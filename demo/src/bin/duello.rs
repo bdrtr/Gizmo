@@ -25,6 +25,11 @@
 //!   (`UiTween::translation(hedef, sn)`, `opacity`, `with_ease`, `with_delay`, `is_finished`).
 //!   Yumuşatma eğrileri `Tween`'inkiler (`Ease`, artık `gizmo-math`'te).
 //!
+//! - **Fontta olmayan bir karakter boş kalıyordu.** Kalkanın simgesi ⛨ DejaVu Sans'ta yok; ilk
+//!   sürüm onu "Kalkan" yazısıyla değiştirmek zorunda kaldı. **Kapatıldı:** bir yedek font zinciri,
+//!   `Renderer::add_font_fallback(yüz)` — metnin kendi yüzünde olmayan her karakter zincirdeki
+//!   onu kapsayan ilk yüzden çiziliyor. Burada Noto Sans Symbols.
+//!
 //! ## Ortam değişkenleri
 //!   * `DUELLO_OTO=1` — kendi kendine bir kart oynar (ekran görüntüsü için)
 //!   * `GIZMO_FONT=<yol>` — font
@@ -541,9 +546,9 @@ fn enemy_move(world: &mut World, game: &mut Game) {
 }
 
 fn hud(world: &mut World, game: &Game) {
-    let foe = format!("Rakip\n♥ {}   Kalkan {}", game.foe.hp.max(0), game.foe.block);
+    let foe = format!("Rakip\n♥ {}   ⛨ {}", game.foe.hp.max(0), game.foe.block);
     set_text(world, game.foe_box, &foe);
-    let me = format!("Sen\n♥ {}   Kalkan {}\nMana {}/{}", game.me.hp.max(0), game.me.block, game.mana, game.turn.min(10));
+    let me = format!("Sen\n♥ {}   ⛨ {}\nMana {}/{}", game.me.hp.max(0), game.me.block, game.mana, game.turn.min(10));
     set_text(world, game.me_box, &me);
     let deck = format!("Deste\n{}\n\nAtılan\n{}", game.deck.len(), game.discard.len());
     set_text(world, game.deck_box, &deck);
@@ -577,7 +582,17 @@ const FONT_CANDIDATES: &[&str] = &[
     "C:/Windows/Fonts/arial.ttf",
 ];
 
+/// Simgeler için bir yedek yüz: ⛨ DejaVu'da yok. Bulunamazsa o karakter boş çiziliyor.
+const SYMBOL_FONTS: &[&str] = &[
+    "/usr/share/fonts/noto/NotoSansSymbols-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf",
+    "C:/Windows/Fonts/seguisym.ttf",
+];
+
 fn load_font(renderer: &mut gizmo::renderer::Renderer) -> FontId {
+    if let Some(symbols) = SYMBOL_FONTS.iter().find_map(|p| renderer.load_font_file(p).ok()) {
+        renderer.add_font_fallback(symbols);
+    }
     let env = std::env::var("GIZMO_FONT").ok();
     for path in env.iter().map(String::as_str).chain(FONT_CANDIDATES.iter().copied()) {
         if let Ok(id) = renderer.load_font_file(path) {

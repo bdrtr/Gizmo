@@ -30,8 +30,10 @@
 //!
 //! # What it does not do
 //!
-//! No shaping (so no Arabic joining, no Indic reordering, no ligatures), no bidi, no font
-//! fallback, no rich text. Kerning comes from the font's `kern` table via `ab_glyph` and nothing
+//! No shaping (so no Arabic joining, no Indic reordering, no ligatures), no bidi, no rich text.
+//! Font fallback is a single chain for the whole library
+//! ([`FontLibrary::add_fallback`](crate::text::FontLibrary::add_fallback)): a character the
+//! text's own face has no glyph for is drawn from the first fallback face that has one. Kerning comes from the font's `kern` table via `ab_glyph` and nothing
 //! more. Lines break on `\n`, and — given a width ([`FontLibrary::layout_wrapped`](crate::text::FontLibrary::layout_wrapped)) — at spaces,
 //! which is right for scripts that separate words with spaces and wrong for those that do not
 //! (Chinese, Japanese, Thai wrap only between characters here). These are named here rather
@@ -127,6 +129,9 @@ impl LineMetrics {
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct PositionedGlyph {
+    /// The face the glyph comes from: the text's own, or a fallback that covers the character
+    /// (see [`FontLibrary::add_fallback`]).
+    pub font: FontId,
     /// The face's own glyph index, which is what the atlas is keyed by. Not a `char`: one
     /// character can map to several glyphs and several characters to one.
     pub glyph: u16,
@@ -180,6 +185,8 @@ impl TextLayout {
 #[derive(Default)]
 pub struct FontLibrary {
     fonts: Vec<ab_glyph::FontVec>,
+    /// Tried in order for a character the text's own face does not cover.
+    fallbacks: Vec<FontId>,
 }
 
 impl std::fmt::Debug for FontLibrary {
@@ -235,6 +242,24 @@ impl FontLibrary {
         self.fonts.get(font.0 as usize)
     }
 
+    /// Adds `font` to the end of the fallback chain: a character that a text's own face has no
+    /// glyph for — a symbol, an emoji, a script the face does not cover — is drawn from the first
+    /// face in the chain that has one, instead of as the face's empty "missing" glyph. Each
+    /// character is looked up on its own; kerning applies only between two glyphs of one face,
+    /// and line height comes from the text's own face. An unknown id, or one already in the
+    /// chain, changes nothing.
+    pub fn add_fallback(&mut self, font: FontId) {
+        if self.face(font).is_some() && !self.fallbacks.contains(&font) {
+            self.fallbacks.push(font);
+        }
+    }
+
+    /// The fallback chain, in the order it is tried.
+    #[must_use]
+    pub fn fallbacks(&self) -> &[FontId] {
+        &self.fallbacks
+    }
+
     /// Vertical metrics at `px`, or `None` for an id this library does not know.
     #[must_use]
     pub fn metrics(&self, font: FontId, px: f32) -> Option<LineMetrics> {
@@ -263,31 +288,68 @@ impl FontLibrary {
     /// a width that is not finite and positive, wraps nothing.
     #[must_use]
     pub fn layout_wrapped(&self, font: FontId, px: f32, text: &str, max_width: Option<f32>) -> Option<TextLayout> {
-        let face = self.face(font)?;
-        Some(layout(face, px, text, max_width.filter(|w| w.is_finite() && *w > 0.0)))
+        let faces = Faces::new(self, font)?;
+        Some(layout(&faces, px, text, max_width.filter(|w| w.is_finite() && *w > 0.0)))
+    }
+}
+
+/// A text's face and the library's fallback chain: which face draws each character.
+struct Faces<'a> {
+    primary: (FontId, &'a ab_glyph::FontVec),
+    chain: Vec<(FontId, &'a ab_glyph::FontVec)>,
+}
+
+impl<'a> Faces<'a> {
+    fn new(library: &'a FontLibrary, font: FontId) -> Option<Self> {
+        let primary = (font, library.face(font)?);
+        let chain = library
+            .fallbacks
+            .iter()
+            .filter(|&&f| f != font)
+            .filter_map(|&f| library.face(f).map(|face| (f, face)))
+            .collect();
+        Some(Self { primary, chain })
+    }
+
+    /// The face that draws `c` and its glyph there: the text's own when it has one (glyph 0 is
+    /// "missing"), else the first fallback that does, else the text's own missing glyph.
+    fn pick(&self, c: char) -> (FontId, &'a ab_glyph::FontVec, ab_glyph::GlyphId) {
+        let (font, face) = self.primary;
+        let id = face.glyph_id(c);
+        if id.0 != 0 {
+            return (font, face, id);
+        }
+        self.chain
+            .iter()
+            .find_map(|&(f, fv)| {
+                let g = fv.glyph_id(c);
+                (g.0 != 0).then_some((f, fv, g))
+            })
+            .unwrap_or((font, face, id))
     }
 }
 
 /// The pen advance of `s` on one line, kerning included — the width [`layout`] would give it.
-fn measure(face: &ab_glyph::FontVec, px: f32, s: &str) -> f32 {
-    let scaled = face.as_scaled(px);
+fn measure(faces: &Faces<'_>, px: f32, s: &str) -> f32 {
     let mut pen = 0.0;
-    let mut previous: Option<ab_glyph::GlyphId> = None;
+    let mut previous: Option<(FontId, ab_glyph::GlyphId)> = None;
     for c in s.chars() {
-        let id = face.glyph_id(c);
-        if let Some(prev) = previous {
+        let (font, face, id) = faces.pick(c);
+        let scaled = face.as_scaled(px);
+        // Kerning pairs belong to one face: none across a fallback boundary.
+        if let Some((_, prev)) = previous.filter(|(pf, _)| *pf == font) {
             pen += scaled.kern(prev, id);
         }
         pen += scaled.h_advance(id);
-        previous = Some(id);
+        previous = Some((font, id));
     }
     pen
 }
 
 /// Breaks one `\n`-free paragraph into lines no wider than `max` — see
 /// [`FontLibrary::layout_wrapped`] for the rule.
-fn wrap_paragraph(face: &ab_glyph::FontVec, px: f32, paragraph: &str, max: f32, out: &mut Vec<String>) {
-    let fits = |s: &str| measure(face, px, s) <= max;
+fn wrap_paragraph(faces: &Faces<'_>, px: f32, paragraph: &str, max: f32, out: &mut Vec<String>) {
+    let fits = |s: &str| measure(faces, px, s) <= max;
     let mut line = String::new();
     let mut started = false;
     // `split(' ')`, not `split_whitespace`: runs of spaces inside a line are kept as authored.
@@ -318,8 +380,9 @@ fn wrap_paragraph(face: &ab_glyph::FontVec, px: f32, paragraph: &str, max: f32, 
 
 /// Places `text` at `px`, breaking on `\n` and, given a width, wherever a line would exceed it.
 /// The library-free half, so it can be tested against a face directly.
-fn layout(face: &ab_glyph::FontVec, px: f32, text: &str, max_width: Option<f32>) -> TextLayout {
-    let scaled = face.as_scaled(px);
+fn layout(faces: &Faces<'_>, px: f32, text: &str, max_width: Option<f32>) -> TextLayout {
+    // Line height is the text's own face's, whatever a fallback glyph would want.
+    let scaled = faces.primary.1.as_scaled(px);
     let metrics = LineMetrics {
         ascent: scaled.ascent(),
         descent: scaled.descent(),
@@ -334,7 +397,7 @@ fn layout(face: &ab_glyph::FontVec, px: f32, text: &str, max_width: Option<f32>)
         Some(max) => {
             let mut wrapped = Vec::new();
             for paragraph in text.split('\n') {
-                wrap_paragraph(face, px, paragraph, max, &mut wrapped);
+                wrap_paragraph(faces, px, paragraph, max, &mut wrapped);
             }
             wrapped.into_iter().map(std::borrow::Cow::Owned).collect()
         }
@@ -342,20 +405,21 @@ fn layout(face: &ab_glyph::FontVec, px: f32, text: &str, max_width: Option<f32>)
     for (line_index, line) in lines.iter().enumerate() {
         let baseline = metrics.ascent + line_index as f32 * line_height;
         let mut pen = 0.0_f32;
-        let mut previous: Option<ab_glyph::GlyphId> = None;
+        let mut previous: Option<(FontId, ab_glyph::GlyphId)> = None;
         for c in line.chars() {
-            let id = face.glyph_id(c);
-            if let Some(prev) = previous {
+            let (font, face, id) = faces.pick(c);
+            let scaled = face.as_scaled(px);
+            if let Some((_, prev)) = previous.filter(|(pf, _)| *pf == font) {
                 pen += scaled.kern(prev, id);
             }
             // A glyph with no outline — a space, or a codepoint this face does not cover — still
             // advances the pen and rasterises to nothing. Keeping it out of `glyphs` is what lets
             // every consumer treat the list as "things to draw".
             if face.outline(id).is_some() {
-                out.glyphs.push(PositionedGlyph { glyph: id.0, x: pen, y: baseline, line: line_index as u32 });
+                out.glyphs.push(PositionedGlyph { font, glyph: id.0, x: pen, y: baseline, line: line_index as u32 });
             }
             pen += scaled.h_advance(id);
-            previous = Some(id);
+            previous = Some((font, id));
         }
         widest = widest.max(pen);
         out.line_widths.push(pen);
@@ -731,6 +795,34 @@ impl GlyphAtlas {
 
 #[cfg(test)]
 mod tests {
+
+    /// A character the text's face lacks is drawn from the first fallback that has it, at the
+    /// pen position the text's own advance gives; the text's own characters stay its own; with no
+    /// chain nothing changes; unknown and repeated ids do not join the chain.
+    #[test]
+    fn a_missing_character_is_drawn_from_the_fallback_chain() {
+        use super::synthetic::{synthetic_face, synthetic_face_drawing, ADVANCE, EM};
+        let mut lib = FontLibrary::new();
+        let a = lib.load(synthetic_face()).unwrap();
+        let b = lib.load(synthetic_face_drawing('B')).unwrap();
+        let fonts = |l: &TextLayout| l.glyphs.iter().map(|g| (g.font, g.glyph)).collect::<Vec<_>>();
+
+        let before = lib.layout(a, 100.0, "AB").unwrap();
+        assert_eq!(fonts(&before), vec![(a, 1)], "without a chain the B is the face's missing glyph");
+
+        lib.add_fallback(FontId(99));
+        lib.add_fallback(b);
+        lib.add_fallback(b);
+        assert_eq!(lib.fallbacks(), &[b]);
+        let after = lib.layout(a, 100.0, "AB").unwrap();
+        assert_eq!(fonts(&after), vec![(a, 1), (b, 1)]);
+        let step = f32::from(ADVANCE) / f32::from(EM) * 100.0;
+        assert!((after.glyphs[1].x - step).abs() < 1e-3, "{}", after.glyphs[1].x);
+        assert_eq!(after.width, before.width, "the same advances either way");
+        // The fallback's own face, used directly, does not fall back to itself — and the chain
+        // holds nothing else, so its missing `A` stays missing.
+        assert_eq!(fonts(&lib.layout(b, 100.0, "AB").unwrap()), vec![(b, 1)]);
+    }
     use super::*;
 
     use super::synthetic::{synthetic_face, ADVANCE, ASCENT, DESCENT, EM, GLYPH_BOX};

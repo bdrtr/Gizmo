@@ -102,7 +102,8 @@ pass (`gizmo::systems::render::record_text`, which `gizmo-studio` calls rather t
 | lines | `\n`, and `Text::max_width` wraps at spaces (or between characters for a word too long to fit) — since 2026-11-01 |
 | kerning | from the face's own `kern` table |
 | per-line alignment (`TextAlign`) | yes, since 2026-11-01 |
-| **shaping, bidi, font fallback, rich text** | **no** |
+| **shaping, bidi, rich text** | **no** |
+| font fallback | a chain of faces tried per character (`Renderer::add_font_fallback`), since 2026-11-03 |
 
 Measured: the same scene with and without text differs in **869/16 384** pixels; a string anchored
 at (8, 8) changes **869** pixels in the top-left quadrant and **0** in the bottom-right (the
@@ -1264,9 +1265,9 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
 `demo/src/bin/duello.rs` is a card duel against the computer: mana that grows each turn, a hand
 refilled to five, cards dragged onto a portrait to play them (attacks on the opponent, shields
 and heals on yourself), an opponent that plays back one card at a time. Everything is UI, and
-everything moves: cards slide from the deck into the hand one after another, follow the pointer
+everything moves (and a symbol needed a second font): cards slide from the deck into the hand one after another, follow the pointer
 while dragged, fly to their target and fade when played, spring back when dropped in the wrong
-place, and the rest of the hand slides over to close the gap; a hit portrait shakes. One thing:
+place, and the rest of the hand slides over to close the gap; a hit portrait shakes. Two things:
 
 - ~~**UI boxes could not be animated.**~~ **Closed 2026-11-03.** `Tween` moves a `Transform`; a
   UI box's place is its `Style`, recomputed every frame. `UiTransform { translation, opacity }`
@@ -1274,6 +1275,9 @@ place, and the rest of the hand slides over to close the gap; a hit portrait sha
   it, on real time, with `Tween`'s own curves (`Ease`, moved to `gizmo-math` for it). The hand's
   slide is the FLIP pattern: set the new `inset`, set the translation to old − new, tween it to
   zero.
+- ~~**A character the font lacks drew as a box.**~~ **Closed 2026-11-03.** The shield ⛨ is not in
+  DejaVu Sans. `Renderer::add_font_fallback(face)`: a chain of faces tried per character; `duello`
+  adds Noto Sans Symbols.
 
 ### C16g. The eleventh game: drag and drop (2026-11-03, `birlestir`)
 

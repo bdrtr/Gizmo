@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Font fallback: `Renderer::add_font_fallback(font)`** (`FontLibrary::add_fallback`). A
+  character a text's face does not cover was drawn as that face's "missing" glyph — `duello`'s
+  shield ⛨ came out as DejaVu's empty box, and the first version wrote "Kalkan" instead. Faces
+  added to the chain are tried in order for each such character; the text's own face keeps every
+  character it has, line height stays its own, and kerning applies only within one face.
+  `PositionedGlyph` carries the face its glyph comes from (`font`), which the atlas is keyed by.
+  Tested with two synthetic faces covering different characters (`synthetic_face_drawing`): the
+  missing one comes from the fallback at the same advance, the chain rejects unknown and repeated
+  ids, a face does not fall back to itself; inverting the coverage test fails it.
 - **Moving and fading UI boxes: `gizmo::ui::UiTransform` and `UiTween`.** A box's place comes
   from its `Style`, recomputed by layout every frame, so sliding a card from the deck to the hand,
   letting a dragged item follow the pointer or sending it back meant rewriting `inset`s by hand

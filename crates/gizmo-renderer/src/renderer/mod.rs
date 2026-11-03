@@ -350,8 +350,9 @@ impl Renderer {
     /// carries.
     ///
     /// The engine ships **no** font: a typeface is a licensing decision that belongs to the
-    /// project, not to the renderer, so there is no default and no fallback. A `Text` whose font
-    /// was never loaded draws nothing rather than substituting one.
+    /// project, not to the renderer, so there is no default, and the only fallback is the chain a
+    /// game builds from faces it loaded ([`add_font_fallback`](Self::add_font_fallback)). A `Text`
+    /// whose font was never loaded draws nothing rather than substituting one.
     ///
     /// # Errors
     ///
@@ -430,6 +431,15 @@ impl Renderer {
     ) -> Result<crate::text::FontId, crate::text::FontError> {
         let bytes = std::fs::read(path).map_err(crate::text::FontError::Io)?;
         self.load_font(bytes)
+    }
+
+    /// Adds a loaded face to the end of the font fallback chain: a character a `Text`'s own face
+    /// does not cover — a symbol, an emoji, another script — is drawn from the first face in the
+    /// chain that covers it. See [`FontLibrary::add_fallback`](crate::text::FontLibrary::add_fallback).
+    pub fn add_font_fallback(&mut self, font: crate::text::FontId) {
+        if let Some(text) = self.text.as_mut() {
+            text.add_font_fallback(font);
+        }
     }
 
     /// Compiles a shader, preferring a copy on disk over the one compiled in.

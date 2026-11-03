@@ -57,6 +57,15 @@ pub const BLANK_CHAR: char = ' ';
 /// Builds the face. See the module docs.
 #[must_use]
 pub fn synthetic_face() -> Vec<u8> {
+    synthetic_face_drawing(DRAWN_CHAR)
+}
+
+/// The same face with its one outline on `drawn` instead of [`DRAWN_CHAR`] — two faces that cover
+/// different characters, which is what a fallback test needs. `drawn` must be above the space and
+/// in the Basic Multilingual Plane (format 4 maps only those).
+#[must_use]
+pub fn synthetic_face_drawing(drawn: char) -> Vec<u8> {
+    assert!(drawn > BLANK_CHAR && (drawn as u32) < 0xFFFF, "the synthetic cmap cannot map {drawn:?}");
     // Glyph 0 is `.notdef` and glyph 2 is the blank: both are empty outlines, which the format
     // expresses as "this glyph's data is zero bytes long" in `loca` rather than as a glyph record.
     // Glyph 1 is the box.
@@ -73,7 +82,7 @@ pub fn synthetic_face() -> Vec<u8> {
     ];
 
     let mut tables: Vec<(&[u8; 4], Vec<u8>)> = vec![
-        (b"cmap", cmap()),
+        (b"cmap", cmap(drawn)),
         (b"glyf", glyf),
         (b"head", head()),
         (b"hhea", hhea()),
@@ -188,10 +197,10 @@ fn hmtx() -> Vec<u8> {
 ///
 /// Format 4 is segment-based and its last segment must be `0xFFFF → 0xFFFF`; parsers reject a
 /// table without it, and the one here maps the two real characters plus that sentinel.
-fn cmap() -> Vec<u8> {
+fn cmap(drawn: char) -> Vec<u8> {
     let segments: [(u16, u16, u16); 3] = [
         (BLANK_CHAR as u16, BLANK_CHAR as u16, 2),
-        (DRAWN_CHAR as u16, DRAWN_CHAR as u16, 1),
+        (drawn as u16, drawn as u16, 1),
         (0xFFFF, 0xFFFF, 0),
     ];
     let seg_count = segments.len() as u16;

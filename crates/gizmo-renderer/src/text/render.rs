@@ -305,6 +305,11 @@ impl TextRenderer {
         self.library.load_file(path)
     }
 
+    /// Adds a face to the fallback chain — see [`FontLibrary::add_fallback`].
+    pub fn add_font_fallback(&mut self, font: FontId) {
+        self.library.add_fallback(font);
+    }
+
     /// The loaded faces, for measuring a string before drawing it.
     #[must_use]
     pub fn library(&self) -> &FontLibrary {
@@ -449,8 +454,7 @@ impl TextRenderer {
         let before = self.screen.len();
         let Self { atlas, library, world, screen, .. } = self;
         let size_px = text.size_px;
-        let font = text.font;
-        place_clipped(&layout, text, world_origin, screen_anchor, screen_size, clip, world, screen, |glyph| {
+        place_clipped(&layout, text, world_origin, screen_anchor, screen_size, clip, world, screen, |font, glyph| {
             atlas.glyph(queue, library, font, glyph, size_px)
         });
         let added = self.screen.len() - before;
@@ -611,7 +615,7 @@ fn place(
     screen_size: Vec2,
     world: &mut Vec<GlyphInstance>,
     screen: &mut Vec<GlyphInstance>,
-    entry_of: impl FnMut(u16) -> Option<super::GlyphEntry>,
+    entry_of: impl FnMut(super::FontId, u16) -> Option<super::GlyphEntry>,
 ) {
     place_clipped(layout, text, world_origin, screen_anchor, screen_size, None, world, screen, entry_of);
 }
@@ -641,7 +645,7 @@ fn place_clipped(
     clip: Option<[Vec2; 2]>,
     world: &mut Vec<GlyphInstance>,
     screen: &mut Vec<GlyphInstance>,
-    mut entry_of: impl FnMut(u16) -> Option<super::GlyphEntry>,
+    mut entry_of: impl FnMut(super::FontId, u16) -> Option<super::GlyphEntry>,
 ) {
     if layout.glyphs.is_empty() {
         return;
@@ -652,7 +656,7 @@ fn place_clipped(
     let color = text.color.to_array();
 
     for g in &layout.glyphs {
-        let Some(entry) = entry_of(g.glyph) else { continue };
+        let Some(entry) = entry_of(g.font, g.glyph) else { continue };
         // The glyph box's top-left in text-local pixels, y down.
         let min = box_offset + Vec2::new(g.x + entry.offset[0], g.y + entry.offset[1]);
         let max = min + Vec2::from(entry.size);
@@ -717,7 +721,7 @@ mod tests {
     /// One glyph on the baseline at pen 0, in a 10-wide, 20-tall box.
     fn one_glyph() -> TextLayout {
         TextLayout {
-            glyphs: vec![PositionedGlyph { glyph: 1, x: 0.0, y: 0.0, line: 0 }],
+            glyphs: vec![PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0 }],
             width: 10.0,
             height: 20.0,
             lines: 1,
@@ -734,7 +738,7 @@ mod tests {
 
     fn quads(t: &Text, layout: &TextLayout, e: GlyphEntry) -> (Vec<GlyphInstance>, Vec<GlyphInstance>) {
         let (mut w, mut s) = (Vec::new(), Vec::new());
-        place(layout, t, Vec3::new(1.0, 2.0, 3.0), None, Vec2::new(100.0, 200.0), &mut w, &mut s, |_| Some(e));
+        place(layout, t, Vec3::new(1.0, 2.0, 3.0), None, Vec2::new(100.0, 200.0), &mut w, &mut s, |_, _| Some(e));
         (w, s)
     }
 
@@ -832,7 +836,7 @@ mod tests {
             let mut t = text(TextSpace::Pinned { at: TextAnchor::factors(anchor), offset }, anchor);
             t.anchor = anchor;
             let (mut w, mut s) = (Vec::new(), Vec::new());
-            place(&one_glyph(), &t, Vec3::ZERO, None, size, &mut w, &mut s, |_| Some(entry([0.0, 0.0])));
+            place(&one_glyph(), &t, Vec3::ZERO, None, size, &mut w, &mut s, |_, _| Some(entry([0.0, 0.0])));
             assert!(w.is_empty(), "a pinned text is screen text");
             // The glyph's centre, back in window pixels.
             let r = s[0].rect;
@@ -858,7 +862,7 @@ mod tests {
         for size in [Vec2::new(100.0, 200.0), Vec2::new(300.0, 400.0)] {
             let t = text(TextSpace::Pinned { at: Vec2::new(0.25, 0.3), offset: Vec2::new(2.0, -4.0) }, TextAnchor::TopLeft);
             let (mut w, mut s) = (Vec::new(), Vec::new());
-            place(&one_glyph(), &t, Vec3::ZERO, None, size, &mut w, &mut s, |_| Some(entry([0.0, 0.0])));
+            place(&one_glyph(), &t, Vec3::ZERO, None, size, &mut w, &mut s, |_, _| Some(entry([0.0, 0.0])));
             // The glyph's top-left corner, back in window pixels.
             let r = s[0].rect;
             let corner = Vec2::new((r[0] + 1.0) * 0.5 * size.x, (1.0 - r[1]) * 0.5 * size.y);
@@ -899,9 +903,9 @@ mod tests {
     fn a_clipped_text_keeps_only_what_is_inside() {
         let layout = TextLayout {
             glyphs: vec![
-                PositionedGlyph { glyph: 1, x: 0.0, y: 0.0, line: 0 },
-                PositionedGlyph { glyph: 2, x: 10.0, y: 0.0, line: 0 },
-                PositionedGlyph { glyph: 3, x: 20.0, y: 0.0, line: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0 },
             ],
             width: 30.0,
             height: 20.0,
@@ -911,7 +915,7 @@ mod tests {
         let t = text(TextSpace::Screen { position: Vec2::ZERO }, TextAnchor::TopLeft);
         let (mut w, mut s) = (Vec::new(), Vec::new());
         let clip = Some([Vec2::ZERO, Vec2::new(10.0, 50.0)]);
-        place_clipped(&layout, &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), clip, &mut w, &mut s, |_| Some(entry([0.0, 0.0])));
+        place_clipped(&layout, &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), clip, &mut w, &mut s, |_, _| Some(entry([0.0, 0.0])));
         assert_eq!(s.len(), 1, "only the first glyph is inside the box");
     }
 
@@ -920,7 +924,7 @@ mod tests {
     fn a_supplied_anchor_wins_over_a_pin_too() {
         let t = text(TextSpace::Pinned { at: Vec2::ZERO, offset: Vec2::ZERO }, TextAnchor::TopLeft);
         let (mut w, mut s) = (Vec::new(), Vec::new());
-        place(&one_glyph(), &t, Vec3::ZERO, Some(Vec2::new(50.0, 50.0)), Vec2::new(100.0, 100.0), &mut w, &mut s, |_| {
+        place(&one_glyph(), &t, Vec3::ZERO, Some(Vec2::new(50.0, 50.0)), Vec2::new(100.0, 100.0), &mut w, &mut s, |_, _| {
             Some(entry([0.0, 0.0]))
         });
         assert!((s[0].rect[0] - 0.0).abs() < 1e-5, "the host's 50 px is NDC 0, got {}", s[0].rect[0]);
@@ -945,9 +949,9 @@ mod tests {
     fn a_missing_atlas_entry_drops_that_glyph_and_no_other() {
         let layout = TextLayout {
             glyphs: vec![
-                PositionedGlyph { glyph: 1, x: 0.0, y: 0.0, line: 0 },
-                PositionedGlyph { glyph: 2, x: 10.0, y: 0.0, line: 0 },
-                PositionedGlyph { glyph: 3, x: 20.0, y: 0.0, line: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0 },
             ],
             width: 30.0,
             height: 20.0,
@@ -956,7 +960,7 @@ mod tests {
         };
         let t = text(TextSpace::Screen { position: Vec2::ZERO }, TextAnchor::TopLeft);
         let (mut w, mut s) = (Vec::new(), Vec::new());
-        place(&layout, &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w, &mut s, |g| {
+        place(&layout, &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w, &mut s, |_, g| {
             (g != 2).then(|| entry([0.0, 0.0]))
         });
         assert_eq!(s.len(), 2, "the missing glyph took its neighbours with it");
@@ -967,7 +971,7 @@ mod tests {
     fn an_empty_layout_queues_nothing() {
         let t = text(TextSpace::Screen { position: Vec2::ZERO }, TextAnchor::TopLeft);
         let (mut w, mut s) = (Vec::new(), Vec::new());
-        place(&TextLayout::default(), &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w, &mut s, |_| {
+        place(&TextLayout::default(), &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w, &mut s, |_, _| {
             unreachable!("an empty layout must not ask the atlas for anything")
         });
         assert!(w.is_empty() && s.is_empty());
@@ -983,7 +987,7 @@ mod tests {
     fn a_supplied_anchor_replaces_the_authored_one_and_moves_nothing_else() {
         let t = text(TextSpace::Screen { position: Vec2::new(10.0, 10.0) }, TextAnchor::TopLeft);
         let (mut w1, mut s1) = (Vec::new(), Vec::new());
-        place(&one_glyph(), &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w1, &mut s1, |_| {
+        place(&one_glyph(), &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w1, &mut s1, |_, _| {
             Some(entry([0.0, 0.0]))
         });
         let (mut w2, mut s2) = (Vec::new(), Vec::new());
@@ -995,7 +999,7 @@ mod tests {
             Vec2::new(100.0, 100.0),
             &mut w2,
             &mut s2,
-            |_| Some(entry([0.0, 0.0])),
+            |_, _| Some(entry([0.0, 0.0])),
         );
         assert!(w1.is_empty() && w2.is_empty());
         // 50 px to the right on a 100 px-wide target is one NDC unit.
