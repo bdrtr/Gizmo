@@ -123,6 +123,26 @@ fn tree_order(world: &World) -> Vec<u32> {
     order
 }
 
+/// The [`UiScale`](crate::ui::UiScale) factor for labels on UI boxes, or `None` when it is `1`
+/// (no resource, or a factor of one) — the common case, which then clones nothing.
+#[cfg(feature = "ui")]
+fn ui_text_scale(world: &World) -> Option<f32> {
+    world.get_resource::<crate::ui::UiScale>().map(|s| s.factor()).filter(|&k| k != 1.0)
+}
+
+#[cfg(not(feature = "ui"))]
+fn ui_text_scale(_world: &World) -> Option<f32> {
+    None
+}
+
+/// `item` at `k` times its size: the font, and the width it wraps at.
+fn scale_text(item: &Text, k: f32) -> Text {
+    let mut t = item.clone();
+    t.size_px *= k;
+    t.max_width = t.max_width.map(|w| w * k);
+    t
+}
+
 #[cfg(not(feature = "ui"))]
 fn ui_boxes(_world: &World) -> Vec<UiBox> {
     Vec::new()
@@ -479,6 +499,15 @@ pub fn record_text(
             }
             None => item,
         };
+        // A label on a UI box grows with the layout's `UiScale`, as the box did.
+        let scaled;
+        let item = match anchor.and(ui_text_scale(world)) {
+            Some(k) => {
+                scaled = scale_text(item, k);
+                &scaled
+            }
+            None => item,
+        };
         text.queue_clipped(queue, item, origin, anchor, screen, clip);
     }
     // Open dropdown lists, above every UI layer (under the screen fade): a row per option, the
@@ -490,7 +519,7 @@ pub fn record_text(
             text.queue_rect_clipped(*at, *size, *colour, screen, None);
         }
         for (at, size, _, label) in rows {
-            let mut item = style.clone();
+            let mut item = ui_text_scale(world).map_or_else(|| style.clone(), |k| scale_text(style, k));
             item.content = label;
             let anchor = at + size * item.anchor.factors();
             text.queue_clipped(queue, &item, Vec3::ZERO, Some(anchor), screen, None);
@@ -599,6 +628,24 @@ mod clip_tests {
         world.add_child(slot, item);
         let ids: Vec<u32> = ui_boxes(&world).iter().map(|b| b.0).collect();
         assert_eq!(ids, vec![slot.id(), second.id(), item.id(), other.id()]);
+    }
+
+    /// A label on a UI box is drawn at the `UiScale` factor: its font and its wrap width, and
+    /// nothing is cloned at a factor of one.
+    #[test]
+    fn ui_labels_follow_the_ui_scale() {
+        let mut world = World::new();
+        assert_eq!(ui_text_scale(&world), None);
+        world.insert_resource(crate::ui::UiScale::fixed(1.0));
+        assert_eq!(ui_text_scale(&world), None);
+        world.insert_resource(crate::ui::UiScale::fixed(2.0));
+        assert_eq!(ui_text_scale(&world), Some(2.0));
+        let font = crate::renderer::text::FontLibrary::default()
+            .load(crate::renderer::text::synthetic::synthetic_face())
+            .expect("the synthetic face parses");
+        let t = Text::screen("x", font, 20.0, Vec2::ZERO).with_max_width(100.0);
+        let k = scale_text(&t, 2.0);
+        assert_eq!((k.size_px, k.max_width), (40.0, Some(200.0)));
     }
 
     /// A `LocalizedText` shows the current language's string, follows a language switch, and

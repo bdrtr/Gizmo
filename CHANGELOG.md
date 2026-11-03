@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gizmo::ui::UiScale` — a layout that fits the window.** `Val::Px` was always a window pixel,
+  so `birlestir`, laid out for 1280×720, did not fit the 472×492 window a tiling window manager
+  gave it. Insert `UiScale::fit(1280.0, 720.0)` and the layout is scaled to the window every frame
+  (the tighter axis decides, up or down), or `UiScale::fixed(k)` for a plain factor. The layout
+  is computed in layout pixels (window ÷ factor) and every `Node` is written in window pixels, so
+  hit testing, drags, drop targets and drawing need nothing; a `Scroll` offset stays in window
+  pixels, its extent scaled. A `Text` on a UI node is drawn at the factor too (font and wrap
+  width). Tested: sizes, padding, a percentage width, a `fit` following a resize, a scrolled list
+  at ×2; dropping any of the four conversions fails it.
 - **Drag and drop: `gizmo::ui::DropTarget`.** What a dragged item was let go over could not be
   found by asking what is under the pointer — the item follows the pointer, so it is what is
   under it, and every slot beneath reads `Interaction::None`. `ui_drop_system` (after

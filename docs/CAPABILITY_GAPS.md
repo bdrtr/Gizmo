@@ -1275,8 +1275,10 @@ is saved. Three things:
 - ~~**A slot painted over its own item.**~~ **Fixed 2026-11-03.** Boxes on one layer came out in
   archetype order; slot and item are in different tables. Tree order now (parent, then children
   in `Children` order).
-- **The UI does not scale with the window.** A field laid out for 1280×720 does not fit the
-  472×492 window a tiling window manager gives it: `Val::Px` is always a window pixel. *Open.*
+- ~~**The UI does not scale with the window.**~~ **Closed 2026-11-03.** A field laid out for
+  1280×720 did not fit the 472×492 window a tiling window manager gave it: `Val::Px` was always a
+  window pixel. `UiScale::fit(w, h)` (or `fixed(k)`), a resource: layout in layout pixels, `Node`
+  in window pixels, labels on boxes scaled with them. Four conversions, four failing mutations.
 - **No tooltip.** The game builds its own — an absolute node moved to the pointer every frame,
   `Display::None` when nothing is hovered. *Open; it works by hand.*
 

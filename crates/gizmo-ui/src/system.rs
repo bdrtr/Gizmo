@@ -45,10 +45,26 @@ pub fn ui_layout_system(
     children: Query<&Children>,
     mut nodes: Query<Mut<Node>>,
     mut scrolls: Query<Mut<crate::components::Scroll>>,
+    scale: Option<ResMut<crate::scale::UiScale>>,
 ) {
     // Track the real (resized) window size so root layout uses the actual available
     // space instead of the construction-time default (which was never updated).
-    ctx.window_size = gizmo_math::Vec2::new(window.width, window.height);
+    //
+    // In *layout* pixels: the window divided by the `UiScale`. Every `Val::Px` is a layout pixel,
+    // so dividing the space once here and multiplying each box once on the way out (step 5)
+    // scales them all without touching a single `Style`.
+    let window_px = gizmo_math::Vec2::new(window.width, window.height);
+    let s = match scale {
+        Some(mut scale) => {
+            let f = scale.factor_for(window_px);
+            if scale.factor() != f {
+                scale.set_factor(f);
+            }
+            f
+        }
+        None => 1.0,
+    };
+    ctx.window_size = window_px / s;
     let mut current_entities = std::collections::HashSet::new();
 
     // 1. Ensure every entity with a Style has a layout node carrying that style.
@@ -181,8 +197,8 @@ pub fn ui_layout_system(
         };
         let abs = parent_origin + local;
         if let Some(mut node) = nodes.get_mut(entity) {
-            node.size = size;
-            node.position = abs;
+            node.size = size * s;
+            node.position = abs * s;
         }
         // No `visited` set: the mirror gives every node exactly one parent and never names a
         // root as anyone's child, so `mirrored_children` is a forest by construction and this
@@ -198,12 +214,14 @@ pub fn ui_layout_system(
                     .iter()
                     .filter_map(|&k| ctx.relative_layout(k))
                     .fold(gizmo_math::Vec2::ZERO, |m, (s, l)| m.max(l + s));
-                let max = (reach + ctx.inner_end(entity) - size).max(gizmo_math::Vec2::ZERO);
+                // The offset is in window pixels (it is moved by wheels, fingers and thumbs, which
+                // live there); the layout is in layout pixels.
+                let max = (reach + ctx.inner_end(entity) - size).max(gizmo_math::Vec2::ZERO) * s;
                 // Only write when something moves, so `Changed<Scroll>` means a real change.
                 if scroll.max_offset() != max || scroll.offset != scroll.offset.clamp(gizmo_math::Vec2::ZERO, max) {
                     scroll.fit(max);
                 }
-                origin = abs - scroll.offset;
+                origin = abs - scroll.offset / s;
             }
             for &child_id in kids {
                 stack.push((child_id, origin));
@@ -483,6 +501,66 @@ mod tests {
         schedule.run(&mut world, 0.016);
         assert_vec2(world.borrow::<Scroll>().get(list.id()).unwrap().max_offset(), 20.0, 120.0);
         assert_vec2(node_of(&world, rows[4]).position, 10.0, 50.0);
+    }
+
+    /// A `UiScale` multiplies every layout pixel — sizes, padding, position — and a `fit` scale
+    /// follows the window; a percentage is still of the window. A scroll offset stays in window
+    /// pixels, its extent scaled with the content.
+    #[test]
+    fn a_ui_scale_multiplies_the_layout_into_window_pixels() {
+        use crate::components::Scroll;
+        use crate::scale::UiScale;
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 1000.0, 1000.0);
+        world.insert_resource(UiScale::fixed(2.0));
+        let root = world.spawn();
+        world.add_component(root, padded_style(100.0, 300.0, 10.0, 20.0));
+        world.add_component(root, Node::default());
+        let child = world.spawn();
+        world.add_component(child, sized_style(30.0, 40.0));
+        world.add_component(child, Node::default());
+        world.add_component(child, Parent(root.id()));
+        world.add_component(root, Children(vec![child.id()]));
+        let wide = world.spawn();
+        world.add_component(wide, Style { width: Val::Percent(100.0), height: Val::Px(5.0), ..Default::default() });
+        world.add_component(wide, Node::default());
+        schedule.run(&mut world, 0.016);
+        assert_vec2(node_of(&world, root).size, 200.0, 600.0);
+        assert_vec2(node_of(&world, child).position, 20.0, 40.0);
+        assert_vec2(node_of(&world, child).size, 60.0, 80.0);
+        assert_vec2(node_of(&world, wide).size, 1000.0, 10.0);
+
+        // Designed for 1280×720, shown in 640×720: half size, and the factor is readable.
+        world.insert_resource(UiScale::fit(1280.0, 720.0));
+        set_window(&mut world, 640.0, 720.0);
+        schedule.run(&mut world, 0.016);
+        assert_eq!(world.get_resource::<UiScale>().unwrap().factor(), 0.5);
+        assert_vec2(node_of(&world, root).size, 50.0, 150.0);
+        assert_vec2(node_of(&world, child).position, 5.0, 10.0);
+        assert_vec2(node_of(&world, wide).size, 640.0, 2.5);
+
+        // A list at ×2: five 40 px rows in a 100 px box reach 200, so it scrolls 100 layout
+        // pixels = 200 window pixels; an offset of 50 window pixels moves the rows by 50.
+        world.insert_resource(UiScale::fixed(2.0));
+        let list = world.spawn();
+        world.add_component(list, column_style(100.0, 100.0));
+        world.add_component(list, Node::default());
+        world.add_component(list, Scroll::default());
+        let rows: Vec<Entity> = (0..5)
+            .map(|_| {
+                let r = world.spawn();
+                world.add_component(r, sized_style(100.0, 40.0));
+                world.add_component(r, Node::default());
+                world.add_component(r, Parent(list.id()));
+                r
+            })
+            .collect();
+        world.add_component(list, Children(rows.iter().map(|r| r.id()).collect()));
+        schedule.run(&mut world, 0.016);
+        assert_vec2(world.borrow::<Scroll>().get(list.id()).unwrap().max_offset(), 0.0, 200.0);
+        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 50.0;
+        schedule.run(&mut world, 0.016);
+        assert_vec2(node_of(&world, rows[1]).position, 0.0, 30.0);
     }
 
     /// A `Children` cycle must not reach the layout engine.

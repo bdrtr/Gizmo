@@ -26,9 +26,13 @@
 //!   içindeki öğe (`ButtonBundle` + `Drag`) ayrı tablolarda, ve önce gelen tablo önce çiziliyor —
 //!   burada her kare kendi öğesini örtüyordu, yalnızca yazısı görünüyordu. **Kapatıldı:** bir
 //!   katmanın içinde ağaç sırası — ebeveyn çocuklarının altında, önceki kardeş sonrakinin altında.
-//! - **Arayüz pencereyle ölçeklenmiyor.** 1280×720 için kurulmuş bir tarla, döşemeli bir pencere
-//!   yöneticisinin verdiği 472×492'lik pencereye sığmıyor; `Val::Px` her zaman pencere pikseli.
-//!   *Açık.*
+//! - **Arayüz pencereyle ölçeklenmiyordu.** 1280×720 için kurulmuş bir tarla, döşemeli bir
+//!   pencere yöneticisinin verdiği 472×492'lik pencereye sığmıyordu; `Val::Px` her zaman pencere
+//!   pikseliydi. **Kapatıldı:** `UiScale` kaynağı — `UiScale::fit(1280.0, 720.0)` düzeni her kare
+//!   pencereye sığdırıyor (`fixed(k)` sabit bir çarpan); kutular, boşluklar ve kutuların üstündeki
+//!   yazılar birlikte büyüyüp küçülüyor. `Node` pencere pikseli kalıyor, tıklama ve sürükleme
+//!   hiçbir şey bilmeden çalışıyor.
+//! - **İpucu (tooltip) yok.** Burada elle: imlecin yanına taşınan mutlak bir düğüm. *Açık.*
 //!
 //! ## Ortam değişkenleri
 //!   * `BIRLESTIR_OTO=1` — kendi kendine birkaç tohum ekip birleştiriyor (ekran görüntüsü için)
@@ -45,7 +49,7 @@ use gizmo::renderer::text::FontId;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
     AlignItems, BackgroundColor, ButtonBundle, Clicked, Drag, DropTarget, FlexDirection, FlexWrap, Interaction,
-    JustifyContent, NodeBundle, PositionType, Style, UiPlugin, UiRect, Val, ZIndex,
+    JustifyContent, NodeBundle, PositionType, Style, UiPlugin, UiRect, UiScale, Val, ZIndex,
 };
 
 const COLS: usize = 6;
@@ -121,6 +125,8 @@ fn main() {
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
             scene.world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+            // Tarla 1280×720 için kuruldu; pencere ne olursa olsun ona sığdırılıyor.
+            scene.world.insert_resource(UiScale::fit(1280.0, 720.0));
 
             let root = scene.world.spawn_bundle(NodeBundle {
                 style: Style {
@@ -524,7 +530,10 @@ fn draw(world: &mut World, game: &Game, input: &Input) {
     set_text(world, game.status, &s);
 
     // İpucu: bir şeyin üstünde durunca adı ve birleşince ne olacağı.
+    // İmleç pencere pikselinde, düzen ise düzen pikselinde: ölçeğe böl.
+    let k = world.get_resource::<UiScale>().map_or(1.0, |s| s.factor());
     let (x, y) = input.mouse_position();
+    let (x, y) = (x / k, y / k);
     let tip = match hovered_view {
         Some(t) if (t as usize) < NAMES.len() => format!("{}\nİki tane → {}", NAMES[t as usize - 1], NAMES[t as usize]),
         Some(t) => format!("{}\nEn üst aşama", NAMES[t as usize - 1]),

@@ -128,6 +128,9 @@
 pub mod components;
 /// The layout pass: turns the component tree into resolved rectangles (taffy under the hood).
 pub mod layout;
+/// [`UiScale`]: every layout pixel times one factor.
+pub mod scale;
+pub use scale::UiScale;
 /// The scheduled systems that run layout and interaction each frame.
 pub mod system;
 /// Pointer hit-testing and the hover/press state a widget reads.
