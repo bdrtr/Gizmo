@@ -25,6 +25,10 @@
 //!   `GlobalTransform`'unu okuyordu; oyun kodunda o bir kare geride, bu karede doğan bir kamera
 //!   için başlangıç noktası. `world_to_screen`'in örneği hiçbir şey izdüşüremeyince bulundu.
 //!   **Düzeltildi:** kameranın bu karedeki yeri (`world_position`).
+//! - **Ajanların birbirini itme mesafesi sabitti.** Ayrışma yarıçapı 1,5 m ve ağırlığı 1,5 koda
+//!   gömülüydü; 1,2 m aralıklı bir düzene varan birimler birbirini 1,5 m'ye itip dağıtırdı.
+//!   **Kapatıldı:** `NavAgent::with_separation(yarıçap, ağırlık)` (alanlar `separation_radius`,
+//!   `separation_weight`; eski sahne dosyaları varsayılanla yükleniyor; inspector'da da var).
 //!
 //! Gerisi ilk denemede çalıştı: `NavGrid` + `NavAgent` ile yirmi altı birimin yol bulması,
 //! birimlerin üstünde ekrana izdüşürülmüş arayüz düğümleri olarak can çubukları (`inset` her
@@ -251,7 +255,8 @@ fn spawn_unit(world: &mut World, side: Side, at: Vec3) {
         RigidBody::new_kinematic(),
         Velocity::default(),
         Collider::sphere(0.3),
-        NavAgent::new(3.0, 12.0, 0.6),
+        // Düzen 1,2 m aralıklı: ayrışma ondan kısa, yoksa yerine varan bölük kendini dağıtır.
+        NavAgent::new(3.0, 12.0, 0.6).with_separation(1.0, 1.5),
         Unit { side, hp: HP, reload: 0.0, bar: bar.id(), fill: fill.id(), ring: ring.id() },
     ));
 }

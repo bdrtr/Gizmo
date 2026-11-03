@@ -157,8 +157,8 @@ pub struct NavAgent {
     ///
     /// It bounds each behaviour separately rather than their sum: the separation force
     /// is clamped to this value, then added on top of the already-clamped seek/arrive
-    /// force with a weight of 1.5, so one update can change velocity by up to
-    /// `2.5 * steering_force * dt`.
+    /// force with a weight of [`separation_weight`](Self::separation_weight) (1.5 by default),
+    /// so one update can change velocity by up to `(1 + weight) * steering_force * dt`.
     pub steering_force: f32,
     /// Waypoint switching distance in metres: once the agent is closer than this to its
     /// current waypoint, the cursor advances to the next one.
@@ -172,6 +172,16 @@ pub struct NavAgent {
     /// the distance covered in one update at `max_speed` can be stepped straight over,
     /// leaving the agent to overshoot and turn back.
     pub arrival_radius: f32,
+    /// Metres: other agents closer than this push this one away (inverse-square, so the push
+    /// grows as they close). Default 1.5. A formation spaced tighter than this is pushed apart
+    /// to it — set it below the spacing.
+    #[serde(default = "NavAgent::default_separation_radius")]
+    pub separation_radius: f32,
+    /// How strongly the push counts against the agent's own steering, which is clamped to
+    /// [`steering_force`](Self::steering_force) first. Default 1.5; `0` lets agents pass through
+    /// one another.
+    #[serde(default = "NavAgent::default_separation_weight")]
+    pub separation_weight: f32,
     /// Seconds accumulated since the agent last made meaningful progress.
     ///
     /// It grows while the agent stays within 5 cm of `last_agent_pos` and is reset to
@@ -216,9 +226,29 @@ impl NavAgent {
             max_speed,
             steering_force,
             arrival_radius,
+            separation_radius: Self::default_separation_radius(),
+            separation_weight: Self::default_separation_weight(),
             stuck_timer: 0.0,
             last_agent_pos: None,
         }
+    }
+
+    /// The same agent with its own separation — see
+    /// [`separation_radius`](Self::separation_radius) and
+    /// [`separation_weight`](Self::separation_weight). Negative values are taken as 0.
+    #[must_use]
+    pub fn with_separation(mut self, radius: f32, weight: f32) -> Self {
+        self.separation_radius = radius.max(0.0);
+        self.separation_weight = weight.max(0.0);
+        self
+    }
+
+    fn default_separation_radius() -> f32 {
+        1.5
+    }
+
+    fn default_separation_weight() -> f32 {
+        1.5
     }
 
     /// Replaces the waypoint list and rewinds the cursor to the first waypoint.

@@ -153,9 +153,9 @@ pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
 ///   the vertical component is forced to zero. On finishing the path the target is cleared and
 ///   the state becomes `Reached`.
 ///
-/// Neighbour lookup is a brute-force O(N²) scan over all agents with a hard-coded 10 m radius,
-/// separation radius 1.5 m and separation weight 1.5; none of these are configurable per agent,
-/// and the cost grows quadratically with agent count.
+/// Neighbour lookup is a brute-force O(N²) scan over all agents, within each agent's own
+/// [`NavAgent::separation_radius`], pushed with its [`NavAgent::separation_weight`]; the cost grows
+/// quadratically with agent count.
 ///
 /// # Aliasing
 ///
@@ -290,7 +290,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         for &other_e in &agent_entities {
             if other_e != agent_id {
                 if let Some(ot) = transforms.get(other_e) {
-                    if (ot.position - t.position).length_squared() < 100.0 {
+                    if (ot.position - t.position).length_squared() < agent.separation_radius * agent.separation_radius {
                         neighbor_positions.push(ot.position);
                     }
                 }
@@ -380,13 +380,13 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             t.position,
             v.linear,
             &neighbor_positions,
-            1.5,
+            agent.separation_radius,
             agent.max_speed,
             agent.steering_force,
         );
 
         // Final kuvveti hıza ekle
-        v.linear += (steering_force + separation * 1.5) * dt;
+        v.linear += (steering_force + separation * agent.separation_weight) * dt;
 
         // Kuvvet eklendikten sonra linear max_speed ile sınırlandırılır, böylece ajan sonsuza hızlanmaz
         let speed = v.linear.length();
@@ -529,6 +529,57 @@ mod frame_tests {
         let advanced = world.borrow::<NavAgent>().get(e.id()).unwrap().path_index();
         ai_navigation_system(&world, step);
         assert_eq!(world.borrow::<NavAgent>().get(e.id()).unwrap().path_index(), advanced, "replanned with nothing changed");
+    }
+
+    /// Separation is the agent's own: two agents walking side by side 1 m apart are pushed apart
+    /// by the default 1.5 m radius, and keep their 1 m with a 0.8 m radius or a weight of 0 —
+    /// what a formation spaced tighter than 1.5 m needs. A scene written before the fields
+    /// existed loads with the defaults.
+    #[test]
+    fn separation_radius_and_weight_are_per_agent() {
+        let gap_after = |agent: NavAgent| {
+            let mut world = World::new();
+            world.insert_resource({
+                let mut g = NavGrid::centred_on(1.0, 80, 20, Vec3::ZERO);
+                g.needs_rebuild = false;
+                g
+            });
+            let mut ids = Vec::new();
+            for z in [-0.5f32, 0.5] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, z)));
+                world.add_component(e, Velocity::default());
+                let mut a = agent.clone();
+                a.target = Some(Vec3::new(30.0, 0.0, z));
+                world.add_component(e, a);
+                ids.push(e.id());
+            }
+            let dt = 1.0 / 60.0;
+            for _ in 0..60 {
+                ai_navigation_system(&world, dt);
+                let moves: Vec<(u32, Vec3)> = {
+                    let v = world.borrow::<Velocity>();
+                    ids.iter().map(|&id| (id, v.get(id).unwrap().linear)).collect()
+                };
+                let mut t = world.borrow_mut::<Transform>();
+                for (id, vel) in moves {
+                    t.get_mut(id).unwrap().position += vel * dt;
+                }
+            }
+            let t = world.borrow::<Transform>();
+            assert!(t.get(ids[0]).unwrap().position.x > 1.0, "they walk");
+            (t.get(ids[1]).unwrap().position.z - t.get(ids[0]).unwrap().position.z).abs()
+        };
+        let pushed = gap_after(NavAgent::default());
+        let tight = gap_after(NavAgent::default().with_separation(0.8, 1.5));
+        let off = gap_after(NavAgent::default().with_separation(1.5, 0.0));
+        assert!(pushed > 1.1, "the default 1.5 m radius pushes 1 m neighbours apart: {pushed}");
+        assert!((tight - 1.0).abs() < 1e-3, "a 0.8 m radius leaves 1 m alone: {tight}");
+        assert!((off - 1.0).abs() < 1e-3, "weight 0 leaves them alone: {off}");
+
+        let old: NavAgent = serde_json::from_str(r#"{"target":null,"max_speed":5.0,"steering_force":10.0,"arrival_radius":0.5}"#)
+            .expect("a pre-separation scene row");
+        assert_eq!((old.separation_radius, old.separation_weight), (1.5, 1.5));
     }
 
     /// An agent with nothing to do is damped, not steered — the same call, the other branch.

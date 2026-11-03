@@ -64,6 +64,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   turns them green (31 230 38 / 6 224 7; forward 0 229 0 / 0 251 0), intensity 0 leaves them dark;
   dropping either shader's branch fails the test. Found by `kosucu`, whose gold coins were grey
   under a pale blue sky.
+- **`NavAgent::separation_radius` / `separation_weight` (`with_separation`).** How far other
+  agents push this one, and how hard, were hard-coded (1.5 m, 1.5): a formation spaced tighter
+  than 1.5 m was pushed apart on arrival. Per agent now, defaults unchanged (the step is
+  bit-identical for them), in the inspector, and a scene row written before the fields loads with
+  the defaults. Tested with two agents walking 1 m apart: the default pushes them apart, a 0.8 m
+  radius or a weight of 0 leaves them at 1 m. `komutan` uses 1.0 m for its 1.2 m formation.
 - **`komutan`, the fifteenth game** — a small real-time strategy skirmish: box-select units with
   the mouse, right-click to march them in a square formation, they fire at what comes into range;
   twelve against fourteen. Health bars are UI nodes placed over each unit with

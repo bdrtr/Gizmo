@@ -379,6 +379,24 @@ pub fn draw_ai_section(
                         );
                     });
 
+                    ui.horizontal(|ui| {
+                        ui.label("Ayrışma Yarıçapı:");
+                        ui.add(
+                            egui::DragValue::new(&mut agent.separation_radius)
+                                .speed(0.05)
+                                .range(0.0..=10.0),
+                        );
+                    });
+
+                    ui.horizontal(|ui| {
+                        ui.label("Ayrışma Ağırlığı:");
+                        ui.add(
+                            egui::DragValue::new(&mut agent.separation_weight)
+                                .speed(0.05)
+                                .range(0.0..=10.0),
+                        );
+                    });
+
                     let state_str = match agent.state {
                         gizmo_ai::components::NavAgentState::Idle => "Bekliyor",
                         gizmo_ai::components::NavAgentState::Moving => "Hareket Ediyor",

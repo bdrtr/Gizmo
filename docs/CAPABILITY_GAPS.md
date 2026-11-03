@@ -1266,7 +1266,7 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
 `demo/src/bin/komutan.rs` is a small real-time strategy skirmish: drag a box to select units,
 right-click the ground to march them (a square formation around the point), and they fire at
 enemies in range. Twelve blue against fourteen red; `NavGrid` routes all twenty-six round the
-rocks. Two gaps, both closed before the game was finished:
+rocks. Three gaps, all closed:
 
 - ~~**No world-to-screen projection.**~~ **Closed 2026-11-03.** The cursor had a ray into the
   world, the world had no way back to the screen — and a box selection has to project the units,
@@ -1275,6 +1275,9 @@ rocks. Two gaps, both closed before the game was finished:
 - ~~**The cursor ray came from a stale camera position.**~~ **Fixed.** It read the camera's
   `GlobalTransform`, a frame behind in game code (the origin, for a camera spawned this frame);
   found when `world_to_screen`'s example projected nothing. It reads `world_position` now.
+- ~~**Agent separation was hard-coded.**~~ **Closed.** 1.5 m and a weight of 1.5 for every
+  agent; a 1.2 m formation was pushed apart on arrival. `NavAgent::with_separation(radius,
+  weight)`.
 
 ### C16j. The fourteenth game: a road that never ends (2026-11-03, `kosucu`)
 
