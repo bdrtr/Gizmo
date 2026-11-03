@@ -91,6 +91,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   steered as some other car — `pist` did). Every car in the tree had written the same four-corner
   loop. Tested driving: straight is −Z, a positive steering input turns left; putting the front
   axle at +Z fails it. `pist` uses it.
+- **`kopru`, the seventeenth game** — bridge building: click beams between grid nodes, then a
+  120 kg ball tries to cross; beams turn red with their joints' `load()` and joints past their
+  threshold snap. Its three gaps — the unreadable joint load, point joints breaking at half their
+  rating, a despawned body's joints catching the next owner of its id — are fixed (see above).
 - **`pist`, the sixteenth game** — a three-car, three-lap race on a stadium track with barriers,
   driven by the engine's own vehicle model (`VehicleController`), a chase camera and a minimap in
   the corner. Its two gaps — cars that did not move under `FixedPhysics`, and the minimap

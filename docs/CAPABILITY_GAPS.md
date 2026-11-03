@@ -1262,6 +1262,26 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16m. The seventeenth game: a structure of joints (2026-11-03, `kopru`)
+
+`demo/src/bin/kopru.rs` is a bridge builder: beams drawn between grid nodes become bodies, nodes
+become breakable ball sockets, a 120 kg ball tries to cross, and each beam is coloured by its
+joints' load. Three gaps, all closed:
+
+- ~~**A joint's load could not be read.**~~ **Closed.** `Joint::last_force` / `last_torque` /
+  `load()`, the numbers the thresholds are compared with (a sleeping pair keeps its last value).
+- ~~**Fixed, hinge and ball-socket joints broke at half their `break_force`.**~~ **Fixed.** Their
+  point constraint skipped its linear rows below 0.1 mm of error; a hanging 10 kg read 196 N.
+- ~~**A despawned body's joints caught the next owner of its id.**~~ **Fixed.** Joints go with
+  their body.
+
+*Open, measured:* the truss's joint forces run above a hand calculation — ~5 kN under its own
+weight where the top chord should carry roughly 2.6 kN, and ~16 kN with the 1.2 kN ball at
+midspan. Neither more joint iterations (10 → 40) nor beam damping changes it; a single beam on two
+pins reads exactly 98 N each, so the measurement is right, and whether the excess is the
+statically indeterminate supports (four pinned nodes) or the solver is not yet separated. The game
+sets its threshold to the forces it sees (30 kN).
+
 ### C16l. The sixteenth game: cars (2026-11-03, `pist`)
 
 `demo/src/bin/pist.rs` is a three-car, three-lap race on a stadium track: the engine's own vehicle
