@@ -30,6 +30,10 @@ pub struct JointScratch {
     pub(crate) impulse_lin: Vec3,
     /// The pass's NET angular impulse, `Σ λᵢ·nᵢ`. `break_torque` is derived from it.
     pub(crate) impulse_ang: Vec3,
+    /// The force and torque the last pass measured against the thresholds (newtons,
+    /// newton-metres) — what [`Joint::last_force`] / [`Joint::last_torque`] report.
+    pub(crate) force: f32,
+    pub(crate) torque: f32,
 }
 
 impl JointScratch {
@@ -1095,6 +1099,32 @@ impl Joint {
     /// automatically at the end of the pass.
     pub fn reset_warm_start(&mut self) {
         self.scratch = JointScratch::default();
+    }
+
+    /// The force this joint carried in the last physics step, in newtons — the number
+    /// [`break_force`](Self::break_force) is compared with: the net reaction of all its rows,
+    /// springs included, motors and drives not. While both its bodies sleep it is not solved and
+    /// keeps the last value it measured; 0 before its first step. Not updated once it is broken.
+    /// What a bridge game colours its beams by.
+    #[must_use]
+    pub fn last_force(&self) -> f32 {
+        self.scratch.force
+    }
+
+    /// The torque this joint carried in the last physics step, in newton-metres — the number
+    /// [`break_torque`](Self::break_torque) is compared with.
+    #[must_use]
+    pub fn last_torque(&self) -> f32 {
+        self.scratch.torque
+    }
+
+    /// How close the last step came to breaking it: the larger of force over
+    /// [`break_force`](Self::break_force) and torque over [`break_torque`](Self::break_torque),
+    /// so `1.0` is the threshold. 0 for an unbreakable joint (infinite thresholds).
+    #[must_use]
+    pub fn load(&self) -> f32 {
+        let part = |carried: f32, limit: f32| if limit.is_finite() && limit > 0.0 { carried / limit } else { 0.0 };
+        part(self.scratch.force, self.break_force).max(part(self.scratch.torque, self.break_torque))
     }
 
     /// Latches [`is_broken`](Self::is_broken) when `applied_force` (newtons) exceeds

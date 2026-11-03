@@ -20,13 +20,16 @@ impl JointSolver {
         let anchor_b =
             transforms[idx_b].position + transforms[idx_b].rotation * joint.local_anchor_b;
         let error = anchor_a - anchor_b; // target = a, current = b, so error = a - b
-        let err_len = error.length();
 
         // Position (point) constraint — shared with the hinge / ball-socket position
-        // stage. Skip only the LINEAR part when the anchor is already coincident; the
-        // Fixed angular lock below must still run (earlier an early `return` here let a
-        // perfectly-pinned Fixed joint spin freely).
-        if err_len >= 0.0001 {
+        // stage. The linear rows run whatever the error: they cancel the relative VELOCITY as
+        // well as correcting the position, and a coincident anchor still has velocity to cancel.
+        // They used to be skipped below 0.1 mm, so a perfectly placed joint let its body fall a
+        // step before it pushed back, then pushed back for the fall and the sag together —
+        // measured on a 10 kg weight hanging from a ball socket: 196 N reported against 98 N
+        // carried, so every fixed, hinge and ball-socket joint broke at half its `break_force`
+        // under a steady load, and the weight never slept. 98 N, and asleep, now.
+        {
             let r_a = Self::lever_arm(rigid_bodies, transforms, idx_a, anchor_a);
             let r_b = Self::lever_arm(rigid_bodies, transforms, idx_b, anchor_b);
 

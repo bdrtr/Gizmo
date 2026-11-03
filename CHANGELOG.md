@@ -70,6 +70,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bit-identical for them), in the inspector, and a scene row written before the fields loads with
   the defaults. Tested with two agents walking 1 m apart: the default pushes them apart, a 0.8 m
   radius or a weight of 0 leaves them at 1 m. `komutan` uses 1.0 m for its 1.2 m formation.
+- **`Joint::last_force()` / `last_torque()` / `load()`** — what a joint carried in the last step,
+  the numbers its `break_force` / `break_torque` are compared with, and the larger of the two as
+  a fraction of its threshold (`1.0` breaks). They were `pub(crate)`, so a game could not show how
+  close a beam was to giving way. A joint whose bodies are both asleep keeps the last value
+  instead of reading 0. Measuring them found the bug below.
 - **`Renderer::load_system_font()`** — a font the machine already has: the file `GIZMO_FONT` names
   (with a warning, and on to the next, if it cannot be read), else the first readable one of the
   platform's usual sans faces (`SYSTEM_FONT_PATHS`: DejaVu, Noto, Liberation, Cantarell on Linux;
@@ -1897,6 +1902,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **Fixed, hinge and ball-socket joints broke at half their `break_force`.** Their shared point
+  constraint skipped its linear rows while the anchors were within 0.1 mm — so a perfectly
+  placed joint let its body fall a step before it pushed back, and then pushed back for the fall
+  and the sag together. Measured on a 10 kg weight hanging from a ball socket: 196 N reported
+  against the 98 N it carries, every step, independent of the iteration count; the threshold is
+  compared with that number, so a joint rated for 150 N gave way under a 75 N load. The weight
+  never fell asleep either. The rows run whatever the error now: 98 N, and asleep, and the
+  first-step transient drops from 260 N to 100 N. (Rope and distance joints are one-sided limits
+  and keep their behaviour — a rope that becomes taut still catches a falling body.)
 
 - **A despawned body's joints tied its id's next owner to the partner.** Removing a body from the
   physics world left the joints attached to it in place, and joints find their bodies by raw id —

@@ -579,6 +579,20 @@ impl JointSolver {
             }
             let force = joint.scratch.impulse_lin.length() / dt;
             let torque = joint.scratch.impulse_ang.length() / dt;
+            // A pair with both ends asleep or static was not solved: it reports the load it last
+            // carried, not the zero this pass left in its scratch — a weight that settles on a
+            // rope has not stopped weighing on it.
+            let solved = match (
+                entity_index_map.get(&joint.entity_a.id()).copied(),
+                entity_index_map.get(&joint.entity_b.id()).copied(),
+            ) {
+                (Some(a), Some(b)) => !joint_is_inert(rigid_bodies, velocities, a, b),
+                _ => false,
+            };
+            if solved {
+                joint.scratch.force = force;
+                joint.scratch.torque = torque;
+            }
             if joint.check_break(force, torque) {
                 tracing::debug!(
                     entity_a = ?joint.entity_a,
