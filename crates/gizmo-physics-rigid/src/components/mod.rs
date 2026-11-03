@@ -25,7 +25,7 @@ pub mod rigid_body;
 /// [`Velocity`] — the per-body velocity state.
 pub mod velocity;
 
-pub use breakable::Breakable;
+pub use breakable::{Breakable, Debris};
 pub use explosion::{Explosion, ExplosionFalloff};
 pub use kinematic_target::KinematicTarget;
 pub use rigid_body::{BodyType, RigidBody};

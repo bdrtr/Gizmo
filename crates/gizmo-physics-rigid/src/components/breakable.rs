@@ -61,9 +61,9 @@ pub struct Breakable {
     /// ratio. Inert as far as physics is concerned: no built-in system reads it, and
     /// [`current_health`](Self::current_health) is neither clamped to it nor reset from it.
     pub max_health: f32,
-    /// Intended lifetime of each debris piece in seconds, after which a game would despawn
-    /// it. Metadata only: the built-in fracture path spawns chunks as ordinary permanent
-    /// bodies and never expires them, so the timer has to be implemented by the caller.
+    /// How long each debris piece lives, in seconds: the fracture step despawns a piece once
+    /// its [`Debris::age`] reaches this. Zero or less keeps the pieces forever. (Through
+    /// 2026-11-03 this was metadata nobody read and every piece stayed in the solver for good.)
     pub debris_lifetime: f32,
     /// Asset identifier for the sound to play when the body breaks. Carried for a game's
     /// audio layer to resolve — this crate has no audio dependency and never plays it.
@@ -102,3 +102,42 @@ impl Default for Breakable {
 
 #[cfg(feature = "ecs")]
 gizmo_core::impl_component!(Breakable);
+
+/// One piece of a body a [`Breakable`] shattered, put on every debris entity the fracture
+/// step spawns.
+///
+/// **Debris used to be invisible and immortal.** It was spawned as a bare rigid body — sphere
+/// collider, no geometry anywhere — so a game that broke a wall saw the wall vanish and
+/// nothing fall (`advanced_physics` gave every mesh-less body a sphere by hand), and
+/// [`Breakable::debris_lifetime`] was documented as metadata nobody read, so every break left
+/// its pieces in the solver forever. This carries the piece's shape, so the facade can draw it
+/// with the broken body's own material, and its age, so the fracture step removes it.
+///
+/// The geometry is the Voronoi cell's convex mesh in the piece's **own** frame: centred on its
+/// centre of mass, which is where the debris body's `Transform` sits, in metres (the debris
+/// `Transform` has a scale of one). Faces do not share vertices, and [`normals`](Self::normals)
+/// is one flat outward normal per vertex; [`indices`](Self::indices) is a triangle list whose
+/// winding is **not** reliable — take facing from the normals (see
+/// [`ProceduralChunk`](crate::fracture::ProceduralChunk)).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct Debris {
+    /// The id of the entity this piece broke off. That entity is gone by the time anyone reads
+    /// this (the break despawns it), so it is a label — which pieces belong together — and not
+    /// something to look up.
+    pub source: u32,
+    /// Vertex positions, metres, in the piece's own frame.
+    pub vertices: Vec<gizmo_math::Vec3>,
+    /// One outward unit normal per vertex, constant across each face.
+    pub normals: Vec<gizmo_math::Vec3>,
+    /// Triangle list into `vertices` / `normals`.
+    pub indices: Vec<u32>,
+    /// Seconds since the piece was spawned, advanced by the fracture step.
+    pub age: f32,
+    /// Seconds after which the fracture step despawns the piece — the broken body's
+    /// [`Breakable::debris_lifetime`]. Zero or less keeps it forever.
+    pub lifetime: f32,
+}
+
+#[cfg(feature = "ecs")]
+gizmo_core::impl_component!(Debris);

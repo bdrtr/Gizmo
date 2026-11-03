@@ -103,6 +103,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the alpha (which passes through).
 - **`From` between `gizmo::math::Ray` and `gizmo::physics::Ray`** — the cursor's ray and the
   physics query's were two types with no conversion; `world.raycast(&cursor_ray.into(), …)` works.
+- **A `Breakable` breaks in a game, and its pieces are drawn and cleared away.** Nothing ran
+  `physics_fracture_system` — not `FixedPhysics`, not `PhysicsPlugin` — so a breakable wall in a
+  game never broke unless the game called it by hand; when it did, the debris was bare rigid
+  bodies with sphere colliders and no geometry (the wall vanished and nothing fell;
+  `advanced_physics` gave every mesh-less body a sphere), each inheriting the wall's `scale`, and
+  `Breakable::debris_lifetime` was metadata nobody read, so every piece stayed in the solver for
+  good. Now the facade's physics step (`cpu_physics_step_system`, which both drivers run) runs
+  fracture; each piece carries a new `Debris` component — its Voronoi cell in its own frame, the
+  source id, its age — and is drawn as that cell in the broken body's own `MaterialDesc` from
+  the frame it appears (read before the body's despawn lands); pieces have a scale of one and
+  are despawned at `debris_lifetime`. Tested with a 50 kg ball dropped on a red box: the box is
+  gone, every piece is red with 12+ vertices; with a 0.5 s lifetime none is left a second
+  later. Removing the fracture call, the material copy, the scale reset or the ageing each fails
+  a test.
 - **A character pushes the crates it walks into (`CharacterController::push_force`, 400 N by
   default; `0` turns it off).** The controller treated every collider as level geometry: walking
   into a 10 kg crate stopped the character at it as at a wall (player x 1.20, crate x 2.00 after

@@ -397,6 +397,8 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
         }
     };
 
+    age_debris(world, &mut commands, dt);
+
     let mut shattered = std::collections::HashSet::new();
 
     // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
@@ -686,6 +688,9 @@ fn shatter_entity(
         let world_offset = transform.rotation * (center + chunk.center_of_mass);
         let mut new_transform = *transform;
         new_transform.position += world_offset;
+        // The piece's geometry is in metres; a scale copied from the parent (which games use
+        // to size its mesh) would size it a second time when it is drawn.
+        new_transform.scale = gizmo_math::Vec3::ONE;
 
         // Give chunks a slight explosive velocity outwards from the center of mass
         let mut new_vel = *vel;
@@ -696,15 +701,47 @@ fn shatter_entity(
         let mut rb = RigidBody::new(chunk.volume * collider.material.density, true);
         rb.update_inertia_from_collider(&chunk_collider);
 
+        let local = center_of_mass_frame(&chunk);
         commands
             .spawn()
             .insert(rb)
             .insert(chunk_collider)
             .insert(new_transform)
-            .insert(new_vel);
+            .insert(new_vel)
+            .insert(crate::components::Debris {
+                source: entity.id(),
+                vertices: local,
+                normals: chunk.normals,
+                indices: chunk.indices,
+                age: 0.0,
+                lifetime: breakable.debris_lifetime,
+            });
     }
 
     true
+}
+
+/// A chunk's vertices moved into its own frame: about its centre of mass, where its body sits.
+fn center_of_mass_frame(chunk: &crate::fracture::ProceduralChunk) -> Vec<gizmo_math::Vec3> {
+    chunk.vertices.iter().map(|v| *v - chunk.center_of_mass).collect()
+}
+
+/// Ages every [`Debris`](crate::components::Debris) piece by `dt` and despawns the ones past
+/// their lifetime.
+fn age_debris(world: &World, commands: &mut gizmo_core::commands::Commands, dt: f32) {
+    // SAFETY: called from `physics_fracture_system` before its breakable query is opened, and
+    // `Debris` is in no other query of that system.
+    let Some(mut pieces) = (unsafe { world.query_unchecked::<gizmo_core::query::Mut<crate::components::Debris>>() }) else {
+        return;
+    };
+    for (id, mut piece) in pieces.iter_mut() {
+        piece.age += dt;
+        if piece.lifetime > 0.0 && piece.age >= piece.lifetime {
+            if let Some(e) = world.entity(id) {
+                commands.entity(e).despawn();
+            }
+        }
+    }
 }
 
 /// System that checks for Explosion components and applies outward forces

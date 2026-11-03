@@ -382,12 +382,13 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     }
 
     // --- fizik ELLE sürülür (bu demo PhysicsPlugin kullanmaz) ---
+    // The step runs the fracture system too, and draws the debris.
     gizmo::systems::cpu_physics_step_system(world, dt);
-    gizmo::physics::physics_fracture_system(world, dt);
     gizmo::physics::physics_explosion_system(world, dt);
     gizmo::systems::physics::physics_debug_system(world);
 
-    // Fracture sisteminin ürettiği chunk'lara görsel mesh/material ver.
+    // Mesh'i olmayan dinamik gövdelere bir küre ver. Kırılma parçaları buna artık düşmüyor:
+    // adım onları kendi Voronoi hücreleri ve kırılan gövdenin malzemesiyle çiziyor.
     let mut missing = Vec::new();
     if let Some(q) = world.query::<(&RigidBody, &Collider)>() {
         let meshes = world.borrow::<MeshRenderer>();

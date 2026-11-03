@@ -489,8 +489,18 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
 // Phase 7.1: Fluid-Rigid Coupling
 // Senkronize eder: GpuPhysicsLink sahibi objeleri FluidCollider buffer'ına yazar.
 /// Steps the CPU physics world by `dt` and writes the results back into the ECS.
+///
+/// The step includes **fracture**: a [`Breakable`](gizmo_physics_rigid::components::Breakable)
+/// hit hard enough shatters, its pieces age and are removed after its `debris_lifetime`, and —
+/// with the `render` feature — each piece is drawn as its own Voronoi cell in the broken body's
+/// material. Until 2026-11-03 neither this step nor anything else ran the fracture system, so a
+/// `Breakable` in a game never broke unless the game called
+/// `physics_fracture_system` itself, and the debris it then got had no geometry to draw.
 pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
     gizmo_physics_rigid::system::physics_step_system(world, dt);
+    gizmo_physics_rigid::system::physics_fracture_system(world, dt);
+    #[cfg(feature = "render")]
+    queue_debris_visuals(world);
 
     #[cfg(feature = "physics-soft")]
     {
@@ -503,6 +513,83 @@ pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
         gizmo_physics_soft::system::cloth_step_system(world, dt, gravity);
         gizmo_physics_soft::system::rope_step_system(world, dt, gravity);
     }
+}
+
+/// Queues, behind the fracture step's own commands, the job of giving each new debris piece a
+/// mesh and the material of the body it broke off.
+///
+/// The broken body is despawned by those commands, before its pieces are spawned, so its
+/// material is read **now**, while it is still there: a `Breakable` that has just latched
+/// `is_broken` and still exists is one whose despawn is pending.
+#[cfg(feature = "render")]
+fn queue_debris_visuals(world: &crate::core::World) {
+    use crate::renderer::components::MaterialDesc;
+    use gizmo_physics_rigid::components::Breakable;
+    let Some(breakables) = world.query::<&Breakable>() else { return };
+    let descs = world.query::<&MaterialDesc>();
+    let looks: Vec<(u32, Option<MaterialDesc>)> = breakables
+        .iter()
+        .filter(|(_, b)| b.is_broken)
+        .map(|(id, _)| (id, descs.as_ref().and_then(|q| q.get(id)).cloned()))
+        .collect();
+    if looks.is_empty() {
+        return;
+    }
+    drop(descs);
+    drop(breakables);
+    let Some(queue) = world.get_resource::<gizmo_core::commands::CommandQueue>() else { return };
+    queue.push(move |world: &mut crate::core::World| attach_debris_visuals(world, &looks));
+}
+
+/// Gives every [`Debris`](gizmo_physics_rigid::components::Debris) piece that has no
+/// `MeshRenderer` yet its cell as a [`MeshData`](crate::renderer::components::MeshData), the
+/// material of the body it came from (`looks`, by source id; a plain grey without one), a
+/// renderer and a `GlobalTransform`.
+#[cfg(feature = "render")]
+pub(crate) fn attach_debris_visuals(world: &mut crate::core::World, looks: &[(u32, Option<crate::renderer::components::MaterialDesc>)]) {
+    use crate::renderer::components::{MaterialDesc, MeshData, MeshRenderer};
+    use gizmo_physics_rigid::components::Debris;
+    let pending: Vec<(u32, MeshData, u32)> = {
+        let Some(pieces) = world.query::<&Debris>() else { return };
+        let drawn = world.query::<&MeshRenderer>();
+        pieces
+            .iter()
+            .filter(|(id, _)| drawn.as_ref().is_none_or(|q| q.get(*id).is_none()))
+            .map(|(id, d)| (id, debris_mesh(d), d.source))
+            .collect()
+    };
+    for (id, mesh, source) in pending {
+        let Some(e) = world.get_entity(id) else { continue };
+        let material = looks
+            .iter()
+            .find(|(s, _)| *s == source)
+            .and_then(|(_, m)| m.clone())
+            .unwrap_or_else(|| MaterialDesc::new().with_pbr(gizmo_math::Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.0));
+        world.add_component(e, mesh);
+        world.add_component(e, material);
+        world.add_component(e, MeshRenderer::new());
+        world.add_component(e, gizmo_physics_core::components::GlobalTransform::default());
+    }
+}
+
+/// A debris cell as a flat-shaded triangle list, each triangle wound counter-clockwise about
+/// its face's stored outward normal (the cell's own winding is not reliable).
+#[cfg(feature = "render")]
+fn debris_mesh(d: &gizmo_physics_rigid::components::Debris) -> crate::renderer::components::MeshData {
+    use crate::renderer::Vertex;
+    let mut out = Vec::with_capacity(d.indices.len());
+    for &[a, b, c] in d.indices.as_chunks::<3>().0 {
+        let [a, b, c] = [a as usize, b as usize, c as usize];
+        let (Some(&pa), Some(&pb), Some(&pc)) = (d.vertices.get(a), d.vertices.get(b), d.vertices.get(c)) else {
+            continue;
+        };
+        let n = d.normals.get(a).copied().unwrap_or(gizmo_math::Vec3::Y);
+        let order = if (pb - pa).cross(pc - pa).dot(n) >= 0.0 { [pa, pb, pc] } else { [pa, pc, pb] };
+        for p in order {
+            out.push(Vertex { position: p.to_array(), normal: n.to_array(), ..Default::default() });
+        }
+    }
+    crate::renderer::components::MeshData::new(out)
 }
 
 /// Schedulable wrapper around [`cpu_physics_step_system`].
@@ -554,5 +641,88 @@ mod physics_step_tests {
         }
         let y1 = world.borrow::<Transform>().get(body.id()).unwrap().position.y;
         assert!(y1 < y0 - 0.5, "body must fall under gravity via the scheduled step: {y0} -> {y1}");
+    }
+    /// A `Breakable` box with a heavy ball dropped on it, stepped by the facade's own step.
+    /// Returns the world and the box.
+    #[cfg(feature = "render")]
+    fn breakable_under_a_ball(lifetime: f32) -> (World, crate::core::Entity) {
+        use crate::renderer::components::MaterialDesc;
+        use gizmo_physics_rigid::components::Breakable;
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        let ground = world.spawn();
+        world.add_component(ground, Transform::new(Vec3::new(0.0, -0.5, 0.0)));
+        world.add_component(ground, RigidBody::new_static());
+        world.add_component(ground, Velocity::default());
+        world.add_component(ground, Collider::box_collider(Vec3::new(10.0, 0.5, 10.0)));
+        let target = world.spawn();
+        // Scaled to its half-extents, the way a game sizes a `standard_cube`.
+        world.add_component(target, Transform::new(Vec3::new(0.0, 0.5, 0.0)).with_scale(Vec3::splat(0.5)));
+        world.add_component(target, RigidBody::new(5.0, true));
+        world.add_component(target, Velocity::default());
+        world.add_component(target, Collider::box_collider(Vec3::splat(0.5)));
+        world.add_component(target, MaterialDesc::new().with_unlit(gizmo_math::Vec4::new(0.9, 0.1, 0.1, 1.0)));
+        world.add_component(target, Breakable {
+            max_pieces: 6,
+            threshold: 1.0,
+            current_health: 1.0,
+            debris_lifetime: lifetime,
+            ..Default::default()
+        });
+        let ball = world.spawn();
+        world.add_component(ball, Transform::new(Vec3::new(0.0, 2.0, 0.0)));
+        world.add_component(ball, RigidBody::new(50.0, true));
+        world.add_component(ball, Velocity::new(Vec3::new(0.0, -10.0, 0.0)));
+        world.add_component(ball, Collider::sphere(0.4));
+        (world, target)
+    }
+
+    #[cfg(feature = "render")]
+    fn debris_ids(world: &World) -> Vec<u32> {
+        world.borrow::<gizmo_physics_rigid::components::Debris>().iter().map(|(id, _)| id).collect()
+    }
+
+    #[test]
+    #[cfg(feature = "render")]
+    fn a_breakable_shatters_in_the_facade_step_into_pieces_drawn_in_its_material() {
+        use crate::renderer::components::{MaterialDesc, MeshData, MeshRenderer};
+        let (mut world, target) = breakable_under_a_ball(0.0);
+        for _ in 0..30 {
+            cpu_physics_step_system(&world, 1.0 / 60.0);
+            world.apply_commands();
+        }
+        assert!(!world.is_alive(target), "the box was hit by 50 kg at 10 m/s and is still whole");
+        let pieces = debris_ids(&world);
+        assert!(pieces.len() >= 2, "{} pieces", pieces.len());
+        let red = MaterialDesc::new().with_unlit(gizmo_math::Vec4::new(0.9, 0.1, 0.1, 1.0));
+        for id in pieces {
+            let mesh = world.borrow::<MeshData>().get(id).map(|m| m.vertices().len()).unwrap_or(0);
+            assert!(mesh >= 12 && mesh % 3 == 0, "piece {id} has {mesh} vertices to draw");
+            assert!(world.borrow::<MeshRenderer>().get(id).is_some(), "piece {id} is not drawn");
+            assert_eq!(world.borrow::<MaterialDesc>().get(id).cloned(), Some(red.clone()), "piece {id}'s material");
+            let scale = world.borrow::<Transform>().get(id).unwrap().scale;
+            assert_eq!(scale, Vec3::ONE, "piece {id} would be sized twice");
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "render")]
+    fn debris_is_removed_after_its_lifetime() {
+        let (mut world, _) = breakable_under_a_ball(0.5);
+        let mut most = 0;
+        let mut broke_at = None;
+        for step in 0..120 {
+            cpu_physics_step_system(&world, 1.0 / 60.0);
+            world.apply_commands();
+            let n = debris_ids(&world).len();
+            if n > 0 && broke_at.is_none() {
+                broke_at = Some(step);
+            }
+            most = most.max(n);
+        }
+        let broke_at = broke_at.expect("the box never broke");
+        assert!(most >= 2, "{most} pieces");
+        assert!(broke_at + 32 < 120, "the run is too short to see the lifetime pass");
+        assert_eq!(debris_ids(&world).len(), 0, "pieces outlived their 0.5 s lifetime");
     }
 }
