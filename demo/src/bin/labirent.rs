@@ -16,8 +16,7 @@
 //! - **Kinematik bir cisim bir duruşa sürülemiyordu.** Kinematik cisim `Velocity`'siyle hareket
 //!   ediyor; oyun ise tahtanın *nerede* olmasını istediğini biliyor. O duruşu hıza çevirmek oyuna
 //!   kalıyordu, ve sabit adımlı fizikte bu yanlış: bir kare sıfır, bir ya da birkaç adım koşuyor,
-//!   kare süresinden hesaplanan açısal hız tahtayı yanlış kadar döndürüyor. (`platformer`'ın
-//!   hareketli platformu hem hızını kuruyor hem konumunu elle ilerletiyordu.) **Kapatıldı:**
+//!   kare süresinden hesaplanan açısal hız tahtayı yanlış kadar döndürüyor. **Kapatıldı:**
 //!   `KinematicTarget::new(konum, dönüş)` — her adımdan önce cismin hızı hedefe *o adımda*
 //!   varacak şekilde kuruluyor (üstündeki bilye bu hareketle taşınıyor), adımdan sonra cisim
 //!   hedefe tam oturtuluyor; hedef değişmedikçe orada sıfır hızla duruyor.
