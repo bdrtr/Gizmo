@@ -28,6 +28,7 @@ hash replays bit-for-bit, which is what rollback netcode and the regression soak
 | Browser | `wasm32` with a reduced forward pipeline (no shadows/AO/GI/TAA); audio works there, networking and Lua do not. Touch works there and on touchscreens: the first finger is the mouse, every finger is in `Input::touches`, and pinch, two-finger pan and swipe are read from them. | `demo-web/README.md` |
 | Editor | `gizmo-editor` panels; `gizmo-studio` app (not published). A game's own components join the in-engine editor with `gizmo::register_editor_component`: inspected, edited, added, removed, saved. | README, CHANGELOG |
 | Netcode | P2P rollback and client-server (`gizmo-net` features `rollback`, `client-server`). Rollback holds the peer that is ahead (`try_advance`) and rolls the game's own state back with the physics (`with_state`); `itis` is a two-player game on it. | ENGINE.md §1, §5 |
+| Scenes | RON scene files with the game's own components (`full_scene_registry` + `register_serializable`); a whole world (`SceneData::save`/`load_into`) or part of one (`of_entities` → `to_ron_string`, `from_ron_str` → `instantiate`), joints included. `atolye` saves its level this way. | ENGINE.md §5 |
 
 ## What is missing — the gaps that block the most
 

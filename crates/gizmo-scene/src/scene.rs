@@ -921,10 +921,29 @@ impl SceneData {
             registry,
         );
 
+        let joints_added = Self::add_joints(scene.joints, &id_map, world);
+
+        tracing::info!(
+            path = %file_path,
+            entity_count,
+            joints_added,
+            "[Scene] Sahne yüklendi",
+        );
+        Ok(())
+    }
+
+    /// Push `joints` into the world's `PhysicsWorld`, their endpoints moved from saved ids to
+    /// the new ones through `id_map`. Returns how many were added; one whose bodies are not both
+    /// in the map is dropped with a warning, and without a `PhysicsWorld` all of them are.
+    fn add_joints(
+        joints: Vec<gizmo_physics_rigid::joints::Joint>,
+        id_map: &HashMap<u32, u32>,
+        world: &mut World,
+    ) -> usize {
         let mut joints_added = 0usize;
         let mut joints_skipped = 0usize;
         if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
-            for mut joint in scene.joints {
+            for mut joint in joints {
                 if let (Some(&new_a), Some(&new_b)) = (id_map.get(&joint.entity_a.id()), id_map.get(&joint.entity_b.id())) {
                     joint.entity_a = gizmo_physics_rigid::BodyHandle::from_id(new_a);
                     joint.entity_b = gizmo_physics_rigid::BodyHandle::from_id(new_b);
@@ -945,14 +964,46 @@ impl SceneData {
                 "[Scene] bazı joint'lerin gövde handle'ları çözülemedi — atlandı (sahne eksik gövde içeriyor)",
             );
         }
+        joints_added
+    }
 
-        tracing::info!(
-            path = %file_path,
-            entity_count,
-            joints_added,
-            "[Scene] Sahne yüklendi",
-        );
-        Ok(())
+    /// A scene of **some** of the world: `entity_ids` (filtered as
+    /// [`serialize_entities`](Self::serialize_entities) filters), plus the physics joints whose
+    /// two bodies are both among them — what a game saves when its level is part of the world,
+    /// not the camera and the HUD along with it. [`to_ron_string`](Self::to_ron_string) turns it
+    /// into text, [`instantiate`](Self::instantiate) spawns it back.
+    ///
+    /// `SceneData` is `#[non_exhaustive]`, so a game could not write the struct itself: building
+    /// one meant a `default()` with its fields assigned one by one, and the joints left out
+    /// (`atolye` found it).
+    pub fn of_entities(world: &World, entity_ids: Vec<u32>, registry: &gizmo_core::registry::ComponentRegistry) -> Self {
+        let wanted: std::collections::HashSet<u32> = entity_ids.iter().copied().collect();
+        let joints = world
+            .try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>()
+            .map(|pw| {
+                pw.joints
+                    .iter()
+                    .filter(|j| wanted.contains(&j.entity_a.id()) && wanted.contains(&j.entity_b.id()))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
+        SceneData {
+            version: CURRENT_SCENE_VERSION,
+            entities: Self::serialize_entities(world, entity_ids, registry),
+            joints,
+        }
+    }
+
+    /// Spawns this scene into `world` — entities, then the joints between them — and returns
+    /// the `saved id → new entity id` map. The in-memory counterpart of
+    /// [`load_into`](Self::load_into), for a scene from [`from_ron_str`](Self::from_ron_str) or
+    /// [`of_entities`](Self::of_entities). It adds to the world; clearing what was there is the
+    /// caller's call.
+    pub fn instantiate(self, world: &mut World, registry: &gizmo_core::registry::ComponentRegistry) -> HashMap<u32, u32> {
+        let id_map = Self::instantiate_entities(self.entities, None, world, registry);
+        Self::add_joints(self.joints, &id_map, world);
+        id_map
     }
 
     /// Spawn already-parsed [`EntityData`] into `world`, returning the
@@ -2565,4 +2616,62 @@ mod asset_identity_tests {
         );
     }
 
+}
+
+#[cfg(test)]
+mod of_entities_tests {
+    use super::*;
+    use gizmo_math::Vec3;
+    use gizmo_physics_core::{Collider, Transform};
+    use gizmo_physics_rigid::components::{RigidBody, Velocity};
+    use gizmo_physics_rigid::joints::Joint;
+    use gizmo_physics_rigid::world::PhysicsWorld;
+    use gizmo_physics_rigid::BodyHandle;
+
+    fn body(world: &mut World, x: f32) -> u32 {
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::new(x, 1.0, 0.0)));
+        world.add_component(e, RigidBody::new(1.0, true));
+        world.add_component(e, Velocity::default());
+        world.add_component(e, Collider::sphere(0.5));
+        e.id()
+    }
+
+    /// Part of a world round-trips through a RON string — the part's entities, and the joints
+    /// between them, re-pointed at the bodies' new ids; a joint reaching outside the part stays
+    /// behind.
+    #[test]
+    fn a_part_of_the_world_round_trips_with_the_joints_inside_it() {
+        let registry = crate::registry::default_scene_registry();
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new());
+        let ids: Vec<u32> = (0..4).map(|i| body(&mut world, i as f32 * 2.0)).collect();
+        {
+            let mut pw = world.get_resource_mut::<PhysicsWorld>().unwrap();
+            let h = |i: usize| BodyHandle::from_id(ids[i]);
+            pw.joints.push(Joint::rope(h(0), h(1), Vec3::ZERO, Vec3::ZERO, 2.5));
+            pw.joints.push(Joint::rope(h(1), h(3), Vec3::ZERO, Vec3::ZERO, 4.5));
+        }
+        let part = SceneData::of_entities(&world, ids[..3].to_vec(), &registry);
+        assert_eq!(part.entities.len(), 3);
+        assert_eq!(part.joints.len(), 1, "the 1–3 joint reaches outside the part");
+        let ron = part.to_ron_string().unwrap();
+
+        let mut fresh = World::new();
+        fresh.insert_resource(PhysicsWorld::new());
+        let _offset = fresh.spawn(); // so the new ids differ from the saved ones
+        let map = SceneData::from_ron_str(&ron).unwrap().instantiate(&mut fresh, &registry);
+        assert_eq!(map.len(), 3);
+        let xs: Vec<f32> = {
+            let ts = fresh.borrow::<Transform>();
+            let mut v: Vec<f32> = map.values().filter_map(|&id| ts.get(id).map(|t| t.position.x)).collect();
+            v.sort_by(f32::total_cmp);
+            v
+        };
+        assert_eq!(xs, vec![0.0, 2.0, 4.0]);
+        let pw = fresh.get_resource::<PhysicsWorld>().unwrap();
+        assert_eq!(pw.joints.len(), 1);
+        let j = &pw.joints[0];
+        assert_eq!((j.entity_a.id(), j.entity_b.id()), (map[&ids[0]], map[&ids[1]]), "the joint still names the saved ids");
+    }
 }

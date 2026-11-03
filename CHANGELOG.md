@@ -150,6 +150,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **`SceneData::of_entities` / `SceneData::instantiate` — part of a world as a scene.**
+  `SceneData::save` writes the whole world, camera and HUD included, so a game saving its level
+  that way gained a camera on every load; `serialize_entities` took a chosen set, but
+  `SceneData` is `#[non_exhaustive]` and a game could not build one from it except field by
+  field on a `default()`, with the joints left out. `of_entities(world, ids, registry)` keeps the
+  joints whose two bodies are in the set; `instantiate(world, registry)` spawns it and re-points
+  them at the new ids (shared with `load_into`). Tested with four bodies, two joints and a
+  three-body part; dropping the filter or the joint re-pointing fails it.
 - **`itis`, the twenty-second game** — a two-player shove match over `RollbackSession`: local,
   UDP, or `itis --test`, which plays 1500 ticks over a lossy, laggy link with a late start and
   checks both peers end on the real match. The first game on the netcode; it found the items
