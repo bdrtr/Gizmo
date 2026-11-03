@@ -150,6 +150,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **`yilan`, the twenty-fifth game** — snake with every rule in Lua, run through the facade's
+  `PlayLoop`; `yilan --test` lets the script play itself and checks the board. It found the
+  scripting items below.
 - **Lua can make what it then moves: `entity.spawn` returns the new id; `set_mesh`, `set_color`;
   the host reads and sets a script's globals; a script can be loaded from a string.** During
   `on_update`, `entity.spawn` / `spawn_prefab` reserve the entity from the world's allocator and
