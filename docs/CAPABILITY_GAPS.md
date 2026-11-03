@@ -1265,7 +1265,7 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
 
 `demo/src/bin/pist.rs` is a three-car, three-lap race on a stadium track: the engine's own vehicle
 model (`VehicleController` — suspension, Pacejka tyres, automatic gears), static barriers, a chase
-camera, and a top-down minimap in the corner. Two gaps, both fixed:
+camera, and a top-down minimap in the corner. Three gaps, all closed:
 
 - ~~**Cars did not move under `FixedPhysics`.**~~ **Fixed 2026-11-03.** The fixed-step driver ran
   the rigid step only; vehicle, character and fighter controllers ran only in
@@ -1275,6 +1275,9 @@ camera, and a top-down minimap in the corner. Two gaps, both fixed:
   frame to the split-screen path, which skipped cameras without one — the primary included. The
   primary camera without a viewport is the full-target base now; a higher-order viewport draws
   over it.
+- ~~**A car was four hand-written corners.**~~ **Closed.** `VehicleController::four_wheeled(track,
+  wheelbase, radius)`, which also sets the tuning's track and wheelbase to where the wheels are —
+  this game had left them at the defaults.
 
 Not engine gaps, recorded so they are not re-chased: the opponents' driving is simple (aim at the
 next point, slow for the sharpness two to four points ahead, back off a wall) and loses time on

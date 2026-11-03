@@ -1203,6 +1203,39 @@ mod tests {
         assert_ne!(shared, roll_after_turn(Some(0.0), None), "a front-only override changed nothing");
     }
 
+    /// `four_wheeled` builds a car that drives the way the controller's conventions say: the
+    /// throttle takes it toward −Z, and a positive steering input turns it left (−X) — with the
+    /// tuning's track and wheelbase matching where the wheels are.
+    #[test]
+    fn a_four_wheeled_car_drives_forward_and_steers_left() {
+        let run = |steer: f32| {
+            let mut rb = RigidBody::new(1200.0, true);
+            rb.calculate_box_inertia(1.6, 0.6, 4.0);
+            let mut t = Transform::new(Vec3::new(0.0, 0.9, 0.0));
+            let mut vel = Velocity::default();
+            let mut vc = VehicleController::four_wheeled(1.6, 2.8, 0.35);
+            let cols = probe_ground();
+            for step in 0..720 {
+                vc.throttle_input = 1.0;
+                vc.steering_input = if step > 360 { steer } else { 0.0 };
+                update_vehicle(BodyHandle::from_id(2), &mut vc, &mut rb, &t, &mut vel, &cols, 1.0, 1.0 / 120.0);
+                vel.linear.y -= 9.81 / 120.0;
+                t.position += vel.linear / 120.0;
+                let w = vel.angular / 120.0;
+                if w.length() > 0.0 {
+                    t.rotation = (gizmo_math::Quat::from_scaled_axis(w) * t.rotation).normalize();
+                }
+            }
+            t.position
+        };
+        let straight = run(0.0);
+        let left = run(1.0);
+        // Not exactly straight: the corners update the chassis one after another (the wheel
+        // vector's documented order dependence) — measured 0.55 m of drift over 51 m.
+        assert!(straight.z < -10.0 && straight.x.abs() < 1.5, "straight ahead is −Z: {straight:?}");
+        assert!(left.x < straight.x - 2.0, "positive steering turns left (−X): {left:?} vs {straight:?}");
+    }
+
     fn probe_ground() -> Vec<(BodyHandle, Transform, Collider)> {
         vec![(
             BodyHandle::from_id(1),

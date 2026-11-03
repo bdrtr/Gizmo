@@ -24,6 +24,11 @@
 //!   **Düzeltildi:** viewport'u olmayan birincil kamera tüm hedefi kaplayan taban; daha yüksek
 //!   `order`'lı küçük bir viewport onun üstüne çiziliyor (resim içinde resim).
 //!
+//! - **Dört tekerlekli bir araba elle kuruluyordu.** Dört köşe döngüsü, akslar, sol/sağ — ve
+//!   `tuning.track_width` / `wheelbase` tekerleklerin yeriyle uyumlu tutulmazsa denge çubuğu ve
+//!   direksiyon geometrisi başka bir arabayı hesaplıyor (bu oyun önce öyleydi). **Kapatıldı:**
+//!   `VehicleController::four_wheeled(iz, dingil_mesafesi, yarıçap)`.
+//!
 //! Gerisi motorda vardı: `VehicleController` (dört tekerlek, süspansiyon, Pacejka lastik,
 //! otomatik vites), statik bariyerler, `Sky` + `Fog`, kovalayan kamera. Yapay zekâ basit: bir
 //! sonraki noktaya dümen, ilerideki virajın keskinliğine göre hız, duvara takılınca geri çıkma —
@@ -34,7 +39,7 @@
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::core::input::{Input, MoveKeys};
-use gizmo::physics::vehicle::{Axle, VehicleController, Wheel};
+use gizmo::physics::vehicle::VehicleController;
 use gizmo::physics::{Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor, Viewport};
@@ -217,22 +222,10 @@ fn spawn_car(world: &mut World, at: Vec3, heading: f32, colour: Vec4, racer: Rac
     let collider = Collider::box_collider(Vec3::new(0.9, 0.35, 2.0));
     let mut body = RigidBody::new(900.0, true);
     body.update_inertia_from_collider(&collider);
-    let mut car = VehicleController::new();
-    for (x, z, axle, is_left) in [
-        (-0.85, -1.4, Axle::Front, true),
-        (0.85, -1.4, Axle::Front, false),
-        (-0.85, 1.4, Axle::Rear, true),
-        (0.85, 1.4, Axle::Rear, false),
-    ] {
-        car.add_wheel(Wheel {
-            attachment_local_pos: Vec3::new(x, 0.0, z),
-            axle_type: axle,
-            is_left,
-            radius: 0.35,
-            suspension_rest_length: 0.4,
-            suspension_max_travel: 0.3,
-            ..Default::default()
-        });
+    let mut car = VehicleController::four_wheeled(1.7, 2.8, 0.35);
+    for wheel in &mut car.wheels {
+        wheel.suspension_rest_length = 0.4;
+        wheel.suspension_max_travel = 0.3;
     }
     car.max_steering_angle = 0.5;
     let id = world

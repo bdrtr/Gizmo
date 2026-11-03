@@ -801,6 +801,39 @@ impl VehicleController {
     pub fn new() -> Self {
         Self::default()
     }
+    /// A four-wheeled car: a wheel at each corner of a `track_width × wheelbase` rectangle
+    /// centred on the chassis origin, the front axle toward −Z (the controller's forward), every
+    /// wheel `radius` with [`Wheel`]'s default suspension and tyres. Front left, front right, rear
+    /// left, rear right — the order the wheel vector's docs warn is load-bearing.
+    ///
+    /// [`VehicleTuning::wheelbase`] and [`VehicleTuning::track_width`] are set to match: the
+    /// anti-roll bar and the Ackermann steering read them, and a hand-built car that leaves them at
+    /// the defaults while its wheels are elsewhere steers and rolls as some other car. Tune further
+    /// through [`wheels`](Self::wheels) and [`tuning`](Self::tuning).
+    ///
+    /// ```
+    /// # use gizmo_physics_dynamics::vehicle::{Axle, VehicleController};
+    /// let car = VehicleController::four_wheeled(1.7, 2.8, 0.35);
+    /// assert_eq!(car.wheels.len(), 4);
+    /// assert_eq!((car.tuning.track_width, car.tuning.wheelbase), (1.7, 2.8));
+    /// assert!(car.wheels[0].attachment_local_pos.z < 0.0 && car.wheels[0].axle_type == Axle::Front);
+    /// ```
+    pub fn four_wheeled(track_width: f32, wheelbase: f32, radius: f32) -> Self {
+        let mut car = Self::new();
+        let (x, z) = (track_width * 0.5, wheelbase * 0.5);
+        for (pos, axle_type, is_left) in [
+            (Vec3::new(-x, 0.0, -z), Axle::Front, true),
+            (Vec3::new(x, 0.0, -z), Axle::Front, false),
+            (Vec3::new(-x, 0.0, z), Axle::Rear, true),
+            (Vec3::new(x, 0.0, z), Axle::Rear, false),
+        ] {
+            car.add_wheel(Wheel { attachment_local_pos: pos, axle_type, is_left, radius, ..Default::default() });
+        }
+        car.tuning.track_width = track_width;
+        car.tuning.wheelbase = wheelbase;
+        car
+    }
+
     /// Appends a suspension corner.
     ///
     /// Performs no validation. Nothing checks that each axle ends up with exactly one

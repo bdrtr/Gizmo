@@ -70,6 +70,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bit-identical for them), in the inspector, and a scene row written before the fields loads with
   the defaults. Tested with two agents walking 1 m apart: the default pushes them apart, a 0.8 m
   radius or a weight of 0 leaves them at 1 m. `komutan` uses 1.0 m for its 1.2 m formation.
+- **`VehicleController::four_wheeled(track_width, wheelbase, radius)`** — a car in one call: a
+  wheel at each corner, front axle toward −Z (the controller's forward), in the order the wheel
+  vector's docs call load-bearing, and `tuning.track_width` / `wheelbase` set to where the wheels
+  are (the anti-roll bar and Ackermann read them; a hand-built car that left them at the defaults
+  steered as some other car — `pist` did). Every car in the tree had written the same four-corner
+  loop. Tested driving: straight is −Z, a positive steering input turns left; putting the front
+  axle at +Z fails it. `pist` uses it.
 - **`pist`, the sixteenth game** — a three-car, three-lap race on a stadium track with barriers,
   driven by the engine's own vehicle model (`VehicleController`), a chase camera and a minimap in
   the corner. Its two gaps — cars that did not move under `FixedPhysics`, and the minimap
