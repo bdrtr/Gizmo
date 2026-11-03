@@ -66,7 +66,8 @@ fn a_joint_too_weak_for_the_weight_breaks_at_a_load_above_one() {
 ///
 /// Measured while separating what `kopru`'s truss showed: at this 10:1 mass ratio the readings sit
 /// within ~3–6 % of statics; with 0.1 kg bars (500:1) they read ~30 % low and never settle — the
-/// sequential-impulse mass-ratio limit, not asserted here. So a truss reading far above statics
+/// sequential-impulse mass-ratio limit, not asserted here. The readings also swing ±15–18 % step to
+/// step at any iteration count (2–80), which is why the assertion averages. So a truss reading far above statics
 /// is not the measurement or a determinate solve; `kopru`'s four pinned supports make it
 /// indeterminate.
 #[test]

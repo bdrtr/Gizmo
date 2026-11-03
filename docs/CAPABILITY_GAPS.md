@@ -1283,8 +1283,10 @@ the member forces statics gives (`joint_load.rs` asserts 8 %), so neither the me
 determinate solve is off — the excess belongs to this truss's four pinned supports, which make it
 indeterminate. Two things measured on the way and not asserted: with 0.1 kg bars (500:1 against the
 weight) the bracket reads ~30 % low and never settles, the sequential-impulse mass-ratio limit; and
-at 40 joint iterations its readings swing more (±25 %) than at 10 (±3 %). The game sets its
-threshold to the forces it sees (30 kN).
+its readings swing about ±15–18 % around statics at every iteration count from 2 to 80 over a
+2.5 s window, while the tip's sway falls with iterations (2.2 → 0.5 mm) — an earlier note here
+said 40 iterations swung more (±25 %) than 10 (±3 %), which was ten steps' worth of samples, not a
+property. The game sets its threshold to the forces it sees (30 kN).
 
 ### C16l. The sixteenth game: cars (2026-11-03, `pist`)
 
