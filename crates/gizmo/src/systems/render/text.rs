@@ -49,7 +49,8 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
     let toggles = world.borrow::<crate::ui::Toggle>();
     let scrolls = world.borrow::<crate::ui::Scroll>();
     let mut out = Vec::new();
-    for (id, node) in nodes.iter() {
+    for id in tree_order(world) {
+        let Some(node) = nodes.get(id) else { continue };
         out.push((id, node.position, node.size, backgrounds.get(id).map(|c| c.0)));
         if let Some(s) = sliders.get(id) {
             let w = node.size.x * s.value.clamp(0.0, 1.0);
@@ -86,6 +87,40 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
         }
     }
     out
+}
+
+/// Every UI node in painting order: a parent before its children, earlier siblings (in
+/// `Children` order) before later ones and everything under them — depth first, as a page is
+/// painted. The renderer keeps the queue order within a layer, so this is what puts an item over
+/// the slot it sits in.
+///
+/// It used to be the node storage's own order, which is by *archetype*: a slot (`NodeBundle` +
+/// a drop target) and the item inside it (`ButtonBundle` + a drag) live in different tables, and
+/// whichever table came first was painted first — in `birlestir`, every slot over its own item.
+#[cfg(feature = "ui")]
+fn tree_order(world: &World) -> Vec<u32> {
+    let nodes = world.borrow::<crate::ui::Node>();
+    let parents = world.borrow::<crate::core::component::Parent>();
+    let children = world.borrow::<crate::core::component::Children>();
+    let parent_node = |id: u32| parents.get(id).map(|p| p.0).filter(|p| nodes.get(*p).is_some());
+    // A node whose parent is not a node starts a tree of its own. Ids order the trees: spawned
+    // earlier, painted earlier.
+    let mut roots: Vec<u32> = nodes.iter().map(|(id, _)| id).filter(|&id| parent_node(id).is_none()).collect();
+    roots.sort_unstable();
+    let total = nodes.iter().count();
+    let mut order = Vec::with_capacity(total);
+    let mut stack: Vec<u32> = roots.into_iter().rev().collect();
+    // Bounded: a `Children` list written by hand can name a node twice or form a loop.
+    while let Some(id) = stack.pop() {
+        if order.len() >= total {
+            break;
+        }
+        order.push(id);
+        if let Some(c) = children.get(id) {
+            stack.extend(c.0.iter().rev().copied().filter(|&k| parent_node(k) == Some(id)));
+        }
+    }
+    order
 }
 
 #[cfg(not(feature = "ui"))]
@@ -359,8 +394,8 @@ fn ui_layer(_world: &World, _entity: u32) -> i32 {
 ///
 /// [`BackgroundColor`](crate::ui::BackgroundColor) is drawn as a solid quad over the box, under
 /// every glyph in the frame. It had been written and read by nothing since the crate existed.
-/// Overlapping boxes are painted in an arbitrary order, because `gizmo-ui` has no z-order to sort
-/// by — its own docs say so, and this pass cannot invent one.
+/// Overlapping boxes are painted by [`ZIndex`](crate::ui::ZIndex) layer, and within a layer in
+/// tree order — a parent under its children, an earlier sibling under a later one.
 pub fn record_text(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &mut Renderer,
@@ -547,6 +582,23 @@ mod clip_tests {
         assert_eq!(boxes.len(), 2);
         assert_eq!(boxes[0], (s.id(), Vec2::new(10.0, 20.0), Vec2::new(200.0, 30.0), Some(Vec4::ONE)));
         assert_eq!(boxes[1], (s.id(), Vec2::new(10.0, 20.0), Vec2::new(50.0, 30.0), Some(fill)));
+    }
+
+    /// Within a layer, boxes come out in tree order whatever tables the nodes live in: a parent
+    /// before its children, siblings in `Children` order. Storage order put a slot over its item.
+    #[test]
+    fn ui_boxes_come_out_parent_before_child_whatever_the_archetype() {
+        use crate::core::hierarchy::HierarchyExt;
+        let mut world = World::new();
+        // The item's table is created first, so storage order would yield it before its slot.
+        let item = world.spawn_bundle((node(4.0, 4.0, 10.0, 10.0), crate::ui::BackgroundColor(Vec4::ONE), crate::ui::Clicked(false)));
+        let slot = world.spawn_bundle((node(0.0, 0.0, 18.0, 18.0), crate::ui::BackgroundColor(Vec4::ZERO)));
+        let second = world.spawn_bundle((node(20.0, 0.0, 18.0, 18.0), crate::ui::BackgroundColor(Vec4::ZERO)));
+        let other = world.spawn_bundle((node(40.0, 0.0, 18.0, 18.0), crate::ui::BackgroundColor(Vec4::ZERO), crate::ui::Clicked(false)));
+        world.add_child(slot, second);
+        world.add_child(slot, item);
+        let ids: Vec<u32> = ui_boxes(&world).iter().map(|b| b.0).collect();
+        assert_eq!(ids, vec![slot.id(), second.id(), item.id(), other.id()]);
     }
 
     /// A `LocalizedText` shows the current language's string, follows a language switch, and

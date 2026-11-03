@@ -1259,6 +1259,27 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16g. The eleventh game: drag and drop (2026-11-03, `birlestir`)
+
+`demo/src/bin/birlestir.rs` is a merge garden made of UI alone: a 6×5 field, **Üret** plants a
+seed (energy that refills on a `Timer`), two equal things dragged together become the next stage,
+orders on the right pay for a stage dropped on them, a bin takes what is not wanted, and the field
+is saved. Three things:
+
+- ~~**A drop could not be found.**~~ **Closed 2026-11-03.** The dragged item follows the pointer,
+  so it is what is under the pointer; everything beneath reads `Interaction::None`, and the game
+  had to hit-test every slot's box itself, minding layers, clipping and the item. `DropTarget`
+  (`hovered_by`, `dropped`) and `Drag::over` / `dropped_on`: front layer first, then the innermost
+  of nested targets; clipped, sizeless, and the dragged subtree never count. Four mutations, four
+  failing tests.
+- ~~**A slot painted over its own item.**~~ **Fixed 2026-11-03.** Boxes on one layer came out in
+  archetype order; slot and item are in different tables. Tree order now (parent, then children
+  in `Children` order).
+- **The UI does not scale with the window.** A field laid out for 1280×720 does not fit the
+  472×492 window a tiling window manager gives it: `Val::Px` is always a window pixel. *Open.*
+- **No tooltip.** The game builds its own — an absolute node moved to the pointer every frame,
+  `Display::None` when nothing is hovered. *Open; it works by hand.*
+
 ### C16f. The tenth game: a world made of tiles (2026-11-03, `zindan`)
 
 `demo/src/bin/zindan.rs` is a turn-based dungeon crawler: rooms and corridors generated per level,

@@ -1,7 +1,9 @@
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
-use crate::components::{Clicked, ClipContent, Drag, Dropdown, Interaction, Node, Scroll, Slider, Toggle, ZIndex};
+use crate::components::{
+    Clicked, ClipContent, Drag, DropTarget, Dropdown, Interaction, Node, Scroll, Slider, Toggle, ZIndex,
+};
 use gizmo_core::component::Parent;
 
 /// The layer `entity` is on: its own [`ZIndex`], or the nearest one up its parents, or `0`.
@@ -406,6 +408,98 @@ pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, Mut<Dra
     }
 }
 
+/// Finds the [`DropTarget`] under every drag — the rules are on [`DropTarget`] — and writes the
+/// answer on both ends: [`DropTarget::hovered_by`] / [`DropTarget::dropped`], and
+/// [`Drag::over`] / [`Drag::dropped_on`]. Runs after `ui_drag_system`, which ends a drag on its
+/// release frame, so the drop is seen on that same frame.
+pub fn ui_drop_system(
+    mut drags: Query<Mut<Drag>>,
+    mut targets: Query<(&Node, Mut<DropTarget>)>,
+    layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
+    clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
+) {
+    let parent = |id: u32| layers.get(id).and_then(|(_, p)| p.map(|p| p.0));
+    let layer_of = |id: u32| layer_with(id, |e| layers.get(e).and_then(|(z, _)| z.map(|z| z.0)), parent);
+    // `id` is `ancestor` or lies under it.
+    let within = |id: u32, ancestor: u32| {
+        let mut at = Some(id);
+        for _ in 0..256 {
+            match at {
+                Some(a) if a == ancestor => return true,
+                Some(a) => at = parent(a),
+                None => return false,
+            }
+        }
+        false
+    };
+    // Not clipped away at `point` by any ClipContent / Scroll above it.
+    let seen = |id: u32, point: (f32, f32)| {
+        let mut at = parent(id);
+        for _ in 0..256 {
+            let Some(a) = at else { return true };
+            if let Some((n, c, s)) = clippers.get(a) {
+                if (c.is_some() || s.is_some()) && !point_in_node(point, n) {
+                    return false;
+                }
+            }
+            at = parent(a);
+        }
+        true
+    };
+
+    // (dragged element, where, still held). Normally one: there is one pointer.
+    let live: Vec<(u32, (f32, f32), bool)> = drags
+        .iter_mut()
+        .filter(|(_, d)| d.is_dragging() || d.just_ended())
+        .map(|(id, d)| (id, (d.position().x, d.position().y), !d.just_ended()))
+        .collect();
+    let candidates: Vec<(u32, Node)> = if live.is_empty() {
+        Vec::new()
+    } else {
+        targets.iter_mut().map(|(id, (n, _))| (id, *n)).collect()
+    };
+    let answers: Vec<(u32, Option<u32>, bool)> = live
+        .iter()
+        .map(|&(drag, point, held)| {
+            let best = candidates
+                .iter()
+                .filter(|(t, n)| {
+                    // A zero-size (hidden) target holds no point, so it drops out here too.
+                    point_in_node(point, n) && !within(*t, drag) && seen(*t, point)
+                })
+                .max_by(|(a, na), (b, nb)| {
+                    let area = |n: &Node| n.size.x * n.size.y;
+                    layer_of(*a)
+                        .cmp(&layer_of(*b))
+                        .then(area(nb).total_cmp(&area(na)))
+                        .then(a.cmp(b))
+                })
+                .map(|(t, _)| *t);
+            (drag, best, held)
+        })
+        .collect();
+
+    // Write only what changed, so `Changed<DropTarget>` / `Changed<Drag>` mean something.
+    for (id, (_, mut target)) in targets.iter_mut() {
+        let hovered = answers.iter().find(|a| a.1 == Some(id) && a.2).map(|a| a.0);
+        let dropped = answers.iter().find(|a| a.1 == Some(id) && !a.2).map(|a| a.0);
+        let next = DropTarget::answer(hovered, dropped);
+        if *target != next {
+            *target = next;
+        }
+    }
+    for (id, mut drag) in drags.iter_mut() {
+        let (over, dropped_on) = match answers.iter().find(|a| a.0 == id) {
+            Some(&(_, t, true)) => (t, None),
+            Some(&(_, t, false)) => (None, t),
+            None => (None, None),
+        };
+        if drag.over() != over || drag.dropped_on() != dropped_on {
+            drag.set_target(over, dropped_on);
+        }
+    }
+}
+
 /// The mouse wheel scrolls the innermost [`Scroll`] node under the cursor — by its `speed` a
 /// notch, wheel up showing earlier content. The layout clamps the result.
 pub fn ui_scroll_system(
@@ -800,6 +894,121 @@ mod tests {
         drag_frame(&mut world, (500.0, 500.0), true);
         drag_frame(&mut world, (50.0, 20.0), true);
         assert!(!drag(&world).is_dragging());
+    }
+
+    /// Interaction, drag, then drop — the order `register` schedules them in.
+    fn drop_frame(world: &mut gizmo_core::World, at: (f32, f32), down: bool) {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        drag_frame(world, at, down);
+        let mut s = Schedule::new();
+        s.add_di_system(ui_drop_system.into_config());
+        s.build();
+        s.run(world, 0.0);
+    }
+
+    /// An item dragged over a slot lights it while held and lands on it on release — even though
+    /// the item, following the pointer, is what is under the pointer; the answer is on both ends
+    /// and lasts the one frame of the drop.
+    #[test]
+    fn a_drag_is_dropped_on_the_target_under_it() {
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        let slot = world.spawn_bundle((node((200.0, 0.0), (80.0, 80.0)), DropTarget::default())).id();
+        let other = world.spawn_bundle((node((400.0, 0.0), (80.0, 80.0)), DropTarget::default())).id();
+        let item = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (80.0, 80.0)), ..Default::default() });
+        world.add_component(item, Drag::default());
+        let item = item.id();
+        let target = |w: &gizmo_core::World, id: u32| *w.borrow::<DropTarget>().get(id).unwrap();
+        let drag = |w: &gizmo_core::World| *w.borrow::<Drag>().get(item).unwrap();
+
+        drop_frame(&mut world, (40.0, 40.0), true);
+        assert_eq!(drag(&world).over(), None);
+        // The item now sits over the slot, as a game moves it — and is still under the pointer.
+        world.borrow_mut::<Node>().get_mut(item).unwrap().position = Vec2::new(200.0, 0.0);
+        drop_frame(&mut world, (240.0, 40.0), true);
+        assert_eq!(target(&world, slot).hovered_by(), Some(item));
+        assert_eq!(target(&world, other).hovered_by(), None);
+        assert_eq!(drag(&world).over(), Some(slot));
+        assert_eq!(target(&world, slot).dropped(), None, "held is not dropped");
+
+        drop_frame(&mut world, (240.0, 40.0), false);
+        assert_eq!(target(&world, slot).dropped(), Some(item));
+        assert_eq!(target(&world, slot).hovered_by(), None, "a dropped drag no longer hovers");
+        assert_eq!(drag(&world).dropped_on(), Some(slot));
+        assert_eq!(drag(&world).over(), None);
+
+        drop_frame(&mut world, (240.0, 40.0), false);
+        assert_eq!(target(&world, slot).dropped(), None, "the drop is one frame");
+        assert_eq!(drag(&world).dropped_on(), None, "the drop is one frame");
+
+        // Let go over nothing: no target hears of it.
+        drop_frame(&mut world, (40.0, 40.0), true);
+        drop_frame(&mut world, (600.0, 300.0), false);
+        assert_eq!(drag(&world).dropped_on(), None);
+        assert_eq!(target(&world, slot).dropped(), None);
+        assert_eq!(target(&world, other).dropped(), None);
+    }
+
+    /// Which target wins: the higher layer, then the smaller of nested ones; never the dragged
+    /// element or what is under it; never one clipped out of view; never one with no size.
+    #[test]
+    fn the_drop_goes_to_the_front_innermost_visible_target_not_the_dragged_one() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        let spawn = |w: &mut gizmo_core::World, pos: (f32, f32), size: (f32, f32)| {
+            w.spawn_bundle((node(pos, size), DropTarget::default()))
+        };
+        // A panel that is a target, with a slot inside it.
+        let panel = spawn(&mut world, (0.0, 200.0), (300.0, 300.0));
+        let inner = spawn(&mut world, (100.0, 300.0), (80.0, 80.0));
+        world.add_child(panel, inner);
+        // The dragged item is itself a target (items take other items), and has a target child.
+        let item = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (80.0, 80.0)), ..Default::default() });
+        world.add_component(item, Drag::default());
+        world.add_component(item, DropTarget::default());
+        let badge = spawn(&mut world, (0.0, 0.0), (20.0, 20.0));
+        world.add_child(item, badge);
+        let (panel, inner, item, badge) = (panel.id(), inner.id(), item.id(), badge.id());
+        let dropped_on = |w: &gizmo_core::World| w.borrow::<Drag>().get(item).unwrap().dropped_on();
+        let throw = |w: &mut gizmo_core::World, at: (f32, f32)| {
+            // Back at rest, picked up, carried to `at`, let go.
+            w.borrow_mut::<Node>().get_mut(item).unwrap().position = Vec2::ZERO;
+            w.borrow_mut::<Node>().get_mut(badge).unwrap().position = Vec2::ZERO;
+            drop_frame(w, (10.0, 10.0), true);
+            // The item (and its badge) follow the pointer, as a game moves them.
+            w.borrow_mut::<Node>().get_mut(item).unwrap().position = Vec2::new(at.0 - 10.0, at.1 - 10.0);
+            w.borrow_mut::<Node>().get_mut(badge).unwrap().position = Vec2::new(at.0 - 10.0, at.1 - 10.0);
+            drop_frame(w, at, false);
+        };
+
+        throw(&mut world, (130.0, 330.0));
+        assert_eq!(dropped_on(&world), Some(inner), "nested: the smaller one");
+        throw(&mut world, (20.0, 220.0));
+        assert_eq!(dropped_on(&world), Some(panel), "outside the slot: the panel");
+
+        // A layer in front wins even though it is bigger.
+        let front = spawn(&mut world, (0.0, 200.0), (400.0, 400.0));
+        world.add_component(front, ZIndex(3));
+        throw(&mut world, (130.0, 330.0));
+        assert_eq!(dropped_on(&world), Some(front.id()), "the front layer");
+        world.despawn(front);
+
+        // The slot scrolled out of its clipping panel: not a target where it would have been.
+        world.add_component(world.entity(panel).unwrap(), ClipContent);
+        world.borrow_mut::<Node>().get_mut(inner).unwrap().position = Vec2::new(100.0, 520.0);
+        throw(&mut world, (130.0, 550.0));
+        assert_eq!(dropped_on(&world), None, "a clipped-away slot took the drop");
+
+        // A hidden (zero-size) target is no target.
+        world.borrow_mut::<Node>().get_mut(inner).unwrap().position = Vec2::new(100.0, 300.0);
+        world.borrow_mut::<Node>().get_mut(inner).unwrap().size = Vec2::ZERO;
+        throw(&mut world, (130.0, 330.0));
+        assert_eq!(dropped_on(&world), Some(panel));
+
+        // Neither the item nor its badge — both under the pointer the whole time — took it.
+        assert!(world.borrow::<DropTarget>().get(item).unwrap().dropped().is_none());
+        assert!(world.borrow::<DropTarget>().get(badge).unwrap().dropped().is_none());
     }
 
     /// Interaction then sliders, the order `register` schedules them in, with the mouse at `at`

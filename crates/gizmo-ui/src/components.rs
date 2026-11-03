@@ -403,6 +403,8 @@ pub struct Drag {
     position: Vec2,
     just_started: bool,
     just_ended: bool,
+    over: Option<u32>,
+    dropped_on: Option<u32>,
 }
 
 impl Drag {
@@ -442,6 +444,27 @@ impl Drag {
         self.just_ended
     }
 
+    /// The drop system's answer for this frame.
+    pub(crate) fn set_target(&mut self, over: Option<u32>, dropped_on: Option<u32>) {
+        self.over = over;
+        self.dropped_on = dropped_on;
+    }
+
+    /// The [`DropTarget`] the drag is over right now, if any — for highlighting where it would
+    /// land. `None` when no drag is under way.
+    #[must_use]
+    pub fn over(&self) -> Option<u32> {
+        self.over
+    }
+
+    /// The [`DropTarget`] the drag was let go over, on the frame it ended
+    /// ([`just_ended`](Self::just_ended)); `None` on every other frame, and when it was let go
+    /// over no target.
+    #[must_use]
+    pub fn dropped_on(&self) -> Option<u32> {
+        self.dropped_on
+    }
+
     /// Advances the drag for one frame: `pressed_here` is a press that began on the element this
     /// frame, `held` the button's state, `pointer` where it is.
     pub(crate) fn step(&mut self, pressed_here: bool, held: bool, pointer: Vec2) {
@@ -459,6 +482,45 @@ impl Drag {
             self.start = pointer;
             self.position = pointer;
         }
+    }
+}
+
+/// An element a [`Drag`] can be let go over — an inventory slot, a bin, an order on a board.
+///
+/// "What was it dropped on" is not "what is under the pointer": the dragged element follows the
+/// pointer, so *it* is under the pointer, and everything beneath it reads
+/// [`Interaction::None`]. `ui_drop_system` asks the other question — which target holds the
+/// drag's position — and answers on both ends: here, and in [`Drag::over`] /
+/// [`Drag::dropped_on`].
+///
+/// When several targets hold the point, the one on the highest [`ZIndex`] layer wins, and among
+/// those the smallest (so a slot inside a panel that is a target too gets the drop, not the
+/// panel). A target the drag cannot see does not count: one scrolled or clipped out of its
+/// [`ClipContent`] / [`Scroll`] ancestor, one with no size (hidden, not laid out), and the dragged
+/// element itself and everything under it — an item can be a target for other items and still be
+/// dragged without dropping onto itself.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DropTarget {
+    hovered_by: Option<u32>,
+    dropped: Option<u32>,
+}
+
+impl DropTarget {
+    /// The dragged element over this target right now, if any.
+    #[must_use]
+    pub fn hovered_by(&self) -> Option<u32> {
+        self.hovered_by
+    }
+
+    /// The element let go over this target this frame, if any — the frame its
+    /// [`Drag::just_ended`] is `true`.
+    #[must_use]
+    pub fn dropped(&self) -> Option<u32> {
+        self.dropped
+    }
+
+    pub(crate) fn answer(hovered_by: Option<u32>, dropped: Option<u32>) -> Self {
+        Self { hovered_by, dropped }
     }
 }
 
@@ -942,7 +1004,7 @@ impl Scroll {
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, Slider, ProgressBar, Toggle, Dropdown);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, DropTarget, Slider, ProgressBar, Toggle, Dropdown);
 
 #[cfg(test)]
 mod tests {

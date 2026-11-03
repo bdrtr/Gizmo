@@ -50,6 +50,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Drag and drop: `gizmo::ui::DropTarget`.** What a dragged item was let go over could not be
+  found by asking what is under the pointer — the item follows the pointer, so it is what is
+  under it, and every slot beneath reads `Interaction::None`. `ui_drop_system` (after
+  `ui_drag_system`) finds the target holding the drag's position and answers on both ends:
+  `DropTarget::hovered_by()` / `dropped()`, `Drag::over()` / `dropped_on()`, the drop for the one
+  frame of the release. The highest `ZIndex` layer wins, then the smallest of nested targets; a
+  target clipped out of its `ClipContent` / `Scroll`, one with no size, and the dragged element
+  and its subtree never count. Tested on hover, drop, one-frame drop and letting go over nothing,
+  and on each tie-break; dropping the subtree exclusion, the area order, the layer order or the
+  clip check each fails a test. Found writing `birlestir`, the eleventh game (a merge garden).
+
 - **A master limiter: `AudioManager::set_limiter(Some(Limiter::default()))`.** Every sound is
   summed by one mixer and the sum had no ceiling: eight sounds at 0.6 peak near 4.8, and the device
   clips it into a crackle. A brick-wall limiter now sits on the sum (instant attack, so no sample
@@ -1754,6 +1765,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **UI boxes on one layer were painted in storage (archetype) order, not tree order.** A slot
+  (`NodeBundle` + `DropTarget`) and the item inside it (`ButtonBundle` + `Drag`) live in different
+  tables, and the table that came first painted first: in `birlestir` every slot covered its own
+  item, leaving only its label visible. The facade's `ui_boxes` now walks the hierarchy — a
+  parent before its children, siblings in `Children` order — and the renderer's stable layer sort
+  keeps that order. Tested with the child's table created first (storage order gave
+  `[3, 2, 1, 0]`).
 
 - **Large imported meshes no longer draw a nonsense LOD.** `Mesh::new_indexed` (every glTF and
   OBJ import, every primitive) passed its de-duplicated vertex array to `Mesh::new`, whose LOD
