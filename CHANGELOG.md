@@ -64,6 +64,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   turns them green (31 230 38 / 6 224 7; forward 0 229 0 / 0 251 0), intensity 0 leaves them dark;
   dropping either shader's branch fails the test. Found by `kosucu`, whose gold coins were grey
   under a pale blue sky.
+- **`pointer::world_to_screen(world, point)` and `Camera::world_to_screen`** — the pixel a world
+  point is drawn at, `cursor_ray`'s inverse: what a box selection tests units against and where a
+  health bar goes over a 3D thing. Top-left origin like `Input::mouse_position`; `None` behind the
+  camera; offset into the camera's viewport in split screen. Tested as the inverse of the cursor
+  ray at three cursors in two window shapes, behind the camera, and in a right-half viewport;
+  dropping the behind-camera test, the y flip or the viewport offset fails it.
 - **`Display::Grid` in `gizmo-ui`.** Explicit tracks (`GridTracks` of `GridTrack::{Px, Percent,
   Fr, Auto}`, up to 16 per axis, held inline so `Style` stays `Copy`), one size for implicit rows
   and columns (`grid_auto_rows` / `grid_auto_columns`), and placement by line, span, or both
@@ -1861,6 +1867,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **The cursor ray came from a stale camera position.** `pointer::cursor_ray` (and so
+  `cursor_on_plane`) read the camera's `GlobalTransform` first, which in game code is a frame
+  behind — a camera spawned this frame cast from the origin, and one following a player cast from
+  where it was. It reads this frame's place through its parents now (`world_position`). Found
+  writing `world_to_screen`'s example, whose freshly spawned camera projected nothing; a test pins
+  it and the old lookup fails it.
 
 - **A multi-part compound collider crashed the physics near any CCD body.** The CCD path's
   speculative contact handed a `Compound` to GJK whole, which violates `support_point`'s contract:

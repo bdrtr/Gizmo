@@ -397,6 +397,22 @@ impl Camera {
         let view_proj_inv = (self.get_projection(w / h) * self.get_view(world_pos)).inverse();
         gizmo_math::Ray::from_ndc(ndc, view_proj_inv)
     }
+
+    /// The other way: the pixel a world-space `point` lands on — [`screen_to_ray`](Self::screen_to_ray)'s
+    /// inverse, with the same `viewport` and `world_pos` arguments and the same top-left origin.
+    ///
+    /// `None` when the point is behind the camera (or on its plane), where no pixel shows it. A
+    /// point in front but outside the view gets a pixel outside `0..viewport`, which is what an
+    /// off-screen marker wants; test the bounds for "is it on screen".
+    pub fn world_to_screen(&self, point: Vec3, viewport: (f32, f32), world_pos: Vec3) -> Option<(f32, f32)> {
+        let (w, h) = (viewport.0.max(1.0), viewport.1.max(1.0));
+        let clip = self.get_projection(w / h) * self.get_view(world_pos) * point.extend(1.0);
+        if clip.w <= 1e-6 {
+            return None;
+        }
+        let ndc = clip.truncate() / clip.w;
+        Some(((ndc.x + 1.0) * 0.5 * w, (1.0 - ndc.y) * 0.5 * h))
+    }
 }
 
 /// **Which camera the scene is rendered from.** One function, because every layer needs the answer

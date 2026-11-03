@@ -22,8 +22,8 @@ use crate::renderer::components::{active_camera, Camera};
 /// one camera, or a cursor outside every viewport — it is
 /// [`active_camera`], the camera the frame is rendered through, over the whole window.
 ///
-/// The camera's position is its `GlobalTransform` (falling back to its `Transform`), the same
-/// position the frame is rendered from.
+/// The camera's position is this frame's — through its parents, from their `Transform`s — the
+/// position the frame will be rendered from once propagation has run.
 pub fn cursor_ray(world: &World) -> Option<Ray> {
     let input = world.get_resource::<Input>()?;
     let info = world.get_resource::<WindowInfo>()?;
@@ -62,12 +62,49 @@ pub fn cursor_on_plane(world: &World, point: Vec3, normal: Vec3) -> Option<Vec3>
     Some(Vec3::from(ray.at(t)))
 }
 
+/// The window pixel a world-space `point` is drawn at, through the camera the frame is rendered
+/// from ([`active_camera`]) — what a box selection tests units against, and where a health bar or
+/// a name goes over a 3D thing. Top-left origin, the same pixels as `Input::mouse_position`.
+///
+/// `None` when the point is behind the camera, or without a camera or a window size. A point in
+/// front of the camera but out of view gets a pixel outside the window. When the camera draws into
+/// a [`viewport`](Camera::viewport) the pixel is in that rectangle, offset to its place in the
+/// window. For another camera, [`Camera::world_to_screen`].
+///
+/// ```
+/// # use gizmo::prelude::*;
+/// # use gizmo::core::window::WindowInfo;
+/// let mut world = World::new();
+/// world.spawn_bundle(CameraBundle {
+///     position: Vec3::new(0.0, 0.0, 10.0),
+///     yaw: -std::f32::consts::FRAC_PI_2, // looking down −Z
+///     primary: true,
+///     ..Default::default()
+/// });
+/// world.insert_resource(WindowInfo { width: 800.0, height: 600.0 });
+/// // Spawned this frame, nothing propagated: the origin is still the centre of the window.
+/// let p = gizmo::pointer::world_to_screen(&world, Vec3::ZERO).unwrap();
+/// assert!((p.x - 400.0).abs() < 1e-3 && (p.y - 300.0).abs() < 1e-3);
+/// ```
+pub fn world_to_screen(world: &World, point: Vec3) -> Option<crate::math::Vec2> {
+    let info = world.get_resource::<WindowInfo>()?;
+    let window = (info.width.max(1.0), info.height.max(1.0));
+    let id = active_camera(world)?;
+    let camera = *world.borrow::<Camera>().get(id)?;
+    let (origin, size) = match camera.viewport {
+        Some(v) => ((v.x * window.0, v.y * window.1), (v.width * window.0, v.height * window.1)),
+        None => ((0.0, 0.0), window),
+    };
+    let (x, y) = camera.world_to_screen(point, size, camera_position(world, id)?)?;
+    Some(crate::math::Vec2::new(origin.0 + x, origin.1 + y))
+}
+
+/// Where the camera is **this frame** — through its parents, from this frame's `Transform`s
+/// ([`world_position`](crate::systems::transform::world_position)). It used to read
+/// `GlobalTransform` first, which in game code is a frame behind: a camera spawned this frame read
+/// as the origin, and one following a player was a frame late against the frame it renders.
 fn camera_position(world: &World, id: u32) -> Option<Vec3> {
-    world
-        .borrow::<gizmo_physics_core::components::GlobalTransform>()
-        .get(id)
-        .map(|g| g.matrix.to_scale_rotation_translation().2)
-        .or_else(|| world.borrow::<gizmo_physics_core::components::Transform>().get(id).map(|t| t.position))
+    crate::systems::transform::world_position(world, world.get_entity(id)?)
 }
 
 #[cfg(test)]
@@ -117,6 +154,54 @@ mod tests {
         let right = cursor_on_plane(&scene(1280.0, 720.0, (1000.0, 360.0)), Vec3::ZERO, Vec3::Y).unwrap();
         assert!(up.z < -0.5, "higher on screen is further from the camera (−Z), got {up:?}");
         assert!(right.x > 0.5, "right on screen is +X, got {right:?}");
+    }
+
+    /// `world_to_screen` is the cursor ray's inverse: the ground point under a cursor projects back
+    /// to that cursor, in two window shapes and away from the centre; a point behind the camera has
+    /// no pixel; and a camera drawing into the right half puts the pixel in that half.
+    #[test]
+    fn world_to_screen_inverts_the_cursor_ray() {
+        for (w, h) in [(1280.0, 720.0), (472.0, 492.0)] {
+            for cursor in [(w * 0.5, h * 0.5), (w * 0.2, h * 0.7), (w * 0.9, h * 0.35)] {
+                let world = scene(w, h, cursor);
+                let ground = cursor_on_plane(&world, Vec3::ZERO, Vec3::Y).expect("ground under the cursor");
+                let back = world_to_screen(&world, ground).expect("in front of the camera");
+                assert!(
+                    (back.x - cursor.0).abs() < 0.05 && (back.y - cursor.1).abs() < 0.05,
+                    "{w}×{h}: {cursor:?} → {ground:?} → {back:?}"
+                );
+            }
+            let world = scene(w, h, (0.0, 0.0));
+            assert_eq!(world_to_screen(&world, Vec3::new(0.0, 12.0, 14.0)), None, "behind the camera");
+        }
+        let mut world = scene(1000.0, 500.0, (0.0, 0.0));
+        let id = active_camera(&world).unwrap();
+        if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(id) {
+            c.viewport = Some(Viewport::right_half());
+        }
+        let centre = world_to_screen(&world, Vec3::ZERO).unwrap();
+        assert!((centre.x - 750.0).abs() < 0.05 && (centre.y - 250.0).abs() < 0.05, "{centre:?}");
+    }
+
+    /// A camera spawned this frame, before any propagation: its `GlobalTransform` is still the
+    /// default (the origin), and the ray must come from where it is — the centre of the window
+    /// still looks at the origin.
+    #[test]
+    fn a_camera_spawned_this_frame_casts_from_where_it_is() {
+        let mut world = World::new();
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 10.0, 10.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: -std::f32::consts::FRAC_PI_4,
+            primary: true,
+            ..Default::default()
+        });
+        world.insert_resource(WindowInfo { width: 800.0, height: 600.0 });
+        let mut input = Input::new();
+        input.set_mouse_position(400.0, 300.0);
+        world.insert_resource(input);
+        let hit = cursor_on_plane(&world, Vec3::ZERO, Vec3::Y).expect("the ground is in view");
+        assert!(hit.length() < 1e-3, "the ray came from the stale GlobalTransform: {hit:?}");
     }
 
     /// Looking at the sky: no ground point.
