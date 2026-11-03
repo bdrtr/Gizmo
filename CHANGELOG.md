@@ -1878,6 +1878,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A crowd replanned all at once, every half second.** Agents spawned or ordered together had
+  their replan timers in step, so every `recalc.interval` all of them ran A* on one frame: 1000
+  agents, 58 ms on every 30th frame against a 0.27 ms median. After a forced replan (new target,
+  route used up, wall moved, first plan) the next scheduled one now waits for the agent's own
+  slot of the interval, so the crowd's replans spread: the same 1000 agents run ~2.4 ms every
+  frame and no spike after the first. A test counts replans per frame for 300 agents (≤ 30;
+  without the slot, 300).
+
 - **Agent separation scanned every pair.** `ai_navigation_system` found each agent's neighbours
   by checking every other agent: 0.83 / 13.1 / 53.2 ms a frame for 250 / 1000 / 2000 agents. They
   come from XZ buckets now — 0.07 / 0.29 / 0.58 ms (steering only; path replans are separate) —

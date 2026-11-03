@@ -121,6 +121,13 @@ pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
     }
 }
 
+/// An agent's slot in the replan interval, `0.1..=1.0`: the golden-ratio sequence over its id,
+/// so consecutive ids land far apart. Never 0, which would replan again on the next frame.
+fn replan_phase(id: u32) -> f32 {
+    let frac = (id as f32 * 0.618_034).fract();
+    0.1 + 0.9 * frac
+}
+
 /// Advances every [`NavAgent`] one frame: replans its path when needed, steers it toward the
 /// next waypoint and writes the result into `Velocity::linear`. `dt` is the frame time in
 /// seconds.
@@ -141,7 +148,11 @@ pub fn ai_navmesh_rebuild_system(world: &World, _dt: f32) {
 ///   pathfinding, so a target's height is ignored and agents only ever navigate in the XZ plane.
 /// - **Replan** when the path is exhausted, `recalc.timer` has run out (it is reset to
 ///   `recalc.interval` seconds), the target has moved more than 2 m from the last planned one,
-///   or nothing has been planned yet. If `NavGrid::find_path` finds nothing — target inside an
+///   a wall moved, or nothing has been planned yet. After one of those *forced* replans the timer
+///   is set to the agent's own slot of the interval (10–100 % of it, by id), so a crowd that was
+///   spawned or ordered together plans together once and then spreads its replans out — it used to
+///   replan on one frame every interval (1000 agents: 58 ms every 30th frame, 0.27 ms between).
+///   The forced frame itself is still one spike: 56 ms for 1000 agents ordered at once. If `NavGrid::find_path` finds nothing — target inside an
 ///   obstacle, outside the grid, or unreachable — the path is cleared and the agent falls back to
 ///   steering straight at the target with no obstacle awareness at all, rather than stopping.
 /// - **Steering.** [`crate::steering::arrive`] for the final waypoint (slowing radius
@@ -269,20 +280,23 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         target_pos.y = t.position.y;
 
         agent.recalc.timer -= dt;
-        let mut needs_recalc = agent.is_done() || agent.recalc.timer <= 0.0 || grid_changed;
+        // Forced: no route yet, the route is used up, a wall moved, or the target moved > 2 m.
+        let target_moved = agent.recalc.last_target_pos.is_none_or(|last| (last - target_pos).length() > 2.0);
+        let forced = agent.is_done() || grid_changed || target_moved;
+        let scheduled = agent.recalc.timer <= 0.0;
 
-        // Hedef çok yer değiştirdiyse yeniden hesapla
-        if let Some(last_pos) = agent.recalc.last_target_pos {
-            if (last_pos - target_pos).length() > 2.0 {
-                needs_recalc = true;
-            }
-        } else {
-            needs_recalc = true;
-        }
-
-        if needs_recalc {
+        if forced || scheduled {
             agent.recalc.last_target_pos = Some(target_pos);
-            agent.recalc.timer = agent.recalc.interval;
+            // A scheduled replan keeps the agent's cadence. A forced one — which a whole crowd
+            // gets on the same frame when it is spawned or ordered together — puts the next
+            // scheduled one at the agent's own phase of the interval, so the crowd's replans
+            // spread over it instead of all landing on one frame every `interval` (measured,
+            // 1000 agents: 58 ms on every 30th frame against a 0.27 ms median).
+            agent.recalc.timer = if forced {
+                agent.recalc.interval * replan_phase(agent_id)
+            } else {
+                agent.recalc.interval
+            };
             recalc_count += 1;
 
             if let Some(new_path) = grid.find_path(t.position, target_pos) {
@@ -655,6 +669,46 @@ mod frame_tests {
         let differ = bucketed.iter().zip(&scanned).filter(|(a, b)| a.to_array().map(f32::to_bits) != b.to_array().map(f32::to_bits)).count();
         assert_eq!(differ, 0, "{differ} of {} velocities differ from the full scan", bucketed.len());
         assert!(bucketed.iter().any(|v| v.z.abs() > 0.5), "the crowd is pushed at all");
+    }
+
+    /// A crowd spawned together plans together once, and then spreads out: after the first
+    /// frame, no frame replans more than a few agents more than its share of the interval —
+    /// where all 300 used to replan on every 30th frame.
+    #[test]
+    fn a_crowd_spreads_its_replans_over_the_interval() {
+        let mut world = World::new();
+        world.insert_resource({
+            let mut g = NavGrid::centred_on(1.0, 128, 128, Vec3::ZERO);
+            g.needs_rebuild = false;
+            g
+        });
+        let mut ids = Vec::new();
+        for i in 0..300u32 {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new((i % 20) as f32 * 1.2 - 30.0, 0.0, (i / 20) as f32 * 1.2 - 30.0)));
+            world.add_component(e, Velocity::default());
+            let mut a = NavAgent::default();
+            a.target = Some(Vec3::new(50.0, 0.0, 50.0));
+            world.add_component(e, a);
+            ids.push(e.id());
+        }
+        let timers = |world: &World| -> Vec<f32> {
+            let agents = world.borrow::<NavAgent>();
+            ids.iter().map(|&id| agents.get(id).unwrap().recalc.timer).collect()
+        };
+        let dt = 1.0 / 60.0;
+        ai_navigation_system(&world, dt);
+        let mut worst = 0;
+        for _ in 0..90 {
+            let before = timers(&world);
+            ai_navigation_system(&world, dt);
+            // A replan reloads the timer, so it goes up; otherwise it only counts down.
+            let replanned = timers(&world).iter().zip(&before).filter(|(after, b)| after > b).count();
+            worst = worst.max(replanned);
+        }
+        // 300 agents over a 30-frame interval is 10 a frame; the golden-ratio slots are not
+        // perfectly even, so allow some bunching — but nothing like 300.
+        assert!(worst <= 30, "{worst} agents replanned on one frame");
     }
 
     /// An agent with nothing to do is damped, not steered — the same call, the other branch.
