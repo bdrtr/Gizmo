@@ -1268,17 +1268,18 @@ under the beams, take the coins; the speed climbs from 43 to 122 km/h and the be
 saved. The road is spawned ahead in 30 m chunks (a parent with ~25 children) and despawned behind
 with `despawn_recursive` — the autopilot run spawns and kills ~75 entities a second, and the
 process held 89 MB for three minutes. Swipes (`Input::swipe`), `Fog`, `SaveData`, `ScreenFade` and
-synthesised sounds worked on the first try. One gap, and one thing to know:
+synthesised sounds worked on the first try. Two gaps:
 
 - ~~**The sky that lights the scene could not be set.**~~ **Closed 2026-11-03.** The game made the
   background and the fog a pale blue, and its gold coins came out grey: what a surface reflects and
   the ambient it gets came from the preset's baked sky, which no setting reached. `Renderer::sky`
   (row in §B).
-- **A child spawned this frame has no world position yet.** Its `GlobalTransform` is the default
-  until propagation runs after the update, so a collision test against fresh obstacles would read
-  them at the origin — where the player starts. Caught while writing it, not measured: the game
-  reads the local `Transform` instead (its chunk roots sit at the origin, unrotated). *Open:* no on-demand way to ask for
-  an entity's world matrix through its parents now.
+- ~~**A child spawned this frame has no world position yet.**~~ **Closed 2026-11-03.** Its
+  `GlobalTransform` is the default until propagation runs after the update, so a collision test
+  against fresh obstacles would read them at the origin — where the player starts (caught while
+  writing it; the first draft read local `Transform`s and kept its chunk roots at the origin).
+  `world_matrix(world, entity)` / `world_position` walk `Parent` and compose this frame's
+  `Transform` fields; the chunks sit at their own z now and the game reads them through it.
 
 ### C16i. The thirteenth game: a board that tilts (2026-11-03, `labirent`)
 

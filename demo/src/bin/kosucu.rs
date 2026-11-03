@@ -20,11 +20,12 @@
 //!   ulaşmıyordu — ileri çizim yolunun da kendi gömülü gün batımı vardı. **Kapatıldı:**
 //!   `Renderer::sky = Some(Sky::gradient(tepe, ufuk, zemin))` — iki yolda da ortam ışığı normalin
 //!   çevresindeki, yansıma ayna yönündeki gökten.
-//! - **Bu karede doğan bir çocuğun dünyadaki yeri henüz yok.** `GlobalTransform`'u yayılma
+//! - **Bu karede doğan bir çocuğun dünyadaki yeri sorulamıyordu.** `GlobalTransform`'u yayılma
 //!   güncellemeden sonra koşana kadar varsayılan; yeni engellere karşı bir çarpışma sınaması
-//!   onları başlangıçta — oyuncunun durduğu yerde — görürdü. Yazarken yakalandı: oyun yerel
-//!   `Transform`'u okuyor (parça kökleri başlangıçta ve dönmüyor). *Açık:* bir varlığın dünya
-//!   matrisini ebeveynleri üzerinden o anda soracak bir yol yok.
+//!   onları başlangıçta — oyuncunun durduğu yerde — görürdü (yazarken yakalandı; ilk taslak yerel
+//!   `Transform`'u okuyup parça köklerini başlangıçta tutuyordu). **Kapatıldı:**
+//!   `world_matrix(world, varlık)` / `world_position` — ebeveyn zinciri boyunca bu karenin
+//!   `Transform`'larından; parça kökleri artık kendi yerinde.
 //!
 //! Gerisi ilk denemede çalıştı: önde doğup arkada `despawn_recursive` ile silinen 30 metrelik yol
 //! parçaları (otomatik koşu saniyede ~75 varlık doğurup öldürürken süreç üç dakika 89 MB'ta
@@ -239,8 +240,9 @@ fn block(at: Vec3, half: Vec3, colour: Vec4) -> impl gizmo::core::component::Bun
 fn spawn_chunk(world: &mut World, game: &mut Game, empty: bool) {
     let z0 = game.next_chunk;
     game.next_chunk -= CHUNK;
-    let mid = z0 - CHUNK / 2.0;
-    let root = world.spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), Chunk { z0 }));
+    // Kök parçanın başında; içindekiler ona göre yerleşiyor (yerel z, 0 … -CHUNK).
+    let mid = -CHUNK / 2.0;
+    let root = world.spawn_bundle((Transform::new(Vec3::new(0.0, 0.0, z0)), GlobalTransform::default(), Chunk { z0 }));
     let shade = if ((z0 / CHUNK) as i64).rem_euclid(2) == 0 { 0.36 } else { 0.32 };
     let mut parts = vec![
         world.spawn_bundle(block(Vec3::new(0.0, -0.1, mid), Vec3::new(3.6, 0.1, CHUNK / 2.0), Vec4::new(shade, shade, shade + 0.04, 1.0))),
@@ -249,7 +251,7 @@ fn spawn_chunk(world: &mut World, game: &mut Game, empty: bool) {
     ];
     if !empty {
         for row in 0..3 {
-            let z = z0 - 5.0 - row as f32 * 10.0;
+            let z = -5.0 - row as f32 * 10.0;
             let mut lanes = [-1, 0, 1];
             game.rng.shuffle(&mut lanes);
             let blocked = game.rng.range(1..3usize);
@@ -399,18 +401,18 @@ fn run(world: &mut World, game: &mut Game, dt: f32, input: &Input) {
     let mut hit = false;
     let mut taken = Vec::new();
     {
-        // Parçanın kökü başlangıçta ve dönmüyor: çocukların yerel `Transform`'u dünyadaki yerleri.
-        // (Bu karede doğanların `GlobalTransform`'u henüz yayılmadı.)
-        let transforms = world.borrow::<Transform>();
+        // Dünyadaki yerleri `world_matrix` ile: bu karede doğanların `GlobalTransform`'u henüz
+        // yayılmadı (varsayılan, yani başlangıç — oyuncunun durduğu yer).
         for (id, _) in world.borrow::<Obstacle>().iter() {
-            let Some(t) = transforms.get(id) else { continue };
-            if overlap(centre, half * 0.9, t.position, t.scale) {
+            let Some(m) = world.get_entity(id).and_then(|e| world_matrix(world, e)) else { continue };
+            let (size, _, at) = m.to_scale_rotation_translation();
+            if overlap(centre, half * 0.9, at, size) {
                 hit = true;
             }
         }
         for (id, _) in world.borrow::<Coin>().iter() {
-            let Some(t) = transforms.get(id) else { continue };
-            if (t.position - centre).abs().cmple(half + Vec3::splat(0.35)).all() {
+            let Some(at) = world.get_entity(id).and_then(|e| world_position(world, e)) else { continue };
+            if (at - centre).abs().cmple(half + Vec3::splat(0.35)).all() {
                 taken.push(id);
             }
         }
@@ -473,10 +475,8 @@ fn overlap(a: Vec3, ha: Vec3, b: Vec3, hb: Vec3) -> bool {
 /// şeride geçer, alçaksa zıplar, kirişse kayar.
 fn autopilot(world: &World, game: &Game) -> (bool, bool, bool, bool) {
     let mut ahead: Vec<(f32, i32, Kind)> = Vec::new();
-    let transforms = world.borrow::<Transform>();
     for (id, o) in world.borrow::<Obstacle>().iter() {
-        let Some(t) = transforms.get(id) else { continue };
-        let at = t.position;
+        let Some(at) = world.get_entity(id).and_then(|e| world_position(world, e)) else { continue };
         let d = game.z - at.z;
         if d > -0.5 && d < 14.0 {
             ahead.push((d, (at.x / LANE_GAP).round() as i32, o.kind));

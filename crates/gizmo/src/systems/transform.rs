@@ -179,6 +179,57 @@ impl gizmo_core::system::System for TransformPropagateSystem {
     }
 }
 
+/// An entity's world matrix **now**, from its own `Transform` and its parents' — what its
+/// `GlobalTransform` will hold once this frame's propagation has run.
+///
+/// `GlobalTransform` is written by [`TransformPropagateSystem`], which runs after the update, so
+/// in game code it is a frame behind: an entity spawned this frame still holds the default (the
+/// origin), and a child of something that moved this frame is where it was. A collision test
+/// against freshly spawned obstacles reads them all at the origin. This walks up the [`Parent`]
+/// links and composes the local transforms from their fields, so it sees this frame's writes.
+///
+/// `None` when the entity is dead or has no `Transform`, or when the chain up from it cannot be
+/// followed the way propagation would: an ancestor with no `Transform`, a `Parent` naming a dead
+/// id, or a cycle. Cost: one lookup per ancestor; for many entities a frame, read
+/// `GlobalTransform` instead and accept the frame.
+///
+/// [`Parent`]: gizmo_core::component::Parent
+///
+/// ```
+/// # use gizmo::prelude::*;
+/// # use gizmo::core::hierarchy::HierarchyExt;
+/// let mut world = World::new();
+/// let board = world.spawn_bundle((Transform::new(Vec3::new(10.0, 0.0, 0.0)), GlobalTransform::default()));
+/// let peg = world.spawn_bundle((Transform::new(Vec3::new(0.0, 1.0, 0.0)), GlobalTransform::default()));
+/// world.add_child(board, peg);
+/// // Spawned this frame: no propagation has run, but its place is known.
+/// assert_eq!(gizmo::systems::world_position(&world, peg), Some(Vec3::new(10.0, 1.0, 0.0)));
+/// ```
+pub fn world_matrix(world: &gizmo_core::world::World, entity: gizmo_core::entity::Entity) -> Option<crate::math::Mat4> {
+    use gizmo_core::component::Parent;
+    use gizmo_physics_core::Transform;
+    /// Deeper than any real hierarchy; past it the chain is taken for a cycle (which is how a
+    /// cycle ends: no visited set, since a real chain is a handful of links).
+    const MAX_DEPTH: usize = 1024;
+    let local = |t: &Transform| crate::math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
+    let mut matrix = local(world.get::<Transform>(entity)?);
+    let mut current = entity;
+    for _ in 0..MAX_DEPTH {
+        let Some(parent) = world.get::<Parent>(current) else {
+            return Some(matrix);
+        };
+        let parent = world.get_entity(parent.0)?;
+        matrix = local(world.get::<Transform>(parent)?) * matrix;
+        current = parent;
+    }
+    None
+}
+
+/// The translation of [`world_matrix`]: where the entity is in the world now.
+pub fn world_position(world: &gizmo_core::world::World, entity: gizmo_core::entity::Entity) -> Option<crate::math::Vec3> {
+    world_matrix(world, entity).map(|m| m.w_axis.truncate())
+}
+
 /// Drives entities that follow a skeleton bone.
 ///
 /// Gated on `render`: `BoneAttachment`/`Skeleton` are renderer components (skinning lives on
@@ -239,6 +290,87 @@ mod tests {
     use gizmo_core::world::World;
     use gizmo_physics_core::components::GlobalTransform;
     use gizmo_physics_core::Transform;
+
+    /// The world matrix through the parents, before any propagation has run: a child spawned
+    /// this frame under a moved, turned, scaled parent is where propagation will put it — and
+    /// after propagation `GlobalTransform` agrees exactly.
+    #[test]
+    fn world_matrix_is_this_frames_place_through_the_parents() {
+        use gizmo_core::hierarchy::HierarchyExt;
+        use gizmo_math::{Quat, Vec3};
+        let mut world = World::new();
+        let root = world.spawn();
+        let arm = world.spawn();
+        let hand = world.spawn();
+        let at = |p: Vec3| Transform::new(p);
+        world.add_component(root, at(Vec3::new(10.0, 0.0, 0.0)).with_rotation(Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::splat(2.0)));
+        world.add_component(arm, at(Vec3::new(1.0, 0.0, 0.0)));
+        world.add_component(hand, at(Vec3::new(0.0, 0.5, 0.0)));
+        for e in [root, arm, hand] {
+            world.add_component(e, GlobalTransform::default());
+        }
+        world.add_child(root, arm);
+        world.add_child(arm, hand);
+
+        // Not propagated yet: GlobalTransform is the default, world_position already knows.
+        let hand_now = world_position(&world, hand).expect("a live chain");
+        // root turns +x into -z and doubles: arm at (10, 0, -2), hand 1 m above it.
+        assert!((hand_now - Vec3::new(10.0, 1.0, -2.0)).length() < 1e-5, "{hand_now:?}");
+        assert_eq!(world.get::<GlobalTransform>(hand).map(|g| g.matrix), Some(gizmo_math::Mat4::IDENTITY));
+
+        TransformSyncSystem.run(&world, 0.0);
+        TransformPropagateSystem.run(&world, 0.0);
+        for e in [root, arm, hand] {
+            let g = world.get::<GlobalTransform>(e).expect("global").matrix;
+            let m = world_matrix(&world, e).expect("matrix");
+            assert!(g.abs_diff_eq(m, 1e-5), "propagation and the walk disagree on {e:?}: {g:?} vs {m:?}");
+        }
+
+        // A parent moved this frame: the walk sees it, GlobalTransform is a frame behind.
+        if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
+            if let Some(mut t) = q.get_mut(root.id()) {
+                t.position.y = 5.0;
+            }
+        }
+        assert!((world_position(&world, hand).unwrap().y - 6.0).abs() < 1e-5);
+        assert!((world.get::<GlobalTransform>(hand).unwrap().matrix.w_axis.y - 1.0).abs() < 1e-5);
+    }
+
+    /// No answer where propagation would give none: no `Transform`, an ancestor without one, a
+    /// `Parent` naming a dead id, a cycle, a dead entity.
+    #[test]
+    fn world_matrix_is_none_where_the_chain_breaks() {
+        use gizmo_core::component::Parent;
+        let mut world = World::new();
+        let bare = world.spawn();
+        assert_eq!(world_matrix(&world, bare), None, "no Transform");
+
+        let (a, b) = (world.spawn(), world.spawn());
+        world.add_component(a, Transform::default());
+        world.add_component(b, Transform::default());
+        world.add_component(a, Parent(bare.id()));
+        assert_eq!(world_matrix(&world, a), None, "an ancestor without a Transform");
+
+        world.add_component(a, Parent(b.id()));
+        world.add_component(b, Parent(a.id()));
+        assert_eq!(world_matrix(&world, a), None, "a cycle through the entity");
+        let c = world.spawn();
+        world.add_component(c, Transform::default());
+        world.add_component(c, Parent(a.id()));
+        assert_eq!(world_matrix(&world, c), None, "a cycle above the entity");
+
+        // `d` first: spawned after the despawn it would recycle the dead id and name itself.
+        let d = world.spawn();
+        let gone = world.spawn();
+        let gone_id = gone.id();
+        world.despawn(gone);
+        world.add_component(d, Transform::default());
+        world.add_component(d, Parent(gone_id));
+        assert_eq!(world_matrix(&world, d), None, "a Parent naming a dead id");
+
+        world.despawn(d);
+        assert_eq!(world_matrix(&world, d), None, "a dead entity");
+    }
 
     #[test]
     fn transform_propagate_terminates_on_children_cycle() {

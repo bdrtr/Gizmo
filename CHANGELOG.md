@@ -64,6 +64,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   turns them green (31 230 38 / 6 224 7; forward 0 229 0 / 0 251 0), intensity 0 leaves them dark;
   dropping either shader's branch fails the test. Found by `kosucu`, whose gold coins were grey
   under a pale blue sky.
+- **`world_matrix(world, entity)` / `world_position` — where an entity is now.** In game code
+  `GlobalTransform` is a frame behind: propagation runs after the update, so an entity spawned
+  this frame still holds the default (the origin) and the child of something that moved this
+  frame is where it was. A collision test against freshly spawned obstacles reads them all at the
+  origin. These walk up `Parent` and compose this frame's `Transform` fields; `None` where
+  propagation would not reach (no `Transform` up the chain, a dead parent id, a cycle). In the
+  prelude. Tested against propagation on a moved, turned, scaled chain (equal after it runs, ahead
+  of it before), and on each broken chain; composing in the wrong order or treating a dead parent
+  as a root fails them. `kosucu`'s road chunks sit at their own z now and it reads its obstacles
+  through it.
 - **`kosucu`, the fourteenth game** — a three-lane endless runner: the road is spawned ahead and
   despawned behind in 30 m chunks, the speed climbs, swipes work on a touch screen. Memory held at
   89 MB over three minutes of the autopilot spawning and despawning ~75 entities a second.

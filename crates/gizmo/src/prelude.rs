@@ -94,6 +94,8 @@ pub use crate::systems::lifetime::{DespawnAfter, DespawnBelowY, LifetimePlugin};
 #[cfg(feature = "physics")]
 pub use crate::systems::auto_collider::{AutoBoxCollider, derived_box_half_extents};
 pub use crate::systems::spin::{Spin, SpinPlugin};
+// Bir varlığın dünyadaki yeri ŞİMDİ — `GlobalTransform` bir kare geride.
+pub use crate::systems::transform::{world_matrix, world_position};
 #[cfg(feature = "render")]
 pub use crate::systems::fps_look::{FpsLook, FpsLookPlugin};
 
