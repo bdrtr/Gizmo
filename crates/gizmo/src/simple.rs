@@ -632,9 +632,22 @@ impl FixedPhysics {
     /// Time short of a full step is kept for the next call; a negative or non-finite `dt` adds
     /// nothing. This steps physics only — call [`sync_transforms`] afterwards to make the result
     /// visible.
+    ///
+    /// Each step runs the gameplay controllers first, in the order `GameplayPhysicsPlugin` runs
+    /// them — vehicles, characters, the fight clock, hit detection — and then the rigid step
+    /// they feed. They did not run here at all, so a car on this driver sat still with its
+    /// throttle down. Do not also add `GameplayPhysicsPlugin`: that is a second driver of the same
+    /// controllers, as `PhysicsPlugin` is of the rigid step.
     pub fn advance(&mut self, world: &mut crate::core::World, dt: f32) -> u32 {
         let steps = self.plan(dt);
         for _ in 0..steps {
+            #[cfg(feature = "physics-dynamics")]
+            {
+                gizmo_physics_dynamics::vehicle_controller_system(world, self.step);
+                gizmo_physics_dynamics::character_controller_system(world, self.step);
+                gizmo_physics_dynamics::fighter_frame_system(world, self.step);
+                gizmo_physics_dynamics::hit_detection_system(world, self.step);
+            }
             systems::cpu_physics_step_system(world, self.step);
         }
         steps
@@ -1101,5 +1114,54 @@ mod fixed_physics_tests {
         assert_eq!((steps_a, steps_b), (128, 128));
         assert!(y(&a, ida) < 9.0, "the ball fell: {}", y(&a, ida));
         assert_eq!(y(&a, ida).to_bits(), y(&b, idb).to_bits(), "same steps, same world");
+    }
+
+    /// A car driven by `FixedPhysics` moves under its throttle: the vehicle controller runs in
+    /// each step, before the rigid step it feeds. It did not run at all — a game on this driver
+    /// had cars that sat still with the pedal down.
+    #[cfg(feature = "physics-dynamics")]
+    #[test]
+    fn fixed_physics_drives_a_vehicle() {
+        use crate::physics::vehicle::{Axle, VehicleController, Wheel};
+        use crate::physics::world::PhysicsWorld;
+        use crate::physics::{Collider, RigidBody, Velocity};
+        let mut w = crate::core::World::new();
+        w.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        w.spawn_bundle((
+            Transform::new(Vec3::new(0.0, -1.0, 0.0)),
+            RigidBody::new_static(),
+            Velocity::default(),
+            Collider::box_collider(Vec3::new(100.0, 1.0, 100.0)),
+        ));
+        let collider = Collider::box_collider(Vec3::new(0.9, 0.3, 2.0));
+        let mut body = RigidBody::new(900.0, true);
+        body.update_inertia_from_collider(&collider);
+        let mut car = VehicleController::new();
+        for (x, z, axle, is_left) in [
+            (-0.8, -1.4, Axle::Front, true),
+            (0.8, -1.4, Axle::Front, false),
+            (-0.8, 1.4, Axle::Rear, true),
+            (0.8, 1.4, Axle::Rear, false),
+        ] {
+            car.add_wheel(Wheel {
+                attachment_local_pos: Vec3::new(x, 0.0, z),
+                axle_type: axle,
+                is_left,
+                radius: 0.35,
+                suspension_rest_length: 0.4,
+                suspension_max_travel: 0.3,
+                ..Default::default()
+            });
+        }
+        car.throttle_input = 1.0;
+        let id = w
+            .spawn_bundle((Transform::new(Vec3::new(0.0, 0.6, 0.0)), body, Velocity::default(), collider, car))
+            .id();
+        let mut physics = FixedPhysics::new(120);
+        for _ in 0..150 {
+            physics.advance(&mut w, 1.0 / 60.0);
+        }
+        let z = w.borrow::<Transform>().get(id).unwrap().position.z;
+        assert!(z < -0.5, "the throttled car went forward (−Z): z = {z}");
     }
 }

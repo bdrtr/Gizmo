@@ -1878,6 +1878,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A car driven by `FixedPhysics` never moved.** `FixedPhysics::advance` — the fixed-step
+  driver `SimpleApp` games use — stepped the rigid world only; the gameplay controllers
+  (`VehicleController`, `CharacterController`, the fight clock and hit detection) run only in
+  `GameplayPhysicsPlugin`, which nothing adds by default. So a car on this driver sat still with
+  its throttle down (measured: z moved 8·10⁻¹² m in 2.5 s). Each step now runs them first, in the
+  plugin's order, then the rigid step they feed. Found while sizing up a racing game; a test
+  drives a throttled car through `FixedPhysics` and fails without the change.
+
 - **`NavGrid::find_path` was 3.4× slower than it needed to be.** Every query filled three
   HashMaps (scores, parents, closed set), allocated a `Vec` per expanded cell for its neighbours,
   and hashed each neighbour's cell into `obstacles` up to three times. The search state is now
