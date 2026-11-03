@@ -42,6 +42,9 @@ pub struct Tilemap {
     height: u32,
     /// Row-major, `width * height` long; [`Self::EMPTY`] where there is no tile.
     tiles: Vec<u32>,
+    /// Per-tile tints, row-major — EMPTY until the first [`set_tint`](Self::set_tint), so a map
+    /// that never tints a tile carries nothing for it.
+    tints: Vec<Vec4>,
 }
 
 impl Tilemap {
@@ -69,6 +72,7 @@ impl Tilemap {
             width,
             height,
             tiles: vec![Self::EMPTY; len],
+            tints: Vec::new(),
         }
     }
 
@@ -146,6 +150,35 @@ impl Tilemap {
             }
             None => false,
         }
+    }
+
+    /// Tints the tile at `(x, y)` — multiplied into it on top of the map's [`color`](Self::color):
+    /// fog of war (dim what was seen and is not seen now), torchlight, a tile flashing when hit.
+    /// Returns `false` outside the map. The tint stays with the cell when its tile changes.
+    ///
+    /// A tile-based game's fog used to need a darker copy of every tile in the tileset.
+    pub fn set_tint(&mut self, x: u32, y: u32, tint: Vec4) -> bool {
+        let Some(i) = self.index(x, y) else { return false };
+        if self.tints.is_empty() {
+            if tint == Vec4::ONE {
+                return true;
+            }
+            self.tints = vec![Vec4::ONE; self.tiles.len()];
+        }
+        self.tints[i] = tint;
+        true
+    }
+
+    /// The tint of `(x, y)` — white unless [`set_tint`](Self::set_tint) said otherwise, or outside
+    /// the map.
+    #[must_use]
+    pub fn tint(&self, x: u32, y: u32) -> Vec4 {
+        self.index(x, y).and_then(|i| self.tints.get(i).copied()).unwrap_or(Vec4::ONE)
+    }
+
+    /// Every tile back to white, and the per-tile tints dropped.
+    pub fn clear_tints(&mut self) {
+        self.tints = Vec::new();
     }
 
     /// Sets every cell of the rectangle starting at `(x, y)`, `w × h` tiles, clipped to the map.
@@ -265,6 +298,9 @@ impl Tilemap {
             .map(move |(x, y, t)| {
             let mut s = base.clone();
             s.set_frame(t, self.tileset_columns, self.tileset_rows);
+            if !self.tints.is_empty() {
+                s.color *= self.tint(x, y);
+            }
             (Vec2::new(x as f32 * self.tile_size.x, -(y as f32) * self.tile_size.y), s)
         })
     }
@@ -284,6 +320,25 @@ fn ray_hits_plane(a: Vec3, b: Vec3) -> Option<Vec2> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A tint multiplies into its tile on top of the map's colour; untinted tiles keep the map's;
+    /// a map that never tints allocates nothing; clearing drops them all.
+    #[test]
+    fn a_tile_tint_multiplies_into_that_tile_only() {
+        let mut m = Tilemap::new(SpriteImageId(0), 2, 1, 3, 2, Vec2::ONE).with_color(Vec4::new(0.5, 1.0, 1.0, 1.0));
+        m.fill(0, 0, 3, 2, Some(0));
+        assert!(m.set_tint(1, 0, Vec4::ONE) && m.tints.is_empty(), "a white tint allocated the table");
+        assert!(m.set_tint(1, 0, Vec4::new(0.2, 0.2, 0.2, 1.0)));
+        assert!(!m.set_tint(9, 9, Vec4::ZERO));
+        let colours: Vec<(Vec2, Vec4)> = m.tile_sprites().map(|(at, s)| (at, s.color)).collect();
+        let at = |x: f32, y: f32| colours.iter().find(|(p, _)| *p == Vec2::new(x, -y)).unwrap().1;
+        assert_eq!(at(1.0, 0.0), Vec4::new(0.1, 0.2, 0.2, 1.0), "tint × map colour");
+        assert_eq!(at(0.0, 0.0), Vec4::new(0.5, 1.0, 1.0, 1.0), "an untinted neighbour changed");
+        m.set(1, 0, Some(1));
+        assert_eq!(m.tint(1, 0), Vec4::new(0.2, 0.2, 0.2, 1.0), "the tint stays with the cell");
+        m.clear_tints();
+        assert!(m.tints.is_empty() && m.tint(1, 0) == Vec4::ONE);
+    }
 
     fn map() -> Tilemap {
         Tilemap::from_rows(SpriteImageId(0), 2, 2, Vec2::new(2.0, 1.0), &["ab.", "..b", "a"], |c| match c {

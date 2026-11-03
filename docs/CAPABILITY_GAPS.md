@@ -1242,6 +1242,24 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16f. The tenth game: a world made of tiles (2026-11-03, `zindan`)
+
+`demo/src/bin/zindan.rs` is a turn-based dungeon crawler: rooms and corridors generated per level,
+a step per input (held, it walks on — `move_axis` + `HoldRepeat`), monsters that close in once they
+see you, gold, stairs down behind a `ScreenFade`, health in a `ProgressBar`. Its world is one
+`Tilemap`, drawn in one call. One thing was missing:
+
+- ~~**A tile could not be tinted.**~~ **Closed 2026-11-03.** Fog of war — lit where you see,
+  dim where you have been, dark elsewhere — is the first thing a tile game wants, and a `Tilemap`
+  had one colour for the whole map: the game's first version drew a dimmed copy of every tile into
+  the tileset. `Tilemap::set_tint(x, y, colour)` / `tint` / `clear_tints`, multiplied on top of the
+  map's colour; a map that never tints allocates nothing for it, and a white tint on an untinted
+  map does not either. Tested on the multiply, an untinted neighbour, the tint staying with its
+  cell when the tile changes, and the clear; not applying it fails it.
+
+(It also first hid out-of-sight monsters by moving them far away; `IsHidden` already hides
+sprites, so it uses that.)
+
 ### C16e. The ninth game: time from the music (2026-11-03, `ritim`)
 
 `demo/src/bin/ritim.rs` is a four-lane rhythm game: notes fall to a line, press the lane's key (or
