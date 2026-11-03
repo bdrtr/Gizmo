@@ -32,90 +32,8 @@ impl crate::asset::AssetManager {
                 height: img_height,
             });
         }
-        // Sınırlama: 512x512'den büyükse performans için uyar ya da downscale et
-
-        let mut vertices: Vec<Vertex> = Vec::with_capacity((img_width * img_height) as usize);
-        let mut heights: Vec<f32> = Vec::with_capacity((img_width * img_height) as usize);
-
-        let half_w = width / 2.0;
-        let half_d = depth / 2.0;
-
-        // 1. GRID VERTEX'LERİ ÜRET
-        for y in 0..img_height {
-            for x in 0..img_width {
-                let pixel = img.get_pixel(x, y)[0] as f32 / 255.0; // 0.0 - 1.0
-                heights.push(pixel);
-                let world_y = pixel * max_height;
-
-                let world_x = -half_w + (x as f32 / (img_width as f32 - 1.0)) * width;
-                let world_z = -half_d + (y as f32 / (img_height as f32 - 1.0)) * depth;
-
-                // UV Mapping: Repeat 10 times across terrain so grass doesn't look stretched
-                let uv_x = (x as f32 / (img_width as f32 - 1.0)) * 10.0;
-                let uv_y = (y as f32 / (img_height as f32 - 1.0)) * 10.0;
-
-                vertices.push(Vertex {
-                    position: [world_x, world_y, world_z],
-                    color: [1.0, 1.0, 1.0, 1.0],
-                    normal: [0.0, 1.0, 0.0], // İlk başta düz yukarı
-                    tex_coords: [uv_x, uv_y],
-                    joint_indices: [0; 4],
-                    joint_weights: [0.0; 4], ..Default::default()
-                });
-            }
-        }
-
-        // 2. INDEX'LERİ OLUŞTUR VE NORMALLERİ HESAPLA
-        let mut indices = Vec::with_capacity(((img_width - 1) * (img_height - 1) * 6) as usize);
-        for y in 0..(img_height - 1) {
-            for x in 0..(img_width - 1) {
-                let i0 = y * img_width + x;
-                let i1 = y * img_width + (x + 1);
-                let i2 = (y + 1) * img_width + x;
-                let i3 = (y + 1) * img_width + (x + 1);
-
-                // Triangle 1
-                indices.push(i0);
-                indices.push(i2);
-                indices.push(i1);
-
-                // Triangle 2
-                indices.push(i1);
-                indices.push(i2);
-                indices.push(i3);
-            }
-        }
-
-        // Face ve Smooth Normalleri hesapla
-        let mut final_vertices = Vec::with_capacity(indices.len());
-        for chunk in indices.chunks(3) {
-            let i0 = chunk[0] as usize;
-            let i1 = chunk[1] as usize;
-            let i2 = chunk[2] as usize;
-
-            let p0 = Vec3::from_array(vertices[i0].position);
-            let p1 = Vec3::from_array(vertices[i1].position);
-            let p2 = Vec3::from_array(vertices[i2].position);
-
-            let norm = (p1 - p0).cross(p2 - p0);
-            let normal = if norm.length_squared() > 1e-6 {
-                norm.normalize()
-            } else {
-                Vec3::new(0.0, 1.0, 0.0)
-            };
-
-            // Triangle count for WGPU. Note: using flat normal per face first, optionally can be smoothed
-            let mut v0 = vertices[i0];
-            v0.normal = [normal.x, normal.y, normal.z];
-            let mut v1 = vertices[i1];
-            v1.normal = [normal.x, normal.y, normal.z];
-            let mut v2 = vertices[i2];
-            v2.normal = [normal.x, normal.y, normal.z];
-
-            final_vertices.push(v0);
-            final_vertices.push(v1);
-            final_vertices.push(v2);
-        }
+        let heights: Vec<f32> = img.pixels().map(|p| p[0] as f32 / 255.0).collect();
+        let final_vertices = Self::terrain_triangles(&heights, img_width, img_height, width, depth, max_height);
 
         let mesh = Mesh::new_indexed(
             device,
@@ -124,5 +42,53 @@ impl crate::asset::AssetManager {
             format!("terrain:{}", heightmap_path),
         );
         Ok((mesh, heights, img_width, img_height))
+    }
+
+    /// The terrain surface as a flat-shaded triangle list, from `heights` (row-major, `0..=1`,
+    /// `cols` along X and `rows` along Z) stretched over `width × depth`, centred on the origin,
+    /// `0..=max_height` tall — what [`create_terrain`](Self::create_terrain) uploads.
+    ///
+    /// Each cell is split along the **same diagonal as `Collider::heightfield`'s cells**,
+    /// `(row, col)`–`(row+1, col+1)`, so the surface drawn and the surface collided with are the
+    /// same two triangles. They were the opposite diagonals until 2026-11-04: on any cell that is
+    /// not flat a body rested above or inside the ground it was drawn on.
+    pub fn terrain_triangles(heights: &[f32], cols: u32, rows: u32, width: f32, depth: f32, max_height: f32) -> Vec<Vertex> {
+        if cols < 2 || rows < 2 || heights.len() != (cols as usize) * (rows as usize) {
+            return Vec::new();
+        }
+        let at = |col: u32, row: u32| {
+            let h = heights[(row * cols + col) as usize];
+            Vec3::new(
+                -width / 2.0 + (col as f32 / (cols as f32 - 1.0)) * width,
+                h * max_height,
+                -depth / 2.0 + (row as f32 / (rows as f32 - 1.0)) * depth,
+            )
+        };
+        // UV Mapping: Repeat 10 times across terrain so grass doesn't look stretched
+        let uv = |col: u32, row: u32| [(col as f32 / (cols as f32 - 1.0)) * 10.0, (row as f32 / (rows as f32 - 1.0)) * 10.0];
+        let mut out = Vec::with_capacity(((cols - 1) * (rows - 1) * 6) as usize);
+        for row in 0..rows - 1 {
+            for col in 0..cols - 1 {
+                // Counter-clockwise seen from +Y, the collider's own order.
+                let c00 = (col, row);
+                let c01 = (col + 1, row);
+                let c10 = (col, row + 1);
+                let c11 = (col + 1, row + 1);
+                for tri in [[c00, c10, c11], [c00, c11, c01]] {
+                    let p = tri.map(|(c, r)| at(c, r));
+                    let n = (p[1] - p[0]).cross(p[2] - p[0]);
+                    let normal = if n.length_squared() > 1e-12 { n.normalize() } else { Vec3::Y };
+                    for (i, &(c, r)) in tri.iter().enumerate() {
+                        out.push(Vertex {
+                            position: p[i].to_array(),
+                            normal: normal.to_array(),
+                            tex_coords: uv(c, r),
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+        }
+        out
     }
 }

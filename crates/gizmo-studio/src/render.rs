@@ -469,7 +469,7 @@ pub fn render_studio(
                         p_depth,
                         p_max_h,
                     ) {
-                        Ok((mesh, _heights, _w, _d)) => {
+                        Ok((mesh, heights, cols, rows)) => {
                             if let Some(ent) = world.get_entity(ent_id.id()) {
                                 // Material yoksa beyaz default ekle
                                 let has_mat = world
@@ -491,13 +491,10 @@ pub fn render_studio(
                                     ent,
                                     gizmo::renderer::components::MeshRenderer::new(),
                                 );
+                                // The same collider the game's frame builds (`terrain_mesh_system`).
                                 world.add_component(
                                     ent,
-                                    gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(
-                                        p_width / 2.0,
-                                        p_max_h / 2.0,
-                                        p_depth / 2.0,
-                                    )),
+                                    gizmo::systems::terrain_collider(heights, cols, rows, p_width, p_depth, p_max_h),
                                 );
                                 // Yerçekimi etkilemesin
                                 world.add_component(ent, gizmo::physics::RigidBody::new_static());

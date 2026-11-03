@@ -150,6 +150,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **A terrain collides as the surface it draws.** Its collider was a box, `width/2 ×
+  max_height/2 × depth/2` about the entity, while the mesh runs from 0 to `max_height` — every
+  body on a terrain rested on a flat lid at half its tallest hill, floating over the valleys and
+  sunk into the peaks. It is a `Collider::heightfield` of the same samples now
+  (`gizmo::systems::terrain_collider`, used by the game's frame and by the studio alike), and the
+  mesh is split along the heightfield's own cell diagonal — it used the other one, so even with
+  the right collider a sloped cell was drawn and hit as different triangles. The triangle list
+  is `AssetManager::terrain_triangles`, buildable without a GPU. A scene saved with the old box
+  gets the heightfield on load; a box the author chose stays. Tested: every drawn triangle is a
+  collider triangle, and a ray down inside each one lands at the drawn height; the old diagonal
+  or a wrong height scale fails both.
 - **`SceneData::of_entities` / `SceneData::instantiate` — part of a world as a scene.**
   `SceneData::save` writes the whole world, camera and HUD included, so a game saving its level
   that way gained a camera on every load; `serialize_entities` took a chosen set, but
