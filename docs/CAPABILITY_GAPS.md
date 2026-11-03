@@ -1262,6 +1262,22 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16u. The twenty-fifth game: rules written in Lua (2026-11-04, `yilan`)
+
+`demo/src/bin/yilan.rs` is snake with every rule in `demo/assets/scripts/yilan.lua`; the Rust side
+builds the board and the HUD and calls the facade's own `PlayLoop::step` — the step the editor's
+▶ and an exported game take. `yilan --test` opens no window: the script plays itself and the board
+is checked (score 17, exactly 3 + score segments, all with a mesh and a colour). The first game
+whose logic is a script. Four gaps, all closed:
+
+- ~~**`entity.spawn` returned nothing**~~ — a script could not name what it had made. It returns
+  the reserved id during `on_update`.
+- ~~**Nothing a script spawned could be seen**~~ — no mesh or colour call. `set_mesh`, `set_color`.
+- ~~**The host could not read a script's values**~~ — `get_global` / `set_global`.
+- ~~**A script could only come from a file**~~ — `load_script_source`.
+
+Left: `on_entity_update` runs without the world, so `spawn` there still returns `nil`.
+
 ### C16t. The twenty-fourth game: a landscape (2026-11-04, `golf`)
 
 `demo/src/bin/golf.rs` is three holes of golf on a generated hilly course: aim with the mouse,
