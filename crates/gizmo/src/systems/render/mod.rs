@@ -306,6 +306,16 @@ fn render_viewports_unshaken(
         .iter()
         .filter_map(|(id, c)| c.viewport.map(|v| (c.order, id, v)))
         .collect();
+    // The camera the frame is drawn through, when it has no rectangle of its own, is the whole
+    // target — the base a picture-in-picture view (a minimap, a mirror) is drawn over. It was
+    // skipped: one small viewport anywhere and the main view went black.
+    if !views.is_empty() {
+        let main = crate::renderer::components::active_camera(world);
+        let full = main.and_then(|id| world.borrow::<Camera>().get(id).filter(|c| c.viewport.is_none()).map(|c| (c.order, id)));
+        if let Some((order, id)) = full {
+            views.push((order, id, crate::renderer::components::Viewport::new(0.0, 0.0, 1.0, 1.0)));
+        }
+    }
     if views.is_empty() {
         prepare_frame(world, renderer);
         capture_reflection_probes(world, renderer);
@@ -4236,6 +4246,58 @@ mod golden_render_tests {
                 "with TAA the views bleed into each other ({left_blue} blue left, {right_red} red \
                  right) — they share one history",
             );
+        });
+    }
+
+    /// **Picture in picture:** the primary camera with no viewport is the whole frame, and a
+    /// second camera with a viewport and a higher order draws over its corner — a minimap. The
+    /// main view used to be skipped (black) as soon as any camera had a viewport.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_small_viewport_draws_over_the_full_primary_view() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        use crate::renderer::components::Viewport;
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            let mut world = World::new();
+            split_screen_scene(&renderer, &mut world);
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-20.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            split_camera(&mut world, 20.0, Viewport::new(0.5, 0.0, 0.5, 0.5), false);
+            if let Some(mut c) = world.borrow_mut::<crate::renderer::components::Camera>().iter_mut().find(|(_, c)| c.viewport.is_some()).map(|(_, c)| c) {
+                c.order = 1;
+            }
+            let frame = render_world(&mut renderer, &mut world).await;
+            let (left_red, _, _) = split_colours(&frame, 0, 64);
+            let quadrant_blue = (0..64usize)
+                .flat_map(|y| (64..128usize).map(move |x| (y, x)))
+                .filter(|&(y, x)| {
+                    let p = &frame[(y * 128 + x) * 4..][..3];
+                    p[2] as i32 > p[0] as i32 + 40 && p[2] as i32 > p[1] as i32 + 20
+                })
+                .count();
+            let bottom_blue = (64..128usize)
+                .flat_map(|y| (0..128usize).map(move |x| (y, x)))
+                .filter(|&(y, x)| {
+                    let p = &frame[(y * 128 + x) * 4..][..3];
+                    p[2] as i32 > p[0] as i32 + 40 && p[2] as i32 > p[1] as i32 + 20
+                })
+                .count();
+            assert!(left_red >= 150, "the full view is drawn: {left_red} red pixels in the left half");
+            assert!(quadrant_blue >= 50, "the small view draws over the top-right quarter: {quadrant_blue} blue");
+            assert!(bottom_blue <= 5, "the small view stays in its rectangle: {bottom_blue} blue below it");
         });
     }
 

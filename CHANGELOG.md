@@ -70,6 +70,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bit-identical for them), in the inspector, and a scene row written before the fields loads with
   the defaults. Tested with two agents walking 1 m apart: the default pushes them apart, a 0.8 m
   radius or a weight of 0 leaves them at 1 m. `komutan` uses 1.0 m for its 1.2 m formation.
+- **`pist`, the sixteenth game** — a three-car, three-lap race on a stadium track with barriers,
+  driven by the engine's own vehicle model (`VehicleController`), a chase camera and a minimap in
+  the corner. Its two gaps — cars that did not move under `FixedPhysics`, and the minimap
+  blacking out the main view — are fixed (see Fixed).
 - **`komutan`, the fifteenth game** — a small real-time strategy skirmish: box-select units with
   the mouse, right-click to march them in a square formation, they fire at what comes into range;
   twelve against fourteen. Health bars are UI nodes placed over each unit with
@@ -1877,6 +1881,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before.
 
 ### Fixed
+
+- **A small viewport blacked out the main view.** As soon as any camera had a `viewport`, the
+  frame went down the split-screen path, which drew only cameras with one — the primary camera
+  without a viewport was skipped, and a minimap in a corner left the rest of the screen black.
+  The primary camera without a viewport is now the whole target, drawn at its own `order`, so a
+  small viewport with a higher order lands on top: picture in picture. GPU-tested (full view red,
+  small view blue in its quarter, nothing outside it); removing the base view fails it. Found by
+  `pist`'s minimap.
 
 - **A car driven by `FixedPhysics` never moved.** `FixedPhysics::advance` — the fixed-step
   driver `SimpleApp` games use — stepped the rigid world only; the gameplay controllers

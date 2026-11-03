@@ -89,7 +89,10 @@ pub struct Camera {
     ///
     /// Only read by the split-screen path (`gizmo::render_viewports`): it draws **every** camera
     /// that has one, each into its own rectangle, and falls back to the single `primary` camera
-    /// when none does. The projection takes the rectangle's aspect ratio, so a half-width view
+    /// when none does. The primary camera without one is drawn too, over the whole target, at its
+    /// own [`order`](Self::order) — so a full view with a small one over it (a minimap) is the
+    /// primary camera plus one camera with a viewport and a higher order. Other cameras without
+    /// one are not drawn. The projection takes the rectangle's aspect ratio, so a half-width view
     /// is not stretched. `#[serde(default)]`.
     #[serde(default)]
     pub viewport: Option<Viewport>,
