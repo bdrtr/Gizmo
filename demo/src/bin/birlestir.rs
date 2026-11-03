@@ -38,6 +38,10 @@
 //!   fontuyla imlecin yanında çıkıyor, ayrılınca ya da tıklanınca kayboluyor, pencerenin içinde
 //!   kalıyor; yalnızca klavye odağı onu açmıyor.
 //!
+//! Sürüklenen öğe ilk sürümde `Absolute`'a çevrilip `inset`'iyle taşınıyordu; `duello` için
+//! eklenen `UiTransform` ile artık düzenden sonra kaydırılıyor, yanlış yere bırakılınca da
+//! `UiTween` ile yerine kayarak dönüyor.
+//!
 //! ## Ortam değişkenleri
 //!   * `BIRLESTIR_OTO=1` — kendi kendine birkaç tohum ekip birleştiriyor (ekran görüntüsü için)
 //!   * `GIZMO_FONT=<yol>` — font
@@ -53,8 +57,9 @@ use gizmo::renderer::text::FontId;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
     AlignItems, BackgroundColor, ButtonBundle, Clicked, Drag, DropTarget, FlexDirection, FlexWrap, JustifyContent,
-    NodeBundle, PositionType, Style, Tooltip, UiPlugin, UiRect, UiScale, Val, ZIndex,
+    NodeBundle, Style, Tooltip, UiPlugin, UiRect, UiScale, UiTransform, UiTween, Val, ZIndex,
 };
+use gizmo::math::Ease;
 
 const COLS: usize = 6;
 const ROWS: usize = 5;
@@ -178,7 +183,7 @@ fn main() {
                 scene.world.add_component(cell, DropTarget::default());
                 scene.world.add_child(field, cell);
                 let view = scene.world.spawn_bundle(ButtonBundle {
-                    style: view_style(None),
+                    style: view_style(),
                     background_color: BackgroundColor(Vec4::ZERO),
                     ..Default::default()
                 });
@@ -299,20 +304,11 @@ fn reward(tier: u8) -> u32 {
     3u32.pow(u32::from(tier))
 }
 
-/// Bir görünümün biçimi: yerindeyken karenin içini dolduruyor, sürüklenirken `delta` kadar
-/// kaymış duruyor (kareye göre, mutlak).
-fn view_style(delta: Option<Vec2>) -> Style {
+/// Bir görünümün biçimi: karenin içini dolduruyor. Sürüklenirken yerinden oynamıyor — onu
+/// `UiTransform` kaydırıyor.
+fn view_style() -> Style {
     let side = Val::Px(CELL - 2.0 * PAD);
-    match delta {
-        None => Style { width: side, height: side, ..Default::default() },
-        Some(d) => Style {
-            position_type: PositionType::Absolute,
-            inset: UiRect { left: Val::Px(PAD + d.x), top: Val::Px(PAD + d.y), right: Val::Auto, bottom: Val::Auto },
-            width: side,
-            height: side,
-            ..Default::default()
-        },
-    }
+    Style { width: side, height: side, ..Default::default() }
 }
 
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
@@ -374,15 +370,21 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     }
     for (from, target) in moves {
-        let Some(target) = target else { continue };
-        if let Some(c) = world.borrow::<Cell>().get(target).copied() {
-            drop_on_cell(world, &mut game, from, c.0);
-        } else if let Some(o) = world.borrow::<OrderCard>().get(target).copied() {
-            deliver(world, &mut game, from, o.0);
-        } else if target == game.bin && game.board[from] > 0 {
-            game.board[from] = 0;
-            play(world, "tak");
-            persist(&game);
+        let before = game.board;
+        if let Some(target) = target {
+            drop_into(world, &mut game, from, target);
+        }
+        // Bir yere gitti: görünüm boşaldı (ya da yeni içeriğiyle) yerinde. Gitmediyse yerine kayarak
+        // dönüyor.
+        let view = world.get_entity(game.views[from]);
+        if let Some(e) = view {
+            world.remove_component::<ZIndex>(e);
+            if game.board[from] == before[from] && before[from] > 0 {
+                world.add_component(e, UiTween::translation(Vec2::ZERO, 0.25).with_ease(Ease::OutBack));
+            } else {
+                world.add_component(e, UiTransform::default());
+                world.remove_component::<UiTween>(e);
+            }
         }
     }
 
@@ -401,6 +403,19 @@ fn generate(world: &mut World, game: &mut Game) {
     game.energy -= 1;
     play(world, "tak");
     persist(game);
+}
+
+/// `from` karesindeki şey `target`'a bırakıldı: bir kare, bir sipariş ya da çöp.
+fn drop_into(world: &mut World, game: &mut Game, from: usize, target: u32) {
+    if let Some(c) = world.borrow::<Cell>().get(target).copied() {
+        drop_on_cell(world, game, from, c.0);
+    } else if let Some(o) = world.borrow::<OrderCard>().get(target).copied() {
+        deliver(world, game, from, o.0);
+    } else if target == game.bin && game.board[from] > 0 {
+        game.board[from] = 0;
+        play(world, "tak");
+        persist(game);
+    }
 }
 
 fn drop_on_cell(world: &mut World, game: &mut Game, from: usize, to: usize) {
@@ -478,19 +493,16 @@ fn draw(world: &mut World, game: &Game) {
     for i in 0..CELLS {
         let (view, cell) = (game.views[i], game.cells[i]);
         let tier = game.board[i];
+        // Sürüklenen şey imleci izliyor (düzen pikseliyle: ölçeğe böl), öbürlerinin önünde.
         let drag = world.borrow::<Drag>().get(view).copied().unwrap_or_default();
-        let dragging = drag.is_dragging() && tier > 0;
-        let style = view_style(dragging.then(|| drag.delta()));
-        if let Some(mut s) = world.borrow_mut::<Style>().get_mut(view) {
-            if *s != style {
-                *s = style;
-            }
-        }
-        if let Some(e) = world.get_entity(view) {
-            if dragging {
-                world.add_component(e, ZIndex(50));
-            } else {
-                world.remove_component::<ZIndex>(e);
+        if drag.is_dragging() && tier > 0 {
+            let k = world.get_resource::<UiScale>().map_or(1.0, |s| s.factor());
+            if let Some(e) = world.get_entity(view) {
+                if drag.just_started() {
+                    world.add_component(e, ZIndex(50));
+                    world.remove_component::<UiTween>(e);
+                }
+                world.add_component(e, UiTransform { translation: drag.delta() / k, opacity: 1.0 });
             }
         }
         let colour = if tier == 0 { Vec4::ZERO } else { COLOURS[tier as usize - 1] };
