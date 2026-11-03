@@ -43,9 +43,10 @@
 
 /// Kinematic character controller.
 ///
-/// Exposes a single entry point, [`update_character`], which advances one character by one
-/// fixed step against a slice of scene colliders, mutating the character's `Transform` and
-/// `Velocity` in place.
+/// Its entry point, [`update_character`], advances one character by one fixed step against a
+/// slice of scene colliders, mutating the character's `Transform` and `Velocity` in place;
+/// [`character::update_character_with_hits`] does the same and also reports the bodies the
+/// character walked into, which is how `character_controller_system` pushes dynamic ones.
 ///
 /// It has two modes, selected by its `water_surface_y: Option<f32>` argument. `None` runs the
 /// land model: ground detection, gravity, slope movement, wall sliding and step climbing.

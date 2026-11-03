@@ -79,10 +79,28 @@ pub fn update_character(
     vel: &mut Velocity,
     collider: &Collider,
     colliders: &[(BodyHandle, Transform, Collider)],
+    water_surface_y: Option<f32>,
+    dt: f32,
+) {
+    update_character_with_hits(_entity, kcc, transform, vel, collider, colliders, water_surface_y, dt, &mut Vec::new());
+}
+
+/// [`update_character`], also reporting what the character walked into: each body that stopped
+/// it this step, with the (unit) direction it was walking — what `character_controller_system`
+/// pushes dynamic bodies with ([`CharacterController::push_force`]).
+#[allow(clippy::too_many_arguments)]
+pub fn update_character_with_hits(
+    _entity: BodyHandle,
+    kcc: &mut CharacterController,
+    transform: &mut Transform,
+    vel: &mut Velocity,
+    collider: &Collider,
+    colliders: &[(BodyHandle, Transform, Collider)],
     // Karakter bir su hacmindeyse yüzeyin dünya-Y'si (yüzme modunu tetikler); değilse None.
     // Çağıran `PhysicsWorld::water_at(pos)` ile türetir.
     water_surface_y: Option<f32>,
     dt: f32,
+    hits: &mut Vec<(BodyHandle, Vec3)>,
 ) {
     let (height, radius) = character_dims(collider);
 
@@ -250,6 +268,7 @@ pub fn update_character(
     for _ in 0..3 {
         let mut hit = false;
         let mut closest_n = Vec3::ZERO;
+        let mut closest_ent = None;
         let mut min_t = 1.0;
         let move_dist = final_delta.length();
         if move_dist < 1e-4 {
@@ -263,10 +282,11 @@ pub fn update_character(
         for (i, h_offset) in sweep_heights.into_iter().enumerate() {
             let mut local_min_t = 1.0;
             let mut local_closest_n = Vec3::ZERO;
+            let mut local_closest_ent = None;
             let origin = current_pos + Vec3::new(0.0, h_offset, 0.0);
             let move_ray = Ray::new(origin, move_dir);
 
-            for (_col_ent, col_trans, col) in &near_colliders {
+            for (col_ent, col_trans, col) in &near_colliders {
                 if let Some((d, n)) = Raycast::ray_shape(&move_ray, &col.shape, col_trans) {
                     // The character's surface sits `radius` ahead of its center. Clamp
                     // the surface distance to 0 so a contact or slightly-penetrating hit
@@ -281,6 +301,7 @@ pub fn update_character(
                         if actual_d < move_dist * local_min_t {
                             local_min_t = actual_d / move_dist;
                             local_closest_n = n;
+                            local_closest_ent = Some(*col_ent);
                         }
                     }
                 }
@@ -288,6 +309,7 @@ pub fn update_character(
             if local_min_t < min_t {
                 min_t = local_min_t;
                 closest_n = local_closest_n;
+                closest_ent = local_closest_ent;
                 hit = true;
             }
         }
@@ -356,6 +378,18 @@ pub fn update_character(
                 );
             } else {
                 current_pos += move_dir * (move_dist * min_t).max(0.0);
+                // Report what stopped us, with the horizontal direction we were walking —
+                // the system pushes it if it is a dynamic body. A floor-like normal (a slope
+                // the character can walk) is ground, not something to push.
+                if let Some(ent) = closest_ent {
+                    let flat = Vec3::new(move_dir.x, 0.0, move_dir.z).normalize_or_zero();
+                    if flat != Vec3::ZERO
+                        && closest_n.angle_between(Vec3::Y) > kcc.max_slope_angle
+                        && !hits.iter().any(|(e, _)| *e == ent)
+                    {
+                        hits.push((ent, flat));
+                    }
+                }
 
                 let remaining_dist = move_dist * (1.0 - min_t);
                 let remaining_dir = move_dir;

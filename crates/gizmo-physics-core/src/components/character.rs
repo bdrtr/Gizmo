@@ -35,6 +35,13 @@ pub struct CharacterController {
     /// `kcc.target_velocity = dir.normalize_or_zero() * kcc.speed` — is what ties the two
     /// together; without it this field has no effect at all.
     pub speed: f32,
+    /// How hard the character pushes a dynamic body it walks into, in newtons (`400.0` by
+    /// default; `0.0` pushes nothing). Applied along the walking direction for as long as the
+    /// body is slower than the character in that direction, so a crate is pushed at walking pace
+    /// and a heavy one barely moves; a static or kinematic body is never pushed. Without it a
+    /// character stopped at a crate as at a wall.
+    #[serde(default = "CharacterController::default_push_force")]
+    pub push_force: f32,
     /// Upward launch speed in m/s applied the moment a jump fires (`5.0` by default).
     ///
     /// It is *assigned* to the vertical velocity rather than added as an impulse, so a jump
@@ -153,10 +160,17 @@ pub struct CharacterController {
     pub is_submerged: bool,
 }
 
+impl CharacterController {
+    fn default_push_force() -> f32 {
+        400.0
+    }
+}
+
 impl Default for CharacterController {
     fn default() -> Self {
         Self {
             speed: 5.0,
+            push_force: Self::default_push_force(),
             jump_speed: 5.0,
             gravity: 9.81,
             max_slope_angle: 45.0_f32.to_radians(),

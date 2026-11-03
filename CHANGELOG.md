@@ -103,6 +103,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the alpha (which passes through).
 - **`From` between `gizmo::math::Ray` and `gizmo::physics::Ray`** — the cursor's ray and the
   physics query's were two types with no conversion; `world.raycast(&cursor_ray.into(), …)` works.
+- **A character pushes the crates it walks into (`CharacterController::push_force`, 400 N by
+  default; `0` turns it off).** The controller treated every collider as level geometry: walking
+  into a 10 kg crate stopped the character at it as at a wall (player x 1.20, crate x 2.00 after
+  3 s). Now the bodies that stop its sweep are reported (`update_character_with_hits`;
+  `update_character` keeps its signature) and `character_controller_system` gives each dynamic one
+  `push_force · dt / mass` along the walking direction, never past the character's own speed —
+  a light crate goes at walking pace (x 9.57 after the same 3 s, the player at its face), a 500 kg
+  one stays put because its friction is more than the push, and kinematic or static bodies are
+  never touched. A scene file written before the field loads it with the default. Removing the
+  push, the speed cap (the crate reaches 3.55 m/s ahead of a 3 m/s walk) or the serde default
+  each fails a test.
 - **`gizli`, the nineteenth game** — a stealth game: guards patrol, their vision cones are rebuilt
   every frame from rays against the walls, suspicion fills while you are seen. It found the four
   items above.

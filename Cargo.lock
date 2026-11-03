@@ -2762,6 +2762,7 @@ dependencies = [
  "gizmo-math",
  "gizmo-physics-core",
  "gizmo-physics-rigid",
+ "serde_json",
  "tracing",
 ]
 

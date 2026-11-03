@@ -40,7 +40,7 @@ use gizmo_physics_core::components::{CharacterController, FighterController};
 use gizmo_physics_core::{BodyHandle, Collider, Transform};
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
-use crate::character::update_character;
+use crate::character::update_character_with_hits;
 use crate::vehicle::{
     update_vehicle_with_query, weather_grip_factor, ColliderListQuery, VehicleController,
     WheelGroundQuery,
@@ -215,7 +215,7 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
 }
 
 /// Drives the kinematic character controller ([`CharacterController`] +
-/// [`update_character`]) for every character entity each fixed step.
+/// [`update_character`](crate::character::update_character)) for every character entity each fixed step.
 ///
 /// Query: `Mut<CharacterController>` + `Mut<Transform>` + `Mut<Velocity>` +
 /// `&Collider`. The KCC does its own gravity / ground-snap / step / slide
@@ -248,6 +248,10 @@ pub fn character_controller_system(world: &World, dt: f32) {
             Without<IsDeleted>,
         )>()
     };
+    // What each character walked into: `(body, unit walking direction, push force, walking
+    // speed)`, applied after the character query is dropped.
+    let mut pushes: Vec<(BodyHandle, gizmo_math::Vec3, f32, f32)> = Vec::new();
+    let mut hits = Vec::new();
     if let Some(mut query) = query {
         let mut char_count = 0usize;
         for (id, (mut kcc, mut transform, mut vel, collider, _)) in query.iter_mut() {
@@ -257,7 +261,9 @@ pub fn character_controller_system(world: &World, dt: f32) {
             let water_surface_y = phys
                 .as_ref()
                 .and_then(|pw| pw.water_at(transform.position).map(|s| s.surface_y));
-            update_character(
+            let walk_speed = gizmo_math::Vec3::new(kcc.target_velocity.x, 0.0, kcc.target_velocity.z).length();
+            hits.clear();
+            update_character_with_hits(
                 BodyHandle::from_id(id),
                 &mut kcc,
                 &mut transform,
@@ -266,7 +272,11 @@ pub fn character_controller_system(world: &World, dt: f32) {
                 &all_colliders,
                 water_surface_y,
                 dt,
+                &mut hits,
             );
+            if kcc.push_force > 0.0 && walk_speed > 0.0 {
+                pushes.extend(hits.iter().map(|&(body, dir)| (body, dir, kcc.push_force, walk_speed)));
+            }
             char_count += 1;
         }
         tracing::trace!(
@@ -274,6 +284,44 @@ pub fn character_controller_system(world: &World, dt: f32) {
             collider_count = all_colliders.len(),
             "[KCC] controller system tick"
         );
+    }
+    push_bodies(world, &pushes, dt);
+}
+
+/// Pushes the dynamic bodies characters walked into this step.
+///
+/// **A character stopped at a crate as at a wall** — the controller treated every collider as
+/// level geometry and nothing moved it, so a box puzzle could not be built (`kapi` found it).
+/// Each hit body gets `push_force · dt / mass` along the walking direction, never taking its
+/// speed in that direction past the character's own: a light crate is pushed at walking pace, a
+/// heavy one accelerates slowly, and one whose friction exceeds the force does not move at all,
+/// since the solver's friction then takes it back. A static or kinematic body has no inverse
+/// mass and is left alone. A pushed body is woken, or the integrator would skip the change.
+fn push_bodies(world: &World, pushes: &[(BodyHandle, gizmo_math::Vec3, f32, f32)], dt: f32) {
+    if pushes.is_empty() {
+        return;
+    }
+    // SAFETY: as above — the character query is dropped, and this one is the only live one.
+    let Some(mut bodies) = (unsafe {
+        world.query_unchecked::<(Mut<RigidBody>, Mut<Velocity>, Without<IsDeleted>)>()
+    }) else {
+        return;
+    };
+    for &(body, dir, force, speed) in pushes {
+        let Some((mut rb, mut vel, _)) = bodies.get_mut(body.id()) else {
+            continue;
+        };
+        let inv_mass = rb.inv_mass();
+        if inv_mass <= 0.0 {
+            continue;
+        }
+        let along = vel.linear.dot(dir);
+        let room = speed - along;
+        if room <= 0.0 {
+            continue;
+        }
+        vel.linear += dir * (force * inv_mass * dt).min(room);
+        rb.wake_up();
     }
 }
 
