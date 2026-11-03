@@ -1836,10 +1836,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   against the motion. Measured with a CCD ball down seventeen tiles: 1.01 m in two seconds against
   2.21 m on one slab (the analytic value). The narrowphase now drops a box part's edge contact when
   another part holds the body with a face contact on the same plane — a real edge (a step) is off
-  that plane and stays: 2.03 m. Without CCD the tiles cost nothing either way (2.22 m); the last 8 %
-  is in the speculative contact against the compound — not its below-1 mm normal fallback, which
-  was tried and changed nothing — recorded as open. Removing the rule fails the
-  test.
+  that plane and stays: 2.03 m. Without CCD the tiles cost nothing either way (2.22 m). The last
+  8 % was not the seams — see the next entry.
+- **A speculative contact with nothing left to close was taken for a resting one.** When a CCD
+  body arrives within the 1 cm skin, `Gjk::speculative_contact` may let it close nothing more, and
+  wrote that as a penetration of `-0.0` — which is not `< 0.0`, the solver's test for a
+  speculative contact. So the contact was solved as a real one: restitution allowed, and friction
+  applied at its anchor, the dynamic body's **centre**, where an impulse has no lever arm — it
+  does not spin the body, it takes its tangential speed. A CCD ball dropped 5 cm onto a tilted
+  floor lost the 0.156 m/s it carried down the slope on landing and covered 2.03 m in two seconds
+  instead of 2.23 m (the slab's 2.21 m; the slab run lands through a real contact and never saw
+  it). Both halves are fixed: the gap is strictly negative, and a speculative contact gets no
+  friction at all — the bodies have not touched, and the next step's real contact rolls it. The
+  first suspect, the contact's below-1 mm normal fallback, was tried and changed nothing; tracing
+  the step found one contact and a velocity set to exactly zero. Undoing either half fails a test.
 
 - **UI boxes on one layer were painted in storage (archetype) order, not tree order.** A slot
   (`NodeBundle` + `DropTarget`) and the item inside it (`ButtonBundle` + `Drag`) live in different

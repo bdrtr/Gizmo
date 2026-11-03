@@ -590,8 +590,10 @@ impl Gjk {
         Some(ContactPoint {
             point,
             normal,
-            // Negative ⇒ speculative gap; solver bias allows closing exactly this much.
-            penetration: -allowed_close,
+            // Negative ⇒ speculative gap; solver bias allows closing exactly this much. Strictly
+            // negative even when nothing may be closed: `-0.0` is not `< 0.0`, and the solver took
+            // such a contact for a resting one — friction at the body's centre included.
+            penetration: -allowed_close.max(f32::MIN_POSITIVE),
             local_point_a: point - pos_a,
             local_point_b: point - pos_b,
             normal_impulse: 0.0,

@@ -233,6 +233,32 @@ mod tests {
         );
     }
 
+    /// A body arriving within the skin may close nothing more, and its contact still reads as
+    /// speculative: `-0.0 < 0.0` is false, so a zero gap written as `-0.0` was taken by the solver
+    /// for a resting contact — with friction at the body's centre, which stopped a ball landing
+    /// on a slope dead instead of letting the next step roll it.
+    #[test]
+    fn a_speculative_contact_inside_the_skin_is_still_negative() {
+        let ball = ColliderShape::Sphere(SphereShape { radius: 0.3 });
+        let floor = ColliderShape::Box(BoxShape { half_extents: Vec3::new(5.0, 0.1, 5.0) });
+        let c = Gjk::speculative_contact(
+            &floor,
+            Vec3::new(0.0, -0.1, 0.0),
+            Quat::IDENTITY,
+            Vec3::ZERO,
+            0.0,
+            &ball,
+            Vec3::new(0.0, 0.305, 0.0),
+            Quat::IDENTITY,
+            Vec3::new(0.0, -1.0, 0.0),
+            5.0,
+            1.0 / 60.0,
+        )
+        .expect("5 mm away at 1 m/s: it arrives this step");
+        assert!(c.penetration < 0.0, "a 5 mm gap read as touching: {}", c.penetration);
+        assert!(c.penetration > -1e-6, "inside the skin it may close nothing: {}", c.penetration);
+    }
+
     /// The repro that motivated rewriting CA: a swept box with a LATERAL OFFSET.
     ///
     /// CA used to work only for a head-on approach. Two unit boxes with B at x=5 and A

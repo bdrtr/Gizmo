@@ -1277,12 +1277,15 @@ things, one of them a crash:
 - ~~**A compound crashed the physics next to a CCD body.**~~ **Fixed.** The speculative contact
   passed it to GJK whole (debug panic; a zero support point in release). Kinematic bodies turn CCD
   on, so this board hit it on its first step.
-- **A ball on tile seams** — ~~lost half its speed~~ **fixed to 8 %**: a box part's edge contact on
-  a plane another part holds with a face contact is dropped (1.01 → 2.03 m of the slab's 2.21 m,
-  CCD ball, two seconds). Without CCD there is no loss at all. *Open:* the remaining 8 % is in the
-  speculative contact against the compound (which part it takes near a seam). It is **not** the
-  contact's below-1 mm normal fallback, the first suspect: lowering that threshold to 1e-6 left
-  2.030 m unchanged. The game turns CCD off, which its speeds allow.
+- ~~**A ball on tile seams** lost half its speed~~ **Closed.** A box part's edge contact on a plane
+  another part holds with a face contact is dropped (1.01 → 2.03 m of the slab's 2.21 m, CCD ball,
+  two seconds). The last 8 % turned out not to be the seams: it was the **landing** — one
+  speculative contact whose zero gap was written as `-0.0`, which the solver's `< 0.0` test reads
+  as a resting contact, so it got friction at the ball's centre and stopped its slide down the
+  slope dead. Strictly negative now, and speculative contacts carry no friction: 2.23 m. Two wrong
+  guesses on the way, both recorded: "the speculative contact near a seam" (it fired once, at the
+  start) and "its below-1 mm normal fallback" (changing it changed nothing). The game turns CCD
+  off anyway, which its speeds allow.
 
 ### C16h. The twelfth game: things on screen that move (2026-11-03, `duello`)
 

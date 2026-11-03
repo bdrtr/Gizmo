@@ -877,6 +877,19 @@ impl ConstraintSolver {
                         velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_n));
                     }
 
+                    // A speculative contact gets no friction: the bodies have not touched, and
+                    // its anchor is the dynamic body's centre (`Gjk::speculative_contact`), so a
+                    // friction impulse there has no lever arm — it does not spin the body, it only
+                    // takes its tangential speed. Measured on a CCD ball dropped 5 cm onto a
+                    // tilted floor of tiles (`tests/kinematic_target.rs`): the one speculative
+                    // contact on landing took the 0.156 m/s it carried down the slope, and it
+                    // covered 2.03 m in two seconds where it covers 2.24 m without that
+                    // friction. The real contact on the next step rolls it.
+                    if penetration < 0.0 {
+                        manifolds[mid].contacts[cid].tangent_impulse = Vec3::ZERO;
+                        continue;
+                    }
+
                     // ── Sürtünme İmpulsu (2-tangent Coulomb cone) ───────────
                     // Normalden türetilen SABİT iki ortonormal tangent (t1,t2); birikim
                     // her eksende skaler ve birlikte dairesel koniye clamp'lenir.

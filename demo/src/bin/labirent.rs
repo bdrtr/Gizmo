@@ -34,9 +34,12 @@
 //!   itiyor. Ölçüldü (iki saniye, 9° eğim, CCD'li bilye): tek parça zeminde 2,21 m (analitik
 //!   değer), on yedi karoda 1,01 m. **Düzeltildi:** bileşik bir şeklin kutu parçasından gelen
 //!   kenar teması, başka bir parça aynı düzlemde yüz temasıyla cismi tutuyorsa atılıyor (bir
-//!   basamağın kenarı o düzlemde değil, kalıyor): 2,03 m. CCD'siz bilye karolarda zaten 2,22 m
-//!   gidiyor — kalan %8 CCD'nin bileşik şekle karşı öngörülü temasında (dikişte hangi parçayı
-//!   aldığı), *açık*. Bu oyun CCD'yi kapatıyor; hızları ona gerek bırakmıyor.
+//!   basamağın kenarı o düzlemde değil, kalıyor): 2,03 m. Kalan %8 dikişlerde değilmiş: bilye
+//!   5 cm yukarıdan bırakılıyor ve inişteki tek öngörülü temas "kapatılacak boşluk yok"u `-0.0`
+//!   diye yazıyordu; çözücünün `< 0.0` sınaması onu gerçek temas sandı ve bilyenin *merkezine*
+//!   sürtünme uyguladı — bilye dönmedi, eğim boyunca taşıdığı hızı bir adımda kaybetti.
+//!   **Düzeltildi:** boşluk kesin negatif, öngörülü temasın sürtünmesi yok: 2,23 m. Bu oyun yine
+//!   de CCD'yi kapatıyor; hızları ona gerek bırakmıyor.
 //!
 //! ## Ortam değişkenleri
 //!   * `LABIRENT_OTO=1` — tahtayı kendi kendine sağa eğer (ekran görüntüsü için)
@@ -253,8 +256,7 @@ fn spawn_ball(world: &mut World, game: &mut Game) {
     }
     // Tahta eğikse başlangıç noktası da onunla birlikte.
     let rotation = world.borrow::<Transform>().get(game.board).map_or(Quat::IDENTITY, |t| t.rotation);
-    // CCD yok: bilye 240 Hz'de adım başına birkaç santim gidiyor, 20 cm'lik zemini delemez; CCD'nin
-    // öngörülü teması ise karoların dikişlerinde bilyeyi frenliyor (aşağıya bakın).
+    // CCD yok: bilye 240 Hz'de adım başına birkaç santim gidiyor, 20 cm'lik zemini delemez.
     let body = RigidBody::new(0.2, true);
     let ball = world.spawn_bundle((
         Transform::new(rotation * game.start).with_scale(Vec3::splat(BALL_R)),

@@ -127,8 +127,11 @@ fn a_compound_board_holds_a_ball_on_a_tile_and_drops_one_through_the_gap() {
 /// A ball with CCD rolling down a floor of seventeen box tiles (one compound) goes nearly as far
 /// as on one slab: the tiles' seams do not catch it. Before seam contacts were dropped it covered
 /// 1.01 m in two seconds against the slab's 2.21 m (the analytic value for a rolling sphere on
-/// this slope); 2.03 m after. The last 8 % is in the speculative contact against the compound,
-/// and open.
+/// this slope); 2.03 m after. The last 8 % was not the seams at all: it was the one speculative
+/// contact on landing (the ball starts 5 cm up), which wrote its zero gap as `-0.0` — not
+/// `< 0.0`, so the solver took it for a resting contact and applied friction at the ball's
+/// centre, stopping the 0.156 m/s it carried down the slope. 2.23 m now. (The slab run lands
+/// through a real contact, so it never saw it.)
 #[test]
 fn a_ball_rolls_across_tile_seams_as_on_one_slab() {
     let run = |tiles: bool| {
@@ -164,5 +167,5 @@ fn a_ball_rolls_across_tile_seams_as_on_one_slab() {
     let (slab, tiles) = (run(false), run(true));
     let analytic = 0.5 * 9.81 * 0.16f32.sin() * 5.0 / 7.0 * 4.0;
     assert!((slab - analytic).abs() < 0.1 * analytic, "slab {slab} vs analytic {analytic}");
-    assert!(tiles > 0.85 * slab, "tiles {tiles} vs slab {slab}");
+    assert!((tiles - slab).abs() < 0.03 * slab, "tiles {tiles} vs slab {slab}");
 }
