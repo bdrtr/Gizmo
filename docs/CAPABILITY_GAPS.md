@@ -1261,6 +1261,21 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16k. The fifteenth game: units under a box (2026-11-03, `komutan`)
+
+`demo/src/bin/komutan.rs` is a small real-time strategy skirmish: drag a box to select units,
+right-click the ground to march them (a square formation around the point), and they fire at
+enemies in range. Twelve blue against fourteen red; `NavGrid` routes all twenty-six round the
+rocks. Two gaps, both closed before the game was finished:
+
+- ~~**No world-to-screen projection.**~~ **Closed 2026-11-03.** The cursor had a ray into the
+  world, the world had no way back to the screen — and a box selection has to project the units,
+  a health bar has to know the pixel over its unit. `pointer::world_to_screen` /
+  `Camera::world_to_screen` (`None` behind the camera; split-screen viewports honoured).
+- ~~**The cursor ray came from a stale camera position.**~~ **Fixed.** It read the camera's
+  `GlobalTransform`, a frame behind in game code (the origin, for a camera spawned this frame);
+  found when `world_to_screen`'s example projected nothing. It reads `world_position` now.
+
 ### C16j. The fourteenth game: a road that never ends (2026-11-03, `kosucu`)
 
 `demo/src/bin/kosucu.rs` is a three-lane endless runner: switch lanes, jump the low barriers, slide

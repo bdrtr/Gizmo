@@ -64,6 +64,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   turns them green (31 230 38 / 6 224 7; forward 0 229 0 / 0 251 0), intensity 0 leaves them dark;
   dropping either shader's branch fails the test. Found by `kosucu`, whose gold coins were grey
   under a pale blue sky.
+- **`komutan`, the fifteenth game** — a small real-time strategy skirmish: box-select units with
+  the mouse, right-click to march them in a square formation, they fire at what comes into range;
+  twelve against fourteen. Health bars are UI nodes placed over each unit with
+  `world_to_screen` every frame.
 - **`pointer::world_to_screen(world, point)` and `Camera::world_to_screen`** — the pixel a world
   point is drawn at, `cursor_ray`'s inverse: what a box selection tests units against and where a
   health bar goes over a 3D thing. Top-left origin like `Input::mouse_position`; `None` behind the
