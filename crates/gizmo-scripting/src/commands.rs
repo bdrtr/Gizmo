@@ -86,6 +86,26 @@ pub enum ScriptCommand {
     },
     /// Despawn an entity. A stale id is a no-op, not an error.
     DestroyEntity(u32),
+    /// Spawn the entity a script's `entity.spawn` / `entity.spawn_prefab` reserved during
+    /// `on_update` — the id the call already returned to the script, so commands naming it later
+    /// in the same frame (a position, a mesh, a colour) land on it.
+    SpawnReserved {
+        /// The reserved entity.
+        entity: gizmo_core::Entity,
+        /// The `EntityName` it is spawned with.
+        name: String,
+        /// Where it appears, in world space.
+        position: Vec3,
+        /// The prefab key for `spawn_prefab` (a `PrefabRequest`), `None` for `spawn`.
+        prefab: Option<String>,
+    },
+    /// Give an entity a mesh to draw: a `MeshSource` with this key (`"standard_cube"`,
+    /// `"sphere"`, `"cylinder"`, a model path…).
+    SetMesh(u32, String),
+    /// Colour an entity — linear RGBA. The renderer owns materials, so this one is handed back
+    /// to the host by `flush_commands`; the facade's play loop turns it into the entity's
+    /// `MaterialDesc`.
+    SetColor(u32, gizmo_math::Vec4),
 
     // ── Audio ────────────────────────────────────────────────────────────────
     /// Play a sound by name, without a position (2D).
@@ -246,7 +266,10 @@ impl ScriptCommand {
             SetVehicleEngineForce(_, f) | SetVehicleSteering(_, f) | SetVehicleBrake(_, f) => {
                 f.is_finite()
             }
-            SpawnEntity { position, .. } | SpawnPrefab { position, .. } => position.is_finite(),
+            SpawnEntity { position, .. }
+            | SpawnPrefab { position, .. }
+            | SpawnReserved { position, .. } => position.is_finite(),
+            SetColor(_, c) => c.is_finite(),
             ShowDialogue { duration, .. } => duration.is_finite(),
             AddCheckpoint { position, radius, .. } => position.is_finite() && radius.is_finite(),
             SetCameraFov(f) | SetAnimationSpeed(_, f) => f.is_finite(),
@@ -256,6 +279,7 @@ impl ScriptCommand {
 
             // Carry no floating-point numbers. Listed rather than wildcarded — see above.
             DestroyEntity(_)
+            | SetMesh(_, _)
             | PlaySound(_)
             | StopSound(_)
             | LoadScene(_)

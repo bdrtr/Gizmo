@@ -47,7 +47,8 @@
 //! ```
 //!
 //! ## Lua API surface
-//! - `entity` — read/write position, rotation, scale, velocity; spawn/destroy
+//! - `entity` — read/write position, rotation, scale, velocity; spawn (returns the new id during
+//!   `on_update`) / destroy; `set_mesh`, `set_color` (the colour is applied by the host)
 //! - `input` — query key and mouse state
 //! - `physics` — apply forces and impulses
 //! - `scene` — save/load scenes, look up entities

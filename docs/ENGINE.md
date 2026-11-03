@@ -3545,8 +3545,10 @@ Cihazsız yarısı ayrı: komutların **tanınması** — asıl kırık olan yar
 birim testinde.
 
 **Ve aynı soru bütün komut vokabülerine soruldu — LİSTE BU (2026-08-18).** `ScriptCommand`'ın
-**42 varyantı** var; `flush_commands` bunların **23'ünü** kendi içinde uyguluyor, **19'u** geri
-dönüyordu ve hiçbirine bakan yoktu. `PlayLoop` şimdi yedisini karşılıyor. *(Sayılar 2026-08-19'da
+**45 varyantı** var; `flush_commands` bunların **25'ini** kendi içinde uyguluyor, **20'si** geri
+dönüyordu ve hiçbirine bakan yoktu. `PlayLoop` şimdi sekizini karşılıyor. *(2026-11-04: `yilan`
+üç varyant ekledi — kimliği ayrılmış doğurma `SpawnReserved` ve `SetMesh` betik katmanında,
+`SetColor` host'ta.)* *(Sayılar 2026-08-19'da
 düzeltildi: `SetFighterHealth` aynı gün eklendi ve iki yerde yazılı sayıyı bayatlattı — §8'in
 "düzyazıya yazılan sayı, kodun geride bıraktığı sayıdır" kuralının bu oturumdaki örneği. Ölçüm:
 enum gövdesindeki varyant adları sayıldı, 43.)*
@@ -3556,6 +3558,7 @@ enum gövdesindeki varyant adları sayıldı, 43.)*
 | `PlaySound` · `PlaySound3D` · `StopSound` | **karşılandı** — yukarıdaki madde |
 | `SetVehicleEngineForce` · `SetVehicleSteering` · `SetVehicleBrake` | **karşılandı** — Lua'nın araç API'si de sessizdi; `VehicleController` `gizmo-physics-dynamics`'te, yani scripting crate'inin ulaşamayacağı yerde |
 | `SetCameraFov` | **karşılandı** |
+| `SetColor` | **karşılandı** — varlığın `MaterialDesc`'i (yoksa yaratılır) ve canlı `Material`'ı |
 | `LoadScene` · `SaveScene` | açık, **bilerek**: editör yazarın altından sahne değiştiremez. Çalışma zamanı için meşru; tetikleyicisi sahne geçişi isteyen bir oyun |
 | `SetCameraTarget` | açık: bu bir **değer** değil, zaman içinde bir **davranış** istiyor ve motor script'in gösterebileceği bir takip sistemi göndermiyor. Tetikleyici: öyle bir sistem. *(`SetFightCamera` bu satırdaydı; 2026-08-19'da SİLİNDİ — bkz. aşağısı.)* |
 | `ShowDialogue` · `HideDialogue` | açık: diyalog altsistemi yok |

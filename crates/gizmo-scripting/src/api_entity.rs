@@ -37,6 +37,28 @@ pub fn register_entity_api(lua: &Lua, command_queue: Arc<CommandQueue>) -> Resul
         )?;
     }
 
+    // === MESH / COLOUR ===
+    {
+        let cq = command_queue.clone();
+        entity_table.raw_set(
+            "set_mesh",
+            lua.create_function(move |_, (id, key): (u32, String)| {
+                cq.push(ScriptCommand::SetMesh(id, key));
+                Ok(())
+            })?,
+        )?;
+    }
+    {
+        let cq = command_queue.clone();
+        entity_table.raw_set(
+            "set_color",
+            lua.create_function(move |_, (id, r, g, b, a): (u32, f32, f32, f32, Option<f32>)| {
+                cq.push(ScriptCommand::SetColor(id, gizmo_math::Vec4::new(r, g, b, a.unwrap_or(1.0))));
+                Ok(())
+            })?,
+        )?;
+    }
+
     // === SCALE ===
     {
         let cq = command_queue.clone();
@@ -224,6 +246,68 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
 
 
     Ok(())
+}
+
+/// For the length of `run` — a frame's `on_update` calls — `entity.spawn(name, x, y, z)` and
+/// `entity.spawn_prefab(name, prefab, x, y, z)` **return the new entity's id**.
+///
+/// They used to return nothing: the spawn was a queued command, so a script that made something
+/// could not name it afterwards — not to move it, colour it or destroy it — short of finding it
+/// by name on a later frame. Here the id is reserved from `world`'s allocator (which takes
+/// `&World`) and travels in the command, so `local id = entity.spawn(...)` followed by
+/// `entity.set_position(id, ...)` works in the same frame: the queue applies them in order.
+///
+/// Outside the window (a script's top level runs at load, with no world) the plain functions are
+/// back and return `nil`.
+pub(crate) fn with_spawn_ids<R>(
+    lua: &Lua,
+    world: &World,
+    command_queue: &Arc<CommandQueue>,
+    run: impl FnOnce() -> Result<R, LuaError>,
+) -> Result<R, LuaError> {
+    let table = crate::api_table::raw(lua, "entity")?;
+    let plain_spawn: LuaValue = table.raw_get("spawn")?;
+    let plain_prefab: LuaValue = table.raw_get("spawn_prefab")?;
+    let out = lua.scope(|scope| {
+        let cq = command_queue.clone();
+        let spawn = scope.create_function(move |_, (name, x, y, z): (String, f32, f32, f32)| {
+            reserve(world, &cq, name, Vec3::new(x, y, z), None)
+        })?;
+        let cq = command_queue.clone();
+        let spawn_prefab = scope.create_function(
+            move |_, (name, prefab, x, y, z): (String, String, f32, f32, f32)| {
+                reserve(world, &cq, name, Vec3::new(x, y, z), Some(prefab))
+            },
+        )?;
+        table.raw_set("spawn", spawn)?;
+        table.raw_set("spawn_prefab", spawn_prefab)?;
+        run()
+    });
+    table.raw_set("spawn", plain_spawn)?;
+    table.raw_set("spawn_prefab", plain_prefab)?;
+    out
+}
+
+/// Reserves an entity and queues its spawn; the id is what the Lua call returns.
+fn reserve(
+    world: &World,
+    command_queue: &CommandQueue,
+    name: String,
+    position: Vec3,
+    prefab: Option<String>,
+) -> Result<u32, LuaError> {
+    // Checked before reserving: the queue drops a non-finite command, and an id reserved for a
+    // command that never arrives would count as alive with nothing behind it.
+    if !position.is_finite() {
+        return Err(LuaError::RuntimeError(format!("entity.spawn('{name}'): the position is not finite")));
+    }
+    let Some(entities) = world.get_resource::<gizmo_core::entity::allocator::Entities>() else {
+        return Err(LuaError::RuntimeError("entity.spawn: the world has no entity allocator".into()));
+    };
+    let entity = entities.reserve_entity();
+    drop(entities);
+    command_queue.push(ScriptCommand::SpawnReserved { entity, name, position, prefab });
+    Ok(entity.id())
 }
 
 #[cfg(test)]

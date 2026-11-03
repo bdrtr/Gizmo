@@ -156,7 +156,7 @@ fn the_script_command_counts_in_prose_match_the_enum() {
 }
 
 /// The arithmetic the same two paragraphs assert: everything the scripting crate does not apply
-/// itself is handed back, and the host's chain takes seven of those.
+/// itself is handed back, and the host's chain takes eight of those.
 ///
 /// Checked against the code, not against itself: the applied count is the number of variants
 /// matched inside `flush_commands`, and the returned count is the rest.

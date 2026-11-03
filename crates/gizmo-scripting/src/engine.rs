@@ -414,6 +414,17 @@ impl ScriptEngine {
             error!(path, error = %e, "[Scripting] Script dosyası okunamadı");
             format!("Script okunamadı {}: {}", path, e)
         })?;
+        self.load_script_source(path, content)
+    }
+
+    /// [`load_script`](Self::load_script) for a script that is not a file: `source` is loaded
+    /// under the name `path`, which is what [`get_global`](Self::get_global),
+    /// [`set_global`](Self::set_global) and [`update_entity`](Self::update_entity) name it by.
+    ///
+    /// What a game that ships its rules inside the binary (`include_str!`) needs — before this it
+    /// had to write the text to a file first, and an exported game has no reliable place to.
+    /// [`reload_if_changed`](Self::reload_if_changed) has no file to watch for such a script.
+    pub fn load_script_source(&mut self, path: &str, content: String) -> Result<(), String> {
         let byte_len = content.len();
 
         let env = self.lua.create_table().map_err(|e| e.to_string())?;
@@ -514,7 +525,8 @@ impl ScriptEngine {
         let budget = &self.budget;
         let budget_ticks = self.budget_ticks;
         let mut failures = Vec::new();
-        api_physics::with_call_time_queries(lua, world, || {
+        let command_queue = &self.command_queue;
+        api_physics::with_call_time_queries(lua, world, || api_entity::with_spawn_ids(lua, world, command_queue, || {
             for (path, (_, key)) in scripts {
                 let env: mlua::Table = match lua.registry_value(key) {
                     Ok(env) => env,
@@ -532,7 +544,7 @@ impl ScriptEngine {
                 }
             }
             Ok(())
-        })
+        }))
         .map_err(|e| format!("script scope hatası: {e}"))?;
 
         if failures.is_empty() {
@@ -588,6 +600,44 @@ impl ScriptEngine {
         out
     }
 
+
+    /// A global of the script loaded from `script_path` — what a game's own code reads to show
+    /// a script's state: a score on the HUD, a phase to branch on. `None` when the script is not
+    /// loaded, the name is unset, or the value is not a number, boolean or string.
+    ///
+    /// Until 2026-11-04 the host had no way to read a script's value at all (`eval_number` was
+    /// test-only), so a game whose rules lived in Lua could not put its score on screen.
+    ///
+    /// Takes `&mut self` although it only reads, for the reason [`has_function`](Self::has_function)
+    /// gives: the engine's `Sync` is sound only while no `&self` method reaches the VM.
+    pub fn get_global(&mut self, script_path: &str, name: &str) -> Option<ScriptValue> {
+        let (_, key) = self.loaded_scripts.get(script_path)?;
+        let env: mlua::Table = self.lua.registry_value(key).ok()?;
+        match env.get::<mlua::Value>(name).ok()? {
+            mlua::Value::Number(n) => Some(ScriptValue::Num(n)),
+            mlua::Value::Integer(i) => Some(ScriptValue::Num(i as f64)),
+            mlua::Value::Boolean(b) => Some(ScriptValue::Bool(b)),
+            mlua::Value::String(s) => s.to_str().ok().map(|t| ScriptValue::Text(t.to_string())),
+            _ => None,
+        }
+    }
+
+    /// Sets a global in the script loaded from `script_path`, as if the script had assigned it —
+    /// a flag or a setting the host decides (`OTO = true` for an automated run, a difficulty).
+    /// It lands in that script's own environment, not in the shared globals.
+    ///
+    /// # Errors
+    /// When the script is not loaded.
+    pub fn set_global(&mut self, script_path: &str, name: &str, value: ScriptValue) -> Result<(), String> {
+        let (_, key) = self.loaded_scripts.get(script_path).ok_or_else(|| format!("{script_path} is not loaded"))?;
+        let env: mlua::Table = self.lua.registry_value(key).map_err(|e| e.to_string())?;
+        match value {
+            ScriptValue::Num(n) => env.set(name, n),
+            ScriptValue::Bool(b) => env.set(name, b),
+            ScriptValue::Text(t) => env.set(name, t),
+        }
+        .map_err(|e| e.to_string())
+    }
 
     /// Reads a numeric expression out of a loaded script's environment. Test-only.
     #[cfg(test)]
@@ -852,6 +902,26 @@ impl ScriptEngine {
                         .add_component(entity, gizmo_physics_core::Transform::new(position));
                     world.add_component(entity, gizmo_core::PrefabRequest(prefab_type.clone()));
                 }
+                ScriptCommand::SpawnReserved { entity, name, position, prefab } => {
+                    // Freed between the reservation and now (a `destroy` queued before this
+                    // flush cannot do it — it comes after in the queue — but a host could).
+                    if !world.is_alive(entity) {
+                        continue;
+                    }
+                    world.flush_spawn(entity);
+                    world.add_component(entity, gizmo_core::EntityName::new(&name));
+                    world.add_component(entity, gizmo_physics_core::Transform::new(position));
+                    if let Some(key) = prefab {
+                        world.add_component(entity, gizmo_core::PrefabRequest(key));
+                    }
+                }
+                ScriptCommand::SetMesh(id, key) => {
+                    if let Some(e) = world.get_entity(id) {
+                        world.add_component(e, gizmo_core::component::MeshSource(key));
+                    } else {
+                        trace!(entity = id, "[Scripting] SetMesh: no such entity, skipped");
+                    }
+                }
                 ScriptCommand::DestroyEntity(id) => {
                     world.despawn_by_id(id);
                     if let Ok(mut q) = self.log_queue.lock() {
@@ -1083,6 +1153,98 @@ mod soundness {
 
 #[cfg(test)]
 mod tests {
+
+    /// A script written to its own temp file, loaded into a fresh engine.
+    fn engine_with(tag: &str, source: &str) -> (ScriptEngine, String, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("gizmo_{tag}_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s.lua");
+        std::fs::write(&path, source).unwrap();
+        let mut engine = ScriptEngine::new().unwrap();
+        let p = path.to_str().unwrap().to_string();
+        engine.load_script(&p).unwrap();
+        (engine, p, dir)
+    }
+
+    /// `entity.spawn` returns the new entity's id, and commands naming it in the same frame land
+    /// on it. It returned nothing, so a script could not touch what it had made.
+    #[test]
+    fn spawn_returns_an_id_the_same_frame_can_use() {
+        let (mut engine, path, dir) = engine_with(
+            "spawn_id",
+            "function on_update(c)\n  if made then return end\n  made = entity.spawn('kutu', 1, 2, 3)\n  entity.set_position(made, 4, 5, 6)\n  entity.set_mesh(made, 'sphere')\nend\n",
+        );
+        let mut world = World::new();
+        engine.update(&world, &Input::default(), 0.016).unwrap();
+        engine.flush_commands(&mut world, 0.016);
+        let Some(ScriptValue::Num(id)) = engine.get_global(&path, "made") else {
+            panic!("entity.spawn returned {:?}", engine.get_global(&path, "made"));
+        };
+        let id = id as u32;
+        assert_eq!(world.borrow::<gizmo_core::EntityName>().get(id).map(|n| n.0.clone()).as_deref(), Some("kutu"));
+        assert_eq!(
+            world.borrow::<gizmo_physics_core::Transform>().get(id).map(|t| t.position),
+            Some(Vec3::new(4.0, 5.0, 6.0)),
+            "the position set right after the spawn did not reach it"
+        );
+        assert_eq!(
+            world.borrow::<gizmo_core::component::MeshSource>().get(id).map(|m| m.0.clone()).as_deref(),
+            Some("sphere")
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `spawn_prefab` returns its id too, and the entity carries the request.
+    #[test]
+    fn spawn_prefab_returns_an_id() {
+        let (mut engine, path, dir) = engine_with(
+            "prefab_id",
+            "function on_update(c)\n  if made then return end\n  made = entity.spawn_prefab('sandik', 'crate.prefab', 0, 1, 0)\nend\n",
+        );
+        let mut world = World::new();
+        engine.update(&world, &Input::default(), 0.016).unwrap();
+        engine.flush_commands(&mut world, 0.016);
+        let Some(ScriptValue::Num(id)) = engine.get_global(&path, "made") else { panic!("no id") };
+        assert_eq!(world.borrow::<gizmo_core::PrefabRequest>().get(id as u32).map(|r| r.0.clone()).as_deref(), Some("crate.prefab"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The host reads a script's globals and sets them in its own environment.
+    #[test]
+    fn the_host_reads_and_sets_a_scripts_globals() {
+        let (mut engine, path, dir) = engine_with(
+            "globals",
+            "score = 0\nfunction on_update(c)\n  if FAST then score = score + 10 else score = score + 1 end\nend\n",
+        );
+        let world = World::new();
+        engine.update(&world, &Input::default(), 0.016).unwrap();
+        assert_eq!(engine.get_global(&path, "score"), Some(ScriptValue::Num(1.0)));
+        engine.set_global(&path, "FAST", ScriptValue::Bool(true)).unwrap();
+        engine.update(&world, &Input::default(), 0.016).unwrap();
+        assert_eq!(engine.get_global(&path, "score"), Some(ScriptValue::Num(11.0)));
+        assert_eq!(engine.get_global(&path, "missing"), None);
+        assert!(engine.set_global("not/loaded.lua", "x", ScriptValue::Num(1.0)).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A colour is the host's to apply (the renderer owns materials): it comes back, naming the
+    /// entity the script got from `spawn`.
+    #[test]
+    fn set_color_is_handed_to_the_host() {
+        let (mut engine, path, dir) = engine_with(
+            "colour",
+            "function on_update(c)\n  if made then return end\n  made = entity.spawn('x', 0, 0, 0)\n  entity.set_color(made, 0.1, 0.2, 0.3)\nend\n",
+        );
+        let mut world = World::new();
+        engine.update(&world, &Input::default(), 0.016).unwrap();
+        let back = engine.flush_commands(&mut world, 0.016);
+        let Some(ScriptValue::Num(id)) = engine.get_global(&path, "made") else { panic!("no id") };
+        assert!(
+            back.iter().any(|c| matches!(c, ScriptCommand::SetColor(i, v) if *i == id as u32 && *v == gizmo_math::Vec4::new(0.1, 0.2, 0.3, 1.0))),
+            "{back:?}"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     /// One script's globals must not be another's, including the explicit spelling.
     ///

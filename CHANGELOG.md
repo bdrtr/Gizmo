@@ -150,6 +150,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **Lua can make what it then moves: `entity.spawn` returns the new id; `set_mesh`, `set_color`;
+  the host reads and sets a script's globals; a script can be loaded from a string.** During
+  `on_update`, `entity.spawn` / `spawn_prefab` reserve the entity from the world's allocator and
+  return its id (they returned nothing, so a script could not move, colour or destroy what it had
+  made); commands naming that id in the same frame land on it (`ScriptCommand::SpawnReserved`).
+  `entity.set_mesh(id, key)` gives it a `MeshSource`; `entity.set_color(id, r, g, b[, a])` is handed
+  to the host, and the play loop makes it the entity's `MaterialDesc` — a script-spawned entity with
+  both is drawn. `ScriptEngine::get_global` / `set_global` read and write a script's own globals as
+  `ScriptValue`s (the host had no way to read a script's score), and `load_script_source` loads a
+  script from text (`include_str!`). Tested in the scripting crate and the play loop; running the
+  scripts outside the reserving window makes the id tests fail.
 - **Editing a `MaterialDesc` at run time recolours the object.** The per-frame sync rebuilt every
   description from its live `Material`, so a game that recoloured through the description — `kapi`'s
   plate lamps, `kopru`'s beams going red under load — had the edit undone before it was drawn: those

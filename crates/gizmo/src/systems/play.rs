@@ -104,8 +104,8 @@ enum ReloadEdge {
 /// This is where those subsystems are, and each handler passes on what it does not speak for.
 ///
 /// **What still goes unanswered, and why it is a list rather than a shrug.** Of `ScriptCommand`'s
-/// 42 variants, 23 are applied inside the scripting crate and 19 came back here. This chain now
-/// takes seven of those (three audio, three vehicle, the camera's field of view). The remaining
+/// 45 variants, 25 are applied inside the scripting crate and 20 came back here. This chain now
+/// takes eight of those (three audio, three vehicle, the camera's field of view, a colour). The remaining
 /// twelve are scene load/save, the camera *follow* command, dialogue, cutscenes and the race
 /// subsystem — see docs/ENGINE.md's Scripting section, which carries the enumerated list and what
 /// each one is waiting for.
@@ -116,7 +116,50 @@ fn apply_host_commands(
 ) -> Vec<crate::scripting::ScriptCommand> {
     let rest = apply_script_audio(world, unhandled);
     let rest = apply_script_vehicle(world, rest);
+    let rest = apply_script_color(world, rest);
     apply_script_camera(world, rest)
+}
+
+/// `entity.set_color(id, r, g, b[, a])`: the entity's `MaterialDesc` takes the colour (linear),
+/// one is made if it has none — a script-spawned entity with a mesh and a colour is drawn — and a
+/// live `Material` takes it too, so the per-frame material sync has nothing to disagree about.
+#[cfg(all(feature = "scripting", feature = "render"))]
+fn apply_script_color(
+    world: &mut World,
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> Vec<crate::scripting::ScriptCommand> {
+    use crate::renderer::components::{Material, MaterialDesc};
+    use crate::scripting::ScriptCommand as Cmd;
+    let mut rest = Vec::new();
+    for cmd in unhandled {
+        match cmd {
+            Cmd::SetColor(id, colour) => {
+                let Some(e) = world.get_entity(id) else { continue };
+                let has_desc = world.borrow::<MaterialDesc>().get(id).is_some();
+                if has_desc {
+                    if let Some(mut d) = world.borrow_mut::<MaterialDesc>().get_mut(id) {
+                        d.albedo = colour;
+                    }
+                } else {
+                    world.add_component(e, MaterialDesc::new().with_pbr(colour, 0.6, 0.0));
+                }
+                if let Some(mut m) = world.borrow_mut::<Material>().get_mut(id) {
+                    m.albedo = colour;
+                }
+            }
+            other => rest.push(other),
+        }
+    }
+    rest
+}
+
+/// Without a renderer there is nothing to colour.
+#[cfg(all(feature = "scripting", not(feature = "render")))]
+fn apply_script_color(
+    _world: &mut World,
+    unhandled: Vec<crate::scripting::ScriptCommand>,
+) -> Vec<crate::scripting::ScriptCommand> {
+    unhandled
 }
 
 /// Drive a vehicle from Lua: `vehicle.set_engine_force`, `set_steering`, `set_brake`.
@@ -658,6 +701,29 @@ fn plan_steps(accumulator: f32, dt: f32) -> (u32, f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `entity.set_color` reaches the entity as a `MaterialDesc` (made if missing, edited if
+    /// there), and leaves the unhandled pile.
+    #[cfg(all(feature = "scripting", feature = "render"))]
+    #[test]
+    fn a_script_colour_becomes_the_entitys_material_description() {
+        use crate::renderer::components::MaterialDesc;
+        use crate::scripting::ScriptCommand as Cmd;
+        let mut world = World::new();
+        let fresh = world.spawn().id();
+        let painted = world.spawn();
+        world.add_component(painted, MaterialDesc::new().with_pbr(crate::math::Vec4::ONE, 0.2, 0.9));
+        let red = crate::math::Vec4::new(0.9, 0.1, 0.1, 1.0);
+        let rest = super::apply_script_color(
+            &mut world,
+            vec![Cmd::SetColor(fresh, red), Cmd::SetColor(painted.id(), red), Cmd::HideDialogue],
+        );
+        assert!(matches!(rest.as_slice(), [Cmd::HideDialogue]), "{rest:?}");
+        let descs = world.borrow::<MaterialDesc>();
+        assert_eq!(descs.get(fresh).map(|d| d.albedo), Some(red));
+        let p = descs.get(painted.id()).unwrap();
+        assert_eq!((p.albedo, p.roughness), (red, 0.2), "only the colour changes on an authored material");
+    }
 
     /// The audio commands must be *recognised* — the half of the defect that has nothing to do
     /// with sound, and the only half that can be asserted without a device.
