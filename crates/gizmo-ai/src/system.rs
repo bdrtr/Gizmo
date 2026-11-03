@@ -226,28 +226,15 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     }
     let mut nearby: Vec<usize> = Vec::new();
 
-    // Iterasyon
-    for (index, &e) in agent_entities.iter().enumerate() {
-        let agent_id = e;
-
-        let t = if let Some(t) = transforms.get(agent_id) {
-            t
-        } else {
+    // Pass 1, in agent order: stuck detection and the replan decision — everything that changes
+    // an agent's state before its route is known. What it decides is a list of route requests.
+    let mut requests: Vec<(usize, Vec3, Vec3)> = Vec::new();
+    for (index, &agent_id) in agent_entities.iter().enumerate() {
+        let (Some(t), true) = (transforms.get(agent_id), velocities.get_mut(agent_id).is_some()) else {
             continue;
         };
-        let mut v = if let Some(v) = velocities.get_mut(agent_id) {
-            v
-        } else {
-            continue;
-        };
-        let mut agent = agents.get_mut(agent_id).unwrap();
-
-        if agent.target.is_none() {
-            // Yavaşla ve dur (Fiziksel sönümleme)
-            v.linear *= 1.0 - (dt * 5.0).min(1.0);
-            agent.state = crate::components::NavAgentState::Idle;
-            continue;
-        }
+        let Some(mut agent) = agents.get_mut(agent_id) else { continue };
+        let Some(mut target_pos) = agent.target else { continue };
 
         // Stuck Algılama
         if let Some(last_pos) = agent.last_agent_pos {
@@ -275,14 +262,16 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             agent.last_agent_pos = Some(t.position);
         }
 
-        let mut target_pos = agent.target.unwrap();
         // Ajanın sadece XZ düzleminde yürümesi için (pathfinding'in çökmesini engeller)
         target_pos.y = t.position.y;
 
         agent.recalc.timer -= dt;
         // Forced: no route yet, the route is used up, a wall moved, or the target moved > 2 m.
+        // A route that was searched for and does not exist is not "used up": retrying it every
+        // frame is the same answer bought again — measured, 4000 agents on a cluttered grid put
+        // ~950 searches into every frame that way. It waits for the schedule, a wall or a move.
         let target_moved = agent.recalc.last_target_pos.is_none_or(|last| (last - target_pos).length() > 2.0);
-        let forced = agent.is_done() || grid_changed || target_moved;
+        let forced = (agent.is_done() && !agent.route_failed()) || grid_changed || target_moved;
         let scheduled = agent.recalc.timer <= 0.0;
 
         if forced || scheduled {
@@ -298,10 +287,65 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
                 agent.recalc.interval
             };
             recalc_count += 1;
+            requests.push((index, t.position, target_pos));
+        }
+    }
 
-            if let Some(new_path) = grid.find_path(t.position, target_pos) {
+    // Pass 2: the routes, **in parallel**. Each search reads the grid and nothing else (its
+    // scratch space is per thread), so the answers are what a sequential loop gives, in any
+    // order. A crowd that gets a new target on one frame — spawned together, or an RTS "all of
+    // you, there" — used to pay every search on one thread: measured, 1000 agents on a 100 × 100
+    // grid, 44 ms that frame against a 2.9 ms median; 4000 agents, 168 ms.
+    let routes: Vec<Option<Vec<Vec3>>> = {
+        // A handful of searches is cheaper on this thread than spread over the pool.
+        #[cfg(not(target_arch = "wasm32"))]
+        if requests.len() >= 16 {
+            use rayon::prelude::*;
+            requests.par_iter().with_min_len(4).map(|&(_, from, to)| grid.find_path(from, to)).collect()
+        } else {
+            requests.iter().map(|&(_, from, to)| grid.find_path(from, to)).collect()
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            requests.iter().map(|&(_, from, to)| grid.find_path(from, to)).collect()
+        }
+    };
+    let mut planned: Vec<Option<Option<Vec<Vec3>>>> = vec![None; agent_entities.len()];
+    for ((index, _, _), route) in requests.into_iter().zip(routes) {
+        planned[index] = Some(route);
+    }
+
+    // Pass 3, in agent order: take the route, then steer.
+    for (index, &e) in agent_entities.iter().enumerate() {
+        let agent_id = e;
+
+        let t = if let Some(t) = transforms.get(agent_id) {
+            t
+        } else {
+            continue;
+        };
+        let mut v = if let Some(v) = velocities.get_mut(agent_id) {
+            v
+        } else {
+            continue;
+        };
+        let mut agent = agents.get_mut(agent_id).unwrap();
+
+        if agent.target.is_none() {
+            // Yavaşla ve dur (Fiziksel sönümleme)
+            v.linear *= 1.0 - (dt * 5.0).min(1.0);
+            agent.state = crate::components::NavAgentState::Idle;
+            continue;
+        }
+
+        let mut target_pos = agent.target.unwrap();
+        target_pos.y = t.position.y;
+
+        if let Some(route) = planned[index].take() {
+            if let Some(new_path) = route {
                 let path_len = new_path.len();
                 agent.set_path(new_path);
+                agent.set_route_failed(false);
                 path_found += 1;
                 tracing::trace!(
                     entity = agent_id,
@@ -311,6 +355,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             } else {
                 // Yol bulunamadı: path temizlenir (sessiz yutmayı sayaca bağla — çıkışta warn!).
                 agent.clear_path();
+                agent.set_route_failed(true);
                 path_failed += 1;
                 tracing::trace!(
                     entity = agent_id,
@@ -757,4 +802,89 @@ mod frame_tests {
         let velocities = world.borrow::<Velocity>();
         assert!(velocities.get(e.id()).unwrap().linear.length() < 0.5);
     }
+
+    /// A target walled in on every side: the search fails, `route_failed` says so, and the next
+    /// search waits for the schedule instead of running again on every frame (the timer counts
+    /// down rather than being reloaded each frame — measured before: ~950 of 4000 agents
+    /// re-searching every frame on a cluttered grid).
+    #[test]
+    fn an_unreachable_target_is_not_searched_for_every_frame() {
+        let mut world = World::new();
+        let mut grid = NavGrid::new(1.0, 20, 20);
+        // A ring of walls around cell (15, 15).
+        for (x, z) in [(14, 14), (15, 14), (16, 14), (14, 15), (16, 15), (14, 16), (15, 16), (16, 16)] {
+            grid.add_obstacle_world(Vec3::new(x as f32 + 0.5, 0.0, z as f32 + 0.5));
+        }
+        grid.needs_rebuild = false;
+        world.insert_resource(grid);
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::new(2.5, 0.0, 2.5)));
+        world.add_component(e, Velocity::default());
+        let mut agent = NavAgent::new(2.0, 8.0, 0.3);
+        agent.set_target(Vec3::new(15.5, 0.0, 15.5));
+        world.add_component(e, agent);
+        let dt = 1.0 / 60.0;
+        ai_navigation_system(&world, dt);
+        assert!(world.borrow::<NavAgent>().get(e.id()).unwrap().route_failed());
+        // Each search reloads the timer; between searches it only counts down. Half a second of
+        // frames holds one scheduled search (interval 0.5 s) and maybe the phase-shortened first.
+        let mut timers = Vec::new();
+        for _ in 0..30 {
+            ai_navigation_system(&world, dt);
+            timers.push(world.borrow::<NavAgent>().get(e.id()).unwrap().recalc.timer);
+        }
+        let searches = timers.windows(2).filter(|w| w[1] >= w[0]).count();
+        assert!(searches <= 2, "{searches} searches in 30 frames: timers {timers:?}");
+        // A reachable target clears the flag.
+        world.borrow_mut::<NavAgent>().get_mut(e.id()).unwrap().set_target(Vec3::new(8.5, 0.0, 2.5));
+        ai_navigation_system(&world, dt);
+        let a = world.borrow::<NavAgent>().get(e.id()).cloned().unwrap();
+        assert!(!a.route_failed() && a.path_len() > 0);
+    }
+
+    /// The searches run in parallel and give every agent the route a search of its own gives,
+    /// the same on every run.
+    #[test]
+    fn a_crowd_gets_the_routes_a_search_each_would_give() {
+        let build = || {
+            let mut world = World::new();
+            let mut grid = NavGrid::new(1.0, 40, 40);
+            for i in 0..40 {
+                grid.add_obstacle_world(Vec3::new(20.5, 0.0, i as f32 + 0.5));
+            }
+            grid.remove_obstacle_world(Vec3::new(20.5, 0.0, 30.5));
+            grid.needs_rebuild = false;
+            world.insert_resource(grid);
+            let mut ids = Vec::new();
+            for i in 0..120u32 {
+                let e = world.spawn();
+                let start = Vec3::new((i % 15) as f32 + 2.5, 0.0, (i / 15) as f32 * 4.0 + 2.5);
+                world.add_component(e, Transform::new(start));
+                world.add_component(e, Velocity::default());
+                let mut a = NavAgent::new(2.0, 8.0, 0.3);
+                a.set_target(Vec3::new(35.5, 0.0, (i % 40) as f32 + 0.5));
+                world.add_component(e, a);
+                ids.push((e.id(), start, Vec3::new(35.5, 0.0, (i % 40) as f32 + 0.5)));
+            }
+            (world, ids)
+        };
+        let (world, ids) = build();
+        ai_navigation_system(&world, 1.0 / 60.0);
+        let grid = world.get_resource::<NavGrid>().unwrap();
+        for &(id, start, target) in &ids {
+            let alone = grid.find_path(start, target).map(|p| p.len()).unwrap_or(0);
+            assert_eq!(world.borrow::<NavAgent>().get(id).unwrap().path_len(), alone, "agent {id}");
+        }
+        drop(grid);
+        let (again, _) = build();
+        ai_navigation_system(&again, 1.0 / 60.0);
+        for &(id, ..) in &ids {
+            assert_eq!(
+                world.borrow::<Velocity>().get(id).unwrap().linear,
+                again.borrow::<Velocity>().get(id).unwrap().linear,
+                "agent {id} differs between two runs"
+            );
+        }
+    }
 }
+

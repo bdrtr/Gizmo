@@ -126,6 +126,10 @@ pub struct NavAgent {
     pub target: Option<Vec3>,
     #[serde(skip)]
     path: Vec<Vec3>,
+    /// The last route search for the current target found nothing — see
+    /// [`route_failed`](Self::route_failed).
+    #[serde(skip)]
+    route_failed: bool,
     #[serde(skip)]
     current_path_index: usize, // path.remove(0) yerine indeks takibi — O(1)
     /// Last state written by the navigation system. See [`NavAgentState`] — writing it
@@ -203,6 +207,19 @@ pub struct NavAgent {
 }
 
 impl NavAgent {
+    /// Whether the last route search toward the current target found **no route** — the target
+    /// is walled off, or stands in a wall. The agent then steers straight at it (as the
+    /// [`Moving`](NavAgentState::Moving) docs say) and searches again only on its schedule, when
+    /// the grid changes or when the target moves; until 2026-11-04 it searched again on every
+    /// frame. A game can use this to say "can't get there".
+    pub fn route_failed(&self) -> bool {
+        self.route_failed
+    }
+
+    pub(crate) fn set_route_failed(&mut self, failed: bool) {
+        self.route_failed = failed;
+    }
+
     /// Builds an idle agent: no destination, no path, [`NavAgentState::Idle`], and a
     /// recalculation interval of 0.5 s.
     ///
@@ -216,6 +233,7 @@ impl NavAgent {
         Self {
             target: None,
             path: Vec::new(),
+            route_failed: false,
             current_path_index: 0,
             state: NavAgentState::Idle,
             recalc: NavAgentRecalcState {

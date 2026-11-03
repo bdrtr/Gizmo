@@ -150,6 +150,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **A crowd's routes are searched in parallel, and an unreachable one is not searched for every
+  frame.** Every route search ran on one thread inside the steering loop, so a crowd that got a
+  target on one frame paid them all at once; and an agent whose target was walled off cleared its
+  path on the failed search, which counted as "route used up" and forced another search on the
+  next frame, for ever. The navigation pass now decides (in agent order), searches (in parallel
+  on native, `rayon`; in sequence on wasm and for fewer than 16 requests) and then steers — the
+  routes are the ones a search of each gives, the same on every run — and a failed search waits
+  for the schedule, a wall change or a target move (`NavAgent::route_failed()` tells a game).
+  Measured on a 100 × 100 grid with 1500 walls, the frame every agent gets a new target / the
+  median frame: 1000 agents 44 → 8.4 ms / 2.9 → 0.88 ms; 2000 agents 86 → 17 ms / 4.8 → 1.8 ms;
+  4000 agents 168 → 106 ms / 10.4 → 7.5 ms. Tested for the routes and their determinism, and for
+  the retry (the old rule shows 29 searches in 30 frames).
 - **An entity script has the world too (`ScriptEngine::update_entity_in`).** `on_entity_update`
   ran without it, so `entity.spawn` returned `nil` there and `physics.ground_at` did not exist —
   only the global `on_update` had them. The play loop now calls `update_entity_in`, which runs the

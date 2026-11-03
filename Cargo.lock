@@ -2550,6 +2550,7 @@ dependencies = [
  "gizmo-math",
  "gizmo-physics-core",
  "gizmo-physics-rigid",
+ "rayon",
  "serde",
  "serde_json",
  "tracing",
