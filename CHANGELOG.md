@@ -122,6 +122,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Triggers are now left out of the sweep, the ground probe and the platform carry, and the ones
   the capsule overlaps after each step are listed: measured, from x 1.20 to 2.80, exactly
   2 ± (0.5 + 0.3). Removing the filter or the record fails a test.
+- **`kapi`, the twentieth game** — a box puzzle: push crates onto pressure plates and the doors
+  of their group sink into the floor; stand on a plate and it opens only while you stay. It found
+  the two character items above (pushing, triggers).
 - **`gizli`, the nineteenth game** — a stealth game: guards patrol, their vision cones are rebuilt
   every frame from rays against the walls, suspicion fills while you are seen. It found the four
   items above.

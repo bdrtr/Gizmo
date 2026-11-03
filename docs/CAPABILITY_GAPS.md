@@ -1262,6 +1262,22 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16p. The twentieth game: pushing things (2026-11-03, `kapi`)
+
+`demo/src/bin/kapi.rs` is a top-down box puzzle: three rooms, each door a kinematic body
+(`KinematicTarget`) that sinks into the floor while every pressure plate of its group is pressed —
+by a crate pushed onto it (`PhysicsWorld::overlap_shape` on the plate's box) or by the player
+standing on it. `KAPI_OTO=1` solves it unaided, three crates onto three plates and out. Two gaps,
+both closed:
+
+- ~~**A character could not push anything**~~ — every collider was level geometry to it; a 10 kg
+  crate stopped it like a wall. `CharacterController::push_force` (400 N) pushes the dynamic
+  bodies its sweep hits, capped at walking speed.
+- ~~**A character stopped at a trigger, and no trigger saw a character**~~ — the sweep treated
+  `is_trigger` colliders as solid, and a character without a `RigidBody` is not in the physics
+  world, so `trigger_events()` never named it. Triggers are out of the sweep now, and
+  `CharacterController::triggers` lists the ones it is inside.
+
 ### C16o. The nineteenth game: being seen (2026-11-03, `gizli`)
 
 `demo/src/bin/gizli.rs` is a top-down stealth game: guards patrol a warehouse on `NavGrid`, each
