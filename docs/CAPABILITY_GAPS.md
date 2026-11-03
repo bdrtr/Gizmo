@@ -1202,6 +1202,17 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   that must stop short of the edge; dropping the click cancellation, the slop or the finger-only
   rule, or the decay, each fails it.
 
+- ~~**Holding a key did nothing more than tapping it.**~~ **Closed 2026-11-03.** `just_pressed`
+  fires on the press only (the OS's own repeats are not new presses), so a held ↓ moved a menu's
+  focus one button and a held → stepped a slider once — and a grid game's held arrow walked one
+  tile. `gizmo::core::input::HoldRepeat` (in the prelude): fires on the press, then after `delay`,
+  then every `interval`, catching up on a long frame. `UiNavigation` reads ↑↓←→ and the d-pad
+  through it (0.4 s, then ten a second), and sliders and dropdowns now take their steps from the
+  navigation (`sideways()`), so all of them repeat. Writing it found that a repeat on its own
+  swallows the second of two taps in consecutive frames (it looks like one hold); a new press now
+  restarts it. Tested on the timing in exact steps, release, a held ↓ walking the list, and the
+  quick double tap; dropping the restart fails it.
+
 ### C16. Every game wrote the same three lines (2026-11-02)
 
 ~~**No timer.**~~ **Closed 2026-11-02.** `balon`, `kale` and `yikim_ustasi` each counted down by

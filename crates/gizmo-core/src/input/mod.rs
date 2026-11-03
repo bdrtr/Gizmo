@@ -609,6 +609,8 @@ mod mapping;
 pub mod rumble;
 /// Fingers on a touchscreen — [`Touch`](touch::Touch), and the first one as the mouse.
 pub mod touch;
+/// [`HoldRepeat`](hold_repeat::HoldRepeat): a held key that fires again and again.
+pub mod hold_repeat;
 pub use axis::{blend_move_axis, MoveKeys};
 pub use fighter::{FighterInputBuffer, FrameActions, FrameRecord, PlaybackData};
 pub use gamepad::{
@@ -620,6 +622,7 @@ pub use mapping::{ActionMap, InputBinding};
 pub use binding_names::{binding_from_name, binding_to_name, UnknownBinding};
 pub use rumble::RumbleRequest;
 pub use touch::{Touch, TouchPhase};
+pub use hold_repeat::HoldRepeat;
 
 fn sub(a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
     (a.0 - b.0, a.1 - b.1)

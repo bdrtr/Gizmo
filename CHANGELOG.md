@@ -114,6 +114,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **`MeshSource("cylinder")` and `"cone"`**, sized like their colliders, and
     `AssetManager::PRIMITIVE_MESH_KEYS` as the one list of primitive keys (the studio's
     missing-asset check now uses it instead of its own copy).
+- **Held keys repeat in menus: `HoldRepeat`** (`gizmo::core::input`) — fires on the press, then
+  after a delay, then at an interval. `UiNavigation`'s arrows and d-pad repeat through it, and so
+  do sliders and dropdowns stepped from the keyboard.
 - **Flicking lists**: a finger on a `Scroll`'s content scrolls it past an 8 px slop (cancelling the
   tap on the item under it) and flings it, decaying; a tap still taps; the mouse is unaffected.
 - **Select lists: `gizmo::ui::Dropdown`** — opens below its button, drawn above every UI layer,

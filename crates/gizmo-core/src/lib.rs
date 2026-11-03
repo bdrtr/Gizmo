@@ -118,7 +118,7 @@ pub type StorageViewMut<'w, T> = crate::query::Query<'w, crate::query::Mut<'w, T
 pub mod prelude {
     pub use super::input::mouse;
     pub use super::input::{
-        AxisDirection, Gamepad, GamepadAxis, GamepadButton, GamepadDeadzone, GamepadId, Gamepads,
+        AxisDirection, Gamepad, GamepadAxis, GamepadButton, GamepadDeadzone, GamepadId, Gamepads, HoldRepeat,
     };
     pub use super::{
         ActionMap, Bundle, Changed, CommandQueue, Commands, Component, Entity, EntityName,

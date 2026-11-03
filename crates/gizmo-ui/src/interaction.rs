@@ -48,7 +48,7 @@ pub fn ui_layer(world: &gizmo_core::World, entity: u32) -> i32 {
 ///   current.
 /// - The focused element reads as [`Interaction::Hovered`] when the mouse is not pressing it, so
 ///   the hover colour a game already paints is its focus highlight.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct UiNavigation {
     /// Whether the keys above navigate. See the type's docs for why it is off by default.
     pub enabled: bool,
@@ -56,6 +56,12 @@ pub struct UiNavigation {
     /// The keys moved the focus this frame — so a slider the right arrow just reached does not
     /// also take that press as a step.
     moved_by_keys: bool,
+    /// Up, down, left, right — held, they repeat (`HoldRepeat`): a held ↓ walks down the list and
+    /// a held → steps a slider on, as every menu does. They used to fire on the press only.
+    repeats: [gizmo_core::input::HoldRepeat; 4],
+    /// This frame's left/right pulses, net (−1, 0, 1, or more on a long frame) — what a focused
+    /// slider or dropdown steps by.
+    sideways: i32,
 }
 
 impl UiNavigation {
@@ -74,6 +80,13 @@ impl UiNavigation {
     #[must_use]
     pub fn moved_this_frame(&self) -> bool {
         self.moved_by_keys
+    }
+
+    /// This frame's left/right steps for the focused element — ←/→ or the d-pad, repeating while
+    /// held. Positive is right.
+    #[must_use]
+    pub fn sideways(&self) -> i32 {
+        self.sideways
     }
 }
 
@@ -125,7 +138,10 @@ pub fn ui_interaction_system(
     clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
     sliders: Query<&Slider>,
     dropdowns: Query<(&Node, &Dropdown)>,
+    time: Option<Res<gizmo_core::time::Time>>,
 ) {
+    // The navigation keys repeat on the real frame time: a menu is used while the game is paused.
+    let dt = time.map_or(0.0, |t| t.raw_dt());
     let mouse_pos = input.mouse_position();
     let is_clicked = input.is_mouse_button_pressed(0); // 0 is left click
 
@@ -182,10 +198,11 @@ pub fn ui_interaction_system(
         Some(mut nav) if nav.enabled && !typing => {
             navigate(&input, &mut nav, &mut interactions, &front, &|id| {
                 sliders.get(id).is_some() || dropdowns.get(id).is_some()
-            })
+            }, dt)
         }
         Some(mut nav) if nav.enabled => {
             nav.moved_by_keys = false;
+            nav.sideways = 0;
             (nav.focused(), false)
         }
         _ => (None, false),
@@ -225,6 +242,7 @@ fn navigate(
     interactions: &mut Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
     hovered: &dyn Fn(u32) -> bool,
     horizontal_taken: &dyn Fn(u32) -> bool,
+    dt: f32,
 ) -> (Option<u32>, bool) {
     // The focusable elements in reading order. A zero-size node is hidden (or not laid out yet).
     let mut order: Vec<(u32, f32, f32, bool)> = interactions
@@ -253,18 +271,35 @@ fn navigate(
     let pad_just = |b: GamepadButton| pad.is_some_and(|p| p.is_just_pressed(b));
     let shift = input.is_key_pressed(key("lshift")) || input.is_key_pressed(key("rshift"));
     let tab = input.is_key_just_pressed(key("tab"));
-    // Left and right belong to a focused slider: they move its value, not the focus.
+    // Each direction held repeats (`HoldRepeat`): the key or the d-pad.
+    let pad_held = |b: GamepadButton| pad.is_some_and(|p| p.is_pressed(b));
+    let held = [
+        input.is_key_pressed(key("up")) || pad_held(GamepadButton::DPadUp),
+        input.is_key_pressed(key("down")) || pad_held(GamepadButton::DPadDown),
+        input.is_key_pressed(key("left")) || pad_held(GamepadButton::DPadLeft),
+        input.is_key_pressed(key("right")) || pad_held(GamepadButton::DPadRight),
+    ];
+    // A NEW press always fires, even if the key was down last frame too: two taps in consecutive
+    // frames are two presses, not one long hold (the repeat would swallow the second).
+    let pressed_now = [
+        input.is_key_just_pressed(key("up")) || pad_just(GamepadButton::DPadUp),
+        input.is_key_just_pressed(key("down")) || pad_just(GamepadButton::DPadDown),
+        input.is_key_just_pressed(key("left")) || pad_just(GamepadButton::DPadLeft),
+        input.is_key_just_pressed(key("right")) || pad_just(GamepadButton::DPadRight),
+    ];
+    let mut pulses = [0u32; 4];
+    for (i, r) in nav.repeats.iter_mut().enumerate() {
+        if pressed_now[i] {
+            r.tick(false, 0.0);
+        }
+        pulses[i] = r.tick(held[i] || pressed_now[i], dt);
+    }
+    let [up, down, left, right] = pulses.map(|p| p > 0);
+    nav.sideways = pulses[3] as i32 - pulses[2] as i32;
+    // Left and right belong to a focused slider or dropdown: they move its value, not the focus.
     let sideways_free = !nav.focused.is_some_and(horizontal_taken);
-    let next = (tab && !shift)
-        || input.is_key_just_pressed(key("down"))
-        || (sideways_free && input.is_key_just_pressed(key("right")))
-        || pad_just(GamepadButton::DPadDown)
-        || (sideways_free && pad_just(GamepadButton::DPadRight));
-    let prev = (tab && shift)
-        || input.is_key_just_pressed(key("up"))
-        || (sideways_free && input.is_key_just_pressed(key("left")))
-        || pad_just(GamepadButton::DPadUp)
-        || (sideways_free && pad_just(GamepadButton::DPadLeft));
+    let next = (tab && !shift) || down || (sideways_free && right);
+    let prev = (tab && shift) || up || (sideways_free && left);
     nav.moved_by_keys = next || prev;
     if next || prev {
         let n = order.len();
@@ -301,10 +336,8 @@ pub fn ui_slider_system(
         .as_ref()
         .filter(|n| n.enabled && !n.moved_this_frame())
         .and_then(|n| n.focused());
-    let pad = input.gamepad();
-    let pad_just = |b: GamepadButton| pad.is_some_and(|p| p.is_just_pressed(b));
-    let keys = i32::from(input.is_key_just_pressed(key("right")) || pad_just(GamepadButton::DPadRight))
-        - i32::from(input.is_key_just_pressed(key("left")) || pad_just(GamepadButton::DPadLeft));
+    // ←/→ and the d-pad, repeating while held — read once, by the navigation.
+    let keys = navigation.as_ref().map_or(0, |n| n.sideways());
     for (id, (node, interaction, mut slider)) in sliders.iter_mut() {
         let pressed_here = down_now && *interaction == Interaction::Pressed;
         let keys_here = if focused == Some(id) { keys } else { 0 };
@@ -330,10 +363,8 @@ pub fn ui_dropdown_system(
         .as_ref()
         .filter(|n| n.enabled && !n.moved_this_frame())
         .and_then(|n| n.focused());
-    let pad = input.gamepad();
-    let pad_just = |b: GamepadButton| pad.is_some_and(|p| p.is_just_pressed(b));
-    let keys = i32::from(input.is_key_just_pressed(key("right")) || pad_just(GamepadButton::DPadRight))
-        - i32::from(input.is_key_just_pressed(key("left")) || pad_just(GamepadButton::DPadLeft));
+    // ←/→ and the d-pad, repeating while held — read once, by the navigation.
+    let keys = navigation.as_ref().map_or(0, |n| n.sideways());
     for (id, (node, clicked, mut dd)) in dropdowns.iter_mut() {
         let mut next = dd.clone();
         let step = if focused == Some(id) { keys } else { 0 };
@@ -1015,6 +1046,53 @@ mod tests {
             s.run(&mut world, 0.0);
         }
         assert_eq!(offset(&world), before, "a mouse drag scrolled the list");
+    }
+
+    /// Holding ↓ walks down the list: one step on the press, then — after the delay — one every
+    /// interval, as every menu does; and two taps in consecutive frames are two steps, not one
+    /// long hold.
+    #[test]
+    fn a_held_arrow_repeats_and_quick_taps_all_count() {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        let (mut world, [top, mid, low]) = menu();
+        world.insert_resource(gizmo_core::time::Time::new());
+        let frame_with = |w: &mut gizmo_core::World, press: bool, hold: bool| {
+            {
+                let mut input = w.get_resource_mut::<Input>().unwrap();
+                input.begin_frame();
+                input.set_mouse_position(500.0, 500.0);
+                if press {
+                    input.on_key_pressed(key("down"));
+                }
+                if !hold {
+                    input.on_key_released(key("down"));
+                }
+            }
+            w.get_resource_mut::<gizmo_core::time::Time>().unwrap().update(1.0 / 60.0);
+            let mut s = Schedule::new();
+            s.add_di_system(ui_interaction_system.into_config());
+            s.build();
+            s.run(w, 0.0);
+        };
+        // Held for one second: the press, then repeats from 0.4 s every 0.1 s.
+        let mut seen = vec![];
+        frame_with(&mut world, true, true);
+        seen.push(focused(&world));
+        for _ in 0..60 {
+            frame_with(&mut world, false, true);
+            if focused(&world) != *seen.last().unwrap() {
+                seen.push(focused(&world));
+            }
+        }
+        assert!(seen.len() >= 6, "holding ↓ did not repeat: {seen:?}");
+        assert_eq!(&seen[..3], &[Some(top), Some(mid), Some(low)], "{seen:?}");
+        frame_with(&mut world, false, false);
+
+        // Two taps in consecutive frames.
+        world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(top));
+        frame_with(&mut world, true, false);
+        frame_with(&mut world, true, false);
+        assert_eq!(focused(&world), Some(low), "the second quick tap was swallowed as a hold");
     }
 
     /// Pressed on, dragged off, released: cancelled, like a desktop button.
