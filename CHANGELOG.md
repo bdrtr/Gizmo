@@ -50,6 +50,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Moving and fading UI boxes: `gizmo::ui::UiTransform` and `UiTween`.** A box's place comes
+  from its `Style`, recomputed by layout every frame, so sliding a card from the deck to the hand,
+  letting a dragged item follow the pointer or sending it back meant rewriting `inset`s by hand
+  (`birlestir` turned its dragged item `Absolute` for it). `UiTransform { translation, opacity }`
+  is applied after layout, like a CSS `transform`: the box and its children are drawn **and
+  hit-tested** where it moves them, siblings do not reflow, and the translation is in layout
+  pixels (scaled by `UiScale`); the opacity multiplies the alpha of the box's background, its
+  extra parts, its text and everything under it. `UiTween::translation(to, s)` / `opacity(to, s)`
+  (`and_…`, `with_ease`, `with_delay`, `is_finished`) eases it on real time from wherever it is
+  when it starts, landing exactly; an element without a `UiTransform` is given one. Tested on the
+  delay and its overrun, starting from a value moved meanwhile, exact landing, an overshooting
+  curve keeping opacity in range, the layout (children follow, siblings stay, ×2 scale), the
+  inserted transform, and inherited opacity; four mutations, four failures. Found writing
+  `duello`, the twelfth game (a card duel).
+- **`Ease` lives in `gizmo-math` now** (`gizmo_math::Ease`), so `gizmo-ui` eases with the same
+  curves without depending on `gizmo-animation`; `gizmo_animation::tween::Ease` re-exports it and
+  every existing path still compiles.
+- **`Query::entity` on every query**, not only read-only ones: it reads no component.
 - **`gizmo::ui::Tooltip`.** `Tooltip::new("…")` on any element with an `Interaction`: after the
   pointer rests on it for `delay` seconds (0.5 by default, real time) with no button held, the
   facade draws the text beside the pointer — light on a dark box, in the element's own `Text`

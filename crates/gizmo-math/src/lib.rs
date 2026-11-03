@@ -51,6 +51,9 @@ pub mod aabb;
 /// from the physics soak/determinism gates — treat it as a sketch, not production maths.
 pub mod fixed;
 
+/// Easing curves: [`Ease`], shared by tweens of transforms and of UI boxes.
+pub mod ease;
+
 /// View-frustum plane extraction and volume classification for culling.
 ///
 /// Produces six half-spaces from a `Projection × View` matrix (Gribb–Hartmann) and
@@ -91,6 +94,7 @@ pub mod spatial;
 pub use glam::{EulerRot, Mat3, Mat4, Quat, Vec2, Vec3, Vec3A, Vec4};
 
 pub use aabb::Aabb;
+pub use ease::Ease;
 pub use fixed::{Fp32, FpVec3};
 pub use frustum::{Frustum, Intersection, Plane};
 pub use ray::Ray;

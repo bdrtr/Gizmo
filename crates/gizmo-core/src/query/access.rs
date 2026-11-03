@@ -300,6 +300,20 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
 
     // ── Metadata (no component access → always `&self`) ───────────────────
 
+    /// The [`Entity`] handle — id **and generation** — for a raw id this query yielded, or `None`
+    /// if the id is not a live entity.
+    ///
+    /// Iteration hands out bare `u32` ids, and a scheduled system cannot reach
+    /// [`World::entity`](crate::world::World::entity) (it is never given the world). This is the
+    /// same lookup through the world the query already holds, so a system can turn an id into a
+    /// handle for `Commands` or for storing, without forging one with `Entity::new(id, 0)` — which
+    /// compiles and is wrong for every recycled id. Reads the allocator under its lock, as
+    /// `Commands` does, so it is safe from systems running in parallel. It reads no component, so
+    /// a query that writes has it too.
+    pub fn entity(&self, entity_id: u32) -> Option<crate::entity::Entity> {
+        self.world.entity(entity_id)
+    }
+
     /// Total rows held by the matching archetypes — an **upper bound** on what iteration
     /// yields, not the number of items it will produce.
     ///
@@ -445,19 +459,6 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
             return Err(QuerySingleError::MultipleEntities);
         }
         Ok(first)
-    }
-
-    /// The [`Entity`] handle — id **and generation** — for a raw id this query yielded, or `None`
-    /// if the id is not a live entity.
-    ///
-    /// Iteration hands out bare `u32` ids, and a scheduled system cannot reach
-    /// [`World::entity`](crate::world::World::entity) (it is never given the world). This is the
-    /// same lookup through the world the query already holds, so a system can turn an id into a
-    /// handle for `Commands` or for storing, without forging one with `Entity::new(id, 0)` — which
-    /// compiles and is wrong for every recycled id. Reads the allocator under its lock, as
-    /// `Commands` does, so it is safe from systems running in parallel.
-    pub fn entity(&self, entity_id: u32) -> Option<crate::entity::Entity> {
-        self.world.entity(entity_id)
     }
 
     /// Access by raw `u32` id. **CAUTION: it does NOT check the generation.** If an id is given

@@ -131,6 +131,9 @@ pub mod layout;
 /// [`UiScale`]: every layout pixel times one factor.
 pub mod scale;
 pub use scale::UiScale;
+/// Moving and fading boxes: [`UiTransform`], [`UiTween`].
+pub mod animate;
+pub use animate::{ui_tween_system, UiTransform, UiTween};
 /// The scheduled systems that run layout and interaction each frame.
 pub mod system;
 /// Pointer hit-testing and the hover/press state a widget reads.
@@ -171,6 +174,8 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Drag>();
     world.register_component_type::<DropTarget>();
     world.register_component_type::<Tooltip>();
+    world.register_component_type::<UiTransform>();
+    world.register_component_type::<UiTween>();
     world.register_component_type::<Slider>();
     world.register_component_type::<ProgressBar>();
     world.register_component_type::<Toggle>();
@@ -190,6 +195,7 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     let _ = world.get_resource_mut_or_default::<gizmo_core::window::WindowInfo>();
 
     schedule.add_di_system(interaction::ui_scroll_system.into_config().label("ui_scroll"));
+    schedule.add_di_system(animate::ui_tween_system.into_config().label("ui_tween").before("ui_layout"));
     schedule.add_di_system(
         system::ui_layout_system
             .into_config()

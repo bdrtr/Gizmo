@@ -51,6 +51,7 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
     let mut out = Vec::new();
     for id in tree_order(world) {
         let Some(node) = nodes.get(id) else { continue };
+        let start = out.len();
         out.push((id, node.position, node.size, backgrounds.get(id).map(|c| c.0)));
         if let Some(s) = sliders.get(id) {
             let w = node.size.x * s.value.clamp(0.0, 1.0);
@@ -85,8 +86,44 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
             let at = rest + Vec2::new(s.value().x, -s.value().y) * s.radius;
             out.push((id, at - Vec2::splat(side * 0.5), Vec2::splat(side), Some(s.knob)));
         }
+        // A fading box fades all of its parts.
+        let alpha = ui_opacity(world, id);
+        if alpha < 1.0 {
+            for b in &mut out[start..] {
+                if let Some(c) = b.3.as_mut() {
+                    c.w *= alpha;
+                }
+            }
+        }
     }
     out
+}
+
+/// The opacity `entity` is drawn at: the product of every [`UiTransform`](crate::ui::UiTransform)
+/// `opacity` from it up through its parents — a card fades with its face and its label.
+#[cfg(feature = "ui")]
+fn ui_opacity(world: &World, entity: u32) -> f32 {
+    let transforms = world.borrow::<crate::ui::UiTransform>();
+    if transforms.iter().next().is_none() {
+        return 1.0;
+    }
+    let parents = world.borrow::<crate::core::component::Parent>();
+    let mut alpha = 1.0;
+    let mut at = Some(entity);
+    // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
+    for _ in 0..256 {
+        let Some(id) = at else { break };
+        if let Some(t) = transforms.get(id) {
+            alpha *= t.opacity.clamp(0.0, 1.0);
+        }
+        at = parents.get(id).map(|p| p.0);
+    }
+    alpha
+}
+
+#[cfg(not(feature = "ui"))]
+fn ui_opacity(_world: &World, _entity: u32) -> f32 {
+    1.0
 }
 
 /// Every UI node in painting order: a parent before its children, earlier siblings (in
@@ -529,14 +566,18 @@ pub fn record_text(
             }
             None => item,
         };
-        // A label on a UI box grows with the layout's `UiScale`, as the box did.
+        // A label on a UI box grows with the layout's `UiScale`, as the box did, and fades with
+        // its `UiTransform`s.
         let scaled;
-        let item = match anchor.and(ui_text_scale(world)) {
-            Some(k) => {
-                scaled = scale_text(item, k);
+        let alpha = ui_opacity(world, id);
+        let item = match (anchor.and(ui_text_scale(world)), alpha < 1.0) {
+            (None, false) => item,
+            (k, _) => {
+                let mut t = scale_text(item, k.unwrap_or(1.0));
+                t.color.w *= alpha;
+                scaled = t;
                 &scaled
             }
-            None => item,
         };
         text.queue_clipped(queue, item, origin, anchor, screen, clip);
     }
@@ -676,6 +717,29 @@ mod clip_tests {
         world.add_child(slot, item);
         let ids: Vec<u32> = ui_boxes(&world).iter().map(|b| b.0).collect();
         assert_eq!(ids, vec![slot.id(), second.id(), item.id(), other.id()]);
+    }
+
+    /// A `UiTransform`'s opacity fades a box and everything under it — background, extra parts,
+    /// children — multiplied down the tree.
+    #[test]
+    fn opacity_is_inherited_down_the_tree() {
+        use crate::core::hierarchy::HierarchyExt;
+        let mut world = World::new();
+        let card = world.spawn_bundle((
+            node(0.0, 0.0, 50.0, 50.0),
+            crate::ui::BackgroundColor(Vec4::new(1.0, 0.0, 0.0, 1.0)),
+            crate::ui::UiTransform { translation: Vec2::ZERO, opacity: 0.5 },
+        ));
+        let face = world.spawn_bundle((
+            node(5.0, 5.0, 40.0, 40.0),
+            crate::ui::BackgroundColor(Vec4::new(0.0, 1.0, 0.0, 0.8)),
+            crate::ui::ProgressBar { value: 1.0, fill: Vec4::ONE },
+            crate::ui::UiTransform { translation: Vec2::ZERO, opacity: 0.5 },
+        ));
+        world.add_child(card, face);
+        assert_eq!(ui_opacity(&world, face.id()), 0.25);
+        let alphas: Vec<f32> = ui_boxes(&world).iter().map(|b| b.3.unwrap().w).collect();
+        assert_eq!(alphas, vec![0.5, 0.2, 0.25]);
     }
 
     /// A tooltip's box sits below-right of the pointer, flips where it would leave the window, and

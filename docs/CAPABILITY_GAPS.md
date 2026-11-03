@@ -1259,6 +1259,22 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16h. The twelfth game: things on screen that move (2026-11-03, `duello`)
+
+`demo/src/bin/duello.rs` is a card duel against the computer: mana that grows each turn, a hand
+refilled to five, cards dragged onto a portrait to play them (attacks on the opponent, shields
+and heals on yourself), an opponent that plays back one card at a time. Everything is UI, and
+everything moves: cards slide from the deck into the hand one after another, follow the pointer
+while dragged, fly to their target and fade when played, spring back when dropped in the wrong
+place, and the rest of the hand slides over to close the gap; a hit portrait shakes. One thing:
+
+- ~~**UI boxes could not be animated.**~~ **Closed 2026-11-03.** `Tween` moves a `Transform`; a
+  UI box's place is its `Style`, recomputed every frame. `UiTransform { translation, opacity }`
+  (after layout, children follow, hit testing follows, opacity inherited) and `UiTween` to ease
+  it, on real time, with `Tween`'s own curves (`Ease`, moved to `gizmo-math` for it). The hand's
+  slide is the FLIP pattern: set the new `inset`, set the translation to old − new, tween it to
+  zero.
+
 ### C16g. The eleventh game: drag and drop (2026-11-03, `birlestir`)
 
 `demo/src/bin/birlestir.rs` is a merge garden made of UI alone: a 6×5 field, **Üret** plants a

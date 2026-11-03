@@ -46,6 +46,7 @@ pub fn ui_layout_system(
     mut nodes: Query<Mut<Node>>,
     mut scrolls: Query<Mut<crate::components::Scroll>>,
     scale: Option<ResMut<crate::scale::UiScale>>,
+    moved: Query<&crate::animate::UiTransform>,
 ) {
     // Track the real (resized) window size so root layout uses the actual available
     // space instead of the construction-time default (which was never updated).
@@ -195,7 +196,8 @@ pub fn ui_layout_system(
         let Some((size, local)) = ctx.relative_layout(entity) else {
             continue;
         };
-        let abs = parent_origin + local;
+        // A `UiTransform` moves the box after layout, and its children with it.
+        let abs = parent_origin + local + moved.get(entity).map_or(gizmo_math::Vec2::ZERO, |t| t.translation);
         if let Some(mut node) = nodes.get_mut(entity) {
             node.size = size * s;
             node.position = abs * s;
@@ -561,6 +563,55 @@ mod tests {
         world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 50.0;
         schedule.run(&mut world, 0.016);
         assert_vec2(node_of(&world, rows[1]).position, 0.0, 30.0);
+    }
+
+    /// A `UiTransform` moves a box after layout — its children with it, its siblings not, scaled
+    /// like every layout pixel — and a `UiTween` drives it, giving a bare element its transform.
+    #[test]
+    fn a_ui_transform_moves_the_box_and_its_children_and_a_tween_drives_it() {
+        use crate::animate::{UiTransform, UiTween};
+        let (mut world, mut schedule) = make_world();
+        let root = world.spawn();
+        world.add_component(root, column_style(300.0, 300.0));
+        world.add_component(root, Node::default());
+        let card = world.spawn();
+        world.add_component(card, padded_style(100.0, 100.0, 10.0, 10.0));
+        world.add_component(card, Node::default());
+        world.add_component(card, Parent(root.id()));
+        let label = world.spawn();
+        world.add_component(label, sized_style(20.0, 20.0));
+        world.add_component(label, Node::default());
+        world.add_component(label, Parent(card.id()));
+        world.add_component(card, Children(vec![label.id()]));
+        let next = world.spawn();
+        world.add_component(next, sized_style(100.0, 50.0));
+        world.add_component(next, Node::default());
+        world.add_component(next, Parent(root.id()));
+        world.add_component(root, Children(vec![card.id(), next.id()]));
+
+        world.add_component(card, UiTransform { translation: Vec2::new(40.0, 5.0), opacity: 1.0 });
+        schedule.run(&mut world, 0.016);
+        assert_vec2(node_of(&world, card).position, 40.0, 5.0);
+        assert_vec2(node_of(&world, label).position, 50.0, 15.0);
+        assert_vec2(node_of(&world, next).position, 0.0, 100.0);
+
+        world.insert_resource(crate::UiScale::fixed(2.0));
+        schedule.run(&mut world, 0.016);
+        assert_vec2(node_of(&world, label).position, 100.0, 30.0);
+        world.insert_resource(crate::UiScale::fixed(1.0));
+
+        // A tween on an element with no transform: it is given one, then moves it.
+        let mut time = gizmo_core::time::Time::default();
+        time.update(0.25);
+        world.insert_resource(time);
+        world.add_component(next, UiTween::translation(Vec2::new(100.0, 0.0), 0.5));
+        schedule.run(&mut world, 0.016);
+        assert!(world.borrow::<UiTransform>().get(next.id()).is_some(), "no transform was added");
+        schedule.run(&mut world, 0.016);
+        assert_vec2(node_of(&world, next).position, 50.0, 100.0);
+        schedule.run(&mut world, 0.016);
+        assert_vec2(node_of(&world, next).position, 100.0, 100.0);
+        assert!(world.borrow::<UiTween>().get(next.id()).unwrap().is_finished());
     }
 
     /// A `Children` cycle must not reach the layout engine.

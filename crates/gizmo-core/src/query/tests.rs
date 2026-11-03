@@ -801,6 +801,18 @@ fn chunks_over_an_optional_component_are_whole_columns_or_refused() {
     assert!(<Option<&OptSparse> as WorldQuery>::has_row_filter());
 }
 
+/// `Query::entity` reads no component, so a query that writes can turn its ids into handles too.
+#[test]
+fn a_writing_query_resolves_its_ids_to_entities() {
+    let mut world = crate::World::new();
+    world.register_component_type::<Position>();
+    let a = world.spawn();
+    world.add_component(a, Position { x: 1.0, y: 0.0 });
+    let mut q = world.query_mut::<Mut<Position>>().unwrap();
+    let id = q.iter_mut().next().unwrap().0;
+    assert_eq!(q.entity(id), Some(a));
+}
+
 /// `single` tells "none", "one" and "several" apart — the two edge cases a `for` loop over
 /// *the* player gets silently wrong — and applies per-row filters the way `iter` does.
 #[test]
