@@ -155,7 +155,7 @@ fn main() {
         })
         // Devre dışı bırakma `set_update`'te: sorgu ham id veriyor ve onu `Entity`'ye güvenle
         // çevirmek `World::entity(id)` istiyor — çizelgeye kayıtlı bir sistem `&World` alamıyor.
-        .set_update(|world, state, dt, input| {
+        .replace_update(|world, state, dt, input| {
             // Bkz. `demo::simple_scene_update` — `set_update` basit sahnenin kancasını eziyor.
             demo::simple_scene_update(world, state, dt, input);
             toggle(world, input);

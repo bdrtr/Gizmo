@@ -189,7 +189,7 @@ fn main() {
         // Uçan kamera YOK: kamerayı oyuncu sürüyor. Bu yüzden `simple_scene_update` çağrılmıyor,
         // ama dördüncü işi — dönüşüm yayılımı — burada elle yapılıyor; yoksa `GlobalTransform`
         // hiç güncellenmez ve sprite'lar yerinden kıpırdamaz.
-        .set_update(|world, _state, dt, input| {
+        .replace_update(|world, _state, dt, input| {
             update(world, dt.min(0.05), input);
             gizmo::systems::transform::TransformSyncSystem.run(world, dt);
             gizmo::systems::transform::TransformPropagateSystem.run(world, dt);

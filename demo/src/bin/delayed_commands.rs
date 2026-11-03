@@ -143,7 +143,7 @@ fn main() {
             scene.world.insert_resource(DelayReport::default());
             scene.spawn_camera(state, Vec3::new(0.0, 3.0, 9.0), Vec3::ZERO);
         })
-        .set_update(|world, state, dt, input| {
+        .replace_update(|world, state, dt, input| {
             // Bkz. `demo::simple_scene_update` — `set_update` basit sahnenin kancasını eziyor.
             demo::simple_scene_update(world, state, dt, input);
             tick(world, dt, input);

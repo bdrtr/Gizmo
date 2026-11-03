@@ -1904,6 +1904,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   still warns (it was added for demos that lost their physics by accident) and its message now
   names `replace_update`. The games use it, and run 900 frames each with nothing printed.
 
+  Then every demo, 300 frames each (136 of them, none crashed): eight more printed the same
+  warning, all deliberately — seven call `simple_scene_update` at the top of their own hook, the
+  way the warning advises, and `sprite_2d` drives its own camera and says why; they use
+  `replace_update` now. Two (`system_forms`, `error_handling`) printed "`after('frames')` does not
+  match" for a constraint that was being kept: the label lived in `PreUpdate` and the constraint in
+  `Update`, and the scheduler only looked inside the phase. A constraint on a label of another
+  phase is now told apart — `after` an earlier phase (or `before` a later one) holds by phase order
+  and is silent; the reverse can never hold and is reported as such; a label nowhere is still
+  "does not match". Tested both ways round, each wrong branch fails it. What remained were assets
+  the repository does not ship (`AnisotropyBarnLamp.glb`, `scenes/main.scene`) and egui's note on
+  an sRGB framebuffer.
+
 - **A small viewport blacked out the main view.** As soon as any camera had a `viewport`, the
   frame went down the split-screen path, which drew only cameras with one — the primary camera
   without a viewport was skipped, and a minimap in a corner left the rest of the screen black.

@@ -192,7 +192,7 @@ fn main() {
         // Kapsam yönetimi ÇİZELGEDE DEĞİL, `set_update`'te: sorgunun verdiği ham id'yi güvenle
         // `Entity`'ye çevirmek `&mut World` istiyor, ve çizelgeye kayıtlı hiçbir sistem onu
         // alamıyor (aşağıdaki başlık notuna bakın).
-        .set_update(|world, state, dt, input| {
+        .replace_update(|world, state, dt, input| {
             // Bkz. `demo::simple_scene_update` — `set_update` basit sahnenin kancasını eziyor.
             demo::simple_scene_update(world, state, dt, input);
             scoped_lifecycle(world);

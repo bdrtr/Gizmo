@@ -1,6 +1,6 @@
 use super::*;
 use crate::world::World;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 // ==============================================================
 // SCHEDULE — DAG BATCHING & MULTITHREADING
@@ -411,8 +411,52 @@ impl Schedule {
         self.build();
     }
 
+    /// What an ordering constraint whose label is not in the system's own phase means. `after`
+    /// a label of an earlier phase holds by phase order and is not reported; `before` one of a
+    /// later phase likewise. The opposite can never hold. A label nowhere in the schedule is the
+    /// old "does not match".
+    fn report_cross_phase(
+        system: usize,
+        kind: &str,
+        label: &'static str,
+        phase: Option<Phase>,
+        elsewhere: &HashMap<&'static str, Vec<Phase>>,
+    ) {
+        let phases = elsewhere.get(label).map(Vec::as_slice).unwrap_or(&[]);
+        let Some(own) = phase.filter(|_| !phases.is_empty()) else {
+            crate::gizmo_log!(Warning, "[Schedule] Sistem {}'in {}('{}') label'ı eşleşmiyor!", system, kind, label);
+            return;
+        };
+        let holds = match kind {
+            "after" => phases.iter().all(|p| *p < own),
+            _ => phases.iter().all(|p| *p > own),
+        };
+        if !holds {
+            crate::gizmo_log!(
+                Warning,
+                "[Schedule] Sistem {} ({:?}) {}('{}') asla sağlanamaz: '{}' {:?} fazında koşuyor",
+                system,
+                own,
+                kind,
+                label,
+                label,
+                phases
+            );
+        }
+    }
+
     /// DAG-batch the configs belonging to a single phase group.
-    fn build_batches_for(configs: Vec<SystemConfig>) -> Vec<SystemBatch> {
+    ///
+    /// `elsewhere` names the phases each label appears in across the whole schedule, and `phase`
+    /// is this group's: a constraint on a label that lives only in another phase is not dropped
+    /// silently any more than before, but it is told apart — `after` a label in an earlier phase
+    /// (or `before` one in a later phase) already holds, because phases run in order, and says
+    /// nothing; the reverse can never hold and says so.
+    fn build_batches_for(
+        configs: Vec<SystemConfig>,
+        phase: Option<Phase>,
+        elsewhere: &HashMap<&'static str, Vec<Phase>>,
+    ) -> Vec<SystemBatch> {
         let count = configs.len();
         if count == 0 {
             return Vec::new();
@@ -443,12 +487,7 @@ impl Schedule {
                     }
                 }
                 if !found {
-                    crate::gizmo_log!(
-                        Warning,
-                        "[Schedule] Sistem {}'in before('{}') label'ı eşleşmiyor!",
-                        i,
-                        before_label
-                    );
+                    Self::report_cross_phase(i, "before", before_label, phase, elsewhere);
                 }
             }
             for after_label in &configs[i].after {
@@ -460,12 +499,7 @@ impl Schedule {
                     }
                 }
                 if !found {
-                    crate::gizmo_log!(
-                        Warning,
-                        "[Schedule] Sistem {}'in after('{}') label'ı eşleşmiyor!",
-                        i,
-                        after_label
-                    );
+                    Self::report_cross_phase(i, "after", after_label, phase, elsewhere);
                 }
             }
         }
@@ -617,6 +651,15 @@ impl Schedule {
 
         if has_explicit_phase {
             // Fazlara göre grupla
+            let mut elsewhere: HashMap<&'static str, Vec<Phase>> = HashMap::new();
+            for config in &configs {
+                for &label in &config.labels {
+                    let phases = elsewhere.entry(label).or_default();
+                    if !phases.contains(&config.phase) {
+                        phases.push(config.phase);
+                    }
+                }
+            }
             let mut phase_groups: std::collections::BTreeMap<Phase, Vec<SystemConfig>> =
                 std::collections::BTreeMap::new();
             for config in configs {
@@ -624,14 +667,14 @@ impl Schedule {
             }
             // Her faz grubu için bağımsız DAG batch oluştur
             for (phase, group) in phase_groups {
-                let batches = Self::build_batches_for(group);
+                let batches = Self::build_batches_for(group, Some(phase), &elsewhere);
                 if !batches.is_empty() {
                     self.phase_batches.push((phase, batches));
                 }
             }
         } else {
             // Geriye uyumlu: tek düz batch listesi
-            self.legacy_batches = Self::build_batches_for(configs);
+            self.legacy_batches = Self::build_batches_for(configs, None, &HashMap::new());
         }
 
         let batch_count: usize = if self.uses_phases {
@@ -963,6 +1006,41 @@ mod frame_boundary {
             frame.scopes.iter().any(|s| s.name == "physics"),
             "the scope spanning the run was wiped by the run itself: {:?}",
             frame.scopes.iter().map(|s| s.name).collect::<Vec<_>>()
+        );
+    }
+}
+
+#[cfg(test)]
+mod cross_phase_constraints {
+    use super::*;
+    use crate::system::{Phase, SystemConfig};
+    use crate::world::World;
+
+    fn noop(_: &World, _: f32) {}
+
+    fn warned_about(label: &str) -> bool {
+        crate::logger::get_logs(|logs| logs.iter().any(|l| l.message.contains(&format!("('{label}')"))))
+    }
+
+    /// `after` a label that lives in an earlier phase already holds — phases run in order — and is
+    /// not reported as "does not match" (`system_forms` and `error_handling` printed that for a
+    /// constraint that was being kept). `after` a label of a later phase can never hold and is
+    /// reported; a label nowhere still is.
+    #[test]
+    fn a_label_in_another_phase_is_told_apart() {
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(SystemConfig::new(Box::new(noop)).in_phase(Phase::PreUpdate).label("xp_early"));
+        schedule.add_di_system(SystemConfig::new(Box::new(noop)).in_phase(Phase::PostUpdate).label("xp_late"));
+        schedule.add_di_system(SystemConfig::new(Box::new(noop)).in_phase(Phase::Update).after("xp_early").before("xp_late"));
+        schedule.add_di_system(SystemConfig::new(Box::new(noop)).in_phase(Phase::Update).after("xp_late"));
+        schedule.add_di_system(SystemConfig::new(Box::new(noop)).in_phase(Phase::Update).after("xp_nowhere"));
+        schedule.build();
+        assert!(!warned_about("xp_early"), "after an earlier phase's label holds");
+        assert!(warned_about("xp_late"), "after a later phase's label can never hold");
+        assert!(warned_about("xp_nowhere"), "a label nowhere is still reported");
+        assert!(
+            crate::logger::get_logs(|logs| logs.iter().any(|l| l.message.contains("asla sağlanamaz") && l.message.contains("xp_late"))),
+            "and it says why"
         );
     }
 }

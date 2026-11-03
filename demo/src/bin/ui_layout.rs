@@ -211,7 +211,7 @@ fn main() {
         })
         // `with_simple_scene` uçan kamerayı kurar ve `set_update` onu DEĞİŞTİRİR — bu yüzden
         // `simple_scene_update`'i elle çağırıyoruz (tam olarak bunun için `pub`).
-        .set_update(|world, state, dt, input| {
+        .replace_update(|world, state, dt, input| {
             gizmo::simple::simple_scene_update(world, state, dt, input);
             recolor_buttons(world);
             count_clicks(world);

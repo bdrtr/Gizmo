@@ -162,7 +162,7 @@ fn main() {
             });
             scene.spawn_camera(state, Vec3::new(0.0, 2.5, 8.0), Vec3::ZERO);
         })
-        .set_update(|world, state, dt, input| {
+        .replace_update(|world, state, dt, input| {
             // ÖNCE bu: `set_update` basit sahnenin kendi kancasını DEĞİŞTİRİYOR, eklemiyor.
             // Bu satır olmadan kamera denetimi, fizik adımı ve transform yayılımı sessizce gider.
             demo::simple_scene_update(world, state, dt, input);
