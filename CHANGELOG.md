@@ -136,6 +136,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Triggers are now left out of the sweep, the ground probe and the platform carry, and the ones
   the capsule overlaps after each step are listed: measured, from x 1.20 to 2.80, exactly
   2 ± (0.5 + 0.3). Removing the filter or the record fails a test.
+- **Rollback time sync: `RollbackSession::frames_ahead` / `try_advance` / `poll_remote`.** The
+  session never waited for its peer — it predicts — so nothing kept two peers' clocks
+  together: one that started 50 frames earlier stayed 50 ticks ahead, every remote input
+  reached it past the rollback window, and the two never agreed again (measured: different
+  hashes after a 50-frame late start against a 32-tick window). `frames_ahead()` is how far
+  this peer has simulated past the newest remote input; `try_advance(input, apply, max_lead)`
+  advances only while that is within `max_lead`, otherwise polls and returns `false`. With it
+  the same late start ends on the same hash as both peers' real run. Skipping the hold, or not
+  tracking the remote tick, fails the tests.
 - **A simple scene has `Gizmos`.** `with_simple_scene` inserted no `Gizmos`, so a game's
   `get_resource_mut::<Gizmos>()` came back empty and every `draw_line` went nowhere without a
   word. An empty one is inserted now unless the setup brought its own; nothing draws into it on

@@ -143,8 +143,10 @@ pub struct RollbackSession<T: Transport> {
     /// A rollback never moves it backwards: re-simulation replays *up to* this tick
     /// rather than rewinding the frontier, so the counter is monotonic. Ticks, not
     /// seconds — simulated time is `tick * fixed_dt`. Nor is it a shared clock: each peer
-    /// advances its own and the session never stalls waiting for remote input (it
-    /// predicts instead), so two peers' tick counters drift apart in wall time.
+    /// advances its own and [`advance`](Self::advance) never stalls waiting for remote input
+    /// (it predicts instead), so two peers' tick counters drift apart in wall time unless the
+    /// game drives the session with [`try_advance`](Self::try_advance), which holds the one
+    /// that is ahead.
     pub tick: u64,
     transport: T,
     local_id: u32,
@@ -157,6 +159,12 @@ pub struct RollbackSession<T: Transport> {
     fixed_dt: f32,
     /// Packet-loss resilience: re-send this many of the most recent local inputs on every send.
     resend_window: u64,
+    /// The newest tick a remote input has arrived for — what [`frames_ahead`](Self::frames_ahead)
+    /// measures against. `None` until the peer's first input lands.
+    remote_tick: Option<u64>,
+    /// The earliest past tick whose remote input contradicted the prediction, gathered by
+    /// [`poll_remote`](Self::poll_remote) and consumed by the next [`advance`](Self::advance).
+    pending_rollback: Option<u64>,
 }
 
 impl<T: Transport> RollbackSession<T> {
@@ -216,7 +224,59 @@ impl<T: Transport> RollbackSession<T> {
             max_rollback,
             fixed_dt,
             resend_window: 8,
+            remote_tick: None,
+            pending_rollback: None,
         }
+    }
+
+    /// How many ticks this peer has simulated past the newest input it has from the other one:
+    /// `tick - (newest remote tick + 1)`, or `tick` before anything has arrived.
+    ///
+    /// **Why it exists.** The session never waits for the peer — it predicts — so nothing kept
+    /// two peers' clocks together: one that started 150 ticks earlier stayed 150 ticks ahead
+    /// for good, every remote input reached it 150 ticks late, past a 120-tick rollback window,
+    /// and the two never agreed again. In steady play this hovers around the one-way lag in
+    /// ticks; a peer far ahead of that should wait — [`try_advance`](Self::try_advance) does.
+    pub fn frames_ahead(&self) -> u64 {
+        self.tick.saturating_sub(self.remote_tick.map_or(0, |t| t + 1))
+    }
+
+    /// Drains the transport without simulating: stores the remote inputs that arrived and notes
+    /// any that contradict a past prediction, for the next [`advance`](Self::advance) to roll
+    /// back to. What a waiting peer calls each frame so it hears the other one catch up.
+    pub fn poll_remote(&mut self) {
+        let t = self.tick;
+        for pkt in self.transport.poll() {
+            if let NetworkPacket::Input(ri) = pkt {
+                let predicted = self.remote_buf.get_or_predict(ri.tick);
+                self.remote_buf.insert(ri);
+                self.remote_tick = Some(self.remote_tick.map_or(ri.tick, |r| r.max(ri.tick)));
+                let diverged = predicted.buttons != ri.buttons
+                    || predicted.joystick_x != ri.joystick_x
+                    || predicted.joystick_y != ri.joystick_y;
+                if diverged && ri.tick < t {
+                    self.pending_rollback = Some(self.pending_rollback.map_or(ri.tick, |cur| cur.min(ri.tick)));
+                }
+            }
+        }
+    }
+
+    /// [`advance`](Self::advance), unless this peer is more than `max_lead` ticks ahead of the
+    /// other ([`frames_ahead`](Self::frames_ahead)) — then it only polls and returns `false`,
+    /// and the caller should hold `local_input` and try again next frame.
+    ///
+    /// This is the time sync the session otherwise lacks: a peer that starts first runs
+    /// `max_lead` ticks and waits for the other to appear, and one whose frames run faster is
+    /// held back to the slower one. Pick `max_lead` above the one-way lag in ticks (a 50 ms
+    /// link is 3 ticks at 60 Hz) and below `max_rollback`, so a late input can always still be
+    /// rolled back to.
+    pub fn try_advance(&mut self, local_input: PlayerInput, apply: &ApplyInput, max_lead: u64) -> bool {
+        if self.frames_ahead() > max_lead {
+            self.poll_remote();
+            return false;
+        }
+        self.advance(local_input, apply);
+        true
     }
 
     /// Mevcut durum hash'i (desync tespiti / test).
@@ -242,19 +302,8 @@ impl<T: Transport> RollbackSession<T> {
         }
 
         // Uzak girdileri al; geçmiş bir tick için tahmin bozulursa rollback hedefi belirle.
-        let mut rollback_to: Option<u64> = None;
-        for pkt in self.transport.poll() {
-            if let NetworkPacket::Input(ri) = pkt {
-                let predicted = self.remote_buf.get_or_predict(ri.tick);
-                self.remote_buf.insert(ri);
-                let diverged = predicted.buttons != ri.buttons
-                    || predicted.joystick_x != ri.joystick_x
-                    || predicted.joystick_y != ri.joystick_y;
-                if diverged && ri.tick < t {
-                    rollback_to = Some(rollback_to.map_or(ri.tick, |cur| cur.min(ri.tick)));
-                }
-            }
-        }
+        self.poll_remote();
+        let rollback_to = self.pending_rollback.take();
 
         // Rollback: hedefin başına dön, hedef..t arası iki oyuncunun (düzeltilmiş) girdisiyle resim.
         if let Some(target) = rollback_to {
@@ -389,6 +438,88 @@ mod tests {
         // Her iki peer birbirine VE ground-truth'a yakınsamalı (senkron).
         assert_eq!(a.state_hash(), b.state_hash(), "iki peer ayrıştı (desync)");
         assert_eq!(a.state_hash(), truth, "peer A ground-truth'a yakınsamadı (lag/loss sonrası)");
+    }
+
+    /// One peer starts `late` frames after the other; both play `N` ticks of real input then
+    /// idle, each stopping at `total`. `lead` = `None` runs the plain `advance`, `Some(m)` runs
+    /// `try_advance(.., m)`. Returns the two final hashes and the ground truth.
+    fn late_start(late: usize, lead: Option<u64>) -> (u64, u64, u64) {
+        const N: usize = 60;
+        let total = N + 40;
+        let mut gt = build_scene();
+        for t in 0..total {
+            let i0 = if t < N { input_for(0, t) } else { PlayerInput::empty(t as u64) };
+            let i1 = if t < N { input_for(1, t) } else { PlayerInput::empty(t as u64) };
+            apply(&mut gt, 0, &i0);
+            apply(&mut gt, 1, &i1);
+            gt.step(DT).ok();
+        }
+        let (ta, tb) = LoopbackTransport::pair(3, 0);
+        let mut a = RollbackSession::new(build_scene(), ta, 0, 1, 32, DT);
+        let mut b = RollbackSession::new(build_scene(), tb, 1, 0, 32, DT);
+        let apply_fn: &ApplyInput = &apply;
+        let input = |player: u32, t: u64| {
+            if (t as usize) < N { input_for(player, t as usize) } else { PlayerInput::empty(t) }
+        };
+        let step = |s: &mut RollbackSession<LoopbackTransport>, player: u32| {
+            let i = input(player, s.tick);
+            match lead {
+                None => s.advance(i, apply_fn),
+                Some(m) => {
+                    s.try_advance(i, apply_fn, m);
+                }
+            }
+        };
+        for frame in 0..total * 4 {
+            if a.tick < total as u64 {
+                step(&mut a, 0);
+            } else {
+                a.poll_remote();
+            }
+            if frame >= late {
+                if b.tick < total as u64 {
+                    step(&mut b, 1);
+                } else {
+                    b.poll_remote();
+                }
+            }
+        }
+        assert_eq!((a.tick, b.tick), (total as u64, total as u64));
+        (a.state_hash(), b.state_hash(), gt.state_hash())
+    }
+
+    #[test]
+    fn a_peer_that_starts_late_desyncs_without_time_sync() {
+        // The measurement behind `try_advance`: 50 frames late against a 32-tick window.
+        let (a, b, _) = late_start(50, None);
+        assert_ne!(a, b, "expected the plain advance to desync after a late start");
+    }
+
+    #[test]
+    fn try_advance_holds_the_early_peer_until_the_late_one_catches_up() {
+        let (a, b, truth) = late_start(50, Some(8));
+        assert_eq!(a, b, "the peers desynced");
+        assert_eq!(a, truth, "the peers agree, but not with the real run");
+    }
+
+    #[test]
+    fn frames_ahead_counts_from_the_newest_remote_input() {
+        let (ta, tb) = LoopbackTransport::pair(0, 0);
+        let mut a = RollbackSession::new(build_scene(), ta, 0, 1, 32, DT);
+        let mut b = RollbackSession::new(build_scene(), tb, 1, 0, 32, DT);
+        let apply_fn: &ApplyInput = &apply;
+        for _ in 0..5 {
+            a.advance(PlayerInput::empty(0), apply_fn);
+        }
+        assert_eq!(a.frames_ahead(), 5, "nothing heard from b yet");
+        // `try_advance` refuses past the lead and leaves the tick alone.
+        assert!(!a.try_advance(PlayerInput::empty(0), apply_fn, 4));
+        assert_eq!(a.tick, 5);
+        b.advance(PlayerInput::empty(0), apply_fn);
+        b.advance(PlayerInput::empty(0), apply_fn);
+        a.poll_remote();
+        assert_eq!(a.frames_ahead(), 3, "b's tick 1 arrived: 5 - (1 + 1)");
+        assert!(a.try_advance(PlayerInput::empty(0), apply_fn, 4));
     }
 
     // --- LoopbackTransport (deterministik test transport'unun kendisi) ---

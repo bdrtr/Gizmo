@@ -19,6 +19,10 @@
 //! fields in declaration order. The variant index is why `NetworkPacket`'s variant *order* is
 //! part of the format.
 
+// The packet types live behind `rollback`; without this gate a plain `cargo test -p gizmo-net`
+// (default features: neither backend) did not compile. `rollback_completeness.rs` had the gate.
+#![cfg(feature = "rollback")]
+
 use gizmo_net::rollback::{NetworkPacket, PlayerInput};
 
 /// Encodes exactly as bincode 1.3.3 did. Captured 2026-08-07, pre-migration.
