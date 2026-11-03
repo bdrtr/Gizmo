@@ -4249,6 +4249,38 @@ mod golden_render_tests {
         });
     }
 
+    /// `load_system_font` takes the file `GIZMO_FONT` names — here the synthetic face, written to
+    /// a temporary file, told apart by its ascent (800 per 1000) — and, when that file cannot be
+    /// read, goes on to the platform's fonts rather than failing.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn load_system_font_takes_gizmo_font_and_falls_back_past_a_bad_one() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let path = std::env::temp_dir().join(format!("gizmo-synthetic-{}.ttf", std::process::id()));
+        std::fs::write(&path, crate::renderer::text::synthetic::synthetic_face()).unwrap();
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let ascent = |r: &Renderer, id| r.text.as_ref().unwrap().library().metrics(id, 1000.0).unwrap().ascent;
+
+            std::env::set_var("GIZMO_FONT", &path);
+            let named = renderer.load_system_font().expect("the named file loads");
+            assert!((ascent(&renderer, named) - 800.0).abs() < 1.0, "it is the file GIZMO_FONT names");
+
+            std::env::set_var("GIZMO_FONT", path.with_extension("missing"));
+            match renderer.load_system_font() {
+                Ok(id) => assert!((ascent(&renderer, id) - 800.0).abs() > 1.0, "a system face, not the named one"),
+                Err(crate::renderer::text::FontError::NotFound) => {} // a machine with no fonts
+                Err(e) => panic!("an unreadable GIZMO_FONT is not an error of its own: {e}"),
+            }
+            std::env::remove_var("GIZMO_FONT");
+        });
+        let _ = std::fs::remove_file(path);
+    }
+
     /// **Picture in picture:** the primary camera with no viewport is the whole frame, and a
     /// second camera with a viewport and a higher order draws over its corner — a minimap. The
     /// main view used to be skipped (black) as soon as any camera had a viewport.

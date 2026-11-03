@@ -70,6 +70,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bit-identical for them), in the inspector, and a scene row written before the fields loads with
   the defaults. Tested with two agents walking 1 m apart: the default pushes them apart, a 0.8 m
   radius or a weight of 0 leaves them at 1 m. `komutan` uses 1.0 m for its 1.2 m formation.
+- **`Renderer::load_system_font()`** — a font the machine already has: the file `GIZMO_FONT` names
+  (with a warning, and on to the next, if it cannot be read), else the first readable one of the
+  platform's usual sans faces (`SYSTEM_FONT_PATHS`: DejaVu, Noto, Liberation, Cantarell on Linux;
+  Helvetica, SF, Arial on macOS; Segoe UI, Arial, Tahoma on Windows); `FontError::NotFound`
+  otherwise, and always on the web. Still not a bundled font — that stays the project's licensing
+  call. Twenty demos carried their own copy of the search (Linux paths plus one guess each for
+  macOS and Windows, and `duello` a symbol face besides); they call this now. GPU-tested: the
+  named file is taken (told apart by the synthetic face's ascent), a bad one falls through to the
+  system's; ignoring `GIZMO_FONT` fails it.
 - **`VehicleController::four_wheeled(track_width, wheelbase, radius)`** — a car in one call: a
   wheel at each corner, front axle toward −Z (the controller's forward), in the order the wheel
   vector's docs call load-bearing, and `tuning.track_width` / `wheelbase` set to where the wheels

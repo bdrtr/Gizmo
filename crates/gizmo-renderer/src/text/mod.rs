@@ -77,6 +77,9 @@ pub enum FontError {
     Invalid,
     /// The file could not be read.
     Io(std::io::Error),
+    /// [`Renderer::load_system_font`](crate::Renderer::load_system_font) found no readable font
+    /// in `GIZMO_FONT` or the platform's usual places (always, on the web).
+    NotFound,
 }
 
 impl std::fmt::Display for FontError {
@@ -84,6 +87,7 @@ impl std::fmt::Display for FontError {
         match self {
             Self::Invalid => write!(f, "not a readable font"),
             Self::Io(e) => write!(f, "could not read the font file: {e}"),
+            Self::NotFound => write!(f, "no system font found (set GIZMO_FONT to a .ttf/.otf file)"),
         }
     }
 }
@@ -91,7 +95,7 @@ impl std::fmt::Display for FontError {
 impl std::error::Error for FontError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            Self::Invalid => None,
+            Self::Invalid | Self::NotFound => None,
             Self::Io(e) => Some(e),
         }
     }

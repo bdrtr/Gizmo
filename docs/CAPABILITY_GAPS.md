@@ -104,6 +104,7 @@ pass (`gizmo::systems::render::record_text`, which `gizmo-studio` calls rather t
 | per-line alignment (`TextAlign`) | yes, since 2026-11-01 |
 | **shaping, bidi, rich text** | **no** |
 | font fallback | a chain of faces tried per character (`Renderer::add_font_fallback`), since 2026-11-03 |
+| finding a font | `Renderer::load_system_font` — `GIZMO_FONT`, then the platform's usual sans faces (`SYSTEM_FONT_PATHS`, per OS), since 2026-11-03; still no bundled face (a licensing call) |
 
 Measured: the same scene with and without text differs in **869/16 384** pixels; a string anchored
 at (8, 8) changes **869** pixels in the top-left quadrant and **0** in the bottom-right (the

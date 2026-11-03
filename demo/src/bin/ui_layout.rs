@@ -64,15 +64,6 @@ const ROWS: [&str; 12] = [
     "Ses", "Parcacik", "Yazi", "Pencere", "Liste", "Son satir",
 ];
 
-/// Font aranacak bilinen yollar — `text` demosuyla aynı sıra, aynı sebep (bkz. oradaki başlık).
-const FONT_CANDIDATES: &[&str] = &[
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-    "C:/Windows/Fonts/arial.ttf",
-];
 
 /// Düğmenin durumuna göre dolgu rengi. Tek yerde, çünkü hem kurulum hem güncelleme kullanıyor.
 fn fill(interaction: Interaction) -> Vec4 {
@@ -255,19 +246,12 @@ fn count_clicks(world: &mut World) {
     }
 }
 
-/// Fontu bulur; hiçbiri yoksa motorun sentetik yüzüne düşer (ekranda kutular görünür).
+/// A font the machine has (`GIZMO_FONT` or the platform's usual faces); without one, the
+/// synthetic test face (labels show as boxes).
 fn load_font(renderer: &mut Renderer) -> gizmo::renderer::text::FontId {
-    for path in FONT_CANDIDATES {
-        if let Ok(id) = renderer.load_font_file(path) {
-            gizmo::gizmo_log!(Info, "font: {path}");
-            return id;
-        }
-    }
-    gizmo::gizmo_log!(
-        Warning,
-        "hiçbir font bulunamadı; sentetik yüz kullanılıyor (etiketler kutu görünecek)"
-    );
-    renderer
-        .load_font(gizmo::renderer::text::synthetic::synthetic_face())
-        .expect("sentetik yüz her zaman ayrıştırılır")
+    renderer.load_system_font().unwrap_or_else(|_| {
+        renderer
+            .load_font(gizmo::renderer::text::synthetic::synthetic_face())
+            .expect("sentetik yüz her zaman ayrıştırılır")
+    })
 }

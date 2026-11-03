@@ -470,26 +470,14 @@ fn sky() -> (Vec<u8>, u32, u32) {
     })
 }
 
-const FONT_CANDIDATES: &[&str] = &[
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-    "C:/Windows/Fonts/arial.ttf",
-];
 
 /// `GIZMO_FONT`, sonra bilinen sistem yolları, sonra sentetik yüz.
 fn load_font(renderer: &mut gizmo::renderer::Renderer) -> FontId {
-    let env = std::env::var("GIZMO_FONT").ok();
-    for path in env.iter().map(String::as_str).chain(FONT_CANDIDATES.iter().copied()) {
-        if let Ok(id) = renderer.load_font_file(path) {
-            return id;
-        }
-    }
-    gizmo::gizmo_log!(Warning, "font bulunamadı; sentetik yüz kutular çizecek (GIZMO_FONT ile seçin)");
-    renderer
-        .load_font(gizmo::renderer::text::synthetic::synthetic_face())
-        .expect("sentetik yüz her zaman ayrıştırılır")
+    // A font the machine has (`GIZMO_FONT`, or the platform's usual faces); without one, the
+    // synthetic test face, so the game still runs.
+    renderer.load_system_font().unwrap_or_else(|_| {
+        renderer
+            .load_font(gizmo::renderer::text::synthetic::synthetic_face())
+            .expect("sentetik yüz her zaman ayrıştırılır")
+    })
 }

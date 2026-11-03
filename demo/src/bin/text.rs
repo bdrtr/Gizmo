@@ -41,15 +41,6 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
-/// Font aranacak bilinen yollar. Bulunan ilki kullanılır.
-const FONT_CANDIDATES: &[&str] = &[
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-    "C:/Windows/Fonts/arial.ttf",
-];
 
 fn main() {
     App::<SimpleSceneState>::new("Gizmo Engine - Text", 1280, 720)
@@ -161,32 +152,16 @@ fn inset(at: Vec2, margin: f32) -> Vec2 {
     Vec2::new((0.5 - at.x) * 2.0 * margin, (0.5 - at.y) * 2.0 * margin)
 }
 
-/// Fontu bulur: `GIZMO_FONT`, sonra bilinen sistem yolları, sonra sentetik yüz.
-///
-/// Dönen bayrak "gerçek bir font bulundu mu" — demo bunu ekrana yazıyor, çünkü kutular gören biri
-/// önce motoru suçlar.
+/// A font the machine has (`GIZMO_FONT` or the platform's usual faces), and whether it is one;
+/// without one, the synthetic test face (boxes on screen).
 fn load_font(renderer: &mut Renderer) -> (gizmo::renderer::text::FontId, bool) {
-    if let Ok(path) = std::env::var("GIZMO_FONT") {
-        match renderer.load_font_file(&path) {
-            Ok(id) => {
-                gizmo::gizmo_log!(Info, "font: {path} (GIZMO_FONT)");
-                return (id, true);
-            }
-            Err(e) => gizmo::gizmo_log!(Warning, "GIZMO_FONT={path} yüklenemedi: {e}"),
-        }
+    match renderer.load_system_font() {
+        Ok(id) => (id, true),
+        Err(_) => (
+            renderer
+                .load_font(gizmo::renderer::text::synthetic::synthetic_face())
+                .expect("sentetik yüz her zaman ayrıştırılır"),
+            false,
+        ),
     }
-    for path in FONT_CANDIDATES {
-        if let Ok(id) = renderer.load_font_file(path) {
-            gizmo::gizmo_log!(Info, "font: {path}");
-            return (id, true);
-        }
-    }
-    gizmo::gizmo_log!(
-        Warning,
-        "hiçbir font bulunamadı; sentetik yüz kullanılıyor (ekranda kutular görünecek)"
-    );
-    let id = renderer
-        .load_font(gizmo::renderer::text::synthetic::synthetic_face())
-        .expect("sentetik yüz her zaman ayrıştırılır");
-    (id, false)
 }

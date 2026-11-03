@@ -327,6 +327,35 @@ pub struct Renderer {
     pub fluid_enabled: bool,
 }
 
+/// Where [`Renderer::load_system_font`] looks, in order, after `GIZMO_FONT`.
+#[cfg(target_os = "linux")]
+pub const SYSTEM_FONT_PATHS: &[&str] = &[
+    "/usr/share/fonts/TTF/DejaVuSans.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/google-noto/NotoSans-Regular.ttf",
+    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/TTF/LiberationSans-Regular.ttf",
+    "/usr/share/fonts/cantarell/Cantarell-Regular.otf",
+];
+/// Where [`Renderer::load_system_font`] looks, in order, after `GIZMO_FONT`.
+#[cfg(target_os = "macos")]
+pub const SYSTEM_FONT_PATHS: &[&str] = &[
+    "/System/Library/Fonts/Helvetica.ttc",
+    "/System/Library/Fonts/SFNS.ttf",
+    "/System/Library/Fonts/Supplemental/Arial.ttf",
+    "/Library/Fonts/Arial.ttf",
+];
+/// Where [`Renderer::load_system_font`] looks, in order, after `GIZMO_FONT`.
+#[cfg(target_os = "windows")]
+pub const SYSTEM_FONT_PATHS: &[&str] = &["C:/Windows/Fonts/segoeui.ttf", "C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/tahoma.ttf"];
+/// Where [`Renderer::load_system_font`] looks, in order, after `GIZMO_FONT` — nowhere, here.
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+pub const SYSTEM_FONT_PATHS: &[&str] = &[];
+
 impl Renderer {
     /// OPT-IN: enable the renderer's own GPU rigid-body physics (default OFF). Idempotent —
     /// safe to call every frame. Only games that drive massive body counts / GPU cloth via
@@ -434,6 +463,42 @@ impl Renderer {
     ) -> Result<crate::text::FontId, crate::text::FontError> {
         let bytes = std::fs::read(path).map_err(crate::text::FontError::Io)?;
         self.load_font(bytes)
+    }
+
+    /// A font the machine already has: the file named by `GIZMO_FONT` if it is set, else the first
+    /// readable one of the platform's usual sans faces — DejaVu, Noto, Liberation, Cantarell on
+    /// Linux; Helvetica, SF, Arial on macOS; Segoe UI, Arial on Windows ([`SYSTEM_FONT_PATHS`]).
+    ///
+    /// Not a bundled font — the engine still ships none, that being the project's licensing call
+    /// — but the list every game had been copying (eighteen copies, Linux paths plus one each for
+    /// macOS and Windows) in one place, per platform. Games still decide what to do without one.
+    ///
+    /// # Errors
+    ///
+    /// [`FontError::NotFound`](crate::text::FontError::NotFound) when nothing loads — always on
+    /// the web, which has no file system to look in.
+    pub fn load_system_font(&mut self) -> Result<crate::text::FontId, crate::text::FontError> {
+        #[cfg(target_arch = "wasm32")]
+        {
+            Err(crate::text::FontError::NotFound)
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if let Ok(path) = std::env::var("GIZMO_FONT") {
+                match self.load_font_file(&path) {
+                    Ok(id) => return Ok(id),
+                    // Asked for by name: say so, then fall back to the system's.
+                    Err(e) => tracing::warn!(path, error = %e, "GIZMO_FONT could not be loaded; trying the system fonts"),
+                }
+            }
+            for path in SYSTEM_FONT_PATHS {
+                if let Ok(id) = self.load_font_file(path) {
+                    return Ok(id);
+                }
+            }
+            tracing::warn!("no system font found — set GIZMO_FONT to a .ttf/.otf file");
+            Err(crate::text::FontError::NotFound)
+        }
     }
 
     /// Adds a loaded face to the end of the font fallback chain: a character a `Text`'s own face

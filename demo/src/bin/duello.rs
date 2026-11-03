@@ -573,14 +573,6 @@ fn set_text(world: &mut World, id: u32, s: &str) {
     }
 }
 
-const FONT_CANDIDATES: &[&str] = &[
-    "/usr/share/fonts/TTF/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/noto/NotoSans-Regular.ttf",
-    "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
-    "/System/Library/Fonts/Helvetica.ttc",
-    "C:/Windows/Fonts/arial.ttf",
-];
 
 /// Simgeler için bir yedek yüz: ⛨ DejaVu'da yok. Bulunamazsa o karakter boş çiziliyor.
 const SYMBOL_FONTS: &[&str] = &[
@@ -590,16 +582,15 @@ const SYMBOL_FONTS: &[&str] = &[
 ];
 
 fn load_font(renderer: &mut gizmo::renderer::Renderer) -> FontId {
+    // Kartların sembolleri (♥ ⚔ …) ana yüzde yoksa bu yüzden çizilsin.
     if let Some(symbols) = SYMBOL_FONTS.iter().find_map(|p| renderer.load_font_file(p).ok()) {
         renderer.add_font_fallback(symbols);
     }
-    let env = std::env::var("GIZMO_FONT").ok();
-    for path in env.iter().map(String::as_str).chain(FONT_CANDIDATES.iter().copied()) {
-        if let Ok(id) = renderer.load_font_file(path) {
-            return id;
-        }
-    }
-    renderer
-        .load_font(gizmo::renderer::text::synthetic::synthetic_face())
-        .expect("sentetik yüz her zaman ayrıştırılır")
+    // A font the machine has (`GIZMO_FONT`, or the platform's usual faces); without one, the
+    // synthetic test face, so the game still runs.
+    renderer.load_system_font().unwrap_or_else(|_| {
+        renderer
+            .load_font(gizmo::renderer::text::synthetic::synthetic_face())
+            .expect("sentetik yüz her zaman ayrıştırılır")
+    })
 }

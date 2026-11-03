@@ -47,7 +47,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   is `renderer.auto_exposure`). Split screen works on the game path (`Camera::viewport`, §A5b); the studio previews a
   split-screen game through its primary camera. Transparent materials blend by
   `Material::blend_mode` — alpha, additive, multiply, premultiplied (§B).
-- **Text:** no shaping, bidi or font fallback; the engine ships no font (§A2).
+- **Text:** no shaping or bidi; the engine ships no font — `Renderer::load_system_font` finds the machine's (`GIZMO_FONT`, then the platform's usual faces), and `add_font_fallback` chains faces per character (§A2).
 - **Extensibility:** several extension points are sealed (§C0).
 - **Editor:** `gizmo-studio` is a separate binary and cannot see a game's types; the in-engine
   editor can.
