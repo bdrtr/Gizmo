@@ -4256,7 +4256,9 @@ mod golden_render_tests {
     #[ignore = "needs a GPU adapter"]
     fn load_system_font_takes_gizmo_font_and_falls_back_past_a_bad_one() {
         let _gpu = crate::test_gpu::gpu_lock();
-        if !pollster::block_on(Renderer::headless_adapter_available()) {
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
             eprintln!("skipping: no usable GPU adapter");
             return;
         }
