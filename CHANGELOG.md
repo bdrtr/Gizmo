@@ -150,6 +150,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **`itis`, the twenty-second game** — a two-player shove match over `RollbackSession`: local,
+  UDP, or `itis --test`, which plays 1500 ticks over a lossy, laggy link with a late start and
+  checks both peers end on the real match. The first game on the netcode; it found the items
+  above and the time sync below.
 - **Rollback time sync: `RollbackSession::frames_ahead` / `try_advance` / `poll_remote`.** The
   session never waited for its peer — it predicts — so nothing kept two peers' clocks
   together: one that started 50 frames earlier stayed 50 ticks ahead, every remote input

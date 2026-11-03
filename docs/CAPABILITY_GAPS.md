@@ -1262,6 +1262,27 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16r. The twenty-second game: two players over a network (2026-11-03, `itis`)
+
+`demo/src/bin/itis.rs` is a two-player shove match on `RollbackSession`: two pucks on a square
+arena, three falls wins. It runs locally (two sessions in one process over a `LoopbackTransport`
+with 4 ticks of lag), over UDP (`--port/--peer/--player`), or as `itis --test`, which opens no
+window: two sessions over a lossy, laggy link, one starting 40 frames late, 1500 ticks of random
+play — both end on the hash and score of the same match played in one world. The first game on
+`gizmo-net`. Four gaps, all closed:
+
+- ~~**The peer that started first stayed ahead for good**~~ — the session never waited, so a late
+  start put every remote input past the rollback window. `try_advance` holds the leader.
+- ~~**Game state did not roll back**~~ — only the `PhysicsWorld` did; a goal scored on a
+  prediction stayed on the board. `with_state` snapshots the game's state with the world, and a
+  `StepRule` runs after every step, re-simulated ones included.
+- ~~**Inputs were applied in opposite orders on the two peers**~~ — local first, so any rule that
+  depended on order came out differently. Player-id order on both now.
+- ~~**A session over `LoopbackTransport` could not be a `World` resource**~~ — its queues were
+  `Rc<RefCell<_>>`. `Arc<Mutex<_>>` now.
+
+Also found: `cargo test -p gizmo-net` with default features did not compile (an ungated test).
+
 ### C16q. The twenty-first game: breaking things (2026-11-03, `vinc`)
 
 `demo/src/bin/vinc.rs` is a demolition game seen from the side: a crane hook driven left and
