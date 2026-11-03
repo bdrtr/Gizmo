@@ -1262,6 +1262,23 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16t. The twenty-fourth game: a landscape (2026-11-04, `golf`)
+
+`demo/src/bin/golf.rs` is three holes of golf on a generated hilly course: aim with the mouse,
+hold the button for power. The course is built in memory — `AssetManager::terrain_triangles`
+draws it, `gizmo::systems::terrain_collider` collides it — and `golf --test` opens no window: an
+AI plays the three holes (10 strokes) while every step measures how far the ball sinks into the
+ground (at most 6 mm). The first game on terrain; no demo used `Terrain` before. Two gaps, both
+closed:
+
+- ~~**A terrain collided as a flat box**~~ at half its tallest hill — the code called it "a crude
+  stand-in". A heightfield of the same samples now, and the mesh split along its diagonal (the
+  other diagonal was used, so even the right collider and the drawn surface disagreed inside
+  every sloped cell).
+- ~~**A generated terrain needed a heightmap file**~~ — `Terrain` takes a path and the mesh was
+  built inside a function that needs the GPU device. The triangle list and the collider can now
+  be built from samples in memory.
+
 ### C16s. The twenty-third game: saving what you built (2026-11-03, `atolye`)
 
 `demo/src/bin/atolye.rs` is a building sandbox — click a column to stack a block, F5 writes the

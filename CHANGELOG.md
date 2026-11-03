@@ -150,6 +150,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **`golf`, the twenty-fourth game** — three holes on a generated hilly course, built in memory
+  from `terrain_triangles` and `terrain_collider`; `golf --test` plays them with an AI and checks
+  the ball never sinks into the ground. It found the terrain item below.
 - **A terrain collides as the surface it draws.** Its collider was a box, `width/2 ×
   max_height/2 × depth/2` about the entity, while the mesh runs from 0 to `max_height` — every
   body on a terrain rested on a flat lid at half its tallest hill, floating over the valleys and
