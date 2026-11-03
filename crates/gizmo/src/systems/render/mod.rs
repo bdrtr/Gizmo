@@ -8979,6 +8979,71 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         });
     }
 
+    /// A tooltip that is up is drawn: a dark box beside the pointer with light glyphs in it, in
+    /// its element's font — and with an empty text nothing changes.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    #[cfg(feature = "ui")]
+    fn a_tooltip_draws_a_box_and_its_text_beside_the_pointer() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(tip: &str) -> Vec<u8> {
+            use crate::core::system::{IntoSystemConfig, Schedule};
+            // `render_world` reads back 128 × 128.
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let font = renderer
+                .load_font(gizmo_renderer::text::synthetic::synthetic_face())
+                .expect("the synthetic face must parse");
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+            let mut input = crate::core::input::Input::new();
+            input.set_mouse_position(10.0, 10.0);
+            world.insert_resource(input);
+            world.spawn_bundle((
+                crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(20.0) },
+                crate::ui::Interaction::Hovered,
+                crate::ui::Tooltip::new(tip).with_delay(0.0),
+                gizmo_renderer::components::Text::screen("", font, 14.0, gizmo_math::Vec2::ZERO),
+            ));
+            let mut s = Schedule::new();
+            s.add_di_system(crate::ui::ui_tooltip_system.into_config());
+            s.build();
+            s.run(&mut world, 0.0);
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let without = frame("").await;
+            // The synthetic face draws one glyph, `A`; every other character is a blank advance.
+            let with = frame("AAA").await;
+            // The box starts at the pointer + (14, 20) = (24, 30).
+            let region = |f: &[u8], x0: usize, y0: usize, x1: usize, y1: usize| {
+                let mut out = Vec::new();
+                for y in y0..y1 {
+                    for x in x0..x1 {
+                        let i = (y * 128 + x) * 4;
+                        out.push([f[i], f[i + 1], f[i + 2]]);
+                    }
+                }
+                out
+            };
+            let corner_before = region(&without, 25, 31, 27, 33);
+            let corner_after = region(&with, 25, 31, 27, 33);
+            assert_ne!(corner_before, corner_after, "no box at the pointer");
+            // 0.04 linear is about 56 once encoded to sRGB.
+            assert!(corner_after.iter().all(|p| p.iter().all(|&c| c < 80)), "the box is not dark: {corner_after:?}");
+            let bright = region(&with, 24, 30, 90, 60).iter().filter(|p| p.iter().all(|&c| c > 150)).count();
+            assert!(bright > 10, "no light glyphs in the box ({bright} bright pixels)");
+            // Away from the pointer, nothing changed.
+            assert_eq!(region(&without, 70, 70, 128, 128), region(&with, 70, 70, 128, 128));
+        });
+    }
+
     async fn render_ui_scene(ui_box: bool, label: bool) -> Vec<u8> {
         const W: u32 = 128;
         let mut renderer = crate::test_gpu::headless_renderer(W, W).await;

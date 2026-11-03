@@ -1264,7 +1264,7 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
 `demo/src/bin/birlestir.rs` is a merge garden made of UI alone: a 6×5 field, **Üret** plants a
 seed (energy that refills on a `Timer`), two equal things dragged together become the next stage,
 orders on the right pay for a stage dropped on them, a bin takes what is not wanted, and the field
-is saved. Three things:
+is saved. Four things:
 
 - ~~**A drop could not be found.**~~ **Closed 2026-11-03.** The dragged item follows the pointer,
   so it is what is under the pointer; everything beneath reads `Interaction::None`, and the game
@@ -1279,8 +1279,11 @@ is saved. Three things:
   1280×720 did not fit the 472×492 window a tiling window manager gave it: `Val::Px` was always a
   window pixel. `UiScale::fit(w, h)` (or `fixed(k)`), a resource: layout in layout pixels, `Node`
   in window pixels, labels on boxes scaled with them. Four conversions, four failing mutations.
-- **No tooltip.** The game builds its own — an absolute node moved to the pointer every frame,
-  `Display::None` when nothing is hovered. *Open; it works by hand.*
+- ~~**No tooltip.**~~ **Closed 2026-11-03.** The game built its own — an absolute node moved to
+  the pointer every frame, `Display::None` when nothing was hovered, the pointer divided by the
+  `UiScale` by hand. `Tooltip::new(text)`: shown after resting `delay` seconds, drawn by the facade
+  in the element's own font, kept in the window; focus alone, a press, leaving or empty text hide
+  it. Tested in logic and on the GPU.
 
 ### C16f. The tenth game: a world made of tiles (2026-11-03, `zindan`)
 

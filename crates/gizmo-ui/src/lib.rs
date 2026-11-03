@@ -148,7 +148,7 @@ pub use components::*;
 pub use bundles::*;
 pub use layout::*;
 pub use interaction::{
-    pointer_over_ui, ui_drag_system, ui_drop_system, ui_dropdown_system, ui_layer, ui_scroll_system, ui_slider_system, ui_toggle_system,
+    pointer_over_ui, ui_drag_system, ui_drop_system, ui_dropdown_system, ui_tooltip_system, ui_layer, ui_scroll_system, ui_slider_system, ui_toggle_system,
     UiNavigation,
 };
 pub use text_input::{text_input_system, TextInput};
@@ -170,6 +170,7 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<Scroll>();
     world.register_component_type::<Drag>();
     world.register_component_type::<DropTarget>();
+    world.register_component_type::<Tooltip>();
     world.register_component_type::<Slider>();
     world.register_component_type::<ProgressBar>();
     world.register_component_type::<Toggle>();
@@ -229,6 +230,12 @@ pub fn register(world: &mut World, schedule: &mut Schedule) {
         interaction::ui_drag_system
             .into_config()
             .label("ui_drag")
+            .after("ui_interaction"),
+    );
+    schedule.add_di_system(
+        interaction::ui_tooltip_system
+            .into_config()
+            .label("ui_tooltip")
             .after("ui_interaction"),
     );
     schedule.add_di_system(

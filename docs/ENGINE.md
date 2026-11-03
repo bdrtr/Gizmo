@@ -725,7 +725,7 @@ state instead.
   (`ZIndex`), text fields (`TextInput`), wheel scrolling (`Scroll`), drags (`Drag`), sliders
   (`Slider`), progress bars (`ProgressBar`), on/off switches (`Toggle`) and on-screen touch
   controls (`VirtualStick`, `VirtualButton`); `Scroll` has a draggable scrollbar since 2026-11-03.
-  A select list (`Dropdown`) and flicking a list's content with a finger since 2026-11-03. Drag and drop targets (`DropTarget`) and a layout scale that fits the window (`UiScale`) since 2026-11-03. No default font ships and none
+  A select list (`Dropdown`) and flicking a list's content with a finger since 2026-11-03. Drag and drop targets (`DropTarget`) a layout scale that fits the window (`UiScale`) and tooltips (`Tooltip`) since 2026-11-03. No default font ships and none
   will without a licensing decision: a `Text` whose face was never loaded draws nothing rather than
   substituting one.
 

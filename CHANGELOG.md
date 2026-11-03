@@ -50,6 +50,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`gizmo::ui::Tooltip`.** `Tooltip::new("…")` on any element with an `Interaction`: after the
+  pointer rests on it for `delay` seconds (0.5 by default, real time) with no button held, the
+  facade draws the text beside the pointer — light on a dark box, in the element's own `Text`
+  font and size (scaled with `UiScale`), `\n` for lines, wrapped at 320 layout pixels, flipped to
+  stay in the window, above every UI layer and under an open dropdown list. Keyboard focus alone
+  does not show it; leaving, a press (either button) or an empty text hides it. `birlestir` built
+  its own first — an absolute node moved to the pointer each frame — and uses this now. Tested on
+  the delay, following, leaving, both buttons, empty text and focus (five mutations, five
+  failures), the box placement, and on the GPU (a dark box with light glyphs beside the pointer,
+  nothing changed elsewhere).
 - **`gizmo::ui::UiScale` — a layout that fits the window.** `Val::Px` was always a window pixel,
   so `birlestir`, laid out for 1280×720, did not fit the 472×492 window a tiling window manager
   gave it. Insert `UiScale::fit(1280.0, 720.0)` and the layout is scaled to the window every frame

@@ -32,7 +32,11 @@
 //!   pencereye sığdırıyor (`fixed(k)` sabit bir çarpan); kutular, boşluklar ve kutuların üstündeki
 //!   yazılar birlikte büyüyüp küçülüyor. `Node` pencere pikseli kalıyor, tıklama ve sürükleme
 //!   hiçbir şey bilmeden çalışıyor.
-//! - **İpucu (tooltip) yok.** Burada elle: imlecin yanına taşınan mutlak bir düğüm. *Açık.*
+//! - **İpucu (tooltip) yoktu.** İlk sürüm kendisininkini kuruyordu: her kare imlecin yanına
+//!   taşınan, kimse üstünde değilken `Display::None` olan mutlak bir düğüm — ve ölçekle bölmeyi
+//!   unutmamak. **Kapatıldı:** `Tooltip::new(metin)` — üstünde yarım saniye durunca öğenin kendi
+//!   fontuyla imlecin yanında çıkıyor, ayrılınca ya da tıklanınca kayboluyor, pencerenin içinde
+//!   kalıyor; yalnızca klavye odağı onu açmıyor.
 //!
 //! ## Ortam değişkenleri
 //!   * `BIRLESTIR_OTO=1` — kendi kendine birkaç tohum ekip birleştiriyor (ekran görüntüsü için)
@@ -48,8 +52,8 @@ use gizmo::renderer::components::{Text, TextAnchor};
 use gizmo::renderer::text::FontId;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
-    AlignItems, BackgroundColor, ButtonBundle, Clicked, Drag, DropTarget, FlexDirection, FlexWrap, Interaction,
-    JustifyContent, NodeBundle, PositionType, Style, UiPlugin, UiRect, UiScale, Val, ZIndex,
+    AlignItems, BackgroundColor, ButtonBundle, Clicked, Drag, DropTarget, FlexDirection, FlexWrap, JustifyContent,
+    NodeBundle, PositionType, Style, Tooltip, UiPlugin, UiRect, UiScale, Val, ZIndex,
 };
 
 const COLS: usize = 6;
@@ -114,7 +118,6 @@ struct Game {
     cards: [u32; ORDERS],
     bin: u32,
     status: u32,
-    tip: u32,
     /// Kendi kendine oynarken kaçıncı karede olduğu.
     auto: Option<u32>,
 }
@@ -181,6 +184,8 @@ fn main() {
                 });
                 scene.world.add_component(view, View(i));
                 scene.world.add_component(view, Drag::default());
+                // Ne olduğu ve birleşince ne olacağı — metni her kare karenin içeriğinden.
+                scene.world.add_component(view, Tooltip::new(""));
                 scene.world.add_component(
                     view,
                     Text::screen("", font, 15.0, Vec2::ZERO)
@@ -247,21 +252,6 @@ fn main() {
             scene.world.add_component(bin, Text::screen("Çöp", font, 20.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
             scene.world.add_child(side, bin);
 
-            // İpucu: imlecin yanında, her şeyin önünde.
-            let tip = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    width: Val::Px(220.0),
-                    height: Val::Px(54.0),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(Vec4::new(0.0, 0.0, 0.0, 0.8)),
-                ..Default::default()
-            });
-            scene.world.add_component(tip, ZIndex(100));
-            scene.world.add_component(tip, Text::screen("", font, 16.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-            let tip = tip.id();
-
             if let Ok(mut audio) = AudioManager::new() {
                 audio.load_sound_bytes("tak", Blip::new(Wave::Triangle, 440.0, 0.05).with_volume(0.3).wav());
                 audio.load_sound_bytes("birles", Blip::new(Wave::Sine, 660.0, 0.12).with_slide(990.0).with_volume(0.3).wav());
@@ -291,10 +281,9 @@ fn main() {
                 cards,
                 bin: bin.id(),
                 status,
-                tip,
                 auto: std::env::var_os("BIRLESTIR_OTO").is_some().then_some(0),
             };
-            let _ = (generate, tip);
+            let _ = generate;
             scene.world.insert_resource(game);
         })
         .set_update(update)
@@ -397,7 +386,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     }
 
-    draw(world, &game, input);
+    draw(world, &game);
     world.insert_resource(game);
 }
 
@@ -484,17 +473,12 @@ fn set_fill(world: &mut World, id: u32, c: Vec4) {
     }
 }
 
-fn draw(world: &mut World, game: &Game, input: &Input) {
+fn draw(world: &mut World, game: &Game) {
     // Kareler ve içleri.
-    let mut hovered_view = None;
     for i in 0..CELLS {
         let (view, cell) = (game.views[i], game.cells[i]);
         let tier = game.board[i];
-        let (drag, interaction) = {
-            let d = world.borrow::<Drag>().get(view).copied().unwrap_or_default();
-            let n = world.borrow::<Interaction>().get(view).copied().unwrap_or_default();
-            (d, n)
-        };
+        let drag = world.borrow::<Drag>().get(view).copied().unwrap_or_default();
         let dragging = drag.is_dragging() && tier > 0;
         let style = view_style(dragging.then(|| drag.delta()));
         if let Some(mut s) = world.borrow_mut::<Style>().get_mut(view) {
@@ -514,8 +498,15 @@ fn draw(world: &mut World, game: &Game, input: &Input) {
         set_text(world, view, if tier == 0 { "" } else { NAMES[tier as usize - 1] });
         let lit = world.borrow::<DropTarget>().get(cell).is_some_and(|t| t.hovered_by().is_some());
         set_fill(world, cell, if lit { SLOT_LIT } else { SLOT });
-        if tier > 0 && interaction == Interaction::Hovered && !drag.is_dragging() {
-            hovered_view = Some(tier);
+        let tip = match tier {
+            0 => String::new(),
+            t if (t as usize) < NAMES.len() => format!("{}\nİki tane → {}", NAMES[t as usize - 1], NAMES[t as usize]),
+            t => format!("{}\nEn üst aşama", NAMES[t as usize - 1]),
+        };
+        if let Some(mut t) = world.borrow_mut::<Tooltip>().get_mut(view) {
+            if t.text != tip {
+                t.text = tip;
+            }
         }
     }
     for (o, &card) in game.cards.iter().enumerate() {
@@ -529,30 +520,6 @@ fn draw(world: &mut World, game: &Game, input: &Input) {
     let s = format!("Altın {}   ·   Enerji {}/{}{}", game.coins, game.energy, MAX_ENERGY, refill);
     set_text(world, game.status, &s);
 
-    // İpucu: bir şeyin üstünde durunca adı ve birleşince ne olacağı.
-    // İmleç pencere pikselinde, düzen ise düzen pikselinde: ölçeğe böl.
-    let k = world.get_resource::<UiScale>().map_or(1.0, |s| s.factor());
-    let (x, y) = input.mouse_position();
-    let (x, y) = (x / k, y / k);
-    let tip = match hovered_view {
-        Some(t) if (t as usize) < NAMES.len() => format!("{}\nİki tane → {}", NAMES[t as usize - 1], NAMES[t as usize]),
-        Some(t) => format!("{}\nEn üst aşama", NAMES[t as usize - 1]),
-        None => String::new(),
-    };
-    set_text(world, game.tip, &tip);
-    let style = Style {
-        position_type: PositionType::Absolute,
-        inset: UiRect { left: Val::Px(x + 18.0), top: Val::Px(y + 18.0), right: Val::Auto, bottom: Val::Auto },
-        width: Val::Px(220.0),
-        height: Val::Px(54.0),
-        display: if hovered_view.is_some() { gizmo::ui::Display::Flex } else { gizmo::ui::Display::None },
-        ..Default::default()
-    };
-    if let Some(mut s) = world.borrow_mut::<Style>().get_mut(game.tip) {
-        if *s != style {
-            *s = style;
-        }
-    }
 }
 
 const FONT_CANDIDATES: &[&str] = &[

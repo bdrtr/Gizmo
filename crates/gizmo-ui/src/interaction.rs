@@ -2,7 +2,7 @@ use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
 use crate::components::{
-    Clicked, ClipContent, Drag, DropTarget, Dropdown, Interaction, Node, Scroll, Slider, Toggle, ZIndex,
+    Clicked, ClipContent, Drag, DropTarget, Dropdown, Interaction, Node, Scroll, Slider, Toggle, Tooltip, ZIndex,
 };
 use gizmo_core::component::Parent;
 
@@ -404,6 +404,28 @@ pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, Mut<Dra
         next.step(pressed_here, held, pointer);
         if next != *drag {
             *drag = next;
+        }
+    }
+}
+
+/// Shows and hides every [`Tooltip`]: the pointer resting on its element (hovered, inside the
+/// box — not merely focused — and no button held) for its delay. Runs after
+/// `ui_interaction_system`, on real time.
+pub fn ui_tooltip_system(
+    input: Res<Input>,
+    time: Option<Res<gizmo_core::time::Time>>,
+    mut tips: Query<(&Node, &Interaction, Mut<Tooltip>)>,
+) {
+    let dt = time.map_or(0.0, |t| t.raw_dt());
+    let (x, y) = input.mouse_position();
+    let pointer = gizmo_math::Vec2::new(x, y);
+    let held = input.is_mouse_button_pressed(0) || input.is_mouse_button_pressed(1);
+    for (_, (node, interaction, mut tip)) in tips.iter_mut() {
+        let resting = *interaction == Interaction::Hovered && point_in_node((x, y), node) && !held;
+        // Only write when something changes, so `Changed<Tooltip>` is not every frame.
+        let next = tip.next_state(resting, pointer, dt);
+        if next != tip.state() {
+            tip.set_state(next);
         }
     }
 }
@@ -1009,6 +1031,63 @@ mod tests {
         // Neither the item nor its badge — both under the pointer the whole time — took it.
         assert!(world.borrow::<DropTarget>().get(item).unwrap().dropped().is_none());
         assert!(world.borrow::<DropTarget>().get(badge).unwrap().dropped().is_none());
+    }
+
+    /// A tooltip appears after its delay of resting on the element, follows the pointer, and goes
+    /// at once when the pointer leaves or a button goes down; focus alone does not show it, nor
+    /// does an empty text.
+    #[test]
+    fn a_tooltip_shows_after_resting_and_hides_on_leave_or_press() {
+        use gizmo_core::system::{IntoSystemConfig, Schedule};
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        let mut time = gizmo_core::time::Time::default();
+        time.update(0.2);
+        world.insert_resource(time);
+        let e = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 40.0)), ..Default::default() });
+        world.add_component(e, Tooltip::new("Fidan").with_delay(0.5));
+        let id = e.id();
+        let tick = |w: &mut gizmo_core::World, at: (f32, f32), down: bool| {
+            frame(w, at, down);
+            let mut s = Schedule::new();
+            s.add_di_system(ui_tooltip_system.into_config());
+            s.build();
+            s.run(w, 0.0);
+            w.borrow::<Tooltip>().get(id).unwrap().shown_at()
+        };
+        assert_eq!(tick(&mut world, (10.0, 10.0), false), None, "0.2 s");
+        assert_eq!(tick(&mut world, (10.0, 10.0), false), None, "0.4 s");
+        assert_eq!(tick(&mut world, (12.0, 10.0), false), Some(Vec2::new(12.0, 10.0)), "0.6 s");
+        assert_eq!(tick(&mut world, (30.0, 20.0), false), Some(Vec2::new(30.0, 20.0)), "follows");
+        assert_eq!(tick(&mut world, (300.0, 20.0), false), None, "left");
+        assert_eq!(tick(&mut world, (10.0, 10.0), false), None, "the wait starts again");
+        tick(&mut world, (10.0, 10.0), false);
+        assert!(tick(&mut world, (10.0, 10.0), false).is_some());
+        assert_eq!(tick(&mut world, (10.0, 10.0), true), None, "a press hides it");
+        // The right button leaves the element `Hovered`, and still hides it (a context menu).
+        tick(&mut world, (10.0, 10.0), false);
+        tick(&mut world, (10.0, 10.0), false);
+        assert!(tick(&mut world, (10.0, 10.0), false).is_some());
+        world.get_resource_mut::<Input>().unwrap().on_mouse_button_pressed(1);
+        let mut s = Schedule::new();
+        s.add_di_system(ui_tooltip_system.into_config());
+        s.build();
+        s.run(&mut world, 0.0);
+        assert_eq!(world.borrow::<Tooltip>().get(id).unwrap().shown_at(), None, "right button");
+        world.get_resource_mut::<Input>().unwrap().on_mouse_button_released(1);
+        tick(&mut world, (10.0, 10.0), false);
+        tick(&mut world, (10.0, 10.0), false);
+        world.borrow_mut::<Tooltip>().get_mut(id).unwrap().text.clear();
+        assert_eq!(tick(&mut world, (10.0, 10.0), false), None, "empty says nothing");
+
+        // Focused by the keys, the pointer elsewhere: `Hovered`, but no tooltip.
+        world.borrow_mut::<Tooltip>().get_mut(id).unwrap().text = "Fidan".into();
+        world.insert_resource(UiNavigation { enabled: true, ..Default::default() });
+        world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(id));
+        for _ in 0..5 {
+            assert_eq!(tick(&mut world, (300.0, 300.0), false), None);
+        }
+        assert_eq!(world.borrow::<Interaction>().get(id), Some(&Interaction::Hovered));
     }
 
     /// Interaction then sliders, the order `register` schedules them in, with the mouse at `at`

@@ -524,6 +524,71 @@ impl DropTarget {
     }
 }
 
+/// A line of help that appears beside the pointer when it rests on the element — what a stage
+/// becomes when merged, what a button does, what an item is worth.
+///
+/// Shown once the pointer has stayed on the element for [`delay`](Self::delay) seconds (real
+/// time, so a paused game still explains itself) with no button held; hidden the moment it
+/// leaves, a button goes down, or [`text`](Self::text) is empty. Keyboard focus alone does not
+/// show it: a tooltip sits at the pointer, and a focused element may be nowhere near it.
+/// `ui_tooltip_system` keeps [`shown_at`](Self::shown_at) — the pointer, in window pixels —
+/// which is all a draw path needs.
+///
+/// Under `gizmo-engine` it is drawn above every UI layer (under an open dropdown list), in the
+/// font of the element's own `Text` at that `Text`'s size, light on a dark box, `\n` for lines,
+/// wrapped at 320 layout pixels, and kept inside the window. An element with no `Text` has no
+/// font to draw it in, and its tooltip is not drawn — as a `Dropdown`'s list borrows its button's.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Tooltip {
+    /// What it says. Change it whenever; an empty string shows nothing.
+    pub text: String,
+    /// Seconds of resting before it appears.
+    pub delay: f32,
+    rested: f32,
+    shown_at: Option<Vec2>,
+}
+
+impl Tooltip {
+    /// A tooltip with the usual half-second delay.
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into(), delay: 0.5, rested: 0.0, shown_at: None }
+    }
+
+    /// With another delay; `0` shows it at once.
+    #[must_use]
+    pub fn with_delay(mut self, seconds: f32) -> Self {
+        self.delay = seconds.max(0.0);
+        self
+    }
+
+    /// Where the pointer is while the tooltip is up (window pixels), `None` while it is not.
+    #[must_use]
+    pub fn shown_at(&self) -> Option<Vec2> {
+        self.shown_at
+    }
+
+    /// Its state after one more frame — `resting` is the pointer on the element with no button
+    /// held — without writing it, so the system can write only a change.
+    pub(crate) fn next_state(&self, resting: bool, pointer: Vec2, dt: f32) -> (f32, Option<Vec2>) {
+        if resting && !self.text.is_empty() {
+            let rested = self.rested + dt;
+            (rested, (rested >= self.delay).then_some(pointer))
+        } else {
+            (0.0, None)
+        }
+    }
+
+    pub(crate) fn state(&self) -> (f32, Option<Vec2>) {
+        (self.rested, self.shown_at)
+    }
+
+    pub(crate) fn set_state(&mut self, (rested, shown_at): (f32, Option<Vec2>)) {
+        self.rested = rested;
+        self.shown_at = shown_at;
+    }
+}
+
 /// A horizontal slider: a value in `0.0..=1.0` set by dragging across the element, or with the
 /// left/right arrows and the d-pad while it has the [`UiNavigation`](crate::UiNavigation) focus.
 /// Put it on a [`ButtonBundle`](crate::ButtonBundle) — it needs the `Interaction` — with a `Text`
@@ -1004,7 +1069,7 @@ impl Scroll {
 /// Marker component for the root of a UI tree.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UiRoot;
-gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, DropTarget, Slider, ProgressBar, Toggle, Dropdown);
+gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, DropTarget, Slider, ProgressBar, Toggle, Dropdown, Tooltip);
 
 #[cfg(test)]
 mod tests {

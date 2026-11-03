@@ -370,6 +370,36 @@ fn dropdown_lists(world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> 
         .collect()
 }
 
+/// Every tooltip that is up: its element, the pointer, what it says.
+#[cfg(feature = "ui")]
+fn tooltips(world: &World) -> Vec<(u32, Vec2, String)> {
+    world
+        .borrow::<crate::ui::Tooltip>()
+        .iter()
+        .filter_map(|(id, t)| t.shown_at().map(|p| (id, p, t.text.clone())))
+        .collect()
+}
+
+#[cfg(not(feature = "ui"))]
+fn tooltips(_world: &World) -> Vec<(u32, Vec2, String)> {
+    Vec::new()
+}
+
+/// Where a tooltip's box goes: below and right of the pointer (clear of the cursor's arrow), or
+/// flipped to the other side of it where that would leave the window, and never off its top-left.
+/// `text` is the laid-out text's size, `pad` the margin around it.
+fn tooltip_box(pointer: Vec2, text: Vec2, pad: f32, screen: Vec2) -> (Vec2, Vec2) {
+    let size = text + Vec2::splat(2.0 * pad);
+    let mut at = pointer + Vec2::new(14.0, 20.0);
+    if at.x + size.x > screen.x {
+        at.x = pointer.x - 6.0 - size.x;
+    }
+    if at.y + size.y > screen.y {
+        at.y = pointer.y - 6.0 - size.y;
+    }
+    (at.max(Vec2::ZERO), size)
+}
+
 #[cfg(not(feature = "ui"))]
 fn dropdown_lists(_world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> {
     Vec::new()
@@ -510,6 +540,24 @@ pub fn record_text(
         };
         text.queue_clipped(queue, item, origin, anchor, screen, clip);
     }
+    // Tooltips above every UI layer, under an open list: light text on a dark box beside the
+    // pointer, in the element's own font and size, kept inside the window.
+    let k = ui_text_scale(world).unwrap_or(1.0);
+    for (id, pointer, content) in tooltips(world) {
+        let Some(style) = texts.get(id) else { continue };
+        // The element's font and size, nothing else of its style: top-left anchored and
+        // left-aligned (`Text::screen`'s own), light, wrapped.
+        let item = Text::screen(content, style.font, style.size_px * k, Vec2::ZERO)
+            .with_color(Vec4::new(0.95, 0.95, 0.97, 1.0))
+            .with_max_width(320.0 * k);
+        let Some(l) = text.library().layout_wrapped(item.font, item.size_px, &item.content, item.max_width) else {
+            continue;
+        };
+        let (at, size) = tooltip_box(pointer, Vec2::new(l.width, l.height), 6.0 * k, screen);
+        text.set_layer(i32::MAX - 2);
+        text.queue_rect_clipped(at, size, Vec4::new(0.04, 0.045, 0.06, 0.94), screen, None);
+        text.queue_clipped(queue, &item, Vec3::ZERO, Some(at + Vec2::splat(6.0 * k)), screen, None);
+    }
     // Open dropdown lists, above every UI layer (under the screen fade): a row per option, the
     // hovered one lighter and the selected one marked, labelled in the button's own `Text` style.
     for (id, rows) in dropdown_lists(world) {
@@ -628,6 +676,20 @@ mod clip_tests {
         world.add_child(slot, item);
         let ids: Vec<u32> = ui_boxes(&world).iter().map(|b| b.0).collect();
         assert_eq!(ids, vec![slot.id(), second.id(), item.id(), other.id()]);
+    }
+
+    /// A tooltip's box sits below-right of the pointer, flips where it would leave the window, and
+    /// never goes off the top-left.
+    #[test]
+    fn a_tooltip_box_stays_in_the_window() {
+        let screen = Vec2::new(800.0, 600.0);
+        let text = Vec2::new(100.0, 20.0);
+        assert_eq!(tooltip_box(Vec2::new(100.0, 100.0), text, 5.0, screen), (Vec2::new(114.0, 120.0), Vec2::new(110.0, 30.0)));
+        let (at, size) = tooltip_box(Vec2::new(780.0, 590.0), text, 5.0, screen);
+        assert_eq!(at, Vec2::new(780.0 - 6.0 - 110.0, 590.0 - 6.0 - 30.0));
+        assert!(at.x + size.x <= screen.x && at.y + size.y <= screen.y);
+        let (at, _) = tooltip_box(Vec2::new(50.0, 5.0), Vec2::new(900.0, 700.0), 5.0, screen);
+        assert_eq!(at, Vec2::ZERO, "too big for the window: pinned to its corner");
     }
 
     /// A label on a UI box is drawn at the `UiScale` factor: its font and its wrap width, and
