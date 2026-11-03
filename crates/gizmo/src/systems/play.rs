@@ -585,7 +585,7 @@ impl PlayLoop {
                     }
                     None => {}
                 }
-                if let Err(e) = engine.update_entity(entity_id, &path, dt, &properties) {
+                if let Err(e) = engine.update_entity_in(world, entity_id, &path, dt, &properties) {
                     report(PlayReport::EntityScriptError {
                         entity: entity_id,
                         path: &path,

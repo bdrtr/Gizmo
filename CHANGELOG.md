@@ -150,6 +150,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **An entity script has the world too (`ScriptEngine::update_entity_in`).** `on_entity_update`
+  ran without it, so `entity.spawn` returned `nil` there and `physics.ground_at` did not exist —
+  only the global `on_update` had them. The play loop now calls `update_entity_in`, which runs the
+  hook inside the same two windows; `update_entity` is unchanged. Tested both ways; dropping the
+  windows fails it.
 - **`yilan`, the twenty-fifth game** — snake with every rule in Lua, run through the facade's
   `PlayLoop`; `yilan --test` lets the script play itself and checks the board. It found the
   scripting items below.

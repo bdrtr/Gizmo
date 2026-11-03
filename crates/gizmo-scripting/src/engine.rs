@@ -664,6 +664,33 @@ impl ScriptEngine {
         dt: f32,
         properties: &std::collections::BTreeMap<String, ScriptValue>,
     ) -> Result<(), String> {
+        self.call_entity_update(None, entity_id, script_path, dt, properties)
+    }
+
+    /// [`update_entity`](Self::update_entity) with the world in reach, as `on_update` has it:
+    /// `entity.spawn` returns the new id and `physics.ground_at` answers. Without the world —
+    /// `update_entity` — those two are `nil`, which is what an entity script had until
+    /// 2026-11-04: a door script could not spawn the key it dropped and name it afterwards.
+    /// The play loop calls this one.
+    pub fn update_entity_in(
+        &mut self,
+        world: &World,
+        entity_id: u32,
+        script_path: &str,
+        dt: f32,
+        properties: &std::collections::BTreeMap<String, ScriptValue>,
+    ) -> Result<(), String> {
+        self.call_entity_update(Some(world), entity_id, script_path, dt, properties)
+    }
+
+    fn call_entity_update(
+        &mut self,
+        world: Option<&World>,
+        entity_id: u32,
+        script_path: &str,
+        dt: f32,
+        properties: &std::collections::BTreeMap<String, ScriptValue>,
+    ) -> Result<(), String> {
         if let Some((_, key)) = self.loaded_scripts.get(script_path) {
             let env: mlua::Table = self.lua.registry_value(key).map_err(|e| e.to_string())?;
 
@@ -679,7 +706,15 @@ impl ScriptEngine {
                     set.map_err(|e| e.to_string())?;
                 }
                 self.arm_budget();
-                func.call::<()>((entity_id, dt, props)).map_err(|e| {
+                let call = || func.call::<()>((entity_id, dt, props));
+                let result = match world {
+                    Some(world) => {
+                        let (lua, queue) = (&self.lua, &self.command_queue);
+                        api_physics::with_call_time_queries(lua, world, || api_entity::with_spawn_ids(lua, world, queue, call))
+                    }
+                    None => call(),
+                };
+                result.map_err(|e| {
                     warn!(entity_id, script_path, error = %e, "[Scripting] on_entity_update çalışma-zamanı hatası");
                     format!(
                         "Lua on_entity_update hatası (entity {} mod {}): {}",
@@ -1191,6 +1226,24 @@ mod tests {
             world.borrow::<gizmo_core::component::MeshSource>().get(id).map(|m| m.0.clone()).as_deref(),
             Some("sphere")
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// An entity script spawns with an id too, when the play loop hands it the world; without
+    /// the world (`update_entity`) the call is the plain one and returns nil.
+    #[test]
+    fn an_entity_script_spawns_with_an_id_when_given_the_world() {
+        let (mut engine, path, dir) = engine_with(
+            "entity_spawn",
+            "function on_entity_update(id, dt, props)\n  got = entity.spawn('anahtar', 0, 0, 0)\nend\n",
+        );
+        let mut world = World::new();
+        engine.update_entity(7, &path, 0.016, &Default::default()).unwrap();
+        assert_eq!(engine.get_global(&path, "got"), None, "without the world there is no id to give");
+        engine.update_entity_in(&world, 7, &path, 0.016, &Default::default()).unwrap();
+        engine.flush_commands(&mut world, 0.016);
+        let Some(ScriptValue::Num(id)) = engine.get_global(&path, "got") else { panic!("no id from on_entity_update") };
+        assert_eq!(world.borrow::<gizmo_core::EntityName>().get(id as u32).map(|n| n.0.clone()).as_deref(), Some("anahtar"));
         std::fs::remove_dir_all(&dir).ok();
     }
 

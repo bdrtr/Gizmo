@@ -1276,7 +1276,8 @@ whose logic is a script. Four gaps, all closed:
 - ~~**The host could not read a script's values**~~ — `get_global` / `set_global`.
 - ~~**A script could only come from a file**~~ — `load_script_source`.
 
-Left: `on_entity_update` runs without the world, so `spawn` there still returns `nil`.
+~~Left: `on_entity_update` ran without the world, so `spawn` there returned `nil`~~ — closed the
+same night: `update_entity_in` gives it the world, and the play loop calls that.
 
 ### C16t. The twenty-fourth game: a landscape (2026-11-04, `golf`)
 
