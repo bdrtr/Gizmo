@@ -31,6 +31,10 @@
 //! ölçüm de belirli bir yapının çözümü de doğru; fazlalık bu kafesin dört sabit düğümünden
 //! (aşırı belirli yapı). Oyun eşiği buna göre ayarlı (30 kN).
 //!
+//! *Sonradan bulundu (2026-11-04, `golf`'tan sonra):* kirişlerin yük altında kızarması hiç
+//! görünmüyordu. Renk `MaterialDesc` ile değişiyordu ve motor her kare açıklamayı malzemeden
+//! yeniden yazıyordu. **Düzeltildi:** düzenlenen açıklama malzemeye geçiyor.
+//!
 //! ## Ortam değişkenleri
 //!   * `KOPRU_OTO=1` — hazır bir kafes köprüyü kurup dener (ekran görüntüsü için)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu

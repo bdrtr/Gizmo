@@ -150,6 +150,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **Editing a `MaterialDesc` at run time recolours the object.** The per-frame sync rebuilt every
+  description from its live `Material`, so a game that recoloured through the description — `kapi`'s
+  plate lamps, `kopru`'s beams going red under load — had the edit undone before it was drawn: those
+  two features never showed, and nothing said so. The sync now tells which side was edited (a
+  hidden copy of the description as it last left it) and carries the edit the other way: an edited
+  description is drawn, an edited material is saved. A description naming a new texture drops the
+  material so it is rebuilt with that texture. GPU-tested both ways and for the texture; the edited-
+  description test failed before the fix.
 - **`golf`, the twenty-fourth game** — three holes on a generated hilly course, built in memory
   from `terrain_triangles` and `terrain_collider`; `golf --test` plays them with an AI and checks
   the ball never sinks into the ground. It found the terrain item below.

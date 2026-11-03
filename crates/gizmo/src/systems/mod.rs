@@ -67,3 +67,8 @@ pub use streaming::*;
 #[cfg(all(feature = "render", feature = "physics"))]
 pub use terrain::*;
 pub use transform::*;
+
+// GPU-tested: a material edited at run time keeps the edit, in either direction. Outside
+// `render/` because `render_parity` reads that directory as the game draw path.
+#[cfg(all(test, feature = "render"))]
+mod material_edit_tests;

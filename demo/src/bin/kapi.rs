@@ -25,6 +25,9 @@
 //! Gerisi ilk denemede çalıştı: kapılar `KinematicTarget` ile inip çıkıyor, plakadaki sandıkları
 //! `PhysicsWorld::overlap_shape` buluyor, sandıklar `lock_rotation` ile dönmüyor.
 //!
+//! *Sonradan bulundu (2026-11-04):* plaka lambası basılınca yanmıyordu — renk `MaterialDesc` ile
+//! değişiyordu ve motor her kare açıklamayı malzemeden yeniden yazıyordu. **Düzeltildi.**
+//!
 //! ## Ortam değişkenleri
 //!   * `KAPI_OTO=1` — oyunu kendisi çözer (sınama ve ekran görüntüsü için)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu

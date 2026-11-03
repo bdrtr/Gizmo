@@ -4,8 +4,10 @@
 //! `Material` owns an `Arc<wgpu::BindGroup>`, so it cannot be written to a file; `MaterialDesc` is
 //! everything else it is. Two passes, one each way:
 //!
-//! - [`sync_material_descriptions`] writes a description for every live material, so a save has
-//!   something to write. Needs no GPU.
+//! - [`sync_material_descriptions`] keeps a live material and its description saying the same
+//!   thing — the description follows an edited material (so a save writes what is on screen), and
+//!   the material follows an edited description (so the screen shows what the game wrote). Needs
+//!   no GPU.
 //! - [`resolve_material_descriptions`] builds a material for every description that has none, so a
 //!   load produces something to draw. Needs the renderer, because building a bind group is what it
 //!   is for.
@@ -20,7 +22,9 @@
 //!
 //! **Every entity with a material carries a description too.** That is one small struct per
 //! entity — not per *material*, since materials are shared by `Arc` while the component is not —
-//! so a ten-thousand-entity scene pays roughly a megabyte for the ability to save it. The
+//! so a ten-thousand-entity scene pays roughly a megabyte for the ability to save it — two since
+//! 2026-11-04, when a hidden copy of the last synced description joined it to tell which side a
+//! game edited. The
 //! alternative was to build descriptions only when a save is about to happen, which puts the
 //! knowledge in every caller that saves (two of them today, and the day there are three is the day
 //! one of them forgets). The per-frame pass costs a struct compare per material and writes
@@ -34,40 +38,106 @@
 use crate::components::{Material, MaterialDesc};
 use gizmo_core::world::World;
 
-/// Give every entity that has a [`Material`] an up-to-date [`MaterialDesc`], so a save can write
-/// it.
+/// The description as this pass last left it — what tells "the game edited the description" from
+/// "the game edited the material", since after either edit the two simply differ.
+#[derive(Clone)]
+struct SyncedDesc(MaterialDesc);
+impl gizmo_core::component::Component for SyncedDesc {}
+
+/// What [`sync_material_descriptions`] does for one entity.
+#[derive(Debug, PartialEq)]
+enum Sync {
+    /// Nothing changed.
+    Nothing,
+    /// The material is newer: write its description (and remember it).
+    TakeMaterial(MaterialDesc),
+    /// The description is newer: draw with it (and remember it).
+    TakeDescription(MaterialDesc),
+}
+
+/// Decides one entity: `material` is the description of its live material, `desc` its stored
+/// description, `synced` what this pass last left there.
 ///
-/// Runs per frame from both draw paths. The cost is one comparison per material — the description
-/// is built and compared against the stored one, and written only when they differ — so a scene
-/// whose materials are not being edited pays a struct compare and nothing else.
+/// A description that differs from the last synced one was edited by the game, and wins — even
+/// if the material was edited in the same frame. Otherwise a material that differs from its
+/// description was edited, and its description follows.
+fn decide(material: &MaterialDesc, desc: Option<&MaterialDesc>, synced: Option<&MaterialDesc>) -> Sync {
+    match (desc, synced) {
+        (Some(d), Some(s)) if d != s => Sync::TakeDescription(d.clone()),
+        (Some(d), _) if d == material => match synced {
+            Some(s) if s == d => Sync::Nothing,
+            _ => Sync::TakeMaterial(material.clone()),
+        },
+        _ => Sync::TakeMaterial(material.clone()),
+    }
+}
+
+/// Keep every entity's [`Material`] and [`MaterialDesc`] saying the same thing, **in whichever
+/// direction the game changed them**.
 ///
-/// A `Material` an entity never had a description for gets one on the first frame it is seen,
-/// which is what makes materials built in code (`Material::new`, the glTF loader, the editor's
-/// ➕ menu) saveable without any of them knowing about descriptions.
+/// Runs per frame from both draw paths. An entity with a material and no description gets one
+/// (which is what makes materials built in code — `Material::new`, the glTF loader, the editor's
+/// ➕ menu — saveable without any of them knowing about descriptions). After that:
+///
+/// - a game that edits the **material** (`kale`, `ritim`) has its description follow, so a save
+///   writes what is on screen;
+/// - a game that edits the **description** (`kapi`'s plate lamps, `kopru`'s beam loads) has the
+///   material follow, so the screen shows what it wrote. Until 2026-11-04 this direction did not
+///   exist: the pass rebuilt the description from the material every frame, and the edit was
+///   undone before it was ever drawn — two games' colour changes never showed, silently. A
+///   description whose `texture_source` changed cannot be applied without the GPU, so its
+///   material is removed and [`resolve_material_descriptions`] builds it again next frame.
+///
+/// Which side was edited is told by a hidden copy of the description as this pass last left it.
+/// The cost is that copy per material and a comparison or two per frame.
 pub fn sync_material_descriptions(world: &mut World) {
-    let mut wanted: Vec<(u32, MaterialDesc)> = Vec::new();
+    let mut decided: Vec<(u32, Sync)> = Vec::new();
     {
         let materials = world.borrow::<Material>();
         let descs = world.borrow::<MaterialDesc>();
+        let synced = world.borrow::<SyncedDesc>();
         for (entity, material) in materials.iter() {
-            let desc = MaterialDesc::from(material);
-            match descs.get(entity) {
-                Some(existing) if *existing == desc => {}
-                _ => wanted.push((entity, desc)),
+            let live = MaterialDesc::from(material);
+            match decide(&live, descs.get(entity), synced.get(entity).map(|s| &s.0)) {
+                Sync::Nothing => {}
+                other => decided.push((entity, other)),
             }
         }
     }
-    if wanted.is_empty() {
+    if decided.is_empty() {
         return;
     }
 
-    let count = wanted.len();
-    for (entity, desc) in wanted {
-        if let Some(e) = world.get_entity(entity) {
-            world.add_component(e, desc);
+    let count = decided.len();
+    for (entity, what) in decided {
+        let Some(e) = world.get_entity(entity) else { continue };
+        match what {
+            Sync::Nothing => {}
+            Sync::TakeMaterial(desc) => {
+                world.add_component(e, SyncedDesc(desc.clone()));
+                world.add_component(e, desc);
+            }
+            Sync::TakeDescription(desc) => {
+                let rebuilt = {
+                    let mut materials = world.borrow_mut::<Material>();
+                    match materials.get_mut(entity) {
+                        Some(mut m) if m.texture_source == desc.texture_source => {
+                            *m = desc.clone().into_material(m.bind_group.clone());
+                            true
+                        }
+                        _ => false,
+                    }
+                };
+                if !rebuilt {
+                    // A new texture needs a new bind group, which needs the GPU: let the resolve
+                    // pass build the material from the description.
+                    world.remove_component::<Material>(e);
+                }
+                world.add_component(e, SyncedDesc(desc));
+            }
         }
     }
-    tracing::debug!(count, "[Material] descriptions refreshed for saving");
+    tracing::debug!(count, "[Material] material and description brought together");
 }
 
 /// Build a [`Material`] for every entity that carries a [`MaterialDesc`] and no material — which
@@ -174,3 +244,44 @@ mod tests {
         assert_eq!(back.texture_source, None);
     }
 }
+
+#[cfg(test)]
+mod decide_tests {
+    use super::{decide, Sync};
+    use crate::components::MaterialDesc;
+
+    fn red() -> MaterialDesc {
+        MaterialDesc { albedo: gizmo_math::Vec4::new(1.0, 0.0, 0.0, 1.0), ..Default::default() }
+    }
+    fn green() -> MaterialDesc {
+        MaterialDesc { albedo: gizmo_math::Vec4::new(0.0, 1.0, 0.0, 1.0), ..Default::default() }
+    }
+
+    #[test]
+    fn a_new_material_gets_its_description() {
+        assert_eq!(decide(&red(), None, None), Sync::TakeMaterial(red()));
+    }
+
+    #[test]
+    fn nothing_changed_is_nothing() {
+        assert_eq!(decide(&red(), Some(&red()), Some(&red())), Sync::Nothing);
+    }
+
+    #[test]
+    fn an_edited_description_wins() {
+        assert_eq!(decide(&red(), Some(&green()), Some(&red())), Sync::TakeDescription(green()));
+    }
+
+    #[test]
+    fn an_edited_material_wins() {
+        assert_eq!(decide(&green(), Some(&red()), Some(&red())), Sync::TakeMaterial(green()));
+    }
+
+    /// A description loaded with a scene and a material resolved from it agree but were never
+    /// synced: remember them, nothing to apply.
+    #[test]
+    fn a_resolved_pair_is_remembered() {
+        assert_eq!(decide(&red(), Some(&red()), None), Sync::TakeMaterial(red()));
+    }
+}
+
