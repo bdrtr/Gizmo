@@ -150,6 +150,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **The reference `server/` speaks the protocol a client can reconcile against.** It applied no
+  input, sent `InputAck` reliably and an entity-keyed `WorldStateUpdate` unreliably — the shape
+  `kovala` showed a client cannot use. It now moves players by their inputs (a documented
+  reference step), sends each client `PlayerState`, keys `WorldStateUpdate` by client id, and goes
+  through `gizmo-net`'s own codec and `send`/`receive` (its private bincode copy is gone). The
+  netcode docs that said nothing in the repository drove the client half now point at `kovala`.
 - **`arazi`, the thirtieth game** — a checkpoint race over generated hills: the vehicle model on
   the heightfield terrain, the first time the two met. `arazi --test` lets an autopilot drive two
   minutes headlessly — all five checkpoints, the body never closer than 0.66 m to the ground. It

@@ -6,8 +6,8 @@
 /// Owning both halves together is the point — updating the transport without flushing it, or
 /// the reverse, is the usual way a renet integration ends up silently sending nothing.
 ///
-/// No in-repo binary uses this: `server/src/main.rs` is the only reference integration and it
-/// drives the server half. Applications supply their own client loop.
+/// In the repository: `server/src/main.rs` is a headless reference server, and
+/// `demo/src/bin/kovala.rs` a game with both halves — predicted clients, an authoritative server.
 pub mod client;
 pub mod error;
 pub mod interpolation;

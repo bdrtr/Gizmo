@@ -14,8 +14,4 @@ gizmo-physics-core = { path = "../crates/gizmo-physics-core" }
 gizmo-physics-rigid = { path = "../crates/gizmo-physics-rigid" }
 gizmo-net = { path = "../crates/gizmo-net", features = ["client-server"] }
 renet = "2.0.0"
-serde = { version = "1.0", features = ["derive"] }
-# 2.x with `config::legacy()` — see `server/src/main.rs`. The legacy config keeps the bytes
-# identical to bincode 1's, which matters here because this server talks to clients built from
-# `gizmo-net`'s `client_server` protocol and the two must agree.
-bincode = { version = "2", features = ["serde"] }
+# The wire format is `gizmo-net`'s own (`ClientMessage::encode` and friends) — no serializer here.

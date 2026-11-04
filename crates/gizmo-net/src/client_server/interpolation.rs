@@ -3,10 +3,9 @@
 //! Interpolates (lerp/slerp) between past server snapshots so that the position/rotation data
 //! arriving over the network for other players can be displayed smoothly.
 //!
-//! Nothing in this repository drives this yet — `server/src/main.rs` is the only reference
-//! integration and it is server-side only. The buffer's behaviour is therefore pinned by this
-//! module's unit tests rather than by a live client, so treat it as a library surface for
-//! applications to wire up, not as a path the engine's own demos exercise.
+//! `demo/src/bin/kovala.rs` drives it for the other players, and its headless test measures the
+//! result (another runner seen at most 0.58 m behind at 100 ms delay and 5 m/s); this module's
+//! unit tests pin the buffer's behaviour.
 
 use std::collections::VecDeque;
 

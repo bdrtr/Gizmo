@@ -5523,14 +5523,12 @@ dependencies = [
 name = "server"
 version = "0.10.0"
 dependencies = [
- "bincode",
  "gizmo-core",
  "gizmo-math",
  "gizmo-net",
  "gizmo-physics-core",
  "gizmo-physics-rigid",
  "renet",
- "serde",
 ]
 
 [[package]]

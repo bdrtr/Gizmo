@@ -2,11 +2,10 @@
 //! side sends, the channel table those messages are routed over, and the tick-comparison rule
 //! everything downstream depends on.
 //!
-//! The types here only derive `serde` — framing is the caller's choice. The reference server
-//! (`server/src/main.rs`) and this module's tests use `bincode`, so both ends of a session must
-//! agree on that too; [`PROTOCOL_ID`] gates the netcode handshake, not the payload encoding, so
-//! an encoding mismatch surfaces as messages that quietly fail to decode on a connection that
-//! came up fine.
+//! The encoding is this module's: [`ClientMessage::encode`] / [`ServerMessage::decode`] and their
+//! pairs, bincode's `legacy()` layout, used by `NetworkServer`/`NetworkClient`'s `send` and
+//! `receive`. (Until 2026-11-04 the types only derived `serde` and the framing was every caller's
+//! own choice.) [`PROTOCOL_ID`] gates the netcode handshake, not the payload encoding.
 //!
 //! Ticks are `u32` counters, not times, and are expected to wrap. Never order them with
 //! `<`/`>`; use [`tick_is_newer`].
