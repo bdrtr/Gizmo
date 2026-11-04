@@ -84,6 +84,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A soft body is drawn (`soft_body_mesh_system`).** A `SoftBodyMesh` in the world was stepped
   and drawn as nothing but debug lines. Both draw paths now give it the mesh of its surface,
   outward, normals smoothed over the nodes, and a renderer and material the first time.
+- **`topcu`, the thirty-third game** — a cannon that throws a ragdoll at rings on the ground; the
+  first game of ragdolls. `topcu --test` fires one ballistic shot headlessly and checks the
+  ragdoll is born whole, holds together through the flight and the landing (joints at most 6 mm
+  apart), lands near the target and comes to rest. It found the humanoid item under Fixed.
 - **`jole`, the thirty-second game** — a tower of jelly blocks dropped from a swinging crane; the
   first game of soft bodies. `jole --test` drops four headlessly and checks the tower stands. It
   found the soft-body items above, and one more: three jellies a few centimetres off centre blew

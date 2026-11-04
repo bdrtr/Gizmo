@@ -1262,6 +1262,18 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16ac. The thirty-third game: a ragdoll in flight (2026-11-04, `topcu`)
+
+`demo/src/bin/topcu.rs` is a cannon that throws a ragdoll (`RagdollBuilder::create_humanoid`) at
+rings on the ground; where it comes to rest scores. `topcu --test` opens no window: one ballistic
+shot at 40°, 14.9 m/s — lands 1.3 m short of the 25 m target, tumbles 8.6 m on, at rest
+(0.07 m/s) within eight seconds; joints at most 6 mm apart in flight and impact. One gap, closed:
+
+- ~~**The stock humanoid was born apart**~~ — nine of ten joints open at spawn (the shoulders by
+  18 cm), the lower arms inside the torso: every ragdoll snapped and kicked on its first step, and
+  the one in the barrel shook before it flew. Each bone now sits where its joint's anchors meet;
+  `spawn_ragdoll` warns about one that does not (`tests/ragdoll_spawn.rs`).
+
 ### C16ab. The thirty-second game: soft solids (2026-11-04, `jole`)
 
 `demo/src/bin/jole.rs` is a tower of jelly blocks dropped from a swinging crane — `SoftBodyMesh`
