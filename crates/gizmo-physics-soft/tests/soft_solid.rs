@@ -147,3 +147,28 @@ fn a_node_leaving_the_floor_is_not_held_on_it() {
     assert!(out.impact.is_none(), "a node rising off the floor was taken as hitting it: {out:?}");
     assert_eq!(out.velocity, up);
 }
+
+/// Three blocks dropped a few centimetres off centre onto each other do not blow up.
+///
+/// A push that moved a node out of another body in one go stretched its elements so hard that the
+/// next explicit step blew the stack apart — measured in exactly this scene (1 × 0.7 × 1 m, 8 kg,
+/// dropped 1.6 m), nodes at thousands of m/s within two seconds of the third landing in a release
+/// build, 40 m/s in this debug one. A push is at most 5 mm now, the rest taken over the next
+/// sub-steps; the fastest node is then the 6 m/s of the drop itself.
+#[test]
+fn an_off_centre_stack_does_not_blow_up() {
+    let mut world = floor_world();
+    let mut fastest_seen = 0.0f32;
+    for frame in 0..480 {
+        if frame % 150 == 0 && frame < 450 {
+            let top = world.borrow::<SoftBodyMesh>().iter().map(|(_, b)| span_y(b).1).fold(0.0, f32::max);
+            let dx = [0.05f32, -0.04, 0.03][frame / 150];
+            let mut b = SoftBodyMesh::block(Vec3::new(-0.5 + dx, top + 1.6, -0.5), Vec3::new(1.0, 0.7, 1.0), [2, 2, 2], 8.0, 15_000.0, 0.3).unwrap();
+            b.damping = 0.4;
+            world.spawn_bundle((b,));
+        }
+        run(&world, DT);
+        fastest_seen = fastest_seen.max(world.borrow::<SoftBodyMesh>().iter().map(|(_, b)| fastest(b)).fold(0.0, f32::max));
+    }
+    assert!(fastest_seen < 15.0, "the stack blew up: a node reached {fastest_seen:.0} m/s");
+}

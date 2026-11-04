@@ -94,6 +94,9 @@ fn barycentric(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Option<[f32; 3]> {
 /// a multiple of that push.
 const FRICTION: f32 = 0.6;
 
+/// The furthest one call moves a node out of another body, metres.
+const MAX_PUSH: f32 = 0.005;
+
 /// How much deeper than the shallowest a way out may be and still be chosen for the node's motion.
 const TIE: f32 = 0.005;
 
@@ -196,8 +199,14 @@ fn push_out(a: &mut SoftBodyMesh, a_faces: &[[u32; 3]], b: &mut SoftBodyMesh) ->
             let (fa, fb, fc) = (a.nodes[face[0] as usize].position, a.nodes[face[1] as usize].position, a.nodes[face[2] as usize].position);
             eprintln!("  node {j} p {p:.3} -> q {q:.3} depth {:.4} n {:.2} v {:.3}", (q - p).length(), (fb - fa).cross(fc - fa).normalize_or_zero(), b.nodes[j].velocity);
         }
-        // Position: the node and the triangle meet at the surface, each moving by its share.
-        let d = q - p;
+        // Position: the node and the triangle move toward meeting at the surface, each by its
+        // share — but by at most `MAX_PUSH` a call. A soft body is integrated explicitly, and a
+        // node shoved further than that in one go stretched its elements so hard that the next
+        // step blew the stack apart (measured: three jellies dropped 4 cm off centre, nodes at
+        // 3800 m/s two seconds in; with the push left out entirely, none). The rest of a deep
+        // overlap is taken out over the following sub-steps, the velocity response below
+        // stopping it from growing meanwhile.
+        let d = (q - p).clamp_length_max(MAX_PUSH);
         b.nodes[j].position += d * (wn / total);
         for k in 0..3 {
             a.nodes[corners[k]].position -= d * (bary[k] * wf[k] / total);
