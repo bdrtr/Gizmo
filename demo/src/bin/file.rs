@@ -20,9 +20,10 @@
 //! - **Kumaşın sönümü sabitti ve neredeyse yoktu** (saniyede %1). Fileye düşen meyve geldiği
 //!   hızla zıplamaya devam ediyordu. **Düzeltildi:** `Cloth::damping` (bu file `0.05`).
 //!
-//! *Açık, ölçülmüş:* sönümlü filede bile yatan meyve ~5 cm inip kalkıyor — bağlaşımın kendi küçük
-//! döngüsü (gövde ile düğüm bir dürtüyü aynı çözümde paylaşmıyor). Yakalama bu yüzden hıza değil
-//! konuma bakıyor.
+//! *Açık sandığımız, açık olmayan:* filede yatan meyve dördüncü saniyede hâlâ ~5 cm inip kalkıyor
+//! ve bu "bağlaşımın kendi döngüsü" diye yazılmıştı. On beş saniye ölçülünce (2026-11-04) sönüyor:
+//! yavaş sönen bir ~2 Hz zıplama, onuncu saniyede 2 mm, on üçüncüde sıfır. Yakalama yine de konuma
+//! bakıyor, çünkü meyve o birkaç saniye boyunca hareket ediyor.
 
 use gizmo::core::input::Input;
 use gizmo::physics::cloth::Cloth;
@@ -96,8 +97,8 @@ fn spawn_fruit(world: &mut World, at: Vec3, visual: bool) {
 }
 
 /// Meyvelerin hesabı: filenin bandında bir buçuk saniye kalan yakalanır, yere inen kaçar.
-/// `(yakalanan, kaçan)`. Hıza değil konuma bakılır: filede yatan bir meyvenin hızı, rijit adımla
-/// kumaşın geri itişi arasında her kare ~0,2 m/s titrer.
+/// `(yakalanan, kaçan)`. Hıza değil konuma bakılır: fileye düşen meyve birkaç saniye zıplar
+/// (yavaş sönen bir salınım) ve hızı o sürede sıfıra yakın değildir.
 fn settle(world: &mut World, dt: f32) -> (u32, u32) {
     let fruits: Vec<(u32, Vec3, f32)> = {
         let f = world.borrow::<Fruit>();

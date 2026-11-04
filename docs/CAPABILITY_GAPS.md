@@ -1300,15 +1300,17 @@ and one left open:
 
 - ~~**Cloth damping was hard-coded and next to none**~~ (1 % a second) — a fruit kept bouncing at
   its arrival speed. `Cloth::damping` (the net uses `0.05`).
-- **Open, measured:** a fruit lying in the damped net still rises and falls ~5 cm, and its velocity
-  flickers ~0.2 m/s a frame — the coupling's own limit cycle (rigid step and cloth step answer each
-  other a frame apart rather than sharing one impulse). The game counts a catch by position for it.
-  *Tried and not kept (2026-11-04):* also paying the body for the projection's displacement
-  (`−m·Δx/sub_dt`) cuts the undamped range from 19 cm to 3.4 cm — but the velocity term already
-  carries the node's whole normal momentum change (its final normal velocity is the body's), so
-  this counts it twice and holds the body up with momentum that came from nowhere. It also made
-  damping stop mattering. The fix the cycle wants is the rigid step and the cloth step sharing one
-  solve, not a second impulse.
+- ~~**Open, measured:** a fruit lying in the damped net still rises and falls ~5 cm — "the
+  coupling's own limit cycle"~~ — **misdiagnosed, measured 2026-11-04.** The 5 cm was the fourth
+  second only. Over fifteen seconds the ball's per-second height range on the test hammock at
+  `0.05` goes 19.4, 12.2, 4.6, 3.2, 1.6 … 0.2 (tenth second), 0.0 cm (thirteenth): a slowly
+  damped ~2 Hz bounce, not a cycle, and at `0.99` it decays too (19 → 7 cm by the fifteenth).
+  Two fixes were tried for a cycle that was not there, and neither is kept: paying the body for
+  the projection's displacement (`−m·Δx/sub_dt`, counts the node's momentum twice), and letting
+  each node's impulse update the body's velocity inside the cloth sub-steps (made it *worse*:
+  4.6 → 7.5 cm in the fourth second at `0.05`, because the collider still does not move within
+  the step, so a body seen rising keeps being met by nodes the projection pushes back down).
+  `a_damped_hammock_settles_the_ball` now asserts rest in the tenth second.
 
 ### C16w. The twenty-seventh game: cloth (2026-11-04, `makas`)
 

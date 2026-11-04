@@ -222,9 +222,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`Cloth::damping`** — the share of its velocity a node keeps over a second; `0.99` (the old
   hard-coded value, still the default, so nothing changes) is next to none. With the cloth pushing
   bodies back an undamped cloth is a trampoline; measured, a ball's height in the fourth second on
-  a hammock ranges over 19 cm at `0.99` and 4.6 cm at `0.05`. About 5 cm remain even at `0.01` —
-  a small limit cycle of the coupling itself (the node and the body do not share one impulse inside
-  the solve), recorded as open. Tested; hard-coding `0.99` again fails it.
+  a hammock ranges over 19 cm at `0.99` and 4.6 cm at `0.05`. At `0.05` the ball is at rest by the
+  tenth second (this entry said ~5 cm remained for good, "a limit cycle of the coupling" — that was
+  the fourth second, a slow bounce still decaying; measured over fifteen seconds 2026-11-04, and the
+  test now asserts rest in the tenth). Tested; hard-coding `0.99` again fails it.
 - **`file`, the twenty-eighth game** — catch falling fruit in a net you slide along; the net is a
   `Cloth`, the fruit rigid bodies it holds. `file --test` drops ten on a still net headlessly and
   checks all ten are caught. It found the damping item above.
