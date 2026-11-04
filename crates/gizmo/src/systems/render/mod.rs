@@ -530,6 +530,9 @@ fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // below so the mesh it adds gets its `GlobalTransform` on the same frame.
     #[cfg(feature = "physics")]
     crate::systems::terrain::terrain_mesh_system(world, renderer);
+    // A `Cloth` component's mesh, from where its nodes are now (it was never drawn).
+    #[cfg(feature = "physics-soft")]
+    crate::systems::cloth::cloth_mesh_system(world);
 
     // **Tweens first**, on the animation clock (so time scale and pause apply), and before the
     // transform pass below so a tweened `Transform` is drawn where it is this frame.

@@ -269,6 +269,9 @@ pub struct Cloth {
     /// Tearing: a constraint whose length exceeds `rest_length * tear_factor` is removed
     /// (the cloth rips there). `f32::INFINITY` (the default) disables tearing.
     pub tear_factor: f32,
+    /// The grid the nodes were laid out on, `(width, height)` — what turns `nodes` back into a
+    /// surface ([`surface_triangles`](Self::surface_triangles)).
+    grid: (usize, usize),
 }
 
 impl Cloth {
@@ -361,7 +364,45 @@ impl Cloth {
             thickness: 0.02,
             friction: 0.5,
             tear_factor: f32::INFINITY,
+            grid: (width, height),
         }
+    }
+
+    /// The `(width, height)` the cloth was built with: node `(x, y)` is `nodes[y * width + x]`.
+    pub fn grid_size(&self) -> (usize, usize) {
+        self.grid
+    }
+
+    /// The cloth's surface as node-index triangles, two per grid cell — **only the cells that are
+    /// still whole**, all four sides' structural links present, so a tear shows as a hole.
+    ///
+    /// Wound counter-clockwise seen from −Z in the cloth's starting (XY) layout; a drawer that
+    /// wants both faces emits each triangle twice. This is what makes a `Cloth` component
+    /// drawable at all: the nodes alone say where the cloth is, not which of them form its
+    /// surface, and the grid's width was not kept anywhere until 2026-11-04.
+    pub fn surface_triangles(&self) -> Vec<[usize; 3]> {
+        let (w, h) = self.grid;
+        if w < 2 || h < 2 || self.nodes.len() != w * h {
+            return Vec::new();
+        }
+        let links: std::collections::HashSet<(usize, usize)> = self
+            .constraints
+            .iter()
+            .map(|c| (c.node_a.min(c.node_b), c.node_a.max(c.node_b)))
+            .collect();
+        let linked = |a: usize, b: usize| links.contains(&(a.min(b), a.max(b)));
+        let mut out = Vec::with_capacity((w - 1) * (h - 1) * 2);
+        for y in 0..h - 1 {
+            for x in 0..w - 1 {
+                let (a, b) = (y * w + x, y * w + x + 1);
+                let (c, d) = (a + w, b + w);
+                if linked(a, b) && linked(c, d) && linked(a, c) && linked(b, d) {
+                    out.push([a, c, b]);
+                    out.push([b, c, d]);
+                }
+            }
+        }
+        out
     }
 
     /// Pins the node at `idx` so it becomes immovable (no-op if out of range).
@@ -1218,3 +1259,25 @@ mod tests {
         assert_eq!(a, b, "identical cloths must evolve identically");
     }
 }
+
+#[cfg(test)]
+mod surface_tests {
+    use super::Cloth;
+
+    #[test]
+    fn a_whole_cloth_is_two_triangles_a_cell() {
+        let c = Cloth::new(4, 3, 0.5, 1.0);
+        assert_eq!(c.grid_size(), (4, 3));
+        assert_eq!(c.surface_triangles().len(), 3 * 2 * 2);
+    }
+
+    /// Cutting one structural link opens the cells on both sides of it.
+    #[test]
+    fn a_tear_is_a_hole() {
+        let mut c = Cloth::new(4, 3, 0.5, 1.0);
+        // The vertical link between node (1, 0) and (1, 1): shared by cells (0, 0) and (1, 0).
+        c.constraints.retain(|k| !((k.node_a == 5 && k.node_b == 1) || (k.node_a == 1 && k.node_b == 5)));
+        assert_eq!(c.surface_triangles().len(), (6 - 2) * 2);
+    }
+}
+

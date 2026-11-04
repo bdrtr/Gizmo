@@ -523,6 +523,8 @@ pub fn render_studio(
     // reopened as an entity that says it is a terrain and draws nothing. The engine's own frame
     // runs the same system, which is what makes the exported game agree with this viewport.
     gizmo::systems::terrain::terrain_mesh_system(world, renderer);
+    // And a `Cloth`'s mesh, as the game's frame draws it.
+    gizmo::systems::cloth::cloth_mesh_system(world);
 
     render_pipeline::execute_render_pipeline(world, state, encoder, view, renderer, light_time);
 }

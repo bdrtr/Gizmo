@@ -72,3 +72,9 @@ pub use transform::*;
 // `render/` because `render_parity` reads that directory as the game draw path.
 #[cfg(all(test, feature = "render"))]
 mod material_edit_tests;
+
+/// Drawing a `Cloth` component — the mesh its nodes make, every frame.
+#[cfg(all(feature = "render", feature = "physics-soft"))]
+pub mod cloth;
+#[cfg(all(feature = "render", feature = "physics-soft"))]
+pub use cloth::cloth_mesh_system;

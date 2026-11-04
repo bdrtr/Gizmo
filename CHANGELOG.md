@@ -150,6 +150,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **A `Cloth` component is drawn.** The physics step simulated every `Cloth` in the world and no
+  draw path knew the type; the cloth did not even keep the grid width that turns its nodes back
+  into a surface (`cloth_demo` kept its cloth outside the ECS and built its own GPU mesh in a
+  render hook). `Cloth::grid_size` and `Cloth::surface_triangles` (whole cells only, so a tear is
+  a hole) now, and `gizmo::systems::cloth_mesh_system` — called by both draw paths — writes both
+  faces of it as the entity's `MeshData` every frame, adding a renderer and a white material the
+  first time. Tested in the soft crate and the facade; drawing torn cells fails both.
 - **`karinca`, the twenty-sixth game** — an ant colony of 600 `NavAgent`s; walls the player drops
   re-route the whole colony on one frame. `karinca --test` runs 40 s headless. It found the two
   AI items below.
