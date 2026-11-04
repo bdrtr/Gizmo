@@ -150,6 +150,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **`Renderer::default_font()` and `gizmo::simple::set_text`** — the two helpers every game wrote.
+  33 demos carry the same `load_font` (the system font, else the synthetic face) and 16 the same
+  `set_text` (write a `Text`'s content only when it changed). Now one call each: `default_font`
+  cannot fail the setup, `set_text` returns whether it wrote. The demos keep their copies; new
+  games use these. Tested (the font on the GPU path).
 - **Agents walk straight lines, not staircases (`NavGrid::find_smooth_path`, `smooth_path`).**
   Routes were raw 8-connected cell centres, so an agent sent anywhere off a row, a column or an
   exact diagonal walked a staircase: on an open grid from (0.5, 0.5) to (9.5, 3.5), 9 waypoints and

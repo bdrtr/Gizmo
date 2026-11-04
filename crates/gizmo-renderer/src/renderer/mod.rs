@@ -501,6 +501,26 @@ impl Renderer {
         }
     }
 
+    /// A font that is always there: the machine's ([`load_system_font`](Self::load_system_font)
+    /// — `GIZMO_FONT`, then the platform's usual faces), else the engine's synthetic face, which
+    /// has the ASCII shapes and nothing more. What 33 of the demos' setups wrote out by hand, as
+    /// one call that cannot fail the setup.
+    ///
+    /// Call it once and keep the id: each call loads the face again.
+    pub fn default_font(&mut self) -> crate::text::FontId {
+        if let Ok(id) = self.load_system_font() {
+            return id;
+        }
+        match self.load_font(crate::text::synthetic::synthetic_face()) {
+            Ok(id) => id,
+            Err(e) => {
+                // Only a renderer built without a text system gets here; no constructor builds one.
+                tracing::error!(error = %e, "no font could be loaded at all; text will not draw");
+                crate::text::FontId(0)
+            }
+        }
+    }
+
     /// Adds a loaded face to the end of the font fallback chain: a character a `Text`'s own face
     /// does not cover — a symbol, an emoji, another script — is drawn from the first face in the
     /// chain that covers it. See [`FontLibrary::add_fallback`](crate::text::FontLibrary::add_fallback).

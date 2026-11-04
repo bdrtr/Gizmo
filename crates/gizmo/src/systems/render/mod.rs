@@ -4286,6 +4286,26 @@ mod golden_render_tests {
         let _ = std::fs::remove_file(path);
     }
 
+    /// `default_font` always gives a font a `Text` can use: the system's or, failing that, the
+    /// synthetic face.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn default_font_always_gives_a_usable_face() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let id = renderer.default_font();
+            let metrics = renderer.text.as_ref().unwrap().library().metrics(id, 100.0);
+            assert!(metrics.is_some_and(|m| m.ascent > 0.0), "the default font has no metrics");
+        });
+    }
+
     /// A `MeshData` replaced on an entity is uploaded again — the mesh follows the data, not the
     /// first frame's — and the uploads it no longer draws are released as it goes, so data
     /// rebuilt every frame (a vision cone) does not pile up. Emptied data removes the mesh.

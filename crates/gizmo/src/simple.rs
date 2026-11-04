@@ -547,6 +547,22 @@ pub fn simple_scene_update(
     sync_transforms(world);
 }
 
+/// Sets the content of the [`Text`](crate::renderer::components::Text) on entity `id` —
+/// **only if it differs**, so a HUD written every frame is laid out again only when it changes.
+/// Returns whether it changed. Nothing happens to an entity without a `Text`.
+///
+/// Sixteen of the demos carried this same function, which is the reason it is here.
+pub fn set_text(world: &mut World, id: u32, content: &str) -> bool {
+    let mut texts = world.borrow_mut::<crate::renderer::components::Text>();
+    match texts.get_mut(id) {
+        Some(mut t) if t.content != content => {
+            t.content = content.to_string();
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Copies physics poses into `Transform`s and propagates them down the hierarchy into
 /// `GlobalTransform` — the last job of [`simple_scene_update`], on its own.
 ///
@@ -1089,6 +1105,24 @@ mod fixed_physics_tests {
         let g = empty.get_resource::<PhysicsWorld>().map(|p| p.integrator.gravity);
         assert_eq!(g, Some(Vec3::new(0.0, -9.81, 0.0)));
         assert!(empty.get_resource::<AssetManager>().is_some());
+    }
+
+    /// `set_text` writes only a different content, says whether it did, and ignores an entity
+    /// without a `Text`.
+    #[test]
+    fn set_text_writes_only_a_change() {
+        use crate::renderer::components::{Text, TextAnchor};
+        let mut w = crate::core::World::new();
+        let font = crate::renderer::text::FontLibrary::default()
+            .load(crate::renderer::text::synthetic::synthetic_face())
+            .expect("the synthetic face parses");
+        let e = w.spawn();
+        w.add_component(e, Text::pinned("a", font, 12.0, TextAnchor::TopLeft, crate::math::Vec2::ZERO));
+        assert!(super::set_text(&mut w, e.id(), "b"));
+        assert!(!super::set_text(&mut w, e.id(), "b"), "the same content is not a change");
+        assert_eq!(w.borrow::<Text>().get(e.id()).unwrap().content, "b");
+        let bare = w.spawn();
+        assert!(!super::set_text(&mut w, bare.id(), "x"));
     }
 
     /// A simple scene has somewhere for debug lines to go, and a setup's own `Gizmos` survives.
