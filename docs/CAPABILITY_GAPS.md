@@ -1262,6 +1262,32 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16ag. The games as a gate (2026-11-04, `scripts/game-tests.py`)
+
+Fifteen games had a headless `--test` mode and no gate ran one; a CCD fix that day moved
+`robot`'s balls onto a path that exposed a 3 cm reach error, found only because the game was run
+by hand. `scripts/game-tests.py` now plays every demo with the mode — release, four at a time,
+no display (a binary that ignores the flag fails instead of opening a window), a fresh empty
+save directory each — in CI's determinism job and the local gate. The games without the mode are
+being given one, on `gizmo::simple::HeadlessFrames`: the game's own `setup` on a plain `World`,
+its own `update` with an empty `Input`, the deferred commands applied after every frame and the
+simple scene's defaults added, as the windowed loop does. So far `kapi`, `vinc`, `labirent`.
+What turning them into tests found:
+
+- ~~**A kinematic body driven once a frame moved in jerks.**~~ **Closed.** `KinematicTarget`
+  is reached in the next step, so a four-step frame made the whole move in its first step at four
+  times the speed. A ball on a board starting to tilt (surface rising at 1.8 m/s) was thrown up at
+  5.2 m/s; `FixedPhysics::advance` now spreads the target over the frame's steps: 1.74 m/s.
+- ~~**Two of `labirent`'s three levels could not be won.**~~ **Closed.** A hole is a whole
+  missing tile and a ball cannot roll across one; in levels 2 and 3 a hole cut every way to the
+  goal. Found by the autopilot's path search; the test now checks every level has a path.
+- ~~**`pinbol`'s ball could be stuck in the launch lane for good**~~ — rolled back in, it was
+  still counted as launched. **Closed.**
+- Not engine gaps, but what a headless loop must do: apply the deferred commands (fracture
+  despawns through them — `vinc` reported 0 pieces where 9 broke) and insert the scene's physics
+  world (`labirent`'s ball never moved). `HeadlessFrames` does both, so a game's test cannot
+  forget them.
+
 ### C16af. The thirty-sixth game: ropes taken and let go (2026-11-04, `sarmasik`)
 
 `demo/src/bin/sarmasik.rs` crosses a chasm on four ropes hanging from the ceiling: hang, pump,

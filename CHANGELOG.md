@@ -112,6 +112,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   loop. `HeadlessFrames::font()` gives HUD text a font with no renderer. The first headless test
   written as a bare loop skipped the command flush, and `vinc`'s shattered blocks were latched
   broken and never despawned — 0 pieces reported where 9 broke. `SimpleSceneState` is `Default`.
+- **`kapi`, `vinc` and `labirent` play themselves headlessly (`--test`).** `labirent`'s
+  autopilot now solves the maze — a path search around walls and holes, tilting toward the next
+  tile — and found that levels 2 and 3 could never be won: a hole cut every way to the goal. Each
+  lost one hole; the test also checks every level has a path. The autopilot's times are not saved
+  as records.
 - **The games are a gate (`scripts/game-tests.py`).** Every demo with a headless `--test` mode
   plays itself in release, four at a time, with no display in its environment — a binary that
   ignores the flag fails rather than opening a window. CI runs it in the determinism job; 15

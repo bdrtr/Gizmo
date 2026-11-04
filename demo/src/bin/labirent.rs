@@ -42,7 +42,9 @@
 //!   de CCD'yi kapatıyor; hızları ona gerek bırakmıyor.
 //!
 //! ## Ortam değişkenleri
-//!   * `LABIRENT_OTO=1` — tahtayı kendi kendine sağa eğer (ekran görüntüsü için)
+//!   * `LABIRENT_OTO=1` — labirenti kendisi çözer: duvarlardan ve deliklerden kaçan en kısa yolun
+//!     bir sonraki karesine doğru eğer (ekran görüntüsü için; `labirent --test` üç bölümü de
+//!     pencere açmadan böyle oynar). Otomatik pilotun süreleri rekor sayılmaz.
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::app::save::SaveData;
@@ -56,7 +58,7 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::screen_fade::ScreenFade;
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 
 const PHYSICS_HZ: u32 = 240;
 const MAX_TILT: f32 = 0.16; // ~9°
@@ -64,6 +66,11 @@ const TILT_SPEED: f32 = 0.6; // radyan/sn
 const BALL_R: f32 = 0.3;
 
 /// `#` duvar, `.` zemin, `O` delik, `S` başlangıç, `G` hedef. Satırlar +z yönünde (ekranda aşağı).
+///
+/// Bir delik koca bir karonun yokluğu: 30 cm'lik bilye 1 m'lik boşluğu ancak 4 m/s'nin üstünde
+/// aşar, eğimle o hıza çıkılmaz — yani delik geçit değil, tuzak. İkinci ve üçüncü bölümde birer
+/// delik hedefe giden her yolu kesiyordu, ikisi de hiç kazanılamazdı (`--test`'in yol bulucusu
+/// buldu, 2026-11-04); `--test` artık her bölümde bir yol olduğunu da sınıyor.
 const LEVELS: [&[&str]; 3] = [
     &[
         "#########",
@@ -80,14 +87,14 @@ const LEVELS: [&[&str]; 3] = [
         "#.#.#.###.#",
         "#.#...#O#.#",
         "#.#####.#.#",
-        "#...O...#.#",
+        "#.......#.#",
         "#####.###.#",
         "#G....O...#",
         "###########",
     ],
     &[
         "#############",
-        "#S.O.....O..#",
+        "#S.......O..#",
         "#.#.#####.#.#",
         "#.#...O...#.#",
         "#.###.#.###.#",
@@ -123,57 +130,160 @@ struct Game {
     auto: bool,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-1.1)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 3.0, LightRole::Sun),
+    ));
+    world.spawn_bundle(CameraBundle {
+        position: Vec3::new(0.0, 15.0, 8.5),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -1.05,
+        primary: true,
+        ..Default::default()
+    });
+    world.insert_resource(ScreenFade::default());
+    let hud = world
+        .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+        .id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("dus", Blip::new(Wave::Sine, 420.0, 0.35).with_slide(90.0).with_volume(0.3).wav());
+        audio.load_sound_bytes("hedef", Blip::new(Wave::Square, 523.0, 0.4).with_slide(1046.0).with_volume(0.2).wav());
+        world.insert_resource(audio);
+    }
+    let save = SaveData::open("labirent");
+    let best = (0..LEVELS.len()).map(|i| save.get::<f32>(&format!("best{i}"))).collect();
+    let mut game = Game {
+        physics: FixedPhysics::new(PHYSICS_HZ),
+        level: 0,
+        board: 0,
+        ball: 0,
+        start: Vec3::ZERO,
+        goal: Vec3::ZERO,
+        tilt: Vec2::ZERO,
+        clock: 0.0,
+        falls: 0,
+        best,
+        won: None,
+        hud,
+        banner,
+        auto: std::env::var_os("LABIRENT_OTO").is_some(),
+    };
+    build_level(world, &mut game);
+    game
+}
+
+/// Bilyenin bulunduğu kare (tahtanın kendi uzayında), ızgara sırasıyla.
+fn cell_of(rows: &[&str], local: Vec3) -> (i32, i32) {
+    let (w, h) = (rows[0].len() as f32, rows.len() as f32);
+    ((local.x + (w - 1.0) / 2.0).round() as i32, (local.z + (h - 1.0) / 2.0).round() as i32)
+}
+
+/// Kareden hedefe, duvarlardan ve deliklerden geçmeyen en kısa yol (kendisi dahil).
+fn path_to_goal(rows: &[&str], from: (i32, i32)) -> Vec<(i32, i32)> {
+    let at = |x: i32, z: i32| rows.get(z as usize).and_then(|r| r.as_bytes().get(x as usize)).copied().unwrap_or(b'#');
+    let mut came = std::collections::HashMap::new();
+    let mut queue = std::collections::VecDeque::from([from]);
+    came.insert(from, from);
+    while let Some((x, z)) = queue.pop_front() {
+        if at(x, z) == b'G' {
+            let mut path = vec![(x, z)];
+            while *path.last().unwrap() != from {
+                path.push(came[path.last().unwrap()]);
+            }
+            path.reverse();
+            return path;
+        }
+        for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
+            let next = (x + dx, z + dz);
+            if !matches!(at(next.0, next.1), b'#' | b'O') && !came.contains_key(&next) {
+                came.insert(next, (x, z));
+                queue.push_back(next);
+            }
+        }
+    }
+    vec![from]
+}
+
+/// `LABIRENT_OTO`: yolun bir sonraki karesinin ortasına doğru eğ; bilyenin hızı frenler.
+fn auto_tilt(world: &World, game: &Game) -> (f32, f32) {
+    let rows = LEVELS[game.level];
+    let rotation = world.borrow::<Transform>().get(game.board).map_or(Quat::IDENTITY, |t| t.rotation);
+    let (Some(p), Some(v)) = (
+        world.borrow::<Transform>().get(game.ball).map(|t| t.position),
+        world.borrow::<Velocity>().get(game.ball).map(|v| v.linear),
+    ) else {
+        return (0.0, 0.0);
+    };
+    let (local, v) = (rotation.inverse() * p, rotation.inverse() * v);
+    let path = path_to_goal(rows, cell_of(rows, local));
+    let (w, h) = (rows[0].len() as f32, rows.len() as f32);
+    let (x, z) = path.get(1).copied().unwrap_or(path[0]);
+    let target = Vec3::new(x as f32 - (w - 1.0) / 2.0, 0.0, z as f32 - (h - 1.0) / 2.0);
+    let push = (target - local) * 2.5 - v * 1.8;
+    // +x eğimi bilyeyi +x'e, +y eğimi −z'ye yuvarlar.
+    let input = Vec2::new(push.x, -push.z).clamp_length_max(1.0);
+    (input.x, input.y)
+}
+
+/// `--test`: pencere açmadan otomatik pilot üç bölümü sırayla çözer.
+fn self_test() -> bool {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font(), false);
+    game.auto = true;
+    world.insert_resource(game);
+    // Her bölüm kazanılabilir mi: başlangıçtan hedefe, deliklerden geçmeyen bir yol.
+    let blocked: Vec<usize> = (0..LEVELS.len())
+        .filter(|&l| {
+            let rows = LEVELS[l];
+            let start = rows.iter().enumerate().find_map(|(z, r)| r.find('S').map(|x| (x as i32, z as i32))).expect("S");
+            path_to_goal(rows, start).len() < 2
+        })
+        .collect();
+    let mut run = HeadlessFrames::new(world);
+    let dt = 1.0 / 60.0;
+    let (mut solved, mut falls, mut times) = (0usize, 0u32, Vec::new());
+    let mut was_won = false;
+    while run.elapsed < 240.0 && solved < LEVELS.len() {
+        run.frame(dt, update);
+        let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+        let won = game.won.is_some();
+        if won && !was_won {
+            solved += 1;
+            falls += game.falls;
+            times.push(game.clock);
+        }
+        was_won = won;
+    }
+    let ok = blocked.is_empty() && solved == LEVELS.len();
+    let times: Vec<String> = times.iter().map(|t| format!("{t:.1}")).collect();
+    println!(
+        "labirent --test: yolu olmayan bölüm {blocked:?}; {solved} / {} bölüm çözüldü ({} sn), {falls} düşüş, {:.0} s → {}",
+        LEVELS.len(),
+        times.join(", "),
+        run.elapsed,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Labirent", 1280, 720)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-1.1)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 3.0, LightRole::Sun),
-            ));
-            scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(0.0, 15.0, 8.5),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -1.05,
-                primary: true,
-                ..Default::default()
-            });
-            scene.world.insert_resource(ScreenFade::default());
-            let hud = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("dus", Blip::new(Wave::Sine, 420.0, 0.35).with_slide(90.0).with_volume(0.3).wav());
-                audio.load_sound_bytes("hedef", Blip::new(Wave::Square, 523.0, 0.4).with_slide(1046.0).with_volume(0.2).wav());
-                scene.world.insert_resource(audio);
-            }
-            let save = SaveData::open("labirent");
-            let best = (0..LEVELS.len()).map(|i| save.get::<f32>(&format!("best{i}"))).collect();
-            let mut game = Game {
-                physics: FixedPhysics::new(PHYSICS_HZ),
-                level: 0,
-                board: 0,
-                ball: 0,
-                start: Vec3::ZERO,
-                goal: Vec3::ZERO,
-                tilt: Vec2::ZERO,
-                clock: 0.0,
-                falls: 0,
-                best,
-                won: None,
-                hud,
-                banner,
-                auto: std::env::var_os("LABIRENT_OTO").is_some(),
-            };
-            build_level(scene.world, &mut game);
+            let game = setup(scene.world, font, true);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
@@ -279,7 +389,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
 
     // Eğim: girdinin istediğine doğru, saniyede TILT_SPEED kadar.
-    let (mx, my) = if game.auto { (1.0, 0.0) } else { input.move_axis() };
+    let (mx, my) = if game.auto { auto_tilt(world, &game) } else { input.move_axis() };
     let want = Vec2::new(mx, my).clamp_length_max(1.0) * MAX_TILT;
     let step = TILT_SPEED * dt;
     game.tilt += (want - game.tilt).clamp_length_max(step);
@@ -309,11 +419,14 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
             let local = rotation.inverse() * p;
             if (local - game.goal).truncate_y().length() < 0.4 && local.y < 0.6 {
                 game.won = Some(2.0);
-                let best = game.best[game.level].map_or(game.clock, |b| b.min(game.clock));
-                game.best[game.level] = Some(best);
-                let mut save = SaveData::open("labirent");
-                if save.set(&format!("best{}", game.level), &best).and_then(|()| save.save()).is_err() {
-                    gizmo::gizmo_log!(Warning, "süre kaydedilemedi");
+                // Otomatik pilotun süresi rekor sayılmaz (ve sınama oyuncunun kaydına yazmaz).
+                if !game.auto {
+                    let best = game.best[game.level].map_or(game.clock, |b| b.min(game.clock));
+                    game.best[game.level] = Some(best);
+                    let mut save = SaveData::open("labirent");
+                    if save.set(&format!("best{}", game.level), &best).and_then(|()| save.save()).is_err() {
+                        gizmo::gizmo_log!(Warning, "süre kaydedilemedi");
+                    }
                 }
                 play(world, "hedef");
                 if let Some(mut fade) = world.get_resource_mut::<ScreenFade>() {
