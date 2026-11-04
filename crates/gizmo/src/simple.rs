@@ -769,9 +769,14 @@ pub struct HeadlessFrames {
 }
 
 impl HeadlessFrames {
-    /// Takes over a world that already holds the game's scene and resources.
+    /// Takes over a world that already holds the game's scene and resources, and adds what
+    /// [`with_simple_scene`](SimpleAppExt::with_simple_scene) adds after a game's setup: a
+    /// physics world with Earth gravity unless the game made its own, an empty `Gizmos`, and an
+    /// asset manager. A game that relied on the scene's physics world and was played without it
+    /// simply never moved (`labirent`, the second game this was written for).
     #[must_use]
-    pub fn new(world: World) -> Self {
+    pub fn new(mut world: World) -> Self {
+        insert_scene_defaults(&mut world, AssetManager::new());
         Self { world, state: SimpleSceneState::default(), input: Input::default(), frames: 0, elapsed: 0.0 }
     }
 
@@ -1320,6 +1325,20 @@ mod headless_frames_tests {
         assert!(!run.world.is_alive(doomed), "the despawn the hook queued was left in the queue");
         run.frame(0.5, |_, _, _, _| {});
         assert_eq!((run.frames, run.elapsed), (2, 0.75));
+    }
+
+    #[test]
+    fn a_headless_world_gets_the_simple_scenes_defaults_but_keeps_its_own_physics() {
+        let run = HeadlessFrames::new(World::new());
+        let gravity = run.world.get_resource::<PhysicsWorld>().map(|p| p.integrator.gravity);
+        assert_eq!(gravity, Some(Vec3::new(0.0, -9.81, 0.0)));
+        assert!(run.world.get_resource::<crate::renderer::Gizmos>().is_some());
+
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -1.0, 0.0)));
+        let run = HeadlessFrames::new(world);
+        let gravity = run.world.get_resource::<PhysicsWorld>().map(|p| p.integrator.gravity);
+        assert_eq!(gravity, Some(Vec3::new(0.0, -1.0, 0.0)), "the game's own physics world was replaced");
     }
 
     #[test]
