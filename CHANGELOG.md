@@ -98,6 +98,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A soft body is drawn (`soft_body_mesh_system`).** A `SoftBodyMesh` in the world was stepped
   and drawn as nothing but debug lines. Both draw paths now give it the mesh of its surface,
   outward, normals smoothed over the nodes, and a renderer and material the first time.
+- **A `SimpleApp` game plays without a window (`gizmo::simple::HeadlessFrames`).** Hand it a
+  world holding the game's scene and call `frame(dt, update)` with the game's own update: the
+  hook runs with nothing pressed, then the deferred commands are applied, as in the windowed
+  loop. `HeadlessFrames::font()` gives HUD text a font with no renderer. The first headless test
+  written as a bare loop skipped the command flush, and `vinc`'s shattered blocks were latched
+  broken and never despawned — 0 pieces reported where 9 broke. `SimpleSceneState` is `Default`.
 - **The games are a gate (`scripts/game-tests.py`).** Every demo with a headless `--test` mode
   plays itself in release, four at a time, with no display in its environment — a binary that
   ignores the flag fails rather than opening a window. CI runs it in the determinism job; 15

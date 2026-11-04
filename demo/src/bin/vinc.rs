@@ -40,7 +40,7 @@ use gizmo::physics::{BodyHandle, Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 
 const HOOK_Y: f32 = 10.0;
 const HOOK_RANGE: (f32, f32) = (-9.0, 6.0);
@@ -154,23 +154,15 @@ fn main() {
 /// beşte dördü inmeli, en az biri parçalanarak. Oyunun kendi `setup`'ı ve `update`'i, boş bir girdiyle, sabit adımla.
 fn self_test() -> bool {
     let mut world = World::new();
-    let font = gizmo::renderer::text::FontLibrary::new()
-        .load(gizmo::renderer::text::synthetic::synthetic_face())
-        .expect("sentetik yüz her zaman ayrıştırılır");
-    let mut game = setup(&mut world, font);
+    let mut game = setup(&mut world, HeadlessFrames::font());
     game.auto = true;
     world.insert_resource(game);
-    let mut state = SimpleSceneState { camera_speed: 0.0, camera_pitch: 0.0, camera_yaw: 0.0, camera_pos: Vec3::ZERO };
-    let input = Input::default();
+    let mut run = HeadlessFrames::new(world);
     let dt = 1.0 / 60.0;
-    let mut frames = 0;
-    while world.get_resource::<Game>().is_some_and(|g| g.over.is_none()) && frames < 60 * 120 {
-        update(&mut world, &mut state, dt, &input);
-        // Pencereli döngü de her `update`'ten sonra ertelenmiş komutları uygular.
-        world.apply_commands();
-        frames += 1;
+    while run.world.get_resource::<Game>().is_some_and(|g| g.over.is_none()) && run.elapsed < 120.0 {
+        run.frame(dt, update);
     }
-    let game = world.get_resource::<Game>().expect("oyun kaynağı");
+    let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
     // Kırılma da işlemeli: yalnız devrilen bloklarla kazanılan oyun kırılmanın bozulduğunu saklar.
     let ok = game.over == Some(true) && game.broken > 0;
     println!(

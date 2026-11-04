@@ -40,7 +40,7 @@ use gizmo::physics::{BodyHandle, Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 
 /// `#` duvar, `.` zemin, `S` başlangıç, `E` çıkış, `x` sandık, `1`…`2` plaka,
 /// `A`…`B` kapı (`A` plaka `1`'lere, `B` plaka `2`'lere bağlı).
@@ -255,22 +255,16 @@ fn main() {
 /// açar, çıkışa yürür. Oyunun kendi `setup`'ı ve `update`'i, boş bir girdiyle, sabit adımla.
 fn self_test() -> bool {
     let mut world = World::new();
-    let font = gizmo::renderer::text::FontLibrary::new()
-        .load(gizmo::renderer::text::synthetic::synthetic_face())
-        .expect("sentetik yüz her zaman ayrıştırılır");
-    let mut game = setup(&mut world, font);
+    let mut game = setup(&mut world, HeadlessFrames::font());
     game.auto = true;
     world.insert_resource(game);
-    let mut state = SimpleSceneState { camera_speed: 0.0, camera_pitch: 0.0, camera_yaw: 0.0, camera_pos: Vec3::ZERO };
-    let input = Input::default();
+    let mut run = HeadlessFrames::new(world);
     let dt = 1.0 / 60.0;
     let (mut time, mut opened) = (0.0f32, [false; 2]);
     while time < 60.0 {
         time += dt;
-        update(&mut world, &mut state, dt, &input);
-        // Pencereli döngü de her `update`'ten sonra ertelenmiş komutları uygular.
-        world.apply_commands();
-        let game = world.get_resource::<Game>().expect("oyun kaynağı");
+        run.frame(dt, update);
+        let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
         for (k, g) in ['1', '2'].into_iter().enumerate() {
             opened[k] |= game.doors.iter().filter(|d| d.group == g).all(|d| d.y < 0.0);
         }
@@ -278,7 +272,7 @@ fn self_test() -> bool {
             break;
         }
     }
-    let won = world.get_resource::<Game>().is_some_and(|g| g.won);
+    let won = run.world.get_resource::<Game>().is_some_and(|g| g.won);
     let ok = won && opened.iter().all(|&o| o);
     println!(
         "kapi --test: {time:.1} s; kapı 1 {}, kapı 2 {}; çıkışa vardı mı: {} → {}",

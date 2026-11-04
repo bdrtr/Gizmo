@@ -26,6 +26,14 @@ pub struct SimpleSceneState {
     pub camera_pos: Vec3,
 }
 
+impl Default for SimpleSceneState {
+    /// Where [`with_simple_scene`](SimpleAppExt::with_simple_scene) starts the fly camera:
+    /// 2 m up, 5 m back, looking down −Z, at 15 m/s.
+    fn default() -> Self {
+        Self { camera_speed: 15.0, camera_pitch: 0.0, camera_yaw: 0.0, camera_pos: Vec3::new(0.0, 2.0, 5.0) }
+    }
+}
+
 impl SimpleSceneState {
     /// Advances the built-in fly camera by one frame: look, then move.
     ///
@@ -713,6 +721,78 @@ impl Default for FixedPhysics {
     }
 }
 
+/// Plays a `SimpleApp` game's own update hook frame by frame, with no window, GPU or event loop —
+/// what a game's headless `--test` mode runs on.
+///
+/// Build the game's scene into a plain [`World`] (meshes and materials need no GPU to exist as
+/// components; [`HeadlessFrames::font`] gives HUD text a real font), hand the world over, and
+/// call [`frame`](Self::frame) with the same `update` function the game gives
+/// [`replace_update`](crate::app::App::replace_update):
+///
+/// ```no_run
+/// # use gizmo::prelude::*;
+/// # use gizmo::core::input::Input;
+/// # use gizmo::simple::{HeadlessFrames, SimpleSceneState};
+/// # struct Game { won: bool }
+/// # fn setup(world: &mut World, _font: gizmo::renderer::text::FontId) -> Game { Game { won: false } }
+/// # fn update(world: &mut World, _s: &mut SimpleSceneState, _dt: f32, _input: &Input) {}
+/// let mut world = World::new();
+/// let game = setup(&mut world, HeadlessFrames::font());
+/// world.insert_resource(game);
+/// let mut run = HeadlessFrames::new(world);
+/// while run.elapsed < 60.0 && !run.world.get_resource::<Game>().is_some_and(|g| g.won) {
+///     run.frame(1.0 / 60.0, update);
+/// }
+/// ```
+///
+/// Each frame does what the windowed loop does around the hook: the hook runs with the frame's
+/// `dt` and an [`Input`] in which nothing is held, then the deferred commands it (and the systems
+/// it drove) queued are applied. That last part is the reason this exists rather than a loop in
+/// every game: the first headless test written that way left it out, and a building whose blocks
+/// shattered on screen reported none — they were latched broken and never despawned, because
+/// fracture despawns through the command queue (2026-11-04, `vinc`).
+///
+/// What it does **not** do: run plugins' schedules, fire the event double-buffer swap, load
+/// assets or draw. A game driven through `FixedPhysics` and its own update needs none of them.
+#[non_exhaustive]
+pub struct HeadlessFrames {
+    /// The game's world. Read its resources between frames to see how the game is going.
+    pub world: World,
+    /// The scene state handed to the hook, as `with_simple_scene` would start it.
+    pub state: SimpleSceneState,
+    /// The input handed to the hook: nothing pressed, unless the caller writes into it.
+    pub input: Input,
+    /// Frames played.
+    pub frames: u64,
+    /// Seconds played: the sum of every `dt` given to [`frame`](Self::frame).
+    pub elapsed: f32,
+}
+
+impl HeadlessFrames {
+    /// Takes over a world that already holds the game's scene and resources.
+    #[must_use]
+    pub fn new(world: World) -> Self {
+        Self { world, state: SimpleSceneState::default(), input: Input::default(), frames: 0, elapsed: 0.0 }
+    }
+
+    /// Plays one frame of `dt` seconds through `update`, then applies the deferred commands.
+    pub fn frame(&mut self, dt: f32, update: impl FnOnce(&mut World, &mut SimpleSceneState, f32, &Input)) {
+        update(&mut self.world, &mut self.state, dt, &self.input);
+        self.world.apply_commands();
+        self.frames += 1;
+        self.elapsed += dt;
+    }
+
+    /// A font for HUD text, loaded without a renderer: the engine's built-in synthetic face.
+    /// Text spawned with it is a real `Text` component; it is simply never drawn.
+    #[must_use]
+    pub fn font() -> crate::renderer::text::FontId {
+        crate::renderer::text::FontLibrary::new()
+            .load(crate::renderer::text::synthetic::synthetic_face())
+            .expect("the built-in synthetic face always parses")
+    }
+}
+
 /// Adds [`with_simple_scene`](SimpleAppExt::with_simple_scene) to an `App<SimpleSceneState>`.
 pub trait SimpleAppExt {
     /// Installs a setup closure that builds the scene through a [`SceneBuilder`], and wires the
@@ -761,12 +841,7 @@ impl SimpleAppExt for App<SimpleSceneState> {
             renderer.ssr = None;
             renderer.ssgi = None;
 
-            let mut state = SimpleSceneState {
-                camera_speed: 15.0,
-                camera_pitch: 0.0,
-                camera_yaw: 0.0,
-                camera_pos: Vec3::new(0.0, 2.0, 5.0),
-            };
+            let mut state = SimpleSceneState::default();
 
             let mut builder = SceneBuilder {
                 world,
@@ -1221,5 +1296,45 @@ mod fixed_physics_tests {
         }
         let z = w.borrow::<Transform>().get(id).unwrap().position.z;
         assert!(z < -0.5, "the throttled car went forward (−Z): z = {z}");
+    }
+}
+
+#[cfg(test)]
+mod headless_frames_tests {
+    use super::*;
+
+    #[test]
+    fn a_frame_runs_the_hook_with_nothing_pressed_and_applies_what_it_queued() {
+        let mut world = World::new();
+        let doomed = world.spawn();
+        let mut run = HeadlessFrames::new(world);
+        let mut seen = None;
+        run.frame(0.25, |world, _state, dt, input| {
+            seen = Some((dt, input.move_axis()));
+            world
+                .get_resource::<crate::core::commands::CommandQueue>()
+                .expect("every World has a command queue")
+                .push(move |w: &mut World| w.despawn(doomed));
+        });
+        assert_eq!(seen, Some((0.25, (0.0, 0.0))));
+        assert!(!run.world.is_alive(doomed), "the despawn the hook queued was left in the queue");
+        run.frame(0.5, |_, _, _, _| {});
+        assert_eq!((run.frames, run.elapsed), (2, 0.75));
+    }
+
+    #[test]
+    fn the_headless_font_is_a_real_font() {
+        let font = HeadlessFrames::font();
+        let mut world = World::new();
+        let id = world
+            .spawn_bundle((crate::renderer::components::Text::pinned("puan 3", font, 22.0, crate::renderer::components::TextAnchor::TopLeft, crate::math::Vec2::ZERO),))
+            .id();
+        assert!(set_text(&mut world, id, "puan 4"));
+    }
+
+    #[test]
+    fn the_default_scene_state_is_where_with_simple_scene_starts() {
+        let s = SimpleSceneState::default();
+        assert_eq!((s.camera_speed, s.camera_pos), (15.0, Vec3::new(0.0, 2.0, 5.0)));
     }
 }
