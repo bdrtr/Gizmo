@@ -40,7 +40,8 @@
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
-//!   * `LOBUT_AT=<güç 0..1>` — açılışta bir atışı kendiliğinden yap (ekran görüntüsü için)
+//!   * `LOBUT_AT=<güç 0..1>` — açılışta bir atışı kendiliğinden yap (ekran görüntüsü için;
+//!     `lobut --test` pencere açmadan durağan lobutları, kenardan bir atışı ve bir oyunu sınar)
 //!   * `LOBUT_LOG=1` — her kare top ve ilk üç lobutun konumu stderr'e (fizik teşhisi için)
 
 use gizmo::audio::synth::{Blip, Wave};
@@ -53,7 +54,7 @@ use gizmo::physics::{Collider, CollisionEvent, CollisionEventType, RigidBody, Ve
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 use gizmo::winit::keyboard::KeyCode;
 
 const PHYSICS_HZ: u32 = 240;
@@ -103,7 +104,126 @@ struct Game {
     auto_shot: Option<f32>,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+
+    // Kulvar: zemin, iki yan ray, arka çukurun duvarı. Hepsi statik kutu.
+    let wood = MaterialDesc::new().with_pbr(Vec4::new(0.78, 0.6, 0.38, 1.0), 0.35, 0.0);
+    let rail = MaterialDesc::new().with_pbr(Vec4::new(0.25, 0.25, 0.3, 1.0), 0.6, 0.3);
+    spawn_static(world, Vec3::new(0.0, -0.1, -9.5), Vec3::new(LANE_HALF, 0.1, 10.5), wood.clone());
+    spawn_static(world, Vec3::new(0.0, -0.3, -21.0), Vec3::new(LANE_HALF + 0.6, 0.1, 1.0), rail.clone());
+    spawn_static(world, Vec3::new(0.0, 0.4, -22.0), Vec3::new(LANE_HALF + 0.6, 0.6, 0.1), rail.clone());
+    for x in [-(LANE_HALF + 0.05), LANE_HALF + 0.05] {
+        spawn_static(world, Vec3::new(x, 0.1, -9.5), Vec3::new(0.05, 0.2, 10.5), rail.clone());
+    }
+
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.9)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.95, 0.85), 2.5, LightRole::Sun),
+    ));
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 2.5, PIN_Z - 0.4)),
+        GlobalTransform::default(),
+        PointLight::new(Vec3::new(1.0, 0.9, 0.7), 8.0, 6.0),
+    ));
+
+    world.spawn_bundle(CameraBundle {
+        position: Vec3::new(0.0, 1.3, 3.2),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -0.22,
+        primary: true,
+        ..Default::default()
+    });
+
+    let hud = world
+        .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+        .id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("tok", Blip::new(Wave::Noise, 2400.0, 0.09).with_slide(600.0).with_volume(0.6).wav());
+        audio.load_sound_bytes("yuvarlan", Blip::new(Wave::Noise, 300.0, 0.6).with_slide(120.0).with_volume(0.15).wav());
+        audio.load_sound_bytes("strike", Blip::new(Wave::Square, 523.0, 0.5).with_slide(1046.0).with_volume(0.25).wav());
+        world.insert_resource(audio);
+    }
+
+    let auto_shot = std::env::var("LOBUT_AT").ok().and_then(|v| v.parse::<f32>().ok());
+    let mut game = Game {
+        physics: FixedPhysics::new(PHYSICS_HZ),
+        phase: Phase2::Aiming,
+        offset: 0.0,
+        angle: 0.0,
+        power: 0.0,
+        frame: 1,
+        roll: 1,
+        scores: Vec::new(),
+        first_roll: 0,
+        hud,
+        banner,
+        auto_shot,
+    };
+    reset_pins(world, &mut game);
+    game
+}
+
+/// Bir oyun: her atış kulvarda `offset`'ten, `angle` nişanıyla (sola artı), `power` gücüyle.
+/// Çerçeve puanları ve oyunun saniyesi.
+fn bowl(power: f32, offset: f32, angle: f32, frames_to_play: u32) -> (Vec<u32>, f32) {
+    let mut world = World::new();
+    let game = setup(&mut world, HeadlessFrames::font(), false);
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world);
+    while run.elapsed < 120.0 {
+        if let Some(mut game) = run.world.get_resource_mut::<Game>() {
+            if game.phase == Phase2::Aiming && game.auto_shot.is_none() {
+                game.auto_shot = Some(power);
+                game.offset = offset;
+                game.angle = angle;
+            }
+            if game.phase == Phase2::Over || game.scores.len() as u32 >= frames_to_play {
+                break;
+            }
+        }
+        run.frame(1.0 / 60.0, update);
+    }
+    (run.world.get_resource::<Game>().map(|g| g.scores.clone()).unwrap_or_default(), run.elapsed)
+}
+
+/// `--test`: pencere açmadan üç sınama. Atış yokken on lobut beş saniye ayakta durmalı (ince,
+/// uzun cisimler devrilmeden); kulvarın sağ kenarından dışa nişanlanmış bir atış strike
+/// yapmamalı; ortadan güçlü atışlarla beş çerçevelik bir oyun bol lobut devirmeli.
+fn self_test() -> bool {
+    let mut world = World::new();
+    let game = setup(&mut world, HeadlessFrames::font(), false);
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world);
+    while run.elapsed < 5.0 {
+        run.frame(1.0 / 60.0, update);
+    }
+    let fell_alone = count_knocked(&run.world);
+    let edge = LANE_HALF - BALL_R - 0.05;
+    let (wide, _) = bowl(0.85, edge, -0.08, 1);
+    let (game, time) = bowl(0.85, 0.0, 0.0, FRAMES);
+    let total: u32 = game.iter().sum();
+    let ok = fell_alone == 0 && wide.first().is_some_and(|&d| d < 10) && game.len() == FRAMES as usize && total >= 30;
+    println!(
+        "lobut --test: 5 s kendi kendine devrilen {fell_alone}; kenardan dışa atış {:?}; ortadan atışlarla {FRAMES} çerçeve {game:?} = {total} ({time:.0} s) → {}",
+        wide.first(),
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Lobut", 1280, 720)
         .add_event::<CollisionEvent>()
         .with_simple_scene(|scene, _state| {
@@ -111,70 +231,7 @@ fn main() {
             r.bloom_intensity = 0.6;
             r.deband_dither = true;
             let font = load_font(r);
-
-            // Kulvar: zemin, iki yan ray, arka çukurun duvarı. Hepsi statik kutu.
-            let wood = MaterialDesc::new().with_pbr(Vec4::new(0.78, 0.6, 0.38, 1.0), 0.35, 0.0);
-            let rail = MaterialDesc::new().with_pbr(Vec4::new(0.25, 0.25, 0.3, 1.0), 0.6, 0.3);
-            spawn_static(scene.world, Vec3::new(0.0, -0.1, -9.5), Vec3::new(LANE_HALF, 0.1, 10.5), wood.clone());
-            spawn_static(scene.world, Vec3::new(0.0, -0.3, -21.0), Vec3::new(LANE_HALF + 0.6, 0.1, 1.0), rail.clone());
-            spawn_static(scene.world, Vec3::new(0.0, 0.4, -22.0), Vec3::new(LANE_HALF + 0.6, 0.6, 0.1), rail.clone());
-            for x in [-(LANE_HALF + 0.05), LANE_HALF + 0.05] {
-                spawn_static(scene.world, Vec3::new(x, 0.1, -9.5), Vec3::new(0.05, 0.2, 10.5), rail.clone());
-            }
-
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.9)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.95, 0.85), 2.5, LightRole::Sun),
-            ));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(0.0, 2.5, PIN_Z - 0.4)),
-                GlobalTransform::default(),
-                PointLight::new(Vec3::new(1.0, 0.9, 0.7), 8.0, 6.0),
-            ));
-
-            scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(0.0, 1.3, 3.2),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -0.22,
-                primary: true,
-                ..Default::default()
-            });
-
-            let hud = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("tok", Blip::new(Wave::Noise, 2400.0, 0.09).with_slide(600.0).with_volume(0.6).wav());
-                audio.load_sound_bytes("yuvarlan", Blip::new(Wave::Noise, 300.0, 0.6).with_slide(120.0).with_volume(0.15).wav());
-                audio.load_sound_bytes("strike", Blip::new(Wave::Square, 523.0, 0.5).with_slide(1046.0).with_volume(0.25).wav());
-                scene.world.insert_resource(audio);
-            }
-
-            let auto_shot = std::env::var("LOBUT_AT").ok().and_then(|v| v.parse::<f32>().ok());
-            let mut game = Game {
-                physics: FixedPhysics::new(PHYSICS_HZ),
-                phase: Phase2::Aiming,
-                offset: 0.0,
-                angle: 0.0,
-                power: 0.0,
-                frame: 1,
-                roll: 1,
-                scores: Vec::new(),
-                first_roll: 0,
-                hud,
-                banner,
-                auto_shot,
-            };
-            reset_pins(scene.world, &mut game);
+            let game = setup(scene.world, font, true);
             scene.world.insert_resource(game);
         })
         .add_update_system(clatter.in_phase(Phase::Update))
