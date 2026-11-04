@@ -27,7 +27,8 @@
 //! `Display::Grid` ile tarla, `ProgressBar`, `Clicked`.
 //!
 //! ## Ortam değişkenleri
-//!   * `BOSTAN_OTO=1` — kendi kendine eker ve toplar (ekran görüntüsü için)
+//!   * `BOSTAN_OTO=1` — kendi kendine eker ve toplar (ekran görüntüsü için; `bostan --test` pencere
+//!     açmadan bahçenin kurallarını sahte bir saatle dener)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::app::save::SaveData;
@@ -36,7 +37,7 @@ use gizmo::core::time::unix_time;
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
     AlignItems, BackgroundColor, ButtonBundle, Clicked, Display, FlexDirection, GridTrack, GridTracks, JustifyContent,
     NodeBundle, ProgressBar, Style, UiPlugin, UiRect, UiScale, Val,
@@ -119,142 +120,191 @@ struct Game {
     auto_clock: f32,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+fn setup(world: &mut World, font: FontId) -> Game {
+    world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+    world.insert_resource(UiScale::fit(1280.0, 720.0));
+    let root = world.spawn_bundle(NodeBundle {
+        style: Style {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Row,
+            justify_content: Some(JustifyContent::Center),
+            align_items: Some(AlignItems::Center),
+            column_gap: Val::Px(40.0),
+            ..Default::default()
+        },
+        background_color: BackgroundColor(hex("#24301C")),
+        ..Default::default()
+    });
+    let field = world.spawn_bundle(NodeBundle {
+        style: Style {
+            display: Display::Grid,
+            grid_template_columns: GridTracks::repeat(COLS, GridTrack::Px(CELL)),
+            grid_auto_rows: GridTrack::Px(CELL),
+            row_gap: Val::Px(10.0),
+            column_gap: Val::Px(10.0),
+            ..Default::default()
+        },
+        background_color: BackgroundColor(Vec4::ZERO),
+        ..Default::default()
+    });
+    {
+        use gizmo::core::hierarchy::HierarchyExt;
+        world.add_child(root, field);
+    }
+    let mut plot_bars = Vec::new();
+    let mut plot_labels = Vec::new();
+    for i in 0..PLOTS {
+        let plot = world.spawn_bundle(ButtonBundle {
+            style: Style {
+                flex_direction: FlexDirection::Column,
+                justify_content: Some(JustifyContent::SpaceBetween),
+                padding: UiRect::all(Val::Px(10.0)),
+                ..Default::default()
+            },
+            background_color: BackgroundColor(hex(SOIL)),
+            ..Default::default()
+        });
+        world.add_component(plot, PlotButton(i));
+        world.add_component(plot, Text::screen("", font, 18.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+        let bar = world.spawn_bundle(NodeBundle {
+            style: Style { width: Val::Percent(100.0), height: Val::Px(12.0), margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(92.0), Val::ZERO), ..Default::default() },
+            background_color: BackgroundColor(Vec4::new(0.0, 0.0, 0.0, 0.35)),
+            ..Default::default()
+        });
+        world.add_component(bar, ProgressBar::new(0.0));
+        {
+            use gizmo::core::hierarchy::HierarchyExt;
+            world.add_child(plot, bar);
+            world.add_child(field, plot);
+        }
+        plot_bars.push(bar.id());
+        plot_labels.push(plot.id());
+    }
+    let side = world.spawn_bundle(NodeBundle {
+        style: Style { width: Val::Px(280.0), flex_direction: FlexDirection::Column, row_gap: Val::Px(12.0), ..Default::default() },
+        background_color: BackgroundColor(Vec4::ZERO),
+        ..Default::default()
+    });
+    let text_node = |world: &mut World, h: f32, size: f32| {
+        let n = world.spawn_bundle(NodeBundle {
+            style: Style { height: Val::Px(h), ..Default::default() },
+            background_color: BackgroundColor(Vec4::ZERO),
+            ..Default::default()
+        });
+        world.add_component(n, Text::screen("", font, size, Vec2::ZERO).with_anchor(TextAnchor::Center));
+        n
+    };
+    let status = text_node(world, 60.0, 24.0);
+    let mut seed_buttons = Vec::new();
+    let mut children = vec![status];
+    for (c, crop) in CROPS.iter().enumerate() {
+        let b = world.spawn_bundle(ButtonBundle {
+            style: Style { height: Val::Px(56.0), ..Default::default() },
+            background_color: BackgroundColor(hex(SEED)),
+            ..Default::default()
+        });
+        world.add_component(b, SeedButton(c));
+        world.add_component(
+            b,
+            Text::screen(format!("{} — {} altın, {:.0} sn → {}", crop.0, crop.2, crop.1, crop.3), font, 17.0, Vec2::ZERO)
+                .with_anchor(TextAnchor::Center),
+        );
+        seed_buttons.push(b.id());
+        children.push(b);
+    }
+    let water = world.spawn_bundle(ButtonBundle {
+        style: Style { height: Val::Px(56.0), ..Default::default() },
+        background_color: BackgroundColor(hex("#2F4D73")),
+        ..Default::default()
+    });
+    world.add_component(water, WaterButton);
+    world.add_component(water, Text::screen(format!("Sulama — {WATER_PRICE} altın"), font, 17.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+    children.push(water);
+    let note = text_node(world, 80.0, 17.0);
+    children.push(note);
+    {
+        use gizmo::core::hierarchy::HierarchyExt;
+        for c in children {
+            world.add_child(side, c);
+        }
+        world.add_child(root, side);
+    }
+
+    // Kayıt: bahçe ve kapalıyken olgunlaşanlar.
+    let garden: Garden = SaveData::open("bostan").get("garden").unwrap_or_default();
+    let now = unix_time();
+    let ripened = garden.plots.iter().filter(|&&p| p != Plot::Empty && garden.progress(p, now) >= 1.0).count();
+    let auto = std::env::var_os("BOSTAN_OTO").is_some();
+    let mut game = Game {
+        garden,
+        seed: 0,
+        plot_bars,
+        plot_labels,
+        seed_buttons,
+        status: status.id(),
+        note: note.id(),
+        note_time: 0.0,
+        auto,
+        auto_clock: 0.0,
+    };
+    if ripened > 0 {
+        set_text(world, game.note, &format!("Sen yokken {ripened} ürün olgunlaştı."));
+        game.note_time = 5.0;
+    }
+    game
+}
+
+/// `--test`: pencere açmadan bahçenin kuralları, sahte bir saatle. Ekmek tohumun fiyatını alır;
+/// olgunlaşmamış ürün toplanmaz, olgunu satış fiyatını verir; kaydedilip geri okunan bahçe oyun
+/// kapalıyken geçen sürede büyümüş olur; geri alınmış bir saat ilerlemeyi sıfırın altına
+/// indirmez; sulama büyümeyi dörtte üçe indirir.
+fn self_test() -> bool {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font());
+    game.garden = Garden::default();
+    game.seed = 0;
+    let (_, grow, price, sell, _) = CROPS[0];
+    let t0 = 1_000_000.0;
+    let mut checks: Vec<(&str, bool)> = Vec::new();
+    let coins = game.garden.coins;
+    checks.push(("turp ekildi", tend(&mut game, 0, t0) && game.garden.coins == coins - price));
+    checks.push(("yarı büyümüş toplanmadı", !tend(&mut game, 0, t0 + grow / 2.0)));
+    let half = game.garden.progress(game.garden.plots[0], t0 + grow / 2.0);
+    checks.push(("yarı yolda %50", (half - 0.5).abs() < 1e-4));
+    checks.push(("olgun turp satıldı", tend(&mut game, 0, t0 + grow) && game.garden.coins == coins - price + sell));
+    // Kapanış ve açılış: kaydedilen bahçe, aradaki sürede büyümüş.
+    tend(&mut game, 1, t0);
+    let mut save = SaveData::in_memory();
+    let stored = save.set("garden", &game.garden).is_ok();
+    let back: Option<Garden> = save.get("garden");
+    let offline = back.as_ref().map(|g| g.progress(g.plots[1], t0 + grow * 3.0));
+    checks.push(("kayıttan dönen bahçe kapalıyken büyümüş", stored && offline == Some(1.0)));
+    let rewound = game.garden.progress(game.garden.plots[1], t0 - 500.0);
+    checks.push(("geri alınan saat sıfırın altına inmedi", rewound == 0.0));
+    game.garden.watered = true;
+    checks.push(("sulama büyümeyi dörtte üçe indirdi", (game.garden.grow_time(0) - grow * 0.75).abs() < 1e-9));
+    let failed: Vec<&str> = checks.iter().filter(|(_, ok)| !ok).map(|(name, _)| *name).collect();
+    println!(
+        "bostan --test: {} sınamadan {} geçti{} → {}",
+        checks.len(),
+        checks.len() - failed.len(),
+        if failed.is_empty() { String::new() } else { format!("; geçmeyen: {}", failed.join(", ")) },
+        if failed.is_empty() { "tamam" } else { "BAŞARISIZ" }
+    );
+    failed.is_empty()
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Bostan", 1280, 720)
         .add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-            scene.world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
-            scene.world.insert_resource(UiScale::fit(1280.0, 720.0));
-            let root = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Row,
-                    justify_content: Some(JustifyContent::Center),
-                    align_items: Some(AlignItems::Center),
-                    column_gap: Val::Px(40.0),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(hex("#24301C")),
-                ..Default::default()
-            });
-            let field = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    display: Display::Grid,
-                    grid_template_columns: GridTracks::repeat(COLS, GridTrack::Px(CELL)),
-                    grid_auto_rows: GridTrack::Px(CELL),
-                    row_gap: Val::Px(10.0),
-                    column_gap: Val::Px(10.0),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(Vec4::ZERO),
-                ..Default::default()
-            });
-            {
-                use gizmo::core::hierarchy::HierarchyExt;
-                scene.world.add_child(root, field);
-            }
-            let mut plot_bars = Vec::new();
-            let mut plot_labels = Vec::new();
-            for i in 0..PLOTS {
-                let plot = scene.world.spawn_bundle(ButtonBundle {
-                    style: Style {
-                        flex_direction: FlexDirection::Column,
-                        justify_content: Some(JustifyContent::SpaceBetween),
-                        padding: UiRect::all(Val::Px(10.0)),
-                        ..Default::default()
-                    },
-                    background_color: BackgroundColor(hex(SOIL)),
-                    ..Default::default()
-                });
-                scene.world.add_component(plot, PlotButton(i));
-                scene.world.add_component(plot, Text::screen("", font, 18.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-                let bar = scene.world.spawn_bundle(NodeBundle {
-                    style: Style { width: Val::Percent(100.0), height: Val::Px(12.0), margin: UiRect::new(Val::ZERO, Val::ZERO, Val::Px(92.0), Val::ZERO), ..Default::default() },
-                    background_color: BackgroundColor(Vec4::new(0.0, 0.0, 0.0, 0.35)),
-                    ..Default::default()
-                });
-                scene.world.add_component(bar, ProgressBar::new(0.0));
-                {
-                    use gizmo::core::hierarchy::HierarchyExt;
-                    scene.world.add_child(plot, bar);
-                    scene.world.add_child(field, plot);
-                }
-                plot_bars.push(bar.id());
-                plot_labels.push(plot.id());
-            }
-            let side = scene.world.spawn_bundle(NodeBundle {
-                style: Style { width: Val::Px(280.0), flex_direction: FlexDirection::Column, row_gap: Val::Px(12.0), ..Default::default() },
-                background_color: BackgroundColor(Vec4::ZERO),
-                ..Default::default()
-            });
-            let text_node = |world: &mut World, h: f32, size: f32| {
-                let n = world.spawn_bundle(NodeBundle {
-                    style: Style { height: Val::Px(h), ..Default::default() },
-                    background_color: BackgroundColor(Vec4::ZERO),
-                    ..Default::default()
-                });
-                world.add_component(n, Text::screen("", font, size, Vec2::ZERO).with_anchor(TextAnchor::Center));
-                n
-            };
-            let status = text_node(scene.world, 60.0, 24.0);
-            let mut seed_buttons = Vec::new();
-            let mut children = vec![status];
-            for (c, crop) in CROPS.iter().enumerate() {
-                let b = scene.world.spawn_bundle(ButtonBundle {
-                    style: Style { height: Val::Px(56.0), ..Default::default() },
-                    background_color: BackgroundColor(hex(SEED)),
-                    ..Default::default()
-                });
-                scene.world.add_component(b, SeedButton(c));
-                scene.world.add_component(
-                    b,
-                    Text::screen(format!("{} — {} altın, {:.0} sn → {}", crop.0, crop.2, crop.1, crop.3), font, 17.0, Vec2::ZERO)
-                        .with_anchor(TextAnchor::Center),
-                );
-                seed_buttons.push(b.id());
-                children.push(b);
-            }
-            let water = scene.world.spawn_bundle(ButtonBundle {
-                style: Style { height: Val::Px(56.0), ..Default::default() },
-                background_color: BackgroundColor(hex("#2F4D73")),
-                ..Default::default()
-            });
-            scene.world.add_component(water, WaterButton);
-            scene.world.add_component(water, Text::screen(format!("Sulama — {WATER_PRICE} altın"), font, 17.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-            children.push(water);
-            let note = text_node(scene.world, 80.0, 17.0);
-            children.push(note);
-            {
-                use gizmo::core::hierarchy::HierarchyExt;
-                for c in children {
-                    scene.world.add_child(side, c);
-                }
-                scene.world.add_child(root, side);
-            }
-
-            // Kayıt: bahçe ve kapalıyken olgunlaşanlar.
-            let garden: Garden = SaveData::open("bostan").get("garden").unwrap_or_default();
-            let now = unix_time();
-            let ripened = garden.plots.iter().filter(|&&p| p != Plot::Empty && garden.progress(p, now) >= 1.0).count();
-            let auto = std::env::var_os("BOSTAN_OTO").is_some();
-            let mut game = Game {
-                garden,
-                seed: 0,
-                plot_bars,
-                plot_labels,
-                seed_buttons,
-                status: status.id(),
-                note: note.id(),
-                note_time: 0.0,
-                auto,
-                auto_clock: 0.0,
-            };
-            if ripened > 0 {
-                set_text(scene.world, game.note, &format!("Sen yokken {ripened} ürün olgunlaştı."));
-                game.note_time = 5.0;
-            }
+            let game = setup(scene.world, font);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
