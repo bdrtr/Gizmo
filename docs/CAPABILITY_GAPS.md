@@ -1273,8 +1273,10 @@ hanging. One gap, closed:
 - ~~**A `Cloth` in the world was never drawn**~~ — no draw path knew the type, and the cloth kept
   no grid width. `surface_triangles` + `cloth_mesh_system` in both draw paths.
 
-Still open, and the reason this is a cutting game rather than a net or a trampoline: cloth is
-**one-way** — it drapes over rigid bodies and pushes nothing back.
+~~Still open, and the reason this is a cutting game rather than a net or a trampoline: cloth is
+**one-way** — it drapes over rigid bodies and pushes nothing back.~~ **Closed the same night**
+(`Cloth::step_coupled`): a hammock holds a 1 kg and a 5 kg ball. What is open now is damping —
+the cloth has next to none, so a ball keeps bouncing on it at about its arrival speed.
 
 ### C16v. The twenty-sixth game: a crowd (2026-11-04, `karinca`)
 

@@ -4,9 +4,9 @@
 //! ([`DistanceConstraint`]) that hold them together; [`Cloth::step`] advances it.
 //! Positions are world-space metres, `dt` is seconds and gravity is m/s².
 //!
-//! Collision is resolved against two things, and is strictly one-way — colliders push the
-//! cloth, the cloth never pushes back on the rigid bodies (`step` takes them by shared
-//! reference and ignores their [`BodyHandle`]s):
+//! Collision is resolved against two things. With [`Cloth::step`] it is one-way — colliders
+//! push the cloth and nothing pushes back; with [`Cloth::step_coupled`] (what the ECS driver
+//! runs) a body that can move is pushed back by the cloth it touches, so a hammock holds a ball:
 //!
 //! - An implicit infinite floor at world `y = 0`. It is always active and cannot be turned
 //!   off; dynamic nodes are clamped to `y >= Cloth::thickness`. Pinned nodes are exempt
@@ -424,6 +424,34 @@ impl Cloth {
         sub_steps: usize,
         colliders: &[(BodyHandle, Transform, Collider)],
     ) {
+        let mut ignored = Vec::new();
+        self.step_coupled(dt, gravity, sub_steps, colliders, &[], &mut ignored);
+    }
+
+    /// [`step`](Self::step), **two-way**: `reactions` says what the bodies behind the colliders
+    /// are made of and how they move (`crate::system::collect_rigid_reactions` reads it off the
+    /// world), and what the cloth owes them is added to `impulses`, per body, for the caller to
+    /// spend (`apply_reaction_impulses`).
+    ///
+    /// A contact is resolved against the body's velocity at the contact point, not against a
+    /// wall at rest: a node a falling ball reaches takes the ball's speed along the normal, and
+    /// the ball loses the momentum the node gained — `−m_node · Δv`, with the matching angular
+    /// part about its centre of mass. A body that cannot react (static, kinematic, missing from
+    /// `reactions`) is owed nothing, and a static one moves nothing: with an empty table the
+    /// arithmetic is exactly the one-way step's.
+    ///
+    /// **Why it exists.** Cloth was strictly one-way: it draped over rigid bodies and pushed
+    /// none back, so a ball dropped on a hammock went through it — the cloth parting around it
+    /// — and a net could catch nothing. `SoftBodyMesh` had the two-way exchange; cloth did not.
+    pub fn step_coupled(
+        &mut self,
+        dt: f32,
+        gravity: Vec3,
+        sub_steps: usize,
+        colliders: &[(BodyHandle, Transform, Collider)],
+        reactions: &[(BodyHandle, crate::coupling::RigidReaction)],
+        impulses: &mut Vec<crate::coupling::RigidImpulse>,
+    ) {
         let sub_dt = dt / (sub_steps as f32);
         let sub_dt2 = sub_dt * sub_dt;
 
@@ -433,6 +461,8 @@ impl Cloth {
         // stays clean. Only populated when there are rigid colliders to resolve against.
         let mut impact_vel: Vec<Vec3> = Vec::new();
         let mut contact_normal: Vec<Option<Vec3>> = Vec::new();
+        // …and which body that contact was with, so the reaction knows where to go.
+        let mut contact_body: Vec<Option<BodyHandle>> = Vec::new();
         // Edge-pass accumulation: corrections are summed per node and applied as an AVERAGE,
         // so a node shared by many edges is not shoved once per incident edge (compounding).
         let mut edge_push: Vec<Vec3> = Vec::new();
@@ -440,6 +470,7 @@ impl Cloth {
         if !colliders.is_empty() {
             impact_vel = vec![Vec3::ZERO; self.nodes.len()];
             contact_normal = vec![None; self.nodes.len()];
+            contact_body = vec![None; self.nodes.len()];
             edge_push = vec![Vec3::ZERO; self.nodes.len()];
             edge_cnt = vec![0u32; self.nodes.len()];
         }
@@ -506,13 +537,15 @@ impl Cloth {
 
                 // Impact velocity (post-predict, post-constraint) BEFORE any collision push,
                 // and the contact normal for each node that ends up touching something.
-                for ((node, cn), iv) in self
+                for (((node, cn), cb), iv) in self
                     .nodes
                     .iter()
                     .zip(contact_normal.iter_mut())
+                    .zip(contact_body.iter_mut())
                     .zip(impact_vel.iter_mut())
                 {
                     *cn = None;
+                    *cb = None;
                     *iv = if node.inv_mass != 0.0 {
                         (node.position - node.prev_position) / sub_dt
                     } else {
@@ -521,16 +554,17 @@ impl Cloth {
                 }
 
                 // Pass 1 — node contact: project each dynamic node out of each collider.
-                for (node, cn) in self.nodes.iter_mut().zip(contact_normal.iter_mut()) {
+                for ((node, cn), cb) in self.nodes.iter_mut().zip(contact_normal.iter_mut()).zip(contact_body.iter_mut()) {
                     if node.inv_mass == 0.0 {
                         continue;
                     }
-                    for (_, ctrans, col) in colliders {
+                    for (handle, ctrans, col) in colliders {
                         if let Some((new_pos, n)) =
                             project_point_out(node.position, thickness, &col.shape, ctrans)
                         {
                             node.position = new_pos;
                             *cn = Some(n);
+                            *cb = Some(*handle);
                         }
                     }
                 }
@@ -563,7 +597,7 @@ impl Cloth {
                     if ma == 0.0 && mb == 0.0 {
                         continue;
                     }
-                    for (_, ctrans, col) in colliders {
+                    for (handle, ctrans, col) in colliders {
                         let Some(bound) = collider_bound(&col.shape) else {
                             continue;
                         };
@@ -610,6 +644,7 @@ impl Cloth {
                                 edge_push[a_idx] += d;
                                 edge_cnt[a_idx] += 1;
                                 contact_normal[a_idx] = Some(n);
+                                contact_body[a_idx] = Some(*handle);
                             }
                         }
                         if mb != 0.0 {
@@ -618,6 +653,7 @@ impl Cloth {
                                 edge_push[b_idx] += d;
                                 edge_cnt[b_idx] += 1;
                                 contact_normal[b_idx] = Some(n);
+                                contact_body[b_idx] = Some(*handle);
                             }
                         }
                     }
@@ -634,26 +670,47 @@ impl Cloth {
                 }
 
                 // Pass 3 — velocity response, ONCE per contacted node: remove the inward normal
-                // component of the pre-collision impact velocity (inelastic) and apply friction
-                // to the tangential remainder, then rebuild prev_position from the new velocity.
-                for ((node, cn), iv) in self
+                // component of the impact velocity **relative to the body at the contact**
+                // (inelastic) and apply friction to the tangential remainder, then rebuild
+                // prev_position from the new velocity. Against a body at rest — every static
+                // collider, and every one when `reactions` is empty — the relative velocity is
+                // the node's own, exactly, and so is the arithmetic. What the node gained, the
+                // body owes back.
+                for (((node, cn), cb), iv) in self
                     .nodes
                     .iter_mut()
                     .zip(contact_normal.iter())
+                    .zip(contact_body.iter())
                     .zip(impact_vel.iter())
                 {
                     if node.inv_mass == 0.0 {
                         continue;
                     }
                     if let Some(n) = *cn {
+                        let reaction = cb.map_or(crate::coupling::RigidReaction::IMMOVABLE, |b| crate::coupling::reaction_for(reactions, b));
+                        let surface = reaction.velocity_at(node.position);
                         let vel = *iv;
-                        let vn = vel.dot(n);
+                        let rel = vel - surface;
+                        let vn = rel.dot(n);
                         let new_vel = if vn < 0.0 {
-                            (vel - n * vn) * (1.0 - friction)
+                            (rel - n * vn) * (1.0 - friction) + surface
                         } else {
                             vel
                         };
                         node.prev_position = node.position - new_vel * sub_dt;
+                        if let (Some(body), true) = (*cb, reaction.can_react()) {
+                            let impulse = (vel - new_vel) * node.mass;
+                            crate::coupling::accumulate_impulse(
+                                impulses,
+                                &crate::coupling::NodeImpact {
+                                    body,
+                                    point: node.position,
+                                    normal: n,
+                                    impulse,
+                                    angular_impulse: (node.position - reaction.center_of_mass).cross(impulse),
+                                },
+                            );
+                        }
                     }
                 }
             }

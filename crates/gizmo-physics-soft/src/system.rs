@@ -183,8 +183,9 @@ pub fn apply_reaction_impulses(world: &World, impulses: &[RigidImpulse]) {
 /// Steps every [`Cloth`] in the world by `dt` seconds under `gravity` using a fixed
 /// number of XPBD sub-steps. The timestep is clamped to a stable upper bound.
 ///
-/// Cloth is still **one-way**: it collides against the rigid colliders but pushes nothing
-/// back. Only [`SoftBodyMesh`] has the two-body response so far.
+/// Two-way, like [`SoftBodyMesh`] (with the `rigid-coupling` feature): the cloth is resolved
+/// against each body's motion and the bodies it pushes are paid back
+/// ([`Cloth::step_coupled`]).
 #[tracing::instrument(skip_all, name = "cloth_step_system")]
 pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
     let dt = dt.min(MAX_SOFT_DT);
@@ -194,12 +195,22 @@ pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
     // Collect rigid colliders so the cloth drapes over them (not just the floor).
     let rigid_colliders = collect_rigid_colliders(world);
 
+    // …and, like the soft bodies, what the bodies behind them are made of, so the cloth pushes
+    // back (a hammock holds a ball; it used to part around it).
+    #[cfg(feature = "rigid-coupling")]
+    let reactions = collect_rigid_reactions(world);
+    #[cfg(not(feature = "rigid-coupling"))]
+    let reactions: Vec<(BodyHandle, RigidReaction)> = Vec::new();
+    let mut impulses: Vec<RigidImpulse> = Vec::new();
+
     // SAFETY: scheduled system, exclusive view of Cloth — see `soft_body_step_system` above.
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Cloth>>() } {
         for (_, mut cloth) in q.iter_mut() {
-            cloth.step(dt, gravity, sub_steps, &rigid_colliders);
+            cloth.step_coupled(dt, gravity, sub_steps, &rigid_colliders, &reactions, &mut impulses);
         }
     }
+    #[cfg(feature = "rigid-coupling")]
+    apply_reaction_impulses(world, &impulses);
 }
 
 /// Steps every [`Rope`] in the world by `dt` seconds under `gravity`.

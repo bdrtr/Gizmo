@@ -150,6 +150,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **Cloth pushes back: a hammock holds a ball (`Cloth::step_coupled`).** Cloth was strictly
+  one-way — it draped over rigid bodies and pushed none back — so a 1 kg ball dropped 0.8 m onto a
+  hammock went through it to the floor, the cloth parting around it. `cloth_step_system` now does
+  what `soft_body_step_system` did: reads the bodies' mass and motion (`collect_rigid_reactions`),
+  resolves each node contact against the body's velocity at the contact instead of a wall at
+  rest, and pays the body `−m_node · Δv` (with the angular part) through
+  `apply_reaction_impulses`. Static colliders keep the exact old arithmetic, and `Cloth::step` is
+  the one-way step as before. Tested with 1 kg and 5 kg balls on a pinned hammock; dropping the
+  payment puts both on the floor. Not done: the cloth has next to no internal damping, so a ball
+  keeps bouncing on it at about the speed it arrived with — energy kept, not gained (measured).
 - **A `Cloth` component is drawn.** The physics step simulated every `Cloth` in the world and no
   draw path knew the type; the cloth did not even keep the grid width that turns its nodes back
   into a surface (`cloth_demo` kept its cloth outside the ECS and built its own GPU mesh in a
