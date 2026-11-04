@@ -2159,6 +2159,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A debug line drawn every frame was drawn twice on most frames.** The renderer cleared
+  `Gizmos` only on frames that had stepped physics, so at 144 Hz over a 60 Hz step a line from an
+  update system was drawn twice on more than half the frames (a moving one with a ghost a frame
+  behind), and a line from a fixed-step system twice on a frame with two steps. `Gizmos` now keeps
+  two lifetimes: `fixed_lines`, what the last physics step drew, kept until the next step (the
+  frame loop calls `Gizmos::end_fixed_step`), and `lines`, cleared after every rendered frame.
+  `vertices()` / `vertex_count()` give both. `physics_debug_system` also stopped logging at `info`
+  on every call.
 - **A replaced `MeshData` was never drawn.** The asset loader read an entity's `MeshData` only on
   the first frame it had no `Mesh`, so geometry rebuilt in code (a vision cone each frame) stayed
   as it was first uploaded. It now tracks which allocation each entity's mesh came from and uploads

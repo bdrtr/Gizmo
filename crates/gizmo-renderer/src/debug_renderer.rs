@@ -5,18 +5,50 @@ use gizmo_math::Vec3;
 /// Draw into it from anywhere during the frame, then hand it to
 /// [`GizmoRendererSystem::update`]; [`clear`](Self::clear) starts the next frame. Nothing here
 /// touches the GPU, so a system can draw gizmos without holding a device.
+///
+/// **Two lifetimes, because a game draws from two schedules.** A line drawn in the per-frame
+/// update lives one rendered frame. A line drawn inside a fixed physics step lives until the
+/// *next* step: the frame loop calls [`end_fixed_step`](Self::end_fixed_step) after each one,
+/// which moves what it drew into [`fixed_lines`](Self::fixed_lines). Until 2026-11-04 there was
+/// one buffer and the renderer cleared it only on frames that had stepped physics — so at 144 Hz
+/// over a 60 Hz step, a line drawn every frame was drawn twice on most frames (a moving one
+/// left a ghost a frame behind), and a line drawn every step was drawn twice on a frame with two
+/// steps.
 pub struct Gizmos {
-    /// The line vertices, in pairs — each two consecutive entries are one segment.
+    /// The line vertices, in pairs — each two consecutive entries are one segment. Everything
+    /// drawn since the last [`clear`](Self::clear) or [`end_fixed_step`](Self::end_fixed_step).
     pub lines: Vec<GizmoVertex>,
+    /// What the last fixed step drew, kept and drawn on every frame until the next step replaces
+    /// it — a frame that steps no physics still shows the physics' lines, once.
+    pub fixed_lines: Vec<GizmoVertex>,
     /// Whether the lines are occluded by the scene. False draws them over everything, which is
     /// what makes a gizmo inside a mesh still selectable.
     pub depth_test: bool,
 }
 
 impl Gizmos {
-    /// Drops every line, ready for the next frame.
+    /// Ends a rendered frame: drops the lines drawn this frame. The last fixed step's
+    /// [`fixed_lines`](Self::fixed_lines) stay — they belong to the simulation's clock, not the
+    /// frame's.
     pub fn clear(&mut self) {
         self.lines.clear();
+    }
+
+    /// Ends a fixed step: what was drawn since the last frame or step becomes the step's lines,
+    /// replacing the previous step's. Called by the frame loop after each step.
+    pub fn end_fixed_step(&mut self) {
+        std::mem::swap(&mut self.lines, &mut self.fixed_lines);
+        self.lines.clear();
+    }
+
+    /// Every line to draw this frame: the last fixed step's, then this frame's.
+    pub fn vertices(&self) -> impl Iterator<Item = &GizmoVertex> {
+        self.fixed_lines.iter().chain(&self.lines)
+    }
+
+    /// How many vertices [`vertices`](Self::vertices) yields.
+    pub fn vertex_count(&self) -> usize {
+        self.fixed_lines.len() + self.lines.len()
     }
 
     /// One world-space segment.
@@ -282,13 +314,13 @@ impl GizmoRendererSystem {
 
     /// Uploads this frame's lines, truncating at [`max_vertices`](Self::max_vertices).
     pub fn update(&mut self, queue: &wgpu::Queue, gizmos: &Gizmos) {
-        self.index_count = gizmos.lines.len() as u32;
+        self.index_count = gizmos.vertex_count() as u32;
         if self.index_count > 0 {
             let to_write = self.index_count.min(self.max_vertices) as usize;
 
             // Map gizmo_core::GizmoVertex to GpuGizmoVertex
             let mut gpu_data = Vec::with_capacity(to_write);
-            for v in &gizmos.lines[0..to_write] {
+            for v in gizmos.vertices().take(to_write) {
                 gpu_data.push(GpuGizmoVertex {
                     position: v.position,
                     color: v.color,
@@ -329,5 +361,39 @@ impl GizmoRendererSystem {
         rpass.set_bind_group(0, global_bind_group, &[]);
         rpass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
         rpass.draw(0..draw_count, 0..1);
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    use super::*;
+
+    fn line(g: &mut Gizmos, x: f32) {
+        g.draw_line(Vec3::new(x, 0.0, 0.0), Vec3::new(x, 1.0, 0.0), [1.0; 4]);
+    }
+
+    /// A step's lines outlive the frame that drew them and die at the next step; a frame's lines
+    /// die at the frame's end.
+    #[test]
+    fn step_lines_live_until_the_next_step_and_frame_lines_one_frame() {
+        let mut g = Gizmos::default();
+        line(&mut g, 1.0); // drawn in a fixed step
+        g.end_fixed_step();
+        line(&mut g, 2.0); // drawn in update
+        assert_eq!(g.vertex_count(), 4);
+        g.clear(); // frame rendered
+
+        // A frame that steps nothing still shows the step's line — once, not the frame's twice.
+        line(&mut g, 2.0);
+        assert_eq!(g.vertex_count(), 4, "a frame with no step lost or doubled lines");
+        g.clear();
+
+        // Two steps in one frame: only the second one's line is shown.
+        line(&mut g, 3.0);
+        g.end_fixed_step();
+        line(&mut g, 4.0);
+        g.end_fixed_step();
+        assert_eq!(g.vertex_count(), 2, "both steps' lines drawn");
+        assert_eq!(g.vertices().next().unwrap().position[0], 4.0);
     }
 }

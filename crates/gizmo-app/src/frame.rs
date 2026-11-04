@@ -150,6 +150,12 @@ where
         }
 
         fixed_schedule.run(world, fixed_dt);
+        // The step's debug lines are kept until the next step, not until the end of this frame:
+        // see `Gizmos`, and the test below.
+        #[cfg(feature = "render")]
+        if let Some(mut gizmos) = world.get_resource_mut::<gizmo_renderer::Gizmos>() {
+            gizmos.end_fixed_step();
+        }
         after_each_fixed_step(world);
 
         world
@@ -636,5 +642,35 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         assert!(stopped, "the faded-out loop was stopped");
+    }
+
+    /// A fixed-step system's debug lines are drawn once per frame — on a frame with no step and
+    /// on a frame with two — and a per-frame system's once.
+    #[test]
+    #[cfg(feature = "render")]
+    fn each_schedules_debug_lines_are_drawn_once() {
+        use gizmo_math::Vec3;
+        use gizmo_renderer::Gizmos;
+        fn draw(world: &World, x: f32) {
+            let mut g = world.get_resource_mut::<Gizmos>().unwrap();
+            g.draw_line(Vec3::new(x, 0.0, 0.0), Vec3::new(x, 1.0, 0.0), [1.0; 4]);
+        }
+        let mut world = World::new();
+        world.insert_resource(PhysicsTime::new(60));
+        world.insert_resource(Gizmos::default());
+        let mut fixed = Schedule::new();
+        fixed.add_system(|w: &World, _dt: f32| draw(w, 1.0));
+        let mut update = Schedule::new();
+        update.add_system(|w: &World, _dt: f32| draw(w, 2.0));
+
+        let step = 1.0 / 60.0;
+        // One step, then none, then two.
+        for (dt, steps) in [(step * 1.01, 1), (step * 0.3, 0), (step * 1.9, 2)] {
+            let ran = run_fixed_and_update(&mut world, &mut fixed, &mut update, dt, dt, |_| {});
+            assert_eq!(ran.fixed_steps, steps);
+            let mut g = world.get_resource_mut::<Gizmos>().unwrap();
+            assert_eq!(g.vertex_count(), 4, "{steps} steps: not one line per schedule");
+            g.clear(); // what the renderer does after drawing
+        }
     }
 }

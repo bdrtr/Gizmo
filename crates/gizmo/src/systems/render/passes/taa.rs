@@ -93,38 +93,40 @@ pub fn record_taa_and_overlays(
         }
     }
 
-    // Auto-clear gizmos for the next frame ONLY if a physics step occurred
-    let mut should_clear = true;
-    let current_step = world.get_resource::<gizmo_core::time::PhysicsTime>()
-        .map(|pt| pt.step_count());
-
-    if let Some(current_step) = current_step {
-        struct GizmosLastStepCount(u64);
-
-        let has_resource = world.get_resource::<GizmosLastStepCount>().is_some();
-        if has_resource {
-            if let Some(mut last_step) = world.get_resource_mut::<GizmosLastStepCount>() {
-                if last_step.0 == current_step {
-                    should_clear = false;
-                } else {
-                    last_step.0 = current_step;
-                }
-            }
-        } else {
-            world.insert_resource(GizmosLastStepCount(current_step));
-        }
-    }
-
-    if should_clear {
-        if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
-            gizmos.clear();
-        }
-    }
+    end_gizmo_frame(world);
 
     // Advance TAA ping-pong and frame counter
     if let Some(ref mut taa) = renderer.taa {
         if taa.enabled {
             taa.advance_frame();
         }
+    }
+}
+
+/// This frame's debug lines are drawn; the last physics step's stay (`Gizmos::fixed_lines`)
+/// until the next step. This cleared everything, and only on frames that had stepped physics —
+/// so a line drawn every frame was drawn twice on every frame that had not.
+fn end_gizmo_frame(world: &crate::core::World) {
+    if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
+        gizmos.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A frame that stepped no physics still ends its own lines.
+    #[test]
+    fn a_frame_without_a_physics_step_still_ends_its_lines() {
+        let mut world = crate::core::World::new();
+        world.insert_resource(gizmo_core::time::PhysicsTime::new(60));
+        world.insert_resource(crate::renderer::Gizmos::default());
+        for _ in 0..3 {
+            world
+                .get_resource_mut::<crate::renderer::Gizmos>()
+                .unwrap()
+                .draw_line(crate::math::Vec3::ZERO, crate::math::Vec3::X, [1.0; 4]);
+            super::end_gizmo_frame(&world);
+        }
+        assert_eq!(world.get_resource::<crate::renderer::Gizmos>().unwrap().vertex_count(), 0);
     }
 }

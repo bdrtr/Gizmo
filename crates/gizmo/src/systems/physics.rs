@@ -318,10 +318,7 @@ pub fn physics_debug_system(world: &crate::core::World) {
                 }
             }
         }
-        tracing::info!(
-            "physics_debug_system: gizmos lines count = {}",
-            gizmos.lines.len()
-        );
+        tracing::trace!(vertices = gizmos.vertex_count(), "physics_debug_system: gizmo lines");
     }
 }
 
