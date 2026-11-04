@@ -26,7 +26,8 @@
 //! aynen çalışıyor, ilk parmak fare olduğu için.
 //!
 //! ## Ortam değişkenleri
-//!   * `MUCEVHER_OTO=1` — kendi kendine oynar (ekran görüntüsü için)
+//!   * `MUCEVHER_OTO=1` — kendi kendine oynar (ekran görüntüsü için; `mucevher --test` pencere
+//!     açmadan bir tur oynar). Otomatik oyunun puanı rekor sayılmaz.
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::app::save::SaveData;
@@ -38,7 +39,7 @@ use gizmo::renderer::components::{ParticleEmitter, ProjectionMode, Text, TextAli
 use gizmo::renderer::screen_fade::ScreenFade;
 use gizmo::renderer::text::FontId;
 use gizmo::renderer::tween::{Ease, Tween};
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, SimpleAppExt, SimpleSceneState};
 
 const N: usize = 8;
 const KINDS: u8 = 6;
@@ -89,7 +90,100 @@ fn cell_pos(x: usize, y: usize) -> Vec3 {
     Vec3::new(x as f32 - (N as f32 - 1.0) / 2.0, y as f32 - (N as f32 - 1.0) / 2.0, 0.0)
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-0.6) * Quat::from_rotation_y(0.4)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun),
+    ));
+    // Tahtanın zemini.
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, 0.0, -0.8)).with_scale(Vec3::new(N as f32 / 2.0 + 0.2, N as f32 / 2.0 + 0.2, 0.1)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(Vec4::new(0.08, 0.09, 0.12, 1.0), 0.9, 0.0),
+        MeshRenderer::new(),
+    ));
+    world.insert_resource(ScreenFade::default());
+
+    let hud = world
+        .spawn_bundle((Text::pinned("", font, 24.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+        .id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.45), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("tak", Blip::new(Wave::Triangle, 520.0, 0.06).with_volume(0.3).wav());
+        audio.load_sound_bytes("pat", Blip::new(Wave::Sine, 880.0, 0.12).with_slide(1400.0).with_volume(0.3).wav());
+        audio.load_sound_bytes("yok", Blip::new(Wave::Square, 200.0, 0.1).with_slide(150.0).with_volume(0.15).wav());
+        world.insert_resource(audio);
+    }
+
+    let best = SaveData::open("mucevher").get::<u32>("best").unwrap_or(0);
+    let mut game = Game {
+        cells: [[None; N]; N],
+        phase: Phase::Idle,
+        selected: None,
+        pressed: None,
+        rng: Rng::new(42),
+        score: 0,
+        best,
+        combo: 1,
+        clock: Timer::once(ROUND),
+        hud,
+        banner,
+        auto: std::env::var_os("MUCEVHER_OTO").is_some(),
+    };
+    fill_board(world, &mut game);
+    game
+}
+
+/// `--test`: pencere açmadan bir tur otomatik oyun. Puan toplanmalı; tur bitip taşlar durulunca
+/// tahtanın her karesinde bir taş olmalı, her taş canlı ve kendi karesinde durmalı (taşları
+/// tween'ler yürütüyor — çizilmeyen karede de ilerlemeleri gerek).
+fn self_test() -> bool {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font(), false);
+    game.auto = true;
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world);
+    let over = |w: &World| w.get_resource::<Game>().is_some_and(|g| g.phase == Phase::Over);
+    while run.elapsed < ROUND + 30.0 && !(over(&run.world) && !animating(&run.world)) {
+        run.frame(1.0 / 60.0, update);
+    }
+    let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+    let (mut filled, mut placed) = (0, 0);
+    for x in 0..N {
+        for y in 0..N {
+            if let Some((_, id)) = game.cells[x][y] {
+                filled += 1;
+                let at = run.world.borrow::<Transform>().get(id).map(|t| t.position);
+                if at.is_some_and(|p| (p - cell_pos(x, y)).length() < 0.01) {
+                    placed += 1;
+                }
+            }
+        }
+    }
+    let ok = game.score > 0 && filled == N * N && placed == N * N;
+    println!(
+        "mucevher --test: {:.0} s'lik tur, {} puan; tahtada {filled}/{} taş, {placed}'i kendi karesinde → {}",
+        ROUND,
+        game.score,
+        N * N,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Mücevher", 1280, 720)
         .with_simple_scene(|scene, state| {
             let font = load_font(scene.renderer);
@@ -99,55 +193,7 @@ fn main() {
                     cam.projection = ProjectionMode::OrthographicFit { width: 10.0, height: 10.0 };
                 }
             }
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-0.6) * Quat::from_rotation_y(0.4)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun),
-            ));
-            // Tahtanın zemini.
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(0.0, 0.0, -0.8)).with_scale(Vec3::new(N as f32 / 2.0 + 0.2, N as f32 / 2.0 + 0.2, 0.1)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(Vec4::new(0.08, 0.09, 0.12, 1.0), 0.9, 0.0),
-                MeshRenderer::new(),
-            ));
-            scene.world.insert_resource(ScreenFade::default());
-
-            let hud = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 24.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.45), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("tak", Blip::new(Wave::Triangle, 520.0, 0.06).with_volume(0.3).wav());
-                audio.load_sound_bytes("pat", Blip::new(Wave::Sine, 880.0, 0.12).with_slide(1400.0).with_volume(0.3).wav());
-                audio.load_sound_bytes("yok", Blip::new(Wave::Square, 200.0, 0.1).with_slide(150.0).with_volume(0.15).wav());
-                scene.world.insert_resource(audio);
-            }
-
-            let best = SaveData::open("mucevher").get::<u32>("best").unwrap_or(0);
-            let mut game = Game {
-                cells: [[None; N]; N],
-                phase: Phase::Idle,
-                selected: None,
-                pressed: None,
-                rng: Rng::new(42),
-                score: 0,
-                best,
-                combo: 1,
-                clock: Timer::once(ROUND),
-                hud,
-                banner,
-                auto: std::env::var_os("MUCEVHER_OTO").is_some(),
-            };
-            fill_board(scene.world, &mut game);
+            let game = setup(scene.world, font, true);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
@@ -206,8 +252,11 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     if game.phase != Phase::Over && game.clock.tick(dt) > 0 {
         game.phase = Phase::Over;
         game.best = game.best.max(game.score);
-        let mut save = SaveData::open("mucevher");
-        let _ = save.set("best", &game.best).and_then(|()| save.save());
+        // Otomatik oyunun puanı rekor sayılmaz (ve sınama oyuncunun kaydına yazmaz).
+        if !game.auto {
+            let mut save = SaveData::open("mucevher");
+            let _ = save.set("best", &game.best).and_then(|()| save.save());
+        }
         if let Some(mut fade) = world.get_resource_mut::<ScreenFade>() {
             fade.fade_to(0.55, 0.6);
         }
