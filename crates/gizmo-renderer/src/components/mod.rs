@@ -15,11 +15,11 @@ pub mod light;
 pub mod material;
 /// Meshes and their per-entity render settings.
 pub mod mesh;
-/// A colour eased to a target — [`ColorTween`](color_tween::ColorTween).
+/// A colour eased to a target — [`ColorTween`].
 pub mod color_tween;
-/// Trauma that shakes a camera — [`CameraShake`](camera_shake::CameraShake).
+/// Trauma that shakes a camera — [`CameraShake`].
 pub mod camera_shake;
-/// Geometry made in code, as data the draw path uploads — [`MeshData`](mesh_data::MeshData).
+/// Geometry made in code, as data the draw path uploads — [`MeshData`].
 pub mod mesh_data;
 /// Everything else an entity can carry: terrain, LOD groups, particle emitters, render targets,
 /// fluid markers and the frame's render statistics.

@@ -24,7 +24,7 @@
 //! Adding the component to a camera therefore changes nothing until a slider moves, which is what
 //! makes it safe to add from the ➕ menu.
 //!
-//! Exposure is deliberately **not** here. It is already on [`Camera`](super::Camera), it already
+//! Exposure is deliberately **not** here. It is already on [`Camera`], it already
 //! round-trips, and duplicating it would create the very split this component exists to end.
 
 /// Per-camera post-processing: what the frame this camera renders is graded with.

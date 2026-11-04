@@ -1,6 +1,6 @@
 //! Per-frame editor integration extracted out of the windowed event loop.
 //!
-//! The windowed [`App`](crate::App) loop is editor-agnostic: it only knows how
+//! The windowed [`App`] loop is editor-agnostic: it only knows how
 //! to drive the generic [`EguiContext`](crate::egui_ctx::EguiContext) overlay.
 //! Everything that reads or mutates [`gizmo_editor::EditorState`] — the
 //! scene/game viewport render-to-texture management and the scene save / load /

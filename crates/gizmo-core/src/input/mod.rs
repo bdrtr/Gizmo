@@ -607,9 +607,9 @@ mod fighter;
 mod gamepad;
 mod mapping;
 pub mod rumble;
-/// Fingers on a touchscreen — [`Touch`](touch::Touch), and the first one as the mouse.
+/// Fingers on a touchscreen — [`Touch`], and the first one as the mouse.
 pub mod touch;
-/// [`HoldRepeat`](hold_repeat::HoldRepeat): a held key that fires again and again.
+/// [`HoldRepeat`]: a held key that fires again and again.
 pub mod hold_repeat;
 pub use axis::{blend_move_axis, MoveKeys};
 pub use fighter::{FighterInputBuffer, FrameActions, FrameRecord, PlaybackData};

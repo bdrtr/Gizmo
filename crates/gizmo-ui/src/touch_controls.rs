@@ -2,13 +2,13 @@
 //!
 //! A twin-stick game on a phone needs two thumbs at once — one moving, one aiming or firing — and
 //! the first finger is the only one that drives the mouse, so nothing built on
-//! [`Interaction`](crate::Interaction) can follow the second. These controls read
+//! [`Interaction`] can follow the second. These controls read
 //! [`Input::touches`](gizmo_core::input::Input::touches) directly: each one **claims the finger
 //! that lands on it** and follows that finger until it lifts, wherever it goes, so a stick and a
 //! button are held by two fingers independently. With no fingers on the screen they answer to the
 //! mouse instead, so a desktop build can be played and tested with them.
 //!
-//! Put one on a UI node (a [`NodeBundle`](crate::NodeBundle) is enough — they need no
+//! Put one on a UI node (a [`NodeBundle`] is enough — they need no
 //! `Interaction`): the node's box is where a finger lands on it. Under `gizmo-engine` a stick's
 //! knob is drawn over its background, at where the stick points.
 

@@ -1,4 +1,4 @@
-//! Light cookies (gobos): an image a [`SpotLight`](crate::components::SpotLight) projects through
+//! Light cookies (gobos): an image a [`SpotLight`] projects through
 //! its cone — a window frame, leaves, a stained-glass colour, a flashlight's uneven beam.
 //!
 //! Cookies live in one `Rgba8UnormSrgb` texture array of [`COOKIE_LAYERS`](crate::cookies::COOKIE_LAYERS) layers,

@@ -10,7 +10,7 @@
 //! against its own threshold, so one impact can yield two events.
 //!
 //! The ECS-driven alternative is `physics_fracture_system` in [`crate::system`], which works
-//! off the [`Breakable`](crate::components::Breakable) component and does spawn the debris
+//! off the [`Breakable`] component and does spawn the debris
 //! itself. The two are independent paths, not layers of one.
 
 use crate::world::PhysicsWorld;

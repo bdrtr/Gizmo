@@ -1,6 +1,6 @@
 //! Moving and fading UI boxes: [`UiTransform`], and [`UiTween`] to animate it.
 //!
-//! A box's place comes from its [`Style`](crate::Style), recomputed by the layout every frame, so
+//! A box's place comes from its [`Style`], recomputed by the layout every frame, so
 //! sliding a card from the deck to the hand, letting a dragged item follow the pointer or sending
 //! it back when it is dropped in the wrong place meant rewriting `inset`s by hand each frame —
 //! `birlestir` turned its dragged item `Absolute` for it, `duello` would have done it for every

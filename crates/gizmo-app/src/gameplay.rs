@@ -5,7 +5,7 @@
 //! that drive them ([`vehicle_controller_system`](gizmo_physics_dynamics::vehicle_controller_system),
 //! [`character_controller_system`](gizmo_physics_dynamics::character_controller_system),
 //! [`fighter_frame_system`](gizmo_physics_dynamics::fighter_frame_system)).
-//! This module wires those systems into an [`App`](crate::App)'s schedule so a
+//! This module wires those systems into an [`App`]'s schedule so a
 //! scene author gets working vehicles/characters/fighters "for free".
 //!
 //! The systems are placed in [`Phase::Physics`](gizmo_core::system::Phase::Physics)
