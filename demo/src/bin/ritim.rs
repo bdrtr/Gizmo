@@ -28,7 +28,8 @@
 //!   bilerek kuruluyor.
 //!
 //! ## Ortam değişkenleri
-//!   * `RITIM_OTO=1` — kendi kendine oynar (her notaya tam zamanında basar)
+//!   * `RITIM_OTO=1` — kendi kendine oynar (her notaya tam zamanında basar; `ritim --test` pencere
+//!     açmadan bir şarkıyı böyle, bir şarkıyı hiç basmadan oynar)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::audio::AudioManager;
@@ -36,7 +37,7 @@ use gizmo::core::input::Input;
 use gizmo::prelude::*;
 use gizmo::renderer::components::{ColorTween, ParticleEmitter, ProjectionMode, Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{BackgroundColor, NodeBundle, PositionType, ProgressBar, Style, UiPlugin, UiRect, Val, VirtualButton};
 
 const RATE: u32 = 44_100;
@@ -103,7 +104,123 @@ fn lane_x(lane: usize) -> f32 {
     (lane as f32 - (LANES as f32 - 1.0) / 2.0) * 1.2
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz; saat o zaman oyunun kendi saati.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-0.5)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun),
+    ));
+    // Şeritler ve çizgi.
+    let mut lane_marks = [0; LANES];
+    for (lane, mark) in lane_marks.iter_mut().enumerate() {
+        let c = LANE_COLOURS[lane];
+        world.spawn_bundle((
+            Transform::new(Vec3::new(lane_x(lane), 0.5, -1.0)).with_scale(Vec3::new(0.5, 4.8, 0.05)),
+            GlobalTransform::default(),
+            MeshSource("standard_cube".into()),
+            MaterialDesc::new().with_unlit(Vec4::new(c.x * 0.12, c.y * 0.12, c.z * 0.12, 1.0)),
+            MeshRenderer::new(),
+        ));
+        *mark = world
+            .spawn_bundle((
+                Transform::new(Vec3::new(lane_x(lane), HIT_Y, -0.5)).with_scale(Vec3::new(0.55, 0.08, 0.1)),
+                GlobalTransform::default(),
+                MeshSource("standard_cube".into()),
+                MaterialDesc::new().with_unlit(Vec4::new(c.x * 0.5, c.y * 0.5, c.z * 0.5, 1.0)),
+                MeshRenderer::new(),
+            ))
+            .id();
+    }
+
+    let hud = world
+        .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+        .id();
+    let judgement = world
+        .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+
+    let progress = world.spawn_bundle(NodeBundle {
+        style: Style {
+            position_type: PositionType::Absolute,
+            inset: UiRect { left: Val::Px(0.0), top: Val::Px(0.0), right: Val::Auto, bottom: Val::Auto },
+            width: Val::Percent(100.0),
+            height: Val::Px(6.0),
+            ..Default::default()
+        },
+        background_color: BackgroundColor(Vec4::new(1.0, 1.0, 1.0, 0.08)),
+        ..Default::default()
+    });
+    world.add_component(progress, ProgressBar::new(0.0).with_fill(Vec4::new(0.9, 0.85, 0.4, 0.9)));
+    let progress = progress.id();
+
+    // Müzik: sentezlenmiş bir döngü; notalar onun vuruşlarına göre.
+    let (samples, loop_len) = song();
+    let mut music = None;
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_samples("sarki", &samples, RATE);
+        music = audio.play_looped("sarki").ok();
+        world.insert_resource(audio);
+    }
+
+    Game {
+        notes: chart(),
+        music,
+        fallback_clock: 0.0,
+        offset: 0.0,
+        loop_len,
+        score: 0,
+        combo: 0,
+        best_combo: 0,
+        perfect: 0,
+        good: 0,
+        missed: 0,
+        hud,
+        judgement,
+        lane_marks,
+        buttons: None,
+        progress,
+        auto: std::env::var_os("RITIM_OTO").is_some(),
+    }
+}
+
+/// Bir şarkı boyunca oynar (`auto`: her notaya tam zamanında basar, değilse hiç basmaz);
+/// mükemmel, iyi, kaçan nota sayıları ve toplam.
+fn play_song(auto: bool) -> (u32, u32, u32, usize) {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font(), false);
+    game.auto = auto;
+    let last = game.notes.iter().map(|n| n.t).fold(0.0, f32::max);
+    let total = game.notes.len();
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world).add_plugin(UiPlugin).add_plugin(gizmo::systems::lifetime::LifetimePlugin);
+    while run.elapsed < last + 2.0 {
+        run.frame(1.0 / 60.0, update);
+    }
+    let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+    (game.perfect, game.good, game.missed, total)
+}
+
+/// `--test`: pencere açmadan iki şarkı. Her notaya tam zamanında basan otomatik oyuncu hiçbirini
+/// kaçırmamalı; hiç basmayan hepsini kaçırmalı.
+fn self_test() -> bool {
+    let (perfect, good, missed, total) = play_song(true);
+    let (_, _, idle_missed, _) = play_song(false);
+    let ok = total > 0 && missed == 0 && perfect + good == total as u32 && idle_missed == total as u32;
+    println!(
+        "ritim --test: {total} nota; otomatik {perfect} mükemmel, {good} iyi, {missed} kaçtı; hiç basmayan {idle_missed} kaçırdı → {}",
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Ritim", 1280, 720)
         .add_plugin(UiPlugin)
         .add_plugin(gizmo::systems::lifetime::LifetimePlugin)
@@ -115,87 +232,8 @@ fn main() {
                     cam.projection = ProjectionMode::OrthographicFit { width: 7.0, height: 9.0 };
                 }
             }
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-0.5)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun),
-            ));
-            // Şeritler ve çizgi.
-            let mut lane_marks = [0; LANES];
-            for (lane, mark) in lane_marks.iter_mut().enumerate() {
-                let c = LANE_COLOURS[lane];
-                scene.world.spawn_bundle((
-                    Transform::new(Vec3::new(lane_x(lane), 0.5, -1.0)).with_scale(Vec3::new(0.5, 4.8, 0.05)),
-                    GlobalTransform::default(),
-                    MeshSource("standard_cube".into()),
-                    MaterialDesc::new().with_unlit(Vec4::new(c.x * 0.12, c.y * 0.12, c.z * 0.12, 1.0)),
-                    MeshRenderer::new(),
-                ));
-                *mark = scene
-                    .world
-                    .spawn_bundle((
-                        Transform::new(Vec3::new(lane_x(lane), HIT_Y, -0.5)).with_scale(Vec3::new(0.55, 0.08, 0.1)),
-                        GlobalTransform::default(),
-                        MeshSource("standard_cube".into()),
-                        MaterialDesc::new().with_unlit(Vec4::new(c.x * 0.5, c.y * 0.5, c.z * 0.5, 1.0)),
-                        MeshRenderer::new(),
-                    ))
-                    .id();
-            }
-
-            let hud = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
-            let judgement = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-
-            let progress = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    inset: UiRect { left: Val::Px(0.0), top: Val::Px(0.0), right: Val::Auto, bottom: Val::Auto },
-                    width: Val::Percent(100.0),
-                    height: Val::Px(6.0),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(Vec4::new(1.0, 1.0, 1.0, 0.08)),
-                ..Default::default()
-            });
-            scene.world.add_component(progress, ProgressBar::new(0.0).with_fill(Vec4::new(0.9, 0.85, 0.4, 0.9)));
-            let progress = progress.id();
-
-            // Müzik: sentezlenmiş bir döngü; notalar onun vuruşlarına göre.
-            let (samples, loop_len) = song();
-            let mut music = None;
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_samples("sarki", &samples, RATE);
-                music = audio.play_looped("sarki").ok();
-                scene.world.insert_resource(audio);
-            }
-
-            scene.world.insert_resource(Game {
-                notes: chart(),
-                music,
-                fallback_clock: 0.0,
-                offset: 0.0,
-                loop_len,
-                score: 0,
-                combo: 0,
-                best_combo: 0,
-                perfect: 0,
-                good: 0,
-                missed: 0,
-                hud,
-                judgement,
-                lane_marks,
-                buttons: None,
-                progress,
-                auto: std::env::var_os("RITIM_OTO").is_some(),
-            });
+            let game = setup(scene.world, font, true);
+            scene.world.insert_resource(game);
         })
         .replace_update(update)
         .run()
