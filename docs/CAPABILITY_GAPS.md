@@ -1262,6 +1262,23 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16af. The thirty-sixth game: ropes taken and let go (2026-11-04, `sarmasik`)
+
+`demo/src/bin/sarmasik.rs` crosses a chasm on four ropes hanging from the ceiling: hang, pump,
+let go, catch the next in flight. Each grab pushes a `Joint::rope` into `PhysicsWorld::joints`
+at the length the player is from the anchor, each release takes it out — the first game to make
+and break joints while it plays. `sarmasik --test` opens no window: the autopilot pumps and lets
+go when the flight lands within reach of the next rope; across in 14 s, three grabs, the rope
+never more than 2 mm past its length. One gap, closed:
+
+- ~~**A body on a recycled id inherited the dead body's joints.**~~ **Closed 2026-11-04.** Physics
+  knows a body by its raw ECS id, and the ECS hands a despawned id to the very next spawn. Despawn
+  a roped body and spawn another before the next step — what restarting after a fall does — and
+  the new body took over the old row, joints and all: spawned 15 m away, it was pulled 5 m toward
+  the dead body's anchor in a second. The ECS bridge now records each id's generation; an id that
+  comes back under a new one is a new body, and the old one is removed with its joints.
+  `tests/joint_recycled_id.rs` (red with the bridge's check taken out).
+
 ### C16ae. The thirty-fifth game: a fast ball and flippers (2026-11-04, `pinbol`)
 
 `demo/src/bin/pinbol.rs` is a pinball table — gravity tilted 12°, a 5 cm CCD ball, two kinematic

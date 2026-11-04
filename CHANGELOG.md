@@ -98,6 +98,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A soft body is drawn (`soft_body_mesh_system`).** A `SoftBodyMesh` in the world was stepped
   and drawn as nothing but debug lines. Both draw paths now give it the mesh of its surface,
   outward, normals smoothed over the nodes, and a renderer and material the first time.
+- **`sarmasik`, the thirty-sixth game** — swing across a chasm on ropes: hang, pump, let go,
+  catch the next in flight; each grab and release makes and breaks a `Joint::rope` while the game
+  runs. `sarmasik --test` lets an autopilot cross headlessly and checks the rope never stretches
+  past its length. It found the recycled-id joint under Fixed.
 - **`pinbol`, the thirty-fifth game** — a pinball table: gravity tilted 12°, a small fast CCD
   ball, two kinematic flippers swung at 25 rad/s, three bumpers that kick and score.
   `pinbol --test` lets an autopilot flip for a minute headlessly and checks the flippers hit the
