@@ -9,7 +9,7 @@
 //! |---|---|
 //! | yerel iki kişi | `itis` — iki oturum aynı süreçte, aralarında 4 tick gecikmeli bir sahte ağ; 1. oyuncu **WASD**, 2. oyuncu **ok tuşları** |
 //! | ağ | `itis --port 7000 --peer 127.0.0.1:7001 --player 0` ve öbür makinede `--port 7001 --peer <ip>:7000 --player 1` |
-//! | sınama | `itis --test` — pencere açmaz: iki oturumu gecikmeli, paket kaybeden bir sahte ağda 1500 tick oynatır, iki tarafın vardığı durumu karşılaştırır |
+//! | sınama | `itis --test` — pencere açmaz: iki oturumu önce gecikmeli, paket kaybeden bir sahte ağda, sonra 127.0.0.1 üstünde gerçek UDP soketleriyle 1500 tick oynatır; iki taraf birbiriyle ve gerçek maçla karşılaştırılır |
 //!
 //! Oyun bitince **Boşluk** yeni maç başlatır (iki taraftan biri basınca).
 //!
@@ -137,12 +137,41 @@ fn quantise(x: f32) -> i8 {
     (x.clamp(-1.0, 1.0) * 127.0).round() as i8
 }
 
-/// `--test`: iki oturum, 4 tick gecikmeli ve her 9. paketi düşüren bir sahte ağda, biri öbüründen
-/// 40 kare sonra başlıyor; ikisi de rastgele sürüyor. Sonda iki tarafın fiziği ve skoru aynı mı,
-/// ve iki girdinin tek bir dünyada oynatıldığı gerçek maçla aynı mı?
+/// Bir maçı iki oturumla sonuna kadar oynatır: biri öbüründen 40 kare sonra başlar; `pause`
+/// verilirse her karede o kadar beklenir (gerçek soketlerde paket o arada gelir).
+fn play_out<T: Transport>(
+    a: &mut Session<T>,
+    b: &mut Session<T>,
+    inputs: &[Vec<PlayerInput>; 2],
+    end: u64,
+    pause: Option<std::time::Duration>,
+) {
+    for frame in 0..end * 3 {
+        for (s, p, from) in [(&mut *a, 0usize, 0u64), (&mut *b, 1usize, 40)] {
+            if frame < from {
+                continue;
+            }
+            if s.tick < end {
+                let i = inputs[p][s.tick as usize];
+                s.try_advance_with(i, &apply, &rules, MAX_LEAD);
+            } else {
+                s.poll_remote();
+            }
+        }
+        if a.tick >= end && b.tick >= end && frame > end + 60 {
+            break;
+        }
+        if let Some(d) = pause {
+            std::thread::sleep(d);
+        }
+    }
+}
+
+/// `--test`: iki oturum, önce 4 tick gecikmeli ve her 9. paketi düşüren bir sahte ağda, sonra
+/// 127.0.0.1 üstünde iki gerçek UDP soketiyle; biri öbüründen 40 kare sonra başlıyor, ikisi de
+/// rastgele sürüyor. Sonda iki tarafın fiziği ve skoru aynı mı, ve iki girdinin tek bir dünyada
+/// oynatıldığı gerçek maçla aynı mı?
 fn self_test() -> bool {
-    let (ta, tb) = LoopbackTransport::pair(4, 9);
-    let (mut a, mut b) = (session(ta, 0), session(tb, 1));
     let mut rng = 0x2545_F491_4F6C_DD1Du64;
     let mut next = move || {
         rng ^= rng << 13;
@@ -174,38 +203,44 @@ fn self_test() -> bool {
         let _ = truth_world.step(DT);
         rules(&mut truth_world, &mut truth);
     }
-    for frame in 0..end * 3 {
-        for (s, p, from) in [(&mut a, 0usize, 0u64), (&mut b, 1usize, 40)] {
-            if frame < from {
-                continue;
+    let verdict = |name: &str, a_tick: u64, b_tick: u64, ha: u64, hb: u64, sa: Match, sb: Match| {
+        let agree = a_tick == b_tick && ha == hb && sa == sb;
+        let real = ha == truth_world.state_hash() && sa == truth;
+        println!(
+            "itis --test ({name}): tick {a_tick} / {b_tick}, hash {ha:016x} / {hb:016x} (gerçek {:016x}), skor {:?} / {:?} (gerçek {:?}) → {}",
+            truth_world.state_hash(),
+            sa.score,
+            sb.score,
+            truth.score,
+            match (agree, real) {
+                (true, true) => "aynı, gerçekle de",
+                (true, false) => "birbirleriyle aynı ama gerçekten FARKLI",
+                _ => "AYRIŞTI",
             }
-            if s.tick < end {
-                let i = inputs[p][s.tick as usize];
-                s.try_advance_with(i, &apply, &rules, MAX_LEAD);
-            } else {
-                s.poll_remote();
-            }
-        }
-    }
-    let agree = a.tick == b.tick && a.state_hash() == b.state_hash() && a.state == b.state;
-    let real = a.state_hash() == truth_world.state_hash() && a.state == truth;
-    println!(
-        "itis --test: tick {} / {}, hash {:016x} / {:016x} (gerçek {:016x}), skor {:?} / {:?} (gerçek {:?}) → {}",
-        a.tick,
-        b.tick,
-        a.state_hash(),
-        b.state_hash(),
-        truth_world.state_hash(),
-        a.state.score,
-        b.state.score,
-        truth.score,
-        match (agree, real) {
-            (true, true) => "aynı, gerçekle de",
-            (true, false) => "birbirleriyle aynı ama gerçekten FARKLI",
-            _ => "AYRIŞTI",
-        }
-    );
-    agree && real
+        );
+        agree && real
+    };
+
+    let (ta, tb) = LoopbackTransport::pair(4, 9);
+    let (mut a, mut b) = (session(ta, 0), session(tb, 1));
+    play_out(&mut a, &mut b, &inputs, end, None);
+    let sahte = verdict("sahte ağ", a.tick, b.tick, a.state_hash(), b.state_hash(), a.state, b.state);
+
+    let udp = (|| -> std::io::Result<bool> {
+        let mut ua = UdpTransport::bind(0)?;
+        let mut ub = UdpTransport::bind(0)?;
+        let (pa, pb) = (ua.local_addr()?.port(), ub.local_addr()?.port());
+        ua.set_remote(std::net::SocketAddr::from(([127, 0, 0, 1], pb)));
+        ub.set_remote(std::net::SocketAddr::from(([127, 0, 0, 1], pa)));
+        let (mut a, mut b) = (session(ua, 0), session(ub, 1));
+        play_out(&mut a, &mut b, &inputs, end, Some(std::time::Duration::from_micros(200)));
+        Ok(verdict("UDP", a.tick, b.tick, a.state_hash(), b.state_hash(), a.state, b.state))
+    })();
+    let udp = udp.unwrap_or_else(|e| {
+        println!("itis --test (UDP): soket açılamadı: {e}");
+        false
+    });
+    sahte && udp
 }
 
 enum Net {

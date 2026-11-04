@@ -150,6 +150,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **`UdpTransport` takes only the peer's datagrams, and says which port it got
+  (`UdpTransport::local_addr`).** Every datagram reaching the port was handed to the session as
+  the remote player's input, so anyone who could reach it — or a peer left over from the last match
+  on it — could play for the other side. Once the peer's address is known (set, or learned from
+  the first packet) others are dropped. And `bind(0)` lets the OS pick a port, but nothing said
+  which, so the peer had nowhere to send. The real-UDP path had never been run by a test or a game:
+  `tests/udp_session.rs` now plays a session over two sockets on 127.0.0.1 to the hash of the
+  same match in one world, and shows a third socket's forged input ignored (it was taken before
+  the fix); `itis --test` adds the same match over real UDP to its loopback run.
 - **`Cloth::damping`** — the share of its velocity a node keeps over a second; `0.99` (the old
   hard-coded value, still the default, so nothing changes) is next to none. With the cloth pushing
   bodies back an undamped cloth is a trampoline; measured, a ball's height in the fourth second on

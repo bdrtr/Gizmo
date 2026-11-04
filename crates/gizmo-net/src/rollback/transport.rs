@@ -68,6 +68,13 @@ impl UdpTransport {
         })
     }
 
+    /// The address the socket is bound to — the port the OS picked for `bind(0)`, which is what
+    /// the other peer has to be told. There was no way to read it, so binding to `0` (the safe
+    /// choice when the game does not care which port) left the peer nothing to send to.
+    pub fn local_addr(&self) -> std::io::Result<SocketAddr> {
+        self.socket.local_addr()
+    }
+
     /// Sets the peer's address.
     pub fn set_remote(&mut self, addr: SocketAddr) {
         tracing::debug!(remote = %addr, "Uzak eş (peer) adresi elle ayarlandı");
@@ -83,8 +90,13 @@ impl UdpTransport {
         Ok(())
     }
 
-    /// Reads every incoming UDP packet and returns them as NetworkPackets.
+    /// Reads every incoming UDP packet **from the peer** and returns them as NetworkPackets.
     /// It is non-blocking, so it returns empty immediately when there is nothing to read.
+    ///
+    /// Once the peer's address is known — set, or learned from the first packet — a datagram
+    /// from any other address is dropped. Until 2026-11-04 it was returned like the peer's own,
+    /// and the session took it as the remote player's input: anyone who could reach the port
+    /// (or a peer left over from the last match on it) could play for the other side.
     #[tracing::instrument(skip_all, name = "udp_poll_events")]
     pub fn poll_events(&mut self) -> Vec<(SocketAddr, NetworkPacket)> {
         let mut events = Vec::new();
@@ -95,9 +107,16 @@ impl UdpTransport {
                 Ok((size, src_addr)) => {
                     // İlk defa paket aldığımız biriyse otomatik olarak remote_addr kaydet
                     // (P2P için pratik bir "hole punching" veya eşleşme simülasyonu)
-                    if self.remote_addr.is_none() {
-                        self.remote_addr = Some(src_addr);
-                        tracing::info!(remote = %src_addr, "Uzak eş adresi ilk paketten öğrenildi (P2P eşleşme)");
+                    match self.remote_addr {
+                        None => {
+                            self.remote_addr = Some(src_addr);
+                            tracing::info!(remote = %src_addr, "Uzak eş adresi ilk paketten öğrenildi (P2P eşleşme)");
+                        }
+                        Some(peer) if peer != src_addr => {
+                            tracing::debug!(src = %src_addr, peer = %peer, size, "paket eşten değil; atıldı");
+                            continue;
+                        }
+                        Some(_) => {}
                     }
 
                     if let Ok(packet) = decode_packet(&buf[..size]) {
