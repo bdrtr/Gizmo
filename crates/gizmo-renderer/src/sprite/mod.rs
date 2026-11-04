@@ -41,6 +41,21 @@ use crate::components::{Sprite, SpriteSpace};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SpriteImageId(pub(crate) u32);
 
+impl SpriteImageId {
+    /// An id no renderer hands out, the `n`th of them — for building a sprite scene where there is
+    /// no renderer to load images into: a game's headless `--test`, a unit test of game logic.
+    ///
+    /// A sprite or tilemap naming one draws nothing ([`SpriteRenderer::queue`] skips an unknown
+    /// image), so a scene built with placeholders and later rendered is blank where they are, not
+    /// wrong. Distinct `n` give distinct ids, counted down from the top of the range so they cannot
+    /// meet an id a renderer issued (those count up from 0). Without this a 2D game could not build
+    /// its scene headlessly at all: `load_sprite_rgba` needs a GPU, and the id had no other way in.
+    #[must_use]
+    pub const fn placeholder(n: u32) -> Self {
+        Self(u32::MAX - n)
+    }
+}
+
 /// How an image is sampled between texels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
@@ -641,6 +656,12 @@ fn runs(list: &[Queued], base: u32) -> Vec<Run> {
 mod tests {
     use super::*;
     use gizmo_math::{Quat, Vec3};
+
+    #[test]
+    fn placeholders_are_distinct_and_far_from_issued_ids() {
+        assert_ne!(SpriteImageId::placeholder(0), SpriteImageId::placeholder(1));
+        assert!(SpriteImageId::placeholder(1000) > SpriteImageId(1_000_000));
+    }
 
     const SCREEN: Vec2 = Vec2::new(200.0, 100.0);
 
