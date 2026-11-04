@@ -74,6 +74,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A soft body is drawn (`soft_body_mesh_system`).** A `SoftBodyMesh` in the world was stepped
   and drawn as nothing but debug lines. Both draw paths now give it the mesh of its surface,
   outward, normals smoothed over the nodes, and a renderer and material the first time.
+- **`jole`, the thirty-second game** — a tower of jelly blocks dropped from a swinging crane; the
+  first game of soft bodies. `jole --test` drops four headlessly and checks the tower stands. It
+  found the soft-body items above, and one more: three jellies a few centimetres off centre blew
+  the stack apart (nodes at thousands of m/s) because a contact pushed an overlapping node out in
+  one go; a push is at most 5 mm now, the rest over the next sub-steps.
 
 - **`ExternalForce` — a push that lasts (`gizmo::physics::components::ExternalForce`).** A force
   and torque applied on every physics step while the component is on the body: an engine, a

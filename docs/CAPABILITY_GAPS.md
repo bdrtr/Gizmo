@@ -1262,6 +1262,32 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16ab. The thirty-second game: soft solids (2026-11-04, `jole`)
+
+`demo/src/bin/jole.rs` is a tower of jelly blocks dropped from a swinging crane — `SoftBodyMesh`
+blocks on a rigid platform and on each other. `jole --test` opens no window: four blocks dropped
+when the crane is centred, five seconds to settle — 2.83 m tall (2.80 m upright), none fallen,
+the fastest node 0.12 m/s at the end. Six gaps, all closed:
+
+- ~~**A dropped block exploded**~~ — one explicit 1/60 s step for a material that needs thirty.
+  `SoftBodyMesh::stable_substeps`; the system sub-steps every body together.
+- ~~**A resting block sank into the floor**~~ (0.33 m in 10 s) — the sweep ignores moves under
+  1e-5 m and nothing put a node that was inside back out. It is put on the surface now.
+- ~~**A node leaving the floor was held on it**~~ while its velocity climbed — a surface the node
+  moves away from was taken as a hit.
+- ~~**A jelly fell through a jelly**~~ — `soft_contact`: out through the face it is falling
+  through, Coulomb friction (without it a stacked block slid 0.8 m in 5 s and fell off), the move
+  and the impulse shared by inverse mass. Choosing "the nearest point" or "the shallowest face"
+  failed on blocks built on one grid (nodes on corners and in side planes); a push made in one go
+  blew an off-centre stack apart — at most 5 mm a call.
+- ~~**No way to build a block, and the hand-built one was non-conforming**~~ —
+  `SoftBodyMesh::block` (Kuhn split); `cpu_physics` used five tetrahedra a cube, which leaves
+  half the inner faces unmatched, and `damping = 5.0`, which adds speed.
+- ~~**A soft body was not drawn**~~ — `soft_body_mesh_system`, both paths.
+
+*Observation, not a gap:* jelly towers are wobbly. Four blocks dropped from 0.6–1.2 m stand; from
+1.6 m they topple; six can lean over within a second. The game drops from 1 m.
+
 ### C16aa. The thirty-first game: what water carries (2026-11-04, `kayik`)
 
 `demo/src/bin/kayik.rs` is a motorboat race through six buoy gates on a lake — the boat, the
