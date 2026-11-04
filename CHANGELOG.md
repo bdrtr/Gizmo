@@ -58,6 +58,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   30 / 60 / 144 fps written with `=`, and 5.0 / 10.0 / 24.0 written with `+=`. The component gives
   10.0 at all three (`tests/external_force.rs`). `ExternalForce::at_point` is a force at a point
   as force plus torque.
+- **`kayik`, the thirty-first game** — a motorboat race through buoy gates on a lake, side gusts
+  rolling the boat; the first game carried by water. `kayik --test` lets an autopilot run the six
+  gates headlessly through a gust every four seconds and checks the hull floats at the depth
+  Archimedes gives and stays upright. It found the buoyancy item below and `ExternalForce` above.
+
 ### Fixed
 
 - **What floats, floats as it should (`FluidZone`).** A zone pushed only on a body whose *origin*

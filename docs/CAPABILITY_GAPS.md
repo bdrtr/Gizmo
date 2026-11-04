@@ -1262,6 +1262,29 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16aa. The thirty-first game: what water carries (2026-11-04, `kayik`)
+
+`demo/src/bin/kayik.rs` is a motorboat race through six buoy gates on a lake — the boat, the
+buoys and the lake a `FluidZone`, a side gust every few seconds rolling the boat. `kayik --test`
+opens no window: three minutes of autopilot with a gust every four seconds — all six gates, the
+hull 35 % under (Archimedes says 35 %), never tipped past 6°, the buoys at the surface. Two gaps,
+both closed:
+
+- ~~**Water carried a body at the wrong depth and never righted it**~~ — the push acted only
+  while the body's origin was inside the zone, as one force at the centre of mass: a density-300
+  box floated half under instead of 30 %, a tipped hull stayed tipped, a spinning one barely
+  slowed. Buoyancy and drag are now summed over a 3×3×3 grid of cells, each at its own point
+  (`tests/buoyancy.rs`).
+- ~~**A steady push was a different push at every frame rate**~~ — the force accumulators are
+  emptied by each step and a game writes them once a frame; under `FixedPhysics`, 10 N for a
+  simulated second gave 5.0 m/s at 30 fps and (with `+=`) 24.0 at 144. `ExternalForce`, applied
+  on every step while it is on the body (`tests/external_force.rs`).
+
+Not a gap, a limit the game works around: a zone's drag is the same in every direction and has
+no term of its own for turning, so a hull slides sideways as easily as forward and its roll dies
+slowly (~8 % a second). The game adds a keel (sideways damping) and bilge keels (roll damping)
+through the same `ExternalForce` — what a hull's shape does, which a zone does not know.
+
 ### C16z. The thirtieth game: a car on terrain (2026-11-04, `arazi`)
 
 `demo/src/bin/arazi.rs` is a checkpoint race over generated hills — `VehicleController` (wheel
