@@ -553,12 +553,19 @@ impl Gjk {
         let rel_vel = vel_a - vel_b;
 
         // Contact normal, pointing A→B. `distance` returns the B→A separating axis,
-        // so negate it. When the gap is tiny that axis is unreliable, so derive the
-        // normal from the approach direction (which equals A→B while A closes on B).
+        // so negate it. When the gap is tiny that axis is unreliable, so the surface's
+        // own normal is measured instead: A is moved along its approach just past the
+        // surface and the penetrating contact's normal taken. It used to be the approach
+        // direction ITSELF — so a body a hair from a wall, moving along it under gravity,
+        // got a contact pointing against gravity that stopped all its motion (measured in
+        // `pinbol`: a ball hung on the rail of a tilted table, normal (0, 0.978, −0.208);
+        // and a lone CCD ball rolled 9 % short, its own floor bounces taken the same way).
         let normal = if gap > AXIS_RELIABLE_GAP {
             -axis
         } else {
-            rel_vel.try_normalize()?
+            let approach = rel_vel.try_normalize()?;
+            let probe = pos_a + approach * (gap + 2.0 * AXIS_RELIABLE_GAP);
+            Self::get_contact(shape_a, probe, rot_a, shape_b, pos_b, rot_b)?.normal
         };
 
         // Closing speed of A onto B along the normal. Not approaching ⇒ no contact.

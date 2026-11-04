@@ -106,12 +106,12 @@ fn arm_pose(target: Vec3) -> [(Vec3, Quat); 2] {
 
 /// Kolun uzanabileceği yere çeker.
 fn clamp_reach(tip: Vec3) -> Vec3 {
+    // İki kemik kökten ne en çok UPPER + LOWER uzağa uzanır, ne de |UPPER − LOWER|'den yakına
+    // katlanır: kökün tam üstünden geçen bir uç ikisinin arasındaki ölü bölgeye düşer (orada
+    // 3 cm kaçırıyordu).
     let d = tip - ROOT;
-    if d.length() > UPPER + LOWER - 0.02 {
-        ROOT + d.normalize() * (UPPER + LOWER - 0.02)
-    } else {
-        tip
-    }
+    let len = d.length().clamp((UPPER - LOWER).abs() + 0.02, UPPER + LOWER - 0.02);
+    ROOT + d.try_normalize().unwrap_or(Vec3::X) * len
 }
 
 fn drive_arm(world: &mut World, arm: [u32; 2], target: Vec3) {

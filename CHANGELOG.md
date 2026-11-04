@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A CCD body a hair from a wall stopped moving along it (`Gjk::speculative_contact`).** Inside
+  1 mm the contact's normal was the approach direction itself, so a ball rolling along a rail
+  under gravity was given a contact pointing back against gravity — in `pinbol` it hung on the
+  launch-lane rail, normal (0, 0.978, −0.208) — and a lone CCD ball on a slope rolled 9 % short,
+  its own floor bounces taken the same way. The normal is now the surface's own, measured just
+  past it along the approach. `tests/ccd_touching.rs`: 0.025 m and 0.665 m rolled before,
+  against about a metre free; both within a few per cent of a body without CCD now.
+
 - **A stock humanoid ragdoll was born apart (`RagdollBuilder::create_humanoid`).** Nine of its ten
   joints were open at spawn — each bone's `local_pos` disagreed with the anchors of the joint that
   holds it, the shoulders by 18 cm — and the lower arms were born inside the torso they do not hang
