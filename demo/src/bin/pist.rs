@@ -35,7 +35,8 @@
 //! turları tamamlıyor, ama arada bir bariyerde vakit kaybediyor.
 //!
 //! ## Ortam değişkenleri
-//!   * `PIST_OTO=1` — oyuncunun arabasını da yapay zekâ sürer (ekran görüntüsü için)
+//!   * `PIST_OTO=1` — oyuncunun arabasını da yapay zekâ sürer (ekran görüntüsü için; `pist --test`
+//!     aynı yarışı pencere açmadan bitirir)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::core::input::{Input, MoveKeys};
@@ -45,7 +46,7 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor, Viewport};
 use gizmo::renderer::text::FontId;
 use gizmo::renderer::{Fog, Sky};
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 
 /// Düzlüklerin yarı boyu ve virajların yarıçapı (pistin orta çizgisi).
 const STRAIGHT: f32 = 40.0;
@@ -116,57 +117,99 @@ fn centre_line() -> Vec<Vec3> {
         .collect()
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+fn setup(world: &mut World, font: FontId) -> Game {
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.9)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.96, 0.88), 3.2, LightRole::Sun),
+    ));
+    let line = centre_line();
+    build_track(world, &line);
+
+    let camera = world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 10.0, 20.0), primary: true, ..Default::default() });
+    if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(camera.id()) {
+        c.clear_color = Some(Vec3::new(0.75, 0.82, 0.9));
+    }
+    // Küçük harita: yukarıdan bakan ikinci bir kamera, sağ üst köşede.
+    let map = world.spawn_bundle(CameraBundle {
+        position: Vec3::new(0.0, 120.0, 0.0),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -std::f32::consts::FRAC_PI_2 + 0.001,
+        ..Default::default()
+    });
+    if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(map.id()) {
+        c.viewport = Some(Viewport::new(0.75, 0.02, 0.23, 0.3));
+        c.order = 1;
+        c.clear_color = Some(Vec3::new(0.15, 0.2, 0.12));
+    }
+
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 48.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+    let mut game = Game {
+        physics: FixedPhysics::new(120),
+        line,
+        player: 0,
+        camera: camera.id(),
+        clock: 0.0,
+        countdown: 3.0,
+        hud,
+        banner,
+        auto: std::env::var_os("PIST_OTO").is_some(),
+    };
+    restart(world, &mut game);
+    game
+}
+
+/// `--test`: pencere açmadan yarış — oyuncunun arabasını da yapay zekâ sürer. Üç araba da üç turu
+/// bitirmeli, hiçbiri devrilmemeli.
+fn self_test() -> bool {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font());
+    // Arabaların sürücüsü yeniden başlarken seçiliyor.
+    game.auto = true;
+    restart(&mut world, &mut game);
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world);
+    let mut lowest_up = 1.0f32;
+    let all_done = |w: &World| w.borrow::<Racer>().iter().all(|(_, r)| r.finished.is_some());
+    while run.elapsed < 300.0 && !all_done(&run.world) {
+        run.frame(1.0 / 60.0, update);
+        let racers: Vec<u32> = run.world.borrow::<Racer>().iter().map(|(id, _)| id).collect();
+        for id in racers {
+            if let Some(t) = run.world.borrow::<Transform>().get(id) {
+                lowest_up = lowest_up.min((t.rotation * Vec3::Y).y);
+            }
+        }
+    }
+    let mut times: Vec<Option<f32>> = run.world.borrow::<Racer>().iter().map(|(_, r)| r.finished).collect();
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let ok = times.len() == 3 && times.iter().all(Option::is_some) && lowest_up > 0.5;
+    let shown: Vec<String> = times.iter().map(|t| t.map_or("bitirmedi".into(), |t| format!("{t:.1} sn"))).collect();
+    println!(
+        "pist --test: {LAPS} tur, varışlar {}; en çok {:.0}° yattı → {}",
+        shown.join(", "),
+        lowest_up.clamp(-1.0, 1.0).acos().to_degrees(),
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Pist", 1280, 720)
         .with_simple_scene(|scene, _state| {
             let r = &mut *scene.renderer;
             r.sky = Some(Sky::gradient([0.35, 0.55, 0.9], [0.75, 0.82, 0.9], [0.3, 0.32, 0.25]).with_intensity(0.5));
             r.fog = Some(Fog::new([0.75, 0.82, 0.9], 0.004).with_height(0.0, 0.0));
             let font = load_font(r);
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.9)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.96, 0.88), 3.2, LightRole::Sun),
-            ));
-            let line = centre_line();
-            build_track(scene.world, &line);
-
-            let camera = scene.world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 10.0, 20.0), primary: true, ..Default::default() });
-            if let Some(mut c) = scene.world.borrow_mut::<Camera>().get_mut(camera.id()) {
-                c.clear_color = Some(Vec3::new(0.75, 0.82, 0.9));
-            }
-            // Küçük harita: yukarıdan bakan ikinci bir kamera, sağ üst köşede.
-            let map = scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(0.0, 120.0, 0.0),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -std::f32::consts::FRAC_PI_2 + 0.001,
-                ..Default::default()
-            });
-            if let Some(mut c) = scene.world.borrow_mut::<Camera>().get_mut(map.id()) {
-                c.viewport = Some(Viewport::new(0.75, 0.02, 0.23, 0.3));
-                c.order = 1;
-                c.clear_color = Some(Vec3::new(0.15, 0.2, 0.12));
-            }
-
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 48.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-            let mut game = Game {
-                physics: FixedPhysics::new(120),
-                line,
-                player: 0,
-                camera: camera.id(),
-                clock: 0.0,
-                countdown: 3.0,
-                hud,
-                banner,
-                auto: std::env::var_os("PIST_OTO").is_some(),
-            };
-            restart(scene.world, &mut game);
+            let game = setup(scene.world, font);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
@@ -328,7 +371,7 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
             let limit = (110.0 * racer.pace - ahead * 150.0).clamp(28.0, 110.0);
             if racer.backing > 0.0 {
                 backing = true;
-                (0.6, 0.0, (angle * 1.5).clamp(-1.0, 1.0))
+                (1.0, 0.0, (angle * 1.5).clamp(-1.0, 1.0))
             } else {
                 let throttle = if speed < limit { 1.0 } else { 0.0 };
                 let brake = if speed > limit + 12.0 { 0.7 } else { 0.0 };
@@ -340,14 +383,16 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
             (my.max(0.0), (-my).max(0.0), -mx)
         };
         if racer.ai && racing {
-            // Duvara dayanıp kalan yapay zekâ bir saniye geri çıkıyor.
+            // Duvara dayanıp kalan yapay zekâ iki saniye tam gaz geri çıkıyor. (1,2 saniyelik, 0,6
+            // gazlı geri çıkış arabayı 0,6 m geri götürüyordu: aynı bariyere yeniden dayanıp bir
+            // arabayı yarışın sonuna kadar orada tuttu — `pist --test` buldu.)
             if let Some(mut r) = world.borrow_mut::<Racer>().get_mut(id) {
                 if r.backing > 0.0 {
                     r.backing -= dt;
                 } else if speed.abs() < 3.0 {
                     r.stuck += dt;
                     if r.stuck > 1.0 {
-                        r.backing = 1.2;
+                        r.backing = 2.0;
                         r.stuck = 0.0;
                     }
                 } else {
