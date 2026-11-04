@@ -48,6 +48,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **`ExternalForce` — a push that lasts (`gizmo::physics::components::ExternalForce`).** A force
+  and torque applied on every physics step while the component is on the body: an engine, a
+  thruster, a steady wind. The body's own accumulators are emptied by each step and a game writes
+  them once a frame, so with a fixed-step driver the same push was a different acceleration at
+  every frame rate — measured, 10 N on 1 kg for a simulated second gave 5.0 / 10.0 / 10.0 m/s at
+  30 / 60 / 144 fps written with `=`, and 5.0 / 10.0 / 24.0 written with `+=`. The component gives
+  10.0 at all three (`tests/external_force.rs`). `ExternalForce::at_point` is a force at a point
+  as force plus torque.
 ### Fixed
 
 - **What floats, floats as it should (`FluidZone`).** A zone pushed only on a body whose *origin*

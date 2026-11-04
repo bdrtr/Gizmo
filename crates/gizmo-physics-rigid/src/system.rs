@@ -185,6 +185,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // on after the step.
     let mut targets: Vec<(usize, crate::components::KinematicTarget)> = Vec::new();
     let target_query = world.query::<&crate::components::KinematicTarget>();
+    // Forces that push on every step, not once a frame — see `ExternalForce`.
+    let force_query = world.query::<&crate::components::ExternalForce>();
     // SAFETY: physics_step_system runs as a scheduled system; the scheduler guarantees
     // no other system mutably aliases these components while it runs (see `query_unchecked`).
     if let Some(mut query) = unsafe {
@@ -211,6 +213,12 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 let mut rb = *rb;
                 if !rb.is_static() && rb.local_inertia == RigidBody::UNSET_INERTIA {
                     rb.update_inertia_from_collider(&final_collider);
+                }
+                if let Some(push) = force_query.as_ref().and_then(|q| q.get(id)) {
+                    if rb.is_dynamic() {
+                        rb.force_accumulator += push.force;
+                        rb.torque_accumulator += push.torque;
+                    }
                 }
                 // A kinematic body with a target moves by whatever velocity reaches it this step.
                 let mut vel = *vel;

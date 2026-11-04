@@ -17,6 +17,8 @@ pub mod breakable;
 /// [`Explosion`] — a one-shot radial impulse/damage source, with its
 /// [`ExplosionFalloff`] distance curves.
 pub mod explosion;
+/// [`ExternalForce`] — a force applied on every physics step while the component is on the body.
+pub mod external_force;
 /// [`KinematicTarget`] — the pose a kinematic body is driven to, one step at a time.
 pub mod kinematic_target;
 /// [`RigidBody`] and [`BodyType`] — mass, inertia, damping, drag, sleep state and axis
@@ -27,6 +29,7 @@ pub mod velocity;
 
 pub use breakable::{Breakable, Debris};
 pub use explosion::{Explosion, ExplosionFalloff};
+pub use external_force::ExternalForce;
 pub use kinematic_target::KinematicTarget;
 pub use rigid_body::{BodyType, RigidBody};
 pub use velocity::Velocity;
