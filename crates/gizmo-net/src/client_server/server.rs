@@ -1,5 +1,5 @@
 use super::error::NetError;
-use super::protocol::{connection_config, PROTOCOL_ID};
+use super::protocol::{connection_config, ClientChannel, ClientMessage, ServerChannel, ServerMessage, PROTOCOL_ID};
 use renet::RenetServer;
 use renet_netcode::{NetcodeServerTransport, ServerAuthentication, ServerConfig};
 use std::net::UdpSocket;
@@ -64,6 +64,41 @@ impl NetworkServer {
     /// Flushes queued per-client messages out over the network. Call at the end of each tick.
     pub fn send_packets(&mut self) {
         self.transport.send_packets(&mut self.server);
+    }
+
+    /// The ids of the clients connected now.
+    pub fn clients(&self) -> Vec<u64> {
+        self.server.clients_id()
+    }
+
+    /// Queues `message` for one client on `channel`; it leaves with the next
+    /// [`send_packets`](Self::send_packets).
+    ///
+    /// The four convenience calls (this, [`broadcast`](Self::broadcast),
+    /// [`receive`](Self::receive) and the client's pair) are what a game needed and did not have:
+    /// talking to a client meant depending on `renet` and a serializer itself, picking channel
+    /// numbers and a byte format, and keeping both ends in agreement by hand.
+    pub fn send(&mut self, client_id: u64, channel: ServerChannel, message: &ServerMessage) -> Result<(), NetError> {
+        let bytes = message.encode()?;
+        self.server.send_message(client_id, channel, bytes);
+        Ok(())
+    }
+
+    /// Queues `message` for every connected client on `channel`.
+    pub fn broadcast(&mut self, channel: ServerChannel, message: &ServerMessage) -> Result<(), NetError> {
+        let bytes = message.encode()?;
+        self.server.broadcast_message(channel, bytes);
+        Ok(())
+    }
+
+    /// Everything `client_id` sent since the last call, in order. A malformed message is dropped
+    /// with a warning.
+    pub fn receive(&mut self, client_id: u64) -> Vec<ClientMessage> {
+        let mut out = Vec::new();
+        while let Some(bytes) = self.server.receive_message(client_id, ClientChannel::Command) {
+            out.extend(ClientMessage::decode(&bytes));
+        }
+        out
     }
 }
 

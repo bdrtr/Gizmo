@@ -148,6 +148,56 @@ pub enum ServerMessage {
     },
 }
 
+/// The wire configuration for [`ClientMessage`] and [`ServerMessage`]: bincode's `legacy()` —
+/// fixed-width little-endian integers, the same bytes as the rollback packets. One place, so the
+/// two ends cannot disagree.
+const WIRE: bincode::config::Configuration<bincode::config::LittleEndian, bincode::config::Fixint> =
+    bincode::config::legacy();
+
+fn encode<T: Serialize>(message: &T) -> Result<Vec<u8>, super::error::NetError> {
+    bincode::serde::encode_to_vec(message, WIRE).map_err(|e| super::error::NetError::Codec(Box::new(e)))
+}
+
+fn decode<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Option<T> {
+    match bincode::serde::decode_from_slice::<T, _>(bytes, WIRE) {
+        Ok((message, used)) if used == bytes.len() => Some(message),
+        Ok((_, used)) => {
+            tracing::warn!(used, len = bytes.len(), "message with trailing bytes dropped");
+            None
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, len = bytes.len(), "malformed message dropped");
+            None
+        }
+    }
+}
+
+impl ClientMessage {
+    /// This message as wire bytes. The messages had no defined encoding: every game had to pick
+    /// one (and depend on a serializer itself) for the two ends to agree on.
+    pub fn encode(&self) -> Result<Vec<u8>, super::error::NetError> {
+        encode(self)
+    }
+
+    /// A message from wire bytes; `None` for anything malformed or with bytes left over.
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        decode(bytes)
+    }
+}
+
+impl ServerMessage {
+    /// This message as wire bytes — see [`ClientMessage::encode`].
+    pub fn encode(&self) -> Result<Vec<u8>, super::error::NetError> {
+        encode(self)
+    }
+
+    /// A message from wire bytes; `None` for anything malformed or with bytes left over.
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        decode(bytes)
+    }
+}
+
+
 /// Network channels the server sends on.
 #[non_exhaustive]
 pub enum ServerChannel {

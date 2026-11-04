@@ -150,6 +150,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **Client-server messages have a wire format, and the two ends a send/receive pair.**
+  `ClientMessage` / `ServerMessage` were serde types with no encoding: a game talking to a client
+  had to depend on `renet` and a serializer itself, choose channel numbers and a byte format, and
+  keep both ends agreeing by hand. `encode` / `decode` now (bincode `legacy()`, the rollback
+  packets' bytes; trailing bytes refused), `NetworkServer::{clients, send, broadcast, receive}`
+  and `NetworkClient::{is_connected, send, receive}`, and `NetError::Codec`. No test had connected
+  the two ends: `tests/client_server_link.rs` does it over 127.0.0.1 — connect, an input up, a
+  world state down — through these calls only.
 - **`UdpTransport` takes only the peer's datagrams, and says which port it got
   (`UdpTransport::local_addr`).** Every datagram reaching the port was handed to the session as
   the remote player's input, so anyone who could reach it — or a peer left over from the last match

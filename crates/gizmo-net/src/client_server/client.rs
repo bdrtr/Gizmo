@@ -1,5 +1,5 @@
 use super::error::NetError;
-use super::protocol::{connection_config, PROTOCOL_ID};
+use super::protocol::{connection_config, ClientChannel, ClientMessage, ServerChannel, ServerMessage, PROTOCOL_ID};
 use renet::RenetClient;
 use renet_netcode::{ClientAuthentication, NetcodeClientTransport};
 use std::net::UdpSocket;
@@ -62,5 +62,32 @@ impl NetworkClient {
         if let Err(e) = self.transport.send_packets(&mut self.client) {
             tracing::warn!(error = %e, "İstemci paket gönderimi başarısız");
         }
+    }
+
+    /// Whether the connection to the server is up.
+    pub fn is_connected(&self) -> bool {
+        self.client.is_connected()
+    }
+
+    /// Queues `message` for the server; it leaves with the next
+    /// [`send_packets`](Self::send_packets). See [`NetworkServer::send`](super::server::NetworkServer::send)
+    /// for why these exist.
+    pub fn send(&mut self, message: &ClientMessage) -> Result<(), NetError> {
+        let bytes = message.encode()?;
+        self.client.send_message(ClientChannel::Command, bytes);
+        Ok(())
+    }
+
+    /// Everything the server sent since the last call, reliable channel first. A malformed
+    /// message is dropped with a warning.
+    pub fn receive(&mut self) -> Vec<ServerMessage> {
+        let mut out = Vec::new();
+        for channel in [ServerChannel::Reliable, ServerChannel::Unreliable] {
+            let id: u8 = channel.into();
+            while let Some(bytes) = self.client.receive_message(id) {
+                out.extend(ServerMessage::decode(&bytes));
+            }
+        }
+        out
     }
 }

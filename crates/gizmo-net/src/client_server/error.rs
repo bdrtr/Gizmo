@@ -22,6 +22,8 @@ pub enum NetError {
     Time(std::time::SystemTimeError),
     /// The underlying netcode transport could not be set up.
     Transport(Box<dyn Error + Send + Sync + 'static>),
+    /// A message could not be encoded for the wire.
+    Codec(Box<dyn Error + Send + Sync + 'static>),
 }
 
 impl fmt::Display for NetError {
@@ -31,6 +33,7 @@ impl fmt::Display for NetError {
             NetError::Io(_) => write!(f, "soket bağlama/G\u{2044}Ç hatası"),
             NetError::Time(_) => write!(f, "sistem saati geçersiz (epoch öncesi)"),
             NetError::Transport(_) => write!(f, "netcode taşıma katmanı kurulamadı"),
+            NetError::Codec(_) => write!(f, "mesaj kodlanamadı"),
         }
     }
 }
@@ -41,7 +44,7 @@ impl Error for NetError {
             NetError::AddrParse(e) => Some(e),
             NetError::Io(e) => Some(e),
             NetError::Time(e) => Some(e),
-            NetError::Transport(e) => Some(&**e),
+            NetError::Transport(e) | NetError::Codec(e) => Some(&**e),
         }
     }
 }
