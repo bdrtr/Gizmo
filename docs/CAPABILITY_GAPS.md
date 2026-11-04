@@ -1303,6 +1303,12 @@ and one left open:
 - **Open, measured:** a fruit lying in the damped net still rises and falls ~5 cm, and its velocity
   flickers ~0.2 m/s a frame — the coupling's own limit cycle (rigid step and cloth step answer each
   other a frame apart rather than sharing one impulse). The game counts a catch by position for it.
+  *Tried and not kept (2026-11-04):* also paying the body for the projection's displacement
+  (`−m·Δx/sub_dt`) cuts the undamped range from 19 cm to 3.4 cm — but the velocity term already
+  carries the node's whole normal momentum change (its final normal velocity is the body's), so
+  this counts it twice and holds the body up with momentum that came from nowhere. It also made
+  damping stop mattering. The fix the cycle wants is the rigid step and the cloth step sharing one
+  solve, not a second impulse.
 
 ### C16w. The twenty-seventh game: cloth (2026-11-04, `makas`)
 
