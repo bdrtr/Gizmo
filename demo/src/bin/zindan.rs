@@ -24,7 +24,8 @@
 //! adım adım yürüme), `ScreenFade` (kat geçişi ve vurulma), `ProgressBar` (can), `Rng`.
 //!
 //! ## Ortam değişkenleri
-//!   * `ZINDAN_OTO=1` — kendi kendine oynar (en yakın altına, yoksa merdivene yürür)
+//!   * `ZINDAN_OTO=1` — kendi kendine oynar (en yakın altına, yoksa merdivene yürür; `zindan --test`
+//!     pencere açmadan böyle oynar)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::core::component::IsHidden;
@@ -34,7 +35,7 @@ use gizmo::renderer::components::{ProjectionMode, Sprite, Text, TextAlign, TextA
 use gizmo::renderer::screen_fade::ScreenFade;
 use gizmo::renderer::sprite::{SpriteFilter, SpriteImageId};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{BackgroundColor, NodeBundle, PositionType, ProgressBar, Style, UiPlugin, UiRect, Val};
 use std::collections::{HashSet, VecDeque};
 
@@ -104,7 +105,91 @@ fn world_of(p: P) -> Vec3 {
     Vec3::new(p.0 as f32 + 0.5, -(p.1 as f32 + 0.5), 0.5)
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır):
+/// resimler `[karolar, kahraman, canavar, altın]`, kamera hazır.
+fn setup(world: &mut World, font: FontId, [tiles, hero, monster, coin]: [SpriteImageId; 4], camera: u32) -> Game {
+    let map = world
+        .spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), Tilemap::new(tiles, 3, 1, W as u32, H as u32, Vec2::ONE)))
+        .id();
+    let player_e = world
+        .spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), Sprite::world(hero, Vec2::splat(0.9)).with_layer(3)))
+        .id();
+    world.insert_resource(ScreenFade::default());
+
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 40.0)),)).id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.4), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),))
+        .id();
+    let hp_bar = world.spawn_bundle(NodeBundle {
+        style: Style {
+            position_type: PositionType::Absolute,
+            inset: UiRect { left: Val::Px(16.0), top: Val::Px(14.0), right: Val::Auto, bottom: Val::Auto },
+            width: Val::Px(220.0),
+            height: Val::Px(14.0),
+            ..Default::default()
+        },
+        background_color: BackgroundColor(Vec4::new(0.2, 0.05, 0.05, 0.8)),
+        ..Default::default()
+    });
+    world.add_component(hp_bar, ProgressBar::new(1.0).with_fill(Vec4::new(0.85, 0.2, 0.2, 1.0)));
+
+    let mut game = Game {
+        cells: vec![Cell::Wall; W * H],
+        seen: vec![false; W * H],
+        visible: HashSet::new(),
+        player: P(0, 0),
+        hp: MAX_HP,
+        gold: 0,
+        depth: 1,
+        monsters: Vec::new(),
+        coins: Vec::new(),
+        rng: Rng::new(7),
+        map,
+        player_e,
+        camera,
+        hud,
+        hp_bar: hp_bar.id(),
+        banner,
+        walk: HoldRepeat::new(0.25, 0.11),
+        descending: false,
+        auto: std::env::var_os("ZINDAN_OTO").is_some(),
+        images: Images { monster, coin },
+    };
+    new_level(world, &mut game);
+    game
+}
+
+/// `--test`: pencere açmadan otomatik oyun (en yakın düşmana ya da altına, yoksa merdivene),
+/// ölene ya da dört dakika dolana dek. Altın toplamalı ve en az bir kat inmeli — iniş ekranın
+/// kararmasını bekliyor, yani çizilmeyen bir karede de kararma ilerlemeli. (Otomatik oyuncu kaba:
+/// gördüğü her düşmana saldırıyor ve ikinci katta ölüyor; zar tohumlu, sonuç her seferinde aynı.)
+fn self_test() -> bool {
+    let mut world = World::new();
+    let camera = world.spawn_bundle(CameraBundle::default()).id();
+    let images = [0, 1, 2, 3].map(SpriteImageId::placeholder);
+    let mut game = setup(&mut world, HeadlessFrames::font(), images, camera);
+    game.auto = true;
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world).add_plugin(UiPlugin);
+    let state = |w: &World| w.get_resource::<Game>().map(|g| (g.depth, g.gold, g.hp)).expect("oyun kaynağı");
+    while run.elapsed < 240.0 && state(&run.world).2 > 0 {
+        run.frame(1.0 / 60.0, update);
+    }
+    let (depth, gold, hp) = state(&run.world);
+    let ok = depth >= 2 && gold > 0;
+    println!(
+        "zindan --test: {:.0} s, {}. kata indi, {gold} altın, can {hp}/{MAX_HP} → {}",
+        run.elapsed,
+        depth,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Zindan", 1280, 720)
         .add_plugin(UiPlugin)
         .with_simple_scene(|scene, state| {
@@ -123,57 +208,7 @@ fn main() {
                 c.clear_color = Some(Vec3::ZERO);
             }
 
-            let map = scene
-                .world
-                .spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), Tilemap::new(tiles, 3, 1, W as u32, H as u32, Vec2::ONE)))
-                .id();
-            let player_e = scene
-                .world
-                .spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), Sprite::world(hero, Vec2::splat(0.9)).with_layer(3)))
-                .id();
-            scene.world.insert_resource(ScreenFade::default());
-
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 40.0)),)).id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.4), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),))
-                .id();
-            let hp_bar = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    position_type: PositionType::Absolute,
-                    inset: UiRect { left: Val::Px(16.0), top: Val::Px(14.0), right: Val::Auto, bottom: Val::Auto },
-                    width: Val::Px(220.0),
-                    height: Val::Px(14.0),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(Vec4::new(0.2, 0.05, 0.05, 0.8)),
-                ..Default::default()
-            });
-            scene.world.add_component(hp_bar, ProgressBar::new(1.0).with_fill(Vec4::new(0.85, 0.2, 0.2, 1.0)));
-
-            let mut game = Game {
-                cells: vec![Cell::Wall; W * H],
-                seen: vec![false; W * H],
-                visible: HashSet::new(),
-                player: P(0, 0),
-                hp: MAX_HP,
-                gold: 0,
-                depth: 1,
-                monsters: Vec::new(),
-                coins: Vec::new(),
-                rng: Rng::new(7),
-                map,
-                player_e,
-                camera,
-                hud,
-                hp_bar: hp_bar.id(),
-                banner,
-                walk: HoldRepeat::new(0.25, 0.11),
-                descending: false,
-                auto: std::env::var_os("ZINDAN_OTO").is_some(),
-                images: Images { monster, coin },
-            };
-            new_level(scene.world, &mut game);
+            let game = setup(scene.world, font, [tiles, hero, monster, coin], camera);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
