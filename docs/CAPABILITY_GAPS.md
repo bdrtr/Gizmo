@@ -1262,6 +1262,19 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16x. The twenty-eighth game: a net that holds things (2026-11-04, `file`)
+
+`demo/src/bin/file.rs` is fruit falling into a net you slide left and right — a `Cloth` pinned on
+its edges, moved by moving its pinned nodes, holding rigid bodies through the two-way coupling.
+`file --test` drops ten fruit two seconds apart onto a still net: all ten caught. One gap, closed,
+and one left open:
+
+- ~~**Cloth damping was hard-coded and next to none**~~ (1 % a second) — a fruit kept bouncing at
+  its arrival speed. `Cloth::damping` (the net uses `0.05`).
+- **Open, measured:** a fruit lying in the damped net still rises and falls ~5 cm, and its velocity
+  flickers ~0.2 m/s a frame — the coupling's own limit cycle (rigid step and cloth step answer each
+  other a frame apart rather than sharing one impulse). The game counts a catch by position for it.
+
 ### C16w. The twenty-seventh game: cloth (2026-11-04, `makas`)
 
 `demo/src/bin/makas.rs` hangs a curtain — a `Cloth` component, swung by the engine's physics step

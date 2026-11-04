@@ -156,6 +156,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a hammock ranges over 19 cm at `0.99` and 4.6 cm at `0.05`. About 5 cm remain even at `0.01` —
   a small limit cycle of the coupling itself (the node and the body do not share one impulse inside
   the solve), recorded as open. Tested; hard-coding `0.99` again fails it.
+- **`file`, the twenty-eighth game** — catch falling fruit in a net you slide along; the net is a
+  `Cloth`, the fruit rigid bodies it holds. `file --test` drops ten on a still net headlessly and
+  checks all ten are caught. It found the damping item above.
 - **Cloth pushes back: a hammock holds a ball (`Cloth::step_coupled`).** Cloth was strictly
   one-way — it draped over rigid bodies and pushed none back — so a 1 kg ball dropped 0.8 m onto a
   hammock went through it to the floor, the cloth parting around it. `cloth_step_system` now does
