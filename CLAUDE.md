@@ -60,6 +60,14 @@ cargo run --release -p demo --bin advanced_physics
 # Determinism / stability gate — 200-box tower collapse, 3 runs, hashes must match
 cargo run --release -p demo --bin headless_stress_test
 
+# Every demo with a headless `--test` mode plays itself — autopilot, fixed step, no window — and
+# exits non-zero on what it checks (a tower fell, a ball left the table). Builds them in release
+# and runs them 4 at a time with DISPLAY/WAYLAND_DISPLAY unset, so a binary that ignores the flag
+# fails instead of opening a window. CI runs it in the determinism job. 15 games, 33 s (2026-11-04).
+# A game joins by having the mode: the script picks up any bin whose source names "--test".
+scripts/game-tests.py
+scripts/game-tests.py pinbol robot   # just these
+
 # Look at what the engine actually drew — any windowed binary, no display grab needed.
 # (External screen capture does NOT work here: Xwayland runs rootless, so the X root window is
 # empty and every `import`/ffmpeg grab comes back black. This reads the frame back from the GPU.)

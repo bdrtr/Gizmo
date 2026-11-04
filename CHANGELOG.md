@@ -98,6 +98,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A soft body is drawn (`soft_body_mesh_system`).** A `SoftBodyMesh` in the world was stepped
   and drawn as nothing but debug lines. Both draw paths now give it the mesh of its surface,
   outward, normals smoothed over the nodes, and a renderer and material the first time.
+- **The games are a gate (`scripts/game-tests.py`).** Every demo with a headless `--test` mode
+  plays itself in release, four at a time, with no display in its environment — a binary that
+  ignores the flag fails rather than opening a window. CI runs it in the determinism job; 15
+  games, 33 s. Until now no gate ran a single one, so a physics change could break a game unseen.
 - **`sarmasik`, the thirty-sixth game** — swing across a chasm on ropes: hang, pump, let go,
   catch the next in flight; each grab and release makes and breaks a `Joint::rope` while the game
   runs. `sarmasik --test` lets an autopilot cross headlessly and checks the rope never stretches

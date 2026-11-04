@@ -266,6 +266,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Headless stress test (200-box tower, 3 runs, hash match)
         run: cargo run --locked --release -p demo --bin headless_stress_test
+      # Every demo with a headless `--test` mode plays itself (autopilot, fixed step, no window)
+      # and fails on what it checks — the games are the engine's end-to-end scenarios, and none
+      # ran in any gate until 2026-11-04. Same release build as the step above.
+      - name: Game self-tests (every demo with --test)
+        run: python3 scripts/game-tests.py
 
   # ── Benchmarks: run every criterion bench ONCE (test mode) ────────────────
   # `cargo bench -- --test` executes each benchmark a single time instead of the
