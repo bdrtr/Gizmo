@@ -517,6 +517,24 @@ fn camera_world_position(world: &World, camera: Option<u32>) -> Vec3 {
         .unwrap_or(Vec3::ZERO)
 }
 
+/// The per-frame clocks a game can see, advanced once a frame: tweens, colour tweens and
+/// typewriters on the animation clock (so time scale and pause apply), the screen fade on the
+/// real frame time (a fade into a pause menu must not stop with the game it is covering).
+///
+/// They live with drawing because they are what moves on screen, but game logic waits on them —
+/// a level that changes when the fade has gone dark, a door that opens when its tween ends — so a
+/// frame driven without drawing has to run them too. `prepare_frame` and
+/// [`HeadlessFrames`](crate::simple::HeadlessFrames) both call this one function, so the two
+/// cannot drift apart.
+pub fn advance_frame_clocks(world: &mut World) {
+    let tween_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
+    crate::renderer::tween::tween_system(world, tween_dt);
+    crate::renderer::components::color_tween_system(world, tween_dt);
+    typewriter_system(world, tween_dt);
+    let real_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.raw_dt()).unwrap_or(0.0);
+    crate::renderer::screen_fade::screen_fade_system(world, real_dt);
+}
+
 /// The part of a frame that happens **once**, however many cameras then draw it: meshes for
 /// terrains, transforms, materials, animation, bone attachments, the CPU side of GPU physics.
 fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
@@ -538,16 +556,9 @@ fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     #[cfg(feature = "physics-soft")]
     crate::systems::cloth::soft_body_mesh_system(world);
 
-    // **Tweens first**, on the animation clock (so time scale and pause apply), and before the
-    // transform pass below so a tweened `Transform` is drawn where it is this frame.
-    let tween_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
-    crate::renderer::tween::tween_system(world, tween_dt);
-    crate::renderer::components::color_tween_system(world, tween_dt);
-    typewriter_system(world, tween_dt);
-    // The screen fade runs on the REAL frame time: a fade into a pause menu must not stop with
-    // the game it is covering.
-    let real_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.raw_dt()).unwrap_or(0.0);
-    crate::renderer::screen_fade::screen_fade_system(world, real_dt);
+    // **Tweens first**, before the transform pass below so a tweened `Transform` is drawn where it
+    // is this frame.
+    advance_frame_clocks(world);
 
     // Every renderable object needs an up-to-date `GlobalTransform` (the draw query
     // below requires it, and physics/gameplay only write the local `Transform`).

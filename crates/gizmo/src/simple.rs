@@ -783,8 +783,9 @@ impl Default for FixedPhysics {
 ///
 /// Plugins the game adds go in with [`add_plugin`](Self::add_plugin): their fixed-step systems
 /// run as many times as the frame's time owes and their per-frame systems once, before the hook —
-/// the windowed loop's order. What it does **not** do: fire the event double-buffer swap, load
-/// assets or draw.
+/// the windowed loop's order. After the hook it advances the clocks the draw path would (tweens,
+/// typewriters, the screen fade). What it does **not** do: fire the event double-buffer swap,
+/// load assets or draw.
 #[non_exhaustive]
 pub struct HeadlessFrames {
     /// The game's world. Read its resources between frames to see how the game is going.
@@ -845,6 +846,9 @@ impl HeadlessFrames {
         crate::app::frame::run_fixed_and_update(&mut self.world, &mut self.schedule, &mut self.update_schedule, sim_dt, dt, |_| {});
         update(&mut self.world, &mut self.state, dt, &self.input);
         self.world.apply_commands();
+        // What the draw path advances once a frame and game logic waits on: tweens, typewriters,
+        // the screen fade (`zindan` takes the stairs when its fade has gone dark).
+        crate::systems::render::advance_frame_clocks(&mut self.world);
         self.frames += 1;
         self.elapsed += dt;
     }
@@ -1474,6 +1478,20 @@ mod headless_frames_tests {
         });
         let time = run.world.get_resource::<crate::core::time::Time>().map(|t| t.elapsed());
         assert!(time.is_some_and(|t| t > 0.0), "the clock did not move: {time:?}");
+    }
+
+    #[test]
+    fn a_screen_fade_finishes_without_drawing() {
+        use crate::renderer::screen_fade::ScreenFade;
+        let mut world = World::new();
+        let mut fade = ScreenFade::default();
+        fade.fade_out(0.2);
+        world.insert_resource(fade);
+        let mut run = HeadlessFrames::new(world);
+        for _ in 0..30 {
+            run.frame(1.0 / 60.0, |_, _, _, _| {});
+        }
+        assert!(run.world.get_resource::<ScreenFade>().is_some_and(|f| f.is_opaque()), "a 0.2 s fade had not gone dark in 0.5 s");
     }
 
     #[test]
