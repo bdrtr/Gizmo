@@ -28,7 +28,8 @@
 //! eşik hiçbirini kırmadı — yalnız devirdi.
 //!
 //! ## Ortam değişkenleri
-//!   * `VINC_OTO=1` — kanca kendi kendine sallanır (sınama ve ekran görüntüsü için)
+//!   * `VINC_OTO=1` — kanca kendi kendine sallanır (ekran görüntüsü için; `vinc --test` aynısını
+//!     pencere açmadan yapar)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::core::input::Input;
@@ -77,67 +78,110 @@ struct Game {
     auto: bool,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+fn setup(world: &mut World, font: FontId) -> Game {
+
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(-0.5) * Quat::from_rotation_x(-0.7)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.92, 0.82), 1.8, LightRole::Sun),
+    ));
+    world.spawn_bundle(CameraBundle {
+        position: Vec3::new(-1.0, 5.5, 19.0),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -0.08,
+        primary: true,
+        ..Default::default()
+    });
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, -0.5, 0.0)).with_scale(Vec3::new(30.0, 0.5, 8.0)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(Color::srgb_hex("#6B5B45").to_vec4(), 0.95, 0.0),
+        MeshRenderer::new(),
+        RigidBody::new_static(),
+        Velocity::default(),
+        Collider::box_collider(Vec3::new(30.0, 0.5, 8.0)),
+    ));
+    // Vincin kirişi: yalnız görüntü.
+    world.spawn_bundle((
+        Transform::new(Vec3::new(-1.5, HOOK_Y + 0.35, 0.0)).with_scale(Vec3::new(8.5, 0.15, 0.15)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(Color::srgb_hex("#E1A73B").to_vec4(), 0.5, 0.6),
+        MeshRenderer::new(),
+    ));
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+    let mut game = Game {
+        physics: FixedPhysics::new(60),
+        hook: 0,
+        hook_x: HOOK_RANGE.0,
+        ball: 0,
+        clock: 0.0,
+        down: 0,
+        broken: 0,
+        hud,
+        banner,
+        over: None,
+        auto: std::env::var_os("VINC_OTO").is_some(),
+    };
+    restart(world, &mut game);
+    game
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Vinç", 1280, 720)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-            scene.world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(-0.5) * Quat::from_rotation_x(-0.7)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.92, 0.82), 1.8, LightRole::Sun),
-            ));
-            scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(-1.0, 5.5, 19.0),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -0.08,
-                primary: true,
-                ..Default::default()
-            });
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(0.0, -0.5, 0.0)).with_scale(Vec3::new(30.0, 0.5, 8.0)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(Color::srgb_hex("#6B5B45").to_vec4(), 0.95, 0.0),
-                MeshRenderer::new(),
-                RigidBody::new_static(),
-                Velocity::default(),
-                Collider::box_collider(Vec3::new(30.0, 0.5, 8.0)),
-            ));
-            // Vincin kirişi: yalnız görüntü.
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(-1.5, HOOK_Y + 0.35, 0.0)).with_scale(Vec3::new(8.5, 0.15, 0.15)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(Color::srgb_hex("#E1A73B").to_vec4(), 0.5, 0.6),
-                MeshRenderer::new(),
-            ));
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-            let mut game = Game {
-                physics: FixedPhysics::new(60),
-                hook: 0,
-                hook_x: HOOK_RANGE.0,
-                ball: 0,
-                clock: 0.0,
-                down: 0,
-                broken: 0,
-                hud,
-                banner,
-                over: None,
-                auto: std::env::var_os("VINC_OTO").is_some(),
-            };
-            restart(scene.world, &mut game);
+            let game = setup(scene.world, font);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
+}
+
+/// `--test`: pencere açmadan otomatik pilot kancayı ipin periyodunda sallar; süre bitmeden binanın
+/// beşte dördü inmeli, en az biri parçalanarak. Oyunun kendi `setup`'ı ve `update`'i, boş bir girdiyle, sabit adımla.
+fn self_test() -> bool {
+    let mut world = World::new();
+    let font = gizmo::renderer::text::FontLibrary::new()
+        .load(gizmo::renderer::text::synthetic::synthetic_face())
+        .expect("sentetik yüz her zaman ayrıştırılır");
+    let mut game = setup(&mut world, font);
+    game.auto = true;
+    world.insert_resource(game);
+    let mut state = SimpleSceneState { camera_speed: 0.0, camera_pitch: 0.0, camera_yaw: 0.0, camera_pos: Vec3::ZERO };
+    let input = Input::default();
+    let dt = 1.0 / 60.0;
+    let mut frames = 0;
+    while world.get_resource::<Game>().is_some_and(|g| g.over.is_none()) && frames < 60 * 120 {
+        update(&mut world, &mut state, dt, &input);
+        // Pencereli döngü de her `update`'ten sonra ertelenmiş komutları uygular.
+        world.apply_commands();
+        frames += 1;
+    }
+    let game = world.get_resource::<Game>().expect("oyun kaynağı");
+    // Kırılma da işlemeli: yalnız devrilen bloklarla kazanılan oyun kırılmanın bozulduğunu saklar.
+    let ok = game.over == Some(true) && game.broken > 0;
+    println!(
+        "vinc --test: {:.1} s; {} / {} blok yıkıldı, {} parçalandı → {}",
+        game.clock,
+        game.down,
+        COLUMNS * FLOORS,
+        game.broken,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
 }
 
 fn restart(world: &mut World, game: &mut Game) {

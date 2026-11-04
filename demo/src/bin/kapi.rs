@@ -268,6 +268,8 @@ fn self_test() -> bool {
     while time < 60.0 {
         time += dt;
         update(&mut world, &mut state, dt, &input);
+        // Pencereli döngü de her `update`'ten sonra ertelenmiş komutları uygular.
+        world.apply_commands();
         let game = world.get_resource::<Game>().expect("oyun kaynağı");
         for (k, g) in ['1', '2'].into_iter().enumerate() {
             opened[k] |= game.doors.iter().filter(|d| d.group == g).all(|d| d.y < 0.0);
