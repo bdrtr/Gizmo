@@ -275,7 +275,7 @@ impl gizmo_core::system::System for FpsLookSystem {
                     // The gate covers the MOUSE only. A stick has no cursor to fight with, so
                     // requiring a held button of it would be a restriction with nothing behind
                     // it — the same conclusion the studio's camera reached about its fly keys.
-                    let looking = look.look_button.is_none_or(&mouse_held);
+                    let looking = look.look_button.is_none_or(mouse_held);
                     if looking {
                         look.apply_look(mdx, mdy);
                     }
