@@ -47,7 +47,8 @@
 //! `UiTween` ile yerine kayarak dönüyor.
 //!
 //! ## Ortam değişkenleri
-//!   * `BIRLESTIR_OTO=1` — kendi kendine birkaç tohum ekip birleştiriyor (ekran görüntüsü için)
+//!   * `BIRLESTIR_OTO=1` — kendi kendine birkaç tohum ekip birleştiriyor (ekran görüntüsü için;
+//!     `birlestir --test` pencere açmadan oyunun kurallarını dener)
 //!   * `GIZMO_FONT=<yol>` — font
 
 use gizmo::app::save::SaveData;
@@ -58,7 +59,7 @@ use gizmo::core::input::Input;
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
     AlignItems, BackgroundColor, ButtonBundle, Clicked, Display, Drag, DropTarget, FlexDirection, GridTrack, GridTracks, JustifyContent,
     NodeBundle, Style, Tooltip, UiPlugin, UiRect, UiScale, UiTransform, UiTween, Val, ZIndex,
@@ -131,166 +132,225 @@ struct Game {
     auto: Option<u32>,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+    world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+    // Tarla 1280×720 için kuruldu; pencere ne olursa olsun ona sığdırılıyor.
+    world.insert_resource(UiScale::fit(1280.0, 720.0));
+
+    let root = world.spawn_bundle(NodeBundle {
+        style: Style {
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            flex_direction: FlexDirection::Row,
+            justify_content: Some(JustifyContent::Center),
+            align_items: Some(AlignItems::Center),
+            column_gap: Val::Px(32.0),
+            ..Default::default()
+        },
+        background_color: BackgroundColor(Vec4::new(0.08, 0.1, 0.07, 1.0)),
+        ..Default::default()
+    });
+
+    // Tarla: altı sütunlu bir ızgara; satırlar kareler geldikçe.
+    let field = world.spawn_bundle(NodeBundle {
+        style: Style {
+            display: Display::Grid,
+            grid_template_columns: GridTracks::repeat(COLS, GridTrack::Px(CELL)),
+            row_gap: Val::Px(GAP),
+            column_gap: Val::Px(GAP),
+            ..Default::default()
+        },
+        background_color: BackgroundColor(Vec4::ZERO),
+        ..Default::default()
+    });
+    world.add_child(root, field);
+
+    let mut cells = [0; CELLS];
+    let mut views = [0; CELLS];
+    for i in 0..CELLS {
+        let cell = world.spawn_bundle(NodeBundle {
+            style: Style {
+                width: Val::Px(CELL),
+                height: Val::Px(CELL),
+                padding: UiRect::all(Val::Px(PAD)),
+                ..Default::default()
+            },
+            background_color: BackgroundColor(SLOT),
+            ..Default::default()
+        });
+        world.add_component(cell, Cell(i));
+        world.add_component(cell, DropTarget::default());
+        world.add_child(field, cell);
+        let view = world.spawn_bundle(ButtonBundle {
+            style: view_style(),
+            background_color: BackgroundColor(Vec4::ZERO),
+            ..Default::default()
+        });
+        world.add_component(view, View(i));
+        world.add_component(view, Drag::default());
+        // Ne olduğu ve birleşince ne olacağı — metni her kare karenin içeriğinden.
+        world.add_component(view, Tooltip::new(""));
+        world.add_component(
+            view,
+            Text::screen("", font, 15.0, Vec2::ZERO)
+                .with_anchor(TextAnchor::Center)
+                .with_color(Vec4::new(0.05, 0.06, 0.04, 1.0)),
+        );
+        world.add_child(cell, view);
+        cells[i] = cell.id();
+        views[i] = view.id();
+    }
+
+    // Sağ sütun: altın, siparişler, Üret, çöp.
+    let side = world.spawn_bundle(NodeBundle {
+        style: Style {
+            width: Val::Px(260.0),
+            flex_direction: FlexDirection::Column,
+            row_gap: Val::Px(12.0),
+            align_items: Some(AlignItems::Stretch),
+            ..Default::default()
+        },
+        background_color: BackgroundColor(Vec4::ZERO),
+        ..Default::default()
+    });
+    world.add_child(root, side);
+    let label = |world: &mut World, parent: Entity, h: f32, size: f32| {
+        let n = world.spawn_bundle(NodeBundle {
+            style: Style { height: Val::Px(h), ..Default::default() },
+            background_color: BackgroundColor(Vec4::ZERO),
+            ..Default::default()
+        });
+        world.add_component(n, Text::screen("", font, size, Vec2::ZERO).with_anchor(TextAnchor::Center));
+        world.add_child(parent, n);
+        n.id()
+    };
+    let status = label(world, side, 64.0, 22.0);
+    let mut cards = [0; ORDERS];
+    for (o, card_id) in cards.iter_mut().enumerate() {
+        let card = world.spawn_bundle(NodeBundle {
+            style: Style { height: Val::Px(70.0), ..Default::default() },
+            background_color: BackgroundColor(CARD),
+            ..Default::default()
+        });
+        world.add_component(card, OrderCard(o));
+        world.add_component(card, DropTarget::default());
+        world.add_component(card, Text::screen("", font, 19.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+        world.add_child(side, card);
+        *card_id = card.id();
+    }
+    let generate = world.spawn_bundle(ButtonBundle {
+        style: Style { height: Val::Px(56.0), ..Default::default() },
+        background_color: BackgroundColor(CARD),
+        ..Default::default()
+    });
+    world.add_component(generate, Generate);
+    world.add_component(generate, Text::screen("Üret", font, 22.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+    world.add_child(side, generate);
+    let bin = world.spawn_bundle(NodeBundle {
+        style: Style { height: Val::Px(56.0), ..Default::default() },
+        background_color: BackgroundColor(Vec4::new(0.25, 0.1, 0.1, 1.0)),
+        ..Default::default()
+    });
+    world.add_component(bin, Bin);
+    world.add_component(bin, DropTarget::default());
+    world.add_component(bin, Text::screen("Çöp", font, 20.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+    world.add_child(side, bin);
+
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("tak", Blip::new(Wave::Triangle, 440.0, 0.05).with_volume(0.3).wav());
+        audio.load_sound_bytes("birles", Blip::new(Wave::Sine, 660.0, 0.12).with_slide(990.0).with_volume(0.3).wav());
+        audio.load_sound_bytes("altin", Blip::new(Wave::Square, 880.0, 0.1).with_slide(1320.0).with_volume(0.15).wav());
+        audio.load_sound_bytes("yok", Blip::new(Wave::Square, 180.0, 0.08).with_volume(0.15).wav());
+        world.insert_resource(audio);
+    }
+
+    let save = SaveData::open("birlestir");
+    let mut board = [0u8; CELLS];
+    if let Some(saved) = save.get::<Vec<u8>>("board").filter(|b| b.len() == CELLS) {
+        board.copy_from_slice(&saved);
+        board.iter_mut().for_each(|t| *t = (*t).min(NAMES.len() as u8));
+    }
+    let mut rng = Rng::new(0xB1_2025);
+    let mut orders = [0; ORDERS];
+    orders.iter_mut().for_each(|o| *o = new_order(&mut rng));
+    let game = Game {
+        board,
+        orders,
+        coins: save.get("coins").unwrap_or(0),
+        energy: save.get::<u32>("energy").unwrap_or(MAX_ENERGY).min(MAX_ENERGY),
+        refill: Timer::repeating(ENERGY_EVERY),
+        rng,
+        cells,
+        views,
+        cards,
+        bin: bin.id(),
+        status,
+        auto: std::env::var_os("BIRLESTIR_OTO").is_some().then_some(0),
+    };
+    let _ = generate;
+    game
+}
+
+/// `--test`: pencere açmadan kuralları dener. Üret bir tohum eker ve enerji harcar; iki aynı şey
+/// bir üstüne birleşir, ayrı şeyler yer değiştirir, boş kareye bırakılan taşınır; istenen aşama
+/// siparişe teslim edilince altın gelir; enerji zamanla dolar.
+fn self_test() -> bool {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font(), false);
+    // Kayıttan ne geldiyse: boş bir tarla, ve oyuncunun kaydına yazmayan, ekran görüntüsü
+    // hamlelerini (ilk karelerde) çoktan geçmiş bir otomatik sayaç.
+    game.board = [0; CELLS];
+    game.coins = 0;
+    game.energy = MAX_ENERGY;
+    game.auto = Some(1_000_000);
+    let mut checks: Vec<(&str, bool)> = Vec::new();
+    generate(&mut world, &mut game);
+    generate(&mut world, &mut game);
+    let seeds: Vec<usize> = (0..CELLS).filter(|&i| game.board[i] == 1).collect();
+    checks.push(("iki tohum, iki enerji", seeds.len() == 2 && game.energy == MAX_ENERGY - 2));
+    drop_on_cell(&mut world, &mut game, seeds[0], seeds[1]);
+    checks.push(("tohum + tohum = filiz", game.board[seeds[1]] == 2 && game.board[seeds[0]] == 0));
+    let empty = (0..CELLS).find(|&i| game.board[i] == 0).expect("boş kare");
+    drop_on_cell(&mut world, &mut game, seeds[1], empty);
+    checks.push(("boş kareye taşındı", game.board[empty] == 2 && game.board[seeds[1]] == 0));
+    generate(&mut world, &mut game);
+    let seed = (0..CELLS).find(|&i| game.board[i] == 1).expect("tohum");
+    drop_on_cell(&mut world, &mut game, seed, empty);
+    checks.push(("tohum ile filiz yer değiştirdi", game.board[empty] == 1 && game.board[seed] == 2));
+    game.orders[0] = 2;
+    let sprout = seed;
+    deliver(&mut world, &mut game, sprout, 0);
+    checks.push(("filiz siparişe teslim, 9 altın", game.coins == reward(2) && game.board[sprout] == 0));
+    let before = game.energy;
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world).add_plugin(UiPlugin);
+    while run.elapsed < ENERGY_EVERY * 2.5 {
+        run.frame(1.0 / 60.0, update);
+    }
+    let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+    checks.push(("enerji zamanla doldu", game.energy == (before + 2).min(MAX_ENERGY)));
+    let failed: Vec<&str> = checks.iter().filter(|(_, ok)| !ok).map(|(name, _)| *name).collect();
+    println!(
+        "birlestir --test: {} sınamadan {} geçti{} → {}",
+        checks.len(),
+        checks.len() - failed.len(),
+        if failed.is_empty() { String::new() } else { format!("; geçmeyen: {}", failed.join(", ")) },
+        if failed.is_empty() { "tamam" } else { "BAŞARISIZ" }
+    );
+    failed.is_empty()
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Birleştir", 1280, 720)
         .add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-            scene.world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
-            // Tarla 1280×720 için kuruldu; pencere ne olursa olsun ona sığdırılıyor.
-            scene.world.insert_resource(UiScale::fit(1280.0, 720.0));
-
-            let root = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    width: Val::Percent(100.0),
-                    height: Val::Percent(100.0),
-                    flex_direction: FlexDirection::Row,
-                    justify_content: Some(JustifyContent::Center),
-                    align_items: Some(AlignItems::Center),
-                    column_gap: Val::Px(32.0),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(Vec4::new(0.08, 0.1, 0.07, 1.0)),
-                ..Default::default()
-            });
-
-            // Tarla: altı sütunlu bir ızgara; satırlar kareler geldikçe.
-            let field = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    display: Display::Grid,
-                    grid_template_columns: GridTracks::repeat(COLS, GridTrack::Px(CELL)),
-                    row_gap: Val::Px(GAP),
-                    column_gap: Val::Px(GAP),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(Vec4::ZERO),
-                ..Default::default()
-            });
-            scene.world.add_child(root, field);
-
-            let mut cells = [0; CELLS];
-            let mut views = [0; CELLS];
-            for i in 0..CELLS {
-                let cell = scene.world.spawn_bundle(NodeBundle {
-                    style: Style {
-                        width: Val::Px(CELL),
-                        height: Val::Px(CELL),
-                        padding: UiRect::all(Val::Px(PAD)),
-                        ..Default::default()
-                    },
-                    background_color: BackgroundColor(SLOT),
-                    ..Default::default()
-                });
-                scene.world.add_component(cell, Cell(i));
-                scene.world.add_component(cell, DropTarget::default());
-                scene.world.add_child(field, cell);
-                let view = scene.world.spawn_bundle(ButtonBundle {
-                    style: view_style(),
-                    background_color: BackgroundColor(Vec4::ZERO),
-                    ..Default::default()
-                });
-                scene.world.add_component(view, View(i));
-                scene.world.add_component(view, Drag::default());
-                // Ne olduğu ve birleşince ne olacağı — metni her kare karenin içeriğinden.
-                scene.world.add_component(view, Tooltip::new(""));
-                scene.world.add_component(
-                    view,
-                    Text::screen("", font, 15.0, Vec2::ZERO)
-                        .with_anchor(TextAnchor::Center)
-                        .with_color(Vec4::new(0.05, 0.06, 0.04, 1.0)),
-                );
-                scene.world.add_child(cell, view);
-                cells[i] = cell.id();
-                views[i] = view.id();
-            }
-
-            // Sağ sütun: altın, siparişler, Üret, çöp.
-            let side = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    width: Val::Px(260.0),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: Val::Px(12.0),
-                    align_items: Some(AlignItems::Stretch),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(Vec4::ZERO),
-                ..Default::default()
-            });
-            scene.world.add_child(root, side);
-            let label = |world: &mut World, parent: Entity, h: f32, size: f32| {
-                let n = world.spawn_bundle(NodeBundle {
-                    style: Style { height: Val::Px(h), ..Default::default() },
-                    background_color: BackgroundColor(Vec4::ZERO),
-                    ..Default::default()
-                });
-                world.add_component(n, Text::screen("", font, size, Vec2::ZERO).with_anchor(TextAnchor::Center));
-                world.add_child(parent, n);
-                n.id()
-            };
-            let status = label(scene.world, side, 64.0, 22.0);
-            let mut cards = [0; ORDERS];
-            for (o, card_id) in cards.iter_mut().enumerate() {
-                let card = scene.world.spawn_bundle(NodeBundle {
-                    style: Style { height: Val::Px(70.0), ..Default::default() },
-                    background_color: BackgroundColor(CARD),
-                    ..Default::default()
-                });
-                scene.world.add_component(card, OrderCard(o));
-                scene.world.add_component(card, DropTarget::default());
-                scene.world.add_component(card, Text::screen("", font, 19.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-                scene.world.add_child(side, card);
-                *card_id = card.id();
-            }
-            let generate = scene.world.spawn_bundle(ButtonBundle {
-                style: Style { height: Val::Px(56.0), ..Default::default() },
-                background_color: BackgroundColor(CARD),
-                ..Default::default()
-            });
-            scene.world.add_component(generate, Generate);
-            scene.world.add_component(generate, Text::screen("Üret", font, 22.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-            scene.world.add_child(side, generate);
-            let bin = scene.world.spawn_bundle(NodeBundle {
-                style: Style { height: Val::Px(56.0), ..Default::default() },
-                background_color: BackgroundColor(Vec4::new(0.25, 0.1, 0.1, 1.0)),
-                ..Default::default()
-            });
-            scene.world.add_component(bin, Bin);
-            scene.world.add_component(bin, DropTarget::default());
-            scene.world.add_component(bin, Text::screen("Çöp", font, 20.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-            scene.world.add_child(side, bin);
-
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("tak", Blip::new(Wave::Triangle, 440.0, 0.05).with_volume(0.3).wav());
-                audio.load_sound_bytes("birles", Blip::new(Wave::Sine, 660.0, 0.12).with_slide(990.0).with_volume(0.3).wav());
-                audio.load_sound_bytes("altin", Blip::new(Wave::Square, 880.0, 0.1).with_slide(1320.0).with_volume(0.15).wav());
-                audio.load_sound_bytes("yok", Blip::new(Wave::Square, 180.0, 0.08).with_volume(0.15).wav());
-                scene.world.insert_resource(audio);
-            }
-
-            let save = SaveData::open("birlestir");
-            let mut board = [0u8; CELLS];
-            if let Some(saved) = save.get::<Vec<u8>>("board").filter(|b| b.len() == CELLS) {
-                board.copy_from_slice(&saved);
-                board.iter_mut().for_each(|t| *t = (*t).min(NAMES.len() as u8));
-            }
-            let mut rng = Rng::new(0xB1_2025);
-            let mut orders = [0; ORDERS];
-            orders.iter_mut().for_each(|o| *o = new_order(&mut rng));
-            let game = Game {
-                board,
-                orders,
-                coins: save.get("coins").unwrap_or(0),
-                energy: save.get::<u32>("energy").unwrap_or(MAX_ENERGY).min(MAX_ENERGY),
-                refill: Timer::repeating(ENERGY_EVERY),
-                rng,
-                cells,
-                views,
-                cards,
-                bin: bin.id(),
-                status,
-                auto: std::env::var_os("BIRLESTIR_OTO").is_some().then_some(0),
-            };
-            let _ = generate;
+            let game = setup(scene.world, font, true);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
