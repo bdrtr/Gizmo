@@ -77,4 +77,4 @@ mod material_edit_tests;
 #[cfg(all(feature = "render", feature = "physics-soft"))]
 pub mod cloth;
 #[cfg(all(feature = "render", feature = "physics-soft"))]
-pub use cloth::{cloth_mesh_system, rope_mesh_system};
+pub use cloth::{cloth_mesh_system, rope_mesh_system, soft_body_mesh_system};

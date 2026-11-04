@@ -535,6 +535,8 @@ fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     crate::systems::cloth::cloth_mesh_system(world);
     #[cfg(feature = "physics-soft")]
     crate::systems::cloth::rope_mesh_system(world);
+    #[cfg(feature = "physics-soft")]
+    crate::systems::cloth::soft_body_mesh_system(world);
 
     // **Tweens first**, on the animation clock (so time scale and pause apply), and before the
     // transform pass below so a tweened `Transform` is drawn where it is this frame.

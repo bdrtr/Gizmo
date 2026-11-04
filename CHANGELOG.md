@@ -71,6 +71,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     `cpu_physics`'s jelly uses it now, and its `damping = 5.0` (a retention factor: above 1 it
     *adds* speed) is 0.5.
   `tests/soft_solid.rs` — reverting each of the five turns a test red.
+- **A soft body is drawn (`soft_body_mesh_system`).** A `SoftBodyMesh` in the world was stepped
+  and drawn as nothing but debug lines. Both draw paths now give it the mesh of its surface,
+  outward, normals smoothed over the nodes, and a renderer and material the first time.
 
 - **`ExternalForce` — a push that lasts (`gizmo::physics::components::ExternalForce`).** A force
   and torque applied on every physics step while the component is on the body: an engine, a

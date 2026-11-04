@@ -1,6 +1,9 @@
 //! Drawing a [`Cloth`](gizmo_physics_soft::cloth::Cloth) component — and a
 //! [`Rope`](gizmo_physics_soft::rope::Rope), which had the same gap.
 //!
+//! A [`SoftBodyMesh`](gizmo_physics_soft::SoftBodyMesh) had it too, and is drawn by
+//! [`soft_body_mesh_system`].
+//!
 //! A `Cloth` in the world was simulated — the physics step runs `cloth_step_system` over every
 //! one — and never drawn: no draw path knew the type, and the cloth did not even keep the grid
 //! width that turns its nodes back into a surface. `cloth_demo` kept its cloth out of the ECS and
@@ -124,6 +127,68 @@ fn rope_vertices(rope: &gizmo_physics_soft::rope::Rope, to_local: gizmo_math::Ma
     out
 }
 
+/// Gives every entity with a [`SoftBodyMesh`](gizmo_physics_soft::SoftBodyMesh) the mesh of its
+/// surface this frame — the faces of its tetrahedra that belong to one tetrahedron only
+/// ([`surface_faces`](gizmo_physics_soft::soft_contact::surface_faces)), outward, with normals
+/// smoothed over the nodes so a wobbling jelly reads as one surface — in the entity's own frame;
+/// and, the first time, a renderer, a `GlobalTransform` and a material if it has none.
+///
+/// A soft body in the world was stepped by the physics step and drawn as nothing but debug
+/// lines (`physics_debug_system`), so a game had none to show.
+pub fn soft_body_mesh_system(world: &mut crate::core::World) {
+    use gizmo_physics_soft::SoftBodyMesh;
+    let built: Vec<(u32, MeshData)> = {
+        let bodies = world.borrow::<SoftBodyMesh>();
+        let transforms = world.borrow::<Transform>();
+        bodies
+            .iter()
+            .map(|(id, body)| {
+                let to_local = transforms
+                    .get(id)
+                    .map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse())
+                    .unwrap_or(gizmo_math::Mat4::IDENTITY);
+                (id, MeshData::new(soft_body_vertices(body, to_local)))
+            })
+            .collect()
+    };
+    for (id, mesh) in built {
+        let Some(e) = world.get_entity(id) else { continue };
+        let first = world.borrow::<MeshRenderer>().get(id).is_none();
+        world.add_component(e, mesh);
+        if first {
+            world.add_component(e, MeshRenderer::new());
+            if world.borrow::<GlobalTransform>().get(id).is_none() {
+                world.add_component(e, GlobalTransform::default());
+            }
+            if world.borrow::<MaterialDesc>().get(id).is_none() {
+                world.add_component(e, MaterialDesc::new().with_pbr(gizmo_math::Vec4::new(0.9, 0.3, 0.4, 1.0), 0.3, 0.0));
+            }
+        }
+    }
+}
+
+/// The outward surface triangles, normals averaged per node.
+fn soft_body_vertices(body: &gizmo_physics_soft::SoftBodyMesh, to_local: gizmo_math::Mat4) -> Vec<Vertex> {
+    let faces = gizmo_physics_soft::soft_contact::surface_faces(body);
+    let local: Vec<Vec3> = body.nodes.iter().map(|n| to_local.transform_point3(n.position)).collect();
+    let mut normals = vec![Vec3::ZERO; local.len()];
+    for f in &faces {
+        let [a, b, c] = f.map(|i| local[i as usize]);
+        let n = (b - a).cross(c - a); // area-weighted
+        for &i in f {
+            normals[i as usize] += n;
+        }
+    }
+    let mut out = Vec::with_capacity(faces.len() * 3);
+    for f in &faces {
+        for &i in f {
+            let i = i as usize;
+            out.push(Vertex { position: local[i].to_array(), normal: normals[i].normalize_or(Vec3::Y).to_array(), ..Default::default() });
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +243,32 @@ mod tests {
         world.add_component(e, cloth);
         cloth_mesh_system(&mut world);
         assert_eq!(world.borrow::<MeshData>().get(e.id()).unwrap().vertices().len(), 8 * 3 * 2);
+    }
+
+    /// A soft body entity gets a mesh of its outer surface only, facing out, where its nodes are.
+    #[test]
+    fn a_soft_body_is_drawn_as_its_surface() {
+        use gizmo_physics_soft::SoftBodyMesh;
+        let mut world = World::new();
+        let e = world.spawn();
+        let body = SoftBodyMesh::block(Vec3::new(4.0, 0.0, 0.0), Vec3::ONE, [2, 2, 2], 8.0, 1000.0, 0.3).unwrap();
+        world.add_component(e, body);
+        soft_body_mesh_system(&mut world);
+        let verts: Vec<(Vec3, Vec3)> = world
+            .borrow::<MeshData>()
+            .get(e.id())
+            .unwrap()
+            .vertices()
+            .iter()
+            .map(|v| (Vec3::from_array(v.position), Vec3::from_array(v.normal)))
+            .collect();
+        assert_eq!(verts.len(), 6 * 4 * 2 * 3, "six sides of four squares, two triangles each — no inner faces");
+        let centre = Vec3::new(4.5, 0.5, 0.5);
+        for tri in verts.chunks(3) {
+            let (a, b, c) = (tri[0].0, tri[1].0, tri[2].0);
+            assert!((b - a).cross(c - a).dot(a - centre) > 0.0, "a triangle faces into the body");
+        }
+        assert!(verts.iter().all(|(p, n)| n.dot(*p - centre) > 0.0), "a normal points inward");
+        assert!(world.borrow::<MeshRenderer>().get(e.id()).is_some());
     }
 }
