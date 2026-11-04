@@ -111,6 +111,11 @@ const EXCEPTIONS: &[(&str, &str)] = &[
         "Up/Down are a dial: they raise and lower the wind speed in m/s.",
     ),
     (
+        "demo/src/bin/pinbol.rs",
+        "A/D and ←/→ are the left and right flipper — two independent buttons held at once, not \
+         a direction; a stick's half-tilt would be half a flip.",
+    ),
+    (
         "crates/gizmo-studio/src/systems/shortcuts.rs",
         "editor shortcuts, and the reason the studio camera gates its fly keys behind the right \
          mouse button: W/E/Q are Translate/Rotate/Select, and Ctrl+S/D/A are save, duplicate and \
