@@ -36,7 +36,8 @@
 //! yeniden yazıyordu. **Düzeltildi:** düzenlenen açıklama malzemeye geçiyor.
 //!
 //! ## Ortam değişkenleri
-//!   * `KOPRU_OTO=1` — hazır bir kafes köprüyü kurup dener (ekran görüntüsü için)
+//!   * `KOPRU_OTO=1` — hazır bir kafes köprüyü kurup dener (ekran görüntüsü için; `kopru --test`
+//!     pencere açmadan onu, bir döşemeyi ve ortası eksik bir döşemeyi dener)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::core::input::Input;
@@ -47,7 +48,7 @@ use gizmo::physics::{BodyHandle, Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 
 /// Düğüm ızgarası: x −6…6, y −4…2, 2 m aralık. Uçurum kenarındaki düğümler sabit.
 const NODE_X: [f32; 7] = [-6.0, -4.0, -2.0, 0.0, 2.0, 4.0, 6.0];
@@ -105,82 +106,90 @@ fn anchored(p: Vec3) -> bool {
     p.x.abs() > 5.9 && p.y > -2.1
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+fn setup(world: &mut World, font: FontId) -> Game {
+
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.8)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 3.0, LightRole::Sun),
+    ));
+    world.spawn_bundle(CameraBundle {
+        position: Vec3::new(0.0, -0.5, 22.0),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: 0.0,
+        primary: true,
+        ..Default::default()
+    });
+    // Uçurumlar: üstü y = 0, köprü boşluğu x −6…6.
+    for x in [-11.0f32, 11.0] {
+        let half = Vec3::new(5.0, 6.0, 2.0);
+        let at = Vec3::new(x, -6.0, 0.0);
+        world.spawn_bundle((
+                Transform::new(at).with_scale(half),
+                GlobalTransform::default(),
+                MeshSource("standard_cube".into()),
+                MaterialDesc::new().with_pbr(Vec4::new(0.45, 0.38, 0.3, 1.0), 0.95, 0.0),
+                MeshRenderer::new(),
+            ));
+        world.spawn_bundle((Transform::new(at), RigidBody::new_static(), Velocity::default(), Collider::box_collider(half)));
+    }
+    // Düğümler: küçük küreler; sabit olanlar koyu.
+    let node_ids = nodes()
+        .into_iter()
+        .map(|p| {
+            let colour = if anchored(p) { Vec4::new(0.2, 0.2, 0.25, 1.0) } else { Vec4::new(0.85, 0.85, 0.9, 1.0) };
+            world
+                .spawn_bundle((
+                    Transform::new(p + Vec3::Z * 0.3).with_scale(Vec3::splat(0.18)),
+                    GlobalTransform::default(),
+                    MeshSource("sphere".into()),
+                    MaterialDesc::new().with_unlit(colour),
+                    MeshRenderer::new(),
+                ))
+                .id()
+        })
+        .collect();
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.2), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+    let auto = std::env::var_os("KOPRU_OTO").is_some();
+    let mut game = Game {
+        physics: FixedPhysics::new(120),
+        mode: Mode::Build,
+        beams: Vec::new(),
+        picked: None,
+        bodies: Vec::new(),
+        joint_beam: Vec::new(),
+        ball: 0,
+        previews: Vec::new(),
+        nodes: node_ids,
+        hud,
+        banner,
+        clock: 0.0,
+        result: None,
+        auto,
+    };
+    if auto {
+        game.beams = truss();
+        rebuild_previews(world, &mut game);
+        start_test(world, &mut game);
+    }
+    game
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Köprü", 1280, 720)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-            scene.world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.8)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 3.0, LightRole::Sun),
-            ));
-            scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(0.0, -0.5, 22.0),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: 0.0,
-                primary: true,
-                ..Default::default()
-            });
-            // Uçurumlar: üstü y = 0, köprü boşluğu x −6…6.
-            for x in [-11.0f32, 11.0] {
-                let half = Vec3::new(5.0, 6.0, 2.0);
-                let at = Vec3::new(x, -6.0, 0.0);
-                scene.world.spawn_bundle((
-                        Transform::new(at).with_scale(half),
-                        GlobalTransform::default(),
-                        MeshSource("standard_cube".into()),
-                        MaterialDesc::new().with_pbr(Vec4::new(0.45, 0.38, 0.3, 1.0), 0.95, 0.0),
-                        MeshRenderer::new(),
-                    ));
-                scene.world.spawn_bundle((Transform::new(at), RigidBody::new_static(), Velocity::default(), Collider::box_collider(half)));
-            }
-            // Düğümler: küçük küreler; sabit olanlar koyu.
-            let node_ids = nodes()
-                .into_iter()
-                .map(|p| {
-                    let colour = if anchored(p) { Vec4::new(0.2, 0.2, 0.25, 1.0) } else { Vec4::new(0.85, 0.85, 0.9, 1.0) };
-                    scene
-                        .world
-                        .spawn_bundle((
-                            Transform::new(p + Vec3::Z * 0.3).with_scale(Vec3::splat(0.18)),
-                            GlobalTransform::default(),
-                            MeshSource("sphere".into()),
-                            MaterialDesc::new().with_unlit(colour),
-                            MeshRenderer::new(),
-                        ))
-                        .id()
-                })
-                .collect();
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.2), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-            let auto = std::env::var_os("KOPRU_OTO").is_some();
-            let mut game = Game {
-                physics: FixedPhysics::new(120),
-                mode: Mode::Build,
-                beams: Vec::new(),
-                picked: None,
-                bodies: Vec::new(),
-                joint_beam: Vec::new(),
-                ball: 0,
-                previews: Vec::new(),
-                nodes: node_ids,
-                hud,
-                banner,
-                clock: 0.0,
-                result: None,
-                auto,
-            };
-            if auto {
-                game.beams = truss();
-                rebuild_previews(scene.world, &mut game);
-                start_test(scene.world, &mut game);
-            }
+            let game = setup(scene.world, font);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
@@ -189,6 +198,53 @@ fn main() {
 }
 
 /// Hazır bir kafes (Warren): üst kuşak y = 0, alt kuşak y = −2, aralarda çaprazlar.
+/// Bir köprüyü kurup dener; topun karşıya geçip geçmediği, kaç eklemin koptuğu, en yüklü eklemin
+/// eşiğin ne kadarını taşıdığı ve sürenin kaç saniye olduğu.
+fn try_bridge(beams: Vec<Beam>) -> (Option<bool>, usize, f32, f32) {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font());
+    game.auto = false;
+    game.beams = beams;
+    rebuild_previews(&mut world, &mut game);
+    start_test(&mut world, &mut game);
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world);
+    let mut worst = 0.0f32;
+    while run.elapsed < 20.0 && run.world.get_resource::<Game>().is_some_and(|g| g.result.is_none()) {
+        run.frame(1.0 / 60.0, update);
+        if let Some(p) = run.world.get_resource::<PhysicsWorld>() {
+            worst = p.joints.iter().filter(|j| !j.is_broken).map(|j| j.load()).fold(worst, f32::max);
+        }
+    }
+    let broken = run.world.get_resource::<PhysicsWorld>().map_or(0, |p| p.joints.iter().filter(|j| j.is_broken).count());
+    (run.world.get_resource::<Game>().and_then(|g| g.result), broken, worst, run.elapsed)
+}
+
+/// `--test`: pencere açmadan üç köprü. Hazır kafes topu taşımalı; menteşeli kirişlerden tek sıra
+/// bir döşeme de taşır (sarkan bir zincir gibi: eğim birkaç derece, gerilme eşiğin çok altında);
+/// ortasından bir kirişi eksik döşemede top düşmeli.
+fn self_test() -> bool {
+    let (truss_result, truss_broken, truss_load, truss_time) = try_bridge(truss());
+    let all = nodes();
+    let at = |x: f32| all.iter().position(|p| (p.x - x).abs() < 0.01 && p.y.abs() < 0.01).expect("a grid node");
+    let deck: Vec<Beam> = (0..6).map(|i| Beam { a: at(NODE_X[i]), b: at(NODE_X[i + 1]) }).collect();
+    let (deck_result, deck_broken, deck_load, deck_time) = try_bridge(deck.clone());
+    let gapped: Vec<Beam> = deck.into_iter().enumerate().filter(|&(i, _)| i != 3).map(|(_, b)| b).collect();
+    let (gap_result, _, _, gap_time) = try_bridge(gapped);
+    let ok = truss_result == Some(true) && truss_broken == 0 && deck_result == Some(true) && gap_result == Some(false);
+    println!(
+        "kopru --test: kafes {:?} ({truss_time:.1} s, {truss_broken} eklem koptu, en yüklü eklem eşiğin %{:.0}'i); \
+         döşeme {:?} ({deck_time:.1} s, {deck_broken} koptu, %{:.0}); bir kirişi eksik döşeme {:?} ({gap_time:.1} s) → {}",
+        truss_result,
+        truss_load * 100.0,
+        deck_result,
+        deck_load * 100.0,
+        gap_result,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn truss() -> Vec<Beam> {
     let all = nodes();
     let at = |x: f32, y: f32| all.iter().position(|p| (p.x - x).abs() < 0.01 && (p.y - y).abs() < 0.01).expect("a grid node");
