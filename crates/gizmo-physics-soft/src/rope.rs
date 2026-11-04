@@ -149,6 +149,18 @@ impl Rope {
     /// The constraint sweep runs sequentially from the first link to the last, so the step is
     /// deterministic for a given state and `dt`.
     pub fn step(&mut self, dt: f32, gravity: Vec3) {
+        self.step_with_colliders(dt, gravity, &[]);
+    }
+
+    /// [`step`](Self::step), also keeping the rope out of `colliders` (spheres, boxes and
+    /// capsules, as [`Cloth`](crate::cloth::Cloth) understands them): after the links are
+    /// solved, every free node inside one is moved to its surface plus half the rope's
+    /// [`thickness`](Self::thickness), and its velocity into it is taken away. One-way — the
+    /// colliders are not pushed.
+    ///
+    /// **Why it exists.** A rope knew the floor at `y = 0` and nothing else, so one dropped on a
+    /// crate fell through it. The ECS driver (`rope_step_system`) passes the world's colliders.
+    pub fn step_with_colliders(&mut self, dt: f32, gravity: Vec3, colliders: &[(gizmo_physics_core::BodyHandle, gizmo_physics_core::Transform, gizmo_physics_core::Collider)]) {
         if dt <= 0.0 {
             return;
         }
@@ -207,7 +219,25 @@ impl Rope {
             }
         }
 
-        // 3. Simple ground collision (sabit/pinned düğümleri TAŞIMA — bunlar her
+        // 3. Colliders: project each free node out, and drop its velocity into the surface.
+        if !colliders.is_empty() {
+            let skin = self.thickness * 0.5;
+            for node in &mut self.nodes {
+                if node.is_fixed {
+                    continue;
+                }
+                for (_, t, c) in colliders {
+                    if let Some((out, n)) = crate::cloth::project_point_out(node.position, skin, &c.shape, t) {
+                        let v = node.position - node.prev_position;
+                        let into = v.dot(n).min(0.0);
+                        node.position = out;
+                        node.prev_position = out - (v - n * into);
+                    }
+                }
+            }
+        }
+
+        // 4. Simple ground collision (sabit/pinned düğümleri TAŞIMA — bunlar her
         //    yere sabitlenebilir, zeminin altında bile; eskiden is_fixed guard yoktu).
         for node in &mut self.nodes {
             if node.is_fixed {
@@ -374,4 +404,21 @@ mod tests {
         }
         assert_eq!(a, b);
     }
+
+    /// A rope dropped across a crate lies on it: the middle node rests on the top face (plus
+    /// half the rope's thickness), where it used to fall through to the floor.
+    #[test]
+    fn a_rope_lies_on_a_crate() {
+        use gizmo_physics_core::{BodyHandle, Collider, Transform};
+        let crate_ = (BodyHandle::from_id(1), Transform::new(Vec3::new(0.0, 0.5, 0.0)), Collider::box_collider(Vec3::splat(0.5)));
+        let mut rope = Rope::new(Vec3::new(-1.0, 2.0, 0.0), Vec3::X, 10, 0.2, 0.05, false, false);
+        for _ in 0..180 {
+            rope.step_with_colliders(1.0 / 60.0, Vec3::new(0.0, -9.81, 0.0), std::slice::from_ref(&crate_));
+        }
+        let middle = rope.nodes[5].position;
+        assert!((middle.y - (1.0 + rope.thickness * 0.5)).abs() < 0.05, "the middle of the rope is at y {:.3}", middle.y);
+        let end = rope.nodes[0].position;
+        assert!(end.y < 0.9, "the free end hangs down over the side: y {:.3}", end.y);
+    }
 }
+

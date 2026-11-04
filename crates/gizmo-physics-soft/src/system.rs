@@ -213,15 +213,17 @@ pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
     apply_reaction_impulses(world, &impulses);
 }
 
-/// Steps every [`Rope`] in the world by `dt` seconds under `gravity`.
+/// Steps every [`Rope`] in the world by `dt` seconds under `gravity`, keeping it out of the
+/// world's colliders ([`Rope::step_with_colliders`]; it used to know only the floor).
 /// The timestep is clamped to a stable upper bound.
 #[tracing::instrument(skip_all, name = "rope_step_system")]
 pub fn rope_step_system(world: &World, dt: f32, gravity: Vec3) {
     let dt = dt.min(MAX_SOFT_DT);
     // SAFETY: scheduled system, exclusive view of Rope — see `soft_body_step_system` above.
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Rope>>() } {
+        let colliders = collect_rigid_colliders(world);
         for (_, mut rope) in q.iter_mut() {
-            rope.step(dt, gravity);
+            rope.step_with_colliders(dt, gravity, &colliders);
         }
     }
 }

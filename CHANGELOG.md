@@ -150,6 +150,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **A rope lies on what it falls on (`Rope::step_with_colliders`).** A rope knew the floor at
+  `y = 0` and nothing else, so one dropped across a crate fell through it. Free nodes are now
+  projected out of spheres, boxes and capsules (the shapes cloth drapes over) by half the rope's
+  thickness, losing their velocity into the surface; `rope_step_system` passes the world's
+  colliders. One-way, like cloth before it. Tested: a rope dropped across a crate rests on its top
+  with its ends hanging; without the colliders it lies on the floor.
 - **A `Rope` component is drawn** (`rope_mesh_system`, `Rope::thickness`) — the same gap `Cloth`
   had: the physics step stepped every `Rope` in the world and no draw path knew the type
   (`advanced_physics` kept its rope outside the ECS and put a sphere on each node by hand). Both

@@ -30,7 +30,7 @@ use gizmo_physics_core::{BodyHandle, Collider, ColliderShape, Transform};
 /// surface point (pushed out by `thickness`) and the outward normal. Handles spheres and
 /// boxes (the common draping targets); other shapes are skipped. Position-based (static)
 /// so it catches RESTING nodes draped on a surface, unlike a swept raycast.
-fn project_point_out(
+pub(crate) fn project_point_out(
     pos: Vec3,
     thickness: f32,
     shape: &ColliderShape,
