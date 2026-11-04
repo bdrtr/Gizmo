@@ -29,7 +29,8 @@
 //! değişiyordu ve motor her kare açıklamayı malzemeden yeniden yazıyordu. **Düzeltildi.**
 //!
 //! ## Ortam değişkenleri
-//!   * `KAPI_OTO=1` — oyunu kendisi çözer (sınama ve ekran görüntüsü için)
+//!   * `KAPI_OTO=1` — oyunu kendisi çözer (ekran görüntüsü için; `kapi --test` aynısını pencere
+//!     açmadan yapar)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::core::input::Input;
@@ -124,123 +125,167 @@ fn plate_collider() -> Collider {
     Collider::box_collider(Vec3::new(0.4, 0.25, 0.4)).with_trigger(true)
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+fn setup(world: &mut World, font: FontId) -> Game {
+
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-1.0)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.95, 0.88), 1.7, LightRole::Sun),
+    ));
+    let (w, h) = (MAP[0].len() as f32, MAP.len() as f32);
+    world.spawn_bundle(CameraBundle {
+        position: Vec3::new(w * 0.5, 13.0, h * 0.5 + 6.5),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -1.05,
+        primary: true,
+        ..Default::default()
+    });
+    world.spawn_bundle((
+        Transform::new(Vec3::new(w * 0.5, -0.5, h * 0.5)),
+        RigidBody::new_static(),
+        Velocity::default(),
+        Collider::box_collider(Vec3::new(w * 0.5, 0.5, h * 0.5)),
+    ));
+    world.spawn_bundle((
+        Transform::new(Vec3::new(w * 0.5, -0.05, h * 0.5)).with_scale(Vec3::new(w * 0.5, 0.05, h * 0.5)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(Color::srgb_hex("#4A4E55").to_vec4(), 0.9, 0.0),
+        MeshRenderer::new(),
+    ));
+    let (mut start, mut exit) = (Vec3::ZERO, Vec3::ZERO);
+    let (mut crate_starts, mut doors, mut plates) = (Vec::new(), Vec::new(), Vec::new());
+    for (z, row) in MAP.iter().enumerate() {
+        for (x, c) in row.chars().enumerate() {
+            let at = cell(x, z);
+            match c {
+                '#' => {
+                    world.spawn_bundle((
+                        Transform::new(at + Vec3::Y * 0.6).with_scale(Vec3::new(0.5, 0.6, 0.5)),
+                        GlobalTransform::default(),
+                        MeshSource("standard_cube".into()),
+                        MaterialDesc::new().with_pbr(Color::srgb_hex("#7A7268").to_vec4(), 0.85, 0.0),
+                        MeshRenderer::new(),
+                        RigidBody::new_static(),
+                        Velocity::default(),
+                        Collider::box_collider(Vec3::new(0.5, 0.6, 0.5)),
+                    ));
+                }
+                'S' => start = at,
+                'E' => exit = at,
+                'x' => crate_starts.push(at),
+                'A' | 'B' => {
+                    let group = if c == 'A' { '1' } else { '2' };
+                    doors.push(spawn_door(world, at, group));
+                }
+                '1' | '2' => {
+                    let body = world
+                        .spawn_bundle((
+                            Transform::new(at + Vec3::Y * 0.3),
+                            RigidBody::new_static(),
+                            Velocity::default(),
+                            plate_collider(),
+                        ))
+                        .id();
+                    let lamp = world
+                        .spawn_bundle((
+                            Transform::new(at + Vec3::Y * 0.02).with_scale(Vec3::new(0.4, 0.02, 0.4)),
+                            GlobalTransform::default(),
+                            MeshSource("standard_cube".into()),
+                            MaterialDesc::new().with_unlit(plate_colour(false)),
+                            MeshRenderer::new(),
+                        ))
+                        .id();
+                    plates.push(Plate { group: c, at, body, lamp });
+                }
+                _ => {}
+            }
+        }
+    }
+    world.spawn_bundle((
+        Transform::new(exit + Vec3::Y * 0.02).with_scale(Vec3::new(0.45, 0.02, 0.45)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_unlit(Color::srgb_hex("#3CB371").to_vec4()),
+        MeshRenderer::new(),
+    ));
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+    let mut game = Game {
+        physics: FixedPhysics::new(60),
+        player: 0,
+        start,
+        exit,
+        crate_starts,
+        doors,
+        plates,
+        hud,
+        banner,
+        won: false,
+        auto: std::env::var_os("KAPI_OTO").is_some(),
+        auto_step: 0,
+        auto_stuck: 0.0,
+    };
+    restart(world, &mut game);
+    game
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Kapı", 1280, 720)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-            scene.world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-1.0)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.95, 0.88), 1.7, LightRole::Sun),
-            ));
-            let (w, h) = (MAP[0].len() as f32, MAP.len() as f32);
-            scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(w * 0.5, 13.0, h * 0.5 + 6.5),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -1.05,
-                primary: true,
-                ..Default::default()
-            });
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(w * 0.5, -0.5, h * 0.5)),
-                RigidBody::new_static(),
-                Velocity::default(),
-                Collider::box_collider(Vec3::new(w * 0.5, 0.5, h * 0.5)),
-            ));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(w * 0.5, -0.05, h * 0.5)).with_scale(Vec3::new(w * 0.5, 0.05, h * 0.5)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(Color::srgb_hex("#4A4E55").to_vec4(), 0.9, 0.0),
-                MeshRenderer::new(),
-            ));
-            let (mut start, mut exit) = (Vec3::ZERO, Vec3::ZERO);
-            let (mut crate_starts, mut doors, mut plates) = (Vec::new(), Vec::new(), Vec::new());
-            for (z, row) in MAP.iter().enumerate() {
-                for (x, c) in row.chars().enumerate() {
-                    let at = cell(x, z);
-                    match c {
-                        '#' => {
-                            scene.world.spawn_bundle((
-                                Transform::new(at + Vec3::Y * 0.6).with_scale(Vec3::new(0.5, 0.6, 0.5)),
-                                GlobalTransform::default(),
-                                MeshSource("standard_cube".into()),
-                                MaterialDesc::new().with_pbr(Color::srgb_hex("#7A7268").to_vec4(), 0.85, 0.0),
-                                MeshRenderer::new(),
-                                RigidBody::new_static(),
-                                Velocity::default(),
-                                Collider::box_collider(Vec3::new(0.5, 0.6, 0.5)),
-                            ));
-                        }
-                        'S' => start = at,
-                        'E' => exit = at,
-                        'x' => crate_starts.push(at),
-                        'A' | 'B' => {
-                            let group = if c == 'A' { '1' } else { '2' };
-                            doors.push(spawn_door(scene.world, at, group));
-                        }
-                        '1' | '2' => {
-                            let body = scene
-                                .world
-                                .spawn_bundle((
-                                    Transform::new(at + Vec3::Y * 0.3),
-                                    RigidBody::new_static(),
-                                    Velocity::default(),
-                                    plate_collider(),
-                                ))
-                                .id();
-                            let lamp = scene
-                                .world
-                                .spawn_bundle((
-                                    Transform::new(at + Vec3::Y * 0.02).with_scale(Vec3::new(0.4, 0.02, 0.4)),
-                                    GlobalTransform::default(),
-                                    MeshSource("standard_cube".into()),
-                                    MaterialDesc::new().with_unlit(plate_colour(false)),
-                                    MeshRenderer::new(),
-                                ))
-                                .id();
-                            plates.push(Plate { group: c, at, body, lamp });
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            scene.world.spawn_bundle((
-                Transform::new(exit + Vec3::Y * 0.02).with_scale(Vec3::new(0.45, 0.02, 0.45)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_unlit(Color::srgb_hex("#3CB371").to_vec4()),
-                MeshRenderer::new(),
-            ));
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-            let mut game = Game {
-                physics: FixedPhysics::new(60),
-                player: 0,
-                start,
-                exit,
-                crate_starts,
-                doors,
-                plates,
-                hud,
-                banner,
-                won: false,
-                auto: std::env::var_os("KAPI_OTO").is_some(),
-                auto_step: 0,
-                auto_stuck: 0.0,
-            };
-            restart(scene.world, &mut game);
+            let game = setup(scene.world, font);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
+}
+
+/// `--test`: pencere açmadan otomatik pilot oyunu çözer — iki sandığı plakalara iter, iki kapıyı
+/// açar, çıkışa yürür. Oyunun kendi `setup`'ı ve `update`'i, boş bir girdiyle, sabit adımla.
+fn self_test() -> bool {
+    let mut world = World::new();
+    let font = gizmo::renderer::text::FontLibrary::new()
+        .load(gizmo::renderer::text::synthetic::synthetic_face())
+        .expect("sentetik yüz her zaman ayrıştırılır");
+    let mut game = setup(&mut world, font);
+    game.auto = true;
+    world.insert_resource(game);
+    let mut state = SimpleSceneState { camera_speed: 0.0, camera_pitch: 0.0, camera_yaw: 0.0, camera_pos: Vec3::ZERO };
+    let input = Input::default();
+    let dt = 1.0 / 60.0;
+    let (mut time, mut opened) = (0.0f32, [false; 2]);
+    while time < 60.0 {
+        time += dt;
+        update(&mut world, &mut state, dt, &input);
+        let game = world.get_resource::<Game>().expect("oyun kaynağı");
+        for (k, g) in ['1', '2'].into_iter().enumerate() {
+            opened[k] |= game.doors.iter().filter(|d| d.group == g).all(|d| d.y < 0.0);
+        }
+        if game.won {
+            break;
+        }
+    }
+    let won = world.get_resource::<Game>().is_some_and(|g| g.won);
+    let ok = won && opened.iter().all(|&o| o);
+    println!(
+        "kapi --test: {time:.1} s; kapı 1 {}, kapı 2 {}; çıkışa vardı mı: {} → {}",
+        if opened[0] { "açıldı" } else { "AÇILMADI" },
+        if opened[1] { "açıldı" } else { "AÇILMADI" },
+        if won { "evet" } else { "HAYIR" },
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
 }
 
 fn spawn_door(world: &mut World, at: Vec3, group: char) -> Door {
