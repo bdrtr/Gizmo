@@ -838,7 +838,11 @@ impl HeadlessFrames {
     /// Plays one frame of `dt` seconds: the plugins' fixed steps and per-frame systems, then
     /// `update`, then the deferred commands.
     pub fn frame(&mut self, dt: f32, update: impl FnOnce(&mut World, &mut SimpleSceneState, f32, &Input)) {
-        crate::app::frame::run_fixed_and_update(&mut self.world, &mut self.schedule, &mut self.update_schedule, dt, dt, |_| {});
+        // What the windowed loop does before its schedules: the input as a resource for systems
+        // that read it (`UiPlugin`'s do, and stop the frame without it), and the clock.
+        self.world.insert_resource(self.input.clone());
+        let sim_dt = crate::app::frame::advance_time(&mut self.world, dt);
+        crate::app::frame::run_fixed_and_update(&mut self.world, &mut self.schedule, &mut self.update_schedule, sim_dt, dt, |_| {});
         update(&mut self.world, &mut self.state, dt, &self.input);
         self.world.apply_commands();
         self.frames += 1;
@@ -1460,6 +1464,16 @@ mod headless_frames_tests {
             run.frame(1.0 / 60.0, |_, _, _, _| {});
         }
         assert!(!run.world.is_alive(spark), "a DespawnAfter outlived its time under the plugin");
+    }
+
+    #[test]
+    fn systems_that_read_input_and_time_find_them() {
+        let mut run = HeadlessFrames::new(World::new());
+        run.frame(0.25, |world, _, _, _| {
+            assert!(world.get_resource::<Input>().is_some(), "no Input resource for systems");
+        });
+        let time = run.world.get_resource::<crate::core::time::Time>().map(|t| t.elapsed());
+        assert!(time.is_some_and(|t| t > 0.0), "the clock did not move: {time:?}");
     }
 
     #[test]
