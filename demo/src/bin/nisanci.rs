@@ -35,7 +35,8 @@
 //! `CameraShake`, `ScreenFade::flash`, `Rng`, sentezlenmiş sesler.
 //!
 //! ## Ortam değişkenleri
-//!   * `NISANCI_OTO=1` — kendi kendine oynar (ekran görüntüsü ve dayanıklılık için)
+//!   * `NISANCI_OTO=1` — kendi kendine oynar (ekran görüntüsü ve dayanıklılık için; `nisanci --test`
+//!     iki dakikasını pencere açmadan oynar)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::audio::synth::{Blip, Wave};
@@ -45,7 +46,7 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{ParticleEmitter, Text, TextAlign, TextAnchor};
 use gizmo::renderer::screen_fade::ScreenFade;
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{BackgroundColor, NodeBundle, PositionType, Style, UiPlugin, UiRect, Val, VirtualStick};
 
 /// Arenanın yarı genişliği/derinliği.
@@ -94,92 +95,135 @@ struct Game {
     sticks: Option<(u32, u32)>,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(ARENA, 0.1, ARENA)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(Vec4::new(0.16, 0.17, 0.2, 1.0), 0.95, 0.0),
+        MeshRenderer::new(),
+    ));
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-1.1)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 3.0, LightRole::Sun),
+    ));
+    let player = world
+        .spawn_bundle((
+            Transform::new(Vec3::new(0.0, 0.4, 0.0)).with_scale(Vec3::splat(0.4)),
+            GlobalTransform::default(),
+            MeshSource("standard_cube".into()),
+            MaterialDesc::new().with_unlit(Vec4::new(0.3, 0.8, 1.0, 1.0)).with_emissive(Vec3::new(0.2, 0.6, 1.0)),
+            MeshRenderer::new(),
+            Player,
+        ))
+        .id();
+    let camera = world
+        .spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 20.0, 11.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: -1.07,
+            primary: true,
+            ..Default::default()
+        })
+        .id();
+    let mut shake = CameraShake::default();
+    shake.max_offset = 0.25;
+    shake.max_angle = 0.0;
+    shake.decay = 1.6;
+    if let Some(e) = world.get_entity(camera) {
+        world.add_component(e, shake);
+    }
+    world.insert_resource(ScreenFade::default());
+
+    let hud = world
+        .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+        .id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.4), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("ates", Blip::new(Wave::Square, 900.0, 0.04).with_slide(500.0).with_volume(0.06).wav());
+        audio.load_sound_bytes("vur", Blip::new(Wave::Noise, 1400.0, 0.08).with_slide(300.0).with_volume(0.2).wav());
+        audio.load_sound_bytes("acı", Blip::new(Wave::Saw, 220.0, 0.35).with_slide(70.0).with_volume(0.35).wav());
+        world.insert_resource(audio);
+    }
+
+    Game {
+        player,
+        camera,
+        hud,
+        banner,
+        rng: Rng::new(2026),
+        fire: Timer::repeating(FIRE_PERIOD),
+        spawn: Timer::repeating(0.6),
+        wave: 0,
+        to_spawn: 0,
+        score: 0,
+        lives: 3,
+        grace: 0.0,
+        aim: Vec3::X,
+        auto: std::env::var_os("NISANCI_OTO").is_some(),
+        t: 0.0,
+        sticks: None,
+    }
+}
+
+/// `--test`: pencere açmadan iki dakika otomatik oyun, oyunun eklentileriyle. Düşmanlar vurulmalı,
+/// dalgalar ilerlemeli; kıvılcımlar ömürleri dolunca silinmeli.
+fn self_test() -> bool {
+    use gizmo::systems::lifetime::{DespawnAfter, LifetimePlugin};
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font(), false);
+    game.auto = true;
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world).add_plugin(UiPlugin).add_plugin(LifetimePlugin);
+    let (mut sparks_most, mut deaths, mut best) = (0usize, 0u32, (0u32, 0u32));
+    let mut was_alive = true;
+    while run.elapsed < 120.0 {
+        run.frame(1.0 / 60.0, update);
+        let (lives, score, wave) = run.world.get_resource::<Game>().map(|g| (g.lives, g.score, g.wave)).expect("oyun kaynağı");
+        if lives == 0 && was_alive {
+            deaths += 1;
+        }
+        was_alive = lives > 0;
+        best = best.max((score, wave));
+        sparks_most = sparks_most.max(run.world.borrow::<DespawnAfter>().iter().count());
+        if lives == 0 {
+            // Otomatik oyun ölünce yeniden başlar (R'ye basmış gibi).
+            let mut game = run.world.remove_resource::<Game>().expect("oyun kaynağı");
+            restart(&mut run.world, &mut game);
+            run.world.insert_resource(game);
+        }
+    }
+    let ok = best.0 > 0 && best.1 >= 2 && sparks_most < 50;
+    println!(
+        "nisanci --test: 120 s, en iyi {} puan, {}. dalga, {deaths} kez öldü; aynı anda en çok {sparks_most} kıvılcım → {}",
+        best.0,
+        best.1,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Nişancı", 1280, 720)
         .add_plugin(UiPlugin)
         // Kıvılcım varlıkları `DespawnAfter` ile kendini siliyor.
         .add_plugin(gizmo::systems::lifetime::LifetimePlugin)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(ARENA, 0.1, ARENA)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(Vec4::new(0.16, 0.17, 0.2, 1.0), 0.95, 0.0),
-                MeshRenderer::new(),
-            ));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-1.1)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.95, 0.9), 3.0, LightRole::Sun),
-            ));
-            let player = scene
-                .world
-                .spawn_bundle((
-                    Transform::new(Vec3::new(0.0, 0.4, 0.0)).with_scale(Vec3::splat(0.4)),
-                    GlobalTransform::default(),
-                    MeshSource("standard_cube".into()),
-                    MaterialDesc::new().with_unlit(Vec4::new(0.3, 0.8, 1.0, 1.0)).with_emissive(Vec3::new(0.2, 0.6, 1.0)),
-                    MeshRenderer::new(),
-                    Player,
-                ))
-                .id();
-            let camera = scene
-                .world
-                .spawn_bundle(CameraBundle {
-                    position: Vec3::new(0.0, 20.0, 11.0),
-                    yaw: -std::f32::consts::FRAC_PI_2,
-                    pitch: -1.07,
-                    primary: true,
-                    ..Default::default()
-                })
-                .id();
-            let mut shake = CameraShake::default();
-            shake.max_offset = 0.25;
-            shake.max_angle = 0.0;
-            shake.decay = 1.6;
-            if let Some(e) = scene.world.get_entity(camera) {
-                scene.world.add_component(e, shake);
-            }
-            scene.world.insert_resource(ScreenFade::default());
-
-            let hud = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.4), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("ates", Blip::new(Wave::Square, 900.0, 0.04).with_slide(500.0).with_volume(0.06).wav());
-                audio.load_sound_bytes("vur", Blip::new(Wave::Noise, 1400.0, 0.08).with_slide(300.0).with_volume(0.2).wav());
-                audio.load_sound_bytes("acı", Blip::new(Wave::Saw, 220.0, 0.35).with_slide(70.0).with_volume(0.35).wav());
-                scene.world.insert_resource(audio);
-            }
-
-            scene.world.insert_resource(Game {
-                player,
-                camera,
-                hud,
-                banner,
-                rng: Rng::new(2026),
-                fire: Timer::repeating(FIRE_PERIOD),
-                spawn: Timer::repeating(0.6),
-                wave: 0,
-                to_spawn: 0,
-                score: 0,
-                lives: 3,
-                grace: 0.0,
-                aim: Vec3::X,
-                auto: std::env::var_os("NISANCI_OTO").is_some(),
-                t: 0.0,
-                sticks: None,
-            });
+            let game = setup(scene.world, font, true);
+            scene.world.insert_resource(game);
         })
         .replace_update(update)
         .run()
