@@ -63,6 +63,9 @@ pub struct Rope {
     /// velocity. Only velocity inherited from the previous step is damped — the current
     /// step's `gravity * dt` increment is added afterwards, undamped. Default `0.98`.
     pub damping: f32,
+    /// How thick the rope is **drawn**, metres across (`0.04` by default). Read only by the
+    /// facade's `rope_mesh_system`; the solver's links have no width.
+    pub thickness: f32,
 }
 
 impl Rope {
@@ -119,6 +122,7 @@ impl Rope {
             iterations: 10,
             stiffness: 1.0,
             damping: 0.98,
+            thickness: 0.04,
         }
     }
 

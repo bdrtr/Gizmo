@@ -1,4 +1,5 @@
-//! Drawing a [`Cloth`](gizmo_physics_soft::cloth::Cloth) component.
+//! Drawing a [`Cloth`](gizmo_physics_soft::cloth::Cloth) component — and a
+//! [`Rope`](gizmo_physics_soft::rope::Rope), which had the same gap.
 //!
 //! A `Cloth` in the world was simulated — the physics step runs `cloth_step_system` over every
 //! one — and never drawn: no draw path knew the type, and the cloth did not even keep the grid
@@ -63,10 +64,71 @@ fn cloth_vertices(cloth: &Cloth, to_local: gizmo_math::Mat4) -> Vec<Vertex> {
     out
 }
 
+/// Gives every entity with a [`Rope`](gizmo_physics_soft::rope::Rope) the mesh its nodes make
+/// this frame: a square tube [`Rope::thickness`](gizmo_physics_soft::rope::Rope::thickness)
+/// across along every link, in the entity's own frame, plus — the first time — a renderer, a
+/// `GlobalTransform` and a dark material if it has none.
+///
+/// A `Rope` in the world was stepped by the physics step and drawn by nothing, like `Cloth`;
+/// `advanced_physics` kept its rope outside the ECS and placed a sphere on every node by hand.
+pub fn rope_mesh_system(world: &mut crate::core::World) {
+    use gizmo_physics_soft::rope::Rope;
+    let built: Vec<(u32, MeshData)> = {
+        let ropes = world.borrow::<Rope>();
+        let transforms = world.borrow::<Transform>();
+        ropes
+            .iter()
+            .map(|(id, rope)| {
+                let to_local = transforms
+                    .get(id)
+                    .map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse())
+                    .unwrap_or(gizmo_math::Mat4::IDENTITY);
+                (id, MeshData::new(rope_vertices(rope, to_local)))
+            })
+            .collect()
+    };
+    for (id, mesh) in built {
+        let Some(e) = world.get_entity(id) else { continue };
+        let first = world.borrow::<MeshRenderer>().get(id).is_none();
+        world.add_component(e, mesh);
+        if first {
+            world.add_component(e, MeshRenderer::new());
+            if world.borrow::<GlobalTransform>().get(id).is_none() {
+                world.add_component(e, GlobalTransform::default());
+            }
+            if world.borrow::<MaterialDesc>().get(id).is_none() {
+                world.add_component(e, MaterialDesc::new().with_pbr(gizmo_math::Vec4::new(0.35, 0.27, 0.18, 1.0), 0.9, 0.0));
+            }
+        }
+    }
+}
+
+/// Four flat sides along every link of the rope.
+fn rope_vertices(rope: &gizmo_physics_soft::rope::Rope, to_local: gizmo_math::Mat4) -> Vec<Vertex> {
+    let r = rope.thickness * 0.5;
+    let mut out = Vec::with_capacity(rope.nodes.len().saturating_sub(1) * 24);
+    for pair in rope.nodes.windows(2) {
+        let (a, b) = (to_local.transform_point3(pair[0].position), to_local.transform_point3(pair[1].position));
+        let along = (b - a).normalize_or(Vec3::Y);
+        let side = along.any_orthonormal_vector();
+        let up = along.cross(side);
+        // The four faces, each a quad from `a` to `b` facing outward.
+        for (n, t) in [(side, up), (up, -side), (-side, -up), (-up, side)] {
+            let (c0, c1) = (n * r - t * r, n * r + t * r);
+            let quad = [a + c0, b + c0, b + c1, a + c1];
+            for i in [0, 1, 2, 0, 2, 3] {
+                out.push(Vertex { position: quad[i].to_array(), normal: n.to_array(), ..Default::default() });
+            }
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::World;
+    use gizmo_math::Vec2;
 
     /// A cloth entity gets a mesh of both faces of its whole cells, where its nodes are, and
     /// follows them.
@@ -88,6 +150,22 @@ mod tests {
         cloth_mesh_system(&mut world);
         let moved = world.borrow::<MeshData>().get(e.id()).unwrap().vertices().iter().any(|v| (Vec3::from_array(v.position) - Vec3::new(0.0, -3.0, 0.0)).length() < 1e-5);
         assert!(moved, "the mesh did not follow the node");
+    }
+
+    /// A rope entity gets a tube along its links, where its nodes are.
+    #[test]
+    fn a_rope_is_drawn_along_its_links() {
+        use gizmo_physics_soft::rope::Rope;
+        let mut world = World::new();
+        let e = world.spawn();
+        world.add_component(e, Rope::new(Vec3::new(0.0, 5.0, 0.0), Vec3::NEG_Y, 4, 0.5, 0.1, true, false));
+        rope_mesh_system(&mut world);
+        let verts: Vec<Vec3> = world.borrow::<MeshData>().get(e.id()).unwrap().vertices().iter().map(|v| Vec3::from_array(v.position)).collect();
+        assert_eq!(verts.len(), 4 * 4 * 6, "four links, four sides, two triangles each");
+        // Every vertex lies within the rope's half-thickness (diagonally) of the x = z = 0 line.
+        assert!(verts.iter().all(|v| Vec2::new(v.x, v.z).length() < 0.04));
+        assert!(verts.iter().any(|v| (v.y - 3.0).abs() < 1e-4), "the tube reaches the last node at y = 3");
+        assert!(world.borrow::<MeshRenderer>().get(e.id()).is_some());
     }
 
     /// A torn cloth draws the hole.

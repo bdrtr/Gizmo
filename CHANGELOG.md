@@ -150,6 +150,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **A `Rope` component is drawn** (`rope_mesh_system`, `Rope::thickness`) — the same gap `Cloth`
+  had: the physics step stepped every `Rope` in the world and no draw path knew the type
+  (`advanced_physics` kept its rope outside the ECS and put a sphere on each node by hand). Both
+  draw paths now give it a square tube `thickness` across along every link, in the entity's own
+  frame. Tested (four links → 96 vertices, all within the rope's width of its line).
 - **The reference `server/` speaks the protocol a client can reconcile against.** It applied no
   input, sent `InputAck` reliably and an entity-keyed `WorldStateUpdate` unreliably — the shape
   `kovala` showed a client cannot use. It now moves players by their inputs (a documented

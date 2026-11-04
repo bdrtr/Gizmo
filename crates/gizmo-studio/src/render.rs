@@ -525,6 +525,7 @@ pub fn render_studio(
     gizmo::systems::terrain::terrain_mesh_system(world, renderer);
     // And a `Cloth`'s mesh, as the game's frame draws it.
     gizmo::systems::cloth::cloth_mesh_system(world);
+    gizmo::systems::cloth::rope_mesh_system(world);
 
     render_pipeline::execute_render_pipeline(world, state, encoder, view, renderer, light_time);
 }
