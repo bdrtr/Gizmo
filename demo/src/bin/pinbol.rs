@@ -243,6 +243,11 @@ impl Table {
         if !p.is_finite() || (outside && p.z < HALF_L + 0.05) {
             self.escaped = true;
         }
+        // Kanala geri yuvarlanan top dibindeki durakta bekler: yeniden atılabilir. (Atılmış
+        // sayıldığı için orada sonsuza kadar kalıyordu.)
+        if !self.in_lane && p.x > LANE_X - 0.07 && p.z > HALF_L - 0.2 && v.length() < 0.05 {
+            self.in_lane = true;
+        }
         // Düştü: alttaki boşluktan çıktı.
         if p.z > HALF_L + 0.1 || p.y < -0.5 || !p.is_finite() {
             self.drains += 1;

@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A kinematic body driven once a frame moved in jerks (`FixedPhysics::advance`).** A
+  `KinematicTarget` is reached "in the next step", so a frame that ran four steps made the whole
+  move in the first at four times the speed asked, then stood still. A ball at rest on a board
+  starting to tilt at 0.6 rad/s, 3 m from the axis (a surface rising at 1.8 m/s), was thrown up
+  at 5.2 m/s; in `labirent` it hopped onto the walls. `advance` now cuts each target into one
+  piece per step — 1.74 m/s. The same change sent `pinbol`'s ball back into the launch lane,
+  where it sat forever, counted as launched; a ball resting at the lane's foot can be launched
+  again.
 - **A body spawned on a dead body's id inherited its joints (ECS physics bridge).** Physics
   knows a body by its raw ECS id, and a despawned id goes to the very next spawn: despawn a body
   held by a joint and spawn another before the next step, and the new one took over the old

@@ -662,9 +662,38 @@ impl FixedPhysics {
     /// they feed. They did not run here at all, so a car on this driver sat still with its
     /// throttle down. Do not also add `GameplayPhysicsPlugin`: that is a second driver of the same
     /// controllers, as `PhysicsPlugin` is of the rigid step.
+    ///
+    /// A [`KinematicTarget`](crate::physics::components::KinematicTarget) is reached across the
+    /// call's steps, not in the first: a target set once a frame is cut into one piece per step
+    /// (position along the line, rotation along the short arc), so a body the game moves every
+    /// frame moves at the speed it asked for. It used to make the whole move in the first step and
+    /// stand still for the rest — at 240 Hz and 60 fps, four times too fast in jerks, which threw
+    /// a ball off a board just starting to tilt (`labirent`). The target itself is left as it was.
     pub fn advance(&mut self, world: &mut crate::core::World, dt: f32) -> u32 {
+        use crate::physics::components::KinematicTarget;
         let steps = self.plan(dt);
-        for _ in 0..steps {
+        // Each driven body's pose now and where the caller wants it after the last step.
+        let driven: Vec<(u32, Transform, KinematicTarget)> = if steps > 1 {
+            let targets = world.borrow::<KinematicTarget>();
+            let transforms = world.borrow::<Transform>();
+            targets.iter().filter_map(|(id, t)| transforms.get(id).map(|from| (id, *from, *t))).collect()
+        } else {
+            Vec::new()
+        };
+        for step in 0..steps {
+            if !driven.is_empty() {
+                let f = (step + 1) as f32 / steps as f32;
+                let mut targets = world.borrow_mut::<KinematicTarget>();
+                for (id, from, goal) in &driven {
+                    if let Some(mut t) = targets.get_mut(*id) {
+                        *t = if step + 1 == steps {
+                            *goal
+                        } else {
+                            KinematicTarget::new(from.position.lerp(goal.position, f), from.rotation.slerp(goal.rotation, f))
+                        };
+                    }
+                }
+            }
             #[cfg(feature = "physics-dynamics")]
             {
                 gizmo_physics_dynamics::vehicle_controller_system(world, self.step);
@@ -1135,6 +1164,57 @@ mod fixed_physics_tests {
             total += p.plan(dt);
         }
         assert!((99..=100).contains(&total), "{total}");
+    }
+
+    /// A kinematic body given a new target once a frame moves through the frame's steps evenly.
+    ///
+    /// `KinematicTarget` reaches its target "in the next step". A frame that runs four steps used
+    /// to spend the whole move in the first and stand still for three — the body moved in jerks at
+    /// four times the speed asked. Measured in `labirent` (240 Hz physics, 60 fps): a ball at rest
+    /// on a board starting to tilt at 0.6 rad/s, 3 m from its axis — a surface rising at 1.8 m/s —
+    /// was thrown up at 3.7 m/s.
+    #[test]
+    fn a_kinematic_target_set_once_a_frame_is_spread_over_the_frames_steps() {
+        use crate::physics::components::{KinematicTarget, RigidBody, Velocity};
+        let mut world = crate::core::World::new();
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+        let mut plank = RigidBody::new_kinematic();
+        plank.ccd_enabled = false;
+        let board = world
+            .spawn_bundle((
+                Transform::new(Vec3::ZERO),
+                plank,
+                Velocity::default(),
+                Collider::box_collider(Vec3::new(4.0, 0.1, 1.0)),
+                KinematicTarget::new(Vec3::ZERO, Quat::IDENTITY),
+            ))
+            .id();
+        let mut body = RigidBody::new(0.2, true);
+        let col = Collider::sphere(0.3);
+        body.update_inertia_from_collider(&col);
+        let ball = world.spawn_bundle((Transform::new(Vec3::new(-3.0, 0.4, 0.0)), body, Velocity::default(), col)).id();
+        let mut physics = FixedPhysics::new(240);
+        let frame = 1.0 / 60.0;
+        // Settle, then tilt the right edge down at 0.6 rad/s: the ball's side rises.
+        for _ in 0..60 {
+            physics.advance(&mut world, frame);
+        }
+        let (mut tilt, mut fastest_up) = (0.0f32, 0.0f32);
+        for _ in 0..18 {
+            tilt = (tilt + 0.6 * frame).min(0.16);
+            if let Some(mut t) = world.borrow_mut::<KinematicTarget>().get_mut(board) {
+                *t = KinematicTarget::new(Vec3::ZERO, Quat::from_rotation_z(-tilt));
+            }
+            physics.advance(&mut world, frame);
+            fastest_up = fastest_up.max(world.borrow::<Velocity>().get(ball).map_or(0.0, |v| v.linear.y));
+        }
+        let surface = 0.6 * 3.0;
+        assert!(
+            fastest_up < surface * 1.25,
+            "a ball on a surface rising at {surface} m/s was thrown up at {fastest_up:.2} m/s"
+        );
+        let at = world.borrow::<Transform>().get(board).map(|t| t.rotation).unwrap();
+        assert!(at.angle_between(Quat::from_rotation_z(-tilt)) < 1e-5, "the board did not end on its target");
     }
 
     /// A stall runs the ceiling and then forgets the rest instead of owing it.

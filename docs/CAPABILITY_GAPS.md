@@ -1283,8 +1283,9 @@ never more than 2 mm past its length. One gap, closed:
 
 `demo/src/bin/pinbol.rs` is a pinball table — gravity tilted 12°, a 5 cm CCD ball, two kinematic
 flippers swung by `KinematicTarget` at 25 rad/s, three bumpers that kick. `pinbol --test` opens
-no window: an autopilot flips for a minute (6 flipper hits, 600 points, 2 drains, the ball never
-leaves the table through a wall). One gap, closed:
+no window: an autopilot flips for a minute (11 flipper hits, 1100 points, the ball never leaves
+the table through a wall; 6 hits before the kinematic fix in C16ag, which also showed that a ball
+rolling back into the launch lane was stuck there for good). One gap, closed:
 
 - ~~**A CCD body touching a wall was held by it.**~~ **Closed 2026-11-04.** Under 1 mm the
   speculative contact took its normal from the approach direction itself, so a ball resting a
