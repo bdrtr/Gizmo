@@ -781,8 +781,10 @@ impl Default for FixedPhysics {
 /// shattered on screen reported none — they were latched broken and never despawned, because
 /// fracture despawns through the command queue (2026-11-04, `vinc`).
 ///
-/// What it does **not** do: run plugins' schedules, fire the event double-buffer swap, load
-/// assets or draw. A game driven through `FixedPhysics` and its own update needs none of them.
+/// Plugins the game adds go in with [`add_plugin`](Self::add_plugin): their fixed-step systems
+/// run as many times as the frame's time owes and their per-frame systems once, before the hook —
+/// the windowed loop's order. What it does **not** do: fire the event double-buffer swap, load
+/// assets or draw.
 #[non_exhaustive]
 pub struct HeadlessFrames {
     /// The game's world. Read its resources between frames to see how the game is going.
@@ -795,6 +797,14 @@ pub struct HeadlessFrames {
     pub frames: u64,
     /// Seconds played: the sum of every `dt` given to [`frame`](Self::frame).
     pub elapsed: f32,
+    schedule: crate::core::system::Schedule,
+    update_schedule: crate::core::system::Schedule,
+}
+
+impl crate::app::AppLike for HeadlessFrames {
+    fn parts_mut(&mut self) -> crate::app::plugin::AppParts<'_> {
+        crate::app::plugin::AppParts { world: &mut self.world, schedule: &mut self.schedule, update_schedule: &mut self.update_schedule }
+    }
 }
 
 impl HeadlessFrames {
@@ -806,11 +816,29 @@ impl HeadlessFrames {
     #[must_use]
     pub fn new(mut world: World) -> Self {
         insert_scene_defaults(&mut world, AssetManager::new());
-        Self { world, state: SimpleSceneState::default(), input: Input::default(), frames: 0, elapsed: 0.0 }
+        Self {
+            world,
+            state: SimpleSceneState::default(),
+            input: Input::default(),
+            frames: 0,
+            elapsed: 0.0,
+            schedule: crate::core::system::Schedule::new(),
+            update_schedule: crate::core::system::Schedule::new(),
+        }
     }
 
-    /// Plays one frame of `dt` seconds through `update`, then applies the deferred commands.
+    /// Builds a plugin into this run, as `App::add_plugin` would — the game's `LifetimePlugin`,
+    /// say, without which nothing a `DespawnAfter` marks is ever removed.
+    #[must_use]
+    pub fn add_plugin(mut self, plugin: impl crate::app::Plugin) -> Self {
+        plugin.build(&mut self);
+        self
+    }
+
+    /// Plays one frame of `dt` seconds: the plugins' fixed steps and per-frame systems, then
+    /// `update`, then the deferred commands.
     pub fn frame(&mut self, dt: f32, update: impl FnOnce(&mut World, &mut SimpleSceneState, f32, &Input)) {
+        crate::app::frame::run_fixed_and_update(&mut self.world, &mut self.schedule, &mut self.update_schedule, dt, dt, |_| {});
         update(&mut self.world, &mut self.state, dt, &self.input);
         self.world.apply_commands();
         self.frames += 1;
@@ -1419,6 +1447,19 @@ mod headless_frames_tests {
         let run = HeadlessFrames::new(world);
         let gravity = run.world.get_resource::<PhysicsWorld>().map(|p| p.integrator.gravity);
         assert_eq!(gravity, Some(Vec3::new(0.0, -1.0, 0.0)), "the game's own physics world was replaced");
+    }
+
+    #[test]
+    fn a_plugin_added_to_a_headless_run_runs_its_systems() {
+        use crate::systems::lifetime::{DespawnAfter, LifetimePlugin};
+        let mut world = World::new();
+        let spark = world.spawn();
+        world.add_component(spark, DespawnAfter::secs(0.05));
+        let mut run = HeadlessFrames::new(world).add_plugin(LifetimePlugin);
+        for _ in 0..10 {
+            run.frame(1.0 / 60.0, |_, _, _, _| {});
+        }
+        assert!(!run.world.is_alive(spark), "a DespawnAfter outlived its time under the plugin");
     }
 
     #[test]

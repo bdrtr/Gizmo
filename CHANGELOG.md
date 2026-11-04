@@ -111,7 +111,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   hook runs with nothing pressed, then the deferred commands are applied, as in the windowed
   loop. `HeadlessFrames::font()` gives HUD text a font with no renderer. The first headless test
   written as a bare loop skipped the command flush, and `vinc`'s shattered blocks were latched
-  broken and never despawned — 0 pieces reported where 9 broke. `SimpleSceneState` is `Default`.
+  broken and never despawned — 0 pieces reported where 9 broke. `SimpleSceneState` is `Default`. It also adds the
+  simple scene's defaults (its physics world, `Gizmos`, an asset manager), takes the game's
+  plugins (`add_plugin`) and runs their fixed-step and per-frame systems before the hook, as the
+  windowed loop does.
 - **`kapi`, `vinc` and `labirent` play themselves headlessly (`--test`).** `labirent`'s
   autopilot now solves the maze — a path search around walls and holes, tilting toward the next
   tile — and found that levels 2 and 3 could never be won: a hole cut every way to the goal. Each
