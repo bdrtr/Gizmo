@@ -52,7 +52,8 @@
 //!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
-//!   * `KALE_OTO=1` — birkaç kule kurup ilk dalgayı kendiliğinden başlat (ekran görüntüsü için)
+//!   * `KALE_OTO=1` — birkaç kule kurup ilk dalgayı kendiliğinden başlat (ekran görüntüsü için;
+//!     `kale --test` pencere açmadan o dalgayı ve yolu kapatma kuralını sınar)
 
 use gizmo::ai::{NavAgent, NavGrid};
 use gizmo::audio::synth::{Blip, Wave};
@@ -62,7 +63,7 @@ use gizmo::physics::{Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{pointer_over_ui, AlignItems, BackgroundColor, ButtonBundle, Clicked, NodeBundle, Style, UiPlugin, UiRect, Val};
 use gizmo::winit::keyboard::KeyCode;
 
@@ -111,110 +112,164 @@ struct Game {
     gesture: bool,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+
+    // Zemin, kapı (kırmızı) ve kale (mavi).
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(HALF_W, 0.1, HALF_D)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(Vec4::new(0.32, 0.42, 0.28, 1.0), 0.9, 0.0),
+        MeshRenderer::new(),
+    ));
+    for (at, colour) in [(SPAWN, Vec4::new(0.7, 0.2, 0.15, 1.0)), (GOAL, Vec4::new(0.2, 0.35, 0.8, 1.0))] {
+        world.spawn_bundle((
+            Transform::new(Vec3::new(at.x, 0.05, at.z)).with_scale(Vec3::new(0.5, 0.05, 0.5)),
+            GlobalTransform::default(),
+            MeshSource("standard_cube".into()),
+            MaterialDesc::new().with_unlit(colour).with_emissive(colour.truncate() * 0.5),
+            MeshRenderer::new(),
+        ));
+    }
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-1.0)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 3.0, LightRole::Sun),
+    ));
+    world.spawn_bundle(CameraBundle {
+        position: Vec3::new(0.0, 14.0, 9.0),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -1.0,
+        primary: true,
+        ..Default::default()
+    });
+
+    // Izgara: oyunun kendi alanına oturtulmuş, kuleler elle ekleniyor.
+    let mut grid = NavGrid::centred_on(1.0, (HALF_W * 2.0) as i32, (HALF_D * 2.0) as i32, Vec3::ZERO);
+    grid.needs_rebuild = false;
+    world.insert_resource(grid);
+
+    // Arayüz: alt şeritte iki düğme.
+    let bar = world.spawn_bundle(NodeBundle {
+        style: Style {
+            width: Val::Percent(100.0),
+            height: Val::Px(64.0),
+            padding: UiRect::all(Val::Px(10.0)),
+            column_gap: Val::Px(12.0),
+            align_items: Some(AlignItems::Center),
+            ..Default::default()
+        },
+        background_color: BackgroundColor(Vec4::new(0.05, 0.06, 0.08, 0.7)),
+        ..Default::default()
+    });
+    let wave_button = world.spawn_bundle(ButtonBundle {
+        style: Style { width: Val::Px(140.0), height: Val::Px(44.0), ..Default::default() },
+        background_color: BackgroundColor(Vec4::new(0.25, 0.4, 0.25, 1.0)),
+        ..Default::default()
+    });
+    world.add_component(
+        wave_button,
+        Text::screen("Dalga", font, 22.0, Vec2::ZERO).with_anchor(TextAnchor::Center),
+    );
+    {
+        use gizmo::core::hierarchy::HierarchyExt;
+        world.add_child(bar, wave_button);
+    }
+
+    let hud = world
+        .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopRight, Vec2::new(-16.0, 16.0))
+            .with_align(TextAlign::Right),))
+        .id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.4), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("ates", Blip::new(Wave::Square, 1200.0, 0.05).with_slide(700.0).with_volume(0.12).wav());
+        audio.load_sound_bytes("kur", Blip::new(Wave::Triangle, 300.0, 0.15).with_slide(450.0).with_volume(0.4).wav());
+        audio.load_sound_bytes("olum", Blip::new(Wave::Noise, 900.0, 0.2).with_slide(200.0).with_volume(0.3).wav());
+        audio.load_sound_bytes("kacak", Blip::new(Wave::Saw, 200.0, 0.4).with_slide(90.0).with_volume(0.3).wav());
+        world.insert_resource(audio);
+    }
+
+    Game {
+        physics: FixedPhysics::new(60),
+        gold: 30,
+        lives: 10,
+        wave: 0,
+        to_spawn: 0,
+        spawn: Timer::repeating(0.9),
+        hud,
+        banner,
+        wave_button: wave_button.id(),
+        rng: Rng::new(7),
+        auto: std::env::var_os("KALE_OTO").is_some(),
+        gesture: false,
+    }
+}
+
+/// `--test`: pencere açmadan iki sınama.
+///
+/// Duvar kuralı: bol altınla kapının önündeki sütunu baştan sona kuleyle doldurmaya çalış —
+/// yolu tamamen kapatacak olan tek kule reddedilmeli, yol açık kalmalı. Savunma: otomatik
+/// pilotun altı kulesiyle ilk dalga sonuna kadar oynanır; düşmanlar yol bulup yürümeli, kuleler
+/// onları vurmalı.
+fn self_test() -> bool {
+    use gizmo::ai::NavGrid;
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font(), false);
+    game.gold = 1000;
+    let rows = (HALF_D * 2.0) as i32;
+    let towers = |w: &World| w.borrow::<Tower>().iter().count();
+    for z in 0..rows {
+        place_tower(&mut world, &mut game, Vec3::new(-6.5, 0.0, -HALF_D + 0.5 + z as f32));
+    }
+    let built = towers(&world);
+    let open = world.get_resource::<NavGrid>().is_some_and(|g| g.find_path(SPAWN, GOAL).is_some());
+
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font(), false);
+    game.auto = true;
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world).add_plugin(UiPlugin);
+    let enemies = |w: &World| w.borrow::<Enemy>().iter().count();
+    let mut seen = 0usize;
+    loop {
+        run.frame(1.0 / 60.0, update);
+        seen = seen.max(enemies(&run.world));
+        let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+        if (game.to_spawn == 0 && enemies(&run.world) == 0 && run.elapsed > 1.0) || run.elapsed > 180.0 {
+            break;
+        }
+    }
+    let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+    let (lives, wave, gold) = (game.lives, game.wave, game.gold);
+    let ok = built == rows as usize - 1 && open && wave == 1 && seen > 0 && lives > 5 && run.elapsed < 180.0;
+    println!(
+        "kale --test: {rows} karelik sütuna {built} kule kuruldu, yol açık: {open}; ilk dalga {:.0} s'de bitti, \
+         aynı anda en çok {seen} düşman, can {lives}/10, altın {gold} → {}",
+        run.elapsed,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Kale", 1280, 720)
         .add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
             let r = &mut *scene.renderer;
             r.deband_dither = true;
             let font = load_font(r);
-
-            // Zemin, kapı (kırmızı) ve kale (mavi).
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(HALF_W, 0.1, HALF_D)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(Vec4::new(0.32, 0.42, 0.28, 1.0), 0.9, 0.0),
-                MeshRenderer::new(),
-            ));
-            for (at, colour) in [(SPAWN, Vec4::new(0.7, 0.2, 0.15, 1.0)), (GOAL, Vec4::new(0.2, 0.35, 0.8, 1.0))] {
-                scene.world.spawn_bundle((
-                    Transform::new(Vec3::new(at.x, 0.05, at.z)).with_scale(Vec3::new(0.5, 0.05, 0.5)),
-                    GlobalTransform::default(),
-                    MeshSource("standard_cube".into()),
-                    MaterialDesc::new().with_unlit(colour).with_emissive(colour.truncate() * 0.5),
-                    MeshRenderer::new(),
-                ));
-            }
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-1.0)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 3.0, LightRole::Sun),
-            ));
-            scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(0.0, 14.0, 9.0),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -1.0,
-                primary: true,
-                ..Default::default()
-            });
-
-            // Izgara: oyunun kendi alanına oturtulmuş, kuleler elle ekleniyor.
-            let mut grid = NavGrid::centred_on(1.0, (HALF_W * 2.0) as i32, (HALF_D * 2.0) as i32, Vec3::ZERO);
-            grid.needs_rebuild = false;
-            scene.world.insert_resource(grid);
-
-            // Arayüz: alt şeritte iki düğme.
-            let bar = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    width: Val::Percent(100.0),
-                    height: Val::Px(64.0),
-                    padding: UiRect::all(Val::Px(10.0)),
-                    column_gap: Val::Px(12.0),
-                    align_items: Some(AlignItems::Center),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(Vec4::new(0.05, 0.06, 0.08, 0.7)),
-                ..Default::default()
-            });
-            let wave_button = scene.world.spawn_bundle(ButtonBundle {
-                style: Style { width: Val::Px(140.0), height: Val::Px(44.0), ..Default::default() },
-                background_color: BackgroundColor(Vec4::new(0.25, 0.4, 0.25, 1.0)),
-                ..Default::default()
-            });
-            scene.world.add_component(
-                wave_button,
-                Text::screen("Dalga", font, 22.0, Vec2::ZERO).with_anchor(TextAnchor::Center),
-            );
-            {
-                use gizmo::core::hierarchy::HierarchyExt;
-                scene.world.add_child(bar, wave_button);
-            }
-
-            let hud = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopRight, Vec2::new(-16.0, 16.0))
-                    .with_align(TextAlign::Right),))
-                .id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.4), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("ates", Blip::new(Wave::Square, 1200.0, 0.05).with_slide(700.0).with_volume(0.12).wav());
-                audio.load_sound_bytes("kur", Blip::new(Wave::Triangle, 300.0, 0.15).with_slide(450.0).with_volume(0.4).wav());
-                audio.load_sound_bytes("olum", Blip::new(Wave::Noise, 900.0, 0.2).with_slide(200.0).with_volume(0.3).wav());
-                audio.load_sound_bytes("kacak", Blip::new(Wave::Saw, 200.0, 0.4).with_slide(90.0).with_volume(0.3).wav());
-                scene.world.insert_resource(audio);
-            }
-
-            scene.world.insert_resource(Game {
-                physics: FixedPhysics::new(60),
-                gold: 30,
-                lives: 10,
-                wave: 0,
-                to_spawn: 0,
-                spawn: Timer::repeating(0.9),
-                hud,
-                banner,
-                wave_button: wave_button.id(),
-                rng: Rng::new(7),
-                auto: std::env::var_os("KALE_OTO").is_some(),
-                gesture: false,
-            });
+            let game = setup(scene.world, font, true);
+            scene.world.insert_resource(game);
         })
         .replace_update(update)
         .run()
