@@ -35,7 +35,8 @@
 //! kare), `IsHidden` ile seçim halkaları, mutlak konumlu yarı saydam bir düğüm olarak seçim kutusu.
 //!
 //! ## Ortam değişkenleri
-//!   * `KOMUTAN_OTO=1` — kendi kendine oynar (ekran görüntüsü için)
+//!   * `KOMUTAN_OTO=1` — kendi kendine oynar (ekran görüntüsü için; `komutan --test` pencere açmadan
+//!     böyle bir çatışmayı ve emirsiz bir dakikayı oynar)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::ai::{NavAgent, NavGrid};
@@ -48,7 +49,7 @@ use gizmo::physics::{Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{BackgroundColor, NodeBundle, PositionType, Style, UiPlugin, UiRect, Val, ZIndex};
 
 const HALF_W: f32 = 22.0;
@@ -61,7 +62,7 @@ const ENEMY_BASE: Vec3 = Vec3::new(15.0, 0.0, -9.0);
 /// Sürüklemenin kutu sayılması için gereken piksel.
 const DRAG_PX: f32 = 6.0;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Side {
     Blue,
     Red,
@@ -99,69 +100,107 @@ struct Game {
     over: Option<Side>,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(HALF_W, 0.1, HALF_D)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(Vec4::new(0.36, 0.42, 0.27, 1.0), 0.95, 0.0),
+        MeshRenderer::new(),
+    ));
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.6) * Quat::from_rotation_x(-0.95)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.95, 0.88), 3.0, LightRole::Sun),
+    ));
+    world.spawn_bundle(CameraBundle {
+        position: Vec3::new(-8.0, 18.0, 12.0),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -1.0,
+        primary: true,
+        ..Default::default()
+    });
+    let hud = world
+        .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+        .id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+    // Seçim kutusu: sürükleme sürerken görünen yarı saydam bir arayüz dikdörtgeni.
+    let marquee = world
+        .spawn_bundle(NodeBundle {
+            style: Style { position_type: PositionType::Absolute, width: Val::Px(0.0), height: Val::Px(0.0), ..Default::default() },
+            background_color: BackgroundColor(Vec4::new(0.4, 0.8, 1.0, 0.0)),
+            ..Default::default()
+        })
+        .id();
+    world.add_component(world.get_entity(marquee).expect("just spawned"), ZIndex(10));
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("ates", Blip::new(Wave::Noise, 900.0, 0.05).with_volume(0.08).wav());
+        audio.load_sound_bytes("emir", Blip::new(Wave::Square, 660.0, 0.06).with_slide(880.0).with_volume(0.12).wav());
+        audio.load_sound_bytes("dus", Blip::new(Wave::Sine, 300.0, 0.25).with_slide(90.0).with_volume(0.2).wav());
+        world.insert_resource(audio);
+    }
+    let mut game = Game {
+        physics: FixedPhysics::new(60),
+        selected: Vec::new(),
+        drag_from: None,
+        marquee,
+        hud,
+        banner,
+        rng: Rng::new(0xC0FFEE),
+        auto: std::env::var_os("KOMUTAN_OTO").is_some(),
+        auto_clock: 0.0,
+        over: None,
+    };
+    restart(world, &mut game);
+    game
+}
+
+/// `--test`: pencere açmadan iki çatışma. Otomatik komutan bütün bölüğü karargâha yürütür: birimler
+/// yol bulup yürümeli, menzile giren düşmanı vurmalı, çatışma bir sonuca varmalı ve kırmızı kayıp
+/// vermeli. (On iki maviyle on dört eşit kırmızıya topyekûn saldırı kaybediyor — oyun taktik
+/// istiyor; burada sınanan çatışmanın işlediği.) Hiç emir vermeyen komutanın bölüğü bir dakika
+/// boyunca kimseyle çatışmamalı.
+fn battle(auto: bool, limit: f32) -> (Option<Side>, usize, usize, f32) {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font(), false);
+    game.auto = auto;
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world).add_plugin(UiPlugin);
+    while run.elapsed < limit && run.world.get_resource::<Game>().is_some_and(|g| g.over.is_none()) {
+        run.frame(1.0 / 60.0, update);
+    }
+    let alive = |side: Side| run.world.borrow::<Unit>().iter().filter(|(_, u)| u.side == side && u.hp > 0.0).count();
+    (run.world.get_resource::<Game>().and_then(|g| g.over), alive(Side::Blue), alive(Side::Red), run.elapsed)
+}
+
+fn self_test() -> bool {
+    let (won, blue, red, time) = battle(true, 240.0);
+    let (idle, _, idle_red, _) = battle(false, 60.0);
+    let ok = won.is_some() && red < 14 && idle.is_none() && idle_red == 14;
+    println!(
+        "komutan --test: otomatik {:?} ({time:.0} s, mavi {blue} sağ, kırmızı {red}); emirsiz bir dakikada {:?}, kırmızı {idle_red} sağ → {}",
+        won,
+        idle,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Komutan", 1280, 720)
         .add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(0.0, -0.1, 0.0)).with_scale(Vec3::new(HALF_W, 0.1, HALF_D)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(Vec4::new(0.36, 0.42, 0.27, 1.0), 0.95, 0.0),
-                MeshRenderer::new(),
-            ));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.6) * Quat::from_rotation_x(-0.95)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.95, 0.88), 3.0, LightRole::Sun),
-            ));
-            scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(-8.0, 18.0, 12.0),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -1.0,
-                primary: true,
-                ..Default::default()
-            });
-            let hud = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-            // Seçim kutusu: sürükleme sürerken görünen yarı saydam bir arayüz dikdörtgeni.
-            let marquee = scene
-                .world
-                .spawn_bundle(NodeBundle {
-                    style: Style { position_type: PositionType::Absolute, width: Val::Px(0.0), height: Val::Px(0.0), ..Default::default() },
-                    background_color: BackgroundColor(Vec4::new(0.4, 0.8, 1.0, 0.0)),
-                    ..Default::default()
-                })
-                .id();
-            scene.world.add_component(scene.world.get_entity(marquee).expect("just spawned"), ZIndex(10));
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("ates", Blip::new(Wave::Noise, 900.0, 0.05).with_volume(0.08).wav());
-                audio.load_sound_bytes("emir", Blip::new(Wave::Square, 660.0, 0.06).with_slide(880.0).with_volume(0.12).wav());
-                audio.load_sound_bytes("dus", Blip::new(Wave::Sine, 300.0, 0.25).with_slide(90.0).with_volume(0.2).wav());
-                scene.world.insert_resource(audio);
-            }
-            let mut game = Game {
-                physics: FixedPhysics::new(60),
-                selected: Vec::new(),
-                drag_from: None,
-                marquee,
-                hud,
-                banner,
-                rng: Rng::new(0xC0FFEE),
-                auto: std::env::var_os("KOMUTAN_OTO").is_some(),
-                auto_clock: 0.0,
-                over: None,
-            };
-            restart(scene.world, &mut game);
+            let game = setup(scene.world, font, true);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
