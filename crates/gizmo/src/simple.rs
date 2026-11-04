@@ -792,7 +792,9 @@ pub struct HeadlessFrames {
     pub world: World,
     /// The scene state handed to the hook, as `with_simple_scene` would start it.
     pub state: SimpleSceneState,
-    /// The input handed to the hook: nothing pressed, unless the caller writes into it.
+    /// The input handed to the hook: nothing pressed, unless the caller writes into it —
+    /// `run.input.on_key_pressed(KeyCode::KeyW as u32)` before a frame holds W from then on, and
+    /// is "just pressed" on that one frame, as in the windowed loop.
     pub input: Input,
     /// Frames played.
     pub frames: u64,
@@ -849,6 +851,9 @@ impl HeadlessFrames {
         // What the draw path advances once a frame and game logic waits on: tweens, typewriters,
         // the screen fade (`zindan` takes the stairs when its fade has gone dark).
         crate::systems::render::advance_frame_clocks(&mut self.world);
+        // The windowed loop ends a frame by turning this frame's edges into history: a key pressed
+        // between two frames is "just pressed" for one frame, then only held.
+        self.input.begin_frame();
         self.frames += 1;
         self.elapsed += dt;
     }
@@ -1492,6 +1497,18 @@ mod headless_frames_tests {
             run.frame(1.0 / 60.0, |_, _, _, _| {});
         }
         assert!(run.world.get_resource::<ScreenFade>().is_some_and(|f| f.is_opaque()), "a 0.2 s fade had not gone dark in 0.5 s");
+    }
+
+    #[test]
+    fn a_key_pressed_before_a_frame_is_just_pressed_on_that_frame_only() {
+        let mut run = HeadlessFrames::new(World::new());
+        let w = crate::prelude::KeyCode::KeyW as u32;
+        run.input.on_key_pressed(w);
+        let mut seen = Vec::new();
+        for _ in 0..3 {
+            run.frame(1.0 / 60.0, |_, _, _, input| seen.push((input.is_key_just_pressed(w), input.is_key_pressed(w))));
+        }
+        assert_eq!(seen, [(true, true), (false, true), (false, true)]);
     }
 
     #[test]
