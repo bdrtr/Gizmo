@@ -1,5 +1,4 @@
 use glam::{Mat4, Vec3A, Vec4Swizzles};
-use std::f32;
 
 /// Axis-Aligned Bounding Box (AABB) represented by min/max corners.
 ///

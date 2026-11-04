@@ -106,11 +106,14 @@ fn loaded_arm(motor_max_force: f32, servo: bool, iterations: usize) -> (f32, f32
 /// ```
 ///
 /// The residual stops shrinking at 3.6e-7 (≈12 f32 ulps at 0.35 rad) and stays there through
-/// 160 iterations, so it is the noise floor and not an unconverged answer. 5e-6 is set above
-/// that floor and still catches the bug this file was written for by 48× — the old
+/// 160 iterations, so it is the noise floor and not an unconverged answer. The floor is the
+/// platform's: CI's macOS runner (aarch64) measured 8.25e-6 for the same 20 → 40 step
+/// (−0.34671956 vs −0.34671131, 2026-11-04), over the 5e-6 this test first used. 2e-5 is set
+/// above both and still catches the bug this file was written for by 12× — the old
 /// `/ iterations` budget drifted the same number by 2.4e-4 between 5 and 40 iterations.
 #[test]
 fn a_force_limited_motor_converges_as_iterations_rise() {
+    const TOLERANCE: f32 = 2e-5;
     // Three regimes: reaching its target with force to spare, stalled under load, and a
     // plain velocity motor that cannot hold the arm up.
     for (name, force, servo) in [
@@ -122,12 +125,12 @@ fn a_force_limited_motor_converges_as_iterations_rise() {
         let (peak_40, tail_40) = loaded_arm(force, servo, 40);
 
         assert!(
-            (peak_20 - peak_40).abs() < 5e-6,
+            (peak_20 - peak_40).abs() < TOLERANCE,
             "{name}: peak angle moved when iterations doubled 20 -> 40 \
              ({peak_20:.8} vs {peak_40:.8}) — `iterations` must refine the answer, not change it"
         );
         assert!(
-            (tail_20 - tail_40).abs() < 5e-6,
+            (tail_20 - tail_40).abs() < TOLERANCE,
             "{name}: final angle moved when iterations doubled 20 -> 40 \
              ({tail_20:.8} vs {tail_40:.8})"
         );
