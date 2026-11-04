@@ -92,6 +92,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A soft body is drawn (`soft_body_mesh_system`).** A `SoftBodyMesh` in the world was stepped
   and drawn as nothing but debug lines. Both draw paths now give it the mesh of its surface,
   outward, normals smoothed over the nodes, and a renderer and material the first time.
+- **`pinbol`, the thirty-fifth game** — a pinball table: gravity tilted 12°, a small fast CCD
+  ball, two kinematic flippers swung at 25 rad/s, three bumpers that kick and score.
+  `pinbol --test` lets an autopilot flip for a minute headlessly and checks the flippers hit the
+  ball and that it never leaves the table through a wall. It found the CCD contact under Fixed.
 - **`robot`, the thirty-fourth game** — a two-bone robot arm on a table pushing balls into a
   pocket, its tip following the cursor through `solve_two_bone_ik`; the first use of the engine's
   IK anywhere. `robot --test` lets an autopilot sink all five headlessly (24 s) and checks the tip

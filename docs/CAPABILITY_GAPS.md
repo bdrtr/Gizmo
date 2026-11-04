@@ -1262,6 +1262,26 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16ae. The thirty-fifth game: a fast ball and flippers (2026-11-04, `pinbol`)
+
+`demo/src/bin/pinbol.rs` is a pinball table — gravity tilted 12°, a 5 cm CCD ball, two kinematic
+flippers swung by `KinematicTarget` at 25 rad/s, three bumpers that kick. `pinbol --test` opens
+no window: an autopilot flips for a minute (6 flipper hits, 600 points, 2 drains, the ball never
+leaves the table through a wall). One gap, closed:
+
+- ~~**A CCD body touching a wall was held by it.**~~ **Closed 2026-11-04.** Under 1 mm the
+  speculative contact took its normal from the approach direction itself, so a ball resting a
+  hair from the rail and rolling *along* it under gravity got a contact pointing straight back up
+  the slope, and stopped: the first ball hung on the launch-lane rail, normal (0, 0.978, −0.208).
+  A lone CCD ball on a slope rolled 9 % short the same way, its own floor taken as being in the
+  way. The normal is now the surface's own, measured a little past it along the approach.
+  `tests/ccd_touching.rs` (0.025 m and 0.665 m before, against ~1 m free).
+
+The same change moved `robot`'s balls, and its autopilot for the first time asked for a tip
+inside the arm's minimum reach (|upper − lower| = 0.2 m, folded over the root) — 3 cm missed.
+`solve_two_bone_ik` documents that it folds to that reach; the game's `clamp_reach` clamped only
+the outer one, and now clamps both (0.000 m again).
+
 ### C16ad. The thirty-fourth game: inverse kinematics (2026-11-04, `robot`)
 
 `demo/src/bin/robot.rs` is a two-bone arm on a pedestal pushing balls into a pocket — the arm's
