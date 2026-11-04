@@ -47,9 +47,14 @@
 //!   `AudioManager::set_limiter(Some(Limiter::default()))` — toplamın üstünde bir limiter, tavan
 //!   −1 dBFS; toplam tavanı geçmedikçe sese dokunmuyor (bit bit aynı).
 //!
+//! *Sonradan bulundu (2026-11-05, `poligon --test`):* oyuncu iki kat hızlı yürüyordu (10 m/s).
+//! `FixedPhysics::advance` karakter denetleyicisini her adımda koşmaya başlamıştı (`pist` için),
+//! bu oyun ise onu ayrıca kare başına bir kez daha çağırmayı sürdürüyordu. **Düzeltildi.**
+//!
 //! ## Ortam değişkenleri
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
-//!   * `POLIGON_OTO=1` — kendiliğinden birkaç atış (ekran görüntüsü için)
+//!   * `POLIGON_OTO=1` — kendiliğinden birkaç atış (ekran görüntüsü için; `poligon --test` pencere
+//!     açmadan bu atışları ve yürüme hızını sınar)
 
 use gizmo::audio::synth::{Blip, Wave};
 use gizmo::audio::AudioManager;
@@ -61,7 +66,7 @@ use gizmo::physics::{Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 use gizmo::winit::keyboard::KeyCode;
 
 const AMMO: u32 = 40;
@@ -88,100 +93,154 @@ struct Game {
     auto_shots: u32,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+
+    // Zemin ve arka duvar.
+    spawn_static(world, Vec3::new(0.0, -0.5, -8.0), Vec3::new(12.0, 0.5, 14.0), Vec4::new(0.45, 0.45, 0.42, 1.0));
+    spawn_static(world, Vec3::new(0.0, 3.0, -21.0), Vec3::new(12.0, 3.0, 0.5), Vec4::new(0.55, 0.5, 0.45, 1.0));
+    // Dört kaide, her birinde bir kutu yığını.
+    for (i, x) in [-6.0f32, -2.0, 2.0, 6.0].into_iter().enumerate() {
+        let z = -12.0 - i as f32 * 1.5;
+        let top = 1.0;
+        spawn_static(world, Vec3::new(x, top * 0.5, z), Vec3::new(0.9, top * 0.5, 0.9), Vec4::new(0.3, 0.32, 0.36, 1.0));
+        for level in 0..3 {
+            for (dx, dz) in [(-0.3, -0.3), (0.3, -0.3), (-0.3, 0.3), (0.3, 0.3)].into_iter().take(4 - level) {
+                spawn_crate(world, Vec3::new(x + dx, top + 0.25 + level as f32 * 0.5, z + dz), top);
+            }
+        }
+    }
+
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.9)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.95, 0.88), 3.0, LightRole::Sun),
+    ));
+
+    // Oyuncu: bir kapsül karakter. Kamera başında.
+    let player = world
+        .spawn_bundle((
+            Transform::new(Vec3::new(0.0, 0.9, 0.0)),
+            GlobalTransform::default(),
+            CharacterController { speed: 5.0, jump_speed: 5.0, ..Default::default() },
+            Collider::capsule(0.3, 0.3),
+            Velocity::default(),
+        ))
+        .id();
+    let camera = world
+        .spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.9 + EYE, 0.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        })
+        .id();
+    // Sarsıntı yalnızca resimde: nişan ışını ve bakış açısı onu hiç görmüyor.
+    let mut shake = CameraShake::default();
+    shake.max_offset = 0.04;
+    shake.max_angle = 0.012;
+    shake.decay = 3.0;
+    if let Some(e) = world.get_entity(camera) {
+        world.add_component(e, shake);
+    }
+
+    let _crosshair = world.spawn_bundle((Text::pinned("+", font, 28.0, TextAnchor::Center, Vec2::ZERO),));
+    let hud = world
+        .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+        .id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("ates", Blip::new(Wave::Noise, 3000.0, 0.12).with_slide(400.0).with_volume(0.35).wav());
+        audio.load_sound_bytes("isabet", Blip::new(Wave::Square, 700.0, 0.06).with_slide(1100.0).with_volume(0.2).wav());
+        // Kapalı bir poligon: atışlar duvarlardan geri geliyor.
+        audio.set_reverb(Some(gizmo::audio::reverb::Reverb::hall()));
+        // Seri atışta toplam 1'i geçmesin: kırpılmak yerine kısılsın.
+        audio.set_limiter(Some(gizmo::audio::limiter::Limiter::default()));
+        world.insert_resource(audio);
+    }
+
+    // Fareyle bakış: imleç kilitli ve gizli.
+    world.insert_resource(CursorOptions::mouse_look());
+    Game {
+        physics: FixedPhysics::new(120),
+        player,
+        camera,
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: 0.0,
+        shots: 0,
+        hud,
+        banner,
+        looking: true,
+        auto_shots: if std::env::var_os("POLIGON_OTO").is_some() { 6 } else { 0 },
+    }
+}
+
+/// Kaidelerinden düşmüş kutular ve toplam kutu.
+fn crates_down(world: &World) -> (usize, usize) {
+    let crates = world.borrow::<Crate>();
+    let tfs = world.borrow::<Transform>();
+    let down = crates.iter().filter(|(id, c)| tfs.get(*id).is_some_and(|t| t.position.y < c.pedestal_top - 0.1)).count();
+    (down, crates.iter().count())
+}
+
+/// `--test`: pencere açmadan iki sınama. W basılıyken oyuncu karakter denetleyicisinin hızıyla
+/// yürümeli (5 m/s); otomatik pilotun altı atışı kutu devirmeli.
+fn self_test() -> bool {
+    let font = HeadlessFrames::font();
+    let mut world = World::new();
+    let game = setup(&mut world, font, false);
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world);
+    let at = |w: &World| w.get_resource::<Game>().and_then(|g| w.borrow::<Transform>().get(g.player).map(|t| t.position)).unwrap_or_default();
+    while run.elapsed < 1.0 {
+        run.frame(1.0 / 60.0, update);
+    }
+    run.input.on_key_pressed(KeyCode::KeyW as u32);
+    while run.elapsed < 2.0 {
+        run.frame(1.0 / 60.0, update);
+    }
+    let from = at(&run.world);
+    while run.elapsed < 3.0 {
+        run.frame(1.0 / 60.0, update);
+    }
+    let to = at(&run.world);
+    let speed = Vec2::new(to.x - from.x, to.z - from.z).length();
+
+    let mut world = World::new();
+    let mut game = setup(&mut world, font, false);
+    game.auto_shots = 6;
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world);
+    while run.elapsed < 5.0 {
+        run.frame(1.0 / 60.0, update);
+    }
+    let (down, total) = crates_down(&run.world);
+    let ok = (speed - 5.0).abs() < 0.5 && down > 0;
+    println!(
+        "poligon --test: W ile {speed:.2} m/s yürüdü (denetleyicinin hızı 5.00); altı atış {down}/{total} kutu düşürdü → {}",
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Poligon", 1280, 720)
         .with_simple_scene(|scene, _state| {
             let r = &mut *scene.renderer;
             r.deband_dither = true;
             let font = load_font(r);
-
-            // Zemin ve arka duvar.
-            spawn_static(scene.world, Vec3::new(0.0, -0.5, -8.0), Vec3::new(12.0, 0.5, 14.0), Vec4::new(0.45, 0.45, 0.42, 1.0));
-            spawn_static(scene.world, Vec3::new(0.0, 3.0, -21.0), Vec3::new(12.0, 3.0, 0.5), Vec4::new(0.55, 0.5, 0.45, 1.0));
-            // Dört kaide, her birinde bir kutu yığını.
-            for (i, x) in [-6.0f32, -2.0, 2.0, 6.0].into_iter().enumerate() {
-                let z = -12.0 - i as f32 * 1.5;
-                let top = 1.0;
-                spawn_static(scene.world, Vec3::new(x, top * 0.5, z), Vec3::new(0.9, top * 0.5, 0.9), Vec4::new(0.3, 0.32, 0.36, 1.0));
-                for level in 0..3 {
-                    for (dx, dz) in [(-0.3, -0.3), (0.3, -0.3), (-0.3, 0.3), (0.3, 0.3)].into_iter().take(4 - level) {
-                        spawn_crate(scene.world, Vec3::new(x + dx, top + 0.25 + level as f32 * 0.5, z + dz), top);
-                    }
-                }
-            }
-
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.9)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.95, 0.88), 3.0, LightRole::Sun),
-            ));
-
-            // Oyuncu: bir kapsül karakter. Kamera başında.
-            let player = scene
-                .world
-                .spawn_bundle((
-                    Transform::new(Vec3::new(0.0, 0.9, 0.0)),
-                    GlobalTransform::default(),
-                    CharacterController { speed: 5.0, jump_speed: 5.0, ..Default::default() },
-                    Collider::capsule(0.3, 0.3),
-                    Velocity::default(),
-                ))
-                .id();
-            let camera = scene
-                .world
-                .spawn_bundle(CameraBundle {
-                    position: Vec3::new(0.0, 0.9 + EYE, 0.0),
-                    yaw: -std::f32::consts::FRAC_PI_2,
-                    pitch: 0.0,
-                    primary: true,
-                    ..Default::default()
-                })
-                .id();
-            // Sarsıntı yalnızca resimde: nişan ışını ve bakış açısı onu hiç görmüyor.
-            let mut shake = CameraShake::default();
-            shake.max_offset = 0.04;
-            shake.max_angle = 0.012;
-            shake.decay = 3.0;
-            if let Some(e) = scene.world.get_entity(camera) {
-                scene.world.add_component(e, shake);
-            }
-
-            let _crosshair = scene.world.spawn_bundle((Text::pinned("+", font, 28.0, TextAnchor::Center, Vec2::ZERO),));
-            let hud = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("ates", Blip::new(Wave::Noise, 3000.0, 0.12).with_slide(400.0).with_volume(0.35).wav());
-                audio.load_sound_bytes("isabet", Blip::new(Wave::Square, 700.0, 0.06).with_slide(1100.0).with_volume(0.2).wav());
-                // Kapalı bir poligon: atışlar duvarlardan geri geliyor.
-                audio.set_reverb(Some(gizmo::audio::reverb::Reverb::hall()));
-                // Seri atışta toplam 1'i geçmesin: kırpılmak yerine kısılsın.
-                audio.set_limiter(Some(gizmo::audio::limiter::Limiter::default()));
-                scene.world.insert_resource(audio);
-            }
-
-            // Fareyle bakış: imleç kilitli ve gizli.
-            scene.world.insert_resource(CursorOptions::mouse_look());
-            scene.world.insert_resource(Game {
-                physics: FixedPhysics::new(120),
-                player,
-                camera,
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: 0.0,
-                shots: 0,
-                hud,
-                banner,
-                looking: true,
-                auto_shots: if std::env::var_os("POLIGON_OTO").is_some() { 6 } else { 0 },
-            });
+            let game = setup(scene.world, font, true);
+            scene.world.insert_resource(game);
         })
         .replace_update(update)
         .run()
@@ -265,8 +324,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         shoot(world, &game, Camera::forward_from(game.yaw, game.pitch));
     }
 
+    // `advance` karakter denetleyicisini her adımda kendisi koşuyor. Burada bir kez daha, kare
+    // süresiyle çağrılıyordu: oyuncu 5 m/s yerine 10 m/s yürüyordu (`poligon --test` ölçtü).
     game.physics.advance(world, dt);
-    gizmo::physics::character_controller_system(world, dt);
     sync_transforms(world);
 
     // Kamera oyuncunun başında.
