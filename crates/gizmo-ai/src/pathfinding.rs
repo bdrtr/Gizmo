@@ -808,6 +808,57 @@ impl NavGrid {
         })
     }
 
+    /// [`find_path`](Self::find_path), **straightened**: each waypoint the route can skip in a
+    /// straight, unobstructed line is dropped (see [`smooth_path`](Self::smooth_path)). What a
+    /// walking agent wants — [`NavAgent`](crate::NavAgent) routes come from here.
+    pub fn find_smooth_path(&self, start_world: Vec3, end_world: Vec3) -> Option<Vec<Vec3>> {
+        let raw = self.find_path(start_world, end_world)?;
+        Some(self.smooth_path(start_world, &raw, self.cell_size * 0.3))
+    }
+
+    /// Drops the waypoints of `path` that a straight line can skip: from where the walker is
+    /// (`from`, then each kept waypoint) it reaches as far along the route as it can see, and
+    /// keeps only that point. "Can see" means every point along the line — and along two lines
+    /// beside it, `clearance` metres to either side — is in a walkable cell, so a straightened
+    /// route keeps that much room from the walls it passes.
+    ///
+    /// **Why it exists.** Routes were raw 8-connected cell centres, so an agent sent anywhere
+    /// but along a row, a column or an exact diagonal walked a staircase: from (0.5, 0.5) to
+    /// (9.5, 3.5) on an open grid that is 9 waypoints and 10.3 m, where the straight line is one
+    /// waypoint and 9.5 m.
+    pub fn smooth_path(&self, from: Vec3, path: &[Vec3], clearance: f32) -> Vec<Vec3> {
+        let mut out = Vec::with_capacity(path.len().min(8));
+        let mut anchor = from;
+        let mut i = 0;
+        while i < path.len() {
+            // Furthest waypoint visible from the anchor, scanning forward until the line breaks.
+            let mut reach = i;
+            while reach + 1 < path.len() && self.line_is_clear(anchor, path[reach + 1], clearance) {
+                reach += 1;
+            }
+            out.push(path[reach]);
+            anchor = path[reach];
+            i = reach + 1;
+        }
+        out
+    }
+
+    /// Whether the straight segment `a`→`b`, and the two parallel to it `clearance` metres to each
+    /// side, cross only walkable cells (sampled every quarter cell, in `a`'s layer).
+    fn line_is_clear(&self, a: Vec3, b: Vec3, clearance: f32) -> bool {
+        let d = Vec3::new(b.x - a.x, 0.0, b.z - a.z);
+        let len = d.length();
+        if len < 1e-6 {
+            return true;
+        }
+        let side = Vec3::new(-d.z, 0.0, d.x) / len * clearance;
+        let samples = (len / (self.cell_size * 0.25)).ceil() as usize;
+        (0..=samples).all(|k| {
+            let p = a + d * (k as f32 / samples as f32);
+            [Vec3::ZERO, side, -side].iter().all(|o| self.is_walkable(self.world_to_grid(Vec3::new(p.x + o.x, a.y, p.z + o.z))))
+        })
+    }
+
     /// The HashMap A* `find_path` replaced, kept to prove the dense one returns the same routes.
     #[cfg(test)]
     pub(crate) fn find_path_reference(&self, start_world: Vec3, end_world: Vec3) -> Option<Vec<Vec3>> {
@@ -1200,4 +1251,51 @@ mod tests {
         assert!(grid.is_walkable(grid.world_to_grid(Vec3::new(-30.0, 0.0, -30.0))));
     }
 
+
+    fn route_length(from: Vec3, path: &[Vec3]) -> f32 {
+        let mut at = from;
+        path.iter().map(|p| {
+            let d = (*p - at).length();
+            at = *p;
+            d
+        }).sum()
+    }
+
+    /// On an open grid a route off the eight directions is a staircase of cell centres; the
+    /// straightened one is the line itself.
+    #[test]
+    fn an_open_route_is_one_straight_line() {
+        let grid = NavGrid::new(1.0, 12, 12);
+        let (from, to) = (Vec3::new(0.5, 0.0, 0.5), Vec3::new(9.5, 0.0, 3.5));
+        let raw = grid.find_path(from, to).unwrap();
+        let smooth = grid.find_smooth_path(from, to).unwrap();
+        eprintln!("raw {} waypoints {:.2} m, smooth {} waypoints {:.2} m", raw.len(), route_length(from, &raw), smooth.len(), route_length(from, &smooth));
+        assert_eq!(smooth.len(), 1, "{smooth:?}");
+        assert_eq!((smooth[0].x, smooth[0].z), (to.x, to.z));
+        assert!(raw.len() > 5);
+    }
+
+    /// Around a wall the straightened route keeps to walkable cells with room to spare, and is
+    /// shorter and simpler than the cell-by-cell one.
+    #[test]
+    fn a_straightened_route_still_goes_round_the_wall() {
+        let mut grid = NavGrid::new(1.0, 12, 12);
+        for z in 0..9 {
+            grid.add_obstacle_world(Vec3::new(5.5, 0.0, z as f32 + 0.5));
+        }
+        let (from, to) = (Vec3::new(2.5, 0.0, 2.5), Vec3::new(8.5, 0.0, 2.5));
+        let raw = grid.find_path(from, to).unwrap();
+        let smooth = grid.find_smooth_path(from, to).unwrap();
+        assert!(smooth.len() < raw.len(), "{} vs {} waypoints", smooth.len(), raw.len());
+        assert!(route_length(from, &smooth) < route_length(from, &raw) - 0.5);
+        let mut at = from;
+        for p in &smooth {
+            for k in 0..=40 {
+                let q = at + (*p - at) * (k as f32 / 40.0);
+                assert!(grid.is_walkable(grid.world_to_grid(q)), "the route crosses a wall at {q:?}");
+            }
+            at = *p;
+        }
+    }
 }
+

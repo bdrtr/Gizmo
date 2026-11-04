@@ -301,13 +301,13 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         #[cfg(not(target_arch = "wasm32"))]
         if requests.len() >= 16 {
             use rayon::prelude::*;
-            requests.par_iter().with_min_len(4).map(|&(_, from, to)| grid.find_path(from, to)).collect()
+            requests.par_iter().with_min_len(4).map(|&(_, from, to)| grid.find_smooth_path(from, to)).collect()
         } else {
-            requests.iter().map(|&(_, from, to)| grid.find_path(from, to)).collect()
+            requests.iter().map(|&(_, from, to)| grid.find_smooth_path(from, to)).collect()
         }
         #[cfg(target_arch = "wasm32")]
         {
-            requests.iter().map(|&(_, from, to)| grid.find_path(from, to)).collect()
+            requests.iter().map(|&(_, from, to)| grid.find_smooth_path(from, to)).collect()
         }
     };
     let mut planned: Vec<Option<Option<Vec<Vec3>>>> = vec![None; agent_entities.len()];
@@ -872,7 +872,7 @@ mod frame_tests {
         ai_navigation_system(&world, 1.0 / 60.0);
         let grid = world.get_resource::<NavGrid>().unwrap();
         for &(id, start, target) in &ids {
-            let alone = grid.find_path(start, target).map(|p| p.len()).unwrap_or(0);
+            let alone = grid.find_smooth_path(start, target).map(|p| p.len()).unwrap_or(0);
             assert_eq!(world.borrow::<NavAgent>().get(id).unwrap().path_len(), alone, "agent {id}");
         }
         drop(grid);

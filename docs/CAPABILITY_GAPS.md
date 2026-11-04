@@ -1326,6 +1326,8 @@ written:
 - ~~**An unreachable target was searched for every frame**~~ — 4000 agents on a cluttered grid
   put ~950 searches into every frame. A failed search waits for the schedule now, and
   `NavAgent::route_failed()` lets the game pick another goal (this one does).
+- ~~**Routes were staircases of cell centres**~~ — found later the same night; straightened
+  (`find_smooth_path`), the colony's 40 s haul went from 748 to 1198.
 
 ### C16u. The twenty-fifth game: rules written in Lua (2026-11-04, `yilan`)
 

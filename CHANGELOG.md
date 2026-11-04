@@ -150,6 +150,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **Agents walk straight lines, not staircases (`NavGrid::find_smooth_path`, `smooth_path`).**
+  Routes were raw 8-connected cell centres, so an agent sent anywhere off a row, a column or an
+  exact diagonal walked a staircase: on an open grid from (0.5, 0.5) to (9.5, 3.5), 9 waypoints and
+  10.3 m against one waypoint and 9.5 m. The route is now straightened — each waypoint a line of
+  sight can skip is dropped, the line checked along itself and 0.3 cell to each side so the agent
+  keeps room from walls — and `NavAgent` routes come from it. `find_path` is unchanged. Measured
+  in a game: `karinca`'s colony carries 1198 pieces in 40 s, up from 748. Tested on an open grid
+  and round a wall (the straightened route never crosses a blocked cell).
 - **Client-server reconciliation has the pair it needs (`ServerMessage::PlayerState`), a game can
   send its own data (`ClientMessage::Custom` / `ServerMessage::Custom`), and the facade reaches
   this half at all (feature `network-client-server`).** Reconciling replays the inputs after the
