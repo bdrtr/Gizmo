@@ -48,6 +48,39 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-11-04
+
+Eleven weeks of work since `0.10.0`, most of it found by writing games on the engine — thirty of
+them now live in `demo/src/bin/`, each with a headless `--test` mode, and each entry below that
+came from one says which. The MSRV is unchanged (**1.96**; CI's MSRV job builds the workspace on
+it). The minor moves because public signatures did, as they may under `0.x`: read the
+**Changed** and **Removed** sections before upgrading.
+
+What arrived, in short:
+
+- **Game layer:** tweens and easing, timers, screen shake and fades, a seeded RNG, save data,
+  localisation with plurals, driven state machines (`App::add_state`), deferred bundles,
+  `Query::single`, optional components in queries, systems that return `Result`, system chains.
+- **UI (`gizmo-ui`):** clicks, scrolling with flicks and a scrollbar, text input, sliders,
+  toggles, progress bars, dropdowns, drag and drop, tooltips, z-layers, clipping, grids,
+  `UiScale`, tweened boxes, on-screen touch controls, and touch gestures.
+- **Rendering:** reflection probes (box-projected, blended, captured by the studio), area and
+  sphere/tube lights, light cookies, soft and contact shadows, object motion blur, irradiance
+  volumes, a hand-set sky and fog, AgX and PBR Neutral tone mapping, blend modes, font fallback,
+  per-tile tints; drawing many objects 52 % cheaper on the CPU.
+- **Physics:** a `Breakable` breaks in a game and its debris is drawn and cleared; characters
+  push crates and walk through triggers; moving platforms carry them; `KinematicTarget`;
+  compound colliders; terrain collides as the surface it draws; joints report their load;
+  cloth and rope are drawn, cloth pushes rigid bodies back and rope lies on what it hits.
+- **AI:** crowd separation, routes searched in parallel, straight (smoothed) paths, no
+  re-search of an unreachable target every frame.
+- **Networking:** rollback with game state, time sync and a UDP transport that only takes the
+  peer's datagrams; the client-server half is reachable from the facade
+  (`network-client-server`) with a wire format, send/receive and the messages reconciliation
+  needs.
+- **Audio:** fades, reverb, a master limiter, positions/seek, and synthesised sounds.
+- **Scripting:** Lua can spawn what it then moves, recolour and re-mesh it, and read the world.
+
 ### Added
 
 - **`Renderer::sky` — the sky that lights the scene, by hand.** The light a surface gets from its

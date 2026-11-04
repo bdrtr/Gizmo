@@ -12,7 +12,7 @@
 ## 1. Overview
 
 Gizmo — a lightweight, **pure-Rust**, ECS-based 3D engine + a physics simulator written from
-scratch (no external physics dependency). Published on crates.io (**0.10.0**, 19 of the 20
+scratch (no external physics dependency). Published on crates.io (**0.11.0**, 2026-11-04; 19 of the 20
 workspace crates — `gizmo-studio` is `publish = false`). *(Said `0.9.0` until 2026-08-19;
 CHANGELOG.md's own note says that version never reached crates.io — no tag, no release.)*
 
