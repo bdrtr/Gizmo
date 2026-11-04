@@ -31,7 +31,8 @@
 //!   onu kapsayan ilk yüzden çiziliyor. Burada Noto Sans Symbols.
 //!
 //! ## Ortam değişkenleri
-//!   * `DUELLO_OTO=1` — kendi kendine bir kart oynar (ekran görüntüsü için)
+//!   * `DUELLO_OTO=1` — kendi kendine bir kart oynar (ekran görüntüsü için; `duello --test` pencere
+//!     açmadan bütün bir düelloyu oynar)
 //!   * `GIZMO_FONT=<yol>` — font
 
 use gizmo::core::hierarchy::HierarchyExt;
@@ -40,7 +41,7 @@ use gizmo::math::Ease;
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
     BackgroundColor, ButtonBundle, Clicked, Drag, DropTarget, NodeBundle, PositionType, Style, Tooltip, UiPlugin,
     UiRect, UiScale, UiTransform, UiTween, Val, ZIndex,
@@ -157,58 +158,117 @@ struct Game {
     auto: Option<u32>,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+fn setup(world: &mut World, font: FontId) -> Game {
+    world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+    world.insert_resource(UiScale::fit(1280.0, 720.0));
+
+    let world = &mut *world;
+    let table = world.spawn_bundle(NodeBundle {
+        // Pencerenin tamamı: oran 16:9 değilse kalan yer de masa.
+        style: Style { width: Val::Percent(100.0), height: Val::Percent(100.0), ..Default::default() },
+        background_color: BackgroundColor(Vec4::new(0.06, 0.12, 0.09, 1.0)),
+        ..Default::default()
+    });
+    let table_id = table.id();
+    let foe_box = panel(world, table, Vec2::new(520.0, 40.0), Vec2::new(240.0, 110.0), Vec4::new(0.3, 0.12, 0.12, 1.0), font, 22.0);
+    world.add_component(world.entity(foe_box).unwrap(), DropTarget::default());
+    let me_box = panel(world, table, Vec2::new(520.0, 380.0), Vec2::new(240.0, 110.0), Vec4::new(0.12, 0.22, 0.3, 1.0), font, 22.0);
+    world.add_component(world.entity(me_box).unwrap(), DropTarget::default());
+    let deck_box = panel(world, table, DECK_AT, CARD, Vec4::new(0.2, 0.17, 0.12, 1.0), font, 20.0);
+    let log = panel(world, table, Vec2::new(40.0, 230.0), Vec2::new(420.0, 90.0), Vec4::ZERO, font, 20.0);
+    let end_turn = world.spawn_bundle(ButtonBundle {
+        style: absolute(Vec2::new(1060.0, 300.0), Vec2::new(180.0, 64.0)),
+        background_color: BackgroundColor(Vec4::new(0.35, 0.3, 0.15, 1.0)),
+        ..Default::default()
+    });
+    world.add_component(end_turn, Text::screen("Turu bitir", font, 22.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+    world.add_child(table, end_turn);
+
+    let mut game = Game {
+        me: Fighter::default(),
+        foe: Fighter::default(),
+        deck: Vec::new(),
+        discard: Vec::new(),
+        hand: Vec::new(),
+        mana: 0,
+        foe_mana: 0,
+        turn: 0,
+        phase: Phase::Player,
+        rng: Rng::new(0xD0E1),
+        font,
+        table: table_id,
+        me_box,
+        foe_box,
+        end_turn: end_turn.id(),
+        deck_box,
+        log,
+        auto: std::env::var_os("DUELLO_OTO").is_some().then_some(0),
+    };
+    new_duel(world, &mut game);
+    game
+}
+
+/// `--test`: pencere açmadan bütün bir düello. Her turda gücü yeten kartlar oynanır (saldırılar
+/// rakibe, öbürleri kendine), sonra tur biter; rakip kendi yapay zekâsıyla oynar. Düello bir
+/// kazananla bitmeli, kartlar kaybolmamalı ya da çoğalmamalı (deste + ıskarta + el sabit), ve
+/// uçup sönen kartların varlıkları silinmeli.
+fn self_test() -> bool {
+    let mut world = World::new();
+    let game = setup(&mut world, HeadlessFrames::font());
+    let cards = game.deck.len() + game.discard.len() + game.hand.len();
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world).add_plugin(UiPlugin);
+    let mut conserved = true;
+    while run.elapsed < 600.0 {
+        let mut game = run.world.remove_resource::<Game>().expect("oyun kaynağı");
+        if game.phase == Phase::Player {
+            while let Some(i) = game.hand.iter().position(|(k, _)| k.cost() <= game.mana) {
+                let at_foe = game.hand[i].0.hostile();
+                play(&mut run.world, &mut game, i, at_foe);
+                if game.foe.hp <= 0 {
+                    break;
+                }
+            }
+            if game.foe.hp > 0 {
+                end_turn(&mut run.world, &mut game);
+            }
+        }
+        conserved &= game.deck.len() + game.discard.len() + game.hand.len() == cards;
+        let over = game.phase == Phase::Over;
+        run.world.insert_resource(game);
+        if over {
+            break;
+        }
+        run.frame(1.0 / 60.0, update);
+    }
+    for _ in 0..90 {
+        run.frame(1.0 / 60.0, update);
+    }
+    let leaving = run.world.borrow::<Leaving>().iter().count();
+    let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+    let winner = if game.foe.hp <= 0 { "sen" } else if game.me.hp <= 0 { "rakip" } else { "kimse" };
+    let ok = game.phase == Phase::Over && conserved && leaving == 0;
+    println!(
+        "duello --test: {} tur, kazanan {winner} (can {} / {}); kartlar korundu {conserved}; sönmeyi bekleyen kart {leaving} → {}",
+        game.turn,
+        game.me.hp,
+        game.foe.hp,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Düello", 1280, 720)
         .add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-            scene.world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
-            scene.world.insert_resource(UiScale::fit(1280.0, 720.0));
-
-            let world = &mut *scene.world;
-            let table = world.spawn_bundle(NodeBundle {
-                // Pencerenin tamamı: oran 16:9 değilse kalan yer de masa.
-                style: Style { width: Val::Percent(100.0), height: Val::Percent(100.0), ..Default::default() },
-                background_color: BackgroundColor(Vec4::new(0.06, 0.12, 0.09, 1.0)),
-                ..Default::default()
-            });
-            let table_id = table.id();
-            let foe_box = panel(world, table, Vec2::new(520.0, 40.0), Vec2::new(240.0, 110.0), Vec4::new(0.3, 0.12, 0.12, 1.0), font, 22.0);
-            world.add_component(world.entity(foe_box).unwrap(), DropTarget::default());
-            let me_box = panel(world, table, Vec2::new(520.0, 380.0), Vec2::new(240.0, 110.0), Vec4::new(0.12, 0.22, 0.3, 1.0), font, 22.0);
-            world.add_component(world.entity(me_box).unwrap(), DropTarget::default());
-            let deck_box = panel(world, table, DECK_AT, CARD, Vec4::new(0.2, 0.17, 0.12, 1.0), font, 20.0);
-            let log = panel(world, table, Vec2::new(40.0, 230.0), Vec2::new(420.0, 90.0), Vec4::ZERO, font, 20.0);
-            let end_turn = world.spawn_bundle(ButtonBundle {
-                style: absolute(Vec2::new(1060.0, 300.0), Vec2::new(180.0, 64.0)),
-                background_color: BackgroundColor(Vec4::new(0.35, 0.3, 0.15, 1.0)),
-                ..Default::default()
-            });
-            world.add_component(end_turn, Text::screen("Turu bitir", font, 22.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-            world.add_child(table, end_turn);
-
-            let mut game = Game {
-                me: Fighter::default(),
-                foe: Fighter::default(),
-                deck: Vec::new(),
-                discard: Vec::new(),
-                hand: Vec::new(),
-                mana: 0,
-                foe_mana: 0,
-                turn: 0,
-                phase: Phase::Player,
-                rng: Rng::new(0xD0E1),
-                font,
-                table: table_id,
-                me_box,
-                foe_box,
-                end_turn: end_turn.id(),
-                deck_box,
-                log,
-                auto: std::env::var_os("DUELLO_OTO").is_some().then_some(0),
-            };
-            new_duel(world, &mut game);
-            world.insert_resource(game);
+            let game = setup(scene.world, font);
+            scene.world.insert_resource(game);
         })
         .replace_update(update)
         .run()
@@ -401,10 +461,7 @@ fn player_turn(world: &mut World, game: &mut Game, input: &Input) {
     }
     let clicked = world.borrow::<Clicked>().get(game.end_turn).is_some_and(|c| c.0);
     if clicked || input.is_key_just_pressed(KeyCode::Enter as u32) {
-        game.phase = Phase::Enemy { wait: 0.6 };
-        game.foe.block = 0;
-        game.foe_mana = game.turn.min(10);
-        say(world, game, "Sıra rakipte…");
+        end_turn(world, game);
         return;
     }
     // Sürüklenen kart imleci izliyor; bırakılınca ya oynanıyor ya yerine dönüyor.
@@ -449,6 +506,14 @@ fn player_turn(world: &mut World, game: &mut Game, input: &Input) {
             }
         }
     }
+}
+
+/// Turu bitir: sıra rakipte.
+fn end_turn(world: &mut World, game: &mut Game) {
+    game.phase = Phase::Enemy { wait: 0.6 };
+    game.foe.block = 0;
+    game.foe_mana = game.turn.min(10);
+    say(world, game, "Sıra rakipte…");
 }
 
 fn ui_scale(world: &World) -> f32 {
