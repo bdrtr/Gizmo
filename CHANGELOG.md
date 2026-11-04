@@ -48,6 +48,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **A stock humanoid ragdoll was born apart (`RagdollBuilder::create_humanoid`).** Nine of its ten
+  joints were open at spawn — each bone's `local_pos` disagreed with the anchors of the joint that
+  holds it, the shoulders by 18 cm — and the lower arms were born inside the torso they do not hang
+  from, so every ragdoll snapped and kicked itself on its first step (in zero gravity, still moving
+  at 0.11 rad/s a second after spawning from rest). Each bone now sits where its joint's anchors
+  meet, the shoulders clear the torso and the legs clear the hands; `spawn_ragdoll` warns about a
+  bone authored off its joint. `tests/ragdoll_spawn.rs`.
+
 ### Added
 
 - **Soft bodies you can drop, stand and stack (`SoftBodyMesh`).** Measured on a 1 m, 10 kg block

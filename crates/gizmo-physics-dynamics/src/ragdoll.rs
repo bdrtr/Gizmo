@@ -93,7 +93,8 @@ pub struct RagdollBoneDef {
     /// gets no joint (a `tracing` warning is emitted; the call does not fail).
     pub parent_type: Option<RagdollBoneType>,
 
-    /// Offset from the parent bone's origin, in metres.
+    /// Offset from the parent bone's origin, in metres. For the joint to be closed at spawn it
+    /// must equal `local_anchor_parent - local_anchor_child`; [`spawn_ragdoll`] warns when not.
     ///
     /// Pure translation in world axes: the parent's rotation is *not* applied (bones
     /// spawn with identity rotation, and positions are chained as
@@ -207,7 +208,7 @@ impl RagdollBuilder {
     }
 
     /// Appends the stock 11-bone humanoid: a `Pelvis` root carrying a `Torso` → `Head`
-    /// spine, two arms and two legs. It measures ≈1.83 m from the bottom of a lower-leg
+    /// spine, two arms and two legs. It measures ≈1.80 m from the bottom of a lower-leg
     /// capsule to the top of the head capsule and weighs 75 kg in total, and is
     /// authored standing upright with its origin at the pelvis.
     ///
@@ -215,6 +216,11 @@ impl RagdollBuilder {
     /// [`spawn_ragdoll`] turns into cone-twist joints with the default 1.2 rad cone and
     /// ±0.6 rad twist. Elbows and knees are hinges about local X, limited to
     /// `0..0.8π` and `-0.8π..0` rad respectively so they fold in opposite directions.
+    ///
+    /// Every bone is placed where its joint's two anchors meet, and the arms hang clear of the
+    /// torso and the hands clear of the thighs, so it is born in one piece and at rest. (Until
+    /// 2026-11-04 nine of its ten joints were apart at spawn, the shoulders by 18 cm, and the
+    /// lower arms were born inside the torso: every ragdoll snapped and kicked on its first step.)
     ///
     /// Bones are *appended*, not replaced: calling this twice — or after adding a bone
     /// of one of the same types — produces duplicate bone types, which
@@ -250,7 +256,7 @@ impl RagdollBuilder {
         .add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::Head,
             parent_type: Some(RagdollBoneType::Torso),
-            local_pos: Vec3::new(0.0, 0.35, 0.0),
+            local_pos: Vec3::new(0.0, 0.3, 0.0),
             radius: 0.12,
             length: 0.1,
             mass: 5.0,
@@ -264,12 +270,12 @@ impl RagdollBuilder {
         .add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::LeftUpperArm,
             parent_type: Some(RagdollBoneType::Torso),
-            local_pos: Vec3::new(-0.3, 0.2, 0.0),
+            local_pos: Vec3::new(-0.3, 0.05, 0.0),
             radius: 0.08,
             length: 0.3,
             mass: 3.0,
             joint_type: JointType::BallSocket,
-            local_anchor_parent: Vec3::new(-0.2, 0.2, 0.0),
+            local_anchor_parent: Vec3::new(-0.3, 0.2, 0.0),
             local_anchor_child: Vec3::new(0.0, 0.15, 0.0),
             joint_axis: Vec3::Y,
             limits: None,
@@ -277,7 +283,7 @@ impl RagdollBuilder {
         .add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::LeftLowerArm,
             parent_type: Some(RagdollBoneType::LeftUpperArm),
-            local_pos: Vec3::new(0.0, -0.3, 0.0),
+            local_pos: Vec3::new(0.0, -0.275, 0.0),
             radius: 0.06,
             length: 0.25,
             mass: 2.0,
@@ -291,12 +297,12 @@ impl RagdollBuilder {
         .add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::RightUpperArm,
             parent_type: Some(RagdollBoneType::Torso),
-            local_pos: Vec3::new(0.3, 0.2, 0.0),
+            local_pos: Vec3::new(0.3, 0.05, 0.0),
             radius: 0.08,
             length: 0.3,
             mass: 3.0,
             joint_type: JointType::BallSocket,
-            local_anchor_parent: Vec3::new(0.2, 0.2, 0.0),
+            local_anchor_parent: Vec3::new(0.3, 0.2, 0.0),
             local_anchor_child: Vec3::new(0.0, 0.15, 0.0),
             joint_axis: Vec3::Y,
             limits: None,
@@ -304,7 +310,7 @@ impl RagdollBuilder {
         .add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::RightLowerArm,
             parent_type: Some(RagdollBoneType::RightUpperArm),
-            local_pos: Vec3::new(0.0, -0.3, 0.0),
+            local_pos: Vec3::new(0.0, -0.275, 0.0),
             radius: 0.06,
             length: 0.25,
             mass: 2.0,
@@ -318,12 +324,12 @@ impl RagdollBuilder {
         .add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::LeftUpperLeg,
             parent_type: Some(RagdollBoneType::Pelvis),
-            local_pos: Vec3::new(-0.15, -0.25, 0.0),
+            local_pos: Vec3::new(-0.12, -0.3, 0.0),
             radius: 0.1,
             length: 0.4,
             mass: 6.0,
             joint_type: JointType::BallSocket,
-            local_anchor_parent: Vec3::new(-0.15, -0.1, 0.0),
+            local_anchor_parent: Vec3::new(-0.12, -0.1, 0.0),
             local_anchor_child: Vec3::new(0.0, 0.2, 0.0),
             joint_axis: Vec3::Y,
             limits: None,
@@ -331,7 +337,7 @@ impl RagdollBuilder {
         .add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::LeftLowerLeg,
             parent_type: Some(RagdollBoneType::LeftUpperLeg),
-            local_pos: Vec3::new(0.0, -0.4, 0.0),
+            local_pos: Vec3::new(0.0, -0.375, 0.0),
             radius: 0.08,
             length: 0.35,
             mass: 4.0,
@@ -345,12 +351,12 @@ impl RagdollBuilder {
         .add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::RightUpperLeg,
             parent_type: Some(RagdollBoneType::Pelvis),
-            local_pos: Vec3::new(0.15, -0.25, 0.0),
+            local_pos: Vec3::new(0.12, -0.3, 0.0),
             radius: 0.1,
             length: 0.4,
             mass: 6.0,
             joint_type: JointType::BallSocket,
-            local_anchor_parent: Vec3::new(0.15, -0.1, 0.0),
+            local_anchor_parent: Vec3::new(0.12, -0.1, 0.0),
             local_anchor_child: Vec3::new(0.0, 0.2, 0.0),
             joint_axis: Vec3::Y,
             limits: None,
@@ -358,7 +364,7 @@ impl RagdollBuilder {
         .add_bone(RagdollBoneDef {
             bone_type: RagdollBoneType::RightLowerLeg,
             parent_type: Some(RagdollBoneType::RightUpperLeg),
-            local_pos: Vec3::new(0.0, -0.4, 0.0),
+            local_pos: Vec3::new(0.0, -0.375, 0.0),
             radius: 0.08,
             length: 0.35,
             mass: 4.0,
@@ -513,6 +519,18 @@ pub fn spawn_ragdoll(world: &mut World, bones: Vec<RagdollBoneDef>) -> RagdollIn
                         Vec3::ZERO
                     }
                 };
+                // Bones spawn unrotated, so the joint is closed when the two anchors coincide:
+                // `local_pos == local_anchor_parent - local_anchor_child`. Anything else is a
+                // skeleton born apart, which the solver snaps shut on its first step — the stock
+                // humanoid itself was, by up to 18 cm, until 2026-11-04.
+                let gap = (bone.local_pos - (bone.local_anchor_parent - bone.local_anchor_child)).length();
+                if gap > 1e-3 {
+                    tracing::warn!(
+                        bone = ?bone.bone_type,
+                        gap_m = gap,
+                        "[Ragdoll] bone spawned off its joint (local_pos != local_anchor_parent - local_anchor_child); the joint will snap it into place"
+                    );
+                }
                 parent_pos + bone.local_pos
             }
             None => bone.local_pos,
