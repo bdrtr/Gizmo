@@ -269,6 +269,14 @@ pub struct Cloth {
     /// Tearing: a constraint whose length exceeds `rest_length * tear_factor` is removed
     /// (the cloth rips there). `f32::INFINITY` (the default) disables tearing.
     pub tear_factor: f32,
+    /// The share of its velocity a node keeps over one second, `0..=1` — `0.99` (the default,
+    /// and what was hard-coded until 2026-11-04) is next to no damping; `0.05` stills a hammock
+    /// within a couple of seconds. Applied each sub-step as `damping^sub_dt`, so it does not
+    /// depend on the step size.
+    ///
+    /// Two-way coupling made it matter: with the cloth pushing bodies back, an undamped cloth
+    /// is a trampoline — a ball dropped on a hammock kept bouncing at the speed it arrived with.
+    pub damping: f32,
     /// The grid the nodes were laid out on, `(width, height)` — what turns `nodes` back into a
     /// surface ([`surface_triangles`](Self::surface_triangles)).
     grid: (usize, usize),
@@ -364,6 +372,7 @@ impl Cloth {
             thickness: 0.02,
             friction: 0.5,
             tear_factor: f32::INFINITY,
+            damping: 0.99,
             grid: (width, height),
         }
     }
@@ -489,7 +498,7 @@ impl Cloth {
                 node.prev_position = node.position;
 
                 // Add gravity and damping (frame-rate independent)
-                let damping = 0.99f32;
+                let damping = self.damping;
                 let next_vel = velocity * damping.powf(sub_dt) + gravity * sub_dt;
                 node.position += next_vel * sub_dt;
             }
