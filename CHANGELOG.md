@@ -162,6 +162,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   so a game could not send a score or whose turn it was; and `gizmo::net` exposed only rollback,
   `client_server` was configured out of every facade build. `kovala` plays on all three: two
   clients reconcile ~300 times each in its headless test with a largest correction of exactly 0.
+- **`kovala`, the twenty-ninth game** — tag on an authoritative server with three server-side
+  bots; clients predict themselves and interpolate the rest. `kovala --test` runs a server and two
+  clients over 127.0.0.1 without a window. It found the items above and below.
 - **Client-server messages have a wire format, and the two ends a send/receive pair.**
   `ClientMessage` / `ServerMessage` were serde types with no encoding: a game talking to a client
   had to depend on `renet` and a serializer itself, choose channel numbers and a byte format, and

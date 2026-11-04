@@ -1262,6 +1262,28 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16y. The twenty-ninth game: an authoritative server (2026-11-04, `kovala`)
+
+`demo/src/bin/kovala.rs` is tag on the client-server netcode: the server moves everyone and
+chooses who is "it", three bots run on it, a client predicts its own runner, reconciles with the
+server and interpolates the others. `kovala --test` opens no window: a server and two clients over
+127.0.0.1 for five seconds — ~300 reconciliations each, largest correction exactly 0, the other
+runner seen at most 0.58 m behind (100 ms of interpolation delay at 5 m/s). The first game on that
+half of `gizmo-net`. Five gaps, all closed:
+
+- ~~**The facade could not reach `client_server`**~~ — `network` enabled rollback only. Feature
+  `network-client-server`.
+- ~~**No wire format, no send/receive**~~ — a game needed `renet` and a serializer of its own.
+  `encode`/`decode`, `NetworkServer::{clients, send, broadcast, receive}`,
+  `NetworkClient::{is_connected, send, receive}`.
+- ~~**No message carried what reconciliation needs**~~ — the ack and the state came apart, and
+  the state was keyed by entity index. `ServerMessage::PlayerState`.
+- ~~**A game could not send its own data**~~ — `ClientMessage::Custom`, `ServerMessage::Custom`.
+- ~~**`UdpTransport` took anyone's datagrams**~~ (rollback, found on the way) — only the peer's.
+
+Not changed: the reference `server/` binary still sends `InputAck` and an entity-keyed
+`WorldStateUpdate`; it moves no players, so there is no per-client state for it to send.
+
 ### C16x. The twenty-eighth game: a net that holds things (2026-11-04, `file`)
 
 `demo/src/bin/file.rs` is fruit falling into a net you slide left and right — a `Cloth` pinned on
