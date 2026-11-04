@@ -7,7 +7,7 @@
 
 use crate::{
     components::Velocity,
-    world::{PhysicsWorld, ZoneShape},
+    world::PhysicsWorld,
 };
 use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, ContactPoints, TriggerEvent};
 use gizmo_physics_core::narrowphase::NarrowPhase;
@@ -103,39 +103,28 @@ impl PhysicsWorld {
                         .map_or(default_gravity, |f| f.gravity);
 
                     // ── Fluid buoyancy & drag ─────────────────────────────
-                    for zone in fluid_zones {
-                        if !zone.shape.contains(pos) {
-                            continue;
+                    // Summed over cells of the body, each at its own point: see
+                    // `FluidZone::push_on`. The torque is what rights a tipped hull.
+                    if !fluid_zones.is_empty() {
+                        let com = pos + transform.rotation * rb.center_of_mass;
+                        let mut force = gizmo_math::Vec3::ZERO;
+                        let mut torque = gizmo_math::Vec3::ZERO;
+                        for zone in fluid_zones {
+                            if let Some(push) = zone.push_on(
+                                collider,
+                                pos,
+                                transform.rotation,
+                                com,
+                                vel.linear,
+                                vel.angular,
+                                active_gravity,
+                            ) {
+                                force += push.force;
+                                torque += push.torque;
+                            }
                         }
-
-                        let extents_y = collider.extents_y();
-                        let surface_y = match zone.shape {
-                            ZoneShape::Box { max, .. }         => max.y,
-                            ZoneShape::Sphere { center, radius } => center.y + radius,
-                        };
-
-                        let submerged_depth =
-                            (surface_y - (pos.y - extents_y)).clamp(0.0, extents_y * 2.0);
-                        let denom = (extents_y * 2.0).max(f32::EPSILON);
-                        let submerged_ratio = submerged_depth / denom;
-
-                        if submerged_ratio > 0.0 {
-                            let submerged_volume = collider.volume() * submerged_ratio;
-                            let buoyancy_force   = -active_gravity * (submerged_volume * zone.density);
-
-                            let speed = vel.linear.length();
-                            let drag_dir = if speed > 1e-4 {
-                                vel.linear / speed
-                            } else {
-                                gizmo_math::Vec3::ZERO
-                            };
-                            let drag_mag = zone.linear_drag    * speed
-                                         + zone.quadratic_drag * speed * speed;
-                            let drag_force = -drag_dir * drag_mag * submerged_ratio;
-
-                            vel.linear +=
-                                (buoyancy_force + drag_force) * rb.inv_mass() * dt;
-                        }
+                        vel.linear += force * rb.inv_mass() * dt;
+                        vel.angular += rb.inv_world_inertia_tensor(transform.rotation) * torque * dt;
                     }
 
                     // ── Velocity integration ──────────────────────────────

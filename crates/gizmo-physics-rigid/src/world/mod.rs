@@ -13,6 +13,7 @@ use std::path::PathBuf;
 
 mod construction;
 mod entity_index_map;
+mod fluid;
 mod query;
 mod scene_query;
 mod snapshot;
@@ -179,17 +180,25 @@ impl Default for GravityField {
 /// A volume of liquid that applies buoyancy and drag to the bodies inside it, and
 /// supplies the underwater fog a submerged camera should use.
 ///
-/// Unlike [`GravityField`], zones do **not** compete: a body whose origin lies in two
-/// overlapping zones receives both zones' buoyancy and both zones' drag, additively.
-/// Submersion is an approximation, not an exact intersected volume — the body's
-/// vertical half-extent is compared against a flat surface plane (`max.y` for a box,
-/// `center.y + radius` for a sphere) to get a ratio in `0.0..=1.0`, and both the
-/// displaced volume and the drag are scaled by it. Rotation is ignored in that
-/// estimate, so a long thin body reports the same submersion whatever its attitude,
-/// and a collider with no vertical extent (a plane) never registers as submerged.
+/// Unlike [`GravityField`], zones do **not** compete: a body in two overlapping zones receives
+/// both zones' buoyancy and both zones' drag, additively.
 ///
-/// Forces are applied to linear velocity only; a spinning body is not slowed by the
-/// fluid. `PhysicsWorld::fluid_zones` is part of the rollback snapshot.
+/// **How a body is pushed** (since 2026-11-04). A sphere is one cell: its submerged share is
+/// linear in the depth of its bottom below the surface plane (`max.y` for a box zone,
+/// `center.y + radius` for a sphere), and the push acts through its centre. Any other collider
+/// is split into a 3×3×3 grid through its local bounds; each cell displaces its share of the
+/// volume times the share of its own (turned) vertical extent below the surface, and is pushed
+/// and dragged **at the cell**, by its own velocity — so a tipped hull is righted and a spinning
+/// body slowed. A cell counts while the water column under or around it is inside the zone, so
+/// a light body floats at the depth Archimedes gives rather than with its origin at the surface.
+///
+/// Until then the push acted at the centre of mass only, and only while the body's **origin**
+/// was inside the zone: a box of density 300 floated half under instead of 30 %, a tipped hull
+/// stayed tipped, and turning met no water (`tests/buoyancy.rs`).
+///
+/// The cells are an estimate, not an intersected volume: a sphere's or capsule's volume is spread
+/// over its bounding box's cells, and the surface is a flat plane. `PhysicsWorld::fluid_zones`
+/// is part of the rollback snapshot.
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct FluidZone {
     /// Region of liquid, in world metres. It fixes both membership (see [`ZoneShape`])
@@ -209,9 +218,10 @@ pub struct FluidZone {
     pub viscosity: f32,      // dynamic viscosity for Stokes drag
     /// Coefficient of the speed-proportional drag term.
     ///
-    /// The drag force magnitude is `(linear_drag * |v| + quadratic_drag * |v|²)`
-    /// scaled by the submerged ratio, directed against the linear velocity. Below
-    /// about `1e-4` m/s no drag is applied at all — the direction would be
+    /// The drag force magnitude is `(linear_drag * |v| + quadratic_drag * |v|²)`, worked out
+    /// per cell against the cell's own velocity (see above) and weighted by the cell's share
+    /// of the body and of the water — a fully submerged body moving without turning feels
+    /// exactly this. Below about `1e-4` m/s a cell gets no drag at all — the direction would be
     /// ill-defined. `0.0` (the [`Default`]) means an inviscid zone that only floats
     /// bodies; nothing damps them and they will bob indefinitely.
     pub linear_drag: f32,    // fallback linear drag

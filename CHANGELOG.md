@@ -48,6 +48,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- **What floats, floats as it should (`FluidZone`).** A zone pushed only on a body whose *origin*
+  was inside it, with one force at the centre of mass worked out from the vertical extent alone.
+  Measured: a box of density 300 floated **half** under, not at the 30 % Archimedes gives (its
+  origin at the surface, where the push switched off); a hull tipped 30° stayed at 30.0° for good;
+  a hull spun at 3 rad/s still turned at 2.46 rad/s after 4 s. A non-spherical body is now a
+  3×3×3 grid of cells through its local bounds, each displacing its share of the water and
+  dragged by its own velocity, **at the cell** — the density-300 box floats 30 % under, the hull
+  rights itself (largest tilt 9.8° in the tenth second, 2.2° in the thirtieth) and spinning meets
+  the water. A ball is one cell, as before. `tests/buoyancy.rs`; dropping the torque or going back
+  to the origin test each turns it red.
+
 ## [0.11.0] — 2026-11-04
 
 Eleven weeks of work since `0.10.0`, most of it found by writing games on the engine — thirty of
