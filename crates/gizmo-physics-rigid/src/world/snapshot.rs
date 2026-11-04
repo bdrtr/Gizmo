@@ -46,6 +46,7 @@ impl PhysicsWorld {
             //    restore requires to be unchanged anyway.
             spatial_hash: _,
             entity_index_map: _,
+            ecs_generations: _,
 
             // ── Output of the last step. Nothing in the pipeline reads these back, and `step`
             //    clears and refills the event lists.

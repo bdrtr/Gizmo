@@ -47,6 +47,7 @@ impl PhysicsWorld {
             velocities: Vec::new(),
             colliders: Vec::new(),
             entity_index_map: crate::world::EntityIndexMap::default(),
+            ecs_generations: rustc_hash::FxHashMap::default(),
             is_paused: false,
             step_once: false,
             rewind_requested: false,
@@ -242,6 +243,24 @@ impl PhysicsWorld {
         }
     }
 
+    /// Records that body `id` is, on the ECS side, the entity of `generation`. If the id was
+    /// last synced under a different generation it now names a different entity: the old body
+    /// is removed — its joints with it — and the sync that follows adds the new one fresh.
+    pub(crate) fn note_ecs_generation(&mut self, id: u32, generation: u32) {
+        match self.ecs_generations.get(&id) {
+            Some(&g) if g == generation => {}
+            Some(_) => {
+                if let Some(&idx) = self.entity_index_map.get(&id) {
+                    self.remove_body_at(idx);
+                }
+                self.ecs_generations.insert(id, generation);
+            }
+            None => {
+                self.ecs_generations.insert(id, generation);
+            }
+        }
+    }
+
     /// Removes the body at component-array index `idx` by swapping the last row into its
     /// place — O(1), but it permutes the arrays.
     ///
@@ -268,6 +287,7 @@ impl PhysicsWorld {
         self.spatial_hash.remove(entity);
         self.entity_index_map.remove(&entity.id());
         self.joints.retain(|joint| joint.entity_a != entity && joint.entity_b != entity);
+        self.ecs_generations.remove(&entity.id());
 
         if idx != last_idx {
             let last_entity = self.entities[last_idx];

@@ -285,6 +285,15 @@ pub fn physics_step_system(world: &World, dt: f32) {
     }
 
     // 4. Step Simulation
+    // An id whose entity was despawned and handed to a new one since the last step is a new
+    // body: drop the old row (and its joints) so the sync adds it fresh. Measured before this: a
+    // body spawned 15 m away on a dead body's id was pulled 5 m by the dead body's rope in a
+    // second (`tests/joint_recycled_id.rs`).
+    for (handle, ..) in &rigid_bodies {
+        if let Some(entity) = world.get_entity(handle.id()) {
+            physics_world.note_ecs_generation(handle.id(), entity.generation());
+        }
+    }
     physics_world.sync_bodies(rigid_bodies.iter());
 
     // A numerical error (NaN/Inf/Overflow) in physics may originate from

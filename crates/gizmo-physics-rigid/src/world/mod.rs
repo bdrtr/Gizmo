@@ -447,6 +447,13 @@ pub struct PhysicsWorld {
     /// How many `RigidBody` entities without a `Collider` the last ECS sync saw — they are not
     /// simulated, and the sync warns when the count grows. Diagnostic only.
     pub(crate) bodies_without_collider: usize,
+    /// The ECS generation each body's id belonged to when the ECS bridge last synced it. An id
+    /// is recycled the moment its entity is despawned, so a body despawned and another spawned
+    /// before the next step arrive under the same id; without this the new body inherited the
+    /// old one's row — and its joints. Written only by the ECS bridge; a world stepped directly
+    /// leaves it empty.
+    #[serde(skip)]
+    pub(crate) ecs_generations: rustc_hash::FxHashMap<u32, u32>,
 
     /// Localized gravity overrides; see [`GravityField`] for how overlaps resolve.
     /// Empty (the default) means every body uses `integrator.gravity`.

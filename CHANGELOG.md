@@ -50,6 +50,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A body spawned on a dead body's id inherited its joints (ECS physics bridge).** Physics
+  knows a body by its raw ECS id, and a despawned id goes to the very next spawn: despawn a body
+  held by a joint and spawn another before the next step, and the new one took over the old
+  body's row and was tied to its partner — spawned 15 m away, pulled 5 m in a second. The bridge
+  now tracks each id's generation and removes the old body, with its joints, when the id comes
+  back as someone else. `tests/joint_recycled_id.rs`.
 - **A CCD body a hair from a wall stopped moving along it (`Gjk::speculative_contact`).** Inside
   1 mm the contact's normal was the approach direction itself, so a ball rolling along a rail
   under gravity was given a contact pointing back against gravity — in `pinbol` it hung on the
