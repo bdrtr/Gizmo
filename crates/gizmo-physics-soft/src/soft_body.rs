@@ -261,6 +261,14 @@ pub fn resolve_node_collision(
         if let Some((d, n)) =
             gizmo_physics_core::raycast::Raycast::ray_shape(&ray, &col.shape, col_trans)
         {
+            // A surface the node is moving AWAY from is not in its way. Taken as a hit, it
+            // parked a node leaving a surface it was touching (a ray from the surface itself
+            // meets it at distance zero) right where it was, step after step, while forces kept
+            // adding to its velocity: measured, a node on the floor at y = 0.000 with 38 m/s of
+            // upward velocity and climbing, which blew up the body around it.
+            if ray.direction.dot(n) >= 0.0 {
+                continue;
+            }
             if d <= dist + 0.1 && nearest.is_none_or(|(nd, _, _)| d < nd) {
                 nearest = Some((d, n, *handle));
             }
@@ -517,6 +525,120 @@ impl SoftBodyMesh {
         Ok(())
     }
 
+    /// A solid box of soft material: `min` its lowest corner, `size` its extents, `cells` the
+    /// number of cubes along each axis, `mass` the whole body's, spread evenly over its nodes.
+    ///
+    /// Each cube is cut into six tetrahedra along its main diagonal (the Kuhn split), the same
+    /// way in every cube, so neighbouring cubes cut their shared face along the same diagonal and
+    /// the mesh is **conforming**: every inner face belongs to exactly two tetrahedra. That is
+    /// what [`soft_contact`](crate::soft_contact) needs to tell the surface from the inside. The
+    /// five-tetrahedra split that hand-built blocks used (`cpu_physics`) cuts neighbouring faces
+    /// along crossing diagonals: half its inner faces are unmatched, so they read as surface, and
+    /// a block dropped on such a block was pushed onto faces deep inside it.
+    ///
+    /// # Errors
+    ///
+    /// As [`new`](Self::new) for the material, and
+    /// [`SoftBodyError::DegenerateTetrahedron`](crate::SoftBodyError::DegenerateTetrahedron) for a size
+    /// or cell count that makes the cubes flat.
+    pub fn block(
+        min: Vec3,
+        size: Vec3,
+        cells: [usize; 3],
+        mass: f32,
+        youngs_modulus: f32,
+        poissons_ratio: f32,
+    ) -> Result<Self, crate::SoftBodyError> {
+        let mut body = Self::new(youngs_modulus, poissons_ratio)?;
+        let [cx, cy, cz] = cells.map(|c| c.max(1));
+        let (nx, ny, nz) = (cx + 1, cy + 1, cz + 1);
+        let step = size / Vec3::new(cx as f32, cy as f32, cz as f32);
+        let per_node = mass / (nx * ny * nz) as f32;
+        for x in 0..nx {
+            for y in 0..ny {
+                for z in 0..nz {
+                    body.add_node(min + step * Vec3::new(x as f32, y as f32, z as f32), per_node);
+                }
+            }
+        }
+        let id = |x: usize, y: usize, z: usize| (x * ny * nz + y * nz + z) as u32;
+        // The six paths from corner 000 to corner 111, one axis at a time.
+        const PATHS: [[usize; 3]; 6] = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+        for x in 0..cx {
+            for y in 0..cy {
+                for z in 0..cz {
+                    for path in PATHS {
+                        let mut c = [x, y, z];
+                        let mut corners = [id(c[0], c[1], c[2]); 4];
+                        for (k, &axis) in path.iter().enumerate() {
+                            c[axis] += 1;
+                            corners[k + 1] = id(c[0], c[1], c[2]);
+                        }
+                        body.add_element(corners[0], corners[1], corners[2], corners[3])?;
+                    }
+                }
+            }
+        }
+        Ok(body)
+    }
+
+    /// How many equal sub-steps a step of `dt` seconds needs to stay stable.
+    ///
+    /// [`step`](Self::step) integrates explicitly, and an explicit step is only stable while it
+    /// is short against the body's fastest vibration: a node of mass `m` held by stiffness `k`
+    /// rings at `ω = √(k/m)`. `k` is estimated per node from its elements at rest,
+    /// `Σ (λ + 2μ) · V / L²` (`L` the element's shortest rest edge), and the count is
+    /// `⌈dt · ω_max / 0.25⌉` — a quarter of a radian a sub-step, an eighth of the textbook
+    /// limit of 2, because a body that hits something is compressed and Neo-Hookean material
+    /// stiffens as it is. Clamped to `1..=`[`MAX_SUBSTEPS`](Self::MAX_SUBSTEPS).
+    ///
+    /// Measured (2026-11-04): a 1 m block of 10 kg dropped 1.5 m onto the floor in single 1/60 s
+    /// steps exploded (nodes at 10¹⁵ m inside a second) at E = 1000 and at E = 20 000; it lands
+    /// and settles with 8 and 32 sub-steps, which is what this gives for them.
+    #[must_use]
+    pub fn stable_substeps(&self, dt: f32) -> usize {
+        if dt.is_nan() || dt <= 0.0 || self.elements.is_empty() {
+            return 1;
+        }
+        let modulus = self.lambda + 2.0 * self.mu;
+        let mut stiffness = vec![0.0f32; self.nodes.len()];
+        for e in &self.elements {
+            // The rest edges are the columns of Dm = (Dm⁻¹)⁻¹, and their differences.
+            let dm = e.inv_rest_matrix.inverse();
+            let (a, b, c) = (dm.col(0), dm.col(1), dm.col(2));
+            let shortest = [a, b, c, b - a, c - a, c - b]
+                .iter()
+                .map(|v| v.length_squared())
+                .fold(f32::MAX, f32::min);
+            if shortest.is_nan() || shortest <= 0.0 || !shortest.is_finite() {
+                continue;
+            }
+            let k = modulus * e.rest_volume / shortest;
+            for &i in &e.node_indices {
+                if let Some(s) = stiffness.get_mut(i as usize) {
+                    *s += k;
+                }
+            }
+        }
+        let omega = self
+            .nodes
+            .iter()
+            .zip(&stiffness)
+            .filter(|(n, _)| !n.is_fixed && n.mass > 0.0)
+            .map(|(n, k)| (k / n.mass).sqrt())
+            .fold(0.0f32, f32::max);
+        let n = (dt * omega / 0.25).ceil();
+        if !n.is_finite() {
+            return Self::MAX_SUBSTEPS;
+        }
+        (n as usize).clamp(1, Self::MAX_SUBSTEPS)
+    }
+
+    /// The most sub-steps [`stable_substeps`](Self::stable_substeps) asks for. A body that
+    /// needs more is too stiff for its node masses at this step length — lighten the material
+    /// or make the nodes heavier.
+    pub const MAX_SUBSTEPS: usize = 128;
+
     /// Advances the FEM simulation by one timestep using a Neo-Hookean hyperelastic model.
     ///
     /// `dt` is in seconds and `gravity` is a world-space acceleration in m/s². Each node is
@@ -525,7 +647,8 @@ impl SoftBodyMesh {
     /// velocity first, damped by [`damping`](Self::damping)`.powf(dt)`, and the position
     /// advanced with that *new* velocity. `dt` is deliberately **not** clamped here: an
     /// explicit integrator on a stiff material goes unstable for large steps, so bounding
-    /// the timestep is the caller's responsibility.
+    /// the timestep is the caller's responsibility — [`stable_substeps`](Self::stable_substeps)
+    /// says how finely to cut it, and `soft_body_step_system` does so.
     ///
     /// Nodes that are [`is_fixed`](SoftBodyNode::is_fixed), or whose mass is `<= 0.0` or NaN,
     /// are skipped outright and stay put. An element is skipped for that step if the
@@ -535,7 +658,10 @@ impl SoftBodyMesh {
     ///
     /// Each moving node is then swept against `rigid_colliders` with
     /// [`resolve_node_collision`], and on a hit the swept position and velocity replace the
-    /// integrated ones. Soft-vs-soft and self-collision are not handled at all.
+    /// integrated ones; a node the sweep did not catch that is inside a collider is put back on
+    /// its surface. Soft-vs-soft contact is not this method's: `soft_body_step_system` steps
+    /// every body together and keeps them apart between steps
+    /// ([`soft_contact`](crate::soft_contact)). Self-collision is not handled at all.
     ///
     /// Element forces are computed in parallel (sequentially on `wasm32`) but accumulated in
     /// element order, so the result is deterministic and independent of thread scheduling.
@@ -709,6 +835,39 @@ impl SoftBodyMesh {
             // the sum — and therefore the body's velocity next step — is replay-stable.
             if let Some(impact) = &swept.impact {
                 accumulate_impulse(out_impulses, impact);
+            } else {
+                // A node the sweep did not catch can still be INSIDE a collider: the sweep
+                // ignores any move of 1e-5 m or less, so a node resting on a surface — and every
+                // node of a substepped body, whose steps are short — crept into it a little each
+                // step and never came back out (measured: a 1 m block resting on the floor sank
+                // 0.33 m in ten seconds at 32 sub-steps). Put it on the surface and take away
+                // the part of its velocity that goes in, relative to the body; the body is owed
+                // what the node lost.
+                for (handle, ctrans, col) in rigid_colliders {
+                    let Some((out, n)) = crate::cloth::project_point_out(node.position, 0.0, &col.shape, ctrans) else {
+                        continue;
+                    };
+                    node.position = out;
+                    let reaction = reaction_for(reactions, *handle);
+                    let vn = (node.velocity - reaction.velocity_at(out)).dot(n);
+                    if vn < 0.0 {
+                        let new_velocity = node.velocity - n * vn;
+                        let impulse = (node.velocity - new_velocity) * node.mass;
+                        node.velocity = new_velocity;
+                        if reaction.can_react() {
+                            accumulate_impulse(
+                                out_impulses,
+                                &NodeImpact {
+                                    body: *handle,
+                                    point: out,
+                                    normal: n,
+                                    impulse,
+                                    angular_impulse: (out - reaction.center_of_mass).cross(impulse),
+                                },
+                            );
+                        }
+                    }
+                }
             }
         }
     }

@@ -64,6 +64,8 @@ pub mod rope;
 /// around it that both the CPU step and the `gpu_compute` readback go through — sharing it is
 /// what keeps the two from drifting apart on which position the sweep starts from.
 pub mod soft_body;
+/// Soft bodies kept out of each other: a node inside another body goes back to its surface.
+pub mod soft_contact;
 /// ECS driver systems that step every soft-body component found in a `World`.
 ///
 /// Each system clamps its `dt` to at most 1/30 s before stepping. The soft-body and cloth

@@ -265,52 +265,14 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
         );
     }
 
-    // --- GPU SOFT BODY (JELLO) — 3×3×3 tetrahedron ızgarası ---
-    let mut soft_body = SoftBodyMesh::new(1000.0, 0.3)
-        .expect("geçerli Young modülü ve Poisson oranı ile SoftBodyMesh oluşturulmalı"); // v=0.5 tekilliğini önle
-    soft_body.damping = 5.0; // kararlılık için yüksek sönüm
-    let grid_size = 3;
-    let spacing = 0.8;
-    let offset = (grid_size as f32 - 1.0) * spacing / 2.0;
-
-    // Düğümleri ekle (node başına 2 kg)
-    for x in 0..grid_size {
-        for y in 0..grid_size {
-            for z in 0..grid_size {
-                let pos = Vec3::new(
-                    x as f32 * spacing - offset,
-                    y as f32 * spacing - offset + 15.0, // yukarıdan başlasın
-                    z as f32 * spacing - offset,
-                );
-                soft_body.add_node(pos, 2.0);
-            }
-        }
-    }
-
-    // 1B indeks yardımcısı
-    let idx = |x, y, z| -> u32 { (x * grid_size * grid_size + y * grid_size + z) as u32 };
-
-    // Elemanlar (tetrahedronlar) — komşu düğümleri voksellere bağla, her vokseli 5 tetrahedrona böl.
-    for x in 0..grid_size - 1 {
-        for y in 0..grid_size - 1 {
-            for z in 0..grid_size - 1 {
-                let i0 = idx(x, y, z);
-                let i1 = idx(x + 1, y, z);
-                let i2 = idx(x, y + 1, z);
-                let i3 = idx(x, y, z + 1);
-                let i4 = idx(x + 1, y + 1, z);
-                let i5 = idx(x + 1, y, z + 1);
-                let i6 = idx(x, y + 1, z + 1);
-                let i7 = idx(x + 1, y + 1, z + 1);
-
-                let _ = soft_body.add_element(i0, i1, i2, i3);
-                let _ = soft_body.add_element(i1, i4, i2, i7);
-                let _ = soft_body.add_element(i1, i3, i5, i7);
-                let _ = soft_body.add_element(i2, i3, i6, i7);
-                let _ = soft_body.add_element(i1, i2, i3, i7);
-            }
-        }
-    }
+    // --- SOFT BODY (JELLO) — 2×2×2 küplük, uyumlu (Kuhn) bir blok ---
+    //
+    // Bu blok eskiden elle kuruluyordu: her küp beş dört yüzlüye, her küpte AYNI yönde bölünüyordu,
+    // ki komşu küpler ortak yüzlerini çapraz köşegenlerle böler — ağ uyumsuzdu. Sönüm de `5.0`'dı:
+    // alan saniyede hızın ne kadarının KALDIĞI (`damping^dt`), 1'in üstü hızı büyütür, söndürmez.
+    let mut soft_body = SoftBodyMesh::block(Vec3::new(-0.8, 14.2, -0.8), Vec3::splat(1.6), [2, 2, 2], 54.0, 1000.0, 0.3)
+        .expect("geçerli Young modülü ve Poisson oranı ile SoftBodyMesh oluşturulmalı");
+    soft_body.damping = 0.5;
 
     world.spawn_bundle((
         Transform::new(Vec3::new(0.0, 15.0, 0.0)),

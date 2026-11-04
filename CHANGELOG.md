@@ -50,6 +50,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Soft bodies you can drop, stand and stack (`SoftBodyMesh`).** Measured on a 1 m, 10 kg block
+  (E = 20 000 Pa) before this: dropped 1.5 m onto the floor it **exploded** inside a second (one
+  explicit 1/60 s step is far past what such a material is stable for — E = 1000 did too); resting
+  on the floor through short steps it **sank** 0.33 m in ten seconds; and a block dropped on
+  another fell **straight through** it, soft bodies meeting only rigid ones. Now:
+  - `SoftBodyMesh::stable_substeps(dt)` estimates the body's fastest vibration from its material
+    and elements, and `soft_body_step_system` cuts the frame into that many steps (8 at E = 1000,
+    32 at 20 000 for that block);
+  - a node inside a collider after the sweep is put back on its surface, its inward velocity
+    taken out and paid to the body; and a surface the node is moving away from no longer counts
+    as a hit (a node leaving the floor was held on it while its velocity climbed);
+  - `gizmo_physics_soft::soft_contact`: every node of one body inside another goes back out
+    through the face it is falling through, with Coulomb friction, the two sharing the move and
+    the impulse by inverse mass — momentum conserved exactly. Without the friction, a block on a
+    block slid 0.8 m sideways in five seconds and fell off;
+  - `SoftBodyMesh::block(min, size, cells, mass, E, ν)` builds a solid box from cubes cut into six
+    tetrahedra the same way each time, so the mesh is conforming. The five-tetrahedra split that
+    blocks were built with by hand (`cpu_physics`) is not — half its inner faces read as surface.
+    `cpu_physics`'s jelly uses it now, and its `damping = 5.0` (a retention factor: above 1 it
+    *adds* speed) is 0.5.
+  `tests/soft_solid.rs` — reverting each of the five turns a test red.
+
 - **`ExternalForce` — a push that lasts (`gizmo::physics::components::ExternalForce`).** A force
   and torque applied on every physics step while the component is on the body: an engine, a
   thruster, a steady wind. The body's own accumulators are emptied by each step and a game writes

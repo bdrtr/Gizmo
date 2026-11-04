@@ -49,8 +49,22 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
     // the caller to supply in exchange for skipping the runtime borrow check.
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<SoftBodyMesh>>() }
     {
-        for (_, mut soft_body) in q.iter_mut() {
-            soft_body.step_coupled(dt, gravity, &rigid_colliders, &reactions, &mut impulses);
+        let mut bodies: Vec<_> = q.iter_mut().map(|(_, b)| b).collect();
+        // As many sub-steps as the stiffest body needs to stay stable — see `stable_substeps`;
+        // one step of the frame's `dt` exploded a dropped block at any stiffness worth calling a
+        // solid. All bodies take the same sub-steps, interleaved, so that after each one the
+        // bodies can be kept out of each other (`resolve_soft_contacts`): a jelly dropped on a
+        // jelly fell through it.
+        let n = bodies.iter().map(|b| b.stable_substeps(dt)).max().unwrap_or(1);
+        let sub = dt / n as f32;
+        for _ in 0..n {
+            for body in bodies.iter_mut() {
+                body.step_coupled(sub, gravity, &rigid_colliders, &reactions, &mut impulses);
+            }
+            if bodies.len() > 1 {
+                let mut views: Vec<&mut SoftBodyMesh> = bodies.iter_mut().map(|b| &mut **b).collect();
+                crate::soft_contact::resolve_soft_contacts(&mut views);
+            }
         }
     }
 
