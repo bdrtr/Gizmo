@@ -130,7 +130,9 @@ pub struct PhysicsMaterial {
     ///
     /// It shares [`friction_combine`](Self::friction_combine) with the two sliding
     /// coefficients: a pair cannot merge its rolling and sliding resistance under different
-    /// rules.
+    /// rules. Under the default geometric mean, **one side at zero makes the pair zero**: a ball
+    /// given rolling friction on a table left at the default rolls on forever (`robot`,
+    /// 2026-11-04) — give both surfaces the value.
     ///
     /// **Do not pick this value the way you would pick a rolling-resistance coefficient.** It is
     /// not one, and choosing it for physical realism gets the wrong answer at both ends. Swept

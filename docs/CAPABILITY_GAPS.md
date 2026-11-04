@@ -1262,6 +1262,17 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16ad. The thirty-fourth game: inverse kinematics (2026-11-04, `robot`)
+
+`demo/src/bin/robot.rs` is a two-bone arm on a pedestal pushing balls into a pocket — the arm's
+two capsules are kinematic bodies driven by `KinematicTarget`, posed every frame by
+`solve_two_bone_ik` (elbow up, so the arm passes over the balls and only the tip comes down).
+`robot --test` opens no window: the autopilot sinks all five in 24 s, the tip never further than
+0.000 m from where it was asked to be. The engine's IK had no user at all before this.
+**No gap found.** One note made where the next person will read it: `rolling_friction` is
+combined by geometric mean like the sliding coefficients, so a ball with it on a table without it
+rolls forever.
+
 ### C16ac. The thirty-third game: a ragdoll in flight (2026-11-04, `topcu`)
 
 `demo/src/bin/topcu.rs` is a cannon that throws a ragdoll (`RagdollBuilder::create_humanoid`) at
