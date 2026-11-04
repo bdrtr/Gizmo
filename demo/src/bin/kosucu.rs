@@ -32,7 +32,8 @@
 //! kaldı), `Input::swipe`, `Fog`, `SaveData`, `ScreenFade`, sentezlenmiş sesler.
 //!
 //! ## Ortam değişkenleri
-//!   * `KOSUCU_OTO=1` — kendi kendine koşar (ekran görüntüsü ve dayanıklılık için)
+//!   * `KOSUCU_OTO=1` — kendi kendine koşar (ekran görüntüsü ve dayanıklılık için; `kosucu --test`
+//!     iki dakikasını pencere açmadan koşar). Otomatik koşunun mesafesi rekor sayılmaz.
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::app::save::SaveData;
@@ -46,7 +47,7 @@ use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::{Fog, Sky};
 use gizmo::renderer::screen_fade::ScreenFade;
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, SimpleAppExt, SimpleSceneState};
 
 const LANE_GAP: f32 = 2.2;
 const CHUNK: f32 = 30.0;
@@ -116,7 +117,118 @@ struct Game {
     last_axis: Vec2,
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.9)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.95, 0.85), 3.2, LightRole::Sun),
+    ));
+    let camera = world.spawn_bundle(CameraBundle {
+        position: Vec3::new(0.0, 4.0, 7.0),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -0.28,
+        primary: true,
+        ..Default::default()
+    });
+    if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(camera.id()) {
+        c.clear_color = Some(Vec3::from(SKY));
+    }
+    let hud = world
+        .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+        .id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+    let player = world
+        .spawn_bundle((
+            Transform::new(Vec3::new(0.0, STAND.y, 0.0)).with_scale(STAND),
+            GlobalTransform::default(),
+            MeshSource("standard_cube".into()),
+            MaterialDesc::new().with_pbr(Vec4::new(0.9, 0.3, 0.2, 1.0), 0.5, 0.0),
+            MeshRenderer::new(),
+        ))
+        .id();
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("altin", Blip::new(Wave::Square, 988.0, 0.08).with_slide(1318.0).with_volume(0.15).wav());
+        audio.load_sound_bytes("zipla", Blip::new(Wave::Triangle, 330.0, 0.15).with_slide(660.0).with_volume(0.25).wav());
+        audio.load_sound_bytes("carp", Blip::new(Wave::Noise, 200.0, 0.4).with_slide(60.0).with_volume(0.4).wav());
+        world.insert_resource(audio);
+    }
+    world.insert_resource(ScreenFade::default());
+    let best = SaveData::open("kosucu").get::<f32>("best").unwrap_or(0.0);
+    let mut game = Game {
+        player,
+        camera: camera.id(),
+        lane: 0,
+        x: 0.0,
+        y: 0.0,
+        vy: 0.0,
+        z: 0.0,
+        slide: 0.0,
+        speed: START_SPEED,
+        coins: 0,
+        best,
+        over: false,
+        next_chunk: 10.0,
+        rng: Rng::new(0x5EED),
+        hud,
+        banner,
+        auto: std::env::var_os("KOSUCU_OTO").is_some(),
+        spin: 0.0,
+        last_axis: Vec2::ZERO,
+    };
+    restart(world, &mut game);
+    game
+}
+
+/// `--test`: pencere açmadan iki dakika otomatik koşu. Yol önde doğup arkada silindiği için dünya
+/// büyümemeli; koşucu engellerden kaçıp yol almalı.
+fn self_test() -> bool {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font(), false);
+    game.auto = true;
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world);
+    let (mut runs, mut longest, mut coins, mut was_over) = (0u32, 0.0f32, 0u32, false);
+    let (mut at_30, mut most) = (0u32, 0u32);
+    while run.elapsed < 120.0 {
+        run.frame(1.0 / 60.0, update);
+        let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+        if game.over && !was_over {
+            runs += 1;
+            longest = longest.max(-game.z);
+            coins += game.coins;
+        }
+        was_over = game.over;
+        let alive = run.world.entity_count();
+        if run.elapsed < 30.0 {
+            at_30 = at_30.max(alive);
+        } else {
+            most = most.max(alive);
+        }
+    }
+    let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+    if !game.over {
+        longest = longest.max(-game.z);
+        coins += game.coins;
+    }
+    // İlk yarım dakikanın en kalabalık anından %20'den fazla büyüyen dünya bir şeyi silmiyor.
+    let ok = longest > 300.0 && coins > 0 && most as f32 <= at_30 as f32 * 1.2;
+    println!(
+        "kosucu --test: 120 s, {runs} çarpışma, en uzun koşu {longest:.0} m, {coins} altın; varlık sayısı ilk 30 s en çok {at_30}, sonra en çok {most} → {}",
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Koşucu", 1280, 720)
         .with_simple_scene(|scene, _state| {
             let r = &mut *scene.renderer;
@@ -125,71 +237,7 @@ fn main() {
             // Sahneyi aydınlatan gök de aynı: altınlar bu mavi-beyazı yansıtıyor.
             r.sky = Some(Sky::gradient([0.3, 0.5, 0.95], SKY, [0.3, 0.3, 0.32]).with_intensity(0.4));
             let font = load_font(r);
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.9)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.95, 0.85), 3.2, LightRole::Sun),
-            ));
-            let camera = scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(0.0, 4.0, 7.0),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -0.28,
-                primary: true,
-                ..Default::default()
-            });
-            if let Some(mut c) = scene.world.borrow_mut::<Camera>().get_mut(camera.id()) {
-                c.clear_color = Some(Vec3::from(SKY));
-            }
-            let hud = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-            let player = scene
-                .world
-                .spawn_bundle((
-                    Transform::new(Vec3::new(0.0, STAND.y, 0.0)).with_scale(STAND),
-                    GlobalTransform::default(),
-                    MeshSource("standard_cube".into()),
-                    MaterialDesc::new().with_pbr(Vec4::new(0.9, 0.3, 0.2, 1.0), 0.5, 0.0),
-                    MeshRenderer::new(),
-                ))
-                .id();
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("altin", Blip::new(Wave::Square, 988.0, 0.08).with_slide(1318.0).with_volume(0.15).wav());
-                audio.load_sound_bytes("zipla", Blip::new(Wave::Triangle, 330.0, 0.15).with_slide(660.0).with_volume(0.25).wav());
-                audio.load_sound_bytes("carp", Blip::new(Wave::Noise, 200.0, 0.4).with_slide(60.0).with_volume(0.4).wav());
-                scene.world.insert_resource(audio);
-            }
-            scene.world.insert_resource(ScreenFade::default());
-            let best = SaveData::open("kosucu").get::<f32>("best").unwrap_or(0.0);
-            let mut game = Game {
-                player,
-                camera: camera.id(),
-                lane: 0,
-                x: 0.0,
-                y: 0.0,
-                vy: 0.0,
-                z: 0.0,
-                slide: 0.0,
-                speed: START_SPEED,
-                coins: 0,
-                best,
-                over: false,
-                next_chunk: 10.0,
-                rng: Rng::new(0x5EED),
-                hud,
-                banner,
-                auto: std::env::var_os("KOSUCU_OTO").is_some(),
-                spin: 0.0,
-                last_axis: Vec2::ZERO,
-            };
-            restart(scene.world, &mut game);
+            let game = setup(scene.world, font, true);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
@@ -441,7 +489,8 @@ fn run(world: &mut World, game: &mut Game, dt: f32, input: &Input) {
             fade.flash(Vec3::new(1.0, 0.3, 0.2), 0.6, 0.5);
         }
         let distance = -game.z;
-        if distance > game.best {
+        // Otomatik koşunun mesafesi rekor sayılmaz (ve sınama oyuncunun kaydına yazmaz).
+        if distance > game.best && !game.auto {
             game.best = distance;
             let mut save = SaveData::open("kosucu");
             if save.set("best", &distance).and_then(|()| save.save()).is_err() {
