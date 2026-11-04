@@ -15,6 +15,10 @@ instead, which is the right answer, since it has no headless mode to test. (The 
 written, a background loop handed `--test` to `kapi`, which has no such mode; it sat open on the
 user's screen for an hour and forty minutes.)
 
+Each also gets a fresh, empty `XDG_DATA_HOME` and `XDG_CONFIG_HOME`: games keep best times and
+settings through `SaveData` (`<data dir>/<game>/save.json`), and a test that wins must not write
+over the save of the person running it — nor read one that changes what it measures.
+
 Release build: the physics is far too slow unoptimised (see CLAUDE.md).
 
 Usage:
@@ -29,6 +33,7 @@ import glob
 import os
 import subprocess
 import sys
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -55,12 +60,15 @@ def play(name, timeout):
     exe = os.path.join(ROOT, "target", "release", name)
     env = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
     start = time.monotonic()
-    try:
-        p = subprocess.run([exe, "--test"], cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout)
-        code, out = p.returncode, (p.stdout + p.stderr)
-    except subprocess.TimeoutExpired as e:
-        code = "timeout"
-        out = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+    with tempfile.TemporaryDirectory(prefix=f"game-test-{name}-") as home:
+        env["XDG_DATA_HOME"] = os.path.join(home, "data")
+        env["XDG_CONFIG_HOME"] = os.path.join(home, "config")
+        try:
+            p = subprocess.run([exe, "--test"], cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout)
+            code, out = p.returncode, (p.stdout + p.stderr)
+        except subprocess.TimeoutExpired as e:
+            code = "timeout"
+            out = (e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
     lines = [l for l in out.splitlines() if l.strip()]
     return name, code, time.monotonic() - start, lines
 
