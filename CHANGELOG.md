@@ -150,6 +150,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **Client-server reconciliation has the pair it needs (`ServerMessage::PlayerState`), a game can
+  send its own data (`ClientMessage::Custom` / `ServerMessage::Custom`), and the facade reaches
+  this half at all (feature `network-client-server`).** Reconciling replays the inputs after the
+  server's ack on top of the state the server had *after that input* — and the protocol only had
+  the two apart: `InputAck` (the reference server sends it reliably) and `WorldStateUpdate`
+  (unreliably, keyed by entity index, so a client could not find itself). Paired from different
+  ticks, the replay starts from the wrong base: an ack for tick 10 with tick 8's state pulls a
+  perfect prediction back two steps (a new test in `prediction`). `PlayerState` carries the ack,
+  the position and the velocity in one message to that client. The two message enums were fixed,
+  so a game could not send a score or whose turn it was; and `gizmo::net` exposed only rollback,
+  `client_server` was configured out of every facade build. `kovala` plays on all three: two
+  clients reconcile ~300 times each in its headless test with a largest correction of exactly 0.
 - **Client-server messages have a wire format, and the two ends a send/receive pair.**
   `ClientMessage` / `ServerMessage` were serde types with no encoding: a game talking to a client
   had to depend on `renet` and a serializer itself, choose channel numbers and a byte format, and

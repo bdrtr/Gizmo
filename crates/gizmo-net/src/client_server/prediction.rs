@@ -220,4 +220,22 @@ mod tests {
         // 100 + 1 (tick u32::MAX) + 1 (tick 0) = 102.
         assert_eq!(corrected.position[0], 102.0);
     }
+
+    /// The ack and the state must come from the same server moment. Twenty inputs of one step
+    /// each; the server has processed up to tick 10, so its player is at 11. Reconciled against
+    /// that pair the prediction stands (20); against tick 10's ack with tick 8's position (9) — the
+    /// two halves arriving apart — it is pulled back two whole steps.
+    #[test]
+    fn an_ack_paired_with_another_ticks_state_corrects_a_perfect_prediction() {
+        let mut p = ClientPredictor::new();
+        for _ in 0..20 {
+            p.add_input(1.0, 0.0, false, 1.0);
+        }
+        let at = |x: f32| PredictedState { position: [x, 0.0, 0.0], velocity: [0.0; 3] };
+        let paired = p.clone().reconcile(10, at(11.0), step);
+        assert_eq!(paired.position[0], 20.0);
+        let apart = p.reconcile(10, at(9.0), step);
+        assert_eq!(apart.position[0], 18.0, "the mismatch is what PlayerState exists to prevent");
+    }
 }
+

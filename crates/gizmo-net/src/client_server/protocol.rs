@@ -94,6 +94,10 @@ pub fn tick_is_newer(candidate: u32, reference: u32) -> bool {
 pub enum ClientMessage {
     /// A single tick's player input.
     Input(PlayerInput),
+    /// The game's own message, in whatever bytes it chose. Both enums are fixed by this crate,
+    /// so until 2026-11-04 a game had no way to send anything they did not already name — a
+    /// score, whose turn it is, a chat line.
+    Custom(Vec<u8>),
 }
 
 /// Messages sent from the server to clients.
@@ -146,6 +150,27 @@ pub enum ServerMessage {
         /// very first input can leave the replay queue one ACK early.
         last_processed_input: u32,
     },
+    /// One client's own authoritative state **and** the input it reflects, in one message, sent
+    /// only to that client — what [`ClientPredictor::reconcile`](crate::client_server::prediction::ClientPredictor::reconcile)
+    /// needs, as one consistent pair.
+    ///
+    /// **Why it exists.** Reconciliation replays the inputs after `last_processed_input` on top
+    /// of the state *the server had after processing that input*. The protocol only offered the
+    /// two halves apart: [`InputAck`](Self::InputAck) (the reference server sends it reliably) and
+    /// [`WorldStateUpdate`](Self::WorldStateUpdate) (unreliably, and keyed by entity index, so a
+    /// client could not even find itself in it). Paired from different ticks, the replay starts
+    /// from the wrong base — measured in `prediction`'s tests: an ack for tick 10 paired with tick
+    /// 8's state corrects a perfect prediction by two whole steps.
+    PlayerState {
+        /// Tick of the newest input from this client the server has consumed.
+        last_processed_input: u32,
+        /// Where the server has the client's player after that input, world space.
+        position: [f32; 3],
+        /// Its velocity at the same moment.
+        velocity: [f32; 3],
+    },
+    /// The game's own message — see [`ClientMessage::Custom`].
+    Custom(Vec<u8>),
 }
 
 /// The wire configuration for [`ClientMessage`] and [`ServerMessage`]: bincode's `legacy()` —
@@ -324,7 +349,7 @@ mod tests {
     fn client_input_roundtrip() {
         let input = PlayerInput { tick: 42, move_x: 1.0, move_z: -0.5, jump: true, dt: 0.016 };
         let bytes = enc(&ClientMessage::Input(input));
-        let ClientMessage::Input(back) = dec(&bytes);
+        let ClientMessage::Input(back) = dec(&bytes) else { panic!("an Input came back as another message") };
         assert_eq!(back, input);
     }
 
