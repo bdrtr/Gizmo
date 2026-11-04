@@ -1262,6 +1262,13 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16z. The thirtieth game: a car on terrain (2026-11-04, `arazi`)
+
+`demo/src/bin/arazi.rs` is a checkpoint race over generated hills — `VehicleController` (wheel
+rays through the broadphase) on the heightfield collider `golf` brought in, the first time the two
+were driven together. `arazi --test` opens no window: two minutes of autopilot, all five
+checkpoints, the body's centre 0.66–1.50 m above the ground throughout. **No gap found.**
+
 ### C16y. The twenty-ninth game: an authoritative server (2026-11-04, `kovala`)
 
 `demo/src/bin/kovala.rs` is tag on the client-server netcode: the server moves everyone and

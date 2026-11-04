@@ -150,6 +150,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   calls; local-first fails it.
 - **`LoopbackTransport` is `Send + Sync`** (its queues were `Rc<RefCell<_>>`), so a session over it
   can be a `World` resource — a local two-player game over a simulated link.
+- **`arazi`, the thirtieth game** — a checkpoint race over generated hills: the vehicle model on
+  the heightfield terrain, the first time the two met. `arazi --test` lets an autopilot drive two
+  minutes headlessly — all five checkpoints, the body never closer than 0.66 m to the ground. It
+  found nothing missing.
 - **`Renderer::default_font()` and `gizmo::simple::set_text`** — the two helpers every game wrote.
   33 demos carry the same `load_font` (the system font, else the synthetic face) and 16 the same
   `set_text` (write a `Text`'s content only when it changed). Now one call each: `default_font`
