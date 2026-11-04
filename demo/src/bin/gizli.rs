@@ -30,7 +30,8 @@
 //! `raycast_excluding` (göz, muhafızın kendi çarpıştırıcısının içinde), `NavGrid` devriyesi.
 //!
 //! ## Ortam değişkenleri
-//!   * `GIZLI_OTO=1` — oyuncu yerinde durur (ekran görüntüsü için)
+//!   * `GIZLI_OTO=1` — oyuncu yerinde durur (ekran görüntüsü için; `gizli --test` pencere açmadan
+//!     hem saklanırken hem açıkta bekletir)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
 
 use gizmo::ai::{NavAgent, NavGrid};
@@ -43,7 +44,7 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{MeshData, Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
 use gizmo::renderer::Vertex;
-use gizmo::simple::{sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
 
 /// `#` duvar, `.` zemin, `S` başlangıç, `E` çıkış, `D` belge, `a`…`d` devriye noktaları.
 const MAP: [&str; 13] = [
@@ -66,6 +67,9 @@ const PATROLS: [&[char]; 2] = [&['a', 'c', 'd', 'c'], &['b', 'd']];
 const SIGHT: f32 = 7.0;
 const HALF_ANGLE: f32 = 0.6;
 const RAYS: usize = 24;
+/// `--test`'in saklandığı kare: `c`–`d` devriyesindeki muhafızın konisine giriyor, gözünden ise
+/// (4, 8)'deki duvarla ayrılıyor (her zemin karesinde 30 s beklenerek seçildi).
+const HIDE: (usize, usize) = (3, 8);
 
 #[derive(Clone, Copy)]
 struct Guard {
@@ -89,108 +93,161 @@ struct Game {
     banner: u32,
     over: Option<bool>,
     auto: bool,
+    /// Oyuncunun bir muhafızın konisinde ve menzilinde olup araya duvar girdiği kareler (sınama).
+    walled_off: u32,
 }
 
 fn cell(x: usize, z: usize) -> Vec3 {
     Vec3::new(x as f32 + 0.5, 0.0, z as f32 + 0.5)
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+fn setup(world: &mut World, font: FontId) -> Game {
+
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-1.1)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(0.8, 0.85, 1.0), 1.6, LightRole::Sun),
+    ));
+    let (w, h) = (MAP[0].len() as f32, MAP.len() as f32);
+    let camera = world
+        .spawn_bundle(CameraBundle {
+            position: Vec3::new(w * 0.5, 17.0, h * 0.5 + 6.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: -1.2,
+            primary: true,
+            ..Default::default()
+        })
+        .id();
+    // Zemin ve duvarlar; ızgara muhafızların yol bulması için.
+    world.spawn_bundle((
+        Transform::new(Vec3::new(w * 0.5, -0.1, h * 0.5)),
+        RigidBody::new_static(),
+        Velocity::default(),
+        Collider::box_collider(Vec3::new(w * 0.5, 0.1, h * 0.5)),
+    ));
+    world.spawn_bundle((
+        Transform::new(Vec3::new(w * 0.5, -0.1, h * 0.5)).with_scale(Vec3::new(w * 0.5, 0.1, h * 0.5)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_pbr(Color::srgb_hex("#3A3F47").to_vec4(), 0.9, 0.0),
+        MeshRenderer::new(),
+    ));
+    let mut grid = NavGrid::new(1.0, w as i32, h as i32);
+    grid.needs_rebuild = false;
+    let (mut start, mut exit, mut document) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
+    let mut points = Vec::new();
+    for (z, row) in MAP.iter().enumerate() {
+        for (x, c) in row.chars().enumerate() {
+            let at = cell(x, z);
+            match c {
+                '#' => {
+                    grid.add_obstacle_world(at);
+                    world.spawn_bundle((
+                        Transform::new(at + Vec3::Y * 0.6).with_scale(Vec3::new(0.5, 0.6, 0.5)),
+                        GlobalTransform::default(),
+                        MeshSource("standard_cube".into()),
+                        MaterialDesc::new().with_pbr(Color::srgb_hex("#6B6E73").to_vec4(), 0.9, 0.0),
+                        MeshRenderer::new(),
+                        RigidBody::new_static(),
+                        Velocity::default(),
+                        Collider::box_collider(Vec3::new(0.5, 0.6, 0.5)),
+                    ));
+                }
+                'S' => start = at,
+                'E' => exit = at,
+                'D' => document = at,
+                'a'..='d' => points.push((c, at)),
+                _ => {}
+            }
+        }
+    }
+    world.insert_resource(grid);
+    // Çıkış: yeşil bir kare.
+    world.spawn_bundle((
+        Transform::new(exit + Vec3::Y * 0.02).with_scale(Vec3::new(0.45, 0.02, 0.45)),
+        GlobalTransform::default(),
+        MeshSource("standard_cube".into()),
+        MaterialDesc::new().with_unlit(Color::srgb_hex("#3CB371").to_vec4()),
+        MeshRenderer::new(),
+    ));
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+    let mut game = Game {
+        physics: FixedPhysics::new(60),
+        player: 0,
+        start,
+        exit,
+        document,
+        has_document: false,
+        suspicion: 0.0,
+        points,
+        camera,
+        hud,
+        banner,
+        over: None,
+        auto: std::env::var_os("GIZLI_OTO").is_some(),
+        walled_off: 0,
+    };
+    restart(world, &mut game);
+    game
+}
+
+/// Oyuncu `at` karesinde (ya da başlangıçta) kıpırdamadan durur; yakalanana ya da `limit` saniye
+/// dolana dek. Yakalandıysa ne zaman, ve kaç karede konide olup duvarın ardında kaldığı.
+fn stand_still(at: Option<(usize, usize)>, limit: f32) -> (Option<f32>, u32) {
+    let mut world = World::new();
+    let mut game = setup(&mut world, HeadlessFrames::font());
+    game.auto = true;
+    if let Some((x, z)) = at {
+        let p = cell(x, z);
+        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.player) {
+            t.position = Vec3::new(p.x, t.position.y, p.z);
+        }
+    }
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world);
+    while run.elapsed < limit {
+        run.frame(1.0 / 60.0, update);
+        let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
+        if game.over == Some(false) {
+            return (Some(run.elapsed), game.walled_off);
+        }
+    }
+    (None, run.world.get_resource::<Game>().map_or(0, |g| g.walled_off))
+}
+
+/// `--test`: pencere açmadan iki bekleyiş. Devriyenin geçtiği `c` noktasında duran oyuncu
+/// görülüp yakalanmalı; bir duvarın ardında, muhafızın konisine giren ama gözünden duvarla
+/// ayrılan bir karede duran bir dakika boyunca hiç yakalanmamalı.
+fn self_test() -> bool {
+    let open = MAP.iter().enumerate().find_map(|(z, r)| r.find('c').map(|x| (x, z)));
+    let (open_caught, _) = stand_still(open, 60.0);
+    let (hidden_caught, hidden_walled) = stand_still(Some(HIDE), 60.0);
+    let ok = open_caught.is_some() && hidden_caught.is_none() && hidden_walled > 0;
+    println!(
+        "gizli --test: açıkta (c) {}; duvarın ardında {:?} {}, {hidden_walled} karede konideydi ama duvar kesti → {}",
+        open_caught.map_or("YAKALANMADI".to_string(), |t| format!("{t:.1} s'de yakalandı")),
+        HIDE,
+        hidden_caught.map_or("60 s yakalanmadı".to_string(), |t| format!("{t:.1} s'de YAKALANDI")),
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Gizli", 1280, 720)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-            scene.world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-1.1)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(0.8, 0.85, 1.0), 1.6, LightRole::Sun),
-            ));
-            let (w, h) = (MAP[0].len() as f32, MAP.len() as f32);
-            let camera = scene
-                .world
-                .spawn_bundle(CameraBundle {
-                    position: Vec3::new(w * 0.5, 17.0, h * 0.5 + 6.0),
-                    yaw: -std::f32::consts::FRAC_PI_2,
-                    pitch: -1.2,
-                    primary: true,
-                    ..Default::default()
-                })
-                .id();
-            // Zemin ve duvarlar; ızgara muhafızların yol bulması için.
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(w * 0.5, -0.1, h * 0.5)),
-                RigidBody::new_static(),
-                Velocity::default(),
-                Collider::box_collider(Vec3::new(w * 0.5, 0.1, h * 0.5)),
-            ));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(w * 0.5, -0.1, h * 0.5)).with_scale(Vec3::new(w * 0.5, 0.1, h * 0.5)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(Color::srgb_hex("#3A3F47").to_vec4(), 0.9, 0.0),
-                MeshRenderer::new(),
-            ));
-            let mut grid = NavGrid::new(1.0, w as i32, h as i32);
-            grid.needs_rebuild = false;
-            let (mut start, mut exit, mut document) = (Vec3::ZERO, Vec3::ZERO, Vec3::ZERO);
-            let mut points = Vec::new();
-            for (z, row) in MAP.iter().enumerate() {
-                for (x, c) in row.chars().enumerate() {
-                    let at = cell(x, z);
-                    match c {
-                        '#' => {
-                            grid.add_obstacle_world(at);
-                            scene.world.spawn_bundle((
-                                Transform::new(at + Vec3::Y * 0.6).with_scale(Vec3::new(0.5, 0.6, 0.5)),
-                                GlobalTransform::default(),
-                                MeshSource("standard_cube".into()),
-                                MaterialDesc::new().with_pbr(Color::srgb_hex("#6B6E73").to_vec4(), 0.9, 0.0),
-                                MeshRenderer::new(),
-                                RigidBody::new_static(),
-                                Velocity::default(),
-                                Collider::box_collider(Vec3::new(0.5, 0.6, 0.5)),
-                            ));
-                        }
-                        'S' => start = at,
-                        'E' => exit = at,
-                        'D' => document = at,
-                        'a'..='d' => points.push((c, at)),
-                        _ => {}
-                    }
-                }
-            }
-            scene.world.insert_resource(grid);
-            // Çıkış: yeşil bir kare.
-            scene.world.spawn_bundle((
-                Transform::new(exit + Vec3::Y * 0.02).with_scale(Vec3::new(0.45, 0.02, 0.45)),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_unlit(Color::srgb_hex("#3CB371").to_vec4()),
-                MeshRenderer::new(),
-            ));
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-            let mut game = Game {
-                physics: FixedPhysics::new(60),
-                player: 0,
-                start,
-                exit,
-                document,
-                has_document: false,
-                suspicion: 0.0,
-                points,
-                camera,
-                hud,
-                banner,
-                over: None,
-                auto: std::env::var_os("GIZLI_OTO").is_some(),
-            };
-            restart(scene.world, &mut game);
+            let game = setup(scene.world, font);
             scene.world.insert_resource(game);
         })
         .replace_update(update)
@@ -367,6 +424,8 @@ fn sight(world: &mut World, game: &mut Game, dt: f32) {
                 .is_some();
             if !blocked {
                 seen = true;
+            } else {
+                game.walled_off += 1;
             }
         }
     }
