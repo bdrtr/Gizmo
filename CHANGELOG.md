@@ -172,7 +172,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   sight can skip is dropped, the line checked along itself and 0.3 cell to each side so the agent
   keeps room from walls — and `NavAgent` routes come from it. `find_path` is unchanged. Measured
   in a game: `karinca`'s colony carries 1198 pieces in 40 s, up from 748. Tested on an open grid
-  and round a wall (the straightened route never crosses a blocked cell).
+  and round a wall (the straightened route never crosses a blocked cell). The straightening first drops
+  the waypoints in the middle of straight runs, so its line-of-sight scan sees only corners:
+  measured on 1000 routes of a cluttered 100 × 100 grid, its cost per route fell from ~33 µs to
+  ~9 µs (1000 agents' first frame 13.4 → 10.5 ms).
 - **Client-server reconciliation has the pair it needs (`ServerMessage::PlayerState`), a game can
   send its own data (`ClientMessage::Custom` / `ServerMessage::Custom`), and the facade reaches
   this half at all (feature `network-client-server`).** Reconciling replays the inputs after the
