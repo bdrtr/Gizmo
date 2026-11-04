@@ -157,6 +157,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a hole) now, and `gizmo::systems::cloth_mesh_system` — called by both draw paths — writes both
   faces of it as the entity's `MeshData` every frame, adding a renderer and a white material the
   first time. Tested in the soft crate and the facade; drawing torn cells fails both.
+- **`makas`, the twenty-seventh game** — cut a marked region out of a hanging curtain with the
+  mouse; `makas --test` cuts an octagon around it headlessly and checks it fell and the rest
+  still hangs. It found the item above.
 - **`karinca`, the twenty-sixth game** — an ant colony of 600 `NavAgent`s; walls the player drops
   re-route the whole colony on one frame. `karinca --test` runs 40 s headless. It found the two
   AI items below.

@@ -1262,6 +1262,20 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16w. The twenty-seventh game: cloth (2026-11-04, `makas`)
+
+`demo/src/bin/makas.rs` hangs a curtain — a `Cloth` component, swung by the engine's physics step
+— with a red region to cut out by dragging the mouse; cuts remove the links the blade crosses, and
+whatever is no longer connected to the rod falls. `makas --test` opens no window: an octagonal cut
+around the red region, three seconds — all of it detached and 1.5 m down, 95 % of the rest still
+hanging. One gap, closed:
+
+- ~~**A `Cloth` in the world was never drawn**~~ — no draw path knew the type, and the cloth kept
+  no grid width. `surface_triangles` + `cloth_mesh_system` in both draw paths.
+
+Still open, and the reason this is a cutting game rather than a net or a trampoline: cloth is
+**one-way** — it drapes over rigid bodies and pushes nothing back.
+
 ### C16v. The twenty-sixth game: a crowd (2026-11-04, `karinca`)
 
 `demo/src/bin/karinca.rs` is an ant colony: 600 `NavAgent`s walk between a nest and food piles;
