@@ -367,8 +367,6 @@ jobs:
     name: Android (aarch64-linux-android APK)
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    env:
-      JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -378,6 +376,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-apk
         run: cargo install cargo-apk --locked
+      # The runner's JDK 17, by the variable the image sets (a job-level `env:` cannot read it:
+      # the `env` context is not available there, and the workflow file is then rejected whole).
       - name: Build the APK
         run: |
           export JAVA_HOME="$JAVA_HOME_17_X64"
