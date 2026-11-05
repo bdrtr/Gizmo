@@ -34,7 +34,8 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     "bundled-font",
 ] }
 log = "0.4"
-# The games written once for the desktop demos and the browser (`games/`): `?oyun=pinbol` runs one.
+# The games written once for the desktop demos and the browser (`games/`): `?oyun=pinbol` or
+# `?oyun=nisanci` runs one.
 games = { path = "../games" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]

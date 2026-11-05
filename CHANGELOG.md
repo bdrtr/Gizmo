@@ -151,6 +151,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`nisanci` in the browser.** `demo-web/?oyun=nisanci` runs the twin-stick arena shooter, the same
+  game the desktop binary runs: it moved to `games/` (`games::nisanci::app()`, `self_test()`), as
+  `pinbol` did, and `demo/src/bin/nisanci.rs` is now three lines that host it. Its font is
+  `Renderer::default_font` (the bundled Noto Sans in the browser) rather than a loader of its own,
+  and `games` turns on `audio` for its synthesised shots.
 - **Soft bodies you can drop, stand and stack (`SoftBodyMesh`).** Measured on a 1 m, 10 kg block
   (E = 20 000 Pa) before this: dropped 1.5 m onto the floor it **exploded** inside a second (one
   explicit 1/60 s step is far past what such a material is stable for — E = 1000 did too); resting

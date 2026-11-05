@@ -1274,7 +1274,8 @@ rises. What getting there found:
   touch buttons were 640 × 0. `stretched_root` sizes it between its insets.
 - **A game could not run in the browser without moving house.** `demo-web` is a library and
   cannot reach a binary in `demo/`; a game that is to run in both lives in `games/` now, with an
-  `app()` both hosts call. Only `pinbol` has moved.
+  `app()` both hosts call. `pinbol` moved first; `nisanci` followed on the same day
+  (`?oyun=nisanci`, two touch sticks).
 - ~~**A touch control made on the first touch missed that touch.**~~ **Closed 2026-11-05.** A
   `VirtualStick`/`VirtualButton` claimed only a finger landing on it, and one made in answer to a
   touch has no box until layout runs, so `nisanci`'s sticks never got the first touch. On its first

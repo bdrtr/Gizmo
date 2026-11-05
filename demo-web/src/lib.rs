@@ -19,6 +19,8 @@
 //!
 //! `?oyun=pinbol` ile sayfa demo sahnesi yerine pinbol'ü açar (`games::pinbol`, masaüstündeki
 //! oyunun aynısı; telefonda ekranın sol ve sağ yarısı paletler).
+//! `?oyun=nisanci` ikiz çubuklu arena nişancısını açar (`games::nisanci`; telefonda sol alt köşe
+//! yürür, sağ alt köşe nişan alıp ateş eder).
 
 #[cfg(target_arch = "wasm32")]
 mod web {
@@ -28,14 +30,19 @@ mod web {
     use wasm_bindgen::prelude::*;
 
     /// The page's `?oyun=` picks what runs: `pinbol` is the pinball game (`games::pinbol`, the same
-    /// one the desktop binary runs, with touch flippers); anything else, or nothing, is the demo
-    /// scene below.
+    /// one the desktop binary runs, with touch flippers), `nisanci` the twin-stick arena shooter
+    /// (`games::nisanci`, a touch stick in each bottom corner); anything else, or nothing, is the
+    /// demo scene below.
     #[wasm_bindgen(start)]
     pub fn start() {
         let query = web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default();
         let wants = |name: &str| query.trim_start_matches('?').split('&').any(|kv| kv == format!("oyun={name}"));
         if wants("pinbol") {
             games::pinbol::app().run().expect("pinbol başlatılamadı");
+            return;
+        }
+        if wants("nisanci") {
+            games::nisanci::app().run().expect("nisanci başlatılamadı");
             return;
         }
         demo_scene();

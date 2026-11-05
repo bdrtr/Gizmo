@@ -17,4 +17,6 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     "physics",
     "physics-dynamics",
     "ui",
+    # nisanci's shots and hits are synthesised blips; the browser build has audio too.
+    "audio",
 ] }

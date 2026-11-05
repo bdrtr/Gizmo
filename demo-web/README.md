@@ -13,6 +13,11 @@ ground disk so the live simulation loop is visible.
 flippers: on a phone the left and right halves of the screen are the two
 flippers, and a tap also launches the ball and restarts a finished game.
 
+`?oyun=nisanci` opens the twin-stick arena shooter —
+**https://bdrtr.github.io/Gizmo/?oyun=nisanci** (`games/src/nisanci.rs`, the
+desktop `nisanci` binary's game). On a phone the first touch puts a stick in each
+bottom corner: the left one walks, the right one aims and fires while held.
+
 The browser has no system fonts to borrow, so this crate turns on the engine's
 `bundled-font` feature: Noto Sans Regular (SIL Open Font License 1.1, see
 `crates/gizmo-renderer/assets/fonts/OFL.txt`) is built in, and text — Turkish

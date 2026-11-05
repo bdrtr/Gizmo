@@ -5,4 +5,5 @@
 //! A game lives here rather than in `demo/src/bin/` once it has to run in the browser too:
 //! `demo-web` is a library crate and cannot reach into another crate's binaries.
 
+pub mod nisanci;
 pub mod pinbol;
