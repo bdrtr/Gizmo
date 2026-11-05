@@ -284,8 +284,15 @@ fn q1_warm_start_at_factor_one() {
 /// **Honesty about f = 1.0.** The author reports that at 200 Hz factor 1.0 survives but does not
 /// go quiet — a slowly growing limit cycle. This is where that shows up, and it is the reason
 /// the shipped default for the knob is 0.0.
+///
+/// **The cross-check no longer holds (found 2026-11-05).** The 200 kg legacy chain ends at
+/// 7.1003 m / max|v| 20.3350, not 4.010 / 13.99 — identically at `v0.11.0` and at today's `main`,
+/// so it moved before that release and nothing since has moved it. The figure is the end of a
+/// chaotic trajectory on the deliberately unstable legacy path: any bit-level change to the joint
+/// pass moves it, and this test is ignored, so nobody saw when. The soft-path assertions above it
+/// still pass. Which commit moved it has not been bisected.
 #[test]
-#[ignore = "measurement; run explicitly with --ignored"]
+#[ignore = "measurement; run explicitly with --ignored (its cross-check has not matched since before v0.11.0 — see above)"]
 fn q1b_warm_start_at_the_acceptance_horizon() {
     println!("\nQ1b  same chain, {LONG_FRAMES} frames @ 1/60 = 4000 substeps");
     println!("           legacy Baumgarte (hz = 0)              soft rows (hz = 200)");
