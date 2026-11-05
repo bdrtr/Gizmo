@@ -167,6 +167,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   meet, the shoulders clear the torso and the legs clear the hands; `spawn_ragdoll` warns about a
   bone authored off its joint. `tests/ragdoll_spawn.rs`.
 
+### Changed
+
+- **The forward shader uses the environment presets: transparent surfaces, the editor viewport and every
+  browser and Android game look different.** The presets lived in the deferred shader alone, and
+  `shader.wgsl` lit everything with a fixed warm hemisphere, so one red cube with no sun read red 182
+  forward and 104 deferred. Both now share `preset_environment` and the environment BRDF, and come out
+  at most 6.2 of 255 apart under every preset, fog off. Under the default preset, forward surfaces with
+  little direct light get noticeably darker and lose the warm cast. `Renderer::sky` and `Renderer::fog`
+  work as before; height fog still does not reach forward surfaces.
+
 ### Added
 
 - **Text shaping and bidi.** Arabic letters join, Devanagari vowels reorder and conjuncts form,
@@ -180,10 +190,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`Material::with_forward`: a PBR material can choose the forward pass.** How a surface is shaded and
   which path draws it were one setting, so drawing PBR forward was impossible. The material type no
   longer changes: the object skips the z-prepass and the G-buffer, stays lit, casts and receives
-  shadows, and shares depth with deferred neighbours. It gives up SSAO, SSR, SSGI, decals, velocity,
-  anisotropy, clear coat, subsurface and irradiance volumes. Set `Renderer::sky` to match the ambient:
-  under the default presets a red cube with no sun reads 182 forward and 104 deferred, with a sky set
-  every channel is within 17 of 255. `MaterialDesc` carries it, older scenes read as deferred, and the
+  shadows, and shares depth with deferred neighbours. It gives up SSAO, SSR, SSGI, decals, height fog,
+  velocity, anisotropy, clear coat, subsurface and irradiance volumes. `MaterialDesc` carries it, older scenes read as deferred, and the
   inspector has a checkbox. Desktop only in effect: the browser, Android and the editor viewport draw
   everything forward already.
 

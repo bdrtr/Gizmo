@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, sky_gradient}
+#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -75,114 +75,13 @@ fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
     return 1.0 - smoothstep(far - band, far, view_depth);
 }
 
-fn get_single_preset_environment(preset: u32, dir: vec3<f32>, roughness: f32, sun_dot: f32, zenith: f32, horizon_blend: f32) -> vec3<f32> {
-    // Preset 0: Sunset Gold
-    if (preset == 0u) {
-        let sky_color = mix(vec3<f32>(0.05, 0.02, 0.08), vec3<f32>(0.1, 0.05, 0.15), max(zenith, 0.0));
-        let horizon_color = vec3<f32>(0.9, 0.35, 0.1);
-        let base_sky = mix(horizon_color, sky_color, pow(max(zenith, 0.0), 0.5));
-        
-        let sun_power = mix(4096.0, 16.0, roughness);
-        let sun_glow = pow(sun_dot, sun_power) * vec3<f32>(20.0, 12.0, 3.0) * mix(1.0, 0.1, roughness);
-        
-        let rim_dir = normalize(vec3<f32>(-0.8, 0.3, -0.5));
-        let rim_dot = max(dot(dir, rim_dir), 0.0);
-        let rim_glow = pow(rim_dot, mix(256.0, 8.0, roughness)) * vec3<f32>(0.2, 0.3, 0.6) * mix(1.0, 0.15, roughness);
-        
-        let ground_color = vec3<f32>(0.12, 0.05, 0.03);
-        
-        let sky_val = base_sky * 0.5 + sun_glow * 0.4 + rim_glow;
-        let ground_val = mix(ground_color, horizon_color * 0.3, pow(1.0 + clamp(zenith, -1.0, 0.0), 4.0)) + sun_glow * 0.1;
-        return mix(ground_val, sky_val, horizon_blend);
-    }
-    
-    // Preset 1: Studio Neutral
-    if (preset == 1u) {
-        let sky_color = vec3<f32>(0.1, 0.12, 0.15);
-        let horizon_color = vec3<f32>(0.4, 0.42, 0.45);
-        let base_sky = mix(horizon_color, sky_color, max(zenith, 0.0));
-        
-        let key_dir = normalize(vec3<f32>(0.6, 0.8, 0.5));
-        let key_dot = max(dot(dir, key_dir), 0.0);
-        let key_glow = pow(key_dot, mix(1024.0, 12.0, roughness)) * vec3<f32>(6.0, 5.8, 5.5) * mix(1.0, 0.2, roughness);
-        
-        let fill_dir = normalize(vec3<f32>(-0.8, 0.2, -0.6));
-        let fill_dot = max(dot(dir, fill_dir), 0.0);
-        let fill_glow = pow(fill_dot, mix(512.0, 8.0, roughness)) * vec3<f32>(1.5, 1.8, 2.5) * mix(1.0, 0.15, roughness);
-        
-        let rim_dir = normalize(vec3<f32>(0.0, 0.1, -1.0));
-        let rim_dot = max(dot(dir, rim_dir), 0.0);
-        let rim_glow = pow(rim_dot, mix(2048.0, 16.0, roughness)) * vec3<f32>(3.0, 2.5, 1.8) * mix(1.0, 0.2, roughness);
-        
-        let ground_color = vec3<f32>(0.03, 0.03, 0.035);
-        
-        let sky_val = base_sky * 0.3 + key_glow * 0.4 + fill_glow * 0.2 + rim_glow * 0.3;
-        let ground_val = mix(ground_color, horizon_color * 0.15, pow(1.0 + clamp(zenith, -1.0, 0.0), 4.0)) + key_glow * 0.1;
-        return mix(ground_val, sky_val, horizon_blend);
-    }
-    
-    // Preset 2: Midnight Neon
-    if (preset == 2u) {
-        let sky_color = vec3<f32>(0.005, 0.005, 0.02);
-        let horizon_color = vec3<f32>(0.01, 0.01, 0.03);
-        let base_sky = mix(horizon_color, sky_color, max(zenith, 0.0));
-        
-        let neon1_dir = normalize(vec3<f32>(0.7, 0.2, 0.5));
-        let neon1_dot = max(dot(dir, neon1_dir), 0.0);
-        let neon1_glow = pow(neon1_dot, mix(2048.0, 8.0, roughness)) * vec3<f32>(18.0, 0.0, 12.0) * mix(1.0, 0.15, roughness);
-        
-        let neon2_dir = normalize(vec3<f32>(-0.7, 0.3, -0.5));
-        let neon2_dot = max(dot(dir, neon2_dir), 0.0);
-        let neon2_glow = pow(neon2_dot, mix(1024.0, 6.0, roughness)) * vec3<f32>(0.0, 14.0, 18.0) * mix(1.0, 0.12, roughness);
-        
-        let top_dir = vec3<f32>(0.0, 1.0, 0.0);
-        let top_glow = pow(max(dot(dir, top_dir), 0.0), 3.0) * vec3<f32>(0.4, 0.0, 0.8);
-        
-        let ground_color = vec3<f32>(0.005, 0.005, 0.008);
-        
-        let sky_val = base_sky * 0.2 + neon1_glow + neon2_glow + top_glow * 0.15;
-        let ground_val = mix(ground_color, horizon_color * 0.2, pow(1.0 + clamp(zenith, -1.0, 0.0), 4.0)) + (neon1_glow + neon2_glow) * 0.05;
-        return mix(ground_val, sky_val, horizon_blend);
-    }
-    
-    // Default Preset 3: Classic Daylight
-    let sky_color = mix(vec3<f32>(0.5, 0.65, 1.0), vec3<f32>(0.05, 0.2, 0.6), max(zenith, 0.0));
-    let base_sky = sky_color;
-    
-    let sun_power = mix(2048.0, 16.0, roughness);
-    let sun_glow = pow(sun_dot, sun_power) * vec3<f32>(15.0, 12.0, 8.0) * mix(1.0, 0.2, roughness);
-    
-    let sun_dir = normalize(-scene.sun_direction.xyz);
-    let horizon_glow = pow(1.0 - max(zenith, 0.0), 4.0) * vec3<f32>(1.0, 0.6, 0.3) * max(dot(dir, sun_dir) * 0.5 + 0.5, 0.0);
-    
-    let ground_color = vec3<f32>(0.05, 0.05, 0.05);
-    
-    let sky_val = base_sky * 0.8 + sun_glow * 0.05 + horizon_glow;
-    let ground_val = mix(ground_color, horizon_glow * 0.2, pow(1.0 + clamp(zenith, -1.0, 0.0), 4.0)) + sun_glow * 0.1;
-    return mix(ground_val, sky_val, horizon_blend);
-}
-
-// Procedural HDR Environment Presets with interpolation and smooth blending
+// What lights and is reflected by a surface: `Renderer::sky` when one is set (intensity ≥ 0; < 0 = no
+// override), otherwise the presets. Same in `shader.wgsl`; the `scene` binding keeps it out of common.
 fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
-    // `Renderer::sky` replaces the presets outright (intensity ≥ 0; < 0 = no override).
     if (scene.sky_zenith.a >= 0.0) {
         return sky_gradient(dir, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, roughness) * scene.sky_zenith.a;
     }
-    let zenith = dir.y;
-    let sun_dir = normalize(-scene.sun_direction.xyz);
-    let sun_dot = max(dot(dir, sun_dir), 0.0);
-    
-    // Smooth transition factor at the horizon (zenith = 0.0)
-    let horizon_blend = smoothstep(0.0, 1.0, clamp(zenith * 10.0 + 0.5, 0.0, 1.0));
-    
-    let color1 = get_single_preset_environment(scene.environment_preset, dir, roughness, sun_dot, zenith, horizon_blend);
-    
-    if (scene.environment_blend_t > 0.001) {
-        let color2 = get_single_preset_environment(scene.environment_preset_b, dir, roughness, sun_dot, zenith, horizon_blend);
-        return mix(color1, color2, scene.environment_blend_t);
-    }
-    
-    return color1;
+    return preset_environment(dir, roughness, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz));
 }
 
 // The anisotropic GGX, clear-coat and env-BRDF lobes now live in gizmo::pbr_ext (imported at

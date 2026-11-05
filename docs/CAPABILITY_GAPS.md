@@ -208,12 +208,18 @@ depth with deferred neighbours. It only matters on the desktop path: the browser
 everything forward already, and so does the editor viewport, which is why the field is game-only in
 `render_parity`.
 
-The shading is close, not equal. Forward has no SSAO, SSR, SSGI, decals or velocity, and does not
-read anisotropy, clear coat, subsurface or irradiance volumes. Its ambient only matches under
-`Renderer::sky`, since the environment presets live in the deferred shader alone: a red cube with no
-sun reads red 182 forward and 104 deferred under the default preset, and with a sky set every channel
-is within 17 of 255, sun or no sun. Bringing the presets to `shader.wgsl` would change the look of
-every transparent surface and of every browser and Android game, so it was left as its own decision.
+The shading is close, not equal. Forward has no SSAO, SSR, SSGI, decals, height fog or velocity, and
+does not read anisotropy, clear coat, subsurface or irradiance volumes.
+
+**The environment presets moved to the forward shader, 2026-11-06 (decided and applied).** They lived
+in the deferred shader alone, so `shader.wgsl` lit everything with a fixed warm hemisphere: a red cube
+with no sun read red 182 forward and 104 deferred. Both shaders now call `preset_environment` in
+`common.wgsl` and use the same environment BRDF, and on one red cube with fog off, under all four
+presets and a set sky, with and without a sun, metal included, they are at most 6.2 of 255 apart. This **changed the
+look** of every transparent surface, of the editor viewport, and of every browser and Android game,
+all of which are drawn by that shader. Height fog was not moved: forward surfaces still stand outside
+it, `Renderer::fog` included, because an additive or multiplied draw cannot simply be mixed towards a
+colour in a shader that does not know its blend mode.
 
 Still open: a custom material cannot be drawn deferred.
 
@@ -301,7 +307,7 @@ materials — read neither the probes nor even the procedural sky: its specular 
 hemispheric stand-in. It now reads the probes through the same `probe_environment`, now a shared
 shader module (`gizmo::reflection_probes`, at `#{REFLECTION_GROUP}`), with the irradiance volume's
 group bound at 5 — the native device's sixth, which nothing used. With no probe it still returns the
-stand-in, unchanged. Measured: a half-transparent metal cube's magenta excess 0.38 → 4.80 with a
+stand-in, unchanged (since 2026-11-06 the presets instead, see A3). Measured then: a half-transparent metal cube's magenta excess 0.38 → 4.80 with a
 probe, 0.39 with the forward shader ignoring it. Native only: the web's four groups are all spent.
 
 **The studio captures too, same day.** `gizmo-studio` calls the game path's

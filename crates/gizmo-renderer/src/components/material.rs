@@ -430,13 +430,12 @@ macro_rules! material_builders {
     ///
     /// It gives up whatever reads the G-buffer or lives in the deferred lighting shader: SSAO, SSR
     /// and SSGI do not see it, decals do not land on it, TAA and motion blur get no velocity for
-    /// it, and anisotropy, clear coat, subsurface and irradiance volumes are not read. Its shadows
-    /// are filtered with fixed PCF, not PCSS.
+    /// it, height fog does not cover it, and anisotropy, clear coat, subsurface and irradiance
+    /// volumes are not read. Its shadows are filtered with fixed PCF, not PCSS.
     ///
-    /// Ambient light needs [`Renderer::sky`](crate::Renderer::sky) to match. The environment
-    /// presets exist only in the deferred shader, so under them a forward surface gets a fixed
-    /// hemisphere instead. Measured on one red cube with no sun, out of 255: red 182 forward, 104
-    /// deferred. With a sky set, every channel is within 17, with or without a sun.
+    /// The environment light is the same on both paths. Measured on one red cube with fog off,
+    /// under all four presets and a set sky, with and without a sun, metal too: at most 6.2 of 255
+    /// apart.
     #[must_use]
     pub fn with_forward(mut self, forward: bool) -> Self {
         self.is_forward = forward;

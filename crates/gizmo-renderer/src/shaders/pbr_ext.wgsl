@@ -1,6 +1,7 @@
 #define_import_path gizmo::pbr_ext
 
-// Deferred-specific PBR extensions beyond the core Lambert + isotropic GGX in gizmo::common:
+// PBR extensions beyond the core Lambert + isotropic GGX in gizmo::common. The forward shader takes
+// the environment BRDF from here too, and the rest is deferred-only:
 // the Lazarov analytical split-sum environment BRDF, anisotropic GGX (tangent/bitangent
 // stretched highlight), and a clear-coat lacquer lobe. Pure per the common.wgsl convention —
 // no reference to a module-scope binding (`scene`, textures); everything arrives as params.

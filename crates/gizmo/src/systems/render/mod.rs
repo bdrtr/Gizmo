@@ -5371,8 +5371,8 @@ mod golden_render_tests {
 
     /// **Transparent surfaces reflect the probes too.** A half-transparent metal cube — drawn by the
     /// forward pass, not the deferred one — in the probe room, facing the magenta wall behind the
-    /// camera. With a probe its face gains magenta; without one, the forward pass's hemispheric
-    /// stand-in gives none of it.
+    /// camera. With a probe its face gains magenta; without one, the environment presets give none
+    /// of it.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn a_transparent_surface_reflects_the_probe_room() {
@@ -6665,8 +6665,23 @@ mod golden_render_tests {
         sun: f32,
         moves: f32,
     ) -> Vec<u8> {
+        forward_metal_frame(renderer, forward, cube_z, sun, moves, 0.0).await
+    }
+
+    /// [`forward_cube_frame`], with the cube in the middle as metallic as asked.
+    async fn forward_metal_frame(
+        renderer: &mut Renderer,
+        forward: bool,
+        cube_z: f32,
+        sun: f32,
+        moves: f32,
+        metallic: f32,
+    ) -> Vec<u8> {
         renderer.taa = None;
         renderer.ssgi = None;
+        renderer.ssr = None;
+        renderer.ssao = None;
+        renderer.volumetric = None;
         let mut world = World::new();
         let mut assets = AssetManager::new();
         let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
@@ -6680,7 +6695,7 @@ mod golden_render_tests {
         world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, cube_z)));
         world.add_component(cube, GlobalTransform::default());
         world.add_component(cube, AssetManager::create_cube(&renderer.device));
-        world.add_component(cube, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.1, 0.05, 1.0), 0.6, 0.0).with_forward(forward));
+        world.add_component(cube, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.1, 0.05, 1.0), 0.6, metallic).with_forward(forward));
         world.add_component(cube, MeshRenderer::new());
         let side = world.spawn();
         world.add_component(side, Transform::new(Vec3::new(-2.6, 0.0, 0.0)).with_scale(Vec3::splat(0.3)));
@@ -6775,16 +6790,22 @@ mod golden_render_tests {
             let (lit, unlit) = (centre_mean(&forward, format, 0), centre_mean(&dark, format, 0));
             assert!(lit > unlit + 20.0, "the sun should light a forward cube: {lit} with, {unlit} without");
 
-            // Under `Renderer::sky` both paths take their ambient from the same gradient, which they
-            // do not under the default presets (those live in the deferred shader alone).
-            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::gradient([0.5, 0.6, 0.8], [0.4, 0.4, 0.4], [0.1, 0.1, 0.1]));
-            for sun in [0.0, 3.0] {
-                let f = forward_cube_frame(&mut renderer, true, 0.0, sun, 0.0).await;
-                let d = forward_cube_frame(&mut renderer, false, 0.0, sun, 0.0).await;
-                // Measured: at most 16.1 apart. What is left is the deferred shader's specular.
-                for channel in 0..3 {
-                    let (f, d) = (centre_mean(&f, format, channel), centre_mean(&d, format, channel));
-                    assert!((f - d).abs() < 20.0, "sun {sun}, channel {channel}: forward {f}, deferred {d}");
+            // Every environment, on both paths, with and without a sun: the two shaders share the
+            // presets, and the same red cube has to come out the same on either. Fog is off because
+            // only the deferred shader draws it.
+            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            let sky = gizmo_renderer::frame_uniforms::Sky::gradient([0.5, 0.6, 0.8], [0.4, 0.4, 0.4], [0.1, 0.1, 0.1]);
+            for (preset, sky) in [(0, None), (1, None), (2, None), (3, None), (1, Some(sky))] {
+                renderer.environment_preset = preset;
+                renderer.sky = sky;
+                for (sun, metallic) in [(0.0, 0.0), (3.0, 0.0), (0.0, 1.0)] {
+                    let f = forward_metal_frame(&mut renderer, true, 0.0, sun, 0.0, metallic).await;
+                    let d = forward_metal_frame(&mut renderer, false, 0.0, sun, 0.0, metallic).await;
+                    for channel in 0..3 {
+                        let (f, d) = (centre_mean(&f, format, channel), centre_mean(&d, format, channel));
+                        // Measured: at most 6.2 of 255, across all of these.
+                        assert!((f - d).abs() < 8.0, "preset {preset}, sun {sun}, metallic {metallic}, channel {channel}: forward {f}, deferred {d}");
+                    }
                 }
             }
         });

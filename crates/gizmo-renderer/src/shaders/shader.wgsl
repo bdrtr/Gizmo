@@ -5,7 +5,8 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient}
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment}
+#import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment}
 #endif
@@ -166,6 +167,16 @@ fn select_cascade(view_depth: f32) -> u32 {
 // D_GGX / V_SmithJointGGX / F_Schlick / compute_direct_lighting are imported from
 // gizmo::common (see the #import at the top). Only forward-specific code stays local.
 
+// What lights and is reflected by a surface: `Renderer::sky` when one is set (intensity ≥ 0; < 0 = no
+// override), otherwise the presets. Same in `deferred_lighting.wgsl`; the `scene` binding keeps it out
+// of common.
+fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
+    if (scene.sky_zenith.a >= 0.0) {
+        return sky_gradient(dir, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, roughness) * scene.sky_zenith.a;
+    }
+    return preset_environment(dir, roughness, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz));
+}
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
@@ -292,29 +303,19 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
     let f0 = mix(vec3<f32>(0.04), base_color, metallic);
     
-    let sky_ambient = vec3<f32>(0.8, 0.5, 0.4) * 0.7;
-    let ground_ambient = vec3<f32>(0.15, 0.1, 0.15);
-    let hemi_mix = N.y * 0.5 + 0.5;
-    var ambient = base_color * mix(ground_ambient, sky_ambient, hemi_mix);
-    
+    // The deferred shader's environment terms, so a surface gets the same light on either path.
+    let ambient_base = vec3<f32>(0.02, 0.02, 0.025);
+    let ambient = base_color * (get_procedural_environment(N, 1.0) + ambient_base) * (1.0 - metallic);
+
     let R = reflect(-view_dir, N);
-    let reflect_mix = clamp(R.y * 0.5 + 0.5, 0.0, 1.0);
-    var fake_env_color = mix(ground_ambient, vec3<f32>(1.0, 0.6, 0.4), reflect_mix);
-    // `Renderer::sky` replaces the hemispheric stand-in (intensity ≥ 0; < 0 = no override): the
-    // gradient around the normal lights it, the one along the mirror ray is what it reflects.
-    if (scene.sky_zenith.a >= 0.0) {
-        let k = scene.sky_zenith.a;
-        ambient = base_color * sky_gradient(N, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, 1.0) * k;
-        fake_env_color = sky_gradient(R, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, min_roughness) * k;
-    }
+    var env_color = get_procedural_environment(normalize(mix(R, N, min_roughness)), min_roughness);
     // With reflection probes in the scene the environment is theirs (native: group 5, the
-    // irradiance volume's); with none, `probe_environment` hands back the hemispheric stand-in it
-    // was given, unchanged.
-    var env_color = fake_env_color;
+    // irradiance volume's); with none, `probe_environment` hands back the environment it was given.
 #ifdef PROBES
-    env_color = probe_environment(R, in.world_position, min_roughness, fake_env_color);
+    env_color = probe_environment(R, in.world_position, min_roughness, env_color);
 #endif
-    let fake_ibl_specular = f0 * env_color * ((1.0 - min_roughness) * (1.0 - min_roughness) * 2.0);
+    let env_brdf = approximate_env_brdf(max(dot(N, view_dir), 0.001), min_roughness);
+    let specular_ibl = env_color * (f0 * env_brdf.x + env_brdf.y);
 
     var total_lighting = vec3<f32>(0.0);
 
@@ -401,7 +402,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Vertex colour at face value, as `gbuffer.wgsl` and `baked_lit.wgsl` take it: an uncoloured
     // source is already white, so rewriting near-black to white only un-paints a black surface.
     let v_color = in.color;
-    var final_color = v_color * (ambient + total_lighting + fake_ibl_specular) + in.inst_emissive.xyz;
+    var final_color = v_color * (ambient + total_lighting + specular_ibl) + in.inst_emissive.xyz;
     
     // We render to an Rgba16Float HDR buffer. Tone mapping is handled in post_process.wgsl.
     
