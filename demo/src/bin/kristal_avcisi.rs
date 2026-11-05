@@ -75,7 +75,7 @@ use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
 use gizmo::renderer::Fog;
-use gizmo::simple::{sync_transforms, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{sync_transforms, HeadlessFrames, SimpleAppExt, SimpleSceneState};
 use gizmo::winit::keyboard::KeyCode;
 
 /// Arenanın yarı genişliği (kare).
@@ -129,25 +129,174 @@ fn arena_point(rng: &mut Rng) -> Vec3 {
     Vec3::new(rng.range(-half..half), 0.5, rng.range(-half..half))
 }
 
-fn main() {
-    App::<SimpleSceneState>::new("Gizmo Engine - Kristal Avcisi", 1280, 720)
-        // `KRISTAL_OYNA=1`: menüyü atla — ekran görüntüsü oyunun içini göstersin.
-        .add_state(if std::env::var_os("KRISTAL_OYNA").is_some() { Screen::Playing } else { Screen::Menu })
-        .on_enter(Screen::Menu, |world| banner(world, "KRİSTAL AVCISI\nEnter ile başla", [0.6, 0.85, 1.0]))
-        .on_enter(Screen::Playing, start_round)
-        .on_enter(Screen::Over, |world| {
+/// Oyunun durumları ve sistemleri — pencereli uygulamaya da `--test`'in başsız koşusuna da aynı
+/// eklenti kuruluyor. `keep_records` kapalıyken en iyi skor kayda yazılmaz.
+struct KristalPlugin {
+    initial: Screen,
+    keep_records: bool,
+}
+
+impl gizmo::app::Plugin for KristalPlugin {
+    fn build(&self, app: &mut dyn gizmo::app::AppLike) {
+        let parts = app.parts_mut();
+        let (world, update_schedule) = (parts.world, parts.update_schedule);
+        let keep_records = self.keep_records;
+        gizmo::core::state::add_state(world, self.initial);
+        gizmo::core::state::on_enter(world, Screen::Menu, |world| banner(world, "KRİSTAL AVCISI\nEnter ile başla", [0.6, 0.85, 1.0]));
+        gizmo::core::state::on_enter(world, Screen::Playing, start_round);
+        gizmo::core::state::on_enter(world, Screen::Over, move |world| {
             play(world.get_resource_mut::<AudioManager>().as_deref_mut(), "bitis");
             let (score, best) = world.get_resource::<Run>().map(|r| (r.score, r.best)).unwrap_or((0, 0));
             // En iyi skor kalıcı: bir sonraki açılışta da orada.
             let mut save = SaveData::open("kristal_avcisi");
-            if save.get::<u32>("best").unwrap_or(0) < best {
+            if keep_records && save.get::<u32>("best").unwrap_or(0) < best {
                 let _ = save.set("best", &best);
                 if let Err(e) = save.save() {
                     gizmo::gizmo_log!(Warning, "en iyi skor kaydedilemedi: {e}");
                 }
             }
             banner(world, &format!("Oyun bitti — {score} kristal\nen iyi {best}\nEnter ile menü"), [1.0, 0.75, 0.3]);
-        })
+        });
+        // Menü ve bitiş ekranı: Enter.
+        update_schedule.add_di_system(press_enter.in_phase(Phase::Update));
+        // Oyun: sırayla — önce oyuncu, sonra avcılar ona doğru, sonra toplama, sonra çarpışma.
+        update_schedule.add_chain(
+            (move_player, chase, collect, get_caught, tick_clock)
+                .chain()
+                .in_phase(Phase::Update),
+        );
+        update_schedule.add_di_system(draw_hud.in_phase(Phase::PostUpdate));
+    }
+}
+
+/// Sahneyi kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır). `sound` kapalıyken
+/// ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) {
+
+    // Kalıcı sahne: zemin, duvarlar, ışıklar. Durumlardan bağımsız. Kurulumda GPU var ama
+    // gerekmiyor — hook'larla aynı GPU'suz tarif.
+    world.spawn_bundle(block(
+        Vec3::new(0.0, -0.1, 0.0),
+        Vec3::new(ARENA, 0.1, ARENA),
+        MaterialDesc::new().with_pbr(Vec4::new(0.35, 0.36, 0.42, 1.0), 0.7, 0.0),
+    ));
+    for (x, z, sx, sz) in [(ARENA, 0.0, 0.2, ARENA), (-ARENA, 0.0, 0.2, ARENA), (0.0, ARENA, ARENA, 0.2), (0.0, -ARENA, ARENA, 0.2)] {
+        world.spawn_bundle(block(
+            Vec3::new(x, 0.5, z),
+            Vec3::new(sx, 0.5, sz),
+            MaterialDesc::new().with_pbr(Vec4::new(0.2, 0.2, 0.26, 1.0), 0.8, 0.0),
+        ));
+    }
+    // Arenanın iki yanında aşağı bakan sıcak panel ışıklar.
+    for x in [-5.0f32, 5.0] {
+        world.spawn_bundle((
+            Transform::new(Vec3::new(x, 4.0, 0.0)).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+            GlobalTransform::default(),
+            RectLight::new(Vec3::new(1.0, 0.85, 0.6), 6.0, 14.0, 3.0, 1.5),
+        ));
+    }
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.6) * Quat::from_rotation_x(-1.0)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(0.7, 0.75, 1.0), 0.8, LightRole::Sun).with_angular_radius(0.02),
+    ));
+
+    let camera = world.spawn_bundle(CameraBundle {
+        position: Vec3::new(0.0, 16.0, 11.0),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -0.95,
+        primary: true,
+        ..Default::default()
+    });
+    if let Some(mut q) = world.query_mut::<Mut<Camera>>() {
+        if let Some(mut cam) = q.get_mut(camera.id()) {
+            cam.clear_color = Some(Vec3::new(0.01, 0.012, 0.03));
+        }
+    }
+
+    // `pinned`: pencere boyutu ne olursa olsun sol üst köşe ve orta — mutlak piksel değil.
+    let status = world
+        .spawn_bundle((Text::pinned("", font, 24.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
+        .id();
+    let banner_text = world
+        .spawn_bundle((Text::pinned("", font, 40.0, TextAnchor::Center, Vec2::new(0.0, -40.0))
+            .with_align(TextAlign::Center),))
+        .id();
+    world.insert_resource(Hud { status, banner: banner_text });
+    // En iyi skor bir önceki oturumdan.
+    let best = SaveData::open("kristal_avcisi").get("best").unwrap_or(0);
+    world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 0.0, best });
+    world.insert_resource(gizmo::renderer::screen_fade::ScreenFade::default());
+    world.insert_resource(Rng::new(0x9E37_79B9));
+    // Sesler dosyadan değil sayılardan. Cihaz yoksa kaynak hiç konmuyor, `play` susuyor.
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("kristal", Blip::new(Wave::Square, 660.0, 0.12).with_slide(1320.0).with_volume(0.25).wav());
+        audio.load_sound_bytes("yakalandi", Blip::new(Wave::Noise, 1800.0, 0.35).with_slide(120.0).with_volume(0.5).wav());
+        audio.load_sound_bytes("basla", Blip::new(Wave::Sine, 440.0, 0.25).with_slide(880.0).with_volume(0.35).wav());
+        audio.load_sound_bytes("bitis", Blip::new(Wave::Saw, 330.0, 0.8).with_slide(80.0).with_volume(0.3).wav());
+        world.insert_resource(audio);
+    }
+}
+
+/// `--test`: pencere açmadan bir tur. Oyun doğrudan "oynuyor"da başlıyor; oyuncu her karede en
+/// yakın kristale doğru WASD'ye basıyor (oyunun kendi girdi yolu). Kristal toplanmalı, avcılar
+/// kovalamalı, tur bitmeli — süreyle ya da üç yakalanmayla — ve bitişte turun varlıkları
+/// (`DespawnOnExit`) toplanmalı.
+fn self_test() -> bool {
+    let mut world = World::new();
+    setup(&mut world, HeadlessFrames::font(), false);
+    let mut run = HeadlessFrames::new(world).add_plugin(KristalPlugin { initial: Screen::Playing, keep_records: false });
+    let keys = [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD].map(|k| k as u32);
+    let over = |w: &World| w.get_resource::<State<Screen>>().is_some_and(|s| *s.get() == Screen::Over);
+    let mut lost = 0u32;
+    let mut lives_before = 3u32;
+    while run.elapsed < ROUND_SECONDS + 10.0 && !over(&run.world) {
+        let (player, target) = {
+            let tfs = run.world.borrow::<Transform>();
+            let player = run.world.borrow::<Player>().iter().find_map(|(id, _)| tfs.get(id).map(|t| t.position));
+            let crystals: Vec<Vec3> = run.world.borrow::<Crystal>().iter().filter_map(|(id, _)| tfs.get(id).map(|t| t.position)).collect();
+            let target = player.and_then(|p| crystals.into_iter().min_by(|a, b| a.distance(p).total_cmp(&b.distance(p))));
+            (player, target)
+        };
+        for &k in &keys {
+            run.input.on_key_released(k);
+        }
+        if let (Some(p), Some(t)) = (player, target) {
+            let d = t - p;
+            if d.x > 0.2 {
+                run.input.on_key_pressed(keys[3]);
+            } else if d.x < -0.2 {
+                run.input.on_key_pressed(keys[1]);
+            }
+            if d.z < -0.2 {
+                run.input.on_key_pressed(keys[0]);
+            } else if d.z > 0.2 {
+                run.input.on_key_pressed(keys[2]);
+            }
+        }
+        run.frame(1.0 / 60.0, update);
+        let lives = run.world.get_resource::<Run>().map_or(0, |r| r.lives);
+        lost += lives_before.saturating_sub(lives);
+        lives_before = lives;
+    }
+    let (score, time_left) = run.world.get_resource::<Run>().map_or((0, 0.0), |r| (r.score, r.time_left));
+    let leftovers = run.world.borrow::<Player>().iter().count() + run.world.borrow::<Crystal>().iter().count();
+    let ok = over(&run.world) && score >= 3 && leftovers == 0;
+    println!(
+        "kristal_avcisi --test: tur {:.0} s sürdü (kalan süre {time_left:.0} s), {score} kristal, {lost} kez yakalandı; bitişte kalan tur varlığı {leftovers} → {}",
+        run.elapsed,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
+fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
+    let initial = if std::env::var_os("KRISTAL_OYNA").is_some() { Screen::Playing } else { Screen::Menu };
+    App::<SimpleSceneState>::new("Gizmo Engine - Kristal Avcisi", 1280, 720)
+        .add_plugin(KristalPlugin { initial, keep_records: true })
         .with_simple_scene(|scene, _state| {
             let r = &mut *scene.renderer;
             r.fog = Some(Fog::new([0.05, 0.06, 0.12], 0.02).with_height(0.15, -1.0));
@@ -155,85 +304,15 @@ fn main() {
             r.bloom_intensity = 1.2;
             r.deband_dither = true;
             let font = load_font(r);
-
-            // Kalıcı sahne: zemin, duvarlar, ışıklar. Durumlardan bağımsız. Kurulumda GPU var ama
-            // gerekmiyor — hook'larla aynı GPU'suz tarif.
-            scene.world.spawn_bundle(block(
-                Vec3::new(0.0, -0.1, 0.0),
-                Vec3::new(ARENA, 0.1, ARENA),
-                MaterialDesc::new().with_pbr(Vec4::new(0.35, 0.36, 0.42, 1.0), 0.7, 0.0),
-            ));
-            for (x, z, sx, sz) in [(ARENA, 0.0, 0.2, ARENA), (-ARENA, 0.0, 0.2, ARENA), (0.0, ARENA, ARENA, 0.2), (0.0, -ARENA, ARENA, 0.2)] {
-                scene.world.spawn_bundle(block(
-                    Vec3::new(x, 0.5, z),
-                    Vec3::new(sx, 0.5, sz),
-                    MaterialDesc::new().with_pbr(Vec4::new(0.2, 0.2, 0.26, 1.0), 0.8, 0.0),
-                ));
-            }
-            // Arenanın iki yanında aşağı bakan sıcak panel ışıklar.
-            for x in [-5.0f32, 5.0] {
-                scene.world.spawn_bundle((
-                    Transform::new(Vec3::new(x, 4.0, 0.0)).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-                    GlobalTransform::default(),
-                    RectLight::new(Vec3::new(1.0, 0.85, 0.6), 6.0, 14.0, 3.0, 1.5),
-                ));
-            }
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.6) * Quat::from_rotation_x(-1.0)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(0.7, 0.75, 1.0), 0.8, LightRole::Sun).with_angular_radius(0.02),
-            ));
-
-            let camera = scene.world.spawn_bundle(CameraBundle {
-                position: Vec3::new(0.0, 16.0, 11.0),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -0.95,
-                primary: true,
-                ..Default::default()
-            });
-            if let Some(mut q) = scene.world.query_mut::<Mut<Camera>>() {
-                if let Some(mut cam) = q.get_mut(camera.id()) {
-                    cam.clear_color = Some(Vec3::new(0.01, 0.012, 0.03));
-                }
-            }
-
-            // `pinned`: pencere boyutu ne olursa olsun sol üst köşe ve orta — mutlak piksel değil.
-            let status = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 24.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
-            let banner_text = scene
-                .world
-                .spawn_bundle((Text::pinned("", font, 40.0, TextAnchor::Center, Vec2::new(0.0, -40.0))
-                    .with_align(TextAlign::Center),))
-                .id();
-            scene.world.insert_resource(Hud { status, banner: banner_text });
-            // En iyi skor bir önceki oturumdan.
-            let best = SaveData::open("kristal_avcisi").get("best").unwrap_or(0);
-            scene.world.insert_resource(Run { score: 0, lives: 3, time_left: ROUND_SECONDS, grace: 0.0, best });
-            scene.world.insert_resource(gizmo::renderer::screen_fade::ScreenFade::default());
-            scene.world.insert_resource(Rng::new(0x9E37_79B9));
-            // Sesler dosyadan değil sayılardan. Cihaz yoksa kaynak hiç konmuyor, `play` susuyor.
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("kristal", Blip::new(Wave::Square, 660.0, 0.12).with_slide(1320.0).with_volume(0.25).wav());
-                audio.load_sound_bytes("yakalandi", Blip::new(Wave::Noise, 1800.0, 0.35).with_slide(120.0).with_volume(0.5).wav());
-                audio.load_sound_bytes("basla", Blip::new(Wave::Sine, 440.0, 0.25).with_slide(880.0).with_volume(0.35).wav());
-                audio.load_sound_bytes("bitis", Blip::new(Wave::Saw, 330.0, 0.8).with_slide(80.0).with_volume(0.3).wav());
-                scene.world.insert_resource(audio);
-            }
+            setup(scene.world, font, true);
         })
-        // Menü ve bitiş ekranı: Enter.
-        .add_update_system(press_enter.in_phase(Phase::Update))
-        // Oyun: sırayla — önce oyuncu, sonra avcılar ona doğru, sonra toplama, sonra çarpışma.
-        .add_update_chain(
-            (move_player, chase, collect, get_caught, tick_clock)
-                .chain()
-                .in_phase(Phase::Update),
-        )
-        .add_update_system(draw_hud.in_phase(Phase::PostUpdate))
-        .replace_update(|world, _state, _dt, _input| sync_transforms(world))
+        .replace_update(update)
         .run()
         .expect("uygulama çalıştırılamadı");
+}
+
+fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &Input) {
+    sync_transforms(world);
 }
 
 /// Oyuna giriş: oyuncuyu, kristalleri ve ilk avcıyı doğur; turu sıfırla. Hepsi
