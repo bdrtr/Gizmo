@@ -116,6 +116,11 @@ const EXCEPTIONS: &[(&str, &str)] = &[
          a direction; a stick's half-tilt would be half a flip.",
     ),
     (
+        "demo/src/bin/menu.rs",
+        "its headless `--test` presses ↓ to move the menu's focus to the next button — input it \
+         writes into the run, not movement it reads; the menu itself reads no movement at all.",
+    ),
+    (
         "crates/gizmo-studio/src/systems/shortcuts.rs",
         "editor shortcuts, and the reason the studio camera gates its fly keys behind the right \
          mouse button: W/E/Q are Translate/Rotate/Select, and Ctrl+S/D/A are save, duplicate and \
