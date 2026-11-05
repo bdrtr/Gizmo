@@ -44,6 +44,11 @@ tracing = "0.1.44"
 # (winit's Wayland decorations pull it in through `sctk-adwaita`), and its whole tree is four
 # small pure-Rust crates that build for wasm.
 ab_glyph = "0.2"
+# Shaping and bidi for `text/shape.rs`, sealed the same way: neither type is on a `pub` signature.
+# `harfrust` is the HarfBuzz project's own Rust port and is already in the tree of anything with
+# egui (`epaint` uses it). Both are pure Rust and build for wasm.
+harfrust = "0.12"
+unicode-bidi = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 meshopt = "0.6.2"

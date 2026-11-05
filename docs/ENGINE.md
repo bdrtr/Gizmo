@@ -1614,6 +1614,13 @@ its precision, and a section that silently rewrites itself cannot be checked.
   (`ab_glyph`, `ab_glyph_rasterizer`, `owned_ttf_parser`, `ttf-parser`) that build for wasm, which
   the separate wasm gate checks. It is on no Stage A surface and is not reachable from one.
 
+- **`harfrust` and `unicode-bidi` — added 2026-11-06, to `gizmo-renderer` (Stage B), sealed on
+  arrival.** Shaping and bidi for `text/shape.rs`. `harfrust` is the HarfBuzz project's own Rust port
+  and was already in the tree of anything with egui, through `epaint`; a game without egui gains it,
+  `read-fonts`, `font-types` and `unicode-bidi`. All pure Rust, and they build for wasm, which the
+  wasm gate checks. No type of theirs is on a `pub` signature: the result is still
+  `PositionedGlyph`. On no Stage A surface and not reachable from one.
+
 - **`web-time` — removed from gizmo-scene's public API 2026-08-09; it was MISSING from this
   contract entirely** and nobody had noticed it before the audit. `SceneSnapshot::timestamp` was
   `pub`, and on `wasm32` the type of that field is `web_time::Instant`, not `std::time::Instant`.

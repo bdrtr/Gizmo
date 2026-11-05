@@ -100,11 +100,30 @@ pass (`gizmo::systems::render::record_text`, which `gizmo-studio` calls rather t
 | world space (camera-facing quad) | yes, **depth-tested** — a label behind a wall is behind it |
 | anchors | nine |
 | lines | `\n`, and `Text::max_width` wraps at spaces (or between characters for a word too long to fit) — since 2026-11-01 |
-| kerning | from the face's own `kern` table |
+| kerning | from the face's `GPOS`, or its `kern` table if it has only that, since 2026-11-06 |
 | per-line alignment (`TextAlign`) | yes, since 2026-11-01 |
-| **shaping, bidi, rich text** | **no** |
+| shaping and bidi | yes, since 2026-11-06 (`harfrust`, `unicode-bidi`); see below |
+| **rich text** | **no** |
 | font fallback | a chain of faces tried per character (`Renderer::add_font_fallback`), since 2026-11-03 |
 | finding a font | `Renderer::load_system_font` — `GIZMO_FONT`, then the platform's usual sans faces (`SYSTEM_FONT_PATHS`, per OS), since 2026-11-03; still no bundled face (a licensing call) |
+
+**Shaping and bidi, 2026-11-06.** `text/shape.rs` runs each line through `unicode-bidi`, cuts it
+wherever the face or the script changes, and shapes each piece with `harfrust`. Arabic letters join,
+Devanagari vowels move and conjuncts form, right-to-left and mixed lines are ordered, marks sit where
+`GPOS` puts them, and kerning comes from `GPOS`, which is the only kerning Noto Sans has: the bundled
+font was drawn unkerned until now, so existing text changes width slightly.
+
+Latin text gets no ligatures. Noto Sans's `fi` hides the dot of the i, which in Turkish is the
+difference between two letters, and it has no Turkish entry a language setting could select. There is
+no language setting, so `locl` lookups see a face's defaults. Still not done: rich text, breaking
+lines of Chinese, Japanese or Thai between words, vertical text. Bidi and shaping are checked by glyph
+ids and positions against subsets of Noto faces in `text/fixtures`; no right-to-left text has been
+looked at on screen, in a browser or on a phone.
+
+Measured in release, on one machine: 200 short HUD strings take 1.44 ms the first time and 15 µs once
+remembered, a wrapped 510-character paragraph 0.97 ms and 0.5 µs. That is why `FontLibrary` keeps up
+to 256 recent layouts per style. **The cost is size:** `demo-web` went from 16.58 to 17.36 MB
+(4.94 → 5.18 MB gzipped, +4.9 %) before `wasm-bindgen` and `wasm-opt`.
 
 Measured: the same scene with and without text differs in **869/16 384** pixels; a string anchored
 at (8, 8) changes **869** pixels in the top-left quadrant and **0** in the bottom-right (the

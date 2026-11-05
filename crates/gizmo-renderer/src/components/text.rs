@@ -14,7 +14,7 @@ use crate::text::FontId;
 ///
 /// # What it does not do
 ///
-/// One font per `Text`, no shaping — see
+/// One font per `Text`, plus the library's fallback chain — see
 /// [`crate::text`] for what that rules out. A `Text` with an unknown [`FontId`] draws nothing
 /// rather than falling back to another font: a silent substitution is how a missing asset stops
 /// looking like a missing asset.

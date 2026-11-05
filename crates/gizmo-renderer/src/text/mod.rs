@@ -21,24 +21,25 @@
 //!
 //! # The dependency, and why it is sealed
 //!
-//! Rasterisation is `ab_glyph`. It is a *rasteriser*: it turns an outline into coverage and
-//! answers metric questions, and it does no shaping, no bidi, no font enumeration and no fallback.
-//! That narrowness is what makes it sealable — no `ab_glyph` type appears on any `pub` signature
+//! Rasterisation is `ab_glyph`: it turns an outline into coverage and answers metric questions.
+//! Shaping and bidi are `harfrust` and `unicode-bidi`, in `shape`, which decide which glyphs go where.
+//! Together they are sealable — none of their types appears on any `pub` signature
 //! here. The surface is [`FontId`](crate::text::FontId), [`LineMetrics`](crate::text::LineMetrics), [`PositionedGlyph`](crate::text::PositionedGlyph) and [`GlyphEntry`](crate::text::GlyphEntry), all
 //! ours. `gizmo-renderer` is a Stage B crate (`docs/ENGINE.md` §4), so a foreign type on its
 //! surface would be *allowed*; it is sealed anyway because sealing it costs one newtype.
 //!
 //! # What it does not do
 //!
-//! No shaping (so no Arabic joining, no Indic reordering, no ligatures), no bidi, no rich text.
-//! Font fallback is a single chain for the whole library
-//! ([`FontLibrary::add_fallback`](crate::text::FontLibrary::add_fallback)): a character the
-//! text's own face has no glyph for is drawn from the first fallback face that has one. Kerning comes from the font's `kern` table via `ab_glyph` and nothing
-//! more. Lines break on `\n`, and — given a width ([`FontLibrary::layout_wrapped`](crate::text::FontLibrary::layout_wrapped)) — at spaces,
-//! which is right for scripts that separate words with spaces and wrong for those that do not
-//! (Chinese, Japanese, Thai wrap only between characters here). These are named here rather
-//! than discovered later: a text system that silently draws the wrong glyphs for a script is worse
-//! than one that says it cannot.
+//! No rich text, and no language setting: a face's `locl` lookups see its defaults, and Latin text
+//! gets no ligatures (see `shape`). Font fallback is a single chain for the whole library
+//! ([`FontLibrary::add_fallback`](crate::text::FontLibrary::add_fallback)): a character the text's own
+//! face has no glyph for is drawn from the first fallback face that has one. Base direction is found
+//! per paragraph; a bidi control that opens on one wrapped line does not carry to the next. Lines
+//! break on `\n`, and — given a width ([`FontLibrary::layout_wrapped`](crate::text::FontLibrary::layout_wrapped)) —
+//! at spaces, which is right for scripts that separate words with spaces and wrong for those that do
+//! not (Chinese, Japanese, Thai wrap only between characters here). Vertical text is not laid out.
+//! These are named here rather than discovered later: a text system that silently draws the wrong
+//! glyphs for a script is worse than one that says it cannot.
 
 use std::collections::HashMap;
 
@@ -46,6 +47,7 @@ use ab_glyph::{Font as _, ScaleFont as _};
 
 /// The GPU half: pipelines, the instance buffer and the draw.
 pub mod render;
+mod shape;
 #[doc(hidden)]
 pub mod synthetic;
 #[cfg(feature = "bundled-font")]
@@ -153,7 +155,8 @@ pub struct PositionedGlyph {
 #[derive(Debug, Clone, PartialEq, Default)]
 #[non_exhaustive]
 pub struct TextLayout {
-    /// The placed glyphs, in reading order. Glyphs with no outline (a space) are **not** here:
+    /// The placed glyphs, each line left to right on screen, which for right-to-left text is not
+    /// the order it is read in. Glyphs with no outline (a space) are **not** here:
     /// they advance the pen and rasterise to nothing, so carrying them would mean every consumer
     /// filtering them out again.
     pub glyphs: Vec<PositionedGlyph>,
@@ -193,7 +196,18 @@ pub struct FontLibrary {
     fonts: Vec<ab_glyph::FontVec>,
     /// Tried in order for a character the text's own face does not cover.
     fallbacks: Vec<FontId>,
+    shaping: shape::Shaping,
+    /// Layouts already worked out. Text is laid out again every frame it is drawn, and shaping a
+    /// wrapped paragraph takes about a millisecond even in release.
+    recent: std::sync::Mutex<HashMap<LayoutKey, HashMap<String, TextLayout>>>,
 }
+
+/// Face, size and wrap width, as bits: what a layout depends on, next to its text.
+type LayoutKey = (u32, u32, Option<u32>);
+
+/// Layouts kept per [`LayoutKey`]. A counter or a timer makes a new string every frame, so the map
+/// is emptied at this size rather than left to grow.
+const RECENT_LAYOUTS: usize = 256;
 
 impl std::fmt::Debug for FontLibrary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -227,6 +241,9 @@ impl FontLibrary {
     /// [`FontError::Invalid`] if the bytes are not a font the rasteriser can parse.
     pub fn load(&mut self, bytes: Vec<u8>) -> Result<FontId, FontError> {
         let font = ab_glyph::FontVec::try_from_vec(bytes).map_err(|_| FontError::Invalid)?;
+        if !self.shaping.add_face(font.as_slice()) {
+            return Err(FontError::Invalid);
+        }
         self.fonts.push(font);
         // `len` is bounded by how many fonts a process loads; the cast is unreachable in practice
         // and saturating is the honest answer rather than a panic in a renderer.
@@ -250,13 +267,13 @@ impl FontLibrary {
 
     /// Adds `font` to the end of the fallback chain: a character that a text's own face has no
     /// glyph for — a symbol, an emoji, a script the face does not cover — is drawn from the first
-    /// face in the chain that has one, instead of as the face's empty "missing" glyph. Each
-    /// character is looked up on its own; kerning applies only between two glyphs of one face,
-    /// and line height comes from the text's own face. An unknown id, or one already in the
-    /// chain, changes nothing.
+    /// face in the chain that has one, instead of as the face's empty "missing" glyph. Shaping and
+    /// kerning work within a stretch of one face, not across a change of face, and line height comes
+    /// from the text's own face. An unknown id, or one already in the chain, changes nothing.
     pub fn add_fallback(&mut self, font: FontId) {
         if self.face(font).is_some() && !self.fallbacks.contains(&font) {
             self.fallbacks.push(font);
+            self.recent.get_mut().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         }
     }
 
@@ -295,12 +312,25 @@ impl FontLibrary {
     #[must_use]
     pub fn layout_wrapped(&self, font: FontId, px: f32, text: &str, max_width: Option<f32>) -> Option<TextLayout> {
         let faces = Faces::new(self, font)?;
-        Some(layout(&faces, px, text, max_width.filter(|w| w.is_finite() && *w > 0.0)))
+        let max_width = max_width.filter(|w| w.is_finite() && *w > 0.0);
+        let key = (font.0, px.to_bits(), max_width.map(f32::to_bits));
+        let mut recent = self.recent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let same_style = recent.entry(key).or_default();
+        if let Some(found) = same_style.get(text) {
+            return Some(found.clone());
+        }
+        let laid_out = layout(&faces, px, text, max_width);
+        if same_style.len() >= RECENT_LAYOUTS {
+            same_style.clear();
+        }
+        same_style.insert(text.to_string(), laid_out.clone());
+        Some(laid_out)
     }
 }
 
 /// A text's face and the library's fallback chain: which face draws each character.
 struct Faces<'a> {
+    library: &'a FontLibrary,
     primary: (FontId, &'a ab_glyph::FontVec),
     chain: Vec<(FontId, &'a ab_glyph::FontVec)>,
 }
@@ -314,7 +344,7 @@ impl<'a> Faces<'a> {
             .filter(|&&f| f != font)
             .filter_map(|&f| library.face(f).map(|face| (f, face)))
             .collect();
-        Some(Self { primary, chain })
+        Some(Self { library, primary, chain })
     }
 
     /// The face that draws `c` and its glyph there: the text's own when it has one (glyph 0 is
@@ -333,23 +363,16 @@ impl<'a> Faces<'a> {
             })
             .unwrap_or((font, face, id))
     }
+
+    /// Whether `font` has a glyph of its own for `c`.
+    fn covers(&self, font: FontId, c: char) -> bool {
+        self.library.face(font).is_some_and(|face| face.glyph_id(c).0 != 0)
+    }
 }
 
-/// The pen advance of `s` on one line, kerning included — the width [`layout`] would give it.
+/// The pen advance of `s` on one line — the width [`layout`] would give it.
 fn measure(faces: &Faces<'_>, px: f32, s: &str) -> f32 {
-    let mut pen = 0.0;
-    let mut previous: Option<(FontId, ab_glyph::GlyphId)> = None;
-    for c in s.chars() {
-        let (font, face, id) = faces.pick(c);
-        let scaled = face.as_scaled(px);
-        // Kerning pairs belong to one face: none across a fallback boundary.
-        if let Some((_, prev)) = previous.filter(|(pf, _)| *pf == font) {
-            pen += scaled.kern(prev, id);
-        }
-        pen += scaled.h_advance(id);
-        previous = Some((font, id));
-    }
-    pen
+    shape::shape_line(faces, px, s, None).width
 }
 
 /// Breaks one `\n`-free paragraph into lines no wider than `max` — see
@@ -398,37 +421,33 @@ fn layout(faces: &Faces<'_>, px: f32, text: &str, max_width: Option<f32>) -> Tex
 
     let mut out = TextLayout { lines: 1, ..Default::default() };
     let mut widest: f32 = 0.0;
-    let lines: Vec<std::borrow::Cow<'_, str>> = match max_width {
-        None => text.split('\n').map(std::borrow::Cow::Borrowed).collect(),
+    let lines: Vec<(std::borrow::Cow<'_, str>, Option<unicode_bidi::Level>)> = match max_width {
+        None => text.split('\n').map(|line| (std::borrow::Cow::Borrowed(line), None)).collect(),
         Some(max) => {
             let mut wrapped = Vec::new();
             for paragraph in text.split('\n') {
-                wrap_paragraph(faces, px, paragraph, max, &mut wrapped);
+                let level = shape::paragraph_level(paragraph);
+                let mut cut = Vec::new();
+                wrap_paragraph(faces, px, paragraph, max, &mut cut);
+                wrapped.extend(cut.into_iter().map(|line| (std::borrow::Cow::Owned(line), level)));
             }
-            wrapped.into_iter().map(std::borrow::Cow::Owned).collect()
+            wrapped
         }
     };
-    for (line_index, line) in lines.iter().enumerate() {
+    for (line_index, (line, level)) in lines.iter().enumerate() {
         let baseline = metrics.ascent + line_index as f32 * line_height;
-        let mut pen = 0.0_f32;
-        let mut previous: Option<(FontId, ab_glyph::GlyphId)> = None;
-        for c in line.chars() {
-            let (font, face, id) = faces.pick(c);
-            let scaled = face.as_scaled(px);
-            if let Some((_, prev)) = previous.filter(|(pf, _)| *pf == font) {
-                pen += scaled.kern(prev, id);
-            }
+        let shaped = shape::shape_line(faces, px, line, *level);
+        for g in shaped.glyphs {
             // A glyph with no outline — a space, or a codepoint this face does not cover — still
-            // advances the pen and rasterises to nothing. Keeping it out of `glyphs` is what lets
+            // advanced the pen and rasterises to nothing. Keeping it out of `glyphs` is what lets
             // every consumer treat the list as "things to draw".
-            if face.outline(id).is_some() {
-                out.glyphs.push(PositionedGlyph { font, glyph: id.0, x: pen, y: baseline, line: line_index as u32 });
+            let drawn = faces.library.face(g.font).is_some_and(|face| face.outline(ab_glyph::GlyphId(g.glyph)).is_some());
+            if drawn {
+                out.glyphs.push(PositionedGlyph { font: g.font, glyph: g.glyph, x: g.x, y: baseline + g.y, line: line_index as u32 });
             }
-            pen += scaled.h_advance(id);
-            previous = Some((font, id));
         }
-        widest = widest.max(pen);
-        out.line_widths.push(pen);
+        widest = widest.max(shaped.width);
+        out.line_widths.push(shaped.width);
         out.lines = u32::try_from(line_index + 1).unwrap_or(u32::MAX);
     }
     out.width = widest;
@@ -801,6 +820,189 @@ impl GlyphAtlas {
 
 #[cfg(test)]
 mod tests {
+    /// The bundled Noto Sans, then the Arabic and Devanagari test faces.
+    fn shaping_faces() -> (FontLibrary, FontId, FontId, FontId) {
+        let mut lib = FontLibrary::new();
+        let latin = lib.load(include_bytes!("../../assets/fonts/NotoSans-Regular.ttf").to_vec()).expect("Noto Sans");
+        let arabic = lib.load(include_bytes!("fixtures/noto-sans-arabic-subset.ttf").to_vec()).expect("Arabic");
+        let deva = lib.load(include_bytes!("fixtures/noto-sans-devanagari-subset.ttf").to_vec()).expect("Devanagari");
+        (lib, latin, arabic, deva)
+    }
+
+    fn glyph_ids(lib: &FontLibrary, font: FontId, text: &str) -> Vec<u16> {
+        lib.layout(font, 32.0, text).expect("laid out").glyphs.iter().map(|g| g.glyph).collect()
+    }
+
+    /// **Arabic letters join, and the first one read is the rightmost.** س has one form alone and
+    /// another at the start of a word, and which it takes is the shaper's whole job here.
+    #[test]
+    fn arabic_letters_join_and_run_right_to_left() {
+        let (lib, _, arabic, _) = shaping_faces();
+        let alone = glyph_ids(&lib, arabic, "س")[0];
+        let spaced = glyph_ids(&lib, arabic, "س ل ا م");
+        let joined = glyph_ids(&lib, arabic, "سلام");
+        assert_eq!(spaced.len(), 4);
+        assert_eq!(*spaced.last().expect("four"), alone, "read first, so drawn last from the left");
+        assert_eq!(joined.len(), 4);
+        assert_ne!(*joined.last().expect("four"), alone, "the word's first letter takes its initial form");
+    }
+
+    /// **Devanagari reorders and forms conjuncts.** The vowel ि is typed after क and drawn before it,
+    /// and क्ष is one glyph from three characters.
+    #[test]
+    fn devanagari_reorders_its_vowel_and_forms_a_conjunct() {
+        let (lib, _, _, deva) = shaping_faces();
+        let ka = glyph_ids(&lib, deva, "क")[0];
+        let ki = glyph_ids(&lib, deva, "कि");
+        assert_eq!(ki.len(), 2);
+        assert_eq!(ki[1], ka, "the consonant comes second on screen");
+        assert_eq!(glyph_ids(&lib, deva, "क्ष").len(), 1);
+    }
+
+    /// **A script change inside one face is a new run**, and a character of no script of its own
+    /// stays with what came before it.
+    #[test]
+    fn a_change_of_script_within_a_face_starts_a_new_run() {
+        let (lib, latin, _, _) = shaping_faces();
+        let faces = Faces::new(&lib, latin).expect("a face");
+        let cut = |text: &str| -> Vec<String> {
+            shape::itemize_for_test(&faces, text).into_iter().map(|r| text[r].to_string()).collect()
+        };
+        assert_eq!(cut("abc, где"), ["abc, ", "где"]);
+        assert_eq!(cut("12 abc"), ["12 abc"], "digits take the script that follows them");
+        assert_eq!(cut("12 "), ["12 "], "a run with no script at all is still one run");
+    }
+
+    /// **The paragraph's first strong letter sets the direction.** Latin first: Latin on the left,
+    /// Arabic after it. Arabic first: the Arabic is read first, so it is on the right.
+    #[test]
+    fn mixed_text_is_ordered_by_its_paragraph_direction() {
+        let (mut lib, latin, arabic, _) = shaping_faces();
+        lib.add_fallback(arabic);
+        let mean_x = |text: &str, font: FontId| {
+            let l = lib.layout(latin, 32.0, text).expect("laid out");
+            let xs: Vec<f32> = l.glyphs.iter().filter(|g| g.font == font).map(|g| g.x).collect();
+            assert!(!xs.is_empty(), "{text}: no glyph from that face");
+            xs.iter().sum::<f32>() / xs.len() as f32
+        };
+        assert!(mean_x("abc سلام", latin) < mean_x("abc سلام", arabic), "left-to-right paragraph");
+        assert!(mean_x("سلام abc", latin) < mean_x("سلام abc", arabic), "right-to-left paragraph");
+        // The Latin word is read first in the first string and second in the other, and in both it
+        // ends up on the left. Reading order tells them apart only with three pieces.
+        let first = lib.layout(latin, 32.0, "سلام abc سلام").expect("laid out");
+        let arabic_xs: Vec<f32> = first.glyphs.iter().filter(|g| g.font == arabic).map(|g| g.x).collect();
+        let latin_xs: Vec<f32> = first.glyphs.iter().filter(|g| g.font == latin).map(|g| g.x).collect();
+        let (lo, hi) = (latin_xs[0], latin_xs[latin_xs.len() - 1]);
+        assert!(arabic_xs.iter().any(|x| *x < lo) && arabic_xs.iter().any(|x| *x > hi), "abc stays between the two words");
+        assert!(latin_xs.windows(2).all(|w| w[0] < w[1]), "abc still reads left to right inside");
+    }
+
+    /// **Inside a right-to-left run the pieces are reversed too.** The Arabic face has no space, so
+    /// the space comes from the Latin face and cuts this run into three pieces. The word read first
+    /// must still be on the right.
+    #[test]
+    fn words_split_by_a_change_of_face_keep_their_right_to_left_order() {
+        let (mut lib, latin, arabic, _) = shaping_faces();
+        lib.add_fallback(arabic);
+        let second_word = glyph_ids(&lib, arabic, "مرحبا");
+        let both = glyph_ids(&lib, latin, "سلام مرحبا");
+        assert_eq!(both[..second_word.len()], second_word[..], "the word read second comes first from the left");
+    }
+
+    /// **A mark goes where the face's `GPOS` says.** Above a capital that is higher than the mark was
+    /// drawn, which only the vertical offset can do; y grows down.
+    #[test]
+    fn a_mark_is_lifted_over_a_tall_letter() {
+        let (lib, latin, _, _) = shaping_faces();
+        let l = lib.layout(latin, 32.0, "Q\u{301}").expect("laid out");
+        assert_eq!(l.glyphs.len(), 2, "no precomposed Q with an acute, so a letter and a mark");
+        assert!(l.glyphs[1].y < l.glyphs[0].y - 1.0, "mark at {}, letter at {}", l.glyphs[1].y, l.glyphs[0].y);
+    }
+
+    /// **A wrapped line keeps its paragraph's direction**, even when it starts with a Latin word and
+    /// would call itself left to right on its own.
+    #[test]
+    fn a_wrapped_line_keeps_the_direction_of_its_paragraph() {
+        let (mut lib, latin, arabic, _) = shaping_faces();
+        lib.add_fallback(arabic);
+        let width = lib.layout(latin, 32.0, "abc سلام").expect("laid out").width + 2.0;
+        let l = lib.layout_wrapped(latin, 32.0, "سلام سلام abc سلام", Some(width)).expect("laid out");
+        assert_eq!(l.lines, 2);
+        let on_second = |font: FontId| l.glyphs.iter().filter(|g| g.line == 1 && g.font == font).map(|g| g.x).sum::<f32>();
+        let count = |font: FontId| l.glyphs.iter().filter(|g| g.line == 1 && g.font == font).count() as f32;
+        assert!(on_second(latin) / count(latin) > on_second(arabic) / count(arabic), "read first, so on the right");
+    }
+
+    /// **Kerning comes from `GPOS`.** Noto Sans has no `kern` table, so the engine drew it unkerned
+    /// until shaping arrived.
+    #[test]
+    fn a_face_with_only_gpos_kerning_is_kerned() {
+        let (lib, latin, _, _) = shaping_faces();
+        let width = |s: &str| lib.layout(latin, 32.0, s).expect("laid out").width;
+        assert!(width("AV") < width("A") + width("V") - 0.5, "AV {} against {} + {}", width("AV"), width("A"), width("V"));
+    }
+
+    /// **A base letter and its combining mark compose**, rather than the mark landing after the letter.
+    #[test]
+    fn a_combining_mark_composes_with_its_letter() {
+        let (lib, latin, _, _) = shaping_faces();
+        assert_eq!(glyph_ids(&lib, latin, "e\u{301}"), glyph_ids(&lib, latin, "é"));
+    }
+
+    /// **Latin text has no ligatures**: Noto Sans's `fi` hides the dot that tells i from dotless i.
+    #[test]
+    fn latin_text_keeps_i_and_dotless_i_apart() {
+        let (lib, latin, _, _) = shaping_faces();
+        let i = glyph_ids(&lib, latin, "i")[0];
+        let dotless = glyph_ids(&lib, latin, "ı")[0];
+        assert_eq!(glyph_ids(&lib, latin, "fi")[1], i);
+        assert_eq!(glyph_ids(&lib, latin, "fı")[1], dotless);
+    }
+
+    /// **Only Latin gives up `liga`.** Thai writes ฤๅ as one glyph, through that same feature.
+    #[test]
+    fn other_scripts_keep_their_ligatures() {
+        let mut lib = FontLibrary::new();
+        let thai = lib.load(include_bytes!("fixtures/noto-sans-thai-subset.ttf").to_vec()).expect("Thai");
+        assert_eq!(glyph_ids(&lib, thai, "ฤๅ").len(), 1);
+    }
+
+    /// A layout remembered before a fallback was added must not outlive it: the same string now has
+    /// glyphs from the new face.
+    #[test]
+    fn adding_a_fallback_forgets_the_layouts_it_changes() {
+        let (mut lib, latin, arabic, _) = shaping_faces();
+        let before = lib.layout(latin, 32.0, "سلام").expect("laid out");
+        assert!(before.glyphs.iter().all(|g| g.font == latin));
+        assert_eq!(lib.layout(latin, 32.0, "سلام").expect("laid out"), before, "remembered, and the same");
+        lib.add_fallback(arabic);
+        let after = lib.layout(latin, 32.0, "سلام").expect("laid out");
+        assert!(after.glyphs.iter().all(|g| g.font == arabic), "still the layout from before the fallback");
+    }
+
+    /// Each style remembers its own layouts: another size or width is another answer.
+    #[test]
+    fn remembered_layouts_are_kept_apart_by_size_and_width() {
+        let (lib, latin, _, _) = shaping_faces();
+        let small = lib.layout(latin, 16.0, "iki kelime").expect("laid out");
+        let large = lib.layout(latin, 32.0, "iki kelime").expect("laid out");
+        assert!(large.width > small.width * 1.5);
+        let word = lib.layout(latin, 32.0, "kelime").expect("laid out").width;
+        let wrapped = lib.layout_wrapped(latin, 32.0, "iki kelime", Some(word + 2.0)).expect("laid out");
+        assert_eq!((large.lines, wrapped.lines), (1, 2));
+    }
+
+    /// A string a frame must not grow the memory without bound.
+    #[test]
+    fn remembered_layouts_stay_bounded() {
+        let (lib, latin, _, _) = shaping_faces();
+        for i in 0..RECENT_LAYOUTS * 3 {
+            let _ = lib.layout(latin, 16.0, &i.to_string());
+        }
+        let recent = lib.recent.lock().expect("not poisoned");
+        assert!(recent.values().all(|m| m.len() <= RECENT_LAYOUTS));
+    }
+
 
     /// A character the text's face lacks is drawn from the first fallback that has it, at the
     /// pen position the text's own advance gives; the text's own characters stay its own; with no

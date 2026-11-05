@@ -169,6 +169,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Text shaping and bidi.** Arabic letters join, Devanagari vowels reorder and conjuncts form,
+  right-to-left and mixed lines are ordered, and marks sit where the face puts them, given a face that
+  has those scripts (`add_font_fallback`). `GPOS` kerning now applies, and it is the only kerning Noto
+  Sans has, so **existing text changes width slightly**. Latin text gets no ligatures, because Noto
+  Sans's `fi` hides the dot that tells i from ı. Recent layouts are remembered: a wrapped paragraph
+  costs 0.97 ms the first frame and 0.5 µs after. Adds `harfrust` and `unicode-bidi`; the web build grows
+  4.9 % gzipped. Checked by glyph ids and positions; not yet looked at on screen.
+
 - **`Material::with_forward`: a PBR material can choose the forward pass.** How a surface is shaded and
   which path draws it were one setting, so drawing PBR forward was impossible. The material type no
   longer changes: the object skips the z-prepass and the G-buffer, stays lit, casts and receives
