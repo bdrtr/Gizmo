@@ -1293,6 +1293,8 @@ rises. What getting there found:
   positions in the wrong pixels (every touch missed), and a console flooded at TRACE. Plus the
   game's own camera looking the wrong way. Now the table fills an upright screen, Turkish text
   draws, a tap launches the ball and a held left half raises the left flipper.
+- ~~**A HUD line ran off a narrow screen.**~~ **Closed 2026-11-05.** Screen and pinned text wrapped
+  only at `\n` or a fixed `max_width`; it now wraps at the room the window leaves it (CHANGELOG).
 - ~~**Speckled rendering on the phone.**~~ **Closed 2026-11-05.** Rainbow noise on the bumpers,
   a quad of it on the table, rails patched in other objects' colours, flicker while playing; the
   desktop browser drew the same build clean. `gizmo_cluster_index` took the whole

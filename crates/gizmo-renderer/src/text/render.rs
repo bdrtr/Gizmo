@@ -443,7 +443,8 @@ impl TextRenderer {
         screen_size: Vec2,
         clip: Option<[Vec2; 2]>,
     ) {
-        let Some(mut layout) = self.library.layout_wrapped(text.font, text.size_px, &text.content, text.max_width) else {
+        let wrap = wrap_width(text, screen_anchor, screen_size);
+        let Some(mut layout) = self.library.layout_wrapped(text.font, text.size_px, &text.content, wrap) else {
             return;
         };
         layout.align(text.align.factor());
@@ -597,6 +598,36 @@ impl TextRenderer {
     pub fn queued(&self) -> (usize, usize, usize) {
         (self.world.len(), self.rects.len(), self.screen.len())
     }
+}
+
+/// The width `text` wraps at: its own [`max_width`](Text::max_width), but never wider than the
+/// window leaves it. A screen or pinned text placed by its own position (no `screen_anchor` from a
+/// host) is cut to the room between its anchor point and the window's edges, by how its box hangs
+/// off that point: a top-left box has the room to the right edge, a centred one twice the room to
+/// the nearer edge, a right-anchored one the room to the left edge.
+///
+/// Without this a HUD line ran off the side of a narrow window. `pinbol`'s
+/// `A/D: paletler   Space: at   R: baştan  (top kanalda)` at 22 px on an upright phone (350 frame
+/// pixels across) lost its last third past the right edge, and nothing on the page said so.
+///
+/// A host that places the text itself — a UI box, a tooltip — passes `screen_anchor` and has
+/// decided the width already, so it gets `max_width` unchanged; so does a world label. A point
+/// outside the window leaves no room to measure from, and the text keeps its own width there too.
+pub(crate) fn wrap_width(text: &Text, screen_anchor: Option<Vec2>, screen_size: Vec2) -> Option<f32> {
+    if screen_anchor.is_some() {
+        return text.max_width;
+    }
+    let Some(point) = text.space.screen_point(screen_size) else {
+        return text.max_width;
+    };
+    let hang = text.anchor.factors().x;
+    let right = if hang < 1.0 { (screen_size.x - point.x) / (1.0 - hang) } else { f32::INFINITY };
+    let left = if hang > 0.0 { point.x / hang } else { f32::INFINITY };
+    let room = right.min(left);
+    if !(room.is_finite() && room > 0.0) {
+        return text.max_width;
+    }
+    Some(text.max_width.map_or(room, |w| w.min(room)))
 }
 
 /// Turns a laid-out string into quads, appending to `world` or `screen` depending on the space.
@@ -830,6 +861,39 @@ mod tests {
     ///
     /// The second window size is the assertion — a `Pinned` that read an absolute position would
     /// pass at one size and fail at the other.
+    #[test]
+    fn a_window_text_wraps_at_the_window_edge() {
+        let screen = Vec2::new(350.0, 657.0);
+        let f = FontId(0);
+        // Top-left, 16 px in: everything to the right edge.
+        let hud = Text::pinned("x", f, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0));
+        assert_eq!(wrap_width(&hud, None, screen), Some(334.0));
+        // Its own narrower width wins; a wider one is cut to the window.
+        assert_eq!(wrap_width(&hud.clone().with_max_width(200.0), None, screen), Some(200.0));
+        assert_eq!(wrap_width(&hud.clone().with_max_width(900.0), None, screen), Some(334.0));
+        // Centred at 40 % across: twice the room to the nearer (left) edge.
+        let title = Text::pinned_at("x", f, 44.0, Vec2::new(0.4, 0.3), Vec2::ZERO).with_anchor(TextAnchor::Center);
+        assert_eq!(wrap_width(&title, None, screen), Some(280.0));
+        // Hung from the top-right corner 16 px in: the room to the left edge.
+        let score = Text::pinned("x", f, 22.0, TextAnchor::TopRight, Vec2::new(-16.0, 16.0));
+        assert_eq!(wrap_width(&score, None, screen), Some(334.0));
+        // An absolute screen position measures the same way.
+        assert_eq!(wrap_width(&Text::screen("x", f, 22.0, Vec2::new(50.0, 0.0)), None, screen), Some(300.0));
+    }
+
+    #[test]
+    fn a_placed_text_and_a_world_label_keep_their_own_width() {
+        let screen = Vec2::new(350.0, 657.0);
+        let f = FontId(0);
+        let hud = Text::pinned("x", f, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0));
+        // A host that places it (a UI box, a tooltip) has chosen the width already.
+        assert_eq!(wrap_width(&hud, Some(Vec2::new(10.0, 10.0)), screen), None);
+        assert_eq!(wrap_width(&Text::world("x", f, 22.0, 64.0), None, screen), None);
+        // A point off the window leaves nothing to measure from.
+        let off = Text::screen("x", f, 22.0, Vec2::new(400.0, 0.0));
+        assert_eq!(wrap_width(&off, None, screen), None);
+    }
+
     #[test]
     fn a_pinned_text_follows_the_window_size() {
         let centre_on = |anchor, offset, size: Vec2| {

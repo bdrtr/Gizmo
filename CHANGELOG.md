@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Screen text ran off the side of a narrow window.** A pinned or screen-positioned `Text`
+  wrapped only at `\n` or its own `max_width`, so a HUD line wider than the window lost its end
+  past the edge — `pinbol`'s controls line on an upright phone (350 frame pixels across) lost its
+  last third. It now wraps at the room the window leaves it, measured from its anchor point by how
+  its box hangs off it: to the right edge for a top-left box, twice the nearer edge for a centred
+  one, to the left edge for a right-anchored one; a narrower `max_width` still wins. Text placed
+  by a host (a UI box, a tooltip) and world labels are unchanged.
+
 - **The lit forward shader came out garbage on an Adreno phone.** On a Redmi Note 12 Pro
   (Adreno 618, driver V@0502, Chrome 156) `pinbol` drew speckles, rainbow noise on the bumpers,
   rails patched with other objects' colours and a quad of noise on an empty stretch of table —
