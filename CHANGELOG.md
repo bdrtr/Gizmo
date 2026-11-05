@@ -138,6 +138,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tweens, colour tweens, typewriters, the screen fade (`systems::render::advance_frame_clocks`, one
   function both call) — because game logic waits on them: `zindan` takes the stairs when its fade
   has gone dark.
+- **A chaos test (`gizmo-physics-rigid/tests/chaos.rs`).** From a seed, through the ECS bridge a
+  game uses: bodies spawned and despawned every frame (ids recycled constantly), ropes tied
+  between them and cut, kicks, CCD switched on and off, in a closed box. After every step nothing
+  may be non-finite, outside the box (only a body through a wall could be) or absurdly fast, and
+  no joint may name a body that is gone; the same seed twice must give the same world. One storm
+  runs in the suite (~50 s unoptimised); three long ones with `--ignored`. Green on its first run;
+  it catches the joint cleanup of `remove_body_at` taken out at frame 10.
 - **Every game plays itself headlessly (`--test`), all 36.** What it found is under Fixed and in
   `docs/CAPABILITY_GAPS.md` C16ag; besides the engine fixes, `poligon`'s player walked at twice
   his speed (the game drove its character controller a second time), `pist`'s AI stayed stuck on a
