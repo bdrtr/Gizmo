@@ -480,6 +480,29 @@ impl PhysicsWorld {
             })
             .collect();
 
+        // ── Contacts of bodies removed since the last step: ended ─────────
+        // Reported first, before this step's own events: the body that took the id may be in the
+        // same pair this very step, and its `Started` must come after the dead body's `Ended`.
+        for (pair, is_trigger) in std::mem::take(&mut self.departed_contacts) {
+            for entity in [pair.0, pair.1] {
+                if let Some(&idx) = entity_map.get(&entity.id()) {
+                    if self.rigid_bodies[idx].is_dynamic() {
+                        self.rigid_bodies[idx].wake_up();
+                    }
+                }
+            }
+            if is_trigger {
+                self.trigger_events.push(TriggerEvent { trigger_entity: pair.0, other_entity: pair.1, event_type: CollisionEventType::Ended });
+            } else {
+                self.collision_events.push(CollisionEvent {
+                    entity_a: pair.0,
+                    entity_b: pair.1,
+                    event_type: CollisionEventType::Ended,
+                    contact_points: ContactPoints::new(),
+                });
+            }
+        }
+
         // ── Sequential post-processing ────────────────────────────────────
         // Pre-size to last frame's counts: the contact set is frame-coherent, so this skips the
         // ~log2(N) grow-and-rehash reallocations the map/vec otherwise do every frame while

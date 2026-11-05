@@ -56,3 +56,77 @@ fn a_new_body_on_a_recycled_id_is_not_tied_to_the_old_ones_joint() {
         at.distance(start)
     );
 }
+
+/// A body that comes into a trigger on a dead body's id is entering it, not staying in it.
+///
+/// The contact cache is keyed by the pair's raw ids, and it decides `Started` against `Persisting`
+/// (and carries warm-start impulses for solid contacts). A body despawned inside a trigger and a
+/// new one spawned there on the same id used to be told it had been there all along — the game's
+/// "on enter" never ran for it.
+#[test]
+fn a_new_body_on_a_recycled_id_enters_a_trigger_it_is_born_in() {
+    use gizmo_physics_core::collision::CollisionEventType;
+    let mut world = World::new();
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::ZERO));
+    let zone = world
+        .spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new_static(), Velocity::default(), Collider::sphere(3.0).with_trigger(true)))
+        .id();
+    let old = ball(&mut world, Vec3::ZERO);
+    // Moving, so it stays awake: a sleeping pair drops out of the cache on its own.
+    world.borrow_mut::<Velocity>().get_mut(old).unwrap().linear = Vec3::new(0.3, 0.0, 0.0);
+    for _ in 0..5 {
+        physics_step_system(&world, STEP);
+    }
+    let e = world.get_entity(old).unwrap();
+    world.despawn(e);
+    world.apply_commands();
+    let new = ball(&mut world, Vec3::new(-0.5, 0.0, 0.0));
+    assert_eq!(old, new, "the scenario needs the id to be recycled");
+    physics_step_system(&world, STEP);
+    let events: Vec<CollisionEventType> = world
+        .get_resource::<PhysicsWorld>()
+        .unwrap()
+        .trigger_events()
+        .iter()
+        .filter(|t| [t.trigger_entity.id(), t.other_entity.id()].contains(&zone) && [t.trigger_entity.id(), t.other_entity.id()].contains(&new))
+        .map(|t| t.event_type)
+        .collect();
+    // The dead body leaves, then the new one comes in — in that order, on the shared id.
+    let (ended, started) = (
+        events.iter().position(|e| *e == CollisionEventType::Ended),
+        events.iter().position(|e| *e == CollisionEventType::Started),
+    );
+    assert!(
+        ended.is_some() && started.is_some() && ended < started,
+        "the dead body's Ended, then the new body's Started: {events:?}"
+    );
+}
+
+/// A body despawned inside a trigger is reported leaving it.
+#[test]
+fn a_body_despawned_in_a_trigger_ends_its_overlap() {
+    use gizmo_physics_core::collision::CollisionEventType;
+    let mut world = World::new();
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::ZERO));
+    let zone = world
+        .spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new_static(), Velocity::default(), Collider::sphere(3.0).with_trigger(true)))
+        .id();
+    let visitor = ball(&mut world, Vec3::ZERO);
+    world.borrow_mut::<Velocity>().get_mut(visitor).unwrap().linear = Vec3::new(0.3, 0.0, 0.0);
+    for _ in 0..5 {
+        physics_step_system(&world, STEP);
+    }
+    let e = world.get_entity(visitor).unwrap();
+    world.despawn(e);
+    world.apply_commands();
+    physics_step_system(&world, STEP);
+    let ended = world
+        .get_resource::<PhysicsWorld>()
+        .unwrap()
+        .trigger_events()
+        .iter()
+        .filter(|t| t.event_type == CollisionEventType::Ended)
+        .filter(|t| [t.trigger_entity.id(), t.other_entity.id()].contains(&zone) && [t.trigger_entity.id(), t.other_entity.id()].contains(&visitor))
+        .count();
+    assert_eq!(ended, 1, "the zone was not told its visitor left");
+}

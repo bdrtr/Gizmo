@@ -454,6 +454,12 @@ pub struct PhysicsWorld {
     /// leaves it empty.
     #[serde(skip)]
     pub(crate) ecs_generations: rustc_hash::FxHashMap<u32, u32>,
+    /// Cached contacts of bodies removed since the last step, `(pair, is_trigger)`: taken out of
+    /// `contact_cache` by `remove_body_at` so a body that gets the id next does not inherit them
+    /// (it was told `Persisting` in a trigger it had just come into, and took the warm-start
+    /// impulses), and reported `Ended` by the next step, as the vanished pair always was.
+    #[serde(skip)]
+    pub(crate) departed_contacts: Vec<((BodyHandle, BodyHandle), bool)>,
 
     /// Localized gravity overrides; see [`GravityField`] for how overlaps resolve.
     /// Empty (the default) means every body uses `integrator.gravity`.

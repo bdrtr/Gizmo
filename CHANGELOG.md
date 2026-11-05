@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A body on a dead body's id was told it had been in that body's contacts all along.** The
+  contact cache is keyed by the pair's raw ids; despawn a body inside a trigger and spawn another
+  there on the same id, and the new one got `Persisting` on every substep and never `Started` —
+  an "on enter" never ran — and, in a solid contact, took the dead body's warm-start impulses.
+  Removing a body now takes its cached contacts out, and the next step reports them `Ended`
+  first, before its own events, so the order on the shared id is "left, then entered".
+  `tests/joint_recycled_id.rs`.
 - **A kinematic body driven once a frame moved in jerks (`FixedPhysics::advance`).** A
   `KinematicTarget` is reached "in the next step", so a frame that ran four steps made the whole
   move in the first at four times the speed asked, then stood still. A ball at rest on a board

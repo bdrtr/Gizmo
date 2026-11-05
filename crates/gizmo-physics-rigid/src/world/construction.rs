@@ -48,6 +48,7 @@ impl PhysicsWorld {
             colliders: Vec::new(),
             entity_index_map: crate::world::EntityIndexMap::default(),
             ecs_generations: rustc_hash::FxHashMap::default(),
+            departed_contacts: Vec::new(),
             is_paused: false,
             step_once: false,
             rewind_requested: false,
@@ -274,8 +275,8 @@ impl PhysicsWorld {
     /// joints attached to the body are removed with it**. They used to be left in place, and a
     /// joint finds its bodies by raw id: the next body to recycle the id was tied to the other
     /// end — measured, a body spawned 15 m away was pulled 2.5 m toward the dead body's partner in
-    /// a second. Cached contacts naming the body are left (they are rebuilt from this step's
-    /// pairs).
+    /// a second. Its cached contacts are taken out too — the next body on the id was told it had
+    /// been in them all along — and reported `Ended` by the next step.
     ///
     /// # Panics
     ///
@@ -288,6 +289,15 @@ impl PhysicsWorld {
         self.entity_index_map.remove(&entity.id());
         self.joints.retain(|joint| joint.entity_a != entity && joint.entity_b != entity);
         self.ecs_generations.remove(&entity.id());
+        // The body's cached contacts go with it: keyed by raw id, they were inherited by the next
+        // body on the id. They are still reported `Ended` by the next step.
+        let departed: Vec<(BodyHandle, BodyHandle)> =
+            self.contact_cache.keys().filter(|(a, b)| *a == entity || *b == entity).copied().collect();
+        for pair in departed {
+            if let Some((is_trigger, _)) = self.contact_cache.remove(&pair) {
+                self.departed_contacts.push((pair, is_trigger));
+            }
+        }
 
         if idx != last_idx {
             let last_entity = self.entities[last_idx];
