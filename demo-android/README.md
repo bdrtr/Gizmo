@@ -1,14 +1,18 @@
 # demo-android — the games as an Android app
 
-The games of `games/` built into an APK that installs on a phone and opens full screen from its
-icon. Today the APK is `pinbol` (**Gizmo Pinbol**): the same game the desktop binary and the
-browser build run, with the touch flippers.
+The games of `games/` built into APKs that install on a phone and open full screen from their
+icon, one APK per game: **Gizmo Pinbol** (`pinbol`, touch flippers; this crate) and **Gizmo
+Nişancı** (`nisanci`, two touch sticks; `demo-android-nisanci`, the same host for another game).
+Each is the same game the desktop binary and the browser build run.
 
 ```bash
-scripts/android-apk.sh          # → target/release/apk/gizmo-pinbol.apk
-scripts/android-apk.sh run      # build, install on the phone adb sees, start it
-adb logcat -s gizmo             # the engine's log
+scripts/android-apk.sh                # → target/release/apk/gizmo-pinbol.apk
+scripts/android-apk.sh nisanci        # → target/release/apk/gizmo-nisanci.apk
+scripts/android-apk.sh nisanci run    # build, install on the phone adb sees, start it
+adb logcat -s gizmo                   # the engine's log
 ```
+
+CI's `android` job builds both on every push and keeps them as the run's `gizmo-apks` artifact.
 
 ## What it needs
 

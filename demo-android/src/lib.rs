@@ -4,7 +4,7 @@
 //! APK; `cargo apk run -p demo-android --release` installs it on a phone over `adb` and starts it.
 //! See `demo-android/README.md` for the tools it needs.
 //!
-//! Android loads this library into a `NativeActivity` and calls [`android_main`]; on the desktop
+//! Android loads this library into a `NativeActivity` and calls `android_main`; on the desktop
 //! the crate is empty.
 
 /// The app's entry point: Android calls it on the activity's thread.

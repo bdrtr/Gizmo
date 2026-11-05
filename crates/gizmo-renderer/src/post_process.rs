@@ -868,6 +868,12 @@ fn composite_encodes_srgb(format: wgpu::TextureFormat) -> bool {
     !format.is_srgb()
 }
 
+
+#[cfg(not(gizmo_forward_only))]
+fn composite_options(_surface_format: wgpu::TextureFormat) -> wgpu::PipelineCompilationOptions<'static> {
+    wgpu::PipelineCompilationOptions::default()
+}
+
 #[cfg(test)]
 mod srgb_tests {
     /// A browser canvas (`bgra8unorm`, `rgba8unorm`) gets the encode; an sRGB surface (Android's
@@ -894,9 +900,4 @@ mod srgb_tests {
             "the pipeline sets ENCODE_SRGB; the shader must declare it"
         );
     }
-}
-
-#[cfg(not(gizmo_forward_only))]
-fn composite_options(_surface_format: wgpu::TextureFormat) -> wgpu::PipelineCompilationOptions<'static> {
-    wgpu::PipelineCompilationOptions::default()
 }

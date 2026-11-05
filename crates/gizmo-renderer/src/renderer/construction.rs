@@ -22,15 +22,16 @@ pub(crate) fn cap_web_render_size(
     size
 }
 
-/// The web's render budget, in pixels: what a 640 × 360 frame costs.
-#[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
+/// The web's render budget, in pixels: what a 640 × 360 frame costs. (Each target's reduced path
+/// reads one of the two budgets, so the other is dead there; both are read by the tests.)
+#[allow(dead_code)]
 pub(crate) const WEB_RENDER_PIXELS: u32 = 640 * 360;
 
 /// An Android app's render budget: what a 1280 × 720 frame costs, four times the web's. The
 /// browser's budget is set by what a page can spend beside everything else a browser does; an app
 /// has the GPU to itself, and at the web's 640 × 360 an upright phone (1080 × 2400) showed a frame
 /// of 328 × 701 stretched 3.3 times — soft edges and blurred text.
-#[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
+#[allow(dead_code)]
 pub(crate) const ANDROID_RENDER_PIXELS: u32 = 1280 * 720;
 
 /// The budget this target's reduced path renders at.

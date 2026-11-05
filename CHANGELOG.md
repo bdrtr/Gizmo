@@ -174,6 +174,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     app now lets the surface go on `suspended` and makes another on `resumed`
     (`Renderer::suspend_surface`, `resume_surface`) — before, a game sent to the background came
     back to a black screen. A frame with no surface is skipped instead of panicking.
+  - **`nisanci` as an APK too** (`scripts/android-apk.sh nisanci`, `demo-android-nisanci`): 91 fps
+    on the phone, both touch sticks, sound through AAudio. One APK per game; both carry the
+    project's icon (`media/logo.png`), and CI's `android` job builds both and keeps them.
   - **An app renders at 1280 × 720 pixels' worth**, four times the browser's 640 × 360: an app has
     the GPU to itself, and at the browser's budget an upright phone stretched a 328 × 701 frame 3.3
     times.

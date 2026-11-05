@@ -381,7 +381,8 @@ jobs:
       - name: Build the APK
         run: |
           export JAVA_HOME="$JAVA_HOME_17_X64"
-          scripts/android-apk.sh
+          scripts/android-apk.sh pinbol
+          scripts/android-apk.sh nisanci
       - name: Clippy aarch64-linux-android (the arms no other lint job sees)
         run: |
           NDK="$(ls -d "$ANDROID_HOME"/ndk/*/ | sort -V | tail -1)"
@@ -396,13 +397,15 @@ jobs:
           # `missing_const_for_thread_local` is allowed here only: it fires on `thread_local!`s
           # that already use `const { }` (gizmo-physics-rigid's solver scratch) — Android's TLS
           # expands the macro differently, and the desktop lint does not report them.
-          cargo clippy --locked --target aarch64-linux-android -p demo-android \
+          cargo clippy --locked --target aarch64-linux-android -p demo-android -p demo-android-nisanci \
             -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity \
             -A clippy::missing_const_for_thread_local
       - uses: actions/upload-artifact@v4
         with:
-          name: gizmo-pinbol-apk
-          path: target/release/apk/gizmo-pinbol.apk
+          name: gizmo-apks
+          path: |
+            target/release/apk/gizmo-pinbol.apk
+            target/release/apk/gizmo-nisanci.apk
   # ── Miri: the ECS unsafe surface must be free of undefined behaviour ───────
   # Runs the pointer/aliasing-heavy gizmo-core modules under Miri (Tree Borrows).
   # This fences the archetype-migration disjoint-borrow invariant: taking two

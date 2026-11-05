@@ -11,8 +11,9 @@
 #
 # One-time setup: `rustup target add aarch64-linux-android` and `cargo install cargo-apk`.
 #
-#   scripts/android-apk.sh          # → target/release/apk/gizmo-pinbol.apk
-#   scripts/android-apk.sh run      # build, install over adb, start; logs: adb logcat -s gizmo
+#   scripts/android-apk.sh                # pinbol → target/release/apk/gizmo-pinbol.apk
+#   scripts/android-apk.sh nisanci        # → target/release/apk/gizmo-nisanci.apk
+#   scripts/android-apk.sh nisanci run    # build, install over adb, start; logs: adb logcat -s gizmo
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -39,8 +40,16 @@ if [ -z "${CARGO_APK_RELEASE_KEYSTORE:-}" ]; then
     fi
 fi
 
-if [ "${1:-}" = "run" ]; then
-    cargo apk run -p demo-android --release
+# Which game: one APK per game, each its own host crate.
+case "${1:-pinbol}" in
+    pinbol) package=demo-android ;;
+    nisanci) package=demo-android-nisanci ;;
+    run) package=demo-android; set -- pinbol run ;;
+    *) echo "unknown game '$1' (pinbol, nisanci)" >&2; exit 2 ;;
+esac
+
+if [ "${2:-}" = "run" ]; then
+    cargo apk run -p "$package" --release
 else
-    cargo apk build -p demo-android --release
+    cargo apk build -p "$package" --release
 fi

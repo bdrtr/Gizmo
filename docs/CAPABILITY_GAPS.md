@@ -1275,8 +1275,10 @@ flippers, and survives being sent to the background. What stood in the way, all 
   cfg of its own now, `gizmo_forward_only`, and Android takes the browser's.
 - ~~**Back from the background to a black screen.**~~ The surface is let go on `suspended` and
   made again on `resumed`.
-- **Open:** one game per APK (`pinbol`), chosen in `demo-android/src/lib.rs`; `aarch64` only. The
-  launcher icon is `media/logo.png`. (The CI `android` job builds, lints and uploads the APK; the render budget
+- **Open:** one APK per game (`pinbol`, `nisanci`), each a host crate; `aarch64` only. Screen text
+  and UI pixels are render pixels, so at the app's render budget a HUD is about 0.6 of its desktop
+  size on a phone (logical pixels would fix it, on high-DPI desktops too); the bottom of the screen
+  is under Android's navigation bar, and `nisanci`'s sticks reach into it. (The CI `android` job builds, lints and uploads the APK; the render budget
   is 1280 × 720 pixels' worth, four times the browser's.)
 
 ### C16ai. A game on a phone, in the browser (2026-11-05, `pinbol` in `demo-web`)
