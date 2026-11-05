@@ -71,6 +71,7 @@ pub fn ui_layout_system(
     mut scrolls: Query<Mut<crate::components::Scroll>>,
     scale: Option<ResMut<crate::scale::UiScale>>,
     moved: Query<&crate::animate::UiTransform>,
+    display: Option<Res<gizmo_core::window::DisplayScale>>,
 ) {
     // Track the real (resized) window size so root layout uses the actual available
     // space instead of the construction-time default (which was never updated).
@@ -79,15 +80,16 @@ pub fn ui_layout_system(
     // so dividing the space once here and multiplying each box once on the way out (step 5)
     // scales them all without touching a single `Style`.
     let window_px = gizmo_math::Vec2::new(window.width, window.height);
+    let density = display.map_or(1.0, |d| d.get());
     let s = match scale {
         Some(mut scale) => {
             let f = scale.factor_for(window_px);
             if scale.factor() != f {
                 scale.set_factor(f);
             }
-            f
+            scale.on_display(density)
         }
-        None => 1.0,
+        None => density,
     };
     ctx.window_size = window_px / s;
     let mut current_entities = std::collections::HashSet::new();

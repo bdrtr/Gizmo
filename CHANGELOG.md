@@ -158,6 +158,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Logical pixels: a HUD is the same size on every screen (`DisplayScale`).** The engine works in
+  the frame's pixels, and those are different sizes: a 22 px HUD line was 13 logical pixels on a
+  phone, and its size in the browser depended on the render budget. The windowed app keeps a
+  `DisplayScale` resource (frame pixels per logical pixel; 1.67 on a Redmi Note 12 Pro, exactly 1
+  on an ordinary desktop window), and a screen `Text`'s font, wrap width and pinned margin, every
+  `Val::Px` of a layout and a `VirtualStick`'s radius are now logical pixels. A `UiScale::fixed`
+  multiplies it, `UiScale::fit` already measures the window, and a `Text::screen` position stays
+  a place in the frame. **A high-DPI desktop changes:** its HUDs and layouts grow to their
+  logical size, as the platform's scale asks.
+- **`SafeArea`: what the system covers.** A resource with each window edge's covered length in frame
+  pixels, from Android's content rectangle (the phone's navigation bar: 130 physical pixels,
+  measured). `nisanci`'s sticks sit above it, where a thumb reaches them.
+
 - **Android: the games as an installable app.** `scripts/android-apk.sh` builds an APK
   (`demo-android`, cargo-apk) that installs on a phone and opens full screen from its icon —
   `pinbol` today, touch flippers and all, measured on a Redmi Note 12 Pro (Adreno 618, Android 13).

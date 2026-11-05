@@ -55,6 +55,18 @@ impl UiScale {
         self.factor = factor;
     }
 
+    /// Window pixels per layout pixel on a display of `density` frame pixels per logical pixel: a
+    /// layout pixel is a logical pixel, so a [`fixed`](Self::fixed) factor is multiplied by the
+    /// density. A [`fit`](Self::fit) already measures the window itself and needs no help.
+    #[must_use]
+    pub fn on_display(&self, density: f32) -> f32 {
+        if self.design.is_some() {
+            self.factor
+        } else {
+            self.factor * density
+        }
+    }
+
     /// The factor for a window of `window` pixels.
     #[must_use]
     pub fn factor_for(&self, window: Vec2) -> f32 {
@@ -79,5 +91,14 @@ mod tests {
         assert_eq!(UiScale::fixed(1.5).factor_for(Vec2::new(100.0, 100.0)), 1.5);
         assert_eq!(UiScale::fixed(0.0).factor(), UiScale::MIN);
         assert_eq!(UiScale::fixed(f32::NAN).factor(), 1.0);
+    }
+
+    /// A phone's density reaches a fixed factor; a `fit` has measured the window already.
+    #[test]
+    fn a_fixed_factor_scales_with_the_display_and_a_fit_does_not() {
+        assert_eq!(UiScale::fixed(2.0).on_display(1.5), 3.0);
+        let mut fit = UiScale::fit(1280.0, 720.0);
+        fit.set_factor(0.5);
+        assert_eq!(fit.on_display(1.5), 0.5);
     }
 }

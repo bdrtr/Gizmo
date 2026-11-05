@@ -243,6 +243,17 @@ impl TextSpace {
         }
     }
 
+    /// This space with a [`Pinned`](Self::Pinned) margin at `k` times its size; anything else is
+    /// unchanged. A margin is a length the author wrote, while a [`Screen`](Self::Screen) position
+    /// is a place in the frame — often computed from it, as a world point's pixel is — and stays.
+    #[must_use]
+    pub fn with_scaled_margin(self, k: f32) -> Self {
+        match self {
+            Self::Pinned { at, offset } => Self::Pinned { at, offset: offset * k },
+            other => other,
+        }
+    }
+
     /// The authored window-pixel anchor, or `None` for a text that lives in the world — or is
     /// [`Pinned`](Self::Pinned), whose pixel depends on the window
     /// ([`screen_point`](Self::screen_point) answers that).

@@ -635,6 +635,7 @@ impl<State: 'static> App<State> {
                             _ => {}
                         }
                         if let WindowEvent::RedrawRequested = event {
+                            sync_display(&mut self.world, &window);
                             // Per-frame root span; the physics/update/render sub-spans
                             // (from the ECS schedule and physics pipeline) nest under it.
                             let _frame_span = tracing::trace_span!("frame").entered();
@@ -937,6 +938,52 @@ impl<State: 'static> App<State> {
     }
 }
 
+/// Keeps `DisplayScale` and `SafeArea` true to the window, the frame and the platform. Called every
+/// frame and writes only on a change: Android sends no event when its content rectangle moves, and
+/// a resize, a scale change and a frame budget all feed the same number.
+fn sync_display(world: &mut gizmo_core::World, window: &winit::window::Window) {
+    let physical = window.inner_size();
+    let frame = world.get_resource::<gizmo_core::window::WindowInfo>().map(|i| (i.width, i.height));
+    let Some((frame_w, frame_h)) = frame else { return };
+    let scale =
+        gizmo_core::window::DisplayScale::from_window(frame_w, physical.width as f32, window.scale_factor() as f32);
+    if world.get_resource::<gizmo_core::window::DisplayScale>().map(|s| *s) != Some(scale) {
+        world.insert_resource(scale);
+    }
+    #[cfg(target_os = "android")]
+    if let Some(app) = crate::android::app() {
+        let r = app.content_rect();
+        let area = safe_area(
+            [r.left, r.top, r.right, r.bottom],
+            (physical.width as f32, physical.height as f32),
+            (frame_w, frame_h),
+        );
+        if world.get_resource::<gizmo_core::window::SafeArea>().map(|a| *a) != Some(area) {
+            tracing::debug!(?area, ?scale, "[App] display");
+            world.insert_resource(area);
+        }
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = frame_h;
+}
+
+/// The window edges outside a content rectangle (`[left, top, right, bottom]`, physical pixels), in
+/// frame pixels. An empty rectangle is no information, not a window wholly covered.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+fn safe_area(content: [i32; 4], physical: (f32, f32), frame: (f32, f32)) -> gizmo_core::window::SafeArea {
+    let [left, top, right, bottom] = content;
+    if right <= left || bottom <= top || physical.0 <= 0.0 || physical.1 <= 0.0 {
+        return gizmo_core::window::SafeArea::default();
+    }
+    let (sx, sy) = (frame.0 / physical.0, frame.1 / physical.1);
+    gizmo_core::window::SafeArea {
+        left: left.max(0) as f32 * sx,
+        top: top.max(0) as f32 * sy,
+        right: (physical.0 - right as f32).max(0.0) * sx,
+        bottom: (physical.1 - bottom as f32).max(0.0) * sy,
+    }
+}
+
 /// What a pointer position in window pixels is multiplied by to land in the frame's pixels — the
 /// space `WindowInfo`, the UI layout and the camera all work in.
 ///
@@ -952,4 +999,23 @@ fn pointer_scale(world: &gizmo_core::World, window: &winit::window::Window) -> (
         return (1.0, 1.0);
     }
     (info.width / physical.width as f32, info.height / physical.height as f32)
+}
+
+#[cfg(test)]
+mod safe_area_tests {
+    use super::safe_area;
+
+    /// The phone it was measured on: a 1080 x 2307 window whose bottom 130 pixels are under the
+    /// navigation bar, drawn in a frame of 656 x 1401.
+    #[test]
+    fn the_covered_edge_is_in_frame_pixels() {
+        let area = safe_area([0, 0, 1080, 2177], (1080.0, 2307.0), (656.0, 1401.0));
+        assert!((area.bottom - 78.95).abs() < 0.1, "{area:?}");
+        assert_eq!((area.left, area.top, area.right), (0.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn an_empty_rectangle_covers_nothing() {
+        assert_eq!(safe_area([0, 0, 0, 0], (1080.0, 2307.0), (656.0, 1401.0)), Default::default());
+    }
 }

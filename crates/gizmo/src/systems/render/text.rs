@@ -83,7 +83,7 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
         if let Some(s) = sticks.get(id) {
             let side = node.size.x.min(node.size.y) * 0.35;
             let rest = if s.is_held() { s.centre() } else { node.position + node.size * 0.5 };
-            let at = rest + Vec2::new(s.value().x, -s.value().y) * s.radius;
+            let at = rest + Vec2::new(s.value().x, -s.value().y) * s.radius * display_density(world);
             out.push((id, at - Vec2::splat(side * 0.5), Vec2::splat(side), Some(s.knob)));
         }
         // A fading box fades all of its parts.
@@ -164,7 +164,9 @@ fn tree_order(world: &World) -> Vec<u32> {
 /// (no resource, or a factor of one) — the common case, which then clones nothing.
 #[cfg(feature = "ui")]
 fn ui_text_scale(world: &World) -> Option<f32> {
-    world.get_resource::<crate::ui::UiScale>().map(|s| s.factor()).filter(|&k| k != 1.0)
+    let density = display_density(world);
+    let k = world.get_resource::<crate::ui::UiScale>().map_or(density, |s| s.on_display(density));
+    (k != 1.0).then_some(k)
 }
 
 #[cfg(not(feature = "ui"))]
@@ -172,11 +174,29 @@ fn ui_text_scale(_world: &World) -> Option<f32> {
     None
 }
 
+/// Frame pixels per logical pixel (`DisplayScale`, 1 without one).
+fn display_density(world: &World) -> f32 {
+    world.get_resource::<crate::core::window::DisplayScale>().map_or(1.0, |d| d.get())
+}
+
+/// What a text's font is multiplied by: a label on a UI box grows with the layout, a HUD line with
+/// the display, and a world label has its own `px_per_unit`.
+fn text_scale(world: &World, on_a_box: bool, in_the_world: bool) -> Option<f32> {
+    if in_the_world {
+        None
+    } else if on_a_box {
+        ui_text_scale(world)
+    } else {
+        Some(display_density(world)).filter(|&k| k != 1.0)
+    }
+}
+
 /// `item` at `k` times its size: the font, and the width it wraps at.
 fn scale_text(item: &Text, k: f32) -> Text {
     let mut t = item.clone();
     t.size_px *= k;
     t.max_width = t.max_width.map(|w| w * k);
+    t.space = t.space.with_scaled_margin(k);
     t
 }
 
@@ -570,7 +590,8 @@ pub fn record_text(
         // its `UiTransform`s.
         let scaled;
         let alpha = ui_opacity(world, id);
-        let item = match (anchor.and(ui_text_scale(world)), alpha < 1.0) {
+        let k = text_scale(world, anchor.is_some(), item.space.needs_world_position());
+        let item = match (k, alpha < 1.0) {
             (None, false) => item,
             (k, _) => {
                 let mut t = scale_text(item, k.unwrap_or(1.0));
@@ -754,6 +775,26 @@ mod clip_tests {
         assert!(at.x + size.x <= screen.x && at.y + size.y <= screen.y);
         let (at, _) = tooltip_box(Vec2::new(50.0, 5.0), Vec2::new(900.0, 700.0), 5.0, screen);
         assert_eq!(at, Vec2::ZERO, "too big for the window: pinned to its corner");
+    }
+
+    /// A HUD line follows the display and a world label does not; a screen position stays where it
+    /// is, because it is a place in the frame, while a pinned text's margin grows with its font.
+    #[test]
+    fn a_hud_line_scales_with_the_display_and_a_world_label_does_not() {
+        use crate::core::window::DisplayScale;
+        let mut world = World::new();
+        assert_eq!(text_scale(&world, false, false), None, "no resource: nothing changes");
+        world.insert_resource(DisplayScale::from_window(800.0, 400.0, 1.0));
+        assert_eq!(text_scale(&world, false, false), Some(2.0));
+        assert_eq!(text_scale(&world, false, true), None);
+        let font = crate::renderer::text::FontLibrary::default()
+            .load(crate::renderer::text::synthetic::synthetic_face())
+            .expect("the synthetic face parses");
+        let pinned = scale_text(&Text::pinned("x", font, 22.0, crate::renderer::components::TextAnchor::TopLeft, Vec2::splat(16.0)), 2.0);
+        assert_eq!(pinned.size_px, 44.0);
+        assert_eq!(pinned.space.screen_point(Vec2::new(800.0, 600.0)), Some(Vec2::splat(32.0)));
+        let placed = scale_text(&Text::screen("x", font, 22.0, Vec2::splat(16.0)), 2.0);
+        assert_eq!(placed.space.screen_point(Vec2::new(800.0, 600.0)), Some(Vec2::splat(16.0)));
     }
 
     /// A label on a UI box is drawn at the `UiScale` factor: its font and its wrap width, and

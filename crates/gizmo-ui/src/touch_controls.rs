@@ -30,7 +30,7 @@ const MOUSE: u64 = u64::MAX;
 /// little off the drawn centre does not start with a push it did not mean.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct VirtualStick {
-    /// How far, in pixels, the finger travels for a full push.
+    /// How far, in logical pixels, the finger travels for a full push.
     pub radius: f32,
     /// The knob's colour (under `gizmo-engine`).
     pub knob: Vec4,
@@ -142,7 +142,11 @@ pub fn touch_controls_system(
     input: Res<Input>,
     mut sticks: Query<(&Node, Mut<VirtualStick>)>,
     mut buttons: Query<(&Node, Mut<VirtualButton>)>,
+    display: Option<Res<gizmo_core::window::DisplayScale>>,
 ) {
+    // A thumb travels the same distance on every screen: the radius is logical pixels, and fingers
+    // arrive in frame pixels.
+    let density = display.map_or(1.0, |d| d.get());
     let pointers = pointers(&input);
     let held_by = |id: u64| pointers.iter().find(|p| p.0 == id && !p.3).map(|p| p.1);
     let mut claimed: Vec<u64> = Vec::new();
@@ -158,7 +162,7 @@ pub fn touch_controls_system(
         if let Some(f) = next.finger {
             match held_by(f) {
                 Some(p) => {
-                    let v = (p - next.centre) / next.radius;
+                    let v = (p - next.centre) / (next.radius * density);
                     let v = Vec2::new(v.x, -v.y);
                     next.value = if v.length() > 1.0 { v.normalize() } else { v };
                 }
@@ -336,6 +340,19 @@ mod tests {
         touch(&mut world, 3, Moved, 700.0, 500.0);
         run(&mut world);
         assert!(!b(&world).is_pressed(), "a finger sliding onto a settled button pressed it");
+    }
+
+    /// A full push is the same distance for a thumb on any screen: fingers arrive in frame pixels,
+    /// and on a dense display 50 logical pixels are more of them.
+    #[test]
+    fn a_full_push_is_the_radius_in_logical_pixels() {
+        let (mut world, stick, _) = pad();
+        world.insert_resource(gizmo_core::window::DisplayScale::from_window(800.0, 400.0, 1.0));
+        touch(&mut world, 1, Started, 100.0, 500.0);
+        run(&mut world);
+        touch(&mut world, 1, Moved, 150.0, 500.0); // 50 frame pixels: half of 50 logical at density 2
+        run(&mut world);
+        assert_eq!(world.borrow::<VirtualStick>().get(stick).unwrap().value(), Vec2::new(0.5, 0.0));
     }
 
     /// A finger lifting over a control on its first frame is no tap.

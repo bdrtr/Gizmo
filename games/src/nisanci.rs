@@ -231,9 +231,16 @@ fn camera_test() -> bool {
     let edge = ARENA - 0.5;
     let seen = [-edge, edge].iter().all(|&x| (x - camera_x(x, phone, fov)).abs() + PLAYER_RADIUS < half_width);
     let still = [-edge, 0.0, edge].iter().all(|&x| camera_x(x, 16.0 / 9.0, fov) == 0.0);
-    let ok = seen && still;
+    // Telefonda çubuklar gezinme çubuğunun üstünde: 79 kare pikseli kapalı, yoğunluk 2.
+    let mut world = World::new();
+    let plain = matches!(stick_bottom(&world), Val::Percent(_));
+    world.insert_resource(gizmo::core::window::WindowInfo::new(656.0, 1000.0));
+    world.insert_resource(gizmo::core::window::SafeArea { bottom: 79.0, ..Default::default() });
+    world.insert_resource(gizmo::core::window::DisplayScale::from_window(656.0, 328.0, 1.0));
+    let above = matches!(stick_bottom(&world), Val::Px(p) if (p - 54.5).abs() < 0.01);
+    let ok = seen && still && plain && above;
     println!(
-        "    kamera: dikey telefonda arenanın uçları görünüyor mu {seen}, geniş pencerede kımıldamıyor mu {still} → {}",
+        "    kamera: dikey telefonda arenanın uçları görünüyor mu {seen}, geniş pencerede kımıldamıyor mu {still}; çubuklar gezinme çubuğunun üstünde mi {above} → {}",
         if ok { "tamam" } else { "BAŞARISIZ" }
     );
     ok
@@ -444,11 +451,13 @@ fn aim_and_fire(world: &mut World, game: &mut Game, input: &Input, dt: f32) {
 
 /// Dokunmatik çubuklar: ekranın sol alt ve sağ alt köşelerinde iki yarı saydam kutu.
 fn spawn_sticks(world: &mut World) -> (u32, u32) {
+    // Telefonda ekranın altı gezinme çubuğunun altında: çubuklar başparmağın erişeceği yerde dursun.
+    let bottom = stick_bottom(world);
     let mut spawn = |left: Val, right: Val| {
         let e = world.spawn_bundle(NodeBundle {
             style: Style {
                 position_type: PositionType::Absolute,
-                inset: UiRect { left, right, top: Val::Auto, bottom: Val::Percent(3.0) },
+                inset: UiRect { left, right, top: Val::Auto, bottom },
                 // Pencereye oranlı: telefonda yatay ekranın iki alt köşesi, masaüstünde küçük.
                 width: Val::Percent(30.0),
                 height: Val::Percent(40.0),
@@ -461,6 +470,19 @@ fn spawn_sticks(world: &mut World) -> (u32, u32) {
         e.id()
     };
     (spawn(Val::Percent(2.0), Val::Auto), spawn(Val::Auto, Val::Percent(2.0)))
+}
+
+/// Çubukların alt boşluğu: pencerenin %3'ü, sistemin kapladığı alt kenarın üstünde.
+fn stick_bottom(world: &World) -> Val {
+    use gizmo::core::window::{DisplayScale, SafeArea, WindowInfo};
+    let covered = world.get_resource::<SafeArea>().map_or(0.0, |a| a.bottom);
+    if covered <= 0.0 {
+        return Val::Percent(3.0);
+    }
+    let height = world.get_resource::<WindowInfo>().map_or(0.0, |w| w.height);
+    let density = world.get_resource::<DisplayScale>().map_or(1.0, |d| d.get());
+    // `Val::Px` mantıksal piksel; `SafeArea` ve pencere kare pikseli.
+    Val::Px((covered + height * 0.03) / density)
 }
 
 /// Bir dokunmatik çubuğun değeri (yoksa `None`).

@@ -74,6 +74,59 @@ impl Default for WindowInfo {
     }
 }
 
+/// How many frame pixels one *logical* pixel is — the unit a `Val::Px`, a HUD's font size and a touch
+/// stick's radius are written in. An ECS resource the windowed app keeps current; without one the
+/// scale is 1.
+///
+/// The engine works in the frame's pixels (`WindowInfo`), and a pixel is not the same size
+/// everywhere: a 22 px HUD line is 22 px on a desktop monitor, but a phone packs 2.75 physical
+/// pixels into the space of one, and the frame may be rendered below the screen's resolution on
+/// top of that. Measured on a Redmi Note 12 Pro (1080 × 2400, scale factor 2.75, frame 656 wide):
+/// 1.67 frame pixels per logical pixel, so a 22 px line came out as 13 logical pixels — too small
+/// to read comfortably, and a different size again in the browser.
+///
+/// On an ordinary desktop window it is exactly 1 and nothing changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DisplayScale(f32);
+
+impl DisplayScale {
+    /// The scale for a frame `frame_width` pixels wide shown on a window `physical_width` physical
+    /// pixels wide at the platform's `scale_factor` (physical pixels per logical pixel). Anything
+    /// not positive and finite gives 1: a minimised window has no meaningful scale.
+    #[must_use]
+    pub fn from_window(frame_width: f32, physical_width: f32, scale_factor: f32) -> Self {
+        let k = frame_width * scale_factor / physical_width;
+        Self(if k.is_finite() && k > 0.0 { k } else { 1.0 })
+    }
+
+    /// Frame pixels per logical pixel.
+    #[must_use]
+    pub fn get(self) -> f32 {
+        self.0
+    }
+}
+
+impl Default for DisplayScale {
+    fn default() -> Self {
+        Self(1.0)
+    }
+}
+
+/// How much of each window edge the system covers, in frame pixels — on a phone, the navigation
+/// bar over the bottom of the app. An ECS resource; without one nothing is covered. A control a
+/// thumb has to reach belongs inside it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct SafeArea {
+    /// Covered at the left edge.
+    pub left: f32,
+    /// Covered at the top edge.
+    pub top: f32,
+    /// Covered at the right edge.
+    pub right: f32,
+    /// Covered at the bottom edge.
+    pub bottom: f32,
+}
+
 /// How the mouse cursor behaves over the window — what a game asks of it, as an ECS resource.
 ///
 /// A first-person or third-person game turns the camera with the mouse and must keep the cursor
@@ -192,3 +245,19 @@ pub enum WindowMode {
 /// ```
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct AppExit;
+
+#[cfg(test)]
+mod display_scale_tests {
+    use super::*;
+
+    /// A desktop window is 1; the phone it was measured on is 1.67; a frame stretched up in a
+    /// browser is under 1; a minimised window does not divide by zero.
+    #[test]
+    fn the_scale_is_frame_pixels_per_logical_pixel() {
+        assert_eq!(DisplayScale::from_window(1280.0, 1280.0, 1.0).get(), 1.0);
+        assert!((DisplayScale::from_window(656.0, 1080.0, 2.75).get() - 1.67).abs() < 0.01);
+        assert!((DisplayScale::from_window(328.0, 1080.0, 2.75).get() - 0.835).abs() < 0.01);
+        assert_eq!(DisplayScale::from_window(100.0, 0.0, 1.0).get(), 1.0);
+        assert_eq!(DisplayScale::default().get(), 1.0);
+    }
+}
