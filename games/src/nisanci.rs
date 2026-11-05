@@ -97,6 +97,8 @@ struct Game {
     t: f32,
     /// Dokunmatik çubuklar: ilk dokunuşta kuruluyor (hareket, nişan).
     sticks: Option<(u32, u32)>,
+    /// Son canın gittiği an (`t`): bir saniye geçmeden gelen dokunuş oyunu yeniden başlatmıyor.
+    ended_at: f32,
 }
 
 /// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
@@ -176,6 +178,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
         auto: std::env::var_os("NISANCI_OTO").is_some(),
         t: 0.0,
         sticks: None,
+        ended_at: 0.0,
     }
 }
 
@@ -258,9 +261,31 @@ fn touch_test() -> bool {
         run.frame(1.0 / 60.0, update);
     }
     let moved = x(&run) - start;
-    let ok = moved > 0.5;
+    run.input.on_touch(1, TouchPhase::Ended, fx + 60.0, fy);
+    run.frame(1.0 / 60.0, update);
+    // Oyun bitti: hemen gelen dokunuş bir şey yapmıyor, bir saniye sonrakisi yeniden başlatıyor.
+    let lives = |run: &HeadlessFrames| run.world.get_resource::<Game>().map_or(0, |g| g.lives);
+    if let Some(mut g) = run.world.get_resource_mut::<Game>() {
+        g.lives = 0;
+        g.ended_at = g.t;
+    }
+    let tap = |run: &mut HeadlessFrames, id: u64| {
+        run.input.on_touch(id, TouchPhase::Started, size.width * 0.5, size.height * 0.4);
+        run.frame(1.0 / 60.0, update);
+        run.input.on_touch(id, TouchPhase::Ended, size.width * 0.5, size.height * 0.4);
+        run.frame(1.0 / 60.0, update);
+    };
+    tap(&mut run, 2);
+    let early = lives(&run);
+    for _ in 0..70 {
+        run.frame(1.0 / 60.0, update);
+    }
+    tap(&mut run, 3);
+    let later = lives(&run);
+    let ok = moved > 0.5 && early == 0 && later == 3;
     println!(
-        "    dokunma: ilk parmak sol çubukta sağa → oyuncu {moved:+.2} birim → {}",
+        "    dokunma: ilk parmak sol çubukta sağa → oyuncu {moved:+.2} birim; bitince hemen dokunuş → {early} can, \
+         bir saniye sonra → {later} can → {}",
         if ok { "tamam" } else { "BAŞARISIZ" }
     );
     ok
@@ -289,7 +314,11 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let pad = input.gamepad();
     let restart_pressed =
         input.is_key_just_pressed(KeyCode::KeyR as u32) || pad.is_some_and(|p| p.is_just_pressed(GamepadButton::Start));
-    if restart_pressed && game.lives == 0 {
+    // Telefonda R de Start da yok: oyun bittikten bir saniye sonra ekrana inen bir parmak yeniden
+    // başlatıyor. O bekleme, son anda telaşla ekrana basan başparmağın sonucu görmeden yeni oyunu
+    // başlatmasın diye.
+    let tapped = game.t - game.ended_at > 1.0 && input.touches().iter().any(|t| t.just_started);
+    if (restart_pressed || tapped) && game.lives == 0 {
         restart(world, &mut game);
     }
 
@@ -574,6 +603,7 @@ fn get_hit(world: &mut World, game: &mut Game, dt: f32) {
     }
     play(world, "acı");
     if game.lives == 0 {
+        game.ended_at = game.t;
         if let Some(mut fade) = world.get_resource_mut::<ScreenFade>() {
             fade.set_color(Vec3::ZERO);
             fade.fade_to(0.6, 1.0);
@@ -640,6 +670,7 @@ fn draw_hud(world: &mut World, game: &Game) {
         );
     }
     if let Some(mut t) = texts.get_mut(game.banner) {
-        t.content = if game.lives == 0 { format!("Bitti — {} puan\nR / Start: yeniden", game.score) } else { String::new() };
+        let again = if game.sticks.is_some() { "dokun: yeniden" } else { "R / Start: yeniden" };
+        t.content = if game.lives == 0 { format!("Bitti — {} puan\n{again}", game.score) } else { String::new() };
     }
 }
