@@ -202,11 +202,42 @@ fn self_test() -> bool {
             run.world.insert_resource(game);
         }
     }
-    let ok = best.0 > 0 && best.1 >= 2 && sparks_most < 50;
+    let touch_ok = touch_test();
+    let ok = best.0 > 0 && best.1 >= 2 && sparks_most < 50 && touch_ok;
     println!(
         "nisanci --test: 120 s, en iyi {} puan, {}. dalga, {deaths} kez öldü; aynı anda en çok {sparks_most} kıvılcım → {}",
         best.0,
         best.1,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
+/// İlk dokunuş, pencere açmadan: sol alttaki çubuk alanına inen ilk parmak sağa kayınca oyuncu
+/// sağa gitmeli. Çubuklar o dokunuşa cevap olarak kuruluyor; motor yeni bir kontrole altında
+/// duran parmağı vermeden önce bu ilk dokunuş boşa gidiyordu, başparmağı kaldırıp yeniden
+/// koymak gerekiyordu.
+fn touch_test() -> bool {
+    use gizmo::core::input::touch::TouchPhase;
+    let mut world = World::new();
+    let game = setup(&mut world, HeadlessFrames::font(), false);
+    world.insert_resource(game);
+    let mut run = HeadlessFrames::new(world).add_plugin(UiPlugin);
+    let x = |run: &HeadlessFrames| run.world.get_resource::<Game>().map(|g| player_position(&run.world, &g).x).unwrap_or(0.0);
+    let size = gizmo::core::window::WindowInfo::default();
+    let (fx, fy) = (size.width * 0.15, size.height * 0.8);
+    let start = x(&run);
+    run.input.on_touch(1, TouchPhase::Started, fx, fy);
+    for i in 0..40 {
+        if i == 5 {
+            run.input.on_touch(1, TouchPhase::Moved, fx + 60.0, fy);
+        }
+        run.frame(1.0 / 60.0, update);
+    }
+    let moved = x(&run) - start;
+    let ok = moved > 0.5;
+    println!(
+        "    dokunma: ilk parmak sol çubukta sağa → oyuncu {moved:+.2} birim → {}",
         if ok { "tamam" } else { "BAŞARISIZ" }
     );
     ok

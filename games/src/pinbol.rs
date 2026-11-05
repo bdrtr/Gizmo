@@ -325,8 +325,10 @@ struct Game {
     hud: u32,
     banner: u32,
     /// Dokunmatik paletler (sol, sağ). Kurulumda, görünmez kuruluyorlar: bir düğme yalnızca
-    /// üstüne o karede inen parmağı sahipleniyor, yani ilk dokunuşta kurulan bir düğme o
-    /// dokunuşu kaçırıyordu — telefonda ilk palet vuruşu boşa gidiyordu.
+    /// üstüne inen parmağı sahipleniyor, yani ilk dokunuşta kurulan bir düğme o dokunuşu
+    /// kaçırıyordu — telefonda ilk palet vuruşu boşa gidiyordu. Motor artık yeni kurulan bir
+    /// kontrole altında duran parmağı veriyor (2026-11-05); düğmeler yine de kurulumda kuruluyor,
+    /// ilk karede yerleşimleri hazır olsun diye.
     touch: [u32; 2],
     /// Ekrana dokunuldu mu: düğmeler o zaman görünür, HUD dokunmatik ipucunu yazar.
     touched: bool,
@@ -388,7 +390,7 @@ fn touch_test() -> bool {
     };
     frames(&mut run, 5);
     let size = gizmo::core::window::WindowInfo::default();
-    // Bu ilk dokunuş: palet hemen kalkmalı (düğmeler ilk dokunuşta kurulsaydı bu parmağı kaçırırdı).
+    // Bu ilk dokunuş: palet hemen kalkmalı.
     run.input.on_touch(1, TouchPhase::Started, size.width * 0.25, size.height * 0.6);
     frames(&mut run, 20);
     let held = angles(&run);

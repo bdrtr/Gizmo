@@ -50,6 +50,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A touch control made in answer to a touch never got that touch.** `VirtualStick` and
+  `VirtualButton` claimed only a finger *landing* on them, and a control spawned on the first
+  touch has no box until layout runs — by the next frame the finger is no longer landing. On a
+  phone `nisanci`'s sticks appeared under the thumb and ignored it until it lifted and came down
+  again. On its first frame with a box a control now also takes a finger already down inside it
+  that nothing else holds (a stick centres where that finger is); after that frame only a landing
+  finger counts, so one sliding onto a control that was already there still claims nothing, and a
+  finger lifting over a brand-new button is not a tap. `nisanci --test` now lays a first finger on
+  the left stick and checks the player moves (+0.00 before, +3.50 after).
+
 - **Screen text ran off the side of a narrow window.** A pinned or screen-positioned `Text`
   wrapped only at `\n` or its own `max_width`, so a HUD line wider than the window lost its end
   past the edge — `pinbol`'s controls line on an upright phone (350 frame pixels across) lost its

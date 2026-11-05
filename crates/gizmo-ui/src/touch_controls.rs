@@ -37,13 +37,15 @@ pub struct VirtualStick {
     value: Vec2,
     finger: Option<u64>,
     centre: Vec2,
+    /// Whether it has had a box yet — see [`touch_controls_system`] for what that changes.
+    laid_out: bool,
 }
 
 impl VirtualStick {
     /// A stick at rest, `radius` pixels for a full push.
     #[must_use]
     pub fn new(radius: f32) -> Self {
-        Self { radius: radius.max(1.0), knob: Vec4::new(1.0, 1.0, 1.0, 0.6), value: Vec2::ZERO, finger: None, centre: Vec2::ZERO }
+        Self { radius: radius.max(1.0), knob: Vec4::new(1.0, 1.0, 1.0, 0.6), value: Vec2::ZERO, finger: None, centre: Vec2::ZERO, laid_out: false }
     }
 
     /// Where it points: `-1..=1` on each axis, inside the unit circle, `y` up. Zero when no finger
@@ -72,6 +74,8 @@ pub struct VirtualButton {
     finger: Option<u64>,
     just_pressed: bool,
     just_released: bool,
+    /// Whether it has had a box yet — see [`touch_controls_system`] for what that changes.
+    laid_out: bool,
 }
 
 impl VirtualButton {
@@ -116,12 +120,24 @@ fn pointers(input: &Input) -> Vec<Pointer> {
     vec![(MOUSE, Vec2::new(x, y), input.is_mouse_button_just_pressed(0), input.is_mouse_button_just_released(0))]
 }
 
+/// Layout has given it somewhere to be touched.
+fn has_box(node: &Node) -> bool {
+    node.size.x > 0.0 && node.size.y > 0.0
+}
+
 fn inside(p: Vec2, node: &Node) -> bool {
     p.x >= node.position.x && p.y >= node.position.y && p.x < node.position.x + node.size.x && p.y < node.position.y + node.size.y
 }
 
 /// Advances every [`VirtualStick`] and [`VirtualButton`] from this frame's fingers (or mouse).
 /// A finger already holding one control is not claimed by another.
+///
+/// A control claims a finger that **lands** on it — and, on the first frame it has a box, one
+/// already down inside it that nothing holds. Without that second half, a control made in answer
+/// to a touch could never have that touch: it has no box until layout runs, and by the next frame
+/// the finger is no longer landing. `nisanci` makes its sticks on the first touch, and on a phone
+/// that touch did nothing; the thumb had to lift and come down again. A finger that slides onto a
+/// control that has been on the screen all along still claims nothing.
 pub fn touch_controls_system(
     input: Res<Input>,
     mut sticks: Query<(&Node, Mut<VirtualStick>)>,
@@ -152,14 +168,18 @@ pub fn touch_controls_system(
                 }
             }
         }
+        let fresh = !next.laid_out;
         if next.finger.is_none() {
-            if let Some(&(id, p, _, _)) = pointers.iter().find(|p| p.2 && !p.3 && !claimed.contains(&p.0) && inside(p.1, node)) {
+            if let Some(&(id, p, _, _)) =
+                pointers.iter().find(|p| (p.2 || fresh) && !p.3 && !claimed.contains(&p.0) && inside(p.1, node))
+            {
                 next.finger = Some(id);
                 next.centre = p;
                 next.value = Vec2::ZERO;
                 claimed.push(id);
             }
         }
+        next.laid_out |= has_box(node);
         if next != *stick {
             *stick = next;
         }
@@ -175,8 +195,13 @@ pub fn touch_controls_system(
                 next.just_released = true;
             }
         }
+        let fresh = !next.laid_out;
         if next.finger.is_none() {
-            if let Some(&(id, _, _, lifted)) = pointers.iter().find(|p| p.2 && !claimed.contains(&p.0) && inside(p.1, node)) {
+            // A finger lifting over a control that has just appeared is not a tap on it: it did
+            // not come down there, and it is not staying.
+            if let Some(&(id, _, _, lifted)) =
+                pointers.iter().find(|p| (p.2 || (fresh && !p.3)) && !claimed.contains(&p.0) && inside(p.1, node))
+            {
                 // A tap inside one frame is a press and a release, both reported.
                 next.just_pressed = true;
                 if lifted {
@@ -187,6 +212,7 @@ pub fn touch_controls_system(
                 }
             }
         }
+        next.laid_out |= has_box(node);
         if next != *button {
             *button = next;
         }
@@ -271,6 +297,59 @@ mod tests {
         touch(&mut world, 9, Ended, 700.0, 500.0);
         run(&mut world);
         assert!(b(&world).just_pressed() && b(&world).just_released() && !b(&world).is_pressed());
+    }
+
+    /// A control made in answer to a touch takes that touch: on its first frame with a box it
+    /// claims a finger already down inside it. Until layout gives it a box there is nothing to be
+    /// inside, and after that first frame a finger has to land on it again.
+    #[test]
+    fn a_control_made_under_a_finger_takes_it() {
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        // The finger comes down before any control exists.
+        touch(&mut world, 1, Started, 100.0, 500.0);
+        touch(&mut world, 2, Started, 700.0, 500.0);
+        run(&mut world);
+        // Made in answer to it, with no box yet: layout has not run.
+        let stick = world.spawn_bundle((node(0.0, 0.0, 0.0, 0.0), VirtualStick::new(50.0))).id();
+        let fire = world.spawn_bundle((node(0.0, 0.0, 0.0, 0.0), VirtualButton::default())).id();
+        run(&mut world);
+        let s = |w: &gizmo_core::World| *w.borrow::<VirtualStick>().get(stick).unwrap();
+        let b = |w: &gizmo_core::World| *w.borrow::<VirtualButton>().get(fire).unwrap();
+        assert!(!s(&world).is_held() && !b(&world).is_pressed(), "claimed with no box to be inside");
+        // Layout places them; both fingers are still down.
+        *world.borrow_mut::<Node>().get_mut(stick).unwrap() = node(0.0, 400.0, 200.0, 200.0);
+        *world.borrow_mut::<Node>().get_mut(fire).unwrap() = node(600.0, 400.0, 200.0, 200.0);
+        touch(&mut world, 1, Moved, 120.0, 500.0);
+        run(&mut world);
+        assert!(s(&world).is_held(), "the stick made under a finger did not take it");
+        assert_eq!(s(&world).centre(), Vec2::new(120.0, 500.0), "centred where the finger is, not a push");
+        assert!(b(&world).is_pressed() && b(&world).just_pressed(), "the button made under a finger did not take it");
+        touch(&mut world, 1, Moved, 145.0, 500.0);
+        run(&mut world);
+        assert_eq!(s(&world).value(), Vec2::new(0.5, 0.0));
+        // After its first frame a resting finger no longer counts: lift and slide back in.
+        touch(&mut world, 2, Ended, 700.0, 500.0);
+        run(&mut world);
+        touch(&mut world, 3, Started, 400.0, 100.0);
+        run(&mut world);
+        touch(&mut world, 3, Moved, 700.0, 500.0);
+        run(&mut world);
+        assert!(!b(&world).is_pressed(), "a finger sliding onto a settled button pressed it");
+    }
+
+    /// A finger lifting over a control on its first frame is no tap.
+    #[test]
+    fn a_finger_lifting_over_a_new_button_is_not_a_tap() {
+        let mut world = gizmo_core::World::new();
+        world.insert_resource(Input::new());
+        touch(&mut world, 1, Started, 700.0, 500.0);
+        run(&mut world);
+        let fire = world.spawn_bundle((node(600.0, 400.0, 200.0, 200.0), VirtualButton::default())).id();
+        touch(&mut world, 1, Ended, 700.0, 500.0);
+        run(&mut world);
+        let b = *world.borrow::<VirtualButton>().get(fire).unwrap();
+        assert!(!b.just_pressed() && !b.just_released() && !b.is_pressed());
     }
 
     /// With no fingers on the screen, the mouse drives them.

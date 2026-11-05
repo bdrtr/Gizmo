@@ -1275,9 +1275,11 @@ rises. What getting there found:
 - **A game could not run in the browser without moving house.** `demo-web` is a library and
   cannot reach a binary in `demo/`; a game that is to run in both lives in `games/` now, with an
   `app()` both hosts call. Only `pinbol` has moved.
-- **Game-side, worth knowing:** a `VirtualButton` claims only a finger that lands on it, so a
-  button made on the first touch (as `nisanci` makes its sticks) misses that touch. `pinbol`
-  makes its buttons at setup, invisible until the first touch; `nisanci` still loses its first.
+- ~~**A touch control made on the first touch missed that touch.**~~ **Closed 2026-11-05.** A
+  `VirtualStick`/`VirtualButton` claimed only a finger landing on it, and one made in answer to a
+  touch has no box until layout runs, so `nisanci`'s sticks never got the first touch. On its first
+  frame with a box a control now also takes a finger already down inside it that nothing holds;
+  `nisanci --test` lays a first finger on the left stick and checks the player moves.
 - ~~**No font in the browser.**~~ **Closed** (the project's call, made 2026-11-05: carry one).
   The web has no system fonts to borrow (`load_system_font` is always `NotFound` there), so text
   fell back to the synthetic face, ASCII only — every Turkish letter in a HUD missing on a phone.
