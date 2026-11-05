@@ -1293,8 +1293,12 @@ rises. What getting there found:
   positions in the wrong pixels (every touch missed), and a console flooded at TRACE. Plus the
   game's own camera looking the wrong way. Now the table fills an upright screen, Turkish text
   draws, a tap launches the ball and a held left half raises the left flipper.
-- **Open — speckled rendering on the phone.** Rainbow noise on one bumper and a quad of it on the
-  table, blue flecks on the rails: not seen on the desktop path, not yet explained.
+- ~~**Speckled rendering on the phone.**~~ **Closed 2026-11-05.** Rainbow noise on the bumpers,
+  a quad of it on the table, rails patched in other objects' colours, flicker while playing; the
+  desktop browser drew the same build clean. `gizmo_cluster_index` took the whole
+  `SceneUniforms` by value (17 040 bytes) and Adreno 618's compiler (driver V@0502) miscompiled
+  the lit fragment shader around the copy; it takes the five fields it reads now (CHANGELOG). A
+  test fails any shader function that takes more than 1 KB by value.
 
 ### C16ah. State keyed by a raw entity id (2026-11-05, an audit after `sarmasik`)
 

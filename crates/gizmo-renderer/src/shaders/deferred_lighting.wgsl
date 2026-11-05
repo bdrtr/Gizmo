@@ -611,7 +611,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Only the lights assigned to THIS fragment's cluster, instead of every light in the frame.
     // `i` still holds the index into `scene.lights`, so everything below — including the
     // point-shadow caster comparison — reads exactly as it did when this looped over all of them.
-    let cluster = gizmo_cluster_index(scene, world_pos);
+    let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, world_pos);
     let cluster_range = cluster_table[cluster];
     for (var ci = 0u; ci < cluster_range.y; ci++) {
         let i = cluster_light_indices[cluster_range.x + ci];

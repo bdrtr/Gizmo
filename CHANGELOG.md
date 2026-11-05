@@ -50,6 +50,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The lit forward shader came out garbage on an Adreno phone.** On a Redmi Note 12 Pro
+  (Adreno 618, driver V@0502, Chrome 156) `pinbol` drew speckles, rainbow noise on the bumpers,
+  rails patched with other objects' colours and a quad of noise on an empty stretch of table —
+  and flickered as it played. The desktop browser drew the same build clean. The cause was
+  `gizmo_cluster_index(scene_: SceneUniforms, …)`: it took the whole scene uniform **by value**,
+  17 040 bytes (nearly all of it the 256-light array), for five fields. That driver's compiler
+  miscompiled the fragment shader around the copy: everything that depended on a fragment input
+  (varyings, the instance id, even the fragment's own depth) was garbage in places, while a
+  constant colour drew clean, and it did so with the light loop never running (the scene has no
+  point lights). It now takes the five fields. Found by bisecting `fs_main` on the phone. Ruled
+  out on the way, each by a build on the phone: the instance storage buffer (fed as vertex
+  attributes instead), `firstInstance`, the depth format, depth precision, the HDR format's
+  compression, blending, `@invariant`, skinning. A test fails any shader function in the forward,
+  deferred or web schema that takes more than 1 KB by value (red on the old signature, 17 040 B).
+
 - **The web build on a phone: the canvas, its size, the pointer, the console.** Found by running
   `pinbol` on a phone over `adb` (Android 13, Chrome 156):
   - the canvas was given the app's 1280 × 720 as its CSS size, over the page's 100 % — a phone

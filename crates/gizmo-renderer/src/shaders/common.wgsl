@@ -94,16 +94,32 @@ fn sky_gradient(dir: vec3<f32>, zenith: vec3<f32>, horizon: vec3<f32>, ground: v
 // light list also needs the two storage bindings (group 0, bindings 1 and 2) — they are declared by
 // the shaders that light, not here, because a pipeline whose group 0 lacks them must still be able
 // to compose this module.
-fn gizmo_cluster_index(scene_: SceneUniforms, world_pos: vec3<f32>) -> u32 {
-    let dims = scene_.cluster_dims;
-    let clip = scene_.view_proj * vec4<f32>(world_pos, 1.0);
+//
+// It takes the five fields it reads, not `SceneUniforms`. It took the whole struct by value until
+// 2026-11-05, and that struct carries `lights: array<LightData, 256>` — 17 040 bytes copied into
+// function-local memory for every fragment. Desktop drivers fold the copy away; Adreno 618's
+// (driver V@0502, Chrome 156) did not, and the lit forward shader came out miscompiled: every
+// value that depends on a fragment input — varyings, even `@builtin(position).z` — was garbage in
+// blocks and speckles, while a constant colour drew clean. It did so with the light loop never
+// iterating (no point lights in the scene): the loop only has to be compiled. Measured on the
+// phone by bisecting `fs_main`: returning before the loop was clean, everything after it was not,
+// and passing these fields instead cleared it.
+fn gizmo_cluster_index(
+    view_proj: mat4x4<f32>,
+    camera_pos: vec3<f32>,
+    camera_forward: vec3<f32>,
+    dims: vec4<u32>,
+    cluster_depth: vec4<f32>,
+    world_pos: vec3<f32>,
+) -> u32 {
+    let clip = view_proj * vec4<f32>(world_pos, 1.0);
     // Behind the camera (w <= 0) has no cluster; clamp into the volume rather than wrap.
     let inv_w = select(1.0 / clip.w, 1.0, abs(clip.w) < 1e-9);
     let uv = clamp(clip.xy * inv_w * 0.5 + vec2<f32>(0.5), vec2<f32>(0.0), vec2<f32>(0.999999));
     let tile = vec2<u32>(uv * vec2<f32>(f32(dims.x), f32(dims.y)));
 
-    let depth = max(dot(world_pos - scene_.camera_pos.xyz, scene_.camera_forward.xyz), 1e-6);
-    let raw = log(depth) * scene_.cluster_depth.x + scene_.cluster_depth.y;
+    let depth = max(dot(world_pos - camera_pos, camera_forward), 1e-6);
+    let raw = log(depth) * cluster_depth.x + cluster_depth.y;
     let slice = min(u32(max(floor(raw), 0.0)), dims.z - 1u);
 
     return min(tile.x, dims.x - 1u)

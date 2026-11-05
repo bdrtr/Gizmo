@@ -308,6 +308,58 @@ mod tests {
         }
     }
 
+    /// No shader function takes a big value by value. `gizmo_cluster_index` took the whole
+    /// `SceneUniforms` (17 040 bytes, nearly all of it `lights: array<LightData, 256>`), and on an
+    /// Adreno 618 phone (driver V@0502, Chrome 156) the lit forward shader came out miscompiled:
+    /// speckles and blocks of garbage wherever a value depended on a fragment input, a constant
+    /// colour drawn clean. Desktop drivers fold the copy away, so nothing here can see the
+    /// miscompile itself — what this can see is the shape that provoked it, in every shader both
+    /// schemas compose.
+    ///
+    /// Entry points are left out: their arguments are stage inputs, not copies.
+    #[test]
+    fn no_shader_function_takes_a_large_value_by_value() {
+        const LIMIT: u32 = 1024;
+        let shaders: &[(&str, &str, bool)] = &[
+            ("shader.wgsl", include_str!("../shaders/shader.wgsl"), true),
+            ("baked_lit.wgsl", include_str!("../shaders/baked_lit.wgsl"), true),
+            ("unlit.wgsl", include_str!("../shaders/unlit.wgsl"), true),
+            ("water.wgsl", include_str!("../shaders/water.wgsl"), true),
+            ("sky.wgsl", include_str!("../shaders/sky.wgsl"), true),
+            ("backdrop.wgsl", include_str!("../shaders/backdrop.wgsl"), true),
+            ("grid.wgsl", include_str!("../shaders/grid.wgsl"), true),
+            ("text.wgsl", include_str!("../shaders/text.wgsl"), true),
+            ("deferred_lighting.wgsl", include_str!("../shaders/deferred_lighting.wgsl"), false),
+            ("gbuffer.wgsl", include_str!("../shaders/gbuffer.wgsl"), false),
+        ];
+        let mut offenders = Vec::new();
+        for &(name, src, web_too) in shaders {
+            let mut schemas = vec![("native", native_render_defs())];
+            if web_too {
+                schemas.push(("web", web_render_defs()));
+            }
+            for (schema, defs) in schemas {
+                let (module, _) = compose_module(src, name, defs).expect("composes");
+                let mut layouter = naga::proc::Layouter::default();
+                layouter.update(module.to_ctx()).expect("layout");
+                for (_, function) in module.functions.iter() {
+                    for argument in &function.arguments {
+                        let size = layouter[argument.ty].size;
+                        if size > LIMIT {
+                            offenders.push(format!(
+                                "{name} ({schema}): {}({}: {} bytes)",
+                                function.name.as_deref().unwrap_or("?"),
+                                argument.name.as_deref().unwrap_or("?"),
+                                size
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(offenders.is_empty(), "functions taking more than {LIMIT} bytes by value: {offenders:#?}");
+    }
+
     #[test]
     fn web_compose_strips_shadows_and_shifts_groups() {
         let web = compose_wgsl(SHADER_SRC, "shader.wgsl", web_render_defs());

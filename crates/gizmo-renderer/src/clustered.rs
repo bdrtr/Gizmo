@@ -576,7 +576,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (i >= arrayLength(&points)) {
         return;
     }
-    out_cluster[i] = gizmo_cluster_index(scene, points[i].xyz);
+    out_cluster[i] = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, points[i].xyz);
 }
 "#;
 

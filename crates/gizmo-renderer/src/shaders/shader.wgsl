@@ -329,7 +329,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Clustered: only this fragment's cluster's lights. `i` is still the index into `scene.lights`
     // so the body is unchanged from when it looped over every light.
-    let cluster = gizmo_cluster_index(scene, in.world_position);
+    let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, in.world_position);
     let cluster_range = cluster_table[cluster];
     for (var ci = 0u; ci < cluster_range.y; ci++) {
         let i = cluster_light_indices[cluster_range.x + ci];
