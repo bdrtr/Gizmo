@@ -500,7 +500,7 @@ fn build_post_pipelines(
         fragment: Some(wgpu::FragmentState {
             module: post_shader,
             entry_point: Some("fs_composite"),
-            compilation_options: Default::default(),
+            compilation_options: composite_options(surface_format),
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
                 blend: Some(wgpu::BlendState::REPLACE),
@@ -846,4 +846,57 @@ pub fn run_post_processing(
     #[cfg(gizmo_forward_only)]
     let passes = 1u32;
     tracing::trace!(passes, "[PostProcess] recorded post-processing chain");
+}
+
+/// The reduced path's composite encodes sRGB itself when the surface will not
+/// (`post_process_wasm.wgsl`'s `ENCODE_SRGB`); the desktop composite has no such constant, and wgpu
+/// rejects a constant a shader does not declare.
+#[cfg(gizmo_forward_only)]
+fn composite_options(surface_format: wgpu::TextureFormat) -> wgpu::PipelineCompilationOptions<'static> {
+    const ENCODE: &[(&str, f64)] = &[("ENCODE_SRGB", 1.0)];
+    const LEAVE: &[(&str, f64)] = &[("ENCODE_SRGB", 0.0)];
+    wgpu::PipelineCompilationOptions {
+        constants: if composite_encodes_srgb(surface_format) { ENCODE } else { LEAVE },
+        ..Default::default()
+    }
+}
+
+/// Whether the reduced path's composite has to encode sRGB for a surface of `format`: when the
+/// hardware will not, on write.
+#[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
+fn composite_encodes_srgb(format: wgpu::TextureFormat) -> bool {
+    !format.is_srgb()
+}
+
+#[cfg(test)]
+mod srgb_tests {
+    /// A browser canvas (`bgra8unorm`, `rgba8unorm`) gets the encode; an sRGB surface (Android's
+    /// Vulkan, every desktop) does not, or the image would be encoded twice and washed out.
+    #[test]
+    fn the_reduced_composite_encodes_only_for_a_surface_that_will_not() {
+        use wgpu::TextureFormat::*;
+        assert!(super::composite_encodes_srgb(Bgra8Unorm) && super::composite_encodes_srgb(Rgba8Unorm));
+        assert!(!super::composite_encodes_srgb(Bgra8UnormSrgb) && !super::composite_encodes_srgb(Rgba8UnormSrgb));
+    }
+
+    /// The reduced composite is valid WGSL and declares the constant the pipeline sets — wgpu
+    /// rejects a pipeline constant its shader does not declare, and this shader is only ever
+    /// compiled by a browser or a phone, never by a desktop test.
+    #[test]
+    fn the_reduced_composite_declares_its_srgb_constant() {
+        let src = include_str!("shaders/post_process_wasm.wgsl");
+        let module = naga::front::wgsl::parse_str(src).expect("post_process_wasm.wgsl parses");
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .expect("post_process_wasm.wgsl validates");
+        assert!(
+            module.overrides.iter().any(|(_, o)| o.name.as_deref() == Some("ENCODE_SRGB")),
+            "the pipeline sets ENCODE_SRGB; the shader must declare it"
+        );
+    }
+}
+
+#[cfg(not(gizmo_forward_only))]
+fn composite_options(_surface_format: wgpu::TextureFormat) -> wgpu::PipelineCompilationOptions<'static> {
+    wgpu::PipelineCompilationOptions::default()
 }

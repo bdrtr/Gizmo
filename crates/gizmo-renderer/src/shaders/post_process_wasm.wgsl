@@ -34,6 +34,20 @@ fn fs_blur(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 @group(2) @binding(1) var s_bloom: sampler;
 @group(2) @binding(2) var t_depth: texture_depth_2d;
 
+/// Whether the image has to be sRGB-encoded here, set when the pipeline is built from the surface's
+/// format. A browser's canvas offers no `*-srgb` format, so on the web the surface is `bgra8unorm`
+/// and the hardware encodes nothing: the linear colour went to the screen as it was, and every
+/// game in the browser was darker than on the desktop. Measured on `pinbol`'s table (`#1B4F72`):
+/// (1, 22, 63) in headless Chrome before, (41, 89, 125) with this on — and (40, 89, 125) in the
+/// Android APK, whose Vulkan surface is sRGB and leaves this off.
+override ENCODE_SRGB: bool = false;
+
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let lo = c * 12.92;
+    let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
+
 @fragment
 fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let hdr_color = textureSample(t_source, s_source, in.uv).rgb;
@@ -44,6 +58,9 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let d = 0.59;
     let e = 0.14;
     let mapped = clamp((hdr_color * (a * hdr_color + b)) / (hdr_color * (c * hdr_color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
-    // Swapchain uses sRGB format, so we don't need manual gamma correction
+    // An sRGB surface encodes on write; any other gets it done here.
+    if (ENCODE_SRGB) {
+        return vec4<f32>(linear_to_srgb(mapped), 1.0);
+    }
     return vec4<f32>(mapped, 1.0);
 }

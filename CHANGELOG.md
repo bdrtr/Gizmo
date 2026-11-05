@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Every game in the browser was too dark.** The reduced path's composite left sRGB encoding to the
+  surface, and a browser canvas has no sRGB format: on the web the surface is `bgra8unorm`, so the
+  linear colour reached the screen as it was. `pinbol`'s table (`#1B4F72`) measured (1, 22, 63) in
+  headless Chrome; it is (41, 89, 125) now, against (40, 89, 125) in the Android APK, whose surface
+  is sRGB. The composite encodes when the surface will not (`ENCODE_SRGB`, a pipeline constant set
+  from the surface's format).
+
 - **A touch control made in answer to a touch never got that touch.** `VirtualStick` and
   `VirtualButton` claimed only a finger *landing* on them, and a control spawned on the first
   touch has no box until layout runs — by the next frame the finger is no longer landing. On a
