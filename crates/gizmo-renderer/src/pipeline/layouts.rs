@@ -208,7 +208,7 @@ pub(super) fn build_layouts(device: &wgpu::Device) -> Layouts {
 pub(super) struct LayoutRefs<'a> {
     pub(super) global: &'a wgpu::BindGroupLayout,
     // WASM pipeline layout'u shadow grubunu kullanmaz (4-grup şeması).
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
     pub(super) shadow: &'a wgpu::BindGroupLayout,
     pub(super) shadow_pass: &'a wgpu::BindGroupLayout,
     pub(super) texture: &'a wgpu::BindGroupLayout,
@@ -216,6 +216,6 @@ pub(super) struct LayoutRefs<'a> {
     pub(super) instance: &'a wgpu::BindGroupLayout,
     /// The irradiance volume's group (with the reflection probes), group 5 of the native forward
     /// pass.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
     pub(super) indirect: &'a wgpu::BindGroupLayout,
 }

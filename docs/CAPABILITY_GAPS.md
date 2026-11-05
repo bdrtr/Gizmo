@@ -1262,6 +1262,23 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16aj. A game as an Android app (2026-11-05, `demo-android`)
+
+The browser ran the games on a phone; a game a player installs is an APK. `scripts/android-apk.sh`
+builds one (`pinbol`), and on a Redmi Note 12 Pro it installs, opens full screen, takes the touch
+flippers, and survives being sent to the background. What stood in the way, all closed (CHANGELOG):
+
+- ~~**No way in.**~~ An Android app starts in `android_main(AndroidApp)` and winit builds its loop
+  only from that handle; `gizmo_app::android::set_app` hands it to `App::run`.
+- ~~**The C++ runtime was not linked**~~ (`meshopt`): the library did not load.
+- ~~**Six bind groups asked of a driver that allows four.**~~ The render path a target takes is a
+  cfg of its own now, `gizmo_forward_only`, and Android takes the browser's.
+- ~~**Back from the background to a black screen.**~~ The surface is let go on `suspended` and
+  made again on `resumed`.
+- **Open:** one game per APK (`pinbol`), chosen in `demo-android/src/lib.rs`; no app icon of its
+  own; `aarch64` only; no CI job builds the APK yet; the render budget is the browser's 640 × 360
+  pixels, which a phone's GPU could likely exceed.
+
 ### C16ai. A game on a phone, in the browser (2026-11-05, `pinbol` in `demo-web`)
 
 The first game to run in the browser: `demo-web/?oyun=pinbol` runs `games::pinbol::app()`, the

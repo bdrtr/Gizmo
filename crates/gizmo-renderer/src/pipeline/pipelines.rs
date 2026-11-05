@@ -2,9 +2,9 @@
 
 use super::layouts::LayoutRefs;
 use super::shaders::load_shader;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(gizmo_forward_only))]
 use super::shaders::load_shader_composed;
-#[cfg(target_arch = "wasm32")]
+#[cfg(gizmo_forward_only)]
 use super::shaders::load_shader_composed_web;
 use crate::gpu_types::Vertex;
 
@@ -71,7 +71,7 @@ pub(super) struct CorePipelines {
 pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> CorePipelines {
     // WASM: max 4 bind groups (Chrome WebGPU), shadow kaldırıldı
     // Native: 5 bind groups (shadow dahil)
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
         bind_group_layouts: &[
@@ -87,7 +87,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     // for its reflection probes (`shader.wgsl`'s `#ifdef PROBES`). Only pipelines built from that
     // shader use it; unlit, grid and backdrop keep five. A forward pass binds group 5 once — a
     // bound group stays bound across pipeline switches.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let lit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Lit Forward Pipeline Layout"),
         bind_group_layouts: &[
@@ -100,7 +100,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         ],
         immediate_size: 0,
     });
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
         bind_group_layouts: &[
@@ -112,19 +112,19 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         immediate_size: 0,
     });
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let shader = load_shader_composed(
         device,
         "demo/assets/shaders/shader.wgsl",
         include_str!("../shaders/shader.wgsl"),
         "Shader",
     );
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let shader = load_shader_composed_web(device, include_str!("../shaders/shader.wgsl"), "Shader");
     // The wireframe draws the same shader with `WIREFRAME` on, which lets a frame's
     // `wireframe_color` replace the lit colour. Native only: the web has no line mode, so its
     // "wireframe" is a fill and keeps the lit shader.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let wire_shader_module = super::shaders::load_shader_composed_with(
         device,
         "demo/assets/shaders/shader.wgsl",
@@ -132,75 +132,75 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         "Wireframe Shader",
         &[("WIREFRAME", naga_oil::compose::ShaderDefValue::Bool(true))],
     );
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let wire_shader = &wire_shader_module;
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let wire_shader = &shader;
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let unlit_shader = load_shader_composed(
         device,
         "demo/assets/shaders/unlit.wgsl",
         include_str!("../shaders/unlit.wgsl"),
         "Unlit Shader",
     );
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let baked_lit_shader = load_shader_composed(
         device,
         "demo/assets/shaders/baked_lit.wgsl",
         include_str!("../shaders/baked_lit.wgsl"),
         "Baked-Lit Shader",
     );
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let unlit_shader = load_shader_composed_web(device, include_str!("../shaders/unlit.wgsl"), "Unlit Shader");
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let baked_lit_shader =
         load_shader_composed_web(device, include_str!("../shaders/baked_lit.wgsl"), "Baked-Lit Shader");
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let water_shader = load_shader_composed(
         device,
         "demo/assets/shaders/water.wgsl",
         include_str!("../shaders/water.wgsl"),
         "Water Shader",
     );
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let water_shader = load_shader_composed_web(device, include_str!("../shaders/water.wgsl"), "Water Shader");
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let sky_shader = load_shader_composed(
         device,
         "demo/assets/shaders/sky.wgsl",
         include_str!("../shaders/sky.wgsl"),
         "Sky Shader",
     );
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let sky_shader = load_shader_composed_web(device, include_str!("../shaders/sky.wgsl"), "Sky Shader");
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let backdrop_shader = load_shader_composed(
         device,
         "demo/assets/shaders/backdrop.wgsl",
         include_str!("../shaders/backdrop.wgsl"),
         "Backdrop Shader",
     );
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let backdrop_shader =
         load_shader_composed_web(device, include_str!("../shaders/backdrop.wgsl"), "Backdrop Shader");
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let grid_shader = load_shader_composed(
         device,
         "demo/assets/shaders/grid.wgsl",
         include_str!("../shaders/grid.wgsl"),
         "Grid Shader",
     );
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let grid_shader = load_shader_composed_web(device, include_str!("../shaders/grid.wgsl"), "Grid Shader");
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let lit_layout = &lit_pipeline_layout;
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let lit_layout = &render_pipeline_layout;
     let create_main = |layout: &wgpu::PipelineLayout,
                        sm: &wgpu::ShaderModule,
@@ -285,7 +285,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
             // WebGPU/WebGL2 PolygonMode::Line desteklemiyor
-            if cfg!(target_arch = "wasm32") {
+            if cfg!(gizmo_forward_only) {
                 wgpu::PolygonMode::Fill
             } else {
                 wgpu::PolygonMode::Line

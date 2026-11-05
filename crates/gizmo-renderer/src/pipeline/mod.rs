@@ -12,7 +12,7 @@ mod uniforms;
 
 pub use shaders::load_shader;
 pub use shaders::load_shader_composed;
-#[cfg(target_arch = "wasm32")]
+#[cfg(gizmo_forward_only)]
 pub use shaders::load_shader_composed_web;
 
 use layouts::{build_layouts, LayoutRefs};

@@ -5,13 +5,13 @@ use super::super::*;
 // instance bir kayar (bkz. gizmo_renderer::pipeline shaders.rs `load_shader_web`).
 //   Native: 0=global 1=texture 2=shadow 3=skeleton 4=instance
 //   WASM:   0=global 1=texture 2=skeleton 3=instance
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(gizmo_forward_only))]
 const BG_SKELETON: u32 = 3;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(gizmo_forward_only))]
 const BG_INSTANCE: u32 = 4;
-#[cfg(target_arch = "wasm32")]
+#[cfg(gizmo_forward_only)]
 const BG_SKELETON: u32 = 2;
-#[cfg(target_arch = "wasm32")]
+#[cfg(gizmo_forward_only)]
 const BG_INSTANCE: u32 = 3;
 
 pub fn record_forward_and_fluid(
@@ -67,12 +67,12 @@ pub fn record_forward_and_fluid(
         });
         render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         // Web şemasında shadow grubu pipeline layout'unda yok (4-grup limiti).
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         render_pass.set_bind_group(BG_INSTANCE, &renderer.scene.instance_bind_group, &[]);
         // Group 5 of the lit pipelines: the irradiance volume's group, for reflection probes.
         // Bound once; it stays bound across the pipeline switches below.
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         if let Some(def) = renderer.deferred.as_ref() {
             render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
         }

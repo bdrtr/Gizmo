@@ -180,12 +180,12 @@ pub struct DrawItem {
     /// Per-object shadow casting (`MeshRenderer::shadows`). Two objects sharing a mesh and a
     /// material can answer differently, so it belongs in the key.
     ///
-    /// Read only by `passes::shadow`, which is `#[cfg(not(target_arch = "wasm32"))]` — the browser
+    /// Read only by `passes::shadow`, which is `#[cfg(not(gizmo_forward_only))]` — the browser
     /// pipeline is forward-only and has no shadow pass at all. The field is still *written* there,
     /// and deliberately: it is part of `BatchKey`, so removing it on wasm would merge two objects
     /// that disagree about shadows into one batch and change what the native build has to re-split
     /// later. So the value is computed everywhere and consumed on one target.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
     pub(super) casts_shadows: bool,
     /// Per-object visibility (`ShadowCasting::Only` casts without being drawn).
     pub(super) visible_in_camera: bool,
@@ -205,10 +205,10 @@ pub struct DrawItem {
     /// batches come first, then all shadow-only casters — see `collect_draw_items`). These
     /// are NOT contiguous with the camera range, so shadow passes draw them as a separate
     /// range. (Only the shadow passes read it — no shadows on web, the fields are dead there.)
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
     pub(super) shadow_first_instance: u32,
     /// Number of shadow-only casters (region B) for this batch.
-    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
     pub(super) shadow_count: u32,
     /// Representative distance used to sort BACKDROP and TRANSPARENT batches back-to-front
     /// (see `cmp_draw_order` / `batch_sort_depth`). 0.0 for opaque batches (unused —
@@ -265,7 +265,7 @@ impl DrawItem {
     /// Shadow-only caster range (region B), clamped to what fit the GPU buffer. Because
     /// region B is appended AFTER every camera instance, capacity truncation drops these
     /// off-screen casters before it ever drops camera-visible geometry.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     pub(super) fn shadow_instance_range(&self, uploaded: u32) -> std::ops::Range<u32> {
         self.shadow_first_instance
             ..(self.shadow_first_instance + self.shadow_count)

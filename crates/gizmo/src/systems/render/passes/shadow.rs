@@ -1,6 +1,6 @@
 use super::super::*;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(gizmo_forward_only))]
 pub fn record_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &Renderer,

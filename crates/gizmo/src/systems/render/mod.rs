@@ -1132,7 +1132,7 @@ fn draw_camera_view(
 
     // Web şemasında gölge yok (4-grup limiti, forward shader'dan shadow örneklemesi
     // `load_shader_web` ile sökülür) — depth-only CSM/point geçitleri boşa GPU olur.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     passes::record_shadow_passes(encoder, renderer, &draw_items, uploaded_instances);
     passes::record_deferred_geometry(
         encoder,

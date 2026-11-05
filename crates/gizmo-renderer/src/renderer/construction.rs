@@ -15,7 +15,7 @@ pub(crate) fn cap_web_render_size(
     if size.width == 0 || size.height == 0 {
         size = winit::dpi::PhysicalSize::new(1280, 720);
     }
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     {
         size = within_pixel_budget(size, WEB_RENDER_PIXELS);
     }
@@ -23,7 +23,7 @@ pub(crate) fn cap_web_render_size(
 }
 
 /// The web's render budget, in pixels: what a 640 × 360 frame costs.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
 pub(crate) const WEB_RENDER_PIXELS: u32 = 640 * 360;
 
 /// `size` scaled down, aspect kept, until it has at most `budget` pixels.
@@ -32,7 +32,7 @@ pub(crate) const WEB_RENDER_PIXELS: u32 = 640 * 360;
 /// landscape window: a phone held upright (1080 × 2024) was cut to 192 × 360 — a sixth of the
 /// pixels a landscape window got, stretched over a screen three times taller. The same pixel
 /// count for any shape gives it 350 × 657.
-#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+#[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
 pub(crate) fn within_pixel_budget(size: winit::dpi::PhysicalSize<u32>, budget: u32) -> winit::dpi::PhysicalSize<u32> {
     let pixels = size.width as f64 * size.height as f64;
     if pixels <= budget as f64 {
@@ -156,7 +156,7 @@ impl Renderer {
             }
         };
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
@@ -171,7 +171,7 @@ impl Renderer {
             .await
             .unwrap();
 
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(gizmo_forward_only)]
         let (device, queue) = {
             let mut limits = adapter.limits();
             limits.max_bind_groups = limits.max_bind_groups.max(4);
@@ -272,7 +272,9 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
         };
 
-        Self::finish_construction(device, queue, Some(surface), config, size)
+        let mut renderer = Self::finish_construction(device, queue, Some(surface), config, size);
+        renderer.instance = Some(instance);
+        renderer
     }
 
     /// Probes whether a GPU adapter is available for headless rendering.
@@ -462,7 +464,7 @@ impl Renderer {
         );
 
         // GPU particle buffer boyutu — ihtiyaca göre ayarlanabilir
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         let gpu_particles = {
             let max_particles: u32 = 100_000;
             Some(crate::gpu_particles::GpuParticleSystem::new(
@@ -472,7 +474,7 @@ impl Renderer {
                 wgpu::TextureFormat::Rgba16Float,
             ))
         };
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(gizmo_forward_only)]
         let gpu_particles: Option<crate::gpu_particles::GpuParticleSystem> = None;
 
         // GPU physics is OPT-IN — default `None`. When `Some`, the renderer runs its OWN
@@ -483,7 +485,7 @@ impl Renderer {
         // want GPU physics (massive counts, GPU cloth) call [`Renderer::enable_gpu_physics`].
         let gpu_physics: Option<crate::gpu_physics::GpuPhysicsSystem> = None;
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         let gpu_fluid = Some(crate::gpu_fluid::GpuFluidSystem::new(
             &device,
             &queue,
@@ -493,7 +495,7 @@ impl Renderer {
             config.width,
             config.height,
         ));
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(gizmo_forward_only)]
         let gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem> = None;
         let debug_renderer = Some(crate::debug_renderer::GizmoRendererSystem::new(
             &device,
@@ -563,14 +565,14 @@ impl Renderer {
             instance_capacity: scene.instance_capacity,
         };
 
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         let deferred = Some(crate::deferred::DeferredState::new(
             &device,
             &scene_state,
             size.width,
             size.height,
         ));
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(gizmo_forward_only)]
         let deferred: Option<crate::deferred::DeferredState> = None;
 
         let ssao = deferred.as_ref().map(|def| {
@@ -674,6 +676,7 @@ impl Renderer {
         let cas = Some(crate::cas::CasState::new(&device, config.format, size.width, size.height));
 
         Self {
+            instance: None,
             tonemap_curve: crate::gpu_types::TonemapCurve::Aces,
             tonemap_white_point: 4.0,
             custom_materials: crate::custom_material::MaterialRegistry::new(),

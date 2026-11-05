@@ -118,6 +118,9 @@ pub struct Renderer {
     /// `None` in headless/offscreen mode (constructed via [`Renderer::new_headless`]);
     /// `Some` on the windowed path. Frame acquisition/present must handle both.
     pub surface: Option<Surface<'static>>,
+    /// The instance the surface came from — kept so [`resume_surface`](Self::resume_surface) can
+    /// make another. `None` headless.
+    instance: Option<wgpu::Instance>,
     /// The wgpu device — everything is allocated from it.
     pub device: Device,
     /// The command queue everything is submitted to.
@@ -362,7 +365,7 @@ impl Renderer {
     /// `GpuPhysicsLink` need this; a normal CPU-physics game
     /// (`PhysicsPlugin`) must NOT enable it — the two sims would fight and blank the scene.
     /// Allocates ~50 000 GPU spheres, so it is off unless explicitly requested.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     pub fn enable_gpu_physics(&mut self) {
         if self.gpu_physics.is_some() {
             return;
@@ -612,6 +615,33 @@ impl Renderer {
     /// The swapchain's current present mode. See [`set_present_mode`](Self::set_present_mode).
     pub fn present_mode(&self) -> wgpu::PresentMode {
         self.config.present_mode
+    }
+
+    /// Lets the surface go, because the window behind it is going away — Android destroys an app's
+    /// native window when it leaves the screen, and a surface outliving its window is undefined.
+    /// Nothing is drawn until [`resume_surface`](Self::resume_surface); the device, the pipelines
+    /// and every GPU resource stay.
+    pub fn suspend_surface(&mut self) {
+        self.surface = None;
+    }
+
+    /// A new surface on `window`, configured as the last one was and sized to the window — the app
+    /// came back to the screen with a new native window. Without this an Android app that was
+    /// sent to the background came back to a black screen: the old surface drew to a window that
+    /// no longer existed. Does nothing on a headless renderer, or if the surface cannot be made
+    /// (logged).
+    pub fn resume_surface(&mut self, window: std::sync::Arc<winit::window::Window>) {
+        let Some(instance) = self.instance.as_ref() else { return };
+        match instance.create_surface(window.clone()) {
+            Ok(surface) => {
+                self.surface = Some(surface);
+                self.resize(window.inner_size());
+                if let Some(ref surface) = self.surface {
+                    surface.configure(&self.device, &self.config);
+                }
+            }
+            Err(e) => tracing::error!(error = %e, "[Renderer] the surface could not be made again"),
+        }
     }
 
     /// Resizes the swapchain and every size-dependent target: depth, G-buffer, decals, fluid.

@@ -289,14 +289,14 @@ impl SpriteRenderer {
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> (wgpu::RenderPipeline, crate::overlay::OverlayPipelines) {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         let shader = crate::pipeline::load_shader_composed(
             device,
             "demo/assets/shaders/sprite.wgsl",
             include_str!("../shaders/sprite.wgsl"),
             "Sprite Shader",
         );
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(gizmo_forward_only)]
         let shader = crate::pipeline::load_shader_composed_web(
             device,
             include_str!("../shaders/sprite.wgsl"),

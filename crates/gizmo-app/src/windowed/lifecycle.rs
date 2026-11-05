@@ -38,7 +38,21 @@ impl<State: 'static> App<State> {
             }
         }
 
+        #[cfg(not(target_os = "android"))]
         let event_loop = EventLoop::new().map_err(crate::AppError::EventLoopCreation)?;
+        // Android builds its loop from the activity the host handed over (`android::set_app`);
+        // without one, winit's own error says so.
+        #[cfg(target_os = "android")]
+        let event_loop = {
+            use winit::platform::android::EventLoopBuilderExtAndroid;
+            let mut builder = EventLoop::builder();
+            if let Some(app) = crate::android::app() {
+                builder.with_android_app(app);
+            } else {
+                tracing::error!("[App::run] on Android without `gizmo_app::android::set_app`");
+            }
+            builder.build().map_err(crate::AppError::EventLoopCreation)?
+        };
         let mut builder = WindowAttributes::default().with_title(&self.window_title);
         // In the browser the page decides the canvas's size: it is styled 100 % of the page below,
         // and winit reports that size as the window's. Asking for an inner size there set the
@@ -283,8 +297,16 @@ impl<State: 'static> ApplicationHandler for App<State> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         // `resumed` can fire more than once (e.g. on mobile); only build the
         // window + runtime the first time.
-        if self.window.is_some() {
-            tracing::trace!("[App] resumed ignored (already initialized)");
+        if let Some(window) = self.window.clone() {
+            // Back on the screen (Android brings an app back with a new native window): draw to
+            // it again. Everything else lived through the pause.
+            if let Some(mut renderer) = self.world.get_resource_mut::<Renderer>() {
+                if renderer.surface.is_none() {
+                    tracing::info!("[App] resumed: making the surface again");
+                    renderer.resume_surface(window.clone());
+                    window.request_redraw();
+                }
+            }
             return;
         }
         tracing::debug!("[App] resumed: creating window + runtime");
@@ -338,6 +360,15 @@ impl<State: 'static> ApplicationHandler for App<State> {
                 *slot.borrow_mut() = Some(renderer);
                 window.request_redraw();
             });
+        }
+    }
+
+    /// Off the screen: Android is about to destroy the native window, and the surface must not
+    /// outlive it. Nothing is drawn until `resumed` makes another.
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(mut renderer) = self.world.get_resource_mut::<Renderer>() {
+            tracing::info!("[App] suspended: letting the surface go");
+            renderer.suspend_surface();
         }
     }
 

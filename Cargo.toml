@@ -5,6 +5,7 @@ members = [
     "server",
     "demo",
     "demo-web",
+    "demo-android",
     "games",
     "cradle",
 ]

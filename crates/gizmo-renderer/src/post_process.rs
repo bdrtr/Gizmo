@@ -69,11 +69,11 @@ pub fn build_post_process_resources(
     depth_view: &wgpu::TextureView,
 ) -> PostProcessState {
     let post_shader = {
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         let source = std::fs::read_to_string("demo/assets/shaders/post_process.wgsl")
             .unwrap_or_else(|_| include_str!("shaders/post_process.wgsl").to_string());
 
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(gizmo_forward_only)]
         let source = include_str!("shaders/post_process_wasm.wgsl").to_string();
 
         device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -122,7 +122,7 @@ pub fn build_post_process_resources(
 
     // WASM: depth texture'ı composite layout'tan kaldır (textureLoad kullanılıyor, sampler gerekmez)
     // Native: depth texture sampler ile kalır
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let composite_bloom_bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite_bloom_bind_group_layout"),
@@ -155,7 +155,7 @@ pub fn build_post_process_resources(
                 },
             ],
         });
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let composite_bloom_bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite_bloom_bind_group_layout"),
@@ -211,13 +211,13 @@ pub fn build_post_process_resources(
         label: Some("post_params_bind_group"),
     });
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let exposure = Some(build_exposure_binding(device));
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let exposure: Option<ExposureBinding> = None;
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let velocity = Some(build_velocity_binding(device));
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let velocity: Option<VelocityBinding> = None;
 
     let (bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline) = build_post_pipelines(
@@ -336,7 +336,7 @@ pub fn velocity_bind_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(gizmo_forward_only))]
 fn build_velocity_binding(device: &wgpu::Device) -> VelocityBinding {
     let layout = velocity_layout(device);
     let placeholder = device
@@ -372,7 +372,7 @@ pub fn exposure_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
     })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(gizmo_forward_only))]
 fn build_exposure_binding(device: &wgpu::Device) -> ExposureBinding {
     let layout = exposure_layout(device);
     let neutral_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -555,7 +555,7 @@ fn create_post_sampler(device: &wgpu::Device) -> wgpu::Sampler {
 
 // WASM: composite-bloom bind group'un depth girdisi native dalında — `depth_view`
 // web'de kullanılmaz (hedefli allow, native lint gücü korunur).
-#[cfg_attr(target_arch = "wasm32", allow(unused_variables))]
+#[cfg_attr(gizmo_forward_only, allow(unused_variables))]
 /// (Re)creates every size-dependent target in the chain and the bind groups that read them,
 /// returning them in the order the caller assigns them: HDR texture, view and group; the extract
 /// view and group; the blur view and group; and the composite group.
@@ -616,7 +616,7 @@ pub fn create_post_textures(
     let (_be_t, be_v, be_bg) = make("Bloom Extract Texture");
     let (_bb_t, bb_v, bb_bg) = make("Bloom Blur Texture");
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let cb_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: composite_bloom_bgl,
         entries: &[
@@ -635,7 +635,7 @@ pub fn create_post_textures(
         ],
         label: Some("composite_bloom_bind_group"),
     });
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let cb_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: composite_bloom_bgl,
         entries: &[
@@ -710,7 +710,7 @@ pub fn run_post_processing(
     region: Option<[f32; 4]>,
 ) {
     // Pass 1: Bright Extract (WASM'da KAPALI)
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("Bloom Extract Pass"),
@@ -735,16 +735,16 @@ pub fn run_post_processing(
     // Pass 2: the separable blur, horizontal then vertical, `bloom_iterations` times (WASM'da
     // KAPALI). Each round widens the halo by about the kernel's reach again, so three rounds reach
     // roughly √3 as far as one; `bloom_radius` spreads the taps themselves.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     {
         let [h, v] = blur_steps(renderer.config.width, renderer.config.height, renderer.bloom_radius);
         renderer.queue.write_buffer(&renderer.post.blur_params_buffer, 0, bytemuck::cast_slice(&h));
         renderer.queue.write_buffer(&renderer.post.blur_v_params_buffer, 0, bytemuck::cast_slice(&v));
     }
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     for _ in 0..renderer.bloom_iterations.clamp(1, 8) {
         // Pass 2a: Yatay Blur (WASM'da KAPALI)
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Bloom Blur Horizontal"),
@@ -766,7 +766,7 @@ pub fn run_post_processing(
             pass.draw(0..3, 0..1);
         }
         // Pass 2b: Dikey Blur (ping-pong) (WASM'da KAPALI)
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Bloom Blur Vertical"),
@@ -841,9 +841,9 @@ pub fn run_post_processing(
 
     // Native records bloom extract + H/V blur + composite; WASM strips bloom and
     // records only the composite/tonemap pass.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(gizmo_forward_only))]
     let passes = 4u32;
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(gizmo_forward_only)]
     let passes = 1u32;
     tracing::trace!(passes, "[PostProcess] recorded post-processing chain");
 }

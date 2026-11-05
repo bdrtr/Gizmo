@@ -72,7 +72,6 @@ scene = ["dep:gizmo-scene", "dep:gizmo-scripting"]
 gamepad = ["dep:gilrs"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-rfd = "0.17.2"
 # Where `SaveData` keeps a game's save on the desktop.
 dirs = "6.0.0"
 backtrace = "0.3.76"
@@ -87,6 +86,17 @@ gilrs = { version = "0.11.2", optional = true }
 # part of the deferred web backlog). `dep:gizmo-scripting` in the `scene`
 # feature is a no-op on wasm32.
 gizmo-scripting = { path = "../gizmo-scripting" , version = "0.11.0", optional = true }
+
+# The panic dialog. A desktop has a native message box; Android has none rfd can show (it does not
+# build there at all), and a phone app's crash goes to logcat instead.
+[target.'cfg(not(any(target_arch = "wasm32", target_os = "android")))'.dependencies]
+rfd = "0.17.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+# Android: the window is a `NativeActivity`, and winit can only build its event loop there with the
+# activity's handle (`gizmo_app::android::set_app`). Same optional dependency as above — `window`
+# turns both on — with the one feature the platform needs.
+winit = { version = "0.30", optional = true, features = ["android-native-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser's gamepads, through gilrs's wasm backend (web-sys + the Web Gamepad API).

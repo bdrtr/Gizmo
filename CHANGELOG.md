@@ -151,6 +151,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Android: the games as an installable app.** `scripts/android-apk.sh` builds an APK
+  (`demo-android`, cargo-apk) that installs on a phone and opens full screen from its icon —
+  `pinbol` today, touch flippers and all, measured on a Redmi Note 12 Pro (Adreno 618, Android 13).
+  What it took in the engine:
+  - `gizmo_app::android::set_app`: an Android app starts in `android_main(AndroidApp)`, and winit
+    builds its event loop only from that handle; `App::run` takes it from there. winit's
+    `android-native-activity` feature is on for Android.
+  - **The render path is the browser's** there. An Adreno 618's Vulkan driver allows four bind
+    groups and the desktop path asks for six (the first APK died in `request_device`). Which path
+    a target takes is now its own cfg, `gizmo_forward_only` (wasm32 or Android, set by
+    `gizmo-renderer`'s and `gizmo`'s build scripts), instead of `target_arch = "wasm32"`: Android
+    takes the browser's pipelines and keeps the desktop's threads, files and timer.
+  - **The surface survives the app leaving the screen.** Android destroys the window then; the
+    app now lets the surface go on `suspended` and makes another on `resumed`
+    (`Renderer::suspend_surface`, `resume_surface`) — before, a game sent to the background came
+    back to a black screen. A frame with no surface is skipped instead of panicking.
+  - The C++ runtime is linked on Android (`meshopt` is C++; the first APK could not load:
+    `cannot locate symbol "__gxx_personality_v0"`), and the desktop crash dialog (`rfd`), which
+    does not build there, is off.
+
 - **`nisanci` in the browser.** `demo-web/?oyun=nisanci` runs the twin-stick arena shooter, the same
   game the desktop binary runs: it moved to `games/` (`games::nisanci::app()`, `self_test()`), as
   `pinbol` did, and `demo/src/bin/nisanci.rs` is now three lines that host it. Its font is

@@ -225,7 +225,7 @@ pub fn load_shader_composed_with(
 /// strip the shadow bindings + PCF block and `@group(#{SKELETON_GROUP/INSTANCE_GROUP})` place
 /// skeleton/instance at 2/3 — all at the source level, so it is immune to naga's WGSL-backend
 /// reformatting (the reason the old grep-the-output approach was broken).
-#[cfg(target_arch = "wasm32")]
+#[cfg(gizmo_forward_only)]
 pub fn load_shader_composed_web(
     device: &wgpu::Device,
     fallback_src: &str,

@@ -161,6 +161,11 @@ impl std::error::Error for AppError {
 #[cfg(all(feature = "window", feature = "render"))]
 pub mod windowed;
 
+/// The Android host's handle on its activity: an `android_main` hands it over with
+/// [`set_app`](android::set_app) before it calls `App::run`, and the event loop is built with it.
+#[cfg(all(target_os = "android", feature = "window"))]
+pub mod android;
+
 /// The headless runtime — a fixed-timestep loop with no window and no GPU. This is what a
 /// dedicated simulation/game server uses, and it stays available no matter which other
 /// features are on.
@@ -224,6 +229,7 @@ pub fn setup_panic_hook() {
             {
                 let backtrace = backtrace::Backtrace::new();
                 tracing::info!("--- BACKTRACE ---\n{:?}", backtrace);
+                #[cfg(not(target_os = "android"))]
                 rfd::MessageDialog::new()
                     .set_title("Gizmo Engine Fatal Error")
                     .set_description(&error_msg)

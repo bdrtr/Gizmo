@@ -185,13 +185,13 @@ impl CustomMaterial {
         // gets the same two affordances — otherwise a game would have to transcribe `SceneUniforms`
         // by hand (and re-transcribe it whenever it changes) and hard-code group indices that
         // differ between native and the web. The defs are the platform's own.
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         let composed = crate::pipeline::shaders::compose_wgsl(
             wgsl,
             label,
             crate::pipeline::shaders::native_render_defs(),
         );
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(gizmo_forward_only)]
         let composed = crate::pipeline::shaders::compose_wgsl(
             wgsl,
             label,
@@ -204,7 +204,7 @@ impl CustomMaterial {
 
         // The order is the contract, and it differs by platform: the browser has four bind groups
         // to spend and the shadow group is the one that does not fit.
-        #[cfg(not(target_arch = "wasm32"))]
+        #[cfg(not(gizmo_forward_only))]
         let groups: [Option<&wgpu::BindGroupLayout>; 5] = [
             Some(&scene.global_bind_group_layout),
             Some(&scene.texture_bind_group_layout),
@@ -212,7 +212,7 @@ impl CustomMaterial {
             Some(&scene.skeleton_bind_group_layout),
             Some(&scene.instance_bind_group_layout),
         ];
-        #[cfg(target_arch = "wasm32")]
+        #[cfg(gizmo_forward_only)]
         let groups: [Option<&wgpu::BindGroupLayout>; 4] = [
             Some(&scene.global_bind_group_layout),
             Some(&scene.texture_bind_group_layout),

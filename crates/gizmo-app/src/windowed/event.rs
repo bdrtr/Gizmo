@@ -340,10 +340,8 @@ impl<State: 'static> App<State> {
     }
 
     fn acquire_backbuffer(&mut self, renderer: &mut Renderer) -> Option<wgpu::SurfaceTexture> {
-        let surface = renderer
-            .surface
-            .as_ref()
-            .expect("windowed render path requires a surface");
+        // No surface: the app is off the screen (`suspended`) and there is nowhere to draw.
+        let surface = renderer.surface.as_ref()?;
         match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture)
             | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
