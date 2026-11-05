@@ -356,6 +356,53 @@ jobs:
           cargo clippy --locked --target wasm32-unknown-unknown -p demo-web \
             -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity
 
+
+  # The APK (`demo-android`): built here so a change that breaks Android is seen on the push that
+  # made it, and uploaded so a phone can take it from the run's page. The runner image carries the
+  # Android SDK, an NDK and a JDK 17; `scripts/android-apk.sh` finds them from `ANDROID_HOME` and
+  # signs with the debug key it creates. The clippy step covers the Android arms — the
+  # `gizmo_forward_only` render path on a native target, `gizmo_app::android` — which neither the
+  # desktop nor the wasm lint sees.
+  android:
+    name: Android (aarch64-linux-android APK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      JAVA_HOME: ${{ env.JAVA_HOME_17_X64 }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-apk
+        run: cargo install cargo-apk --locked
+      - name: Build the APK
+        run: |
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          scripts/android-apk.sh
+      - name: Clippy aarch64-linux-android (the arms no other lint job sees)
+        run: |
+          NDK="$(ls -d "$ANDROID_HOME"/ndk/*/ | sort -V | tail -1)"
+          BIN="${NDK%/}/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          export CC_aarch64_linux_android="$BIN/aarch64-linux-android26-clang"
+          export CXX_aarch64_linux_android="$BIN/aarch64-linux-android26-clang++"
+          export AR_aarch64_linux_android="$BIN/llvm-ar"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$BIN/aarch64-linux-android26-clang"
+          # `-p demo-android` alone: its graph is the engine as Android builds it, and the workspace
+          # crates in it are linted too. (`-p gizmo-app` on its own takes its default features —
+          # the editor and `rfd`, which does not build for Android.)
+          # `missing_const_for_thread_local` is allowed here only: it fires on `thread_local!`s
+          # that already use `const { }` (gizmo-physics-rigid's solver scratch) — Android's TLS
+          # expands the macro differently, and the desktop lint does not report them.
+          cargo clippy --locked --target aarch64-linux-android -p demo-android \
+            -- -D warnings -A clippy::too_many_arguments -A clippy::type_complexity \
+            -A clippy::missing_const_for_thread_local
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gizmo-pinbol-apk
+          path: target/release/apk/gizmo-pinbol.apk
   # ── Miri: the ECS unsafe surface must be free of undefined behaviour ───────
   # Runs the pointer/aliasing-heavy gizmo-core modules under Miri (Tree Borrows).
   # This fences the archetype-migration disjoint-borrow invariant: taking two
