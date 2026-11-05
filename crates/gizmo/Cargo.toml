@@ -33,6 +33,9 @@ network = ["dep:gizmo-net", "gizmo-app/network"]
 network-client-server = ["network", "gizmo-net/client-server"]
 window = ["gizmo-app/window", "dep:winit", "dep:gizmo-window"]
 render = ["gizmo-app/render", "dep:gizmo-renderer", "dep:wgpu", "dep:bytemuck", "window"]
+# A font built in (Noto Sans, OFL 1.1) for when the machine lends none — the browser. See
+# `gizmo-renderer`'s feature of the same name.
+bundled-font = ["render", "gizmo-renderer/bundled-font"]
 audio = ["dep:gizmo-audio", "gizmo-app/audio"]
 # Immediate-mode overlay UI (egui runtime + `set_ui` hook + dev console),
 # usable for in-game HUDs without the full editor.

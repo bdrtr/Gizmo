@@ -30,6 +30,8 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     # takes `default-features = false`: without it the web demo is the one build of the engine
     # where a plugged-in controller does nothing, which is indistinguishable from broken.
     "gamepad",
+    # The browser lends no font: without this every non-ASCII letter (all of Turkish's) is blank.
+    "bundled-font",
 ] }
 log = "0.4"
 # The games written once for the desktop demos and the browser (`games/`): `?oyun=pinbol` runs one.

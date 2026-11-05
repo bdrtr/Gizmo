@@ -145,8 +145,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   has gone dark.
 - **Pinbol in the browser, with touch flippers (`demo-web/?oyun=pinbol`).** The game moved to a
   new `games/` crate (`games::pinbol::app()`), which the desktop `pinbol` binary and `demo-web`
-  both run; on a phone the halves of the screen are the flippers. Text on the web is ASCII-only
-  for now — the engine ships no font and the browser has none to lend (`CAPABILITY_GAPS` C16ai).
+  both run; on a phone the halves of the screen are the flippers.
+- **A font the engine carries (`bundled-font`, default off).** Noto Sans Regular, SIL Open Font
+  License 1.1 (`crates/gizmo-renderer/assets/fonts/OFL.txt`), 621 KB. `Renderer::default_font`
+  uses it when the machine lends no font — always in the browser, where text had been ASCII-only
+  (every Turkish letter blank). `demo-web` turns it on; `text::bundled::{noto_sans, NOTO_SANS,
+  NOTO_SANS_LICENSE}`.
 - **A chaos test (`gizmo-physics-rigid/tests/chaos.rs`).** From a seed, through the ECS bridge a
   game uses: bodies spawned and despawned every frame (ids recycled constantly), ropes tied
   between them and cut, kicks, CCD switched on and off, in a closed box. After every step nothing

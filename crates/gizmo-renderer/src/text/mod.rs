@@ -48,6 +48,8 @@ use ab_glyph::{Font as _, ScaleFont as _};
 pub mod render;
 #[doc(hidden)]
 pub mod synthetic;
+#[cfg(feature = "bundled-font")]
+pub mod bundled;
 
 pub use render::TextRenderer;
 

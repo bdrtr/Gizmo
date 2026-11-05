@@ -13,9 +13,10 @@ ground disk so the live simulation loop is visible.
 flippers: on a phone the left and right halves of the screen are the two
 flippers, and a tap also launches the ball and restarts a finished game.
 
-Known: the engine ships no font, and the browser has no system fonts to borrow,
-so text falls back to the built-in synthetic face — ASCII only. Turkish letters
-in the HUD (ş, ğ, ı, …) do not draw. See `docs/CAPABILITY_GAPS.md` C16ai.
+The browser has no system fonts to borrow, so this crate turns on the engine's
+`bundled-font` feature: Noto Sans Regular (SIL Open Font License 1.1, see
+`crates/gizmo-renderer/assets/fonts/OFL.txt`) is built in, and text — Turkish
+letters included — draws as on the desktop.
 
 ## Live demo
 

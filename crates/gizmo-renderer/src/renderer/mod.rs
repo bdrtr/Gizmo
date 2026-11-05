@@ -502,14 +502,21 @@ impl Renderer {
     }
 
     /// A font that is always there: the machine's ([`load_system_font`](Self::load_system_font)
-    /// — `GIZMO_FONT`, then the platform's usual faces), else the engine's synthetic face, which
-    /// has the ASCII shapes and nothing more. What 33 of the demos' setups wrote out by hand, as
-    /// one call that cannot fail the setup.
+    /// — `GIZMO_FONT`, then the platform's usual faces), else — with the `bundled-font` feature —
+    /// the engine's own Noto Sans ([`text::bundled`](crate::text::bundled)), else the synthetic
+    /// face, which has the ASCII shapes and nothing more. What 33 of the demos' setups wrote out by
+    /// hand, as one call that cannot fail the setup. In the browser there is never a machine font,
+    /// so without the feature web text is ASCII-only.
     ///
     /// Call it once and keep the id: each call loads the face again.
     pub fn default_font(&mut self) -> crate::text::FontId {
         if let Ok(id) = self.load_system_font() {
             return id;
+        }
+        #[cfg(feature = "bundled-font")]
+        match self.load_font(crate::text::bundled::noto_sans()) {
+            Ok(id) => return id,
+            Err(e) => tracing::warn!(error = %e, "the bundled font did not load; falling back to the synthetic face"),
         }
         match self.load_font(crate::text::synthetic::synthetic_face()) {
             Ok(id) => id,

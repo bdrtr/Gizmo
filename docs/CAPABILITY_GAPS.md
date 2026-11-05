@@ -1278,11 +1278,13 @@ rises. What getting there found:
 - **Game-side, worth knowing:** a `VirtualButton` claims only a finger that lands on it, so a
   button made on the first touch (as `nisanci` makes its sticks) misses that touch. `pinbol`
   makes its buttons at setup, invisible until the first touch; `nisanci` still loses its first.
-- **Open — no font in the browser.** The engine ships no font (a licensing decision), and the
-  web has no system fonts to borrow (`load_system_font` is always `NotFound` there), so text
-  falls back to the synthetic face: ASCII only. Every Turkish letter in a HUD is missing on a
-  phone. Bundling a freely licensed face, or fetching one the page serves, is the project's
-  call to make.
+- ~~**No font in the browser.**~~ **Closed** (the project's call, made 2026-11-05: carry one).
+  The web has no system fonts to borrow (`load_system_font` is always `NotFound` there), so text
+  fell back to the synthetic face, ASCII only — every Turkish letter in a HUD missing on a phone.
+  `gizmo-renderer`'s default-off `bundled-font` feature carries **Noto Sans Regular** (SIL Open
+  Font License 1.1, `assets/fonts/OFL.txt`, 621 KB) and `default_font` uses it when the machine
+  lends none; `demo-web` turns it on. Every letter of the Turkish alphabet has a glyph in it
+  (`text::bundled` test).
 - **Not verified on a phone here.** No browser with WebGPU on this machine; what is checked is
   the wasm build, the wasm lints, that touch events reach `Input`, and the touch path headlessly.
 
