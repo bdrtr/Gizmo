@@ -587,6 +587,13 @@ fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
     const EXCEPTIONS: &[(&str, Path, &str)] = &[
         (
+            "Occluder",
+            Path::GameOnly,
+            "an optimisation that promises the same picture (`an_occluder_hides_objects_without_changing_a_pixel`), \
+             so nothing the editor shows differs for not having it; and the editor's camera flies \
+             inside and around what it is editing, where an occluder pays least.",
+        ),
+        (
             "Viewport",
             Path::GameOnly,
             "a camera's rectangle of the target, for split screen: `render_viewports` composes one \

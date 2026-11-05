@@ -6454,6 +6454,154 @@ mod golden_render_tests {
         });
     }
 
+    /// A wall, what it hides, what it does not, and a sun that makes all of them cast.
+    async fn walled_scene(renderer: &mut Renderer, occlude: bool, rows: i32, sun: bool) -> World {
+        use crate::renderer::components::Occluder;
+        let mut world = World::new();
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let cube = AssetManager::create_cube(&renderer.device);
+        let spawn = |world: &mut World, at: Vec3, scale: Vec3| {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(at).with_scale(scale));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, cube.clone());
+            world.add_component(e, Material::new(tex.clone()));
+            world.add_component(e, MeshRenderer::new());
+            e
+        };
+        let wall = spawn(&mut world, Vec3::new(0.0, 3.0, 0.0), Vec3::new(12.0, 3.0, 0.2));
+        if occlude {
+            world.add_component(wall, Occluder::new());
+        }
+        spawn(&mut world, Vec3::new(0.0, -0.5, 0.0), Vec3::new(40.0, 0.5, 40.0)); // the ground
+        spawn(&mut world, Vec3::new(0.0, 7.0, -3.0), Vec3::new(1.0, 4.0, 1.0)); // sticks out above
+        spawn(&mut world, Vec3::new(-3.0, 1.0, 5.0), Vec3::splat(1.0)); // in front
+        spawn(&mut world, Vec3::new(30.0, 1.0, -3.0), Vec3::splat(1.0)); // beside it
+        spawn(&mut world, Vec3::new(12.2, 3.0, -1.0), Vec3::new(1.2, 1.5, 0.5)); // past its end, on every row
+        // Hidden, and its shadow is not: the low sun throws it out past the wall's end, in view.
+        spawn(&mut world, Vec3::new(10.0, 2.8, -3.0), Vec3::new(0.5, 2.6, 0.5));
+        // Behind it, in rows: the sun throws their shadows out past the wall's end.
+        for x in 0..rows {
+            for z in 0..rows {
+                let at = Vec3::new(-5.0 + x as f32 * 10.0 / rows as f32, 1.0, -2.0 - z as f32 * 10.0 / rows as f32);
+                spawn(&mut world, at, Vec3::splat(0.2));
+            }
+        }
+        if sun {
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle {
+                rotation: gizmo_math::Quat::from_rotation_arc(Vec3::NEG_Z, Vec3::new(1.0, -0.5, 0.1).normalize()),
+                ..Default::default()
+            });
+        }
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 3.0, 22.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            ..Default::default()
+        });
+        world
+    }
+
+    /// **What occlusion culling promises: the same picture.** With the wall an `Occluder`, the
+    /// objects behind it are not drawn, and every byte of the frame, shadows included, is what it
+    /// was with all of them drawn. The objects sticking out above the wall and past its end, and the
+    /// ones in front and beside it, are not among the hidden.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn an_occluder_hides_objects_without_changing_a_pixel() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut plain = crate::test_gpu::headless_renderer(256, 144).await;
+            let mut world = walled_scene(&mut plain, false, 10, true).await;
+            let all_drawn = render_world(&mut plain, &mut world).await;
+            assert_eq!(plain.occluded_objects, 0, "no occluder, nothing hidden");
+
+            let mut culled = crate::test_gpu::headless_renderer(256, 144).await;
+            let mut world = walled_scene(&mut culled, true, 10, true).await;
+            let hidden = render_world(&mut culled, &mut world).await;
+            assert_eq!(culled.occluded_objects, 101, "the 101 behind the wall, and only those");
+
+            let differ = all_drawn.iter().zip(&hidden).filter(|(a, b)| a != b).count();
+            assert_eq!(differ, 0, "{differ} of {} bytes changed", all_drawn.len());
+        });
+    }
+
+    /// An occluder counts only while it draws solid: hidden or see-through, it hides nothing.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn an_occluder_that_does_not_draw_solid_hides_nothing() {
+        use crate::renderer::components::Occluder;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            for spoil in ["hidden", "glass"] {
+                let mut renderer = crate::test_gpu::headless_renderer(256, 144).await;
+                let mut world = walled_scene(&mut renderer, true, 2, true).await;
+                let wall = world.borrow::<Occluder>().iter().next().expect("the wall").0;
+                let entity = world.get_entity(wall).expect("the wall");
+                if spoil == "hidden" {
+                    world.add_component(entity, crate::core::component::IsHidden);
+                } else {
+                    let mut materials = world.borrow_mut::<Material>();
+                    let mut glass = materials.get_mut(wall).expect("its material");
+                    glass.is_transparent = true;
+                    glass.albedo.w = 0.5;
+                }
+                render_world(&mut renderer, &mut world).await;
+                assert_eq!(renderer.occluded_objects, 0, "a {spoil} wall hid something");
+            }
+        });
+    }
+
+    /// An object the camera will not see and that casts nothing has no use for the frame: not an
+    /// instance built, not an upload. It used to go to the shadow-only list anyway.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn an_unseen_object_that_casts_nothing_uploads_nothing() {
+        use crate::renderer::components::ShadowCasting;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, GlobalTransform {
+                matrix: gizmo_math::Mat4::from_translation(Vec3::new(0.0, 0.0, 20.0)),
+            });
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex));
+            world.add_component(e, MeshRenderer::new());
+            // Looking down -z from the origin, the object behind; a cascade that takes it in.
+            let view_proj = gizmo_math::Mat4::perspective_rh(1.0, 1.0, 0.1, 100.0)
+                * gizmo_math::Mat4::look_at_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
+            let cascade = gizmo_math::Mat4::orthographic_rh(-50.0, 50.0, -50.0, 50.0, -50.0, 50.0);
+            let (_, casting) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, [cascade; 4], Vec3::ZERO);
+            assert_eq!(casting, 1, "the setup: as a caster it goes to the shadow maps");
+            world.borrow_mut::<MeshRenderer>().get_mut(e.id()).expect("renderer").shadows = ShadowCasting::Off;
+            let (_, silent) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, [cascade; 4], Vec3::ZERO);
+            assert_eq!(silent, 0, "unseen and casting nothing, and still uploaded");
+        });
+    }
+
     /// A `Grid` material draws as a grid in the game, as in the editor: lines, not a flat plane.
     /// Seen from above, the lower half of the frame must be full of sharp horizontal edges; the
     /// same plane routed any other way (deferred PBR, as it was, or the plain unlit pipeline)

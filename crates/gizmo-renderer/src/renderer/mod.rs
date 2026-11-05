@@ -293,6 +293,9 @@ pub struct Renderer {
     /// How many times the separable blur runs (1–8, default 1). Each round spreads the halo
     /// again — wider and smoother than a larger radius, at two passes a round.
     pub bloom_iterations: u32,
+    /// How many objects the last view's occluders hid from the camera
+    /// ([`Occluder`](crate::components::Occluder)); they drew nothing, or shadows only.
+    pub occluded_objects: u32,
     /// Linear exposure multiplier applied before tone mapping.
     pub exposure: f32,
     /// Whether depth of field runs.

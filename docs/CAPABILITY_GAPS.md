@@ -25,8 +25,8 @@ capabilities in section A.
 
 **Section A as of 2026-11-02:** sprites (A1), text (A2), extrusion (A4), reflection probes (A5),
 split screen (A5b), area lights / cookies / soft and contact shadows (A7) and motion blur (A7c) are
-closed. Open: user shaders stay forward-only (A3), MSAA is declined by decision (A6), occlusion
-culling waits on the per-object walk (A7b), planar reflections (A7d), and the ECS items of A8. The
+closed, occlusion culling (A7b) since 2026-11-05. Open: user shaders stay forward-only (A3), MSAA is
+declined by decision (A6), planar reflections (A7d), and the ECS items of A8. The
 2026-08-22 counts above are that day's inventory and were not re-run.
 
 ---
@@ -471,7 +471,44 @@ shadows. Each item:
 dims the light rather than softening its shadow — measured scene brightness rising
 `136.13 → 139.09 → 143.16` as radius goes `2 → 6 → 20`.
 
-### A7b. No occlusion culling — and frustum culling currently buys nothing
+### A7b. Occlusion culling — **landed 2026-11-05, opt-in**
+
+**`Occluder`** on a big opaque entity: what is completely behind it, from the camera, draws nothing.
+Each view rasterises the occluders' boxes on the CPU into a 36 864-pixel depth buffer
+(`gizmo_renderer::occlusion`), and each object the frustum let through is tested against it. Chosen
+over a GPU depth readback because it has no latency (nothing pops in from behind a corner), needs no
+readback, and runs the same in the browser and on a phone. It leans one way on both sides: an
+occluder writes only cells it wholly covers at its farthest depth there, an object reads every cell
+its box touches at its nearest. A hidden caster still casts. The studio path does not cull
+(`render_parity` records why). `Renderer::occluded_objects` says how many it hid.
+
+Tested three ways: **the frame is byte-identical** with and without, shadows included (a mutation that
+drops hidden casters' shadows changes 117 of 65 536 bytes); against ground truth, random walls and
+objects where every ray to what it calls hidden must hit a wall; and the buffer's cells read directly.
+
+**Measured, 1280 × 720, a wall hiding everything else:**
+
+| scene | no occluder | occluder |
+|---|---|---|
+| 2 026 spheres of 8 064 triangles, not casting | 23.0 ms | **8.0 ms** |
+| the same, casting | 34.2 ms | **19.4 ms** |
+| 19 882 cubes, not casting | 16.3 ms | **13.4 ms** |
+| the same, casting | 17.3 ms | 17.9 ms |
+
+**What it does not buy:** cheap geometry that casts. A hidden caster keeps its instance and its shadow
+draws, so all it saves is the camera's passes, which for a cube is less than the 55 ns the test costs.
+Each occluder is rasterised every view, so tens, not thousands. Occluders do not hide each other's
+shadow casters, and nothing is automatic: a game has to mark them, because the box must be inside the
+object and only a box mesh's bounds are.
+
+Measuring it found a defect of its own: an object off screen that casts nothing went on to the
+shadow-only list anyway (the classifier asks the material whether it can cast, not the entity whether
+it does) and was built and uploaded for a pass that skipped it. Fixed; that alone took a camera turned
+away from 19 882 such cubes from 19 888 instances to 7.
+
+The rest of this section is the older question of the per-object walk.
+
+### A7b (history). No occlusion culling — and frustum culling currently buys nothing
 
 There is no hierarchical depth buffer, no query-based culling, no reprojected visibility. Frustum
 culling **does** exist (`frustum_cull.rs`, with its own tests, and it culls shadow casters against

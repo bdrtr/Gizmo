@@ -73,7 +73,7 @@ pub use crate::renderer::asset::AssetManager;
 pub use crate::systems::render::Typewriter;
 #[cfg(feature = "render")]
 pub use crate::renderer::components::{
-    BlendMode, Camera, CameraShake, DirectionalLight, LightRole, Material, MaterialDesc, Mesh, MeshData, MeshRenderer,
+    BlendMode, Camera, CameraShake, DirectionalLight, Occluder, LightRole, Material, MaterialDesc, Mesh, MeshData, MeshRenderer,
     PointLight, RectLight, SpotLight,
 };
 #[cfg(feature = "render")]

@@ -350,6 +350,52 @@ pub(crate) struct BatchData {
     shadow_previous: Vec<[[f32; 4]; 4]>,
 }
 
+/// This view's occlusion buffer: every solid [`Occluder`](crate::renderer::components::Occluder)'s
+/// box, rasterised. `None` when none draws, which is every scene that never asked for this.
+fn build_occlusion(
+    world: &World,
+    view_proj: &Mat4,
+    size: winit::dpi::PhysicalSize<u32>,
+    hidden: &std::collections::HashSet<u32>,
+) -> Option<crate::renderer::occlusion::OcclusionBuffer> {
+    let occluders = world.borrow::<crate::renderer::components::Occluder>();
+    occluders.iter().next()?;
+    let renderers = world.borrow::<MeshRenderer>();
+    let transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
+    let pooled = world.borrow::<gizmo_core::pool::Pooled>();
+    let editor_only = world.borrow::<crate::core::component::EditorOnly>();
+    let meshes = world.borrow::<Mesh>();
+    let materials = world.borrow::<Material>();
+    let mesh_handles = world.borrow::<gizmo_core::asset::Handle<Mesh>>();
+    let material_handles = world.borrow::<gizmo_core::asset::Handle<Material>>();
+    let mesh_assets = world.try_get_resource::<gizmo_core::asset::Assets<Mesh>>().ok();
+    let material_assets = world.try_get_resource::<gizmo_core::asset::Assets<Material>>().ok();
+
+    let aspect = size.width as f32 / size.height.max(1) as f32;
+    let mut buffer = crate::renderer::occlusion::OcclusionBuffer::new(*view_proj, aspect);
+    for (e, occluder) in occluders.iter() {
+        let Some(shown) = renderers.get(e) else { continue };
+        if !shown.shadows.visible() || hidden.contains(&e) || pooled.get(e).is_some() || editor_only.get(e).is_some() {
+            continue;
+        }
+        let Some(trans) = transforms.get(e) else { continue };
+        let mesh = meshes
+            .get(e)
+            .or_else(|| mesh_handles.get(e).and_then(|h| mesh_assets.as_ref().and_then(|a| a.get(h))));
+        let material = materials
+            .get(e)
+            .or_else(|| material_handles.get(e).and_then(|h| material_assets.as_ref().and_then(|a| a.get(h))));
+        let (Some(mesh), Some(material)) = (mesh, material) else { continue };
+        // Solid means solid: what shows through or has holes cut in it hides nothing.
+        if material.is_transparent || material.albedo.w < 0.99 || material.alpha_cutoff > 0.0 {
+            continue;
+        }
+        let model = trans.matrix * Mat4::from_translation(mesh.center_offset);
+        buffer.add_box(&model, occluder.box_for(mesh.bounds));
+    }
+    (!buffer.is_empty()).then_some(buffer)
+}
+
 /// Collect visible + shadow-casting meshes into instanced draw batches for one frame.
 ///
 /// The caller passes the UNJITTERED view-proj and the cascade view-projs so culling uses
@@ -394,6 +440,12 @@ pub(super) fn collect_draw_items(
     // path (`capture_reflection_probes`) — without it the grid, light icons and gizmo handles
     // would be baked into every probe the editor captured.
     let editor_only = world.borrow::<crate::core::component::EditorOnly>();
+
+    // What this view's occluders hide. Built before the walk, from this frame's transforms; `None`
+    // for a scene with no `Occluder`, which then tests nothing.
+    let occlusion = build_occlusion(world, &unjittered_view_proj, renderer.size, &hidden);
+    let occluders = world.borrow::<crate::renderer::components::Occluder>();
+    let occluded_objects = std::cell::Cell::new(0u32);
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
     // Per-cascade LIGHT frusta — shadow casters are culled against these, NOT the camera
@@ -493,6 +545,44 @@ pub(super) fn collect_draw_items(
                     crate::renderer::Visibility::Culled => continue,
                     crate::renderer::Visibility::Camera => true,
                     crate::renderer::Visibility::ShadowOnly => false,
+                };
+                // Unseen and casting nothing: this object has no use for this frame. It used to go on
+                // to the shadow-only list anyway, because `classify_visibility_world` asks the
+                // material whether it can cast and only this entity knows it does not — an instance
+                // built and uploaded for a shadow pass that skips it. Measured with 19 882 such cubes
+                // and the camera turned away: all of them still uploaded.
+                let unseen_and_silent = |camera: bool| {
+                    !camera && renderers.get($e).is_some_and(|r| !r.shadows.casts())
+                };
+                if unseen_and_silent(camera_visible) {
+                    continue;
+                }
+                // In view, and behind an occluder: the same as off screen. An occluder is not
+                // tested, and neither is what is pinned to the far plane rather than placed in
+                // the world (its box says nothing about where it draws).
+                let camera_visible = if camera_visible
+                    && occlusion.as_ref().is_some_and(|o| o.is_occluded(drawn_world_aabb))
+                    && occluders.get($e).is_none()
+                    && !matches!(
+                        $mat.material_type,
+                        crate::renderer::components::MaterialType::Skybox
+                            | crate::renderer::components::MaterialType::Backdrop
+                            | crate::renderer::components::MaterialType::BackdropPlaced
+                            | crate::renderer::components::MaterialType::Grid
+                    ) {
+                    occluded_objects.set(occluded_objects.get() + 1);
+                    match crate::renderer::unseen_visibility(
+                        &cascade_frusta,
+                        drawn_world_aabb,
+                        $mat.material_type,
+                        $mat.is_transparent,
+                        $mat.albedo.w,
+                    ) {
+                        crate::renderer::Visibility::ShadowOnly if !unseen_and_silent(false) => false,
+                        _ => continue,
+                    }
+                } else {
+                    camera_visible
                 };
 
                 // Auto-LOD (Level of Detail) Seçimi. The per-object bias means the same thing
@@ -736,6 +826,8 @@ pub(super) fn collect_draw_items(
             }
         }
         
+        renderer.occluded_objects = occluded_objects.get();
+
         let mut local_instances: Vec<crate::renderer::gpu_types::InstanceRaw> = std::mem::take(&mut cache.instances);
         let mut local_draw_items: Vec<DrawItem> = std::mem::take(&mut cache.draw_items);
         let mut local_previous: Vec<[[f32; 4]; 4]> = Vec::new();

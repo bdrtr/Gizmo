@@ -82,6 +82,18 @@ pub fn classify_visibility_world(
     if camera_frustum.intersects_aabb(world_aabb) {
         return Visibility::Camera;
     }
+    unseen_visibility(cascade_frusta, world_aabb, material_type, is_transparent, albedo_alpha)
+}
+
+/// What becomes of an object the camera will not see: off screen, or behind an occluder. A caster
+/// inside a cascade still goes to the shadow maps, or its shadow would vanish with it.
+pub fn unseen_visibility(
+    cascade_frusta: &[Frustum],
+    world_aabb: Aabb,
+    material_type: crate::components::MaterialType,
+    is_transparent: bool,
+    albedo_alpha: f32,
+) -> Visibility {
     let is_caster = !is_transparent
         && albedo_alpha >= 0.99
         && !matches!(

@@ -50,6 +50,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An unseen object that casts nothing was still built and uploaded.** `ShadowCasting::Off` kept an
+  off-screen object from the shadow pass but not from the shadow-only instance list: a camera turned
+  away from 19 882 such cubes still uploaded all of them. Now it uploads none.
+
 - **The UI focus passed to a new widget on a dead one's id.** A menu rebuilt without calling `focus`
   again left the focus on whichever new widget took the id: highlighted, and Enter pressed it.
   `UiNavigation` now remembers the handle it saw and drops the focus when the id's entity is another
@@ -164,6 +168,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bone authored off its joint. `tests/ragdoll_spawn.rs`.
 
 ### Added
+
+- **Occlusion culling (`Occluder`).** Put it on a wall or a building, and what is completely behind it
+  draws nothing, shadows kept. Rasterised on the CPU each view, so nothing pops in late and it runs
+  the same in the browser. The frame is byte-identical with and without. On 2 026 spheres of 8 064
+  triangles behind a wall: 23.0 → 8.0 ms not casting, 34.2 → 19.4 ms casting. It buys nothing for
+  cheap geometry that casts (19 882 cubes: 17.3 → 17.9 ms). A scene with no `Occluder` pays nothing.
 
 - **`World::run_system`: a system, once, now.** From an `on_enter` hook, an exclusive system or a
   test. It runs inside the frame's change window, its `Commands` are applied before it returns, and

@@ -44,7 +44,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   FXAA (four quality presets) + CAS sharpening instead (§A6) — no SMAA, area lights
   are sphere, tube and rectangle, and spot lights take cookies (§A7: `source_radius` /
   `source_length` / `RectLight` / `SpotLight::cookie`, cookies native-only. Soft sun shadows and
-  contact shadows are `DirectionalLight::angular_radius` / `contact_shadow_length`), no occlusion culling (§A7b), motion blur
+  contact shadows are `DirectionalLight::angular_radius` / `contact_shadow_length`), occlusion culling is opt-in (`Occluder`, §A7b), motion blur
   covers camera and objects but not transparent ones (§A7c, `PostProcess::motion_blur`; auto exposure
   is `renderer.auto_exposure`). Split screen works on the game path (`Camera::viewport`, §A5b); the studio previews a
   split-screen game through its primary camera. Transparent materials blend by

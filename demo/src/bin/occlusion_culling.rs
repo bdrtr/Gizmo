@@ -1,5 +1,8 @@
 //! # Motorun neyi ayıkladığı, neyi ayıklamadığı
 //!
+//! > **2026-11-05 notu:** occlusion culling artık var, `Occluder` ile (`CAPABILITY_GAPS.md` §A7b). Bu
+//! > demo ondan önceki ölçümlerin kaydı; aşağıdaki "motorda yok" cümleleri o günü anlatıyor.
+//!
 //! Çizilmeyecek geometriyi çizmemek. İki ayrı soru var ve motorun cevabı ikisinde farklı:
 //!
 //!   * **Görüş alanı dışında mı?** (frustum culling) — motorda **var**.

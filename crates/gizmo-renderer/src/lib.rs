@@ -147,6 +147,8 @@ pub mod deferred;
 pub mod draw_order;
 pub mod frame_uniforms;
 pub mod frustum_cull;
+/// Occlusion culling: a small CPU depth buffer of what a game marked as an [`Occluder`](components::Occluder).
+pub mod occlusion;
 pub mod fxaa;
 pub mod gi;
 /// GPU SPH fluid simulation and its surface rendering.
@@ -201,7 +203,7 @@ pub use frame_uniforms::{
     CameraFrame, EnvironmentFrame, Fog, SceneFrame, ShadowFrame, Sky, SunFrame, UnderwaterFog, MAX_LIGHTS,
 };
 pub use frustum_cull::{
-    classify_visibility, classify_visibility_world, visible_in_frustum, Frustum, Visibility,
+    classify_visibility, classify_visibility_world, unseen_visibility, visible_in_frustum, Frustum, Visibility,
 };
 // `NO_KEY` is deliberately NOT re-exported at the crate root — the name only means anything
 // next to the index. Reach it as `gizmo_renderer::visibility::NO_KEY`.
