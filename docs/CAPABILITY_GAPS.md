@@ -1262,6 +1262,36 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16ah. State keyed by a raw entity id (2026-11-05, an audit after `sarmasik`)
+
+The ECS hands a despawned entity's id to a later spawn, and much of the engine keeps state by the
+raw `u32` (or `BodyHandle`, which is one). `sarmasik` found the first case (C16af: a dead body's
+joints tied to the next body on its id); an audit of everything else that keeps state by id
+across frames found four more. No production code registers a despawn hook, so nothing outside
+the ECS is told an entity went. The free list is first in, first out, so these show in quiet
+scenes or when it has run dry.
+
+- ~~**Contacts and trigger overlaps.**~~ **Closed.** The contact cache is keyed by the pair's ids:
+  a body born in a trigger on a dead body's id was told `Persisting` and never `Started`, and in a
+  solid contact took the dead body's warm-start impulses. A removed body's pairs leave the cache
+  and are reported `Ended` before the next step's own events (`tests/joint_recycled_id.rs`).
+- ~~**Streamed textures.**~~ **Closed.** A finished decode was applied to whatever material held
+  the id; it now goes only to a material whose `texture_source` is still the requested path.
+- ~~**Object motion (TAA, motion blur).**~~ **Closed.** `MotionHistory` handed a new entity the
+  previous matrix of the dead one on its id — a frame of motion from there to here. Its slot
+  records the generation.
+- **Open — UI focus.** `UiNavigation` keeps the focus as a raw id; a menu rebuilt without calling
+  `focus` again leaves it on whichever new widget took the old id (highlighted, and Enter would
+  press it). Its system has no world to read generations from, and the obvious `Added<Interaction>`
+  test would also clear the focus a game sets on a button it has just spawned; the fix is an
+  `Entity`-based focus API, a public change.
+- **Open, low — `FighterController::already_hit`.** A victim on a recycled id is immune for the
+  rest of the attacker's current move; the list is cleared every move.
+- Checked and safe: hierarchy (unlinked both ways on despawn), character-controller triggers
+  (rewritten every step), kinematic targets and soft/cloth/rope coupling (rebuilt every frame),
+  drag/drop and text-input focus, rollback restore (generation-checked), editor selection
+  (`Entity`, generation included), AI targets (positions), audio (sink ids).
+
 ### C16ag. The games as a gate (2026-11-04, `scripts/game-tests.py`)
 
 Fifteen games had a headless `--test` mode and no gate ran one; a CCD fix that day moved
