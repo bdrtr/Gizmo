@@ -790,7 +790,7 @@ mod clip_tests {
         let font = crate::renderer::text::FontLibrary::default()
             .load(crate::renderer::text::synthetic::synthetic_face())
             .expect("the synthetic face parses");
-        let pinned = scale_text(&Text::pinned("x", font, 22.0, crate::renderer::components::TextAnchor::TopLeft, Vec2::splat(16.0)), 2.0);
+        let pinned = scale_text(&Text::pinned_at("x", font, 22.0, Vec2::ZERO, Vec2::splat(16.0)), 2.0);
         assert_eq!(pinned.size_px, 44.0);
         assert_eq!(pinned.space.screen_point(Vec2::new(800.0, 600.0)), Some(Vec2::splat(32.0)));
         let placed = scale_text(&Text::screen("x", font, 22.0, Vec2::splat(16.0)), 2.0);
