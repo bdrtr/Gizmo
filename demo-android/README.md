@@ -38,4 +38,5 @@ desktop. What is different on a phone:
   `/system/fonts`.
 - **The C++ runtime** (`meshopt` is C++) is linked statically by `gizmo-renderer`'s build script.
 
-Only `aarch64` (every phone of the last decade) is built.
+Only `aarch64` (every phone of the last decade) is built. The launcher icon is `media/logo.png` at
+Android's five densities (`res/mipmap-*/ic_launcher.png`).

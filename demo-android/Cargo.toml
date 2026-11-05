@@ -38,6 +38,8 @@ android_logger = "0.14"
 package = "com.bdrtr.gizmo.pinbol"
 apk_name = "gizmo-pinbol"
 build_targets = ["aarch64-linux-android"]
+# The launcher icon: `media/logo.png` at the five densities, in `res/mipmap-*/`.
+resources = "res"
 
 [package.metadata.android.sdk]
 min_sdk_version = 26
@@ -45,6 +47,7 @@ target_sdk_version = 35
 
 [package.metadata.android.application]
 label = "Gizmo Pinbol"
+icon = "@mipmap/ic_launcher"
 theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
 
 [package.metadata.android.application.activity]
