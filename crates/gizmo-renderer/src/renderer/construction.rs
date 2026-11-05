@@ -17,7 +17,7 @@ pub(crate) fn cap_web_render_size(
     }
     #[cfg(gizmo_forward_only)]
     {
-        size = within_pixel_budget(size, WEB_RENDER_PIXELS);
+        size = within_pixel_budget(size, FORWARD_ONLY_RENDER_PIXELS);
     }
     size
 }
@@ -25,6 +25,21 @@ pub(crate) fn cap_web_render_size(
 /// The web's render budget, in pixels: what a 640 × 360 frame costs.
 #[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
 pub(crate) const WEB_RENDER_PIXELS: u32 = 640 * 360;
+
+/// An Android app's render budget: what a 1280 × 720 frame costs, four times the web's. The
+/// browser's budget is set by what a page can spend beside everything else a browser does; an app
+/// has the GPU to itself, and at the web's 640 × 360 an upright phone (1080 × 2400) showed a frame
+/// of 328 × 701 stretched 3.3 times — soft edges and blurred text.
+#[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
+pub(crate) const ANDROID_RENDER_PIXELS: u32 = 1280 * 720;
+
+/// The budget this target's reduced path renders at.
+#[cfg(target_os = "android")]
+#[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
+const FORWARD_ONLY_RENDER_PIXELS: u32 = ANDROID_RENDER_PIXELS;
+#[cfg(not(target_os = "android"))]
+#[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
+const FORWARD_ONLY_RENDER_PIXELS: u32 = WEB_RENDER_PIXELS;
 
 /// `size` scaled down, aspect kept, until it has at most `budget` pixels.
 ///
@@ -777,6 +792,19 @@ pub(crate) fn native_device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
 mod budget_tests {
     use super::*;
     use winit::dpi::PhysicalSize;
+
+    /// An upright phone in the APK renders at four times the web's pixels, aspect kept, and never
+    /// more than the budget.
+    #[test]
+    fn an_android_app_renders_at_four_times_the_webs_pixels() {
+        let phone = within_pixel_budget(PhysicalSize::new(1080, 2400), ANDROID_RENDER_PIXELS);
+        let web = within_pixel_budget(PhysicalSize::new(1080, 2400), WEB_RENDER_PIXELS);
+        let pixels = |s: PhysicalSize<u32>| s.width * s.height;
+        assert!(pixels(phone) <= ANDROID_RENDER_PIXELS, "{phone:?} is over the budget");
+        assert!(pixels(phone) > 3 * pixels(web), "{phone:?} against the web's {web:?}");
+        let aspect = |s: PhysicalSize<u32>| s.width as f32 / s.height as f32;
+        assert!((aspect(phone) - 1080.0 / 2400.0).abs() < 0.01, "{phone:?} lost the screen's shape");
+    }
 
     #[test]
     fn a_portrait_window_gets_the_same_pixels_as_a_landscape_one() {

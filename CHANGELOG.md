@@ -174,6 +174,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     app now lets the surface go on `suspended` and makes another on `resumed`
     (`Renderer::suspend_surface`, `resume_surface`) — before, a game sent to the background came
     back to a black screen. A frame with no surface is skipped instead of panicking.
+  - **An app renders at 1280 × 720 pixels' worth**, four times the browser's 640 × 360: an app has
+    the GPU to itself, and at the browser's budget an upright phone stretched a 328 × 701 frame 3.3
+    times.
   - The C++ runtime is linked on Android (`meshopt` is C++; the first APK could not load:
     `cannot locate symbol "__gxx_personality_v0"`), and the desktop crash dialog (`rfd`), which
     does not build there, is off.
