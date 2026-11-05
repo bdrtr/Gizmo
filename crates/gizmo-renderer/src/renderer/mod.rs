@@ -503,7 +503,7 @@ impl Renderer {
 
     /// A font that is always there: the machine's ([`load_system_font`](Self::load_system_font)
     /// — `GIZMO_FONT`, then the platform's usual faces), else — with the `bundled-font` feature —
-    /// the engine's own Noto Sans ([`text::bundled`](crate::text::bundled)), else the synthetic
+    /// the engine's own Noto Sans (`text::bundled`, only built with that feature), else the synthetic
     /// face, which has the ASCII shapes and nothing more. What 33 of the demos' setups wrote out by
     /// hand, as one call that cannot fail the setup. In the browser there is never a machine font,
     /// so without the feature web text is ASCII-only.
