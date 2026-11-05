@@ -5,6 +5,7 @@ members = [
     "server",
     "demo",
     "demo-web",
+    "games",
     "cradle",
 ]
 # Rakip motorla kıyas düzeneği. Üye DEĞİL: `rapier3d` motorun bağımlılık grafiğine

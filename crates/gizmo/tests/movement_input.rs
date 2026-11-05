@@ -111,7 +111,7 @@ const EXCEPTIONS: &[(&str, &str)] = &[
         "Up/Down are a dial: they raise and lower the wind speed in m/s.",
     ),
     (
-        "demo/src/bin/pinbol.rs",
+        "games/src/pinbol.rs",
         "A/D and ←/→ are the left and right flipper — two independent buttons held at once, not \
          a direction; a stick's half-tilt would be half a flip.",
     ),
@@ -134,7 +134,7 @@ const EXCEPTIONS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Where movement is read from: **every crate's `src`, and the demo crate's**.
+/// Where movement is read from: **every crate's `src`, the demo crate's and the games crate's**.
 ///
 /// The first version of this list named three places — `demo/src/bin`, `SimpleApp` and the
 /// studio's camera — and it was wrong within the hour. It missed
@@ -148,7 +148,8 @@ const EXCEPTIONS: &[(&str, &str)] = &[
 /// `tests/` directories are deliberately outside it, because a test that lists key codes to prove
 /// them (`gizmo-app`'s `key_convention.rs`, and this file) is not movement code.
 fn subjects(root: &Path) -> Vec<PathBuf> {
-    let mut dirs = vec![root.join("demo/src")];
+    // `games/src` holds the games both the desktop demos and the browser build run.
+    let mut dirs = vec![root.join("demo/src"), root.join("games/src")];
     for entry in std::fs::read_dir(root.join("crates"))
         .expect("crates/ is readable")
         .flatten()

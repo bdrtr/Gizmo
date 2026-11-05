@@ -10,6 +10,10 @@
 //! | **D / →** | sağ palet |
 //! | **Space** | topu at (atış kanalındayken) |
 //! | **R** | baştan |
+//! | **dokunmatik**: ekranın sol / sağ yarısı | sol / sağ palet; kanaldaki topu da atar; oyun bitince yeniden başlatır |
+//!
+//! Masaüstünde `demo/src/bin/pinbol.rs`, tarayıcıda `demo-web` (`?oyun=pinbol`) çalıştırıyor — ikisi
+//! de [`app`]'i. Dokunmatik düğmeler ekrana ilk dokunuşta beliriyor; masaüstünde hiç görünmüyor.
 //!
 //! `pinbol --test` pencere açmaz: otomatik palet bir dakika oynar; kaç kez vurduğu, topun kaç kez
 //! düştüğü, ve masanın dışına (duvarın içinden) hiç çıkıp çıkmadığı yazılır. (`PINBOL_OTO=1`
@@ -21,7 +25,8 @@ use gizmo::physics::world::PhysicsWorld;
 use gizmo::physics::{Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{MeshData, Text, TextAlign, TextAnchor};
-use gizmo::simple::{set_text, sync_transforms, FixedPhysics, SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{set_text, sync_transforms, FixedPhysics, HeadlessFrames, SimpleAppExt, SimpleSceneState};
+use gizmo::ui::{BackgroundColor, NodeBundle, PositionType, Style, UiPlugin, UiRect, Val, VirtualButton};
 
 /// Masanın yarı genişliği (x) ve yarı boyu (z); oyuncu +z tarafında.
 const HALF_W: f32 = 0.6;
@@ -289,7 +294,7 @@ impl Autopilot {
 }
 
 /// `--test`: bir dakika otomatik palet.
-fn self_test() -> bool {
+pub fn self_test() -> bool {
     let mut world = World::new();
     let mut table = Table::new(&mut world, false);
     let mut auto = Autopilot::default();
@@ -300,7 +305,8 @@ fn self_test() -> bool {
         let (up, fire) = auto.press(&world, &table, dt);
         table.frame(&mut world, dt, up, fire, false);
     }
-    let ok = !table.escaped && table.hits >= 5;
+    let touch_ok = touch_test();
+    let ok = !table.escaped && table.hits >= 5 && touch_ok;
     println!(
         "pinbol --test: 60 s; paletler {} kez vurdu, tamponlar {} puan, top {} kez düştü; masadan kaçtı mı: {} → {}",
         table.hits,
@@ -318,34 +324,99 @@ struct Game {
     auto: Autopilot,
     hud: u32,
     banner: u32,
+    /// Dokunmatik paletler (sol, sağ). Kurulumda, görünmez kuruluyorlar: bir düğme yalnızca
+    /// üstüne o karede inen parmağı sahipleniyor, yani ilk dokunuşta kurulan bir düğme o
+    /// dokunuşu kaçırıyordu — telefonda ilk palet vuruşu boşa gidiyordu.
+    touch: [u32; 2],
+    /// Ekrana dokunuldu mu: düğmeler o zaman görünür, HUD dokunmatik ipucunu yazar.
+    touched: bool,
 }
 
-fn main() {
-    if std::env::args().any(|a| a == "--test") {
-        std::process::exit(if self_test() { 0 } else { 1 });
-    }
+/// Bütün oyun: sahne, girdi, güncelleme. Masaüstü ikilisi ve tarayıcı yapısı bunu çalıştırıyor.
+pub fn app() -> App<SimpleSceneState> {
     App::<SimpleSceneState>::new("Gizmo Engine - Pinbol", 1280, 720)
+        .add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
             let font = scene.renderer.default_font();
-            let table = Table::new(scene.world, true);
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-1.1)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 2.4, LightRole::Sun),
-            ));
-            scene.world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 2.3, 2.3), pitch: -0.85, primary: true, ..Default::default() });
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
-            let banner = scene
-                .world
-                .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_align(TextAlign::Center),))
-                .id();
-            scene.world.insert_resource(Game { table, balls_left: BALLS, auto: Autopilot::default(), hud, banner });
+            let game = setup(scene.world, font);
+            scene.world.insert_resource(game);
         })
         .replace_update(update)
-        .run()
-        .expect("uygulama çalıştırılamadı");
+}
+
+/// Masa, ışık, kamera, HUD (pencere de GPU da gerekmez).
+fn setup(world: &mut World, font: gizmo::renderer::text::FontId) -> Game {
+    let table = Table::new(world, true);
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-1.1)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 2.4, LightRole::Sun),
+    ));
+    world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 2.3, 2.3), pitch: -0.85, primary: true, ..Default::default() });
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let banner = world
+        .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_align(TextAlign::Center),))
+        .id();
+    let touch = spawn_touch_buttons(world);
+    Game { table, balls_left: BALLS, auto: Autopilot::default(), hud, banner, touch, touched: false }
+}
+
+/// Dokunmatik paletler, pencere açmadan: ekranın sol yarısına inen bir parmak sol paleti kaldırıyor,
+/// sağ palet inik kalıyor; parmak kalkınca palet iniyor. Oyunun kendi kurulumu ve güncellemesi,
+/// arayüz eklentisiyle.
+fn touch_test() -> bool {
+    use gizmo::core::input::touch::TouchPhase;
+    let mut run = HeadlessFrames::new(World::new()).add_plugin(UiPlugin);
+    let game = setup(&mut run.world, HeadlessFrames::font());
+    run.world.insert_resource(game);
+    let angles = |run: &HeadlessFrames| run.world.get_resource::<Game>().map(|g| g.table.angles).unwrap_or_default();
+    let frames = |run: &mut HeadlessFrames, n: usize| {
+        for _ in 0..n {
+            run.frame(1.0 / 60.0, update);
+        }
+    };
+    frames(&mut run, 5);
+    let size = gizmo::core::window::WindowInfo::default();
+    // Bu ilk dokunuş: palet hemen kalkmalı (düğmeler ilk dokunuşta kurulsaydı bu parmağı kaçırırdı).
+    run.input.on_touch(1, TouchPhase::Started, size.width * 0.25, size.height * 0.6);
+    frames(&mut run, 20);
+    let held = angles(&run);
+    run.input.on_touch(1, TouchPhase::Ended, size.width * 0.25, size.height * 0.6);
+    frames(&mut run, 20);
+    let released = angles(&run);
+    let up = |a: f32| (a - FLIPPER_UP).abs() < 0.01;
+    let down = |a: f32| (a - FLIPPER_DOWN).abs() < 0.01;
+    let ok = up(held[0]) && down(held[1]) && down(released[0]);
+    println!(
+        "    dokunma: sol yarıda parmak → paletler {:.2} / {:.2} (kalkık {FLIPPER_UP}, inik {FLIPPER_DOWN}), parmak kalkınca sol {:.2} → {}",
+        held[0],
+        held[1],
+        released[0],
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
+/// Ekranın iki yarısını kaplayan iki dokunmatik palet düğmesi (sol, sağ), görünmez. Her biri kendi
+/// parmağını tutuyor: iki palet aynı anda kaldırılabiliyor.
+fn spawn_touch_buttons(world: &mut World) -> [u32; 2] {
+    let mut half = |left: Val, right: Val| {
+        let e = world.spawn_bundle(NodeBundle {
+            style: Style {
+                position_type: PositionType::Absolute,
+                inset: UiRect { left, right, top: Val::Percent(0.0), bottom: Val::Percent(0.0) },
+                width: Val::Percent(50.0),
+                ..Default::default()
+            },
+            background_color: BackgroundColor(Vec4::ZERO),
+            ..Default::default()
+        });
+        world.add_component(e, VirtualButton::default());
+        e.id()
+    };
+    [half(Val::Percent(0.0), Val::Auto), half(Val::Auto, Val::Percent(0.0))]
 }
 
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
@@ -356,19 +427,39 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         game.table.score = 0;
         game.table.drains = 0;
     }
+    if !game.touched && !input.touches().is_empty() {
+        game.touched = true;
+        for id in game.touch {
+            if let Some(mut bg) = world.borrow_mut::<BackgroundColor>().get_mut(id) {
+                bg.0 = Vec4::new(1.0, 1.0, 1.0, 0.03);
+            }
+        }
+    }
+    // Dokunmatik paletler: basılı mı, bu karede mi basıldı.
+    let touch: [(bool, bool); 2] = {
+        let buttons = world.borrow::<VirtualButton>();
+        game.touch.map(|id| buttons.get(id).map_or((false, false), |b| (b.is_pressed(), b.just_pressed())))
+    };
+    let tapped = touch.iter().any(|t| t.1);
     let (up, fire) = if std::env::var_os("PINBOL_OTO").is_some() {
         let Game { auto, table, .. } = &mut game;
         auto.press(world, table, dt)
     } else {
         (
             [
-                input.is_key_pressed(KeyCode::KeyA as u32) || input.is_key_pressed(KeyCode::ArrowLeft as u32),
-                input.is_key_pressed(KeyCode::KeyD as u32) || input.is_key_pressed(KeyCode::ArrowRight as u32),
+                input.is_key_pressed(KeyCode::KeyA as u32) || input.is_key_pressed(KeyCode::ArrowLeft as u32) || touch[0].0,
+                input.is_key_pressed(KeyCode::KeyD as u32) || input.is_key_pressed(KeyCode::ArrowRight as u32) || touch[1].0,
             ],
-            input.is_key_just_pressed(KeyCode::Space as u32),
+            input.is_key_just_pressed(KeyCode::Space as u32) || tapped,
         )
     };
     let over = game.table.drains >= game.balls_left;
+    // Oyun bitince bir dokunuş da baştan başlatıyor.
+    if over && tapped {
+        game.balls_left = BALLS;
+        game.table.score = 0;
+        game.table.drains = 0;
+    }
     if !over {
         game.table.frame(world, dt, up, fire, true);
     }
@@ -378,8 +469,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         world,
         game.hud,
         &format!(
-            "puan {}   top {left}\nA/D: paletler   Space: at{}   R: baştan",
+            "puan {}   top {left}\n{}{}",
             game.table.score,
+            if game.touched { "sol / sağ yarı: paletler, dokun: at" } else { "A/D: paletler   Space: at   R: baştan" },
             if game.table.in_lane { "  (top kanalda)" } else { "" }
         ),
     );

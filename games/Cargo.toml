@@ -1,0 +1,20 @@
+[package]
+name = "games"
+description = "Games shared by the desktop demos (demo/) and the browser build (demo-web/): one game, two hosts."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+# What the games need and nothing more, so the browser build can take this crate as it is. The
+# desktop `demo` crate adds its own features on top; cargo unifies them.
+gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features = false, features = [
+    "window",
+    "render",
+    "physics",
+    "physics-dynamics",
+    "ui",
+] }

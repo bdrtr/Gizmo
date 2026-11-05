@@ -1769,6 +1769,7 @@ name = "demo"
 version = "0.11.0"
 dependencies = [
  "bytemuck",
+ "games",
  "gizmo-engine",
  "mimalloc",
  "pollster",
@@ -1784,9 +1785,11 @@ dependencies = [
 name = "demo-web"
 version = "0.11.0"
 dependencies = [
+ "games",
  "gizmo-engine",
  "log",
  "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -2414,6 +2417,13 @@ dependencies = [
  "futures-task",
  "pin-project-lite",
  "slab",
+]
+
+[[package]]
+name = "games"
+version = "0.11.0"
+dependencies = [
+ "gizmo-engine",
 ]
 
 [[package]]
