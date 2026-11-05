@@ -86,7 +86,7 @@ pub fn draw_material_section(
                         ui.horizontal(|ui| {
                             ui.checkbox(&mut mat.is_transparent, "Transparent").on_hover_text("Alpha blending etkinleştirir.");
                             ui.checkbox(&mut mat.is_double_sided, "Double Sided").on_hover_text("Backface culling'i kapatır.");
-                            ui.checkbox(&mut mat.is_forward, "Forward").on_hover_text("Oyunda G-buffer yerine forward geçişinde çizer. Editör görünümü zaten her şeyi forward çizer.");
+                            ui.checkbox(&mut mat.is_forward, "Forward").on_hover_text("Oyunda son rengi forward geçişinde çizer. Editör görünümü zaten her şeyi forward çizer.");
                         });
 
                         // --- Blend Mode --- Alpha dışındaki her kip malzemeyi saydam yapar

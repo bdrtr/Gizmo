@@ -589,8 +589,8 @@ fn every_render_capability_is_known_to_both_draw_paths() {
         (
             "is_forward",
             Path::GameOnly,
-            "Chooses forward over the G-buffer, and this viewport has no G-buffer pass: it draws \
-             every opaque object forward through `shader.wgsl`, so there is nothing to opt out of.",
+            "Chooses forward shading over deferred, and this viewport has no deferred pass: it draws \
+             every opaque object forward through `shader.wgsl`, so there is nothing to choose.",
         ),
         (
             "PlanarReflection",

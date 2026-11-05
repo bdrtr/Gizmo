@@ -202,14 +202,22 @@ measures.
 **Choosing the forward path for a built-in material: closed 2026-11-06.** Measured in
 `deferred_rendering`, doing so used to mean changing the material type, which also changed the
 shading: two axes that ought to be separate were one. `Material::with_forward` is the second axis.
-The type stays `Pbr`, the object leaves the z-prepass and the G-buffer, stays lit, casts and receives
-(more than 80 shadow pixels asserted in all four pairings of floor and caster paths), and shares
-depth with deferred neighbours. It only matters on the desktop path: the browser and Android draw
-everything forward already, and so does the editor viewport, which is why the field is game-only in
-`render_parity`.
+The type stays `Pbr`, the final colour comes from the forward pass, and it casts and receives (more
+than 80 shadow pixels asserted in all four pairings of floor and caster paths). It only matters on the
+desktop path: the browser and Android draw everything forward already, and so does the editor
+viewport, which is why the field is game-only in `render_parity`.
 
-The shading is close, not equal. Forward has no SSAO, SSR, SSGI, decals or velocity, and does not read
-anisotropy, clear coat, subsurface or irradiance volumes.
+**It stays in the z-prepass and the G-buffer.** The first version took it out, and that was wrong at
+the root: TAA reprojects from the G-buffer's world position, motion blur reads its velocity, and SSR
+and SSGI its normals and positions, so every one of them saw the surface *behind* the object. Now they
+see the object, it occludes its neighbours in SSAO, and the forward pass draws its colour over the
+deferred one. The cost is that its pixels are shaded twice. What is still lost is what `shader.wgsl`
+does not have: SSAO on its own surface, decals, anisotropy, clear coat, subsurface, irradiance volumes
+and PCSS.
+
+Unlit and baked-lit surfaces do not fill the G-buffer, so those effects still see through them, and a
+moving one gets no motion blur. Baked-lit exists to skip that cost, so changing this is its own
+decision.
 
 **The environment presets moved to the forward shader, 2026-11-06 (decided and applied).** They lived
 in the deferred shader alone, so `shader.wgsl` lit everything with a fixed warm hemisphere: a red cube

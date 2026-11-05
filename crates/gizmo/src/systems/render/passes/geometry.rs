@@ -41,7 +41,7 @@ pub fn record_deferred_geometry(
             if !item.visible_in_camera {
                 continue;
             }
-            if item.unlit || item.forward_lit || item.is_skybox || item.is_transparent {
+            if item.unlit || item.is_skybox || item.is_transparent {
                 continue;
             }
             if two_sided_bound != Some(item.is_double_sided) {
@@ -151,7 +151,7 @@ pub fn record_deferred_geometry(
             if !item.visible_in_camera {
                 continue; // ShadowCasting::Only
             }
-            if item.unlit || item.forward_lit || item.is_transparent {
+            if item.unlit || item.is_transparent {
                 continue;
             }
             if two_sided_bound != Some(item.is_double_sided) {

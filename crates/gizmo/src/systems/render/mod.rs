@@ -6732,14 +6732,14 @@ mod golden_render_tests {
         sum / 144.0
     }
 
-    /// **`with_forward` moves a lit material out of the G-buffer and changes nothing else about it.**
-    /// The velocity target is what tells, because the G-buffer writes it and the forward pass does
-    /// not. A moving cube with nothing behind it writes no velocity when forward, which is the
-    /// G-buffer. A still cube leaves the velocity of the moving wall behind it, which is the
-    /// z-prepass: had it been there, the wall would have lost those pixels to depth.
+    /// **`with_forward` changes who shades a surface and nothing else about it.** It still fills the
+    /// G-buffer, which the velocity target shows: a moving forward cube writes its motion there, for
+    /// motion blur, and a still one hides the moving wall behind it, for which it has to be in the
+    /// z-prepass. The forward pass draws its colour: `shading_mode` 3 replaces a deferred surface with
+    /// a debug colour and cannot reach this one.
     #[test]
     #[ignore = "needs a GPU adapter"]
-    fn a_forward_material_is_lit_and_stays_out_of_the_gbuffer() {
+    fn a_forward_material_is_shaded_forward_and_still_fills_the_gbuffer() {
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available())
             || pollster::block_on(Renderer::headless_adapter_is_software())
@@ -6774,11 +6774,28 @@ mod golden_render_tests {
             let (forward_centre, forward_side, forward) = velocities(true).await;
             assert_eq!(deferred_centre, 0.0, "a deferred cube that did not move writes zero");
             assert!(deferred_side > 0.01, "a deferred cube that moved writes its velocity: {deferred_side}");
-            assert_eq!(forward_side, 0.0, "a moving forward cube reached the G-buffer");
+            assert_eq!(forward_centre, 0.0, "a still forward cube let the moving wall through: it is not in the z-prepass");
+            assert!((forward_side - deferred_side).abs() < 0.001, "a moving forward cube wrote {forward_side}, a deferred one {deferred_side}");
+
+            // Every pixel of the forward cube's face comes from the forward pass.
+            renderer.shading_mode = 3;
+            let debug_deferred = forward_cube_frame(&mut renderer, false, 0.0, 3.0, 0.3).await;
+            let debug_forward = forward_cube_frame(&mut renderer, true, 0.0, 3.0, 0.3).await;
+            renderer.shading_mode = 0;
             assert!(
-                forward_centre > 0.01,
-                "a forward cube reached the z-prepass: the wall's motion reads {forward_centre} under it",
+                (centre_mean(&debug_deferred, format, 1) - centre_mean(&deferred, format, 1)).abs() > 40.0,
+                "the debug view did not replace a deferred surface",
             );
+            let mut leaked = 0;
+            for y in 48..80 {
+                for x in 48..80 {
+                    let i = (y * 128 + x) * 4;
+                    if debug_forward[i..i + 3] != forward[i..i + 3] {
+                        leaked += 1;
+                    }
+                }
+            }
+            assert_eq!(leaked, 0, "{leaked} of the forward cube's pixels show the deferred pass through it");
 
             for (name, frame) in [("deferred", &deferred), ("forward", &forward)] {
                 let (r, b) = (centre_mean(frame, format, 0), centre_mean(frame, format, 2));
@@ -6956,6 +6973,69 @@ mod golden_render_tests {
             let frame = forward_cube_frame(&mut renderer, true, -6.0, 3.0, 0.0).await;
             let (r, b) = (centre_mean(&frame, format, 0), centre_mean(&frame, format, 2));
             assert!(b > r + 40.0, "the wall stands in front of the cube and should cover it: r {r}, b {b}");
+        });
+    }
+
+    /// **In the G-buffer the nearer surface wins whatever order they are drawn in**, which is the
+    /// z-prepass's job, since the G-buffer writes no depth. Two pairs of forward cubes, a still one in
+    /// front of a moving one, drawn nearest first on the left and nearest last on the right. Velocity
+    /// tells which surface the G-buffer kept, and on both sides it has to be the still one.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_gbuffer_keeps_the_nearer_forward_surface_in_either_draw_order() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let cube = AssetManager::create_cube(&renderer.device);
+            let material = Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.6, 0.0).with_forward(true);
+            let mut spawn = |at: Vec3, size: f32| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(Vec3::splat(size)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, cube.clone());
+                world.add_component(e, material.clone());
+                world.add_component(e, MeshRenderer::new());
+                e
+            };
+            let _near_first = spawn(Vec3::new(-1.5, 0.0, 1.0), 0.5);
+            let far_left = spawn(Vec3::new(-1.5, 0.0, -1.0), 1.0);
+            let far_right = spawn(Vec3::new(1.5, 0.0, -1.0), 1.0);
+            let _near_last = spawn(Vec3::new(1.5, 0.0, 1.0), 0.5);
+            world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await;
+            for moved in [far_left, far_right] {
+                if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(moved.id()) {
+                    t.position.y += 0.05;
+                }
+            }
+            render_world(&mut renderer, &mut world).await;
+            let tex = &renderer.deferred.as_ref().expect("the deferred path").velocity_tex;
+            let bytes = read_target(&renderer, tex, 128).await;
+            let moving = |x: usize| {
+                let i = (64 * 128 + x) * 4;
+                // Either half-float with anything but its sign bit: -0 is still zero.
+                [0, 2].iter().any(|c| u16::from_le_bytes([bytes[i + c], bytes[i + c + 1]]) & 0x7fff != 0)
+            };
+            // 1.5 m at 5 m from the camera is 36 px from the middle of the frame.
+            assert!(!moving(28), "the near cube drawn first lost its pixels to the far one behind it");
+            assert!(!moving(100), "the near cube drawn last lost its pixels to the far one behind it");
         });
     }
 

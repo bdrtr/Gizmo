@@ -194,13 +194,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   costs 0.97 ms the first frame and 0.5 µs after. Adds `harfrust` and `unicode-bidi`; the web build grows
   4.9 % gzipped. Checked by glyph ids and positions; not yet looked at on screen.
 
-- **`Material::with_forward`: a PBR material can choose the forward pass.** How a surface is shaded and
-  which path draws it were one setting, so drawing PBR forward was impossible. The material type no
-  longer changes: the object skips the z-prepass and the G-buffer, stays lit, casts and receives
-  shadows, and shares depth with deferred neighbours. It gives up SSAO, SSR, SSGI, decals,
-  velocity, anisotropy, clear coat, subsurface and irradiance volumes. `MaterialDesc` carries it, older scenes read as deferred, and the
-  inspector has a checkbox. Desktop only in effect: the browser, Android and the editor viewport draw
-  everything forward already.
+- **`Material::with_forward`: a PBR material can be shaded by the forward pass.** How a surface is shaded
+  and which path draws it were one setting, so drawing PBR forward was impossible. The material type no
+  longer changes. It stays in the z-prepass and the G-buffer, so TAA, motion blur, SSR, SSGI and SSAO
+  treat it like any other surface, and the forward pass draws its final colour over the deferred one, so
+  its pixels are shaded twice. It gives up what `shader.wgsl` lacks: SSAO on its own surface, decals,
+  anisotropy, clear coat, subsurface, irradiance volumes and PCSS. `MaterialDesc` carries it, older scenes
+  read as deferred, and the inspector has a checkbox. Desktop only in effect: the browser, Android and the
+  editor viewport draw everything forward already.
 
 - **Planar reflections (`PlanarReflection`).** A flat unlit mesh with this component reflects the scene,
   including what the camera cannot see: the scene is drawn again from the camera reflected in its

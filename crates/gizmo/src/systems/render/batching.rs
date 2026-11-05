@@ -179,9 +179,10 @@ pub struct DrawItem {
     /// The material asked for both faces (`Material::with_double_sided`). Selects the cull-off
     /// variant of whichever pipeline this item lands in; see `passes::geometry`.
     pub(super) is_double_sided: bool,
-    /// Lit, opaque, and drawn by the forward pass (`Material::with_forward`). **Not** `unlit`,
-    /// which would also take it out of the shadow passes and pick the unlit pipeline: this object
-    /// casts like any other and is shaded by `shader.wgsl`.
+    /// Lit, opaque, and shaded by the forward pass (`Material::with_forward`). **Not** `unlit`, which
+    /// would take it out of the shadow passes, the z-prepass and the G-buffer and pick the unlit
+    /// pipeline: this object is in all of those like any other, and the forward pass draws its final
+    /// colour over the deferred one.
     pub(super) forward_lit: bool,
     /// Per-object shadow casting (`MeshRenderer::shadows`). Two objects sharing a mesh and a
     /// material can answer differently, so it belongs in the key.

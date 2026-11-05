@@ -186,9 +186,9 @@ pub struct Material {
     /// Whether back faces are drawn. Needed for anything modelled as a single sheet — foliage,
     /// cloth, a flat pane.
     pub is_double_sided: bool,
-    /// Draw an opaque lit material in the forward pass instead of the G-buffer. **The material
+    /// Shade an opaque lit material in the forward pass rather than the deferred one. **The material
     /// type does not change**, which is the point: how a surface is shaded and which path draws it
-    /// are two questions. See [`Self::with_forward`] for what the forward path gives up.
+    /// are two questions. See [`Self::with_forward`] for what that does and does not change.
     pub is_forward: bool,
     /// Discard texels whose final alpha falls below this. **0 disables it**, which is every
     /// material that does not ask.
@@ -421,20 +421,20 @@ macro_rules! material_builders {
         self
     }
 
-    /// Draws this material in the forward pass instead of the G-buffer, keeping its material type.
+    /// Shades this material in the forward pass instead of the deferred one, keeping its material
+    /// type.
     ///
-    /// It stays lit, casts and receives shadows, and hides and is hidden by deferred neighbours
-    /// through the shared depth buffer. No effect on a material already drawn forward: every type
-    /// but [`MaterialType::Pbr`], anything blended, and every material on the browser and Android
-    /// path, which has no G-buffer.
+    /// It stays in the z-prepass and the G-buffer, so everything that reads them treats it like any
+    /// other surface: TAA reprojects it, motion blur smears it, SSR and SSGI see it, and it occludes
+    /// its neighbours in SSAO. Its final colour comes from the forward pass, drawn over the deferred
+    /// one, which is the cost: its pixels are shaded twice. No effect on a material already drawn
+    /// forward: every type but [`MaterialType::Pbr`], anything blended, and every material on the
+    /// browser and Android path, which has no G-buffer.
     ///
-    /// It gives up whatever reads the G-buffer or lives in the deferred lighting shader: SSAO, SSR
-    /// and SSGI do not see it, decals do not land on it, TAA and motion blur get no velocity for
-    /// it, and anisotropy, clear coat, subsurface and irradiance volumes are not read. Its shadows
-    /// are filtered with fixed PCF, not PCSS.
-    ///
-    /// Environment light and height fog are the same on both paths. Measured on one red cube under
-    /// all four presets and a set sky, with and without a sun, metal too: under 8 of 255 apart.
+    /// Only what `shader.wgsl` does not have is lost: no SSAO on its own surface, no decals, no
+    /// anisotropy, clear coat, subsurface or irradiance volumes, and fixed PCF shadows instead of
+    /// PCSS. Environment light and height fog are the same on both paths. Measured on one red cube
+    /// under all four presets and a set sky, with and without a sun, metal too: under 8 of 255 apart.
     #[must_use]
     pub fn with_forward(mut self, forward: bool) -> Self {
         self.is_forward = forward;
