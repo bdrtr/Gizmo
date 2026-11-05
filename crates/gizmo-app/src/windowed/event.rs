@@ -571,6 +571,8 @@ impl<State: 'static> App<State> {
                                 }
                             }
                             WindowEvent::CursorMoved { position, .. } => {
+                                let (sx, sy) = pointer_scale(&self.world, &window);
+                                let position = winit::dpi::PhysicalPosition::new(position.x * sx as f64, position.y * sy as f64);
                                 // Desktop: the raw look delta comes from
                                 // DeviceEvent::MouseMotion, so CursorMoved only tracks
                                 // absolute position — accumulating delta here too
@@ -606,11 +608,12 @@ impl<State: 'static> App<State> {
                                     winit::event::TouchPhase::Ended => TouchPhase::Ended,
                                     winit::event::TouchPhase::Cancelled => TouchPhase::Cancelled,
                                 };
+                                let (sx, sy) = pointer_scale(&self.world, &window);
                                 self.input.on_touch(
                                     touch.id,
                                     phase,
-                                    touch.location.x as f32,
-                                    touch.location.y as f32,
+                                    touch.location.x as f32 * sx,
+                                    touch.location.y as f32 * sy,
                                 );
                             }
                             // Odak kaybında (Alt-Tab / tarayıcı sekme değişimi) basılı
@@ -934,4 +937,21 @@ impl<State: 'static> App<State> {
             self.last_frame_time = Some(last_frame_time);
             self.light_time = light_time;
     }
+}
+
+/// What a pointer position in window pixels is multiplied by to land in the frame's pixels — the
+/// space `WindowInfo`, the UI layout and the camera all work in.
+///
+/// On the desktop the two are the same, and this is exactly (1, 1). In the browser the frame is
+/// rendered below the canvas's size and stretched up by CSS (`cap_web_render_size`), and pointer
+/// events still arrive in the canvas's own pixels: on a phone a finger at x = 300 of 1080 was
+/// taken for x = 300 of a 350-wide frame, so every touch control and UI click past the top-left
+/// corner landed off to the right of where it was meant, or off the frame altogether.
+fn pointer_scale(world: &gizmo_core::World, window: &winit::window::Window) -> (f32, f32) {
+    let physical = window.inner_size();
+    let Some(info) = world.get_resource::<gizmo_core::window::WindowInfo>() else { return (1.0, 1.0) };
+    if physical.width == 0 || physical.height == 0 || info.width <= 0.0 || info.height <= 0.0 {
+        return (1.0, 1.0);
+    }
+    (info.width / physical.width as f32, info.height / physical.height as f32)
 }

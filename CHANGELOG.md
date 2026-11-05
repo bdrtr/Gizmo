@@ -50,6 +50,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The web build on a phone: the canvas, its size, the pointer, the console.** Found by running
+  `pinbol` on a phone over `adb` (Android 13, Chrome 156):
+  - the canvas was given the app's 1280 × 720 as its CSS size, over the page's 100 % — a phone
+    392 px wide showed the canvas's top-left corner. In the browser no size is asked for now;
+  - the `Resized` that reports the canvas's real size came while the renderer was still being
+    built asynchronously, found none, and was dropped: the frame stayed at 640 × 360. The size is
+    applied once the renderer is ready;
+  - the web render cap was "640 wide or 360 tall": an upright phone would have got 192 × 360. It
+    is a pixel budget now (640 × 360 of them, any shape): 350 × 657;
+  - pointer and touch positions arrive in the canvas's pixels and the frame is rendered smaller,
+    so every touch control and UI click landed off to the right or off the frame. They are scaled
+    into the frame's pixels (exactly 1 on the desktop);
+  - the console got every `tracing` event down to TRACE, each also put in the performance
+    timeline — hundreds of lines a frame, 50 ms frames. INFO and up now, no timeline marks.
 - **An absolutely positioned root UI node was never sized by its insets.** taffy lays a root out
   with no containing block, so `top: 0, bottom: 0` (or `left` and `right`) with an `Auto` size
   gave a box **0 px** on that axis — a touch button meant to cover half the screen covered none

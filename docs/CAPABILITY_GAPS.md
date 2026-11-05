@@ -1285,8 +1285,16 @@ rises. What getting there found:
   Font License 1.1, `assets/fonts/OFL.txt`, 621 KB) and `default_font` uses it when the machine
   lends none; `demo-web` turns it on. Every letter of the Turkish alphabet has a glyph in it
   (`text::bundled` test).
-- **Not verified on a phone here.** No browser with WebGPU on this machine; what is checked is
-  the wasm build, the wasm lints, that touch events reach `Input`, and the touch path headlessly.
+- **Then run on a real phone** (Redmi Note 12 Pro, Android 13, Chrome 156, over `adb`: the page
+  served locally through `adb reverse`, screenshots with `screencap`, the console through Chrome's
+  DevTools protocol, touches with `input tap/swipe`). It drew nothing at first; five engine gaps
+  stood between it and a game, all closed (CHANGELOG): the canvas held at 1280 × 720 CSS pixels,
+  the first `Resized` lost to the async renderer init, a landscape-only render cap, pointer
+  positions in the wrong pixels (every touch missed), and a console flooded at TRACE. Plus the
+  game's own camera looking the wrong way. Now the table fills an upright screen, Turkish text
+  draws, a tap launches the ball and a held left half raises the left flipper.
+- **Open — speckled rendering on the phone.** Rainbow noise on one bumper and a quad of it on the
+  table, blue flecks on the rails: not seen on the desktop path, not yet explained.
 
 ### C16ah. State keyed by a raw entity id (2026-11-05, an audit after `sarmasik`)
 

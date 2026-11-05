@@ -16,18 +16,35 @@ pub(crate) fn cap_web_render_size(
         size = winit::dpi::PhysicalSize::new(1280, 720);
     }
     #[cfg(target_arch = "wasm32")]
-    if size.width > 640 || size.height > 360 {
-        let aspect = size.width as f32 / size.height as f32;
-        if aspect > 1.0 {
-            size.width = 640;
-            size.height = ((640.0 / aspect) as u32).max(1);
-        } else {
-            size.height = 360;
-            size.width = ((360.0 * aspect) as u32).max(1);
-        }
+    {
+        size = within_pixel_budget(size, WEB_RENDER_PIXELS);
     }
     size
 }
+
+/// The web's render budget, in pixels: what a 640 × 360 frame costs.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) const WEB_RENDER_PIXELS: u32 = 640 * 360;
+
+/// `size` scaled down, aspect kept, until it has at most `budget` pixels.
+///
+/// The cap used to be "640 wide or 360 tall, whichever binds", which is a budget only for a
+/// landscape window: a phone held upright (1080 × 2024) was cut to 192 × 360 — a sixth of the
+/// pixels a landscape window got, stretched over a screen three times taller. The same pixel
+/// count for any shape gives it 350 × 657.
+#[cfg_attr(not(target_arch = "wasm32"), allow(dead_code))]
+pub(crate) fn within_pixel_budget(size: winit::dpi::PhysicalSize<u32>, budget: u32) -> winit::dpi::PhysicalSize<u32> {
+    let pixels = size.width as f64 * size.height as f64;
+    if pixels <= budget as f64 {
+        return size;
+    }
+    let scale = (budget as f64 / pixels).sqrt();
+    winit::dpi::PhysicalSize::new(
+        ((size.width as f64 * scale) as u32).max(1),
+        ((size.height as f64 * scale) as u32).max(1),
+    )
+}
+
 
 impl Renderer {
     /// Builds a renderer against a window: adapter, device, surface, and every pass the platform
@@ -750,5 +767,21 @@ pub(crate) fn native_device_limits(adapter: &wgpu::Adapter) -> wgpu::Limits {
         max_storage_buffer_binding_size: 256 << 20, // 256 MB buffer limit
         max_color_attachment_bytes_per_sample: adapter.limits().max_color_attachment_bytes_per_sample.clamp(32, 64),
         ..wgpu::Limits::default()
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use winit::dpi::PhysicalSize;
+
+    #[test]
+    fn a_portrait_window_gets_the_same_pixels_as_a_landscape_one() {
+        let landscape = within_pixel_budget(PhysicalSize::new(1920, 1080), WEB_RENDER_PIXELS);
+        let portrait = within_pixel_budget(PhysicalSize::new(1080, 2024), WEB_RENDER_PIXELS);
+        assert_eq!((landscape.width, landscape.height), (640, 360));
+        assert_eq!((portrait.width, portrait.height), (350, 657));
+        let small = PhysicalSize::new(300, 200);
+        assert_eq!(within_pixel_budget(small, WEB_RENDER_PIXELS), small, "a small window is left alone");
     }
 }

@@ -39,12 +39,18 @@ impl<State: 'static> App<State> {
         }
 
         let event_loop = EventLoop::new().map_err(crate::AppError::EventLoopCreation)?;
-        let mut builder = WindowAttributes::default()
-            .with_title(&self.window_title)
-            .with_inner_size(winit::dpi::LogicalSize::new(
+        let mut builder = WindowAttributes::default().with_title(&self.window_title);
+        // In the browser the page decides the canvas's size: it is styled 100 % of the page below,
+        // and winit reports that size as the window's. Asking for an inner size there set the
+        // canvas's CSS size to it, over the 100 % — a phone 392 px wide got a 1280 px canvas and
+        // showed its top-left corner, the game in the middle of it off screen.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            builder = builder.with_inner_size(winit::dpi::LogicalSize::new(
                 self.window_size.0,
                 self.window_size.1,
             ));
+        }
 
         #[cfg(target_arch = "wasm32")]
         {
@@ -249,6 +255,23 @@ impl<State: 'static> App<State> {
             self.init_error = Some(e);
             event_loop.exit();
             return;
+        }
+        // The canvas's real size. The renderer was made from the window's size at creation, before
+        // the browser had laid the page out, and the `Resized` that then reported the real one came
+        // while the renderer was still being built and found none to resize: a phone's canvas
+        // stayed at 640 × 360, stretched over an upright screen, and the camera kept a landscape
+        // aspect. Apply it now, as that `Resized` would have.
+        let size = window.inner_size();
+        let effective = self.world.get_resource_mut::<Renderer>().map(|mut r| {
+            if r.size != size {
+                r.resize(size);
+            }
+            r.size
+        });
+        if let Some(effective) = effective {
+            let mut info = self.world.get_resource_mut_or_default::<gizmo_core::window::WindowInfo>();
+            info.width = effective.width as f32;
+            info.height = effective.height as f32;
         }
         // İlk kareyi tetikle — web'de sonraki kareler RedrawRequested
         // zincirinden akar.

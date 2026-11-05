@@ -183,8 +183,19 @@ pub fn setup_panic_hook() {
     #[cfg(target_arch = "wasm32")]
     {
         console_error_panic_hook::set_once();
-        let _ = console_log::init_with_level(log::Level::Debug);
-        let _ = tracing_wasm::try_set_as_global_default();
+        // INFO and up, not everything. `tracing_wasm`'s default is every level down to TRACE,
+        // each event also written into the browser's performance timeline, and the engine traces
+        // something for every frame, system and resource: on a phone that was hundreds of console
+        // lines a frame, and the frame took 50 ms.
+        let _ = console_log::init_with_level(log::Level::Info);
+        if !tracing::dispatcher::has_been_set() {
+            tracing_wasm::set_as_global_default_with_config(
+                tracing_wasm::WASMLayerConfigBuilder::new()
+                    .set_max_level(tracing::Level::INFO)
+                    .set_report_logs_in_timings(false)
+                    .build(),
+            );
+        }
     }
     #[cfg(not(target_arch = "wasm32"))]
     {

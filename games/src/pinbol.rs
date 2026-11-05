@@ -352,7 +352,16 @@ fn setup(world: &mut World, font: gizmo::renderer::text::FontId) -> Game {
         GlobalTransform::default(),
         DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 2.4, LightRole::Sun),
     ));
-    world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 2.3, 2.3), pitch: -0.85, primary: true, ..Default::default() });
+    // Masaya, oyuncunun ucundan (−z'ye) bakıyor. `yaw` verilmemişti: varsayılan 0 +x'e bakar, ve
+    // masa görüşün solunda, yarısı kadrajın dışındaydı (pinbol yalnız başsız sınanmıştı; telefonda
+    // ilk açılışta görüldü).
+    world.spawn_bundle(CameraBundle {
+        position: Vec3::new(0.0, 2.3, 2.3),
+        yaw: -std::f32::consts::FRAC_PI_2,
+        pitch: -0.85,
+        primary: true,
+        ..Default::default()
+    });
     let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
