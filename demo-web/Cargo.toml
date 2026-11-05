@@ -32,6 +32,10 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     "gamepad",
 ] }
 log = "0.4"
+# The games written once for the desktop demos and the browser (`games/`): `?oyun=pinbol` runs one.
+games = { path = "../games" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
+# The page's address, to pick the game from `?oyun=`. Already in the graph through winit.
+web-sys = { version = "0.3", features = ["Window", "Location"] }

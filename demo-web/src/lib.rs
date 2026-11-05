@@ -16,6 +16,9 @@
 //! ```
 //!
 //! Kontroller: sağ tık basılı + fare = bakış; WASD = hareket; Shift = hız.
+//!
+//! `?oyun=pinbol` ile sayfa demo sahnesi yerine pinbol'ü açar (`games::pinbol`, masaüstündeki
+//! oyunun aynısı; telefonda ekranın sol ve sağ yarısı paletler).
 
 #[cfg(target_arch = "wasm32")]
 mod web {
@@ -24,8 +27,21 @@ mod web {
     use gizmo::simple::{SimpleAppExt, SimpleSceneState};
     use wasm_bindgen::prelude::*;
 
+    /// The page's `?oyun=` picks what runs: `pinbol` is the pinball game (`games::pinbol`, the same
+    /// one the desktop binary runs, with touch flippers); anything else, or nothing, is the demo
+    /// scene below.
     #[wasm_bindgen(start)]
     pub fn start() {
+        let query = web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default();
+        let wants = |name: &str| query.trim_start_matches('?').split('&').any(|kv| kv == format!("oyun={name}"));
+        if wants("pinbol") {
+            games::pinbol::app().run().expect("pinbol başlatılamadı");
+            return;
+        }
+        demo_scene();
+    }
+
+    fn demo_scene() {
         // App::new panic hook'u + console_log/tracing-wasm'ı kurar; run() web'de
         // canvas'ı body'ye ekleyip event loop'u `spawn_app` ile başlatır ve
         // hemen döner (kareler requestAnimationFrame zincirinden akar).

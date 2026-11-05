@@ -5,6 +5,18 @@ same high-level `SimpleAppExt` API and the same engine core, compiled to
 `wasm32-unknown-unknown`. The scene drops a stack of physics cubes onto a
 ground disk so the live simulation loop is visible.
 
+## Games in the browser
+
+`?oyun=pinbol` opens the pinball game instead of the demo scene —
+**https://bdrtr.github.io/Gizmo/?oyun=pinbol**. It is the same game the desktop
+`pinbol` binary runs (`games/src/pinbol.rs`, one game, two hosts), with touch
+flippers: on a phone the left and right halves of the screen are the two
+flippers, and a tap also launches the ball and restarts a finished game.
+
+Known: the engine ships no font, and the browser has no system fonts to borrow,
+so text falls back to the built-in synthetic face — ASCII only. Turkish letters
+in the HUD (ş, ğ, ı, …) do not draw. See `docs/CAPABILITY_GAPS.md` C16ai.
+
 ## Live demo
 
 **https://bdrtr.github.io/Gizmo/** — no toolchain needed, just a WebGPU browser.

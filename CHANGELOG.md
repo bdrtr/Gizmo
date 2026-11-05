@@ -143,6 +143,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tweens, colour tweens, typewriters, the screen fade (`systems::render::advance_frame_clocks`, one
   function both call) — because game logic waits on them: `zindan` takes the stairs when its fade
   has gone dark.
+- **Pinbol in the browser, with touch flippers (`demo-web/?oyun=pinbol`).** The game moved to a
+  new `games/` crate (`games::pinbol::app()`), which the desktop `pinbol` binary and `demo-web`
+  both run; on a phone the halves of the screen are the flippers. Text on the web is ASCII-only
+  for now — the engine ships no font and the browser has none to lend (`CAPABILITY_GAPS` C16ai).
 - **A chaos test (`gizmo-physics-rigid/tests/chaos.rs`).** From a seed, through the ECS bridge a
   game uses: bodies spawned and despawned every frame (ids recycled constantly), ropes tied
   between them and cut, kicks, CCD switched on and off, in a closed box. After every step nothing

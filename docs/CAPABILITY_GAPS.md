@@ -1262,6 +1262,30 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16ai. A game on a phone, in the browser (2026-11-05, `pinbol` in `demo-web`)
+
+The first game to run in the browser: `demo-web/?oyun=pinbol` runs `games::pinbol::app()`, the
+same game the desktop binary runs, with touch flippers (two `VirtualButton`s over the halves of
+the screen). Its `--test` lays a finger on the left half headlessly and checks the left flipper
+rises. What getting there found:
+
+- ~~**An absolute root UI node was not sized by its insets.**~~ **Closed.** `top: 0, bottom: 0`
+  and no height gave a root 0 px tall (taffy lays a root out with no containing block); the
+  touch buttons were 640 × 0. `stretched_root` sizes it between its insets.
+- **A game could not run in the browser without moving house.** `demo-web` is a library and
+  cannot reach a binary in `demo/`; a game that is to run in both lives in `games/` now, with an
+  `app()` both hosts call. Only `pinbol` has moved.
+- **Game-side, worth knowing:** a `VirtualButton` claims only a finger that lands on it, so a
+  button made on the first touch (as `nisanci` makes its sticks) misses that touch. `pinbol`
+  makes its buttons at setup, invisible until the first touch; `nisanci` still loses its first.
+- **Open — no font in the browser.** The engine ships no font (a licensing decision), and the
+  web has no system fonts to borrow (`load_system_font` is always `NotFound` there), so text
+  falls back to the synthetic face: ASCII only. Every Turkish letter in a HUD is missing on a
+  phone. Bundling a freely licensed face, or fetching one the page serves, is the project's
+  call to make.
+- **Not verified on a phone here.** No browser with WebGPU on this machine; what is checked is
+  the wasm build, the wasm lints, that touch events reach `Input`, and the touch path headlessly.
+
 ### C16ah. State keyed by a raw entity id (2026-11-05, an audit after `sarmasik`)
 
 The ECS hands a despawned entity's id to a later spawn, and much of the engine keeps state by the
