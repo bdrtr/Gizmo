@@ -60,7 +60,7 @@ fn apply_completed_textures(world: &World) {
     };
 
     // 2) Her birini GPU'ya yükle → (entity_ids, bind_group). Renderer borrow'u burada biter.
-    let installed: Vec<(Vec<usize>, std::sync::Arc<wgpu::BindGroup>)> = {
+    let installed: Vec<(Vec<usize>, String, std::sync::Arc<wgpu::BindGroup>)> = {
         let Some(renderer) = world.get_resource::<gizmo_renderer::Renderer>() else {
             // Renderer yoksa (headless-no-render) uygulanamaz; sessizce bırak.
             return;
@@ -81,7 +81,7 @@ fn apply_completed_textures(world: &World) {
                     c.width,
                     c.height,
                 ) {
-                    Ok(bg) => Some((c.entity_ids, bg)),
+                    Ok(bg) => Some((c.entity_ids, c.request_path, bg)),
                     Err(e) => {
                         tracing::warn!(
                             "[streaming] texture install failed ({}): {:?}",
@@ -101,13 +101,25 @@ fn apply_completed_textures(world: &World) {
     }
     // SAFETY: exclusive sistem; scheduler bu çalışırken Material'a başka mutable erişim vermez.
     let mut materials = unsafe { world.borrow_mut_unchecked::<Material>() };
-    for (entity_ids, bind_group) in installed {
+    for (entity_ids, path, bind_group) in installed {
         for eid in entity_ids {
             if let Some(mut mat) = materials.get_mut(eid as u32) {
-                mat.bind_group = bind_group.clone();
+                if still_wants(mat.texture_source.as_deref(), &path) {
+                    mat.bind_group = bind_group.clone();
+                }
             }
         }
     }
+}
+
+/// Does the material on the id that asked for `path` still want it?
+///
+/// A load names its entities by raw id, and an id is handed to the next entity the moment its
+/// owner is despawned. A material that asked for a texture and was despawned while it decoded had
+/// its id taken by a new entity, and the new entity's material got the old one's texture — and
+/// kept it. The texture goes only to a material whose `texture_source` is still that path.
+fn still_wants(texture_source: Option<&str>, path: &str) -> bool {
+    texture_source == Some(path)
 }
 
 /// Request an asynchronous load for materials with a `texture_source` that are near the
@@ -203,6 +215,14 @@ fn should_request(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_finished_texture_goes_only_to_a_material_that_still_asks_for_it() {
+        // The same id, now another entity's material: a different texture, or none.
+        assert!(super::still_wants(Some("crate.png"), "crate.png"));
+        assert!(!super::still_wants(Some("grass.png"), "crate.png"));
+        assert!(!super::still_wants(None, "crate.png"));
+    }
+
     use super::*;
     use crate::asset_server::AssetServer;
     use gizmo_math::Vec3;
@@ -329,6 +349,7 @@ mod tests {
             .expect("AssetServer resource")
             .completed_textures
             .push(TextureReloadCompletion {
+                request_path: "dummy.png".to_string(),
                 cache_key: "test-red-2x2".to_string(),
                 rgba: vec![
                     255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,

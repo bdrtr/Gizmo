@@ -16,6 +16,9 @@ use std::thread;
 /// Decoding is the slow part and needs no GPU; uploading needs the device and must happen on the
 /// main thread. This is what crosses between them.
 pub struct TextureReloadCompletion {
+    /// The path the texture was requested by — what a waiting material's `texture_source` says
+    /// (the cache key is its canonical form, which need not be the same string).
+    pub request_path: String,
     /// The cache key the decoded image belongs to.
     pub cache_key: String,
     /// The decoded pixels, RGBA8.
@@ -344,6 +347,7 @@ impl AsyncAssetLoader {
                     match result {
                         Ok((rgba, width, height)) => {
                             out.textures.push(TextureReloadCompletion {
+                                request_path,
                                 cache_key,
                                 rgba,
                                 width,

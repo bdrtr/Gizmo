@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A streamed texture could land on the wrong entity's material.** A finished decode names its
+  waiting entities by raw id; a material despawned while its texture decoded had its id taken by
+  a new entity, whose material got the old texture and kept it. The texture goes only to a
+  material whose `texture_source` is still the path it asked for. `TextureReloadCompletion` has
+  a `request_path` (the cache key is its canonical form, not always the same string).
 - **A body on a dead body's id was told it had been in that body's contacts all along.** The
   contact cache is keyed by the pair's raw ids; despawn a body inside a trigger and spawn another
   there on the same id, and the new one got `Persisting` on every substep and never `Started` —
