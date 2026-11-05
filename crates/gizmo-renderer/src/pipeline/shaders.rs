@@ -231,7 +231,23 @@ pub fn load_shader_composed_web(
     fallback_src: &str,
     label: &str,
 ) -> wgpu::ShaderModule {
-    let composed = compose_wgsl(fallback_src, label, web_render_defs());
+    load_shader_composed_web_with(device, fallback_src, label, &[])
+}
+
+/// [`load_shader_composed_web`] with some defs added: a variant of a shader, as
+/// [`load_shader_composed_with`] makes on the desktop.
+#[cfg(gizmo_forward_only)]
+pub fn load_shader_composed_web_with(
+    device: &wgpu::Device,
+    fallback_src: &str,
+    label: &str,
+    overrides: &[(&str, ShaderDefValue)],
+) -> wgpu::ShaderModule {
+    let mut defs = web_render_defs();
+    for (name, value) in overrides {
+        defs.insert((*name).to_string(), *value);
+    }
+    let composed = compose_wgsl(fallback_src, label, defs);
     device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(label),
         source: wgpu::ShaderSource::Wgsl(composed.into()),
@@ -296,6 +312,12 @@ mod tests {
         for (name, src) in web_capable {
             compose_wgsl(src, name, native_render_defs());
             compose_wgsl(src, name, web_render_defs());
+        }
+        // Water showing a `PlanarReflection` is its own variant of the same source.
+        let water = include_str!("../shaders/water.wgsl");
+        for mut defs in [native_render_defs(), web_render_defs()] {
+            defs.insert("PLANAR".to_string(), ShaderDefValue::Bool(true));
+            compose_wgsl(water, "water.wgsl (planar)", defs);
         }
         // Native-only (no web schema): the deferred pass and the two shadow passes.
         let native_only: &[(&str, &str)] = &[

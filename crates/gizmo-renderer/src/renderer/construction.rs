@@ -547,6 +547,7 @@ impl Renderer {
             water_pipeline: scene.water_pipeline,
             water_double_sided_pipeline: scene.water_double_sided_pipeline,
             mirror_pipeline: scene.mirror_pipeline,
+            water_mirror_pipeline: scene.water_mirror_pipeline,
             shadow_pipeline: scene.shadow_pipeline,
             transparent_pipeline: scene.transparent_pipeline,
             grid_pipeline: scene.grid_pipeline,

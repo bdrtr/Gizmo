@@ -51,6 +51,11 @@ struct VertexOutput {
     @location(2) tex_coords: vec2<f32>,
     @location(3) world_position: vec3<f32>,
     @location(4) inst_albedo: vec4<f32>,
+#ifdef PLANAR
+    // The clip position again, for the screen coordinate of the reflection; and how much it reflects.
+    @location(5) clip: vec4<f32>,
+    @location(6) reflectance: f32,
+#endif
 };
 
 // ── Gerstner dalga: tek dalganın pozisyon ötelemesi + analitik normal katkısı ──────
@@ -138,13 +143,22 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_albedo = inst.albedo_color;
     
     out.clip_position = scene.view_proj * world_pos;
+#ifdef PLANAR
+    out.clip = out.clip_position;
+    out.reflectance = inst.ambient.x;
+#endif
     
     return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+#ifdef PLANAR
+    // `PlanarReflection` on the water: group 1's texture is the capture, not a material's.
+    let tex_color = vec4<f32>(1.0);
+#else
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+#endif
     let base_color = in.inst_albedo.rgb * tex_color.rgb; // Maviimsi
     
     let N = normalize(in.normal);
@@ -164,8 +178,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let fresnel = pow(1.0 - max(dot(N, view_dir), 0.0), 5.0);
     let sky_reflect = vec3<f32>(0.45, 0.62, 0.85);
     let water_body = base_color * (ambient + diffuse * 0.6);
+#ifdef PLANAR
+    // Where this fragment lands on screen, mirrored left to right (see `planar_mirror.wgsl`), pushed
+    // by the wave normal so the picture breaks up. Far waves are small on screen and their normals
+    // would only sparkle, so the push falls off with distance. Clamped by the sampler at the edge.
+    let ndc = in.clip.xy / in.clip.w;
+    let ripple = N.xz * 0.12 / (1.0 + in.clip.w * 0.04);
+    let uv = vec2<f32>(1.0 - (ndc.x * 0.5 + 0.5), 0.5 - ndc.y * 0.5) + ripple;
+    let reflected = textureSample(t_diffuse, s_diffuse, uv).rgb;
+    let f = in.reflectance + (1.0 - in.reflectance) * fresnel;
+    let lit = mix(water_body, reflected, f) + vec3<f32>(0.7, 0.9, 1.0) * spec * sun_col * 2.0;
+    let body_alpha = clamp(in.inst_albedo.a * (0.7 + fresnel * 0.3), 0.0, 1.0);
+    // What is reflected is on the surface: the water is opaque as far as it reflects.
+    return vec4<f32>(lit, mix(body_alpha, 1.0, f));
+#else
     let final_color = water_body + sky_reflect * fresnel * 0.5 + (vec3<f32>(0.7, 0.9, 1.0) * spec * sun_col * 2.0);
     // Grazing açıda su daha yansıtıcı/opak → kenar opaklığı fresnel ile biraz artar.
     let alpha = clamp(in.inst_albedo.a * tex_color.a * (0.7 + fresnel * 0.3), 0.0, 1.0);
     return vec4<f32>(final_color, alpha);
+#endif
 }

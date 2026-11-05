@@ -662,9 +662,17 @@ picture. Looked at too: positions match the arithmetic by hand.
 empty scene at 1280 × 720, 5.4 → 7.7 ms; it scales with the scene. `Renderer::planar.captures` says how
 many ran.
 
+**On water, the same day:** `PlanarReflection::water()` on a `Material::with_water` surface. The Gerstner
+normal pushes the look-up so the waves break the picture up, falling off with distance, and the shader's
+Fresnel mixes the real reflection in where it used to add a constant sky colour (a pillar standing in
+the water: 1 401 red pixels below its foot, 185 different two seconds later, none without the
+component). Water without the component is the same shader as before, not one byte different. The
+water's own texture is not read while it reflects, and seen from underwater it has no capture and draws
+plain. The plane is the surface at rest: what touches the water sits slightly off a tall wave.
+
 **What it does not do:** no blur (every mirror is perfectly sharp, roughness is ignored); mirrors do
-not appear in each other or in a reflection probe, so no mirror-in-a-mirror; no ripple or normal map,
-so it is not yet the water shader's reflection; it draws plain in split screen and in the studio
+not appear in each other or in a reflection probe, so no mirror-in-a-mirror; it draws plain in split
+screen and in the studio
 (`render_parity` records why). The reduced path has it and its shader is validated under the web
 schema, but **it has not been run in a browser or on a phone.**
 

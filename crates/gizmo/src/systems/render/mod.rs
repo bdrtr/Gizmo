@@ -8730,6 +8730,108 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         });
     }
 
+    /// Water seen low across the surface, a red pillar standing in it to the left, at a given elapsed
+    /// time.
+    async fn reflecting_water(reflection: Option<crate::renderer::components::PlanarReflection>, elapsed: f32) -> (Vec<u8>, wgpu::TextureFormat, u32) {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        let mut assets = AssetManager::new();
+        let mut world = World::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let mut time = gizmo_core::time::Time::new();
+        while (time.elapsed() as f32) < elapsed {
+            time.update(0.05);
+        }
+        world.insert_resource(time);
+        let surface = world.spawn();
+        world.add_component(surface, Transform::new(Vec3::ZERO));
+        world.add_component(surface, GlobalTransform::default());
+        world.add_component(surface, AssetManager::create_plane_subdivided(&renderer.device, 60.0, 48));
+        world.add_component(surface, Material::new(tex.clone()).with_water(Vec4::new(0.10, 0.35, 0.50, 1.0)));
+        world.add_component(surface, MeshRenderer::new());
+        if let Some(reflection) = reflection {
+            world.add_component(surface, reflection);
+        }
+        let pillar = world.spawn();
+        world.add_component(pillar, Transform::new(Vec3::new(-5.0, 5.0, -4.0)).with_scale(Vec3::new(2.5, 5.0, 1.0)));
+        world.add_component(pillar, GlobalTransform::default());
+        world.add_component(pillar, AssetManager::create_cube(&renderer.device));
+        world.add_component(pillar, Material::new(tex).with_unlit(Vec4::new(1.0, 0.0, 0.0, 1.0)));
+        world.add_component(pillar, MeshRenderer::new());
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 2.0, 16.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            pitch: 0.0,
+            primary: true,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+        let frame = render_world(&mut renderer, &mut world).await;
+        (frame, renderer.config.format, renderer.planar.captures)
+    }
+
+    /// The red in the frame below row `from`: where the water is, under the pillar's foot.
+    fn red_below(frame: &[u8], format: wgpu::TextureFormat, from: usize) -> (usize, u64) {
+        let swap = matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+        let (mut count, mut sum) = (0, 0u64);
+        for (i, p) in frame.as_chunks::<4>().0.iter().enumerate() {
+            let (r, g, b) = if swap { (p[2], p[1], p[0]) } else { (p[0], p[1], p[2]) };
+            if i / 128 >= from && r as i32 > g as i32 + 30 && r as i32 > b as i32 + 30 {
+                count += 1;
+                sum += u64::from(r);
+            }
+        }
+        (count, sum)
+    }
+
+    /// **Water reflects the world and the waves break it up.** Without the component the pillar is
+    /// not in the water at all; with it, its reflection is, a different shape two seconds later, and
+    /// fainter the less the water reflects head-on.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn water_reflects_the_scene_and_its_waves_break_the_picture_up() {
+        use crate::renderer::components::PlanarReflection;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            // The pillar's foot is at row 76 of 128 in this view; 84 leaves room for the waves.
+            const WATER: usize = 84;
+            let (plain, format, captures) = reflecting_water(None, 1.0).await;
+            assert_eq!(captures, 0);
+            assert_eq!(red_below(&plain, format, WATER).0, 0, "no reflection, and red in the water");
+
+            let mirror = PlanarReflection::water().with_reflectance(1.0);
+            let (t1, _, captures) = reflecting_water(Some(mirror), 1.0).await;
+            let (t3, _, _) = reflecting_water(Some(mirror), 3.0).await;
+            assert_eq!(captures, 1);
+            let (bright, bright_sum) = red_below(&t1, format, WATER);
+            assert!(bright > 40, "the pillar is not in the water: {bright} red pixels");
+            let (left, right) = colour_count(&t1[WATER * 128 * 4..], format, 0);
+            assert!(left > right * 4, "the pillar stands to the left and its reflection does not: {left} / {right}");
+
+            let swap = matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+            let is_red = |p: &[u8; 4]| {
+                let (r, g, b) = if swap { (p[2], p[1], p[0]) } else { (p[0], p[1], p[2]) };
+                r as i32 > g as i32 + 30 && r as i32 > b as i32 + 30
+            };
+            let moved = t1.as_chunks::<4>().0.iter().zip(t3.as_chunks::<4>().0)
+                .enumerate()
+                .filter(|(i, (a, b))| i / 128 >= WATER && is_red(a) != is_red(b))
+                .count();
+            // Measured with the pillar in the middle: 1 401 red pixels, 185 different two seconds on.
+            assert!(moved > 10, "the waves do not move the reflection: {moved} pixels changed");
+
+            let (faint, _, _) = reflecting_water(Some(PlanarReflection::water()), 1.0).await;
+            let (_, faint_sum) = red_below(&faint, format, WATER);
+            assert!(faint_sum < bright_sum, "water reflecting 2 % head-on is as bright as a mirror: {faint_sum} / {bright_sum}");
+        });
+    }
+
     /// A tessellated water plane under a sun, at a given elapsed time.
     ///
     /// `water` selects between `Material::with_water` and a `with_pbr` carrying the **same**

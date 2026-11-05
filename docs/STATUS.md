@@ -39,8 +39,8 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   separate 2D solver (§C9); one-way platforms with `Collider::one_way`. A side-on character is the
   kinematic `CharacterController` with `target_velocity.x` — it jumps up through one-way platforms,
   lands on them and drops off them (`drop_through_timer`), and stays in its plane.
-- **Rendering:** planar mirrors are `PlanarReflection`, one extra scene draw each and perfectly sharp
-  (§A7d); reflection probes — up to four, box parallax, blended, transparent surfaces
+- **Rendering:** planar mirrors and reflecting water are `PlanarReflection`, one extra scene draw each
+  and sharp apart from the waves (§A7d); reflection probes — up to four, box parallax, blended, transparent surfaces
   included on native (§A5) — no MSAA — by decision, TAA +
   FXAA (four quality presets) + CAS sharpening instead (§A6) — no SMAA, area lights
   are sphere, tube and rectangle, and spot lights take cookies (§A7: `source_radius` /

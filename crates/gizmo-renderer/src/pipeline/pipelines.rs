@@ -60,6 +60,7 @@ pub(super) struct CorePipelines {
     /// The same, culling off — an ocean surface is looked at from underneath.
     pub(super) water_double_sided: wgpu::RenderPipeline,
     pub(super) mirror: wgpu::RenderPipeline,
+    pub(super) water_mirror: wgpu::RenderPipeline,
     pub(super) transparent: wgpu::RenderPipeline,
     pub(super) grid: wgpu::RenderPipeline,
     /// The lit transparent pipeline under each of `BlendMode::VARIANTS`.
@@ -168,6 +169,23 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     #[cfg(gizmo_forward_only)]
     let mirror_shader =
         load_shader_composed_web(device, include_str!("../shaders/planar_mirror.wgsl"), "Planar Mirror Shader");
+
+    let planar = [("PLANAR", naga_oil::compose::ShaderDefValue::Bool(true))];
+    #[cfg(not(gizmo_forward_only))]
+    let water_mirror_shader = super::shaders::load_shader_composed_with(
+        device,
+        "demo/assets/shaders/water.wgsl",
+        include_str!("../shaders/water.wgsl"),
+        "Water Mirror Shader",
+        &planar,
+    );
+    #[cfg(gizmo_forward_only)]
+    let water_mirror_shader = super::shaders::load_shader_composed_web_with(
+        device,
+        include_str!("../shaders/water.wgsl"),
+        "Water Mirror Shader",
+        &planar,
+    );
 
     #[cfg(not(gizmo_forward_only))]
     let water_shader = load_shader_composed(
@@ -392,6 +410,17 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             &render_pipeline_layout,
             &water_shader,
             "Water Double-Sided Pipeline",
+            true,
+            None,
+            Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
+        ),
+        // Double-sided whatever the material says: there is a capture only from above, and a wave's
+        // far side is hidden by its near one in the depth test.
+        water_mirror: create_main(
+            &render_pipeline_layout,
+            &water_mirror_shader,
+            "Water Mirror Pipeline",
             true,
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),

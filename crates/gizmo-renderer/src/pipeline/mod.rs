@@ -13,7 +13,7 @@ mod uniforms;
 pub use shaders::load_shader;
 pub use shaders::load_shader_composed;
 #[cfg(gizmo_forward_only)]
-pub use shaders::load_shader_composed_web;
+pub use shaders::{load_shader_composed_web, load_shader_composed_web_with};
 
 use layouts::{build_layouts, LayoutRefs};
 use pipelines::{build_core_pipelines, build_shadow_pipeline};
@@ -55,6 +55,8 @@ pub struct SceneState {
     pub water_double_sided_pipeline: wgpu::RenderPipeline,
     /// What a [`PlanarReflection`](crate::components::PlanarReflection) draws with once captured.
     pub mirror_pipeline: wgpu::RenderPipeline,
+    /// Water with a [`PlanarReflection`](crate::components::PlanarReflection), once captured.
+    pub water_mirror_pipeline: wgpu::RenderPipeline,
     /// Depth-only, for rendering into the shadow cascades.
     pub shadow_pipeline: wgpu::RenderPipeline,
     /// Line-topology, for wireframe views.
@@ -697,6 +699,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         water_pipeline: core_pipelines.water,
         water_double_sided_pipeline: core_pipelines.water_double_sided,
         mirror_pipeline: core_pipelines.mirror,
+        water_mirror_pipeline: core_pipelines.water_mirror,
         transparent_pipeline: core_pipelines.transparent,
         grid_pipeline: core_pipelines.grid,
         blend_lit_pipelines: core_pipelines.blend_lit,
@@ -772,6 +775,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.water_pipeline = core_pipelines.water;
     renderer.scene.water_double_sided_pipeline = core_pipelines.water_double_sided;
     renderer.scene.mirror_pipeline = core_pipelines.mirror;
+    renderer.scene.water_mirror_pipeline = core_pipelines.water_mirror;
     renderer.scene.transparent_pipeline = core_pipelines.transparent;
     renderer.scene.grid_pipeline = core_pipelines.grid;
     renderer.scene.blend_lit_pipelines = core_pipelines.blend_lit;

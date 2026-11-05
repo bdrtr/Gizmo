@@ -125,7 +125,11 @@ pub fn record_forward_and_fluid(
                 let mirror = item.mirror.and_then(|owner| renderer.planar.captured(owner));
 
                 let engine_pipeline = if mirror.is_some() {
-                    &renderer.scene.mirror_pipeline
+                    if item.is_water {
+                        &renderer.scene.water_mirror_pipeline
+                    } else {
+                        &renderer.scene.mirror_pipeline
+                    }
                 } else if item.is_backdrop {
                     // FIRST, ahead of the `unlit` and `is_transparent` branches below: a
                     // backdrop sets `unlit` (that is what keeps it out of the deferred and

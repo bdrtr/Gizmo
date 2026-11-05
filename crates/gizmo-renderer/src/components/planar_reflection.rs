@@ -11,7 +11,10 @@ use gizmo_math::{Mat4, Vec3, Vec4};
 ///
 /// Give the entity an [`unlit`](crate::components::Material::with_unlit) material: its colour is what
 /// shows where the surface does not reflect, and it keeps the mirror out of the deferred and shadow
-/// passes. Mirrors do not appear in each other, in their own reflection or in a reflection probe, and
+/// passes. Or a [`water`](crate::components::Material::with_water) one with [`water`](Self::water): the
+/// waves then break the reflection up, and Fresnel decides how much of it shows. (The water's own
+/// texture is not read while it reflects; its colour is.) Seen from underwater it has no capture and
+/// draws as plain water. Mirrors do not appear in each other, in their own reflection or in a reflection probe, and
 /// there is no blur: every mirror is perfectly sharp. On a split-screen view, and in the editor, the
 /// surface draws as its plain colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -37,6 +40,13 @@ impl PlanarReflection {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// For a [`Material::with_water`](crate::components::Material::with_water) surface: facing local
+    /// +Y, reflecting 2 % head-on and everything at a grazing angle, as water does.
+    #[must_use]
+    pub fn water() -> Self {
+        Self { reflectance: 0.02, ..Self::default() }
     }
 
     /// Faces `normal` in local space, `offset` along it from the local origin.
