@@ -65,7 +65,7 @@ use gizmo::core::window::{AppExit, WindowMode};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
 use gizmo::renderer::text::FontId;
-use gizmo::simple::{SimpleAppExt, SimpleSceneState};
+use gizmo::simple::{HeadlessFrames, SimpleAppExt, SimpleSceneState};
 use gizmo::ui::{
     AlignItems, BackgroundColor, ButtonBundle, Clicked, FlexDirection, Interaction, JustifyContent, NodeBundle, Style,
     TextInput, UiNavigation, UiPlugin, UiRect, Val,
@@ -143,173 +143,222 @@ fn fill(i: Interaction) -> Vec4 {
     }
 }
 
+/// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
+/// `sound` kapalıyken ses aygıtı açılmaz.
+fn setup(world: &mut World, font: FontId, sound: bool) -> Menu {
+
+    // Arkada yavaşça dönen bir şey olsun.
+    world.spawn_bundle((
+        Transform::new(Vec3::new(2.5, 0.0, 0.0)),
+        GlobalTransform::default(),
+        MeshSource("cone".into()),
+        MaterialDesc::new().with_pbr(Vec4::new(0.85, 0.5, 0.25, 1.0), 0.4, 0.2),
+        MeshRenderer::new(),
+        Tween::to_rotation(Quat::from_rotation_y(std::f32::consts::PI), 4.0).repeating(gizmo::renderer::tween::Repeat::PingPong),
+    ));
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-0.8)),
+        GlobalTransform::default(),
+        DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun),
+    ));
+    world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.5, 6.0), yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+
+
+    // Sütun: dört düğme.
+    let column = world.spawn_bundle(NodeBundle {
+        style: Style {
+            width: Val::Px(320.0),
+            height: Val::Percent(100.0),
+            padding: UiRect::all(Val::Px(48.0)),
+            row_gap: Val::Px(14.0),
+            flex_direction: FlexDirection::Column,
+            justify_content: Some(JustifyContent::Center),
+            align_items: Some(AlignItems::Stretch),
+            ..Default::default()
+        },
+        background_color: BackgroundColor(Vec4::new(0.0, 0.0, 0.0, 0.35)),
+        ..Default::default()
+    });
+    // Ayarlar bir önceki oturumdan.
+    let save = SaveData::open("gizmo_menu");
+    let volume = save.get::<u32>("volume").unwrap_or(50).min(100);
+    let mode = if save.get::<bool>("fullscreen").unwrap_or(false) { WindowMode::Fullscreen } else { WindowMode::Windowed };
+    world.insert_resource(mode);
+
+    // İsim alanı: `Text`'in kendi içeriği yer tutucu; yazılınca değer gösteriliyor.
+    // Dil: kayıtlıysa o, değilse sistemin dili, o da yoksa Türkçe.
+    let mut locale = Locale::new("tr");
+    locale.load_json("tr", STRINGS_TR).expect("the Turkish table is valid JSON");
+    locale.load_json("en", STRINGS_EN).expect("the English table is valid JSON");
+    let language = save
+        .get::<String>("language")
+        .or_else(Locale::system_language)
+        .filter(|l| locale.languages().contains(&l.as_str()))
+        .unwrap_or_else(|| "tr".to_string());
+    locale.set_language(&language);
+    world.insert_resource(locale);
+
+    // Başlık sütunun ilk öğesi: pencereye iğnelenmiş bir başlık, kısa bir pencerede
+    // dikeyde ortalanan düğmelerin üstüne biniyordu.
+    let title = world.spawn_bundle(NodeBundle {
+        style: Style { height: Val::Px(90.0), ..Default::default() },
+        background_color: BackgroundColor(Vec4::ZERO),
+        ..Default::default()
+    });
+    world.add_component(title, Text::screen("GIZMO", font, 72.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+    world.add_child(column, title);
+
+    let mut field = TextInput::new(16);
+    field.value = save.get::<String>("name").unwrap_or_default();
+    let name_field = world.spawn_bundle(ButtonBundle {
+        style: Style { height: Val::Px(52.0), ..Default::default() },
+        background_color: BackgroundColor(fill(Interaction::None)),
+        ..Default::default()
+    });
+    world.add_component(
+        name_field,
+        Text::screen("", font, 22.0, Vec2::ZERO)
+            .with_anchor(TextAnchor::Center)
+            .with_color(Vec4::new(0.8, 0.82, 0.88, 1.0)),
+    );
+    world.add_component(name_field, LocalizedText::new("menu.name"));
+    world.add_component(name_field, field);
+    world.add_component(name_field, gizmo::ui::ClipContent);
+    world.add_child(column, name_field);
+
+    let mut first = None;
+    let mut slider = None;
+    let mut difficulty = None;
+    // Etiketler anahtar: ekranda `Locale`'in o anki dilindeki dizge çiziliyor.
+    for (action, label) in [
+        (Action::Start, LocalizedText::new("menu.start")),
+        (Action::Fullscreen, LocalizedText::new("menu.fullscreen")),
+        (Action::Volume, volume_label(volume)),
+        (Action::Difficulty, LocalizedText::new("menu.normal")),
+        (Action::Language, LocalizedText::new("menu.language")),
+        (Action::Quit, LocalizedText::new("menu.quit")),
+    ] {
+        let button = world.spawn_bundle(ButtonBundle {
+            style: Style { height: Val::Px(52.0), ..Default::default() },
+            background_color: BackgroundColor(fill(Interaction::None)),
+            ..Default::default()
+        });
+        world.add_component(button, MenuButton(action));
+        world.add_component(button, Text::screen("", font, 24.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
+        world.add_component(button, label);
+        world.add_child(column, button);
+        if action == Action::Fullscreen {
+            // Açık mı kapalı mı, solundaki onay kutusu söylüyor (`Toggle`); her tık onu da
+            // çeviriyor, aşağıdaki işleyici pencereyi.
+            world.add_component(button, gizmo::ui::Toggle::new(mode == WindowMode::Fullscreen));
+        }
+        if action == Action::Difficulty {
+            // Bir açılır liste: tıklayınca altında seçenekler açılıyor; odaktayken ←/→
+            // seçenekler arasında dönüyor. Seçenekler dilin dizgeleri — dil değişince
+            // yenileniyor (`difficulty_options`). Etiketi seçili seçenek, `LocalizedText`
+            // değil.
+            world.remove_component::<LocalizedText>(button);
+            let chosen = save.get::<usize>("difficulty").unwrap_or(1).min(2);
+            let options = difficulty_options(world.get_resource::<Locale>().as_deref());
+            let mut dropdown = gizmo::ui::Dropdown::new(options, chosen);
+            if std::env::var_os("MENU_LISTE_ACIK").is_some() {
+                dropdown.set_open(true); // ekran görüntüsü için
+            }
+            world.add_component(button, dropdown);
+            difficulty = Some(button.id());
+        }
+        if action == Action::Volume {
+            // Sürüklenen ya da odaktayken ←/→ ile adım adım değişen bir kaydırıcı; dolgusunu
+            // motor çiziyor, etiketin altında.
+            world.add_component(button, gizmo::ui::Slider::new(volume as f32 / 100.0));
+            slider = Some(button.id());
+        }
+        first.get_or_insert(button.id());
+    }
+
+    let banner = world
+        .spawn_bundle((
+            Text::pinned_at("", font, 32.0, Vec2::new(0.62, 0.85), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),
+            // Her yeni duyuru harf harf yazılıyor.
+            Typewriter::new(40.0),
+        ))
+        .id();
+    world.spawn_bundle((
+        Text::pinned("", font, 18.0, TextAnchor::BottomRight, Vec2::new(-16.0, -16.0))
+            .with_color(Vec4::new(0.7, 0.72, 0.78, 1.0)),
+        LocalizedText::new("menu.hint"),
+    ));
+
+    // Menü açık: klavye ve gamepad gezsin, ilk düğme odakta başlasın.
+    if let Some(mut nav) = world.get_resource_mut::<UiNavigation>() {
+        nav.enabled = true;
+        nav.focus(first);
+    }
+
+    let mut music = None;
+    if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
+        audio.load_sound_bytes("tik", Blip::new(Wave::Sine, 880.0, 0.05).with_volume(0.5).wav());
+        audio.mixer_mut().set_master_gain(volume as f32 / 100.0);
+        audio.load_samples("menu", &pad([220.0, 261.5, 330.0]), 44_100);
+        audio.load_samples("oyun", &pad([196.0, 247.0, 293.5]), 44_100);
+        music = audio.crossfade(None, "menu", 2.0).ok();
+        world.insert_resource(audio);
+    }
+    let volume_button = slider.expect("the volume button was built");
+    let difficulty = difficulty.expect("the difficulty list was built");
+    Menu { volume, banner, volume_button, difficulty, music, in_game: false }
+}
+
+/// `--test`: pencere açmadan menüyü yalnız klavyeyle gezer — Enter odaktakini seçer, ↓ bir
+/// sonrakine geçer — ve her düğmenin işini görür: Başla oyun müziğine geçer, Tam ekran pencere
+/// kipini değiştirir, Dil dili çevirir, Çıkış uygulamadan çıkmayı ister.
+fn self_test() -> bool {
+    REMEMBER.store(false, std::sync::atomic::Ordering::Relaxed);
+    // Pencereli uygulamadaki sıra: önce arayüz eklentisi (odak kaynağını o koyuyor), sonra sahne.
+    let mut run = HeadlessFrames::new(World::new()).add_plugin(UiPlugin);
+    let menu = setup(&mut run.world, HeadlessFrames::font(), false);
+    run.world.insert_resource(menu);
+    let tap = |run: &mut HeadlessFrames, key: KeyCode| {
+        run.input.on_key_pressed(key as u32);
+        run.frame(1.0 / 60.0, update);
+        run.input.on_key_released(key as u32);
+        run.frame(1.0 / 60.0, update);
+    };
+    for _ in 0..5 {
+        run.frame(1.0 / 60.0, update);
+    }
+    let language = |w: &World| w.get_resource::<Locale>().map(|l| l.language().to_string());
+    let start_language = language(&run.world);
+    let (mut started, mut fullscreen, mut translated, mut quit) = (false, false, false, false);
+    for _ in 0..12 {
+        tap(&mut run, KeyCode::Enter);
+        started |= run.world.get_resource::<Menu>().is_some_and(|m| m.in_game);
+        fullscreen |= run.world.get_resource::<WindowMode>().is_some_and(|m| *m == WindowMode::Fullscreen);
+        translated |= language(&run.world) != start_language;
+        quit = run.world.get_resource::<AppExit>().is_some();
+        if quit {
+            break;
+        }
+        tap(&mut run, KeyCode::ArrowDown);
+    }
+    let ok = started && fullscreen && translated && quit;
+    println!(
+        "menu --test: klavyeyle Başla {started}, Tam ekran {fullscreen}, Dil {translated}, Çıkış {quit} → {}",
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        std::process::exit(if self_test() { 0 } else { 1 });
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Menu", 1280, 720)
         .add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
             let font = load_font(scene.renderer);
-
-            // Arkada yavaşça dönen bir şey olsun.
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::new(2.5, 0.0, 0.0)),
-                GlobalTransform::default(),
-                MeshSource("cone".into()),
-                MaterialDesc::new().with_pbr(Vec4::new(0.85, 0.5, 0.25, 1.0), 0.4, 0.2),
-                MeshRenderer::new(),
-                Tween::to_rotation(Quat::from_rotation_y(std::f32::consts::PI), 4.0).repeating(gizmo::renderer::tween::Repeat::PingPong),
-            ));
-            scene.world.spawn_bundle((
-                Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-0.8)),
-                GlobalTransform::default(),
-                DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun),
-            ));
-            scene.world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.5, 6.0), yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
-
-
-            // Sütun: dört düğme.
-            let column = scene.world.spawn_bundle(NodeBundle {
-                style: Style {
-                    width: Val::Px(320.0),
-                    height: Val::Percent(100.0),
-                    padding: UiRect::all(Val::Px(48.0)),
-                    row_gap: Val::Px(14.0),
-                    flex_direction: FlexDirection::Column,
-                    justify_content: Some(JustifyContent::Center),
-                    align_items: Some(AlignItems::Stretch),
-                    ..Default::default()
-                },
-                background_color: BackgroundColor(Vec4::new(0.0, 0.0, 0.0, 0.35)),
-                ..Default::default()
-            });
-            // Ayarlar bir önceki oturumdan.
-            let save = SaveData::open("gizmo_menu");
-            let volume = save.get::<u32>("volume").unwrap_or(50).min(100);
-            let mode = if save.get::<bool>("fullscreen").unwrap_or(false) { WindowMode::Fullscreen } else { WindowMode::Windowed };
-            scene.world.insert_resource(mode);
-
-            // İsim alanı: `Text`'in kendi içeriği yer tutucu; yazılınca değer gösteriliyor.
-            // Dil: kayıtlıysa o, değilse sistemin dili, o da yoksa Türkçe.
-            let mut locale = Locale::new("tr");
-            locale.load_json("tr", STRINGS_TR).expect("the Turkish table is valid JSON");
-            locale.load_json("en", STRINGS_EN).expect("the English table is valid JSON");
-            let language = save
-                .get::<String>("language")
-                .or_else(Locale::system_language)
-                .filter(|l| locale.languages().contains(&l.as_str()))
-                .unwrap_or_else(|| "tr".to_string());
-            locale.set_language(&language);
-            scene.world.insert_resource(locale);
-
-            // Başlık sütunun ilk öğesi: pencereye iğnelenmiş bir başlık, kısa bir pencerede
-            // dikeyde ortalanan düğmelerin üstüne biniyordu.
-            let title = scene.world.spawn_bundle(NodeBundle {
-                style: Style { height: Val::Px(90.0), ..Default::default() },
-                background_color: BackgroundColor(Vec4::ZERO),
-                ..Default::default()
-            });
-            scene.world.add_component(title, Text::screen("GIZMO", font, 72.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-            scene.world.add_child(column, title);
-
-            let mut field = TextInput::new(16);
-            field.value = save.get::<String>("name").unwrap_or_default();
-            let name_field = scene.world.spawn_bundle(ButtonBundle {
-                style: Style { height: Val::Px(52.0), ..Default::default() },
-                background_color: BackgroundColor(fill(Interaction::None)),
-                ..Default::default()
-            });
-            scene.world.add_component(
-                name_field,
-                Text::screen("", font, 22.0, Vec2::ZERO)
-                    .with_anchor(TextAnchor::Center)
-                    .with_color(Vec4::new(0.8, 0.82, 0.88, 1.0)),
-            );
-            scene.world.add_component(name_field, LocalizedText::new("menu.name"));
-            scene.world.add_component(name_field, field);
-            scene.world.add_component(name_field, gizmo::ui::ClipContent);
-            scene.world.add_child(column, name_field);
-
-            let mut first = None;
-            let mut slider = None;
-            let mut difficulty = None;
-            // Etiketler anahtar: ekranda `Locale`'in o anki dilindeki dizge çiziliyor.
-            for (action, label) in [
-                (Action::Start, LocalizedText::new("menu.start")),
-                (Action::Fullscreen, LocalizedText::new("menu.fullscreen")),
-                (Action::Volume, volume_label(volume)),
-                (Action::Difficulty, LocalizedText::new("menu.normal")),
-                (Action::Language, LocalizedText::new("menu.language")),
-                (Action::Quit, LocalizedText::new("menu.quit")),
-            ] {
-                let button = scene.world.spawn_bundle(ButtonBundle {
-                    style: Style { height: Val::Px(52.0), ..Default::default() },
-                    background_color: BackgroundColor(fill(Interaction::None)),
-                    ..Default::default()
-                });
-                scene.world.add_component(button, MenuButton(action));
-                scene.world.add_component(button, Text::screen("", font, 24.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
-                scene.world.add_component(button, label);
-                scene.world.add_child(column, button);
-                if action == Action::Fullscreen {
-                    // Açık mı kapalı mı, solundaki onay kutusu söylüyor (`Toggle`); her tık onu da
-                    // çeviriyor, aşağıdaki işleyici pencereyi.
-                    scene.world.add_component(button, gizmo::ui::Toggle::new(mode == WindowMode::Fullscreen));
-                }
-                if action == Action::Difficulty {
-                    // Bir açılır liste: tıklayınca altında seçenekler açılıyor; odaktayken ←/→
-                    // seçenekler arasında dönüyor. Seçenekler dilin dizgeleri — dil değişince
-                    // yenileniyor (`difficulty_options`). Etiketi seçili seçenek, `LocalizedText`
-                    // değil.
-                    scene.world.remove_component::<LocalizedText>(button);
-                    let chosen = save.get::<usize>("difficulty").unwrap_or(1).min(2);
-                    let options = difficulty_options(scene.world.get_resource::<Locale>().as_deref());
-                    let mut dropdown = gizmo::ui::Dropdown::new(options, chosen);
-                    if std::env::var_os("MENU_LISTE_ACIK").is_some() {
-                        dropdown.set_open(true); // ekran görüntüsü için
-                    }
-                    scene.world.add_component(button, dropdown);
-                    difficulty = Some(button.id());
-                }
-                if action == Action::Volume {
-                    // Sürüklenen ya da odaktayken ←/→ ile adım adım değişen bir kaydırıcı; dolgusunu
-                    // motor çiziyor, etiketin altında.
-                    scene.world.add_component(button, gizmo::ui::Slider::new(volume as f32 / 100.0));
-                    slider = Some(button.id());
-                }
-                first.get_or_insert(button.id());
-            }
-
-            let banner = scene
-                .world
-                .spawn_bundle((
-                    Text::pinned_at("", font, 32.0, Vec2::new(0.62, 0.85), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),
-                    // Her yeni duyuru harf harf yazılıyor.
-                    Typewriter::new(40.0),
-                ))
-                .id();
-            scene.world.spawn_bundle((
-                Text::pinned("", font, 18.0, TextAnchor::BottomRight, Vec2::new(-16.0, -16.0))
-                    .with_color(Vec4::new(0.7, 0.72, 0.78, 1.0)),
-                LocalizedText::new("menu.hint"),
-            ));
-
-            // Menü açık: klavye ve gamepad gezsin, ilk düğme odakta başlasın.
-            if let Some(mut nav) = scene.world.get_resource_mut::<UiNavigation>() {
-                nav.enabled = true;
-                nav.focus(first);
-            }
-
-            let mut music = None;
-            if let Ok(mut audio) = AudioManager::new() {
-                audio.load_sound_bytes("tik", Blip::new(Wave::Sine, 880.0, 0.05).with_volume(0.5).wav());
-                audio.mixer_mut().set_master_gain(volume as f32 / 100.0);
-                audio.load_samples("menu", &pad([220.0, 261.5, 330.0]), 44_100);
-                audio.load_samples("oyun", &pad([196.0, 247.0, 293.5]), 44_100);
-                music = audio.crossfade(None, "menu", 2.0).ok();
-                scene.world.insert_resource(audio);
-            }
-            let volume_button = slider.expect("the volume button was built");
-            let difficulty = difficulty.expect("the difficulty list was built");
-            scene.world.insert_resource(Menu { volume, banner, volume_button, difficulty, music, in_game: false });
+            let game = setup(scene.world, font, true);
+            scene.world.insert_resource(game);
         })
         .replace_update(update)
         .run()
@@ -444,7 +493,13 @@ fn set_volume(world: &mut World, menu: &mut Menu, v: u32) {
 }
 
 /// Bir ayarı kalıcı yapar — bir sonraki açılışta menü onunla açılıyor.
+/// Ayarlar kayda yazılsın mı — `--test` oyuncunun ayarlarına dokunmasın diye kapatıyor.
+static REMEMBER: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
 fn remember<T: serde::Serialize>(key: &str, value: &T) {
+    if !REMEMBER.load(std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
     let mut save = SaveData::open("gizmo_menu");
     if save.set(key, value).and_then(|()| save.save()).is_err() {
         gizmo::gizmo_log!(Warning, "ayar kaydedilemedi: {key}");
