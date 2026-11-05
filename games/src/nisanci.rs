@@ -56,6 +56,10 @@ const BULLET_SPEED: f32 = 22.0;
 const FIRE_PERIOD: f32 = 0.09;
 const ENEMY_RADIUS: f32 = 0.45;
 const PLAYER_RADIUS: f32 = 0.45;
+/// Kamera arenanın merkezinin bu kadar üstünde ve gerisinde; arenaya `CAMERA_PITCH` ile bakıyor.
+const CAMERA_HEIGHT: f32 = 20.0;
+const CAMERA_BACK: f32 = 11.0;
+const CAMERA_PITCH: f32 = -1.07;
 
 #[derive(Clone, Copy)]
 struct Player;
@@ -123,9 +127,9 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
         .id();
     let camera = world
         .spawn_bundle(CameraBundle {
-            position: Vec3::new(0.0, 20.0, 11.0),
+            position: Vec3::new(0.0, CAMERA_HEIGHT, CAMERA_BACK),
             yaw: -std::f32::consts::FRAC_PI_2,
-            pitch: -1.07,
+            pitch: CAMERA_PITCH,
             primary: true,
             ..Default::default()
         })
@@ -203,11 +207,30 @@ pub fn self_test() -> bool {
         }
     }
     let touch_ok = touch_test();
-    let ok = best.0 > 0 && best.1 >= 2 && sparks_most < 50 && touch_ok;
+    let camera_ok = camera_test();
+    let ok = best.0 > 0 && best.1 >= 2 && sparks_most < 50 && touch_ok && camera_ok;
     println!(
         "nisanci --test: 120 s, en iyi {} puan, {}. dalga, {deaths} kez öldü; aynı anda en çok {sparks_most} kıvılcım → {}",
         best.0,
         best.1,
+        if ok { "tamam" } else { "BAŞARISIZ" }
+    );
+    ok
+}
+
+/// Kamera dar ekranda oyuncuyu izliyor: dikey bir telefonda (9 : 19,5) arenanın iki ucundaki
+/// oyuncu görünen alanın içinde kalmalı; geniş bir pencerede kamera hiç kıpırdamamalı.
+fn camera_test() -> bool {
+    let fov = std::f32::consts::FRAC_PI_3;
+    let distance = (CAMERA_HEIGHT * CAMERA_HEIGHT + CAMERA_BACK * CAMERA_BACK).sqrt();
+    let phone = 9.0 / 19.5;
+    let half_width = distance * (fov * 0.5).tan() * phone;
+    let edge = ARENA - 0.5;
+    let seen = [-edge, edge].iter().all(|&x| (x - camera_x(x, phone, fov)).abs() + PLAYER_RADIUS < half_width);
+    let still = [-edge, 0.0, edge].iter().all(|&x| camera_x(x, 16.0 / 9.0, fov) == 0.0);
+    let ok = seen && still;
+    println!(
+        "    kamera: dikey telefonda arenanın uçları görünüyor mu {seen}, geniş pencerede kımıldamıyor mu {still} → {}",
         if ok { "tamam" } else { "BAŞARISIZ" }
     );
     ok
@@ -276,6 +299,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     if game.lives > 0 {
         move_player(world, &mut game, input, dt);
+        follow_with_camera(world, &game, dt);
         aim_and_fire(world, &mut game, input, dt);
         spawn_enemies(world, &mut game, dt);
         chase(world, &game, dt);
@@ -284,6 +308,31 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     fly_bullets(world, &mut game, dt);
     draw_hud(world, &game);
     world.insert_resource(game);
+}
+
+/// Dar bir ekranda — dikey tutulan bir telefon — arena yanlara sığmıyor: kamera geniş bir pencere
+/// için kurulu, dikey telefonda yatay görüş 34° kadar ve 24 birimlik arenanın yarısından azı
+/// görünüyor; oyuncu kenara yürüyünce ekrandan çıkıyordu. Görünen yarı genişlik arenadan darsa
+/// kamera yanlara oyuncuyu izliyor, arenanın kenarında duruyor; geniş bir pencerede yerinden
+/// kıpırdamıyor.
+fn follow_with_camera(world: &mut World, game: &Game, dt: f32) {
+    let aspect = world.get_resource::<gizmo::core::window::WindowInfo>().map_or(16.0 / 9.0, |w| w.aspect_ratio());
+    let fov = world.borrow::<Camera>().get(game.camera).map_or(std::f32::consts::FRAC_PI_3, |c| c.fov);
+    let target = camera_x(player_position(world, game).x, aspect, fov);
+    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+        // Yumuşak: oyuncu dönünce görüntü sarsılmasın.
+        let x = t.position.x + (target - t.position.x) * (1.0 - (-8.0 * dt).exp());
+        t.position.x = x;
+    }
+}
+
+/// Kameranın x'i: oyuncu `player_x`'teyken, en-boy oranı `aspect` olan bir ekranda, dikey görüş
+/// açısı `fov`. Görünen alan arenayı (bir birim payla) kaplıyorsa 0.
+fn camera_x(player_x: f32, aspect: f32, fov: f32) -> f32 {
+    let distance = (CAMERA_HEIGHT * CAMERA_HEIGHT + CAMERA_BACK * CAMERA_BACK).sqrt();
+    let half_width = distance * (fov * 0.5).tan() * aspect;
+    let room = ARENA + 1.0 - half_width;
+    if room > 0.0 { player_x.clamp(-room, room) } else { 0.0 }
 }
 
 fn player_position(world: &World, game: &Game) -> Vec3 {
