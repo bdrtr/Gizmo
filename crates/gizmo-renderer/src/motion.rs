@@ -41,6 +41,9 @@ pub struct MotionHistory {
 struct Entry {
     /// The frame it was last drawn in; 0 for a slot never used (frames start at 1).
     seen: u64,
+    /// Which entity on this id it was: ids are reused, and a new entity on a dead one's id is a
+    /// newcomer, not the dead one moved.
+    generation: u32,
     prev: Cols,
     cur: Cols,
 }
@@ -52,25 +55,29 @@ impl MotionHistory {
         self.frame += 1;
     }
 
-    /// The matrix `entity` was drawn with last frame, given the one it is drawn with now. An entity
-    /// seen for the first time — or after a gap — gets `current` back: no motion, rather than a
-    /// streak from wherever it last was.
-    pub fn previous(&mut self, entity: u32, current: Cols) -> Cols {
+    /// The matrix `entity` (of `generation`) was drawn with last frame, given the one it is drawn
+    /// with now. An entity seen for the first time — or after a gap, or a new entity on an id that
+    /// was another's last frame — gets `current` back: no motion, rather than a streak from
+    /// wherever it last was. (The id alone could not tell a despawned entity from the next one to
+    /// take its id: the newcomer was drawn for one frame with motion vectors from the dead one's
+    /// position to its own — a blur streak, a TAA ghost.)
+    pub fn previous(&mut self, entity: u32, generation: u32, current: Cols) -> Cols {
         let frame = self.frame;
         let slot = entity as usize;
         if slot >= self.entries.len() {
             self.entries.resize(slot + 1, Entry::default());
         }
         let e = &mut self.entries[slot];
-        if e.seen == frame && frame != 0 {
+        let same = e.generation == generation;
+        if same && e.seen == frame && frame != 0 {
             e.prev
-        } else if e.seen != 0 && e.seen + 1 == frame {
+        } else if same && e.seen != 0 && e.seen + 1 == frame {
             e.prev = e.cur;
             e.cur = current;
             e.seen = frame;
             e.prev
         } else {
-            *e = Entry { seen: frame, prev: current, cur: current };
+            *e = Entry { seen: frame, generation, prev: current, cur: current };
             current
         }
     }
@@ -191,18 +198,30 @@ mod tests {
     /// The history advances once per frame, however often it is asked; a newcomer has no motion; and
     /// an entity missing for a frame starts over rather than streaking from where it was.
     #[test]
+    fn a_new_entity_on_a_dead_ones_id_has_no_motion() {
+        let mut h = MotionHistory::default();
+        h.begin_frame();
+        h.previous(7, 0, at(0.0));
+        h.begin_frame();
+        // Entity 7 was despawned; a new one (generation 1) takes the id and is drawn at x = 5.
+        assert_eq!(h.previous(7, 1, at(5.0)), at(5.0), "a streak from the dead entity's place");
+        h.begin_frame();
+        assert_eq!(h.previous(7, 1, at(6.0)), at(5.0), "from then on it has a history of its own");
+    }
+
+    #[test]
     fn history_advances_once_per_frame_and_forgets_gaps() {
         let mut h = MotionHistory::default();
         h.begin_frame();
-        assert_eq!(h.previous(7, at(0.0)), at(0.0), "first sight: no motion");
+        assert_eq!(h.previous(7, 0, at(0.0)), at(0.0), "first sight: no motion");
         h.begin_frame();
-        assert_eq!(h.previous(7, at(1.0)), at(0.0), "last frame's matrix");
-        assert_eq!(h.previous(7, at(1.0)), at(0.0), "a second view this frame gets the same answer");
+        assert_eq!(h.previous(7, 0, at(1.0)), at(0.0), "last frame's matrix");
+        assert_eq!(h.previous(7, 0, at(1.0)), at(0.0), "a second view this frame gets the same answer");
         h.begin_frame();
-        assert_eq!(h.previous(7, at(2.0)), at(1.0));
+        assert_eq!(h.previous(7, 0, at(2.0)), at(1.0));
         h.begin_frame(); // not drawn this frame
         h.begin_frame();
-        assert_eq!(h.previous(7, at(9.0)), at(9.0), "after a gap: no streak from x = 2");
+        assert_eq!(h.previous(7, 0, at(9.0)), at(9.0), "after a gap: no streak from x = 2");
     }
 
     /// A slot per id: a large id grows the table without disturbing the others, an id never drawn
@@ -212,14 +231,14 @@ mod tests {
     fn slots_are_per_id_and_a_stale_slot_is_a_newcomer() {
         let mut h = MotionHistory::default();
         h.begin_frame();
-        h.previous(3, at(1.0));
-        assert_eq!(h.previous(50_000, at(5.0)), at(5.0), "first sight of a large id");
+        h.previous(3, 0, at(1.0));
+        assert_eq!(h.previous(50_000, 0, at(5.0)), at(5.0), "first sight of a large id");
         h.begin_frame();
-        assert_eq!(h.previous(3, at(2.0)), at(1.0), "growing the table kept id 3's history");
-        assert_eq!(h.previous(40_000, at(4.0)), at(4.0), "a slot that exists but was never drawn");
-        assert_eq!(h.previous(50_000, at(6.0)), at(5.0));
+        assert_eq!(h.previous(3, 0, at(2.0)), at(1.0), "growing the table kept id 3's history");
+        assert_eq!(h.previous(40_000, 0, at(4.0)), at(4.0), "a slot that exists but was never drawn");
+        assert_eq!(h.previous(50_000, 0, at(6.0)), at(5.0));
         h.begin_frame();
         h.begin_frame();
-        assert_eq!(h.previous(3, at(8.0)), at(8.0), "a stale slot is a newcomer");
+        assert_eq!(h.previous(3, 0, at(8.0)), at(8.0), "a stale slot is a newcomer");
     }
 }

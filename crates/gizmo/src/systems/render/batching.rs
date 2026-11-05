@@ -556,7 +556,8 @@ pub(super) fn collect_draw_items(
                 .with_alpha_cutoff($mat.alpha_cutoff)
                 .with_shadow_receiving(renderers.get($e).map(|r| r.receives_shadows).unwrap_or(true));
                 // Where this entity was drawn last frame — the object half of its velocity.
-                let previous_model = renderer.motion_history.previous($e, upload_model.to_cols_array_2d());
+                let generation = world.get_entity($e).map_or(0, |e| e.generation());
+                let previous_model = renderer.motion_history.previous($e, generation, upload_model.to_cols_array_2d());
                 let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| &s.bind_group);
 
                 // Compute the pass-routing flags up front so they can be part of the

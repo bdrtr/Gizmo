@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A new entity on a dead one's id was drawn with the dead one's motion.** `MotionHistory`
+  (object motion for TAA and motion blur) keeps a slot per raw id; a new entity drawn on an id
+  another was drawn on last frame got that one's matrix as its previous — one frame of motion
+  vectors from the dead entity's place to its own, a streak or a ghost. The slot records the
+  entity's generation now; a different one is a newcomer, with no motion.
 - **A streamed texture could land on the wrong entity's material.** A finished decode names its
   waiting entities by raw id; a material despawned while its texture decoded had its id taken by
   a new entity, whose material got the old texture and kept it. The texture goes only to a
