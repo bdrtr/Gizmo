@@ -339,6 +339,13 @@ pub fn app() -> App<SimpleSceneState> {
     App::<SimpleSceneState>::new("Gizmo Engine - Pinbol", 1280, 720)
         .add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
+            // The ball is chrome, and chrome shows only what it reflects: under the default studio
+            // environment it is nearly black on a dark table. This is the pale sky behind the table.
+            scene.renderer.sky = Some(gizmo::renderer::frame_uniforms::Sky::gradient(
+                [0.55, 0.68, 0.85],
+                [0.60, 0.68, 0.75],
+                [0.20, 0.20, 0.22],
+            ));
             let font = scene.renderer.default_font();
             let game = setup(scene.world, font);
             scene.world.insert_resource(game);

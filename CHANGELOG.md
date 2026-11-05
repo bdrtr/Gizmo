@@ -175,6 +175,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   forward and 104 deferred. Both now share `preset_environment` and the environment BRDF, and come out
   under 8 of 255 apart under every preset. Under the default preset, forward surfaces with little
   direct light get noticeably darker and lose the warm cast.
+  `pinbol`'s chrome ball went nearly black on its dark table for the same reason, so the game now sets
+  a `Renderer::sky` matching the pale background behind it, and it reads again.
 - **Height fog covers every material path: transparent, forward, baked-lit, water and mirrors, and
   `Renderer::fog` now works in the browser and on Android.** It was the deferred shader's alone. Each
   blend mode treats it as it needs: alpha and opaque fade to its colour, additive fades out, multiply
