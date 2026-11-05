@@ -32,6 +32,30 @@ fn root_origin(style: &Style, size: gizmo_math::Vec2, window: gizmo_math::Vec2) 
     )
 }
 
+/// An absolutely positioned root with both insets of an axis set and that axis's size `Auto`
+/// spans the window between them, as an absolute box does inside a parent (CSS, and taffy for
+/// every node but the root). taffy lays a root out with no containing block, so its insets never
+/// sized it: `top: 0, bottom: 0` with no height came out **0 px tall** — a touch button meant to
+/// cover half the screen covered none of it (`pinbol`, 2026-11-05). `root_origin` already placed
+/// such a root by its insets; this gives it the size the same insets imply.
+fn stretched_root(style: &Style, window: gizmo_math::Vec2) -> Style {
+    use crate::components::Val;
+    let resolve = |v: Val, extent: f32| match v {
+        Val::Px(p) => Some(p),
+        Val::Percent(p) => Some(p / 100.0 * extent),
+        _ => None,
+    };
+    let span = |size: Val, near: Val, far: Val, extent: f32| match (size, resolve(near, extent), resolve(far, extent)) {
+        (Val::Auto, Some(a), Some(b)) => Val::Px((extent - a - b).max(0.0)),
+        _ => size,
+    };
+    Style {
+        width: span(style.width, style.inset.left, style.inset.right, window.x),
+        height: span(style.height, style.inset.top, style.inset.bottom, window.y),
+        ..*style
+    }
+}
+
 /// System that syncs UI entities into the layout tree, computes layout for each
 /// root, and writes the results back into the [`Node`] components.
 ///
@@ -82,6 +106,9 @@ pub fn ui_layout_system(
         };
         if in_scroll && style.flex_shrink != 0.0 {
             ctx.sync_style(entity, &Style { flex_shrink: 0.0, ..*style });
+        } else if parents.get(entity).is_none() && style.position_type == crate::components::PositionType::Absolute {
+            let stretched = stretched_root(style, ctx.window_size);
+            ctx.sync_style(entity, &stretched);
         } else {
             ctx.sync_style(entity, style);
         }
@@ -462,6 +489,27 @@ mod tests {
         // A conversion that forwarded the number straight to taffy (which wants
         // a 0..=1 fraction) would give a 100x-too-large box here.
         assert_vec2(n.size, 800.0, 300.0);
+    }
+
+    #[test]
+    fn an_absolute_root_with_both_insets_spans_the_window_between_them() {
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 800.0, 600.0);
+        let e = world.spawn();
+        world.add_component(
+            e,
+            Style {
+                position_type: crate::components::PositionType::Absolute,
+                inset: UiRect { left: Val::Px(400.0), right: Val::Px(0.0), top: Val::Percent(10.0), bottom: Val::Px(0.0) },
+                ..Default::default()
+            },
+        );
+        world.add_component(e, Node::default());
+        schedule.run(&mut world, 0.016);
+        let n = node_of(&world, e);
+        // Right half, below the top tenth: 400 wide, 540 tall, at (400, 60).
+        assert_vec2(n.size, 400.0, 540.0);
+        assert_vec2(n.position, 400.0, 60.0);
     }
 
     #[test]

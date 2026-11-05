@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An absolutely positioned root UI node was never sized by its insets.** taffy lays a root out
+  with no containing block, so `top: 0, bottom: 0` (or `left` and `right`) with an `Auto` size
+  gave a box **0 px** on that axis — a touch button meant to cover half the screen covered none
+  of it. Such a root now spans the window between its insets, as an absolute box inside a parent
+  always did.
 - **A new entity on a dead one's id was drawn with the dead one's motion.** `MotionHistory`
   (object motion for TAA and motion blur) keeps a slot per raw id; a new entity drawn on an id
   another was drawn on last frame got that one's matrix as its previous — one frame of motion
