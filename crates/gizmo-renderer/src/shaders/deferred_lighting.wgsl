@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment}
+#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -236,80 +236,7 @@ fn filter_pcss(
 }
 
 fn compute_height_fog(world_pos: vec3<f32>, camera_pos: vec3<f32>) -> vec4<f32> {
-    let view_vec = world_pos - camera_pos;
-    let dist = length(view_vec);
-    let view_dir = view_vec / max(dist, 0.0001);
-
-    var fog_color = vec3<f32>(0.5, 0.6, 0.7); // default Daylight
-    var fog_density = 0.015;
-    var fog_height_falloff = 0.05;
-    var fog_base_height = -5.0; // base height of fog plane
-
-    if (scene.environment_preset == 0u) {
-        // Sunset Gold
-        fog_color = vec3<f32>(0.85, 0.38, 0.15);
-        fog_density = 0.025;
-        fog_height_falloff = 0.08;
-    } else if (scene.environment_preset == 1u) {
-        // Studio Neutral
-        fog_color = vec3<f32>(0.2, 0.22, 0.25);
-        fog_density = 0.008;
-        fog_height_falloff = 0.04;
-    } else if (scene.environment_preset == 2u) {
-        // Midnight Neon
-        fog_color = vec3<f32>(0.12, 0.02, 0.25);
-        fog_density = 0.035;
-        fog_height_falloff = 0.12;
-    }
-
-    // Blend fog color if we are interpolating presets!
-    if (scene.environment_blend_t > 0.001) {
-        var fog_color_2 = vec3<f32>(0.5, 0.6, 0.7);
-        var fog_density_2 = 0.015;
-        var fog_height_falloff_2 = 0.05;
-
-        if (scene.environment_preset_b == 0u) {
-            fog_color_2 = vec3<f32>(0.85, 0.38, 0.15);
-            fog_density_2 = 0.025;
-            fog_height_falloff_2 = 0.08;
-        } else if (scene.environment_preset_b == 1u) {
-            fog_color_2 = vec3<f32>(0.2, 0.22, 0.25);
-            fog_density_2 = 0.008;
-            fog_height_falloff_2 = 0.04;
-        } else if (scene.environment_preset_b == 2u) {
-            fog_color_2 = vec3<f32>(0.12, 0.02, 0.25);
-            fog_density_2 = 0.035;
-            fog_height_falloff_2 = 0.12;
-        }
-        fog_color = mix(fog_color, fog_color_2, scene.environment_blend_t);
-        fog_density = mix(fog_density, fog_density_2, scene.environment_blend_t);
-        fog_height_falloff = mix(fog_height_falloff, fog_height_falloff_2, scene.environment_blend_t);
-    }
-
-    // `Renderer::fog` replaces the preset's fog outright (density ≥ 0; < 0 = no override).
-    if (scene.fog.a >= 0.0) {
-        fog_color = scene.fog.rgb;
-        fog_density = scene.fog.a;
-        fog_height_falloff = scene.fog_shape.x;
-        fog_base_height = scene.fog_shape.y;
-    }
-
-    // Volumetric analytical scattering (height-decay fog integration)
-    let cam_y = camera_pos.y - fog_base_height;
-    let dir_y = view_dir.y;
-
-    var fog_amount = 0.0;
-    // The linear limit whenever the exponent's rate is ~0: a level ray, or fog that does not thin
-    // with height at all (`Fog::height_falloff == 0`), which the division below would turn to NaN.
-    if (abs(fog_height_falloff * dir_y) < 0.000001) {
-        fog_amount = fog_density * exp(-fog_height_falloff * cam_y) * dist;
-    } else {
-        let falloff_dir_y = fog_height_falloff * dir_y;
-        fog_amount = (fog_density * exp(-fog_height_falloff * cam_y) * (1.0 - exp(-falloff_dir_y * dist))) / falloff_dir_y;
-    }
-
-    let fog_factor = 1.0 - clamp(exp(-fog_amount), 0.0, 1.0);
-    return vec4<f32>(fog_color, fog_factor);
+    return height_fog(world_pos, camera_pos, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
 }
 
 @fragment

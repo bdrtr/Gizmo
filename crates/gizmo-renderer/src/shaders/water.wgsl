@@ -3,7 +3,7 @@
 // and `gpu_types.rs` documents as unused. Nothing caught it because no pass had ever bound this
 // pipeline: the waves were frozen at t = 1.0 in a shader nobody was drawing.
 // No shadow group; skeleton/instance from #{SKELETON_GROUP}/#{INSTANCE_GROUP} (3/4 native, 2/3 web).
-#import gizmo::common::{SceneUniforms}
+#import gizmo::common::{SceneUniforms, height_fog}
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
@@ -153,6 +153,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
 #ifdef PLANAR
     // `PlanarReflection` on the water: group 1's texture is the capture, not a material's.
     let tex_color = vec4<f32>(1.0);
@@ -190,11 +191,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let lit = mix(water_body, reflected, f) + vec3<f32>(0.7, 0.9, 1.0) * spec * sun_col * 2.0;
     let body_alpha = clamp(in.inst_albedo.a * (0.7 + fresnel * 0.3), 0.0, 1.0);
     // What is reflected is on the surface: the water is opaque as far as it reflects.
-    return vec4<f32>(lit, mix(body_alpha, 1.0, f));
+    return vec4<f32>(mix(lit, fog.rgb, fog.a), mix(body_alpha, 1.0, f));
 #else
     let final_color = water_body + sky_reflect * fresnel * 0.5 + (vec3<f32>(0.7, 0.9, 1.0) * spec * sun_col * 2.0);
     // Grazing açıda su daha yansıtıcı/opak → kenar opaklığı fresnel ile biraz artar.
     let alpha = clamp(in.inst_albedo.a * tex_color.a * (0.7 + fresnel * 0.3), 0.0, 1.0);
-    return vec4<f32>(final_color, alpha);
+    return vec4<f32>(mix(final_color, fog.rgb, fog.a), alpha);
 #endif
 }

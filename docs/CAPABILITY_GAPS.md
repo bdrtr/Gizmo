@@ -208,18 +208,28 @@ depth with deferred neighbours. It only matters on the desktop path: the browser
 everything forward already, and so does the editor viewport, which is why the field is game-only in
 `render_parity`.
 
-The shading is close, not equal. Forward has no SSAO, SSR, SSGI, decals, height fog or velocity, and
-does not read anisotropy, clear coat, subsurface or irradiance volumes.
+The shading is close, not equal. Forward has no SSAO, SSR, SSGI, decals or velocity, and does not read
+anisotropy, clear coat, subsurface or irradiance volumes.
 
 **The environment presets moved to the forward shader, 2026-11-06 (decided and applied).** They lived
 in the deferred shader alone, so `shader.wgsl` lit everything with a fixed warm hemisphere: a red cube
 with no sun read red 182 forward and 104 deferred. Both shaders now call `preset_environment` in
-`common.wgsl` and use the same environment BRDF, and on one red cube with fog off, under all four
-presets and a set sky, with and without a sun, metal included, they are at most 6.2 of 255 apart. This **changed the
-look** of every transparent surface, of the editor viewport, and of every browser and Android game,
-all of which are drawn by that shader. Height fog was not moved: forward surfaces still stand outside
-it, `Renderer::fog` included, because an additive or multiplied draw cannot simply be mixed towards a
-colour in a shader that does not know its blend mode.
+`common.wgsl` and use the same environment BRDF, and on one red cube, under all four presets and a set
+sky, with and without a sun, metal included, they are under 8 of 255 apart. This **changed the look**
+of every transparent surface, of the editor viewport, and of every browser and Android game, all of
+which are drawn by that shader.
+
+**Height fog reaches every material path, same day.** It was the deferred shader's alone, so
+`Renderer::fog` did nothing on the web or on a phone, and a glass pane, a baked-lit level, water or a
+mirror stood outside the fog around them. `height_fog` is in `common.wgsl` now. `shader.wgsl` has one
+fragment entry point per blend mode, because fog means something different under each: alpha and opaque
+draws fade to its colour, additive ones fade out, multiplied ones fade to white, and premultiplied ones
+do both by their alpha. **Baked-lit surfaces are fogged now**, by the default preset's fog too, which
+a game with its own lighting will see at a distance until it sets `Renderer::fog`. Unlit materials stay
+outside it on purpose: their contract is the exact colour asked for, and editor furniture relies on it.
+
+Still outside the fog: particles, GPU physics bodies, FEM soft bodies, fluid and smoke, each its own
+shader outside the material paths. That is separate work, one shader and one test scene each.
 
 Still open: a custom material cannot be drawn deferred.
 

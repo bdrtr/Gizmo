@@ -430,12 +430,11 @@ macro_rules! material_builders {
     ///
     /// It gives up whatever reads the G-buffer or lives in the deferred lighting shader: SSAO, SSR
     /// and SSGI do not see it, decals do not land on it, TAA and motion blur get no velocity for
-    /// it, height fog does not cover it, and anisotropy, clear coat, subsurface and irradiance
-    /// volumes are not read. Its shadows are filtered with fixed PCF, not PCSS.
+    /// it, and anisotropy, clear coat, subsurface and irradiance volumes are not read. Its shadows
+    /// are filtered with fixed PCF, not PCSS.
     ///
-    /// The environment light is the same on both paths. Measured on one red cube with fog off,
-    /// under all four presets and a set sky, with and without a sun, metal too: at most 6.2 of 255
-    /// apart.
+    /// Environment light and height fog are the same on both paths. Measured on one red cube under
+    /// all four presets and a set sky, with and without a sun, metal too: under 8 of 255 apart.
     #[must_use]
     pub fn with_forward(mut self, forward: bool) -> Self {
         self.is_forward = forward;

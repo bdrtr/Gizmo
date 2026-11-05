@@ -10,7 +10,7 @@
 // It samples the shadow group the forward pass already binds at slot 2, so it needs no plumbing of
 // its own. On the web schema that group does not exist (the 4-bind-group limit), and there the
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
-#import gizmo::common::{SceneUniforms}
+#import gizmo::common::{SceneUniforms, height_fog}
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
@@ -226,5 +226,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Vertex alpha multiplies through with the instance's and the texture's. It only reaches the
     // framebuffer on the blended (transparent) variant of this pipeline — the opaque variant
     // writes it to the HDR target's unread alpha channel, exactly as it did before.
-    return vec4<f32>(colour, final_alpha);
+    let fog = height_fog(in.world_pos, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    return vec4<f32>(mix(colour, fog.rgb, fog.a), final_alpha);
 }

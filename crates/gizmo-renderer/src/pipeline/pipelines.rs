@@ -232,13 +232,14 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     let lit_layout = &lit_pipeline_layout;
     #[cfg(gizmo_forward_only)]
     let lit_layout = &render_pipeline_layout;
-    let create_main = |layout: &wgpu::PipelineLayout,
-                       sm: &wgpu::ShaderModule,
-                       label: &str,
-                       depth_write: bool,
-                       cull: Option<wgpu::Face>,
-                       blend: Option<wgpu::BlendState>,
-                       polygon_mode: wgpu::PolygonMode| {
+    let create_at = |entry: &str,
+                     layout: &wgpu::PipelineLayout,
+                     sm: &wgpu::ShaderModule,
+                     label: &str,
+                     depth_write: bool,
+                     cull: Option<wgpu::Face>,
+                     blend: Option<wgpu::BlendState>,
+                     polygon_mode: wgpu::PolygonMode| {
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some(label),
             layout: Some(layout),
@@ -250,7 +251,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             },
             fragment: Some(wgpu::FragmentState {
                 module: sm,
-                entry_point: Some("fs_main"),
+                entry_point: Some(entry),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: wgpu::TextureFormat::Rgba16Float,
@@ -282,6 +283,15 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             multiview_mask: None,
             cache: None,
         })
+    };
+    let create_main = |layout: &wgpu::PipelineLayout,
+                       sm: &wgpu::ShaderModule,
+                       label: &str,
+                       depth_write: bool,
+                       cull: Option<wgpu::Face>,
+                       blend: Option<wgpu::BlendState>,
+                       polygon_mode: wgpu::PolygonMode| {
+        create_at("fs_main", layout, sm, label, depth_write, cull, blend, polygon_mode)
     };
 
     let opaque_state = baked_lit_state(false);
@@ -446,7 +456,8 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         ),
         // Same state as `transparent` (no depth write, no culling), each mode's blend.
         blend_lit: crate::components::BlendMode::VARIANTS.map(|mode| {
-            create_main(
+            create_at(
+                lit_fragment_entry(mode),
                 lit_layout,
                 &shader,
                 &format!("Transparent Pipeline ({mode:?})"),
@@ -522,6 +533,17 @@ pub(super) fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs)
         multiview_mask: None,
             cache: None,
     })
+}
+
+/// The entry point of `shader.wgsl` that draws `mode`: each treats fog as that blend needs.
+fn lit_fragment_entry(mode: crate::components::BlendMode) -> &'static str {
+    use crate::components::BlendMode;
+    match mode {
+        BlendMode::Alpha => "fs_main",
+        BlendMode::Additive => "fs_additive",
+        BlendMode::Multiply => "fs_multiply",
+        BlendMode::Premultiplied => "fs_premultiplied",
+    }
 }
 
 #[cfg(test)]

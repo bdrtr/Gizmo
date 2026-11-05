@@ -173,9 +173,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   browser and Android game look different.** The presets lived in the deferred shader alone, and
   `shader.wgsl` lit everything with a fixed warm hemisphere, so one red cube with no sun read red 182
   forward and 104 deferred. Both now share `preset_environment` and the environment BRDF, and come out
-  at most 6.2 of 255 apart under every preset, fog off. Under the default preset, forward surfaces with
-  little direct light get noticeably darker and lose the warm cast. `Renderer::sky` and `Renderer::fog`
-  work as before; height fog still does not reach forward surfaces.
+  under 8 of 255 apart under every preset. Under the default preset, forward surfaces with little
+  direct light get noticeably darker and lose the warm cast.
+- **Height fog covers every material path: transparent, forward, baked-lit, water and mirrors, and
+  `Renderer::fog` now works in the browser and on Android.** It was the deferred shader's alone. Each
+  blend mode treats it as it needs: alpha and opaque fade to its colour, additive fades out, multiply
+  fades to white. **Baked-lit surfaces are now fogged, by the default preset's fog too**: a game with
+  its own lighting sets `Renderer::fog` to choose. Unlit materials keep their exact colour. Particles,
+  GPU physics bodies, FEM soft bodies, fluid and smoke are not fogged yet.
 
 ### Added
 
@@ -190,7 +195,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **`Material::with_forward`: a PBR material can choose the forward pass.** How a surface is shaded and
   which path draws it were one setting, so drawing PBR forward was impossible. The material type no
   longer changes: the object skips the z-prepass and the G-buffer, stays lit, casts and receives
-  shadows, and shares depth with deferred neighbours. It gives up SSAO, SSR, SSGI, decals, height fog,
+  shadows, and shares depth with deferred neighbours. It gives up SSAO, SSR, SSGI, decals,
   velocity, anisotropy, clear coat, subsurface and irradiance volumes. `MaterialDesc` carries it, older scenes read as deferred, and the
   inspector has a checkbox. Desktop only in effect: the browser, Android and the editor viewport draw
   everything forward already.

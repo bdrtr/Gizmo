@@ -6791,9 +6791,7 @@ mod golden_render_tests {
             assert!(lit > unlit + 20.0, "the sun should light a forward cube: {lit} with, {unlit} without");
 
             // Every environment, on both paths, with and without a sun: the two shaders share the
-            // presets, and the same red cube has to come out the same on either. Fog is off because
-            // only the deferred shader draws it.
-            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            // presets and their fog, and the same red cube has to come out the same on either.
             let sky = gizmo_renderer::frame_uniforms::Sky::gradient([0.5, 0.6, 0.8], [0.4, 0.4, 0.4], [0.1, 0.1, 0.1]);
             for (preset, sky) in [(0, None), (1, None), (2, None), (3, None), (1, Some(sky))] {
                 renderer.environment_preset = preset;
@@ -6808,6 +6806,135 @@ mod golden_render_tests {
                     }
                 }
             }
+        });
+    }
+
+    /// The centre of a frame: an unlit grey wall far off, and in front of it, if `material` makes one,
+    /// a cube 6 m from the camera. Everything is under a green fog of `density`, and `mirror` gives
+    /// the cube a `PlanarReflection`.
+    async fn fog_centre(
+        renderer: &mut Renderer,
+        density: f32,
+        mirror: bool,
+        material: Option<&dyn Fn(Material) -> Material>,
+    ) -> [f32; 3] {
+        renderer.taa = None;
+        renderer.ssgi = None;
+        renderer.ssr = None;
+        renderer.ssao = None;
+        renderer.volumetric = None;
+        renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.6, 0.0], density));
+        let format = renderer.config.format;
+        let mut world = World::new();
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let wall = world.spawn();
+        world.add_component(wall, Transform::new(Vec3::new(0.0, 0.0, -4.0)).with_scale(Vec3::new(30.0, 30.0, 0.1)));
+        world.add_component(wall, GlobalTransform::default());
+        world.add_component(wall, AssetManager::create_cube(&renderer.device));
+        world.add_component(wall, Material::new(tex.clone()).with_unlit(Vec4::new(0.5, 0.5, 0.5, 1.0)));
+        world.add_component(wall, MeshRenderer::new());
+        if let Some(material) = material {
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::ZERO));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, material(Material::new(tex)));
+            world.add_component(cube, MeshRenderer::new());
+            if mirror {
+                // The cube's face towards the camera, the only plane it can be seen in.
+                world.add_component(cube, crate::renderer::components::PlanarReflection::water().facing(Vec3::Z, 1.0));
+            }
+        }
+        world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 6.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            primary: true,
+            ..Default::default()
+        });
+        let frame = render_world(renderer, &mut world).await;
+        assert_eq!(renderer.planar.captures, u32::from(mirror), "the mirror's own pipeline has to be what ran");
+        [centre_mean(&frame, format, 0), centre_mean(&frame, format, 1), centre_mean(&frame, format, 2)]
+    }
+
+    /// **Fog covers a surface whichever path draws it, and means what its blend needs.** At this
+    /// density nothing 6 m away is left of the surface. Everything lit becomes the fog's colour. An
+    /// additive or a multiplied cube becomes nothing at all, because adding the fog's colour would
+    /// light up the fog and multiplying by it would stain what is behind. Unlit stays its exact colour.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn fog_covers_every_lit_surface_as_its_blend_mode_needs() {
+        use crate::renderer::components::BlendMode;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let red = Vec4::new(0.9, 0.1, 0.05, 1.0);
+        let half = Vec4::new(0.9, 0.1, 0.05, 0.5);
+        const THICK: f32 = 5.0;
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let r = &mut renderer;
+
+            let wall_clear = fog_centre(r, 0.0, false, None).await;
+            let wall_thick = fog_centre(r, THICK, false, None).await;
+            assert_eq!(wall_clear, wall_thick, "an unlit surface keeps its exact colour");
+
+            let deferred = fog_centre(r, THICK, false, Some(&|m: Material| m.with_pbr(red, 0.6, 0.0))).await;
+            assert!(deferred[1] > deferred[0] + 60.0 && deferred[1] > deferred[2] + 60.0, "deferred under fog: {deferred:?}");
+            let close = |a: [f32; 3], b: [f32; 3], limit: f32| (0..3).all(|i| (a[i] - b[i]).abs() < limit);
+
+            // Each of these, without fog, is something other than the fog's colour.
+            let opaque: [(&str, &dyn Fn(Material) -> Material); 2] = [
+                ("forward", &|m: Material| m.with_pbr(red, 0.6, 0.0).with_forward(true)),
+                ("baked-lit", &|m: Material| m.with_baked_lit(red)),
+            ];
+            for (name, material) in opaque {
+                let clear = fog_centre(r, 0.0, false, Some(material)).await;
+                let thick = fog_centre(r, THICK, false, Some(material)).await;
+                assert!(!close(clear, deferred, 40.0), "{name} without fog is already {clear:?}");
+                assert!(close(thick, deferred, 2.0), "{name} under fog: {thick:?}, deferred {deferred:?}");
+            }
+
+            // Water lets some of the wall through, on both of its pipelines, so fog shows as green.
+            for mirror in [false, true] {
+                let water = |m: Material| m.with_water(Vec4::new(0.1, 0.1, 0.8, 1.0));
+                let clear = fog_centre(r, 0.0, mirror, Some(&water)).await;
+                let thick = fog_centre(r, THICK, mirror, Some(&water)).await;
+                let green = |c: [f32; 3]| c[1] > c[2] + 30.0 && c[1] > c[0] + 30.0;
+                assert!(!green(clear), "water without fog, mirror {mirror}: {clear:?}");
+                assert!(green(thick), "water under fog, mirror {mirror}: {thick:?}");
+            }
+
+            // A plain mirror: unlit, but the fog stands in front of it like anything else.
+            let plain = |m: Material| m.with_unlit(Vec4::new(0.1, 0.1, 0.8, 1.0));
+            let clear = fog_centre(r, 0.0, true, Some(&plain)).await;
+            let thick = fog_centre(r, THICK, true, Some(&plain)).await;
+            assert!(!close(clear, deferred, 40.0), "a mirror without fog is already {clear:?}");
+            assert!(close(thick, deferred, 2.0), "a mirror under fog: {thick:?}, deferred {deferred:?}");
+
+            // These two leave only what is behind them.
+            let vanish: [(&str, &dyn Fn(Material) -> Material); 2] = [
+                ("additive", &|m: Material| m.with_pbr(red, 0.6, 0.0).with_blend_mode(BlendMode::Additive)),
+                ("multiply", &|m: Material| m.with_pbr(red, 0.6, 0.0).with_blend_mode(BlendMode::Multiply)),
+            ];
+            for (name, material) in vanish {
+                let clear = fog_centre(r, 0.0, false, Some(material)).await;
+                let thick = fog_centre(r, THICK, false, Some(material)).await;
+                assert!(!close(clear, wall_clear, 15.0), "{name} without fog does nothing: {clear:?}");
+                assert!(close(thick, wall_thick, 2.0), "{name} under fog: {thick:?}, wall {wall_thick:?}");
+            }
+
+            // Half covered, an alpha and a premultiplied draw come to the same thing: half fog, half
+            // wall. Mixing the premultiplied one like the alpha one would add a whole fog to it.
+            let alpha = fog_centre(r, THICK, false, Some(&|m: Material| m.with_pbr(half, 0.6, 0.0).with_transparent(true))).await;
+            let premultiplied = fog_centre(r, THICK, false, Some(&|m: Material| m.with_pbr(half, 0.6, 0.0).with_blend_mode(BlendMode::Premultiplied))).await;
+            assert!(close(alpha, premultiplied, 2.0), "alpha {alpha:?}, premultiplied {premultiplied:?}");
+            assert!(alpha[1] > wall_thick[1] && alpha[0] < wall_thick[0], "half fog over the wall: {alpha:?}");
         });
     }
 

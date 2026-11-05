@@ -4,7 +4,7 @@
 // The capture is the camera reflected in the plane, drawn with an ordinary rotation so nothing
 // has to reverse its winding. Reflection would have turned the picture inside out, so a rotation's
 // picture is the true one mirrored left to right: hence `1.0 - u`.
-#import gizmo::common::{SceneUniforms}
+#import gizmo::common::{SceneUniforms, height_fog}
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
@@ -69,5 +69,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let facing = clamp(abs(dot(normalize(in.normal), to_eye)), 0.0, 1.0);
     // Schlick: `reflectance` head-on, everything at a grazing angle.
     let f = in.reflectance + (1.0 - in.reflectance) * pow(1.0 - facing, 5.0);
-    return vec4<f32>(mix(in.base, reflected, f), 1.0);
+    // The capture has the fog up to the far side of the mirror; this is the fog on the near side.
+    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    return vec4<f32>(mix(mix(in.base, reflected, f), fog.rgb, fog.a), 1.0);
 }

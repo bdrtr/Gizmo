@@ -5,7 +5,7 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment}
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment}
@@ -177,8 +177,37 @@ fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
     return preset_environment(dir, roughness, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz));
 }
 
+// One entry point per blend mode, because fog means something different under each. Fog stands
+// between the camera and the surface, so what reaches the screen is less of the surface and, where
+// the blend lets a colour through, some of the fog. An alpha or opaque draw fades to the fog's colour.
+// An additive one only fades out: adding the fog's colour would light the fog up where it stands. A
+// multiplied one fades to white, which multiplies by one. A premultiplied one does both by its alpha.
+const FOG_MIX: u32 = 0u;
+const FOG_ADDITIVE: u32 = 1u;
+const FOG_MULTIPLY: u32 = 2u;
+const FOG_PREMULTIPLIED: u32 = 3u;
+
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in, FOG_MIX);
+}
+
+@fragment
+fn fs_additive(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in, FOG_ADDITIVE);
+}
+
+@fragment
+fn fs_multiply(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in, FOG_MULTIPLY);
+}
+
+@fragment
+fn fs_premultiplied(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in, FOG_PREMULTIPLIED);
+}
+
+fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
 #ifdef WIREFRAME
     // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0
@@ -406,5 +435,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // We render to an Rgba16Float HDR buffer. Tone mapping is handled in post_process.wgsl.
     
-    return vec4<f32>(final_color, in.inst_albedo.a * tex_color.a);
+    let alpha = in.inst_albedo.a * tex_color.a;
+    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    if (fog_kind == FOG_ADDITIVE) {
+        final_color *= 1.0 - fog.a;
+    } else if (fog_kind == FOG_MULTIPLY) {
+        final_color = mix(final_color, vec3<f32>(1.0), fog.a);
+    } else if (fog_kind == FOG_PREMULTIPLIED) {
+        final_color = final_color * (1.0 - fog.a) + fog.rgb * fog.a * alpha;
+    } else {
+        final_color = mix(final_color, fog.rgb, fog.a);
+    }
+
+    return vec4<f32>(final_color, alpha);
 }
