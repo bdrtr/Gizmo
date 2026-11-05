@@ -186,6 +186,10 @@ pub struct Material {
     /// Whether back faces are drawn. Needed for anything modelled as a single sheet — foliage,
     /// cloth, a flat pane.
     pub is_double_sided: bool,
+    /// Draw an opaque lit material in the forward pass instead of the G-buffer. **The material
+    /// type does not change**, which is the point: how a surface is shaded and which path draws it
+    /// are two questions. See [`Self::with_forward`] for what the forward path gives up.
+    pub is_forward: bool,
     /// Discard texels whose final alpha falls below this. **0 disables it**, which is every
     /// material that does not ask.
     ///
@@ -245,6 +249,9 @@ pub struct MaterialDesc {
     pub is_transparent: bool,
     /// See [`Material::is_double_sided`].
     pub is_double_sided: bool,
+    /// See [`Material::is_forward`]. `#[serde(default)]`: scenes saved before it read as deferred.
+    #[serde(default)]
+    pub is_forward: bool,
     /// See [`Material::alpha_cutoff`].
     pub alpha_cutoff: f32,
     /// See [`Material::blend_mode`]. `#[serde(default)]`: scenes saved before it read as alpha.
@@ -273,6 +280,7 @@ impl From<&Material> for MaterialDesc {
             material_type,
             is_transparent,
             is_double_sided,
+            is_forward,
             alpha_cutoff,
             blend_mode,
         } = m;
@@ -289,6 +297,7 @@ impl From<&Material> for MaterialDesc {
             material_type: *material_type,
             is_transparent: *is_transparent,
             is_double_sided: *is_double_sided,
+            is_forward: *is_forward,
             alpha_cutoff: *alpha_cutoff,
             blend_mode: *blend_mode,
         }
@@ -313,6 +322,7 @@ impl MaterialDesc {
             material_type: self.material_type,
             is_transparent: self.is_transparent,
             is_double_sided: self.is_double_sided,
+            is_forward: self.is_forward,
             alpha_cutoff: self.alpha_cutoff,
             blend_mode: self.blend_mode,
         }
@@ -338,6 +348,7 @@ impl Default for MaterialDesc {
             material_type: MaterialType::Pbr,
             is_transparent: false,
             is_double_sided: false,
+            is_forward: false,
             alpha_cutoff: 0.0,
             blend_mode: BlendMode::Alpha,
         }
@@ -407,6 +418,28 @@ macro_rules! material_builders {
         if mode != BlendMode::Alpha {
             self.is_transparent = true;
         }
+        self
+    }
+
+    /// Draws this material in the forward pass instead of the G-buffer, keeping its material type.
+    ///
+    /// It stays lit, casts and receives shadows, and hides and is hidden by deferred neighbours
+    /// through the shared depth buffer. No effect on a material already drawn forward: every type
+    /// but [`MaterialType::Pbr`], anything blended, and every material on the browser and Android
+    /// path, which has no G-buffer.
+    ///
+    /// It gives up whatever reads the G-buffer or lives in the deferred lighting shader: SSAO, SSR
+    /// and SSGI do not see it, decals do not land on it, TAA and motion blur get no velocity for
+    /// it, and anisotropy, clear coat, subsurface and irradiance volumes are not read. Its shadows
+    /// are filtered with fixed PCF, not PCSS.
+    ///
+    /// Ambient light needs [`Renderer::sky`](crate::Renderer::sky) to match. The environment
+    /// presets exist only in the deferred shader, so under them a forward surface gets a fixed
+    /// hemisphere instead. Measured on one red cube with no sun, out of 255: red 182 forward, 104
+    /// deferred. With a sky set, every channel is within 17, with or without a sun.
+    #[must_use]
+    pub fn with_forward(mut self, forward: bool) -> Self {
+        self.is_forward = forward;
         self
     }
 

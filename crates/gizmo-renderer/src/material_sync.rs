@@ -210,6 +210,7 @@ mod tests {
             material_type: MaterialType::BakedLit,
             is_transparent: true,
             is_double_sided: true,
+            is_forward: true,
             alpha_cutoff: 0.0,
             blend_mode: crate::components::BlendMode::Additive,
         };
@@ -236,6 +237,7 @@ mod tests {
             material_type: MaterialType::Pbr,
             is_transparent: false,
             is_double_sided: false,
+            is_forward: false,
             alpha_cutoff: 0.0,
             blend_mode: Default::default(),
         };

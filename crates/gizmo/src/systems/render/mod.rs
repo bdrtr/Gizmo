@@ -6654,6 +6654,225 @@ mod golden_render_tests {
         });
     }
 
+    /// A wall, a cube and a side cube facing a camera on the z axis, 20 px a metre at the cubes, all
+    /// lit PBR. The wall is blue, the cube in the middle of the frame is red and still, and the side
+    /// cube ends up around pixel 18 with nothing behind it. The cubes go forward when `forward` says
+    /// so; on the second frame the wall and the side cube move by `moves`. Returns that frame.
+    async fn forward_cube_frame(
+        renderer: &mut Renderer,
+        forward: bool,
+        cube_z: f32,
+        sun: f32,
+        moves: f32,
+    ) -> Vec<u8> {
+        renderer.taa = None;
+        renderer.ssgi = None;
+        let mut world = World::new();
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let wall = world.spawn();
+        world.add_component(wall, Transform::new(Vec3::new(0.0, 0.0, -2.0)).with_scale(Vec3::new(2.5, 30.0, 0.1)));
+        world.add_component(wall, GlobalTransform::default());
+        world.add_component(wall, AssetManager::create_cube(&renderer.device));
+        world.add_component(wall, Material::new(tex.clone()).with_pbr(Vec4::new(0.05, 0.1, 0.9, 1.0), 0.6, 0.0));
+        world.add_component(wall, MeshRenderer::new());
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, cube_z)));
+        world.add_component(cube, GlobalTransform::default());
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(cube, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.1, 0.05, 1.0), 0.6, 0.0).with_forward(forward));
+        world.add_component(cube, MeshRenderer::new());
+        let side = world.spawn();
+        world.add_component(side, Transform::new(Vec3::new(-2.6, 0.0, 0.0)).with_scale(Vec3::splat(0.3)));
+        world.add_component(side, GlobalTransform::default());
+        world.add_component(side, AssetManager::create_cube(&renderer.device));
+        world.add_component(side, Material::new(tex).with_pbr(Vec4::new(0.9, 0.1, 0.05, 1.0), 0.6, 0.0).with_forward(forward));
+        world.add_component(side, MeshRenderer::new());
+        world.spawn_bundle(DirectionalLightBundle { intensity: sun, ..Default::default() });
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 6.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            primary: true,
+            ..Default::default()
+        });
+        render_world(renderer, &mut world).await;
+        for moved in [wall, side] {
+            if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(moved.id()) {
+                t.position.x += moves;
+            }
+        }
+        render_world(renderer, &mut world).await
+    }
+
+    /// A channel's mean over the frame's middle 12×12, whatever order the format stores them in.
+    fn centre_mean(frame: &[u8], format: wgpu::TextureFormat, channel: usize) -> f32 {
+        let swap = matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+        let channel = if swap && channel != 1 { 2 - channel } else { channel };
+        let mut sum = 0.0;
+        for y in 58..70 {
+            for x in 58..70 {
+                sum += frame[(y * 128 + x) * 4 + channel] as f32;
+            }
+        }
+        sum / 144.0
+    }
+
+    /// **`with_forward` moves a lit material out of the G-buffer and changes nothing else about it.**
+    /// The velocity target is what tells, because the G-buffer writes it and the forward pass does
+    /// not. A moving cube with nothing behind it writes no velocity when forward, which is the
+    /// G-buffer. A still cube leaves the velocity of the moving wall behind it, which is the
+    /// z-prepass: had it been there, the wall would have lost those pixels to depth.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_forward_material_is_lit_and_stays_out_of_the_gbuffer() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        fn half(bits: u16) -> f32 {
+            let sign = if bits >> 15 == 1 { -1.0 } else { 1.0 };
+            let exp = ((bits >> 10) & 0x1f) as i32;
+            let frac = (bits & 0x3ff) as f32;
+            sign * match exp {
+                0 => frac * 2f32.powi(-24),
+                31 => f32::INFINITY,
+                _ => (1.0 + frac / 1024.0) * 2f32.powi(exp - 15),
+            }
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let format = renderer.config.format;
+            let mut velocities = async |forward: bool| {
+                let frame = forward_cube_frame(&mut renderer, forward, 0.0, 3.0, 0.3).await;
+                let tex = &renderer.deferred.as_ref().expect("the deferred path").velocity_tex;
+                let bytes = read_target(&renderer, tex, 128).await;
+                let at = |x: usize| {
+                    let i = (64 * 128 + x) * 4;
+                    half(u16::from_le_bytes([bytes[i], bytes[i + 1]]))
+                };
+                (at(64), at(18), frame)
+            };
+            let (deferred_centre, deferred_side, deferred) = velocities(false).await;
+            let (forward_centre, forward_side, forward) = velocities(true).await;
+            assert_eq!(deferred_centre, 0.0, "a deferred cube that did not move writes zero");
+            assert!(deferred_side > 0.01, "a deferred cube that moved writes its velocity: {deferred_side}");
+            assert_eq!(forward_side, 0.0, "a moving forward cube reached the G-buffer");
+            assert!(
+                forward_centre > 0.01,
+                "a forward cube reached the z-prepass: the wall's motion reads {forward_centre} under it",
+            );
+
+            for (name, frame) in [("deferred", &deferred), ("forward", &forward)] {
+                let (r, b) = (centre_mean(frame, format, 0), centre_mean(frame, format, 2));
+                assert!(r > b + 40.0, "the {name} red cube should stand in front of the blue wall: r {r}, b {b}");
+            }
+
+            // Lit, not unlit: the sun moves it.
+            let dark = forward_cube_frame(&mut renderer, true, 0.0, 0.0, 0.0).await;
+            let (lit, unlit) = (centre_mean(&forward, format, 0), centre_mean(&dark, format, 0));
+            assert!(lit > unlit + 20.0, "the sun should light a forward cube: {lit} with, {unlit} without");
+
+            // Under `Renderer::sky` both paths take their ambient from the same gradient, which they
+            // do not under the default presets (those live in the deferred shader alone).
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::gradient([0.5, 0.6, 0.8], [0.4, 0.4, 0.4], [0.1, 0.1, 0.1]));
+            for sun in [0.0, 3.0] {
+                let f = forward_cube_frame(&mut renderer, true, 0.0, sun, 0.0).await;
+                let d = forward_cube_frame(&mut renderer, false, 0.0, sun, 0.0).await;
+                // Measured: at most 16.1 apart. What is left is the deferred shader's specular.
+                for channel in 0..3 {
+                    let (f, d) = (centre_mean(&f, format, channel), centre_mean(&d, format, channel));
+                    assert!((f - d).abs() < 20.0, "sun {sun}, channel {channel}: forward {f}, deferred {d}");
+                }
+            }
+        });
+    }
+
+    /// **A forward cube and a deferred wall share one depth buffer.** Behind the wall the cube does
+    /// not show at all, though the forward pass runs after the wall was shaded.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_deferred_wall_hides_a_forward_material_behind_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let format = renderer.config.format;
+            let frame = forward_cube_frame(&mut renderer, true, -6.0, 3.0, 0.0).await;
+            let (r, b) = (centre_mean(&frame, format, 0), centre_mean(&frame, format, 2));
+            assert!(b > r + 40.0, "the wall stands in front of the cube and should cover it: r {r}, b {b}");
+        });
+    }
+
+    /// **A forward material casts and receives like a deferred one.** The shadow pixels are the ones
+    /// `ShadowCasting::On` darkens against `Off`, in all four pairings of the floor's path and the
+    /// caster's. `unlit` drops a material from the shadow passes, which is why `forward_lit` is a flag
+    /// of its own.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_forward_material_casts_and_receives_shadows() {
+        use crate::renderer::components::ShadowCasting;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(floor_forward: bool, cube_forward: bool, shadows: ShadowCasting) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0).with_forward(floor_forward));
+            world.add_component(floor, MeshRenderer::new());
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 1.0, 0.0)).with_scale(Vec3::splat(0.6)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.9, 0.0).with_forward(cube_forward));
+            world.add_component(cube, MeshRenderer::new().with_shadows(shadows));
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle {
+                rotation: gizmo_math::Quat::from_rotation_z(-0.3) * gizmo_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                intensity: 3.0,
+                ..Default::default()
+            });
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 6.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.8,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        pollster::block_on(async {
+            for (floor_forward, cube_forward) in [(false, false), (true, false), (false, true), (true, true)] {
+                let on = frame(floor_forward, cube_forward, ShadowCasting::On).await;
+                let off = frame(floor_forward, cube_forward, ShadowCasting::Off).await;
+                let shadow = (0..128 * 128).filter(|&i| luma(&on, i) + 20 < luma(&off, i)).count();
+                assert!(shadow > 80, "floor forward {floor_forward}, cube forward {cube_forward}: {shadow} shadow pixels");
+            }
+        });
+    }
+
     /// A mirror 10 ahead of a camera at the origin looking down -z, and around them a red cube behind
     /// the camera to the left, a blue one behind the mirror, a green one between. All unlit, so a
     /// colour counted means that object and no other.

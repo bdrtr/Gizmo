@@ -180,10 +180,23 @@ field that read true and did nothing. An id with nothing behind it draws **nothi
 falling back to PBR; restoring the fallback leaks 5770/16384 pixels, which is what the guard test
 measures.
 
-Still open: choosing the forward path for a *built-in* material. Measured in
-`deferred_rendering` — doing so means changing the material type, which also changes the shading,
-so two axes that ought to be separate are one axis. **A PBR material cannot be drawn forward at
-all**, and a custom material cannot be drawn deferred.
+**Choosing the forward path for a built-in material: closed 2026-11-06.** Measured in
+`deferred_rendering`, doing so used to mean changing the material type, which also changed the
+shading: two axes that ought to be separate were one. `Material::with_forward` is the second axis.
+The type stays `Pbr`, the object leaves the z-prepass and the G-buffer, stays lit, casts and receives
+(more than 80 shadow pixels asserted in all four pairings of floor and caster paths), and shares
+depth with deferred neighbours. It only matters on the desktop path: the browser and Android draw
+everything forward already, and so does the editor viewport, which is why the field is game-only in
+`render_parity`.
+
+The shading is close, not equal. Forward has no SSAO, SSR, SSGI, decals or velocity, and does not
+read anisotropy, clear coat, subsurface or irradiance volumes. Its ambient only matches under
+`Renderer::sky`, since the environment presets live in the deferred shader alone: a red cube with no
+sun reads red 182 forward and 104 deferred under the default preset, and with a sky set every channel
+is within 17 of 255, sun or no sun. Bringing the presets to `shader.wgsl` would change the look of
+every transparent surface and of every browser and Android game, so it was left as its own decision.
+
+Still open: a custom material cannot be drawn deferred.
 
 ### A4. Extrusion / 2D-shape-to-mesh machinery — **landed 2026-08-24**
 

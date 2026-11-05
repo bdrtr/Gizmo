@@ -587,6 +587,12 @@ fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
     const EXCEPTIONS: &[(&str, Path, &str)] = &[
         (
+            "is_forward",
+            Path::GameOnly,
+            "Chooses forward over the G-buffer, and this viewport has no G-buffer pass: it draws \
+             every opaque object forward through `shader.wgsl`, so there is nothing to opt out of.",
+        ),
+        (
             "PlanarReflection",
             Path::GameOnly,
             "a mirror is one more full draw of the scene through the game path's own view code \

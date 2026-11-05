@@ -179,6 +179,10 @@ pub struct DrawItem {
     /// The material asked for both faces (`Material::with_double_sided`). Selects the cull-off
     /// variant of whichever pipeline this item lands in; see `passes::geometry`.
     pub(super) is_double_sided: bool,
+    /// Lit, opaque, and drawn by the forward pass (`Material::with_forward`). **Not** `unlit`,
+    /// which would also take it out of the shadow passes and pick the unlit pipeline: this object
+    /// casts like any other and is shaded by `shader.wgsl`.
+    pub(super) forward_lit: bool,
     /// Per-object shadow casting (`MeshRenderer::shadows`). Two objects sharing a mesh and a
     /// material can answer differently, so it belongs in the key.
     ///
@@ -303,6 +307,9 @@ pub(crate) struct BatchKey {
     /// would inherit whichever entity the ECS iteration reached first, and a double-sided cloth
     /// would lose its back faces (or a solid wall gain interior ones) depending on the frame.
     is_double_sided: bool,
+    /// Which pass draws it: two materials differing only in this share a texture bind group and a
+    /// mesh, and one batch would put both in the same pass.
+    forward_lit: bool,
     /// Per-object shadow casting (`MeshRenderer::shadows`) — in the key for exactly the reason
     /// above: two objects sharing a mesh and a material can answer differently.
     casts_shadows: bool,
@@ -334,6 +341,7 @@ pub(crate) struct BatchData {
     is_skybox: bool,
     is_backdrop: bool,
     is_double_sided: bool,
+    forward_lit: bool,
     casts_shadows: bool,
     visible_in_camera: bool,
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
@@ -695,6 +703,9 @@ pub(super) fn collect_draw_items(
                 // double-sided showed both faces in the viewport and lost its back faces in the
                 // game.
                 let is_double_sided = $mat.is_double_sided;
+                // Only says something about a material that would otherwise reach the G-buffer:
+                // everything `skips_deferred` and everything blended is forward already.
+                let forward_lit = $mat.is_forward && !routing.skips_deferred && !is_transparent;
                 // Honoured by BOTH paths from the start, unlike `is_double_sided` above — a flag
                 // the editor obeys and the game ignores makes the viewport lie about the build.
                 let shadows = renderers.get($e).map(|r| r.shadows).unwrap_or_default();
@@ -712,6 +723,7 @@ pub(super) fn collect_draw_items(
                     is_skybox,
                     is_backdrop,
                     is_double_sided,
+                    forward_lit,
                     casts_shadows,
                     visible_in_camera,
                     custom: routing.custom,
@@ -732,6 +744,7 @@ pub(super) fn collect_draw_items(
                     is_skybox,
                     is_backdrop,
                     is_double_sided,
+                    forward_lit,
                     casts_shadows,
                     visible_in_camera,
                     custom: routing.custom,
@@ -914,6 +927,7 @@ pub(super) fn collect_draw_items(
                 mirror: batch.mirror,
                 is_grid: batch.is_grid,
                 is_double_sided: batch.is_double_sided,
+                forward_lit: batch.forward_lit,
                 casts_shadows: batch.casts_shadows,
                 visible_in_camera: batch.visible_in_camera,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
@@ -1021,6 +1035,7 @@ mod batch_key_tests {
             is_skybox: false,
             is_backdrop: false,
             is_double_sided: false,
+            forward_lit: false,
             casts_shadows: true,
             visible_in_camera: true,
             custom: None,
@@ -1048,6 +1063,7 @@ mod batch_key_tests {
             is_skybox: false,
             is_backdrop: false,
             is_double_sided: false,
+            forward_lit: false,
             casts_shadows: true,
             visible_in_camera: true,
             custom: None,
@@ -1085,6 +1101,11 @@ mod batch_key_tests {
         assert_ne!(base, two_sided, "one-sided and double-sided must be separate batches");
 
         assert_ne!(base, transparent, "opaque and transparent must be separate batches");
+        assert_ne!(
+            base,
+            BatchKey { forward_lit: true, ..base.clone() },
+            "the G-buffer and the forward pass cannot draw one batch",
+        );
         assert_ne!(base, unlit, "PBR and unlit must be separate batches");
         assert_ne!(base, skybox, "PBR and skybox must be separate batches");
         assert_ne!(unlit, backdrop, "unlit and backdrop must be separate batches");

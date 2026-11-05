@@ -169,6 +169,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Material::with_forward`: a PBR material can choose the forward pass.** How a surface is shaded and
+  which path draws it were one setting, so drawing PBR forward was impossible. The material type no
+  longer changes: the object skips the z-prepass and the G-buffer, stays lit, casts and receives
+  shadows, and shares depth with deferred neighbours. It gives up SSAO, SSR, SSGI, decals, velocity,
+  anisotropy, clear coat, subsurface and irradiance volumes. Set `Renderer::sky` to match the ambient:
+  under the default presets a red cube with no sun reads 182 forward and 104 deferred, with a sky set
+  every channel is within 17 of 255. `MaterialDesc` carries it, older scenes read as deferred, and the
+  inspector has a checkbox. Desktop only in effect: the browser, Android and the editor viewport draw
+  everything forward already.
+
 - **Planar reflections (`PlanarReflection`).** A flat unlit mesh with this component reflects the scene,
   including what the camera cannot see: the scene is drawn again from the camera reflected in its
   plane, clipped at the mirror by an oblique near plane. `reflectance` runs from a mirror to water's
