@@ -55,6 +55,11 @@ pub struct UiNavigation {
     /// Whether the keys above navigate. See the type's docs for why it is off by default.
     pub enabled: bool,
     focused: Option<u32>,
+    /// The handle of the element `focused` was seen to be, generation included: an id outlives its
+    /// entity (the ECS hands it to a later spawn), and a menu rebuilt without calling
+    /// [`focus`](Self::focus) again must lose the focus, not pass it to whichever new widget took
+    /// the id. `None` until the system has seen it, so a game can focus a button it just spawned.
+    focused_handle: Option<gizmo_core::entity::Entity>,
     /// The keys moved the focus this frame — so a slider the right arrow just reached does not
     /// also take that press as a step.
     moved_by_keys: bool,
@@ -76,6 +81,7 @@ impl UiNavigation {
     /// Moves the focus to `entity` (`None` clears it) — a menu opening on its first button.
     pub fn focus(&mut self, entity: Option<u32>) {
         self.focused = entity;
+        self.focused_handle = None;
     }
 
     /// Whether this frame's keys moved the focus (rather than acting on what it was on).
@@ -255,7 +261,14 @@ fn navigate(
     order.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)).then(a.0.cmp(&b.0)));
     if order.is_empty() {
         nav.focused = None;
+        nav.focused_handle = None;
         return (None, false);
+    }
+    // The id's entity is not the one that was focused: it died, and a later spawn took the id.
+    if let (Some(f), Some(seen)) = (nav.focused, nav.focused_handle) {
+        if interactions.entity(f) != Some(seen) {
+            nav.focused = None;
+        }
     }
     if nav.focused.is_some_and(|f| !order.iter().any(|o| o.0 == f)) {
         nav.focused = None;
@@ -318,6 +331,7 @@ fn navigate(
         && (input.is_key_just_pressed(key("enter"))
             || input.is_key_just_pressed(key("space"))
             || pad_just(GamepadButton::South));
+    nav.focused_handle = nav.focused.and_then(|f| interactions.entity(f));
     (nav.focused, activate)
 }
 
@@ -717,6 +731,52 @@ mod tests {
 
     fn focused(world: &gizmo_core::World) -> Option<u32> {
         world.get_resource::<UiNavigation>().unwrap().focused()
+    }
+
+    /// Spawns a button until one lands on `id` — the free list is first in, first out, so a dead
+    /// id comes back only after the older free ones.
+    fn button_on_id(world: &mut gizmo_core::World, id: u32) -> gizmo_core::entity::Entity {
+        for _ in 0..64 {
+            let b = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 40.0)), ..Default::default() });
+            if b.id() == id {
+                return b;
+            }
+        }
+        panic!("id {id} never came back");
+    }
+
+    /// A menu rebuilt without calling `focus` again: the id the focus was on goes to a new widget,
+    /// which must not come up highlighted and answer to Enter.
+    #[test]
+    fn the_focus_does_not_pass_to_a_new_widget_on_a_dead_ones_id() {
+        let (mut world, [top, _, _]) = menu();
+        world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(top));
+        press(&mut world, None);
+        assert_eq!(focused(&world), Some(top));
+        let old = world.get_entity(top).unwrap();
+        world.despawn(old);
+        let new = button_on_id(&mut world, top);
+        assert_ne!(new, old, "the same id, another generation");
+        press(&mut world, Some("enter"));
+        assert_eq!(focused(&world), None, "the focus followed the id onto a new widget");
+        assert!(!clicked(&world, top), "Enter pressed a widget nobody focused");
+        assert_eq!(world.borrow::<Interaction>().get(top).copied(), Some(Interaction::None));
+    }
+
+    /// A game focusing a widget on a recycled id, the one it just spawned, means it: that keeps
+    /// the focus, on the first frame and after.
+    #[test]
+    fn a_widget_focused_on_a_recycled_id_keeps_the_focus() {
+        let (mut world, [top, _, _]) = menu();
+        world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(top));
+        press(&mut world, None);
+        let old = world.get_entity(top).unwrap();
+        world.despawn(old);
+        button_on_id(&mut world, top);
+        world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(top));
+        press(&mut world, None);
+        press(&mut world, None);
+        assert_eq!(focused(&world), Some(top));
     }
 
     /// Down walks the buttons in reading order — top to bottom, whatever order they were spawned
