@@ -688,7 +688,9 @@ Measured in `ecs_extension_points`. Four traits are sealed and cannot be impleme
 | `ReadOnlyQuery` | — |
 | `FetchComponent` | No custom fetch |
 
-And two APIs are simply absent: **`pipe`** and **`run_system`** (one-shot systems). The seal is a
+~~`run_system`~~ **closed 2026-11-05:** `World::run_system(system)` runs a system once, now, inside
+the frame's change window, its `Commands` applied before it returns. **`pipe`** is still absent;
+one function calling another does its job when the first needs no parameters of its own. The seal is a
 deliberate design choice — the scheduler has to know statically what a parameter touches or
 parallel execution is unsound — but the consequence is real: several common patterns cannot be
 expressed, only approximated.
@@ -1342,13 +1344,13 @@ scenes or when it has run dry.
 - ~~**Object motion (TAA, motion blur).**~~ **Closed.** `MotionHistory` handed a new entity the
   previous matrix of the dead one on its id — a frame of motion from there to here. Its slot
   records the generation.
-- **Open — UI focus.** `UiNavigation` keeps the focus as a raw id; a menu rebuilt without calling
-  `focus` again leaves it on whichever new widget took the old id (highlighted, and Enter would
-  press it). Its system has no world to read generations from, and the obvious `Added<Interaction>`
-  test would also clear the focus a game sets on a button it has just spawned; the fix is an
-  `Entity`-based focus API, a public change.
-- **Open, low — `FighterController::already_hit`.** A victim on a recycled id is immune for the
-  rest of the attacker's current move; the list is cleared every move.
+- ~~**UI focus.**~~ **Closed 2026-11-05, with no change to its API.** A menu rebuilt without calling
+  `focus` again left the focus on whichever new widget took the old id (highlighted, and Enter
+  pressed it). This was priced as needing an `Entity`-based API because the system has no world to
+  read generations from; `Query::entity`, added since, is exactly that read. `UiNavigation` keeps the
+  handle it saw, and a game focusing a widget it just spawned is still believed.
+- ~~**`FighterController::already_hit`.**~~ **Closed 2026-11-05.** A victim on a recycled id was immune
+  for the rest of the attacker's move; the list holds handles now (a public field's type changed).
 - Checked and safe: hierarchy (unlinked both ways on despawn), character-controller triggers
   (rewritten every step), kinematic targets and soft/cloth/rope coupling (rebuilt every frame),
   drag/drop and text-input focus, rollback restore (generation-checked), editor selection

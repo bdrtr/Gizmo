@@ -476,7 +476,7 @@ pub fn hit_detection_system(world: &World, dt: f32) {
     // ── 1. Every fighter, and which of them are swinging this frame ──────────────────────────
     let mut is_fighter: HashMap<u32, ()> = HashMap::new();
     let mut attacks: HashMap<u32, Attack> = HashMap::new();
-    let mut already_hit: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut already_hit: HashMap<u32, Vec<gizmo_core::entity::Entity>> = HashMap::new();
     {
         let controllers = world.borrow::<FighterController>();
         for (id, fighter) in controllers.iter() {
@@ -593,10 +593,10 @@ pub fn hit_detection_system(world: &World, dt: f32) {
                     continue; // your own hurtboxes are not targets
                 }
                 let victim = victim_owner.unwrap_or(victim_entity);
-                if already_hit
-                    .get(&attacker_box.owner)
-                    .is_some_and(|hit| hit.contains(&victim))
-                {
+                let victim_handle = world.entity(victim);
+                if victim_handle.is_some_and(|handle| {
+                    already_hit.get(&attacker_box.owner).is_some_and(|hit| hit.contains(&handle))
+                }) {
                     continue; // this move already connected with them
                 }
                 if !hit_volumes_overlap(
@@ -614,7 +614,7 @@ pub fn hit_detection_system(world: &World, dt: f32) {
                 already_hit
                     .entry(attacker_box.owner)
                     .or_default()
-                    .push(victim);
+                    .extend(victim_handle);
                 hits.push(HitEvent {
                     attacker: attacker_box.owner,
                     attacker_hitbox: attacker_box.entity,
@@ -641,8 +641,10 @@ pub fn hit_detection_system(world: &World, dt: f32) {
         let mut controllers = unsafe { world.borrow_mut_unchecked::<FighterController>() };
         for hit in &hits {
             if let Some(mut fighter) = controllers.get_mut(hit.attacker) {
-                if !fighter.already_hit.contains(&hit.victim) {
-                    fighter.already_hit.push(hit.victim);
+                if let Some(victim) = world.entity(hit.victim) {
+                    if !fighter.already_hit.contains(&victim) {
+                        fighter.already_hit.push(victim);
+                    }
                 }
             }
         }
@@ -1566,5 +1568,39 @@ mod tests {
             }
         }
         assert_eq!(total, 3, "three jabs, three hits");
+    }
+
+    /// A move connects once with a *victim*, not with an id: an entity born mid-swing on a dead
+    /// victim's id is somebody else, and it gets hit.
+    #[test]
+    fn a_new_victim_on_a_dead_ones_id_is_not_immune() {
+        let (mut world, attacker, _fist, defender) = versus();
+        let mut long = jab();
+        long.frame_data.active = 20;
+        long.frame_data.hitstop = 0;
+        start(&mut world, attacker, long);
+        let mut first = 0;
+        for _ in 0..8 {
+            first += fight_frame(&mut world).len();
+            if first > 0 {
+                break;
+            }
+        }
+        assert_eq!(first, 1, "the setup: the swing connected");
+
+        let dead = world.get_entity(defender).expect("the victim");
+        world.despawn(dead);
+        let reborn = (0..64)
+            .map(|_| world.spawn())
+            .find(|e| e.id() == defender)
+            .expect("the id came back");
+        world.add_component(reborn, Transform::new(Vec3::new(0.0, 0.0, -1.0)));
+        world.add_component(reborn, FighterController::new(3));
+        world.add_component(reborn, Hurtbox::new(Vec3::new(0.3, 0.5, 0.3)));
+
+        let hits = fight_frame(&mut world);
+        assert_eq!(hits.len(), 1, "the newcomer was immune because of who had its id before");
+        assert_eq!(hits[0].victim, defender);
+        assert!(fight_frame(&mut world).is_empty(), "and it too is hit only once");
     }
 }

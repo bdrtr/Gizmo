@@ -817,7 +817,7 @@ impl World {
     /// Runs one system now, once — from an `on_enter` hook, an exclusive system, a test, anywhere a
     /// `&mut World` is at hand. Its parameters are fetched as in a schedule, its `Commands` are
     /// applied before this returns, and a `Result` it returns goes to the
-    /// [`SystemErrorHandler`](super::SystemErrorHandler).
+    /// [`SystemErrorHandler`].
     ///
     /// It runs **inside the frame it was called in**: `Changed<T>` and `Added<T>` mean the same as
     /// for the frame's other systems, and the systems after it see the same window. Building a
@@ -826,7 +826,7 @@ impl World {
     /// sees the whole world as changed.
     ///
     /// Its `f32` parameter is [`Time::dt`](crate::time::Time::dt), or 0 without a `Time`. A
-    /// [`Local`](super::Local) starts fresh every call, since nothing outlives the call; state that
+    /// [`Local`] starts fresh every call, since nothing outlives the call; state that
     /// must last goes in a resource.
     ///
     /// ```

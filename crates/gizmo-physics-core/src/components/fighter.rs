@@ -212,9 +212,12 @@ pub struct FighterController {
     /// [`FighterController::start_move`] and by [`FighterController::tick`] when the move ends,
     /// so the record never outlives the move that filled it.
     ///
+    /// Handles, generation included: an id outlives its entity, and a new victim on a dead one's id
+    /// is somebody else, not somebody already hit.
+    ///
     /// `#[serde(skip)]`, like the other in-flight state: a loaded fighter has hit nobody yet.
     #[serde(skip)]
-    pub already_hit: Vec<u32>,
+    pub already_hit: Vec<gizmo_core::entity::Entity>,
     /// Frames of stun still pending; `0` when the fighter is free to act.
     ///
     /// Differs from `hitstop_frames` in what entering it costs, not in how it is spent:

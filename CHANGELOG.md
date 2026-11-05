@@ -50,6 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The UI focus passed to a new widget on a dead one's id.** A menu rebuilt without calling `focus`
+  again left the focus on whichever new widget took the id: highlighted, and Enter pressed it.
+  `UiNavigation` now remembers the handle it saw and drops the focus when the id's entity is another
+  one; a game focusing a widget it just spawned keeps it.
+- **A fighter's new victim on a dead one's id was immune.** `FighterController::already_hit` is
+  `Vec<Entity>` now, not `Vec<u32>`: a new entity on an id the move had already hit gets hit.
+
 - **Every game in the browser was too dark.** The reduced path's composite left sRGB encoding to the
   surface, and a browser canvas has no sRGB format: on the web the surface is `bgra8unorm`, so the
   linear colour reached the screen as it was. `pinbol`'s table (`#1B4F72`) measured (1, 22, 63) in
@@ -157,6 +164,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   bone authored off its joint. `tests/ragdoll_spawn.rs`.
 
 ### Added
+
+- **`World::run_system`: a system, once, now.** From an `on_enter` hook, an exclusive system or a
+  test. It runs inside the frame's change window, its `Commands` are applied before it returns, and
+  a `Result` goes to the error handler. (A `Schedule` built for it and `run` reopens the window from
+  tick 0, and every later system of that frame sees the whole world as changed.)
 
 - **Logical pixels: a HUD is the same size on every screen (`DisplayScale`).** The engine works in
   the frame's pixels, and those are different sizes: a 22 px HUD line was 13 logical pixels on a
