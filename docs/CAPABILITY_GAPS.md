@@ -26,7 +26,7 @@ capabilities in section A.
 **Section A as of 2026-11-02:** sprites (A1), text (A2), extrusion (A4), reflection probes (A5),
 split screen (A5b), area lights / cookies / soft and contact shadows (A7) and motion blur (A7c) are
 closed, occlusion culling (A7b) since 2026-11-05. Open: user shaders stay forward-only (A3), MSAA is
-declined by decision (A6), planar reflections (A7d), and the ECS items of A8. The
+declined by decision (A6), and the ECS items of A8. Planar reflections (A7d) closed 2026-11-06. The
 2026-08-22 counts above are that day's inventory and were not re-run.
 
 ---
@@ -644,9 +644,31 @@ the baseline in the first and 0.001 ms *below* it in the second, so it sits insi
 post-process — closing the loop without the CPU ever seeing it — is the remaining work, and needs
 `post_process.wgsl` to read exposure from that buffer.
 
-### A7d. No planar reflections, and SSR's limit priced
+### A7d. Planar reflections — **landed 2026-11-06**
 
-No reflection-plane concept, no oblique frustum, no stencil buffer, and a render target cannot be
+**`PlanarReflection`** on a flat unlit mesh: each frame the scene is drawn again from the camera
+reflected in its plane, with an oblique near plane on the mirror so what stands behind it is clipped
+in every pipeline, and copied into the mirror's own texture. The mirror's pipeline looks that up by
+screen position with a Schlick rise (`reflectance` 1 is a mirror, 0.02 is water or glass). The capture
+is HDR from before the post chain, so it is exposed and tone-mapped once, with the frame.
+
+Tested: the cube behind the camera shows in the mirror on its own side of the picture and what is
+behind the mirror does not (red when the oblique plane or the left-right flip is removed); pure maths
+that the flipped capture lands exactly on the mirror image and that the near plane lies on the mirror;
+a mirror out of view or seen from behind captures nothing; a second mirror is not in the first one's
+picture. Looked at too: positions match the arithmetic by hand.
+
+**What it costs:** one more full draw of the scene per mirror in view, shadows included. On a nearly
+empty scene at 1280 × 720, 5.4 → 7.7 ms; it scales with the scene. `Renderer::planar.captures` says how
+many ran.
+
+**What it does not do:** no blur (every mirror is perfectly sharp, roughness is ignored); mirrors do
+not appear in each other or in a reflection probe, so no mirror-in-a-mirror; no ripple or normal map,
+so it is not yet the water shader's reflection; it draws plain in split screen and in the studio
+(`render_parity` records why). The reduced path has it and its shader is validated under the web
+schema, but **it has not been run in a browser or on a phone.**
+
+Before this entry, and what the demo `mirror` still records: no reflection-plane concept, no oblique frustum, no stencil buffer, and a render target cannot be
 bound back onto a material (same `pub(crate)` wall as C1). What remains is SSR, and
 `mirror` puts a number on what it cannot do: a red column facing a smooth metallic floor
 contributes +7.91 of red−blue to it while on screen and **exactly nothing** once it moves behind

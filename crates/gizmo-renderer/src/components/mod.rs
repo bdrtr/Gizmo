@@ -21,6 +21,8 @@ pub mod color_tween;
 pub mod camera_shake;
 /// Marks a big opaque thing as hiding what is behind it — [`Occluder`].
 pub mod occluder;
+/// A flat surface that reflects the scene — [`PlanarReflection`].
+pub mod planar_reflection;
 /// Geometry made in code, as data the draw path uploads — [`MeshData`].
 pub mod mesh_data;
 /// Everything else an entity can carry: terrain, LOD groups, particle emitters, render targets,
@@ -47,6 +49,7 @@ pub use mesh_data::MeshData;
 pub use color_tween::{color_tween_system, ColorTween};
 pub use camera_shake::CameraShake;
 pub use occluder::Occluder;
+pub use planar_reflection::PlanarReflection;
 pub use misc::*;
 pub use post_process::*;
 pub use reflection_probe::*;

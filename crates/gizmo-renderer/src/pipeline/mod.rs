@@ -53,6 +53,8 @@ pub struct SceneState {
     /// [`double_sided`](crate::components::Material::with_double_sided) — looking up at the
     /// underside of the ocean is the ordinary case, not the exotic one.
     pub water_double_sided_pipeline: wgpu::RenderPipeline,
+    /// What a [`PlanarReflection`](crate::components::PlanarReflection) draws with once captured.
+    pub mirror_pipeline: wgpu::RenderPipeline,
     /// Depth-only, for rendering into the shadow cascades.
     pub shadow_pipeline: wgpu::RenderPipeline,
     /// Line-topology, for wireframe views.
@@ -694,6 +696,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         backdrop_pipeline: core_pipelines.backdrop,
         water_pipeline: core_pipelines.water,
         water_double_sided_pipeline: core_pipelines.water_double_sided,
+        mirror_pipeline: core_pipelines.mirror,
         transparent_pipeline: core_pipelines.transparent,
         grid_pipeline: core_pipelines.grid,
         blend_lit_pipelines: core_pipelines.blend_lit,
@@ -768,6 +771,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.backdrop_pipeline = core_pipelines.backdrop;
     renderer.scene.water_pipeline = core_pipelines.water;
     renderer.scene.water_double_sided_pipeline = core_pipelines.water_double_sided;
+    renderer.scene.mirror_pipeline = core_pipelines.mirror;
     renderer.scene.transparent_pipeline = core_pipelines.transparent;
     renderer.scene.grid_pipeline = core_pipelines.grid;
     renderer.scene.blend_lit_pipelines = core_pipelines.blend_lit;
@@ -882,6 +886,7 @@ mod tests {
                 ("baked_lit.wgsl", include_str!("../shaders/baked_lit.wgsl")),
                 ("grid.wgsl", include_str!("../shaders/grid.wgsl")),
                 ("water.wgsl", include_str!("../shaders/water.wgsl")),
+                ("planar_mirror.wgsl", include_str!("../shaders/planar_mirror.wgsl")),
                 ("shadow.wgsl", include_str!("../shaders/shadow.wgsl")),
                 ("point_shadow.wgsl", include_str!("../shaders/point_shadow.wgsl")),
                 ("decal.wgsl", include_str!("../shaders/decal.wgsl")),

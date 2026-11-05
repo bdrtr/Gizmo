@@ -296,6 +296,10 @@ pub struct Renderer {
     /// How many objects the last view's occluders hid from the camera
     /// ([`Occluder`](crate::components::Occluder)); they drew nothing, or shadows only.
     pub occluded_objects: u32,
+    /// Every [`PlanarReflection`](crate::components::PlanarReflection)'s capture.
+    pub planar: crate::planar::PlanarReflections,
+    /// This view is itself a capture: mirrors are left out of it.
+    pub skip_mirrors: bool,
     /// Linear exposure multiplier applied before tone mapping.
     pub exposure: f32,
     /// Whether depth of field runs.

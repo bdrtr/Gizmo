@@ -1,5 +1,8 @@
 //! # Düzlemsel yansıma (ayna)
 //!
+//! > **2026-11-06 notu:** motorda artık `PlanarReflection` var (`CAPABILITY_GAPS.md` §A7d). Bu demo
+//! > ondan önceki eksiğin ölçümlerini kaydediyor.
+//!
 //! Bir aynanın, bir su yüzeyinin ya da cilalı bir zeminin arkasındaki dünyayı göstermesi. Klasik
 //! yolu şu: sahneyi aynanın düzlemine göre yansıtılmış bir kameradan bir dokuya çiz, sonra o
 //! dokuyu aynanın malzemesi olarak bağla.

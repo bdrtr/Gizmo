@@ -247,6 +247,7 @@ pub fn default_render_pass(
         let camera = crate::renderer::components::active_camera(world);
         let lods =
             step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
+        capture_planar_reflections(world, renderer, camera, lods);
         draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
     }
     undo_camera_shake(world, shaken);
@@ -439,6 +440,7 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
                 up,
                 near: probe.near,
                 far: probe.far.max(probe.near + 0.1),
+                projection: None,
             };
             // The HDR target stands in for the output view: a capture stops before the post
             // chain, so nothing is ever written through it.
@@ -495,6 +497,119 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
         }
     }
     tracing::debug!(captured = pending.len(), probes = owners.len(), size, "[Render] reflection probes captured");
+}
+
+/// Draws the scene again for each [`PlanarReflection`] the camera can see from the front, into that
+/// mirror's texture, before the frame's own draw. A mirror out of view or seen from behind costs
+/// nothing and draws plain this frame. See [`crate::renderer::planar`].
+fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera: Option<u32>, lods: (f32, f32)) {
+    use crate::renderer::components::PlanarReflection;
+    use crate::renderer::planar::{oblique_projection, reflect_direction, reflect_point};
+    renderer.planar.begin_frame();
+    let mirrors: Vec<(u32, PlanarReflection)> =
+        world.borrow::<PlanarReflection>().iter().map(|(id, r)| (id, *r)).collect();
+    let owners: Vec<u32> = mirrors.iter().map(|m| m.0).collect();
+    renderer.planar.retain(&owners);
+    let Some(camera) = camera.filter(|_| !mirrors.is_empty()) else { return };
+    let Some(cam) = world.borrow::<Camera>().get(camera).copied() else { return };
+
+    let eye = camera_world_position(world, Some(camera));
+    let aspect = renderer.size.width as f32 / renderer.size.height.max(1) as f32;
+    let projection = cam.get_projection(aspect);
+    let forward = cam.get_front();
+    let up = cam.get_right().cross(forward);
+    let frustum = crate::math::Frustum::from_matrix(&(projection * cam.get_view(eye)));
+
+    // Which mirrors, decided before anything is drawn: a capture takes `world` mutably.
+    let visible: Vec<(u32, gizmo_math::Vec4)> = {
+        let transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
+        let meshes = world.borrow::<crate::renderer::components::Mesh>();
+        let renderers = world.borrow::<MeshRenderer>();
+        let hidden = collect_hidden(
+            &world.borrow::<crate::core::component::IsHidden>(),
+            &world.borrow::<crate::core::component::Children>(),
+        );
+        mirrors
+            .iter()
+            .filter_map(|(id, reflection)| {
+                renderers.get(*id)?;
+                if hidden.contains(id) {
+                    return None;
+                }
+                let model = transforms.get(*id)?.matrix;
+                let plane = reflection.world_plane(&model)?;
+                let in_view = meshes.get(*id).is_none_or(|mesh| {
+                    let placed = model * Mat4::from_translation(mesh.center_offset);
+                    frustum.intersects_aabb(mesh.bounds.transform(&placed))
+                });
+                (in_view && plane.truncate().dot(eye) + plane.w > 0.0).then_some((*id, plane))
+            })
+            .collect()
+    };
+    if visible.is_empty() {
+        return;
+    }
+
+    let size = (renderer.size.width, renderer.size.height);
+    let taa = renderer.taa.take();
+    let ssgi = renderer.ssgi.take();
+    let history = renderer.previous_view_proj.take();
+    for (owner, plane) in visible {
+        if !renderer.planar.prepare(owner, size) {
+            let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("planar_reflection"),
+                size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: renderer.post.hdr_texture.format(),
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let sampler = renderer.device.create_sampler(&wgpu::SamplerDescriptor {
+                label: Some("planar_reflection"),
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
+            let bind_group = {
+                let mut assets = renderer.asset_manager.write().unwrap_or_else(|e| e.into_inner());
+                crate::renderer::asset::AssetManager::material().base_colour(&view).sampler(&sampler).label("planar_reflection").build(
+                    &mut assets,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                )
+            };
+            renderer.planar.insert(owner, texture, bind_group);
+        }
+
+        let normal = plane.truncate();
+        let (position, look, look_up) =
+            (reflect_point(eye, plane), reflect_direction(forward, normal), reflect_direction(up, normal));
+        let oblique = oblique_projection(projection, Mat4::look_to_rh(position, look, look_up), plane);
+        let fixed = FixedView {
+            position,
+            forward: look,
+            up: look_up,
+            near: cam.near,
+            far: cam.far,
+            projection: Some((oblique, cam.fov)),
+        };
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("planar_reflection") });
+        // The HDR target stands in for the output view: a capture stops before the post chain.
+        let hdr = renderer.post.hdr_texture_view.clone();
+        draw_camera_view(world, &mut encoder, &hdr, renderer, Some(camera), lods, None, false, Some(fixed));
+        let Renderer { planar, post, .. } = renderer;
+        planar.record_copy(&mut encoder, &post.hdr_texture, owner);
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+    }
+    renderer.taa = taa;
+    renderer.ssgi = ssgi;
+    renderer.previous_view_proj = history;
 }
 
 /// Where `camera` is in the world: its synced `GlobalTransform`, else its own `Transform`, else the
@@ -720,8 +835,9 @@ fn step_gpu_simulations(
     (particle_lod, fluid_lod)
 }
 
-/// A view that is not a camera entity: a reflection probe's cube face. Square, 90°, looking along
-/// `forward` with `up`; drawn into the HDR target and stopped there — no post chain, no HUD.
+/// A view that is not a camera entity: a reflection probe's cube face (square, 90°), or a camera
+/// reflected in a mirror (its own `projection`). Looks along `forward` with `up`; drawn into the HDR
+/// target and stopped there — no post chain, no HUD.
 #[derive(Clone, Copy)]
 struct FixedView {
     position: Vec3,
@@ -729,6 +845,8 @@ struct FixedView {
     up: Vec3,
     near: f32,
     far: f32,
+    /// In place of the 90° square one, with the field of view it came from.
+    projection: Option<(Mat4, f32)>,
 }
 
 /// One camera's picture: from its matrices to the post chain, into `region` of `view` (the whole
@@ -747,6 +865,7 @@ fn draw_camera_view(
     overlay: bool,
     capture: Option<FixedView>,
 ) {
+    renderer.skip_mirrors = capture.is_some();
     // Post-process params are written AFTER the active camera is resolved (below), so the
     // single exposure knob can be the camera's exposure — see the update_post_process call
     // after camera selection. Exposure is applied ONCE here, over the whole composited HDR
@@ -826,10 +945,12 @@ fn draw_camera_view(
         }
     }
     if let Some(fixed) = capture {
-        cam_fov = std::f32::consts::FRAC_PI_2;
         cam_near = fixed.near;
         cam_far = fixed.far;
-        proj = Mat4::perspective_rh(cam_fov, 1.0, cam_near, cam_far);
+        (proj, cam_fov) = fixed.projection.unwrap_or_else(|| {
+            let right_angle = std::f32::consts::FRAC_PI_2;
+            (Mat4::perspective_rh(right_angle, 1.0, cam_near, cam_far), right_angle)
+        });
         view_mat = Mat4::look_to_rh(fixed.position, fixed.forward, fixed.up);
         cam_pos = fixed.position;
         cam_forward = fixed.forward;
@@ -6530,6 +6651,145 @@ mod golden_render_tests {
 
             let differ = all_drawn.iter().zip(&hidden).filter(|(a, b)| a != b).count();
             assert_eq!(differ, 0, "{differ} of {} bytes changed", all_drawn.len());
+        });
+    }
+
+    /// A mirror 10 ahead of a camera at the origin looking down -z, and around them a red cube behind
+    /// the camera to the left, a blue one behind the mirror, a green one between. All unlit, so a
+    /// colour counted means that object and no other.
+    async fn mirror_scene(renderer: &mut Renderer, reflective: bool, camera_at: Vec3, yaw: f32) -> World {
+        use crate::renderer::components::PlanarReflection;
+        let mut world = World::new();
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let cube = AssetManager::create_cube(&renderer.device);
+        let spawn = |world: &mut World, at: Vec3, scale: Vec3, colour: gizmo_math::Vec4| {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(at).with_scale(scale));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, cube.clone());
+            world.add_component(e, Material::new(tex.clone()).with_unlit(colour));
+            world.add_component(e, MeshRenderer::new());
+            e
+        };
+        let mirror = spawn(&mut world, Vec3::new(0.0, 0.0, -10.0), Vec3::new(9.0, 7.0, 0.05), gizmo_math::Vec4::new(0.0, 0.0, 0.0, 1.0));
+        if reflective {
+            world.add_component(mirror, PlanarReflection::new().facing(Vec3::Z, 1.0));
+        }
+        spawn(&mut world, Vec3::new(-6.0, 0.0, 6.0), Vec3::splat(1.5), gizmo_math::Vec4::new(1.0, 0.0, 0.0, 1.0)); // behind the camera, left
+        spawn(&mut world, Vec3::new(0.0, 0.0, -13.0), Vec3::splat(1.5), gizmo_math::Vec4::new(0.0, 0.0, 1.0, 1.0)); // behind the mirror
+        spawn(&mut world, Vec3::new(4.0, 2.0, -6.0), Vec3::splat(0.5), gizmo_math::Vec4::new(0.0, 1.0, 0.0, 1.0)); // between, up and right
+        world.spawn_bundle(CameraBundle { position: camera_at, yaw, pitch: 0.0, ..Default::default() });
+        world
+    }
+
+    /// Where a colour shows in the frame: how many pixels of it in the left and the right half, and
+    /// the mean row (0 at the top). A pixel counts when `channel` clearly beats the other two.
+    fn colour_count(frame: &[u8], format: wgpu::TextureFormat, channel: usize) -> (usize, usize) {
+        let swap = matches!(format, wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb);
+        let (mut left, mut right) = (0, 0);
+        for (i, p) in frame.as_chunks::<4>().0.iter().enumerate() {
+            let rgb = if swap { [p[2], p[1], p[0]] } else { [p[0], p[1], p[2]] };
+            let c = rgb[channel] as i32;
+            if (0..3).all(|o| o == channel || c > rgb[o] as i32 + 60) {
+                if i % 128 < 64 { left += 1 } else { right += 1 }
+            }
+        }
+        (left, right)
+    }
+
+    /// **A mirror shows what the camera cannot see.** The red cube behind the camera appears in it,
+    /// on the same side of the picture it stands on; what stands behind the mirror does not; and a
+    /// surface without the component shows neither.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_mirror_shows_what_is_behind_the_camera_and_not_what_is_behind_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let toward_mirror = -std::f32::consts::FRAC_PI_2;
+            let mut plain = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut world = mirror_scene(&mut plain, false, Vec3::ZERO, toward_mirror).await;
+            let frame = render_world(&mut plain, &mut world).await;
+            assert_eq!(colour_count(&frame, plain.config.format, 0), (0, 0), "no mirror, and the cube behind the camera shows");
+            assert_eq!(plain.planar.captures, 0);
+
+            let mut mirrored = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut world = mirror_scene(&mut mirrored, true, Vec3::ZERO, toward_mirror).await;
+            let frame = render_world(&mut mirrored, &mut world).await;
+            assert_eq!(mirrored.planar.captures, 1);
+            let format = mirrored.config.format;
+            let (red_left, red_right) = colour_count(&frame, format, 0);
+            assert!(red_left > 30, "the cube behind the camera is not in the mirror: {red_left}");
+            assert_eq!(red_right, 0, "it stands to the left and shows on the right");
+            assert_eq!(colour_count(&frame, format, 2), (0, 0), "what is behind the mirror came through it");
+            // The green cube is in the frame directly, up and right, and again in its reflection.
+            let (green_left, green_right) = colour_count(&frame, format, 1);
+            assert!(green_right > 30, "the cube between: {green_left} / {green_right}");
+        });
+    }
+
+    /// Mirrors are left out of each other's captures: a second mirror behind the camera does not
+    /// stand in the first one's picture, and the red cube past it still shows.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_mirror_is_not_in_another_mirrors_reflection() {
+        use crate::renderer::components::PlanarReflection;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut world = mirror_scene(&mut renderer, true, Vec3::ZERO, -std::f32::consts::FRAC_PI_2).await;
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            // Behind the camera and between it and the red cube, as big as the first mirror.
+            let second = world.spawn();
+            world.add_component(second, Transform::new(Vec3::new(0.0, 0.0, 3.0)).with_scale(Vec3::new(30.0, 20.0, 0.05)));
+            world.add_component(second, GlobalTransform::default());
+            world.add_component(second, AssetManager::create_cube(&renderer.device));
+            world.add_component(second, Material::new(tex).with_unlit(gizmo_math::Vec4::new(0.0, 0.0, 0.0, 1.0)));
+            world.add_component(second, MeshRenderer::new());
+            world.add_component(second, PlanarReflection::new().facing(Vec3::NEG_Z, 1.0));
+            let frame = render_world(&mut renderer, &mut world).await;
+            let (left, _) = colour_count(&frame, renderer.config.format, 0);
+            assert!(left > 30, "the second mirror stands in the first one's picture: {left} red pixels");
+        });
+    }
+
+    /// One capture per mirror in view; none for a mirror off screen or seen from behind, which is
+    /// the whole of what makes a second full draw of the scene affordable.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_mirror_out_of_view_or_seen_from_behind_costs_nothing() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let toward = -std::f32::consts::FRAC_PI_2;
+            for (label, at, yaw, want) in [
+                ("in view", Vec3::ZERO, toward, 1),
+                ("turned away", Vec3::ZERO, std::f32::consts::FRAC_PI_2, 0),
+                ("behind it, looking on", Vec3::new(0.0, 0.0, -20.0), std::f32::consts::FRAC_PI_2, 0),
+            ] {
+                let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+                let mut world = mirror_scene(&mut renderer, true, at, yaw).await;
+                render_world(&mut renderer, &mut world).await;
+                assert_eq!(renderer.planar.captures, want, "{label}");
+            }
         });
     }
 

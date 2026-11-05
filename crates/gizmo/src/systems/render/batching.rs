@@ -172,6 +172,8 @@ pub struct DrawItem {
     /// `passes::forward`. Rides `unlit` out of the deferred and shadow passes like every other
     /// forward type, and this flag is what says *which* forward pipeline.
     pub(super) is_water: bool,
+    /// The `PlanarReflection` this batch is: its own batch, because each mirror has its own capture.
+    pub(super) mirror: Option<u32>,
     /// The reference grid (`MaterialType::Grid`): drawn forward through `grid.wgsl`.
     pub(super) is_grid: bool,
     /// The material asked for both faces (`Material::with_double_sided`). Selects the cull-off
@@ -315,6 +317,7 @@ pub(crate) struct BatchKey {
     /// an otherwise **identical** key — and the batch would inherit whichever the ECS iteration
     /// reached first, drawing one of the two with the other's pipeline.
     is_water: bool,
+    mirror: Option<u32>,
     /// The grid has its own pipeline, so it must not share a batch with anything that has not.
     is_grid: bool,
 }
@@ -335,6 +338,7 @@ pub(crate) struct BatchData {
     visible_in_camera: bool,
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
     is_water: bool,
+    mirror: Option<u32>,
     is_grid: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
@@ -446,6 +450,8 @@ pub(super) fn collect_draw_items(
     let occlusion = build_occlusion(world, &unjittered_view_proj, renderer.size, &hidden);
     let occluders = world.borrow::<crate::renderer::components::Occluder>();
     let occluded_objects = std::cell::Cell::new(0u32);
+    let reflections = world.borrow::<crate::renderer::components::PlanarReflection>();
+    let skip_mirrors = renderer.skip_mirrors;
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
     // Per-cascade LIGHT frusta — shadow casters are culled against these, NOT the camera
@@ -491,6 +497,11 @@ pub(super) fn collect_draw_items(
                     continue;
                 }
                 if editor_only.get($e).is_some() {
+                    continue;
+                }
+                // A mirror is not in a capture, its own or another's.
+                let mirror = reflections.get($e).map(|_| $e);
+                if mirror.is_some() && skip_mirrors {
                     continue;
                 }
 
@@ -626,7 +637,7 @@ pub(super) fn collect_draw_items(
                     &model,
                     cam_pos,
                 );
-                let instance_data = crate::renderer::gpu_types::InstanceRaw::new(
+                let mut instance_data = crate::renderer::gpu_types::InstanceRaw::new(
                     upload_model.to_cols_array_2d(),
                     [$mat.albedo.x, $mat.albedo.y, $mat.albedo.z, $mat.albedo.w],
                     $mat.roughness,
@@ -669,6 +680,11 @@ pub(super) fn collect_draw_items(
                 let unlit = routing.skips_deferred;
                 // Which forward pipeline, once `unlit` has said "not the deferred one".
                 let is_water = routing.is_water;
+                // How much a mirror reflects, for its shader alone: no other pipeline draws this
+                // batch while it has a capture, and the plain one ignores `ambient`.
+                if let Some(reflection) = reflections.get($e) {
+                    instance_data.ambient[0] = reflection.reflectance;
+                }
                 let is_grid = routing.is_grid;
                 let is_transparent = draws_blended($mat.is_transparent, $mat.albedo.w, $mat.alpha_cutoff);
                 // Only a blended draw blends; an opaque one's mode is moot and must not split it
@@ -700,6 +716,7 @@ pub(super) fn collect_draw_items(
                     visible_in_camera,
                     custom: routing.custom,
                     is_water,
+                    mirror,
                     is_grid,
                 };
 
@@ -719,6 +736,7 @@ pub(super) fn collect_draw_items(
                     visible_in_camera,
                     custom: routing.custom,
                     is_water,
+                    mirror,
                     is_grid,
                     skeleton_bind_group: skel_bg.cloned(),
                     is_transparent,
@@ -893,6 +911,7 @@ pub(super) fn collect_draw_items(
                 is_backdrop: batch.is_backdrop,
                 custom: batch.custom,
                 is_water: batch.is_water,
+                mirror: batch.mirror,
                 is_grid: batch.is_grid,
                 is_double_sided: batch.is_double_sided,
                 casts_shadows: batch.casts_shadows,
@@ -1006,6 +1025,7 @@ mod batch_key_tests {
             visible_in_camera: true,
             custom: None,
             is_water: false,
+            mirror: None,
             is_grid: false,
         };
         let no_cast = BatchKey { casts_shadows: false, ..base.clone() };
@@ -1032,6 +1052,7 @@ mod batch_key_tests {
             visible_in_camera: true,
             custom: None,
             is_water: false,
+            mirror: None,
             is_grid: false,
         };
         let transparent = BatchKey {

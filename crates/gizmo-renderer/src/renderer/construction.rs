@@ -546,6 +546,7 @@ impl Renderer {
             backdrop_pipeline: scene.backdrop_pipeline,
             water_pipeline: scene.water_pipeline,
             water_double_sided_pipeline: scene.water_double_sided_pipeline,
+            mirror_pipeline: scene.mirror_pipeline,
             shadow_pipeline: scene.shadow_pipeline,
             transparent_pipeline: scene.transparent_pipeline,
             grid_pipeline: scene.grid_pipeline,
@@ -745,6 +746,8 @@ impl Renderer {
             bloom_radius: 1.0,
             bloom_iterations: 1,
             occluded_objects: 0,
+            planar: Default::default(),
+            skip_mirrors: false,
             exposure: 1.15,
             // Depth of field is an opt-in artistic effect, not a default: with it
             // ON, any scene whose subject isn't near `dof_focus_dist` (4.5 m) is

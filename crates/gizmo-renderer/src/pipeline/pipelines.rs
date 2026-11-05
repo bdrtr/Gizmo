@@ -59,6 +59,7 @@ pub(super) struct CorePipelines {
     pub(super) water: wgpu::RenderPipeline,
     /// The same, culling off — an ocean surface is looked at from underneath.
     pub(super) water_double_sided: wgpu::RenderPipeline,
+    pub(super) mirror: wgpu::RenderPipeline,
     pub(super) transparent: wgpu::RenderPipeline,
     pub(super) grid: wgpu::RenderPipeline,
     /// The lit transparent pipeline under each of `BlendMode::VARIANTS`.
@@ -156,6 +157,17 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     #[cfg(gizmo_forward_only)]
     let baked_lit_shader =
         load_shader_composed_web(device, include_str!("../shaders/baked_lit.wgsl"), "Baked-Lit Shader");
+
+    #[cfg(not(gizmo_forward_only))]
+    let mirror_shader = load_shader_composed(
+        device,
+        "demo/assets/shaders/planar_mirror.wgsl",
+        include_str!("../shaders/planar_mirror.wgsl"),
+        "Planar Mirror Shader",
+    );
+    #[cfg(gizmo_forward_only)]
+    let mirror_shader =
+        load_shader_composed_web(device, include_str!("../shaders/planar_mirror.wgsl"), "Planar Mirror Shader");
 
     #[cfg(not(gizmo_forward_only))]
     let water_shader = load_shader_composed(
@@ -383,6 +395,15 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             true,
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),
+            wgpu::PolygonMode::Fill,
+        ),
+        mirror: create_main(
+            &render_pipeline_layout,
+            &mirror_shader,
+            "Planar Mirror Pipeline",
+            true,
+            Some(wgpu::Face::Back),
+            None,
             wgpu::PolygonMode::Fill,
         ),
         grid: create_main(

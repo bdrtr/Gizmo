@@ -169,6 +169,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Planar reflections (`PlanarReflection`).** A flat unlit mesh with this component reflects the scene,
+  including what the camera cannot see: the scene is drawn again from the camera reflected in its
+  plane, clipped at the mirror by an oblique near plane. `reflectance` runs from a mirror to water's
+  grazing-angle Fresnel. **It costs one more full draw of the scene per mirror in view** (5.4 → 7.7 ms
+  on a nearly empty scene at 1280 × 720, and it scales with the scene); a mirror out of view or seen from
+  behind costs nothing. Perfectly sharp; mirrors do not show in each other; plain in split screen and
+  in the editor. Not yet run in a browser or on a phone.
 - **Occlusion culling (`Occluder`).** Put it on a wall or a building, and what is completely behind it
   draws nothing, shadows kept. Rasterised on the CPU each view, so nothing pops in late and it runs
   the same in the browser. The frame is byte-identical with and without. On 2 026 spheres of 8 064

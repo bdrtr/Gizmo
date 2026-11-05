@@ -280,6 +280,7 @@ mod tests {
             ("shader.wgsl", include_str!("../shaders/shader.wgsl")),
             ("unlit.wgsl", include_str!("../shaders/unlit.wgsl")),
             ("water.wgsl", include_str!("../shaders/water.wgsl")),
+            ("planar_mirror.wgsl", include_str!("../shaders/planar_mirror.wgsl")),
             ("sky.wgsl", include_str!("../shaders/sky.wgsl")),
             // The painted backdrop. Its whole job is a vertex transform and a texture fetch,
             // so type-checking it under both schemas is most of what a GPU would tell us —

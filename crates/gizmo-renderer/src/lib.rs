@@ -149,6 +149,8 @@ pub mod frame_uniforms;
 pub mod frustum_cull;
 /// Occlusion culling: a small CPU depth buffer of what a game marked as an [`Occluder`](components::Occluder).
 pub mod occlusion;
+/// Planar reflections: the scene drawn again from the camera reflected in a mirror.
+pub mod planar;
 pub mod fxaa;
 pub mod gi;
 /// GPU SPH fluid simulation and its surface rendering.

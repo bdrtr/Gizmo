@@ -587,6 +587,13 @@ fn every_render_capability_is_known_to_both_draw_paths() {
     /// Declared asymmetries: (component, which path, why).
     const EXCEPTIONS: &[(&str, Path, &str)] = &[
         (
+            "PlanarReflection",
+            Path::GameOnly,
+            "a mirror is one more full draw of the scene through the game path's own view code \
+             (`draw_camera_view`); the studio's single-camera path has no such step, so a mirror \
+             draws as its plain unlit colour in the editor, which its doc says.",
+        ),
+        (
             "Occluder",
             Path::GameOnly,
             "an optimisation that promises the same picture (`an_occluder_hides_objects_without_changing_a_pixel`), \

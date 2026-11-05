@@ -120,7 +120,13 @@ pub fn record_forward_and_fluid(
                     .custom
                     .map(|id| renderer.custom_materials.get(id).map(|c| &c.pipeline));
 
-                let engine_pipeline = if item.is_backdrop {
+                // A mirror with this frame's capture shows it; without one (off screen last frame,
+                // seen from behind, split screen) it falls through and draws as its plain colour.
+                let mirror = item.mirror.and_then(|owner| renderer.planar.captured(owner));
+
+                let engine_pipeline = if mirror.is_some() {
+                    &renderer.scene.mirror_pipeline
+                } else if item.is_backdrop {
                     // FIRST, ahead of the `unlit` and `is_transparent` branches below: a
                     // backdrop sets `unlit` (that is what keeps it out of the deferred and
                     // shadow passes) and may well be transparent, and either of those
@@ -202,7 +208,7 @@ pub fn record_forward_and_fluid(
 
                 if let Some(pipeline) = pipeline {
                     render_pass.set_pipeline(pipeline);
-                    render_pass.set_bind_group(1, &*item.bind_group, &[]);
+                    render_pass.set_bind_group(1, mirror.unwrap_or(&*item.bind_group), &[]);
                     render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
                     item.record_draw(&mut render_pass, inst_start..inst_end);
                 }
