@@ -761,16 +761,7 @@ impl Schedule {
         // batch'lerden ÖNCE) ayarlandığından paralel sistemler arasında yarış yok.
         world.begin_change_frame(self.last_run_tick);
 
-        if self.uses_phases {
-            // Fazları sırasıyla çalıştır: PreUpdate → Update → Physics → PostUpdate → Render
-            for (_phase, batches) in &mut self.phase_batches {
-                let _span = tracing::info_span!("phase", name = _phase.name()).entered();
-                Self::run_batches(batches, world, dt);
-            }
-        } else {
-            // Legacy mod: düz batch listesi
-            Self::run_batches(&mut self.legacy_batches, world, dt);
-        }
+        self.run_systems(world, dt);
 
         // Bir sonraki frame'in referansı: bu frame'in tick'i.
         self.last_run_tick = world.tick;
@@ -791,6 +782,20 @@ impl Schedule {
         // loop, and a hand-written loop like `server/`. Each calls `end_frame` once per frame.
     }
 
+    /// Runs every batch, inside whatever change-detection window the world already has open.
+    fn run_systems(&mut self, world: &mut World, dt: f32) {
+        if self.uses_phases {
+            // Fazları sırasıyla çalıştır: PreUpdate → Update → Physics → PostUpdate → Render
+            for (_phase, batches) in &mut self.phase_batches {
+                let _span = tracing::info_span!("phase", name = _phase.name()).entered();
+                Self::run_batches(batches, world, dt);
+            }
+        } else {
+            // Legacy mod: düz batch listesi
+            Self::run_batches(&mut self.legacy_batches, world, dt);
+        }
+    }
+
     /// The total batch count (for debug / test purposes)
     #[cfg(test)]
     pub(crate) fn total_batch_count(&self) -> usize {
@@ -805,6 +810,88 @@ impl Schedule {
 impl Default for Schedule {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl World {
+    /// Runs one system now, once — from an `on_enter` hook, an exclusive system, a test, anywhere a
+    /// `&mut World` is at hand. Its parameters are fetched as in a schedule, its `Commands` are
+    /// applied before this returns, and a `Result` it returns goes to the
+    /// [`SystemErrorHandler`](super::SystemErrorHandler).
+    ///
+    /// It runs **inside the frame it was called in**: `Changed<T>` and `Added<T>` mean the same as
+    /// for the frame's other systems, and the systems after it see the same window. Building a
+    /// [`Schedule`] for it and calling [`Schedule::run`] looks equivalent and is not: a new schedule
+    /// has no last run, so it reopens the window from tick 0 and every later system of that frame
+    /// sees the whole world as changed.
+    ///
+    /// Its `f32` parameter is [`Time::dt`](crate::time::Time::dt), or 0 without a `Time`. A
+    /// [`Local`](super::Local) starts fresh every call, since nothing outlives the call; state that
+    /// must last goes in a resource.
+    ///
+    /// ```
+    /// # use gizmo_core::prelude::*;
+    /// # use gizmo_core::world::World;
+    /// struct Score(u32);
+    /// fn add_ten(mut score: ResMut<Score>) {
+    ///     score.0 += 10;
+    /// }
+    /// let mut world = World::new();
+    /// world.insert_resource(Score(1));
+    /// world.run_system(add_ten);
+    /// assert_eq!(world.get_resource::<Score>().unwrap().0, 11);
+    /// ```
+    pub fn run_system<Params, S: super::IntoSystemConfig<Params>>(&mut self, system: S) {
+        let dt = self.get_resource::<crate::time::Time>().map_or(0.0, |t| t.dt());
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(system);
+        schedule.build();
+        schedule.run_systems(self, dt);
+    }
+}
+
+#[cfg(test)]
+mod run_system {
+    use super::*;
+    use crate::system::{Res, ResMut};
+    use crate::Commands;
+
+    struct Count(u32);
+    #[derive(Clone)]
+    struct Marker;
+    crate::impl_component!(Marker);
+
+    #[test]
+    fn it_runs_now_and_its_commands_are_applied() {
+        fn spawn_one(mut commands: Commands, mut count: ResMut<Count>) {
+            commands.spawn_bundle((Marker,));
+            count.0 += 1;
+        }
+        let mut world = World::new();
+        world.register_component_type::<Marker>();
+        world.insert_resource(Count(0));
+        world.run_system(spawn_one);
+        assert_eq!(world.get_resource::<Count>().unwrap().0, 1);
+        assert_eq!(world.borrow::<Marker>().iter().count(), 1, "the command waited past the call");
+    }
+
+    /// The frame's change window survives: a system after it does not see an old component as new.
+    #[test]
+    fn it_leaves_the_frames_change_window_alone() {
+        fn nothing(_count: Res<Count>) {}
+        let mut world = World::new();
+        world.register_component_type::<Marker>();
+        world.insert_resource(Count(0));
+        world.spawn_bundle((Marker,));
+        world.begin_change_frame(0);
+        let settled = world.tick;
+        world.begin_change_frame(settled);
+        let added = |w: &World| w.query::<crate::query::Added<Marker>>().unwrap().iter().count();
+        assert_eq!(added(&world), 0, "the setup: nothing is new in this frame");
+        let tick = world.tick;
+        world.run_system(nothing);
+        assert_eq!(added(&world), 0, "the call reopened the window: the old component reads as new");
+        assert_eq!(world.tick, tick, "the call advanced the frame");
     }
 }
 
