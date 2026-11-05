@@ -121,6 +121,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tweens, colour tweens, typewriters, the screen fade (`systems::render::advance_frame_clocks`, one
   function both call) — because game logic waits on them: `zindan` takes the stairs when its fade
   has gone dark.
+- **Every game plays itself headlessly (`--test`), all 36.** What it found is under Fixed and in
+  `docs/CAPABILITY_GAPS.md` C16ag; besides the engine fixes, `poligon`'s player walked at twice
+  his speed (the game drove its character controller a second time), `pist`'s AI stayed stuck on a
+  barrier, `kristal_avcisi`'s states and systems are a plugin both runtimes add.
 - **`kapi`, `vinc` and `labirent` play themselves headlessly (`--test`).** `labirent`'s
   autopilot now solves the maze — a path search around walls and holes, tilting toward the next
   tile — and found that levels 2 and 3 could never be won: a hole cut every way to the goal. Each

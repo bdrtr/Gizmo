@@ -1271,8 +1271,8 @@ no display (a binary that ignores the flag fails instead of opening a window), a
 save directory each — in CI's determinism job and the local gate. The games without the mode are
 being given one, on `gizmo::simple::HeadlessFrames`: the game's own `setup` on a plain `World`,
 its own `update` with an empty `Input`, the deferred commands applied after every frame and the
-simple scene's defaults added, as the windowed loop does. So far `kapi`, `vinc`, `labirent`.
-What turning them into tests found:
+simple scene's defaults added, as the windowed loop does. Since 2026-11-05 **all 36 games** have
+one (86 s for the lot, four at a time). What turning them into tests found:
 
 - ~~**A kinematic body driven once a frame moved in jerks.**~~ **Closed.** `KinematicTarget`
   is reached in the next step, so a four-step frame made the whole move in its first step at four
@@ -1283,10 +1283,30 @@ What turning them into tests found:
   goal. Found by the autopilot's path search; the test now checks every level has a path.
 - ~~**`pinbol`'s ball could be stuck in the launch lane for good**~~ — rolled back in, it was
   still counted as launched. **Closed.**
-- Not engine gaps, but what a headless loop must do: apply the deferred commands (fracture
-  despawns through them — `vinc` reported 0 pieces where 9 broke) and insert the scene's physics
-  world (`labirent`'s ball never moved). `HeadlessFrames` does both, so a game's test cannot
-  forget them.
+- ~~**Tweens, typewriters and the screen fade moved only when a frame was drawn.**~~ **Closed.**
+  They were advanced inside the draw path's `prepare_frame`, and game logic waits on them (`zindan`
+  takes the stairs when its fade has gone dark, `mucevher` moves on when its gems' tweens end).
+  `systems::render::advance_frame_clocks` is the one function the draw path and `HeadlessFrames`
+  both call.
+- ~~**A 2D scene could not be built without a renderer.**~~ **Closed.** A `SpriteImageId` came only
+  from `load_sprite_rgba`, which needs a GPU. `SpriteImageId::placeholder(n)` names no image and
+  draws nothing (`zindan`).
+- ~~**`poligon`'s player walked at twice his speed**~~ (10 m/s for a 5 m/s controller): the game
+  still drove the character controller once a frame after `FixedPhysics` had started driving it
+  every step. **Closed.**
+- ~~**`pist`'s AI could be held against a barrier for the rest of the race**~~ — it backed off
+  0.6 m and drove back in. **Closed** (2 s at full throttle). The three-car race itself passed
+  here and failed on CI, a car rolled over: cars hitting cars diverge from machine to machine
+  (same-platform determinism), so the test drives one car, at three frame rates.
+- Not engine gaps, but what a headless loop must do, all in `HeadlessFrames` now so no game's test
+  can forget one: apply the deferred commands (fracture despawns through them — `vinc` reported 0
+  pieces where 9 broke); insert the scene's physics world (`labirent`'s ball never moved); add the
+  game's plugins and run their schedules (`nisanci`'s sparks piled up to 537 without
+  `LifetimePlugin`); put `Input` in the world and advance `Time` before them (`UiPlugin`'s systems
+  stop the frame without `Input`); end the frame with `Input::begin_frame`.
+- Measured and not a gap: `kopru`'s single row of hinged beams carries the ball, as a sagging
+  chain (86 % of the joint threshold); `komutan`'s twelve charging at fourteen equals lose, the
+  game wants tactics; `zindan`'s autopilot dies on level 2, it attacks everything it sees.
 
 ### C16af. The thirty-sixth game: ropes taken and let go (2026-11-04, `sarmasik`)
 

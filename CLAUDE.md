@@ -63,7 +63,9 @@ cargo run --release -p demo --bin headless_stress_test
 # Every demo with a headless `--test` mode plays itself — autopilot, fixed step, no window — and
 # exits non-zero on what it checks (a tower fell, a ball left the table). Builds them in release
 # and runs them 4 at a time with DISPLAY/WAYLAND_DISPLAY unset, so a binary that ignores the flag
-# fails instead of opening a window. CI runs it in the determinism job. 15 games, 33 s (2026-11-04).
+# fails instead of opening a window. CI runs it in the determinism job. All 36 games, 86 s
+# (2026-11-05). A game's `--test` runs on `gizmo::simple::HeadlessFrames` — its own setup and update,
+# no window; see that type for what a headless frame does.
 # A game joins by having the mode: the script picks up any bin whose source names "--test".
 scripts/game-tests.py
 scripts/game-tests.py pinbol robot   # just these
