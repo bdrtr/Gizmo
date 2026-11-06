@@ -120,7 +120,7 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
     let ms = t0.elapsed().as_secs_f32() * 1000.0;
     colony.worst_ai_ms = colony.worst_ai_ms.max(ms);
     colony.recent_ai_ms = colony.recent_ai_ms * 0.95 + ms * 0.05;
-    let moves: Vec<(u32, Vec3)> = world.borrow::<Velocity>().iter().map(|(id, v)| (id, v.linear)).collect();
+    let moves: Vec<(u32, Vec3)> = world.query::<(Entity, &Velocity)>().unwrap().iter().map(|(entity, v)| (entity.id(), v.linear)).collect();
     // Duvarın içine yürümesin: bir sonraki hücre kapalıysa durur, yol bulucu çevirir.
     let steps: Vec<(u32, Vec3)> = {
         let grid = world.get_resource::<NavGrid>();
@@ -139,11 +139,10 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
         }
     }
     let ants: Vec<(u32, Ant, Vec3, bool)> = {
-        let a = world.borrow::<Ant>();
         let ts = world.borrow::<Transform>();
         let ag = world.borrow::<NavAgent>();
-        a.iter()
-            .filter_map(|(id, ant)| Some((id, *ant, ts.get(id)?.position, ag.get(id).is_some_and(|n| n.route_failed()))))
+        world.query::<(Entity, &Ant)>().unwrap().iter()
+            .filter_map(|(entity, ant)| Some((entity.id(), *ant, ts.get(entity)?.position, ag.get(entity).is_some_and(|n| n.route_failed()))))
             .collect()
     };
     for (id, mut ant, pos, failed) in ants {
@@ -206,9 +205,8 @@ fn set_wall(world: &mut World, cell: (i32, i32), on: bool, visual: bool) {
         }
     }
     let existing: Option<u32> = {
-        let walls = world.borrow::<Wall>();
         let ts = world.borrow::<Transform>();
-        walls.iter().map(|(id, _)| id).find(|id| ts.get(*id).is_some_and(|t| (t.position.x - at.x).abs() < 0.1 && (t.position.z - at.z).abs() < 0.1))
+        world.query::<(Entity, &Wall)>().unwrap().iter().map(|(entity, _)| entity.id()).find(|id| ts.get(*id).is_some_and(|t| (t.position.x - at.x).abs() < 0.1 && (t.position.z - at.z).abs() < 0.1))
     };
     match (on, existing) {
         (true, None) => {
@@ -261,16 +259,16 @@ fn self_test() -> bool {
                 let ag = world.borrow::<NavAgent>();
                 let ants = world.borrow::<Ant>();
                 (
-                    ag.iter().filter(|(_, a)| a.route_failed()).count(),
-                    ag.iter().filter(|(_, a)| a.target.is_none()).count(),
-                    ants.iter().filter(|(_, a)| a.carrying).count(),
+                    ag.iter().filter(|a| a.route_failed()).count(),
+                    ag.iter().filter(|a| a.target.is_none()).count(),
+                    ants.iter().filter(|a| a.carrying).count(),
                 )
             };
             let left: Vec<u32> = colony.piles.iter().map(|p| p.food).collect();
             println!("  {:4.0} s: taşınan {:4}, taşıyan {carrying:3}, yolsuz {failed:3}, hedefsiz {idle:3}, yığınlar {left:?}", colony.clock, colony.delivered);
         }
     }
-    let positions_ok = world.borrow::<Transform>().iter().all(|(_, t)| t.position.is_finite());
+    let positions_ok = world.borrow::<Transform>().iter().all(|t| t.position.is_finite());
     let ok = colony.delivered > 300 && colony.delivered > at_unwall && at_unwall > at_wall && positions_ok;
     println!(
         "karinca --test: {} karınca, 40 s'de {} yem taşındı (duvardan önce {at_wall}, duvarken {}, sonra {}); en uzun yapay zekâ karesi {:.1} ms → {}",
@@ -363,11 +361,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     }
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        let gone: Vec<u32> = world
-            .borrow::<Ant>()
-            .iter()
-            .map(|(id, _)| id)
-            .chain(world.borrow::<Wall>().iter().map(|(id, _)| id))
+        let gone: Vec<u32> = world.query::<(Entity, &Ant)>().unwrap().iter()
+            .map(|(entity, _)| entity.id())
+            .chain(world.query::<(Entity, &Wall)>().unwrap().iter().map(|(entity, _)| entity.id()))
             .chain(game.colony.piles.iter().filter_map(|p| p.marker))
             .collect();
         for id in gone {

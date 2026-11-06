@@ -73,9 +73,7 @@ fn crane_x(clock: f32) -> f32 {
 }
 
 fn tower_top(world: &World) -> f32 {
-    world
-        .borrow::<SoftBodyMesh>()
-        .iter()
+    world.query::<(Entity, &SoftBodyMesh)>().unwrap().iter()
         .map(|(_, b)| b.nodes.iter().map(|n| n.position.y).fold(f32::MIN, f32::max))
         .fold(0.0, f32::max)
 }
@@ -99,7 +97,7 @@ fn drop_block(world: &mut World, x: f32, k: usize, visual: bool) {
 
 /// Platformdan düşen blok var mı.
 fn fallen(world: &World) -> bool {
-    world.borrow::<SoftBodyMesh>().iter().any(|(_, b)| b.nodes.iter().map(|n| n.position.y).fold(f32::MAX, f32::min) < -2.0)
+    world.query::<(Entity, &SoftBodyMesh)>().unwrap().iter().any(|(_, b)| b.nodes.iter().map(|n| n.position.y).fold(f32::MAX, f32::min) < -2.0)
 }
 
 /// `--test`: vinç ortadayken altı blok, sonra beş saniye.
@@ -125,9 +123,7 @@ fn self_test() -> bool {
         physics.advance(&mut world, dt);
         world.apply_commands();
         if wait > 4.0 {
-            let fastest = world
-                .borrow::<SoftBodyMesh>()
-                .iter()
+            let fastest = world.query::<(Entity, &SoftBodyMesh)>().unwrap().iter()
                 .flat_map(|(_, b)| b.nodes.iter().map(|n| n.velocity.length()).collect::<Vec<_>>())
                 .fold(0.0f32, f32::max);
             worst_speed = worst_speed.max(fastest);
@@ -224,7 +220,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let Some(mut game) = world.remove_resource::<Game>() else { return };
     let dt = dt.min(0.05);
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        let blocks: Vec<u32> = world.borrow::<SoftBodyMesh>().iter().map(|(id, _)| id).collect();
+        let blocks: Vec<u32> = world.query::<(Entity, &SoftBodyMesh)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
         for id in blocks {
             if let Some(e) = world.get_entity(id) {
                 world.despawn(e);

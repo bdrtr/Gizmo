@@ -6,6 +6,7 @@
 //! and the counters the engine's fight clock spends — plus the input-buffer history combo
 //! recognition walks.
 
+use gizmo_core::Entity;
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_core::World;
 use mlua::prelude::*;
@@ -231,8 +232,8 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
     }
 
     let controllers = world.borrow::<gizmo_physics_core::components::FighterController>();
-    for (eid, _) in controllers.iter() {
-        if let Some(fighter) = controllers.get(eid) {
+    for (entity, _) in world.query::<(Entity, &gizmo_physics_core::components::FighterController)>().unwrap().iter() {
+        if let Some(fighter) = controllers.get(entity) {
             let state = lua.create_table()?;
             state.set("player_id", fighter.player_id)?;
             state.set("health", fighter.health)?;
@@ -261,7 +262,7 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
                 state.set("move", move_table)?;
             }
 
-            states.set(eid, state)?;
+            states.set(entity.id(), state)?;
 
             let frames_table = lua.create_table()?;
             for (i, frame) in fighter.input_buffer.frames.iter().enumerate() {
@@ -291,7 +292,7 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
 
                 frames_table.set(i + 1, frame_table)?;
             }
-            buffers.set(eid, frames_table)?;
+            buffers.set(entity.id(), frames_table)?;
         }
     }
 

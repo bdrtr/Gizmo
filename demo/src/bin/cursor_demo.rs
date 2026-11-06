@@ -83,7 +83,7 @@ fn draw_cursor(
     }
 
     let mut cam_data = None;
-    for (_id, (trans, cam)) in q_cam.iter() {
+    for (trans, cam) in q_cam.iter() {
         if cam.primary {
             cam_data = Some((trans.position, cam));
             break;

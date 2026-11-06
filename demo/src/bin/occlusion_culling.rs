@@ -445,7 +445,7 @@ fn main() {
 /// değmediğini söyleyecek olan şey, ağacı **güncel tutmanın** maliyetinin sorguda kazandırdığından
 /// az olup olmadığı — ve bu ölçülmeden bilinmiyor.
 fn measure(
-    cubes: Query<(&Transform, With<MeshRenderer>)>,
+    cubes: Query<(Entity, &Transform, With<MeshRenderer>)>,
     mut cameras: Query<(Mut<Camera>, Mut<Transform>)>,
     mut bench: ResMut<Bench>,
     mut analyzer: ResMut<Analyzer>,
@@ -465,7 +465,7 @@ fn measure(
     let cam = cameras
         .iter_mut()
         .next()
-        .map(|(_, (c, t))| (c.get_projection(16.0 / 9.0), c.get_view(t.position)));
+        .map(|(c, t)| (c.get_projection(16.0 / 9.0), c.get_view(t.position)));
     if let Some((proj, view)) = cam {
         let frustum = gizmo::math::Frustum::from_matrix(&(proj * view));
         let unit = gizmo::math::Aabb {
@@ -475,7 +475,7 @@ fn measure(
         // ── Doğrusal yürüyüş: batcher'ın yaptığı işin aynısı ────────────────
         let t_linear = std::time::Instant::now();
         let mut n = 0usize;
-        for (_e, (t, _)) in cubes.iter() {
+        for (_, t, _) in cubes.iter() {
             let m = Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
             if gizmo::renderer::frustum_cull::visible_in_frustum(&frustum, &m, unit) {
                 n += 1;
@@ -498,9 +498,9 @@ fn measure(
         let rebuild_every_frame = std::env::var("GIZMO_CULL_INDEX_STATIC").is_err();
         let t_update = std::time::Instant::now();
         if rebuild_every_frame || tree.is_empty() {
-            for (e, (t, _)) in cubes.iter() {
+            for (e, t, _) in cubes.iter() {
                 let m = Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
-                tree.insert(e, unit.transform(&m));
+                tree.insert(e.id(), unit.transform(&m));
             }
         }
         bench.index_update_ms = t_update.elapsed().as_secs_f32() * 1000.0;

@@ -177,8 +177,8 @@ fn self_test() -> bool {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let actors: Vec<u32> = world.borrow::<Actor>().iter().map(|(id, _)| id).collect();
-    let debris: Vec<u32> = world.borrow::<gizmo::physics::components::Debris>().iter().map(|(id, _)| id).collect();
+    let actors: Vec<u32> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let debris: Vec<u32> = world.query::<(Entity, &gizmo::physics::components::Debris)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
     for id in actors.into_iter().chain(debris) {
         if let Some(e) = world.get_entity(id) {
             world.despawn(e);
@@ -296,12 +296,10 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 fn count_down(world: &World, game: &mut Game) {
     game.broken = COLUMNS * FLOORS - world.borrow::<Block>().iter().count();
     let standing = {
-        let blocks = world.borrow::<Block>();
         let ts = world.borrow::<Transform>();
-        blocks
-            .iter()
-            .filter(|(id, b)| {
-                ts.get(*id).is_some_and(|t| {
+        world.query::<(Entity, &Block)>().unwrap().iter()
+            .filter(|(entity, b)| {
+                ts.get(*entity).is_some_and(|t| {
                     let upright = (t.rotation * Vec3::Y).y > 0.9;
                     upright && t.position.y > b.0 - BLOCK.y * 2.0
                 })

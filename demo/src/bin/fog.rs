@@ -261,7 +261,7 @@ fn tint_sky(mut skies: Query<(Mut<Material>, With<SkyDome>)>, fog: Res<FogState>
         mix(a[2], b[2]),
         1.0,
     );
-    for (_entity, (mut material, _)) in skies.iter_mut() {
+    for (mut material, _) in skies.iter_mut() {
         material.albedo = color;
     }
 }

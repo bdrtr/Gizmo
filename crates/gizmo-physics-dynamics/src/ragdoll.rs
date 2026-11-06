@@ -986,7 +986,7 @@ mod tests {
         let instance = builder.spawn(&mut world);
 
         let pelvis = instance.entity_of(RagdollBoneType::Pelvis).unwrap();
-        let start_y = world.query::<&Transform>().unwrap().get(pelvis.id()).unwrap().position.y;
+        let start_y = world.query::<&Transform>().unwrap().get(pelvis).unwrap().position.y;
 
         let dt = 1.0 / 120.0;
         for _ in 0..60 {
@@ -995,11 +995,11 @@ mod tests {
 
         // Every bone must remain finite.
         for (_, entity) in &instance.bones {
-            let p = world.query::<&Transform>().unwrap().get(entity.id()).unwrap().position;
+            let p = world.query::<&Transform>().unwrap().get(*entity).unwrap().position;
             assert!(p.is_finite(), "ragdoll bone position went non-finite: {p:?}");
         }
 
-        let end_y = world.query::<&Transform>().unwrap().get(pelvis.id()).unwrap().position.y;
+        let end_y = world.query::<&Transform>().unwrap().get(pelvis).unwrap().position.y;
         assert!(
             end_y < start_y - 0.05,
             "ragdoll should fall under gravity: pelvis y {start_y} -> {end_y}"

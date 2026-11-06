@@ -201,7 +201,7 @@ fn main() {
             let coin = r.load_sprite_rgba(&glyph([255, 210, 60]), 8, 8, SpriteFilter::Nearest).expect("coin");
 
             scene.spawn_camera(state, Vec3::new(W as f32 / 2.0, -(H as f32) / 2.0, 20.0), Vec3::new(W as f32 / 2.0, -(H as f32) / 2.0, 0.0));
-            let camera = scene.world.borrow::<Camera>().iter().next().map(|(id, _)| id).expect("camera");
+            let camera = scene.world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, _)| entity.id()).expect("camera");
             if let Some(mut c) = scene.world.borrow_mut::<Camera>().get_mut(camera) {
                 c.projection = ProjectionMode::OrthographicFit { width: 22.0, height: 14.0 };
                 // Hiç görülmeyen yer siyah: harita orada boş, arkası kameranın rengi.

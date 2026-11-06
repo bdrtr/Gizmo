@@ -35,7 +35,7 @@ fn with_ccd_sets_flag_and_prevents_tunnel_end_to_end() {
 
     // (a) Bayrak archetype'a ulaştı mı? (gather *rb + sync_bodies bunu koruyor.)
     assert!(
-        w.borrow::<RigidBody>().get(bullet.id()).unwrap().ccd_enabled,
+        w.borrow::<RigidBody>().get(bullet).unwrap().ccd_enabled,
         "with_ccd() spawn edilen cismin ccd_enabled'ını set etmeli"
     );
 
@@ -43,7 +43,7 @@ fn with_ccd_sets_flag_and_prevents_tunnel_end_to_end() {
     let mut peak = f32::MIN;
     for _ in 0..240 {
         cpu_physics_step_system(&w, 1.0 / 240.0);
-        peak = peak.max(w.borrow::<Transform>().get(bullet.id()).unwrap().position.x);
+        peak = peak.max(w.borrow::<Transform>().get(bullet).unwrap().position.x);
     }
     assert!(peak < 0.0, "idiomatik .with_ccd() tünellemeyi önlemeli, tepe_x={peak}");
 }
@@ -71,7 +71,7 @@ fn without_ccd_the_same_bullet_tunnels() {
     let mut peak = f32::MIN;
     for _ in 0..30 {
         cpu_physics_step_system(&w, 1.0 / 240.0);
-        peak = peak.max(w.borrow::<Transform>().get(bullet.id()).unwrap().position.x);
+        peak = peak.max(w.borrow::<Transform>().get(bullet).unwrap().position.x);
     }
     assert!(peak > 1.0, "CCD'siz idiomatik mermi tünellemeli (kontrast), tepe_x={peak}");
 }

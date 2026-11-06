@@ -342,7 +342,7 @@ struct Ball;
 gizmo::core::impl_component!(Ball);
 
 fn start_hole(world: &mut World, game: &mut Game, hole: usize) {
-    let balls: Vec<u32> = world.borrow::<Ball>().iter().map(|(id, _)| id).collect();
+    let balls: Vec<u32> = world.query::<(Entity, &Ball)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
     for id in balls {
         if let Some(e) = world.get_entity(id) {
             world.despawn(e);

@@ -7,6 +7,7 @@
 //! card. A [`UiTransform`] is applied **after** layout, the way a CSS `transform` is: the box and
 //! everything in it is drawn and hit-tested where it is moved to, and nothing around it reflows.
 
+use gizmo_core::Entity;
 use gizmo_core::commands::Commands;
 use gizmo_core::query::{Mut, Query};
 use gizmo_core::system::Res;
@@ -156,14 +157,14 @@ impl UiTween {
 /// default one. Runs before the layout, on real time.
 pub fn ui_tween_system(
     time: Option<Res<gizmo_core::time::Time>>,
-    mut tweens: Query<(Mut<UiTween>, Option<Mut<UiTransform>>)>,
+    mut tweens: Query<(Entity, Mut<UiTween>, Option<Mut<UiTransform>>)>,
     mut commands: Commands,
 ) {
     let dt = time.map_or(0.0, |t| t.raw_dt());
     let mut bare = Vec::new();
-    for (id, (mut tween, transform)) in tweens.iter_mut() {
+    for (entity, mut tween, transform) in tweens.iter_mut() {
         let Some(mut transform) = transform else {
-            bare.push(id);
+            bare.push(entity);
             continue;
         };
         if tween.is_finished() {
@@ -176,10 +177,8 @@ pub fn ui_tween_system(
         }
         *tween = tw;
     }
-    for id in bare {
-        if let Some(e) = tweens.entity(id) {
-            commands.entity(e).insert(UiTransform::default());
-        }
+    for entity in bare {
+        commands.entity(entity).insert(UiTransform::default());
     }
 }
 

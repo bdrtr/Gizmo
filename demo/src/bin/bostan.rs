@@ -315,7 +315,7 @@ fn main() {
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
     let Some(mut game) = world.remove_resource::<Game>() else { return };
     let now = unix_time();
-    let clicked: Vec<u32> = world.borrow::<Clicked>().iter().filter(|(_, c)| c.0).map(|(id, _)| id).collect();
+    let clicked: Vec<u32> = world.query::<(Entity, &Clicked)>().unwrap().iter().filter(|(_, c)| c.0).map(|(entity, _)| entity.id()).collect();
     let mut changed = false;
     for id in clicked {
         if let Some(&SeedButton(c)) = world.borrow::<SeedButton>().get(id) {

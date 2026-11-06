@@ -72,7 +72,7 @@ fn fire(world: &mut World, angle: f32, speed: f32, visual: bool) -> RagdollInsta
     let ragdoll = gizmo::physics::ragdoll::spawn_ragdoll(world, defs.clone());
     let v = launch_velocity(angle, speed);
     for ((_, e), def) in ragdoll.bones.iter().zip(&defs) {
-        if let Some(mut vel) = world.borrow_mut::<Velocity>().get_mut(e.id()) {
+        if let Some(mut vel) = world.borrow_mut::<Velocity>().get_mut(*e) {
             vel.linear = v;
             vel.angular = Vec3::new(0.0, 0.0, -1.5);
         }
@@ -95,17 +95,17 @@ fn despawn(world: &mut World, ragdoll: &RagdollInstance) {
 }
 
 fn pelvis(world: &World, ragdoll: &RagdollInstance) -> Vec3 {
-    ragdoll.bones.first().and_then(|(_, e)| world.borrow::<Transform>().get(e.id()).map(|t| t.position)).unwrap_or(Vec3::ZERO)
+    ragdoll.bones.first().and_then(|(_, e)| world.borrow::<Transform>().get(*e).map(|t| t.position)).unwrap_or(Vec3::ZERO)
 }
 
 fn fastest(world: &World, ragdoll: &RagdollInstance) -> f32 {
     let vs = world.borrow::<Velocity>();
-    ragdoll.bones.iter().filter_map(|(_, e)| vs.get(e.id()).map(|v| v.linear.length())).fold(0.0, f32::max)
+    ragdoll.bones.iter().filter_map(|(_, e)| vs.get(*e).map(|v| v.linear.length())).fold(0.0, f32::max)
 }
 
 fn lowest(world: &World, ragdoll: &RagdollInstance) -> f32 {
     let ts = world.borrow::<Transform>();
-    ragdoll.bones.iter().filter_map(|(_, e)| ts.get(e.id()).map(|t| t.position.y)).fold(f32::MAX, f32::min)
+    ragdoll.bones.iter().filter_map(|(_, e)| ts.get(*e).map(|t| t.position.y)).fold(f32::MAX, f32::min)
 }
 
 /// Eklemlerin iki ucu arasındaki en büyük açıklık.

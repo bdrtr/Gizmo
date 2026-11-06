@@ -210,10 +210,10 @@ fn run_next(world: &mut World, input: &Input) {
 
     // Bekleyen ilk geri çağrıyı bul. Bileşeni klonluyoruz — `Arc` sayesinde ucuz, ve kapatmayı
     // çalıştırırken dünyayı ödünç almamış oluyoruz.
-    let next = world.query::<(&Callback, &Pending)>().and_then(|q| {
+    let next = world.query::<(Entity, &Callback, &Pending)>().and_then(|q| {
         q.iter()
             .next()
-            .map(|(id, (cb, _))| (id, cb.clone()))
+            .map(|(entity, cb, _)| (entity.id(), cb.clone()))
     });
     let Some((id, cb)) = next else {
         return;

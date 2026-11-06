@@ -6,6 +6,7 @@
 //! beside it in the same batch seeing a torn view.
 //!
 //! [`in_state`] turns a state value into a run condition.
+use crate::Entity;
 use crate::world::World;
 
 /// The State struct used to manage the logical states in the game.
@@ -224,8 +225,8 @@ fn run_hooks<S: PartialEq>(hooks: &mut [(S, StateHook)], state: &S, world: &mut 
 
 fn despawn_scoped<S: Clone + PartialEq + Eq + Send + Sync + 'static>(world: &mut World, left: &S) {
     use crate::hierarchy::HierarchyExt;
-    let ids: Vec<u32> = match world.query::<&DespawnOnExit<S>>() {
-        Some(q) => q.iter().filter(|(_, d)| d.0 == *left).map(|(id, _)| id).collect(),
+    let ids: Vec<u32> = match world.query::<(Entity, &DespawnOnExit<S>)>() {
+        Some(q) => q.iter().filter(|(_, d)| d.0 == *left).map(|(entity, _)| entity.id()).collect(),
         None => return,
     };
     for id in ids {

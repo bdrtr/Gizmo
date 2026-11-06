@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use crate::coupling::{RigidImpulse, RigidReaction};
 use crate::{cloth::Cloth, rope::Rope, SoftBodyMesh};
 use gizmo_core::world::World;
@@ -49,7 +50,7 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
     // the caller to supply in exchange for skipping the runtime borrow check.
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<SoftBodyMesh>>() }
     {
-        let mut bodies: Vec<_> = q.iter_mut().map(|(_, b)| b).collect();
+        let mut bodies: Vec<_> = q.iter_mut().collect();
         // As many sub-steps as the stiffest body needs to stay stable — see `stable_substeps`;
         // one step of the frame's `dt` exploded a dropped block at any stiffness worth calling a
         // solid. All bodies take the same sub-steps, interleaved, so that after each one the
@@ -86,9 +87,9 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
 /// an inconsistency) → rather than unwrapping, that collider is silently skipped.
 fn collect_rigid_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
     let mut rigid_colliders = Vec::new();
-    if let Some(q) = world.query::<(&Transform, &Collider)>() {
-        for (e, (trans, col)) in q.iter() {
-            if let Some(entity) = world.get_entity(e) {
+    if let Some(q) = world.query::<(Entity, &Transform, &Collider)>() {
+        for (e, trans, col) in q.iter() {
+            if let Some(entity) = world.get_entity(e.id()) {
                 // Bridge: ECS entity -> opaque physics BodyHandle (id only).
                 rigid_colliders.push((BodyHandle::from_id(entity.id()), *trans, col.clone()));
             }
@@ -113,12 +114,12 @@ pub fn collect_rigid_reactions(world: &World) -> Vec<(BodyHandle, RigidReaction)
     use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
     let mut out = Vec::new();
-    if let Some(q) = world.query::<(&RigidBody, &Velocity, &Transform)>() {
-        for (e, (rb, vel, trans)) in q.iter() {
+    if let Some(q) = world.query::<(Entity, &RigidBody, &Velocity, &Transform)>() {
+        for (e, rb, vel, trans) in q.iter() {
             if rb.is_static() {
                 continue;
             }
-            let Some(entity) = world.get_entity(e) else {
+            let Some(entity) = world.get_entity(e.id()) else {
                 continue;
             };
             out.push((
@@ -166,17 +167,18 @@ pub fn apply_reaction_impulses(world: &World, impulses: &[RigidImpulse]) {
     // collider/reaction queries above have already been dropped.
     let mut q = unsafe {
         world.query_unchecked::<(
+            gizmo_core::Entity,
             gizmo_core::query::Mut<RigidBody>,
             &Transform,
             gizmo_core::query::Mut<Velocity>,
         )>()
     };
     if let Some(q) = &mut q {
-        for (id, (mut rb, trans, mut vel)) in q.iter_mut() {
+        for (entity, mut rb, trans, mut vel) in q.iter_mut() {
             if !rb.is_dynamic() {
                 continue;
             }
-            let handle = BodyHandle::from_id(id);
+            let handle = BodyHandle::from_id(entity.id());
             let Some(impulse) = impulses.iter().find(|i| i.body == handle) else {
                 continue;
             };
@@ -219,7 +221,7 @@ pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
 
     // SAFETY: scheduled system, exclusive view of Cloth — see `soft_body_step_system` above.
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Cloth>>() } {
-        for (_, mut cloth) in q.iter_mut() {
+        for mut cloth in q.iter_mut() {
             cloth.step_coupled(dt, gravity, sub_steps, &rigid_colliders, &reactions, &mut impulses);
         }
     }
@@ -236,7 +238,7 @@ pub fn rope_step_system(world: &World, dt: f32, gravity: Vec3) {
     // SAFETY: scheduled system, exclusive view of Rope — see `soft_body_step_system` above.
     if let Some(mut q) = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Rope>>() } {
         let colliders = collect_rigid_colliders(world);
-        for (_, mut rope) in q.iter_mut() {
+        for mut rope in q.iter_mut() {
             rope.step_with_colliders(dt, gravity, &colliders);
         }
     }

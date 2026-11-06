@@ -16,6 +16,7 @@
 //!     — it used to be "clear the material's `texture_source`", which put the request stage in the
 //!     business of deleting the field a scene file saves. See `should_request`.
 
+use gizmo_core::Entity;
 use gizmo_core::system::{AccessInfo, System};
 use gizmo_core::World;
 use gizmo_physics_core::Transform;
@@ -132,7 +133,7 @@ fn request_nearby_textures(world: &World) {
         };
         let mut fallback = None;
         let mut primary = None;
-        for (_id, (cam, t)) in q.iter() {
+        for (cam, t) in q.iter() {
             if cam.primary {
                 primary = Some(t.position);
                 break;
@@ -156,7 +157,7 @@ fn request_nearby_textures(world: &World) {
     }
 
     // Aday entity'leri topla (Material read borrow'u ifade sonunda biter).
-    let entities: Vec<u32> = world.borrow::<Material>().entities().collect();
+    let entities: Vec<u32> = world.query::<(Entity, &Material)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
     let transforms = world.borrow::<Transform>();
     let hidden = world.borrow::<gizmo_core::component::IsHidden>();
     let Some(mut server) = world.get_resource_mut::<crate::asset_server::AssetServer>() else {

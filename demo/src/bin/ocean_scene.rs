@@ -271,7 +271,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
 
     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
-        for (_, (mut transform, mut camera)) in q.iter_mut() {
+        for (mut transform, mut camera) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
 
@@ -323,7 +323,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
 
     if let Some(mut q) = world.query_mut::<Mut<Transform>>() {
         // Güneş rotasyonu (Gündüz/Gece döngüsü)
-        if let Some((_, mut trans)) = q.iter_mut().find(|(e, _)| *e == state.sun_entity.id()) {
+        if let Some(mut trans) = q.get_mut(state.sun_entity) {
             let sun_speed = 0.2; // Zamanın hızı
             let sun_angle = -std::f32::consts::PI / 4.0 + state.time * sun_speed;
             trans.rotation = Quat::from_rotation_x(sun_angle);
@@ -369,7 +369,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
 
         if let Some(mut rbs) = world.query_mut::<(Mut<Transform>, Mut<RigidBody>, Mut<Velocity>)>()
         {
-            for (_, (trans, rb, mut vel)) in rbs.iter_mut() {
+            for (trans, rb, mut vel) in rbs.iter_mut() {
                 if rb.body_type != BodyType::Static {
                     let dir = trans.position - epicenter;
                     let dist = dir.length();
@@ -391,9 +391,9 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     // X Tuşu: Cam Gibi Parçalama (Fracture) — kırılabilir tahtaları render fn'e kuyrukla.
     if input.is_key_just_pressed(KeyCode::KeyX as u32) {
         let mut queue = world.get_resource_mut::<FractureQueue>().unwrap();
-        if let Some(q) = world.query::<(&Transform, &Destructible)>() {
-            for (ent_id, _) in q.iter() {
-                queue.entities.push(ent_id);
+        if let Some(q) = world.query::<(Entity, &Transform, &Destructible)>() {
+            for (entity, ..) in q.iter() {
+                queue.entities.push(entity.id());
             }
         }
     }
@@ -420,20 +420,20 @@ fn render(
     if !to_fracture.is_empty() {
         let mut fracture_data = Vec::new();
 
-        if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Material>, Mut<Velocity>)>() {
-            for (ent_id, (trans, mat, vel)) in q.iter_mut() {
-                if to_fracture.contains(&ent_id) {
-                    fracture_data.push((ent_id, *trans, mat.clone(), *vel));
+        if let Some(mut q) = world.query_mut::<(Entity, Mut<Transform>, Mut<Material>, Mut<Velocity>)>() {
+            for (entity, trans, mat, vel) in q.iter_mut() {
+                if to_fracture.contains(&entity.id()) {
+                    fracture_data.push((entity, *trans, mat.clone(), *vel));
                 }
             }
         }
 
         for (ent_id, trans, mat, vel) in fracture_data {
-            world.despawn_by_id(ent_id); // Orijinal objeyi yok et
+            world.despawn_by_id(ent_id.id()); // Orijinal objeyi yok et
 
             // Voronoi Shatter ile objeyi rastgele parçalara böl
             let chunks =
-                gizmo::physics::fracture::voronoi_shatter(Vec3::splat(0.5), 5, 42 + ent_id as u64);
+                gizmo::physics::fracture::voronoi_shatter(Vec3::splat(0.5), 5, 42 + ent_id.id() as u64);
 
             for chunk in chunks {
                 // Parçalar için GPU Vertex'lerini unroll (indices üzerinden)

@@ -209,7 +209,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) {
         ..Default::default()
     });
     if let Some(mut q) = world.query_mut::<Mut<Camera>>() {
-        if let Some(mut cam) = q.get_mut(camera.id()) {
+        if let Some(mut cam) = q.get_mut(camera) {
             cam.clear_color = Some(Vec3::new(0.01, 0.012, 0.03));
         }
     }
@@ -253,8 +253,8 @@ fn self_test() -> bool {
     while run.elapsed < ROUND_SECONDS + 10.0 && !over(&run.world) {
         let (player, target) = {
             let tfs = run.world.borrow::<Transform>();
-            let player = run.world.borrow::<Player>().iter().find_map(|(id, _)| tfs.get(id).map(|t| t.position));
-            let crystals: Vec<Vec3> = run.world.borrow::<Crystal>().iter().filter_map(|(id, _)| tfs.get(id).map(|t| t.position)).collect();
+            let player = run.world.query::<(Entity, &Player)>().unwrap().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position));
+            let crystals: Vec<Vec3> = run.world.query::<(Entity, &Crystal)>().unwrap().iter().filter_map(|(entity, _)| tfs.get(entity).map(|t| t.position)).collect();
             let target = player.and_then(|p| crystals.into_iter().min_by(|a, b| a.distance(p).total_cmp(&b.distance(p))));
             (player, target)
         };
@@ -280,7 +280,7 @@ fn self_test() -> bool {
         lives_before = lives;
     }
     let (score, time_left) = run.world.get_resource::<Run>().map_or((0, 0.0), |r| (r.score, r.time_left));
-    let leftovers = run.world.borrow::<Player>().iter().count() + run.world.borrow::<Crystal>().iter().count();
+    let leftovers = run.world.query::<(Entity, &Player)>().unwrap().iter().count() + run.world.query::<(Entity, &Crystal)>().unwrap().iter().count();
     let ok = over(&run.world) && score >= 3 && leftovers == 0;
     println!(
         "kristal_avcisi --test: tur {:.0} s sürdü (kalan süre {time_left:.0} s), {score} kristal, {lost} kez yakalandı; bitişte kalan tur varlığı {leftovers} → {}",
@@ -441,13 +441,13 @@ fn move_player(mut players: Query<(Mut<Transform>, With<Player>)>, input: Res<In
     let (ax, az) = input.move_axis_with(MoveKeys::ARROWS);
     let dir = Vec3::new(x + ax, 0.0, -(z + az));
     let step = dir.normalize_or_zero() * PLAYER_SPEED * time.dt();
-    for (_, (mut tf, _)) in players.iter_mut() {
+    for (mut tf, _) in players.iter_mut() {
         tf.position = (tf.position + step).clamp(Vec3::new(-ARENA + 0.6, 0.5, -ARENA + 0.6), Vec3::new(ARENA - 0.6, 0.5, ARENA - 0.6));
     }
 }
 
 fn player_position(players: &Query<(&Transform, With<Player>)>) -> Option<Vec3> {
-    players.iter().next().map(|(_, (tf, _))| tf.position)
+    players.iter().next().map(|(tf, _)| tf.position)
 }
 
 fn chase(mut hunters: Query<(Mut<Transform>, With<Hunter>)>, players: Query<(&Transform, With<Player>)>, time: Res<Time>, state: Res<State<Screen>>) {
@@ -455,7 +455,7 @@ fn chase(mut hunters: Query<(Mut<Transform>, With<Hunter>)>, players: Query<(&Tr
         return;
     }
     let Some(target) = player_position(&players) else { return };
-    for (_, (mut tf, _)) in hunters.iter_mut() {
+    for (mut tf, _) in hunters.iter_mut() {
         let to = (target - tf.position) * Vec3::new(1.0, 0.0, 1.0);
         tf.position += to.normalize_or_zero() * HUNTER_SPEED * time.dt();
     }
@@ -477,7 +477,7 @@ fn collect(
     }
     let Some(player) = player_position(&players) else { return };
     let spin = Quat::from_rotation_y(time.dt() * 2.0) * Quat::from_rotation_x(time.dt() * 1.3);
-    for (_, (mut tf, _)) in crystals.iter_mut() {
+    for (mut tf, _) in crystals.iter_mut() {
         tf.rotation = spin * tf.rotation;
         if tf.position.distance(player) < 0.9 {
             run.score += 1;
@@ -506,7 +506,7 @@ fn get_caught(
     }
     run.grace = (run.grace - time.dt()).max(0.0);
     let Some(player) = player_position(&players) else { return };
-    let caught = hunters.iter().any(|(_, (tf, _))| tf.position.distance(player) < 0.9);
+    let caught = hunters.iter().any(|(tf, _)| tf.position.distance(player) < 0.9);
     if caught && run.grace == 0.0 {
         run.lives = run.lives.saturating_sub(1);
         run.grace = 1.5;

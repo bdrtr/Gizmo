@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use gizmo_math::{Vec2, Vec4};
 
 use crate::sprite::SpriteImageId;
@@ -280,12 +281,12 @@ impl SpriteAnimation {
 pub fn sprite_animation_system(world: &mut gizmo_core::World, dt: f32) {
     // Two passes: an animation advances whether or not its entity has a sprite, so it cannot be
     // a joint `(SpriteAnimation, Sprite)` query.
-    let frames: Vec<(u32, [f32; 4])> = match world.query_mut::<gizmo_core::query::Mut<SpriteAnimation>>() {
+    let frames: Vec<(u32, [f32; 4])> = match world.query_mut::<(Entity, gizmo_core::query::Mut<SpriteAnimation>)>() {
         Some(mut q) => q
             .iter_mut()
-            .filter_map(|(id, mut anim)| {
+            .filter_map(|(entity, mut anim)| {
                 anim.advance(dt);
-                sheet_frame(anim.frame(), anim.columns, anim.rows).map(|rect| (id, rect))
+                sheet_frame(anim.frame(), anim.columns, anim.rows).map(|rect| (entity.id(), rect))
             })
             .collect(),
         None => return,
@@ -435,7 +436,7 @@ mod tests {
 
         sprite_animation_system(&mut world, 0.55); // step 5 → column 1 of row 1
         let sprites = world.borrow::<Sprite>();
-        assert_eq!(sprites.get(animated.id()).unwrap().uv_rect, [0.25, 0.5, 0.5, 1.0]);
-        assert_eq!(sprites.get(still.id()).unwrap().uv_rect, [0.1, 0.2, 0.3, 0.4]);
+        assert_eq!(sprites.get(animated).unwrap().uv_rect, [0.25, 0.5, 0.5, 1.0]);
+        assert_eq!(sprites.get(still).unwrap().uv_rect, [0.1, 0.2, 0.3, 0.4]);
     }
 }

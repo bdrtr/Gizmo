@@ -631,7 +631,7 @@ fn apply_exposure(mut cameras: Query<Mut<Camera>>, ae: Res<Ae>) {
     // `frame` artık `set_render` içinde artıyor: kare süresi orada ölçülüyor ve ikisi aynı sayacı
     // kullanmak zorunda.
     let e = ae.exposure;
-    for (_entity, mut camera) in cameras.iter_mut() {
+    for mut camera in cameras.iter_mut() {
         camera.exposure = e;
     }
 }

@@ -113,7 +113,7 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 4] {
 /// Küp renklerini zamanla akıcı biçimde döndüren ECS sistemi (100°/sn).
 fn animate_materials(mut q_materials: Query<(Mut<Material>, Mut<CubeHue>)>, time: Res<Time>) {
     let dt = time.dt();
-    for (_entity, (mut mat, mut hue)) in q_materials.iter_mut() {
+    for (mut mat, mut hue) in q_materials.iter_mut() {
         hue.0 = (hue.0 + dt * 100.0).rem_euclid(360.0);
         let rgb = hsl_to_rgb(hue.0, 1.0, 0.5);
         mat.albedo = Vec4::new(rgb[0], rgb[1], rgb[2], 1.0);

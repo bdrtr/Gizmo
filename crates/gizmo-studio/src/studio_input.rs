@@ -125,20 +125,19 @@ fn find_closest_hit(world: &World, ray: &Ray, player_id: u32) -> Option<u32> {
     let mut closest_t = f32::MAX;
     let mut hit_entity = None;
 
-    let transforms = world.borrow::<Transform>();
     let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
     let colliders = world.borrow::<Collider>();
     let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
     let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
-    for (id, t) in transforms.iter() {
+    for (entity, t) in world.query::<(Entity, &Transform)>().unwrap().iter() {
         // Filtreleme: Kamera, gizli, editör objeleri
-        if id == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id) {
+        if entity.id() == player_id || is_hidden.get(entity).is_some() || is_editor_entity(world, entity.id()) {
             continue;
         }
 
         // Objenin OBB bilgilerini topla
-        let obb = match compute_entity_obb(id, t, &meshes, &colliders, &global_transforms) {
+        let obb = match compute_entity_obb(entity.id(), t, &meshes, &colliders, &global_transforms) {
             Some(obb) => obb,
             None => continue, // Hacmi olmayan objeleri atla
         };
@@ -147,7 +146,7 @@ fn find_closest_hit(world: &World, ray: &Ray, player_id: u32) -> Option<u32> {
         if let Some(hit_t) = ray.intersect_obb(obb.center, obb.half_extents, obb.rotation) {
             if hit_t > 0.0 && hit_t < closest_t {
                 closest_t = hit_t;
-                hit_entity = Some(id);
+                hit_entity = Some(entity.id());
             }
         }
     }
@@ -248,14 +247,13 @@ fn perform_rubber_band_selection(
         state.selection.entities.clear();
     }
 
-    let transforms = world.borrow::<Transform>();
     let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
     let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
     let colliders = world.borrow::<Collider>();
     let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
 
-    for (id, t) in transforms.iter() {
-        if id == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id) {
+    for (id, t) in world.query::<(Entity, &Transform)>().unwrap().iter() {
+        if id.id() == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id.id()) {
             continue;
         }
 
@@ -297,7 +295,7 @@ fn perform_rubber_band_selection(
 
         if screen_x >= min_x && screen_x <= max_x && screen_y >= min_y && screen_y <= max_y {
             // Child mesh yerine root entity'yi seç (raycast ile aynı davranış)
-            let root_id = find_selection_root(world, id);
+            let root_id = find_selection_root(world, id.id());
             if let Some(entity) = world.get_entity(root_id) {
                 state.selection.entities.insert(entity);
             }

@@ -222,8 +222,8 @@ fn toggle(world: &mut gizmo::core::World, input: &Input) {
     drop(report);
 
     let mut ids: Vec<u32> = world
-        .query::<&Spinner>()
-        .map(|q| q.iter().map(|(id, _)| id).collect())
+        .query::<(Entity, &Spinner)>()
+        .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
         .unwrap_or_default();
     ids.sort_unstable();
     for (index, id) in ids.iter().enumerate() {
@@ -251,7 +251,7 @@ fn spin_filtered(
 ) {
     let dt = time.dt();
     let mut seen = 0usize;
-    for (_entity, (mut transform, spinner, _)) in spinners.iter_mut() {
+    for (mut transform, spinner, _) in spinners.iter_mut() {
         seen += 1;
         // Her küpün kendi hızı — `Spinner`'ın yükü burada iş görüyor.
         transform.rotation *= Quat::from_rotation_y(dt * (0.6 + spinner.0));

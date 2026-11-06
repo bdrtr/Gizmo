@@ -32,6 +32,7 @@
 //! diagonal ([`AssetManager::terrain_triangles`](crate::renderer::asset::AssetManager::terrain_triangles)),
 //! so what is drawn is what is hit.
 
+use gizmo_core::Entity;
 use crate::renderer::components::{Mesh, MeshRenderer, Terrain};
 use crate::renderer::Renderer;
 
@@ -85,19 +86,18 @@ fn is_the_old_box(collider: &crate::physics::Collider, width: f32, depth: f32, m
 fn recipes_awaiting_a_mesh(
     world: &crate::core::World,
 ) -> Vec<(u32, String, f32, f32, f32)> {
-    let terrains = world.borrow::<Terrain>();
     let meshes = world.borrow::<Mesh>();
     let failed = world.borrow::<TerrainBuildFailed>();
     let mut pending = Vec::new();
-    for (id, terrain) in terrains.iter() {
+    for (entity, terrain) in world.query::<(Entity, &Terrain)>().unwrap().iter() {
         // Already built, already failed, or never authored — an empty path is a `Terrain` a user
         // has added and not yet pointed at a heightmap, which is a normal state in the inspector
         // and not an error to log every frame.
-        if meshes.contains(id) || failed.contains(id) || terrain.heightmap_path.is_empty() {
+        if meshes.contains(entity) || failed.contains(entity) || terrain.heightmap_path.is_empty() {
             continue;
         }
         pending.push((
-            id,
+            entity.id(),
             terrain.heightmap_path.clone(),
             terrain.width,
             terrain.depth,

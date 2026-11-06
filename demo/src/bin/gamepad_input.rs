@@ -268,7 +268,7 @@ fn read_pad(
     let (lx, ly) = pad.left;
     let (rx, _) = pad.right;
     let scale = 0.6 + pad.triggers.1 * 0.8 - pad.triggers.0 * 0.4;
-    for (_entity, (mut transform, _)) in pawns.iter_mut() {
+    for (mut transform, _) in pawns.iter_mut() {
         // Çubuğun Y'si ileri: ekranda −Z.
         transform.position = Vec3::new(lx * REACH, 0.0, -ly * REACH);
         transform.rotation = Quat::from_rotation_y(rx * TAU * 0.25);

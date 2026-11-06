@@ -1361,19 +1361,19 @@ mod tests {
         // e1 to {Pos,Vel}; e2 swap-fills e1's vacated row in {Pos} (moved_eid path).
         world.add_component(e1, Vel(10));
 
-        assert_eq!(world.borrow::<Pos>().get(e0.id()).unwrap().0, 0);
-        assert_eq!(world.borrow::<Pos>().get(e1.id()).unwrap().0, 1);
-        assert_eq!(world.borrow::<Pos>().get(e2.id()).unwrap().0, 2);
-        assert_eq!(world.borrow::<Vel>().get(e1.id()).unwrap().0, 10);
-        assert!(world.borrow::<Vel>().get(e0.id()).is_none());
-        assert!(world.borrow::<Vel>().get(e2.id()).is_none());
+        assert_eq!(world.borrow::<Pos>().get(e0).unwrap().0, 0);
+        assert_eq!(world.borrow::<Pos>().get(e1).unwrap().0, 1);
+        assert_eq!(world.borrow::<Pos>().get(e2).unwrap().0, 2);
+        assert_eq!(world.borrow::<Vel>().get(e1).unwrap().0, 10);
+        assert!(world.borrow::<Vel>().get(e0).is_none());
+        assert!(world.borrow::<Vel>().get(e2).is_none());
 
         // Remove Vel → e1 migrates back to {Pos}; every entity's data stays intact.
         world.remove_component::<Vel>(e1);
-        assert_eq!(world.borrow::<Pos>().get(e0.id()).unwrap().0, 0);
-        assert_eq!(world.borrow::<Pos>().get(e1.id()).unwrap().0, 1);
-        assert_eq!(world.borrow::<Pos>().get(e2.id()).unwrap().0, 2);
-        assert!(world.borrow::<Vel>().get(e1.id()).is_none());
+        assert_eq!(world.borrow::<Pos>().get(e0).unwrap().0, 0);
+        assert_eq!(world.borrow::<Pos>().get(e1).unwrap().0, 1);
+        assert_eq!(world.borrow::<Pos>().get(e2).unwrap().0, 2);
+        assert!(world.borrow::<Vel>().get(e1).is_none());
     }
 
     /// `add_bundle` on a reserved-but-unflushed id must not panic.
@@ -1404,7 +1404,7 @@ mod tests {
         // The world must still be usable — the dropped bundle left no half-built archetype.
         let ok = world.spawn();
         world.add_component(ok, Pos(7));
-        assert_eq!(world.borrow::<Pos>().get(ok.id()).unwrap().0, 7);
+        assert_eq!(world.borrow::<Pos>().get(ok).unwrap().0, 7);
     }
 
     /// The recycled-id half of the same defect: here the `entity_locations` slot EXISTS
@@ -1433,7 +1433,7 @@ mod tests {
         world.add_bundle(recycled, (Pos(3), Vel(4)));
 
         // Survivor untouched: no bogus row move happened.
-        assert_eq!(world.borrow::<Pos>().get(survivor.id()).unwrap().0, 2);
+        assert_eq!(world.borrow::<Pos>().get(survivor).unwrap().0, 2);
         assert!(world.entity_component_types(recycled).is_empty());
     }
 

@@ -362,11 +362,9 @@ fn start_test(world: &mut World, game: &mut Game) {
         }
     }
     let all = nodes();
-    let cliff_body: Vec<(u32, Vec3)> = world
-        .borrow::<RigidBody>()
-        .iter()
+    let cliff_body: Vec<(u32, Vec3)> = world.query::<(Entity, &RigidBody)>().unwrap().iter()
         .filter(|(_, rb)| rb.is_static())
-        .filter_map(|(id, _)| world.borrow::<Transform>().get(id).map(|t| (id, t.position)))
+        .filter_map(|(entity, _)| world.borrow::<Transform>().get(entity).map(|t| (entity.id(), t.position)))
         .collect();
     let mut joints = Vec::new();
     game.bodies.clear();
@@ -491,7 +489,7 @@ fn colour_beams(world: &mut World, game: &Game) {
         };
         let child = world.borrow::<gizmo::core::component::Children>().get(body).and_then(|c| c.0.first().copied());
         if let Some(child) = child {
-            if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(child.id()) {
+            if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(child) {
                 if m.albedo != colour {
                     *m = m.clone().with_pbr(colour, 0.8, 0.0);
                 }

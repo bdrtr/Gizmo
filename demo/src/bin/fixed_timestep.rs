@@ -169,7 +169,7 @@ fn fixed_update(
     stats.fixed_steps += 1;
     stats.steps_this_frame += 1;
 
-    for (_entity, (mut transform, mut cube)) in cubes.iter_mut() {
+    for (mut transform, mut cube) in cubes.iter_mut() {
         cube.0 += dt * SPEED;
         transform.position.x = SPAN * cube.0.sin();
     }
@@ -206,7 +206,7 @@ fn frame_update(
     }
     stats.steps_this_frame = 0;
 
-    for (_entity, (mut transform, mut cube)) in cubes.iter_mut() {
+    for (mut transform, mut cube) in cubes.iter_mut() {
         cube.0 += dt * SPEED;
         transform.position.x = SPAN * cube.0.sin();
     }

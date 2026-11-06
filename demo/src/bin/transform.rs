@@ -159,7 +159,7 @@ fn main() {
 
 /// Küpü kendi **önüne** doğru taşır.
 fn move_cube(mut cubes: Query<(Mut<Transform>, &CubeState)>, time: Res<Time>) {
-    for (_entity, (mut transform, cube)) in cubes.iter_mut() {
+    for (mut transform, cube) in cubes.iter_mut() {
         let ahead = transform.forward();
         let delta = ahead * cube.move_speed * time.dt();
         transform.position += delta;
@@ -177,11 +177,11 @@ fn rotate_cube(
 ) {
     // Dönülecek nokta: kürelerin konumlarının toplamı (sahnede tek küre var).
     let mut center = Vec3::ZERO;
-    for (_entity, (transform, _)) in centers.iter() {
+    for (transform, _) in centers.iter() {
         center += transform.position;
     }
 
-    for (_entity, (mut transform, cube, _)) in cubes.iter_mut() {
+    for (mut transform, cube, _) in cubes.iter_mut() {
         // Küreye tam baksaydı hangi dönüş olurdu — ve o dönüşe doğru küçük bir adım.
         let target = transform.looking_at(center, transform.up());
         let weight = cube.turn_speed * time.dt();
@@ -198,13 +198,13 @@ fn scale_center(
 ) {
     let mut distances = 0.0;
     let mut cube_position = Vec3::ZERO;
-    for (_entity, (transform, state, _)) in cubes.iter() {
+    for (transform, state, _) in cubes.iter() {
         distances += (state.start_pos - transform.position).length();
         cube_position = transform.position;
     }
 
     let mut sphere_scale = 0.0;
-    for (_entity, (mut transform, center)) in centers.iter_mut() {
+    for (mut transform, center) in centers.iter_mut() {
         let new_size = (center.max_size - center.scale_factor * distances).max(center.min_size);
         transform.scale = Vec3::splat(new_size);
         sphere_scale = new_size;

@@ -1,3 +1,5 @@
+use gizmo_core::Entity;
+
 /// Propagates the transform hierarchy: every entity's `GlobalTransform` is rebuilt from its
 /// local `Transform` and its parents', so a child follows what it is attached to.
 pub struct TransformSyncSystem;
@@ -26,7 +28,7 @@ impl gizmo_core::system::System for TransformSyncSystem {
             // moving or not — the same mistake `set_global_matrix` below was written to undo for
             // `GlobalTransform` — and on a static scene of 60 000 entities it was most of this
             // pass's cost (measured 2026-11-03).
-            for (_, mut trans) in transforms.iter_mut() {
+            for mut trans in transforms.iter_mut() {
                 let next = crate::math::Mat4::from_scale_rotation_translation(trans.scale, trans.rotation, trans.position);
                 if trans.local_matrix != next {
                     trans.bypass_change_detection().local_matrix = next;
@@ -100,6 +102,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
         let root_query = unsafe {
             world.query_unchecked::<(
+                Entity,
                 &gizmo_physics_core::Transform,
                 gizmo_core::query::Mut<gizmo_physics_core::components::GlobalTransform>,
                 gizmo_core::query::Without<gizmo_core::component::Parent>,
@@ -119,7 +122,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
 
         if let Some(mut roots) = root_query {
             let mut children_query = world.query::<&gizmo_core::component::Children>();
-            for (id, (local, mut global, _)) in roots.iter_mut() {
+            for (entity, local, mut global, _) in roots.iter_mut() {
                 // Compare-then-write. `Mut::deref_mut` stamps `ticks.changed` on EVERY use,
                 // so writing unconditionally marked every node of the hierarchy as changed
                 // every single frame — `Changed<GlobalTransform>` then matched 100% of the
@@ -127,9 +130,9 @@ impl gizmo_core::system::System for TransformPropagateSystem {
                 // value through `bypass_change_detection` keeps the field correct and
                 // leaves the tick alone. See T16–T18.
                 set_global_matrix(&mut global, local.local_matrix);
-                visited.insert(id);
+                visited.insert(entity.id());
                 if let Some(children_q) = &mut children_query {
-                    if let Some(children) = children_q.get(id) {
+                    if let Some(children) = children_q.get(entity) {
                         for &child in &children.0 {
                             if world.is_alive(child) && visited.insert(child.id()) {
                                 queue.push((global.matrix, child.id()));
@@ -249,19 +252,19 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
     #[tracing::instrument(skip_all, level = "trace", name = "bone_attachment")]
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
         let mut attached = 0usize;
-        if let Some(query) = world.query::<&gizmo_renderer::components::BoneAttachment>() {
+        if let Some(query) = world.query::<(Entity, &gizmo_renderer::components::BoneAttachment)>() {
             let mut skeletons = world.query::<&gizmo_renderer::components::Skeleton>();
             // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
             let mut transforms = unsafe {
                 world.query_unchecked::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>()
             };
 
-            for (id, attachment) in query.iter() {
+            for (entity, attachment) in query.iter() {
                 if let Some(sq) = &mut skeletons {
-                    if let Some(skeleton) = sq.get(attachment.target_entity.id()) {
+                    if let Some(skeleton) = sq.get(attachment.target_entity) {
                         if let Some(global_matrix) = skeleton.global_poses.get(attachment.bone_index) {
                             if let Some(tq) = &mut transforms {
-                                if let Some(mut trans) = tq.get_mut(id) {
+                                if let Some(mut trans) = tq.get_mut(entity) {
                                     let final_mat = *global_matrix * attachment.offset;
                                     let (t, r, s) = gizmo_renderer::decompose_mat4(final_mat);
                                     trans.position = t;
@@ -284,6 +287,7 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
 
 #[cfg(test)]
 mod tests {
+    use gizmo_core::Entity;
     use super::*;
     use gizmo_core::component::Children;
     use gizmo_core::system::System;
@@ -328,7 +332,7 @@ mod tests {
 
         // A parent moved this frame: the walk sees it, GlobalTransform is a frame behind.
         if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
-            if let Some(mut t) = q.get_mut(root.id()) {
+            if let Some(mut t) = q.get_mut(root) {
                 t.position.y = 5.0;
             }
         }
@@ -415,15 +419,15 @@ mod tests {
             // Offset each root so the chain is not all-identity (identity would make the
             // "unchanged" compare trivially true for the wrong reason).
             if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
-                if let Some(mut t) = q.get_mut(r.id()) {
+                if let Some(mut t) = q.get_mut(r) {
                     t.position = gizmo_math::Vec3::new(i as f32, 1.0, 2.0);
                     t.update_local_matrix();
                 }
-                if let Some(mut t) = q.get_mut(c.id()) {
+                if let Some(mut t) = q.get_mut(c) {
                     t.position = gizmo_math::Vec3::new(0.0, 3.0, 0.0);
                     t.update_local_matrix();
                 }
-                if let Some(mut t) = q.get_mut(g.id()) {
+                if let Some(mut t) = q.get_mut(g) {
                     t.position = gizmo_math::Vec3::new(0.0, 0.0, 4.0);
                     t.update_local_matrix();
                 }
@@ -441,8 +445,8 @@ mod tests {
 
     fn changed_globals(world: &World) -> Vec<u32> {
         let mut ids: Vec<u32> = world
-            .query::<gizmo_core::query::Changed<GlobalTransform>>()
-            .map(|q| q.iter().map(|(id, _)| id).collect())
+            .query::<(Entity, gizmo_core::query::Changed<GlobalTransform>)>()
+            .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
             .unwrap_or_default();
         ids.sort_unstable();
         ids
@@ -496,8 +500,8 @@ mod tests {
         world.add_component(moving, Transform::new(gizmo_math::Vec3::ZERO));
         let changed = |w: &World| -> Vec<u32> {
             let mut v: Vec<u32> = w
-                .query::<gizmo_core::query::Changed<Transform>>()
-                .map(|q| q.iter().map(|(id, _)| id).collect())
+                .query::<(Entity, gizmo_core::query::Changed<Transform>)>()
+                .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
                 .unwrap_or_default();
             v.sort_unstable();
             v
@@ -509,11 +513,11 @@ mod tests {
         let prev = world.tick;
         world.begin_change_frame(prev);
         if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
-            q.get_mut(moving.id()).unwrap().position = gizmo_math::Vec3::new(5.0, 0.0, 0.0);
+            q.get_mut(moving).unwrap().position = gizmo_math::Vec3::new(5.0, 0.0, 0.0);
         }
         TransformSyncSystem.run(&world, 0.0);
         assert_eq!(changed(&world), vec![moving.id()], "the sync stamped a transform nobody moved");
-        let m = world.borrow::<Transform>().get(moving.id()).unwrap().local_matrix;
+        let m = world.borrow::<Transform>().get(moving).unwrap().local_matrix;
         assert_eq!(m.w_axis.truncate(), gizmo_math::Vec3::new(5.0, 0.0, 0.0), "the moved matrix was not rebuilt");
     }
 

@@ -21,7 +21,7 @@
 //! // here we drive a single step by hand.
 //! SpinSystem.run(&world, 0.1);
 //!
-//! let rotated = world.query::<&Transform>().unwrap().get(wheel.id()).unwrap().rotation;
+//! let rotated = world.query::<&Transform>().unwrap().get(wheel).unwrap().rotation;
 //! assert!(rotated.angle_between(Quat::IDENTITY) > 0.0, "Spin must have applied a rotation");
 //! ```
 
@@ -90,7 +90,7 @@ impl gizmo_core::system::System for SpinSystem {
                 gizmo_core::query::Mut<Transform>,
             )>()
         } {
-            for (_id, (mut spin, mut t)) in q.iter_mut() {
+            for (mut spin, mut t) in q.iter_mut() {
                 spin.angle += spin.angular_velocity * dt;
                 t.rotation = spin.rest_rotation * Quat::from_axis_angle(spin.axis, spin.angle);
                 t.update_local_matrix();
@@ -134,7 +134,7 @@ mod tests {
         }
 
         let t = world.borrow::<Transform>();
-        let rot = t.get(e.id()).unwrap().rotation;
+        let rot = t.get(e).unwrap().rotation;
         // 1 s'de ~2 rad dönmüş olmalı, rest'in üzerine.
         let expected = rest * Quat::from_axis_angle(Vec3::X, 2.0);
         assert!(
@@ -143,6 +143,6 @@ mod tests {
         );
         // Spin bileşeninin biriken açısı da ~2.
         let spins = world.borrow::<Spin>();
-        assert!((spins.get(e.id()).unwrap().angle - 2.0).abs() < 1e-3);
+        assert!((spins.get(e).unwrap().angle - 2.0).abs() < 1e-3);
     }
 }

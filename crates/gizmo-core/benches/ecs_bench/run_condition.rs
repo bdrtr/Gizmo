@@ -71,7 +71,7 @@ pub fn run_condition_yes_with_query(criterion: &mut Criterion) {
     group.measurement_time(core::time::Duration::from_secs(3));
     fn empty() {}
     let yes_with_query = |query: gizmo_core::query::Query<&TestBool>| -> bool {
-        query.iter().next().map(|q| q.1.0).unwrap_or(false)
+        query.iter().next().map(|q| q.0).unwrap_or(false)
     };
     use gizmo_core::system::{Schedule, DistributiveRunIfExt};
     for amount in [10, 100, 1_000] {

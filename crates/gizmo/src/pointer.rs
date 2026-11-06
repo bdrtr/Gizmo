@@ -7,6 +7,7 @@
 //! the ray then has to be cut with the ground by hand. `kale` wrote those fifteen lines; this is
 //! them, once.
 
+use gizmo_core::Entity;
 use crate::core::input::Input;
 use crate::core::window::WindowInfo;
 use crate::core::World;
@@ -32,9 +33,8 @@ pub fn cursor_ray(world: &World) -> Option<Ray> {
 
     let cameras = world.borrow::<Camera>();
     // A viewport camera under the cursor, else the camera the frame is drawn through.
-    let in_viewport = cameras
-        .iter()
-        .filter_map(|(id, c)| c.viewport.map(|v| (id, c.order, v)))
+    let in_viewport = world.query::<(Entity, &Camera)>().unwrap().iter()
+        .filter_map(|(entity, c)| c.viewport.map(|v| (entity.id(), c.order, v)))
         .filter(|(_, _, v)| {
             let (x, y) = (cursor.0 / window.0, cursor.1 / window.1);
             x >= v.x && x < v.x + v.width && y >= v.y && y < v.y + v.height
@@ -222,7 +222,7 @@ mod tests {
             pitch: -std::f32::consts::FRAC_PI_4,
             ..Default::default()
         });
-        if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(right.id()) {
+        if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(right) {
             c.viewport = Some(Viewport::right_half());
         }
         propagate(&mut world);

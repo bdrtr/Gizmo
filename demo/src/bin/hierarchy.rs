@@ -169,8 +169,8 @@ fn main() {
 /// yaşayan varlığa çevrilmesi gerekiyor, ve **ölü bir kimlik sessizce atlanıyor**. Demonun
 /// ikinci aşamasında listede tam olarak öyle bir kimlik var.
 fn rotate(
-    roots: Query<(&Children, With<Node>)>,
-    mut transforms: Query<(Mut<Transform>, With<Node>)>,
+    roots: Query<(Entity, &Children, With<Node>)>,
+    mut transforms: Query<(Entity, Mut<Transform>, With<Node>)>,
     time: Res<Time>,
 ) {
     let dt = time.dt();
@@ -178,15 +178,15 @@ fn rotate(
     // Önce hangi varlığın ne kadar döneceğini topla: iki sorgu aynı anda ödünç alınamaz.
     let mut root_ids = Vec::new();
     let mut child_ids = Vec::new();
-    for (entity, (children, _)) in roots.iter() {
+    for (entity, children, _) in roots.iter() {
         root_ids.push(entity);
         child_ids.extend(children.0.iter().map(|c| c.id()));
     }
 
-    for (entity, (mut transform, _)) in transforms.iter_mut() {
+    for (entity, mut transform, _) in transforms.iter_mut() {
         if root_ids.contains(&entity) {
             transform.rotate_z(-PI / 2.0 * dt);
-        } else if child_ids.contains(&entity) {
+        } else if child_ids.contains(&entity.id()) {
             transform.rotate_z(PI * dt);
         }
     }
@@ -196,7 +196,7 @@ fn rotate(
 fn tick(
     mut tree: ResMut<Tree>,
     roots: Query<(&Children, With<Node>)>,
-    nodes: Query<&Node>,
+    nodes: Query<(Entity, &Node)>,
     input: Res<Input>,
     time: Res<Time>,
 ) {
@@ -205,9 +205,9 @@ fn tick(
         tree.restart = true;
     }
 
-    let living: Vec<u32> = nodes.iter().map(|(entity, _)| entity).collect();
+    let living: Vec<u32> = nodes.iter().map(|(entity, _)| entity.id()).collect();
     let (mut listed, mut alive) = (0, 0);
-    for (_entity, (children, _)) in roots.iter() {
+    for (children, _) in roots.iter() {
         listed += children.0.len();
         alive += children.0.iter().filter(|c| living.contains(&c.id())).count();
     }
@@ -236,10 +236,10 @@ fn advance_stages(world: &mut gizmo::core::World) {
     // Kökün çocuk listesinin bir kopyası — listeyi tutan bileşeni ödünç alırken dünyayı
     // değiştiremeyiz.
     let children: Vec<u32> = world
-        .query::<&Children>()
+        .query::<(Entity, &Children)>()
         .and_then(|q| {
             q.iter()
-                .find(|(entity, _)| *entity == root_id)
+                .find(|(entity, _)| (*entity).id() == root_id)
                 .map(|(_, c)| c.0.iter().map(|e| e.id()).collect())
         })
         .unwrap_or_default();
@@ -353,8 +353,8 @@ fn build_tree(world: &mut gizmo::core::World, cube: &Mesh, template: &Material) 
 /// **R**: kalan düğümleri silip ağacı yeniden kurar.
 fn rebuild(world: &mut gizmo::core::World) {
     let doomed: Vec<u32> = world
-        .query::<&Node>()
-        .map(|q| q.iter().map(|(entity, _)| entity).collect())
+        .query::<(Entity, &Node)>()
+        .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
         .unwrap_or_default();
     for id in doomed {
         if let Some(entity) = world.get_entity(id) {
@@ -364,7 +364,7 @@ fn rebuild(world: &mut gizmo::core::World) {
 
     let template = world
         .query::<(&Mesh, &Material)>()
-        .and_then(|q| q.iter().next().map(|(_, (m, mat))| (m.clone(), mat.clone())));
+        .and_then(|q| q.iter().next().map(|(m, mat)| (m.clone(), mat.clone())));
     let Some((mesh, material)) = template else {
         return;
     };

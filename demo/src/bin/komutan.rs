@@ -175,7 +175,7 @@ fn battle(auto: bool, limit: f32) -> (Option<Side>, usize, usize, f32) {
     while run.elapsed < limit && run.world.get_resource::<Game>().is_some_and(|g| g.over.is_none()) {
         run.frame(1.0 / 60.0, update);
     }
-    let alive = |side: Side| run.world.borrow::<Unit>().iter().filter(|(_, u)| u.side == side && u.hp > 0.0).count();
+    let alive = |side: Side| run.world.borrow::<Unit>().iter().filter(|u| u.side == side && u.hp > 0.0).count();
     (run.world.get_resource::<Game>().and_then(|g| g.over), alive(Side::Blue), alive(Side::Red), run.elapsed)
 }
 
@@ -209,7 +209,7 @@ fn main() {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let units: Vec<u32> = world.borrow::<Unit>().iter().map(|(id, _)| id).collect();
+    let units: Vec<u32> = world.query::<(Entity, &Unit)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
     for id in units {
         despawn_unit(world, id);
     }
@@ -354,7 +354,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
 fn count(world: &World) -> (usize, usize) {
     let units = world.borrow::<Unit>();
-    let blue = units.iter().filter(|(_, u)| u.side == Side::Blue).count();
+    let blue = units.iter().filter(|u| u.side == Side::Blue).count();
     (blue, units.iter().count() - blue)
 }
 
@@ -396,12 +396,10 @@ fn select_and_order(world: &mut World, game: &mut Game, input: &Input) {
 }
 
 fn blue_units(world: &World) -> Vec<(u32, Vec3)> {
-    let units = world.borrow::<Unit>();
     let transforms = world.borrow::<Transform>();
-    units
-        .iter()
+    world.query::<(Entity, &Unit)>().unwrap().iter()
         .filter(|(_, u)| u.side == Side::Blue)
-        .filter_map(|(id, _)| transforms.get(id).map(|t| (id, t.position)))
+        .filter_map(|(entity, _)| transforms.get(entity).map(|t| (entity.id(), t.position)))
         .collect()
 }
 
@@ -425,9 +423,8 @@ fn order(world: &mut World, game: &mut Game, to: Vec3) {
 /// Menzildeki en yakın düşmana ateş; kırmızılar da birimleri menzile girince karşılık veriyor.
 fn combat(world: &mut World, game: &mut Game, dt: f32) {
     let all: Vec<(u32, Side, Vec3)> = {
-        let units = world.borrow::<Unit>();
         let transforms = world.borrow::<Transform>();
-        units.iter().filter_map(|(id, u)| transforms.get(id).map(|t| (id, u.side, t.position))).collect()
+        world.query::<(Entity, &Unit)>().unwrap().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity.id(), u.side, t.position))).collect()
     };
     let mut hits: Vec<(u32, Vec3, Vec3)> = Vec::new();
     {
@@ -479,16 +476,14 @@ fn combat(world: &mut World, game: &mut Game, dt: f32) {
         play(world, "dus");
     }
     let mut gone = Vec::new();
-    for (id, mut t) in world.borrow_mut::<Tracer>().iter_mut() {
+    for (entity, mut t) in world.query_mut::<(Entity, Mut<Tracer>)>().unwrap().iter_mut() {
         t.life -= dt;
         if t.life <= 0.0 {
-            gone.push(id);
+            gone.push(entity);
         }
     }
-    for id in gone {
-        if let Some(e) = world.get_entity(id) {
-            world.despawn(e);
-        }
+    for entity in gone {
+        world.despawn(entity);
     }
 }
 
@@ -496,9 +491,8 @@ fn combat(world: &mut World, game: &mut Game, dt: f32) {
 /// sürüklenirken.
 fn overlays(world: &mut World, game: &Game) {
     let units: Vec<(u32, Unit, Vec3)> = {
-        let units = world.borrow::<Unit>();
         let transforms = world.borrow::<Transform>();
-        units.iter().filter_map(|(id, u)| transforms.get(id).map(|t| (id, *u, t.position))).collect()
+        world.query::<(Entity, &Unit)>().unwrap().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity.id(), *u, t.position))).collect()
     };
     for (id, unit, at) in units {
         let screen = gizmo::pointer::world_to_screen(world, at + Vec3::Y * 1.0);
@@ -551,7 +545,7 @@ fn overlays(world: &mut World, game: &Game) {
 fn camera_controls(world: &mut World, input: &Input, dt: f32) {
     let (mx, my) = input.move_axis();
     let wheel = input.mouse_scroll();
-    let Some(id) = world.borrow::<Camera>().iter().next().map(|(id, _)| id) else { return };
+    let Some(id) = world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, _)| entity.id()) else { return };
     if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
         t.position += Vec3::new(mx, 0.0, -my) * 14.0 * dt;
         t.position.y = (t.position.y - wheel * 1.5).clamp(8.0, 30.0);
@@ -572,9 +566,8 @@ fn autoplay(world: &mut World, game: &mut Game, dt: f32) {
     if game.selected.is_empty() || game.auto_clock > 3.0 {
         game.selected = blue_units(world).into_iter().map(|(id, _)| id).collect();
         let reds: Vec<Vec3> = {
-            let units = world.borrow::<Unit>();
             let transforms = world.borrow::<Transform>();
-            units.iter().filter(|(_, u)| u.side == Side::Red).filter_map(|(id, _)| transforms.get(id).map(|t| t.position)).collect()
+            world.query::<(Entity, &Unit)>().unwrap().iter().filter(|(_, u)| u.side == Side::Red).filter_map(|(entity, _)| transforms.get(entity).map(|t| t.position)).collect()
         };
         let target = reds.first().copied().unwrap_or(ENEMY_BASE);
         order(world, game, target);

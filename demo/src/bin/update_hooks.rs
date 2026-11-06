@@ -165,9 +165,9 @@ fn my_hook(world: &mut World, _state: &mut SimpleSceneState, dt: f32, _input: &I
     // Sorgu üzerinden, çünkü motorda "şu varlığın şu bileşenini ver" diye tekil bir erişimci yok:
     // `World`'ün sunduğu tipli yol `query`/`query_mut`, ve tek varlık isteyen de bütünü gezip
     // kimliği karşılaştırıyor. Demonun konusu bu değil, ama demoyu yazarken çıktı.
-    if let Some(mut q) = world.query_mut::<gizmo::core::query::Mut<Transform>>() {
-        for (id, mut t) in q.iter_mut() {
-            if id == pair.parent {
+    if let Some(mut q) = world.query_mut::<(Entity, gizmo::core::query::Mut<Transform>)>() {
+        for (entity, mut t) in q.iter_mut() {
+            if entity.id() == pair.parent {
                 t.rotation = Quat::from_rotation_y(report.parent_spin);
             }
         }
@@ -175,9 +175,9 @@ fn my_hook(world: &mut World, _state: &mut SimpleSceneState, dt: f32, _input: &I
 
     // Çocuğun DÜNYA konumunu oku — yalnız yayılım koştuysa değişir.
     let mut child_now = None;
-    if let Some(q) = world.query::<&GlobalTransform>() {
-        for (id, g) in q.iter() {
-            if id == pair.child {
+    if let Some(q) = world.query::<(Entity, &GlobalTransform)>() {
+        for (entity, g) in q.iter() {
+            if entity.id() == pair.child {
                 child_now = Some(g.compute_matrix().w_axis.truncate());
             }
         }
@@ -201,9 +201,9 @@ fn my_hook(world: &mut World, _state: &mut SimpleSceneState, dt: f32, _input: &I
     // `PhysicsPlugin` de çizelgeye bir adım koyuyor — yani "tuzakta fizik durur" bir iddia, ve
     // iddialar ölçülür.
     let mut fall_y = None;
-    if let Some(q) = world.query::<&Transform>() {
-        for (id, t) in q.iter() {
-            if id == pair.faller {
+    if let Some(q) = world.query::<(Entity, &Transform)>() {
+        for (entity, t) in q.iter() {
+            if entity.id() == pair.faller {
                 fall_y = Some(t.position.y);
             }
         }

@@ -98,7 +98,7 @@ fn main() {
             // Ortografik kamera — küreler ekranın her yerinde aynı boyutta görünsün diye.
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 8.0), Vec3::ZERO);
             if let Some(mut q) = scene.world.query_mut::<(Mut<Camera>, Mut<Transform>)>() {
-                for (_entity, (mut camera, _transform)) in q.iter_mut() {
+                for (mut camera, _transform) in q.iter_mut() {
                     camera.projection = ProjectionMode::Orthographic {
                         height: VIEWPORT_HEIGHT,
                     };

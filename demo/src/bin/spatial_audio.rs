@@ -288,7 +288,7 @@ fn orbit_emitter(
 
     let angle = demo.angle;
     let volume = if demo.muted { 0.0 } else { 1.0 };
-    for (_entity, (mut transform, mut source, _)) in emitters.iter_mut() {
+    for (mut transform, mut source, _) in emitters.iter_mut() {
         transform.position = Vec3::new(angle.cos() * ORBIT_RADIUS, 0.0, angle.sin() * ORBIT_RADIUS);
         source.volume = volume;
     }
@@ -302,7 +302,7 @@ fn measure_listener(world: &mut gizmo::core::World) {
     let emitter = world.query::<(&Transform, &Emitter)>().and_then(|q| {
         q.iter()
             .next()
-            .map(|(_, (transform, _))| transform.position)
+            .map(|(transform, _)| transform.position)
     });
     let Some(emitter) = emitter else { return };
 
@@ -312,8 +312,8 @@ fn measure_listener(world: &mut gizmo::core::World) {
         .query::<(&Camera, &Transform)>()
         .and_then(|q| {
             q.iter()
-                .find(|(_, (camera, _))| camera.primary)
-                .map(|(_, (camera, _))| camera.get_right())
+                .find(|(camera, _)| camera.primary)
+                .map(|(camera, _)| camera.get_right())
         })
         .unwrap_or(Vec3::X);
     let right_agreement = listener.right.dot(camera_right);

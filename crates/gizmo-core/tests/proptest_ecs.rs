@@ -62,10 +62,10 @@ struct Live {
 }
 
 fn read_a(world: &World, e: Entity) -> Option<u64> {
-    world.query::<&CompA>().and_then(|q| q.get_entity(e).map(|c| c.0))
+    world.query::<&CompA>().and_then(|q| q.get(e).map(|c| c.0))
 }
 fn read_b(world: &World, e: Entity) -> Option<u64> {
-    world.query::<&CompB>().and_then(|q| q.get_entity(e).map(|c| c.0))
+    world.query::<&CompB>().and_then(|q| q.get(e).map(|c| c.0))
 }
 
 proptest! {
@@ -144,12 +144,12 @@ proptest! {
         let model_ab: HashSet<u32> =
             live.iter().filter(|l| l.a.is_some() && l.b.is_some()).map(|l| l.e.id()).collect();
 
-        let world_a: HashSet<u32> = world.query::<&CompA>()
-            .map(|q| q.iter().map(|(id, _)| id).collect()).unwrap_or_default();
-        let world_b: HashSet<u32> = world.query::<&CompB>()
-            .map(|q| q.iter().map(|(id, _)| id).collect()).unwrap_or_default();
-        let world_ab: HashSet<u32> = world.query::<(&CompA, &CompB)>()
-            .map(|q| q.iter().map(|(id, _)| id).collect()).unwrap_or_default();
+        let world_a: HashSet<u32> = world.query::<(Entity, &CompA)>()
+            .map(|q| q.iter().map(|(entity, _)| entity.id()).collect()).unwrap_or_default();
+        let world_b: HashSet<u32> = world.query::<(Entity, &CompB)>()
+            .map(|q| q.iter().map(|(entity, _)| entity.id()).collect()).unwrap_or_default();
+        let world_ab: HashSet<u32> = world.query::<(Entity, &CompA, &CompB)>()
+            .map(|q| q.iter().map(|(entity, ..)| entity.id()).collect()).unwrap_or_default();
 
         prop_assert_eq!(world_a, model_a, "&CompA query kümesi uyuşmuyor");
         prop_assert_eq!(world_b, model_b, "&CompB query kümesi uyuşmuyor");

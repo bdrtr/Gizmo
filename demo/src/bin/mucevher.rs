@@ -189,7 +189,7 @@ fn main() {
             let font = load_font(scene.renderer);
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 20.0), Vec3::ZERO);
             if let Some(mut q) = scene.world.query_mut::<Mut<Camera>>() {
-                for (_, mut cam) in q.iter_mut() {
+                for mut cam in q.iter_mut() {
                     cam.projection = ProjectionMode::OrthographicFit { width: 10.0, height: 10.0 };
                 }
             }
@@ -271,7 +271,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
 /// Bitmemiş bir `Tween` var mı.
 fn animating(world: &World) -> bool {
-    world.borrow::<Tween>().iter().any(|(_, t)| !t.is_finished())
+    world.borrow::<Tween>().iter().any(|t| !t.is_finished())
 }
 
 fn step(world: &mut World, game: &mut Game, input: &Input) {

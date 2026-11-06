@@ -81,7 +81,7 @@ fn colour(i: u8) -> Vec4 {
 }
 
 fn blocks(world: &World) -> Vec<(u32, Block)> {
-    world.borrow::<Block>().iter().map(|(id, b)| (id, *b)).collect()
+    world.query::<(Entity, &Block)>().unwrap().iter().map(|(entity, b)| (entity.id(), *b)).collect()
 }
 
 /// Sütunun bir sonraki boş katı.
@@ -112,7 +112,7 @@ fn remove_top(world: &mut World, x: i32, z: i32) {
 }
 
 fn clear(world: &mut World) {
-    let ids: Vec<u32> = blocks(world).into_iter().map(|(id, _)| id).chain(world.borrow::<Ball>().iter().map(|(id, _)| id)).collect();
+    let ids: Vec<u32> = blocks(world).into_iter().map(|(id, _)| id).chain(world.query::<(Entity, &Ball)>().unwrap().iter().map(|(entity, _)| entity.id())).collect();
     for id in ids {
         if let Some(e) = world.get_entity(id) {
             world.despawn(e);

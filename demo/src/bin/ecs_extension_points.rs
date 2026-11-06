@@ -204,7 +204,7 @@ fn filtered(
     // Kaybedilen şey iki parçanın ayrı ayrı çizelgelenebilmesi, sonucun kendisi değil.
     let total: f32 = spinning
         .iter()
-        .map(|(_, (t, _, _))| t.position.x)
+        .map(|(t, _, _)| t.position.x)
         .sum();
     counters.piped = normalise(total, counters.spinning);
 

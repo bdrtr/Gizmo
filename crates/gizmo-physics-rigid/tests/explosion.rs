@@ -100,8 +100,8 @@ fn explosion_wakes_exactly_the_bodies_it_moves() {
     let vels = world.borrow::<Velocity>();
 
     // ── The fix ──────────────────────────────────────────────────────────────
-    let hit_rb = bodies.get(hit.id()).expect("hit body");
-    let hit_v = vels.get(hit.id()).expect("hit velocity");
+    let hit_rb = bodies.get(hit).expect("hit body");
+    let hit_v = vels.get(hit).expect("hit velocity");
     assert!(
         !hit_rb.is_sleeping,
         "a blast inside the radius must WAKE the body it pushes — otherwise the integrator \
@@ -117,24 +117,24 @@ fn explosion_wakes_exactly_the_bodies_it_moves() {
     );
 
     // ── Scope: nothing else is disturbed ─────────────────────────────────────
-    let far_rb = bodies.get(far.id()).expect("far body");
+    let far_rb = bodies.get(far).expect("far body");
     assert!(
         far_rb.is_sleeping,
         "a body 23 m outside a 5 m blast must stay asleep — the radius test has to gate the wake"
     );
     assert_eq!(
-        vels.get(far.id()).expect("far velocity").linear,
+        vels.get(far).expect("far velocity").linear,
         Vec3::ZERO,
         "a body outside the radius must not be pushed either"
     );
 
-    let massless_rb = bodies.get(massless.id()).expect("massless body");
+    let massless_rb = bodies.get(massless).expect("massless body");
     assert!(
         massless_rb.is_sleeping,
         "the blast applies zero Δv to an infinite-mass body, so it must not be woken by it"
     );
     assert_eq!(
-        vels.get(massless.id()).expect("massless velocity").linear,
+        vels.get(massless).expect("massless velocity").linear,
         Vec3::ZERO,
         "infinite mass — the blast cannot accelerate it"
     );
@@ -180,17 +180,17 @@ fn explosion_moves_a_body_that_has_fallen_asleep() {
     let (target_x0, far_x0) = {
         let bodies = world.borrow::<RigidBody>();
         assert!(
-            bodies.get(target.id()).expect("target").is_sleeping,
+            bodies.get(target).expect("target").is_sleeping,
             "scenario invalid: the target box never fell asleep, so there is nothing to wake"
         );
         assert!(
-            bodies.get(far.id()).expect("far").is_sleeping,
+            bodies.get(far).expect("far").is_sleeping,
             "scenario invalid: the control box never fell asleep"
         );
         let ts = world.borrow::<Transform>();
         (
-            ts.get(target.id()).expect("target").position.x,
-            ts.get(far.id()).expect("far").position.x,
+            ts.get(target).expect("target").position.x,
+            ts.get(far).expect("far").position.x,
         )
     };
 
@@ -203,11 +203,11 @@ fn explosion_moves_a_body_that_has_fallen_asleep() {
     {
         let bodies = world.borrow::<RigidBody>();
         assert!(
-            !bodies.get(target.id()).expect("target").is_sleeping,
+            !bodies.get(target).expect("target").is_sleeping,
             "the blasted box must be awake after the first step"
         );
         assert!(
-            bodies.get(far.id()).expect("far").is_sleeping,
+            bodies.get(far).expect("far").is_sleeping,
             "the control box is 23 m from a 5 m blast — it must still be asleep"
         );
     }
@@ -220,8 +220,8 @@ fn explosion_moves_a_body_that_has_fallen_asleep() {
     }
 
     let ts = world.borrow::<Transform>();
-    let target_x1 = ts.get(target.id()).expect("target").position.x;
-    let far_x1 = ts.get(far.id()).expect("far").position.x;
+    let target_x1 = ts.get(target).expect("target").position.x;
+    let far_x1 = ts.get(far).expect("far").position.x;
 
     assert!(
         target_x1 > target_x0 + 0.5,

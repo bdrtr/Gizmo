@@ -28,7 +28,7 @@ pub fn animation_system(
     time: Res<Time>,
     entities: Res<Entities>,
     mut commands: gizmo_core::Commands,
-    mut players: Query<Mut<AnimationPlayer>>,
+    mut players: Query<(Entity, Mut<AnimationPlayer>)>,
     names: Query<&EntityName>,
     children: Query<&Children>,
     mut transforms: Query<(Mut<Transform>, gizmo_core::query::With<crate::player::Animated>)>,
@@ -92,11 +92,11 @@ pub fn animation_system(
                                 });
                                 // Bounds-check the id: a stale/out-of-range id must skip
                                 // gracefully rather than panic on an out-of-bounds index.
-                                match state.generations.get(current as usize).copied() {
+                                match state.generations.get(current.id() as usize).copied() {
                                     Some(gen) => gen,
                                     None => {
                                         tracing::trace!(
-                                            id = current,
+                                            id = %current,
                                             target = %track.target_name,
                                             "[Animation] target resolution: entity id out of range, skipping track"
                                         );
@@ -104,7 +104,7 @@ pub fn animation_system(
                                     }
                                 }
                             };
-                            let entity = Entity::new(current, gen);
+                            let entity = Entity::new(current.id(), gen);
                             player.target_entities.insert(name.0.clone(), entity);
 
                             // Insert the Animated marker component onto the target entity.
@@ -116,8 +116,8 @@ pub fn animation_system(
                 // Add children to stack — only the ones this walk has not already queued.
                 if let Some(child_comp) = children.get(current) {
                     for &child in &child_comp.0 {
-                        if children.entity(child.id()) == Some(child) && visited.insert(child.id()) {
-                            stack.push(child.id());
+                        if children.entity(child.id()) == Some(child) && visited.insert(child) {
+                            stack.push(child);
                         }
                     }
                 }
@@ -286,7 +286,7 @@ mod tests {
             schedule.run(&mut world, 0.016);
 
             let players = world.borrow::<AnimationPlayer>();
-            let player = players.get(root.id()).expect("the player is still there");
+            let player = players.get(root).expect("the player is still there");
             (player.target_entities.len(), player.elapsed_time)
         });
 

@@ -42,7 +42,7 @@ fn step(world: &mut World) {
 }
 
 fn position(world: &World, e: Entity) -> Vec3 {
-    world.borrow::<Transform>().get(e.id()).unwrap().position
+    world.borrow::<Transform>().get(e).unwrap().position
 }
 
 #[test]
@@ -60,7 +60,7 @@ fn a_character_walks_through_a_trigger_and_reports_it_while_inside() {
     for _ in 0..120 {
         step(&mut world);
         let x = position(&world, p).x;
-        let triggers = world.borrow::<CharacterController>().get(p.id()).unwrap().triggers.clone();
+        let triggers = world.borrow::<CharacterController>().get(p).unwrap().triggers.clone();
         if !triggers.is_empty() {
             assert_eq!(triggers, vec![BodyHandle::from_id(sensor.id())]);
             first = first.min(x);
@@ -84,5 +84,5 @@ fn a_trigger_is_not_ground() {
     }
     let y = position(&world, p).y;
     assert!(y < -1.0, "the character stood on a trigger: y = {y:.2}");
-    assert!(world.borrow::<CharacterController>().get(p.id()).unwrap().triggers.is_empty());
+    assert!(world.borrow::<CharacterController>().get(p).unwrap().triggers.is_empty());
 }

@@ -9,6 +9,7 @@
 //!
 //! This module is only compiled with the `editor` feature.
 
+use gizmo_core::Entity;
 use crate::egui_ctx::EguiContext;
 use gizmo_core::world::World;
 use gizmo_renderer::renderer::Renderer;
@@ -307,15 +308,14 @@ pub fn process_scene_requests(world: &mut World) {
         let editor_entities: std::collections::HashSet<u32> = {
             let names = world.borrow::<gizmo_core::EntityName>();
             let markers = world.borrow::<gizmo_core::component::EditorOnly>();
-            names
-                .iter()
-                .filter_map(|(id, _)| {
-                    names.get(id).and_then(|n| {
+            world.query::<(Entity, &gizmo_core::EntityName)>().unwrap().iter()
+                .filter_map(|(entity, _)| {
+                    names.get(entity).and_then(|n| {
                         if gizmo_core::component::is_editor_only(
-                            markers.get(id).is_some(),
+                            markers.get(entity).is_some(),
                             Some(n.0.as_str()),
                         ) {
-                            Some(id)
+                            Some(entity.id())
                         } else {
                             None
                         }

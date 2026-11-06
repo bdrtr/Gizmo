@@ -81,16 +81,16 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
         let names = world.borrow::<gizmo::core::component::EntityName>();
         let hidden = world.borrow::<gizmo::core::component::IsHidden>();
         let markers = world.borrow::<gizmo::core::component::EditorOnly>();
-        let editor_entities: Vec<u32> = names.iter()
-            .filter(|(id, name)| {
+        let editor_entities: Vec<u32> = world.query::<(Entity, &gizmo::core::component::EntityName)>().unwrap().iter()
+            .filter(|(entity, name)| {
                 // The editor camera is furniture too, but hiding it would hide what play mode
                 // draws from — so it is the one deliberate exception, kept as its own clause.
                 gizmo::core::component::is_editor_only(
-                    markers.get(*id).is_some(),
+                    markers.get(*entity).is_some(),
                     Some(name.0.as_str()),
-                ) && *id != state.editor_camera
+                ) && (*entity).id() != state.editor_camera
             })
-            .map(|(id, _)| id)
+            .map(|(entity, _)| entity.id())
             .collect();
         drop(names);
         drop(hidden);

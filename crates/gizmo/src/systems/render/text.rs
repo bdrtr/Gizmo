@@ -19,6 +19,7 @@
 //! `gizmo-studio/tests/render_parity.rs` exists to catch, and exactly what happened to decals
 //! before that test was written.
 
+use gizmo_core::Entity;
 use gizmo_math::{Vec2, Vec3, Vec4};
 
 use crate::core::World;
@@ -104,7 +105,7 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
 #[cfg(feature = "ui")]
 fn ui_opacity(world: &World, entity: u32) -> f32 {
     let transforms = world.borrow::<crate::ui::UiTransform>();
-    if transforms.iter().next().is_none() {
+    if transforms.is_empty() {
         return 1.0;
     }
     let parents = world.borrow::<crate::core::component::Parent>();
@@ -144,9 +145,9 @@ fn tree_order(world: &World) -> Vec<u32> {
     };
     // A node whose parent is not a node starts a tree of its own. Ids order the trees: spawned
     // earlier, painted earlier.
-    let mut roots: Vec<u32> = nodes.iter().map(|(id, _)| id).filter(|&id| parent_node(id).is_none()).collect();
+    let mut roots: Vec<u32> = world.query::<(Entity, &crate::ui::Node)>().unwrap().iter().map(|(entity, _)| entity.id()).filter(|&id| parent_node(id).is_none()).collect();
     roots.sort_unstable();
-    let total = nodes.iter().count();
+    let total = world.query::<(Entity, &crate::ui::Node)>().unwrap().iter().count();
     let mut order = Vec::with_capacity(total);
     let mut stack: Vec<u32> = roots.into_iter().rev().collect();
     // Bounded: a `Children` list written by hand can name a node twice or form a loop.
@@ -346,17 +347,15 @@ gizmo_core::impl_component!(Typewriter);
 /// it, on the animation clock.
 pub fn typewriter_system(world: &mut World, dt: f32) {
     let lines: Vec<(u32, String)> = {
-        let typers = world.borrow::<Typewriter>();
         let texts = world.borrow::<Text>();
-        typers
-            .iter()
-            .filter_map(|(id, _)| {
-                let t = texts.get(id)?;
-                let s = text_input_display(world, id)
-                    .or_else(|| dropdown_display(world, id))
-                    .or_else(|| localized_display(world, id))
+        world.query::<(Entity, &Typewriter)>().unwrap().iter()
+            .filter_map(|(entity, _)| {
+                let t = texts.get(entity)?;
+                let s = text_input_display(world, entity.id())
+                    .or_else(|| dropdown_display(world, entity.id()))
+                    .or_else(|| localized_display(world, entity.id()))
                     .unwrap_or_else(|| t.content.clone());
-                Some((id, s))
+                Some((entity.id(), s))
             })
             .collect()
     };
@@ -404,12 +403,10 @@ fn dropdown_display(_world: &World, _entity: u32) -> Option<String> {
 #[cfg(feature = "ui")]
 fn dropdown_lists(world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> {
     let nodes = world.borrow::<crate::ui::Node>();
-    world
-        .borrow::<crate::ui::Dropdown>()
-        .iter()
+    world.query::<(Entity, &crate::ui::Dropdown)>().unwrap().iter()
         .filter(|(_, d)| d.is_open())
-        .filter_map(|(id, d)| {
-            let node = nodes.get(id)?;
+        .filter_map(|(entity, d)| {
+            let node = nodes.get(entity)?;
             let rows = d
                 .options
                 .iter()
@@ -426,7 +423,7 @@ fn dropdown_lists(world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> 
                     (at, size, colour, label.clone())
                 })
                 .collect();
-            Some((id, rows))
+            Some((entity.id(), rows))
         })
         .collect()
 }
@@ -434,10 +431,8 @@ fn dropdown_lists(world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> 
 /// Every tooltip that is up: its element, the pointer, what it says.
 #[cfg(feature = "ui")]
 fn tooltips(world: &World) -> Vec<(u32, Vec2, String)> {
-    world
-        .borrow::<crate::ui::Tooltip>()
-        .iter()
-        .filter_map(|(id, t)| t.shown_at().map(|p| (id, p, t.text.clone())))
+    world.query::<(Entity, &crate::ui::Tooltip)>().unwrap().iter()
+        .filter_map(|(entity, t)| t.shown_at().map(|p| (entity.id(), p, t.text.clone())))
         .collect()
 }
 
@@ -517,7 +512,7 @@ pub fn record_text(
     let fade = world
         .get_resource::<crate::renderer::screen_fade::ScreenFade>()
         .and_then(|f| f.overlay());
-    if texts.iter().next().is_none() && boxes.iter().all(|(_, _, _, bg)| bg.is_none()) && fade.is_none() {
+    if texts.is_empty() && boxes.iter().all(|(_, _, _, bg)| bg.is_none()) && fade.is_none() {
         // Nothing to draw — but the overlay draws from what was last uploaded, so forget it, or
         // a HUD removed this frame would stay on screen.
         if let Some(text) = renderer.text.as_mut() {
@@ -545,7 +540,7 @@ pub fn record_text(
         }
     }
 
-    for (id, item) in texts.iter() {
+    for (id, item) in world.query::<(Entity, &Text)>().unwrap().iter() {
         // `TextSpace::needs_world_position` rather than a `match` here: the enum is
         // `#[non_exhaustive]`, so this file could only match it with a wildcard, and a wildcard is
         // where a third space would quietly become a HUD element. The decision lives beside the
@@ -564,21 +559,21 @@ pub fn record_text(
             // button rather than centring it on the button's top-left.
             let anchor = boxes
                 .iter()
-                .find(|(e, ..)| *e == id)
+                .find(|(e, ..)| *e == id.id())
                 .map(|(_, position, size, _)| *position + *size * item.anchor.factors());
             (Vec3::ZERO, anchor)
         };
         // A clipping UI box above it (or on it) cuts screen text to the box.
-        let clip = if item.space.needs_world_position() { None } else { ui_clip(world, id) };
-        text.set_layer(ui_layer(world, id));
+        let clip = if item.space.needs_world_position() { None } else { ui_clip(world, id.id()) };
+        text.set_layer(ui_layer(world, id.id()));
         // A text field draws its value where its `Text` holds the placeholder; otherwise a
         // `LocalizedText` draws the current language's string (the placeholder too).
         // A `Typewriter` then shows only as much of that as it has typed.
         let field;
-        let shown = text_input_display(world, id)
-            .or_else(|| dropdown_display(world, id))
-            .or_else(|| localized_display(world, id));
-        let shown = typed_display(world, id, shown.as_deref().unwrap_or(&item.content)).or(shown);
+        let shown = text_input_display(world, id.id())
+            .or_else(|| dropdown_display(world, id.id()))
+            .or_else(|| localized_display(world, id.id()));
+        let shown = typed_display(world, id.id(), shown.as_deref().unwrap_or(&item.content)).or(shown);
         let item = match shown {
             Some(shown) => {
                 field = {
@@ -593,7 +588,7 @@ pub fn record_text(
         // A label on a UI box grows with the layout's `UiScale`, as the box did, and fades with
         // its `UiTransform`s.
         let scaled;
-        let alpha = ui_opacity(world, id);
+        let alpha = ui_opacity(world, id.id());
         let k = text_scale(world, anchor.is_some(), item.space.needs_world_position());
         let item = match (k, alpha < 1.0) {
             (None, false) => item,
@@ -847,7 +842,7 @@ mod clip_tests {
         assert!(
             // `let shown =` is record_text's own line — the typewriter has the same chain, so a
             // looser match would find that one and pass with the draw loop's removed.
-            code.contains(concat!("letshown=text_input_display(world,id)", ".or_else(||dropdown_display(world,id))", ".or_else(||localized_display(world,id));")),
+            code.contains(concat!("letshown=text_input_display(world,id.id())", ".or_else(||dropdown_display(world,id.id()))", ".or_else(||localized_display(world,id.id()));")),
             "record_text no longer draws localized labels"
         );
     }
@@ -913,7 +908,7 @@ mod clip_tests {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
-        assert!(code.contains(concat!("typed_display(world,id,", "shown.as_deref()")), "record_text no longer cuts typed labels");
+        assert!(code.contains(concat!("typed_display(world,id.id(),", "shown.as_deref()")), "record_text no longer cuts typed labels");
     }
 
     /// A scrolling list clips like a `ClipContent` panel: its rows scroll out of sight.

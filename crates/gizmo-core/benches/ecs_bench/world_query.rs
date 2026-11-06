@@ -348,7 +348,7 @@ pub fn world_query_get(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get(entity.id()).is_some());
+                    assert!(query.get(*entity).is_some());
                 }
             });
         });
@@ -372,7 +372,7 @@ pub fn world_query_get(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get(entity.id()).is_some());
+                    assert!(query.get(*entity).is_some());
                 }
             });
         });
@@ -382,7 +382,7 @@ pub fn world_query_get(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get(entity.id()).is_some());
+                    assert!(query.get(*entity).is_some());
                 }
             });
         });
@@ -406,7 +406,7 @@ pub fn world_query_get(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get(entity.id()).is_some());
+                    assert!(query.get(*entity).is_some());
                 }
             });
         });
@@ -427,7 +427,7 @@ pub fn world_query_iter(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 let mut count = 0;
-                for (_id, comp) in query.iter() {
+                for comp in query.iter() {
                     core::hint::black_box(comp);
                     count += 1;
                     core::hint::black_box(count);
@@ -441,7 +441,7 @@ pub fn world_query_iter(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 let mut count = 0;
-                for (_id, comp) in query.iter() {
+                for comp in query.iter() {
                     core::hint::black_box(comp);
                     count += 1;
                     core::hint::black_box(count);
@@ -466,7 +466,7 @@ pub fn world_query_for_each(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 let mut count = 0;
-                query.iter().for_each(|(_id, comp)| {
+                query.iter().for_each(|comp| {
                     core::hint::black_box(comp);
                     count += 1;
                     core::hint::black_box(count);
@@ -480,7 +480,7 @@ pub fn world_query_for_each(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 let mut count = 0;
-                query.iter().for_each(|(_id, comp)| {
+                query.iter().for_each(|comp| {
                     core::hint::black_box(comp);
                     count += 1;
                     core::hint::black_box(count);
@@ -514,7 +514,7 @@ pub fn query_get(criterion: &mut Criterion) {
             let entities_clone = entities.clone();
             schedule.add_di_system(move |query: gizmo_core::query::Query<&Table>| {
                 let mut count = 0;
-                for comp in entities_clone.iter().filter_map(|&e| query.get(e.id())) {
+                for comp in entities_clone.iter().filter_map(|&e| query.get(e)) {
                     core::hint::black_box(comp);
                     count += 1;
                     core::hint::black_box(count);
@@ -539,7 +539,7 @@ pub fn query_get(criterion: &mut Criterion) {
             let entities_clone = entities.clone();
             schedule.add_di_system(move |query: gizmo_core::query::Query<&Sparse>| {
                 let mut count = 0;
-                for comp in entities_clone.iter().filter_map(|&e| query.get(e.id())) {
+                for comp in entities_clone.iter().filter_map(|&e| query.get(e)) {
                     core::hint::black_box(comp);
                     count += 1;
                     core::hint::black_box(count);
@@ -567,7 +567,7 @@ pub fn query_get_components_mut_2(criterion: &mut Criterion) {
             let mut query = world.query_mut::<(Mut<WideTable<0>>, Mut<WideTable<1>>)>().unwrap();
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get_mut(entity.id()).is_some());
+                    assert!(query.get_mut(*entity).is_some());
                 }
             });
         });
@@ -587,7 +587,7 @@ pub fn query_get_components_mut_5(criterion: &mut Criterion) {
             let mut query = world.query_mut::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>)>().unwrap();
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get_mut(entity.id()).is_some());
+                    assert!(query.get_mut(*entity).is_some());
                 }
             });
         });
@@ -607,7 +607,7 @@ pub fn query_get_components_mut_10(criterion: &mut Criterion) {
             let mut query = world.query_mut::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>, Mut<WideTable<5>>, Mut<WideTable<6>>, Mut<WideTable<7>>, Mut<WideTable<8>>, Mut<WideTable<9>>)>().unwrap();
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(query.get_mut(entity.id()).is_some());
+                    assert!(query.get_mut(*entity).is_some());
                 }
             });
         });

@@ -147,24 +147,23 @@ pub fn handle_simulation(
     // the pause overlay was still being drawn over the top of them. A paused fight is still a
     // fight; only the *countdown* below stops, because that is the part that spends time.
     if editor_state.is_in_play_session() {
-        let fighters = world.borrow::<gizmo::physics::components::FighterController>();
         let names = world.borrow::<gizmo::core::component::EntityName>();
         let mut found_any = false;
 
-        for (id, fighter) in fighters.iter() {
+        for (entity, fighter) in world.query::<(Entity, &gizmo::physics::components::FighterController)>().unwrap().iter() {
             found_any = true;
             if fighter.player_id == 1 {
-                editor_state.fight_hud.p1_entity = Some(id);
+                editor_state.fight_hud.p1_entity = Some(entity.id());
                 editor_state.fight_hud.p1_health = fighter.health;
                 editor_state.fight_hud.p1_max_health = fighter.max_health;
-                if let Some(name) = names.get(id) {
+                if let Some(name) = names.get(entity) {
                     editor_state.fight_hud.p1_name = name.0.clone();
                 }
             } else if fighter.player_id == 2 {
-                editor_state.fight_hud.p2_entity = Some(id);
+                editor_state.fight_hud.p2_entity = Some(entity.id());
                 editor_state.fight_hud.p2_health = fighter.health;
                 editor_state.fight_hud.p2_max_health = fighter.max_health;
-                if let Some(name) = names.get(id) {
+                if let Some(name) = names.get(entity) {
                     editor_state.fight_hud.p2_name = name.0.clone();
                 }
             }

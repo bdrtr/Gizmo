@@ -184,7 +184,7 @@ fn main() {
 
             scene.spawn_camera(state, Vec3::new(0.0, 5.0, 20.0), Vec3::new(0.0, 5.0, 0.0));
             if let Some(mut q) = scene.world.query_mut::<(Mut<Camera>, Mut<Transform>)>() {
-                for (_, (mut cam, _)) in q.iter_mut() {
+                for (mut cam, _) in q.iter_mut() {
                     cam.projection =
                         ProjectionMode::OrthographicFit { width: VIEW_WIDTH, height: VIEW_MIN_HEIGHT };
                 }
@@ -312,11 +312,9 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
 
     // Oyun durumu: hedeflerden kaçı platformun altına indi?
     let down = {
-        let targets = world.borrow::<Target>();
         let tf = world.borrow::<Transform>();
-        targets
-            .iter()
-            .filter(|(id, _)| tf.get(*id).is_some_and(|t| t.position.y < PLATFORM_TOP - 0.3))
+        world.query::<(Entity, &Target)>().unwrap().iter()
+            .filter(|(entity, _)| tf.get(*entity).is_some_and(|t| t.position.y < PLATFORM_TOP - 0.3))
             .count()
     };
     if game.outcome == Outcome::Playing {
@@ -346,7 +344,7 @@ fn fit_camera(world: &mut World) {
     let Some(info) = world.get_resource::<gizmo::core::window::WindowInfo>().map(|i| *i) else { return };
     let aspect = info.width / info.height.max(1.0);
     if let Some(mut q) = world.query_mut::<(Mut<Camera>, Mut<Transform>)>() {
-        for (_, (cam, mut t)) in q.iter_mut() {
+        for (cam, mut t) in q.iter_mut() {
             if let Some(extent) = cam.projection.view_extent(aspect) {
                 // Zemin ekranın altına otursun: görüşün alt kenarı y ≈ −1.
                 t.position.y = extent.y * 0.5 - 1.0;

@@ -60,8 +60,8 @@ fn collider_material_restitution_reaches_the_solver() {
     }
 
     let vs = world.borrow::<Velocity>();
-    let va = vs.get(a.id()).unwrap().linear.x;
-    let vb = vs.get(b.id()).unwrap().linear.x;
+    let va = vs.get(a).unwrap().linear.x;
+    let vb = vs.get(b).unwrap().linear.x;
 
     // Elastic equal-mass 1-D: the striker nearly stops, the target carries most of
     // the speed. With the material dropped (restitution → default 0.3) B would only
@@ -118,7 +118,7 @@ fn a_trigger_collider_authored_in_the_ecs_reports_and_never_pushes() {
     );
 
     let vs = world.borrow::<Velocity>();
-    let va = vs.get(a.id()).unwrap().linear.x;
+    let va = vs.get(a).unwrap().linear.x;
     assert!(
         va > 4.9,
         "the body passed through a sensor, so nothing should have slowed it — got vx={va}. \
@@ -126,7 +126,7 @@ fn a_trigger_collider_authored_in_the_ecs_reports_and_never_pushes() {
     );
     let xs = world.borrow::<Transform>();
     assert!(
-        xs.get(a.id()).unwrap().position.x > 0.5,
+        xs.get(a).unwrap().position.x > 0.5,
         "and it should be out the far side of the trigger by now"
     );
 }
@@ -166,13 +166,13 @@ fn a_collision_layer_authored_in_the_ecs_filters_in_the_solver() {
 
     let vs = world.borrow::<Velocity>();
     assert!(
-        vs.get(a.id()).unwrap().linear.x > 4.9,
+        vs.get(a).unwrap().linear.x > 4.9,
         "A accepts only layer 1 and B is on layer 2, so the pair must never be solved — \
          got vx={}",
-        vs.get(a.id()).unwrap().linear.x
+        vs.get(a).unwrap().linear.x
     );
     assert_eq!(
-        vs.get(b.id()).unwrap().linear.x,
+        vs.get(b).unwrap().linear.x,
         0.0,
         "and B must not have been pushed by a collision that should have been filtered out"
     );
@@ -210,7 +210,7 @@ fn a_physics_material_component_overrides_the_collider_material() {
     }
 
     let vs = world.borrow::<Velocity>();
-    let vb = vs.get(b.id()).unwrap().linear.x;
+    let vb = vs.get(b).unwrap().linear.x;
     assert!(vb > 3.5, "the component's restitution 1 did not reach the solver: vb = {vb}");
     drop(vs);
 

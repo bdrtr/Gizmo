@@ -83,7 +83,7 @@ fn blast_once(world: &mut World) {
 fn debris_positions(world: &World) -> Vec<Vec3> {
     let mut out = Vec::new();
     if let Some(q) = world.query::<(&RigidBody, &Transform)>() {
-        for (_id, (_rb, t)) in q.iter() {
+        for (_rb, t) in q.iter() {
             out.push(t.position);
         }
     }
@@ -93,7 +93,7 @@ fn debris_positions(world: &World) -> Vec<Vec3> {
 fn health_of(world: &World, e: Entity) -> f32 {
     world
         .borrow::<Breakable>()
-        .get(e.id())
+        .get(e)
         .expect("breakable still present")
         .current_health
 }
@@ -101,7 +101,7 @@ fn health_of(world: &World, e: Entity) -> f32 {
 fn is_broken(world: &World, e: Entity) -> bool {
     world
         .borrow::<Breakable>()
-        .get(e.id())
+        .get(e)
         .expect("breakable still present")
         .is_broken
 }
@@ -454,7 +454,7 @@ fn a_recycled_id_breakable_shatters_instead_of_outliving_its_own_debris() {
         "the debris must still spawn; the bug is the original surviving it, not the debris"
     );
     assert!(
-        world.borrow::<Breakable>().get(e.id()).is_none(),
+        world.borrow::<Breakable>().get(e).is_none(),
         "no Breakable may remain on the recycled id — a survivor here is latched is_broken and \
          can never be damaged again"
     );
@@ -509,7 +509,7 @@ fn a_recycled_id_explosion_fires_once_and_then_despawns() {
 /// The third symptom, and the quietest: on the COLLISION path a breakable in a recycled id slot
 /// took no contact damage at all.
 ///
-/// Here the fabricated handle failed `get_mut_entity`'s own generation check rather than
+/// Here the fabricated handle failed `get_mut`'s own generation check rather than
 /// `despawn`'s, so the entity was skipped before any damage was applied. That direction fails
 /// *safe* — nothing is corrupted — which is exactly why it could sit unnoticed: the object simply
 /// never breaks, and an invulnerable crate reads as a tuning problem rather than a bug. The

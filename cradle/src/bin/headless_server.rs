@@ -42,7 +42,7 @@ fn install_headless_runner(app: &mut App<()>) {
                     if let Some(trans) = app
                         .world
                         .borrow::<gizmo::physics::components::Transform>()
-                        .get(ent.id())
+                        .get(ent)
                     {
                         println!(
                             "[Simülasyon] Saniye: {} - Obje Y ekseni: {:.2}",

@@ -70,6 +70,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
     let mut compound_shapes_map = std::collections::HashMap::new();
     {
         if let Some(query) = world.query::<(
+            Entity,
             &Collider,
             &Transform,
             &RigidBody,
@@ -83,7 +84,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
             // see `Collider::material_with`, which `gizmo-physics-dynamics` applies too.
             let material_query = world.query::<&gizmo_physics_core::components::PhysicsMaterial>();
 
-            for (id, (col, transform, _rb, _, _)) in query.iter() {
+            for (id, col, transform, _rb, _, _) in query.iter() {
                 let mut compound_shapes = Vec::new();
                 compound_shapes.push((
                     gizmo_physics_core::Transform::default(),
@@ -113,10 +114,10 @@ pub fn physics_step_system(world: &World, dt: f32) {
                         if let Some(children) = children_query_ref.get(curr_id) {
                             for &child in &children.0 {
                                 let child_id = child.id();
-                                if !world.is_alive(child) || !visited.insert(child_id) {
+                                if !world.is_alive(child) || !visited.insert(child) {
                                     continue;
                                 }
-                                stack.push(child_id);
+                                stack.push(child);
                                 if let (Some(tq), Some(cq)) = (&trans_query, &col_query) {
                                     if let (Some(child_trans), Some(child_col)) = (tq.get(child_id), cq.get(child_id)) {
                                         let inv_rot = transform.rotation.inverse();
@@ -192,6 +193,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // no other system mutably aliases these components while it runs (see `query_unchecked`).
     if let Some(mut query) = unsafe {
         world.query_unchecked::<(
+            Entity,
             Mut<RigidBody>,
             Mut<Transform>,
             Mut<Velocity>,
@@ -199,7 +201,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
             gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
         )>()
     } {
-        for (id, (rb, transform, vel, _, _)) in query.iter_mut() {
+        for (id, rb, transform, vel, _, _) in query.iter_mut() {
             if let Some(final_collider) = compound_shapes_map.remove(&id) {
                 // A moving body whose inertia was never set gets its collider's.
                 //
@@ -236,7 +238,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 }
                 // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
                 // unused by physics; bodies are keyed by id only).
-                rigid_bodies.push((BodyHandle::from_id(id), rb, *transform, vel, final_collider));
+                rigid_bodies.push((BodyHandle::from_id(id.id()), rb, *transform, vel, final_collider));
             }
         }
     } else {
@@ -259,28 +261,27 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // Scenes whose bodies all carry a `Velocity` — every one written before this — take neither
     // branch, so their bodies, their order and their hashes are unchanged.
     if let Some(query) = world.query::<(
+        Entity,
         &RigidBody,
         &Transform,
         gizmo_core::query::Without<Velocity>,
         gizmo_core::query::Without<gizmo_core::pool::Pooled>,
         gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
     )>() {
-        for (id, (rb, transform, _, _, _)) in query.iter() {
+        for (id, rb, transform, _, _, _) in query.iter() {
             if rb.is_static() {
                 if let Some(final_collider) = compound_shapes_map.remove(&id) {
-                    rigid_bodies.push((BodyHandle::from_id(id), *rb, *transform, Velocity::default(), final_collider));
+                    rigid_bodies.push((BodyHandle::from_id(id.id()), *rb, *transform, Velocity::default(), final_collider));
                 }
             } else if let Ok(queue) = world.try_get_resource::<gizmo_core::commands::CommandQueue>() {
-                tracing::debug!(entity = id, "[Physics] a moving RigidBody has no Velocity — adding one; it is simulated from the next frame");
+                tracing::debug!(entity = %id, "[Physics] a moving RigidBody has no Velocity — adding one; it is simulated from the next frame");
                 queue.push(move |w: &mut World| {
-                    if w.borrow::<Velocity>().get(id).is_none() {
-                        if let Some(e) = w.get_entity(id) {
-                            w.add_component(e, Velocity::default());
-                        }
+                    if w.is_alive(id) && w.borrow::<Velocity>().get(id).is_none() {
+                        w.add_component(id, Velocity::default());
                     }
                 });
             } else {
-                tracing::warn!(entity = id, "[Physics] a moving RigidBody has no Velocity and there is no CommandQueue to add one — it is not simulated");
+                tracing::warn!(entity = %id, "[Physics] a moving RigidBody has no Velocity and there is no CommandQueue to add one — it is not simulated");
             }
         }
     }
@@ -505,7 +506,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
             // slota yanlış yazmayı engeller.
             let resolved_a = world.entity(event.entity_a.id());
             if let Some((entity_a, (mut breakable, transform, collider, vel, _))) =
-                resolved_a.and_then(|e| query.get_mut_entity(e).map(|q| (e, q)))
+                resolved_a.and_then(|e| query.get_mut(e).map(|q| (e, q)))
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
@@ -535,7 +536,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
             // Resolved rather than fabricated — see the note on entity A above.
             let resolved_b = world.entity(event.entity_b.id());
             if let Some((entity_b, (mut breakable, transform, collider, vel, _))) =
-                resolved_b.and_then(|e| query.get_mut_entity(e).map(|q| (e, q)))
+                resolved_b.and_then(|e| query.get_mut(e).map(|q| (e, q)))
             {
                 if !breakable.is_broken && max_impulse > breakable.threshold {
                     breakable.current_health -= max_impulse;
@@ -749,15 +750,13 @@ fn center_of_mass_frame(chunk: &crate::fracture::ProceduralChunk) -> Vec<gizmo_m
 fn age_debris(world: &World, commands: &mut gizmo_core::commands::Commands, dt: f32) {
     // SAFETY: called from `physics_fracture_system` before its breakable query is opened, and
     // `Debris` is in no other query of that system.
-    let Some(mut pieces) = (unsafe { world.query_unchecked::<gizmo_core::query::Mut<crate::components::Debris>>() }) else {
+    let Some(mut pieces) = (unsafe { world.query_unchecked::<(Entity, gizmo_core::query::Mut<crate::components::Debris>)>() }) else {
         return;
     };
     for (id, mut piece) in pieces.iter_mut() {
         piece.age += dt;
         if piece.lifetime > 0.0 && piece.age >= piece.lifetime {
-            if let Some(e) = world.entity(id) {
-                commands.entity(e).despawn();
-            }
+            commands.entity(id).despawn();
         }
     }
 }
@@ -779,6 +778,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     };
 
     let explosion_query_opt = world.query::<(
+        Entity,
         &Explosion,
         &Transform,
         gizmo_core::query::Without<gizmo_core::pool::Pooled>,
@@ -786,17 +786,13 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     let mut active_explosions = Vec::new();
 
     if let Some(exp_query) = &explosion_query_opt {
-        for (ent_id, (explosion, transform, _)) in exp_query.iter() {
+        for (exp_entity, explosion, transform, _) in exp_query.iter() {
             if explosion.is_active {
                 // Resolved, not fabricated: this handle is what despawns the explosion at the
                 // end of the pass. A generation-0 handle to a recycled slot fails
                 // `World::despawn`'s liveness check SILENTLY, leaving `is_active` set — so the
                 // blast re-detonates on every subsequent frame, against `Explosion`'s own
                 // documented contract that it applies exactly once and then despawns.
-                let exp_entity = match world.entity(ent_id) {
-                    Some(e) => e,
-                    None => continue,
-                };
                 // Apply offset to transform position
                 active_explosions.push((
                     exp_entity,
@@ -832,6 +828,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
     let mut breakable_query_opt = unsafe {
         world.query_unchecked::<(
+            Entity,
             gizmo_core::query::Mut<crate::components::Breakable>,
             &Transform,
             &Collider,
@@ -841,8 +838,8 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     };
     if let Some(breakable_query) = &mut breakable_query_opt {
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (id, (mut breakable, transform, collider, vel, _)) in breakable_query.iter_mut() {
-                if breakable.is_broken || shattered.contains(&id) {
+            for (entity, mut breakable, transform, collider, vel, _) in breakable_query.iter_mut() {
+                if breakable.is_broken || shattered.contains(&entity) {
                     continue;
                 }
 
@@ -867,10 +864,6 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                             // original in the scene beside its own debris and, since every
                             // damage path is gated on `!is_broken` and nothing clears it,
                             // permanently undamageable.
-                            let entity = match world.entity(id) {
-                                Some(e) => e,
-                                None => continue,
-                            };
                             let broke = shatter_entity(
                                 &mut commands,
                                 entity,
@@ -883,7 +876,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
                             );
                             if broke {
                                 breakable.is_broken = true;
-                                shattered.insert(id);
+                                shattered.insert(entity);
                             }
                         }
                     }
@@ -896,6 +889,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
     let mut rb_query_opt = unsafe {
         world.query_unchecked::<(
+            Entity,
             Mut<RigidBody>,
             &Transform,
             Mut<Velocity>,
@@ -904,8 +898,8 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     };
     if let Some(rb_query) = &mut rb_query_opt {
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
-            for (id, (mut rb, transform, mut vel, _)) in rb_query.iter_mut() {
-                if !rb.is_dynamic() || shattered.contains(&id) {
+            for (entity, mut rb, transform, mut vel, _) in rb_query.iter_mut() {
+                if !rb.is_dynamic() || shattered.contains(&entity) {
                     continue;
                 }
 
@@ -1028,7 +1022,7 @@ mod collider_less_body_tests {
             physics_step_system(&world, 1.0 / 60.0);
         }
         assert_eq!(world.get_resource::<PhysicsWorld>().unwrap().bodies_without_collider, 1);
-        let y = |e: gizmo_core::entity::Entity| world.borrow::<Transform>().get(e.id()).unwrap().position.y;
+        let y = |e: gizmo_core::entity::Entity| world.borrow::<Transform>().get(e).unwrap().position.y;
         assert_eq!(y(bare), 5.0, "not simulated");
         assert!(y(full) < 4.0, "the same body with a collider falls");
     }

@@ -9,6 +9,7 @@
 //! width that turns its nodes back into a surface. `cloth_demo` kept its cloth out of the ECS and
 //! rebuilt a GPU mesh itself in a render hook. Both draw paths call [`cloth_mesh_system`] now.
 
+use gizmo_core::Entity;
 use crate::renderer::components::{MaterialDesc, MeshData, MeshRenderer};
 use crate::renderer::Vertex;
 use gizmo_math::Vec3;
@@ -25,13 +26,11 @@ use gizmo_physics_soft::cloth::Cloth;
 /// `MeshData` every frame re-uploads it, which is what a moving cloth costs.
 pub fn cloth_mesh_system(world: &mut crate::core::World) {
     let built: Vec<(u32, MeshData)> = {
-        let cloths = world.borrow::<Cloth>();
         let transforms = world.borrow::<Transform>();
-        cloths
-            .iter()
-            .map(|(id, cloth)| {
-                let to_local = transforms.get(id).map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse()).unwrap_or(gizmo_math::Mat4::IDENTITY);
-                (id, MeshData::new(cloth_vertices(cloth, to_local)))
+        world.query::<(Entity, &Cloth)>().unwrap().iter()
+            .map(|(entity, cloth)| {
+                let to_local = transforms.get(entity).map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse()).unwrap_or(gizmo_math::Mat4::IDENTITY);
+                (entity.id(), MeshData::new(cloth_vertices(cloth, to_local)))
             })
             .collect()
     };
@@ -77,16 +76,14 @@ fn cloth_vertices(cloth: &Cloth, to_local: gizmo_math::Mat4) -> Vec<Vertex> {
 pub fn rope_mesh_system(world: &mut crate::core::World) {
     use gizmo_physics_soft::rope::Rope;
     let built: Vec<(u32, MeshData)> = {
-        let ropes = world.borrow::<Rope>();
         let transforms = world.borrow::<Transform>();
-        ropes
-            .iter()
-            .map(|(id, rope)| {
+        world.query::<(Entity, &Rope)>().unwrap().iter()
+            .map(|(entity, rope)| {
                 let to_local = transforms
-                    .get(id)
+                    .get(entity)
                     .map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse())
                     .unwrap_or(gizmo_math::Mat4::IDENTITY);
-                (id, MeshData::new(rope_vertices(rope, to_local)))
+                (entity.id(), MeshData::new(rope_vertices(rope, to_local)))
             })
             .collect()
     };
@@ -138,16 +135,14 @@ fn rope_vertices(rope: &gizmo_physics_soft::rope::Rope, to_local: gizmo_math::Ma
 pub fn soft_body_mesh_system(world: &mut crate::core::World) {
     use gizmo_physics_soft::SoftBodyMesh;
     let built: Vec<(u32, MeshData)> = {
-        let bodies = world.borrow::<SoftBodyMesh>();
         let transforms = world.borrow::<Transform>();
-        bodies
-            .iter()
-            .map(|(id, body)| {
+        world.query::<(Entity, &SoftBodyMesh)>().unwrap().iter()
+            .map(|(entity, body)| {
                 let to_local = transforms
-                    .get(id)
+                    .get(entity)
                     .map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse())
                     .unwrap_or(gizmo_math::Mat4::IDENTITY);
-                (id, MeshData::new(soft_body_vertices(body, to_local)))
+                (entity.id(), MeshData::new(soft_body_vertices(body, to_local)))
             })
             .collect()
     };
@@ -204,16 +199,16 @@ mod tests {
         world.add_component(e, Transform::new(Vec3::new(10.0, 0.0, 0.0)));
         world.add_component(e, Cloth::new(4, 3, 0.5, 1.0));
         cloth_mesh_system(&mut world);
-        let verts: Vec<Vec3> = world.borrow::<MeshData>().get(e.id()).unwrap().vertices().iter().map(|v| Vec3::from_array(v.position)).collect();
+        let verts: Vec<Vec3> = world.borrow::<MeshData>().get(e).unwrap().vertices().iter().map(|v| Vec3::from_array(v.position)).collect();
         assert_eq!(verts.len(), 12 * 3 * 2, "two faces of two triangles of six cells");
         // Node (0, 0) is at the world origin; the entity sits at x = 10, so locally it is at −10.
         assert!(verts.iter().any(|v| (*v - Vec3::new(-10.0, 0.0, 0.0)).length() < 1e-5));
-        assert!(world.borrow::<MeshRenderer>().get(e.id()).is_some());
-        assert!(world.borrow::<MaterialDesc>().get(e.id()).is_some());
+        assert!(world.borrow::<MeshRenderer>().get(e).is_some());
+        assert!(world.borrow::<MaterialDesc>().get(e).is_some());
 
-        world.borrow_mut::<Cloth>().get_mut(e.id()).unwrap().nodes[0].position = Vec3::new(10.0, -3.0, 0.0);
+        world.borrow_mut::<Cloth>().get_mut(e).unwrap().nodes[0].position = Vec3::new(10.0, -3.0, 0.0);
         cloth_mesh_system(&mut world);
-        let moved = world.borrow::<MeshData>().get(e.id()).unwrap().vertices().iter().any(|v| (Vec3::from_array(v.position) - Vec3::new(0.0, -3.0, 0.0)).length() < 1e-5);
+        let moved = world.borrow::<MeshData>().get(e).unwrap().vertices().iter().any(|v| (Vec3::from_array(v.position) - Vec3::new(0.0, -3.0, 0.0)).length() < 1e-5);
         assert!(moved, "the mesh did not follow the node");
     }
 
@@ -225,12 +220,12 @@ mod tests {
         let e = world.spawn();
         world.add_component(e, Rope::new(Vec3::new(0.0, 5.0, 0.0), Vec3::NEG_Y, 4, 0.5, 0.1, true, false));
         rope_mesh_system(&mut world);
-        let verts: Vec<Vec3> = world.borrow::<MeshData>().get(e.id()).unwrap().vertices().iter().map(|v| Vec3::from_array(v.position)).collect();
+        let verts: Vec<Vec3> = world.borrow::<MeshData>().get(e).unwrap().vertices().iter().map(|v| Vec3::from_array(v.position)).collect();
         assert_eq!(verts.len(), 4 * 4 * 6, "four links, four sides, two triangles each");
         // Every vertex lies within the rope's half-thickness (diagonally) of the x = z = 0 line.
         assert!(verts.iter().all(|v| Vec2::new(v.x, v.z).length() < 0.04));
         assert!(verts.iter().any(|v| (v.y - 3.0).abs() < 1e-4), "the tube reaches the last node at y = 3");
-        assert!(world.borrow::<MeshRenderer>().get(e.id()).is_some());
+        assert!(world.borrow::<MeshRenderer>().get(e).is_some());
     }
 
     /// A torn cloth draws the hole.
@@ -242,7 +237,7 @@ mod tests {
         cloth.constraints.retain(|k| !((k.node_a == 5 && k.node_b == 1) || (k.node_a == 1 && k.node_b == 5)));
         world.add_component(e, cloth);
         cloth_mesh_system(&mut world);
-        assert_eq!(world.borrow::<MeshData>().get(e.id()).unwrap().vertices().len(), 8 * 3 * 2);
+        assert_eq!(world.borrow::<MeshData>().get(e).unwrap().vertices().len(), 8 * 3 * 2);
     }
 
     /// A soft body entity gets a mesh of its outer surface only, facing out, where its nodes are.
@@ -256,7 +251,7 @@ mod tests {
         soft_body_mesh_system(&mut world);
         let verts: Vec<(Vec3, Vec3)> = world
             .borrow::<MeshData>()
-            .get(e.id())
+            .get(e)
             .unwrap()
             .vertices()
             .iter()
@@ -269,6 +264,6 @@ mod tests {
             assert!((b - a).cross(c - a).dot(a - centre) > 0.0, "a triangle faces into the body");
         }
         assert!(verts.iter().all(|(p, n)| n.dot(*p - centre) > 0.0), "a normal points inward");
-        assert!(world.borrow::<MeshRenderer>().get(e.id()).is_some());
+        assert!(world.borrow::<MeshRenderer>().get(e).is_some());
     }
 }

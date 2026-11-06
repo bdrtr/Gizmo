@@ -178,7 +178,7 @@ impl<'a> Commands<'a> {
     /// `yaw = -π/2` (looking towards −X), `pitch = 0` (level).
     pub fn spawn_camera(&mut self, pos: Vec3) -> EntityBuilder<'_, 'a> {
         if let Some(mut cameras) = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>() {
-            for (_, mut c) in cameras.iter_mut() {
+            for mut c in cameras.iter_mut() {
                 c.primary = false;
             }
         }
@@ -217,7 +217,7 @@ impl<'a> Commands<'a> {
         far: f32,
     ) -> EntityBuilder<'_, 'a> {
         if let Some(mut cameras) = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>() {
-            for (_, mut c) in cameras.iter_mut() {
+            for mut c in cameras.iter_mut() {
                 c.primary = false;
             }
         }
@@ -355,7 +355,7 @@ impl<'a> Commands<'a> {
         // Scale'i half_extents ile eşleştir
         {
             let mut trans_store = self.world.borrow_mut::<Transform>();
-            if let Some(mut trans) = trans_store.get_mut(id.id()) {
+            if let Some(mut trans) = trans_store.get_mut(id) {
                 trans.scale = half_extents * 2.0;
                 trans.update_local_matrix();
             }
@@ -600,21 +600,21 @@ pub trait WorldExt {
     /// # world.add_component(e, Health(100));
     /// // The second type parameter is the closure's own, so it can only be `_`.
     /// world.modify::<Health, _>("Player", |h| h.0 -= 30);
-    /// assert_eq!(world.borrow::<Health>().get(e.id()).unwrap().0, 70);
+    /// assert_eq!(world.borrow::<Health>().get(e).unwrap().0, 70);
     ///
     /// // An unknown name is a silent no-op, not a panic.
     /// world.modify::<Health, _>("Nobody", |h| h.0 = 0);
-    /// assert_eq!(world.borrow::<Health>().get(e.id()).unwrap().0, 70);
+    /// assert_eq!(world.borrow::<Health>().get(e).unwrap().0, 70);
     /// ```
     fn modify<T: gizmo_core::Component + 'static, F: FnMut(&mut T)>(&mut self, name: &str, f: F);
 }
 
 impl WorldExt for World {
     fn entity_named(&self, name: &str) -> Option<u32> {
-        let mut names = self.query::<&EntityName>()?;
-        for (id, n) in names.iter_mut() {
+        let mut names = self.query::<(Entity, &EntityName)>()?;
+        for (entity, n) in names.iter_mut() {
             if n.0 == name {
-                return Some(id);
+                return Some(entity.id());
             }
         }
         None
@@ -622,11 +622,11 @@ impl WorldExt for World {
 
     fn move_entity_named<F: FnMut(&mut gizmo_physics_core::Transform)>(&mut self, name: &str, mut f: F) {
         let target: Option<u32> = {
-            if let Some(mut names) = self.query::<&EntityName>() {
+            if let Some(mut names) = self.query::<(Entity, &EntityName)>() {
                 let mut found = None;
-                for (id, n) in names.iter_mut() {
+                for (entity, n) in names.iter_mut() {
                     if n.0 == name {
-                        found = Some(id);
+                        found = Some(entity.id());
                         break;
                     }
                 }
@@ -637,10 +637,10 @@ impl WorldExt for World {
         };
         if let Some(target_id) = target {
             if let Some(mut transforms) =
-                self.query_mut::<gizmo_core::prelude::Mut<gizmo_physics_core::Transform>>()
+                self.query_mut::<(Entity, gizmo_core::prelude::Mut<gizmo_physics_core::Transform>)>()
             {
                 for (tid, mut trans) in transforms.iter_mut() {
-                    if tid == target_id {
+                    if tid.id() == target_id {
                         f(&mut trans);
                         trans.update_local_matrix();
                     }
@@ -661,11 +661,11 @@ impl WorldExt for World {
         mut f: F,
     ) {
         let target: Option<u32> = {
-            if let Some(mut names) = self.query::<&EntityName>() {
+            if let Some(mut names) = self.query::<(Entity, &EntityName)>() {
                 let mut found = None;
-                for (id, n) in names.iter_mut() {
+                for (entity, n) in names.iter_mut() {
                     if n.0 == name {
-                        found = Some(id);
+                        found = Some(entity.id());
                         break;
                     }
                 }

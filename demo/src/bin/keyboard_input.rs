@@ -184,7 +184,7 @@ fn keyboard_input_system(
     } else {
         (0.35, Vec4::new(0.25, 0.5, 0.9, 1.0))
     };
-    for (_entity, (mut transform, mut material, _)) in cubes.iter_mut() {
+    for (mut transform, mut material, _) in cubes.iter_mut() {
         transform.scale = Vec3::splat(scale);
         material.albedo = albedo;
     }

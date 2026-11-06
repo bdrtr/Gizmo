@@ -152,7 +152,7 @@ fn movement(
     }
     // Ok tuşlarının "ileri"si sahnede −Z.
     let step = Vec3::new(x, 0.0, -z) * MOVE_SPEED * time.dt();
-    for (_entity, (mut transform, _)) in cubes.iter_mut() {
+    for (mut transform, _) in cubes.iter_mut() {
         transform.position += step;
     }
 }

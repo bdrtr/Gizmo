@@ -33,6 +33,7 @@
 //!   `Vec` each step (`gather_colliders`) and scans it. Same defect, different fix (a capsule
 //!   sweep, not a ray); tracked as a follow-up.
 
+use gizmo_core::Entity;
 use gizmo_core::component::IsDeleted;
 use gizmo_core::query::{Mut, Without};
 use gizmo_core::world::World;
@@ -68,11 +69,11 @@ fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
     // The same material rule as the rigid step (`Collider::material_with`), so the first-frame
     // fallback and the broadphase path agree on how much grip a surface has.
     let materials = world.query::<&gizmo_physics_core::components::PhysicsMaterial>();
-    if let Some(query) = world.query::<(&Transform, &Collider, Without<IsDeleted>)>() {
-        for (id, (transform, collider, _)) in query.iter() {
+    if let Some(query) = world.query::<(Entity, &Transform, &Collider, Without<IsDeleted>)>() {
+        for (entity, transform, collider, _) in query.iter() {
             let mut collider = collider.clone();
-            collider.material = collider.material_with(materials.as_ref().and_then(|q| q.get(id)));
-            colliders.push((BodyHandle::from_id(id), *transform, collider));
+            collider.material = collider.material_with(materials.as_ref().and_then(|q| q.get(entity)));
+            colliders.push((BodyHandle::from_id(entity.id()), *transform, collider));
         }
     }
     colliders
@@ -179,6 +180,7 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
     // was already dropped, so there is no overlapping `&`/`&mut` on `Transform` either.
     let query = unsafe {
         world.query_unchecked::<(
+            Entity,
             Mut<VehicleController>,
             Mut<RigidBody>,
             &Transform,
@@ -188,11 +190,11 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
     };
     if let Some(mut query) = query {
         let mut vehicle_count = 0usize;
-        for (id, (mut vehicle, mut rb, transform, mut vel, _)) in query.iter_mut() {
+        for (entity, mut vehicle, mut rb, transform, mut vel, _) in query.iter_mut() {
             // Aquaplaning hıza bağlı → her araç kendi hızıyla değerlendirilir.
             let wg = weather_grip_factor(weather, vel.linear.length());
             update_vehicle_with_query(
-                BodyHandle::from_id(id),
+                BodyHandle::from_id(entity.id()),
                 &mut vehicle,
                 &mut rb,
                 transform,
@@ -239,6 +241,7 @@ pub fn character_controller_system(world: &World, dt: f32) {
     // the `Mut<Transform>` here never aliases the `&Transform` used above.
     let query = unsafe {
         world.query_unchecked::<(
+            Entity,
             Mut<CharacterController>,
             Mut<Transform>,
             Mut<Velocity>,
@@ -252,8 +255,8 @@ pub fn character_controller_system(world: &World, dt: f32) {
     let mut hits = Vec::new();
     if let Some(mut query) = query {
         let mut char_count = 0usize;
-        for (id, (mut kcc, mut transform, mut vel, collider, _)) in query.iter_mut() {
-            if let Some((_, carry)) = carried.iter().find(|(c, _)| *c == id) {
+        for (entity, mut kcc, mut transform, mut vel, collider, _) in query.iter_mut() {
+            if let Some((_, carry)) = carried.iter().find(|(c, _)| *c == entity.id()) {
                 transform.position += *carry;
             }
             let water_surface_y = phys
@@ -262,7 +265,7 @@ pub fn character_controller_system(world: &World, dt: f32) {
             let walk_speed = gizmo_math::Vec3::new(kcc.target_velocity.x, 0.0, kcc.target_velocity.z).length();
             hits.clear();
             update_character_with_hits(
-                BodyHandle::from_id(id),
+                BodyHandle::from_id(entity.id()),
                 &mut kcc,
                 &mut transform,
                 &mut vel,
@@ -341,11 +344,11 @@ fn platform_carry(world: &World, colliders: &[(BodyHandle, Transform, Collider)]
     use gizmo_physics_core::raycast::{Ray, Raycast};
     use gizmo_math::Vec3;
     let mut out = Vec::new();
-    let Some(characters) = world.query::<(&CharacterController, &Transform, &Collider, Without<IsDeleted>)>() else {
+    let Some(characters) = world.query::<(Entity, &CharacterController, &Transform, &Collider, Without<IsDeleted>)>() else {
         return out;
     };
     let velocities = world.query::<&Velocity>();
-    for (id, (kcc, transform, collider, _)) in characters.iter() {
+    for (entity, kcc, transform, collider, _) in characters.iter() {
         if !kcc.is_grounded || kcc.is_submerged {
             continue;
         }
@@ -354,7 +357,7 @@ fn platform_carry(world: &World, colliders: &[(BodyHandle, Transform, Collider)]
         let ray = Ray::new(feet, Vec3::NEG_Y);
         let mut floor: Option<(f32, BodyHandle, Vec3)> = None;
         for (handle, t, c) in colliders {
-            if handle.id() == id || c.is_trigger {
+            if handle.id() == entity.id() || c.is_trigger {
                 continue;
             }
             if let Some((d, _)) = Raycast::ray_shape(&ray, &c.shape, t) {
@@ -368,7 +371,7 @@ fn platform_carry(world: &World, colliders: &[(BodyHandle, Transform, Collider)]
         let contact = feet - Vec3::Y * d;
         let at_contact = v.linear + v.angular.cross(contact - centre);
         if at_contact != Vec3::ZERO {
-            out.push((id, at_contact * dt));
+            out.push((entity.id(), at_contact * dt));
         }
     }
     out
@@ -412,7 +415,7 @@ pub fn fighter_frame_system(world: &World, dt: f32) {
     let query = unsafe { world.query_unchecked::<(Mut<FighterController>, Without<IsDeleted>)>() };
     if let Some(mut query) = query {
         let mut fighter_count = 0usize;
-        for (_id, (mut fighter, _)) in query.iter_mut() {
+        for (mut fighter, _) in query.iter_mut() {
             fighter.tick();
             fighter_count += 1;
         }
@@ -478,14 +481,13 @@ pub fn hit_detection_system(world: &World, dt: f32) {
     let mut attacks: HashMap<u32, Attack> = HashMap::new();
     let mut already_hit: HashMap<u32, Vec<gizmo_core::entity::Entity>> = HashMap::new();
     {
-        let controllers = world.borrow::<FighterController>();
-        for (id, fighter) in controllers.iter() {
-            is_fighter.insert(id, ());
-            already_hit.insert(id, fighter.already_hit.clone());
+        for (entity, fighter) in world.query::<(Entity, &FighterController)>().unwrap().iter() {
+            is_fighter.insert(entity.id(), ());
+            already_hit.insert(entity.id(), fighter.already_hit.clone());
             if let Some(active) = &fighter.active_move {
                 if fighter.is_in_active_window() {
                     attacks.insert(
-                        id,
+                        entity.id(),
                         Attack {
                             move_name: active.name.clone(),
                             damage: active.frame_data.damage,
@@ -554,9 +556,10 @@ pub fn hit_detection_system(world: &World, dt: f32) {
     {
         // SAFETY: exclusive `fn(&World, f32)` system — the scheduler runs it alone — and `Hitbox`
         // is a different component type from the `Transform`/`Parent` queries borrowed above.
-        let mut hitboxes = unsafe { world.borrow_mut_unchecked::<Hitbox>() };
+        let mut hitboxes = unsafe { world.query_unchecked::<(Entity, Mut<Hitbox>)>() }
+            .expect("one component never aliases itself");
         for (entity, mut hitbox) in hitboxes.iter_mut() {
-            let Some(owner) = owning_fighter(entity) else {
+            let Some(owner) = owning_fighter(entity.id()) else {
                 continue; // not a fighter's box — its `active` is somebody else's business
             };
             let swinging = attacks.get(&owner).is_some_and(|attack| {
@@ -567,9 +570,9 @@ pub fn hit_detection_system(world: &World, dt: f32) {
             });
             hitbox.active = swinging;
             if swinging {
-                if let Some((pos, rot)) = world_pose(entity) {
+                if let Some((pos, rot)) = world_pose(entity.id()) {
                     live.push(LiveBox {
-                        entity,
+                        entity: entity.id(),
                         owner,
                         hitbox: hitbox.clone(),
                         pos,
@@ -586,17 +589,16 @@ pub fn hit_detection_system(world: &World, dt: f32) {
     // ── 3. Test them against every hurtbox that is not the attacker's own ────────────────────
     let mut hits: Vec<HitEvent> = Vec::new();
     {
-        let hurtboxes = world.borrow::<Hurtbox>();
-        for (victim_entity, hurtbox) in hurtboxes.iter() {
-            let victim_owner = owning_fighter(victim_entity);
-            let Some((u_pos, u_rot)) = world_pose(victim_entity) else {
+        for (victim_entity, hurtbox) in world.query::<(Entity, &Hurtbox)>().unwrap().iter() {
+            let victim_owner = owning_fighter(victim_entity.id());
+            let Some((u_pos, u_rot)) = world_pose(victim_entity.id()) else {
                 continue;
             };
             for attacker_box in &live {
-                if victim_owner == Some(attacker_box.owner) || victim_entity == attacker_box.owner {
+                if victim_owner == Some(attacker_box.owner) || victim_entity.id() == attacker_box.owner {
                     continue; // your own hurtboxes are not targets
                 }
-                let victim = victim_owner.unwrap_or(victim_entity);
+                let victim = victim_owner.unwrap_or(victim_entity.id());
                 let victim_handle = world.entity(victim);
                 if victim_handle.is_some_and(|handle| {
                     already_hit.get(&attacker_box.owner).is_some_and(|hit| hit.contains(&handle))
@@ -623,7 +625,7 @@ pub fn hit_detection_system(world: &World, dt: f32) {
                     attacker: attacker_box.owner,
                     attacker_hitbox: attacker_box.entity,
                     victim,
-                    victim_hurtbox: victim_entity,
+                    victim_hurtbox: victim_entity.id(),
                     damage: attack.damage * hurtbox.damage_multiplier,
                     hitstun: attack.hitstun,
                     hitstop: attack.hitstop,
@@ -750,7 +752,7 @@ mod tests {
         let start_z = world
             .query::<&Transform>()
             .unwrap()
-            .get(car.id())
+            .get(car)
             .unwrap()
             .position
             .z;
@@ -761,7 +763,7 @@ mod tests {
             physics_step_system(&world, dt);
         }
 
-        let end = *world.query::<&Transform>().unwrap().get(car.id()).unwrap();
+        let end = *world.query::<&Transform>().unwrap().get(car).unwrap();
         assert!(end.position.is_finite(), "vehicle position went non-finite: {:?}", end.position);
         assert!(
             start_z - end.position.z > 0.2,
@@ -783,7 +785,7 @@ mod tests {
         let start_z = world
             .query::<&Transform>()
             .unwrap()
-            .get(car.id())
+            .get(car)
             .unwrap()
             .position
             .z;
@@ -806,7 +808,7 @@ mod tests {
             schedule.run(&mut world, dt);
         }
 
-        let end = *world.query::<&Transform>().unwrap().get(car.id()).unwrap();
+        let end = *world.query::<&Transform>().unwrap().get(car).unwrap();
         assert!(end.position.is_finite());
         assert!(
             start_z - end.position.z > 0.2,
@@ -836,14 +838,14 @@ mod tests {
         for _ in 0..(seconds / dt).round() as usize {
             {
                 let mut tfs = world.borrow_mut::<Transform>();
-                let mut t = tfs.get_mut(p.id()).unwrap();
+                let mut t = tfs.get_mut(p).unwrap();
                 t.position += linear * dt;
                 t.rotation = gizmo_math::Quat::from_scaled_axis(angular * dt) * t.rotation;
             }
             character_controller_system(&world, dt);
         }
-        let pos = world.query::<&Transform>().unwrap().get(e.id()).unwrap().position;
-        let grounded = world.borrow::<CharacterController>().get(e.id()).unwrap().is_grounded;
+        let pos = world.query::<&Transform>().unwrap().get(e).unwrap().position;
+        let grounded = world.borrow::<CharacterController>().get(e).unwrap().is_grounded;
         (pos, grounded)
     }
 
@@ -905,7 +907,7 @@ mod tests {
             character_controller_system(&world, dt);
         }
 
-        let pos = world.query::<&Transform>().unwrap().get(e.id()).unwrap().position;
+        let pos = world.query::<&Transform>().unwrap().get(e).unwrap().position;
         assert!(pos.is_finite(), "character position went non-finite: {pos:?}");
         assert!(pos.x > 0.5, "character should have walked forward in +X, got x = {}", pos.x);
     }
@@ -943,7 +945,7 @@ mod tests {
             character_controller_system(&world, dt);
         }
 
-        let pos = world.query::<&Transform>().unwrap().get(e.id()).unwrap().position;
+        let pos = world.query::<&Transform>().unwrap().get(e).unwrap().position;
         assert!(pos.is_finite());
         assert!(
             pos.y > start_y + 0.05,
@@ -987,7 +989,7 @@ mod tests {
                 }
                 physics_step_system(&world, dt);
             }
-            world.query::<&Transform>().unwrap().get(b.id()).unwrap().position
+            world.query::<&Transform>().unwrap().get(b).unwrap().position
         }
 
         let baseline = run(false);
@@ -1011,13 +1013,13 @@ mod tests {
             world.insert_resource(pw);
             spawn_ground(&mut world);
             let car = spawn_vehicle(&mut world, 1.0);
-            let start_z = world.query::<&Transform>().unwrap().get(car.id()).unwrap().position.z;
+            let start_z = world.query::<&Transform>().unwrap().get(car).unwrap().position.z;
             let dt = 1.0 / 120.0;
             for _ in 0..300 {
                 vehicle_controller_system(&world, dt);
                 physics_step_system(&world, dt);
             }
-            let end_z = world.query::<&Transform>().unwrap().get(car.id()).unwrap().position.z;
+            let end_z = world.query::<&Transform>().unwrap().get(car).unwrap().position.z;
             start_z - end_z // ileri (-Z) kat edilen mesafe
         }
         let sunny = run(Weather::Sunny);
@@ -1040,7 +1042,7 @@ mod tests {
         for _ in 0..30 {
             vehicle_controller_system(&world, dt); // yalnız kontrolcü; kuvvetleri Velocity'ye yazar
         }
-        let v = world.query::<&Velocity>().unwrap().get(car.id()).unwrap().linear;
+        let v = world.query::<&Velocity>().unwrap().get(car).unwrap().linear;
         assert!(v.is_finite(), "PhysicsWorld'süz kontrolcü sonlu kalmalı, bulundu {v:?}");
     }
 
@@ -1052,7 +1054,7 @@ mod tests {
     /// Per-wheel `is_grounded`, read out of the ECS.
     fn grounded_flags(world: &World, car: Entity) -> Vec<bool> {
         let q = world.query::<&VehicleController>().unwrap();
-        q.get(car.id())
+        q.get(car)
             .unwrap()
             .wheels
             .iter()
@@ -1137,7 +1139,7 @@ mod tests {
         use gizmo_physics_core::components::PhysicsMaterial;
         let surface = |world: &World, car: Entity| -> Vec<f32> {
             let q = world.query::<&VehicleController>().unwrap();
-            q.get(car.id()).unwrap().wheels.iter().map(|w| w.surface_friction).collect()
+            q.get(car).unwrap().wheels.iter().map(|w| w.surface_friction).collect()
         };
         let mut world = World::new();
         world.insert_resource(PhysicsWorld::new());
@@ -1206,9 +1208,9 @@ mod tests {
         }
 
         // Freeze the inputs both paths will be handed.
-        let transform = *world.query::<&Transform>().unwrap().get(car.id()).unwrap();
-        let rb0 = *world.query::<&RigidBody>().unwrap().get(car.id()).unwrap();
-        let vel0 = *world.query::<&Velocity>().unwrap().get(car.id()).unwrap();
+        let transform = *world.query::<&Transform>().unwrap().get(car).unwrap();
+        let rb0 = *world.query::<&RigidBody>().unwrap().get(car).unwrap();
+        let vel0 = *world.query::<&Velocity>().unwrap().get(car).unwrap();
         let handle = gizmo_physics_core::BodyHandle::from_id(car.id());
 
         let colliders = gather_colliders(&world);
@@ -1307,9 +1309,9 @@ mod tests {
         // --- counts -----------------------------------------------------------------
         // Reconstruct the four suspension rays and ask the broadphase what it would return.
         let (candidates, ray_count) = {
-            let transform = *world.query::<&Transform>().unwrap().get(car.id()).unwrap();
+            let transform = *world.query::<&Transform>().unwrap().get(car).unwrap();
             let q = world.query::<&VehicleController>().unwrap();
-            let vc = q.get(car.id()).unwrap();
+            let vc = q.get(car).unwrap();
             let phys = world.get_resource::<PhysicsWorld>().unwrap();
             let mut total = 0usize;
             for w in &vc.wheels {
@@ -1331,9 +1333,9 @@ mod tests {
 
         // The old path, reproduced exactly: rebuild the owned snapshot every step, then scan
         // it once per wheel.
-        let transform = *world.query::<&Transform>().unwrap().get(car.id()).unwrap();
-        let rb0 = *world.query::<&RigidBody>().unwrap().get(car.id()).unwrap();
-        let vel0 = *world.query::<&Velocity>().unwrap().get(car.id()).unwrap();
+        let transform = *world.query::<&Transform>().unwrap().get(car).unwrap();
+        let rb0 = *world.query::<&RigidBody>().unwrap().get(car).unwrap();
+        let vel0 = *world.query::<&Velocity>().unwrap().get(car).unwrap();
         let handle = gizmo_physics_core::BodyHandle::from_id(car.id());
         let t0 = Instant::now();
         for _ in 0..STEPS {

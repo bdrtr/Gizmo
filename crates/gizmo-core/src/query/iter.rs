@@ -6,11 +6,8 @@ use std::marker::PhantomData;
 // QUERY ITERATOR
 // =========================================================================
 
-/// Row-by-row iterator over a [`Query`](super::Query), yielding `(entity_id, item)`.
-///
-/// The `u32` is the raw entity index **without** the generation counter — the same value as
-/// [`Entity::id`](crate::entity::Entity::id). It is only usable with the `u32`-keyed accessors,
-/// which cannot tell a live entity from a despawned slot that has been reused.
+/// Row-by-row iterator over a [`Query`](super::Query), yielding each row's item. Put
+/// [`Entity`](crate::entity::Entity) in the query to get the row's handle with it.
 ///
 /// Visits archetypes in ascending archetype index and rows in ascending row order, skipping
 /// rows rejected by `filter_row` — so the number of items yielded can be smaller than
@@ -26,7 +23,33 @@ use std::marker::PhantomData;
 /// resumable per-row state machine of `next`. The override always restarts from the first
 /// matching archetype and does not consult how far `next` has already advanced, so call it on
 /// a *fresh* iterator: on a partially consumed one it replays the items already yielded.
-pub struct QueryIter<'a, 'w, Q: WorldQuery> {
+pub struct QueryIter<'a, 'w, Q: WorldQuery>(pub(super) QueryRows<'a, 'w, Q>);
+
+impl<'a, 'w, Q: WorldQuery> Iterator for QueryIter<'a, 'w, Q>
+where
+    'w: 'a,
+{
+    type Item = Q::Item<'a>;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(|(_, item)| item)
+    }
+
+    #[inline(always)]
+    fn for_each<F>(self, mut f: F)
+    where
+        Self: Sized,
+        F: FnMut(Self::Item),
+    {
+        self.0.for_each(|(_, item)| f(item));
+    }
+}
+
+/// What [`QueryIter`] walks: each row with its raw id, which the query's own machinery still needs
+/// (a sparse fetch looks up by id, [`Query::iter_combinations`](super::Query::iter_combinations)
+/// keeps one per row) and which nothing outside this module sees.
+pub(super) struct QueryRows<'a, 'w, Q: WorldQuery> {
     pub(super) world: &'a World,
     pub(super) archetype_indices: &'a [usize],
     pub(super) current_arch_idx: usize,
@@ -36,7 +59,7 @@ pub struct QueryIter<'a, 'w, Q: WorldQuery> {
     pub(super) _marker_w: PhantomData<&'w ()>,
 }
 
-impl<'a, 'w, Q: WorldQuery> Iterator for QueryIter<'a, 'w, Q>
+impl<'a, 'w, Q: WorldQuery> Iterator for QueryRows<'a, 'w, Q>
 where
     'w: 'a,
 {
@@ -166,7 +189,7 @@ impl<'a, 'w, Q: WorldQuery> Iterator for QueryChunksIter<'a, 'w, Q>
 where
     'w: 'a,
 {
-    type Item = (&'a [crate::entity::Entity], Q::Slice<'a>);
+    type Item = Q::Slice<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.current_arch_idx < self.archetype_indices.len() {
@@ -185,14 +208,9 @@ where
                 None => continue,
             };
 
-            // SAFETY: `len == arch.len()` and the entity vector is exactly that long, so this
-            // rebuilds the slice the archetype already owns, with its lifetime tied to `'w`.
-            let ids = unsafe { std::slice::from_raw_parts(arch.entities().as_ptr(), len) };
             // SAFETY: `fetch` is this archetype's and `len` is its row count, which is what
             // `get_slice` requires; it panics for SparseSet storage rather than fabricating one.
-            let slice = unsafe { Q::get_slice(fetch, len) };
-
-            return Some((ids, slice));
+            return Some(unsafe { Q::get_slice(fetch, len) });
         }
         None
     }

@@ -258,7 +258,7 @@ fn orbit_and_measure(
         (angle * 0.37).sin() * SHELL_RADIUS * 0.5,
         angle.sin() * SHELL_RADIUS * 1.8,
     );
-    for (_entity, (mut transform, _)) in cameras.iter_mut() {
+    for (mut transform, _) in cameras.iter_mut() {
         transform.position = eye;
     }
 

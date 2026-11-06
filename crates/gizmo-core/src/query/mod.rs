@@ -8,7 +8,6 @@
 //! data. Note which ones are per-ROW rather than per-archetype: the chunked iterators cannot
 //! serve those and reject them up front.
 use crate::archetype::Archetype;
-use crate::entity::Entity;
 use crate::world::World;
 use std::any::TypeId;
 use std::marker::PhantomData;
@@ -19,6 +18,7 @@ mod iter;
 
 pub use default_filters::DefaultQueryFilters;
 pub use fetch::{FetchComponent, Mut};
+pub use access::{QueryCombinations, QueryCombinationsMut};
 pub use iter::{QueryChunksIter, QueryIter};
 
 /// Why [`Query::single`] / [`Query::single_mut`] found no one answer.
@@ -469,7 +469,7 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
 /// world.spawn_bundle((Health(10),));
 /// world.spawn_bundle((Health(10), Shield(5)));
 /// let q = world.query::<(&Health, Option<&Shield>)>().unwrap();
-/// let shields: Vec<Option<u32>> = q.iter().map(|(_, (_, s))| s.map(|s| s.0)).collect();
+/// let shields: Vec<Option<u32>> = q.iter().map(|(_, s)| s.map(|s| s.0)).collect();
 /// assert_eq!(shields.len(), 2);
 /// assert!(shields.contains(&None) && shields.contains(&Some(5)));
 /// ```
@@ -610,7 +610,7 @@ impl WorldQuery for crate::entity::Entity {
     }
 }
 
-/// What [`Query::get`] can look a row up by: an [`Entity`], which is
+/// What [`Query::get`] can look a row up by: an [`Entity`](crate::entity::Entity), which is
 /// checked against the row and so never reaches whoever got a dead entity's id, or a raw `u32`, which
 /// cannot tell them apart.
 pub trait QueryKey: Copy {

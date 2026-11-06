@@ -112,7 +112,7 @@ pub fn execute_render_pipeline(
     // 2026-08-19 fix was about. The `IsHidden` borrow is still taken here rather than inside the
     // helper so this loop keeps naming the marker in code, which `render_parity` asserts.
     let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
-    let hidden = gizmo::systems::render::collect_hidden(world, &_is_hidden_guard,
+    let hidden = gizmo::systems::render::collect_hidden(world,
         &world.borrow::<gizmo::core::component::Children>(),
     );
 
@@ -242,15 +242,15 @@ pub fn execute_render_pipeline(
         let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
         let editor_only = world.borrow::<gizmo::core::component::EditorOnly>();
 
-        if let Some(mut q) = world.query::<(&Mesh, &gizmo::physics::components::GlobalTransform, &Material)>() {
-            for (e, (mesh, global_trans, mat)) in q.iter_mut() {
+        if let Some(mut q) = world.query::<(Entity, &Mesh, &gizmo::physics::components::GlobalTransform, &Material)>() {
+            for (e, mesh, global_trans, mat) in q.iter_mut() {
                 // Sadece MeshRenderer tagli olanları çiz
                 if renderers.get(e).is_none() {
                     continue;
                 }
 
                 // Gizli olarak işaretlenmiş objeleri (ve gizli bir ebeveynin altındakileri) atla
-                if hidden.contains(&e) {
+                if hidden.contains(&e.id()) {
                     continue;
                 }
 
@@ -589,8 +589,10 @@ pub fn execute_render_pipeline(
             // end of this statement, so the mutable ParticleEmitter query below never coexists
             // with a same-type read borrow.
             let emitter_entities: Vec<u32> = world
-                .borrow::<gizmo::renderer::components::ParticleEmitter>()
-                .entities()
+                .query::<(gizmo::core::Entity, &gizmo::renderer::components::ParticleEmitter)>()
+                .unwrap()
+                .iter()
+                .map(|(entity, _)| entity.id())
                 .collect();
             // SAFETY: exclusive `&mut World`; ParticleEmitter is a distinct component type from
             // the read-only Transform query below, and the read borrow above is already dropped,

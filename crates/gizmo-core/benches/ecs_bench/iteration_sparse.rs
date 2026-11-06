@@ -22,7 +22,7 @@ pub fn bench_sparse_iter(c: &mut Criterion) {
 
     c.bench_function("sparse_iter", |b| {
         b.iter(|| {
-            query.iter_mut().for_each(|(_id, (velocity, mut position))| {
+            query.iter_mut().for_each(|(velocity, mut position)| {
                 position.0.0[0] += velocity.0.0[0];
                 position.0.0[1] += velocity.0.0[1];
                 position.0.0[2] += velocity.0.0[2];
@@ -68,7 +68,7 @@ pub fn bench_wide_sparse_iter(c: &mut Criterion) {
 
     c.bench_function("wide_sparse_iter", |b| {
         b.iter(|| {
-            query.iter_mut().for_each(|(_id, (v0, mut p0, v1, mut p1, v2, mut p2, v3, mut p3, v4, mut p4))| {
+            query.iter_mut().for_each(|(v0, mut p0, v1, mut p1, v2, mut p2, v3, mut p3, v4, mut p4)| {
                 p0.0.0[0] += v0.0.0[0];
                 p0.0.0[1] += v0.0.0[1];
                 p0.0.0[2] += v0.0.0[2];
@@ -110,7 +110,7 @@ pub fn bench_sparse_simple_iter(c: &mut Criterion) {
 
     c.bench_function("sparse_simple_iter", |b| {
         b.iter(|| {
-            for (_id, (velocity, mut position)) in query.iter_mut() {
+            for (velocity, mut position) in query.iter_mut() {
                 position.0.0[0] += velocity.0.0[0];
                 position.0.0[1] += velocity.0.0[1];
                 position.0.0[2] += velocity.0.0[2];
@@ -156,7 +156,7 @@ pub fn bench_wide_sparse_simple_iter(c: &mut Criterion) {
 
     c.bench_function("wide_sparse_simple_iter", |b| {
         b.iter(|| {
-            for (_id, (v0, mut p0, v1, mut p1, v2, mut p2, v3, mut p3, v4, mut p4)) in query.iter_mut() {
+            for (v0, mut p0, v1, mut p1, v2, mut p2, v3, mut p3, v4, mut p4) in query.iter_mut() {
                 p0.0.0[0] += v0.0.0[0];
                 p0.0.0[1] += v0.0.0[1];
                 p0.0.0[2] += v0.0.0[2];

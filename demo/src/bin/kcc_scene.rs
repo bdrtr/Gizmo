@@ -160,7 +160,7 @@ fn update(world: &mut World, state: &mut KccState, dt: f32, input: &Input) {
     // --- Karakter kontrolü (WASD → hedef hız, SPACE → zıplama tamponu) ---
     if let Some(mut kcc) = world
         .borrow_mut::<CharacterController>()
-        .get_mut(state.character.id())
+        .get_mut(state.character)
     {
         // Tuşlar ve sol çubuk `Input::move_axis` ile birleşiyor. Tuşlarda davranış aynı;
         // yeni olan, çubuğun yarım yatırılınca yürüyüş vermesi — tuşun veremediği tek şey.
@@ -184,7 +184,7 @@ fn update(world: &mut World, state: &mut KccState, dt: f32, input: &Input) {
     let mut char_pos = Vec3::ZERO;
     if let Some(mut tr) = world
         .borrow_mut::<Transform>()
-        .get_mut(state.character.id())
+        .get_mut(state.character)
     {
         char_pos = tr.position;
         tr.rotation = Quat::from_rotation_y(state.yaw);
@@ -193,7 +193,7 @@ fn update(world: &mut World, state: &mut KccState, dt: f32, input: &Input) {
     // --- FPS kamerası: karakterin baş hizasında ---
     let cam_pos = char_pos + Vec3::new(0.0, 0.8, 0.0);
     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
-        for (_, (mut tr, mut cam)) in q.iter_mut() {
+        for (mut tr, mut cam) in q.iter_mut() {
             tr.position = cam_pos;
             tr.rotation = cam_rot;
             cam.yaw = state.yaw;

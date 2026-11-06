@@ -150,14 +150,14 @@ pub fn touch_controls_system(
     let pointers = pointers(&input);
     let held_by = |id: u64| pointers.iter().find(|p| p.0 == id && !p.3).map(|p| p.1);
     let mut claimed: Vec<u64> = Vec::new();
-    for (_, (_, s)) in sticks.iter_mut() {
+    for (_, s) in sticks.iter_mut() {
         claimed.extend(s.finger);
     }
-    for (_, (_, b)) in buttons.iter_mut() {
+    for (_, b) in buttons.iter_mut() {
         claimed.extend(b.finger);
     }
 
-    for (_, (node, mut stick)) in sticks.iter_mut() {
+    for (node, mut stick) in sticks.iter_mut() {
         let mut next = *stick;
         if let Some(f) = next.finger {
             match held_by(f) {
@@ -189,7 +189,7 @@ pub fn touch_controls_system(
         }
     }
 
-    for (_, (node, mut button)) in buttons.iter_mut() {
+    for (node, mut button) in buttons.iter_mut() {
         let mut next = *button;
         next.just_pressed = false;
         next.just_released = false;

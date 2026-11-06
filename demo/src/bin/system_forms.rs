@@ -124,8 +124,8 @@ gizmo::core::system_param! {
 
 /// Kompozit parametreyi tek başına alan sistem. Üç şeyi tek imzadan okuyor.
 fn composite_reader(mut b: Bundle) {
-    let h: f32 = b.health.iter().map(|(_, x)| x.0).sum();
-    let m: f32 = b.mana.iter().map(|(_, x)| x.0).sum();
+    let h: f32 = b.health.iter().map(|x| x.0).sum();
+    let m: f32 = b.mana.iter().map(|x| x.0).sum();
     b.report.composite_runs += 1;
     b.report.composite_seen = format!("health {h:.0} · mana {m:.0}");
 }
@@ -304,7 +304,7 @@ fn latched_startup(mut report: ResMut<FormReport>) {
 fn report_pool<T: Pool>(pool: Query<&T>, mut report: ResMut<FormReport>) {
     let mut count = 0usize;
     let mut total = 0.0f32;
-    for (_entity, value) in pool.iter() {
+    for value in pool.iter() {
         count += 1;
         total += value.value();
     }

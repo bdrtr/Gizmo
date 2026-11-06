@@ -226,11 +226,11 @@ fn apply_look(world: &mut gizmo::core::World) {
         return;
     };
     let camera = world
-        .query::<(&Camera, &Transform)>()
+        .query::<(Entity, &Camera, &Transform)>()
         .and_then(|q| {
             q.iter()
-                .find(|(_, (c, _))| c.primary)
-                .map(|(entity, _)| entity)
+                .find(|(_, c, _)| c.primary)
+                .map(|(entity, ..)| entity.id())
         })
         .and_then(|id| world.get_entity(id));
     let Some(camera) = camera else { return };

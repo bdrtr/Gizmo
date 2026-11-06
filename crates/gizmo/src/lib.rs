@@ -26,7 +26,7 @@
 //! let e = world.spawn();
 //! world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
 //! assert_eq!(
-//!     world.query::<&Transform>().unwrap().get(e.id()).unwrap().position.y,
+//!     world.query::<&Transform>().unwrap().get(e).unwrap().position.y,
 //!     1.0
 //! );
 //! ```

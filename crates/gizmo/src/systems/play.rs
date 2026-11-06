@@ -248,8 +248,7 @@ fn apply_script_camera(
                 // The primary is found through a read borrow and written through a write one:
                 // the mutable query is not iterable, and holding both at once is a panic.
                 let primary = {
-                    let cameras = world.borrow::<crate::renderer::Camera>();
-                    cameras.iter().find(|(_, cam)| cam.primary).map(|(entity, _)| entity)
+                    world.query::<(crate::core::Entity, &crate::renderer::Camera)>().unwrap().iter().find(|(_, cam)| cam.primary).map(|(entity, _)| entity.id())
                 };
                 match primary {
                     Some(entity) => {
@@ -564,10 +563,9 @@ impl PlayLoop {
             // cached per path, so a per-entity value cannot live in the shared Lua environment.
             let mut entity_calls = Vec::new();
             {
-                let scripts = world.borrow::<crate::scripting::Script>();
-                for (entity_id, script) in scripts.iter() {
+                for (entity, script) in world.query::<(crate::core::Entity, &crate::scripting::Script)>().unwrap().iter() {
                     entity_calls.push((
-                        entity_id,
+                        entity,
                         script.file_path.clone(),
                         script.properties.clone(),
                     ));
@@ -585,9 +583,9 @@ impl PlayLoop {
                     }
                     None => {}
                 }
-                if let Err(e) = engine.update_entity_in(world, entity_id, &path, dt, &properties) {
+                if let Err(e) = engine.update_entity_in(world, entity_id.id(), &path, dt, &properties) {
                     report(PlayReport::EntityScriptError {
-                        entity: entity_id,
+                        entity: entity_id.id(),
                         path: &path,
                         error: &e,
                     });
@@ -721,7 +719,7 @@ mod tests {
         assert!(matches!(rest.as_slice(), [Cmd::HideDialogue]), "{rest:?}");
         let descs = world.borrow::<MaterialDesc>();
         assert_eq!(descs.get(fresh).map(|d| d.albedo), Some(red));
-        let p = descs.get(painted.id()).unwrap();
+        let p = descs.get(painted).unwrap();
         assert_eq!((p.albedo, p.roughness), (red, 0.2), "only the colour changes on an authored material");
     }
 
@@ -847,7 +845,7 @@ mod tests {
         apply_script_camera(&mut world, vec![Cmd::SetCameraFov(60.0)]);
 
         let cameras = world.borrow::<crate::renderer::Camera>();
-        let fov = cameras.get(eye.id()).expect("the camera").fov;
+        let fov = cameras.get(eye).expect("the camera").fov;
         assert!(
             (fov - std::f32::consts::FRAC_PI_3).abs() < 1e-5,
             "60 degrees is {} radians, not {fov}",

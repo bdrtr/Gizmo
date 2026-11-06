@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::window::WindowInfo;
@@ -64,7 +65,7 @@ fn stretched_root(style: &Style, window: gizmo_math::Vec2) -> Style {
 pub fn ui_layout_system(
     mut ctx: ResMut<UiContext>,
     window: Res<WindowInfo>,
-    styles: Query<&Style>,
+    styles: Query<(Entity, &Style)>,
     parents: Query<&Parent>,
     children: Query<&Children>,
     mut nodes: Query<Mut<Node>>,
@@ -100,19 +101,19 @@ pub fn ui_layout_system(
     //    20 px tall and there would be nothing to scroll. (CSS has the same trap and makes you
     //    write `flex-shrink: 0`; a list that has to be told not to squash its rows is no list.)
     for (entity, style) in styles.iter() {
-        current_entities.insert(entity);
+        current_entities.insert(entity.id());
         // (`get_mut` only to ask: a `Mut` marks a change on write, not on fetch.)
         let in_scroll = match parents.get(entity) {
             Some(p) => parents.live(p.0).is_some_and(|id| scrolls.get_mut(id).is_some()),
             None => false,
         };
         if in_scroll && style.flex_shrink != 0.0 {
-            ctx.sync_style(entity, &Style { flex_shrink: 0.0, ..*style });
+            ctx.sync_style(entity.id(), &Style { flex_shrink: 0.0, ..*style });
         } else if parents.get(entity).is_none() && style.position_type == crate::components::PositionType::Absolute {
             let stretched = stretched_root(style, ctx.window_size);
-            ctx.sync_style(entity, &stretched);
+            ctx.sync_style(entity.id(), &stretched);
         } else {
-            ctx.sync_style(entity, style);
+            ctx.sync_style(entity.id(), style);
         }
     }
 
@@ -182,8 +183,8 @@ pub fn ui_layout_system(
         mirrored_children.insert(entity, kids);
     }
     for (entity, _) in styles.iter() {
-        if !mirrored.contains(&entity) {
-            ctx.set_children(entity, &[]);
+        if !mirrored.contains(&entity.id()) {
+            ctx.set_children(entity.id(), &[]);
         }
     }
 
@@ -215,7 +216,7 @@ pub fn ui_layout_system(
         .iter()
         .map(|&e| {
             let origin = match (styles.get(e), ctx.relative_layout(e)) {
-                (Some(style), Some((size, _))) => root_origin(style, size, window_size),
+                (Some((_, style)), Some((size, _))) => root_origin(style, size, window_size),
                 _ => gizmo_math::Vec2::ZERO,
             };
             (e, origin)
@@ -321,7 +322,7 @@ mod tests {
     }
 
     fn node_of(world: &World, e: Entity) -> Node {
-        *world.borrow::<Node>().get(e.id()).unwrap()
+        *world.borrow::<Node>().get(e).unwrap()
     }
 
     fn assert_vec2(got: Vec2, x: f32, y: f32) {
@@ -623,29 +624,29 @@ mod tests {
 
         schedule.run(&mut world, 0.016);
         // Five 40 px rows in a 100 px box: they reach 200, so it can scroll 100.
-        let max = world.borrow::<Scroll>().get(list.id()).unwrap().max_offset();
+        let max = world.borrow::<Scroll>().get(list).unwrap().max_offset();
         assert_vec2(max, 0.0, 100.0);
         assert_vec2(node_of(&world, rows[1]).position, 0.0, 40.0);
 
-        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 30.0;
+        world.borrow_mut::<Scroll>().get_mut(list).unwrap().offset.y = 30.0;
         schedule.run(&mut world, 0.016);
         assert_vec2(node_of(&world, rows[1]).position, 0.0, 10.0);
         assert_vec2(node_of(&world, rows[0]).position, 0.0, -30.0);
         assert_vec2(node_of(&world, list).position, 0.0, 0.0);
 
         // Past the end is clamped: the last row's bottom meets the box's bottom.
-        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 500.0;
+        world.borrow_mut::<Scroll>().get_mut(list).unwrap().offset.y = 500.0;
         schedule.run(&mut world, 0.016);
-        assert_eq!(world.borrow::<Scroll>().get(list.id()).unwrap().offset.y, 100.0);
+        assert_eq!(world.borrow::<Scroll>().get(list).unwrap().offset.y, 100.0);
         assert_vec2(node_of(&world, rows[4]).position, 0.0, 60.0);
 
         // With padding, the end keeps the bottom padding below the last row, as the start keeps
         // the top padding above the first: 10 + 200 + 10 in a 100 px box scrolls 120. (And the
         // 100 px rows now overflow the 80 px inside sideways, by 20.)
-        world.borrow_mut::<Style>().get_mut(list.id()).unwrap().padding = UiRect::all(Val::Px(10.0));
-        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 500.0;
+        world.borrow_mut::<Style>().get_mut(list).unwrap().padding = UiRect::all(Val::Px(10.0));
+        world.borrow_mut::<Scroll>().get_mut(list).unwrap().offset.y = 500.0;
         schedule.run(&mut world, 0.016);
-        assert_vec2(world.borrow::<Scroll>().get(list.id()).unwrap().max_offset(), 20.0, 120.0);
+        assert_vec2(world.borrow::<Scroll>().get(list).unwrap().max_offset(), 20.0, 120.0);
         assert_vec2(node_of(&world, rows[4]).position, 10.0, 50.0);
     }
 
@@ -703,8 +704,8 @@ mod tests {
             .collect();
         world.add_component(list, Children(rows.to_vec()));
         schedule.run(&mut world, 0.016);
-        assert_vec2(world.borrow::<Scroll>().get(list.id()).unwrap().max_offset(), 0.0, 200.0);
-        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 50.0;
+        assert_vec2(world.borrow::<Scroll>().get(list).unwrap().max_offset(), 0.0, 200.0);
+        world.borrow_mut::<Scroll>().get_mut(list).unwrap().offset.y = 50.0;
         schedule.run(&mut world, 0.016);
         assert_vec2(node_of(&world, rows[1]).position, 0.0, 30.0);
     }
@@ -750,12 +751,12 @@ mod tests {
         world.insert_resource(time);
         world.add_component(next, UiTween::translation(Vec2::new(100.0, 0.0), 0.5));
         schedule.run(&mut world, 0.016);
-        assert!(world.borrow::<UiTransform>().get(next.id()).is_some(), "no transform was added");
+        assert!(world.borrow::<UiTransform>().get(next).is_some(), "no transform was added");
         schedule.run(&mut world, 0.016);
         assert_vec2(node_of(&world, next).position, 50.0, 100.0);
         schedule.run(&mut world, 0.016);
         assert_vec2(node_of(&world, next).position, 100.0, 100.0);
-        assert!(world.borrow::<UiTween>().get(next.id()).unwrap().is_finished());
+        assert!(world.borrow::<UiTween>().get(next).unwrap().is_finished());
     }
 
     /// A `Children` cycle must not reach the layout engine.
@@ -918,7 +919,7 @@ mod tests {
         );
         world.add_component(btn, Interaction::None);
 
-        let interaction = |world: &World| *world.borrow::<Interaction>().get(btn.id()).unwrap();
+        let interaction = |world: &World| *world.borrow::<Interaction>().get(btn).unwrap();
 
         // Pointer outside the box -> None.
         world.get_resource_mut::<Input>().unwrap().set_mouse_position(10.0, 10.0);
@@ -972,7 +973,7 @@ mod tests {
         world.get_resource_mut::<Input>().unwrap().set_mouse_position(25.0, 25.0);
         schedule.run(&mut world, 0.016);
 
-        assert_eq!(*world.borrow::<Interaction>().get(a.id()).unwrap(), Interaction::Hovered);
-        assert_eq!(*world.borrow::<Interaction>().get(b.id()).unwrap(), Interaction::None);
+        assert_eq!(*world.borrow::<Interaction>().get(a).unwrap(), Interaction::Hovered);
+        assert_eq!(*world.borrow::<Interaction>().get(b).unwrap(), Interaction::None);
     }
 }

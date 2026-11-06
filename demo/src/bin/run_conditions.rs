@@ -231,7 +231,7 @@ fn grow_with_counter(
 ) {
     ran.grow = time.frame();
     let scale = 0.35 + (counter.value as f32 * 0.02).min(0.5);
-    for (_entity, (mut transform, _)) in cubes.iter_mut() {
+    for (mut transform, _) in cubes.iter_mut() {
         transform.scale = Vec3::splat(scale);
     }
 }
@@ -243,7 +243,7 @@ fn spin_on_change(
     time: Res<Time>,
 ) {
     ran.spin = time.frame();
-    for (_entity, (mut transform, _)) in cubes.iter_mut() {
+    for (mut transform, _) in cubes.iter_mut() {
         transform.rotation *= Quat::from_rotation_y(time.dt() * 3.0);
     }
 }
@@ -255,7 +255,7 @@ fn show_in_window(
     time: Res<Time>,
 ) {
     ran.window = time.frame();
-    for (_entity, (mut transform, _)) in cubes.iter_mut() {
+    for (mut transform, _) in cubes.iter_mut() {
         transform.position.y = 0.6 + ((time.elapsed() as f32 - 2.0) * 1.5).min(1.5);
     }
 }

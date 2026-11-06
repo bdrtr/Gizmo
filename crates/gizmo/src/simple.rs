@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use crate::app::App;
 use crate::core::input::Input;
 use crate::core::world::World;
@@ -534,10 +535,7 @@ pub fn simple_scene_update(
         let rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2)
             * Quat::from_rotation_x(state.camera_pitch);
 
-        for (id, (mut trans, mut cam)) in q.iter_mut() {
-            if id != target {
-                continue;
-            }
+        if let Some((mut trans, mut cam)) = q.get_mut(target) {
             trans.position = state.camera_pos;
             trans.rotation = rot;
             cam.yaw = state.camera_yaw;
@@ -674,9 +672,8 @@ impl FixedPhysics {
         let steps = self.plan(dt);
         // Each driven body's pose now and where the caller wants it after the last step.
         let driven: Vec<(u32, Transform, KinematicTarget)> = if steps > 1 {
-            let targets = world.borrow::<KinematicTarget>();
             let transforms = world.borrow::<Transform>();
-            targets.iter().filter_map(|(id, t)| transforms.get(id).map(|from| (id, *from, *t))).collect()
+            world.query::<(Entity, &KinematicTarget)>().unwrap().iter().filter_map(|(entity, t)| transforms.get(entity).map(|from| (entity.id(), *from, *t))).collect()
         } else {
             Vec::new()
         };
@@ -1065,11 +1062,11 @@ mod fly_camera_tests {
 
         let read = |entity: crate::core::Entity| {
             let q = world
-                .query::<(&Transform, &Camera)>()
+                .query::<(Entity, &Transform, &Camera)>()
                 .expect("query buildable");
             q.iter()
-                .find(|(id, _)| *id == entity.id())
-                .map(|(_, (t, c))| (t.position, c.pitch))
+                .find(|(id, ..)| (*id).id() == entity.id())
+                .map(|(_, t, c)| (t.position, c.pitch))
                 .expect("camera still present")
         };
 
@@ -1321,7 +1318,7 @@ mod fixed_physics_tests {
         w.add_component(e, Text::pinned("a", font, 12.0, TextAnchor::TopLeft, crate::math::Vec2::ZERO));
         assert!(super::set_text(&mut w, e.id(), "b"));
         assert!(!super::set_text(&mut w, e.id(), "b"), "the same content is not a change");
-        assert_eq!(w.borrow::<Text>().get(e.id()).unwrap().content, "b");
+        assert_eq!(w.borrow::<Text>().get(e).unwrap().content, "b");
         let bare = w.spawn();
         assert!(!super::set_text(&mut w, bare.id(), "x"));
     }

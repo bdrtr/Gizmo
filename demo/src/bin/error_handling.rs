@@ -265,7 +265,7 @@ fn guarded(_present: Res<NeverRegistered>, mut log: ResMut<ErrorLog>) {
 
 /// İş mantığı hatası: sistem `Err` döndüremediği için hatayı bir kaynağa yazıyor.
 fn business_logic(
-    health: gizmo::core::query::Query<&Health>,
+    health: gizmo::core::query::Query<(Entity, &Health)>,
     mut log: ResMut<ErrorLog>,
     input: Res<Input>,
 ) {
@@ -275,11 +275,11 @@ fn business_logic(
         return;
     }
     let frame = log.frame;
-    for (id, h) in health.iter() {
+    for (entity, h) in health.iter() {
         if h.0 < 50.0 {
             // `Result` döndürülebilseydi burada `Err(...)` dönerdi ve `?` ile yukarı taşınırdı.
             log.entries
-                .push(format!("kare {frame}: varlık {id} sağlığı kritik ({:.0})", h.0));
+                .push(format!("kare {frame}: varlık {entity} sağlığı kritik ({:.0})", h.0));
         }
     }
     gizmo::gizmo_log!(

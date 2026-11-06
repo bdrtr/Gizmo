@@ -57,7 +57,7 @@ pub fn bench_wide_iteration(c: &mut Criterion) {
 
     c.bench_function("wide_iteration", |b| {
         b.iter(|| {
-            for (_id, (mut d0, mut d1, mut d2, mut d3, mut d4, mut d5, mut d6, mut d7, mut d8, mut d9, mut d10)) in query.iter_mut() {
+            for (mut d0, mut d1, mut d2, mut d3, mut d4, mut d5, mut d6, mut d7, mut d8, mut d9, mut d10) in query.iter_mut() {
                 d0.0 *= 2.0;
                 d1.0 *= 2.0;
                 d2.0 *= 2.0;
@@ -111,7 +111,7 @@ pub fn bench_wide_simple_iter(c: &mut Criterion) {
 
     c.bench_function("wide_simple_iter", |b| {
         b.iter(|| {
-            query.iter_mut().for_each(|(_id, (v0, mut p0, v1, mut p1, v2, mut p2, v3, mut p3, v4, mut p4))| {
+            query.iter_mut().for_each(|(v0, mut p0, v1, mut p1, v2, mut p2, v3, mut p3, v4, mut p4)| {
                 p0.0.0[0] += v0.0.0[0];
                 p0.0.0[1] += v0.0.0[1];
                 p0.0.0[2] += v0.0.0[2];

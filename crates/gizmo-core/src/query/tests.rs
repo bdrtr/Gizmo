@@ -1,5 +1,6 @@
 //! Query system unit tests, moved out of query/mod.rs (verbatim, de-indented).
 
+use crate::Entity;
 use super::*;
 use crate::impl_component;
 
@@ -106,7 +107,7 @@ fn change_detection_is_relative_to_ref_tick() {
     // Frame 2 içinde mutasyon → Changed yeniden 1 olmalı.
     {
         let mut q = world.query_mut::<Mut<Position>>().unwrap();
-        for (_id, mut p) in q.iter_mut() {
+        for mut p in q.iter_mut() {
             p.x += 1.0;
         }
     }
@@ -117,7 +118,7 @@ fn change_detection_is_relative_to_ref_tick() {
 /// had its slot reused returns `None`; raw `get(id)` on the other hand (footgun) returns the
 /// new entity's data.
 #[test]
-fn get_entity_rejects_stale_handle_after_despawn_reuse() {
+fn get_with_a_handle_rejects_it_after_despawn_and_reuse() {
     let mut world = crate::World::new();
     world.register_component_type::<Position>();
 
@@ -137,9 +138,9 @@ fn get_entity_rejects_stale_handle_after_despawn_reuse() {
     // Ham id: generation kontrolü yok → yeni entity'nin verisi (footgun).
     assert_eq!(q.get(stale.id()).map(|p| p.x), Some(2.0));
     // Generation-doğrulamalı: stale handle reddedilir.
-    assert!(q.get_entity(stale).is_none(), "stale handle None dönmeli");
+    assert!(q.get(stale).is_none(), "stale handle None dönmeli");
     // Geçerli handle çalışır.
-    assert_eq!(q.get_entity(e2).map(|p| p.x), Some(2.0));
+    assert_eq!(q.get(e2).map(|p| p.x), Some(2.0));
 }
 
 /// A bulk write made with `iter_chunks_mut` must trigger change detection
@@ -159,7 +160,7 @@ fn iter_chunks_mut_triggers_change_detection() {
     // Chunked mutable yazma.
     {
         let mut q = world.query_mut::<Mut<Position>>().unwrap();
-        for (_ids, slice) in q.iter_chunks_mut() {
+        for slice in q.iter_chunks_mut() {
             for p in slice.iter_mut() {
                 p.x += 10.0;
             }
@@ -168,7 +169,7 @@ fn iter_chunks_mut_triggers_change_detection() {
 
     // Yazmadan sonra: Changed tetiklenmeli ve değer güncellenmeli.
     assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
-    assert_eq!(world.query::<&Position>().unwrap().get(e.id()).map(|p| p.x), Some(11.0));
+    assert_eq!(world.query::<&Position>().unwrap().get(e).map(|p| p.x), Some(11.0));
 }
 
 /// On SparseSet components `Changed`/`Added` now do real tick tracking
@@ -202,12 +203,12 @@ fn sparse_set_change_detection_tracks_ticks() {
     // Frame 2 içinde mutasyon → Changed yeniden tetiklenmeli.
     {
         let mut q = world.query_mut::<Mut<SparseComp>>().unwrap();
-        for (_id, mut c) in q.iter_mut() {
+        for mut c in q.iter_mut() {
             c.0 += 10;
         }
     }
     assert_eq!(world.query::<Changed<SparseComp>>().unwrap().iter().count(), 1);
-    assert_eq!(world.query::<&SparseComp>().unwrap().get(e.id()).map(|c| c.0), Some(11));
+    assert_eq!(world.query::<&SparseComp>().unwrap().get(e).map(|c| c.0), Some(11));
 }
 
 // Sparse queries match EVERY archetype at the archetype level (data lives
@@ -250,7 +251,7 @@ fn sparse_query_mixed_presence_narrows_correctly() {
     // &SparseC must yield exactly the 3 holders with the right values.
     {
         let q = world.query::<&SparseC>().unwrap();
-        let mut vals: Vec<i32> = q.iter().map(|(_id, s)| s.0).collect();
+        let mut vals: Vec<i32> = q.iter().map(|s| s.0).collect();
         vals.sort();
         assert_eq!(vals, vec![0, 10, 20], "sparse query leaked/dropped rows under mixed presence");
     }
@@ -274,7 +275,7 @@ fn sparse_query_mixed_presence_narrows_correctly() {
     // Random access: table-only entities must report no SparseC.
     for e in &table_only {
         assert!(
-            world.query::<&SparseC>().unwrap().get(e.id()).is_none(),
+            world.query::<&SparseC>().unwrap().get(*e).is_none(),
             "get() returned a sparse component for an entity that lacks it"
         );
     }
@@ -300,15 +301,15 @@ fn get_honours_table_with_without_like_iter() {
     // With<Velocity>: iter skips e ⇒ get/get_entity/contains must all agree (skip).
     let q = world.query::<(&Position, With<Velocity>)>().unwrap();
     assert_eq!(q.iter().count(), 0, "iter should skip the Velocity-less entity");
-    assert!(q.get(e.id()).is_none(), "get() must honour With<Velocity>");
-    assert!(q.get_entity(e).is_none(), "get_entity() must honour With<Velocity>");
-    assert!(!q.contains(e.id()), "contains() must honour With<Velocity>");
+    assert!(q.get(e).is_none(), "get() must honour With<Velocity>");
+    assert!(q.get(e).is_none(), "get_entity() must honour With<Velocity>");
+    assert!(!q.contains(e), "contains() must honour With<Velocity>");
 
     // Without<Velocity>: iter yields e ⇒ get/contains must also yield it (consistency both ways).
     let q2 = world.query::<(&Position, Without<Velocity>)>().unwrap();
     assert_eq!(q2.iter().count(), 1, "iter should include the Velocity-less entity");
-    assert!(q2.get(e.id()).is_some(), "get() must include under Without<Velocity>");
-    assert!(q2.contains(e.id()), "contains() must include under Without<Velocity>");
+    assert!(q2.get(e).is_some(), "get() must include under Without<Velocity>");
+    assert!(q2.contains(e), "contains() must include under Without<Velocity>");
 }
 
 
@@ -318,7 +319,8 @@ fn get_honours_table_with_without_like_iter() {
 
 #[cfg(test)]
 mod default_filter_tests {
-    use crate::impl_component;
+    use crate::Entity;
+use crate::impl_component;
     use crate::query::{IgnoreDefaultFilters, Mut, Query, With, Without};
     use crate::system::{IntoSystemConfig, ResMut, Schedule};
     use crate::world::World;
@@ -496,8 +498,8 @@ mod default_filter_tests {
             chunk_total: usize,
         }
 
-        fn probe(q: Query<&Hp>, mut out: ResMut<Answers>) {
-            out.iter_ids = q.iter().map(|(id, _)| id).collect();
+        fn probe(q: Query<(Entity, &Hp)>, mut out: ResMut<Answers>) {
+            out.iter_ids = q.iter().map(|(entity, _)| entity.id()).collect();
             out.count = q.iter().count();
             // The disabled entity is id 1 — spawned second, and ids start at 0.
             out.got_disabled = q.get(1).is_some();
@@ -530,7 +532,7 @@ mod default_filter_tests {
     fn a_filter_does_not_cost_chunk_iteration() {
         fn chunked(q: Query<&Hp>, mut seen: ResMut<Seen>) {
             // `iter_chunks` panics rather than lying if the query has a row filter.
-            seen.filtered = q.iter_chunks().map(|(_, s)| s.len()).sum();
+            seen.filtered = q.iter_chunks().map(|s| s.len()).sum();
         }
 
         let mut world = world_with_one_disabled(true);
@@ -574,7 +576,7 @@ mod default_filter_tests {
     #[test]
     fn a_mutable_system_query_is_filtered() {
         fn bump(mut q: Query<Mut<Hp>>) {
-            for (_, mut hp) in q.iter_mut() {
+            for mut hp in q.iter_mut() {
                 hp.0 += 100;
             }
         }
@@ -583,7 +585,7 @@ mod default_filter_tests {
         run_once(&mut world, bump.into_config());
 
         let hp = world.borrow::<Hp>();
-        let mut values: Vec<u32> = hp.iter().map(|(_, h)| h.0).collect();
+        let mut values: Vec<u32> = hp.iter().map(|h| h.0).collect();
         values.sort_unstable();
         assert_eq!(
             values,
@@ -660,7 +662,7 @@ fn a_query_over_an_overaligned_zst_hands_out_an_aligned_reference() {
 
     let q = world.query::<&Aligned16>().expect("a registered component type has a query");
     let mut seen = 0;
-    for (_entity, item) in q.iter() {
+    for item in q.iter() {
         let addr = item as *const Aligned16 as usize;
         assert_eq!(
             addr % std::mem::align_of::<Aligned16>(),
@@ -735,11 +737,11 @@ fn an_optional_component_is_some_where_present_and_none_elsewhere() {
     let c = world.spawn_bundle((Position { x: 3.0, y: 0.0 }, Velocity { x: 7.0, y: 0.0 }));
     world.spawn_bundle((Velocity { x: 9.0, y: 0.0 },));
 
-    let q = world.query::<(&Position, Option<&Velocity>)>().unwrap();
-    let mut seen: Vec<(u32, Option<f32>)> = q.iter().map(|(id, (_, v))| (id, v.map(|v| v.x))).collect();
+    let q = world.query::<(Entity, &Position, Option<&Velocity>)>().unwrap();
+    let mut seen: Vec<(u32, Option<f32>)> = q.iter().map(|(entity, _, v)| (entity.id(), v.map(|v| v.x))).collect();
     seen.sort_by_key(|(id, _)| *id);
     assert_eq!(seen, vec![(a.id(), Some(5.0)), (b.id(), None), (c.id(), Some(7.0))]);
-    assert_eq!(q.get(b.id()).map(|(_, v)| v.is_none()), Some(true));
+    assert_eq!(q.get(b).map(|(_, _, v)| v.is_none()), Some(true));
 }
 
 /// The same over sparse storage, where presence is per entity rather than per archetype — the
@@ -752,8 +754,8 @@ fn an_optional_sparse_component_is_tested_per_entity() {
     world.add_component(a, OptSparse(10));
     let b = world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
     let q = world.query::<(&Position, Option<&OptSparse>)>().unwrap();
-    assert_eq!(q.get(a.id()).and_then(|(_, s)| s.map(|s| s.0)), Some(10));
-    assert_eq!(q.get(b.id()).map(|(_, s)| s.is_none()), Some(true));
+    assert_eq!(q.get(a).and_then(|(_, s)| s.map(|s| s.0)), Some(10));
+    assert_eq!(q.get(b).map(|(_, s)| s.is_none()), Some(true));
     assert_eq!(q.iter().count(), 2);
 }
 
@@ -767,13 +769,13 @@ fn an_optional_mut_writes_and_marks_the_change() {
     world.begin_change_frame(prev);
     {
         let mut q = world.query_mut::<(&Position, Option<Mut<Velocity>>)>().unwrap();
-        for (_, (p, v)) in q.iter_mut() {
+        for (p, v) in q.iter_mut() {
             if let Some(mut v) = v {
                 v.x = p.x * 10.0;
             }
         }
     }
-    assert_eq!(world.query::<&Velocity>().unwrap().get(a.id()).map(|v| v.x), Some(10.0));
+    assert_eq!(world.query::<&Velocity>().unwrap().get(a).map(|v| v.x), Some(10.0));
     assert_eq!(world.query::<Changed<Velocity>>().unwrap().iter().count(), 1);
 }
 
@@ -808,9 +810,8 @@ fn a_writing_query_resolves_its_ids_to_entities() {
     world.register_component_type::<Position>();
     let a = world.spawn();
     world.add_component(a, Position { x: 1.0, y: 0.0 });
-    let mut q = world.query_mut::<Mut<Position>>().unwrap();
-    let id = q.iter_mut().next().unwrap().0;
-    assert_eq!(q.entity(id), Some(a));
+    let q = world.query_mut::<Mut<Position>>().unwrap();
+    assert_eq!(q.entity(a.id()), Some(a));
 }
 
 /// `single` tells "none", "one" and "several" apart — the two edge cases a `for` loop over
@@ -828,9 +829,9 @@ fn single_tells_none_one_and_several_apart() {
     let a = world.spawn();
     world.add_component(a, Position { x: 1.0, y: 0.0 });
     {
-        let q = world.query::<&Position>().unwrap();
-        let (id, p) = q.single().expect("one entity matches");
-        assert_eq!((id, p.x), (a.id(), 1.0));
+        let q = world.query::<(crate::entity::Entity, &Position)>().unwrap();
+        let (entity, p) = q.single().expect("one entity matches");
+        assert_eq!((entity, p.x), (a, 1.0));
     }
 
     let b = world.spawn();
@@ -841,18 +842,19 @@ fn single_tells_none_one_and_several_apart() {
         Some(QuerySingleError::MultipleEntities)
     );
     // A filter narrows it back to one.
-    let q = world.query::<(&Position, With<Velocity>)>().unwrap();
-    assert_eq!(q.single().map(|(id, (p, _))| (id, p.x)), Ok((b.id(), 2.0)));
+    let q = world.query::<(crate::entity::Entity, &Position, With<Velocity>)>().unwrap();
+    assert_eq!(q.single().map(|(entity, p, _)| (entity, p.x)), Ok((b, 2.0)));
 
     // A per-row filter counts too: only `b` changes this frame.
     drop(q);
     world.begin_change_frame(world.tick);
     {
         let mut q = world.query_mut::<Mut<Position>>().unwrap();
-        q.get_mut(b.id()).unwrap().x = 3.0;
+        q.get_mut(b).unwrap().x = 3.0;
     }
     let q = world.query::<(&Position, Changed<Position>)>().unwrap();
-    assert_eq!(q.single().map(|(id, _)| id), Ok(b.id()));
+    assert_eq!(q.get(b).map(|_| ()), Some(()));
+    assert_eq!(q.single().map(|(p, _)| p.x), Ok(3.0));
 }
 
 /// `single_mut` writes the one row and marks only that row; when it refuses because there are
@@ -867,10 +869,10 @@ fn single_mut_writes_the_one_row_and_marks_nothing_on_refusal() {
     world.begin_change_frame(world.tick);
     {
         let mut q = world.query_mut::<Mut<Position>>().unwrap();
-        let (_, mut p) = q.single_mut().expect("one entity");
+        let mut p = q.single_mut().expect("one entity");
         p.x = 5.0;
     }
-    assert_eq!(world.query::<&Position>().unwrap().get(a.id()).map(|p| p.x), Some(5.0));
+    assert_eq!(world.query::<&Position>().unwrap().get(a).map(|p| p.x), Some(5.0));
     assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
 
     let b = world.spawn();
@@ -894,7 +896,7 @@ fn entity_is_a_query_term() {
     let a = world.spawn_bundle((Position { x: 1.0, y: 0.0 },));
     let b = world.spawn_bundle((Position { x: 2.0, y: 0.0 }, Velocity { x: 0.0, y: 0.0 }));
     let q = world.query::<(crate::entity::Entity, &Position)>().unwrap();
-    let mut seen: Vec<(crate::entity::Entity, f32)> = q.iter().map(|(_, (e, p))| (e, p.x)).collect();
+    let mut seen: Vec<(crate::entity::Entity, f32)> = q.iter().map(|(e, p)| (e, p.x)).collect();
     seen.sort_by(|l, r| l.1.total_cmp(&r.1));
     assert_eq!(seen, [(a, 1.0), (b, 2.0)]);
     drop(q);
@@ -903,7 +905,7 @@ fn entity_is_a_query_term() {
     let c = world.spawn_bundle((Position { x: 3.0, y: 0.0 },));
     assert_eq!(c.id(), a.id(), "the id is recycled, which is the case being tested");
     let q = world.query::<crate::entity::Entity>().unwrap();
-    let all: Vec<_> = q.iter().map(|(_, e)| e).collect();
+    let all: Vec<_> = q.iter().collect();
     assert!(all.contains(&c) && !all.contains(&a), "the row holds the new handle: {all:?}");
 }
 
@@ -923,5 +925,5 @@ fn get_with_a_dead_handle_does_not_reach_the_new_owner_of_its_id() {
     assert!(!q.contains(old));
     assert!(q.contains(new));
     assert_eq!(q.get(new).map(|p| p.x), Some(2.0));
-    assert_eq!(q.get(new.id()).map(|p| p.x), Some(2.0), "a raw id still reads whoever holds the slot");
+    assert_eq!(q.get(new).map(|p| p.x), Some(2.0), "a raw id still reads whoever holds the slot");
 }

@@ -170,7 +170,7 @@ fn new_round_system(rules: Res<GameRules>, mut state: ResMut<GameState>) {
 
 /// Her oyuncunun puanını ve serisini günceller.
 fn score_system(mut players: Query<(&Player, Mut<Score>, Mut<PlayerStreak>)>, mut dice: ResMut<Dice>) {
-    for (_entity, (player, mut score, mut streak)) in players.iter_mut() {
+    for (player, mut score, mut streak) in players.iter_mut() {
         let scored = dice.roll(2) == 0;
         if scored {
             score.value += 1;
@@ -200,7 +200,7 @@ fn score_check_system(
     mut state: ResMut<GameState>,
     players: Query<(&Player, &Score)>,
 ) {
-    for (_entity, (player, score)) in players.iter() {
+    for (player, score) in players.iter() {
         if score.value == rules.winning_score {
             state.winning_player = Some(player.name.clone());
         }

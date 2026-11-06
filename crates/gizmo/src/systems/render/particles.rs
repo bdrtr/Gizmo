@@ -31,6 +31,7 @@
 //! here writes simulation state either way, so this was never a contract violation — only an
 //! avoidable inconsistency.
 
+use gizmo_core::Entity;
 use crate::renderer::components::ParticleEmitter;
 use crate::renderer::gpu_particles::{GpuParticle, GpuParticleSystem};
 use gizmo_core::World;
@@ -61,7 +62,7 @@ pub fn spawn_from_emitters(
 ) {
     // Collected through a read borrow that ends with this statement, so the mutable borrow below
     // never coexists with a read borrow of the same storage.
-    let emitter_entities: Vec<u32> = world.borrow::<ParticleEmitter>().entities().collect();
+    let emitter_entities: Vec<u32> = world.query::<(Entity, &ParticleEmitter)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
     if emitter_entities.is_empty() {
         return;
     }

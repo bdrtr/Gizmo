@@ -11,6 +11,7 @@
 //! Bu testler, motorun kendi bileşenleri Table kullandığından, latent ama güvenli-koddan
 //! ulaşılabilen public-API hatasını tetikler.
 
+use gizmo_core::Entity;
 use gizmo_core::component::StorageType;
 use gizmo_core::{Component, Mut, With, Without, World};
 
@@ -36,8 +37,8 @@ fn bare_read_query_skips_entities_without_sparse_component() {
     let b = world.spawn();
     world.add_component(b, Tableish(99));
 
-    let q = world.query::<&SparseTag>().expect("query");
-    let mut got: Vec<(u32, i32)> = q.iter().map(|(id, c)| (id, c.0)).collect();
+    let q = world.query::<(Entity, &SparseTag)>().expect("query");
+    let mut got: Vec<(u32, i32)> = q.iter().map(|(entity, c)| (entity.id(), c.0)).collect();
     got.sort();
     assert_eq!(got, vec![(a.id(), 10)], "yalnız SparseTag taşıyan entity ziyaret edilmeli");
 }
@@ -53,13 +54,13 @@ fn bare_mut_query_skips_entities_without_sparse_component() {
 
     {
         let mut q = world.query_mut::<Mut<SparseTag>>().expect("query");
-        for (_id, mut c) in q.iter_mut() {
+        for mut c in q.iter_mut() {
             c.0 += 1;
         }
     }
 
     let q = world.query::<&SparseTag>().expect("query");
-    let vals: Vec<i32> = q.iter().map(|(_, c)| c.0).collect();
+    let vals: Vec<i32> = q.iter().map(|c| c.0).collect();
     assert_eq!(vals, vec![11], "yalnız mevcut sparse bileşen mutasyona uğramalı, b'de OOB olmamalı");
     let _ = b;
 }
@@ -95,7 +96,7 @@ fn with_and_without_respect_sparse_presence() {
     // With<SparseTag>: yalnız a ve c eşlenmeli.
     {
         let q = world.query::<(With<SparseTag>, &Tableish)>().expect("query");
-        let mut vals: Vec<i32> = q.iter().map(|(_, (_, t))| t.0).collect();
+        let mut vals: Vec<i32> = q.iter().map(|(_, t)| t.0).collect();
         vals.sort();
         assert_eq!(vals, vec![1, 3], "With<sparse> yalnız bileşeni taşıyanları eşlemeli");
     }
@@ -103,7 +104,7 @@ fn with_and_without_respect_sparse_presence() {
     // Without<SparseTag>: yalnız b eşlenmeli.
     {
         let q = world.query::<(Without<SparseTag>, &Tableish)>().expect("query");
-        let vals: Vec<i32> = q.iter().map(|(_, (_, t))| t.0).collect();
+        let vals: Vec<i32> = q.iter().map(|(_, t)| t.0).collect();
         assert_eq!(vals, vec![2], "Without<sparse> yalnız bileşeni TAŞIMAYANLARI eşlemeli");
     }
 }
@@ -120,7 +121,7 @@ fn tuple_query_with_sparse_and_table_components() {
     world.add_component(b, Tableish(60)); // SparseTag YOK → tuple eşlememeli
 
     let q = world.query::<(&SparseTag, &Tableish)>().expect("query");
-    let mut got: Vec<(i32, i32)> = q.iter().map(|(_, (s, t))| (s.0, t.0)).collect();
+    let mut got: Vec<(i32, i32)> = q.iter().map(|(s, t)| (s.0, t.0)).collect();
     got.sort();
     assert_eq!(got, vec![(5, 50)], "tuple yalnız her iki bileşeni taşıyan entity'yi vermeli");
     let _ = b;

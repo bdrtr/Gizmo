@@ -79,10 +79,10 @@ fn step(world: &mut World, pw: &mut PhysicsWorld) {
             .filter_map(|e| {
                 Some((
                     BodyHandle::from_id(e.id()),
-                    *rigid_bodies.get(e.id())?,
-                    *transforms.get(e.id())?,
-                    *velocities.get(e.id())?,
-                    colliders.get(e.id())?.clone(),
+                    *rigid_bodies.get(e)?,
+                    *transforms.get(e)?,
+                    *velocities.get(e)?,
+                    colliders.get(e)?.clone(),
                 ))
             })
             .collect()

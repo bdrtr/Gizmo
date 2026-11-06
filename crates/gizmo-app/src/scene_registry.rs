@@ -163,7 +163,7 @@ mod tests {
         loaded.insert_resource(game);
         let registry = scene_registry_for_world(&loaded);
         gizmo_scene::scene::SceneData::load_into(path, &mut loaded, &registry).unwrap();
-        let healths: Vec<Health> = loaded.borrow::<Health>().iter().map(|(_, h)| h.clone()).collect();
+        let healths: Vec<Health> = loaded.borrow::<Health>().iter().cloned().collect();
         assert_eq!(healths, vec![Health { hp: 7.5, lives: 3 }]);
         let _ = std::fs::remove_dir_all(&dir);
     }

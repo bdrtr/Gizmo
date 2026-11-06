@@ -11,6 +11,7 @@
 //! the camera" and "cull shadow casters against the light frustum, not the camera
 //! frustum" fixes both had to be duplicated). This module single-sources it.
 
+use gizmo_core::Entity;
 use crate::core::World;
 use crate::math::{Vec3, Vec4};
 use crate::renderer::components::{DirectionalLight, LightRole, PointLight, RectLight, SpotLight};
@@ -176,7 +177,7 @@ pub fn collect_scene_lights(
         Some(((cam_pos.distance(pos) - radius).max(0.0), intensity * radius))
     };
 
-    if let Some(q) = world.query::<&PointLight>() {
+    if let Some(q) = world.query::<(Entity, &PointLight)>() {
         for (e, light) in q.iter() {
             let Some((pos, rot)) = world_tf(e) else { continue };
             let Some((surface_dist, reach)) = score(pos, light.intensity, light.radius) else {
@@ -197,12 +198,12 @@ pub fn collect_scene_lights(
                 is_point: true,
                 surface_dist,
                 reach,
-                entity_id: e,
+                entity_id: e.id(),
             });
         }
     }
 
-    if let Some(q) = world.query::<&SpotLight>() {
+    if let Some(q) = world.query::<(Entity, &SpotLight)>() {
         for (e, light) in q.iter() {
             let Some((pos, rot)) = world_tf(e) else { continue };
             let dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize();
@@ -233,12 +234,12 @@ pub fn collect_scene_lights(
                 is_point: false,
                 surface_dist,
                 reach,
-                entity_id: e,
+                entity_id: e.id(),
             });
         }
     }
 
-    if let Some(q) = world.query::<&RectLight>() {
+    if let Some(q) = world.query::<(Entity, &RectLight)>() {
         for (e, light) in q.iter() {
             let Some((pos, rot)) = world_tf(e) else { continue };
             let Some((surface_dist, reach)) = score(pos, light.intensity, light.radius) else {
@@ -258,7 +259,7 @@ pub fn collect_scene_lights(
                 is_point: false,
                 surface_dist,
                 reach,
-                entity_id: e,
+                entity_id: e.id(),
             });
         }
     }
@@ -292,7 +293,7 @@ pub fn collect_scene_lights(
     let mut has_sun = false;
     let mut sun_angular_radius = 0.0;
     let mut sun_contact_shadow_length = 0.0;
-    if let Some(q) = world.query::<&DirectionalLight>() {
+    if let Some(q) = world.query::<(Entity, &DirectionalLight)>() {
         for (e, light) in q.iter() {
             if light.role == LightRole::Sun {
                 if let Some((_, rot)) = world_tf(e) {
@@ -371,7 +372,7 @@ pub fn sync_irradiance_volume(world: &World, renderer: &mut crate::renderer::Ren
     use std::hash::{Hash, Hasher};
     let Some(volume) = world
         .query::<&crate::renderer::irradiance::IrradianceVolume>()
-        .and_then(|q| q.iter().next().map(|(_, v)| *v))
+        .and_then(|q| q.iter().next().copied())
     else {
         return;
     };
@@ -387,7 +388,7 @@ pub fn sync_irradiance_volume(world: &World, renderer: &mut crate::renderer::Ren
             .or_else(|| locals.get(e).map(|t| (t.position, t.rotation)))
     };
     let mut directional = Vec::new();
-    if let Some(q) = world.query::<&DirectionalLight>() {
+    if let Some(q) = world.query::<(Entity, &DirectionalLight)>() {
         for (e, light) in q.iter() {
             if let Some((_, rot)) = world_tf(e) {
                 directional.push((rot.mul_vec3(Vec3::NEG_Z).normalize(), light.color, light.intensity));
@@ -395,7 +396,7 @@ pub fn sync_irradiance_volume(world: &World, renderer: &mut crate::renderer::Ren
         }
     }
     let mut points = Vec::new();
-    if let Some(q) = world.query::<&PointLight>() {
+    if let Some(q) = world.query::<(Entity, &PointLight)>() {
         for (e, light) in q.iter() {
             if let Some((pos, _)) = world_tf(e) {
                 points.push((pos, light.color, light.intensity, light.radius));
@@ -758,7 +759,7 @@ mod tests {
         // prefers it — so these three now resolve to the origin. Give each the matrix that
         // reproduces its own position, or the test would be measuring a move, not a reorder.)
         for &e in &[lights[0], lights[4], lights[9]] {
-            let z = world.query::<&Transform>().unwrap().get(e.id()).unwrap().position.z;
+            let z = world.query::<&Transform>().unwrap().get(e).unwrap().position.z;
             world.add_component(
                 e,
                 GlobalTransform {

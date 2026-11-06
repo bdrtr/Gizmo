@@ -49,6 +49,6 @@ fn a_body_that_recycles_a_dead_bodys_id_is_not_tied_to_its_partner() {
     let c = body(&mut world, 20.0);
     assert_eq!(c.id(), a.id(), "the test needs the id recycled");
     step(&mut world, 60);
-    let x = world.borrow::<Transform>().get(c.id()).unwrap().position.x;
+    let x = world.borrow::<Transform>().get(c).unwrap().position.x;
     assert!((x - 20.0).abs() < 1e-3, "the new body was pulled by the dead one's joint: x = {x}");
 }

@@ -32,6 +32,7 @@
 //! assert!(!world.is_alive(spark), "the expired spark must be despawned");
 //! ```
 
+use gizmo_core::Entity;
 use gizmo_core::world::World;
 use gizmo_physics_core::Transform;
 
@@ -124,28 +125,24 @@ impl gizmo_core::system::System for LifetimeSystem {
         // (Bound out of the `if let` so the comment sits directly above the `unsafe`, which is
         // where `clippy::undocumented_unsafe_blocks` looks — the lint is a ratchet in this crate.)
         let despawn_after =
-            unsafe { world.query_unchecked::<gizmo_core::query::Mut<DespawnAfter>>() };
+            unsafe { world.query_unchecked::<(Entity, gizmo_core::query::Mut<DespawnAfter>)>() };
         if let Some(mut q) = despawn_after {
-            for (id, mut d) in q.iter_mut() {
+            for (entity, mut d) in q.iter_mut() {
                 d.remaining -= dt;
                 if d.remaining <= 0.0 {
-                    if let Some(e) = world.entity(id) {
-                        commands.entity(e).despawn();
-                        despawned_after += 1;
-                    }
+                    commands.entity(entity).despawn();
+                    despawned_after += 1;
                 }
             }
         }
 
         // ── DespawnBelowY: konumu eşiğin altındaki varlıkları sil. ──
         // SAFETY: exclusive system; this view is read-only and aliases nothing mutably.
-        if let Some(q) = unsafe { world.query_unchecked::<(&DespawnBelowY, &Transform)>() } {
-            for (id, (below, t)) in q.iter() {
+        if let Some(q) = unsafe { world.query_unchecked::<(Entity, &DespawnBelowY, &Transform)>() } {
+            for (entity, below, t) in q.iter() {
                 if t.position.y < below.y {
-                    if let Some(e) = world.entity(id) {
-                        commands.entity(e).despawn();
-                        despawned_below_y += 1;
-                    }
+                    commands.entity(entity).despawn();
+                    despawned_below_y += 1;
                 }
             }
         }
@@ -187,8 +184,8 @@ pub fn lifetime_components_are_inert(world: &World) -> bool {
         return false;
     }
     let any = |found: Option<bool>| found.unwrap_or(false);
-    any(world.query::<&DespawnAfter>().map(|q| q.iter().next().is_some()))
-        || any(world.query::<&DespawnBelowY>().map(|q| q.iter().next().is_some()))
+    any(world.query::<&DespawnAfter>().map(|q| !q.is_empty()))
+        || any(world.query::<&DespawnBelowY>().map(|q| !q.is_empty()))
 }
 
 /// Logs one warning, once per world, when [`lifetime_components_are_inert`]: entities carrying

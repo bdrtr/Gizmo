@@ -522,11 +522,11 @@ mod tests {
         world.add_child(parent, a);
         world.add_child(parent, b);
         world.despawn(a);
-        let children = world.borrow::<Children>().get(parent.id()).map(|c| c.0.clone());
+        let children = world.borrow::<Children>().get(parent).map(|c| c.0.clone());
         assert_eq!(children, Some(vec![b]), "only the living child is listed");
         let stranger = world.spawn();
         assert_eq!(stranger.id(), a.id(), "the id is recycled — which is what made the old list lie");
-        let children = world.borrow::<Children>().get(parent.id()).map(|c| c.0.clone());
+        let children = world.borrow::<Children>().get(parent).map(|c| c.0.clone());
         assert_eq!(children, Some(vec![b]), "and the stranger is not the parent's child");
     }
 
@@ -542,8 +542,8 @@ mod tests {
         world.add_child(parent, child);
         world.despawn(parent);
         assert!(world.is_alive(child), "a plain despawn does not take the children");
-        assert!(world.borrow::<Parent>().get(child.id()).is_none(), "the orphan is a root now");
-        let listed = world.borrow::<Children>().get(grandparent.id()).map(|c| c.0.clone());
+        assert!(world.borrow::<Parent>().get(child).is_none(), "the orphan is a root now");
+        let listed = world.borrow::<Children>().get(grandparent).map(|c| c.0.clone());
         assert_eq!(listed, Some(vec![]), "and the grandparent no longer lists the parent");
     }
 

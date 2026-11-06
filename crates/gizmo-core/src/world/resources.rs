@@ -320,14 +320,14 @@ mod tests {
         world.add_component(e1, Position { x: 1.0, y: 2.0 });
         world.add_component(e1, Health(100));
 
-        assert!(world.borrow::<Position>().get(e1.id()).is_some());
-        assert!(world.borrow::<Health>().get(e1.id()).is_some());
+        assert!(world.borrow::<Position>().get(e1).is_some());
+        assert!(world.borrow::<Health>().get(e1).is_some());
 
         world.despawn(e1);
 
         assert!(!world.is_alive(e1));
-        assert!(world.borrow::<Position>().get(e1.id()).is_none());
-        assert!(world.borrow::<Health>().get(e1.id()).is_none());
+        assert!(world.borrow::<Position>().get(e1).is_none());
+        assert!(world.borrow::<Health>().get(e1).is_none());
     }
 
     #[test]
@@ -344,8 +344,8 @@ mod tests {
         // Despawn e1 — should not affect e2
         world.despawn(e1);
 
-        assert!(world.borrow::<Position>().get(e2.id()).is_some());
-        assert!(world.borrow::<Health>().get(e2.id()).is_some());
+        assert!(world.borrow::<Position>().get(e2).is_some());
+        assert!(world.borrow::<Health>().get(e2).is_some());
         assert_eq!(world.entity_count(), 1);
     }
 
@@ -391,7 +391,7 @@ mod tests {
         world.add_component(e, Health(50)); // Overwrite
 
         let hp = world.borrow::<Health>();
-        assert_eq!(hp.get(e.id()).unwrap().0, 50);
+        assert_eq!(hp.get(e).unwrap().0, 50);
     }
 
     /// When the same component type is added twice the data must be updated in archetype migration.
@@ -411,7 +411,7 @@ mod tests {
         // ID yeniden kullanıldığında eski Health taşınmamalı
         let e2 = world.spawn();
         assert_eq!(e2.id(), id);
-        assert!(world.borrow::<Health>().get(e2.id()).is_none());
+        assert!(world.borrow::<Health>().get(e2).is_none());
     }
 
     #[test]

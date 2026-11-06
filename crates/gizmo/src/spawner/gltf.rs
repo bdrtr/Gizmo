@@ -323,7 +323,7 @@ fn spawn_gltf_node_flat(
     if !newly_added_prims.is_empty() {
         {
             let mut ch_store = world.borrow_mut::<Children>();
-            if let Some(mut parent_ch) = ch_store.get_mut(entity.id()) {
+            if let Some(mut parent_ch) = ch_store.get_mut(entity) {
                 parent_ch.0.extend(newly_added_prims);
             }
         }

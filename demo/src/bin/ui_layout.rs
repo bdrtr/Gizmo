@@ -219,8 +219,7 @@ fn main() {
 /// `gizmo-ui`'nin belgeleri bunu eksik olarak sayıyor.
 fn recolor_buttons(world: &mut World) {
     let states: Vec<(u32, Interaction)> = {
-        let interactions = world.borrow::<Interaction>();
-        interactions.iter().map(|(id, i)| (id, *i)).collect()
+        world.query::<(Entity, &Interaction)>().unwrap().iter().map(|(entity, i)| (entity.id(), *i)).collect()
     };
     let mut colors = world.borrow_mut::<BackgroundColor>();
     for (id, interaction) in states {
@@ -232,7 +231,7 @@ fn recolor_buttons(world: &mut World) {
 
 /// Tıklanan düğmenin sayacını artırır ve etiketine yazar. `Clicked` tam bir kare `true`.
 fn count_clicks(world: &mut World) {
-    let hits: Vec<u32> = world.borrow::<Clicked>().iter().filter(|(_, c)| c.0).map(|(id, _)| id).collect();
+    let hits: Vec<u32> = world.query::<(Entity, &Clicked)>().unwrap().iter().filter(|(_, c)| c.0).map(|(entity, _)| entity.id()).collect();
     for id in hits {
         let text = {
             let mut counters = world.borrow_mut::<Counter>();

@@ -24,7 +24,7 @@ pub fn draw_velocity_section(
     // section, and nobody types a velocity expecting to then hunt for a second control.
     let mut velocity_edited = false;
     {
-        if let Some(mut v) = velocities.get_mut(entity_id.id()) {
+        if let Some(mut v) = velocities.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("Velocity"))
                 .default_open(true)
                 .show(ui, |ui| {
@@ -85,7 +85,7 @@ pub fn draw_velocity_section(
     if velocity_edited {
         // SAFETY: same single-threaded egui draw as the borrow above, which has ended.
         let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
-        if let Some(mut rb) = rigid_bodies.get_mut(entity_id.id()) {
+        if let Some(mut rb) = rigid_bodies.get_mut(entity_id) {
             rb.wake_up();
         }
     }
@@ -102,7 +102,7 @@ pub fn draw_rigidbody_section(
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut rigidbodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
     {
-        if let Some(mut rb) = rigidbodies.get_mut(entity_id.id()) {
+        if let Some(mut rb) = rigidbodies.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("RigidBody"))
                 .default_open(true)
                 .show(ui, |ui| {
@@ -164,7 +164,7 @@ pub fn draw_collider_section(
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut colliders = unsafe { world.borrow_mut_unchecked::<Collider>() };
     {
-        if let Some(mut collider) = colliders.get_mut(entity_id.id()) {
+        if let Some(mut collider) = colliders.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("Collider"))
                 .default_open(true)
                 .show(ui, |ui| {

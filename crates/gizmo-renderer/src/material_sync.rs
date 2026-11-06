@@ -35,6 +35,7 @@
 //! the next frame. Nothing in the editor can do that today — the inspector has no delete button
 //! for a material — but a game that removes one by hand should remove the description with it.
 
+use gizmo_core::Entity;
 use crate::components::{Material, MaterialDesc};
 use gizmo_core::world::World;
 
@@ -93,14 +94,13 @@ fn decide(material: &MaterialDesc, desc: Option<&MaterialDesc>, synced: Option<&
 pub fn sync_material_descriptions(world: &mut World) {
     let mut decided: Vec<(u32, Sync)> = Vec::new();
     {
-        let materials = world.borrow::<Material>();
         let descs = world.borrow::<MaterialDesc>();
         let synced = world.borrow::<SyncedDesc>();
-        for (entity, material) in materials.iter() {
+        for (entity, material) in world.query::<(Entity, &Material)>().unwrap().iter() {
             let live = MaterialDesc::from(material);
             match decide(&live, descs.get(entity), synced.get(entity).map(|s| &s.0)) {
                 Sync::Nothing => {}
-                other => decided.push((entity, other)),
+                other => decided.push((entity.id(), other)),
             }
         }
     }
@@ -149,12 +149,10 @@ pub fn sync_material_descriptions(world: &mut World) {
 /// group an untextured material already draws with, and a warning rather than a missing object.
 pub fn resolve_material_descriptions(world: &mut World, renderer: &crate::Renderer) {
     let pending: Vec<(u32, MaterialDesc)> = {
-        let descs = world.borrow::<MaterialDesc>();
         let materials = world.borrow::<Material>();
-        descs
-            .iter()
+        world.query::<(Entity, &MaterialDesc)>().unwrap().iter()
             .filter(|(entity, _)| materials.get(*entity).is_none())
-            .map(|(entity, desc)| (entity, desc.clone()))
+            .map(|(entity, desc)| (entity.id(), desc.clone()))
             .collect()
     };
     if pending.is_empty() {

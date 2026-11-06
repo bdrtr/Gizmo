@@ -1,5 +1,7 @@
 //! Applying a [`CameraShake`] to the frame being drawn — and only to it.
 
+use gizmo_core::Mut;
+use gizmo_core::Entity;
 use crate::core::World;
 use crate::renderer::components::{Camera, CameraShake};
 use gizmo_physics_core::components::{GlobalTransform, Transform};
@@ -28,12 +30,12 @@ struct Moved {
 pub fn apply_camera_shake(world: &mut World, dt: f32) -> ShakeUndo {
     let mut undo = ShakeUndo::default();
     let shaking: Vec<(u32, (gizmo_math::Vec3, f32, f32))> = {
-        let mut shakes = world.borrow_mut::<CameraShake>();
+        let mut shakes = world.query_mut::<(Entity, Mut<CameraShake>)>().unwrap();
         shakes
             .iter_mut()
-            .map(|(id, mut s)| {
+            .map(|(entity, mut s)| {
                 s.advance(dt);
-                (id, s.sample())
+                (entity.id(), s.sample())
             })
             .collect()
     };

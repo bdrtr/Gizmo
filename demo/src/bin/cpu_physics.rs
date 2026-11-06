@@ -296,7 +296,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     // aşağıdaki ışın onu kullanıyor.
     let (mut cam_forward, mut cam_pos) = (Vec3::new(0.0, 0.0, -1.0), Vec3::ZERO);
     if let Some(mut q) = world.query::<(&FpsLook, &Transform)>() {
-        for (_, (look, transform)) in q.iter_mut() {
+        for (look, transform) in q.iter_mut() {
             cam_forward = look.forward();
             cam_pos = transform.position;
         }

@@ -164,7 +164,7 @@ fn change_component(
     time: Res<Time>,
 ) {
     let now = (time.elapsed() as f32 * 2.0).round();
-    for (_entity, (mut component, _)) in tracked.iter_mut() {
+    for (mut component, _) in tracked.iter_mut() {
         if !rng.chance(0.08) {
             continue;
         }
@@ -187,7 +187,7 @@ fn change_without_stamping(
     time: Res<Time>,
 ) {
     let now = (time.elapsed() as f32 * 2.0).round();
-    for (_entity, (mut component, _)) in sneaky.iter_mut() {
+    for (mut component, _) in sneaky.iter_mut() {
         let target = component.bypass_change_detection();
         if target.0 != now {
             target.0 = now;
@@ -204,7 +204,7 @@ fn change_detection(
     mut counters: ResMut<Counters>,
 ) {
     let mut seen = 0;
-    for (_entity, (mut material, tracked, _)) in changed.iter_mut() {
+    for (mut material, tracked, _) in changed.iter_mut() {
         material.albedo = HOT;
         seen += 1;
         gizmo::gizmo_log!(Info, "değişiklik: Tracked({})", tracked.0);
@@ -216,7 +216,7 @@ fn change_detection(
 /// Boyayı her karede biraz söndürür — parlayan küp "bu karede değişti" demek olsun diye.
 fn fade_highlight(mut materials: Query<(Mut<Material>, &Tracked)>, time: Res<Time>) {
     let k = (time.dt() * 12.0).min(1.0);
-    for (_entity, (mut material, _)) in materials.iter_mut() {
+    for (mut material, _) in materials.iter_mut() {
         // Doğrudan alan yazmak damga basar; burada sorun değil, çünkü `Changed<Tracked>` izliyor,
         // `Changed<Material>` değil.
         let current = material.albedo;

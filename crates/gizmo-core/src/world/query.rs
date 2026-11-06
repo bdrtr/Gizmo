@@ -58,8 +58,8 @@ impl World {
     ///
     /// let r1 = world.query::<&Position>().unwrap();
     /// let r2 = world.query::<&Position>().unwrap(); // any number may coexist
-    /// assert_eq!(r1.get(e.id()).unwrap().x, 1.0);
-    /// assert_eq!(r2.get(e.id()).unwrap().x, 1.0);
+    /// assert_eq!(r1.get(e).unwrap().x, 1.0);
+    /// assert_eq!(r2.get(e).unwrap().x, 1.0);
     /// ```
     ///
     /// A *mutable* query can NOT be built through `query` — `Mut<T>` is not
@@ -103,9 +103,9 @@ impl World {
     ///
     /// {
     ///     let mut q = world.query_mut::<Mut<Position>>().unwrap();
-    ///     for (_id, mut p) in q.iter_mut() { p.x += 1.0; }
+    ///     for mut p in q.iter_mut() { p.x += 1.0; }
     /// }
-    /// assert_eq!(world.query::<&Position>().unwrap().get(e.id()).unwrap().x, 2.0);
+    /// assert_eq!(world.query::<&Position>().unwrap().get(e).unwrap().x, 2.0);
     /// ```
     ///
     /// Two simultaneous mutable queries can't exist — each ties up `&mut World`, so the

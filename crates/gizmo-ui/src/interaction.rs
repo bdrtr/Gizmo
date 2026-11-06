@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use gizmo_core::query::{Query, Mut};
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
@@ -124,14 +125,12 @@ fn point_in_node(point: (f32, f32), node: &Node) -> bool {
 pub fn pointer_over_ui(world: &gizmo_core::World) -> bool {
     let Some(input) = world.get_resource::<Input>() else { return false };
     let p = input.mouse_position();
-    world.borrow::<Node>().iter().any(|(_, n)| point_in_node(p, n))
+    world.borrow::<Node>().iter().any(|n| point_in_node(p, n))
         || {
             let nodes = world.borrow::<Node>();
             let point = gizmo_math::Vec2::new(p.0, p.1);
-            world
-                .borrow::<Dropdown>()
-                .iter()
-                .any(|(id, d)| nodes.get(id).is_some_and(|n| d.option_at(n, point).is_some()))
+            world.query::<(Entity, &Dropdown)>().unwrap().iter()
+                .any(|(entity, d)| nodes.get(entity).is_some_and(|n| d.option_at(n, point).is_some()))
         }
 }
 
@@ -140,7 +139,7 @@ pub fn pointer_over_ui(world: &gizmo_core::World) -> bool {
 pub fn ui_interaction_system(
     input: Res<Input>,
     navigation: Option<ResMut<UiNavigation>>,
-    mut interactions: Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
+    mut interactions: Query<(Entity, &Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
     layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
     fields: Query<&crate::text_input::TextInput>,
     clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
@@ -189,11 +188,11 @@ pub fn ui_interaction_system(
     };
     // An open dropdown's list takes the pointer: nothing under it is hovered or pressed.
     let pointer = gizmo_math::Vec2::new(mouse_pos.0, mouse_pos.1);
-    let over_open_list = dropdowns.iter().any(|(_, (n, d))| d.option_at(n, pointer).is_some());
+    let over_open_list = dropdowns.iter().any(|(n, d)| d.option_at(n, pointer).is_some());
     let under: Vec<(u32, i32)> = interactions
         .iter_mut()
-        .filter(|(id, (n, _, _))| !over_open_list && point_in_node(mouse_pos, n) && visible(*id))
-        .map(|(id, _)| (id, layer_of(id)))
+        .filter(|(entity, n, _, _)| !over_open_list && point_in_node(mouse_pos, n) && visible((*entity).id()))
+        .map(|(entity, ..)| (entity.id(), layer_of(entity.id())))
         .collect();
     let top = under.iter().map(|(_, l)| *l).max();
     let front = |id: u32| under.iter().any(|(e, l)| *e == id && Some(*l) == top);
@@ -201,7 +200,7 @@ pub fn ui_interaction_system(
     // Keyboard/gamepad focus — decided before the per-element pass so it can mark the focused one.
     // A text field that has the keyboard keeps it: Space and Enter are typing there, not
     // clicks, and the arrows are not focus moves.
-    let typing = fields.iter().any(|(_, f)| f.is_focused());
+    let typing = fields.iter().any(|f| f.is_focused());
     let (focused, activate) = match navigation {
         Some(mut nav) if nav.enabled && !typing => {
             navigate(&input, &mut nav, &mut interactions, &front, &|id| {
@@ -218,11 +217,11 @@ pub fn ui_interaction_system(
 
     // Note: This is a simplified check that doesn't account for z-index or hierarchy properly yet.
     // In a real UI system, we would need to walk the tree from front to back.
-    for (id, (_, mut interaction, clicked)) in interactions.iter_mut() {
+    for (entity, _, mut interaction, clicked) in interactions.iter_mut() {
         let was = *interaction;
-        let is_hovered = front(id);
+        let is_hovered = front(entity.id());
 
-        let is_focused = focused == Some(id);
+        let is_focused = focused == Some(entity.id());
         if is_hovered && is_clicked {
             *interaction = Interaction::Pressed;
         } else if is_hovered || is_focused {
@@ -247,7 +246,7 @@ pub fn ui_interaction_system(
 fn navigate(
     input: &Input,
     nav: &mut UiNavigation,
-    interactions: &mut Query<(&Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
+    interactions: &mut Query<(Entity, &Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
     hovered: &dyn Fn(u32) -> bool,
     horizontal_taken: &dyn Fn(u32) -> bool,
     dt: f32,
@@ -255,8 +254,8 @@ fn navigate(
     // The focusable elements in reading order. A zero-size node is hidden (or not laid out yet).
     let mut order: Vec<(u32, f32, f32, bool)> = interactions
         .iter_mut()
-        .filter(|(_, (n, _, _))| n.size.x > 0.0 && n.size.y > 0.0)
-        .map(|(id, (n, _, _))| (id, n.position.y, n.position.x, hovered(id)))
+        .filter(|(_, n, _, _)| n.size.x > 0.0 && n.size.y > 0.0)
+        .map(|(entity, n, _, _)| (entity.id(), n.position.y, n.position.x, hovered(entity.id())))
         .collect();
     order.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.2.total_cmp(&b.2)).then(a.0.cmp(&b.0)));
     if order.is_empty() {
@@ -341,7 +340,7 @@ fn navigate(
 pub fn ui_slider_system(
     input: Res<Input>,
     navigation: Option<Res<UiNavigation>>,
-    mut sliders: Query<(&Node, &Interaction, Mut<Slider>)>,
+    mut sliders: Query<(Entity, &Node, &Interaction, Mut<Slider>)>,
 ) {
     let (x, y) = input.mouse_position();
     let pointer = gizmo_math::Vec2::new(x, y);
@@ -354,9 +353,9 @@ pub fn ui_slider_system(
         .and_then(|n| n.focused());
     // ←/→ and the d-pad, repeating while held — read once, by the navigation.
     let keys = navigation.as_ref().map_or(0, |n| n.sideways());
-    for (id, (node, interaction, mut slider)) in sliders.iter_mut() {
+    for (entity, node, interaction, mut slider) in sliders.iter_mut() {
         let pressed_here = down_now && *interaction == Interaction::Pressed;
-        let keys_here = if focused == Some(id) { keys } else { 0 };
+        let keys_here = if focused == Some(entity.id()) { keys } else { 0 };
         let mut next = *slider;
         next.step_frame(pressed_here, held, pointer, (node.position.x, node.size.x), keys_here);
         if next != *slider {
@@ -370,7 +369,7 @@ pub fn ui_slider_system(
 pub fn ui_dropdown_system(
     input: Res<Input>,
     navigation: Option<Res<UiNavigation>>,
-    mut dropdowns: Query<(&Node, &Clicked, Mut<Dropdown>)>,
+    mut dropdowns: Query<(Entity, &Node, &Clicked, Mut<Dropdown>)>,
 ) {
     let (x, y) = input.mouse_position();
     let pointer = gizmo_math::Vec2::new(x, y);
@@ -381,9 +380,9 @@ pub fn ui_dropdown_system(
         .and_then(|n| n.focused());
     // ←/→ and the d-pad, repeating while held — read once, by the navigation.
     let keys = navigation.as_ref().map_or(0, |n| n.sideways());
-    for (id, (node, clicked, mut dd)) in dropdowns.iter_mut() {
+    for (entity, node, clicked, mut dd) in dropdowns.iter_mut() {
         let mut next = dd.clone();
-        let step = if focused == Some(id) { keys } else { 0 };
+        let step = if focused == Some(entity.id()) { keys } else { 0 };
         next.step_frame(clicked.0, press, point_in_node((x, y), node), pointer, node, step);
         if next != *dd {
             *dd = next;
@@ -394,7 +393,7 @@ pub fn ui_dropdown_system(
 /// Flips every [`Toggle`] whose element was [`Clicked`] this frame. Runs after
 /// `ui_interaction_system`, which sets the click.
 pub fn ui_toggle_system(mut toggles: Query<(&Clicked, Mut<Toggle>)>) {
-    for (_, (clicked, mut toggle)) in toggles.iter_mut() {
+    for (clicked, mut toggle) in toggles.iter_mut() {
         let mut next = *toggle;
         next.step(clicked.0);
         if next != *toggle {
@@ -411,7 +410,7 @@ pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, Mut<Dra
     let pointer = gizmo_math::Vec2::new(x, y);
     let down_now = input.is_mouse_button_just_pressed(0);
     let held = input.is_mouse_button_pressed(0) && !input.is_mouse_button_just_released(0);
-    for (_, (interaction, mut drag)) in drags.iter_mut() {
+    for (interaction, mut drag) in drags.iter_mut() {
         let pressed_here = down_now && *interaction == Interaction::Pressed;
         // Only write when something changes, so `Changed<Drag>` means a moving drag.
         let mut next = *drag;
@@ -434,7 +433,7 @@ pub fn ui_tooltip_system(
     let (x, y) = input.mouse_position();
     let pointer = gizmo_math::Vec2::new(x, y);
     let held = input.is_mouse_button_pressed(0) || input.is_mouse_button_pressed(1);
-    for (_, (node, interaction, mut tip)) in tips.iter_mut() {
+    for (node, interaction, mut tip) in tips.iter_mut() {
         let resting = *interaction == Interaction::Hovered && point_in_node((x, y), node) && !held;
         // Only write when something changes, so `Changed<Tooltip>` is not every frame.
         let next = tip.next_state(resting, pointer, dt);
@@ -449,8 +448,8 @@ pub fn ui_tooltip_system(
 /// [`Drag::over`] / [`Drag::dropped_on`]. Runs after `ui_drag_system`, which ends a drag on its
 /// release frame, so the drop is seen on that same frame.
 pub fn ui_drop_system(
-    mut drags: Query<Mut<Drag>>,
-    mut targets: Query<(&Node, Mut<DropTarget>)>,
+    mut drags: Query<(Entity, Mut<Drag>)>,
+    mut targets: Query<(Entity, &Node, Mut<DropTarget>)>,
     layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
     clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
 ) {
@@ -487,12 +486,12 @@ pub fn ui_drop_system(
     let live: Vec<(u32, (f32, f32), bool)> = drags
         .iter_mut()
         .filter(|(_, d)| d.is_dragging() || d.just_ended())
-        .map(|(id, d)| (id, (d.position().x, d.position().y), !d.just_ended()))
+        .map(|(entity, d)| (entity.id(), (d.position().x, d.position().y), !d.just_ended()))
         .collect();
     let candidates: Vec<(u32, Node)> = if live.is_empty() {
         Vec::new()
     } else {
-        targets.iter_mut().map(|(id, (n, _))| (id, *n)).collect()
+        targets.iter_mut().map(|(entity, n, _)| (entity.id(), *n)).collect()
     };
     let answers: Vec<(u32, Option<u32>, bool)> = live
         .iter()
@@ -516,16 +515,16 @@ pub fn ui_drop_system(
         .collect();
 
     // Write only what changed, so `Changed<DropTarget>` / `Changed<Drag>` mean something.
-    for (id, (_, mut target)) in targets.iter_mut() {
-        let hovered = answers.iter().find(|a| a.1 == Some(id) && a.2).map(|a| a.0);
-        let dropped = answers.iter().find(|a| a.1 == Some(id) && !a.2).map(|a| a.0);
+    for (entity, _, mut target) in targets.iter_mut() {
+        let hovered = answers.iter().find(|a| a.1 == Some(entity.id()) && a.2).map(|a| a.0);
+        let dropped = answers.iter().find(|a| a.1 == Some(entity.id()) && !a.2).map(|a| a.0);
         let next = DropTarget::answer(hovered, dropped);
         if *target != next {
             *target = next;
         }
     }
-    for (id, mut drag) in drags.iter_mut() {
-        let (over, dropped_on) = match answers.iter().find(|a| a.0 == id) {
+    for (entity, mut drag) in drags.iter_mut() {
+        let (over, dropped_on) = match answers.iter().find(|a| a.0 == entity.id()) {
             Some(&(_, t, true)) => (t, None),
             Some(&(_, t, false)) => (None, t),
             None => (None, None),
@@ -544,7 +543,7 @@ pub fn ui_scroll_system(
     navigation: Option<Res<UiNavigation>>,
     nodes: Query<&Node>,
     parents: Query<&Parent>,
-    mut scrolls: Query<(&Node, Mut<Scroll>)>,
+    mut scrolls: Query<(Entity, &Node, Mut<Scroll>)>,
 ) {
     let dt = time.map_or(0.0, |t| t.raw_dt());
     // The keys moved the focus: bring it into view in the nearest scrolling list around it. A held
@@ -554,7 +553,7 @@ pub fn ui_scroll_system(
             let mut at = parents.get(focused).and_then(|p| parents.live(p.0));
             for _ in 0..256 {
                 let Some(a) = at else { break };
-                if let Some((list, mut scroll)) = scrolls.get_mut(a) {
+                if let Some((_, list, mut scroll)) = scrolls.get_mut(a) {
                     let (top, bottom) = (list.position.y, list.position.y + list.size.y);
                     let (item_top, item_bottom) = (item.position.y, item.position.y + item.size.y);
                     let shift = if item_top < top {
@@ -588,17 +587,17 @@ pub fn ui_scroll_system(
         .then(|| {
             scrolls
                 .iter_mut()
-                .filter(|(_, (n, s))| point_in_node(p, n) && !s.in_bar_strip(n, pointer))
-                .min_by(|a, b| (a.1 .0.size.x * a.1 .0.size.y).total_cmp(&(b.1 .0.size.x * b.1 .0.size.y)))
-                .map(|(id, _)| id)
+                .filter(|(_, n, s)| point_in_node(p, n) && !s.in_bar_strip(n, pointer))
+                .min_by(|a, b| (a.1.size.x * a.1.size.y).total_cmp(&(b.1.size.x * b.1.size.y)))
+                .map(|(entity, ..)| entity)
         })
         .flatten();
-    for (id, (node, mut scroll)) in scrolls.iter_mut() {
+    for (entity, node, mut scroll) in scrolls.iter_mut() {
         let mut next = *scroll;
         if pressed || scroll.is_dragging_thumb() {
             next.drag_thumb(node, pressed, held, pointer);
         }
-        next.flick_frame(flick_target == Some(id), held, pointer.y, dt);
+        next.flick_frame(flick_target == Some(entity), held, pointer.y, dt);
         if next != *scroll {
             *scroll = next;
         }
@@ -610,11 +609,11 @@ pub fn ui_scroll_system(
     }
     let target = scrolls
         .iter_mut()
-        .filter(|(_, (n, _))| point_in_node(p, n))
-        .min_by(|a, b| (a.1 .0.size.x * a.1 .0.size.y).total_cmp(&(b.1 .0.size.x * b.1 .0.size.y)))
-        .map(|(id, _)| id);
-    if let Some(id) = target {
-        if let Some((_, mut s)) = scrolls.get_mut(id) {
+        .filter(|(_, n, _)| point_in_node(p, n))
+        .min_by(|a, b| (a.1.size.x * a.1.size.y).total_cmp(&(b.1.size.x * b.1.size.y)))
+        .map(|(entity, ..)| entity);
+    if let Some(entity) = target {
+        if let Some((_, _, mut s)) = scrolls.get_mut(entity) {
             let step = s.speed;
             s.offset.y -= wheel * step;
         }
@@ -924,7 +923,7 @@ mod tests {
             s.build();
             s.run(world, 0.0);
         };
-        let offset = |w: &gizmo_core::World, e: gizmo_core::Entity| w.borrow::<Scroll>().get(e.id()).unwrap().offset.y;
+        let offset = |w: &gizmo_core::World, e: gizmo_core::Entity| w.borrow::<Scroll>().get(e).unwrap().offset.y;
         wheel(&mut world, (50.0, 50.0), -2.0);
         assert_eq!((offset(&world, inner), offset(&world, outer)), (50.0, 0.0), "two notches down, at its own speed");
         wheel(&mut world, (200.0, 200.0), -1.0);
@@ -954,7 +953,7 @@ mod tests {
         world.insert_resource(Input::new());
         let knob = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 40.0)), ..Default::default() });
         world.add_component(knob, Drag::default());
-        let drag = |w: &gizmo_core::World| *w.borrow::<Drag>().get(knob.id()).unwrap();
+        let drag = |w: &gizmo_core::World| *w.borrow::<Drag>().get(knob).unwrap();
 
         drag_frame(&mut world, (50.0, 20.0), true);
         let d = drag(&world);
@@ -964,7 +963,7 @@ mod tests {
         let d = drag(&world);
         assert!(d.is_dragging() && !d.just_started(), "lost the drag when the pointer left the element");
         assert_eq!(d.delta(), Vec2::new(250.0, 180.0));
-        assert_eq!(world.borrow::<Interaction>().get(knob.id()), Some(&Interaction::None));
+        assert_eq!(world.borrow::<Interaction>().get(knob), Some(&Interaction::None));
         drag_frame(&mut world, (310.0, 200.0), false);
         let d = drag(&world);
         assert!(!d.is_dragging() && d.just_ended());
@@ -1185,7 +1184,7 @@ mod tests {
         world.insert_resource(Input::new());
         let s = world.spawn_bundle(crate::ButtonBundle { node: node((100.0, 0.0), (200.0, 30.0)), ..Default::default() });
         world.add_component(s, Slider::new(0.5));
-        let get = |w: &gizmo_core::World| *w.borrow::<Slider>().get(s.id()).unwrap();
+        let get = |w: &gizmo_core::World| *w.borrow::<Slider>().get(s).unwrap();
 
         slider_frame(&mut world, (150.0, 15.0), true, None);
         assert!((get(&world).value - 0.25).abs() < 1e-6 && get(&world).just_changed());
@@ -1271,9 +1270,9 @@ mod tests {
             s.build();
             s.run(w, 0.0);
         };
-        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list.id()).unwrap().offset.y;
+        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list).unwrap().offset.y;
         run(&mut world, (95.0, 10.0), true); // on the thumb, 10 px into it
-        assert_eq!(world.borrow::<Interaction>().get(item.id()), Some(&Interaction::None), "the press went to the item under the bar");
+        assert_eq!(world.borrow::<Interaction>().get(item), Some(&Interaction::None), "the press went to the item under the bar");
         run(&mut world, (300.0, 47.5), true); // thumb top to 37.5 of 75 travel, off the box
         assert!((offset(&world) - 150.0).abs() < 1e-3, "{}", offset(&world));
         run(&mut world, (95.0, 500.0), true);
@@ -1283,7 +1282,7 @@ mod tests {
         assert_eq!(offset(&world), 300.0, "released: moving does not scroll");
         // A press on the item itself, left of the strip, is the item's.
         run(&mut world, (50.0, 10.0), true);
-        assert_eq!(world.borrow::<Interaction>().get(item.id()), Some(&Interaction::Pressed));
+        assert_eq!(world.borrow::<Interaction>().get(item), Some(&Interaction::Pressed));
     }
 
     /// A dropdown opens on a click, takes the pointer while open (the button under its list is
@@ -1315,19 +1314,19 @@ mod tests {
                 w.get_resource_mut::<Input>().unwrap().on_key_released(key(k));
             }
         };
-        let get = |w: &gizmo_core::World| w.borrow::<Dropdown>().get(dd.id()).unwrap().clone();
+        let get = |w: &gizmo_core::World| w.borrow::<Dropdown>().get(dd).unwrap().clone();
 
         run(&mut world, (50.0, 15.0), true, None);
         run(&mut world, (50.0, 15.0), false, None);
         assert!(get(&world).is_open(), "a click opens it");
         run(&mut world, (50.0, 45.0), false, None);
         assert_eq!(get(&world).hovered(), Some(0));
-        assert_eq!(world.borrow::<Interaction>().get(below.id()), Some(&Interaction::None), "the list let the pointer through");
+        assert_eq!(world.borrow::<Interaction>().get(below), Some(&Interaction::None), "the list let the pointer through");
         run(&mut world, (50.0, 75.0), true, None); // on "Medium", over nothing else... and on `below`'s edge row
         let d = get(&world);
         assert!(!d.is_open() && d.selected == 1 && d.just_changed() && d.selected_option() == Some("Medium"));
         run(&mut world, (50.0, 75.0), false, None);
-        assert!(!world.borrow::<Clicked>().get(below.id()).unwrap().0, "picking an option clicked what was under it");
+        assert!(!world.borrow::<Clicked>().get(below).unwrap().0, "picking an option clicked what was under it");
 
         // Open, then press elsewhere: closed, unchanged.
         run(&mut world, (50.0, 15.0), true, None);
@@ -1377,8 +1376,8 @@ mod tests {
             s.build();
             s.run(w, 0.0);
         };
-        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list.id()).unwrap().offset.y;
-        let clicked = |w: &gizmo_core::World| w.borrow::<Clicked>().get(item.id()).unwrap().0;
+        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list).unwrap().offset.y;
+        let clicked = |w: &gizmo_core::World| w.borrow::<Clicked>().get(item).unwrap().0;
 
         // A tap: down and up in place — the item is clicked, nothing scrolls.
         step(&mut world, Some((Started, 20.0)));
@@ -1388,7 +1387,7 @@ mod tests {
 
         // A drag down that ends over the item: past the slop the content follows the finger, and
         // the release — over the item it started on — clicks nothing.
-        world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 500.0;
+        world.borrow_mut::<Scroll>().get_mut(list).unwrap().offset.y = 500.0;
         step(&mut world, Some((Started, 5.0)));
         for y in [9.0, 16.0, 25.0, 35.0] {
             step(&mut world, Some((Moved, y)));
@@ -1493,7 +1492,7 @@ mod tests {
                 e.id()
             })
             .collect();
-        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list.id()).unwrap().offset.y;
+        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list).unwrap().offset.y;
         let run = |w: &mut gizmo_core::World, k: Option<&str>| {
             press(w, k);
             let mut s = Schedule::new();

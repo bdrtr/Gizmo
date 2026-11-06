@@ -69,6 +69,7 @@
 //! after the rebuild must be inserted, or it disappears. That is the cost of the door being a door;
 //! see [`VisibilityIndex::rebuild_from`].
 
+use gizmo_core::Entity;
 use crate::core::World;
 use gizmo_physics_core::components::GlobalTransform;
 use gizmo_renderer::components::Mesh;
@@ -103,10 +104,10 @@ impl VisibilityIndex {
     /// per-frame update cost this exists to avoid, which the module docs measure.
     pub fn rebuild_from(&mut self, world: &World) {
         self.tree.clear();
-        if let Some(q) = world.query::<(&Mesh, &GlobalTransform)>() {
-            for (e, (mesh, trans)) in q.iter() {
+        if let Some(q) = world.query::<(Entity, &Mesh, &GlobalTransform)>() {
+            for (e, mesh, trans) in q.iter() {
                 let world_aabb = mesh.bounds.transform(&trans.matrix);
-                self.tree.insert(e, world_aabb);
+                self.tree.insert(e.id(), world_aabb);
             }
         }
     }

@@ -434,11 +434,11 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
     // --- hedef yıkım kontrolü + kalan sayımı (TEK ECS sorgusu) ---
     let mut killed: Vec<(u32, Vec3)> = Vec::new();
     let mut alive = 0usize;
-    if let Some(q) = world.query::<(&Target, &Transform)>() {
-        for (id, (tgt, tr)) in q.iter() {
+    if let Some(q) = world.query::<(Entity, &Target, &Transform)>() {
+        for (entity, tgt, tr) in q.iter() {
             let p = tr.position;
             if p.y < KILL_Y || (p - tgt.start).length() > KILL_DIST {
-                killed.push((id, if p.y < KILL_Y { tgt.start } else { p }));
+                killed.push((entity.id(), if p.y < KILL_Y { tgt.start } else { p }));
             } else {
                 alive += 1;
             }
@@ -466,7 +466,7 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
 
     // --- kamerayı nişana göre güncelle ---
     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
-        for (_, (mut tr, mut cam)) in q.iter_mut() {
+        for (mut tr, mut cam) in q.iter_mut() {
             tr.position = CANNON;
             tr.rotation = Quat::from_rotation_y(-g.yaw);
             cam.yaw = g.yaw;

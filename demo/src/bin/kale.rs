@@ -349,7 +349,7 @@ fn camera_controls(world: &mut World, input: &Input) {
     if zoom == 1.0 && pan.is_none() {
         return;
     }
-    let Some(cam) = world.borrow::<Camera>().iter().next().map(|(id, c)| (id, c.get_front())) else { return };
+    let Some(cam) = world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, c)| (entity.id(), c.get_front())) else { return };
     let (id, forward) = cam;
     let mut transforms = world.borrow_mut::<Transform>();
     let Some(mut t) = transforms.get_mut(id) else { return };
@@ -439,14 +439,13 @@ fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {
 
 fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
     let enemies: Vec<(u32, Vec3)> = {
-        let es = world.borrow::<Enemy>();
         let ts = world.borrow::<Transform>();
-        es.iter().filter_map(|(id, _)| ts.get(id).map(|t| (id, t.position))).collect()
+        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity.id(), t.position))).collect()
     };
     let mut shots: Vec<(Vec3, Vec3, u32)> = Vec::new();
     {
         let Some(mut towers) = world.query_mut::<(Mut<Tower>, &Transform)>() else { return };
-        for (_, (mut tower, tf)) in towers.iter_mut() {
+        for (mut tower, tf) in towers.iter_mut() {
             tower.reload.tick(dt);
             if !tower.reload.finished() {
                 continue;
@@ -520,11 +519,10 @@ fn sparks(count: u32, colour: Vec4) -> gizmo::renderer::components::ParticleEmit
 
 fn enemies_arrive(world: &mut World, game: &mut Game) {
     let arrived: Vec<u32> = {
-        let es = world.borrow::<Enemy>();
         let ts = world.borrow::<Transform>();
-        es.iter()
-            .filter(|(id, _)| ts.get(*id).is_some_and(|t| Vec3::new(t.position.x - GOAL.x, 0.0, t.position.z - GOAL.z).length() < 0.6))
-            .map(|(id, _)| id)
+        world.query::<(Entity, &Enemy)>().unwrap().iter()
+            .filter(|(entity, _)| ts.get(*entity).is_some_and(|t| Vec3::new(t.position.x - GOAL.x, 0.0, t.position.z - GOAL.z).length() < 0.6))
+            .map(|(entity, _)| entity.id())
             .collect()
     };
     for id in arrived {
@@ -536,12 +534,12 @@ fn enemies_arrive(world: &mut World, game: &mut Game) {
 
 fn fade_flashes(world: &mut World, dt: f32) {
     let done: Vec<u32> = {
-        let mut fs = world.borrow_mut::<Flash>();
+        let mut fs = world.query_mut::<(Entity, Mut<Flash>)>().unwrap();
         let mut done = Vec::new();
-        for (id, mut f) in fs.iter_mut() {
+        for (entity, mut f) in fs.iter_mut() {
             f.0 -= dt;
             if f.0 <= 0.0 {
-                done.push(id);
+                done.push(entity.id());
             }
         }
         done

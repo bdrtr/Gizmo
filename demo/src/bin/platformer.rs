@@ -180,7 +180,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> PlatformerState {
 fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input) {
     // 1. Hareketli platformlar
     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Velocity>, Mut<MovingPlatform>)>() {
-        for (_id, (mut p_trans, mut p_vel, mut plat)) in q.iter_mut() {
+        for (mut p_trans, mut p_vel, mut plat) in q.iter_mut() {
             let target = if plat.going_to_end {
                 plat.end_pos
             } else {
@@ -231,7 +231,7 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
     // 3. Karakter kontrolü
     if let Some(mut kcc) = world
         .borrow_mut::<CharacterController>()
-        .get_mut(state.player.id())
+        .get_mut(state.player)
     {
         // Bu harmanlama elle burada duruyordu; artık motorda: `Input::move_axis`. Çubuk yönü
         // DEĞİL, yön+miktar taşır (hafif yatırma yürüyüş, tam yatırma koşu — tuşun veremediği
@@ -256,12 +256,12 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
     }
 
     // Ölüm kontrolü — oyuncu lava seviyesinin altına düşerse respawn.
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(state.player.id()) {
+    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(state.player) {
         player_pos = t.position;
         if t.position.y < -3.0 {
             println!("💀 ÖLDÜN! Respawn oluyorsun...");
             t.position = state.respawn_point;
-            if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(state.player.id()) {
+            if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(state.player) {
                 v.linear = Vec3::ZERO;
             }
         }
@@ -270,7 +270,7 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
     // 4. Kamerayı oyuncuya takip ettir
     let cam_pos = player_pos - forward * 8.0 + Vec3::new(0.0, 2.0, 0.0);
     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
-        for (_, (mut trans, mut cam)) in q.iter_mut() {
+        for (mut trans, mut cam) in q.iter_mut() {
             trans.position = cam_pos;
             trans.rotation = Quat::from_rotation_y(-state.camera_yaw);
             cam.yaw = state.camera_yaw;

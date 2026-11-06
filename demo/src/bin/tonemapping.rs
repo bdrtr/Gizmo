@@ -206,7 +206,7 @@ fn exposure_input(
             exposure.0 = value;
         }
     }
-    for (_entity, (mut camera, _)) in cameras.iter_mut() {
+    for (mut camera, _) in cameras.iter_mut() {
         if camera.primary {
             camera.exposure = exposure.0;
         }

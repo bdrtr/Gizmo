@@ -26,6 +26,7 @@
 //! …, 0, 5, 0)` produces an entity called `crate` at that point with the prefab hanging under it —
 //! and it is the same shape the editor's drag-and-drop already uses, which passes a parent too.
 
+use gizmo_core::Entity;
 use gizmo_core::PrefabRequest;
 
 /// Resolves every outstanding [`PrefabRequest`], and clears it either way.
@@ -38,8 +39,7 @@ pub fn prefab_request_system(world: &mut crate::core::World) {
     // Collect first: loading a prefab spawns entities, and structural changes cannot run while a
     // query borrow is live.
     let pending: Vec<(u32, String)> = {
-        let requests = world.borrow::<PrefabRequest>();
-        requests.iter().map(|(id, req)| (id, req.0.clone())).collect()
+        world.query::<(Entity, &PrefabRequest)>().unwrap().iter().map(|(entity, req)| (entity.id(), req.0.clone())).collect()
     };
     if pending.is_empty() {
         return;
@@ -80,7 +80,7 @@ mod tests {
         prefab_request_system(&mut world);
 
         assert!(
-            world.borrow::<PrefabRequest>().get(e.id()).is_none(),
+            world.borrow::<PrefabRequest>().get(e).is_none(),
             "the request must be cleared, or it selects this entity again next frame"
         );
     }
@@ -97,7 +97,7 @@ mod tests {
         prefab_request_system(&mut world);
 
         assert!(
-            world.borrow::<PrefabRequest>().get(e.id()).is_none(),
+            world.borrow::<PrefabRequest>().get(e).is_none(),
             "a failed load must still clear the request"
         );
         assert!(world.get_entity(e.id()).is_some(), "and must not take the entity with it");
@@ -154,12 +154,12 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert!(
-            world.borrow::<PrefabRequest>().get(host.id()).is_none(),
+            world.borrow::<PrefabRequest>().get(host).is_none(),
             "a fulfilled request must be cleared — nothing else clears it"
         );
 
         let velocities = world.borrow::<gizmo_physics_rigid::components::Velocity>();
-        let arrived: Vec<f32> = velocities.iter().map(|(_, v)| v.linear.z).collect();
+        let arrived: Vec<f32> = velocities.iter().map(|v| v.linear.z).collect();
         assert_eq!(
             arrived,
             vec![3.5],
@@ -170,7 +170,7 @@ mod tests {
 
         let names = world.borrow::<EntityName>();
         assert_eq!(
-            names.get(host.id()).map(|n| n.0.as_str()),
+            names.get(host).map(|n| n.0.as_str()),
             Some("crate"),
             "and the requesting entity keeps the name the script gave it"
         );

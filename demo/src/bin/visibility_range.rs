@@ -220,7 +220,7 @@ fn measure(
     let radius = subjects
         .iter()
         .next()
-        .map(|(_, (t, _))| t.scale.x.max(t.scale.y).max(t.scale.z))
+        .map(|(t, _)| t.scale.x.max(t.scale.y).max(t.scale.z))
         .unwrap_or(1.0);
     report.threshold = radius * 15.0;
 

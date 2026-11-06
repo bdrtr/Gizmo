@@ -3,6 +3,7 @@
 //! the `Query` struct in the parent module. `use super::*` brings in WorldQuery/ReadOnlyQuery,
 //! the archetype/fetch machinery and `Mut`.
 
+use super::iter::QueryRows;
 use super::*;
 
 impl<'w, Q: WorldQuery> Query<'w, Q> {
@@ -68,8 +69,8 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     // exclusive borrow (so two live `&mut T` from one query are impossible). Keeping
     // these private is what makes the gating airtight.
 
-    fn iter_inner<'a>(&'a self) -> QueryIter<'a, 'w, Q> {
-        QueryIter {
+    fn iter_inner<'a>(&'a self) -> QueryRows<'a, 'w, Q> {
+        QueryRows {
             world: self.world,
             archetype_indices: &self.matching_archetypes,
             current_arch_idx: 0,
@@ -78,6 +79,15 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
             _marker: PhantomData,
             _marker_w: PhantomData,
         }
+    }
+
+    fn single_inner(&self) -> Result<Q::Item<'_>, QuerySingleError> {
+        let mut rows = self.iter_inner();
+        let (_, first) = rows.next().ok_or(QuerySingleError::NoEntities)?;
+        if rows.next().is_some() {
+            return Err(QuerySingleError::MultipleEntities);
+        }
+        Ok(first)
     }
 
     fn iter_chunks_inner<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
@@ -198,7 +208,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// Mutable iteration yielding a per-element `Mut<T>`. Because it takes `&mut self`, a second
     /// live mutable iteration over the same query is blocked at compile time.
     pub fn iter_mut<'a>(&'a mut self) -> QueryIter<'a, 'w, Q> {
-        self.iter_inner()
+        QueryIter(self.iter_inner())
     }
 
     /// Mutable chunk iteration for **bulk writes** (returns `&mut [T]`).
@@ -215,7 +225,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.iter_chunks_inner()
     }
 
-    /// Mutable access to one row, by [`Entity`] or raw id: see [`Query::get`].
+    /// Mutable access to one row, by [`Entity`](crate::entity::Entity) or raw id: see [`Query::get`].
     /// Because it takes `&mut self` the returned `Mut` borrows the query exclusively; a second
     /// simultaneous `get_mut`/`iter_mut` does not compile.
     #[inline]
@@ -223,7 +233,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.get_inner(key)
     }
 
-    /// Every unordered pair of matching rows, **both halves mutable**.
+    /// Every unordered `K`-element combination of matching rows, **all of them writable**.
     ///
     /// The writing counterpart of [`iter_combinations`](Self::iter_combinations). An n-body force
     /// loop applies equal and opposite impulses to `a` and `b` in one visit; without this it reads
@@ -237,37 +247,30 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// # let mut world = World::new();
     /// # for _ in 0..3 { let e = world.spawn(); world.add_component(e, Charge(1.0)); }
     /// let mut q = world.query_mut::<Mut<Charge>>().unwrap();
-    /// for ((_, mut a), (_, mut b)) in q.iter_combinations_mut() {
+    /// let mut pairs = q.iter_combinations_mut();
+    /// while let Some([mut a, mut b]) = pairs.fetch_next() {
     ///     // Equal and opposite: what a two-pass version has to reconstruct.
     ///     a.0 += 1.0;
     ///     b.0 -= 1.0;
     /// }
     /// ```
     ///
-    /// # Why this needs `unsafe`, and what makes it sound
-    ///
-    /// Both halves of a pair are `&mut` into the same component storage at the same time. That is
-    /// sound **because `i != j`** — the two halves are always different rows — and unsound the
-    /// moment they are not. The borrow checker cannot see that, so the invariant is carried by the
-    /// iterator's own structure rather than by a type: `j` starts at `i + 1` and only ever runs
-    /// ahead, and the ids come from one `iter()` scan, which yields each matching row exactly once.
-    ///
-    /// The `&mut self` borrow is what keeps that invariant meaningful from the outside: no second
-    /// view of this query can exist while the iterator does, so nothing else can be looking at
-    /// either row.
+    /// `fetch_next` rather than `for`: see [`QueryCombinationsMut`] for why this cannot be an
+    /// iterator.
     ///
     /// # Cost
     ///
-    /// The same as the read-only version: one `Vec<u32>` of ids up front, then `n(n-1)/2` pairs of
-    /// lookups.
-    pub fn iter_combinations_mut<'a>(&'a mut self) -> QueryCombinationsMut<'a, 'w, Q> {
-        let ids: Vec<u32> = self.iter_mut().map(|(id, _)| id).collect();
+    /// The same as the read-only version: one `Vec<u32>` of ids up front, then `K` lookups per
+    /// combination.
+    pub fn iter_combinations_mut<'a, const K: usize>(
+        &'a mut self,
+    ) -> QueryCombinationsMut<'a, 'w, Q, K> {
+        let ids: Vec<u32> = self.iter_inner().map(|(id, _)| id).collect();
+        let subsets = Subsets::new(ids.len());
         QueryCombinationsMut {
-            query: self as *mut Self,
+            query: self,
             ids,
-            i: 0,
-            j: 1,
-            _marker: PhantomData,
+            subsets,
         }
     }
 
@@ -276,32 +279,21 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// Sound for the same reason [`iter_mut`](Self::iter_mut) is: the result borrows the query
     /// exclusively. To tell "one" from "several" it has to look at a second row; that second item
     /// is built and dropped without being written, so it is not marked changed.
-    pub fn single_mut(&mut self) -> Result<(u32, Q::Item<'_>), QuerySingleError> {
-        let mut rows = self.iter_inner();
-        let first = rows.next().ok_or(QuerySingleError::NoEntities)?;
-        if rows.next().is_some() {
-            return Err(QuerySingleError::MultipleEntities);
-        }
-        Ok(first)
-    }
-
-    /// Generation-validated mutable access (see [`Query::get_entity`]).
-    #[inline]
-    pub fn get_mut_entity(&mut self, entity: Entity) -> Option<Q::Item<'_>> {
-        self.get_inner(entity)
+    pub fn single_mut(&mut self) -> Result<Q::Item<'_>, QuerySingleError> {
+        self.single_inner()
     }
 
     /// Lock-free parallel mutable iteration running on the thread pool (Work-Stealing).
     pub fn par_for_each_mut<F>(&mut self, func: F)
     where
-        F: Fn((u32, Q::Item<'_>)) + Send + Sync,
+        F: Fn(Q::Item<'_>) + Send + Sync,
     {
-        self.par_inner(func);
+        self.par_inner(|(_, item)| func(item));
     }
 
     // ── Metadata (no component access → always `&self`) ───────────────────
 
-    /// The [`Entity`] handle — id **and generation** — for a raw id this query yielded, or `None`
+    /// The [`Entity`](crate::entity::Entity) handle — id **and generation** — for a raw id this query yielded, or `None`
     /// if the id is not a live entity.
     ///
     /// Iteration hands out bare `u32` ids, and a scheduled system cannot reach
@@ -374,13 +366,13 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// because `Q: ReadOnlyQuery` guarantees no item can be a `&mut T`. For a mutable `Q` use
     /// [`Query::iter_mut`], which ties the iterator to an exclusive borrow instead.
     ///
-    /// See [`QueryIter`] for the visit order and for what the yielded `u32` id does and does not
-    /// guarantee.
+    /// See [`QueryIter`] for the visit order.
     pub fn iter<'a>(&'a self) -> QueryIter<'a, 'w, Q> {
-        self.iter_inner()
+        QueryIter(self.iter_inner())
     }
 
-    /// Every unordered **pair** of matching rows, each yielded once.
+    /// Every unordered `K`-element combination of matching rows, each yielded once. `K = 2` is a
+    /// **pair**:
     ///
     /// `[a, b, c]` gives `(a,b)`, `(a,c)`, `(b,c)` — never `(a,a)`, and never both `(a,b)` and
     /// `(b,a)`. That is the property an n-body force loop or a broad-phase collision check needs,
@@ -394,32 +386,26 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// # let mut world = World::new();
     /// # for m in [1.0, 2.0, 3.0] { let e = world.spawn(); world.add_component(e, Mass(m)); }
     /// let q = world.query::<&Mass>().unwrap();
-    /// let pairs: Vec<_> = q.iter_combinations().map(|((_, a), (_, b))| (a.0, b.0)).collect();
+    /// let pairs: Vec<_> = q.iter_combinations().map(|[a, b]| (a.0, b.0)).collect();
     /// assert_eq!(pairs.len(), 3); // 3 choose 2
     /// ```
     ///
-    /// # Read-only, and why there is no `_mut`
-    ///
-    /// This takes `&self` and requires `Q: ReadOnlyQuery`, so both halves of a pair are shared
-    /// borrows and any number may coexist. A mutable version would have to hand out two `&mut`
-    /// into the same storage at once; that is sound only because `i != j`, which the borrow
-    /// checker cannot see, so it would need `unsafe`. Until that is written and justified, a loop
-    /// that *writes* still reads pairs here and applies the results in a second pass — which is
-    /// what `demo/src/bin/iter_combinations.rs` does and measures.
+    /// The pattern `[a, b]` is what picks `K = 2`; write `iter_combinations::<3>()` where nothing
+    /// names it. A writing loop uses [`iter_combinations_mut`](Self::iter_combinations_mut).
     ///
     /// # Cost
     ///
-    /// One `Vec<u32>` of matching ids up front, then `n(n-1)/2` pairs of [`get`](Self::get)
-    /// lookups. The ids are collected once rather than re-scanned per pair, and they are captured
-    /// before the first pair is yielded — so a structural change during iteration is impossible
-    /// anyway (the query holds a borrow), and the visit order is the one [`QueryIter`] documents.
-    pub fn iter_combinations<'a>(&'a self) -> QueryCombinations<'a, 'w, Q> {
-        let ids: Vec<u32> = self.iter().map(|(id, _)| id).collect();
+    /// One `Vec<u32>` of matching ids up front, then `K` [`get`](Self::get) lookups per combination.
+    /// The ids are collected once rather than re-scanned, and before the first combination is
+    /// yielded, so a structural change during iteration is impossible anyway (the query holds a
+    /// borrow), and the visit order is the one [`QueryIter`] documents.
+    pub fn iter_combinations<'a, const K: usize>(&'a self) -> QueryCombinations<'a, 'w, Q, K> {
+        let ids: Vec<u32> = self.iter_inner().map(|(id, _)| id).collect();
+        let subsets = Subsets::new(ids.len());
         QueryCombinations {
             query: self,
             ids,
-            i: 0,
-            j: 1,
+            subsets,
         }
     }
 
@@ -436,7 +422,7 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         self.iter_chunks_inner()
     }
 
-    /// The one matching row — `(id, item)` — or why there is not exactly one.
+    /// The one matching row's item, or why there is not exactly one.
     ///
     /// For the query a game writes for *the* player, *the* main camera, *the* score: written as a
     /// loop it silently does the wrong thing in both edge cases — no body runs when nothing has
@@ -454,35 +440,21 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// let e = world.spawn();
     /// world.add_component(e, Player(7));
     /// let q = world.query::<&Player>().unwrap();
-    /// let (id, p) = q.single().unwrap();
-    /// assert_eq!((id, p.0), (e.id(), 7));
+    /// assert_eq!(q.single().unwrap().0, 7);
     /// ```
     ///
     /// It walks at most two rows, and it applies the per-row filters exactly as
     /// [`iter`](Self::iter) does, so a `Changed<T>` query is "the one that changed this frame".
-    pub fn single(&self) -> Result<(u32, Q::Item<'_>), QuerySingleError> {
-        let mut rows = self.iter_inner();
-        let first = rows.next().ok_or(QuerySingleError::NoEntities)?;
-        if rows.next().is_some() {
-            return Err(QuerySingleError::MultipleEntities);
-        }
-        Ok(first)
+    pub fn single(&self) -> Result<Q::Item<'_>, QuerySingleError> {
+        self.single_inner()
     }
 
-    /// One row, by [`Entity`] or raw id. An `Entity` is checked against the row,
+    /// One row, by [`Entity`](crate::entity::Entity) or raw id. An `Entity` is checked against the row,
     /// so one that has died returns `None` even after its slot went to someone else. **A raw id cannot
     /// tell them apart** and returns whoever holds the slot now.
     #[inline]
     pub fn get(&self, key: impl super::QueryKey) -> Option<Q::Item<'_>> {
         self.get_inner(key)
-    }
-
-    /// Generation-validated access: returns `None` if `entity` is no longer alive (despawned or
-    /// its slot handed to another entity). Prevents reading the wrong entity's data through a
-    /// stale handle. If you hold an [`Entity`] handle, prefer this one.
-    #[inline]
-    pub fn get_entity(&self, entity: Entity) -> Option<Q::Item<'_>> {
-        self.get_inner(entity)
     }
 
     /// Checks whether a given entity belongs to this query.
@@ -491,133 +463,130 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         self.get_inner(key).is_some()
     }
 
-    /// The matching entity ids alone, in the same order and with the same per-row filtering as
-    /// [`Query::iter`] — it *is* `iter()` with the item discarded, so a row rejected by
-    /// `Changed`/`Added`/`Or` or by a sparse presence test does not appear here either. This
-    /// makes it a truer count than [`Query::len`], at the cost of walking every row.
-    ///
-    /// Ids are raw `u32` indices without a generation counter; they say nothing about liveness
-    /// once the query is dropped.
-    pub fn entities<'a>(&'a self) -> impl Iterator<Item = u32> + 'a {
-        self.iter_inner().map(|(id, _)| id)
-    }
-
     /// Lock-free parallel iteration running on the thread pool (Work-Stealing)
     pub fn par_for_each<F>(&self, func: F)
     where
-        F: Fn((u32, Q::Item<'_>)) + Send + Sync,
+        F: Fn(Q::Item<'_>) + Send + Sync,
     {
-        self.par_inner(func);
+        self.par_inner(|(_, item)| func(item));
     }
 }
 
-/// Every unordered pair of matching rows. Built by [`Query::iter_combinations`].
+/// Walks every `K`-element subset of `0..n` in lexicographic order, each exactly once.
 ///
-/// `(i, j)` walks the upper triangle: `j` runs ahead of `i`, so `i == j` never happens and each
-/// pair is produced in exactly one order.
-pub struct QueryCombinations<'a, 'w, Q: ReadOnlyQuery> {
-    query: &'a Query<'w, Q>,
-    /// The matching ids, collected once. Re-scanning per pair would be `n` times the work for the
-    /// same answer.
-    ids: Vec<u32>,
-    i: usize,
-    j: usize,
+/// Indices strictly increase within a subset, so no two positions of one combination are ever the
+/// same row. That is what makes [`QueryCombinationsMut`] sound, and it lives here, in one place.
+struct Subsets<const K: usize> {
+    next: Option<[usize; K]>,
+    n: usize,
 }
 
-impl<'a, 'w, Q: ReadOnlyQuery> Iterator for QueryCombinations<'a, 'w, Q> {
-    type Item = ((u32, Q::Item<'a>), (u32, Q::Item<'a>));
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.i + 1 >= self.ids.len() {
-                return None;
-            }
-            if self.j >= self.ids.len() {
-                self.i += 1;
-                self.j = self.i + 1;
-                continue;
-            }
-            let (a_id, b_id) = (self.ids[self.i], self.ids[self.j]);
-            self.j += 1;
-            // Both must still resolve. They were collected from this same query a moment ago and
-            // the query holds a borrow, so this is belt-and-braces rather than a real branch —
-            // but returning a half pair would be worse than skipping one.
-            if let (Some(a), Some(b)) = (self.query.get(a_id), self.query.get(b_id)) {
-                return Some(((a_id, a), (b_id, b)));
-            }
+impl<const K: usize> Subsets<K> {
+    fn new(n: usize) -> Self {
+        Self {
+            // `K <= n` also covers `K == 0`: there is exactly one empty subset of anything.
+            next: (K <= n).then(|| std::array::from_fn(|i| i)),
+            n,
         }
     }
 
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.ids.len();
-        (0, Some(n.saturating_mul(n.saturating_sub(1)) / 2))
+    fn advance(&mut self) -> Option<[usize; K]> {
+        let current = self.next?;
+        let mut following = current;
+        // The rightmost position that can still move: position `i` tops out at `n - K + i`.
+        self.next = (0..K).rev().find(|&i| following[i] < self.n - K + i).map(|i| {
+            following[i] += 1;
+            for j in i + 1..K {
+                following[j] = following[j - 1] + 1;
+            }
+            following
+        });
+        Some(current)
+    }
+
+    /// `C(n, K)`, or `None` if it does not fit a `usize`.
+    fn total(&self) -> Option<usize> {
+        if K > self.n {
+            return Some(0);
+        }
+        let k = K.min(self.n - K) as u128;
+        let mut c = 1u128;
+        for i in 0..k {
+            c = c.checked_mul(self.n as u128 - i)? / (i + 1);
+        }
+        usize::try_from(c).ok()
     }
 }
 
+/// Every unordered `K`-element combination of matching rows. Built by
+/// [`Query::iter_combinations`].
+pub struct QueryCombinations<'a, 'w, Q: ReadOnlyQuery, const K: usize> {
+    query: &'a Query<'w, Q>,
+    /// The matching rows, collected once. Re-scanning per combination would be `n` times the work
+    /// for the same answer.
+    ids: Vec<u32>,
+    subsets: Subsets<K>,
+}
 
+impl<'a, 'w, Q: ReadOnlyQuery, const K: usize> Iterator for QueryCombinations<'a, 'w, Q, K> {
+    type Item = [Q::Item<'a>; K];
 
-/// Every unordered pair of matching rows, both halves mutable. Built by
+    fn next(&mut self) -> Option<Self::Item> {
+        let chosen = self.subsets.advance()?;
+        // `ids` came from this query a moment ago and the query holds a borrow, so every row still
+        // resolves.
+        Some(chosen.map(|i| {
+            self.query
+                .get_inner(self.ids[i])
+                .expect("a row matched by this query's own scan resolves")
+        }))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (0, self.subsets.total())
+    }
+}
+
+/// Every unordered `K`-element combination of matching rows, all writable, one at a time. Built by
 /// [`Query::iter_combinations_mut`].
 ///
-/// Holds the query as a raw pointer because two `Q::Item<'a>` from one `&mut Query` cannot be
-/// expressed safely — see [`Query::iter_combinations_mut`] for the invariant that makes it sound.
-/// The `PhantomData` re-ties the lifetime the pointer erased, so this cannot outlive the query.
-pub struct QueryCombinationsMut<'a, 'w, Q: WorldQuery> {
-    query: *mut Query<'w, Q>,
+/// Not an [`Iterator`], deliberately: an iterator's items may outlive the call that made them, and
+/// row 0 is in the pairs `(0, 1)` and `(0, 2)` alike, so collecting them would be two live `&mut` to
+/// one row. [`fetch_next`](Self::fetch_next) ties each combination to a borrow of this value, so the
+/// previous one is gone before the next exists.
+///
+/// ```compile_fail,E0499
+/// # use gizmo_core::prelude::*;
+/// # use gizmo_core::query::Mut;
+/// # #[derive(Clone)] struct Tag(u32);
+/// # gizmo_core::impl_component!(Tag);
+/// # let mut world = World::new();
+/// let mut q = world.query_mut::<Mut<Tag>>().unwrap();
+/// let mut pairs = q.iter_combinations_mut::<2>();
+/// let first = pairs.fetch_next();
+/// let second = pairs.fetch_next(); // the first combination is still alive
+/// drop((first, second));
+/// ```
+pub struct QueryCombinationsMut<'a, 'w, Q: WorldQuery, const K: usize> {
+    query: &'a mut Query<'w, Q>,
     ids: Vec<u32>,
-    i: usize,
-    j: usize,
-    _marker: PhantomData<&'a mut Query<'w, Q>>,
+    subsets: Subsets<K>,
 }
 
-impl<'a, 'w, Q: WorldQuery> Iterator for QueryCombinationsMut<'a, 'w, Q> {
-    type Item = ((u32, Q::Item<'a>), (u32, Q::Item<'a>));
-
-    fn next(&mut self) -> Option<Self::Item> {
-        loop {
-            if self.i + 1 >= self.ids.len() {
-                return None;
-            }
-            if self.j >= self.ids.len() {
-                self.i += 1;
-                self.j = self.i + 1;
-                continue;
-            }
-            let (a_id, b_id) = (self.ids[self.i], self.ids[self.j]);
-            self.j += 1;
-
-            // The invariant, stated where it is relied on: `j` begins at `i + 1` and only
-            // increases, so `a_id` and `b_id` are different entries of `ids`; and `ids` came from
-            // one `iter_mut()` scan, which yields each matching row exactly once, so different
-            // entries are different entities and therefore different rows.
-            debug_assert_ne!(a_id, b_id, "a pair must never be an entity with itself");
-
-            // SAFETY: `get_inner` takes `&self` and hands back `Q::Item` tied to that shared
-            // borrow, so two calls produce two items with no `&mut Query` anywhere — the same
-            // route `iter_mut` takes through `iter_inner`. What the two items may contain is
-            // `&mut T` into component storage, and *that* is what `a_id != b_id` settles: the two
-            // ids name two different rows (`j` starts at `i + 1` and only advances; `ids` came
-            // from one scan, which yields each row once), so the two `&mut` are disjoint.
-            //
-            // The pointer is live for `'a`: it came from a `&'a mut Query`, `PhantomData` keeps
-            // this iterator from outliving it, and that `&mut` means no other view of the query
-            // exists while this runs.
-            //
-            // An earlier version reached the same lifetime with `transmute_copy` + `forget`.
-            // Miri rejected it: `forget` *moves* its argument, a move is a retag, and the retag
-            // invalidated the copy's own tag — "trying to retag from <...> but that tag does not
-            // exist in the borrow stack". The tests passed. Going through `get_inner` needs no
-            // transmute at all.
-            let q: &'a Query<'w, Q> = unsafe { &*self.query };
-            let a = q.get_inner(a_id)?;
-            let b = q.get_inner(b_id)?;
-            return Some(((a_id, a), (b_id, b)));
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.ids.len();
-        (0, Some(n.saturating_mul(n.saturating_sub(1)) / 2))
+impl<'a, 'w, Q: WorldQuery, const K: usize> QueryCombinationsMut<'a, 'w, Q, K> {
+    /// The next combination, valid until this is called again.
+    pub fn fetch_next(&mut self) -> Option<[Q::Item<'_>; K]> {
+        let chosen = self.subsets.advance()?;
+        // `Subsets` gives strictly increasing positions and `ids` holds each matching row once, so
+        // these are different rows and the items do not alias. Exclusive access to the query for
+        // this borrow is what keeps anyone else from looking at them.
+        let query: &Query<'w, Q> = self.query;
+        let ids = &self.ids;
+        Some(chosen.map(|i| {
+            query
+                .get_inner(ids[i])
+                .expect("a row matched by this query's own scan resolves")
+        }))
     }
 }
 
@@ -650,7 +619,7 @@ mod combination_tests {
             let q = w.query::<&Tag>().expect("Tag is registered");
             let pairs: Vec<(u32, u32)> = q
                 .iter_combinations()
-                .map(|((_, a), (_, b))| (a.0, b.0))
+                .map(|[a, b]| (a.0, b.0))
                 .collect();
 
             let expected = (n as usize * (n as usize).saturating_sub(1)) / 2;
@@ -670,20 +639,74 @@ mod combination_tests {
         }
     }
 
-    /// The ids travel with the items, and they are the ids of *those* items.
+    /// A handle in the query travels with its own items.
     ///
-    /// A loop that yielded the right pair of components under the wrong pair of ids would pass
+    /// A loop that yielded the right pair of components under the wrong pair of handles would pass
     /// the test above and still write forces to the wrong entities.
     #[test]
-    fn each_half_carries_its_own_entity_id() {
+    fn each_half_carries_its_own_entity() {
         let w = world_with(4);
-        let q = w.query::<&Tag>().expect("registered");
-        for ((a_id, a), (b_id, b)) in q.iter_combinations() {
-            let ea = q.get(a_id).expect("a resolves");
-            let eb = q.get(b_id).expect("b resolves");
-            assert_eq!(ea.0, a.0, "the first id does not name the first item");
-            assert_eq!(eb.0, b.0, "the second id does not name the second item");
+        let q = w.query::<(crate::entity::Entity, &Tag)>().expect("registered");
+        for [(ea, a), (eb, b)] in q.iter_combinations() {
+            assert_eq!(q.get(ea).expect("a resolves").1 .0, a.0, "first handle, wrong item");
+            assert_eq!(q.get(eb).expect("b resolves").1 .0, b.0, "second handle, wrong item");
         }
+    }
+
+    /// `K` is not only 2: every subset once, none with a repeated row, and the edges of `C(n, K)`.
+    #[test]
+    fn every_k_visits_exactly_n_choose_k_distinct_rows() {
+        fn c(n: usize, k: usize) -> usize {
+            if k > n {
+                return 0;
+            }
+            (0..k).fold(1, |acc, i| acc * (n - i) / (i + 1))
+        }
+        fn check<const K: usize>(n: u32) {
+            let w = world_with(n);
+            let q = w.query::<&Tag>().expect("registered");
+            let mut seen: Vec<[u32; K]> = q.iter_combinations::<K>().map(|c| c.map(|t| t.0)).collect();
+            assert_eq!(seen.len(), c(n as usize, K), "n = {n}, K = {K}");
+            for combo in &seen {
+                assert!(combo.windows(2).all(|p| p[0] != p[1]), "a row repeated: {combo:?}");
+            }
+            seen.sort_unstable();
+            let before = seen.len();
+            seen.dedup();
+            assert_eq!(before, seen.len(), "n = {n}, K = {K}: a combination came twice");
+            assert_eq!(q.iter_combinations::<K>().size_hint().1, Some(c(n as usize, K)));
+        }
+        for n in 0..7 {
+            check::<0>(n);
+            check::<1>(n);
+            check::<2>(n);
+            check::<3>(n);
+            check::<4>(n);
+        }
+    }
+
+    /// The writable version visits what the read-only one does, in any `K`.
+    #[test]
+    fn three_writable_rows_at_once_do_not_alias() {
+        let mut w = world_with(5);
+        {
+            let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
+            let mut triples = q.iter_combinations_mut::<3>();
+            let mut count = 0;
+            while let Some([mut a, mut b, mut c]) = triples.fetch_next() {
+                a.0 += 100;
+                b.0 += 10;
+                c.0 += 1;
+                count += 1;
+            }
+            assert_eq!(count, 10, "5 choose 3");
+        }
+        // Row 0 is first in all 6 triples containing it, row 4 last in all 6 of its own.
+        let q = w.query::<&Tag>().expect("registered");
+        let got: Vec<u32> = q.iter().map(|t| t.0).collect();
+        // Tag starts at the row number. Row i is first in C(4-i, 2) triples, middle in i*(4-i),
+        // last in C(i, 2).
+        assert_eq!(got, vec![600, 1 + 3 * 100 + 3 * 10, 2 + 100 + 4 * 10 + 1, 3 + 3 * 10 + 3, 4 + 6]);
     }
 
     /// Both halves are writable, and each write lands on **its own** entity.
@@ -704,7 +727,8 @@ mod combination_tests {
         }
         {
             let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
-            for ((_, mut a), (_, mut b)) in q.iter_combinations_mut() {
+            let mut pairs = q.iter_combinations_mut();
+            while let Some([mut a, mut b]) = pairs.fetch_next() {
                 a.0 += 10;
                 b.0 -= 10;
             }
@@ -712,7 +736,7 @@ mod combination_tests {
         // 5 entities, 10 pairs. Each entity is `a` in (4 - i) pairs and `b` in i, so its net
         // change is 10 * (4 - 2i) — and the total across all of them is zero.
         let q = w.query::<&Tag>().expect("registered");
-        let values: Vec<i64> = q.iter().map(|(_, t)| i64::from(t.0)).collect();
+        let values: Vec<i64> = q.iter().map(|t| i64::from(t.0)).collect();
         assert_eq!(values.len(), 5);
         let initial: i64 = (0..5).map(|i| 1000 + i).sum();
         let total: i64 = values.iter().sum();
@@ -736,15 +760,16 @@ mod combination_tests {
             let mut w = world_with(n);
             let readonly: Vec<(u32, u32)> = {
                 let q = w.query::<&Tag>().expect("registered");
-                q.iter_combinations()
-                    .map(|((a, _), (b, _))| (a, b))
-                    .collect()
+                q.iter_combinations().map(|[a, b]| (a.0, b.0)).collect()
             };
             let mutable: Vec<(u32, u32)> = {
                 let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
-                q.iter_combinations_mut()
-                    .map(|((a, _), (b, _))| (a, b))
-                    .collect()
+                let mut pairs = q.iter_combinations_mut();
+                let mut out = Vec::new();
+                while let Some([a, b]) = pairs.fetch_next() {
+                    out.push((a.0, b.0));
+                }
+                out
             };
             assert_eq!(readonly, mutable, "n = {n}: the two versions disagree about pairs");
         }
@@ -759,7 +784,8 @@ mod combination_tests {
         let mut w = world_with(3);
         {
             let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
-            for ((_, mut a), (_, mut b)) in q.iter_combinations_mut() {
+            let mut pairs = q.iter_combinations_mut();
+            while let Some([mut a, mut b]) = pairs.fetch_next() {
                 // Each pair doubles both halves. Entity 0 is in pairs (0,1) and (0,2), so if the
                 // second sees the first's write it ends at 0 * 4; a stale copy would give 0 * 2.
                 let (va, vb) = (a.0, b.0);
@@ -768,7 +794,7 @@ mod combination_tests {
             }
         }
         let q = w.query::<&Tag>().expect("registered");
-        let mut values: Vec<u32> = q.iter().map(|(_, t)| t.0).collect();
+        let mut values: Vec<u32> = q.iter().map(|t| t.0).collect();
         values.sort_unstable();
         // 1 is in pairs (0,1) and (1,2) → ×4; 2 is in (0,2) and (1,2) → ×4.
         assert_eq!(values, vec![0, 4, 8], "a write was not visible to the following pair");
@@ -779,7 +805,7 @@ mod combination_tests {
     fn the_size_hint_bounds_the_real_count() {
         let w = world_with(6);
         let q = w.query::<&Tag>().expect("registered");
-        let it = q.iter_combinations();
+        let it = q.iter_combinations::<2>();
         let (_, upper) = it.size_hint();
         assert_eq!(upper, Some(15));
         assert_eq!(it.count(), 15);

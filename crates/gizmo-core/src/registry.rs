@@ -581,11 +581,11 @@ mod editable_tests {
 
         let add = reg.insert_default_fn("Health").expect("registered editable");
         add(&mut world, e);
-        assert_eq!(world.borrow::<Health>().get(e.id()).cloned(), Some(Health::default()));
+        assert_eq!(world.borrow::<Health>().get(e).cloned(), Some(Health::default()));
 
         let remove = reg.remove_fn("Health").expect("registered editable");
         remove(&mut world, e);
-        assert!(world.borrow::<Health>().get(e.id()).is_none());
+        assert!(world.borrow::<Health>().get(e).is_none());
     }
 
     #[test]

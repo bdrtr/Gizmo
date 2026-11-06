@@ -30,9 +30,8 @@ pub fn garbage_collection_system(
         // Soft-deleted entity'leri topla
         let mut to_despawn = Vec::new();
         {
-            let deleted = world.borrow::<gizmo::core::component::IsDeleted>();
-            for (id, _) in deleted.iter() {
-                to_despawn.push(id);
+            for (entity, _) in world.query::<(Entity, &gizmo::core::component::IsDeleted)>().unwrap().iter() {
+                to_despawn.push(entity.id());
             }
         }
 

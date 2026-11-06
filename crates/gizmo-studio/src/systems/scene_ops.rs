@@ -224,9 +224,9 @@ pub fn handle_scene_operations(
             let is_protected = {
                 let names = world.borrow::<gizmo::core::component::EntityName>();
                 let markers = world.borrow::<gizmo::core::component::EditorOnly>();
-                let name = names.get(ent_id.id()).map(|n| n.0.clone());
+                let name = names.get(ent_id).map(|n| n.0.clone());
                 gizmo::core::component::is_editor_only(
-                    markers.get(ent_id.id()).is_some(),
+                    markers.get(ent_id).is_some(),
                     name.as_deref(),
                 ) || name.as_deref() == Some("Directional Light")
             };
@@ -469,7 +469,7 @@ pub fn handle_scene_operations(
                 // Parent → Children listesine ekle
                 {
                     let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
-                    if let Some(mut ch) = children_comp.get_mut(parent_entity.id()) {
+                    if let Some(mut ch) = children_comp.get_mut(parent_entity) {
                         if !ch.0.contains(&e) {
                             ch.0.push(e);
                         }
@@ -487,7 +487,7 @@ pub fn handle_scene_operations(
                 // İsmi parent'a göre güncelle
                 let parent_name = world
                     .borrow::<gizmo::core::component::EntityName>()
-                    .get(parent_entity.id())
+                    .get(parent_entity)
                     .map(|n| n.0.clone())
                     .unwrap_or_default();
 
@@ -566,7 +566,7 @@ pub fn handle_scene_operations(
         if let Some(ent) = world.get_entity(ent_id.id()) {
             let currently_hidden = world
                 .borrow::<gizmo::core::component::IsHidden>()
-                .contains(ent_id.id());
+                .contains(ent_id);
             if currently_hidden {
                 world.remove_component::<gizmo::core::component::IsHidden>(ent);
                 editor_state.log_info(&format!("Entity {} görünür yapıldı.", ent_id));
@@ -616,7 +616,7 @@ pub fn handle_scene_operations(
     if let Some(child_id) = editor_state.unparent_request.take() {
         let old_parent_id = world
             .borrow::<gizmo::core::component::Parent>()
-            .get(child_id.id())
+            .get(child_id)
             .map(|c| c.0);
 
         if let (Some(old_pid), Some(child)) = (old_parent_id, world.get_entity(child_id.id())) {
@@ -633,9 +633,7 @@ pub fn handle_scene_operations(
 /// Saturates at `u8::MAX` rather than wrapping back onto slot 0 — a scene with 255 fighters is
 /// nonsense, and handing out slot 0 twice would be worse than handing out 255 twice.
 fn next_free_player_slot(world: &World) -> u8 {
-    let taken: Vec<u8> = world
-        .borrow::<gizmo::physics::components::fighter::FighterController>()
-        .iter()
+    let taken: Vec<u8> = world.query::<(Entity, &gizmo::physics::components::fighter::FighterController)>().unwrap().iter()
         .map(|(_, f)| f.player_id)
         .collect();
     let mut slot: u8 = 1;
@@ -929,7 +927,7 @@ mod tests {
 
         for member in [a, b] {
             assert_eq!(
-                world.borrow::<Parent>().get(member.id()).map(|p| p.0),
+                world.borrow::<Parent>().get(member).map(|p| p.0),
                 Some(group),
                 "every selected entity must end up under the group"
             );
@@ -965,7 +963,7 @@ mod tests {
 
         assert!(ed.pending_group_members.is_empty());
         assert!(ed.pending_child_parent.is_none());
-        assert!(world.borrow::<Parent>().get(a.id()).is_none());
+        assert!(world.borrow::<Parent>().get(a).is_none());
     }
 
     fn spawn(world: &mut World) -> gizmo::core::entity::Entity {
@@ -990,7 +988,7 @@ mod tests {
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
         assert_eq!(
-            world.borrow::<Parent>().get(child.id()).map(|p| p.0),
+            world.borrow::<Parent>().get(child).map(|p| p.0),
             Some(parent),
             "the child must point at its new parent"
         );
@@ -1014,7 +1012,7 @@ mod tests {
             "the old parent still lists a child it no longer has"
         );
         assert_eq!(children_of(&world, second.id()), vec![child.id()]);
-        assert_eq!(world.borrow::<Parent>().get(child.id()).map(|p| p.0), Some(second));
+        assert_eq!(world.borrow::<Parent>().get(child).map(|p| p.0), Some(second));
     }
 
     /// Dropping a node onto itself is refused. A `Children` cycle is not a cosmetic problem: it
@@ -1028,7 +1026,7 @@ mod tests {
 
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
-        assert!(world.borrow::<Parent>().get(e.id()).is_none(), "self-parenting must be refused");
+        assert!(world.borrow::<Parent>().get(e).is_none(), "self-parenting must be refused");
     }
 
     /// …and neither can it be dropped onto its own descendant, which is the same cycle one level
@@ -1048,7 +1046,7 @@ mod tests {
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
         assert!(
-            world.borrow::<Parent>().get(root.id()).is_none(),
+            world.borrow::<Parent>().get(root).is_none(),
             "the root was adopted by its own grandchild — that is a cycle"
         );
         assert_eq!(children_of(&world, leaf.id()), Vec::<u32>::new());
@@ -1066,7 +1064,7 @@ mod tests {
         ed.unparent_request = Some(child);
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
-        assert!(world.borrow::<Parent>().get(child.id()).is_none(), "the child is a root now");
+        assert!(world.borrow::<Parent>().get(child).is_none(), "the child is a root now");
         assert!(
             children_of(&world, parent.id()).is_empty(),
             "the old parent must not keep listing it"
@@ -1124,7 +1122,7 @@ mod tests {
 
         ed.add_component_request = Some((ent, "Health".to_string()));
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
-        assert_eq!(world.borrow::<Health>().get(ent.id()).cloned(), Some(Health::default()));
+        assert_eq!(world.borrow::<Health>().get(ent).cloned(), Some(Health::default()));
 
         let set = world
             .get_resource::<gizmo::core::ComponentRegistry>()
@@ -1135,11 +1133,11 @@ mod tests {
             .unwrap();
         ed.pending_json_updates.push((ent, set, serde_json::json!({ "hp": 3.5, "lives": 9 })));
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
-        assert_eq!(world.borrow::<Health>().get(ent.id()).map(|h| h.lives), Some(9));
+        assert_eq!(world.borrow::<Health>().get(ent).map(|h| h.lives), Some(9));
 
         ed.remove_component_request = Some((ent, "Health".to_string()));
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
-        assert!(world.borrow::<Health>().get(ent.id()).is_none(), "🗑 left the game component in place");
+        assert!(world.borrow::<Health>().get(ent).is_none(), "🗑 left the game component in place");
     }
 
     /// **Every light type the engine draws can be created in the editor.**
@@ -1167,12 +1165,12 @@ mod tests {
             handle_scene_operations(&mut world, &mut ed, &mut studio_state());
         }
 
-        assert!(world.borrow::<PointLight>().get(ent.id()).is_some());
+        assert!(world.borrow::<PointLight>().get(ent).is_some());
         let suns = world.borrow::<DirectionalLight>();
-        let sun = suns.get(ent.id()).expect("a sun can be added");
+        let sun = suns.get(ent).expect("a sun can be added");
         assert!(sun.intensity > 0.0, "a sun that lights nothing reads as broken, not as neutral");
         let spots = world.borrow::<SpotLight>();
-        let spot = spots.get(ent.id()).expect("a spot light can be added");
+        let spot = spots.get(ent).expect("a spot light can be added");
         assert!(
             spot.inner_angle <= spot.outer_angle,
             "an inner cone wider than its outer cone inverts the falloff and lights the outside \
@@ -1180,7 +1178,7 @@ mod tests {
         );
         assert!(spot.radius > 0.0 && spot.intensity > 0.0);
         let rects = world.borrow::<RectLight>();
-        let rect = rects.get(ent.id()).expect("a rectangle light can be added");
+        let rect = rects.get(ent).expect("a rectangle light can be added");
         assert!(rect.width > 0.0 && rect.height > 0.0 && rect.intensity > 0.0);
     }
 
@@ -1220,7 +1218,7 @@ mod tests {
             slots.push(
                 world
                     .borrow::<gizmo::physics::components::fighter::FighterController>()
-                    .get(ent.id())
+                    .get(ent)
                     .expect("the fighter was added")
                     .player_id,
             );
@@ -1229,11 +1227,9 @@ mod tests {
         assert_eq!(slots, vec![1, 2, 3], "each fighter takes the lowest free slot");
 
         // And a freed slot is reused rather than skipped: delete player 2, add another.
-        let p2 = world
-            .borrow::<gizmo::physics::components::fighter::FighterController>()
-            .iter()
+        let p2 = world.query::<(Entity, &gizmo::physics::components::fighter::FighterController)>().unwrap().iter()
             .find(|(_, f)| f.player_id == 2)
-            .map(|(id, _)| id)
+            .map(|(entity, _)| entity.id())
             .expect("player 2 is there");
         let p2 = world.get_entity(p2).expect("still alive");
         ed.remove_component_request = Some((p2, "FighterController".to_string()));
@@ -1245,7 +1241,7 @@ mod tests {
         assert_eq!(
             world
                 .borrow::<gizmo::physics::components::fighter::FighterController>()
-                .get(ent.id())
+                .get(ent)
                 .expect("added")
                 .player_id,
             2,

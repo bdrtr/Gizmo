@@ -344,7 +344,7 @@ fn ccd_r9_spinning_thin_body_generates_contacts() {
 
     let omega = w
         .borrow::<Velocity>()
-        .get(rod.id())
+        .get(rod)
         .expect("rod keeps its Velocity")
         .angular
         .z;

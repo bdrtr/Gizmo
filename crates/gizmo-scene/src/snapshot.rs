@@ -662,7 +662,7 @@ mod tests {
         let alive_names: Vec<_> = world
             .iter_alive_entities()
             .into_iter()
-            .filter_map(|e| names.get(e.id()).map(|n| n.0.clone()))
+            .filter_map(|e| names.get(e).map(|n| n.0.clone()))
             .collect();
         assert!(alive_names.contains(&"Original".to_string()));
         assert!(!alive_names.contains(&"Bullet".to_string()), "bullet must be gone after Stop");
@@ -747,7 +747,7 @@ mod tests {
             world
                 .iter_alive_entities()
                 .into_iter()
-                .any(|e| names.get(e.id()).map(|n| n.0.as_str()) == Some("SpawnMarker")),
+                .any(|e| names.get(e).map(|n| n.0.as_str()) == Some("SpawnMarker")),
             "name-only entity must be recreated on restore"
         );
     }
@@ -808,8 +808,8 @@ mod tests {
             .iter_alive_entities()
             .into_iter()
             .filter_map(|e| {
-                let name = names.get(e.id())?.0.clone();
-                let x = transforms.get(e.id())?.position.x;
+                let name = names.get(e)?.0.clone();
+                let x = transforms.get(e)?.position.x;
                 Some((name, x))
             })
             .collect();

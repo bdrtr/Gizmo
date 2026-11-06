@@ -260,7 +260,7 @@ struct Actor;
 gizmo::core::impl_component!(Actor);
 
 fn restart(world: &mut World, game: &mut Game) {
-    let actors: Vec<u32> = world.borrow::<Actor>().iter().map(|(id, _)| id).collect();
+    let actors: Vec<u32> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
     for id in actors {
         if let Some(e) = world.get_entity(id) {
             use gizmo::core::hierarchy::HierarchyExt;
@@ -352,7 +352,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
 /// Bir muhafız hedefine varınca rotasının bir sonraki noktasına yönelir.
 fn patrol(world: &mut World, game: &Game) {
-    let guards: Vec<u32> = world.borrow::<Guard>().iter().map(|(id, _)| id).collect();
+    let guards: Vec<u32> = world.query::<(Entity, &Guard)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
     for id in guards {
         let done = world.borrow::<NavAgent>().get(id).is_some_and(|a| a.target.is_none());
         if !done {
@@ -377,15 +377,14 @@ fn patrol(world: &mut World, game: &Game) {
 fn sight(world: &mut World, game: &mut Game, dt: f32) {
     let player = world.borrow::<Transform>().get(game.player).map(|t| t.position).unwrap_or(game.start);
     let guards: Vec<(u32, Vec3, Vec3, u32)> = {
-        let gs = world.borrow::<Guard>();
         let ts = world.borrow::<Transform>();
         let vs = world.borrow::<Velocity>();
-        gs.iter()
-            .filter_map(|(id, g)| {
-                let at = ts.get(id)?.position;
-                let v = vs.get(id).map(|v| v.linear).unwrap_or(Vec3::Z);
+        world.query::<(Entity, &Guard)>().unwrap().iter()
+            .filter_map(|(entity, g)| {
+                let at = ts.get(entity)?.position;
+                let v = vs.get(entity).map(|v| v.linear).unwrap_or(Vec3::Z);
                 let facing = Vec3::new(v.x, 0.0, v.z).try_normalize().unwrap_or(Vec3::Z);
-                Some((id, at, facing, g.cone))
+                Some((entity.id(), at, facing, g.cone))
             })
             .collect()
     };
@@ -440,7 +439,7 @@ fn pickups(world: &mut World, game: &mut Game) {
     let flat = |a: Vec3, b: Vec3| Vec2::new(a.x - b.x, a.z - b.z).length();
     if !game.has_document && flat(p, game.document) < 0.6 {
         game.has_document = true;
-        let doc: Vec<u32> = world.borrow::<Document>().iter().map(|(id, _)| id).collect();
+        let doc: Vec<u32> = world.query::<(Entity, &Document)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
         for id in doc {
             if let Some(e) = world.get_entity(id) {
                 world.despawn(e);

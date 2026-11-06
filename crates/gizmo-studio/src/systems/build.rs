@@ -293,13 +293,13 @@ fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<Miss
 
     {
         let meshes = world.borrow::<gizmo::core::component::MeshSource>();
-        for (_, m) in meshes.iter() {
+        for m in meshes.iter() {
             refs.push(("Mesh".into(), m.0.clone(), RefKind::Mesh));
         }
     }
     {
         let mats = world.borrow::<gizmo::core::component::MaterialSource>();
-        for (_, m) in mats.iter() {
+        for m in mats.iter() {
             if let Some(t) = &m.texture_source {
                 refs.push(("Materyal dokusu".into(), t.clone(), RefKind::Texture));
             }
@@ -307,7 +307,7 @@ fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<Miss
     }
     {
         let descs = world.borrow::<gizmo::renderer::components::MaterialDesc>();
-        for (_, d) in descs.iter() {
+        for d in descs.iter() {
             if let Some(t) = &d.texture_source {
                 refs.push(("Materyal dokusu".into(), t.clone(), RefKind::Texture));
             }
@@ -315,13 +315,13 @@ fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<Miss
     }
     {
         let terrains = world.borrow::<gizmo::renderer::components::Terrain>();
-        for (_, t) in terrains.iter() {
+        for t in terrains.iter() {
             refs.push(("Arazi heightmap".into(), t.heightmap_path.clone(), RefKind::Path));
         }
     }
     {
         let emitters = world.borrow::<gizmo::renderer::components::ParticleEmitter>();
-        for (_, e) in emitters.iter() {
+        for e in emitters.iter() {
             if let Some(t) = &e.texture_source {
                 refs.push(("Partikül dokusu".into(), t.clone(), RefKind::Texture));
             }
@@ -329,13 +329,13 @@ fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<Miss
     }
     {
         let scripts = world.borrow::<gizmo::scripting::Script>();
-        for (_, s) in scripts.iter() {
+        for s in scripts.iter() {
             refs.push(("Script".into(), s.file_path.clone(), RefKind::Path));
         }
     }
     {
         let sounds = world.borrow::<gizmo::prelude::AudioSource>();
-        for (_, s) in sounds.iter() {
+        for s in sounds.iter() {
             refs.push(("Ses".into(), s.sound_name.clone(), RefKind::Sound));
         }
     }
@@ -1162,7 +1162,7 @@ mod export_copy_tests {
 
         let names = loaded.borrow::<EntityName>();
         assert!(
-            names.iter().any(|(_, n)| n.0 == "Sahnedeki Kutu"),
+            names.iter().any(|n| n.0 == "Sahnedeki Kutu"),
             "the world the editor was showing is not what got staged"
         );
     }

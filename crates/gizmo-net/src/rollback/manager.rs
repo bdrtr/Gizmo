@@ -284,7 +284,7 @@ mod tests {
         // Frame 1: Objeyi hareket ettir (Simülasyon adımı)
         {
             let mut transforms = world.borrow_mut::<Transform>();
-            if let Some(mut trans) = transforms.get_mut(ent.id()) {
+            if let Some(mut trans) = transforms.get_mut(ent) {
                 trans.position.x += 1.0; // pozisyon 11.0 oldu
             }
         }
@@ -307,7 +307,7 @@ mod tests {
         // Tick 0'da pozisyon 10.0'dı.
         {
             let transforms = world.borrow::<Transform>();
-            let trans = transforms.get(ent.id()).unwrap();
+            let trans = transforms.get(ent).unwrap();
             assert_eq!(trans.position.x, 10.0);
         }
 

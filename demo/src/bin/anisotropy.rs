@@ -163,7 +163,7 @@ fn main() {
             // fırçalı, gerisi izotropik.
             {
                 let mut materials = world.borrow_mut::<Material>();
-                for (_id, mut mat) in materials.iter_mut() {
+                for mut mat in materials.iter_mut() {
                     if mat.albedo.x > 0.9 && mat.albedo.y < 0.7 {
                         mat.anisotropy = 0.9; // Torus (anizotropik bakır)
                     } else if mat.albedo.x > 0.9 && mat.albedo.y > 0.7 && mat.albedo.y < 0.85 {
@@ -756,7 +756,7 @@ fn camera_orbit(
 
     // Pozlamayı kameraya taşı: çizim yolunun okuduğu alan bu.
     let exposure = state.exposure;
-    for (_entity, (_transform, mut camera)) in q_cam.iter_mut() {
+    for (_transform, mut camera) in q_cam.iter_mut() {
         camera.exposure = exposure;
     }
 
@@ -826,7 +826,7 @@ fn camera_orbit(
     let pitch_rot = Quat::from_rotation_x(camera_settings.pitch);
     let rot = yaw_rot * pitch_rot;
 
-    for (_id, (mut trans, mut cam)) in q_cam.iter_mut() {
+    for (mut trans, mut cam) in q_cam.iter_mut() {
         trans.position = camera_settings.pos;
         trans.rotation = rot;
         cam.yaw = camera_settings.yaw;

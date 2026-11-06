@@ -152,19 +152,19 @@ fn main() {
             //    ve motor buna karşı çıkmıyor. Sözleşme yok.
             if let Some(mut q) = scene.world.query_mut::<gizmo::core::query::Mut<Frozen>>() {
                 report.frozen_mutable = true;
-                for (_id, mut frozen) in q.iter_mut() {
+                for mut frozen in q.iter_mut() {
                     frozen.0 = -1.0; // hiçbir kanca, hiçbir kapı
                 }
             }
             report.frozen_value = scene
                 .world
                 .query::<&Frozen>()
-                .and_then(|q| q.iter().next().map(|(_, f)| f.0))
+                .and_then(|q| q.iter().next().map(|f| f.0))
                 .unwrap_or(0.0);
 
             // 2b. `dynamic`'in erişim yarısı: ham işaretçi var, ama `TypeId` istiyor — yani
             //     zaten var olan bir tür gerekiyor.
-            let first = scene.world.query::<&SlotA>().and_then(|q| q.iter().next().map(|(id, _)| id));
+            let first = scene.world.query::<(Entity, &SlotA)>().and_then(|q| q.iter().next().map(|(entity, _)| entity.id()));
             report.raw_read = first
                 .and_then(|id| scene.world.entity(id))
                 .and_then(|entity| {

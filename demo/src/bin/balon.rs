@@ -78,7 +78,7 @@ fn main() {
             ));
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 20.0), Vec3::ZERO);
             if let Some(mut q) = scene.world.query_mut::<Mut<Camera>>() {
-                for (_, mut cam) in q.iter_mut() {
+                for mut cam in q.iter_mut() {
                     cam.projection = ProjectionMode::OrthographicFit { width: VIEW_W, height: VIEW_H };
                 }
             }
@@ -170,37 +170,34 @@ fn spawn_balloons(world: &mut World, game: &mut Game, dt: f32) {
 
 fn rise(world: &mut World, game: &mut Game, dt: f32) {
     let mut escaped = Vec::new();
-    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Balloon>)>() {
-        for (id, (mut t, mut b)) in q.iter_mut() {
+    if let Some(mut q) = world.query_mut::<(Entity, Mut<Transform>, Mut<Balloon>)>() {
+        for (entity, mut t, mut b) in q.iter_mut() {
             b.phase += dt * 2.0;
             t.position.y += b.speed * dt;
             t.position.x += b.phase.sin() * b.sway * dt;
             if t.position.y > VIEW_H * 0.5 + RADIUS {
-                escaped.push(id);
+                escaped.push(entity);
             }
         }
     }
     for id in escaped {
-        world.despawn_by_id(id);
+        world.despawn_by_id(id.id());
         game.lives = game.lives.saturating_sub(1);
         play(world, "kac");
     }
 }
 
 fn first_balloon(world: &World) -> Option<Vec3> {
-    let balloons = world.borrow::<Balloon>();
     let tfs = world.borrow::<Transform>();
-    balloons.iter().find_map(|(id, _)| tfs.get(id).map(|t| t.position).filter(|p| p.y > -VIEW_H * 0.1))
+    world.query::<(Entity, &Balloon)>().unwrap().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position).filter(|p| p.y > -VIEW_H * 0.1))
 }
 
 /// İmlecin altındaki balon patlar: büyüyüp sönüyor, parçaları saçılıyor.
 fn pop_at(world: &mut World, game: &mut Game, p: Vec3) {
     let hit = {
-        let balloons = world.borrow::<Balloon>();
         let tfs = world.borrow::<Transform>();
-        balloons
-            .iter()
-            .filter_map(|(id, _)| tfs.get(id).map(|t| (id, t.position)))
+        world.query::<(Entity, &Balloon)>().unwrap().iter()
+            .filter_map(|(entity, _)| tfs.get(entity).map(|t| (entity.id(), t.position)))
             .filter(|(_, at)| Vec2::new(at.x - p.x, at.y - p.y).length() < RADIUS)
             .map(|(id, _)| id)
             .next()
@@ -229,9 +226,8 @@ fn pop_at(world: &mut World, game: &mut Game, p: Vec3) {
 /// Solması biten patlamış balonları siler.
 fn clear_pops(world: &mut World) {
     let done: Vec<u32> = {
-        let pops = world.borrow::<Popping>();
         let fades = world.borrow::<ColorTween>();
-        pops.iter().filter(|(id, _)| fades.get(*id).is_some_and(|f| f.is_finished())).map(|(id, _)| id).collect()
+        world.query::<(Entity, &Popping)>().unwrap().iter().filter(|(entity, _)| fades.get(*entity).is_some_and(|f| f.is_finished())).map(|(entity, _)| entity.id()).collect()
     };
     for id in done {
         world.despawn_by_id(id);

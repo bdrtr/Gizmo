@@ -203,11 +203,11 @@ fn move_and_bounce(mut cubes: Query<(Mut<Transform>, Mut<Velocity>)>, mut bench:
 
     if parallel {
         // Kilitsiz: satırlar ayrık olduğu için her iş parçacığı kendi küpüne dokunuyor.
-        cubes.par_for_each_mut(|(_entity, (mut transform, mut velocity))| {
+        cubes.par_for_each_mut(|(mut transform, mut velocity)| {
             step(&mut transform, &mut velocity);
         });
     } else {
-        for (_entity, (mut transform, mut velocity)) in cubes.iter_mut() {
+        for (mut transform, mut velocity) in cubes.iter_mut() {
             step(&mut transform, &mut velocity);
         }
     }
@@ -290,10 +290,10 @@ fn apply_resize(world: &mut World, direction: i32) {
         }
     } else {
         // Sorgu dünyayı ödünç alıyor; silmeden önce listeyi toplayıp bırakmak gerek.
-        let doomed: Vec<u32> = match world.query::<&Velocity>() {
+        let doomed: Vec<u32> = match world.query::<(Entity, &Velocity)>() {
             Some(query) => query
                 .iter()
-                .map(|(entity, _)| entity)
+                .map(|(entity, _)| entity.id())
                 .take(current - target)
                 .collect(),
             None => Vec::new(),

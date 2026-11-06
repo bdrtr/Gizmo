@@ -219,7 +219,7 @@ fn movement(
     }
 
     let step = Vec3::new(x, y, 0.0) * MOVE_SPEED * time.dt();
-    for (_entity, (mut transform, _)) in movables.iter_mut() {
+    for (mut transform, _) in movables.iter_mut() {
         transform.position += step;
     }
 }
@@ -232,7 +232,7 @@ fn toggle_ambient_light(mut materials: Query<Mut<Material>>, input: Res<Input>) 
     if !input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Space as u32) {
         return;
     }
-    for (_entity, mut material) in materials.iter_mut() {
+    for mut material in materials.iter_mut() {
         material.ambient = if material.ambient == Vec3::ZERO {
             AMBIENT_ON
         } else {

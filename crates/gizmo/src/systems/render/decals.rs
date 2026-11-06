@@ -20,6 +20,7 @@
 //! lowest crate that can see both, and being `pub` is the point: the studio calls it rather than
 //! keeping a second copy, so the two paths cannot drift apart about where a decal sits.
 
+use gizmo_core::Entity;
 use crate::core::World;
 use crate::renderer::decal::DecalUniforms;
 use crate::renderer::Renderer;
@@ -42,13 +43,12 @@ pub fn collect_decals(
     world: &World,
     cam_pos: Vec3,
 ) -> (Vec<DecalUniforms>, Vec<Arc<wgpu::BindGroup>>) {
-    let decals = world.borrow::<crate::renderer::components::Decal>();
     let transforms = world.borrow::<gizmo_physics_core::Transform>();
 
     let mut uniforms = Vec::new();
     let mut bind_groups = Vec::new();
-    for (id, decal) in decals.iter() {
-        let Some(trans) = transforms.get(id) else {
+    for (entity, decal) in world.query::<(Entity, &crate::renderer::components::Decal)>().unwrap().iter() {
+        let Some(trans) = transforms.get(entity) else {
             continue;
         };
         let model = trans.local_matrix;

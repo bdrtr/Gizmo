@@ -305,9 +305,8 @@ fn knocked(tf: &Transform) -> bool {
 }
 
 fn count_knocked(world: &World) -> u32 {
-    let pins = world.borrow::<Pin>();
     let tfs = world.borrow::<Transform>();
-    pins.iter().filter(|(id, _)| tfs.get(*id).is_some_and(knocked)).count() as u32
+    world.query::<(Entity, &Pin)>().unwrap().iter().filter(|(entity, _)| tfs.get(*entity).is_some_and(knocked)).count() as u32
 }
 
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
@@ -346,9 +345,8 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
         Phase2::Rolling(t) => {
             let ball_z = {
-                let balls = world.borrow::<Ball>();
                 let tfs = world.borrow::<Transform>();
-                balls.iter().find_map(|(id, _)| tfs.get(id).map(|t| t.position.z))
+                world.query::<(Entity, &Ball)>().unwrap().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position.z))
             };
             let gone = ball_z.is_none_or(|z| z < PIN_Z - 2.0);
             game.phase = if gone || t > 7.0 { Phase2::Settling(0.0) } else { Phase2::Rolling(t + dt) };
@@ -366,11 +364,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     game.physics.advance(world, dt);
     sync_transforms(world);
     if std::env::var_os("LOBUT_LOG").is_some() {
-        let pins = world.borrow::<Pin>();
-        let balls = world.borrow::<Ball>();
         let tfs = world.borrow::<Transform>();
-        let p: Vec<String> = pins.iter().take(3).filter_map(|(id, _)| tfs.get(id)).map(|t| format!("({:.2},{:.2},{:.2} up{:.2})", t.position.x, t.position.y, t.position.z, (t.rotation * Vec3::Y).y)).collect();
-        let b: Vec<String> = balls.iter().filter_map(|(id, _)| tfs.get(id)).map(|t| format!("({:.2},{:.2},{:.2})", t.position.x, t.position.y, t.position.z)).collect();
+        let p: Vec<String> = world.query::<(Entity, &Pin)>().unwrap().iter().take(3).filter_map(|(entity, _)| tfs.get(entity)).map(|t| format!("({:.2},{:.2},{:.2} up{:.2})", t.position.x, t.position.y, t.position.z, (t.rotation * Vec3::Y).y)).collect();
+        let b: Vec<String> = world.query::<(Entity, &Ball)>().unwrap().iter().filter_map(|(entity, _)| tfs.get(entity)).map(|t| format!("({:.2},{:.2},{:.2})", t.position.x, t.position.y, t.position.z)).collect();
         eprintln!("LOG {:?} pins {} ball {}", game.phase, p.join(" "), b.join(" "));
     }
     follow_ball(world, &game);
@@ -386,9 +382,8 @@ fn finish_roll(world: &mut World, game: &mut Game) {
         game.roll = 2;
         // Devrilenleri kaldır; ayaktakiler yerinde kalır.
         let fallen: Vec<u32> = {
-            let pins = world.borrow::<Pin>();
             let tfs = world.borrow::<Transform>();
-            pins.iter().filter(|(id, _)| tfs.get(*id).is_some_and(knocked)).map(|(id, _)| id).collect()
+            world.query::<(Entity, &Pin)>().unwrap().iter().filter(|(entity, _)| tfs.get(*entity).is_some_and(knocked)).map(|(entity, _)| entity.id()).collect()
         };
         for id in fallen {
             world.despawn_by_id(id);
@@ -417,16 +412,15 @@ fn finish_roll(world: &mut World, game: &mut Game) {
 /// Kamera topun arkasından gelir, lobutlara yaklaşınca durur.
 fn follow_ball(world: &mut World, game: &Game) {
     let ball = {
-        let balls = world.borrow::<Ball>();
         let tfs = world.borrow::<Transform>();
-        balls.iter().find_map(|(id, _)| tfs.get(id).map(|t| t.position))
+        world.query::<(Entity, &Ball)>().unwrap().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position))
     };
     let target_z = match (game.phase, ball) {
         (Phase2::Rolling(_), Some(p)) => (p.z + 3.2).max(PIN_Z + 4.5),
         (Phase2::Settling(_), _) => PIN_Z + 4.5,
         _ => BALL_Z + 3.2,
     };
-    let cams: Vec<u32> = world.borrow::<Camera>().iter().map(|(id, _)| id).collect();
+    let cams: Vec<u32> = world.query::<(Entity, &Camera)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
     let mut tfs = world.borrow_mut::<Transform>();
     for id in cams {
         if let Some(mut t) = tfs.get_mut(id) {

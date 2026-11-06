@@ -160,7 +160,7 @@ fn main() {
 /// saydamlaştırırdı.
 fn fade_transparency(mut materials: Query<(Mut<Material>, Mut<Fading>)>, time: Res<Time>) {
     let alpha = (time.elapsed() as f32).sin() / 2.0 + 0.5;
-    for (_entity, (mut material, _)) in materials.iter_mut() {
+    for (mut material, _) in materials.iter_mut() {
         material.albedo.w = alpha;
     }
 }

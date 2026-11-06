@@ -109,12 +109,12 @@ pub fn handle_editor_shortcuts(
             let deleted = world.borrow::<gizmo::core::component::IsDeleted>();
             for e in world.iter_alive_entities() {
                 // Editor entity'lerini ve gizli/silinmiş olanları atla
-                if hidden.contains(e.id()) || deleted.contains(e.id()) {
+                if hidden.contains(e) || deleted.contains(e) {
                     continue;
                 }
                 if gizmo::core::component::is_editor_only(
-                    markers.get(e.id()).is_some(),
-                    names.get(e.id()).map(|n| n.0.as_str()),
+                    markers.get(e).is_some(),
+                    names.get(e).map(|n| n.0.as_str()),
                 ) {
                     continue;
                 }
@@ -134,12 +134,10 @@ pub fn handle_editor_shortcuts(
         // Alt+H → Tüm gizli objeleri göster
         if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyH as u32) {
             let hidden_ids: Vec<u32> = {
-                let hidden = world.borrow::<gizmo::core::component::IsHidden>();
                 let deleted = world.borrow::<gizmo::core::component::IsDeleted>();
                 let names = world.borrow::<gizmo::core::component::EntityName>();
                 let markers = world.borrow::<gizmo::core::component::EditorOnly>();
-                hidden
-                    .iter()
+                world.query::<(Entity, &gizmo::core::component::IsHidden)>().unwrap().iter()
                     .filter(|(id, _)| {
                         // Editor entity'lerini gösterme, sadece kullanıcı entity'leri
                         if deleted.contains(*id) {
@@ -153,7 +151,7 @@ pub fn handle_editor_shortcuts(
                         }
                         true
                     })
-                    .map(|(id, _)| id)
+                    .map(|(entity, _)| entity.id())
                     .collect()
             };
 
@@ -266,7 +264,7 @@ fn focus_on_selection(
     let mut center_pos = gizmo::math::Vec3::ZERO;
     let mut count = 0.0;
     for &target_id in editor_state.selection.entities.iter() {
-        if let Some(target) = transforms.get(target_id.id()) {
+        if let Some(target) = transforms.get(target_id) {
             center_pos += target.position;
             count += 1.0;
         }

@@ -101,7 +101,7 @@ fn main() {
             if let Some(clones) = world.clone_entity(template.id(), 100_000 - 1) {
                 let mut handles = world.borrow_mut::<FluidHandle>();
                 for (i, clone_ent) in clones.into_iter().enumerate() {
-                    if let Some(mut h) = handles.get_mut(clone_ent.id()) {
+                    if let Some(mut h) = handles.get_mut(clone_ent) {
                         h.gpu_index = (i + 1) as u32;
                     }
                 }
@@ -272,7 +272,7 @@ fn fluid_only_render_pass(
     let cameras = world.borrow::<Camera>();
     let transforms = world.borrow::<Transform>();
     {
-        if let Some((active_cam, _)) = cameras.iter().next() {
+        if let Some((active_cam, _)) = world.query::<(Entity, &Camera)>().unwrap().iter().next() {
             if let (Some(cam), Some(trans)) = (cameras.get(active_cam), transforms.get(active_cam))
             {
                 proj = cam.get_projection(aspect);
@@ -351,9 +351,8 @@ fn fluid_only_render_pass(
         let mut colliders = Vec::new();
         {
             let transforms = world.borrow::<Transform>();
-            let interactors = world.borrow::<gizmo::renderer::components::FluidInteractor>();
 
-            for (ent, interactor) in interactors.iter() {
+            for (ent, interactor) in world.query::<(Entity, &gizmo::renderer::components::FluidInteractor)>().unwrap().iter() {
                 if let Some(trans) = transforms.get(ent) {
                     colliders.push(gizmo::renderer::gpu_fluid::FluidCollider {
                         position: [trans.position.x, trans.position.y, trans.position.z],

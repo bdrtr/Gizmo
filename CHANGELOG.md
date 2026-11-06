@@ -48,7 +48,46 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+
+- **`Query` has the shape of Bevy's.** `iter()` and `iter_mut()` yield the row's item and nothing else;
+  whoever wants the entity asks for it in the query. All 625 call sites, 36 games and every demo moved in
+  the same change, with no compatibility path.
+
+  ```rust
+  // before
+  for (id, (mut t, v)) in q.iter_mut() { /* id: u32 */ }
+  let q = world.query::<&Enemy>().unwrap();
+  for (id, e) in q.iter() { /* ... */ }
+
+  // after
+  for (entity, mut t, v) in q.iter_mut() { /* with Query<(Entity, Mut<T>, &V)>, entity: Entity */ }
+  let q = world.query::<(Entity, &Enemy)>().unwrap();
+  for (entity, e) in q.iter() { /* ... */ }
+  ```
+
+  | Before | Now |
+  |---|---|
+  | `q.iter()` → `(u32, Item)` | `q.iter()` → `Item` |
+  | `q.single()` → `Result<(u32, Item), _>` | `q.single()` → `Result<Item, _>` |
+  | `par_for_each(\|(id, item)\| ..)` | `par_for_each(\|item\| ..)` |
+  | `iter_chunks()` → `(&[Entity], Slice)` | `iter_chunks()` → `Slice`; put `Entity` in the query for the handles |
+  | `iter_combinations()` → `((u32, Item), (u32, Item))` | `iter_combinations::<K>()` → `[Item; K]`; `for [a, b] in q.iter_combinations()` |
+  | `for (a, b) in q.iter_combinations_mut()` | `while let Some([a, b]) = c.fetch_next()` |
+  | `q.entities()` | `(Entity, ...)` in the query; `q.is_empty()` to ask whether there is anything |
+  | `q.get_entity(e)`, `q.get_mut_entity(e)` | `q.get(e)`, `q.get_mut(e)` |
+
+  `get` still accepts a raw `u32` beside an `Entity`, because callers still hold raw ids from
+  `Vec<u32>`, `HitEvent` and the Lua API; those are the next piece of work, not this one. `iter_combinations`
+  now takes any `K`, not only pairs. `collect_hidden` lost its `hidden` parameter: it asks the world.
+
 ### Fixed
+
+- **`iter_combinations_mut` could give two live `&mut` to one row, in safe code.** It was an `Iterator`, whose
+  items outlive the call that made them, and row 0 is in the pairs `(0, 1)` and `(0, 2)` alike:
+  `.collect::<Vec<_>>()` held both. `fetch_next` ties each combination to a borrow, so the previous one is
+  gone before the next exists, and a `compile_fail` doctest holds that. It also removed the raw pointer and
+  the `unsafe` block the old form needed.
 
 - **Fluid was drawn over the whole frame, and through what stood in front of it.** `fluid_composite.wgsl`
   read the depth from the normal's channel, so no background pixel counted as empty, and it wrote no depth

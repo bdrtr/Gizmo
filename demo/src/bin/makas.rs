@@ -231,7 +231,7 @@ fn main() {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let old: Vec<u32> = world.borrow::<Curtain>().iter().map(|(id, _)| id).chain(game.markers.drain(..)).collect();
+    let old: Vec<u32> = world.query::<(Entity, &Curtain)>().unwrap().iter().map(|(entity, _)| entity.id()).chain(game.markers.drain(..)).collect();
     for id in old {
         if let Some(e) = world.get_entity(id) {
             world.despawn(e);

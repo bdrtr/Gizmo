@@ -67,7 +67,7 @@ pub fn bench_fragmented_iteration(c: &mut Criterion) {
 
     c.bench_function("fragmented_iteration", |b| {
         b.iter(|| {
-            for (_id, mut data) in query.iter_mut() {
+            for mut data in query.iter_mut() {
                 data.0 *= 2.0;
             }
         });
@@ -136,7 +136,7 @@ pub fn bench_fragmented_wide_iteration(c: &mut Criterion) {
 
     c.bench_function("fragmented_wide_iteration", |b| {
         b.iter(|| {
-            for (_id, (mut d0, mut d1, mut d2, mut d3, mut d4, mut d5, mut d6, mut d7, mut d8, mut d9, mut d10)) in query.iter_mut() {
+            for (mut d0, mut d1, mut d2, mut d3, mut d4, mut d5, mut d6, mut d7, mut d8, mut d9, mut d10) in query.iter_mut() {
                 d0.0 *= 2.0;
                 d1.0 *= 2.0;
                 d2.0 *= 2.0;

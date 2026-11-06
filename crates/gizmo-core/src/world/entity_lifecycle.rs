@@ -41,10 +41,10 @@ impl World {
     /// let player = world.spawn_bundle((EntityName("Player".to_string()), Health(100)));
     ///
     /// assert_eq!(
-    ///     world.query::<&EntityName>().unwrap().get(player.id()).unwrap().0.as_str(),
+    ///     world.query::<&EntityName>().unwrap().get(player).unwrap().0.as_str(),
     ///     "Player"
     /// );
-    /// assert_eq!(world.query::<&Health>().unwrap().get(player.id()).unwrap().0, 100);
+    /// assert_eq!(world.query::<&Health>().unwrap().get(player).unwrap().0, 100);
     /// ```
     pub fn spawn_bundle<B: crate::component::Bundle>(&mut self, bundle: B) -> Entity {
         let entity = self.spawn();
@@ -578,7 +578,7 @@ impl World {
         let parent = self.query::<&Parent>().and_then(|q| q.get(id).map(|p| p.0));
         if let Some(parent) = parent.filter(|p| *p != e) {
             if let Some(mut q) = self.query_mut::<crate::query::Mut<Children>>() {
-                if let Some(mut children) = q.get_mut(parent.id()) {
+                if let Some(mut children) = q.get_mut(parent) {
                     children.0.retain(|&c| c != e);
                 }
             }
@@ -586,7 +586,7 @@ impl World {
         let children: Vec<Entity> =
             self.query::<&Children>().and_then(|q| q.get(id).map(|c| c.0.clone())).unwrap_or_default();
         for child in children {
-            let points_here = self.query::<&Parent>().and_then(|q| q.get(child.id()).map(|p| p.0 == e)).unwrap_or(false);
+            let points_here = self.query::<&Parent>().and_then(|q| q.get(child).map(|p| p.0 == e)).unwrap_or(false);
             if points_here && child != e && self.is_alive(child) {
                 self.remove_component::<Parent>(child);
             }
@@ -925,8 +925,8 @@ impl World {
     /// ```
     pub fn despawn_all_with<C: crate::component::Component>(&mut self) -> usize {
         // Önce id'leri topla (query &self ödünç alır), sonra despawn et (&mut self).
-        let ids: Vec<u32> = match self.query::<&C>() {
-            Some(q) => q.iter().map(|(id, _)| id).collect(),
+        let ids: Vec<u32> = match self.query::<(Entity, &C)>() {
+            Some(q) => q.iter().map(|(entity, _)| entity.id()).collect(),
             None => Vec::new(),
         };
         let n = ids.len();

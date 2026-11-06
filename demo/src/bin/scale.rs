@@ -96,7 +96,7 @@ fn main() {
 /// `floor`/`ceil` numarası: sınır aşıldığında ölçek tam sayıya
 /// oturtulur, böylece aynı koşul bir sonraki frame'de yeniden tetiklenmez.
 fn change_scale_direction(mut cubes: Query<(Mut<Transform>, Mut<Scaling>)>) {
-    for (_entity, (mut transform, mut cube)) in cubes.iter_mut() {
+    for (mut transform, mut cube) in cubes.iter_mut() {
         // Gizmo'nun küpü 2 birim olduğu için sınırlar *birim* ölçeğinde okunur.
         let size = transform.scale / UNIT;
 
@@ -119,7 +119,7 @@ fn change_scale_direction(mut cubes: Query<(Mut<Transform>, Mut<Scaling>)>) {
 /// Ölçeği o anki yönde büyütür.
 fn scale_cube(mut cubes: Query<(Mut<Transform>, Mut<Scaling>)>, time: Res<Time>) {
     let dt = time.dt();
-    for (_entity, (mut transform, cube)) in cubes.iter_mut() {
+    for (mut transform, cube) in cubes.iter_mut() {
         transform.scale += cube.scale_direction * cube.scale_speed * dt * UNIT;
     }
 }

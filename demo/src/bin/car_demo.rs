@@ -901,11 +901,10 @@ fn derive_wheel(
 ) -> Option<(Vec3, f32)> {
     // 1. İsimle tekerlek entity'sini bul.
     let wheel_id = {
-        let names = world.borrow::<gizmo::core::EntityName>();
         let mut found = None;
-        for (id, n) in names.iter() {
+        for (entity, n) in world.query::<(Entity, &gizmo::core::EntityName)>().unwrap().iter() {
             if n.0 == name {
-                found = Some(id);
+                found = Some(entity.id());
                 break;
             }
         }
@@ -968,7 +967,7 @@ fn wheel_mesh_radius(world: &World, wheel_id: u32, scale_y: f32) -> f32 {
         .map(|c| c.0.clone());
     if let Some(kids) = kids {
         for k in kids {
-            if let Some(m) = meshes.get(k.id()) {
+            if let Some(m) = meshes.get(k) {
                 return from(m);
             }
         }
@@ -1141,7 +1140,7 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
     // aşağıdaki `calculate_box_inertia` ile aynı ölçüler), böylece görsel ve fizik uyuşur.
     {
         let mut transforms = world.borrow_mut::<Transform>();
-        if let Some(mut t) = transforms.get_mut(chassis_entity.id()) {
+        if let Some(mut t) = transforms.get_mut(chassis_entity) {
             t.scale = if has_gltf_chassis {
                 Vec3::splat(2.0) // 5.0 çok büyük gelmişti
             } else {
@@ -1162,12 +1161,12 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
     if has_gltf_chassis {
         let kids = world
             .borrow::<gizmo::core::component::Children>()
-            .get(chassis_entity.id())
+            .get(chassis_entity)
             .map(|c| c.0.clone());
         if let Some(kids) = kids {
             let mut transforms = world.borrow_mut::<Transform>();
             for kid in kids {
-                if let Some(mut t) = transforms.get_mut(kid.id()) {
+                if let Some(mut t) = transforms.get_mut(kid) {
                     t.position.x = 0.0;
                     t.position.z = 0.0;
                     // VehicleController "ileri" = local -Z (Ackermann konvansiyonu), ama Kenney
@@ -1280,31 +1279,30 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
 
     // GLTF yüklendiği için tekerlek entity'lerini isimlerinden bulup cache'le
     {
-        let names = world.borrow::<gizmo::core::EntityName>();
         let ecs_transforms = world.borrow::<Transform>();
-        for (id, name) in names.iter() {
+        for (entity, name) in world.query::<(Entity, &gizmo::core::EntityName)>().unwrap().iter() {
             if name.0 == "wheelFrontLeft" {
-                state.wheel_fl = Some(id);
+                state.wheel_fl = Some(entity.id());
                 state.wheel_fl_rot = ecs_transforms
-                    .get(id)
+                    .get(entity)
                     .map(|t| t.rotation)
                     .unwrap_or(Quat::IDENTITY);
             } else if name.0 == "wheelFrontRight" {
-                state.wheel_fr = Some(id);
+                state.wheel_fr = Some(entity.id());
                 state.wheel_fr_rot = ecs_transforms
-                    .get(id)
+                    .get(entity)
                     .map(|t| t.rotation)
                     .unwrap_or(Quat::IDENTITY);
             } else if name.0 == "wheelBackLeft" {
-                state.wheel_bl = Some(id);
+                state.wheel_bl = Some(entity.id());
                 state.wheel_bl_rot = ecs_transforms
-                    .get(id)
+                    .get(entity)
                     .map(|t| t.rotation)
                     .unwrap_or(Quat::IDENTITY);
             } else if name.0 == "wheelBackRight" {
-                state.wheel_br = Some(id);
+                state.wheel_br = Some(entity.id());
                 state.wheel_br_rot = ecs_transforms
-                    .get(id)
+                    .get(entity)
                     .map(|t| t.rotation)
                     .unwrap_or(Quat::IDENTITY);
             }

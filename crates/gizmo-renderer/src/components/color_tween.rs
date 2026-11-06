@@ -134,7 +134,7 @@ pub fn color_tween_system(world: &mut World, dt: f32) {
     let Some(mut q) = world.query_mut::<(Mut<ColorTween>, Option<Mut<Sprite>>, Option<Mut<Text>>, Option<Mut<Material>>)>() else {
         return;
     };
-    for (_, (mut tween, sprite, text, material)) in q.iter_mut() {
+    for (mut tween, sprite, text, material) in q.iter_mut() {
         if tween.is_finished() {
             continue;
         }
@@ -203,9 +203,9 @@ mod tests {
             ColorTween::to(Vec4::new(0.0, 0.0, 0.0, 1.0), 1.0),
         ));
         color_tween_system(&mut world, 0.0);
-        assert_eq!(world.borrow::<Sprite>().get(e.id()).unwrap().color, Vec4::ONE, "a paused clock changed it");
+        assert_eq!(world.borrow::<Sprite>().get(e).unwrap().color, Vec4::ONE, "a paused clock changed it");
         color_tween_system(&mut world, 1.0);
-        assert_eq!(world.borrow::<Sprite>().get(e.id()).unwrap().color, Vec4::new(0.0, 0.0, 0.0, 1.0));
-        assert_eq!(world.borrow::<Text>().get(e.id()).unwrap().color, Vec4::new(0.0, 0.0, 0.0, 1.0));
+        assert_eq!(world.borrow::<Sprite>().get(e).unwrap().color, Vec4::new(0.0, 0.0, 0.0, 1.0));
+        assert_eq!(world.borrow::<Text>().get(e).unwrap().color, Vec4::new(0.0, 0.0, 0.0, 1.0));
     }
 }

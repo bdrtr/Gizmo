@@ -262,7 +262,7 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
     let mut char_pos = Vec3::ZERO;
     if let Some(mut kcc) = world
         .borrow_mut::<CharacterController>()
-        .get_mut(state.character_entity.id())
+        .get_mut(state.character_entity)
     {
         // Tuşlar ve sol çubuk `Input::move_axis` ile birleşiyor. Tuşlarda davranış aynı;
         // yeni olan, çubuğun yarım yatırılınca yürüyüş vermesi — tuşun veremediği tek şey.
@@ -286,7 +286,7 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
 
     // Kamera/karakter pozisyonuna göre chunk akışını sür.
     {
-        if let Some(trans) = world.borrow::<Transform>().get(state.character_entity.id()) {
+        if let Some(trans) = world.borrow::<Transform>().get(state.character_entity) {
             char_pos = trans.position;
         }
     }
@@ -406,7 +406,7 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
 
     if let Some(mut trans) = world
         .borrow_mut::<Transform>()
-        .get_mut(state.character_entity.id())
+        .get_mut(state.character_entity)
     {
         trans.rotation = Quat::from_rotation_y(state.camera_yaw);
     }
@@ -417,7 +417,7 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
         gizmo::core::query::Mut<Transform>,
         gizmo::core::query::Mut<Camera>,
     )>() {
-        for (_, (mut trans, mut cam)) in q.iter_mut() {
+        for (mut trans, mut cam) in q.iter_mut() {
             trans.position = cam_pos;
             trans.rotation = cam_rot;
             cam.yaw = state.camera_yaw;

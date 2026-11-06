@@ -150,7 +150,7 @@ fn light_sway(mut lights: Query<(Mut<Transform>, Mut<SpotLight>)>, time: Res<Tim
     );
     let angle = ((t * 1.2).sin() + 1.0) * (FRAC_PI_4 - 0.1);
 
-    for (_entity, (mut transform, mut light)) in lights.iter_mut() {
+    for (mut transform, mut light) in lights.iter_mut() {
         transform.rotation = rotation;
         light.outer_angle = angle;
         light.inner_angle = angle * 0.8;
@@ -168,7 +168,7 @@ fn movement(
         return;
     }
     let step = Vec3::new(x, 0.0, -z) * MOVE_SPEED * time.dt();
-    for (_entity, (mut transform, _)) in movables.iter_mut() {
+    for (mut transform, _) in movables.iter_mut() {
         transform.position += step;
     }
 }

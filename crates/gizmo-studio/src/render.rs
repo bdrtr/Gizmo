@@ -15,8 +15,8 @@ fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
         let markers = world.borrow::<gizmo::core::component::EditorOnly>();
         for e in world.iter_alive_entities() {
             if gizmo::core::component::is_editor_only(
-                markers.get(e.id()).is_some(),
-                names.get(e.id()).map(|n| n.0.as_str()),
+                markers.get(e).is_some(),
+                names.get(e).map(|n| n.0.as_str()),
             ) {
                 protected.insert(e.id());
             }
@@ -453,7 +453,7 @@ pub fn render_studio(
 
                 {
                     let terrains = world.borrow::<gizmo::renderer::components::Terrain>();
-                    if let Some(t) = terrains.get(ent_id.id()) {
+                    if let Some(t) = terrains.get(ent_id) {
                         p_width = t.width;
                         p_depth = t.depth;
                         p_max_h = t.max_height;
@@ -474,7 +474,7 @@ pub fn render_studio(
                                 // Material yoksa beyaz default ekle
                                 let has_mat = world
                                     .borrow::<gizmo::prelude::Material>()
-                                    .contains(ent.id());
+                                    .contains(ent);
                                 if !has_mat {
                                     let dummy_rgba = [255, 255, 255, 255];
                                     let dummy_bg = renderer.create_texture(&dummy_rgba, 1, 1);

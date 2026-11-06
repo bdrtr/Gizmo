@@ -161,14 +161,14 @@ fn an_off_centre_stack_does_not_blow_up() {
     let mut fastest_seen = 0.0f32;
     for frame in 0..480 {
         if frame % 150 == 0 && frame < 450 {
-            let top = world.borrow::<SoftBodyMesh>().iter().map(|(_, b)| span_y(b).1).fold(0.0, f32::max);
+            let top = world.borrow::<SoftBodyMesh>().iter().map(|b| span_y(b).1).fold(0.0, f32::max);
             let dx = [0.05f32, -0.04, 0.03][frame / 150];
             let mut b = SoftBodyMesh::block(Vec3::new(-0.5 + dx, top + 1.6, -0.5), Vec3::new(1.0, 0.7, 1.0), [2, 2, 2], 8.0, 15_000.0, 0.3).unwrap();
             b.damping = 0.4;
             world.spawn_bundle((b,));
         }
         run(&world, DT);
-        fastest_seen = fastest_seen.max(world.borrow::<SoftBodyMesh>().iter().map(|(_, b)| fastest(b)).fold(0.0, f32::max));
+        fastest_seen = fastest_seen.max(world.borrow::<SoftBodyMesh>().iter().map(fastest).fold(0.0, f32::max));
     }
     assert!(fastest_seen < 15.0, "the stack blew up: a node reached {fastest_seen:.0} m/s");
 }

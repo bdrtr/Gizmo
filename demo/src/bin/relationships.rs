@@ -100,8 +100,8 @@ fn main() {
                 let idx = index.clone();
                 scene.world.register_on_add::<Targeting>(Box::new(move |world, entity| {
                     let target = world
-                        .query::<&Targeting>()
-                        .and_then(|q| q.iter().find(|(e, _)| *e == entity.id()).map(|(_, t)| t.0));
+                        .query::<(Entity, &Targeting)>()
+                        .and_then(|q| q.iter().find(|(e, _)| (*e).id() == entity.id()).map(|(_, t)| t.0));
                     if let Some(target) = target {
                         idx.lock().unwrap().entry(target).or_default().push(entity.id());
                     }
@@ -249,8 +249,8 @@ fn redistribute(world: &mut World, input: &Input) {
         return;
     }
     let ids: Vec<u32> = world
-        .query::<&Unit>()
-        .map(|q| q.iter().map(|(e, _)| e).collect())
+        .query::<(Entity, &Unit)>()
+        .map(|q| q.iter().map(|(e, _)| e.id()).collect())
         .unwrap_or_default();
     for (i, id) in ids.iter().enumerate() {
         let target = ids[(i + 2) % ids.len()];

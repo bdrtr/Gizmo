@@ -107,17 +107,17 @@ impl PhysicsStateSnapshot {
             // despawn ÖNCESİ bir snapshot'ı geri yüklemek yeni entity'nin durumunu sessizce
             // eski verilerle bozardı. Generation uyuşmazsa bu state atlanır.
             let mut applied_any = false;
-            if let Some(mut t) = transforms.get_mut_entity(state.entity) {
+            if let Some(mut t) = transforms.get_mut(state.entity) {
                 t.position = state.position;
                 t.rotation = state.rotation;
                 applied_any = true;
             }
-            if let Some(mut v) = velocities.get_mut_entity(state.entity) {
+            if let Some(mut v) = velocities.get_mut(state.entity) {
                 v.linear = state.linear_velocity;
                 v.angular = state.angular_velocity;
                 applied_any = true;
             }
-            if let Some(mut rb) = rigid_bodies.get_mut_entity(state.entity) {
+            if let Some(mut rb) = rigid_bodies.get_mut(state.entity) {
                 rb.is_sleeping = state.is_sleeping;
                 applied_any = true;
             }
@@ -231,7 +231,7 @@ mod tests {
         snap.restore(&mut world);
 
         let transforms = world.borrow::<Transform>();
-        let t = transforms.get(e2.id()).expect("yeni entity'nin transform'u olmalı");
+        let t = transforms.get(e2).expect("yeni entity'nin transform'u olmalı");
         assert_eq!(
             t.position,
             Vec3::new(-5.0, -5.0, -5.0),
@@ -252,14 +252,14 @@ mod tests {
         // Durumu değiştir.
         {
             let mut transforms = world.borrow_mut::<Transform>();
-            let mut t = transforms.get_mut(e.id()).unwrap();
+            let mut t = transforms.get_mut(e).unwrap();
             t.position = Vec3::new(100.0, 100.0, 100.0);
         }
 
         snap.restore(&mut world);
 
         let transforms = world.borrow::<Transform>();
-        let t = transforms.get(e.id()).unwrap();
+        let t = transforms.get(e).unwrap();
         assert_eq!(t.position, Vec3::new(1.0, 2.0, 3.0));
     }
 
@@ -347,7 +347,7 @@ mod tests {
         // Uyku bayrağını kur, sonra snapshot al.
         {
             let mut rbs = world.borrow_mut::<RigidBody>();
-            let mut rb = rbs.get_mut(e.id()).unwrap();
+            let mut rb = rbs.get_mut(e).unwrap();
             rb.is_sleeping = true;
         }
         let snap = PhysicsStateSnapshot::capture(&world, 0);
@@ -355,17 +355,17 @@ mod tests {
         // Her şeyi boz.
         {
             let mut ts = world.borrow_mut::<Transform>();
-            let mut t = ts.get_mut(e.id()).unwrap();
+            let mut t = ts.get_mut(e).unwrap();
             t.position = Vec3::new(-9.0, -9.0, -9.0);
         }
         {
             let mut vs = world.borrow_mut::<Velocity>();
-            let mut v = vs.get_mut(e.id()).unwrap();
+            let mut v = vs.get_mut(e).unwrap();
             v.linear = Vec3::ZERO;
         }
         {
             let mut rbs = world.borrow_mut::<RigidBody>();
-            let mut rb = rbs.get_mut(e.id()).unwrap();
+            let mut rb = rbs.get_mut(e).unwrap();
             rb.is_sleeping = false;
         }
 
@@ -374,7 +374,7 @@ mod tests {
         {
             let ts = world.borrow::<Transform>();
             assert_eq!(
-                ts.get(e.id()).unwrap().position,
+                ts.get(e).unwrap().position,
                 Vec3::new(1.0, 2.0, 3.0),
                 "pozisyon geri gelmeli"
             );
@@ -382,14 +382,14 @@ mod tests {
         {
             let vs = world.borrow::<Velocity>();
             assert_eq!(
-                vs.get(e.id()).unwrap().linear,
+                vs.get(e).unwrap().linear,
                 Vec3::new(4.0, 5.0, 6.0),
                 "hız geri gelmeli"
             );
         }
         {
             let rbs = world.borrow::<RigidBody>();
-            assert!(rbs.get(e.id()).unwrap().is_sleeping, "uyku bayrağı geri gelmeli");
+            assert!(rbs.get(e).unwrap().is_sleeping, "uyku bayrağı geri gelmeli");
         }
     }
 }

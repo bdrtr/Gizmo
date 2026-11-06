@@ -1048,8 +1048,8 @@ mod ecs {
 
         let bodies = world.borrow::<RigidBody>();
         let vels = world.borrow::<Velocity>();
-        let rb = bodies.get(target.id()).expect("crate");
-        let vel = vels.get(target.id()).expect("crate velocity");
+        let rb = bodies.get(target).expect("crate");
+        let vel = vels.get(target).expect("crate velocity");
 
         assert!(
             (vel.linear.x - 60.0).abs() < 1e-2,
@@ -1094,18 +1094,18 @@ mod ecs {
             let bodies = world.borrow::<RigidBody>();
             let vels = world.borrow::<Velocity>();
             assert_eq!(
-                vels.get(floor.id()).expect("floor velocity").linear,
+                vels.get(floor).expect("floor velocity").linear,
                 Vec3::ZERO,
                 "a static floor must never be pushed"
             );
             assert!(
-                bodies.get(floor.id()).expect("floor").is_sleeping,
+                bodies.get(floor).expect("floor").is_sleeping,
                 "…and must not be woken by the contact either"
             );
         }
 
         let meshes = world.borrow::<SoftBodyMesh>();
-        let sb = meshes.get(soft.id()).expect("soft body");
+        let sb = meshes.get(soft).expect("soft body");
         assert!(
             (sb.nodes[0].velocity.y - 30.0).abs() < 1e-2,
             "the node must still bounce at −e·v = +30 m/s off the static floor, got {:?}",
@@ -1138,12 +1138,12 @@ mod ecs {
         let bodies = world.borrow::<RigidBody>();
         let vels = world.borrow::<Velocity>();
         assert_eq!(
-            vels.get(far.id()).expect("far velocity").linear,
+            vels.get(far).expect("far velocity").linear,
             Vec3::ZERO,
             "a body the soft body never reached must not be pushed"
         );
         assert!(
-            bodies.get(far.id()).expect("far").is_sleeping,
+            bodies.get(far).expect("far").is_sleeping,
             "…nor woken — the wake is scoped to bodies that were actually pushed"
         );
     }
@@ -1213,8 +1213,8 @@ mod ecs {
 
         let meshes = world.borrow::<SoftBodyMesh>();
         let vels = world.borrow::<Velocity>();
-        let stepped = meshes.get(soft.id()).expect("soft body");
-        let vel = vels.get(target.id()).expect("crate velocity");
+        let stepped = meshes.get(soft).expect("soft body");
+        let vel = vels.get(target).expect("crate velocity");
 
         // Non-vacuity: if the geometry ever drifts so the nodes stop reaching the crate, the
         // conservation assertion below becomes trivially true.

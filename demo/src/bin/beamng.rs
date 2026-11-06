@@ -552,7 +552,7 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &Input) {
         let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
         let rot = yaw_rot * pitch_rot;
 
-        for (_, (mut trans, mut cam)) in q.iter_mut() {
+        for (mut trans, mut cam) in q.iter_mut() {
             trans.position = state.camera_pos;
             trans.rotation = rot;
             cam.yaw = state.camera_yaw;

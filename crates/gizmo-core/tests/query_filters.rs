@@ -57,7 +57,7 @@ fn or_with_sparse_operands_matches_either_never_neither() {
         .query::<(&Marker, Or<With<SparseA>, With<SparseB>>)>()
         .unwrap()
         .iter()
-        .map(|(_, (m, _))| m.0)
+        .map(|(m, _)| m.0)
         .collect();
     got.sort();
     assert_eq!(
@@ -89,7 +89,7 @@ fn or_with_without_sparse_mixed() {
         .query::<(&Marker, Or<With<SparseA>, Without<SparseB>>)>()
         .unwrap()
         .iter()
-        .map(|(_, (m, _))| m.0)
+        .map(|(m, _)| m.0)
         .collect();
     got.sort();
     assert_eq!(got, vec![1, 3, 4]);
@@ -111,7 +111,7 @@ fn or_with_table_operands_still_works() {
         .query::<(&Marker, Or<With<TableA>, With<TableB>>)>()
         .unwrap()
         .iter()
-        .map(|(_, (m, _))| m.0)
+        .map(|(m, _)| m.0)
         .collect();
     got.sort();
     assert_eq!(got, vec![1, 2], "the common Or<With<table>,...> case must still work");
@@ -138,7 +138,7 @@ fn iter_chunks_works_on_plain_data_and_table_filter() {
     }
     // plain data query → fast path
     let q = world.query::<&Marker>().unwrap();
-    let total: usize = q.iter_chunks().map(|(ids, _)| ids.len()).sum();
+    let total: usize = q.iter_chunks().map(|s| s.len()).sum();
     assert_eq!(total, 3);
 
     // table With is archetype-level (no per-row filter) → chunks allowed
@@ -149,6 +149,6 @@ fn iter_chunks_works_on_plain_data_and_table_filter() {
     let b = w2.spawn();
     w2.add_component(b, Marker(2)); // no TableA → different archetype
     let q2 = w2.query::<(&Marker, With<TableA>)>().unwrap();
-    let total2: usize = q2.iter_chunks().map(|(ids, _)| ids.len()).sum();
+    let total2: usize = q2.iter_chunks().map(|(s, _)| s.len()).sum();
     assert_eq!(total2, 1, "table With selects the archetype; chunks yields only it");
 }

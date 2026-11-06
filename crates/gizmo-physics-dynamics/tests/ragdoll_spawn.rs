@@ -44,7 +44,7 @@ fn a_new_humanoid_in_zero_gravity_stays_still() {
     }
     let vs = world.borrow::<Velocity>();
     let (v, w) = ragdoll.bones.iter().fold((0.0f32, 0.0f32), |(v, w), (_, e)| {
-        let vel = vs.get(e.id()).unwrap();
+        let vel = vs.get(*e).unwrap();
         (v.max(vel.linear.length()), w.max(vel.angular.length()))
     });
     assert!(v < 0.05 && w < 0.05, "a ragdoll born at rest moves: {v:.2} m/s, {w:.2} rad/s after a second");

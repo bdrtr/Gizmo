@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use criterion::Criterion;
 use gizmo_core::{
     component::Component,
@@ -68,11 +69,11 @@ pub fn iter_frag_empty(c: &mut Criterion) {
         spawn_empty_frag_archetype_wide::<Table>(&mut world);
 
         let mut schedule = gizmo_core::system::Schedule::new();
-        fn iter_table(query: gizmo_core::query::Query<&Table >) {
+        fn iter_table(query: gizmo_core::query::Query<(Entity, &Table )>) {
             let mut res = 0;
             // Iterate over entities
             for (e, t) in query.iter() {
-                res += e;
+                res += e.id();
                 core::hint::black_box(t);
             }
             core::hint::black_box(res);
@@ -90,11 +91,11 @@ pub fn iter_frag_empty(c: &mut Criterion) {
         spawn_empty_frag_archetype_wide::<Sparse>(&mut world);
 
         let mut schedule = gizmo_core::system::Schedule::new();
-        fn iter_sparse(query: gizmo_core::query::Query<&Sparse >) {
+        fn iter_sparse(query: gizmo_core::query::Query<(Entity, &Sparse )>) {
             let mut res = 0;
             // Iterate over entities
             for (e, t) in query.iter() {
-                res += e;
+                res += e.id();
                 core::hint::black_box(t);
             }
             core::hint::black_box(res);

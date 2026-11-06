@@ -3,6 +3,7 @@
 //! Gives Lua scripts access to entity position, rotation, velocity and scale. Every change is
 //! written to the command queue.
 
+use gizmo_core::Entity;
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_core::World;
 use gizmo_math::{Quat, Vec3};
@@ -196,44 +197,44 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
     let names = lua.create_table()?;
 
     let transforms = world.borrow::<gizmo_physics_core::Transform>();
-    for (eid, _) in transforms.iter() {
-        if let Some(t) = transforms.get(eid) {
+    for (entity, _) in world.query::<(Entity, &gizmo_physics_core::Transform)>().unwrap().iter() {
+        if let Some(t) = transforms.get(entity) {
             let pos = lua.create_table()?;
             pos.set("x", t.position.x)?;
             pos.set("y", t.position.y)?;
             pos.set("z", t.position.z)?;
-            positions.set(eid, pos)?;
+            positions.set(entity.id(), pos)?;
 
             let rot = lua.create_table()?;
             rot.set("x", t.rotation.x)?;
             rot.set("y", t.rotation.y)?;
             rot.set("z", t.rotation.z)?;
             rot.set("w", t.rotation.w)?;
-            rotations.set(eid, rot)?;
+            rotations.set(entity.id(), rot)?;
 
             let scl = lua.create_table()?;
             scl.set("x", t.scale.x)?;
             scl.set("y", t.scale.y)?;
             scl.set("z", t.scale.z)?;
-            scales.set(eid, scl)?;
+            scales.set(entity.id(), scl)?;
         }
     }
 
     let vels = world.borrow::<gizmo_physics_rigid::components::Velocity>();
-    for (eid, _) in vels.iter() {
-        if let Some(v) = vels.get(eid) {
+    for (entity, _) in world.query::<(Entity, &gizmo_physics_rigid::components::Velocity)>().unwrap().iter() {
+        if let Some(v) = vels.get(entity) {
             let vel = lua.create_table()?;
             vel.set("x", v.linear.x)?;
             vel.set("y", v.linear.y)?;
             vel.set("z", v.linear.z)?;
-            velocities.set(eid, vel)?;
+            velocities.set(entity.id(), vel)?;
         }
     }
 
     let entity_names = world.borrow::<gizmo_core::EntityName>();
-    for (eid, _) in entity_names.iter() {
-        if let Some(n) = entity_names.get(eid) {
-            names.set(eid, n.0.clone())?;
+    for (entity, _) in world.query::<(Entity, &gizmo_core::EntityName)>().unwrap().iter() {
+        if let Some(n) = entity_names.get(entity) {
+            names.set(entity.id(), n.0.clone())?;
         }
     }
 

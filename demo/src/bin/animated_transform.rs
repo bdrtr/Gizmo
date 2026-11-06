@@ -300,7 +300,7 @@ fn controls(
         None
     };
 
-    for (_entity, mut player) in players.iter_mut() {
+    for mut player in players.iter_mut() {
         if toggle {
             if player.playing {
                 player.pause();
@@ -323,7 +323,7 @@ fn controls(
 
     // Yayılımın ne zaman koştuğunun ölçüsü: kökün yerel konumu ile dünya matrisinin
     // ötelemesi aynı karede eşit olmalı. Değilse dünya matrisi bir kare geridedir.
-    for (_entity, (transform, global, name)) in planets.iter() {
+    for (transform, global, name) in planets.iter() {
         if name.0 == PLANET {
             let world = global.matrix.w_axis.truncate();
             playback.propagation_lag = (world - transform.position).length();

@@ -345,7 +345,7 @@ mod tests {
 
         let mut count = 0;
         if let Some(q) = world.query::<&ComponentA>() {
-            for (_, c) in q.iter() {
+            for c in q.iter() {
                 assert_eq!(c.0, 42);
                 count += 1;
             }
@@ -369,7 +369,7 @@ mod tests {
 
         let mut count = 0;
         if let Some(q) = world.query::<(&ComponentA, &ComponentB)>() {
-            for (_, (ca, cb)) in q.iter() {
+            for (ca, cb) in q.iter() {
                 assert_eq!(ca.0, 100);
                 assert_eq!(cb.0, 2.5);
                 count += 1;
@@ -388,11 +388,11 @@ mod tests {
             commands.spawn_bundle((ComponentA(7), ComponentB(1.5))).id()
         };
         // `entity_count` counts the reserved id already, so the components are what to look at.
-        assert!(world.borrow::<ComponentA>().get(e.id()).is_none(), "nothing is observable before the flush");
+        assert!(world.borrow::<ComponentA>().get(e).is_none(), "nothing is observable before the flush");
         world.apply_commands();
         assert!(world.is_alive(e));
-        assert_eq!(world.borrow::<ComponentA>().get(e.id()).cloned(), Some(ComponentA(7)));
-        assert_eq!(world.borrow::<ComponentB>().get(e.id()).cloned(), Some(ComponentB(1.5)));
+        assert_eq!(world.borrow::<ComponentA>().get(e).cloned(), Some(ComponentA(7)));
+        assert_eq!(world.borrow::<ComponentB>().get(e).cloned(), Some(ComponentB(1.5)));
     }
 
     /// `insert_bundle` adds to what is there, and leaves a dead entity alone.
@@ -409,9 +409,9 @@ mod tests {
         }
         world.apply_commands();
         assert!(!world.is_alive(dead), "the dead entity came back");
-        assert!(world.borrow::<ComponentA>().get(dead.id()).is_none());
-        assert_eq!(world.borrow::<ComponentA>().get(alive.id()).cloned(), Some(ComponentA(1)));
-        assert_eq!(world.borrow::<ComponentB>().get(alive.id()).cloned(), Some(ComponentB(2.0)));
+        assert!(world.borrow::<ComponentA>().get(dead).is_none());
+        assert_eq!(world.borrow::<ComponentA>().get(alive).cloned(), Some(ComponentA(1)));
+        assert_eq!(world.borrow::<ComponentB>().get(alive).cloned(), Some(ComponentB(2.0)));
     }
 
     #[test]
@@ -429,10 +429,10 @@ mod tests {
         // Use a standard (&World, f32) system to access query and manually fetch Commands
         schedule.add_system(|world: &World, dt: f32| {
             let mut commands = Commands::fetch_stateless(world, dt).unwrap();
-            if let Some(q) = world.query::<&ComponentA>() {
+            if let Some(q) = world.query::<(Entity, &ComponentA)>() {
                 for (id, c) in q.iter() {
                     if c.0 == 10 {
-                        commands.entity(Entity::new(id, 0)).despawn();
+                        commands.entity(Entity::new(id.id(), 0)).despawn();
                     }
                 }
             }
@@ -442,7 +442,7 @@ mod tests {
 
         assert_eq!(world.entity_count(), 1);
         if let Some(q) = world.query::<&ComponentA>() {
-            for (_, c) in q.iter() {
+            for c in q.iter() {
                 assert_eq!(c.0, 20);
             }
         }
@@ -460,9 +460,9 @@ mod tests {
 
         schedule.add_system(|world: &World, dt: f32| {
             let mut commands = Commands::fetch_stateless(world, dt).unwrap();
-            if let Some(q) = world.query::<&ComponentA>() {
+            if let Some(q) = world.query::<(Entity, &ComponentA)>() {
                 for (id, _) in q.iter() {
-                    commands.entity(Entity::new(id, 0)).remove::<ComponentA>();
+                    commands.entity(Entity::new(id.id(), 0)).remove::<ComponentA>();
                 }
             }
         });

@@ -14,6 +14,7 @@
 //! dynamic body does fall; it just re-zeroes each time this system runs instead of
 //! accelerating. Kinematic agents are the case that stays level.
 
+use gizmo_core::Entity;
 use crate::components::NavAgent;
 use crate::pathfinding::NavGrid;
 use crate::steering;
@@ -69,7 +70,7 @@ pub fn ensure_nav_grid(world: &mut World) {
     if world.get_resource::<NavGrid>().is_some() {
         return;
     }
-    if world.borrow::<NavAgent>().entities().next().is_none() {
+    if world.borrow::<NavAgent>().is_empty() {
         return;
     }
 
@@ -190,9 +191,9 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     let grid = &*grid;
 
     let (agent_entities, cell): (Vec<u32>, f32) = {
-        let agents = world.borrow::<NavAgent>();
+        let agents = world.query::<(Entity, &NavAgent)>().unwrap();
         let widest = agents.iter().map(|(_, a)| a.separation_radius).fold(0.0f32, f32::max);
-        (agents.entities().collect(), widest.max(0.01))
+        (agents.iter().map(|(entity, _)| entity.id()).collect(), widest.max(0.01))
     };
     let agent_count = agent_entities.len();
 
@@ -590,12 +591,12 @@ mod frame_tests {
         }
 
         let velocities = world.borrow::<Velocity>();
-        let v = velocities.get(e.id()).unwrap().linear;
+        let v = velocities.get(e).unwrap().linear;
         assert!(v.x > 0.0, "the agent should be steered toward +X, got {v:?}");
         assert_eq!(v.y, 0.0, "navigation never adds vertical velocity");
 
         let agents = world.borrow::<NavAgent>();
-        assert_eq!(agents.get(e.id()).unwrap().state, NavAgentState::Moving);
+        assert_eq!(agents.get(e).unwrap().state, NavAgentState::Moving);
     }
 
     /// A wall dropped on an agent's route makes it replan at once — not when its timer next runs
@@ -611,7 +612,7 @@ mod frame_tests {
         });
         let step = 1.0 / 240.0; // far inside the 0.5 s replan interval
         ai_navigation_system(&world, step);
-        let straight = world.borrow::<NavAgent>().get(e.id()).unwrap().path_len();
+        let straight = world.borrow::<NavAgent>().get(e).unwrap().path_len();
         assert!(straight > 0, "no first path");
 
         // A wall across the route, thirteen cells tall: the grid steps diagonally, so going round
@@ -622,18 +623,18 @@ mod frame_tests {
             }
         }
         ai_navigation_system(&world, step);
-        let detour = world.borrow::<NavAgent>().get(e.id()).unwrap().path_len();
+        let detour = world.borrow::<NavAgent>().get(e).unwrap().path_len();
         assert!(detour > straight, "still on the old route: {straight} waypoints before, {detour} after");
 
         // And an unchanged grid does not replan every frame.
         if let Some(mut agents) = world.query_mut::<Mut<NavAgent>>() {
-            for (_, mut a) in agents.iter_mut() {
+            for mut a in agents.iter_mut() {
                 a.advance();
             }
         }
-        let advanced = world.borrow::<NavAgent>().get(e.id()).unwrap().path_index();
+        let advanced = world.borrow::<NavAgent>().get(e).unwrap().path_index();
         ai_navigation_system(&world, step);
-        assert_eq!(world.borrow::<NavAgent>().get(e.id()).unwrap().path_index(), advanced, "replanned with nothing changed");
+        assert_eq!(world.borrow::<NavAgent>().get(e).unwrap().path_index(), advanced, "replanned with nothing changed");
     }
 
     /// Separation is the agent's own: two agents walking side by side 1 m apart are pushed apart
@@ -781,7 +782,7 @@ mod frame_tests {
         });
         ai_navigation_system(&world, 1.0 / 60.0);
         let agents = world.borrow::<NavAgent>();
-        let agent = agents.get(e.id()).unwrap();
+        let agent = agents.get(e).unwrap();
         // `Reached` on the step it arrives; the next one, with no target, is `Idle`.
         assert_eq!((agent.target, agent.state), (None, NavAgentState::Reached));
     }
@@ -792,7 +793,7 @@ mod frame_tests {
         let (mut world, e) = world_with_agent(Vec3::ZERO, None);
         {
             let mut velocities = world.borrow_mut::<Velocity>();
-            velocities.get_mut(e.id()).unwrap().linear = Vec3::new(4.0, 0.0, 0.0);
+            velocities.get_mut(e).unwrap().linear = Vec3::new(4.0, 0.0, 0.0);
         }
 
         for _ in 0..30 {
@@ -800,7 +801,7 @@ mod frame_tests {
         }
 
         let velocities = world.borrow::<Velocity>();
-        assert!(velocities.get(e.id()).unwrap().linear.length() < 0.5);
+        assert!(velocities.get(e).unwrap().linear.length() < 0.5);
     }
 
     /// A target walled in on every side: the search fails, `route_failed` says so, and the next
@@ -825,20 +826,20 @@ mod frame_tests {
         world.add_component(e, agent);
         let dt = 1.0 / 60.0;
         ai_navigation_system(&world, dt);
-        assert!(world.borrow::<NavAgent>().get(e.id()).unwrap().route_failed());
+        assert!(world.borrow::<NavAgent>().get(e).unwrap().route_failed());
         // Each search reloads the timer; between searches it only counts down. Half a second of
         // frames holds one scheduled search (interval 0.5 s) and maybe the phase-shortened first.
         let mut timers = Vec::new();
         for _ in 0..30 {
             ai_navigation_system(&world, dt);
-            timers.push(world.borrow::<NavAgent>().get(e.id()).unwrap().recalc.timer);
+            timers.push(world.borrow::<NavAgent>().get(e).unwrap().recalc.timer);
         }
         let searches = timers.windows(2).filter(|w| w[1] >= w[0]).count();
         assert!(searches <= 2, "{searches} searches in 30 frames: timers {timers:?}");
         // A reachable target clears the flag.
-        world.borrow_mut::<NavAgent>().get_mut(e.id()).unwrap().set_target(Vec3::new(8.5, 0.0, 2.5));
+        world.borrow_mut::<NavAgent>().get_mut(e).unwrap().set_target(Vec3::new(8.5, 0.0, 2.5));
         ai_navigation_system(&world, dt);
-        let a = world.borrow::<NavAgent>().get(e.id()).cloned().unwrap();
+        let a = world.borrow::<NavAgent>().get(e).cloned().unwrap();
         assert!(!a.route_failed() && a.path_len() > 0);
     }
 

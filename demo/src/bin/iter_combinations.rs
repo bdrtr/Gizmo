@@ -270,11 +270,11 @@ fn main() {
 /// Ayrı bir sistem, çünkü `gravity` `Mut<Transform>` alıyor ve `iter_combinations`
 /// `ReadOnlyQuery` istiyor — aynı sistemde iki sorgu açmak erişim çakışması olurdu. Çizelge bu
 /// ikisini zaten ayırıyor: biri yazıyor, öteki okuyor.
-fn pair_audit(bodies: Query<(&Transform, &Body)>, mut report: ResMut<Conservation>) {
+fn pair_audit(bodies: Query<(Entity, &Transform, &Body)>, mut report: ResMut<Conservation>) {
     // Elle döngünün gerektirdiği ara `Vec` — karşılaştırmanın öteki yakası.
     let state: Vec<(Vec3, f32)> = bodies
         .iter()
-        .map(|(_, (t, b))| (t.position, b.mass))
+        .map(|(_, t, b)| (t.position, b.mass))
         .collect();
 
     let mut manual = vec![Vec3::ZERO; state.len()];
@@ -291,16 +291,16 @@ fn pair_audit(bodies: Query<(&Transform, &Body)>, mut report: ResMut<Conservatio
     }
 
     // Motorun yolu: tek çağrı, ara `Vec` yok, indeks aritmetiği yok.
-    let index: std::collections::HashMap<u32, usize> = bodies
+    let index: std::collections::HashMap<Entity, usize> = bodies
         .iter()
         .enumerate()
-        .map(|(i, (id, _))| (id, i))
+        .map(|(i, (entity, ..))| (entity, i))
         .collect();
     let mut engine = vec![Vec3::ZERO; state.len()];
     let mut engine_pairs = 0usize;
-    for ((a_id, (ta, ba)), (b_id, (tb, bb))) in bodies.iter_combinations() {
+    for [(a, ta, ba), (b, tb, bb)] in bodies.iter_combinations() {
         engine_pairs += 1;
-        let (ia, ib) = (index[&a_id], index[&b_id]);
+        let (ia, ib) = (index[&a], index[&b]);
         let delta = tb.position - ta.position;
         let dist2 = delta.length_squared() + SOFTENING * SOFTENING;
         let dir = delta * (1.0 / (dist2 * dist2.sqrt()));
@@ -327,7 +327,8 @@ fn gravity_one_pass(
     mut report: ResMut<Conservation>,
 ) {
     // 1. geçiş: kuvvetler doğrudan hıza. Ara `Vec` yok, indeks aritmetiği yok.
-    for ((_, (ta, mut ba)), (_, (tb, mut bb))) in bodies.iter_combinations_mut() {
+    let mut pairs = bodies.iter_combinations_mut();
+    while let Some([(ta, mut ba), (tb, mut bb)]) = pairs.fetch_next() {
         let delta = tb.position - ta.position;
         let dist2 = delta.length_squared() + SOFTENING * SOFTENING;
         let dir = delta * (1.0 / (dist2 * dist2.sqrt()));
@@ -341,7 +342,7 @@ fn gravity_one_pass(
     // her cismi n-1 kez ziyaret ediyor, konum bir kez ilerlemeli.
     let mut momentum = Vec3::ZERO;
     let mut kinetic = 0.0;
-    for (_entity, (mut transform, body)) in bodies.iter_mut() {
+    for (mut transform, body) in bodies.iter_mut() {
         transform.position += body.velocity * STEP;
         momentum += body.velocity * body.mass;
         kinetic += 0.5 * body.mass * body.velocity.length_squared();
@@ -373,7 +374,7 @@ fn gravity(mut bodies: Query<(Mut<Transform>, Mut<Body>)>, mut report: ResMut<Co
     // gezilemiyor (`iter` için `ReadOnlyQuery` sınırı sağlanmıyor). Bu, ikili döngünün neden tek
     // geçişte yazılamadığının bir başka yüzü.
     let mut state: Vec<(Vec3, f32, Vec3)> = Vec::new();
-    for (_entity, (transform, body)) in bodies.iter_mut() {
+    for (transform, body) in bodies.iter_mut() {
         state.push((transform.position, body.mass, body.velocity));
     }
 
@@ -395,7 +396,7 @@ fn gravity(mut bodies: Query<(Mut<Transform>, Mut<Body>)>, mut report: ResMut<Co
     // 3. geçiş: geri yaz.
     let mut momentum = Vec3::ZERO;
     let mut kinetic = 0.0;
-    for (index, (_entity, (mut transform, mut body))) in bodies.iter_mut().enumerate() {
+    for (index, (mut transform, mut body)) in bodies.iter_mut().enumerate() {
         body.velocity += accel[index] * STEP;
         transform.position += body.velocity * STEP;
         momentum += body.velocity * body.mass;

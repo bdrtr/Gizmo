@@ -9,6 +9,7 @@
 //! cannot mutate it during the tick — an action that wants to change state records its intent
 //! and lets a system apply it.
 
+use gizmo_core::Entity;
 use gizmo_core::World;
 
 /// Return status of a Behavior Tree node
@@ -337,10 +338,12 @@ impl BehaviorTree {
 /// errors, and a node's panic propagates out of it.
 #[tracing::instrument(skip_all, name = "behavior_tree_system")]
 pub fn behavior_tree_system(world: &mut World, dt: f32) {
-    let entities: Vec<u32> = {
-        let trees = world.borrow::<BehaviorTree>();
-        trees.entities().collect()
-    };
+    let entities: Vec<u32> = world
+        .query::<(Entity, &BehaviorTree)>()
+        .unwrap()
+        .iter()
+        .map(|(entity, _)| entity.id())
+        .collect();
 
     let tree_count = entities.len();
     // Frame-başı toplu sayaçlar — iç döngüde per-tick log yerine çıkışta AGGREGATE.
@@ -532,7 +535,7 @@ mod tests {
         );
         // …and it is back afterwards.
         assert!(
-            world.borrow::<BehaviorTree>().get(e.id()).is_some_and(|t| t.root.is_some()),
+            world.borrow::<BehaviorTree>().get(e).is_some_and(|t| t.root.is_some()),
             "the root must be restored once the tick returns"
         );
     }
@@ -560,7 +563,7 @@ mod tests {
         );
         behavior_tree_system(&mut world, 1.0 / 60.0);
         assert!(
-            world.borrow::<BehaviorTree>().get(e.id()).is_none(),
+            world.borrow::<BehaviorTree>().get(e).is_none(),
             "the component was removed mid-tick, so the root is dropped rather than restored — \
              putting it back would resurrect a component the node deliberately removed"
         );
@@ -573,6 +576,6 @@ mod tests {
         let e = world.spawn();
         world.add_component(e, BehaviorTree { root: None });
         behavior_tree_system(&mut world, 1.0 / 60.0);
-        assert!(world.borrow::<BehaviorTree>().get(e.id()).is_some_and(|t| t.root.is_none()));
+        assert!(world.borrow::<BehaviorTree>().get(e).is_some_and(|t| t.root.is_none()));
     }
 }

@@ -26,11 +26,11 @@
 //! FpsLookSystem.run(&world, 1.0 / 60.0);
 //!
 //! let looks = world.borrow::<FpsLook>();
-//! let look = looks.get_entity(cam).unwrap();
+//! let look = looks.get(cam).unwrap();
 //! assert!((look.yaw - 100.0 * look.sensitivity).abs() < 1e-6); // mouse right -> yaw+
 //! // The camera view stays in sync: the renderer uses `Camera.yaw/pitch`.
 //! let cams = world.borrow::<Camera>();
-//! assert_eq!(cams.get_entity(cam).unwrap().yaw, look.yaw);
+//! assert_eq!(cams.get(cam).unwrap().yaw, look.yaw);
 //!
 //! // when firing:
 //! let dir = look.forward();
@@ -270,7 +270,7 @@ impl gizmo_core::system::System for FpsLookSystem {
                 gizmo_core::query::Mut<Transform>,
             )>()
         } {
-            for (_id, (mut look, mut cam, mut t)) in q.iter_mut() {
+            for (mut look, mut cam, mut t) in q.iter_mut() {
                 if look.enabled {
                     // The gate covers the MOUSE only. A stick has no cursor to fight with, so
                     // requiring a held button of it would be a restriction with nothing behind
@@ -422,7 +422,7 @@ mod tests {
 
             FpsLookSystem.run(&world, 1.0);
             let transforms = world.borrow::<Transform>();
-            transforms.get_entity(cam).unwrap().position.length()
+            transforms.get(cam).unwrap().position.length()
         }
 
         let full = travel(1.0);
@@ -459,7 +459,7 @@ mod tests {
             }
             world.insert_resource(input);
             FpsLookSystem.run(&world, 1.0);
-            world.borrow::<FpsLook>().get_entity(cam).unwrap().yaw
+            world.borrow::<FpsLook>().get(cam).unwrap().yaw
         }
 
         let gated = FpsLook::new().with_sensitivity(0.01).with_look_button(mouse::RIGHT);
@@ -499,7 +499,7 @@ mod tests {
             }
             world.insert_resource(input);
             FpsLookSystem.run(&world, 1.0);
-            world.borrow::<Transform>().get_entity(cam).unwrap().position.length()
+            world.borrow::<Transform>().get(cam).unwrap().position.length()
         }
 
         let look = FpsLook::new()
@@ -552,7 +552,7 @@ mod tests {
         sys.run(&world, 1.0 / 60.0);
 
         let cams = world.borrow::<Camera>();
-        let cam = cams.get(e.id()).unwrap();
+        let cam = cams.get(e).unwrap();
         assert!((cam.yaw - 1.2).abs() < 1e-5 && (cam.pitch - 0.4).abs() < 1e-5);
     }
 }

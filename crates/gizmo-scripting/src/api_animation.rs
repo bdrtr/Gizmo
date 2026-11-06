@@ -12,6 +12,7 @@
 //! documentation names "the Lua `PlayAnimation` command" while explaining why a failed clip lookup
 //! is logged, which is how far the assumption had spread.
 
+use gizmo_core::Entity;
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_core::World;
 use mlua::prelude::*;
@@ -123,8 +124,8 @@ pub fn update_animation_read_api(lua: &Lua, world: &World) -> Result<(), LuaErro
 
     let states = lua.create_table()?;
     let players = world.borrow::<gizmo_animation::skeletal::AnimationPlayer>();
-    for (eid, _) in players.iter() {
-        if let Some(player) = players.get(eid) {
+    for (entity, _) in world.query::<(Entity, &gizmo_animation::skeletal::AnimationPlayer)>().unwrap().iter() {
+        if let Some(player) = players.get(entity) {
             let state = lua.create_table()?;
             state.set("time", player.current_time)?;
             state.set("speed", player.speed)?;
@@ -140,7 +141,7 @@ pub fn update_animation_read_api(lua: &Lua, world: &World) -> Result<(), LuaErro
             }
             state.set("clips", clips)?;
 
-            states.set(eid, state)?;
+            states.set(entity.id(), state)?;
         }
     }
 

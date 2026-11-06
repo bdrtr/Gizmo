@@ -205,7 +205,7 @@ fn bounce_and_rumble(
 
     let mut fired: Option<(f32, f32, f32)> = None;
 
-    for (_entity, (mut transform, mut bouncer, _)) in bouncers.iter_mut() {
+    for (mut transform, mut bouncer, _) in bouncers.iter_mut() {
         bouncer.velocity += GRAVITY * dt;
         transform.position.y += bouncer.velocity * dt;
         if transform.position.y <= FLOOR {

@@ -39,7 +39,7 @@ fn par_for_each(
         &ArchetypeData<11>,
     )>,
 ) {
-    query.par_for_each(|(_id, comp)| {
+    query.par_for_each(|comp| {
         core::hint::black_box(comp);
     });
 }

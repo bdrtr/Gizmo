@@ -158,7 +158,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
             let mut transforms = unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::Transform>() };
             
             let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
-            if transforms.get_mut(primary_id.id()).is_some() {
+            if transforms.get_mut(primary_id).is_some() {
                 
                 use transform_gizmo_egui::prelude::*;
                 use transform_gizmo_egui::math::Transform as GizmoTransform;
@@ -250,7 +250,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                 let mut selected_ids = Vec::new();
 
                 for &id in state.selection.entities.iter() {
-                    if let Some(t) = transforms.get_mut(id.id()).map(|t| *t) {
+                    if let Some(t) = transforms.get_mut(id).map(|t| *t) {
                         let translation = transform_gizmo_egui::mint::Vector3 { x: t.position.x as f64, y: t.position.y as f64, z: t.position.z as f64 };
                         let rotation = transform_gizmo_egui::mint::Quaternion { v: transform_gizmo_egui::mint::Vector3 { x: t.rotation.x as f64, y: t.rotation.y as f64, z: t.rotation.z as f64 }, s: t.rotation.w as f64 };
                         let scale = transform_gizmo_egui::mint::Vector3 { x: t.scale.x as f64, y: t.scale.y as f64, z: t.scale.z as f64 };
@@ -294,7 +294,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         // Fare bırakıldı (Sürükleme bitti), tüm değişiklikleri History'ye bas
                         let mut changes = Vec::new();
                         for (entity, old_t) in state.scene.gizmo_original_transforms.drain() {
-                            if let Some(new_t) = transforms.get_mut(entity.id()).map(|t| *t) {
+                            if let Some(new_t) = transforms.get_mut(entity).map(|t| *t) {
                                 if old_t != new_t {
                                     changes.push((entity, old_t, new_t));
                                 }
@@ -368,7 +368,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     if !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::F)) {
         if let Some(entity) = state.selection.primary {
             let transforms = world.borrow::<gizmo_physics_core::Transform>();
-            if let Some(t) = transforms.get(entity.id()) {
+            if let Some(t) = transforms.get(entity) {
                 state.camera.focus_target = Some(t.position);
             }
         }
@@ -419,7 +419,7 @@ fn draw_viewport_overlays(
         let fov = world
             .iter_alive_entities()
             .into_iter()
-            .find_map(|e| cameras.get(e.id()).map(|c| c.fov))
+            .find_map(|e| cameras.get(e).map(|c| c.fov))
             .unwrap_or(std::f32::consts::FRAC_PI_3);
         // 35 mm equivalent, which is how the prototype labels it: a 36 mm-wide frame subtends
         // `fov`, so the focal length is half the width over the tangent of the half angle.

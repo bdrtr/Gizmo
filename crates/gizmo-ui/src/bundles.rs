@@ -107,12 +107,12 @@ mod tests {
         let e = world.spawn();
         NodeBundle::default().apply(&mut world, e);
 
-        assert!(world.borrow::<Style>().get(e.id()).is_some());
-        assert!(world.borrow::<Node>().get(e.id()).is_some());
-        assert!(world.borrow::<BackgroundColor>().get(e.id()).is_some());
+        assert!(world.borrow::<Style>().get(e).is_some());
+        assert!(world.borrow::<Node>().get(e).is_some());
+        assert!(world.borrow::<BackgroundColor>().get(e).is_some());
         // A plain node is non-interactive: it must NOT carry an Interaction, or it
         // would be picked up by the interaction system's hit-test query.
-        assert!(world.borrow::<Interaction>().get(e.id()).is_none());
+        assert!(world.borrow::<Interaction>().get(e).is_none());
         // The advertised archetype shape must match what `apply` actually writes.
         assert_eq!(NodeBundle::get_infos().len(), 3);
     }
@@ -124,16 +124,16 @@ mod tests {
         let e = world.spawn();
         ButtonBundle::default().apply(&mut world, e);
 
-        assert!(world.borrow::<Style>().get(e.id()).is_some());
-        assert!(world.borrow::<Node>().get(e.id()).is_some());
+        assert!(world.borrow::<Style>().get(e).is_some());
+        assert!(world.borrow::<Node>().get(e).is_some());
         // A fresh button starts un-interacted.
-        assert_eq!(*world.borrow::<Interaction>().get(e.id()).unwrap(), Interaction::None);
+        assert_eq!(*world.borrow::<Interaction>().get(e).unwrap(), Interaction::None);
         // Default fill is OPAQUE white: a transparent (alpha 0) or black default
         // would make every button invisible, so this default is a real contract.
-        let bg = *world.borrow::<BackgroundColor>().get(e.id()).unwrap();
+        let bg = *world.borrow::<BackgroundColor>().get(e).unwrap();
         assert_eq!(bg.0, Vec4::new(1.0, 1.0, 1.0, 1.0));
         // A fresh button has not been clicked.
-        assert_eq!(world.borrow::<Clicked>().get(e.id()).copied(), Some(Clicked(false)));
+        assert_eq!(world.borrow::<Clicked>().get(e).copied(), Some(Clicked(false)));
         // Button advertises two more components (Interaction, Clicked) than a plain node.
         assert_eq!(ButtonBundle::get_infos().len(), 5);
         assert_eq!(ButtonBundle::get_infos().len(), NodeBundle::get_infos().len() + 2);

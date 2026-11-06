@@ -107,7 +107,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RagdollDemo {
             let mut saved = Transform::new(Vec3::ZERO);
             {
                 let mut ts = world.borrow_mut::<Transform>();
-                if let Some(mut t) = ts.get_mut(entity.id()) {
+                if let Some(mut t) = ts.get_mut(*entity) {
                     t.scale = Vec3::new(sx, sy, sz);
                     t.update_local_matrix();
                     saved = *t;
@@ -115,7 +115,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RagdollDemo {
             }
             {
                 let mut vs = world.borrow_mut::<Velocity>();
-                if let Some(mut v) = vs.get_mut(entity.id()) {
+                if let Some(mut v) = vs.get_mut(*entity) {
                     *v = Velocity::new(lin).with_angular(ang);
                 }
             }

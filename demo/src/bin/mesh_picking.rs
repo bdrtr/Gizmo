@@ -167,7 +167,7 @@ fn main() {
 
 /// İmlecin altındaki şekli bulur, çizer, ve tıklanınca rengini değiştirir.
 fn pick_under_cursor(
-    mut shapes: Query<(Mut<Shape>, Mut<Material>)>,
+    mut shapes: Query<(Entity, Mut<Shape>, Mut<Material>)>,
     cameras: Query<(&Camera, &Transform)>,
     physics: Res<PhysicsWorld>,
     window: Res<WindowInfo>,
@@ -180,7 +180,7 @@ fn pick_under_cursor(
 
     // 1) Kamera: sahnenin baktığı kamerayı bul.
     let mut camera_data = None;
-    for (_entity, (camera, transform)) in cameras.iter() {
+    for (camera, transform) in cameras.iter() {
         if camera.primary {
             camera_data = Some((*camera, transform.position));
             break;
@@ -230,8 +230,8 @@ fn pick_under_cursor(
     // Sol tık: sıradaki renge geç.
     if input.is_mouse_button_just_pressed(0) {
         hover.clicks += 1;
-        for (entity, (mut shape, mut material)) in shapes.iter_mut() {
-            if entity == hit.entity.id() {
+        for (entity, mut shape, mut material) in shapes.iter_mut() {
+            if entity.id() == hit.entity.id() {
                 shape.palette = (shape.palette + 1) % PALETTE.len();
                 material.albedo = PALETTE[shape.palette];
             }
@@ -240,10 +240,10 @@ fn pick_under_cursor(
 }
 
 /// İmlecin altındaki şekli aydınlatır, diğerlerini kendi rengine bırakır.
-fn paint_hover(mut shapes: Query<(Mut<Shape>, Mut<Material>)>, hover: Res<Hover>) {
-    for (entity, (shape, mut material)) in shapes.iter_mut() {
+fn paint_hover(mut shapes: Query<(Entity, Mut<Shape>, Mut<Material>)>, hover: Res<Hover>) {
+    for (entity, shape, mut material) in shapes.iter_mut() {
         let base = PALETTE[shape.palette];
-        material.albedo = if hover.entity == Some(entity) {
+        material.albedo = if hover.entity == Some(entity.id()) {
             base + HOVER_BOOST
         } else {
             base

@@ -2,6 +2,7 @@
 //!
 //! Covers: saving/loading scenes, dialogue, cutscenes, the race system and the camera.
 
+use gizmo_core::Entity;
 use crate::commands::{CommandQueue, ScriptCommand};
 use gizmo_core::World;
 use mlua::prelude::*;
@@ -221,9 +222,9 @@ pub fn update_scene_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
     // İsim → ID eşleme tablosu
     let name_map = lua.create_table()?;
     let names = world.borrow::<gizmo_core::EntityName>();
-    for (eid, _) in names.iter() {
-        if let Some(n) = names.get(eid) {
-            name_map.set(n.0.clone(), eid)?;
+    for (entity, _) in world.query::<(Entity, &gizmo_core::EntityName)>().unwrap().iter() {
+        if let Some(n) = names.get(entity) {
+            name_map.set(n.0.clone(), entity.id())?;
         }
     }
     scene_table.raw_set("_name_map", name_map)?;

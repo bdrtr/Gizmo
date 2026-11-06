@@ -217,11 +217,9 @@ fn a_scene_saved_with_a_script_loads_and_that_script_runs() {
     let _ = std::fs::remove_file(&scene);
 
     let id = {
-        let names = world.borrow::<EntityName>();
-        names
-            .iter()
+        world.query::<(Entity, &EntityName)>().unwrap().iter()
             .find(|(_, n)| n.0 == "Oyuncu")
-            .map(|(id, _)| id)
+            .map(|(entity, _)| entity.id())
             .expect("the entity survived the file")
     };
     assert!(
@@ -540,7 +538,7 @@ fn a_script_spends_the_hits_the_engine_reports() {
     }
 
     let fighters = world.borrow::<gizmo::physics::components::FighterController>();
-    let hit = fighters.get(defender.id()).expect("the defender is still there");
+    let hit = fighters.get(defender).expect("the defender is still there");
     assert_eq!(
         hit.health, 92.0,
         "the script must have spent exactly one 8-damage hit: 100 means the event never reached \

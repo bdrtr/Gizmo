@@ -82,7 +82,7 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     // SAFETY: the editor UI runs single-threaded inside the egui draw; no concurrent World access.
     let mut players =
         unsafe { world.borrow_mut_unchecked::<gizmo_renderer::components::AnimationPlayer>() };
-    let Some(mut player) = players.get_mut(entity.id()) else {
+    let Some(mut player) = players.get_mut(entity) else {
         empty(ui, "Seçili varlıkta AnimationPlayer yok.");
         return;
     };

@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use crate::error::SceneError;
 use gizmo_core::{EntityName, World};
 use gizmo_core::component::{MeshSource, MaterialSource};
@@ -1478,11 +1479,8 @@ impl SceneData {
     /// name.
     pub fn entity_names(world: &World) -> Vec<(u32, String)> {
         let mut result = Vec::new();
-        let names = world.borrow::<EntityName>();
-        for (entity_id, _) in names.iter() {
-            if let Some(name) = names.get(entity_id) {
-                result.push((entity_id, name.0.clone()));
-            }
+        for (entity, name) in world.query::<(Entity, &EntityName)>().unwrap().iter() {
+            result.push((entity.id(), name.0.clone()));
         }
         result
     }
@@ -1497,10 +1495,10 @@ impl SceneData {
     /// rather than *the* one. Resolve once and keep the id rather than re-looking it up.
     pub fn find_entity_by_name(world: &World, target_name: &str) -> Option<u32> {
         let names = world.borrow::<EntityName>();
-        for (entity_id, _) in names.iter() {
-            if let Some(name) = names.get(entity_id) {
+        for (entity, _) in world.query::<(Entity, &EntityName)>().unwrap().iter() {
+            if let Some(name) = names.get(entity) {
                 if name.0 == target_name {
-                    return Some(entity_id);
+                    return Some(entity.id());
                 }
             }
         }
@@ -1818,12 +1816,12 @@ mod tests {
         let child2 = loaded
             .iter_alive_entities()
             .into_iter()
-            .find(|e| names.get(e.id()).map(|n| n.0.as_str()) == Some("CHILD"))
+            .find(|e| names.get(*e).map(|n| n.0.as_str()) == Some("CHILD"))
             .expect("çocuk yüklenmedi");
         drop(names);
         let parents = loaded.borrow::<Parent>();
         assert!(
-            parents.get(child2.id()).is_some(),
+            parents.get(child2).is_some(),
             "çocuk, korunan grup node'una bağlı kalmalı (öksüz kalmamalı)"
         );
     }

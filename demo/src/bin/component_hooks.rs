@@ -258,8 +258,8 @@ fn main() {
                     // Kancaya YALNIZ varlık geliyor — ne eski ne yeni değer. Görmek istiyorsan
                     // dünyadan geri okuyacaksın. Ve motorda tipli tek-varlık okuyucusu yok:
                     // `World::query` kurup varlığı aramak zorundasın.
-                    let read_back = world.query::<&Tracked>().and_then(|q| {
-                        q.iter().find(|(e, _)| *e == entity.id()).map(|(_, c)| c.0)
+                    let read_back = world.query::<(Entity, &Tracked)>().and_then(|q| {
+                        q.iter().find(|(e, _)| (*e).id() == entity.id()).map(|(_, c)| c.0)
                     });
                     if let Some(v) = read_back {
                         t.last_value.store(v as usize, Ordering::Relaxed);

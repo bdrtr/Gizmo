@@ -1,6 +1,7 @@
 //! [`TextInput`] — a field the player types into: a name for the high-score table, a seed, a
 //! chat line.
 
+use gizmo_core::Entity;
 use gizmo_core::input::Input;
 use gizmo_core::query::{Mut, Query};
 use gizmo_core::system::Res;
@@ -97,16 +98,16 @@ fn key(name: &str) -> u32 {
 /// Focuses the clicked field, unfocuses the rest on a click elsewhere, and feeds the focused one
 /// this frame's typing. Runs after [`ui_interaction_system`](crate::interaction::ui_interaction_system),
 /// whose `Clicked` it reads.
-pub fn text_input_system(input: Res<Input>, mut fields: Query<(Mut<TextInput>, Option<&Clicked>, Option<&Interaction>)>) {
+pub fn text_input_system(input: Res<Input>, mut fields: Query<(Entity, Mut<TextInput>, Option<&Clicked>, Option<&Interaction>)>) {
     let pressed_anywhere = input.is_mouse_button_just_pressed(0);
     let typed = input.typed_text();
     let backspace = input.is_key_just_pressed(key("backspace"));
     let enter = input.is_key_just_pressed(key("enter"));
     let escape = input.is_key_just_pressed(key("escape"));
-    let clicked: Option<u32> = fields.iter_mut().find(|(_, (_, c, _))| c.is_some_and(|c| c.0)).map(|(id, _)| id);
-    for (id, (mut field, _, interaction)) in fields.iter_mut() {
+    let clicked: Option<u32> = fields.iter_mut().find(|(_, _, c, _)| c.is_some_and(|c| c.0)).map(|(entity, ..)| entity.id());
+    for (entity, mut field, _, interaction) in fields.iter_mut() {
         if let Some(c) = clicked {
-            field.focused = c == id;
+            field.focused = c == entity.id();
         } else if pressed_anywhere && interaction.is_none_or(|i| *i == Interaction::None) {
             // A press that is not on this field takes its focus away.
             field.focused = false;

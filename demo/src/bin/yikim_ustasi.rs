@@ -706,7 +706,7 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
             if !t.alive {
                 continue;
             }
-            if let Some(tr) = ts.get(t.entity.id()) {
+            if let Some(tr) = ts.get(t.entity) {
                 let p = tr.position;
                 if p.y < KILL_Y || (p - t.start).length() > KILL_DIST {
                     destroyed.push((i, p));
@@ -746,7 +746,7 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
 
     // --- kamerayı nişana göre güncelle ---
     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
-        for (_, (mut tr, mut cam)) in q.iter_mut() {
+        for (mut tr, mut cam) in q.iter_mut() {
             tr.position = CANNON_POS;
             tr.rotation = Quat::from_rotation_y(-g.yaw);
             cam.yaw = g.yaw;

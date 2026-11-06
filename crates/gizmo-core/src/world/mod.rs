@@ -376,7 +376,7 @@ mod tests {
         
         // e3 hâlâ erişilebilir olmalı
         let comps = world.borrow::<TestComp>();
-        let val = comps.get(e3.id()).unwrap();
+        let val = comps.get(e3).unwrap();
         assert_eq!(val.0, 3);
     }
 
@@ -404,8 +404,8 @@ mod tests {
         let loc2 = world.entity_location(e.id());
         assert_ne!(loc1.archetype_id, loc2.archetype_id);
         
-        assert_eq!(world.borrow::<TestCompI32>().get(e.id()).unwrap().0, 10);
-        assert_eq!(world.borrow::<TestCompF32>().get(e.id()).unwrap().0, 2.5);
+        assert_eq!(world.borrow::<TestCompI32>().get(e).unwrap().0, 10);
+        assert_eq!(world.borrow::<TestCompF32>().get(e).unwrap().0, 2.5);
     }
 
     #[test]
@@ -430,8 +430,8 @@ mod tests {
         let bi = world.borrow::<BatchI>();
         let bf = world.borrow::<BatchF>();
         for (i, e) in ents.iter().enumerate() {
-            assert_eq!(bi.get(e.id()).map(|c| c.0), Some(i as i32), "BatchI[{i}]");
-            assert_eq!(bf.get(e.id()).map(|c| c.0), Some(i as f32 * 1.5), "BatchF[{i}]");
+            assert_eq!(bi.get(*e).map(|c| c.0), Some(i as i32), "BatchI[{i}]");
+            assert_eq!(bf.get(*e).map(|c| c.0), Some(i as f32 * 1.5), "BatchF[{i}]");
         }
         // Query iterasyonu tam n eleman vermeli (her sütun uzunluğu == entities sayısı).
         assert_eq!(bi.iter().count(), n, "column/entities tutarsızlığı");
@@ -1448,7 +1448,7 @@ mod tests {
         // sparse one must carry the right value (routed, not lost/panicked).
         let mut query = world.query_mut::<(&TableC, &SparseC)>().unwrap();
         let mut count = 0;
-        for (_id, (t, s)) in query.iter_mut() {
+        for (t, s) in query.iter_mut() {
             assert_eq!(s.0, t.0 * 2, "sparse component value mismatch");
             count += 1;
         }
@@ -1482,7 +1482,7 @@ mod tests {
         // The sparse component must be reachable through a sparse-storage query.
         let mut query = world.query_mut::<(&TableC, &SparseC)>().unwrap();
         let mut found = None;
-        for (_id, (t, s)) in query.iter_mut() {
+        for (t, s) in query.iter_mut() {
             found = Some((t.0, s.0));
         }
         assert_eq!(found, Some((7, 9)), "add_bundle must route the sparse component");
@@ -1719,7 +1719,7 @@ mod tests {
         world.add_component(e, TestCompI32(1));
         world.add_component(e, TestCompI32(99)); // overwrite
         
-        assert_eq!(world.borrow::<TestCompI32>().get(e.id()).unwrap().0, 99);
+        assert_eq!(world.borrow::<TestCompI32>().get(e).unwrap().0, 99);
     }
 
     #[test]
@@ -1795,13 +1795,13 @@ mod tests {
         
         // Query ile tüm i32'leri iki katına çıkar
         if let Some(mut q) = world.query_mut::<crate::query::Mut<TestCompI32>>() {
-            for (_, mut val) in q.iter_mut() {
+            for mut val in q.iter_mut() {
                 val.0 *= 2;
             }
         }
         
-        assert_eq!(world.borrow::<TestCompI32>().get(e1.id()).unwrap().0, 2);
-        assert_eq!(world.borrow::<TestCompI32>().get(e2.id()).unwrap().0, 4);
+        assert_eq!(world.borrow::<TestCompI32>().get(e1).unwrap().0, 2);
+        assert_eq!(world.borrow::<TestCompI32>().get(e2).unwrap().0, 4);
     }
 
     #[test]

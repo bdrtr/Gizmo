@@ -452,9 +452,8 @@ mod tests {
         let handles: Arc<Mutex<Vec<Entity>>> = Arc::new(Mutex::new(Vec::new()));
         let seen = handles.clone();
         let mut schedule = Schedule::new();
-        schedule.add_di_system(move |q: Query<&Doomed>, mut commands: crate::commands::Commands| {
-            for (id, _) in q.iter() {
-                let handle = q.entity(id).expect("a live id");
+        schedule.add_di_system(move |q: Query<(Entity, &Doomed)>, mut commands: crate::commands::Commands| {
+            for (handle, _) in q.iter() {
                 seen.lock().unwrap().push(handle);
                 commands.entity(handle).despawn();
             }

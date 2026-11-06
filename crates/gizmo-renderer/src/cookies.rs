@@ -174,7 +174,7 @@ impl LightCookies {
     pub fn sync(&mut self, world: &gizmo_core::World, queue: &wgpu::Queue, textures: &CookieTextures) {
         let mut wanted: Vec<String> = Vec::new();
         if let Some(q) = world.query::<&crate::components::SpotLight>() {
-            for (_, light) in q.iter() {
+            for light in q.iter() {
                 if let Some(name) = &light.cookie {
                     if self.layer(name).is_none() && !self.failed.contains(name) && !wanted.contains(name) {
                         wanted.push(name.clone());

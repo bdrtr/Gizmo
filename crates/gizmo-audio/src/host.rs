@@ -61,7 +61,7 @@ pub fn ensure_audio_manager(world: &mut World) {
     if world.get_resource::<AudioManager>().is_some() {
         return;
     }
-    if world.borrow::<AudioSource>().entities().next().is_none() {
+    if world.borrow::<AudioSource>().is_empty() {
         return;
     }
     open_audio_device(world);
@@ -120,7 +120,7 @@ pub fn open_audio_device(world: &mut World) -> bool {
 pub fn load_scene_sounds(world: &mut World) {
     let named: Vec<String> = {
         let sources = world.borrow::<AudioSource>();
-        sources.iter().map(|(_, s)| s.sound_name.clone()).collect()
+        sources.iter().map(|s| s.sound_name.clone()).collect()
     };
     load_named_sounds(world, &named);
 }
@@ -192,7 +192,7 @@ pub fn play_flat_sources(world: &mut World) {
     // and the checked `borrow_mut` wants `&mut World`.)
     let mut sources = unsafe { world.borrow_mut_unchecked::<AudioSource>() };
 
-    for (_, mut source) in sources.iter_mut() {
+    for mut source in sources.iter_mut() {
         if source.is_3d {
             continue;
         }
@@ -293,7 +293,7 @@ mod tests {
         play_flat_sources(&mut world);
 
         let sources = world.borrow::<AudioSource>();
-        assert!(!sources.get(e.id()).unwrap().has_played);
+        assert!(!sources.get(e).unwrap().has_played);
     }
 
     /// **End to end on a real sound card**: a scene's flat source — its music — plays, with no
@@ -321,7 +321,7 @@ mod tests {
             .expect("a scene with a source opens the device");
         let sources = world.borrow::<AudioSource>();
         let sink = sources
-            .get(e.id())
+            .get(e)
             .unwrap()
             ._internal_sink_id
             .expect("the flat source must have been started");
@@ -346,7 +346,7 @@ mod tests {
 
         let sink = world
             .borrow::<AudioSource>()
-            .get(e.id())
+            .get(e)
             .unwrap()
             ._internal_sink_id
             .expect("the source started");

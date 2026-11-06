@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use gizmo_audio::{AudioManager, AudioSource};
 use gizmo_core::World;
 use gizmo_math::Vec3;
@@ -79,8 +80,8 @@ impl Listener {
 /// build the up vector, so the ears are by construction square to what is on screen.
 pub fn listener(world: &World) -> Listener {
     let mut listener = Listener::default();
-    if let Some(mut query) = world.query::<(&gizmo_renderer::Camera, &Transform)>() {
-        for (e, (cam, t)) in query.iter_mut() {
+    if let Some(mut query) = world.query::<(Entity, &gizmo_renderer::Camera, &Transform)>() {
+        for (e, cam, t) in query.iter_mut() {
             if cam.primary {
                 listener.position = t.position;
                 listener.right = cam.get_right();
@@ -142,7 +143,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
     let listener_vel = ear.velocity;
     let (left_ear_arr, right_ear_arr) = ear.ears();
 
-    let source_ids: Vec<u32> = world.borrow::<AudioSource>().entities().collect();
+    let source_ids: Vec<u32> = world.query::<(Entity, &AudioSource)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
     // SAFETY: exclusive `&mut World`; AudioSource is a distinct component type from the
     // read-only Velocity/Transform queries, so this mutable query never aliases them.
     let mut sources = unsafe { world.borrow_mut_unchecked::<AudioSource>() };
@@ -370,7 +371,7 @@ mod tests {
         assert!(
             !world
                 .borrow::<AudioSource>()
-                .get(e.id())
+                .get(e)
                 .expect("the source is still there")
                 .has_played,
             "with no AudioManager nothing may be started"
@@ -465,7 +466,7 @@ mod tests {
             .get_resource::<AudioManager>()
             .expect("a scene with a source opens the device");
         let sources = world.borrow::<AudioSource>();
-        let source = sources.get(e.id()).unwrap();
+        let source = sources.get(e).unwrap();
         let sink = source
             ._internal_sink_id
             .expect("the source must have been started");
@@ -490,7 +491,7 @@ mod tests {
 
         let sink = world
             .borrow::<AudioSource>()
-            .get(e.id())
+            .get(e)
             .unwrap()
             ._internal_sink_id
             .expect("the looping source was started");

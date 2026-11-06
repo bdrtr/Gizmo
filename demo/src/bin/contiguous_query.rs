@@ -221,10 +221,9 @@ fn measure(
     // 1. Filtresiz: her arketip bir dilim.
     let mut all_chunks = Vec::new();
     let mut chunk_sum = 0.0f32;
-    // Dilim `(&[u32], &[Sample])` — varlık id'leri bileşen dilimiyle YAN YANA geliyor, yani
-    // toplu işlerken hangi varlığa ait olduğunu kaybetmiyorsunuz.
-    for (ids, samples) in everything.iter_chunks() {
-        debug_assert_eq!(ids.len(), samples.len(), "id dilimi ile bileşen dilimi aynı boyda olmalı");
+    // Sorguda `Entity` istenseydi dilimi `(&[Entity], &[Sample])` olurdu: varlıklar bileşen
+    // dilimiyle YAN YANA gelir, toplu işlerken hangi varlığa ait olduğu kaybolmaz.
+    for samples in everything.iter_chunks() {
         all_chunks.push(samples.len());
         chunk_sum += samples.iter().map(|s| s.0).sum::<f32>();
     }
@@ -243,7 +242,7 @@ fn measure(
     // 3. Satır satır — karşılaştırma tabanı.
     let mut row_total = 0usize;
     let mut row_sum = 0.0f32;
-    for (_entity, sample) in everything.iter() {
+    for sample in everything.iter() {
         row_total += 1;
         row_sum += sample.0;
     }

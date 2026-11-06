@@ -285,15 +285,12 @@ fn scoped_lifecycle(world: &mut World) {
     // 1. Çıkış temizliği: bu duruma ait OLMAYAN her kapsamlı varlığı sil.
     let mut alive = 0usize;
     let mut doomed: Vec<gizmo::core::Entity> = Vec::new();
-    if let Some(q) = world.query::<&ScopedTo>() {
+    if let Some(q) = world.query::<(Entity, &ScopedTo)>() {
         for (id, scope) in q.iter() {
             if scope.0 == current {
                 alive += 1;
             } else {
-                // Ham id -> Entity, nesil kontrollü. `Entity::new(id, 0)` DEĞİL.
-                if let Some(entity) = world.entity(id) {
-                    doomed.push(entity);
-                }
+                doomed.push(id);
             }
         }
     }

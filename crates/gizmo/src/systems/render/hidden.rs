@@ -45,11 +45,13 @@ use gizmo_core::StorageView;
 #[must_use]
 pub fn collect_hidden(
     world: &World,
-    hidden: &StorageView<'_, IsHidden>,
     children: &StorageView<'_, Children>,
 ) -> HashSet<u32> {
     let mut out: HashSet<u32> = HashSet::new();
-    let mut stack: Vec<u32> = hidden.iter().map(|(id, _)| id).collect();
+    let mut stack: Vec<u32> = world
+        .query::<(gizmo_core::Entity, &IsHidden)>()
+        .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
+        .unwrap_or_default();
     // The set doubles as the visited set. A `Parent`/`Children` cycle should be impossible, but
     // "should be" is what makes an infinite loop in a render pass; descending only into ids the
     // set did not already have makes the walk terminate whatever the hierarchy looks like.
@@ -82,9 +84,7 @@ mod tests {
     }
 
     fn hidden_set(world: &World) -> HashSet<u32> {
-        let hidden = world.borrow::<IsHidden>();
-        let children = world.borrow::<Children>();
-        collect_hidden(world, &hidden, &children)
+        collect_hidden(world, &world.borrow::<Children>())
     }
 
     #[test]

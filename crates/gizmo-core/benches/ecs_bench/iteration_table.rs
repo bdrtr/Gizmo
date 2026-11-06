@@ -22,7 +22,7 @@ pub fn bench_simple_iter(c: &mut Criterion) {
 
     c.bench_function("simple_iter", |b| {
         b.iter(|| {
-            for (_id, (velocity, mut position)) in query.iter_mut() {
+            for (velocity, mut position) in query.iter_mut() {
                 position.0.0[0] += velocity.0.0[0];
                 position.0.0[1] += velocity.0.0[1];
                 position.0.0[2] += velocity.0.0[2];
@@ -49,7 +49,7 @@ pub fn bench_contiguous_iter(c: &mut Criterion) {
     c.bench_function("contiguous_iter", |b| {
         b.iter(|| {
             let iter = query.iter_chunks_mut();
-            for (_ids, (velocity_slice, position_slice)) in iter {
+            for (velocity_slice, position_slice) in iter {
                 assert!(velocity_slice.len() == position_slice.len());
                 for (v, p) in velocity_slice.iter().zip(position_slice.iter_mut()) {
                     p.0.0[0] += v.0.0[0];
@@ -93,7 +93,7 @@ pub fn bench_contiguous_iter_avx2(c: &mut Criterion) {
     c.bench_function("contiguous_iter_avx2", |b| {
         b.iter(|| {
             let iter = query.iter_chunks_mut();
-            for (_ids, (velocity_slice, position_slice)) in iter {
+            for (velocity_slice, position_slice) in iter {
                 // SAFETY: test-local — the values were built here with the layout this storage was created
                 // with, the rows used are the ones just pushed, and the test owns the storage outright.
                 unsafe {
@@ -121,7 +121,7 @@ pub fn bench_for_each_iter(c: &mut Criterion) {
 
     c.bench_function("for_each_iter", |b| {
         b.iter(|| {
-            query.iter_mut().for_each(|(_id, (velocity, mut position))| {
+            query.iter_mut().for_each(|(velocity, mut position)| {
                 position.0.0[0] += velocity.0.0[0];
                 position.0.0[1] += velocity.0.0[1];
                 position.0.0[2] += velocity.0.0[2];
@@ -153,7 +153,7 @@ pub fn bench_cache_locality_loss(c: &mut Criterion) {
 
     c.bench_function("cache_locality_loss", |b| {
         b.iter(|| {
-            query.iter_mut().for_each(|(_id, (mut v1, v2))| {
+            query.iter_mut().for_each(|(mut v1, v2)| {
                 v1.0 += v2.0;
             });
         });
@@ -177,7 +177,7 @@ pub fn bench_bypass_change_detection(c: &mut Criterion) {
 
     c.bench_function("bypass_change_detection", |b| {
         b.iter(|| {
-            for (_id, (velocity, mut position)) in query.iter_mut() {
+            for (velocity, mut position) in query.iter_mut() {
                 let p = position.bypass_change_detection();
                 p.0.0[0] += velocity.0.0[0];
                 p.0.0[1] += velocity.0.0[1];
@@ -200,7 +200,7 @@ pub fn bench_system_iter(c: &mut Criterion) {
     })).count();
 
     fn query_system(mut query: Query<(&Velocity, Mut<Position>)>) {
-        for (_id, (velocity, mut position)) in query.iter_mut() {
+        for (velocity, mut position) in query.iter_mut() {
             position.0.0[0] += velocity.0.0[0];
             position.0.0[1] += velocity.0.0[1];
             position.0.0[2] += velocity.0.0[2];

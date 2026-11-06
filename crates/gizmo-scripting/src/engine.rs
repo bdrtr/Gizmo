@@ -1188,6 +1188,7 @@ mod soundness {
 
 #[cfg(test)]
 mod tests {
+    use gizmo_core::Entity;
 
     /// A script written to its own temp file, loaded into a fresh engine.
     fn engine_with(tag: &str, source: &str) -> (ScriptEngine, String, std::path::PathBuf) {
@@ -1625,7 +1626,7 @@ mod tests {
         let entity = world.spawn();
         world.add_component(entity, RigidBody::new(2.0, false));
         // Kasıtlı olarak Velocity EKLENMEDİ.
-        assert!(world.borrow::<Velocity>().get(entity.id()).is_none());
+        assert!(world.borrow::<Velocity>().get(entity).is_none());
 
         engine
             .command_queue()
@@ -1636,7 +1637,7 @@ mod tests {
 
         let vels = world.borrow::<Velocity>();
         let v = vels
-            .get(entity.id())
+            .get(entity)
             .expect("Velocity ApplyForce tarafından oluşturulmalıydı");
         // accel = force/mass = 4/2 = 2; dv = accel*dt = 2*0.5 = 1.0
         assert!((v.linear.x - 1.0).abs() < 1e-5, "x hızı yanlış: {}", v.linear.x);
@@ -1651,7 +1652,7 @@ mod tests {
 
         let entity = world.spawn();
         world.add_component(entity, RigidBody::new(2.0, false));
-        assert!(world.borrow::<Velocity>().get(entity.id()).is_none());
+        assert!(world.borrow::<Velocity>().get(entity).is_none());
 
         engine
             .command_queue()
@@ -1661,7 +1662,7 @@ mod tests {
 
         let vels = world.borrow::<Velocity>();
         let v = vels
-            .get(entity.id())
+            .get(entity)
             .expect("Velocity ApplyImpulse tarafından oluşturulmalıydı");
         // dv = impulse/mass = 6/2 = 3.0 (dt'den bağımsız)
         assert!((v.linear.x - 3.0).abs() < 1e-5, "x hızı yanlış: {}", v.linear.x);
@@ -1807,7 +1808,7 @@ mod tests {
 
         // İsimli entity'yi bul.
         let names = world.borrow::<gizmo_core::EntityName>();
-        let found = names.iter().filter_map(|(eid, _)| names.get(eid).map(|n| (eid, n.0.clone())))
+        let found = world.query::<(Entity, &gizmo_core::EntityName)>().unwrap().iter().filter_map(|(entity, _)| names.get(entity).map(|n| (entity.id(), n.0.clone())))
             .find(|(_, name)| name == "hero");
         let (eid, _) = found.expect("'hero' isimli entity oluşmalıydı");
         drop(names);

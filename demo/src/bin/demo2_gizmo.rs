@@ -393,7 +393,7 @@ fn toggle_wireframes(mut cfg: ResMut<gizmo::systems::render::WireframeConfig>, i
 
 fn advance_rows(mut q: Query<(Mut<Row>, Mut<Transform>, With<Shape>)>, input: Res<Input>) {
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Tab as u32) {
-        for (_id, (mut row, mut trans, _)) in q.iter_mut() {
+        for (mut row, mut trans, _) in q.iter_mut() {
             *row = row.advance();
             trans.position.z = row.z();
         }
@@ -408,7 +408,7 @@ fn rotate_shapes(
     let dt = time.dt();
     if state.rotate {
         state.time += dt;
-        for (_id, (mut trans, _)) in q.iter_mut() {
+        for (mut trans, _) in q.iter_mut() {
             trans.rotation = Quat::from_rotation_y(state.time);
             trans.rotation *= Quat::from_rotation_x(state.time * 0.5);
         }
@@ -467,7 +467,7 @@ fn camera_movement(
     let pitch_rot = Quat::from_rotation_x(state.simple.camera_pitch);
     let rot = yaw_rot * pitch_rot;
 
-    for (_id, (mut trans, mut cam)) in q.iter_mut() {
+    for (mut trans, mut cam) in q.iter_mut() {
         trans.position = state.simple.camera_pos;
         trans.rotation = rot;
         cam.yaw = state.simple.camera_yaw;
@@ -519,7 +519,7 @@ fn draw_cursor(
     }
 
     let mut cam_data = None;
-    for (_id, (trans, cam)) in q_cam.iter() {
+    for (trans, cam) in q_cam.iter() {
         if cam.primary {
             cam_data = Some((trans.position, cam));
             break;

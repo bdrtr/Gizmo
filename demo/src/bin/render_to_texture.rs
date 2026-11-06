@@ -38,7 +38,7 @@
 //! gözetmeden:
 //!
 //! ```text
-//! for (_, (mut trans, mut cam)) in q.iter_mut() {   // filtre yok
+//! for (mut trans, mut cam) in q.iter_mut() {   // filtre yok
 //! ```
 //!
 //! Ölçülen sonuç: ikinci kamera (0 · 7,0 · 0,2) konumunda, pitch −1,15 ile doğuruldu; çizim
@@ -220,8 +220,8 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 1.4, 6.5), Vec3::ZERO);
             let front = scene
                 .world
-                .query::<&Camera>()
-                .and_then(|q| q.iter().next().map(|(id, _)| id));
+                .query::<(Entity, &Camera)>()
+                .and_then(|q| q.iter().next().map(|(entity, _)| entity.id()));
             if let Some(id) = front.and_then(|id| scene.world.entity(id)) {
                 scene.world.add_component(id, CameraTag(0));
             }
@@ -390,18 +390,18 @@ fn log_active(world: &World, label: &str) {
     }
     let active = gizmo::renderer::components::active_camera(world);
     let mut rows = Vec::new();
-    if let Some(q) = world.query::<(&CameraTag, &Camera)>() {
-        for (id, (tag, cam)) in q.iter() {
-            rows.push(format!("id{id}=etiket{} primary={}", tag.0, cam.primary));
+    if let Some(q) = world.query::<(Entity, &CameraTag, &Camera)>() {
+        for (entity, tag, cam) in q.iter() {
+            rows.push(format!("id{entity}=etiket{} primary={}", tag.0, cam.primary));
         }
     }
     // Kameraların GERÇEK duruşu: yaw/pitch ve iki ayrı konum kaynağı.
     let mut poses = Vec::new();
-    if let Some(q) = world.query::<(&CameraTag, &Camera, &Transform, &GlobalTransform)>() {
-        for (id, (tag, cam, t, g)) in q.iter() {
+    if let Some(q) = world.query::<(Entity, &CameraTag, &Camera, &Transform, &GlobalTransform)>() {
+        for (entity, tag, cam, t, g) in q.iter() {
             let gp = g.matrix.to_scale_rotation_translation().2;
             poses.push(format!(
-                "id{id}/e{}: yaw {:.2} pitch {:.2} T{:?} G{:?}",
+                "id{entity}/e{}: yaw {:.2} pitch {:.2} T{:?} G{:?}",
                 tag.0,
                 cam.yaw,
                 cam.pitch,
@@ -422,14 +422,14 @@ fn log_active(world: &World, label: &str) {
 /// `primary` bayrağını verilen etikete taşır — kamera seçiminin tek kolu bu.
 fn set_primary(world: &mut World, tag: u8) {
     let mut wanted: Vec<(u32, bool)> = Vec::new();
-    if let Some(q) = world.query::<(&CameraTag, &Camera)>() {
-        for (id, (t, _)) in q.iter() {
-            wanted.push((id, t.0 == tag));
+    if let Some(q) = world.query::<(Entity, &CameraTag, &Camera)>() {
+        for (entity, t, _) in q.iter() {
+            wanted.push((entity.id(), t.0 == tag));
         }
     }
-    if let Some(mut q) = world.query_mut::<Mut<Camera>>() {
-        for (id, mut camera) in q.iter_mut() {
-            if let Some((_, want)) = wanted.iter().find(|(wid, _)| *wid == id) {
+    if let Some(mut q) = world.query_mut::<(Entity, Mut<Camera>)>() {
+        for (entity, mut camera) in q.iter_mut() {
+            if let Some((_, want)) = wanted.iter().find(|(wid, _)| *wid == entity.id()) {
                 camera.primary = *want;
             }
         }

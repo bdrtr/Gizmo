@@ -172,7 +172,7 @@ fn main() {
 
                 if let Some(mut q) = world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>()
                 {
-                    for (_e, (link, trans)) in q.iter_mut() {
+                    for (link, trans) in q.iter_mut() {
                         if (trans.position.y - 40.0).abs() < 1.0 {
                             let x =
                                 ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0).round() as i32;
@@ -219,7 +219,7 @@ fn main() {
                         if let Some(mut q) =
                             world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>()
                         {
-                            for (_e, (link, trans)) in q.iter_mut() {
+                            for (link, trans) in q.iter_mut() {
                                 if (trans.position.y - 40.0).abs() < 1.0 {
                                     let x = ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0)
                                         .round() as i32;

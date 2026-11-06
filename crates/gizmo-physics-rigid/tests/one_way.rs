@@ -36,7 +36,7 @@ fn launch(platform: Collider, platform_rotation: Quat) -> Vec3 {
     for _ in 0..180 {
         gizmo_physics_rigid::system::physics_step_system(&w, 1.0 / 60.0);
     }
-    let p = w.borrow::<Transform>().get(ball.id()).unwrap().position;
+    let p = w.borrow::<Transform>().get(ball).unwrap().position;
     p
 }
 

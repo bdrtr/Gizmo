@@ -227,7 +227,7 @@ fn sun_input(
         return;
     }
     let rotation = sun_rotation(sun.elevation_deg);
-    for (_entity, (mut transform, _)) in lights.iter_mut() {
+    for (mut transform, _) in lights.iter_mut() {
         transform.rotation = rotation;
     }
 }

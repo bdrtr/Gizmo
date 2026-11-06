@@ -401,10 +401,9 @@ fn aim_and_fire(world: &mut World, game: &mut Game, input: &Input, dt: f32) {
     if game.auto {
         // En yakın düşmana.
         let nearest = {
-            let es = world.borrow::<Enemy>();
             let ts = world.borrow::<Transform>();
-            es.iter()
-                .filter_map(|(id, _)| ts.get(id).map(|t| t.position))
+            world.query::<(Entity, &Enemy)>().unwrap().iter()
+                .filter_map(|(entity, _)| ts.get(entity).map(|t| t.position))
                 .min_by(|a, b| a.distance(me).total_cmp(&b.distance(me)))
         };
         firing = nearest.is_some();
@@ -529,9 +528,8 @@ fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {
 fn chase(world: &mut World, game: &Game, dt: f32) {
     let me = player_position(world, game);
     let enemies: Vec<(u32, Vec3, f32)> = {
-        let es = world.borrow::<Enemy>();
         let ts = world.borrow::<Transform>();
-        es.iter().filter_map(|(id, e)| ts.get(id).map(|t| (id, t.position, e.speed))).collect()
+        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, e)| ts.get(entity).map(|t| (entity.id(), t.position, e.speed))).collect()
     };
     let mut ts = world.borrow_mut::<Transform>();
     for (i, &(id, p, speed)) in enemies.iter().enumerate() {
@@ -551,29 +549,28 @@ fn chase(world: &mut World, game: &Game, dt: f32) {
 
 fn fly_bullets(world: &mut World, game: &mut Game, dt: f32) {
     let targets: Vec<(u32, Vec3)> = {
-        let es = world.borrow::<Enemy>();
         let ts = world.borrow::<Transform>();
-        es.iter().filter_map(|(id, _)| ts.get(id).map(|t| (id, t.position))).collect()
+        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity.id(), t.position))).collect()
     };
     let mut dead_bullets = Vec::new();
     let mut hits: Vec<(u32, Vec3)> = Vec::new();
-    if let Some(mut q) = world.query_mut::<(Mut<Bullet>, Mut<Transform>)>() {
-        for (id, (mut b, mut t)) in q.iter_mut() {
+    if let Some(mut q) = world.query_mut::<(Entity, Mut<Bullet>, Mut<Transform>)>() {
+        for (entity, mut b, mut t) in q.iter_mut() {
             b.life -= dt;
             t.position += b.velocity * dt;
             let p = t.position;
             if b.life <= 0.0 || p.x.abs() > ARENA + 1.0 || p.z.abs() > ARENA + 1.0 {
-                dead_bullets.push(id);
+                dead_bullets.push(entity);
                 continue;
             }
             if let Some(&(enemy, _)) = targets.iter().find(|(_, q)| q.distance(p) < ENEMY_RADIUS) {
-                dead_bullets.push(id);
+                dead_bullets.push(entity);
                 hits.push((enemy, p));
             }
         }
     }
     for id in dead_bullets {
-        world.despawn_by_id(id);
+        world.despawn_by_id(id.id());
     }
     for (enemy, at) in hits {
         let killed = {
@@ -602,11 +599,10 @@ fn get_hit(world: &mut World, game: &mut Game, dt: f32) {
     }
     let me = player_position(world, game);
     let touching: Vec<u32> = {
-        let es = world.borrow::<Enemy>();
         let ts = world.borrow::<Transform>();
-        es.iter()
-            .filter(|(id, _)| ts.get(*id).is_some_and(|t| t.position.distance(me) < ENEMY_RADIUS + PLAYER_RADIUS))
-            .map(|(id, _)| id)
+        world.query::<(Entity, &Enemy)>().unwrap().iter()
+            .filter(|(entity, _)| ts.get(*entity).is_some_and(|t| t.position.distance(me) < ENEMY_RADIUS + PLAYER_RADIUS))
+            .map(|(entity, _)| entity.id())
             .collect()
     };
     if touching.is_empty() {

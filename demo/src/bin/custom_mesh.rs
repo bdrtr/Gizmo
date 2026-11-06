@@ -111,7 +111,7 @@ fn main() {
             if let Some(zoomed) = pending {
                 let vertices = cube_vertices(zoomed);
                 let meshes = world.borrow::<Mesh>();
-                for (_id, mesh) in meshes.iter() {
+                for mesh in meshes.iter() {
                     mesh.update_vertices(&renderer.queue, &vertices);
                 }
                 drop(meshes);
@@ -143,7 +143,7 @@ fn input_handler(
         toggle.dirty = true;
     }
 
-    for (_entity, (mut transform, _)) in cubes.iter_mut() {
+    for (mut transform, _) in cubes.iter_mut() {
         if key(KeyCode::KeyX) {
             transform.rotation *= Quat::from_rotation_x(TURN_RATE * dt);
         }

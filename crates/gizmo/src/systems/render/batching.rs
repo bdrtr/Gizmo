@@ -6,6 +6,7 @@
 //! uploads the instance buffer, and returns the `DrawItem` list plus how many instances
 //! actually fit the GPU buffer. Pure move out of mod.rs — no behaviour change.
 
+use gizmo_core::Entity;
 use super::*;
 
 #[derive(Default)]
@@ -384,9 +385,9 @@ fn build_occlusion(
 
     let aspect = size.width as f32 / size.height.max(1) as f32;
     let mut buffer = crate::renderer::occlusion::OcclusionBuffer::new(*view_proj, aspect);
-    for (e, occluder) in occluders.iter() {
+    for (e, occluder) in world.query::<(Entity, &crate::renderer::components::Occluder)>().unwrap().iter() {
         let Some(shown) = renderers.get(e) else { continue };
-        if !shown.shadows.visible() || hidden.contains(&e) || pooled.get(e).is_some() || editor_only.get(e).is_some() {
+        if !shown.shadows.visible() || hidden.contains(&e.id()) || pooled.get(e).is_some() || editor_only.get(e).is_some() {
             continue;
         }
         let Some(trans) = transforms.get(e) else { continue };
@@ -444,8 +445,7 @@ pub(super) fn collect_draw_items(
     // entity, so hiding a vehicle hides its wheels. Before it, a hidden parent left 1 886 of a
     // pair's 2 946 pixels on screen. The set is built from the same two borrows both paths hold,
     // and it costs nothing on a frame with nothing hidden.
-    let hidden = world.borrow::<crate::core::component::IsHidden>();
-    let hidden = super::collect_hidden(world, &hidden, &world.borrow::<crate::core::component::Children>());
+    let hidden = super::collect_hidden(world, &world.borrow::<crate::core::component::Children>());
     // **Editor furniture never draws here.** A game has none, so for a game this is a no-op; it
     // matters since 2026-11-01, when the studio started capturing reflection probes through this
     // path (`capture_reflection_probes`) — without it the grid, light icons and gizmo handles
@@ -806,10 +806,10 @@ pub(super) fn collect_draw_items(
             })
         };
 
-        if let Some(mut q) = world.query::<(&Mesh, &gizmo_physics_core::components::GlobalTransform, &Material)>() {
+        if let Some(mut q) = world.query::<(Entity, &Mesh, &gizmo_physics_core::components::GlobalTransform, &Material)>() {
             if let Some(candidates) = index_candidates.as_ref() {
                 for &e in candidates {
-                    let Some((mesh, trans, mat)) = q.get(e) else {
+                    let Some((_, mesh, trans, mat)) = q.get(e) else {
                         continue;
                     };
                     let Some(mesh) = crate::renderer::components::LodGroup::pick(
@@ -822,7 +822,7 @@ pub(super) fn collect_draw_items(
                     process_mesh!(e, mesh, trans, mat, skeletons.get(e));
                 }
             } else {
-                for (e, (mesh, trans, mat)) in q.iter_mut() {
+                for (e, mesh, trans, mat) in q.iter_mut() {
                     let Some(mesh) = crate::renderer::components::LodGroup::pick(
                         lod_groups.get(e),
                         mesh,
@@ -830,7 +830,7 @@ pub(super) fn collect_draw_items(
                     ) else {
                         continue;
                     };
-                    process_mesh!(e, mesh, trans, mat, skeletons.get(e));
+                    process_mesh!(e.id(), mesh, trans, mat, skeletons.get(e));
                 }
             }
         }
@@ -839,8 +839,8 @@ pub(super) fn collect_draw_items(
         let materials = world.try_get_resource::<gizmo_core::asset::Assets<Material>>().ok();
         
         if let (Some(meshes), Some(materials)) = (meshes, materials) {
-            if let Some(mut q) = world.query::<(&gizmo_core::asset::Handle<Mesh>, &gizmo_physics_core::components::GlobalTransform, &gizmo_core::asset::Handle<Material>)>() {
-                for (e, (h_mesh, trans, h_mat)) in q.iter_mut() {
+            if let Some(mut q) = world.query::<(Entity, &gizmo_core::asset::Handle<Mesh>, &gizmo_physics_core::components::GlobalTransform, &gizmo_core::asset::Handle<Material>)>() {
+                for (e, h_mesh, trans, h_mat) in q.iter_mut() {
                     if let (Some(mesh), Some(mat)) = (meshes.get(h_mesh), materials.get(h_mat)) {
                         let Some(mesh) = crate::renderer::components::LodGroup::pick(
                             lod_groups.get(e),
@@ -849,7 +849,7 @@ pub(super) fn collect_draw_items(
                         ) else {
                             continue;
                         };
-                        process_mesh!(e, mesh, trans, mat, skeletons.get(e));
+                        process_mesh!(e.id(), mesh, trans, mat, skeletons.get(e));
                     }
                 }
             }

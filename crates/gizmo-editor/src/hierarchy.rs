@@ -167,7 +167,7 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         let root_entities: Vec<gizmo_core::entity::Entity> = world
             .iter_alive_entities()
             .into_iter()
-            .filter(|e| parents.get(e.id()).is_none() && is_deleted_comp.get(e.id()).is_none())
+            .filter(|e| parents.get(*e).is_none() && is_deleted_comp.get(*e).is_none())
             .collect();
 
         // Root entity'leri çiz.
@@ -260,27 +260,27 @@ fn draw_entity_node(
         return;
     }
     let entity_name = names
-        .get(entity.id())
+        .get(entity)
         .map(|n| n.0.clone())
         .unwrap_or_else(|| format!("Entity_{}", entity.id()));
 
     if state.hide_editor_entities
         && gizmo_core::component::is_editor_only(
-            editor_only_markers.get(entity.id()).is_some(),
+            editor_only_markers.get(entity).is_some(),
             Some(entity_name.as_str()),
         )
     {
         return;
     }
 
-    if is_deleted_comp.get(entity.id()).is_some() {
+    if is_deleted_comp.get(entity).is_some() {
         return;
     }
 
     // Filtre uygulaması
     if !filter_lower.is_empty() && !entity_name.to_lowercase().contains(filter_lower) {
         // Bu entity filtrede yoksa ama child'ları olabilir — onları kontrol et
-        if let Some(children) = children_comp.get(entity.id()) {
+        if let Some(children) = children_comp.get(entity) {
             for &child_id in &children.0 {
                 // Generation güvenliği sağlandı, world üzerinden çekildi
                 if let Some(child_ent) = Some(child_id).filter(|c| world.is_alive(*c)) {
@@ -313,11 +313,11 @@ fn draw_entity_node(
 
     let is_selected = state.is_selected(entity);
     let has_children = children_comp
-        .get(entity.id())
+        .get(entity)
         .map(|c| !c.0.is_empty())
         .unwrap_or(false);
 
-    let is_hidden = is_hidden_comp.get(entity.id()).is_some();
+    let is_hidden = is_hidden_comp.get(entity).is_some();
 
     // Düğüm Çizimi + Drag Drop Kapsüllemesi
     let mut draw_row = |ui: &mut egui::Ui| {
@@ -337,7 +337,7 @@ fn draw_entity_node(
             painter.rect_filled(rect, 0.0, SURFACE);
         }
 
-        let dim = is_hidden || is_deleted_comp.get(entity.id()).is_some();
+        let dim = is_hidden || is_deleted_comp.get(entity).is_some();
         let name_color = if is_selected {
             TEXT_BRIGHT
         } else if dim {
@@ -595,7 +595,7 @@ fn draw_entity_node(
         // Açıksa çocukları girintili çiz
         if is_open {
             ui.indent(id, |ui| {
-                if let Some(children) = children_comp.get(entity.id()) {
+                if let Some(children) = children_comp.get(entity) {
                     for &child_id in &children.0 {
                         if let Some(child_ent) = Some(child_id).filter(|c| world.is_alive(*c)) {
                             if world.is_alive(child_ent) {

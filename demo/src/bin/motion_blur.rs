@@ -228,7 +228,7 @@ fn main() {
             // `GIZMO_BLUR_SHUTTER=0.5`: kameraya deklanşörü açık bir `PostProcess`. Bileşenin
             // varsayılanı bileşensiz davranış, yani değişen tek şey bulanıklık.
             if let Some(shutter) = std::env::var("GIZMO_BLUR_SHUTTER").ok().and_then(|v| v.parse::<f32>().ok()) {
-                let cams: Vec<u32> = world.borrow::<Camera>().iter().map(|(id, _)| id).collect();
+                let cams: Vec<u32> = world.query::<(Entity, &Camera)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
                 for id in cams {
                     if world.borrow::<PostProcess>().get(id).is_none() {
                         if let Some(e) = world.get_entity(id) {
@@ -250,7 +250,7 @@ fn main() {
                     let pos = Vec3::new(m.angle.cos() * ORBIT_RADIUS, 1.2, m.angle.sin() * ORBIT_RADIUS);
                     let dir = (-pos).normalize();
                     if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
-                        for (_, (mut t, mut cam)) in q.iter_mut() {
+                        for (mut t, mut cam) in q.iter_mut() {
                             t.position = pos;
                             cam.yaw = dir.z.atan2(dir.x);
                             cam.pitch = dir.y.asin();
@@ -326,7 +326,7 @@ fn drive(
         // YALNIZ Y ekseni, ve yalnız `a` ile. İlk kurulumda `from_rotation_x(a * 0.6)` de
         // vardı: `a` tam tur katıyken `a * 0.6` değil, yani iki koşu yakalama karesinde aynı
         // duruşta olmuyordu ve fark bulanıklık değil **poz** farkıydı.
-        for (_e, (mut t, _)) in spinners.iter_mut() {
+        for (mut t, _) in spinners.iter_mut() {
             t.rotation = Quat::from_rotation_y(a);
         }
     } else {

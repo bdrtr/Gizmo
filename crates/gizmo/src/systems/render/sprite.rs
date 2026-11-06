@@ -6,6 +6,7 @@
 //! the point: `gizmo-studio` calls this rather than keeping a copy, so the editor viewport and the
 //! game cannot disagree about where a sprite sits or which one is in front.
 
+use gizmo_core::Entity;
 use gizmo_math::{Mat4, Vec2};
 
 use crate::core::World;
@@ -36,7 +37,7 @@ pub fn record_sprites(
 ) {
     let sprites = world.borrow::<Sprite>();
     let tilemaps = world.borrow::<Tilemap>();
-    if sprites.iter().next().is_none() && tilemaps.iter().next().is_none() {
+    if sprites.is_empty() && tilemaps.is_empty() {
         if let Some(s) = renderer.sprites.as_mut() {
             // Last frame's runs must not survive into a frame that has none.
             s.begin_frame();
@@ -45,7 +46,6 @@ pub fn record_sprites(
     }
     let hidden = super::hidden::collect_hidden(
         world,
-        &world.borrow::<gizmo_core::component::IsHidden>(),
         &world.borrow::<gizmo_core::component::Children>(),
     );
     let transforms = world.borrow::<crate::prelude::GlobalTransform>();
@@ -57,12 +57,12 @@ pub fn record_sprites(
     };
 
     state.begin_frame();
-    for (id, sprite) in sprites.iter() {
-        if hidden.contains(&id) {
+    for (entity, sprite) in world.query::<(Entity, &Sprite)>().unwrap().iter() {
+        if hidden.contains(&entity.id()) {
             continue;
         }
         let model = if sprite.space.needs_world_transform() {
-            let Some(t) = transforms.get(id) else { continue };
+            let Some(t) = transforms.get(entity) else { continue };
             t.matrix
         } else {
             Mat4::IDENTITY
@@ -71,11 +71,11 @@ pub fn record_sprites(
     }
     // A tilemap is a run of world sprites sharing one image: queued here, it is sorted and
     // batched with them, so a whole map is one draw call on both draw paths.
-    for (id, map) in tilemaps.iter() {
-        if hidden.contains(&id) {
+    for (entity, map) in world.query::<(Entity, &Tilemap)>().unwrap().iter() {
+        if hidden.contains(&entity.id()) {
             continue;
         }
-        let Some(t) = transforms.get(id) else { continue };
+        let Some(t) = transforms.get(entity) else { continue };
         // Only the cells this camera can see: a level far larger than the screen costs what is
         // on screen. Conservative — a view that cannot bound the map gets all of it.
         let cells = map.visible_cells(view_proj * t.matrix);

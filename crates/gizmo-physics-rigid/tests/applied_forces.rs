@@ -66,15 +66,15 @@ fn settled_box() -> (World, gizmo_core::Entity) {
 fn a_force_wakes_the_body_it_is_applied_to() {
     let (mut w, b) = settled_box();
     assert!(
-        w.borrow::<RigidBody>().get(b.id()).expect("the box").is_sleeping,
+        w.borrow::<RigidBody>().get(b).expect("the box").is_sleeping,
         "the harness must actually get the box to sleep, or this test measures nothing"
     );
-    let start = w.borrow::<Transform>().get(b.id()).expect("the box").position;
+    let start = w.borrow::<Transform>().get(b).expect("the box").position;
 
     for _ in 0..120 {
         {
             let mut bodies = w.borrow_mut::<RigidBody>();
-            if let Some(mut rb) = bodies.get_mut(b.id()) {
+            if let Some(mut rb) = bodies.get_mut(b) {
                 // Deliberately NO `wake_up()`: that is the call this test exists to make
                 // unnecessary.
                 rb.force_accumulator.x += 50.0;
@@ -83,7 +83,7 @@ fn a_force_wakes_the_body_it_is_applied_to() {
         physics_step_system(&w, DT);
     }
 
-    let moved = (w.borrow::<Transform>().get(b.id()).expect("the box").position - start).length();
+    let moved = (w.borrow::<Transform>().get(b).expect("the box").position - start).length();
     println!("[wake] 50 N for 2 s on a sleeping box: {moved:.4} m");
     assert!(
         moved > 1.0,
@@ -96,19 +96,19 @@ fn a_force_wakes_the_body_it_is_applied_to() {
 #[test]
 fn a_torque_wakes_the_body_it_is_applied_to() {
     let (mut w, b) = settled_box();
-    assert!(w.borrow::<RigidBody>().get(b.id()).expect("the box").is_sleeping);
+    assert!(w.borrow::<RigidBody>().get(b).expect("the box").is_sleeping);
 
     for _ in 0..120 {
         {
             let mut bodies = w.borrow_mut::<RigidBody>();
-            if let Some(mut rb) = bodies.get_mut(b.id()) {
+            if let Some(mut rb) = bodies.get_mut(b) {
                 rb.torque_accumulator.y += 5.0;
             }
         }
         physics_step_system(&w, DT);
     }
 
-    let spin = w.borrow::<Velocity>().get(b.id()).expect("the box").angular.length();
+    let spin = w.borrow::<Velocity>().get(b).expect("the box").angular.length();
     println!("[wake] 5 N·m for 2 s on a sleeping box: {spin:.4} rad/s");
     assert!(spin > 0.1, "a torque on a sleeping body produced {spin:.4} rad/s");
 }
@@ -140,13 +140,13 @@ fn a_torque_produces_the_same_angular_acceleration_at_every_frame_rate() {
         for _ in 0..steps {
             {
                 let mut bodies = w.borrow_mut::<RigidBody>();
-                if let Some(mut rb) = bodies.get_mut(b.id()) {
+                if let Some(mut rb) = bodies.get_mut(b) {
                     rb.torque_accumulator.y += 2.0; // N·m, held for the whole second
                 }
             }
             physics_step_system(&w, dt);
         }
-        w.borrow::<Velocity>().get(b.id()).expect("the body").angular.y
+        w.borrow::<Velocity>().get(b).expect("the body").angular.y
     }
 
     let rates = [1.0 / 240.0, 1.0 / 120.0, 1.0 / 60.0, 1.0 / 30.0];

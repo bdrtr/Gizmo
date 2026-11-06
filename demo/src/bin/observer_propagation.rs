@@ -379,8 +379,8 @@ fn drive(world: &mut World, input: &Input) {
     if input.is_key_just_pressed(KeyCode::KeyX as u32) || (frame_bump && once(world, 3)) {
         // Halkayı dizin sırasına göre değil, taşıdığı `Link` derinliğine göre bul — zincir
         // yeniden düzenlense de doğru halkayı keser.
-        let middle_id = world.query::<&Link>().and_then(|q| {
-            q.iter().find(|(_, link)| link.0 == DEPTH / 2).map(|(id, _)| id)
+        let middle_id = world.query::<(Entity, &Link)>().and_then(|q| {
+            q.iter().find(|(_, link)| link.0 == DEPTH / 2).map(|(entity, _)| entity.id())
         });
         let Some(middle) = middle_id.and_then(|id| world.entity(id)) else {
             return;
@@ -410,9 +410,9 @@ fn drive(world: &mut World, input: &Input) {
 /// Uğranan halkaları ekranda işaretler — `Link`'in derinliği burada iş görüyor.
 fn tint_visited(world: &mut World, visited: &[usize]) {
     let mut targets: Vec<(u32, usize)> = Vec::new();
-    if let Some(q) = world.query::<&Link>() {
-        for (id, link) in q.iter() {
-            targets.push((id, link.0));
+    if let Some(q) = world.query::<(Entity, &Link)>() {
+        for (entity, link) in q.iter() {
+            targets.push((entity.id(), link.0));
         }
     }
     for (id, depth) in targets {
@@ -424,8 +424,8 @@ fn tint_visited(world: &mut World, visited: &[usize]) {
             Vec4::new(0.30 + depth as f32 * 0.14, 0.55, 0.85, 1.0)
         };
         let existing = world
-            .query::<&Material>()
-            .and_then(|q| q.iter().find(|(e, _)| *e == id).map(|(_, m)| m.clone()));
+            .query::<(Entity, &Material)>()
+            .and_then(|q| q.iter().find(|(e, _)| (*e).id() == id).map(|(_, m)| m.clone()));
         if let Some(material) = existing {
             world.add_component(entity, material.with_pbr(colour, 0.5, 0.0));
         }

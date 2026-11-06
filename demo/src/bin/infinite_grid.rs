@@ -177,7 +177,7 @@ fn main() {
 /// `&mut World` tutamıyor (bkz. `docs/CAPABILITY_GAPS.md` C2).
 fn toggle_grid(
     mut grid: ResMut<GridState>,
-    planes: Query<(&EngineGrid, With<EngineGrid>)>,
+    planes: Query<(Entity, &EngineGrid, With<EngineGrid>)>,
     mut commands: Commands,
     input: Res<Input>,
 ) {
@@ -190,11 +190,11 @@ fn toggle_grid(
     }
 
     let draw_plane = grid.visible && grid.use_engine_material;
-    for (entity, _) in planes.iter() {
+    for (entity, ..) in planes.iter() {
         // `Entity::new(id, 0)`: sorgular ham `u32` veriyor ve geri çevirmek `&World` istiyor —
         // C1'de yazılı bir boşluk. Burada güvenli, çünkü bu varlık kurulumda doğuruldu ve hiç
         // silinmedi, yani kuşağı sıfır.
-        let e = gizmo::core::entity::Entity::new(entity, 0);
+        let e = gizmo::core::entity::Entity::new(entity.id(), 0);
         if draw_plane {
             commands.entity(e).remove::<gizmo::core::component::IsHidden>();
         } else {
@@ -220,7 +220,7 @@ fn draw_line_grid(
 
     // Kameranın oturduğu hücrenin merkezi.
     let mut origin = Vec3::ZERO;
-    for (_entity, (camera, transform)) in cameras.iter() {
+    for (camera, transform) in cameras.iter() {
         if camera.primary {
             origin = transform.position;
             break;

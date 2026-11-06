@@ -210,7 +210,7 @@ fn rotate(
     if !spinning.0 {
         return;
     }
-    for (_entity, (mut transform, _)) in shapes.iter_mut() {
+    for (mut transform, _) in shapes.iter_mut() {
         transform.rotate_y(time.dt() / 2.0);
     }
 }

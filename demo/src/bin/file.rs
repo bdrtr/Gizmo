@@ -101,9 +101,8 @@ fn spawn_fruit(world: &mut World, at: Vec3, visual: bool) {
 /// (yavaş sönen bir salınım) ve hızı o sürede sıfıra yakın değildir.
 fn settle(world: &mut World, dt: f32) -> (u32, u32) {
     let fruits: Vec<(u32, Vec3, f32)> = {
-        let f = world.borrow::<Fruit>();
         let ts = world.borrow::<Transform>();
-        f.iter().filter_map(|(id, _)| Some((id, ts.get(id)?.position, 0.0))).collect()
+        world.query::<(Entity, &Fruit)>().unwrap().iter().filter_map(|(entity, _)| Some((entity.id(), ts.get(entity)?.position, 0.0))).collect()
     };
     let (mut caught, mut missed) = (0, 0);
     for (id, p, speed) in fruits {
@@ -244,7 +243,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let dt = dt.min(0.05);
     let over = game.missed >= MISSES;
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        let fruits: Vec<u32> = world.borrow::<Fruit>().iter().map(|(id, _)| id).collect();
+        let fruits: Vec<u32> = world.query::<(Entity, &Fruit)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
         for id in fruits {
             if let Some(e) = world.get_entity(id) {
                 world.despawn(e);
