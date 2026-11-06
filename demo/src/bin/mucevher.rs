@@ -188,7 +188,8 @@ fn main() {
         .with_simple_scene(|scene, state| {
             let font = load_font(scene.renderer);
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 20.0), Vec3::ZERO);
-            if let Some(mut q) = scene.world.query_mut::<Mut<Camera>>() {
+            {
+                let mut q = scene.world.query_mut::<Mut<Camera>>();
                 for mut cam in q.iter_mut() {
                     cam.projection = ProjectionMode::OrthographicFit { width: 10.0, height: 10.0 };
                 }

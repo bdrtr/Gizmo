@@ -222,7 +222,7 @@ pub fn update_scene_api(lua: &Lua, world: &World) -> Result<(), LuaError> {
     // İsim → ID eşleme tablosu
     let name_map = lua.create_table()?;
     let names = world.borrow::<gizmo_core::EntityName>();
-    for (entity, _) in world.query::<(Entity, &gizmo_core::EntityName)>().unwrap().iter() {
+    for (entity, _) in world.query::<(Entity, &gizmo_core::EntityName)>().iter() {
         if let Some(n) = names.get(entity) {
             name_map.set(n.0.clone(), entity.id())?;
         }

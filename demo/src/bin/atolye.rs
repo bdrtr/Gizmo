@@ -81,7 +81,7 @@ fn colour(i: u8) -> Vec4 {
 }
 
 fn blocks(world: &World) -> Vec<(Entity, Block)> {
-    world.query::<(Entity, &Block)>().unwrap().iter().map(|(entity, b)| (entity, *b)).collect()
+    world.query::<(Entity, &Block)>().iter().map(|(entity, b)| (entity, *b)).collect()
 }
 
 /// Sütunun bir sonraki boş katı.
@@ -112,7 +112,7 @@ fn remove_top(world: &mut World, x: i32, z: i32) {
 }
 
 fn clear(world: &mut World) {
-    let ids: Vec<Entity> = blocks(world).into_iter().map(|(id, _)| id).chain(world.query::<(Entity, &Ball)>().unwrap().iter().map(|(entity, _)| entity)).collect();
+    let ids: Vec<Entity> = blocks(world).into_iter().map(|(id, _)| id).chain(world.query::<(Entity, &Ball)>().iter().map(|(entity, _)| entity)).collect();
     for id in ids {
         if let Some(e) = world.live(id) {
             world.despawn(e);

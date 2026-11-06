@@ -16,7 +16,7 @@ use gizmo_core::world::World;
 /// woke the body by hand and reached into `Integrator` — which the facade does not even export
 /// (`poligon`, 2026-11-02).
 pub fn apply_impulse(world: &mut World, id: Entity, impulse: gizmo_math::Vec3, point: gizmo_math::Vec3) -> bool {
-    let Some(mut q) = world.query_mut::<(Mut<RigidBody>, &Transform, Mut<Velocity>)>() else { return false };
+    let mut q = world.query_mut::<(Mut<RigidBody>, &Transform, Mut<Velocity>)>();
     let Some((mut rb, transform, mut vel)) = q.get_mut(id) else { return false };
     if !rb.is_dynamic() {
         return false;
@@ -55,7 +55,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // its `NavAgent`'s velocity did exactly that (`gizli`). Say so once, when the count grows.
     let orphans = world
         .query::<(&RigidBody, gizmo_core::query::Without<Collider>)>()
-        .map_or(0, |q| q.iter().count());
+        .iter()
+        .count();
     if orphans > physics_world.bodies_without_collider {
         tracing::warn!(
             orphans,
@@ -69,14 +70,15 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // 2. Gather Compound Shapes (Read Locks Only)
     let mut compound_shapes_map = std::collections::HashMap::new();
     {
-        if let Some(query) = world.query::<(
+        {
+            let query = world.query::<(
             Entity,
             &Collider,
             &Transform,
             &RigidBody,
             gizmo_core::query::Without<gizmo_core::pool::Pooled>,
             gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
-        )>() {
+        )>();
             let mut children_query = world.query::<&gizmo_core::component::Children>();
             let trans_query = world.query::<&Transform>();
             let col_query = world.query::<&Collider>();
@@ -110,7 +112,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 visited.insert(id);
                 let mut stack = vec![id];
                 while let Some(curr_id) = stack.pop() {
-                    if let Some(children_query_ref) = &mut children_query {
+                    {
+                        let children_query_ref = &mut children_query;
                         if let Some(children) = children_query_ref.get(curr_id) {
                             for &child in &children.0 {
                                 let child_id = child;
@@ -118,7 +121,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
                                     continue;
                                 }
                                 stack.push(child);
-                                if let (Some(tq), Some(cq)) = (&trans_query, &col_query) {
+                                {
+                                    let (tq, cq) = (&trans_query, &col_query);
                                     if let (Some(child_trans), Some(child_col)) = (tq.get(child_id), cq.get(child_id)) {
                                         let inv_rot = transform.rotation.inverse();
                                         let local_pos =
@@ -175,7 +179,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 };
 
                 final_collider.material =
-                    col.material_with(material_query.as_ref().and_then(|q| q.get(id)));
+                    col.material_with(material_query.get(id));
                 compound_shapes_map.insert(id, final_collider);
             }
         }
@@ -191,9 +195,10 @@ pub fn physics_step_system(world: &World, dt: f32) {
     let target_query = world.query::<&crate::components::KinematicTarget>();
     // Forces that push on every step, not once a frame — see `ExternalForce`.
     let force_query = world.query::<&crate::components::ExternalForce>();
-    // SAFETY: physics_step_system runs as a scheduled system; the scheduler guarantees
-    // no other system mutably aliases these components while it runs (see `query_unchecked`).
-    if let Some(mut query) = unsafe {
+    {
+        // SAFETY: physics_step_system runs as a scheduled system; the scheduler guarantees
+        // no other system mutably aliases these components while it runs (see `query_unchecked`).
+        let mut query = unsafe {
         world.query_unchecked::<(
             Entity,
             Mut<RigidBody>,
@@ -202,7 +207,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
             gizmo_core::query::Without<gizmo_core::pool::Pooled>,
             gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
         )>()
-    } {
+    };
         for (id, rb, transform, vel, _, _) in query.iter_mut() {
             if let Some(final_collider) = compound_shapes_map.remove(&id) {
                 // A moving body whose inertia was never set gets its collider's.
@@ -219,7 +224,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 if !rb.is_static() && rb.local_inertia == RigidBody::UNSET_INERTIA {
                     rb.update_inertia_from_collider(&final_collider);
                 }
-                if let Some(push) = force_query.as_ref().and_then(|q| q.get(id)) {
+                if let Some(push) = force_query.get(id) {
                     if rb.is_dynamic() {
                         rb.force_accumulator += push.force;
                         rb.torque_accumulator += push.torque;
@@ -229,7 +234,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 let mut vel = *vel;
                 if let Some(target) = rb
                     .is_kinematic()
-                    .then(|| target_query.as_ref().and_then(|q| q.get(id).copied()))
+                    .then(|| target_query.get(id).copied())
                     .flatten()
                 {
                     let com = transform.rotation * rb.center_of_mass;
@@ -244,12 +249,6 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 body_entities.push(id);
             }
         }
-    } else {
-        // The write query failed to build — no bodies get stepped this frame. Recoverable
-        // but a genuine failure (physics silently freezes), so warn rather than info.
-        tracing::warn!(
-            "[Physics] could not mutably borrow RigidBody/Transform/Velocity — no bodies stepped this frame"
-        );
     }
 
     // 3b. Bodies without a `Velocity`.
@@ -263,14 +262,15 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // hold, so it is given one through the command queue and simulated from the next frame on.
     // Scenes whose bodies all carry a `Velocity` — every one written before this — take neither
     // branch, so their bodies, their order and their hashes are unchanged.
-    if let Some(query) = world.query::<(
+    {
+        let query = world.query::<(
         Entity,
         &RigidBody,
         &Transform,
         gizmo_core::query::Without<Velocity>,
         gizmo_core::query::Without<gizmo_core::pool::Pooled>,
         gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
-    )>() {
+    )>();
         for (id, rb, transform, _, _, _) in query.iter() {
             if rb.is_static() {
                 if let Some(final_collider) = compound_shapes_map.remove(&id) {
@@ -346,15 +346,16 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 5. Write back to ECS (Rigid Bodies)
     if !rigid_bodies.is_empty() {
-        // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
-        if let Some(mut query) = unsafe {
+        {
+            // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+            let mut query = unsafe {
             world.query_unchecked::<(
                 Mut<RigidBody>,
                 Mut<Transform>,
                 Mut<Velocity>,
                 gizmo_core::query::Without<gizmo_core::pool::Pooled>,
             )>()
-        } {
+        };
             for ((_, rb, transform, vel, _collider), entity) in rigid_bodies.into_iter().zip(body_entities) {
                 if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel, _)) = query.get_mut(entity) {
                     *ecs_rb = rb;
@@ -434,13 +435,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
             gizmo_core::query::Without<gizmo_core::pool::Pooled>,
         )>()
     };
-    let mut query = match query_opt {
-        Some(q) => q,
-        None => {
-            tracing::trace!("[Physics] fracture system: breakable query unavailable, skipping");
-            return;
-        }
-    };
+    let mut query = query_opt;
 
     for event in &physics_world.collision_events {
         let mut max_impulse = 0.0;
@@ -754,9 +749,7 @@ fn center_of_mass_frame(chunk: &crate::fracture::ProceduralChunk) -> Vec<gizmo_m
 fn age_debris(world: &World, commands: &mut gizmo_core::commands::Commands, dt: f32) {
     // SAFETY: called from `physics_fracture_system` before its breakable query is opened, and
     // `Debris` is in no other query of that system.
-    let Some(mut pieces) = (unsafe { world.query_unchecked::<(Entity, gizmo_core::query::Mut<crate::components::Debris>)>() }) else {
-        return;
-    };
+    let mut pieces = unsafe { world.query_unchecked::<(Entity, gizmo_core::query::Mut<crate::components::Debris>)>() };
     for (id, mut piece) in pieces.iter_mut() {
         piece.age += dt;
         if piece.lifetime > 0.0 && piece.age >= piece.lifetime {
@@ -789,7 +782,8 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     )>();
     let mut active_explosions = Vec::new();
 
-    if let Some(exp_query) = &explosion_query_opt {
+    {
+        let exp_query = &explosion_query_opt;
         for (exp_entity, explosion, transform, _) in exp_query.iter() {
             if explosion.is_active {
                 // Resolved, not fabricated: this handle is what despawns the explosion at the
@@ -840,7 +834,8 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
             gizmo_core::query::Without<gizmo_core::pool::Pooled>,
         )>()
     };
-    if let Some(breakable_query) = &mut breakable_query_opt {
+    {
+        let breakable_query = &mut breakable_query_opt;
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
             for (entity, mut breakable, transform, collider, vel, _) in breakable_query.iter_mut() {
                 if breakable.is_broken || shattered.contains(&entity) {
@@ -900,7 +895,8 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
             gizmo_core::query::Without<gizmo_core::pool::Pooled>,
         )>()
     };
-    if let Some(rb_query) = &mut rb_query_opt {
+    {
+        let rb_query = &mut rb_query_opt;
         for (_exp_entity, explosion, exp_pos) in &active_explosions {
             for (entity, mut rb, transform, mut vel, _) in rb_query.iter_mut() {
                 if !rb.is_dynamic() || shattered.contains(&entity) {

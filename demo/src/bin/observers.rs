@@ -484,8 +484,7 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
             continue;
         };
         let mine = world
-            .query::<(Entity, &Mine)>()
-            .and_then(|q| q.iter().find(|(e, _)| (*e).id() == *id).map(|(_, m)| *m));
+            .query::<(Entity, &Mine)>().iter().find(|(e, _)| (*e).id() == *id).map(|(_, m)| *m);
         let Some(mine) = mine else { continue };
         if mine.exploded {
             continue;
@@ -498,7 +497,8 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
                 ..mine
             },
         );
-        if let Some(mut query) = world.query_mut::<Mut<Material>>() {
+        {
+            let mut query = world.query_mut::<Mut<Material>>();
             if let Some(mut material) = query.get_mut(entity) {
                 material.albedo = FIRED;
             }
@@ -507,7 +507,8 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
 
     // Menzil içindeki sağlam mayınları tetikle — zincirin bir sonraki halkası.
     let mut next = Vec::new();
-    if let Some(query) = world.query::<(Entity, &Mine)>() {
+    {
+        let query = world.query::<(Entity, &Mine)>();
         for (entity, mine) in query.iter() {
             if mine.exploded {
                 continue;
@@ -552,22 +553,23 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
 fn explode_now(world: &mut gizmo::core::World, entity: gizmo::core::entity::Entity) {
     let id = entity.id();
     let mine = world
-        .query::<(Entity, &Mine)>()
-        .and_then(|q| q.iter().find(|(e, _)| (*e).id() == id).map(|(_, m)| *m));
+        .query::<(Entity, &Mine)>().iter().find(|(e, _)| (*e).id() == id).map(|(_, m)| *m);
     let Some(mine) = mine else { return };
     if mine.exploded {
         return;
     }
 
     world.add_component(entity, Mine { exploded: true, ..mine });
-    if let Some(mut query) = world.query_mut::<Mut<Material>>() {
+    {
+        let mut query = world.query_mut::<Mut<Material>>();
         if let Some(mut material) = query.get_mut(entity) {
             material.albedo = FIRED;
         }
     }
 
     let mut next = Vec::new();
-    if let Some(query) = world.query::<(Entity, &Mine)>() {
+    {
+        let query = world.query::<(Entity, &Mine)>();
         for (other, candidate) in query.iter() {
             if candidate.exploded {
                 continue;
@@ -584,8 +586,7 @@ fn explode_now(world: &mut gizmo::core::World, entity: gizmo::core::entity::Enti
         // dönüyor ama yürüyüş sürüyor. İlk ölçümde bu, kuyruk kipinin 26 kabarmasını anında
         // kipte 73'e çıkarmıştı: aynı zincir, üç katı olay.
         let still_armed = world
-            .query::<(Entity, &Mine)>()
-            .and_then(|q| q.iter().find(|(e, _)| *e == other).map(|(_, m)| !m.exploded))
+            .query::<(Entity, &Mine)>().iter().find(|(e, _)| *e == other).map(|(_, m)| !m.exploded)
             .unwrap_or(false);
         if !still_armed {
             continue;
@@ -606,7 +607,7 @@ fn mine_under(
     world: &gizmo::core::World,
     point: Vec3,
 ) -> Option<gizmo::core::entity::Entity> {
-    let query = world.query::<(Entity, &Mine)>()?;
+    let query = world.query::<(Entity, &Mine)>();
     for (entity, mine) in query.iter() {
         if !mine.exploded && (mine.position - point).length() <= mine.radius {
             return Some(entity);
@@ -620,7 +621,7 @@ fn nearest_mine(
     world: &gizmo::core::World,
     point: Vec3,
 ) -> Option<gizmo::core::entity::Entity> {
-    let query = world.query::<(Entity, &Mine)>()?;
+    let query = world.query::<(Entity, &Mine)>();
     let mut best: Option<(f32, u32)> = None;
     for (entity, mine) in query.iter() {
         if mine.exploded {
@@ -637,13 +638,12 @@ fn nearest_mine(
 
 /// Defteri sayaçlardan doldurur.
 fn sync_report(world: &mut gizmo::core::World, fuse: &Fuse, advanced: bool) {
-    let (mines, exploded) = world
-        .query::<&Mine>()
-        .map(|q| {
+    let (mines, exploded) = {
+ let q = world
+        .query::<&Mine>();
             let all: Vec<Mine> = q.iter().copied().collect();
             (all.len(), all.iter().filter(|m| m.exploded).count())
-        })
-        .unwrap_or((0, 0));
+        };
     let bubbled = *fuse.bubbled.lock().expect("sayaç kilidi");
     let indexed = *fuse.indexed.lock().expect("sayaç kilidi");
     let replaced = *fuse.replaced.lock().expect("sayaç kilidi");

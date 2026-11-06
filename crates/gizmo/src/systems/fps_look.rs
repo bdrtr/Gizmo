@@ -262,14 +262,15 @@ impl gizmo_core::system::System for FpsLookSystem {
             .and_then(|i| i.gamepad().map(gizmo_core::input::Gamepad::right_stick))
             .unwrap_or((0.0, 0.0));
 
-        // SAFETY: exclusive sistem; scheduler disjoint mutable erişim garanti eder.
-        if let Some(mut q) = unsafe {
+        {
+            // SAFETY: exclusive sistem; scheduler disjoint mutable erişim garanti eder.
+            let mut q = unsafe {
             world.query_unchecked::<(
                 gizmo_core::query::Mut<FpsLook>,
                 gizmo_core::query::Mut<Camera>,
                 gizmo_core::query::Mut<Transform>,
             )>()
-        } {
+        };
             for (mut look, mut cam, mut t) in q.iter_mut() {
                 if look.enabled {
                     // The gate covers the MOUSE only. A stick has no cursor to fight with, so

@@ -101,7 +101,8 @@ pub fn ensure_global_transforms(world: &mut World) {
     // Collect first: `add_component` is a structural change and can't run while a
     // query borrow is live.
     let mut missing = Vec::new();
-    if let Some(q) = world.query::<(Entity, &Mesh, &Transform, Without<GlobalTransform>)>() {
+    {
+        let q = world.query::<(Entity, &Mesh, &Transform, Without<GlobalTransform>)>();
         for (entity, ..) in q.iter() {
             missing.push(entity);
         }
@@ -254,7 +255,7 @@ pub fn default_render_pass(
 
 /// Whether any camera in `world` asks for a [`Viewport`](crate::renderer::components::Viewport).
 fn any_camera_has_a_viewport(world: &World) -> bool {
-    world.query::<(Entity, &Camera)>().unwrap().iter()
+    world.query::<(Entity, &Camera)>().iter()
         .any(|(_, c)| c.viewport.is_some())
 }
 
@@ -299,7 +300,7 @@ fn render_viewports_unshaken(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
-    let mut views: Vec<(i32, Entity, crate::renderer::components::Viewport)> = world.query::<(Entity, &Camera)>().unwrap().iter()
+    let mut views: Vec<(i32, Entity, crate::renderer::components::Viewport)> = world.query::<(Entity, &Camera)>().iter()
         .filter_map(|(entity, c)| c.viewport.map(|v| (c.order, entity, v)))
         .collect();
     // The camera the frame is drawn through, when it has no rectangle of its own, is the whole
@@ -385,7 +386,7 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     use crate::renderer::components::ReflectionProbe;
     use crate::renderer::reflection::{ReflectionProbeGpu, FACES, MAX_PROBES};
     let mut probes: Vec<(Entity, ReflectionProbe)> =
-        world.query::<(Entity, &ReflectionProbe)>().unwrap().iter().map(|(entity, p)| (entity, *p)).collect();
+        world.query::<(Entity, &ReflectionProbe)>().iter().map(|(entity, p)| (entity, *p)).collect();
     probes.sort_by_key(|&(id, _)| id);
     probes.truncate(MAX_PROBES);
     if probes.is_empty() {
@@ -502,7 +503,7 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
     use crate::renderer::planar::{oblique_projection, reflect_direction, reflect_point};
     renderer.planar.begin_frame();
     let mirrors: Vec<(Entity, PlanarReflection)> =
-        world.query::<(Entity, &PlanarReflection)>().unwrap().iter().map(|(entity, r)| (entity, *r)).collect();
+        world.query::<(Entity, &PlanarReflection)>().iter().map(|(entity, r)| (entity, *r)).collect();
     let owners: Vec<Entity> = mirrors.iter().map(|m| m.0).collect();
     renderer.planar.retain(&owners.iter().map(|e| e.id()).collect::<Vec<_>>());
     let Some(camera) = camera.filter(|_| !mirrors.is_empty()) else { return };
@@ -3783,7 +3784,7 @@ mod golden_render_tests {
             assert_eq!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, Some(first), "a still scene does not rebake");
 
             {
-                let mut q = world.query_mut::<crate::core::query::Mut<Transform>>().unwrap();
+                let mut q = world.query_mut::<crate::core::query::Mut<Transform>>();
                 q.get_mut(lamp).unwrap().position.x = 1.0;
             }
             let _ = render_world(&mut renderer, &mut world).await;
@@ -4913,7 +4914,7 @@ mod golden_render_tests {
             world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 3.0), primary: true, ..Default::default() });
             render_world(&mut renderer, &mut world).await;
             assert!(
-                world.query::<(Entity, &ReflectionProbe)>().unwrap().iter().all(|(_, p)| p.captured),
+                world.query::<(Entity, &ReflectionProbe)>().iter().all(|(_, p)| p.captured),
                 "the probe did not capture on its first frame"
             );
             // Slot 0 of the cube array, as a plain cube.
@@ -7368,7 +7369,6 @@ mod golden_render_tests {
                 let mut world = walled_scene(&mut renderer, true, 2, true).await;
                 let entity = world
                     .query::<(crate::core::Entity, &Occluder)>()
-                    .unwrap()
                     .iter()
                     .next()
                     .expect("the wall")
@@ -7661,7 +7661,7 @@ mod golden_render_tests {
                 ..Default::default()
             });
             if let Some(c) = clear {
-                let mut q = world.query_mut::<crate::core::query::Mut<crate::renderer::components::Camera>>().unwrap();
+                let mut q = world.query_mut::<crate::core::query::Mut<crate::renderer::components::Camera>>();
                 q.get_mut(cam).unwrap().clear_color = Some(c);
             }
             let f = render_world(&mut renderer, &mut world).await;
@@ -8118,7 +8118,8 @@ mod golden_render_tests {
 
         // Pass two: move the camera well to the side. Same entity — what matters is that the
         // second write lands after the first pass was *recorded*, which is the whole trap.
-        if let Some(mut q) = world.query_mut::<(Entity, crate::core::query::Mut<Transform>)>() {
+        {
+            let mut q = world.query_mut::<(Entity, crate::core::query::Mut<Transform>)>();
             for (entity, mut t) in q.iter_mut() {
                 if entity.id() == cam_a.id() {
                     t.position = Vec3::new(-4.0, 0.5, 5.0);

@@ -244,7 +244,8 @@ pub fn tween_system(world: &mut World, dt: f32) {
     if dt <= 0.0 {
         return;
     }
-    if let Some(mut q) = world.query_mut::<(Mut<Tween>, Mut<Transform>)>() {
+    {
+        let mut q = world.query_mut::<(Mut<Tween>, Mut<Transform>)>();
         for (mut tween, mut transform) in q.iter_mut() {
             if !tween.is_finished() {
                 tween.advance(dt, &mut transform);

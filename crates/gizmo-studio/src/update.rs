@@ -161,7 +161,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         let is_playing = editor_state.is_playing();
 
         if !is_playing {
-            for (entity_id, _) in world.query::<(Entity, &gizmo::renderer::components::Camera)>().unwrap().iter() {
+            for (entity_id, _) in world.query::<(Entity, &gizmo::renderer::components::Camera)>().iter() {
                 // Editor kamerasını göstermeye gerek yok
                 if entity_id == state.editor_camera {
                     continue;
@@ -248,7 +248,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
 
         if !is_playing {
             // Directional Light Gizmos
-            for (entity_id, _) in world.query::<(Entity, &gizmo::renderer::components::DirectionalLight)>().unwrap().iter() {
+            for (entity_id, _) in world.query::<(Entity, &gizmo::renderer::components::DirectionalLight)>().iter() {
                 if let (Some(light), Some(gt)) = (dir_lights.get(entity_id), global_transforms.get(entity_id)) {
                     let (pos, rot, _scale) = gizmo::renderer::decompose_mat4(gt.matrix);
                     let forward = rot * gizmo::math::Vec3::new(0.0, 0.0, -1.0);
@@ -272,7 +272,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             }
 
             // Point Light Gizmos
-            for (entity_id, _) in world.query::<(Entity, &gizmo::renderer::components::PointLight)>().unwrap().iter() {
+            for (entity_id, _) in world.query::<(Entity, &gizmo::renderer::components::PointLight)>().iter() {
                 if let (Some(light), Some(gt)) = (point_lights.get(entity_id), global_transforms.get(entity_id)) {
                     let (pos, _rot, _scale) = gizmo::renderer::decompose_mat4(gt.matrix);
                     

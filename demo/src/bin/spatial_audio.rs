@@ -299,22 +299,23 @@ fn measure_listener(world: &mut gizmo::core::World) {
     let listener = gizmo::systems::audio::listener(world);
     let (left, right) = listener.ears();
 
-    let emitter = world.query::<(&Transform, &Emitter)>().and_then(|q| {
+    let emitter = {
+ let q = world.query::<(&Transform, &Emitter)>();
         q.iter()
             .next()
             .map(|(transform, _)| transform.position)
-    });
+    };
     let Some(emitter) = emitter else { return };
 
     // Kameranın KENDİ sağ vektörü — motorun `Camera::right_from(yaw)`'ı, görüş matrisini kuran
     // fonksiyonun ta kendisi. Dinleyicinin kullandığıyla karşılaştırılıyor.
-    let camera_right = world
-        .query::<(&Camera, &Transform)>()
-        .and_then(|q| {
+    let camera_right = {
+ let q = world
+        .query::<(&Camera, &Transform)>();
             q.iter()
                 .find(|(camera, _)| camera.primary)
                 .map(|(camera, _)| camera.get_right())
-        })
+        }
         .unwrap_or(Vec3::X);
     let right_agreement = listener.right.dot(camera_right);
 

@@ -30,7 +30,7 @@ struct Moved {
 pub fn apply_camera_shake(world: &mut World, dt: f32) -> ShakeUndo {
     let mut undo = ShakeUndo::default();
     let shaking: Vec<(Entity, (gizmo_math::Vec3, f32, f32))> = {
-        let mut shakes = world.query_mut::<(Entity, Mut<CameraShake>)>().unwrap();
+        let mut shakes = world.query_mut::<(Entity, Mut<CameraShake>)>();
         shakes
             .iter_mut()
             .map(|(entity, mut s)| {

@@ -122,7 +122,7 @@ fn a_saved_scene_comes_back_with_its_meshes_lights_and_camera() {
         let transforms = loaded.borrow::<Transform>();
         let materials = loaded.borrow::<MaterialSource>();
 
-        let floor = loaded.query::<(Entity, &EntityName)>().unwrap().iter()
+        let floor = loaded.query::<(Entity, &EntityName)>().iter()
             .find(|(_, n)| n.0 == "Zemin")
             .map(|(entity, _)| entity)
             .expect("adlar da dosyadan geliyor");

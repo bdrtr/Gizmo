@@ -222,9 +222,7 @@ fn toggle(world: &mut gizmo::core::World, input: &Input) {
     drop(report);
 
     let mut ids: Vec<Entity> = world
-        .query::<(Entity, &Spinner)>()
-        .map(|q| q.iter().map(|(entity, _)| entity).collect())
-        .unwrap_or_default();
+        .query::<(Entity, &Spinner)>().iter().map(|(entity, _)| entity).collect();
     ids.sort_unstable();
     for (index, id) in ids.iter().enumerate() {
         if !(DISABLE_FROM..DISABLE_TO).contains(&index) {

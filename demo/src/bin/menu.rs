@@ -385,7 +385,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
     }
 
     // Düğme renkleri: odak `Hovered` olarak geliyor, yani üzerine gelme rengi odak rengi de.
-    let states: Vec<(Entity, Interaction)> = world.query::<(Entity, &Interaction)>().unwrap().iter().map(|(entity, i)| (entity, *i)).collect();
+    let states: Vec<(Entity, Interaction)> = world.query::<(Entity, &Interaction)>().iter().map(|(entity, i)| (entity, *i)).collect();
     for (id, i) in states {
         if let Some(mut bg) = world.borrow_mut::<BackgroundColor>().get_mut(id) {
             bg.0 = fill(i);
@@ -414,7 +414,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
 
     let clicked: Vec<(Entity, Action)> = {
         let clicks = world.borrow::<Clicked>();
-        world.query::<(Entity, &MenuButton)>().unwrap().iter().filter(|(entity, _)| clicks.get(*entity).is_some_and(|c| c.0)).map(|(entity, b)| (entity, b.0)).collect()
+        world.query::<(Entity, &MenuButton)>().iter().filter(|(entity, _)| clicks.get(*entity).is_some_and(|c| c.0)).map(|(entity, b)| (entity, b.0)).collect()
     };
     for (id, action) in clicked {
         let label = match action {

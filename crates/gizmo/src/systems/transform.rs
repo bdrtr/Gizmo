@@ -18,10 +18,11 @@ impl gizmo_core::system::System for TransformSyncSystem {
         // SAFETY: scheduled system; the scheduler guarantees no other system mutably
         // aliases Transform while this runs (see `World::query_unchecked`).
         let mut updated = 0usize;
-        // SAFETY: see the note above — scheduled system, no other system aliases Transform.
-        if let Some(mut transforms) = unsafe {
+        {
+            // SAFETY: see the note above — scheduled system, no other system aliases Transform.
+            let mut transforms = unsafe {
             world.query_unchecked::<gizmo_core::query::Mut<gizmo_physics_core::Transform>>()
-        } {
+        };
             // Rebuilt only where it moved, and written WITHOUT a change mark: `local_matrix` is a
             // cache derived from the fields, not a change of its own. Writing it through the
             // change-tracked path marked every `Transform` in the world changed every frame,
@@ -120,7 +121,8 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         // this pass on a big flat scene.
         let mut visited = VisitedIds::default();
 
-        if let Some(mut roots) = root_query {
+        {
+            let mut roots = root_query;
             let mut children_query = world.query::<&gizmo_core::component::Children>();
             for (entity, local, mut global, _) in roots.iter_mut() {
                 // Compare-then-write. `Mut::deref_mut` stamps `ticks.changed` on EVERY use,
@@ -131,7 +133,8 @@ impl gizmo_core::system::System for TransformPropagateSystem {
                 // leaves the tick alone. See T16–T18.
                 set_global_matrix(&mut global, local.local_matrix);
                 visited.insert(entity.id());
-                if let Some(children_q) = &mut children_query {
+                {
+                    let children_q = &mut children_query;
                     if let Some(children) = children_q.get(entity) {
                         for &child in &children.0 {
                             if world.is_alive(child) && visited.insert(child.id()) {
@@ -156,7 +159,8 @@ impl gizmo_core::system::System for TransformPropagateSystem {
             let (parent_matrix, current_id) = queue[head];
             head += 1;
 
-            if let (Some(lq), Some(gq)) = (&mut local_query, &mut global_query) {
+            {
+                let (lq, gq) = (&mut local_query, &mut global_query);
                 if let (Some(local), Some(mut global)) = (lq.get(current_id), gq.get_mut(current_id)) {
                     // Same compare-then-write as the root loop. Note the compare is on the
                     // COMPOSED world matrix, not the local one: a child whose own `Transform`
@@ -164,7 +168,8 @@ impl gizmo_core::system::System for TransformPropagateSystem {
                     // stamped for it (T18).
                     set_global_matrix(&mut global, parent_matrix * local.local_matrix);
 
-                    if let Some(cq) = &mut children_query {
+                    {
+                        let cq = &mut children_query;
                         if let Some(children) = cq.get(current_id) {
                             for &child in &children.0 {
                                 if world.is_alive(child) && visited.insert(child.id()) {
@@ -252,7 +257,8 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
     #[tracing::instrument(skip_all, level = "trace", name = "bone_attachment")]
     fn run(&mut self, world: &gizmo_core::world::World, _dt: f32) {
         let mut attached = 0usize;
-        if let Some(query) = world.query::<(Entity, &gizmo_renderer::components::BoneAttachment)>() {
+        {
+            let query = world.query::<(Entity, &gizmo_renderer::components::BoneAttachment)>();
             let mut skeletons = world.query::<&gizmo_renderer::components::Skeleton>();
             // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
             let mut transforms = unsafe {
@@ -260,10 +266,12 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
             };
 
             for (entity, attachment) in query.iter() {
-                if let Some(sq) = &mut skeletons {
+                {
+                    let sq = &mut skeletons;
                     if let Some(skeleton) = sq.get(attachment.target_entity) {
                         if let Some(global_matrix) = skeleton.global_poses.get(attachment.bone_index) {
-                            if let Some(tq) = &mut transforms {
+                            {
+                                let tq = &mut transforms;
                                 if let Some(mut trans) = tq.get_mut(entity) {
                                     let final_mat = *global_matrix * attachment.offset;
                                     let (t, r, s) = gizmo_renderer::decompose_mat4(final_mat);
@@ -331,7 +339,8 @@ mod tests {
         }
 
         // A parent moved this frame: the walk sees it, GlobalTransform is a frame behind.
-        if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
+        {
+            let mut q = world.query_mut::<gizmo_core::query::Mut<Transform>>();
             if let Some(mut t) = q.get_mut(root) {
                 t.position.y = 5.0;
             }
@@ -418,7 +427,8 @@ mod tests {
             }
             // Offset each root so the chain is not all-identity (identity would make the
             // "unchanged" compare trivially true for the wrong reason).
-            if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
+            {
+                let mut q = world.query_mut::<gizmo_core::query::Mut<Transform>>();
                 if let Some(mut t) = q.get_mut(r) {
                     t.position = gizmo_math::Vec3::new(i as f32, 1.0, 2.0);
                     t.update_local_matrix();
@@ -445,9 +455,7 @@ mod tests {
 
     fn changed_globals(world: &World) -> Vec<Entity> {
         let mut ids: Vec<Entity> = world
-            .query::<(Entity, gizmo_core::query::Changed<GlobalTransform>)>()
-            .map(|q| q.iter().map(|(entity, _)| entity).collect())
-            .unwrap_or_default();
+            .query::<(Entity, gizmo_core::query::Changed<GlobalTransform>)>().iter().map(|(entity, _)| entity).collect();
         ids.sort_unstable();
         ids
     }
@@ -500,9 +508,7 @@ mod tests {
         world.add_component(moving, Transform::new(gizmo_math::Vec3::ZERO));
         let changed = |w: &World| -> Vec<u32> {
             let mut v: Vec<u32> = w
-                .query::<(Entity, gizmo_core::query::Changed<Transform>)>()
-                .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
-                .unwrap_or_default();
+                .query::<(Entity, gizmo_core::query::Changed<Transform>)>().iter().map(|(entity, _)| entity.id()).collect();
             v.sort_unstable();
             v
         };
@@ -512,7 +518,8 @@ mod tests {
         // Frame 2: move one by its fields only — the matrix is stale until the sync.
         let prev = world.tick;
         world.begin_change_frame(prev);
-        if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
+        {
+            let mut q = world.query_mut::<gizmo_core::query::Mut<Transform>>();
             q.get_mut(moving).unwrap().position = gizmo_math::Vec3::new(5.0, 0.0, 0.0);
         }
         TransformSyncSystem.run(&world, 0.0);
@@ -547,7 +554,8 @@ mod tests {
 
         // Move ONE leaf (a grandchild — no children of its own, so exactly one node moves).
         let moved = chains[2][2];
-        if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
+        {
+            let mut q = world.query_mut::<gizmo_core::query::Mut<Transform>>();
             if let Some(mut t) = q.get_mut(moved) {
                 t.position.x += 10.0;
                 t.update_local_matrix();
@@ -575,7 +583,8 @@ mod tests {
         assert!(changed_globals(&world).is_empty(), "premise: settled");
 
         let [root, child, grand] = chains[1];
-        if let Some(mut q) = world.query_mut::<gizmo_core::query::Mut<Transform>>() {
+        {
+            let mut q = world.query_mut::<gizmo_core::query::Mut<Transform>>();
             if let Some(mut t) = q.get_mut(root) {
                 t.position.z -= 25.0;
                 t.update_local_matrix();

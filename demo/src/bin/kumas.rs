@@ -170,8 +170,8 @@ fn main() {
                 let mut node_gpu_ids = vec![0; grid_x * grid_z];
                 let mut can_load = false;
 
-                if let Some(mut q) = world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>()
                 {
+                    let mut q = world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>();
                     for (link, trans) in q.iter_mut() {
                         if (trans.position.y - 40.0).abs() < 1.0 {
                             let x =
@@ -216,9 +216,8 @@ fn main() {
                         let grid_z = 40;
                         let mut node_gpu_ids = vec![0; grid_x * grid_z];
 
-                        if let Some(mut q) =
-                            world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>()
                         {
+                            let mut q = world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>();
                             for (link, trans) in q.iter_mut() {
                                 if (trans.position.y - 40.0).abs() < 1.0 {
                                     let x = ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0)

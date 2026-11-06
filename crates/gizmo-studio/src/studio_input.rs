@@ -130,7 +130,7 @@ fn find_closest_hit(world: &World, ray: &Ray, player_id: Entity) -> Option<Entit
     let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
     let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
 
-    for (entity, t) in world.query::<(Entity, &Transform)>().unwrap().iter() {
+    for (entity, t) in world.query::<(Entity, &Transform)>().iter() {
         // Filtreleme: Kamera, gizli, editör objeleri
         if entity == player_id || is_hidden.get(entity).is_some() || is_editor_entity(world, entity) {
             continue;
@@ -252,7 +252,7 @@ fn perform_rubber_band_selection(
     let colliders = world.borrow::<Collider>();
     let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
 
-    for (id, t) in world.query::<(Entity, &Transform)>().unwrap().iter() {
+    for (id, t) in world.query::<(Entity, &Transform)>().iter() {
         if id == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id) {
             continue;
         }

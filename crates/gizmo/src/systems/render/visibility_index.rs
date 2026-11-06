@@ -104,7 +104,8 @@ impl VisibilityIndex {
     /// per-frame update cost this exists to avoid, which the module docs measure.
     pub fn rebuild_from(&mut self, world: &World) {
         self.tree.clear();
-        if let Some(q) = world.query::<(Entity, &Mesh, &GlobalTransform)>() {
+        {
+            let q = world.query::<(Entity, &Mesh, &GlobalTransform)>();
             for (e, mesh, trans) in q.iter() {
                 let world_aabb = mesh.bounds.transform(&trans.matrix);
                 self.tree.insert(e.id(), world_aabb);

@@ -163,7 +163,8 @@ fn main() {
 
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO);
             let mut camera = None;
-            if let Some(mut q) = scene.world.query_mut::<(Entity, Mut<Camera>, Mut<Transform>)>() {
+            {
+                let mut q = scene.world.query_mut::<(Entity, Mut<Camera>, Mut<Transform>)>();
                 for (entity, mut cam, _) in q.iter_mut() {
                     cam.projection = ProjectionMode::Orthographic { height: VIEW_HEIGHT };
                     camera = Some(entity);

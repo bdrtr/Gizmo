@@ -131,9 +131,7 @@ pub fn color_tween_system(world: &mut World, dt: f32) {
     if dt <= 0.0 {
         return;
     }
-    let Some(mut q) = world.query_mut::<(Mut<ColorTween>, Option<Mut<Sprite>>, Option<Mut<Text>>, Option<Mut<Material>>)>() else {
-        return;
-    };
+    let mut q = world.query_mut::<(Mut<ColorTween>, Option<Mut<Sprite>>, Option<Mut<Text>>, Option<Mut<Material>>)>();
     for (mut tween, sprite, text, material) in q.iter_mut() {
         if tween.is_finished() {
             continue;

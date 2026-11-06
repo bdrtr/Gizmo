@@ -220,8 +220,7 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 1.4, 6.5), Vec3::ZERO);
             let front = scene
                 .world
-                .query::<(Entity, &Camera)>()
-                .and_then(|q| q.iter().next().map(|(entity, _)| entity));
+                .query::<(Entity, &Camera)>().iter().next().map(|(entity, _)| entity);
             if let Some(id) = front.and_then(|id| scene.world.live(id)) {
                 scene.world.add_component(id, CameraTag(0));
             }
@@ -390,14 +389,16 @@ fn log_active(world: &World, label: &str) {
     }
     let active = gizmo::renderer::components::active_camera(world);
     let mut rows = Vec::new();
-    if let Some(q) = world.query::<(Entity, &CameraTag, &Camera)>() {
+    {
+        let q = world.query::<(Entity, &CameraTag, &Camera)>();
         for (entity, tag, cam) in q.iter() {
             rows.push(format!("id{entity}=etiket{} primary={}", tag.0, cam.primary));
         }
     }
     // Kameraların GERÇEK duruşu: yaw/pitch ve iki ayrı konum kaynağı.
     let mut poses = Vec::new();
-    if let Some(q) = world.query::<(Entity, &CameraTag, &Camera, &Transform, &GlobalTransform)>() {
+    {
+        let q = world.query::<(Entity, &CameraTag, &Camera, &Transform, &GlobalTransform)>();
         for (entity, tag, cam, t, g) in q.iter() {
             let gp = g.matrix.to_scale_rotation_translation().2;
             poses.push(format!(
@@ -422,12 +423,14 @@ fn log_active(world: &World, label: &str) {
 /// `primary` bayrağını verilen etikete taşır — kamera seçiminin tek kolu bu.
 fn set_primary(world: &mut World, tag: u8) {
     let mut wanted: Vec<(u32, bool)> = Vec::new();
-    if let Some(q) = world.query::<(Entity, &CameraTag, &Camera)>() {
+    {
+        let q = world.query::<(Entity, &CameraTag, &Camera)>();
         for (entity, t, _) in q.iter() {
             wanted.push((entity.id(), t.0 == tag));
         }
     }
-    if let Some(mut q) = world.query_mut::<(Entity, Mut<Camera>)>() {
+    {
+        let mut q = world.query_mut::<(Entity, Mut<Camera>)>();
         for (entity, mut camera) in q.iter_mut() {
             if let Some((_, want)) = wanted.iter().find(|(wid, _)| *wid == entity.id()) {
                 camera.primary = *want;

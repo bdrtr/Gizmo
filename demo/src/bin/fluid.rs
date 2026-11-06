@@ -272,7 +272,7 @@ fn fluid_only_render_pass(
     let cameras = world.borrow::<Camera>();
     let transforms = world.borrow::<Transform>();
     {
-        if let Some((active_cam, _)) = world.query::<(Entity, &Camera)>().unwrap().iter().next() {
+        if let Some((active_cam, _)) = world.query::<(Entity, &Camera)>().iter().next() {
             if let (Some(cam), Some(trans)) = (cameras.get(active_cam), transforms.get(active_cam))
             {
                 proj = cam.get_projection(aspect);
@@ -352,7 +352,7 @@ fn fluid_only_render_pass(
         {
             let transforms = world.borrow::<Transform>();
 
-            for (ent, interactor) in world.query::<(Entity, &gizmo::renderer::components::FluidInteractor)>().unwrap().iter() {
+            for (ent, interactor) in world.query::<(Entity, &gizmo::renderer::components::FluidInteractor)>().iter() {
                 if let Some(trans) = transforms.get(ent) {
                     colliders.push(gizmo::renderer::gpu_fluid::FluidCollider {
                         position: [trans.position.x, trans.position.y, trans.position.z],

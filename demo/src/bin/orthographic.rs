@@ -75,7 +75,8 @@ fn main() {
 
             // Kamera (5, 5, 5) → orijin, sonra projeksiyonu ortografiğe çevir.
             scene.spawn_camera(state, Vec3::new(5.0, 5.0, 5.0), Vec3::ZERO);
-            if let Some(mut q) = scene.world.query_mut::<(Mut<Camera>, Mut<Transform>)>() {
+            {
+                let mut q = scene.world.query_mut::<(Mut<Camera>, Mut<Transform>)>();
                 for (mut camera, _transform) in q.iter_mut() {
                     camera.projection = ProjectionMode::Orthographic {
                         height: VIEWPORT_HEIGHT,

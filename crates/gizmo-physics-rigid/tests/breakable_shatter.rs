@@ -82,7 +82,8 @@ fn blast_once(world: &mut World) {
 /// Positions of every debris body, i.e. of every `RigidBody` in the world.
 fn debris_positions(world: &World) -> Vec<Vec3> {
     let mut out = Vec::new();
-    if let Some(q) = world.query::<(&RigidBody, &Transform)>() {
+    {
+        let q = world.query::<(&RigidBody, &Transform)>();
         for (_rb, t) in q.iter() {
             out.push(t.position);
         }
@@ -501,7 +502,7 @@ fn a_recycled_id_explosion_fires_once_and_then_despawns() {
         "an explosion in a recycled id slot stayed alive, so it re-detonates every frame"
     );
     assert!(
-        world.query::<&Explosion>().map(|q| q.iter().count()).unwrap_or(0) == 0,
+        world.query::<&Explosion>().iter().count() == 0,
         "no Explosion component may survive the pass that consumed it"
     );
 }

@@ -185,8 +185,8 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
 /// Kaidelerinden düşmüş kutular ve toplam kutu.
 fn crates_down(world: &World) -> (usize, usize) {
     let tfs = world.borrow::<Transform>();
-    let down = world.query::<(Entity, &Crate)>().unwrap().iter().filter(|(entity, c)| tfs.get(*entity).is_some_and(|t| t.position.y < c.pedestal_top - 0.1)).count();
-    (down, world.query::<(Entity, &Crate)>().unwrap().iter().count())
+    let down = world.query::<(Entity, &Crate)>().iter().filter(|(entity, c)| tfs.get(*entity).is_some_and(|t| t.position.y < c.pedestal_top - 0.1)).count();
+    (down, world.query::<(Entity, &Crate)>().iter().count())
 }
 
 /// `--test`: pencere açmadan iki sınama. W basılıyken oyuncu karakter denetleyicisinin hızıyla
@@ -379,8 +379,8 @@ fn play(world: &mut World, name: &str) {
 fn draw_hud(world: &mut World, game: &Game) {
     let (down, total) = {
         let tfs = world.borrow::<Transform>();
-        let total = world.query::<(Entity, &Crate)>().unwrap().iter().count();
-        let down = world.query::<(Entity, &Crate)>().unwrap().iter()
+        let total = world.query::<(Entity, &Crate)>().iter().count();
+        let down = world.query::<(Entity, &Crate)>().iter()
             .filter(|(entity, c)| tfs.get(*entity).is_some_and(|t| t.position.y < c.pedestal_top - 0.1))
             .count();
         (down, total)

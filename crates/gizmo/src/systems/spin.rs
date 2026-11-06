@@ -21,7 +21,7 @@
 //! // here we drive a single step by hand.
 //! SpinSystem.run(&world, 0.1);
 //!
-//! let rotated = world.query::<&Transform>().unwrap().get(wheel).unwrap().rotation;
+//! let rotated = world.query::<&Transform>().get(wheel).unwrap().rotation;
 //! assert!(rotated.angle_between(Quat::IDENTITY) > 0.0, "Spin must have applied a rotation");
 //! ```
 
@@ -82,14 +82,15 @@ impl gizmo_core::system::System for SpinSystem {
     }
 
     fn run(&mut self, world: &World, dt: f32) {
-        // SAFETY: exclusive sistem; Spin ve Transform ayrı bileşen tipleri (disjoint),
-        // scheduler bu çalışırken başka mutable alias vermez.
-        if let Some(mut q) = unsafe {
+        {
+            // SAFETY: exclusive sistem; Spin ve Transform ayrı bileşen tipleri (disjoint),
+            // scheduler bu çalışırken başka mutable alias vermez.
+            let mut q = unsafe {
             world.query_unchecked::<(
                 gizmo_core::query::Mut<Spin>,
                 gizmo_core::query::Mut<Transform>,
             )>()
-        } {
+        };
             for (mut spin, mut t) in q.iter_mut() {
                 spin.angle += spin.angular_velocity * dt;
                 t.rotation = spin.rest_rotation * Quat::from_axis_angle(spin.axis, spin.angle);

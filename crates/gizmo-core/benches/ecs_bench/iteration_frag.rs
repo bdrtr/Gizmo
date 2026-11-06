@@ -62,7 +62,7 @@ pub fn bench_fragmented_iteration(c: &mut Criterion) {
     spawn_variants!(world; C90, C91, C92, C93, C94, C95, C96, C97, C98, C99);
 
     // Warm up the query cache
-    let mut query = world.query_mut::<Mut<Data>>().unwrap();
+    let mut query = world.query_mut::<Mut<Data>>();
     query.iter_mut().for_each(|_| {});
 
     c.bench_function("fragmented_iteration", |b| {
@@ -130,7 +130,7 @@ pub fn bench_fragmented_wide_iteration(c: &mut Criterion) {
         Mut<WideData<8>>,
         Mut<WideData<9>>,
         Mut<WideData<10>>,
-    )>().unwrap();
+    )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup
 

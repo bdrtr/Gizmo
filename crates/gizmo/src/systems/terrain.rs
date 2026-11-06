@@ -89,7 +89,7 @@ fn recipes_awaiting_a_mesh(
     let meshes = world.borrow::<Mesh>();
     let failed = world.borrow::<TerrainBuildFailed>();
     let mut pending = Vec::new();
-    for (entity, terrain) in world.query::<(Entity, &Terrain)>().unwrap().iter() {
+    for (entity, terrain) in world.query::<(Entity, &Terrain)>().iter() {
         // Already built, already failed, or never authored — an empty path is a `Terrain` a user
         // has added and not yet pointed at a heightmap, which is a normal state in the inspector
         // and not an error to log every frame.

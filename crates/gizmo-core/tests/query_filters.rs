@@ -55,7 +55,6 @@ fn or_with_sparse_operands_matches_either_never_neither() {
 
     let mut got: Vec<u32> = world
         .query::<(&Marker, Or<With<SparseA>, With<SparseB>>)>()
-        .unwrap()
         .iter()
         .map(|(m, _)| m.0)
         .collect();
@@ -87,7 +86,6 @@ fn or_with_without_sparse_mixed() {
     // has A  OR  lacks B  → a(hasA), c(lacksB), d(hasA). b is excluded (no A, has B).
     let mut got: Vec<u32> = world
         .query::<(&Marker, Or<With<SparseA>, Without<SparseB>>)>()
-        .unwrap()
         .iter()
         .map(|(m, _)| m.0)
         .collect();
@@ -109,7 +107,6 @@ fn or_with_table_operands_still_works() {
 
     let mut got: Vec<u32> = world
         .query::<(&Marker, Or<With<TableA>, With<TableB>>)>()
-        .unwrap()
         .iter()
         .map(|(m, _)| m.0)
         .collect();
@@ -125,7 +122,7 @@ fn iter_chunks_rejects_sparse_filtered_query() {
     let a = world.spawn();
     world.add_component(a, Marker(1));
     world.add_component(a, SparseA);
-    let q = world.query::<(&Marker, With<SparseA>)>().unwrap();
+    let q = world.query::<(&Marker, With<SparseA>)>();
     let _ = q.iter_chunks().count(); // must panic, not silently ignore the filter
 }
 
@@ -137,7 +134,7 @@ fn iter_chunks_works_on_plain_data_and_table_filter() {
         world.add_component(e, Marker(i));
     }
     // plain data query → fast path
-    let q = world.query::<&Marker>().unwrap();
+    let q = world.query::<&Marker>();
     let total: usize = q.iter_chunks().map(|s| s.len()).sum();
     assert_eq!(total, 3);
 
@@ -148,7 +145,7 @@ fn iter_chunks_works_on_plain_data_and_table_filter() {
     w2.add_component(a, TableA);
     let b = w2.spawn();
     w2.add_component(b, Marker(2)); // no TableA → different archetype
-    let q2 = w2.query::<(&Marker, With<TableA>)>().unwrap();
+    let q2 = w2.query::<(&Marker, With<TableA>)>();
     let total2: usize = q2.iter_chunks().map(|(s, _)| s.len()).sum();
     assert_eq!(total2, 1, "table With selects the archetype; chunks yields only it");
 }

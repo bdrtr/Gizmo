@@ -215,7 +215,8 @@ fn tick(world: &mut World, dt: f32, input: &Input) {
     // Elle kurulan kuyruk: süresi dolan komutları uygula. Motorun `LifetimeSystem`'i de aynı
     // biçimde yazılmış — sorgu ham id veriyor, `world.entity(id)` ile `Entity`'ye çevriliyor.
     let mut due_ids: Vec<(u32, Action)> = Vec::new();
-    if let Some(mut q) = world.query_mut::<(Entity, gizmo::core::query::Mut<Delayed>)>() {
+    {
+        let mut q = world.query_mut::<(Entity, gizmo::core::query::Mut<Delayed>)>();
         for (entity, mut d) in q.iter_mut() {
             d.remaining -= dt;
             if d.remaining <= 0.0 {
@@ -239,7 +240,8 @@ fn tick(world: &mut World, dt: f32, input: &Input) {
                 applied_despawn += 1;
             }
             Action::Grow => {
-                if let Some(mut q) = world.query_mut::<(Entity, gizmo::core::query::Mut<Transform>)>() {
+                {
+                    let mut q = world.query_mut::<(Entity, gizmo::core::query::Mut<Transform>)>();
                     for (id, mut t) in q.iter_mut() {
                         if id.id() == entity.id() {
                             t.scale *= 1.6;
@@ -253,13 +255,9 @@ fn tick(world: &mut World, dt: f32, input: &Input) {
     }
 
     let engine_alive = world
-        .query::<&EngineSide>()
-        .map(|q| q.iter().count())
-        .unwrap_or(0);
+        .query::<&EngineSide>().iter().count();
     let manual_alive = world
-        .query::<&ManualSide>()
-        .map(|q| q.iter().count())
-        .unwrap_or(0);
+        .query::<&ManualSide>().iter().count();
 
     let Some(mut report) = world.get_resource_mut::<DelayReport>() else {
         return;

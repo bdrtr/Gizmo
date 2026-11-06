@@ -192,7 +192,8 @@ fn update(world: &mut World, state: &mut KccState, dt: f32, input: &Input) {
 
     // --- FPS kamerası: karakterin baş hizasında ---
     let cam_pos = char_pos + Vec3::new(0.0, 0.8, 0.0);
-    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
+    {
+        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
         for (mut tr, mut cam) in q.iter_mut() {
             tr.position = cam_pos;
             tr.rotation = cam_rot;

@@ -209,7 +209,7 @@ fn main() {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let units: Vec<Entity> = world.query::<(Entity, &Unit)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let units: Vec<Entity> = world.query::<(Entity, &Unit)>().iter().map(|(entity, _)| entity).collect();
     for id in units {
         despawn_unit(world, id);
     }
@@ -397,7 +397,7 @@ fn select_and_order(world: &mut World, game: &mut Game, input: &Input) {
 
 fn blue_units(world: &World) -> Vec<(Entity, Vec3)> {
     let transforms = world.borrow::<Transform>();
-    world.query::<(Entity, &Unit)>().unwrap().iter()
+    world.query::<(Entity, &Unit)>().iter()
         .filter(|(_, u)| u.side == Side::Blue)
         .filter_map(|(entity, _)| transforms.get(entity).map(|t| (entity, t.position)))
         .collect()
@@ -424,7 +424,7 @@ fn order(world: &mut World, game: &mut Game, to: Vec3) {
 fn combat(world: &mut World, game: &mut Game, dt: f32) {
     let all: Vec<(Entity, Side, Vec3)> = {
         let transforms = world.borrow::<Transform>();
-        world.query::<(Entity, &Unit)>().unwrap().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity, u.side, t.position))).collect()
+        world.query::<(Entity, &Unit)>().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity, u.side, t.position))).collect()
     };
     let mut hits: Vec<(Entity, Vec3, Vec3)> = Vec::new();
     {
@@ -476,7 +476,7 @@ fn combat(world: &mut World, game: &mut Game, dt: f32) {
         play(world, "dus");
     }
     let mut gone = Vec::new();
-    for (entity, mut t) in world.query_mut::<(Entity, Mut<Tracer>)>().unwrap().iter_mut() {
+    for (entity, mut t) in world.query_mut::<(Entity, Mut<Tracer>)>().iter_mut() {
         t.life -= dt;
         if t.life <= 0.0 {
             gone.push(entity);
@@ -492,7 +492,7 @@ fn combat(world: &mut World, game: &mut Game, dt: f32) {
 fn overlays(world: &mut World, game: &Game) {
     let units: Vec<(Entity, Unit, Vec3)> = {
         let transforms = world.borrow::<Transform>();
-        world.query::<(Entity, &Unit)>().unwrap().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity, *u, t.position))).collect()
+        world.query::<(Entity, &Unit)>().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity, *u, t.position))).collect()
     };
     for (id, unit, at) in units {
         let screen = gizmo::pointer::world_to_screen(world, at + Vec3::Y * 1.0);
@@ -545,7 +545,7 @@ fn overlays(world: &mut World, game: &Game) {
 fn camera_controls(world: &mut World, input: &Input, dt: f32) {
     let (mx, my) = input.move_axis();
     let wheel = input.mouse_scroll();
-    let Some(id) = world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, _)| entity) else { return };
+    let Some(id) = world.query::<(Entity, &Camera)>().iter().next().map(|(entity, _)| entity) else { return };
     if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
         t.position += Vec3::new(mx, 0.0, -my) * 14.0 * dt;
         t.position.y = (t.position.y - wheel * 1.5).clamp(8.0, 30.0);
@@ -567,7 +567,7 @@ fn autoplay(world: &mut World, game: &mut Game, dt: f32) {
         game.selected = blue_units(world).into_iter().map(|(id, _)| id).collect();
         let reds: Vec<Vec3> = {
             let transforms = world.borrow::<Transform>();
-            world.query::<(Entity, &Unit)>().unwrap().iter().filter(|(_, u)| u.side == Side::Red).filter_map(|(entity, _)| transforms.get(entity).map(|t| t.position)).collect()
+            world.query::<(Entity, &Unit)>().iter().filter(|(_, u)| u.side == Side::Red).filter_map(|(entity, _)| transforms.get(entity).map(|t| t.position)).collect()
         };
         let target = reds.first().copied().unwrap_or(ENEMY_BASE);
         order(world, game, target);

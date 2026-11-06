@@ -17,7 +17,7 @@ pub fn bench_simple_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("simple_iter", |b| {
@@ -43,7 +43,7 @@ pub fn bench_contiguous_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("contiguous_iter", |b| {
@@ -77,7 +77,7 @@ pub fn bench_contiguous_iter_avx2(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     #[target_feature(enable = "avx2")]
@@ -116,7 +116,7 @@ pub fn bench_for_each_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("for_each_iter", |b| {
@@ -148,7 +148,7 @@ pub fn bench_cache_locality_loss(c: &mut Criterion) {
         world.despawn(e);
     }
 
-    let mut query = world.query_mut::<(Mut<A>, &B)>().unwrap();
+    let mut query = world.query_mut::<(Mut<A>, &B)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("cache_locality_loss", |b| {
@@ -172,7 +172,7 @@ pub fn bench_bypass_change_detection(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>().unwrap();
+    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("bypass_change_detection", |b| {

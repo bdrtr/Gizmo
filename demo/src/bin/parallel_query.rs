@@ -290,14 +290,12 @@ fn apply_resize(world: &mut World, direction: i32) {
         }
     } else {
         // Sorgu dünyayı ödünç alıyor; silmeden önce listeyi toplayıp bırakmak gerek.
-        let doomed: Vec<Entity> = match world.query::<(Entity, &Velocity)>() {
-            Some(query) => query
+        let doomed: Vec<Entity> = world
+            .query::<(Entity, &Velocity)>()
                 .iter()
                 .map(|(entity, _)| entity)
                 .take(current - target)
-                .collect(),
-            None => Vec::new(),
-        };
+                .collect();
         for entity in doomed {
             world.despawn(entity);
         }

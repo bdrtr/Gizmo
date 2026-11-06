@@ -233,13 +233,13 @@ fn advance_stages(world: &mut gizmo::core::World) {
 
     // Kökün çocuk listesinin bir kopyası — listeyi tutan bileşeni ödünç alırken dünyayı
     // değiştiremeyiz.
-    let children: Vec<Entity> = world
-        .query::<(Entity, &Children)>()
-        .and_then(|q| {
+    let children: Vec<Entity> = {
+ let q = world
+        .query::<(Entity, &Children)>();
             q.iter()
                 .find(|(entity, _)| *entity == root_id)
                 .map(|(_, c)| c.0.to_vec())
-        })
+        }
         .unwrap_or_default();
 
     match stage {
@@ -275,9 +275,9 @@ fn advance_stages(world: &mut gizmo::core::World) {
         }
         // 4 s: kökü alt ağacıyla birlikte yok et.
         2 if elapsed >= 4.0 => {
-            let before = world.query::<&Node>().map(|q| q.iter().count()).unwrap_or(0);
+            let before = world.query::<&Node>().iter().count();
             world.despawn_recursive(root_entity);
-            let after = world.query::<&Node>().map(|q| q.iter().count()).unwrap_or(0);
+            let after = world.query::<&Node>().iter().count();
             note(
                 world,
                 format!("4,0 s — despawn_recursive: {before} düğümden {after} kaldı"),
@@ -351,9 +351,7 @@ fn build_tree(world: &mut gizmo::core::World, cube: &Mesh, template: &Material) 
 /// **R**: kalan düğümleri silip ağacı yeniden kurar.
 fn rebuild(world: &mut gizmo::core::World) {
     let doomed: Vec<Entity> = world
-        .query::<(Entity, &Node)>()
-        .map(|q| q.iter().map(|(entity, _)| entity).collect())
-        .unwrap_or_default();
+        .query::<(Entity, &Node)>().iter().map(|(entity, _)| entity).collect();
     for id in doomed {
         if let Some(entity) = world.live(id) {
             world.despawn(entity);
@@ -361,8 +359,7 @@ fn rebuild(world: &mut gizmo::core::World) {
     }
 
     let template = world
-        .query::<(&Mesh, &Material)>()
-        .and_then(|q| q.iter().next().map(|(m, mat)| (m.clone(), mat.clone())));
+        .query::<(&Mesh, &Material)>().iter().next().map(|(m, mat)| (m.clone(), mat.clone()));
     let Some((mesh, material)) = template else {
         return;
     };

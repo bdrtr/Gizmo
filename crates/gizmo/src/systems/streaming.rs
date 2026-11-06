@@ -128,9 +128,7 @@ fn still_wants(texture_source: Option<&str>, path: &str) -> bool {
 fn request_nearby_textures(world: &World) {
     // Birincil kamera pozisyonu (yoksa: ilk kamera; hiç kamera yoksa çık).
     let cam_pos = {
-        let Some(q) = world.query::<(&Camera, &Transform)>() else {
-            return;
-        };
+        let q = world.query::<(&Camera, &Transform)>();
         let mut fallback = None;
         let mut primary = None;
         for (cam, t) in q.iter() {
@@ -157,7 +155,7 @@ fn request_nearby_textures(world: &World) {
     }
 
     // Aday entity'leri topla (Material read borrow'u ifade sonunda biter).
-    let entities: Vec<Entity> = world.query::<(Entity, &Material)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let entities: Vec<Entity> = world.query::<(Entity, &Material)>().iter().map(|(entity, _)| entity).collect();
     let transforms = world.borrow::<Transform>();
     let hidden = world.borrow::<gizmo_core::component::IsHidden>();
     let Some(mut server) = world.get_resource_mut::<crate::asset_server::AssetServer>() else {

@@ -179,7 +179,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> PlatformerState {
 
 fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input) {
     // 1. Hareketli platformlar
-    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Velocity>, Mut<MovingPlatform>)>() {
+    {
+        let mut q = world.query_mut::<(Mut<Transform>, Mut<Velocity>, Mut<MovingPlatform>)>();
         for (mut p_trans, mut p_vel, mut plat) in q.iter_mut() {
             let target = if plat.going_to_end {
                 plat.end_pos
@@ -269,7 +270,8 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
 
     // 4. Kamerayı oyuncuya takip ettir
     let cam_pos = player_pos - forward * 8.0 + Vec3::new(0.0, 2.0, 0.0);
-    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
+    {
+        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
         for (mut trans, mut cam) in q.iter_mut() {
             trans.position = cam_pos;
             trans.rotation = Quat::from_rotation_y(-state.camera_yaw);

@@ -73,7 +73,8 @@ pub fn oxygen_system(world: &World, dt: f32) {
     // SAFETY: exclusive `fn(&World, f32)` sistemi — scheduler tek başına çalıştırır; `Oxygen` ve
     // `Transform` ayrı bileşen tipleri, alias yok.
     let query = unsafe { world.query_unchecked::<(gizmo_core::Entity, Mut<Oxygen>, &Transform, Without<IsDeleted>)>() };
-    if let Some(mut query) = query {
+    {
+        let mut query = query;
         for (entity, mut oxy, transform, _) in query.iter_mut() {
             let head = transform.position + Vec3::new(0.0, oxy.head_offset, 0.0);
             let submerged = phys.as_ref().is_some_and(|pw| pw.is_submerged(head));
@@ -129,7 +130,7 @@ mod tests {
         for _ in 0..60 {
             oxygen_system(&world, dt); // 1 sn batık
         }
-        let o = world.query::<&Oxygen>().unwrap().get(diver).unwrap().current;
+        let o = world.query::<&Oxygen>().get(diver).unwrap().current;
         assert!(o < 20.0 - 1.5, "batıkken oksijen tükenmeli (~2/sn), bulundu {o}");
 
         // Yüzeye taşı (kafa +2.6 → havada) → dolmalı.
@@ -138,7 +139,7 @@ mod tests {
         for _ in 0..60 {
             oxygen_system(&world, dt);
         }
-        let o2 = world.query::<&Oxygen>().unwrap().get(diver).unwrap().current;
+        let o2 = world.query::<&Oxygen>().get(diver).unwrap().current;
         assert!(o2 > o, "yüzeyde oksijen dolmalı, {o} → {o2}");
     }
 
@@ -183,7 +184,7 @@ mod tests {
         for _ in 0..600 {
             oxygen_system(&world, 1.0 / 60.0); // 100/s × 10s ≫ max, must still cap
         }
-        let o = world.query::<&Oxygen>().unwrap().get(e).unwrap().current;
+        let o = world.query::<&Oxygen>().get(e).unwrap().current;
         assert!((o - 10.0).abs() < 1e-4, "refill must cap at max, got {o}");
     }
 
@@ -201,7 +202,7 @@ mod tests {
         for _ in 0..600 {
             oxygen_system(&world, 1.0 / 60.0);
         }
-        let o = world.query::<&Oxygen>().unwrap().get(diver).unwrap().current;
+        let o = world.query::<&Oxygen>().get(diver).unwrap().current;
         assert_eq!(o, 0.0, "depletion must floor at exactly 0, got {o}");
         assert!(o >= 0.0, "oxygen must never go negative");
     }
@@ -216,7 +217,7 @@ mod tests {
         world.add_component(diver, Oxygen { current: 5.0, ..Default::default() });
         oxygen_system(&world, 0.0);
         oxygen_system(&world, -1.0);
-        let o = world.query::<&Oxygen>().unwrap().get(diver).unwrap().current;
+        let o = world.query::<&Oxygen>().get(diver).unwrap().current;
         assert_eq!(o, 5.0, "dt <= 0 must leave oxygen untouched, got {o}");
     }
 
@@ -231,7 +232,7 @@ mod tests {
         for _ in 0..60 {
             oxygen_system(&world, 1.0 / 60.0);
         }
-        let o = world.query::<&Oxygen>().unwrap().get(e).unwrap().current;
+        let o = world.query::<&Oxygen>().get(e).unwrap().current;
         assert!(o > 5.0, "susuz dünyada oksijen dolmalı, bulundu {o}");
     }
 }

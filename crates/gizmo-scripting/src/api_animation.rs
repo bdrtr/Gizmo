@@ -124,7 +124,7 @@ pub fn update_animation_read_api(lua: &Lua, world: &World) -> Result<(), LuaErro
 
     let states = lua.create_table()?;
     let players = world.borrow::<gizmo_animation::skeletal::AnimationPlayer>();
-    for (entity, _) in world.query::<(Entity, &gizmo_animation::skeletal::AnimationPlayer)>().unwrap().iter() {
+    for (entity, _) in world.query::<(Entity, &gizmo_animation::skeletal::AnimationPlayer)>().iter() {
         if let Some(player) = players.get(entity) {
             let state = lua.create_table()?;
             state.set("time", player.current_time)?;

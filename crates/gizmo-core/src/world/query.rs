@@ -56,8 +56,8 @@ impl World {
     /// let e = world.spawn();
     /// world.add_component(e, Position { x: 1.0 });
     ///
-    /// let r1 = world.query::<&Position>().unwrap();
-    /// let r2 = world.query::<&Position>().unwrap(); // any number may coexist
+    /// let r1 = world.query::<&Position>();
+    /// let r2 = world.query::<&Position>(); // any number may coexist
     /// assert_eq!(r1.get(e).unwrap().x, 1.0);
     /// assert_eq!(r2.get(e).unwrap().x, 1.0);
     /// ```
@@ -77,7 +77,7 @@ impl World {
     /// ```
     pub fn query<'w, Q: crate::query::ReadOnlyQuery>(
         &'w self,
-    ) -> Option<crate::query::Query<'w, Q>> {
+    ) -> crate::query::Query<'w, Q> {
         crate::query::Query::new(self)
     }
 
@@ -102,10 +102,10 @@ impl World {
     /// world.add_component(e, Position { x: 1.0 });
     ///
     /// {
-    ///     let mut q = world.query_mut::<Mut<Position>>().unwrap();
+    ///     let mut q = world.query_mut::<Mut<Position>>();
     ///     for mut p in q.iter_mut() { p.x += 1.0; }
     /// }
-    /// assert_eq!(world.query::<&Position>().unwrap().get(e).unwrap().x, 2.0);
+    /// assert_eq!(world.query::<&Position>().get(e).unwrap().x, 2.0);
     /// ```
     ///
     /// Two simultaneous mutable queries can't exist — each ties up `&mut World`, so the
@@ -132,7 +132,7 @@ impl World {
     ///
     /// let mut world = World::new();
     /// world.register_component_type::<Position>();
-    /// let mut q = world.query_mut::<Mut<Position>>().unwrap();
+    /// let mut q = world.query_mut::<Mut<Position>>();
     /// let a = q.get_mut(0);
     /// let b = q.get_mut(0); // second &mut borrow of `q` — E0499
     /// let _ = (a, b);
@@ -147,12 +147,12 @@ impl World {
     /// gizmo_core::impl_component!(Position);
     ///
     /// let mut world = World::new();
-    /// let q = world.query_mut::<Mut<Position>>().unwrap();
+    /// let q = world.query_mut::<Mut<Position>>();
     /// let _it = q.iter(); // `iter` requires `Q: ReadOnlyQuery`; Mut<Position> isn't — E0599
     /// ```
     pub fn query_mut<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
-    ) -> Option<crate::query::Query<'w, Q>> {
+    ) -> crate::query::Query<'w, Q> {
         crate::query::Query::new(self)
     }
 
@@ -172,14 +172,14 @@ impl World {
     /// you have exclusive access, use the safe [`World::query_mut`] instead.
     pub unsafe fn query_unchecked<'w, Q: crate::query::WorldQuery>(
         &'w self,
-    ) -> Option<crate::query::Query<'w, Q>> {
+    ) -> crate::query::Query<'w, Q> {
         crate::query::Query::new(self)
     }
 
     /// StorageView alternative for backwards compatibility (`&T` shared access — always sound).
     #[inline]
     pub fn borrow<'w, T: Component>(&'w self) -> crate::query::Query<'w, &'w T> {
-        self.query::<&T>().expect("Failed to create borrow Query")
+        self.query::<&T>()
     }
 
     /// Mutable query for a single component (`Mut<T>`) — safe, requires `&mut self`.
@@ -189,7 +189,7 @@ impl World {
     pub fn borrow_mut<'w, T: Component>(
         &'w mut self,
     ) -> crate::query::Query<'w, crate::query::Mut<'w, T>> {
-        self.query_mut::<crate::query::Mut<T>>().expect("Failed to create borrow_mut Query")
+        self.query_mut::<crate::query::Mut<T>>()
     }
 
     /// The `unsafe` escape-hatch version of [`World::borrow_mut`] — for parallel-scheduler
@@ -203,14 +203,13 @@ impl World {
         &'w self,
     ) -> crate::query::Query<'w, crate::query::Mut<'w, T>> {
         self.query_unchecked::<crate::query::Mut<T>>()
-            .expect("Failed to create borrow_mut_unchecked Query")
     }
 
     /// Cached query — uses the archetype index cache.
     /// Because it requires &mut self it can only be called when you own the World.
     pub fn query_cached<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
-    ) -> Option<crate::query::Query<'w, Q>> {
+    ) -> crate::query::Query<'w, Q> {
         crate::query::Query::new_cached(self)
     }
 

@@ -419,7 +419,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     // Sönen kartlar bitince siliniyor.
     let gone: Vec<Entity> = {
         let tweens = world.borrow::<UiTween>();
-        world.query::<(Entity, &Leaving)>().unwrap().iter().filter(|(entity, _)| tweens.get(*entity).is_none_or(|t| t.is_finished())).map(|(entity, _)| entity).collect()
+        world.query::<(Entity, &Leaving)>().iter().filter(|(entity, _)| tweens.get(*entity).is_none_or(|t| t.is_finished())).map(|(entity, _)| entity).collect()
     };
     for id in gone {
         if let Some(e) = world.live(id) {

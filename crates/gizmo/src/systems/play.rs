@@ -249,7 +249,7 @@ fn apply_script_camera(
                 // The primary is found through a read borrow and written through a write one:
                 // the mutable query is not iterable, and holding both at once is a panic.
                 let primary = {
-                    world.query::<(crate::core::Entity, &crate::renderer::Camera)>().unwrap().iter().find(|(_, cam)| cam.primary).map(|(entity, _)| entity)
+                    world.query::<(crate::core::Entity, &crate::renderer::Camera)>().iter().find(|(_, cam)| cam.primary).map(|(entity, _)| entity)
                 };
                 match primary {
                     Some(entity) => {
@@ -564,7 +564,7 @@ impl PlayLoop {
             // cached per path, so a per-entity value cannot live in the shared Lua environment.
             let mut entity_calls = Vec::new();
             {
-                for (entity, script) in world.query::<(crate::core::Entity, &crate::scripting::Script)>().unwrap().iter() {
+                for (entity, script) in world.query::<(crate::core::Entity, &crate::scripting::Script)>().iter() {
                     entity_calls.push((
                         entity,
                         script.file_path.clone(),

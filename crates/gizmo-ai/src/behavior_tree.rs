@@ -340,7 +340,6 @@ impl BehaviorTree {
 pub fn behavior_tree_system(world: &mut World, dt: f32) {
     let entities: Vec<Entity> = world
         .query::<(Entity, &BehaviorTree)>()
-        .unwrap()
         .iter()
         .map(|(entity, _)| entity)
         .collect();

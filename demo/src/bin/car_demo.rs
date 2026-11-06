@@ -902,7 +902,7 @@ fn derive_wheel(
     // 1. İsimle tekerlek entity'sini bul.
     let wheel_id = {
         let mut found = None;
-        for (entity, n) in world.query::<(Entity, &gizmo::core::EntityName)>().unwrap().iter() {
+        for (entity, n) in world.query::<(Entity, &gizmo::core::EntityName)>().iter() {
             if n.0 == name {
                 found = Some(entity);
                 break;
@@ -1280,7 +1280,7 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
     // GLTF yüklendiği için tekerlek entity'lerini isimlerinden bulup cache'le
     {
         let ecs_transforms = world.borrow::<Transform>();
-        for (entity, name) in world.query::<(Entity, &gizmo::core::EntityName)>().unwrap().iter() {
+        for (entity, name) in world.query::<(Entity, &gizmo::core::EntityName)>().iter() {
             if name.0 == "wheelFrontLeft" {
                 state.wheel_fl = Some(entity);
                 state.wheel_fl_rot = ecs_transforms

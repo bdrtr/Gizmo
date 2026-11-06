@@ -47,7 +47,7 @@ pub fn collect_decals(
 
     let mut uniforms = Vec::new();
     let mut bind_groups = Vec::new();
-    for (entity, decal) in world.query::<(Entity, &crate::renderer::components::Decal)>().unwrap().iter() {
+    for (entity, decal) in world.query::<(Entity, &crate::renderer::components::Decal)>().iter() {
         let Some(trans) = transforms.get(entity) else {
             continue;
         };

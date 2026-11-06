@@ -39,7 +39,7 @@ pub fn prefab_request_system(world: &mut crate::core::World) {
     // Collect first: loading a prefab spawns entities, and structural changes cannot run while a
     // query borrow is live.
     let pending: Vec<(Entity, String)> = {
-        world.query::<(Entity, &PrefabRequest)>().unwrap().iter().map(|(entity, req)| (entity, req.0.clone())).collect()
+        world.query::<(Entity, &PrefabRequest)>().iter().map(|(entity, req)| (entity, req.0.clone())).collect()
     };
     if pending.is_empty() {
         return;

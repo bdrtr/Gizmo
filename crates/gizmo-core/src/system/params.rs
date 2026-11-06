@@ -25,14 +25,6 @@ pub enum SystemParamFetchError {
     /// panic reports the same way. The borrow is attempted, never waited on, so a
     /// self-conflict surfaces as this error rather than as a deadlock.
     Resource(crate::world::ResourceFetchError),
-    /// Query construction returned nothing.
-    ///
-    /// Unreachable through the built-in `Query` parameter: that constructor never returns
-    /// `None`. It is not *infallible*, though — asking for the same component mutably twice
-    /// in one query (`Query<(Mut<T>, Mut<T>)>`) panics inside the aliasing check rather than
-    /// surfacing here. The variant exists as the failure channel should construction start
-    /// reporting failures instead.
-    QueryError,
 }
 
 impl SystemParamFetchError {
@@ -44,9 +36,6 @@ impl SystemParamFetchError {
     /// scheduling bug — two `ResMut<T>` in one parameter list, or a `get_resource` call made from
     /// inside a system that already holds the write lock. Turning the second into `None` would
     /// hide it behind a branch that looks like ordinary absence handling.
-    ///
-    /// `QueryError` is **not** an absence: query construction returning nothing means the world
-    /// could not produce the view at all.
     #[must_use]
     pub fn is_absence(&self) -> bool {
         matches!(
@@ -68,9 +57,6 @@ impl std::fmt::Display for SystemParamFetchError {
             SystemParamFetchError::Resource(e) => {
                 write!(f, "system parameter resource fetch failed: {e}")
             }
-            SystemParamFetchError::QueryError => {
-                write!(f, "system parameter query construction failed")
-            }
         }
     }
 }
@@ -79,7 +65,6 @@ impl std::error::Error for SystemParamFetchError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             SystemParamFetchError::Resource(e) => Some(e),
-            SystemParamFetchError::QueryError => None,
         }
     }
 }
@@ -428,11 +413,7 @@ impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<
         // too, which blanked the inspector, froze transform subtrees and made `sync_bodies`
         // *destroy* a disabled rigid body. This function is the one place a query is built as a
         // PARAMETER, so it is the one place the filter belongs.
-        if let Some(query) = crate::query::Query::<Q>::new_for_system(world) {
-            Ok(query)
-        } else {
-            Err(SystemParamFetchError::QueryError)
-        }
+        Ok(crate::query::Query::<Q>::new_for_system(world))
     }
     fn get_access_info(info: &mut AccessInfo) {
         let mut types = Vec::new();
@@ -683,10 +664,6 @@ mod optional_param_tests {
         assert!(
             !conflict.is_absence(),
             "a borrow conflict is a scheduling bug — turning it into None would hide it"
-        );
-        assert!(
-            !SystemParamFetchError::QueryError.is_absence(),
-            "a query that could not be built is not an absence"
         );
     }
 }

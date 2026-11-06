@@ -245,7 +245,7 @@ impl World {
     ///
     /// // The resource went back into the world, and the pool cloned the prefab -> prefab + clone = 2 Enemy.
     /// assert!(world.get_resource::<PoolManager>().is_some());
-    /// assert_eq!(world.query::<&Enemy>().unwrap().iter().count(), 2);
+    /// assert_eq!(world.query::<&Enemy>().iter().count(), 2);
     /// ```
     pub fn resource_scope<T: Send + Sync + 'static, U, F>(&mut self, f: F) -> Option<U>
     where

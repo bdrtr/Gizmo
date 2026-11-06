@@ -270,7 +270,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
 
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
 
-    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
+    {
+        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
         for (mut transform, mut camera) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
@@ -321,7 +322,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
         }
     }
 
-    if let Some(mut q) = world.query_mut::<Mut<Transform>>() {
+    {
+        let mut q = world.query_mut::<Mut<Transform>>();
         // Güneş rotasyonu (Gündüz/Gece döngüsü)
         if let Some(mut trans) = q.get_mut(state.sun_entity) {
             let sun_speed = 0.2; // Zamanın hızı
@@ -367,8 +369,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
         let explosion_radius = 25.0;
         let explosion_force = 20000.0; // Güçlü bir şok dalgası
 
-        if let Some(mut rbs) = world.query_mut::<(Mut<Transform>, Mut<RigidBody>, Mut<Velocity>)>()
         {
+            let mut rbs = world.query_mut::<(Mut<Transform>, Mut<RigidBody>, Mut<Velocity>)>();
             for (trans, rb, mut vel) in rbs.iter_mut() {
                 if rb.body_type != BodyType::Static {
                     let dir = trans.position - epicenter;
@@ -391,7 +393,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     // X Tuşu: Cam Gibi Parçalama (Fracture) — kırılabilir tahtaları render fn'e kuyrukla.
     if input.is_key_just_pressed(KeyCode::KeyX as u32) {
         let mut queue = world.get_resource_mut::<FractureQueue>().unwrap();
-        if let Some(q) = world.query::<(Entity, &Transform, &Destructible)>() {
+        {
+            let q = world.query::<(Entity, &Transform, &Destructible)>();
             for (entity, ..) in q.iter() {
                 queue.entities.push(entity.id());
             }
@@ -420,7 +423,8 @@ fn render(
     if !to_fracture.is_empty() {
         let mut fracture_data = Vec::new();
 
-        if let Some(mut q) = world.query_mut::<(Entity, Mut<Transform>, Mut<Material>, Mut<Velocity>)>() {
+        {
+            let mut q = world.query_mut::<(Entity, Mut<Transform>, Mut<Material>, Mut<Velocity>)>();
             for (entity, trans, mat, vel) in q.iter_mut() {
                 if to_fracture.contains(&entity.id()) {
                     fracture_data.push((entity, *trans, mat.clone(), *vel));

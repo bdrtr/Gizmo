@@ -150,7 +150,8 @@ fn main() {
 
             // 1. `immutable_components`: "değişmez" olması gereken bileşen doğrudan yazılıyor,
             //    ve motor buna karşı çıkmıyor. Sözleşme yok.
-            if let Some(mut q) = scene.world.query_mut::<gizmo::core::query::Mut<Frozen>>() {
+            {
+                let mut q = scene.world.query_mut::<gizmo::core::query::Mut<Frozen>>();
                 report.frozen_mutable = true;
                 for mut frozen in q.iter_mut() {
                     frozen.0 = -1.0; // hiçbir kanca, hiçbir kapı
@@ -158,13 +159,12 @@ fn main() {
             }
             report.frozen_value = scene
                 .world
-                .query::<&Frozen>()
-                .and_then(|q| q.iter().next().map(|f| f.0))
+                .query::<&Frozen>().iter().next().map(|f| f.0)
                 .unwrap_or(0.0);
 
             // 2b. `dynamic`'in erişim yarısı: ham işaretçi var, ama `TypeId` istiyor — yani
             //     zaten var olan bir tür gerekiyor.
-            let first = scene.world.query::<(Entity, &SlotA)>().and_then(|q| q.iter().next().map(|(entity, _)| entity));
+            let first = scene.world.query::<(Entity, &SlotA)>().iter().next().map(|(entity, _)| entity);
             report.raw_read = first
                 .and_then(|id| scene.world.live(id))
                 .and_then(|entity| {
@@ -206,7 +206,7 @@ fn main() {
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
             // 3. `extraction`: çıkarma adımı YOK. Render kancası oyun bileşenlerini doğrudan
             //    okuyor, çünkü tek dünya var.
-            let seen = world.query::<&Frozen>().map(|q| q.iter().count()).unwrap_or(0);
+            let seen = world.query::<&Frozen>().iter().count();
             if let Some(mut report) = world.get_resource_mut::<AbsentReport>() {
                 report.seen_from_render = seen;
             }

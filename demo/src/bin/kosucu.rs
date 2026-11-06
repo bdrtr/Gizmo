@@ -250,7 +250,7 @@ fn lane_x(lane: i32) -> f32 {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let chunks: Vec<Entity> = world.query::<(Entity, &Chunk)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let chunks: Vec<Entity> = world.query::<(Entity, &Chunk)>().iter().map(|(entity, _)| entity).collect();
     for id in chunks {
         if let Some(e) = world.live(id) {
             world.despawn_recursive(e);
@@ -451,14 +451,14 @@ fn run(world: &mut World, game: &mut Game, dt: f32, input: &Input) {
     {
         // Dünyadaki yerleri `world_matrix` ile: bu karede doğanların `GlobalTransform`'u henüz
         // yayılmadı (varsayılan, yani başlangıç — oyuncunun durduğu yer).
-        for (entity, _) in world.query::<(Entity, &Obstacle)>().unwrap().iter() {
+        for (entity, _) in world.query::<(Entity, &Obstacle)>().iter() {
             let Some(m) = world_matrix(world, entity) else { continue };
             let (size, _, at) = m.to_scale_rotation_translation();
             if overlap(centre, half * 0.9, at, size) {
                 hit = true;
             }
         }
-        for (entity, _) in world.query::<(Entity, &Coin)>().unwrap().iter() {
+        for (entity, _) in world.query::<(Entity, &Coin)>().iter() {
             let Some(at) = world_position(world, entity) else { continue };
             if (at - centre).abs().cmple(half + Vec3::splat(0.35)).all() {
                 taken.push(entity);
@@ -473,7 +473,7 @@ fn run(world: &mut World, game: &mut Game, dt: f32, input: &Input) {
     // Altınlar dönüyor.
     game.spin += dt * 4.0;
     let spin = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2) * Quat::from_rotation_x(game.spin);
-    let coins: Vec<Entity> = world.query::<(Entity, &Coin)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let coins: Vec<Entity> = world.query::<(Entity, &Coin)>().iter().map(|(entity, _)| entity).collect();
     for id in coins {
         if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
             t.rotation = spin;
@@ -501,7 +501,7 @@ fn run(world: &mut World, game: &mut Game, dt: f32, input: &Input) {
     while game.next_chunk > game.z - CHUNK * AHEAD as f32 {
         spawn_chunk(world, game, false);
     }
-    let behind: Vec<Entity> = world.query::<(Entity, &Chunk)>().unwrap().iter()
+    let behind: Vec<Entity> = world.query::<(Entity, &Chunk)>().iter()
         .filter(|(_, c)| c.z0 - CHUNK > game.z + 10.0)
         .map(|(entity, _)| entity)
         .collect();
@@ -520,7 +520,7 @@ fn overlap(a: Vec3, ha: Vec3, b: Vec3, hb: Vec3) -> bool {
 /// şeride geçer, alçaksa zıplar, kirişse kayar.
 fn autopilot(world: &World, game: &Game) -> (bool, bool, bool, bool) {
     let mut ahead: Vec<(f32, i32, Kind)> = Vec::new();
-    for (entity, o) in world.query::<(Entity, &Obstacle)>().unwrap().iter() {
+    for (entity, o) in world.query::<(Entity, &Obstacle)>().iter() {
         let Some(at) = world_position(world, entity) else { continue };
         let d = game.z - at.z;
         if d > -0.5 && d < 14.0 {

@@ -525,13 +525,11 @@ pub fn simple_scene_update(
     // The renderer's own rule, not a second copy of it: whichever camera `active_camera` names is
     // the one the fly controls.
     let target = crate::renderer::components::active_camera(world);
-    if let (Some(target), Some(mut q)) = (
-        target,
-        world.query_mut::<(
+    if let Some(target) = target {
+        let mut q = world.query_mut::<(
             crate::core::query::Mut<Transform>,
             crate::core::query::Mut<Camera>,
-        )>(),
-    ) {
+        )>();
         let rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2)
             * Quat::from_rotation_x(state.camera_pitch);
 
@@ -673,7 +671,7 @@ impl FixedPhysics {
         // Each driven body's pose now and where the caller wants it after the last step.
         let driven: Vec<(Entity, Transform, KinematicTarget)> = if steps > 1 {
             let transforms = world.borrow::<Transform>();
-            world.query::<(Entity, &KinematicTarget)>().unwrap().iter().filter_map(|(entity, t)| transforms.get(entity).map(|from| (entity, *from, *t))).collect()
+            world.query::<(Entity, &KinematicTarget)>().iter().filter_map(|(entity, t)| transforms.get(entity).map(|from| (entity, *from, *t))).collect()
         } else {
             Vec::new()
         };
@@ -1062,8 +1060,7 @@ mod fly_camera_tests {
 
         let read = |entity: crate::core::Entity| {
             let q = world
-                .query::<(Entity, &Transform, &Camera)>()
-                .expect("query buildable");
+                .query::<(Entity, &Transform, &Camera)>();
             q.iter()
                 .find(|(id, ..)| (*id).id() == entity.id())
                 .map(|(_, t, c)| (t.position, c.pitch))

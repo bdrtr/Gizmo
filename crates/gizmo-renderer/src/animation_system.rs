@@ -13,7 +13,7 @@ use std::sync::Arc;
 /// Advances every [`AnimationPlayer`], composes the resulting local poses down each skeleton, and
 /// uploads the joint matrices.
 pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
-    let entities: Vec<Entity> = world.query::<(Entity, &AnimationPlayer)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let entities: Vec<Entity> = world.query::<(Entity, &AnimationPlayer)>().iter().map(|(entity, _)| entity).collect();
     tracing::trace!(players = entities.len(), dt, "[Animation] updating skeletal players");
     // SAFETY: exclusive `&mut World`; AnimationPlayer and Skeleton are distinct component
     // types, so these two mutable queries never alias the same storage.
@@ -147,7 +147,7 @@ fn advance_and_sample_prev(
 /// The same, for entities driven by an [`AnimationStateMachine`]: it evaluates transitions first,
 /// then blends the active states before composing the pose.
 pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
-    let entities: Vec<Entity> = world.query::<(Entity, &AnimationStateMachine)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let entities: Vec<Entity> = world.query::<(Entity, &AnimationStateMachine)>().iter().map(|(entity, _)| entity).collect();
     // SAFETY: exclusive `&mut World`; AnimationStateMachine and Skeleton are distinct
     // component types, so these two mutable queries never alias the same storage.
     let mut machines = unsafe { world.borrow_mut_unchecked::<AnimationStateMachine>() };

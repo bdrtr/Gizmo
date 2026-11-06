@@ -207,7 +207,8 @@ fn react_on_removal(world: &mut gizmo::core::World, entity: gizmo::core::entity:
     }
 
     // Boyama: despawn edilen varlıkta bu sessizce başarısız olur, ki doğrusu da budur.
-    if let Some(mut query) = world.query_mut::<Mut<Material>>() {
+    {
+        let mut query = world.query_mut::<Mut<Material>>();
         if let Some(mut material) = query.get_mut(entity) {
             material.albedo = REACTED;
         }
@@ -334,8 +335,7 @@ fn rebuild(world: &mut gizmo::core::World) {
     // Mesh ve malzeme yeniden üretilmiyor: hayatta kalan bir varlıktan (zeminden) kopyalanıyor,
     // çünkü GPU kaynağı yaratmak cihaz ister ve burada cihaz yok.
     let template = world
-        .query::<(&Mesh, &Material)>()
-        .and_then(|q| q.iter().next().map(|(m, mat)| (m.clone(), mat.clone())));
+        .query::<(&Mesh, &Material)>().iter().next().map(|(m, mat)| (m.clone(), mat.clone()));
     let Some((mesh, material)) = template else {
         return;
     };

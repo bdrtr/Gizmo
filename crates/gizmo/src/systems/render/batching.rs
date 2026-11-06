@@ -385,7 +385,7 @@ fn build_occlusion(
 
     let aspect = size.width as f32 / size.height.max(1) as f32;
     let mut buffer = crate::renderer::occlusion::OcclusionBuffer::new(*view_proj, aspect);
-    for (e, occluder) in world.query::<(Entity, &crate::renderer::components::Occluder)>().unwrap().iter() {
+    for (e, occluder) in world.query::<(Entity, &crate::renderer::components::Occluder)>().iter() {
         let Some(shown) = renderers.get(e) else { continue };
         if !shown.shadows.visible() || hidden.contains(&e) || pooled.get(e).is_some() || editor_only.get(e).is_some() {
             continue;
@@ -806,7 +806,8 @@ pub(super) fn collect_draw_items(
             })
         };
 
-        if let Some(mut q) = world.query::<(Entity, &Mesh, &gizmo_physics_core::components::GlobalTransform, &Material)>() {
+        {
+            let mut q = world.query::<(Entity, &Mesh, &gizmo_physics_core::components::GlobalTransform, &Material)>();
             if let Some(candidates) = index_candidates.as_ref() {
                 for &candidate in candidates {
                     let Some(e) = q.entity(candidate) else { continue };
@@ -840,7 +841,8 @@ pub(super) fn collect_draw_items(
         let materials = world.try_get_resource::<gizmo_core::asset::Assets<Material>>().ok();
         
         if let (Some(meshes), Some(materials)) = (meshes, materials) {
-            if let Some(mut q) = world.query::<(Entity, &gizmo_core::asset::Handle<Mesh>, &gizmo_physics_core::components::GlobalTransform, &gizmo_core::asset::Handle<Material>)>() {
+            {
+                let mut q = world.query::<(Entity, &gizmo_core::asset::Handle<Mesh>, &gizmo_physics_core::components::GlobalTransform, &gizmo_core::asset::Handle<Material>)>();
                 for (e, h_mesh, trans, h_mat) in q.iter_mut() {
                     if let (Some(mesh), Some(mat)) = (meshes.get(h_mesh), materials.get(h_mat)) {
                         let Some(mesh) = crate::renderer::components::LodGroup::pick(

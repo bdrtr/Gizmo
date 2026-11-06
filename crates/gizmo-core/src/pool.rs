@@ -292,7 +292,7 @@ mod tests {
             "the pool has no prefab any more and must say so"
         );
         assert_eq!(
-            world.query::<&Stranger>().map(|q| q.iter().count()),
+            Some(world.query::<&Stranger>().iter().count()),
             Some(1),
             "and nothing cloned the entity that took the prefab's slot"
         );
@@ -363,7 +363,7 @@ mod tests {
             "the pool's handles all name entities of the new scene, so the pool is gone"
         );
         assert_eq!(
-            world.query::<&Newcomer>().map(|q| q.iter().count()),
+            Some(world.query::<&Newcomer>().iter().count()),
             Some(1),
             "and the new scene's entity was neither handed out nor cloned"
         );

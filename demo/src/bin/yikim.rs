@@ -226,7 +226,7 @@ fn load_level(g: &mut Game, world: &mut World, idx: usize) {
 }
 
 fn count_targets(world: &World) -> usize {
-    world.query::<&Target>().map(|q| q.iter().count()).unwrap_or(0)
+    world.query::<&Target>().iter().count()
 }
 
 // --------------------------------------------------------------- ateş + efekt
@@ -434,7 +434,8 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
     // --- hedef yıkım kontrolü + kalan sayımı (TEK ECS sorgusu) ---
     let mut killed: Vec<(u32, Vec3)> = Vec::new();
     let mut alive = 0usize;
-    if let Some(q) = world.query::<(Entity, &Target, &Transform)>() {
+    {
+        let q = world.query::<(Entity, &Target, &Transform)>();
         for (entity, tgt, tr) in q.iter() {
             let p = tr.position;
             if p.y < KILL_Y || (p - tgt.start).length() > KILL_DIST {
@@ -465,7 +466,8 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
     }
 
     // --- kamerayı nişana göre güncelle ---
-    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
+    {
+        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
         for (mut tr, mut cam) in q.iter_mut() {
             tr.position = CANNON;
             tr.rotation = Quat::from_rotation_y(-g.yaw);

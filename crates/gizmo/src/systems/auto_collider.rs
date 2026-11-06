@@ -151,13 +151,14 @@ impl gizmo_core::system::System for AutoBoxColliderSystem {
         let mut skipped_non_box = 0usize;
         let mut inertia_refreshed = 0usize;
 
-        // ── PASS 1: collider'ı boyutlandır (+ işaret kaldırmayı kuyruğa al). ──
-        // RigidBody GEREKTİRMEZ → trigger-only (RigidBody'siz) kutular da boyutlanır.
-        // SAFETY: exclusive sistem; scheduler bu çalışırken disjoint mutable erişim garanti eder.
-        if let Some(mut q) = unsafe {
+        {
+            // ── PASS 1: collider'ı boyutlandır (+ işaret kaldırmayı kuyruğa al). ──
+            // RigidBody GEREKTİRMEZ → trigger-only (RigidBody'siz) kutular da boyutlanır.
+            // SAFETY: exclusive sistem; scheduler bu çalışırken disjoint mutable erişim garanti eder.
+            let mut q = unsafe {
             world
                 .query_unchecked::<(Entity, &Transform, Mut<Collider>, &AutoBoxCollider, Added<AutoBoxCollider>)>()
-        } {
+        };
             for (id, t, mut col, cfg, _) in q.iter_mut() {
                 // Savunma: bir küre/kapsül collider'ı ASLA kutuya dönüştürme.
                 if !matches!(col.shape, ColliderShape::Box(_)) {
@@ -179,16 +180,17 @@ impl gizmo_core::system::System for AutoBoxColliderSystem {
             }
         }
 
-        // ── PASS 2: ataleti tazele (yalnız RigidBody'si OLAN varlıklar). ──
-        // Mevcut `update_inertia_from_collider`'ı YENİDEN KULLAN — Box kolu yarı→tam
-        // ikilemeyi kendi içinde yapar, böylece FULL-vs-HALF ×2 tuzağı yapısal olarak imkânsız.
-        // Statik/kinematik yazımı zararsızca yutar (inv_inertia=0); trigger-only doğal dışlanır.
-        // SAFETY: scheduled system; RigidBody is the only mutable view and nothing else in
-        // this pass holds one, so the borrow `query_unchecked` skips cannot be violated here.
-        if let Some(mut q) = unsafe {
+        {
+            // ── PASS 2: ataleti tazele (yalnız RigidBody'si OLAN varlıklar). ──
+            // Mevcut `update_inertia_from_collider`'ı YENİDEN KULLAN — Box kolu yarı→tam
+            // ikilemeyi kendi içinde yapar, böylece FULL-vs-HALF ×2 tuzağı yapısal olarak imkânsız.
+            // Statik/kinematik yazımı zararsızca yutar (inv_inertia=0); trigger-only doğal dışlanır.
+            // SAFETY: scheduled system; RigidBody is the only mutable view and nothing else in
+            // this pass holds one, so the borrow `query_unchecked` skips cannot be violated here.
+            let mut q = unsafe {
             world
                 .query_unchecked::<(&Transform, Mut<RigidBody>, &Collider, &AutoBoxCollider, Added<AutoBoxCollider>)>()
-        } {
+        };
             for (t, mut rb, col, cfg, _) in q.iter_mut() {
                 // Pass 1 ile SİMETRİ: kutu-olmayan collider'a takılı işarette Pass 1 şekli
                 // KORUDU (atladı); burada da inertia'yı EZME — yoksa collider küre kalır ama
@@ -242,7 +244,8 @@ mod tests {
         }
         fn run(&mut self, world: &World, _dt: f32) {
             let mut captured = None;
-            if let Some(q) = world.query::<&Collider>() {
+            {
+                let q = world.query::<&Collider>();
                 for col in q.iter() {
                     if let ColliderShape::Box(b) = &col.shape {
                         captured = Some(b.half_extents);

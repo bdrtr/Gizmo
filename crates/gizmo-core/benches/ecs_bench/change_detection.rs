@@ -22,7 +22,7 @@ fn all_added_detection_generic<T: Component + Default + Clone>(group: &mut crite
                     (world, entities)
                 },
                 |(world, _)| {
-                    let query = world.query::<(Entity, gizmo_core::query::Added<T>)>().unwrap();
+                    let query = world.query::<(Entity, gizmo_core::query::Added<T>)>();
                     let mut count = 0;
                     for (entity, _) in query.iter() {
                         core::hint::black_box(entity);
@@ -59,7 +59,7 @@ fn all_changed_detection_generic<T: Component + Default + Clone>(
                     let mut world = World::new();
                     let entities: Vec<_> = world.spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize)).collect();
                     world.increment_tick();
-                    let mut query_mut = world.query_mut::<gizmo_core::query::Mut<T>>().unwrap();
+                    let mut query_mut = world.query_mut::<gizmo_core::query::Mut<T>>();
                     for mut component in query_mut.iter_mut() {
                         // writing to Mut<T> triggers Changed tick internally! Wait, Gizmo's `Mut` doesn't automatically trigger Changed tick.
                         // Wait, does it? Let's assume the user has a bench_modify trait, but we can just do mutable access or manually update ticks.
@@ -73,7 +73,7 @@ fn all_changed_detection_generic<T: Component + Default + Clone>(
                     (world, entities)
                 },
                 |(world, _)| {
-                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>().unwrap();
+                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>();
                     let mut count = 0;
                     for (entity, _) in query.iter() {
                         core::hint::black_box(entity);
@@ -125,7 +125,7 @@ fn few_changed_detection_generic<T: Component + Default + Clone>(
                     (world, entities)
                 },
                 |(world, _)| {
-                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>().unwrap();
+                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>();
                     for (entity, _) in query.iter() {
                         core::hint::black_box(entity);
                     }
@@ -170,7 +170,7 @@ fn none_changed_detection_generic<T: Component + Default + Clone>(
                     (world, entities)
                 },
                 |(world, _)| {
-                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>().unwrap();
+                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>();
                     let mut count = 0;
                     for (entity, _) in query.iter() {
                         core::hint::black_box(entity);
@@ -244,7 +244,8 @@ fn multiple_archetype_none_changed_detection_generic<T: Component + Default + Cl
                         gizmo_core::query::Mut<ArchetypeData<1>>,
                         gizmo_core::query::Mut<ArchetypeData<2>>,
                     )>();
-                    if let Some(mut query_mut) = query_mut {
+                    {
+                        let mut query_mut = query_mut;
                         for (mut d0, mut d1, mut d2) in query_mut.iter_mut() {
                             d0.0 += 1.0; d1.0 += 1.0; d2.0 += 1.0;
                         }
@@ -252,7 +253,7 @@ fn multiple_archetype_none_changed_detection_generic<T: Component + Default + Cl
                     world
                 },
                 |world| {
-                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>().unwrap();
+                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>();
                     let mut count = 0;
                     for (entity, _) in query.iter() {
                         core::hint::black_box(entity);

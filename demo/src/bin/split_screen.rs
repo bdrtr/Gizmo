@@ -160,9 +160,9 @@ fn apply_layout(world: &mut gizmo::core::World) {
     let index = world.get_resource::<Layout>().map(|l| l.0).unwrap_or(0);
     let [scene_cam, top_cam] = layout(index);
     let top = world
-        .query::<(Entity, &TopDown, &Camera)>()
-        .and_then(|q| q.iter().next().map(|(entity, ..)| entity));
-    if let Some(mut q) = world.query_mut::<(Entity, Mut<Camera>)>() {
+        .query::<(Entity, &TopDown, &Camera)>().iter().next().map(|(entity, ..)| entity);
+    {
+        let mut q = world.query_mut::<(Entity, Mut<Camera>)>();
         for (entity, mut camera) in q.iter_mut() {
             let (viewport, order) = if Some(entity) == top { top_cam } else { scene_cam };
             camera.viewport = viewport;

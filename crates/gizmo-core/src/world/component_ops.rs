@@ -981,7 +981,7 @@ impl World {
     /// let ids: Vec<Entity> = (0..3).map(|_| world.spawn_bundle(Health(100))).collect();
     /// world.insert_batch(&ids, Team(2)); // one archetype lookup for the whole group
     ///
-    /// let q = world.query::<&Team>().unwrap();
+    /// let q = world.query::<&Team>();
     /// assert_eq!(q.iter().count(), 3);
     /// assert_eq!(q.get(ids[2]).unwrap().0, 2);
     /// ```
@@ -1512,7 +1512,7 @@ mod tests {
         assert_eq!(world.query_entity::<&Vel>(b1.id()).map(|v| v.0), Some(1));
         // The despawned ones are gone rather than half-written.
         assert!(!world.is_alive(a2) && !world.is_alive(b2), "the victims should be despawned");
-        assert_eq!(world.query::<&Tag>().unwrap().iter().count(), 2, "exactly the survivors carry Tag");
+        assert_eq!(world.query::<&Tag>().iter().count(), 2, "exactly the survivors carry Tag");
     }
 
     /// The same hazard on `insert_batch`'s SAME-ARCHETYPE branch, plus the symptom that never
@@ -1644,7 +1644,7 @@ mod tests {
         // The survivors keep everything else, so no row was moved out from under them.
         assert_eq!(world.query_entity::<&Pos>(a1.id()).map(|p| p.0), Some(1));
         assert_eq!(world.query_entity::<&Vel>(b1.id()).map(|v| v.0), Some(1));
-        assert_eq!(world.query::<&Doomed>().unwrap().iter().count(), 0);
+        assert_eq!(world.query::<&Doomed>().iter().count(), 0);
     }
 
     // ── `add_bundle`'s drop discipline. These two live HERE rather than in `world/tests`

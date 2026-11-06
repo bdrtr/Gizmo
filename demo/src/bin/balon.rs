@@ -77,7 +77,8 @@ fn main() {
                 Sprite::world(sky, Vec2::new(60.0, 40.0)).with_layer(-10),
             ));
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 20.0), Vec3::ZERO);
-            if let Some(mut q) = scene.world.query_mut::<Mut<Camera>>() {
+            {
+                let mut q = scene.world.query_mut::<Mut<Camera>>();
                 for mut cam in q.iter_mut() {
                     cam.projection = ProjectionMode::OrthographicFit { width: VIEW_W, height: VIEW_H };
                 }
@@ -170,7 +171,8 @@ fn spawn_balloons(world: &mut World, game: &mut Game, dt: f32) {
 
 fn rise(world: &mut World, game: &mut Game, dt: f32) {
     let mut escaped = Vec::new();
-    if let Some(mut q) = world.query_mut::<(Entity, Mut<Transform>, Mut<Balloon>)>() {
+    {
+        let mut q = world.query_mut::<(Entity, Mut<Transform>, Mut<Balloon>)>();
         for (entity, mut t, mut b) in q.iter_mut() {
             b.phase += dt * 2.0;
             t.position.y += b.speed * dt;
@@ -189,14 +191,14 @@ fn rise(world: &mut World, game: &mut Game, dt: f32) {
 
 fn first_balloon(world: &World) -> Option<Vec3> {
     let tfs = world.borrow::<Transform>();
-    world.query::<(Entity, &Balloon)>().unwrap().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position).filter(|p| p.y > -VIEW_H * 0.1))
+    world.query::<(Entity, &Balloon)>().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position).filter(|p| p.y > -VIEW_H * 0.1))
 }
 
 /// İmlecin altındaki balon patlar: büyüyüp sönüyor, parçaları saçılıyor.
 fn pop_at(world: &mut World, game: &mut Game, p: Vec3) {
     let hit = {
         let tfs = world.borrow::<Transform>();
-        world.query::<(Entity, &Balloon)>().unwrap().iter()
+        world.query::<(Entity, &Balloon)>().iter()
             .filter_map(|(entity, _)| tfs.get(entity).map(|t| (entity, t.position)))
             .filter(|(_, at)| Vec2::new(at.x - p.x, at.y - p.y).length() < RADIUS)
             .map(|(id, _)| id)
@@ -227,7 +229,7 @@ fn pop_at(world: &mut World, game: &mut Game, p: Vec3) {
 fn clear_pops(world: &mut World) {
     let done: Vec<Entity> = {
         let fades = world.borrow::<ColorTween>();
-        world.query::<(Entity, &Popping)>().unwrap().iter().filter(|(entity, _)| fades.get(*entity).is_some_and(|f| f.is_finished())).map(|(entity, _)| entity).collect()
+        world.query::<(Entity, &Popping)>().iter().filter(|(entity, _)| fades.get(*entity).is_some_and(|f| f.is_finished())).map(|(entity, _)| entity).collect()
     };
     for id in done {
         world.despawn(id);

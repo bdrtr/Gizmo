@@ -191,7 +191,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     let grid = &*grid;
 
     let (agent_entities, cell): (Vec<Entity>, f32) = {
-        let agents = world.query::<(Entity, &NavAgent)>().unwrap();
+        let agents = world.query::<(Entity, &NavAgent)>();
         let widest = agents.iter().map(|(_, a)| a.separation_radius).fold(0.0f32, f32::max);
         (agents.iter().map(|(entity, _)| entity).collect(), widest.max(0.01))
     };
@@ -627,7 +627,8 @@ mod frame_tests {
         assert!(detour > straight, "still on the old route: {straight} waypoints before, {detour} after");
 
         // And an unchanged grid does not replan every frame.
-        if let Some(mut agents) = world.query_mut::<Mut<NavAgent>>() {
+        {
+            let mut agents = world.query_mut::<Mut<NavAgent>>();
             for mut a in agents.iter_mut() {
                 a.advance();
             }

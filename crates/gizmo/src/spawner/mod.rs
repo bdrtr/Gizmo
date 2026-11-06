@@ -177,7 +177,8 @@ impl<'a> Commands<'a> {
     /// Spawns the primary 3D perspective camera.
     /// `yaw = -π/2` (looking towards −X), `pitch = 0` (level).
     pub fn spawn_camera(&mut self, pos: Vec3) -> EntityBuilder<'_, 'a> {
-        if let Some(mut cameras) = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>() {
+        {
+            let mut cameras = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>();
             for mut c in cameras.iter_mut() {
                 c.primary = false;
             }
@@ -216,7 +217,8 @@ impl<'a> Commands<'a> {
         near: f32,
         far: f32,
     ) -> EntityBuilder<'_, 'a> {
-        if let Some(mut cameras) = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>() {
+        {
+            let mut cameras = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>();
             for mut c in cameras.iter_mut() {
                 c.primary = false;
             }
@@ -611,7 +613,7 @@ pub trait WorldExt {
 
 impl WorldExt for World {
     fn entity_named(&self, name: &str) -> Option<Entity> {
-        let mut names = self.query::<(Entity, &EntityName)>()?;
+        let mut names = self.query::<(Entity, &EntityName)>();
         for (entity, n) in names.iter_mut() {
             if n.0 == name {
                 return Some(entity);
@@ -622,7 +624,8 @@ impl WorldExt for World {
 
     fn move_entity_named<F: FnMut(&mut gizmo_physics_core::Transform)>(&mut self, name: &str, mut f: F) {
         let target: Option<Entity> = {
-            if let Some(mut names) = self.query::<(Entity, &EntityName)>() {
+            {
+                let mut names = self.query::<(Entity, &EntityName)>();
                 let mut found = None;
                 for (entity, n) in names.iter_mut() {
                     if n.0 == name {
@@ -631,14 +634,11 @@ impl WorldExt for World {
                     }
                 }
                 found
-            } else {
-                None
             }
         };
         if let Some(target_id) = target {
-            if let Some(mut transforms) =
-                self.query_mut::<(Entity, gizmo_core::prelude::Mut<gizmo_physics_core::Transform>)>()
             {
+                let mut transforms = self.query_mut::<(Entity, gizmo_core::prelude::Mut<gizmo_physics_core::Transform>)>();
                 for (tid, mut trans) in transforms.iter_mut() {
                     if tid == target_id {
                         f(&mut trans);
@@ -661,7 +661,8 @@ impl WorldExt for World {
         mut f: F,
     ) {
         let target: Option<Entity> = {
-            if let Some(mut names) = self.query::<(Entity, &EntityName)>() {
+            {
+                let mut names = self.query::<(Entity, &EntityName)>();
                 let mut found = None;
                 for (entity, n) in names.iter_mut() {
                     if n.0 == name {
@@ -670,8 +671,6 @@ impl WorldExt for World {
                     }
                 }
                 found
-            } else {
-                None
             }
         };
         if let Some(target_id) = target {

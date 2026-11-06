@@ -77,8 +77,7 @@ fn test_query_new_with_valid_types() {
     world.add_component(e, Velocity { x: 0.0, y: 0.0 });
 
     // Farklı tipler — Query oluşturulabilmeli
-    let q = world.query_mut::<(Mut<Position>, Mut<Velocity>)>();
-    assert!(q.is_some());
+    let _q = world.query_mut::<(Mut<Position>, Mut<Velocity>)>();
 }
 
 /// `Changed<T>`/`Added<T>` now work relative to the reference tick (the last run),
@@ -92,26 +91,26 @@ fn change_detection_is_relative_to_ref_tick() {
 
     // Frame 1: ref=0 → ilk gözlem eklenen bileşeni görür.
     world.begin_change_frame(0);
-    assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
-    assert_eq!(world.query::<Added<Position>>().unwrap().iter().count(), 1);
+    assert_eq!(world.query::<Changed<Position>>().iter().count(), 1);
+    assert_eq!(world.query::<Added<Position>>().iter().count(), 1);
 
     // Frame 2: değişiklik yok → Changed boş olmalı.
     let prev = world.tick;
     world.begin_change_frame(prev);
     assert_eq!(
-        world.query::<Changed<Position>>().unwrap().iter().count(),
+        world.query::<Changed<Position>>().iter().count(),
         0,
         "değişiklik olmayan frame'de Changed boş olmalı (eski `==` davranışı her şeyi eşliyordu)"
     );
 
     // Frame 2 içinde mutasyon → Changed yeniden 1 olmalı.
     {
-        let mut q = world.query_mut::<Mut<Position>>().unwrap();
+        let mut q = world.query_mut::<Mut<Position>>();
         for mut p in q.iter_mut() {
             p.x += 1.0;
         }
     }
-    assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
+    assert_eq!(world.query::<Changed<Position>>().iter().count(), 1);
 }
 
 /// `get_entity` validates the generation: the old handle of an entity that was despawned and
@@ -134,7 +133,7 @@ fn get_with_a_handle_rejects_it_after_despawn_and_reuse() {
     assert_eq!(e2.id(), stale.id(), "slot yeniden kullanılmalı (aynı id)");
     assert_ne!(e2.generation(), stale.generation(), "generation artmalı");
 
-    let q = world.query::<&Position>().unwrap();
+    let q = world.query::<&Position>();
     // Generation-doğrulamalı: stale handle reddedilir.
     assert!(q.get(stale).is_none(), "stale handle None dönmeli");
     // Geçerli handle çalışır.
@@ -153,11 +152,11 @@ fn iter_chunks_mut_triggers_change_detection() {
     // Referansı bu tick'e ayarla ve frame'i ilerlet (Schedule'ın yaptığı gibi).
     world.begin_change_frame(world.tick);
     // Yazmadan önce: değişiklik yok.
-    assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 0);
+    assert_eq!(world.query::<Changed<Position>>().iter().count(), 0);
 
     // Chunked mutable yazma.
     {
-        let mut q = world.query_mut::<Mut<Position>>().unwrap();
+        let mut q = world.query_mut::<Mut<Position>>();
         for slice in q.iter_chunks_mut() {
             for p in slice.iter_mut() {
                 p.x += 10.0;
@@ -166,8 +165,8 @@ fn iter_chunks_mut_triggers_change_detection() {
     }
 
     // Yazmadan sonra: Changed tetiklenmeli ve değer güncellenmeli.
-    assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
-    assert_eq!(world.query::<&Position>().unwrap().get(e).map(|p| p.x), Some(11.0));
+    assert_eq!(world.query::<Changed<Position>>().iter().count(), 1);
+    assert_eq!(world.query::<&Position>().get(e).map(|p| p.x), Some(11.0));
 }
 
 /// On SparseSet components `Changed`/`Added` now do real tick tracking
@@ -189,24 +188,24 @@ fn sparse_set_change_detection_tracks_ticks() {
 
     // Frame 1: ref=0 → eklenen bileşen Added ve Changed olarak görülmeli.
     world.begin_change_frame(0);
-    assert_eq!(world.query::<Added<SparseComp>>().unwrap().iter().count(), 1);
-    assert_eq!(world.query::<Changed<SparseComp>>().unwrap().iter().count(), 1);
+    assert_eq!(world.query::<Added<SparseComp>>().iter().count(), 1);
+    assert_eq!(world.query::<Changed<SparseComp>>().iter().count(), 1);
 
     // Frame 2: değişiklik yok → ikisi de boş (eski davranış burada hep 1 verirdi).
     let prev = world.tick;
     world.begin_change_frame(prev);
-    assert_eq!(world.query::<Changed<SparseComp>>().unwrap().iter().count(), 0);
-    assert_eq!(world.query::<Added<SparseComp>>().unwrap().iter().count(), 0);
+    assert_eq!(world.query::<Changed<SparseComp>>().iter().count(), 0);
+    assert_eq!(world.query::<Added<SparseComp>>().iter().count(), 0);
 
     // Frame 2 içinde mutasyon → Changed yeniden tetiklenmeli.
     {
-        let mut q = world.query_mut::<Mut<SparseComp>>().unwrap();
+        let mut q = world.query_mut::<Mut<SparseComp>>();
         for mut c in q.iter_mut() {
             c.0 += 10;
         }
     }
-    assert_eq!(world.query::<Changed<SparseComp>>().unwrap().iter().count(), 1);
-    assert_eq!(world.query::<&SparseComp>().unwrap().get(e).map(|c| c.0), Some(11));
+    assert_eq!(world.query::<Changed<SparseComp>>().iter().count(), 1);
+    assert_eq!(world.query::<&SparseComp>().get(e).map(|c| c.0), Some(11));
 }
 
 // Sparse queries match EVERY archetype at the archetype level (data lives
@@ -248,32 +247,32 @@ fn sparse_query_mixed_presence_narrows_correctly() {
 
     // &SparseC must yield exactly the 3 holders with the right values.
     {
-        let q = world.query::<&SparseC>().unwrap();
+        let q = world.query::<&SparseC>();
         let mut vals: Vec<i32> = q.iter().map(|s| s.0).collect();
         vals.sort();
         assert_eq!(vals, vec![0, 10, 20], "sparse query leaked/dropped rows under mixed presence");
     }
     // (&TableC, &SparseC): only the 3 with both.
     assert_eq!(
-        world.query::<(&TableC, &SparseC)>().unwrap().iter().count(),
+        world.query::<(&TableC, &SparseC)>().iter().count(),
         3,
         "table+sparse tuple query miscounted"
     );
     // With<SparseC> keeps 3; Without<SparseC> keeps the 2 table-only.
     assert_eq!(
-        world.query::<(&TableC, With<SparseC>)>().unwrap().iter().count(),
+        world.query::<(&TableC, With<SparseC>)>().iter().count(),
         3,
         "With<Sparse> miscounted"
     );
     assert_eq!(
-        world.query::<(&TableC, Without<SparseC>)>().unwrap().iter().count(),
+        world.query::<(&TableC, Without<SparseC>)>().iter().count(),
         2,
         "Without<Sparse> miscounted"
     );
     // Random access: table-only entities must report no SparseC.
     for e in &table_only {
         assert!(
-            world.query::<&SparseC>().unwrap().get(*e).is_none(),
+            world.query::<&SparseC>().get(*e).is_none(),
             "get() returned a sparse component for an entity that lacks it"
         );
     }
@@ -297,14 +296,14 @@ fn get_honours_table_with_without_like_iter() {
     world.add_component(e, Position { x: 1.0, y: 2.0 });
 
     // With<Velocity>: iter skips e ⇒ get/get_entity/contains must all agree (skip).
-    let q = world.query::<(&Position, With<Velocity>)>().unwrap();
+    let q = world.query::<(&Position, With<Velocity>)>();
     assert_eq!(q.iter().count(), 0, "iter should skip the Velocity-less entity");
     assert!(q.get(e).is_none(), "get() must honour With<Velocity>");
     assert!(q.get(e).is_none(), "get_entity() must honour With<Velocity>");
     assert!(!q.contains(e), "contains() must honour With<Velocity>");
 
     // Without<Velocity>: iter yields e ⇒ get/contains must also yield it (consistency both ways).
-    let q2 = world.query::<(&Position, Without<Velocity>)>().unwrap();
+    let q2 = world.query::<(&Position, Without<Velocity>)>();
     assert_eq!(q2.iter().count(), 1, "iter should include the Velocity-less entity");
     assert!(q2.get(e).is_some(), "get() must include under Without<Velocity>");
     assert!(q2.contains(e), "contains() must include under Without<Velocity>");
@@ -427,7 +426,7 @@ use crate::impl_component;
         let mut world = world_with_one_disabled(true);
 
         assert_eq!(world.borrow::<Hp>().iter().count(), 3, "`World::borrow`");
-        assert_eq!(world.query::<&Hp>().map(|q| q.iter().count()), Some(3), "`World::query`");
+        assert_eq!(world.query::<&Hp>().iter().count(), 3, "`World::query`");
         assert!(
             world.query_entity::<&Hp>(1).is_some(),
             "`World::query_entity` — its own fetch path, outside `Query` entirely",
@@ -435,8 +434,8 @@ use crate::impl_component;
         // SAFETY: single-threaded test, no other query alive.
         let unchecked = unsafe { world.query_unchecked::<&Hp>() };
         assert_eq!(
-            unchecked.map(|q| q.iter().count()),
-            Some(3),
+            unchecked.iter().count(),
+            3,
             "`World::query_unchecked` was filtered — it is the engine's `&mut`-from-`&World` hatch, \
              not the system-parameter route, and 98 call sites read the world through it",
         );
@@ -451,7 +450,7 @@ use crate::impl_component;
         drop(borrowed);
         assert_eq!(world.borrow_mut::<Hp>().iter_mut().count(), 3, "`World::borrow_mut`");
         assert_eq!(
-            world.query_cached::<&Hp>().map(|q| q.iter().count()),
+            Some(world.query_cached::<&Hp>().iter().count()),
             Some(3),
             "`World::query_cached`",
         );
@@ -659,7 +658,7 @@ fn a_query_over_an_overaligned_zst_hands_out_an_aligned_reference() {
         world.add_component(e, Aligned16);
     }
 
-    let q = world.query::<&Aligned16>().expect("a registered component type has a query");
+    let q = world.query::<&Aligned16>();
     let mut seen = 0;
     for item in q.iter() {
         let addr = item as *const Aligned16 as usize;
@@ -696,7 +695,7 @@ fn query_cached_sees_an_archetype_created_after_it_first_ran() {
 
     // Warms the cache for `&Position`: exactly one archetype carries it right now.
     assert_eq!(
-        world.query_cached::<&Position>().map(|q| q.iter().count()),
+        Some(world.query_cached::<&Position>().iter().count()),
         Some(1),
         "the warm-up itself must see the one entity that exists",
     );
@@ -708,7 +707,7 @@ fn query_cached_sees_an_archetype_created_after_it_first_ran() {
     world.add_component(b, Velocity { x: 1.0, y: 1.0 });
 
     assert_eq!(
-        world.query_cached::<&Position>().map(|q| q.iter().count()),
+        Some(world.query_cached::<&Position>().iter().count()),
         Some(2),
         "`query_cached` is still answering from the archetype list it cached before \
          `(Position, Velocity)` existed",
@@ -736,7 +735,7 @@ fn an_optional_component_is_some_where_present_and_none_elsewhere() {
     let c = world.spawn_bundle((Position { x: 3.0, y: 0.0 }, Velocity { x: 7.0, y: 0.0 }));
     world.spawn_bundle((Velocity { x: 9.0, y: 0.0 },));
 
-    let q = world.query::<(Entity, &Position, Option<&Velocity>)>().unwrap();
+    let q = world.query::<(Entity, &Position, Option<&Velocity>)>();
     let mut seen: Vec<(u32, Option<f32>)> = q.iter().map(|(entity, _, v)| (entity.id(), v.map(|v| v.x))).collect();
     seen.sort_by_key(|(id, _)| *id);
     assert_eq!(seen, vec![(a.id(), Some(5.0)), (b.id(), None), (c.id(), Some(7.0))]);
@@ -752,7 +751,7 @@ fn an_optional_sparse_component_is_tested_per_entity() {
     let a = world.spawn_bundle((Position { x: 1.0, y: 0.0 },));
     world.add_component(a, OptSparse(10));
     let b = world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
-    let q = world.query::<(&Position, Option<&OptSparse>)>().unwrap();
+    let q = world.query::<(&Position, Option<&OptSparse>)>();
     assert_eq!(q.get(a).and_then(|(_, s)| s.map(|s| s.0)), Some(10));
     assert_eq!(q.get(b).map(|(_, s)| s.is_none()), Some(true));
     assert_eq!(q.iter().count(), 2);
@@ -767,15 +766,15 @@ fn an_optional_mut_writes_and_marks_the_change() {
     let prev = world.tick;
     world.begin_change_frame(prev);
     {
-        let mut q = world.query_mut::<(&Position, Option<Mut<Velocity>>)>().unwrap();
+        let mut q = world.query_mut::<(&Position, Option<Mut<Velocity>>)>();
         for (p, v) in q.iter_mut() {
             if let Some(mut v) = v {
                 v.x = p.x * 10.0;
             }
         }
     }
-    assert_eq!(world.query::<&Velocity>().unwrap().get(a).map(|v| v.x), Some(10.0));
-    assert_eq!(world.query::<Changed<Velocity>>().unwrap().iter().count(), 1);
+    assert_eq!(world.query::<&Velocity>().get(a).map(|v| v.x), Some(10.0));
+    assert_eq!(world.query::<Changed<Velocity>>().iter().count(), 1);
 }
 
 /// An optional access is still an access: beside a writer of the same type it is the aliasing
@@ -809,7 +808,7 @@ fn a_writing_query_resolves_its_ids_to_entities() {
     world.register_component_type::<Position>();
     let a = world.spawn();
     world.add_component(a, Position { x: 1.0, y: 0.0 });
-    let q = world.query_mut::<Mut<Position>>().unwrap();
+    let q = world.query_mut::<Mut<Position>>();
     assert_eq!(q.entity(a.id()), Some(a));
 }
 
@@ -821,14 +820,14 @@ fn single_tells_none_one_and_several_apart() {
     world.register_component_type::<Position>();
     world.register_component_type::<Velocity>();
     assert_eq!(
-        world.query::<&Position>().unwrap().single().err(),
+        world.query::<&Position>().single().err(),
         Some(QuerySingleError::NoEntities)
     );
 
     let a = world.spawn();
     world.add_component(a, Position { x: 1.0, y: 0.0 });
     {
-        let q = world.query::<(crate::entity::Entity, &Position)>().unwrap();
+        let q = world.query::<(crate::entity::Entity, &Position)>();
         let (entity, p) = q.single().expect("one entity matches");
         assert_eq!((entity, p.x), (a, 1.0));
     }
@@ -837,21 +836,21 @@ fn single_tells_none_one_and_several_apart() {
     world.add_component(b, Position { x: 2.0, y: 0.0 });
     world.add_component(b, Velocity { x: 0.0, y: 0.0 });
     assert_eq!(
-        world.query::<&Position>().unwrap().single().err(),
+        world.query::<&Position>().single().err(),
         Some(QuerySingleError::MultipleEntities)
     );
     // A filter narrows it back to one.
-    let q = world.query::<(crate::entity::Entity, &Position, With<Velocity>)>().unwrap();
+    let q = world.query::<(crate::entity::Entity, &Position, With<Velocity>)>();
     assert_eq!(q.single().map(|(entity, p, _)| (entity, p.x)), Ok((b, 2.0)));
 
     // A per-row filter counts too: only `b` changes this frame.
     drop(q);
     world.begin_change_frame(world.tick);
     {
-        let mut q = world.query_mut::<Mut<Position>>().unwrap();
+        let mut q = world.query_mut::<Mut<Position>>();
         q.get_mut(b).unwrap().x = 3.0;
     }
-    let q = world.query::<(&Position, Changed<Position>)>().unwrap();
+    let q = world.query::<(&Position, Changed<Position>)>();
     assert_eq!(q.get(b).map(|_| ()), Some(()));
     assert_eq!(q.single().map(|(p, _)| p.x), Ok(3.0));
 }
@@ -867,22 +866,22 @@ fn single_mut_writes_the_one_row_and_marks_nothing_on_refusal() {
 
     world.begin_change_frame(world.tick);
     {
-        let mut q = world.query_mut::<Mut<Position>>().unwrap();
+        let mut q = world.query_mut::<Mut<Position>>();
         let mut p = q.single_mut().expect("one entity");
         p.x = 5.0;
     }
-    assert_eq!(world.query::<&Position>().unwrap().get(a).map(|p| p.x), Some(5.0));
-    assert_eq!(world.query::<Changed<Position>>().unwrap().iter().count(), 1);
+    assert_eq!(world.query::<&Position>().get(a).map(|p| p.x), Some(5.0));
+    assert_eq!(world.query::<Changed<Position>>().iter().count(), 1);
 
     let b = world.spawn();
     world.add_component(b, Position { x: 2.0, y: 0.0 });
     world.begin_change_frame(world.tick);
     {
-        let mut q = world.query_mut::<Mut<Position>>().unwrap();
+        let mut q = world.query_mut::<Mut<Position>>();
         assert_eq!(q.single_mut().err(), Some(QuerySingleError::MultipleEntities));
     }
     assert_eq!(
-        world.query::<Changed<Position>>().unwrap().iter().count(),
+        world.query::<Changed<Position>>().iter().count(),
         0,
         "a refused single_mut must not mark either row"
     );
@@ -894,7 +893,7 @@ fn entity_is_a_query_term() {
     let mut world = World::new();
     let a = world.spawn_bundle((Position { x: 1.0, y: 0.0 },));
     let b = world.spawn_bundle((Position { x: 2.0, y: 0.0 }, Velocity { x: 0.0, y: 0.0 }));
-    let q = world.query::<(crate::entity::Entity, &Position)>().unwrap();
+    let q = world.query::<(crate::entity::Entity, &Position)>();
     let mut seen: Vec<(crate::entity::Entity, f32)> = q.iter().map(|(e, p)| (e, p.x)).collect();
     seen.sort_by(|l, r| l.1.total_cmp(&r.1));
     assert_eq!(seen, [(a, 1.0), (b, 2.0)]);
@@ -903,7 +902,7 @@ fn entity_is_a_query_term() {
     world.despawn(a);
     let c = world.spawn_bundle((Position { x: 3.0, y: 0.0 },));
     assert_eq!(c.id(), a.id(), "the id is recycled, which is the case being tested");
-    let q = world.query::<crate::entity::Entity>().unwrap();
+    let q = world.query::<crate::entity::Entity>();
     let all: Vec<_> = q.iter().collect();
     assert!(all.contains(&c) && !all.contains(&a), "the row holds the new handle: {all:?}");
 }
@@ -918,8 +917,8 @@ fn get_with_a_dead_handle_does_not_reach_the_new_owner_of_its_id() {
     let new = world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
     assert_eq!(new.id(), old.id(), "the id is recycled, which is the case being tested");
 
-    assert!(world.query_mut::<Mut<Position>>().unwrap().get_mut(old).is_none());
-    let q = world.query::<&Position>().unwrap();
+    assert!(world.query_mut::<Mut<Position>>().get_mut(old).is_none());
+    let q = world.query::<&Position>();
     assert!(q.get(old).is_none());
     assert!(!q.contains(old));
     assert!(q.contains(new));
@@ -948,7 +947,7 @@ fn live_and_get_refuse_a_dead_handle_and_entity_names_the_new_occupant() {
     assert_eq!(world.live(new), Some(new));
     assert_eq!(world.entity(old.id()), Some(new), "the id means whoever holds it now");
 
-    let q = world.query::<&Position>().unwrap();
+    let q = world.query::<&Position>();
     assert!(q.get(old).is_none() && !q.contains(old));
     assert_eq!(q.get(new).map(|p| p.x), Some(2.0));
     assert_eq!(q.entity(old.id()), Some(new));

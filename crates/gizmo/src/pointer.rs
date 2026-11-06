@@ -33,7 +33,7 @@ pub fn cursor_ray(world: &World) -> Option<Ray> {
 
     let cameras = world.borrow::<Camera>();
     // A viewport camera under the cursor, else the camera the frame is drawn through.
-    let in_viewport = world.query::<(Entity, &Camera)>().unwrap().iter()
+    let in_viewport = world.query::<(Entity, &Camera)>().iter()
         .filter_map(|(entity, c)| c.viewport.map(|v| (entity, c.order, v)))
         .filter(|(_, _, v)| {
             let (x, y) = (cursor.0 / window.0, cursor.1 / window.1);

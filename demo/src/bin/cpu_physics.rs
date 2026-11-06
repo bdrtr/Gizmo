@@ -295,7 +295,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     // Kamerayı `FpsLookSystem` sürüyor (aşağıda, `add_system`). Buradan yalnız pozunu okuyoruz:
     // aşağıdaki ışın onu kullanıyor.
     let (mut cam_forward, mut cam_pos) = (Vec3::new(0.0, 0.0, -1.0), Vec3::ZERO);
-    if let Some(mut q) = world.query::<(&FpsLook, &Transform)>() {
+    {
+        let mut q = world.query::<(&FpsLook, &Transform)>();
         for (look, transform) in q.iter_mut() {
             cam_forward = look.forward();
             cam_pos = transform.position;
@@ -309,9 +310,9 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
             if let Some(hit) = phys.raycast(&ray, 50.0) {
                 // SAFETY: tek-thread'li demo; Velocity bileşeni tutulan PhysicsWorld kaynak
                 // guard'ından ayrık (disjoint).
-                if let Some(mut q) =
-                    unsafe { world.query_unchecked::<(Mut<Velocity>, &RigidBody)>() }
                 {
+                    let mut q = 
+                    unsafe { world.query_unchecked::<(Mut<Velocity>, &RigidBody)>() };
                     if let Some((mut vel, rb)) = q.entity(hit.entity.id()).and_then(|e| q.get_mut(e)) {
                         if rb.is_dynamic() {
                             vel.linear += cam_forward * 20.0; // ileri fırlat

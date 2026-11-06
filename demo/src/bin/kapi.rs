@@ -307,7 +307,7 @@ fn plate_colour(pressed: bool) -> Vec4 {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let actors: Vec<Entity> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let actors: Vec<Entity> = world.query::<(Entity, &Actor)>().iter().map(|(entity, _)| entity).collect();
     for id in actors {
         if let Some(e) = world.live(id) {
             world.despawn(e);
@@ -390,7 +390,7 @@ fn plates_and_doors(world: &mut World, game: &mut Game, dt: f32) {
         .get(game.player)
         .map(|c| c.triggers.clone())
         .unwrap_or_default();
-    let crates: Vec<Entity> = world.query::<(Entity, &Crate)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let crates: Vec<Entity> = world.query::<(Entity, &Crate)>().iter().map(|(entity, _)| entity).collect();
     let mut pressed = Vec::with_capacity(game.plates.len());
     {
         let Some(physics) = world.get_resource::<PhysicsWorld>() else { return };

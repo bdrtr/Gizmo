@@ -289,7 +289,8 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
     }
 
     // Oksijeni HUD'a oku.
-    if let Some(q) = world.query::<&gizmo::physics::Oxygen>() {
+    {
+        let q = world.query::<&gizmo::physics::Oxygen>();
         if let Some(o) = q.get(state.swimmer) {
             state.oxygen_frac = o.fraction();
             state.oxygen_secs = o.current;
@@ -328,10 +329,11 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
         audio.set_underwater(state.underwater);
         audio.update();
     }
-    if let Some(mut q) = world.query_mut::<(
+    {
+        let mut q = world.query_mut::<(
         gizmo::core::query::Mut<Transform>,
         gizmo::core::query::Mut<Camera>,
-    )>() {
+    )>();
         for (mut t, mut c) in q.iter_mut() {
             t.position = head;
             t.rotation = cam_rot;

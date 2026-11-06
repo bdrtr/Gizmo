@@ -306,7 +306,7 @@ fn knocked(tf: &Transform) -> bool {
 
 fn count_knocked(world: &World) -> u32 {
     let tfs = world.borrow::<Transform>();
-    world.query::<(Entity, &Pin)>().unwrap().iter().filter(|(entity, _)| tfs.get(*entity).is_some_and(knocked)).count() as u32
+    world.query::<(Entity, &Pin)>().iter().filter(|(entity, _)| tfs.get(*entity).is_some_and(knocked)).count() as u32
 }
 
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
@@ -346,7 +346,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         Phase2::Rolling(t) => {
             let ball_z = {
                 let tfs = world.borrow::<Transform>();
-                world.query::<(Entity, &Ball)>().unwrap().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position.z))
+                world.query::<(Entity, &Ball)>().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position.z))
             };
             let gone = ball_z.is_none_or(|z| z < PIN_Z - 2.0);
             game.phase = if gone || t > 7.0 { Phase2::Settling(0.0) } else { Phase2::Rolling(t + dt) };
@@ -365,8 +365,8 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     sync_transforms(world);
     if std::env::var_os("LOBUT_LOG").is_some() {
         let tfs = world.borrow::<Transform>();
-        let p: Vec<String> = world.query::<(Entity, &Pin)>().unwrap().iter().take(3).filter_map(|(entity, _)| tfs.get(entity)).map(|t| format!("({:.2},{:.2},{:.2} up{:.2})", t.position.x, t.position.y, t.position.z, (t.rotation * Vec3::Y).y)).collect();
-        let b: Vec<String> = world.query::<(Entity, &Ball)>().unwrap().iter().filter_map(|(entity, _)| tfs.get(entity)).map(|t| format!("({:.2},{:.2},{:.2})", t.position.x, t.position.y, t.position.z)).collect();
+        let p: Vec<String> = world.query::<(Entity, &Pin)>().iter().take(3).filter_map(|(entity, _)| tfs.get(entity)).map(|t| format!("({:.2},{:.2},{:.2} up{:.2})", t.position.x, t.position.y, t.position.z, (t.rotation * Vec3::Y).y)).collect();
+        let b: Vec<String> = world.query::<(Entity, &Ball)>().iter().filter_map(|(entity, _)| tfs.get(entity)).map(|t| format!("({:.2},{:.2},{:.2})", t.position.x, t.position.y, t.position.z)).collect();
         eprintln!("LOG {:?} pins {} ball {}", game.phase, p.join(" "), b.join(" "));
     }
     follow_ball(world, &game);
@@ -383,7 +383,7 @@ fn finish_roll(world: &mut World, game: &mut Game) {
         // Devrilenleri kaldır; ayaktakiler yerinde kalır.
         let fallen: Vec<Entity> = {
             let tfs = world.borrow::<Transform>();
-            world.query::<(Entity, &Pin)>().unwrap().iter().filter(|(entity, _)| tfs.get(*entity).is_some_and(knocked)).map(|(entity, _)| entity).collect()
+            world.query::<(Entity, &Pin)>().iter().filter(|(entity, _)| tfs.get(*entity).is_some_and(knocked)).map(|(entity, _)| entity).collect()
         };
         for id in fallen {
             world.despawn(id);
@@ -413,14 +413,14 @@ fn finish_roll(world: &mut World, game: &mut Game) {
 fn follow_ball(world: &mut World, game: &Game) {
     let ball = {
         let tfs = world.borrow::<Transform>();
-        world.query::<(Entity, &Ball)>().unwrap().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position))
+        world.query::<(Entity, &Ball)>().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position))
     };
     let target_z = match (game.phase, ball) {
         (Phase2::Rolling(_), Some(p)) => (p.z + 3.2).max(PIN_Z + 4.5),
         (Phase2::Settling(_), _) => PIN_Z + 4.5,
         _ => BALL_Z + 3.2,
     };
-    let cams: Vec<Entity> = world.query::<(Entity, &Camera)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let cams: Vec<Entity> = world.query::<(Entity, &Camera)>().iter().map(|(entity, _)| entity).collect();
     let mut tfs = world.borrow_mut::<Transform>();
     for id in cams {
         if let Some(mut t) = tfs.get_mut(id) {

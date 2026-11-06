@@ -1475,7 +1475,7 @@ impl SceneData {
     /// name.
     pub fn entity_names(world: &World) -> Vec<(Entity, String)> {
         let mut result = Vec::new();
-        for (entity, name) in world.query::<(Entity, &EntityName)>().unwrap().iter() {
+        for (entity, name) in world.query::<(Entity, &EntityName)>().iter() {
             result.push((entity, name.0.clone()));
         }
         result
@@ -1491,7 +1491,7 @@ impl SceneData {
     /// rather than *the* one. Resolve once and keep the id rather than re-looking it up.
     pub fn find_entity_by_name(world: &World, target_name: &str) -> Option<Entity> {
         let names = world.borrow::<EntityName>();
-        for (entity, _) in world.query::<(Entity, &EntityName)>().unwrap().iter() {
+        for (entity, _) in world.query::<(Entity, &EntityName)>().iter() {
             if let Some(name) = names.get(entity) {
                 if name.0 == target_name {
                     return Some(entity);

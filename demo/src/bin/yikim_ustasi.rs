@@ -745,7 +745,8 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
     // otomatik siler; bölüm yenilemede despawn_all_with::<TransientFx>() topluca temizler.)
 
     // --- kamerayı nişana göre güncelle ---
-    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
+    {
+        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
         for (mut tr, mut cam) in q.iter_mut() {
             tr.position = CANNON_POS;
             tr.rotation = Quat::from_rotation_y(-g.yaw);

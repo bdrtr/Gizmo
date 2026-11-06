@@ -349,7 +349,7 @@ fn camera_controls(world: &mut World, input: &Input) {
     if zoom == 1.0 && pan.is_none() {
         return;
     }
-    let Some(cam) = world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, c)| (entity, c.get_front())) else { return };
+    let Some(cam) = world.query::<(Entity, &Camera)>().iter().next().map(|(entity, c)| (entity, c.get_front())) else { return };
     let (id, forward) = cam;
     let mut transforms = world.borrow_mut::<Transform>();
     let Some(mut t) = transforms.get_mut(id) else { return };
@@ -440,11 +440,11 @@ fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {
 fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
     let enemies: Vec<(Entity, Vec3)> = {
         let ts = world.borrow::<Transform>();
-        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity, t.position))).collect()
+        world.query::<(Entity, &Enemy)>().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity, t.position))).collect()
     };
     let mut shots: Vec<(Vec3, Vec3, Entity)> = Vec::new();
     {
-        let Some(mut towers) = world.query_mut::<(Mut<Tower>, &Transform)>() else { return };
+        let mut towers = world.query_mut::<(Mut<Tower>, &Transform)>();
         for (mut tower, tf) in towers.iter_mut() {
             tower.reload.tick(dt);
             if !tower.reload.finished() {
@@ -520,7 +520,7 @@ fn sparks(count: u32, colour: Vec4) -> gizmo::renderer::components::ParticleEmit
 fn enemies_arrive(world: &mut World, game: &mut Game) {
     let arrived: Vec<Entity> = {
         let ts = world.borrow::<Transform>();
-        world.query::<(Entity, &Enemy)>().unwrap().iter()
+        world.query::<(Entity, &Enemy)>().iter()
             .filter(|(entity, _)| ts.get(*entity).is_some_and(|t| Vec3::new(t.position.x - GOAL.x, 0.0, t.position.z - GOAL.z).length() < 0.6))
             .map(|(entity, _)| entity)
             .collect()
@@ -534,7 +534,7 @@ fn enemies_arrive(world: &mut World, game: &mut Game) {
 
 fn fade_flashes(world: &mut World, dt: f32) {
     let done: Vec<Entity> = {
-        let mut fs = world.query_mut::<(Entity, Mut<Flash>)>().unwrap();
+        let mut fs = world.query_mut::<(Entity, Mut<Flash>)>();
         let mut done = Vec::new();
         for (entity, mut f) in fs.iter_mut() {
             f.0 -= dt;

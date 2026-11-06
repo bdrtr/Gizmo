@@ -96,7 +96,7 @@ pub fn sync_material_descriptions(world: &mut World) {
     {
         let descs = world.borrow::<MaterialDesc>();
         let synced = world.borrow::<SyncedDesc>();
-        for (entity, material) in world.query::<(Entity, &Material)>().unwrap().iter() {
+        for (entity, material) in world.query::<(Entity, &Material)>().iter() {
             let live = MaterialDesc::from(material);
             match decide(&live, descs.get(entity), synced.get(entity).map(|s| &s.0)) {
                 Sync::Nothing => {}
@@ -149,7 +149,7 @@ pub fn sync_material_descriptions(world: &mut World) {
 pub fn resolve_material_descriptions(world: &mut World, renderer: &crate::Renderer) {
     let pending: Vec<(u32, MaterialDesc)> = {
         let materials = world.borrow::<Material>();
-        world.query::<(Entity, &MaterialDesc)>().unwrap().iter()
+        world.query::<(Entity, &MaterialDesc)>().iter()
             .filter(|(entity, _)| materials.get(*entity).is_none())
             .map(|(entity, desc)| (entity.id(), desc.clone()))
             .collect()

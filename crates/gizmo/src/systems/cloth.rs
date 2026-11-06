@@ -27,7 +27,7 @@ use gizmo_physics_soft::cloth::Cloth;
 pub fn cloth_mesh_system(world: &mut crate::core::World) {
     let built: Vec<(Entity, MeshData)> = {
         let transforms = world.borrow::<Transform>();
-        world.query::<(Entity, &Cloth)>().unwrap().iter()
+        world.query::<(Entity, &Cloth)>().iter()
             .map(|(entity, cloth)| {
                 let to_local = transforms.get(entity).map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse()).unwrap_or(gizmo_math::Mat4::IDENTITY);
                 (entity, MeshData::new(cloth_vertices(cloth, to_local)))
@@ -77,7 +77,7 @@ pub fn rope_mesh_system(world: &mut crate::core::World) {
     use gizmo_physics_soft::rope::Rope;
     let built: Vec<(Entity, MeshData)> = {
         let transforms = world.borrow::<Transform>();
-        world.query::<(Entity, &Rope)>().unwrap().iter()
+        world.query::<(Entity, &Rope)>().iter()
             .map(|(entity, rope)| {
                 let to_local = transforms
                     .get(entity)
@@ -136,7 +136,7 @@ pub fn soft_body_mesh_system(world: &mut crate::core::World) {
     use gizmo_physics_soft::SoftBodyMesh;
     let built: Vec<(Entity, MeshData)> = {
         let transforms = world.borrow::<Transform>();
-        world.query::<(Entity, &SoftBodyMesh)>().unwrap().iter()
+        world.query::<(Entity, &SoftBodyMesh)>().iter()
             .map(|(entity, body)| {
                 let to_local = transforms
                     .get(entity)

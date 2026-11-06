@@ -174,7 +174,7 @@ fn lone_race(dt: f32) -> (Option<f32>, f32) {
     restart(&mut world, &mut game);
     // Rakipler yok: arabalar birbirine çarpınca yarış makineden makineye dağılıyor (CI'da biri
     // ters döndü, burada dönmedi); sınanan aracın kendisi.
-    let rivals: Vec<Entity> = world.query::<(Entity, &Racer)>().unwrap().iter().filter(|(entity, _)| *entity != game.player).map(|(entity, _)| entity).collect();
+    let rivals: Vec<Entity> = world.query::<(Entity, &Racer)>().iter().filter(|(entity, _)| *entity != game.player).map(|(entity, _)| entity).collect();
     for id in rivals {
         if let Some(e) = world.live(id) {
             use gizmo::core::hierarchy::HierarchyExt;
@@ -309,7 +309,7 @@ fn spawn_car(world: &mut World, at: Vec3, heading: f32, colour: Vec4, racer: Rac
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let racers: Vec<Entity> = world.query::<(Entity, &Racer)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let racers: Vec<Entity> = world.query::<(Entity, &Racer)>().iter().map(|(entity, _)| entity).collect();
     for id in racers {
         if let Some(e) = world.live(id) {
             use gizmo::core::hierarchy::HierarchyExt;
@@ -357,7 +357,7 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
     let racers: Vec<(Entity, Racer, Vec3, Quat, f32)> = {
         let transforms = world.borrow::<Transform>();
         let cars = world.borrow::<VehicleController>();
-        world.query::<(Entity, &Racer)>().unwrap().iter()
+        world.query::<(Entity, &Racer)>().iter()
             .filter_map(|(entity, r)| {
                 let t = transforms.get(entity)?;
                 Some((entity, *r, t.position, t.rotation, cars.get(entity)?.current_speed_kmh))
@@ -427,7 +427,7 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
 fn checkpoints(world: &mut World, game: &Game) {
     let positions: Vec<(Entity, Vec3)> = {
         let transforms = world.borrow::<Transform>();
-        world.query::<(Entity, &Racer)>().unwrap().iter().filter_map(|(entity, _)| transforms.get(entity).map(|t| (entity, t.position))).collect()
+        world.query::<(Entity, &Racer)>().iter().filter_map(|(entity, _)| transforms.get(entity).map(|t| (entity, t.position))).collect()
     };
     for (id, at) in positions {
         if let Some(mut r) = world.borrow_mut::<Racer>().get_mut(id) {
@@ -469,7 +469,7 @@ fn chase_camera(world: &mut World, game: &Game, dt: f32) {
 }
 
 fn hud(world: &mut World, game: &Game) {
-    let racers: Vec<(Entity, Racer)> = world.query::<(Entity, &Racer)>().unwrap().iter().map(|(entity, r)| (entity, *r)).collect();
+    let racers: Vec<(Entity, Racer)> = world.query::<(Entity, &Racer)>().iter().map(|(entity, r)| (entity, *r)).collect();
     let Some(me) = racers.iter().find(|(id, _)| *id == game.player).map(|(_, r)| *r) else { return };
     let place = 1 + racers.iter().filter(|(id, r)| *id != game.player && (r.passed > me.passed || r.finished.is_some_and(|t| me.finished.is_none_or(|m| t < m)))).count();
     let lap = (me.passed / POINTS as u32 + 1).min(LAPS);

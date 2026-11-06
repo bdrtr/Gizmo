@@ -413,10 +413,11 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
 
     // TPS/FPS Kamera Takibi
     let cam_pos = char_pos + Vec3::new(0.0, 1.5, 0.0);
-    if let Some(mut q) = world.query_mut::<(
+    {
+        let mut q = world.query_mut::<(
         gizmo::core::query::Mut<Transform>,
         gizmo::core::query::Mut<Camera>,
-    )>() {
+    )>();
         for (mut trans, mut cam) in q.iter_mut() {
             trans.position = cam_pos;
             trans.rotation = cam_rot;

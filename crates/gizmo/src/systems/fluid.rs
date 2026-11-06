@@ -23,7 +23,8 @@ pub fn gpu_fluid_coupling_system(world: &crate::core::World, renderer: &mut Rend
 
         let mut count = 0;
 
-        if let Some(q) = world.query::<(&Transform, &gizmo_physics_rigid::components::Velocity, &Collider)>() {
+        {
+            let q = world.query::<(&Transform, &gizmo_physics_rigid::components::Velocity, &Collider)>();
             for (trans, vel, col) in q.iter() {
                 if count >= MAX_FLUID_COLLIDERS {
                     break;

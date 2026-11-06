@@ -150,7 +150,7 @@ pub fn handle_simulation(
         let names = world.borrow::<gizmo::core::component::EntityName>();
         let mut found_any = false;
 
-        for (entity, fighter) in world.query::<(Entity, &gizmo::physics::components::FighterController)>().unwrap().iter() {
+        for (entity, fighter) in world.query::<(Entity, &gizmo::physics::components::FighterController)>().iter() {
             found_any = true;
             if fighter.player_id == 1 {
                 editor_state.fight_hud.p1_entity = Some(entity);

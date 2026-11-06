@@ -51,7 +51,7 @@ pub fn bench_wide_iteration(c: &mut Criterion) {
         Mut<WideData<8>>,
         Mut<WideData<9>>,
         Mut<WideData<10>>,
-    )>().unwrap();
+    )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup
 
@@ -105,7 +105,7 @@ pub fn bench_wide_simple_iter(c: &mut Criterion) {
         Mut<Pos<3>>,
         &Vel<4>,
         Mut<Pos<4>>,
-    )>().unwrap();
+    )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup
 

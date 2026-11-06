@@ -120,7 +120,7 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
     let ms = t0.elapsed().as_secs_f32() * 1000.0;
     colony.worst_ai_ms = colony.worst_ai_ms.max(ms);
     colony.recent_ai_ms = colony.recent_ai_ms * 0.95 + ms * 0.05;
-    let moves: Vec<(Entity, Vec3)> = world.query::<(Entity, &Velocity)>().unwrap().iter().map(|(entity, v)| (entity, v.linear)).collect();
+    let moves: Vec<(Entity, Vec3)> = world.query::<(Entity, &Velocity)>().iter().map(|(entity, v)| (entity, v.linear)).collect();
     // Duvarın içine yürümesin: bir sonraki hücre kapalıysa durur, yol bulucu çevirir.
     let steps: Vec<(Entity, Vec3)> = {
         let grid = world.get_resource::<NavGrid>();
@@ -141,7 +141,7 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
     let ants: Vec<(Entity, Ant, Vec3, bool)> = {
         let ts = world.borrow::<Transform>();
         let ag = world.borrow::<NavAgent>();
-        world.query::<(Entity, &Ant)>().unwrap().iter()
+        world.query::<(Entity, &Ant)>().iter()
             .filter_map(|(entity, ant)| Some((entity, *ant, ts.get(entity)?.position, ag.get(entity).is_some_and(|n| n.route_failed()))))
             .collect()
     };
@@ -206,7 +206,7 @@ fn set_wall(world: &mut World, cell: (i32, i32), on: bool, visual: bool) {
     }
     let existing: Option<Entity> = {
         let ts = world.borrow::<Transform>();
-        world.query::<(Entity, &Wall)>().unwrap().iter().map(|(entity, _)| entity).find(|id| ts.get(*id).is_some_and(|t| (t.position.x - at.x).abs() < 0.1 && (t.position.z - at.z).abs() < 0.1))
+        world.query::<(Entity, &Wall)>().iter().map(|(entity, _)| entity).find(|id| ts.get(*id).is_some_and(|t| (t.position.x - at.x).abs() < 0.1 && (t.position.z - at.z).abs() < 0.1))
     };
     match (on, existing) {
         (true, None) => {
@@ -361,9 +361,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     }
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        let gone: Vec<Entity> = world.query::<(Entity, &Ant)>().unwrap().iter()
+        let gone: Vec<Entity> = world.query::<(Entity, &Ant)>().iter()
             .map(|(entity, _)| entity)
-            .chain(world.query::<(Entity, &Wall)>().unwrap().iter().map(|(entity, _)| entity))
+            .chain(world.query::<(Entity, &Wall)>().iter().map(|(entity, _)| entity))
             .chain(game.colony.piles.iter().filter_map(|p| p.marker))
             .collect();
         for id in gone {

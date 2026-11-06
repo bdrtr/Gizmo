@@ -344,7 +344,8 @@ mod tests {
         assert_eq!(world.entity_count(), 1);
 
         let mut count = 0;
-        if let Some(q) = world.query::<&ComponentA>() {
+        {
+            let q = world.query::<&ComponentA>();
             for c in q.iter() {
                 assert_eq!(c.0, 42);
                 count += 1;
@@ -368,7 +369,8 @@ mod tests {
         schedule.run(&mut world, 0.1);
 
         let mut count = 0;
-        if let Some(q) = world.query::<(&ComponentA, &ComponentB)>() {
+        {
+            let q = world.query::<(&ComponentA, &ComponentB)>();
             for (ca, cb) in q.iter() {
                 assert_eq!(ca.0, 100);
                 assert_eq!(cb.0, 2.5);
@@ -429,7 +431,8 @@ mod tests {
         // Use a standard (&World, f32) system to access query and manually fetch Commands
         schedule.add_system(|world: &World, dt: f32| {
             let mut commands = Commands::fetch_stateless(world, dt).unwrap();
-            if let Some(q) = world.query::<(Entity, &ComponentA)>() {
+            {
+                let q = world.query::<(Entity, &ComponentA)>();
                 for (id, c) in q.iter() {
                     if c.0 == 10 {
                         commands.entity(Entity::new(id.id(), 0)).despawn();
@@ -441,7 +444,8 @@ mod tests {
         schedule.run(&mut world, 0.1);
 
         assert_eq!(world.entity_count(), 1);
-        if let Some(q) = world.query::<&ComponentA>() {
+        {
+            let q = world.query::<&ComponentA>();
             for c in q.iter() {
                 assert_eq!(c.0, 20);
             }
@@ -460,7 +464,8 @@ mod tests {
 
         schedule.add_system(|world: &World, dt: f32| {
             let mut commands = Commands::fetch_stateless(world, dt).unwrap();
-            if let Some(q) = world.query::<(Entity, &ComponentA)>() {
+            {
+                let q = world.query::<(Entity, &ComponentA)>();
                 for (id, _) in q.iter() {
                     commands.entity(Entity::new(id.id(), 0)).remove::<ComponentA>();
                 }
@@ -471,16 +476,7 @@ mod tests {
 
         assert_eq!(world.entity_count(), 1);
 
-        let mut has_a = false;
-        if let Some(q) = world.query::<&ComponentA>() {
-            has_a = q.iter().count() > 0;
-        }
-        assert!(!has_a, "ComponentA still exists!");
-
-        let mut has_b = false;
-        if let Some(q) = world.query::<&ComponentB>() {
-            has_b = q.iter().count() > 0;
-        }
-        assert!(has_b, "ComponentB was unexpectedly removed!");
+        assert!(world.query::<&ComponentA>().is_empty(), "ComponentA still exists!");
+        assert!(!world.query::<&ComponentB>().is_empty(), "ComponentB was unexpectedly removed!");
     }
 }

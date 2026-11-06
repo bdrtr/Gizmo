@@ -385,7 +385,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
 
     let clicked = world.borrow::<Clicked>();
-    let generate_clicked = world.query::<(Entity, &Generate)>().unwrap().iter().any(|(entity, _)| clicked.get(entity).is_some_and(|c| c.0));
+    let generate_clicked = world.query::<(Entity, &Generate)>().iter().any(|(entity, _)| clicked.get(entity).is_some_and(|c| c.0));
     drop(clicked);
     if generate_clicked || input.is_key_just_pressed(KeyCode::Space as u32) {
         generate(world, &mut game);
@@ -423,7 +423,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let mut moves: Vec<(usize, Option<Entity>)> = Vec::new();
     {
         let drags = world.borrow::<Drag>();
-        for (entity, v) in world.query::<(Entity, &View)>().unwrap().iter() {
+        for (entity, v) in world.query::<(Entity, &View)>().iter() {
             let Some(d) = drags.get(entity) else { continue };
             if d.just_ended() {
                 moves.push((v.0, d.dropped_on()));

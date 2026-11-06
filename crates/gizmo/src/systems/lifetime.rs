@@ -126,7 +126,8 @@ impl gizmo_core::system::System for LifetimeSystem {
         // where `clippy::undocumented_unsafe_blocks` looks — the lint is a ratchet in this crate.)
         let despawn_after =
             unsafe { world.query_unchecked::<(Entity, gizmo_core::query::Mut<DespawnAfter>)>() };
-        if let Some(mut q) = despawn_after {
+        {
+            let mut q = despawn_after;
             for (entity, mut d) in q.iter_mut() {
                 d.remaining -= dt;
                 if d.remaining <= 0.0 {
@@ -136,9 +137,10 @@ impl gizmo_core::system::System for LifetimeSystem {
             }
         }
 
-        // ── DespawnBelowY: konumu eşiğin altındaki varlıkları sil. ──
-        // SAFETY: exclusive system; this view is read-only and aliases nothing mutably.
-        if let Some(q) = unsafe { world.query_unchecked::<(Entity, &DespawnBelowY, &Transform)>() } {
+        {
+            // ── DespawnBelowY: konumu eşiğin altındaki varlıkları sil. ──
+            // SAFETY: exclusive system; this view is read-only and aliases nothing mutably.
+            let q = unsafe { world.query_unchecked::<(Entity, &DespawnBelowY, &Transform)>() };
             for (entity, below, t) in q.iter() {
                 if t.position.y < below.y {
                     commands.entity(entity).despawn();
@@ -184,8 +186,8 @@ pub fn lifetime_components_are_inert(world: &World) -> bool {
         return false;
     }
     let any = |found: Option<bool>| found.unwrap_or(false);
-    any(world.query::<&DespawnAfter>().map(|q| !q.is_empty()))
-        || any(world.query::<&DespawnBelowY>().map(|q| !q.is_empty()))
+    any(Some(!world.query::<&DespawnAfter>().is_empty()))
+        || any(Some(!world.query::<&DespawnBelowY>().is_empty()))
 }
 
 /// Logs one warning, once per world, when [`lifetime_components_are_inert`]: entities carrying

@@ -50,9 +50,7 @@ pub fn collect_hidden(
 ) -> HashSet<Entity> {
     let mut out: HashSet<Entity> = HashSet::new();
     let mut stack: Vec<Entity> = world
-        .query::<(gizmo_core::Entity, &IsHidden)>()
-        .map(|q| q.iter().map(|(entity, _)| entity).collect())
-        .unwrap_or_default();
+        .query::<(gizmo_core::Entity, &IsHidden)>().iter().map(|(entity, _)| entity).collect();
     // The set doubles as the visited set. A `Parent`/`Children` cycle should be impossible, but
     // "should be" is what makes an infinite loop in a render pass; descending only into ids the
     // set did not already have makes the walk terminate whatever the hierarchy looks like.

@@ -137,7 +137,7 @@ pub fn handle_editor_shortcuts(
                 let deleted = world.borrow::<gizmo::core::component::IsDeleted>();
                 let names = world.borrow::<gizmo::core::component::EntityName>();
                 let markers = world.borrow::<gizmo::core::component::EditorOnly>();
-                world.query::<(Entity, &gizmo::core::component::IsHidden)>().unwrap().iter()
+                world.query::<(Entity, &gizmo::core::component::IsHidden)>().iter()
                     .filter(|(id, _)| {
                         // Editor entity'lerini gösterme, sadece kullanıcı entity'leri
                         if deleted.contains(*id) {

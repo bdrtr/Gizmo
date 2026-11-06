@@ -127,7 +127,7 @@ pub fn pointer_over_ui(world: &gizmo_core::World) -> bool {
         || {
             let nodes = world.borrow::<Node>();
             let point = gizmo_math::Vec2::new(p.0, p.1);
-            world.query::<(Entity, &Dropdown)>().unwrap().iter()
+            world.query::<(Entity, &Dropdown)>().iter()
                 .any(|(entity, d)| nodes.get(entity).is_some_and(|n| d.option_at(n, point).is_some()))
         }
 }

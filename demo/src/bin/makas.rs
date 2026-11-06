@@ -231,7 +231,7 @@ fn main() {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let old: Vec<Entity> = world.query::<(Entity, &Curtain)>().unwrap().iter().map(|(entity, _)| entity).chain(game.markers.drain(..)).collect();
+    let old: Vec<Entity> = world.query::<(Entity, &Curtain)>().iter().map(|(entity, _)| entity).chain(game.markers.drain(..)).collect();
     for id in old {
         if let Some(e) = world.live(id) {
             world.despawn(e);

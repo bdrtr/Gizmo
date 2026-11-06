@@ -226,7 +226,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     let mut cam_pos = Vec3::ZERO;
 
     // --- serbest-uçuş kamera (sağ-tık basılıyken fare-look) ---
-    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
+    {
+        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
         for (mut transform, mut camera) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
@@ -310,7 +311,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
 
     // --- gizmo debug: hız vektörleri (yeşil) + iz bırakma (yarı-saydam) ---
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
-        if let Some(q) = world.query::<(&Velocity, &Transform, &RigidBody)>() {
+        {
+            let q = world.query::<(&Velocity, &Transform, &RigidBody)>();
             for (vel, trans, _rb) in q.iter() {
                 gizmos.draw_line(
                     trans.position,
@@ -321,9 +323,9 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
         }
 
         // GÜVENLİK: tek-thread demo; GhostTrail bileşeni, tutulan Gizmos kaynak-guard'ından ayrık.
-        if let Some(mut q) =
-            unsafe { world.query_unchecked::<(Mut<GhostTrail>, &Transform, &Collider)>() }
         {
+            let mut q = 
+            unsafe { world.query_unchecked::<(Mut<GhostTrail>, &Transform, &Collider)>() };
             for (mut ghost, trans, col) in q.iter_mut() {
                 // Bu kareyi sakla, en eskiyi at.
                 ghost.history.push_front(*trans);
@@ -390,7 +392,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     // Mesh'i olmayan dinamik gövdelere bir küre ver. Kırılma parçaları buna artık düşmüyor:
     // adım onları kendi Voronoi hücreleri ve kırılan gövdenin malzemesiyle çiziyor.
     let mut missing = Vec::new();
-    if let Some(q) = world.query::<(Entity, &RigidBody, &Collider)>() {
+    {
+        let q = world.query::<(Entity, &RigidBody, &Collider)>();
         let meshes = world.borrow::<MeshRenderer>();
         for (e, rb, _) in q.iter() {
             if meshes.get(e).is_none() && rb.mass > 0.0 {
@@ -411,7 +414,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
         rope.step(dt, Vec3::new(0.0, -9.81, 0.0));
 
         let mut node_idx = 0;
-        if let Some(mut q) = world.query_mut::<(Mut<Transform>, &EntityName)>() {
+        {
+            let mut q = world.query_mut::<(Mut<Transform>, &EntityName)>();
             for (mut trans, name) in q.iter_mut() {
                 if name.0 == "RopeNode" && node_idx < rope.nodes.len() {
                     trans.position = rope.nodes[node_idx].position;

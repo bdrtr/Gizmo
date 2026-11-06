@@ -7,17 +7,17 @@ use super::iter::QueryRows;
 use super::*;
 
 impl<'w, Q: WorldQuery> Query<'w, Q> {
-    pub(crate) fn new(world: &'w World) -> Option<Self> {
+    pub(crate) fn new(world: &'w World) -> Self {
         let mut used_types = Vec::new();
         Q::check_aliasing(&mut used_types);
         let matching = world
             .archetype_index
             .matching_archetypes_readonly(Q::matches_archetype);
-        Some(Self {
+        Self {
             world,
             matching_archetypes: matching,
             _marker: PhantomData,
-        })
+        }
     }
 
     /// [`new`](Self::new), plus the world's [`DefaultQueryFilters`](crate::query::DefaultQueryFilters).
@@ -33,33 +33,33 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// construction and nothing per row, and `has_row_filter` is untouched — a query carrying no
     /// row filter can still be chunk-iterated after being filtered. That is possible only because
     /// a filter type must be `Table`-stored, which `DefaultQueryFilters::add` enforces.
-    pub(crate) fn new_for_system(world: &'w World) -> Option<Self> {
-        let mut query = Self::new(world)?;
+    pub(crate) fn new_for_system(world: &'w World) -> Self {
+        let mut query = Self::new(world);
         // Two early outs, in the order that makes the common case free: no filters registered at
         // all (every world that never asked for the feature), then this query opting out.
         if world.default_query_filters.is_empty() || Q::ignores_default_filters() {
-            return Some(query);
+            return query;
         }
         let filters = &world.default_query_filters;
         let archetypes = &world.archetype_index.archetypes;
         query
             .matching_archetypes
             .retain(|&idx| !filters.excludes(&archetypes[idx]));
-        Some(query)
+        query
     }
 
-    pub(crate) fn new_cached(world: &'w mut World) -> Option<Self> {
+    pub(crate) fn new_cached(world: &'w mut World) -> Self {
         let mut used_types = Vec::new();
         Q::check_aliasing(&mut used_types);
         let matching = world
             .archetype_index
             .matching_archetypes(TypeId::of::<Q::StaticType>(), Q::matches_archetype)
             .to_vec();
-        Some(Self {
+        Self {
             world,
             matching_archetypes: matching,
             _marker: PhantomData,
-        })
+        }
     }
 
     // ── PRIVATE primitives ────────────────────────────────────────────────
@@ -246,7 +246,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// # gizmo_core::impl_component!(Charge);
     /// # let mut world = World::new();
     /// # for _ in 0..3 { let e = world.spawn(); world.add_component(e, Charge(1.0)); }
-    /// let mut q = world.query_mut::<Mut<Charge>>().unwrap();
+    /// let mut q = world.query_mut::<Mut<Charge>>();
     /// let mut pairs = q.iter_combinations_mut();
     /// while let Some([mut a, mut b]) = pairs.fetch_next() {
     ///     // Equal and opposite: what a two-pass version has to reconstruct.
@@ -384,7 +384,7 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// # gizmo_core::impl_component!(Mass);
     /// # let mut world = World::new();
     /// # for m in [1.0, 2.0, 3.0] { let e = world.spawn(); world.add_component(e, Mass(m)); }
-    /// let q = world.query::<&Mass>().unwrap();
+    /// let q = world.query::<&Mass>();
     /// let pairs: Vec<_> = q.iter_combinations().map(|[a, b]| (a.0, b.0)).collect();
     /// assert_eq!(pairs.len(), 3); // 3 choose 2
     /// ```
@@ -434,11 +434,11 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// # #[derive(Clone, Debug)] struct Player(u32);
     /// # gizmo_core::impl_component!(Player);
     /// let mut world = World::new();
-    /// assert_eq!(world.query::<&Player>().unwrap().single().err(), Some(QuerySingleError::NoEntities));
+    /// assert_eq!(world.query::<&Player>().single().err(), Some(QuerySingleError::NoEntities));
     ///
     /// let e = world.spawn();
     /// world.add_component(e, Player(7));
-    /// let q = world.query::<&Player>().unwrap();
+    /// let q = world.query::<&Player>();
     /// assert_eq!(q.single().unwrap().0, 7);
     /// ```
     ///
@@ -559,7 +559,7 @@ impl<'a, 'w, Q: ReadOnlyQuery, const K: usize> Iterator for QueryCombinations<'a
 /// # #[derive(Clone)] struct Tag(u32);
 /// # gizmo_core::impl_component!(Tag);
 /// # let mut world = World::new();
-/// let mut q = world.query_mut::<Mut<Tag>>().unwrap();
+/// let mut q = world.query_mut::<Mut<Tag>>();
 /// let mut pairs = q.iter_combinations_mut::<2>();
 /// let first = pairs.fetch_next();
 /// let second = pairs.fetch_next(); // the first combination is still alive
@@ -614,7 +614,7 @@ mod combination_tests {
     fn every_pair_appears_exactly_once_and_nothing_pairs_with_itself() {
         for n in [0u32, 1, 2, 3, 5, 8] {
             let w = world_with(n);
-            let q = w.query::<&Tag>().expect("Tag is registered");
+            let q = w.query::<&Tag>();
             let pairs: Vec<(u32, u32)> = q
                 .iter_combinations()
                 .map(|[a, b]| (a.0, b.0))
@@ -644,7 +644,7 @@ mod combination_tests {
     #[test]
     fn each_half_carries_its_own_entity() {
         let w = world_with(4);
-        let q = w.query::<(crate::entity::Entity, &Tag)>().expect("registered");
+        let q = w.query::<(crate::entity::Entity, &Tag)>();
         for [(ea, a), (eb, b)] in q.iter_combinations() {
             assert_eq!(q.get(ea).expect("a resolves").1 .0, a.0, "first handle, wrong item");
             assert_eq!(q.get(eb).expect("b resolves").1 .0, b.0, "second handle, wrong item");
@@ -662,7 +662,7 @@ mod combination_tests {
         }
         fn check<const K: usize>(n: u32) {
             let w = world_with(n);
-            let q = w.query::<&Tag>().expect("registered");
+            let q = w.query::<&Tag>();
             let mut seen: Vec<[u32; K]> = q.iter_combinations::<K>().map(|c| c.map(|t| t.0)).collect();
             assert_eq!(seen.len(), c(n as usize, K), "n = {n}, K = {K}");
             for combo in &seen {
@@ -688,7 +688,7 @@ mod combination_tests {
     fn three_writable_rows_at_once_do_not_alias() {
         let mut w = world_with(5);
         {
-            let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
+            let mut q = w.query_mut::<crate::query::Mut<Tag>>();
             let mut triples = q.iter_combinations_mut::<3>();
             let mut count = 0;
             while let Some([mut a, mut b, mut c]) = triples.fetch_next() {
@@ -700,7 +700,7 @@ mod combination_tests {
             assert_eq!(count, 10, "5 choose 3");
         }
         // Row 0 is first in all 6 triples containing it, row 4 last in all 6 of its own.
-        let q = w.query::<&Tag>().expect("registered");
+        let q = w.query::<&Tag>();
         let got: Vec<u32> = q.iter().map(|t| t.0).collect();
         // Tag starts at the row number. Row i is first in C(4-i, 2) triples, middle in i*(4-i),
         // last in C(i, 2).
@@ -724,7 +724,7 @@ mod combination_tests {
             w.add_component(e, Tag(1000 + i));
         }
         {
-            let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
+            let mut q = w.query_mut::<crate::query::Mut<Tag>>();
             let mut pairs = q.iter_combinations_mut();
             while let Some([mut a, mut b]) = pairs.fetch_next() {
                 a.0 += 10;
@@ -733,7 +733,7 @@ mod combination_tests {
         }
         // 5 entities, 10 pairs. Each entity is `a` in (4 - i) pairs and `b` in i, so its net
         // change is 10 * (4 - 2i) — and the total across all of them is zero.
-        let q = w.query::<&Tag>().expect("registered");
+        let q = w.query::<&Tag>();
         let values: Vec<i64> = q.iter().map(|t| i64::from(t.0)).collect();
         assert_eq!(values.len(), 5);
         let initial: i64 = (0..5).map(|i| 1000 + i).sum();
@@ -757,11 +757,11 @@ mod combination_tests {
         for n in [0u32, 1, 2, 3, 6] {
             let mut w = world_with(n);
             let readonly: Vec<(u32, u32)> = {
-                let q = w.query::<&Tag>().expect("registered");
+                let q = w.query::<&Tag>();
                 q.iter_combinations().map(|[a, b]| (a.0, b.0)).collect()
             };
             let mutable: Vec<(u32, u32)> = {
-                let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
+                let mut q = w.query_mut::<crate::query::Mut<Tag>>();
                 let mut pairs = q.iter_combinations_mut();
                 let mut out = Vec::new();
                 while let Some([a, b]) = pairs.fetch_next() {
@@ -781,7 +781,7 @@ mod combination_tests {
     fn a_write_is_visible_to_the_pairs_that_follow() {
         let mut w = world_with(3);
         {
-            let mut q = w.query_mut::<crate::query::Mut<Tag>>().expect("registered");
+            let mut q = w.query_mut::<crate::query::Mut<Tag>>();
             let mut pairs = q.iter_combinations_mut();
             while let Some([mut a, mut b]) = pairs.fetch_next() {
                 // Each pair doubles both halves. Entity 0 is in pairs (0,1) and (0,2), so if the
@@ -791,7 +791,7 @@ mod combination_tests {
                 b.0 = vb * 2;
             }
         }
-        let q = w.query::<&Tag>().expect("registered");
+        let q = w.query::<&Tag>();
         let mut values: Vec<u32> = q.iter().map(|t| t.0).collect();
         values.sort_unstable();
         // 1 is in pairs (0,1) and (1,2) → ×4; 2 is in (0,2) and (1,2) → ×4.
@@ -802,7 +802,7 @@ mod combination_tests {
     #[test]
     fn the_size_hint_bounds_the_real_count() {
         let w = world_with(6);
-        let q = w.query::<&Tag>().expect("registered");
+        let q = w.query::<&Tag>();
         let it = q.iter_combinations::<2>();
         let (_, upper) = it.size_hint();
         assert_eq!(upper, Some(15));

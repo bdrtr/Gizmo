@@ -79,6 +79,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   `iter_combinations` now takes any `K`, not only pairs.
 
+- **`world.query::<Q>()` returns the query, not an `Option`.** Building one never failed: `Query::new` always
+  said `Some`, so the type asked about 330 callers for an `.unwrap()` or `.expect()` and 130-odd for an
+  `if let Some`, whose `else` branches could not run. Two of those logged a failure that did not exist. `query`, `query_mut`, `query_unchecked` and
+  `query_cached` all changed. `SystemParamFetchError::QueryError`, documented as unreachable, is gone.
+
+  ```rust
+  // before
+  if let Some(q) = world.query::<&Enemy>() { for e in q.iter() { /* .. */ } }
+  let n = world.query::<&Enemy>().unwrap().iter().count();
+
+  // after
+  for e in world.query::<&Enemy>().iter() { /* .. */ }
+  let n = world.query::<&Enemy>().iter().count();
+  ```
+
 - **`Query::get`, `get_mut` and `contains` take an `Entity` and nothing else,** so a lookup can no longer
   reach whoever got a dead entity's id. What held raw ids holds handles now, and code that passed `x.id()`
   around passes `x`:

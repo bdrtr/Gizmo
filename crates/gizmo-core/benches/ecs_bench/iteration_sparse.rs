@@ -17,7 +17,7 @@ pub fn bench_sparse_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&SparseVel, Mut<SparsePos>)>().unwrap();
+    let mut query = world.query_mut::<(&SparseVel, Mut<SparsePos>)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("sparse_iter", |b| {
@@ -62,7 +62,7 @@ pub fn bench_wide_sparse_iter(c: &mut Criterion) {
         Mut<SparsePosWide<3>>,
         &SparseVelWide<4>,
         Mut<SparsePosWide<4>>,
-    )>().unwrap();
+    )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup
 
@@ -105,7 +105,7 @@ pub fn bench_sparse_simple_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&SparseVel, Mut<SparsePos>)>().unwrap();
+    let mut query = world.query_mut::<(&SparseVel, Mut<SparsePos>)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("sparse_simple_iter", |b| {
@@ -150,7 +150,7 @@ pub fn bench_wide_sparse_simple_iter(c: &mut Criterion) {
         Mut<SparsePosWide<3>>,
         &SparseVelWide<4>,
         Mut<SparsePosWide<4>>,
-    )>().unwrap();
+    )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup
 

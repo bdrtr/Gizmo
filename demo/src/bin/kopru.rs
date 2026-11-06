@@ -361,7 +361,7 @@ fn start_test(world: &mut World, game: &mut Game) {
         }
     }
     let all = nodes();
-    let cliff_body: Vec<(Entity, Vec3)> = world.query::<(Entity, &RigidBody)>().unwrap().iter()
+    let cliff_body: Vec<(Entity, Vec3)> = world.query::<(Entity, &RigidBody)>().iter()
         .filter(|(_, rb)| rb.is_static())
         .filter_map(|(entity, _)| world.borrow::<Transform>().get(entity).map(|t| (entity, t.position)))
         .collect();

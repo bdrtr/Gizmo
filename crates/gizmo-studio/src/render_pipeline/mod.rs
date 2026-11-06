@@ -242,7 +242,8 @@ pub fn execute_render_pipeline(
         let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
         let editor_only = world.borrow::<gizmo::core::component::EditorOnly>();
 
-        if let Some(mut q) = world.query::<(Entity, &Mesh, &gizmo::physics::components::GlobalTransform, &Material)>() {
+        {
+            let mut q = world.query::<(Entity, &Mesh, &gizmo::physics::components::GlobalTransform, &Material)>();
             for (e, mesh, global_trans, mat) in q.iter_mut() {
                 // Sadece MeshRenderer tagli olanları çiz
                 if renderers.get(e).is_none() {
@@ -590,7 +591,6 @@ pub fn execute_render_pipeline(
             // with a same-type read borrow.
             let emitter_entities: Vec<Entity> = world
                 .query::<(gizmo::core::Entity, &gizmo::renderer::components::ParticleEmitter)>()
-                .unwrap()
                 .iter()
                 .map(|(entity, _)| entity)
                 .collect();

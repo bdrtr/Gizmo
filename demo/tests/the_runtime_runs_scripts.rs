@@ -217,7 +217,7 @@ fn a_scene_saved_with_a_script_loads_and_that_script_runs() {
     let _ = std::fs::remove_file(&scene);
 
     let id = {
-        world.query::<(Entity, &EntityName)>().unwrap().iter()
+        world.query::<(Entity, &EntityName)>().iter()
             .find(|(_, n)| n.0 == "Oyuncu")
             .map(|(entity, _)| entity)
             .expect("the entity survived the file")

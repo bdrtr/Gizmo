@@ -825,7 +825,7 @@ mod tests {
         assert_locations_agree_with_archetypes(&world, "after a duplicated insert_batch");
         // And the component actually arrived, exactly once, on exactly that entity.
         assert_eq!(world.query_entity::<&B>(ents[0].id()).map(|c| c.0), Some(9));
-        assert_eq!(world.query::<&B>().unwrap().iter().count(), 1);
+        assert_eq!(world.query::<&B>().iter().count(), 1);
     }
 
     /// The same shape through `remove_batch`, whose grouping loop is the same code.
@@ -849,7 +849,7 @@ mod tests {
 
         assert_locations_agree_with_archetypes(&world, "after a duplicated remove_batch");
         assert!(world.query_entity::<&B2>(ents[0].id()).is_none());
-        assert_eq!(world.query::<&B2>().unwrap().iter().count(), 3);
+        assert_eq!(world.query::<&B2>().iter().count(), 3);
     }
 
     /// `spawn_batch` discovers the batch's archetype from its first entity, and hooks run
@@ -1245,7 +1245,7 @@ mod tests {
         assert_inv(&world, "after the freed id was recycled by a later spawn");
         assert!(world.is_alive(reused));
         assert_eq!(
-            world.query::<&crate::component::EntityName>().map(|q| q.iter().count()),
+            Some(world.query::<&crate::component::EntityName>().iter().count()),
             Some(0),
             "sanity: nothing invented a component"
         );
@@ -1359,7 +1359,7 @@ mod tests {
 
         // A bare read must skip the out-of-range ids rather than index them.
         assert_eq!(
-            world.query::<&SparseP>().unwrap().iter().count(),
+            world.query::<&SparseP>().iter().count(),
             1,
             "only the entity that still has the component"
         );
@@ -1370,7 +1370,7 @@ mod tests {
             world.query_entity::<&Tableish>(ents[N - 1].id()).map(|c| c.0),
             Some(9)
         );
-        assert_eq!(world.query::<&Tableish>().unwrap().iter().count(), 1);
+        assert_eq!(world.query::<&Tableish>().iter().count(), 1);
     }
 
     /// The other direction: a surviving HIGH id pins the index, and compaction must not shorten
@@ -1446,7 +1446,7 @@ mod tests {
 
         // Every entity must have BOTH the table and the sparse component, and the
         // sparse one must carry the right value (routed, not lost/panicked).
-        let mut query = world.query_mut::<(&TableC, &SparseC)>().unwrap();
+        let mut query = world.query_mut::<(&TableC, &SparseC)>();
         let mut count = 0;
         for (t, s) in query.iter_mut() {
             assert_eq!(s.0, t.0 * 2, "sparse component value mismatch");
@@ -1480,7 +1480,7 @@ mod tests {
         world.add_bundle(e, (TableC(7), SparseC(9)));
 
         // The sparse component must be reachable through a sparse-storage query.
-        let mut query = world.query_mut::<(&TableC, &SparseC)>().unwrap();
+        let mut query = world.query_mut::<(&TableC, &SparseC)>();
         let mut found = None;
         for (t, s) in query.iter_mut() {
             found = Some((t.0, s.0));
@@ -1513,7 +1513,7 @@ mod tests {
         world.add_component(e, SparseC(2)); // correctly in the sparse set
         world.remove_bundle::<(TableC, SparseC)>(e);
 
-        let query = world.query::<&SparseC>().unwrap();
+        let query = world.query::<&SparseC>();
         assert_eq!(
             query.iter().count(),
             0,
@@ -1544,7 +1544,7 @@ mod tests {
 
         // No SparseC must survive the despawn (leak)...
         assert_eq!(
-            world.query::<&SparseC>().unwrap().iter().count(),
+            world.query::<&SparseC>().iter().count(),
             0,
             "despawn leaked a sparse component"
         );
@@ -1605,7 +1605,7 @@ mod tests {
             "an entity spawned after clear_entities inherited a stale sparse component"
         );
         assert_eq!(
-            world.query::<&SparseC>().unwrap().iter().count(),
+            world.query::<&SparseC>().iter().count(),
             0,
             "clear_entities leaked a sparse component into the query iterator"
         );
@@ -1773,11 +1773,11 @@ mod tests {
         let e3 = world.spawn(); world.add_component(e3, TestCompI32(3)); // sadece i32
         
         // i32 query'si 3 entity'yi de bulmalı
-        let count = world.query::<&TestCompI32>().unwrap().iter().count();
+        let count = world.query::<&TestCompI32>().iter().count();
         assert_eq!(count, 3);
         
         // (i32, f32) query'si sadece e1'i bulmalı
-        let count = world.query::<(&TestCompI32, &TestCompF32)>().unwrap().iter().count();
+        let count = world.query::<(&TestCompI32, &TestCompF32)>().iter().count();
         assert_eq!(count, 1);
     }
 
@@ -1794,7 +1794,8 @@ mod tests {
         let e2 = world.spawn(); world.add_component(e2, TestCompI32(2));
         
         // Query ile tüm i32'leri iki katına çıkar
-        if let Some(mut q) = world.query_mut::<crate::query::Mut<TestCompI32>>() {
+        {
+            let mut q = world.query_mut::<crate::query::Mut<TestCompI32>>();
             for mut val in q.iter_mut() {
                 val.0 *= 2;
             }
@@ -1827,9 +1828,9 @@ mod tests {
             world.add_component(e, CompB);
         }
 
-        let a_count = world.query::<&CompA>().unwrap().iter().count();
-        let b_count = world.query::<&CompB>().unwrap().iter().count();
-        let both_count = world.query::<(&CompA, &CompB)>().unwrap().iter().count();
+        let a_count = world.query::<&CompA>().iter().count();
+        let b_count = world.query::<&CompB>().iter().count();
+        let both_count = world.query::<(&CompA, &CompB)>().iter().count();
 
         assert_eq!(a_count, 100);
         assert_eq!(b_count, 50);

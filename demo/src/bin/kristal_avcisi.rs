@@ -208,7 +208,8 @@ fn setup(world: &mut World, font: FontId, sound: bool) {
         primary: true,
         ..Default::default()
     });
-    if let Some(mut q) = world.query_mut::<Mut<Camera>>() {
+    {
+        let mut q = world.query_mut::<Mut<Camera>>();
         if let Some(mut cam) = q.get_mut(camera) {
             cam.clear_color = Some(Vec3::new(0.01, 0.012, 0.03));
         }
@@ -253,8 +254,8 @@ fn self_test() -> bool {
     while run.elapsed < ROUND_SECONDS + 10.0 && !over(&run.world) {
         let (player, target) = {
             let tfs = run.world.borrow::<Transform>();
-            let player = run.world.query::<(Entity, &Player)>().unwrap().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position));
-            let crystals: Vec<Vec3> = run.world.query::<(Entity, &Crystal)>().unwrap().iter().filter_map(|(entity, _)| tfs.get(entity).map(|t| t.position)).collect();
+            let player = run.world.query::<(Entity, &Player)>().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position));
+            let crystals: Vec<Vec3> = run.world.query::<(Entity, &Crystal)>().iter().filter_map(|(entity, _)| tfs.get(entity).map(|t| t.position)).collect();
             let target = player.and_then(|p| crystals.into_iter().min_by(|a, b| a.distance(p).total_cmp(&b.distance(p))));
             (player, target)
         };
@@ -280,7 +281,7 @@ fn self_test() -> bool {
         lives_before = lives;
     }
     let (score, time_left) = run.world.get_resource::<Run>().map_or((0, 0.0), |r| (r.score, r.time_left));
-    let leftovers = run.world.query::<(Entity, &Player)>().unwrap().iter().count() + run.world.query::<(Entity, &Crystal)>().unwrap().iter().count();
+    let leftovers = run.world.query::<(Entity, &Player)>().iter().count() + run.world.query::<(Entity, &Crystal)>().iter().count();
     let ok = over(&run.world) && score >= 3 && leftovers == 0;
     println!(
         "kristal_avcisi --test: tur {:.0} s sürdü (kalan süre {time_left:.0} s), {score} kristal, {lost} kez yakalandı; bitişte kalan tur varlığı {leftovers} → {}",

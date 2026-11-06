@@ -97,7 +97,7 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
 ///     app.schedule.run(&mut app.world, 1.0 / 60.0);
 /// }
 ///
-/// let y = app.world.query::<&Transform>().unwrap().get(player).unwrap().position.y;
+/// let y = app.world.query::<&Transform>().get(player).unwrap().position.y;
 /// assert!(y < 10.0, "the registered controller must have applied its gravity");
 /// ```
 #[derive(Debug, Default, Clone, Copy)]
@@ -175,7 +175,7 @@ mod tests {
         world.add_component(car, Velocity::default());
         world.add_component(car, vc);
 
-        let start_z = world.query::<&Transform>().unwrap().get(car).unwrap().position.z;
+        let start_z = world.query::<&Transform>().get(car).unwrap().position.z;
 
         let mut schedule = Schedule::new();
         register_gameplay_physics_systems(&mut schedule);
@@ -191,7 +191,7 @@ mod tests {
             schedule.run(&mut world, dt);
         }
 
-        let end = *world.query::<&Transform>().unwrap().get(car).unwrap();
+        let end = *world.query::<&Transform>().get(car).unwrap();
         assert!(end.position.is_finite());
         assert!(
             start_z - end.position.z > 0.2,

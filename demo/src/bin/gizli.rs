@@ -260,7 +260,7 @@ struct Actor;
 gizmo::core::impl_component!(Actor);
 
 fn restart(world: &mut World, game: &mut Game) {
-    let actors: Vec<Entity> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let actors: Vec<Entity> = world.query::<(Entity, &Actor)>().iter().map(|(entity, _)| entity).collect();
     for id in actors {
         if let Some(e) = world.live(id) {
             use gizmo::core::hierarchy::HierarchyExt;
@@ -352,7 +352,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
 /// Bir muhafız hedefine varınca rotasının bir sonraki noktasına yönelir.
 fn patrol(world: &mut World, game: &Game) {
-    let guards: Vec<Entity> = world.query::<(Entity, &Guard)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let guards: Vec<Entity> = world.query::<(Entity, &Guard)>().iter().map(|(entity, _)| entity).collect();
     for id in guards {
         let done = world.borrow::<NavAgent>().get(id).is_some_and(|a| a.target.is_none());
         if !done {
@@ -379,7 +379,7 @@ fn sight(world: &mut World, game: &mut Game, dt: f32) {
     let guards: Vec<(Entity, Vec3, Vec3, Entity)> = {
         let ts = world.borrow::<Transform>();
         let vs = world.borrow::<Velocity>();
-        world.query::<(Entity, &Guard)>().unwrap().iter()
+        world.query::<(Entity, &Guard)>().iter()
             .filter_map(|(entity, g)| {
                 let at = ts.get(entity)?.position;
                 let v = vs.get(entity).map(|v| v.linear).unwrap_or(Vec3::Z);
@@ -439,7 +439,7 @@ fn pickups(world: &mut World, game: &mut Game) {
     let flat = |a: Vec3, b: Vec3| Vec2::new(a.x - b.x, a.z - b.z).length();
     if !game.has_document && flat(p, game.document) < 0.6 {
         game.has_document = true;
-        let doc: Vec<Entity> = world.query::<(Entity, &Document)>().unwrap().iter().map(|(entity, _)| entity).collect();
+        let doc: Vec<Entity> = world.query::<(Entity, &Document)>().iter().map(|(entity, _)| entity).collect();
         for id in doc {
             if let Some(e) = world.live(id) {
                 world.despawn(e);

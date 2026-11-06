@@ -19,7 +19,7 @@ pub fn bench_heavy_compute(c: &mut Criterion) {
 
     c.bench_function("heavy_compute_par", |b| {
         b.iter(|| {
-            let mut query = world.query_mut::<(Mut<Position>, Mut<Transform>)>().unwrap();
+            let mut query = world.query_mut::<(Mut<Position>, Mut<Transform>)>();
             query.par_for_each_mut(|(mut pos, mut mat)| {
                 for _ in 0..100 {
                     // simulate inverse matrix
@@ -49,7 +49,7 @@ pub fn bench_par_cache_locality_loss(c: &mut Criterion) {
         world.despawn(e);
     }
 
-    let mut query = world.query_mut::<(Mut<A>, &B)>().unwrap();
+    let mut query = world.query_mut::<(Mut<A>, &B)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("par_cache_locality_loss", |b| {

@@ -228,7 +228,7 @@ fn main() {
             // `GIZMO_BLUR_SHUTTER=0.5`: kameraya deklanşörü açık bir `PostProcess`. Bileşenin
             // varsayılanı bileşensiz davranış, yani değişen tek şey bulanıklık.
             if let Some(shutter) = std::env::var("GIZMO_BLUR_SHUTTER").ok().and_then(|v| v.parse::<f32>().ok()) {
-                let cams: Vec<Entity> = world.query::<(Entity, &Camera)>().unwrap().iter().map(|(entity, _)| entity).collect();
+                let cams: Vec<Entity> = world.query::<(Entity, &Camera)>().iter().map(|(entity, _)| entity).collect();
                 for id in cams {
                     if world.borrow::<PostProcess>().get(id).is_none() {
                         if let Some(e) = world.live(id) {
@@ -249,7 +249,8 @@ fn main() {
                 if !m.spin_object {
                     let pos = Vec3::new(m.angle.cos() * ORBIT_RADIUS, 1.2, m.angle.sin() * ORBIT_RADIUS);
                     let dir = (-pos).normalize();
-                    if let Some(mut q) = world.query_mut::<(Mut<Transform>, Mut<Camera>)>() {
+                    {
+                        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
                         for (mut t, mut cam) in q.iter_mut() {
                             t.position = pos;
                             cam.yaw = dir.z.atan2(dir.x);

@@ -177,8 +177,8 @@ fn self_test() -> bool {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let actors: Vec<Entity> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity).collect();
-    let debris: Vec<Entity> = world.query::<(Entity, &gizmo::physics::components::Debris)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let actors: Vec<Entity> = world.query::<(Entity, &Actor)>().iter().map(|(entity, _)| entity).collect();
+    let debris: Vec<Entity> = world.query::<(Entity, &gizmo::physics::components::Debris)>().iter().map(|(entity, _)| entity).collect();
     for id in actors.into_iter().chain(debris) {
         if let Some(e) = world.live(id) {
             world.despawn(e);
@@ -297,7 +297,7 @@ fn count_down(world: &World, game: &mut Game) {
     game.broken = COLUMNS * FLOORS - world.borrow::<Block>().iter().count();
     let standing = {
         let ts = world.borrow::<Transform>();
-        world.query::<(Entity, &Block)>().unwrap().iter()
+        world.query::<(Entity, &Block)>().iter()
             .filter(|(entity, b)| {
                 ts.get(*entity).is_some_and(|t| {
                     let upright = (t.rotation * Vec3::Y).y > 0.9;

@@ -145,9 +145,9 @@ fn tree_order(world: &World) -> Vec<Entity> {
     };
     // A node whose parent is not a node starts a tree of its own. Ids order the trees: spawned
     // earlier, painted earlier.
-    let mut roots: Vec<Entity> = world.query::<(Entity, &crate::ui::Node)>().unwrap().iter().map(|(entity, _)| entity).filter(|&id| parent_node(id).is_none()).collect();
+    let mut roots: Vec<Entity> = world.query::<(Entity, &crate::ui::Node)>().iter().map(|(entity, _)| entity).filter(|&id| parent_node(id).is_none()).collect();
     roots.sort_unstable();
-    let total = world.query::<(Entity, &crate::ui::Node)>().unwrap().iter().count();
+    let total = world.query::<(Entity, &crate::ui::Node)>().iter().count();
     let mut order = Vec::with_capacity(total);
     let mut stack: Vec<Entity> = roots.into_iter().rev().collect();
     // Bounded: a `Children` list written by hand can name a node twice or form a loop.
@@ -348,7 +348,7 @@ gizmo_core::impl_component!(Typewriter);
 pub fn typewriter_system(world: &mut World, dt: f32) {
     let lines: Vec<(Entity, String)> = {
         let texts = world.borrow::<Text>();
-        world.query::<(Entity, &Typewriter)>().unwrap().iter()
+        world.query::<(Entity, &Typewriter)>().iter()
             .filter_map(|(entity, _)| {
                 let t = texts.get(entity)?;
                 let s = text_input_display(world, entity)
@@ -403,7 +403,7 @@ fn dropdown_display(_world: &World, _entity: Entity) -> Option<String> {
 #[cfg(feature = "ui")]
 fn dropdown_lists(world: &World) -> Vec<(Entity, Vec<(Vec2, Vec2, Vec4, String)>)> {
     let nodes = world.borrow::<crate::ui::Node>();
-    world.query::<(Entity, &crate::ui::Dropdown)>().unwrap().iter()
+    world.query::<(Entity, &crate::ui::Dropdown)>().iter()
         .filter(|(_, d)| d.is_open())
         .filter_map(|(entity, d)| {
             let node = nodes.get(entity)?;
@@ -431,7 +431,7 @@ fn dropdown_lists(world: &World) -> Vec<(Entity, Vec<(Vec2, Vec2, Vec4, String)>
 /// Every tooltip that is up: its element, the pointer, what it says.
 #[cfg(feature = "ui")]
 fn tooltips(world: &World) -> Vec<(Entity, Vec2, String)> {
-    world.query::<(Entity, &crate::ui::Tooltip)>().unwrap().iter()
+    world.query::<(Entity, &crate::ui::Tooltip)>().iter()
         .filter_map(|(entity, t)| t.shown_at().map(|p| (entity, p, t.text.clone())))
         .collect()
 }
@@ -540,7 +540,7 @@ pub fn record_text(
         }
     }
 
-    for (id, item) in world.query::<(Entity, &Text)>().unwrap().iter() {
+    for (id, item) in world.query::<(Entity, &Text)>().iter() {
         // `TextSpace::needs_world_position` rather than a `match` here: the enum is
         // `#[non_exhaustive]`, so this file could only match it with a wildcard, and a wildcard is
         // where a third space would quietly become a HUD element. The decision lives beside the

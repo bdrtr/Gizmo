@@ -63,7 +63,7 @@ fn global(world: &mut World, name: &str) -> Option<ScriptValue> {
 fn segments(world: &World) -> (usize, usize) {
     let meshes = world.borrow::<gizmo::core::component::MeshSource>();
     let colours = world.borrow::<MaterialDesc>();
-    let ids: Vec<Entity> = world.query::<(Entity, &gizmo::core::EntityName)>().unwrap().iter().filter(|(_, n)| n.0 == "yilan").map(|(entity, _)| entity).collect();
+    let ids: Vec<Entity> = world.query::<(Entity, &gizmo::core::EntityName)>().iter().filter(|(_, n)| n.0 == "yilan").map(|(entity, _)| entity).collect();
     let drawn = ids.iter().filter(|id| meshes.get(**id).is_some() && colours.get(**id).is_some()).count();
     (ids.len(), drawn)
 }

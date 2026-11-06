@@ -113,9 +113,7 @@ fn main() {
                 //    kapatma kendi kuruyor — parametre çıkarımı yok.
                 callback("sorgu kuran", |world, _entity| {
                     let n = world
-                        .query::<&Callback>()
-                        .map(|q| q.iter().count())
-                        .unwrap_or(0);
+                        .query::<&Callback>().iter().count();
                     format!("dünyada {n} geri çağrı var")
                 }),
                 // 3. "Dışlayıcı sistem" biçimi: `|world: &mut World|`. Burada ayrıcalıklı bir
@@ -210,11 +208,12 @@ fn run_next(world: &mut World, input: &Input) {
 
     // Bekleyen ilk geri çağrıyı bul. Bileşeni klonluyoruz — `Arc` sayesinde ucuz, ve kapatmayı
     // çalıştırırken dünyayı ödünç almamış oluyoruz.
-    let next = world.query::<(Entity, &Callback, &Pending)>().and_then(|q| {
+    let next = {
+ let q = world.query::<(Entity, &Callback, &Pending)>();
         q.iter()
             .next()
             .map(|(entity, cb, _)| (entity.id(), cb.clone()))
-    });
+    };
     let Some((id, cb)) = next else {
         return;
     };

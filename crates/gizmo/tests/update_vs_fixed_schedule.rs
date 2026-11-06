@@ -37,7 +37,6 @@ fn camera_with_pending_mouse_motion(world: &mut World) -> gizmo::core::entity::E
 fn yaw_of(world: &World, e: gizmo::core::entity::Entity) -> f32 {
     world
         .query::<&FpsLook>()
-        .unwrap()
         .get(e)
         .expect("entity still has FpsLook")
         .yaw
@@ -157,7 +156,6 @@ fn transform_propagation_runs_on_the_per_frame_schedule() {
 
     let world_y = |w: &World| -> f32 {
         w.query::<&GlobalTransform>()
-            .unwrap()
             .get(e)
             .expect("entity keeps its GlobalTransform")
             .matrix

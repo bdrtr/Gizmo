@@ -223,9 +223,7 @@ fn demo_registry() -> SceneRegistry {
 /// hepsini içeriyor, ama bu demoda görülmek istenen şey kutuların gidip geri gelmesi.
 fn despawn_crates(world: &mut World) {
     let doomed: Vec<Entity> = world
-        .query::<(Entity, &Crate)>()
-        .map(|q| q.iter().map(|(entity, _)| entity).collect())
-        .unwrap_or_default();
+        .query::<(Entity, &Crate)>().iter().map(|(entity, _)| entity).collect();
     for entity in doomed {
         world.despawn(entity);
     }

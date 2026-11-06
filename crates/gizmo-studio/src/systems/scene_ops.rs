@@ -632,7 +632,7 @@ pub fn handle_scene_operations(
 /// Saturates at `u8::MAX` rather than wrapping back onto slot 0 — a scene with 255 fighters is
 /// nonsense, and handing out slot 0 twice would be worse than handing out 255 twice.
 fn next_free_player_slot(world: &World) -> u8 {
-    let taken: Vec<u8> = world.query::<(Entity, &gizmo::physics::components::fighter::FighterController)>().unwrap().iter()
+    let taken: Vec<u8> = world.query::<(Entity, &gizmo::physics::components::fighter::FighterController)>().iter()
         .map(|(_, f)| f.player_id)
         .collect();
     let mut slot: u8 = 1;
@@ -1225,7 +1225,7 @@ mod tests {
         assert_eq!(slots, vec![1, 2, 3], "each fighter takes the lowest free slot");
 
         // And a freed slot is reused rather than skipped: delete player 2, add another.
-        let p2 = world.query::<(Entity, &gizmo::physics::components::fighter::FighterController)>().unwrap().iter()
+        let p2 = world.query::<(Entity, &gizmo::physics::components::fighter::FighterController)>().iter()
             .find(|(_, f)| f.player_id == 2)
             .map(|(entity, _)| entity)
             .expect("player 2 is there");

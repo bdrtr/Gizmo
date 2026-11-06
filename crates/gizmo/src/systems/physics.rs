@@ -171,11 +171,12 @@ pub fn physics_debug_system(world: &crate::core::World) {
             }
         }
 
-        if let Some(q) = world.query::<(
+        {
+            let q = world.query::<(
             &gizmo_physics_core::Transform,
             &gizmo_physics_core::Collider,
             &gizmo_physics_rigid::components::RigidBody,
-        )>() {
+        )>();
             for (trans, col, rb) in q.iter() {
                 let color = if rb.is_static() {
                     [0.5, 0.5, 0.5, 1.0]
@@ -188,11 +189,12 @@ pub fn physics_debug_system(world: &crate::core::World) {
             }
         }
 
-        if let Some(q) = world.query::<(
+        {
+            let q = world.query::<(
             &gizmo_physics_core::Transform,
             &gizmo_physics_core::Collider,
             crate::core::query::Without<gizmo_physics_rigid::components::RigidBody>,
-        )>() {
+        )>();
             for (trans, col, _) in q.iter() {
                 draw_collider(trans, col, [0.5, 0.5, 0.5, 1.0], &mut gizmos);
             }
@@ -229,7 +231,8 @@ pub fn physics_debug_system(world: &crate::core::World) {
             gizmos.draw_line(p3, p7, color);
         };
 
-        if let Some(q) = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hitbox)>() {
+        {
+            let q = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hitbox)>();
             for (trans, hitbox) in q.iter() {
                 if hitbox.active {
                     draw_oriented_box(trans, hitbox.offset, hitbox.half_extents, [1.0, 0.0, 0.0, 1.0], &mut gizmos); // RED
@@ -237,7 +240,8 @@ pub fn physics_debug_system(world: &crate::core::World) {
             }
         }
 
-        if let Some(q) = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hurtbox)>() {
+        {
+            let q = world.query::<(&gizmo_physics_core::Transform, &gizmo_physics_core::components::Hurtbox)>();
             for (trans, hurtbox) in q.iter() {
                 draw_oriented_box(trans, hurtbox.offset, hurtbox.half_extents, [0.0, 1.0, 0.0, 1.0], &mut gizmos); // GREEN
             }
@@ -246,7 +250,8 @@ pub fn physics_debug_system(world: &crate::core::World) {
         #[cfg(feature = "physics-soft")]
         let soft_color = [1.0, 0.4, 0.8, 1.0]; // Pinkish for soft body
         #[cfg(feature = "physics-soft")]
-        if let Some(q) = world.query::<&gizmo_physics_soft::SoftBodyMesh>() {
+        {
+            let q = world.query::<&gizmo_physics_soft::SoftBodyMesh>();
             for sm in q.iter() {
                 for elem in &sm.elements {
                     let p0 = sm.nodes[elem.node_indices[0] as usize].position;
@@ -267,10 +272,11 @@ pub fn physics_debug_system(world: &crate::core::World) {
 
         // --- Phase 6.1: Süspansiyon Raycast Çizgisi + Kuvvet Okları ---
         #[cfg(feature = "physics-dynamics")]
-        if let Some(q) = world.query::<(
+        {
+            let q = world.query::<(
             &gizmo_physics_core::Transform,
             &gizmo_physics_dynamics::VehicleController,
-        )>() {
+        )>();
             for (trans, vehicle) in q.iter() {
                 for wheel in &vehicle.wheels {
                     let attach_world =
@@ -337,7 +343,8 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
 
     if let Some(physics) = &renderer.gpu_physics {
         let mut unlinked_entities = Vec::new();
-        if let Some(q) = world.query::<(gizmo_core::Entity, &RigidBody, &Transform, &Collider)>() {
+        {
+            let q = world.query::<(gizmo_core::Entity, &RigidBody, &Transform, &Collider)>();
             let links = world.borrow::<GpuPhysicsLink>();
             let velocities = world.borrow::<Velocity>();
             for (e, rb, trans, col) in q.iter() {
@@ -349,9 +356,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
         }
 
         let mut next_dynamic_id = world
-            .query::<&GpuPhysicsLink>()
-            .map(|q| q.iter().count() as u32)
-            .unwrap_or(0);
+            .query::<&GpuPhysicsLink>().iter().count() as u32;
 
         for (e, rb, trans, col, vel) in unlinked_entities {
             if matches!(col.shape, ColliderShape::Plane(_)) {
@@ -442,9 +447,8 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
 pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Renderer) {
     if let Some(physics) = &renderer.gpu_physics {
         if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
-            if let Some(mut q) =
-                world.query_mut::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink, &gizmo_physics_core::Collider)>()
             {
+                let mut q = world.query_mut::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink, &gizmo_physics_core::Collider)>();
                 for (mut trans, link, col) in q.iter_mut() {
                     let idx = link.id as usize;
                     if idx < gpu_data.len() {
@@ -522,12 +526,12 @@ pub fn cpu_physics_step_system(world: &crate::core::World, dt: f32) {
 fn queue_debris_visuals(world: &crate::core::World) {
     use crate::renderer::components::MaterialDesc;
     use gizmo_physics_rigid::components::Breakable;
-    let Some(breakables) = world.query::<(gizmo_core::Entity, &Breakable)>() else { return };
+    let breakables = world.query::<(gizmo_core::Entity, &Breakable)>();
     let descs = world.query::<&MaterialDesc>();
     let looks: Vec<(gizmo_core::Entity, Option<MaterialDesc>)> = breakables
         .iter()
         .filter(|(_, b)| b.is_broken)
-        .map(|(entity, _)| (entity, descs.as_ref().and_then(|q| q.get(entity)).cloned()))
+        .map(|(entity, _)| (entity, descs.get(entity).cloned()))
         .collect();
     if looks.is_empty() {
         return;
@@ -547,11 +551,11 @@ pub(crate) fn attach_debris_visuals(world: &mut crate::core::World, looks: &[(gi
     use crate::renderer::components::{MaterialDesc, MeshData, MeshRenderer};
     use gizmo_physics_rigid::components::Debris;
     let pending: Vec<(gizmo_core::Entity, MeshData, u32)> = {
-        let Some(pieces) = world.query::<(gizmo_core::Entity, &Debris)>() else { return };
+        let pieces = world.query::<(gizmo_core::Entity, &Debris)>();
         let drawn = world.query::<&MeshRenderer>();
         pieces
             .iter()
-            .filter(|(entity, _)| drawn.as_ref().is_none_or(|q| q.get(*entity).is_none()))
+            .filter(|(entity, _)| drawn.get(*entity).is_none())
             .map(|(entity, d)| (entity, debris_mesh(d), d.source))
             .collect()
     };
@@ -677,7 +681,7 @@ mod physics_step_tests {
 
     #[cfg(feature = "render")]
     fn debris_ids(world: &World) -> Vec<Entity> {
-        world.query::<(Entity, &gizmo_physics_rigid::components::Debris)>().unwrap().iter().map(|(entity, _)| entity).collect()
+        world.query::<(Entity, &gizmo_physics_rigid::components::Debris)>().iter().map(|(entity, _)| entity).collect()
     }
 
     #[test]

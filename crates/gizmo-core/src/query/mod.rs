@@ -468,7 +468,7 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
 /// let mut world = World::new();
 /// world.spawn_bundle((Health(10),));
 /// world.spawn_bundle((Health(10), Shield(5)));
-/// let q = world.query::<(&Health, Option<&Shield>)>().unwrap();
+/// let q = world.query::<(&Health, Option<&Shield>)>();
 /// let shields: Vec<Option<u32>> = q.iter().map(|(_, s)| s.map(|s| s.0)).collect();
 /// assert_eq!(shields.len(), 2);
 /// assert!(shields.contains(&None) && shields.contains(&Some(5)));

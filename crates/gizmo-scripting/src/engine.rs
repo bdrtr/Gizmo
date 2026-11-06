@@ -1826,7 +1826,7 @@ mod tests {
 
         // İsimli entity'yi bul.
         let names = world.borrow::<gizmo_core::EntityName>();
-        let found = world.query::<(Entity, &gizmo_core::EntityName)>().unwrap().iter().filter_map(|(entity, _)| names.get(entity).map(|n| (entity, n.0.clone())))
+        let found = world.query::<(Entity, &gizmo_core::EntityName)>().iter().filter_map(|(entity, _)| names.get(entity).map(|n| (entity, n.0.clone())))
             .find(|(_, name)| name == "hero");
         let (eid, _) = found.expect("'hero' isimli entity oluşmalıydı");
         drop(names);

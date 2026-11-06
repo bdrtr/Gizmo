@@ -225,10 +225,12 @@ fn run_hooks<S: PartialEq>(hooks: &mut [(S, StateHook)], state: &S, world: &mut 
 
 fn despawn_scoped<S: Clone + PartialEq + Eq + Send + Sync + 'static>(world: &mut World, left: &S) {
     use crate::hierarchy::HierarchyExt;
-    let ids: Vec<u32> = match world.query::<(Entity, &DespawnOnExit<S>)>() {
-        Some(q) => q.iter().filter(|(_, d)| d.0 == *left).map(|(entity, _)| entity.id()).collect(),
-        None => return,
-    };
+    let ids: Vec<u32> = world
+        .query::<(Entity, &DespawnOnExit<S>)>()
+        .iter()
+        .filter(|(_, d)| d.0 == *left)
+        .map(|(entity, _)| entity.id())
+        .collect();
     for id in ids {
         // A child despawned with its parent above is already gone.
         if let Some(entity) = world.entity(id) {
