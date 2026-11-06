@@ -87,6 +87,15 @@ pub struct SceneState {
     pub blend_lit_pipelines: [wgpu::RenderPipeline; 3],
     /// The unlit pipeline under each of them, not writing depth.
     pub blend_unlit_pipelines: [wgpu::RenderPipeline; 3],
+    /// The lit pipeline that also reads the frame behind it — see
+    /// [`transmissive_pipeline`](Self::transmissive_pipeline).
+    pub transmissive: [wgpu::RenderPipeline; 2],
+    /// What group 0 offers as the frame behind glass until something draws glass: one black texel.
+    pub behind_fallback: wgpu::TextureView,
+    /// What group 0 offers now: that, or [`Renderer::behind`](crate::Renderer::behind)'s view.
+    pub behind_view: wgpu::TextureView,
+    /// How the glass shader reads that frame.
+    pub behind_sampler: wgpu::Sampler,
     /// The lit pipelines with anisotropy, clear coat and subsurface, where the ones above leave them
     /// out. `None` on the desktop path, whose lit pipelines always have them.
     pub lit_lobes: Option<LitLobes>,
@@ -279,6 +288,14 @@ impl SceneView {
                     binding: 2,
                     resource: cluster_index_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&scene.behind_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&scene.behind_sampler),
+                },
             ],
             label: Some(label),
         });
@@ -336,6 +353,43 @@ impl SceneState {
     pub fn blend_variant(&self, unlit: bool, mode: crate::components::BlendMode) -> Option<&wgpu::RenderPipeline> {
         let i = crate::components::BlendMode::VARIANTS.iter().position(|m| *m == mode)?;
         Some(if unlit { &self.blend_unlit_pipelines[i] } else { &self.blend_lit_pipelines[i] })
+    }
+
+    /// The lit pipeline that also reads the frame behind it, for a draw that
+    /// [is glass](crate::components::Material::is_transmissive). Opaque as far as the blend goes,
+    /// and it writes depth: what it shows of the world, it read.
+    pub fn transmissive_pipeline(&self, double_sided: bool) -> &wgpu::RenderPipeline {
+        &self.transmissive[usize::from(double_sided)]
+    }
+
+    /// Points every view's group 0 at this frame behind glass, or back at the black texel. Group 0
+    /// is the one bind group every pass uses, so this is the only place that has to know.
+    pub fn set_behind_view(&mut self, device: &wgpu::Device, behind: Option<&wgpu::TextureView>) {
+        self.behind_view = behind.unwrap_or(&self.behind_fallback).clone();
+        let view = &self.behind_view;
+        let build = |uniform: &wgpu::Buffer, table: &wgpu::Buffer, indices: &wgpu::Buffer| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("global_bind_group"),
+                layout: &self.global_bind_group_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: table.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 2, resource: indices.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(view) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.behind_sampler) },
+                ],
+            })
+        };
+        let global = build(&self.global_uniform_buffer, &self.cluster_table_buffer, &self.cluster_index_buffer);
+        let views: Vec<wgpu::BindGroup> = self
+            .views
+            .iter()
+            .map(|v| build(&v.uniform_buffer, &v.cluster_table_buffer, &v.cluster_index_buffer))
+            .collect();
+        self.global_bind_group = global;
+        for (v, group) in self.views.iter_mut().zip(views) {
+            v.bind_group = group;
+        }
     }
 
     /// The pipeline for a lit, non-custom draw. `lobes` says the material uses anisotropy, clear coat
@@ -578,6 +632,27 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         mapped_at_creation: false,
     });
 
+    let behind_fallback = device
+        .create_texture(&wgpu::TextureDescriptor {
+            label: Some("nothing behind glass yet"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+        .create_view(&wgpu::TextureViewDescriptor::default());
+    let behind_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+        label: Some("behind glass"),
+        address_mode_u: wgpu::AddressMode::ClampToEdge,
+        address_mode_v: wgpu::AddressMode::ClampToEdge,
+        mag_filter: wgpu::FilterMode::Linear,
+        min_filter: wgpu::FilterMode::Linear,
+        mipmap_filter: wgpu::MipmapFilterMode::Linear,
+        ..Default::default()
+    });
     let global_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: &layouts.global,
         entries: &[
@@ -592,6 +667,14 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: cluster_index_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(&behind_fallback),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::Sampler(&behind_sampler),
             },
         ],
         label: Some("global_bind_group"),
@@ -745,6 +828,10 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         blend_lit_pipelines: core_pipelines.blend_lit,
         blend_unlit_pipelines: core_pipelines.blend_unlit,
         lit_lobes: core_pipelines.lobes,
+        transmissive: core_pipelines.transmissive,
+        behind_view: behind_fallback.clone(),
+        behind_fallback,
+        behind_sampler,
         shadow_pipeline,
         global_uniform_buffer,
         global_bind_group_layout: layouts.global,
@@ -806,6 +893,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let shadow_pipeline = build_shadow_pipeline(device, &layouts);
 
     renderer.scene.lit_lobes = core_pipelines.lobes;
+    renderer.scene.transmissive = core_pipelines.transmissive;
     renderer.scene.render_pipeline = core_pipelines.render;
     renderer.scene.render_double_sided_pipeline = core_pipelines.render_double_sided;
     renderer.scene.wireframe_pipeline = core_pipelines.wireframe;
@@ -1008,7 +1096,12 @@ mod tests {
                     if *name == "shader.wgsl" {
                         let mut defs = shaders::web_render_defs();
                         defs.insert("LOBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
-                        variants.push(("web with lobes", shaders::compose_wgsl(src, name, defs)));
+                        variants.push(("web with lobes", shaders::compose_wgsl(src, name, defs.clone())));
+                        defs.insert("TRANSMISSION".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        variants.push(("web glass", shaders::compose_wgsl(src, name, defs)));
+                        let mut defs = shaders::native_render_defs();
+                        defs.insert("TRANSMISSION".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        variants.push(("native glass", shaders::compose_wgsl(src, name, defs)));
                     }
                 } else {
                     variants.push(("raw", src.to_string()));

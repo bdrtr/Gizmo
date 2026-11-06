@@ -437,9 +437,50 @@ pub(super) fn record_studio_main_pass(
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
+            // 3b. Glass reads the frame behind it, so with glass in view this pass ends here, the
+            // frame is copied, and another takes over: the game path's order (`passes::forward`).
+            let glass = |batch: &&FlatBatchData| batch.is_transmissive && batch.end_instance > batch.start_instance;
+            let mut render_pass = match renderer.behind.as_ref().filter(|_| flat_batches.iter().any(|b| glass(&b))) {
+                None => render_pass,
+                Some(behind) => {
+                    drop(render_pass);
+                    behind.capture(encoder, &renderer.post.hdr_texture);
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("Main Render Pass, glass and after (HDR)"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &renderer.post.hdr_texture_view,
+                            depth_slice: None,
+                            resolve_target: None,
+                            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &renderer.depth_texture_view,
+                            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                        multiview_mask: None,
+                    });
+                    for batch in flat_batches.iter().filter(glass) {
+                        pass.set_pipeline(renderer.scene.transmissive_pipeline(batch.is_double_sided));
+                        pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
+                        pass.set_bind_group(1, &*batch.bind_group, &[]);
+                        pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                        pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
+                        pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                        if let Some(def) = renderer.deferred.as_ref() {
+                            pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+                        }
+                        batch.record_draw(&mut pass, batch.start_instance..batch.end_instance.min(renderer.scene.instance_capacity as u32));
+                    }
+                    pass
+                }
+            };
+
             // 4. TRANSPARENT OBJELERİ ÇİZ (Depth yazması kapalı, Opaque'nin üstüne blend olur)
             for batch in flat_batches {
-                if !batch.is_transparent || batch.is_grid || batch.is_backdrop || batch.is_water {
+                if !batch.is_transparent || batch.is_transmissive || batch.is_grid || batch.is_backdrop || batch.is_water {
                     continue;
                 } // Sadece saydamları çiz (backdrop ve su kendi geçişlerinde çizildi)
                 // The game path's choice (`passes::forward`): the batch's blend mode picks a

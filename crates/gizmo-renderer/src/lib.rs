@@ -176,6 +176,8 @@ pub mod ssgi;
 pub mod ssr;
 /// Temporal anti-aliasing.
 pub mod taa;
+/// The frame copied under glass, for [`Material::transmission`](crate::components::Material::transmission).
+pub mod transmission;
 /// Fonts, glyph rasterisation and text layout.
 pub mod text;
 /// Sprites: loaded images and the 2D quad pass.

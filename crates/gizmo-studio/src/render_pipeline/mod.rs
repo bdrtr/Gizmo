@@ -164,6 +164,9 @@ pub fn execute_render_pipeline(
             // shading mode comes from the viewport's debug dropdown, not from the renderer.
             environment: gizmo::renderer::EnvironmentFrame {
                 shading_mode: ed_shading_mode,
+                // What a scene sets by hand is the scene, and this viewport shows it.
+                fog: renderer.fog,
+                sky: renderer.sky,
                 ..Default::default()
             },
             // The editor records no point-shadow cube pass, so there is no cube to sample;
@@ -361,6 +364,7 @@ pub fn execute_render_pipeline(
                 // `a_cut_out_material_cuts_in_the_editor_viewport`.
                 .with_alpha_cutoff(mat.alpha_cutoff)
                 .with_reflectance(mat.reflectance)
+                .with_transmission_of(mat)
                 .with_shadow_receiving(renderers.get(e).map(|r| r.receives_shadows).unwrap_or(true));
 
                 // --- SKELETON (KEMİK) ARAMASI ---
@@ -417,7 +421,8 @@ pub fn execute_render_pipeline(
                 // Water goes in the opaque map whatever its alpha: it has its own pass with its
                 // own pipeline, and the transparent pass would draw it with `shader.wgsl`.
                 // Only a blended draw blends — the game path's rule (`batching.rs`).
-                let blend_mode = if blended { mat.blend_mode } else { Default::default() };
+                let is_transmissive = mat.is_transmissive();
+                let blend_mode = if blended && !is_transmissive { mat.blend_mode } else { Default::default() };
                 let batches = if blended && !is_water {
                     &mut *transparent_batches
                 } else if mat.is_double_sided {
@@ -427,20 +432,21 @@ pub fn execute_render_pipeline(
                 };
 
                 let batch = batches
-                    .entry((
-                        vbuf_ptr,
-                        bg_ptr,
-                        skel_ptr,
+                    .entry(BatchKey {
+                        vbuf: vbuf_ptr,
+                        bind_group: bg_ptr,
+                        skeleton: skel_ptr,
                         is_skybox,
                         is_grid,
                         is_unlit,
                         is_backdrop,
                         is_water,
+                        is_transmissive,
                         is_editor_only,
                         casts_shadows,
                         visible_in_camera,
                         blend_mode,
-                    ))
+                    })
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
                         vertex_count: active_mesh.vertex_count,
@@ -458,6 +464,7 @@ pub fn execute_render_pipeline(
                         is_skybox,
                         is_grid,
                         is_unlit,
+                        is_transmissive,
                         is_backdrop,
                         is_water,
                         is_editor_only,
@@ -523,6 +530,7 @@ pub fn execute_render_pipeline(
                         end_instance: start + count,
                         shadow_end_instance: start + count + shadow_count,
                         is_transparent,
+                        is_transmissive: batch.is_transmissive,
                         is_double_sided,
                         is_skybox: batch.is_skybox,
                         is_grid: batch.is_grid,
@@ -566,6 +574,9 @@ pub fn execute_render_pipeline(
 
         if !all_instances.is_empty() {
             renderer.ensure_instance_capacity(all_instances.len());
+            if flat_batches.iter().any(|b| b.is_transmissive && b.end_instance > b.start_instance) {
+                renderer.ensure_behind_surface();
+            }
             renderer.queue.write_buffer(
                 &renderer.scene.instance_buffer,
                 0,
@@ -883,9 +894,16 @@ fn record_game_view(
             aspect,
             cam_fov,
             shadow_caster: gizmo::systems::render::ShadowCaster::SunOrFirstLight,
+            // The game view is the game's picture: the same environment the game path gives
+            // `SceneSetupInputs`. It dropped all of this until 2026-11-07.
             environment: gizmo::renderer::EnvironmentFrame {
+                preset: renderer.environment_preset,
+                preset_2: renderer.environment_preset_2,
+                blend_t: renderer.environment_blend_t,
                 shading_mode: ed_shading_mode,
                 clear_color,
+                fog: renderer.fog,
+                sky: renderer.sky,
                 ..Default::default()
             },
             point_shadows_enabled: false,

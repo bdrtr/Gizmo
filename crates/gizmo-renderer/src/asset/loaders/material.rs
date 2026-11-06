@@ -307,6 +307,13 @@ pub(super) fn build_gltf_materials(
                 || alpha < 0.99
                 || is_glass;
             mat.is_double_sided = material.double_sided();
+            // `KHR_materials_transmission` and `KHR_materials_volume`, without their textures.
+            if let Some(t) = material.transmission() {
+                mat = mat.with_transmission(t.transmission_factor());
+            }
+            if let Some(v) = material.volume() {
+                mat = mat.with_thickness(v.thickness_factor());
+            }
 
             mat
         })

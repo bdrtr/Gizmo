@@ -545,6 +545,19 @@ impl InstanceRaw {
         self
     }
 
+    /// Carry [`Material::transmission`](crate::components::Material::transmission) and
+    /// [`Material::thickness`](crate::components::Material::thickness) in `ambient.xy`, for a
+    /// material that [draws as glass](crate::components::Material::is_transmissive). Only baked-lit
+    /// reads `ambient`, and a baked-lit material never draws as glass, so the slot is free there.
+    #[must_use]
+    pub fn with_transmission_of(mut self, material: &crate::components::Material) -> Self {
+        if material.is_transmissive() {
+            self.ambient[0] = material.transmission;
+            self.ambient[1] = material.thickness;
+        }
+        self
+    }
+
     /// Carry [`Material::reflectance`](crate::components::Material::reflectance) in the magnitude
     /// of `emissive.w`, keeping the sign [`with_shadow_receiving`](Self::with_shadow_receiving)
     /// put there.

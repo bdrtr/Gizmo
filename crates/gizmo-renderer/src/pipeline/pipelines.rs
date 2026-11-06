@@ -68,6 +68,8 @@ pub(super) struct CorePipelines {
     /// The lit pipelines with anisotropy, clear coat and subsurface, on the path where the ones above
     /// leave them out. See [`LitLobes`](super::LitLobes).
     pub(super) lobes: Option<super::LitLobes>,
+    /// The lit shader with `TRANSMISSION` on: single-sided, then double-sided.
+    pub(super) transmissive: [wgpu::RenderPipeline; 2],
     /// The unlit pipeline under each of them — and, unlike `unlit`, not writing depth: a blended
     /// draw is sorted, and a glow writing depth would hide the glow behind it.
     pub(super) blend_unlit: [wgpu::RenderPipeline; 3],
@@ -324,8 +326,35 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     #[cfg(not(gizmo_forward_only))]
     let lobes = None;
 
+    // Glass: the lit shader reading the frame behind it. The lobes are on, as they are on every
+    // desktop lit pipeline: a phone that draws glass has already chosen to pay for a copy of the
+    // frame. No blend, since what shows through is part of what it computes.
+    #[cfg(not(gizmo_forward_only))]
+    let glass_shader = super::shaders::load_shader_composed_with(
+        device,
+        "demo/assets/shaders/shader.wgsl",
+        include_str!("../shaders/shader.wgsl"),
+        "Glass Shader",
+        &[("TRANSMISSION", naga_oil::compose::ShaderDefValue::Bool(true))],
+    );
+    #[cfg(gizmo_forward_only)]
+    let glass_shader = super::shaders::load_shader_composed_web_with(
+        device,
+        include_str!("../shaders/shader.wgsl"),
+        "Glass Shader",
+        &[
+            ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
+            ("TRANSMISSION", naga_oil::compose::ShaderDefValue::Bool(true)),
+        ],
+    );
+    let transmissive = [
+        create_main(lit_layout, &glass_shader, "Glass Pipeline", true, Some(wgpu::Face::Back), None, wgpu::PolygonMode::Fill),
+        create_main(lit_layout, &glass_shader, "Glass TwoSided Pipeline", true, None, None, wgpu::PolygonMode::Fill),
+    ];
+
     CorePipelines {
         lobes,
+        transmissive,
         render: create_main(
             lit_layout,
             &shader,

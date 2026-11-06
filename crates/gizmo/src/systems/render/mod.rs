@@ -9633,6 +9633,170 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         });
     }
 
+    /// A row of what glass is measured against: a red cube at the centre, on a black sky, and a pane
+    /// between it and the camera. Returns the frame; `pane` makes the pane's material from a neutral one.
+    async fn frame_through_pane(renderer: &mut Renderer, pane: fn(Material) -> Material, tilt: f32) -> Vec<u8> {
+        let mut world = pane_world(renderer, pane, tilt);
+        render_world(renderer, &mut world).await
+    }
+
+    fn pane_world(renderer: &mut Renderer, pane: fn(Material) -> Material, tilt: f32) -> World {
+        renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let mut world = World::new();
+        let cube = world.spawn();
+        world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, -3.0)));
+        world.add_component(cube, GlobalTransform::default());
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(cube, Material::new(tex.clone()).with_unlit(Vec4::new(3.0, 0.0, 0.0, 1.0)));
+        world.add_component(cube, MeshRenderer::new());
+        let plane = world.spawn();
+        let up = std::f32::consts::FRAC_PI_2;
+        world.add_component(
+            plane,
+            Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_y(tilt) * gizmo_math::Quat::from_rotation_x(up)),
+        );
+        world.add_component(plane, GlobalTransform::default());
+        world.add_component(plane, AssetManager::create_plane(&renderer.device, 6.0));
+        world.add_component(plane, pane(Material::new(tex).with_pbr(Vec4::ONE, 0.0, 0.0).with_double_sided(true)));
+        world.add_component(plane, MeshRenderer::new());
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 4.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            primary: true,
+            ..Default::default()
+        });
+        world
+    }
+
+    /// Red minus green, averaged over a square at the frame's centre, and where the red's middle is.
+    fn red_through_pane(frame: &[u8]) -> (f32, f32) {
+        const W: usize = 128;
+        let (mut sum, mut at, mut weight) = (0.0f32, 0.0f32, 0.0f32);
+        for y in 0..W {
+            for x in 0..W {
+                let p = &frame[(y * W + x) * 4..][..3];
+                let red = (f32::from(p[0]) - f32::from(p[1])).max(0.0);
+                if (54..74).contains(&x) && (54..74).contains(&y) {
+                    sum += red / 400.0;
+                }
+                if red > 40.0 {
+                    at += red * x as f32;
+                    weight += red;
+                }
+            }
+        }
+        (sum, if weight > 0.0 { at / weight } else { -1.0 })
+    }
+
+    /// **Glass shows what is behind it**, tinted by its colour, displaced by its thickness and its
+    /// index of refraction, blurred by its roughness. A white pane with no transmission hides the
+    /// cube; with full transmission the cube shows, each of the rest then moves what shows.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn glass_shows_tints_bends_and_blurs_what_is_behind_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let solid = frame_through_pane(&mut renderer, |m| m, 0.0).await;
+            assert!(renderer.behind.is_none(), "no glass drawn, no copy of the frame made");
+            let clear = frame_through_pane(&mut renderer, |m| m.with_transmission(1.0), 0.0).await;
+            assert!(renderer.behind.is_some());
+            let half = frame_through_pane(&mut renderer, |m| m.with_transmission(0.5), 0.0).await;
+            let tinted = frame_through_pane(&mut renderer, |m| m.with_transmission(1.0).with_pbr(Vec4::new(0.0, 1.0, 1.0, 1.0), 0.0, 0.0), 0.0).await;
+            let metal = frame_through_pane(&mut renderer, |m| m.with_transmission(1.0).with_pbr(Vec4::ONE, 0.0, 1.0), 0.0).await;
+            let (solid_red, clear_red) = (red_through_pane(&solid).0, red_through_pane(&clear).0);
+            let (half_red, tinted_red, metal_red) = (red_through_pane(&half).0, red_through_pane(&tinted).0, red_through_pane(&metal).0);
+            eprintln!("red: solid {solid_red:.1}, clear {clear_red:.1}, half {half_red:.1}, tinted {tinted_red:.1}, metal {metal_red:.1}");
+            assert!(solid_red < 1.0, "an opaque pane hides the cube: {solid_red}");
+            assert!(clear_red > 100.0, "clear glass shows it: {clear_red}");
+            assert!(half_red > solid_red + 20.0 && half_red < clear_red - 20.0, "half: {half_red}");
+            assert!(tinted_red < 1.0, "a cyan pane stops red: {tinted_red}");
+            assert!(metal_red < 1.0, "a metal lets nothing through: {metal_red}");
+            // Half a metal lets half through, on top of what its Fresnel already takes.
+            let half_metal = frame_through_pane(&mut renderer, |m| m.with_transmission(1.0).with_pbr(Vec4::ONE, 0.0, 0.5), 0.0).await;
+            let half_metal_red = red_through_pane(&half_metal).0;
+            eprintln!("half a metal {half_metal_red:.1}");
+            assert!(half_metal_red < half_red - 5.0, "half a metal {half_metal_red}, half the transmission {half_red}");
+
+            // Tilted, a thick pane moves the picture; a thin one, or an index of 1, does not.
+            let tilt = 0.6;
+            let thin = red_through_pane(&frame_through_pane(&mut renderer, |m| m.with_transmission(1.0), tilt).await).1;
+            let thick = red_through_pane(&frame_through_pane(&mut renderer, |m| m.with_transmission(1.0).with_thickness(1.5).with_ior(1.5), tilt).await).1;
+            let air = red_through_pane(&frame_through_pane(&mut renderer, |m| m.with_transmission(1.0).with_thickness(1.5).with_ior(1.001), tilt).await).1;
+            eprintln!("the cube's centre at x: thin {thin:.1}, thick {thick:.1}, index 1 {air:.1}");
+            assert!((thin - 64.0).abs() < 3.0, "a thin pane leaves it where it is: {thin}");
+            assert!((thick - thin).abs() > 3.0, "a thick pane bends it: {thin} and {thick}");
+            assert!((air - thin).abs() < 2.0, "air bends nothing: {thin} and {air}");
+
+            // Rough: the cube's edge smears, so pixels between red and black are many.
+            let smeared = |frame: &[u8]| {
+                frame.as_chunks::<4>().0.iter().filter(|p| (30..190).contains(&(i32::from(p[0]) - i32::from(p[1])))).count()
+            };
+            let polished = smeared(&clear);
+            let rough = smeared(&frame_through_pane(&mut renderer, |m| m.with_transmission(1.0).with_pbr(Vec4::ONE, 0.5, 0.0), 0.0).await);
+            eprintln!("half-red pixels: polished {polished}, rough {rough}");
+            assert!(rough > polished * 3 + 50, "a rough pane blurs: polished {polished}, rough {rough}");
+        });
+    }
+
+    /// **What blends is drawn after the glass, over it**, and the copy follows the size of the frame:
+    /// a resize drops it, and the next frame with glass makes one of the new size instead of copying
+    /// between textures that no longer match.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn glass_keeps_blended_draws_over_it_and_survives_a_resize() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let mut world = pane_world(&mut renderer, |m| m.with_transmission(1.0), 0.0);
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let front = world.spawn();
+            let up = std::f32::consts::FRAC_PI_2;
+            world.add_component(front, Transform::new(Vec3::new(0.0, 0.0, 1.0)).with_rotation(gizmo_math::Quat::from_rotation_x(up)));
+            world.add_component(front, GlobalTransform::default());
+            world.add_component(front, AssetManager::create_plane(&renderer.device, 6.0));
+            world.add_component(front, Material::new(tex).with_unlit(Vec4::new(0.0, 0.0, 4.0, 0.5)).with_transparent(true));
+            world.add_component(front, MeshRenderer::new());
+            let frame = render_world(&mut renderer, &mut world).await;
+            let centre = &frame[(64 * 128 + 64) * 4..][..3];
+            assert!(centre[2] > 60, "the blended pane in front is drawn over the glass: {centre:?}");
+            assert!(centre[0] > 60, "and the cube still shows through both: {centre:?}");
+
+            assert!(renderer.behind.is_some());
+            renderer.resize(winit::dpi::PhysicalSize::new(96, 64));
+            assert!(renderer.behind.is_none(), "the copy of the old size is gone");
+            let mut world = pane_world(&mut renderer, |m| m.with_transmission(1.0), 0.0);
+            render_world(&mut renderer, &mut world).await;
+            assert!(renderer.behind.is_some(), "and the next frame with glass makes one");
+            renderer.resize(winit::dpi::PhysicalSize::new(128, 128));
+        });
+    }
+
     /// **A large image drawn small does not alias.** A one-pixel checker shrunk eightfold is an even grey
     /// with mipmaps, and with nearest sampling, which has none, it stays hard black and white. Pixels in the
     /// sprite's middle, so an edge cannot make the numbers.

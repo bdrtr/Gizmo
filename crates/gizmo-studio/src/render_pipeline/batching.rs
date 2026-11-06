@@ -12,29 +12,32 @@ use super::*;
 // routing (e.g. `passes::record_studio_shadow_passes` skips unlit/skybox/grid), so a real
 // PBR object batched under an unlit-first batch would silently stop casting
 // shadows. Keying on the routing flags too keeps them apart.
-pub(super) type BatchKey = (
-    *const wgpu::Buffer,
-    *const wgpu::BindGroup,
-    *const wgpu::BindGroup,
-    bool, // is_skybox
-    bool, // is_grid
-    bool, // is_unlit
-    bool, // is_backdrop
-    // Water. In the key for a sharper version of the reason above: water and unlit both route
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) struct BatchKey {
+    pub(super) vbuf: *const wgpu::Buffer,
+    pub(super) bind_group: *const wgpu::BindGroup,
+    pub(super) skeleton: *const wgpu::BindGroup,
+    pub(super) is_skybox: bool,
+    pub(super) is_grid: bool,
+    pub(super) is_unlit: bool,
+    pub(super) is_backdrop: bool,
+    // Water. In the key for a sharper version of the reason above: water and unlit both draw
     // forward, and an untextured plane of each shares the cached white-texture bind group, so
     // without this the two batches have an identical key and one draws with the other's pipeline.
-    bool, // is_water
+    pub(super) is_water: bool,
+    // Glass: its own pipeline and its own pass.
+    pub(super) is_transmissive: bool,
     // Editor furniture (`EditorOnly`) is keyed apart for the same reason as the routing flags,
     // and one more: the game view skips these batches, so a light icon sharing a batch with a
     // scene mesh would drag the scene mesh out of the game picture with it.
-    bool, // is_editor_only
-    // Per-object shadow casting: two objects with the same mesh and material can now answer
+    pub(super) is_editor_only: bool,
+    // Per-object shadow casting: two objects with the same mesh and material can now ask
     // differently, so they cannot share a batch.
-    bool, // casts_shadows
-    bool, // visible_in_camera
+    pub(super) casts_shadows: bool,
+    pub(super) visible_in_camera: bool,
     // The blend is baked into the pipeline (`Material::blend_mode`); `Alpha` for opaque draws.
-    gizmo::renderer::components::BlendMode,
-);
+    pub(super) blend_mode: gizmo::renderer::components::BlendMode,
+}
 
 pub(super) struct BatchData {
     pub(super) vbuf: std::sync::Arc<wgpu::Buffer>,
@@ -59,6 +62,8 @@ pub(super) struct BatchData {
     pub(super) is_skybox: bool,
     pub(super) is_grid: bool,
     pub(super) is_unlit: bool,
+    /// [`Material::is_transmissive`](gizmo::renderer::components::Material::is_transmissive).
+    pub(super) is_transmissive: bool,
     /// A painted backdrop (`gizmo_renderer::backdrop`): drawn FIRST, from the mesh's own
     /// texture and vertex colour, locked to the camera and writing no depth.
     pub(super) is_backdrop: bool,
@@ -100,6 +105,9 @@ pub(super) struct FlatBatchData {
     /// `start..shadow_end_instance`). Equals `end_instance` when there are none.
     pub(super) shadow_end_instance: u32,
     pub(super) is_transparent: bool,
+    /// Glass: in the transparent list for the sort, drawn after the copy of the frame by its own
+    /// pipeline. See [`BatchData::is_transmissive`].
+    pub(super) is_transmissive: bool,
     pub(super) is_double_sided: bool,
     pub(super) is_skybox: bool,
     pub(super) is_grid: bool,

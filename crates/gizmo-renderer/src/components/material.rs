@@ -211,6 +211,22 @@ pub struct Material {
     /// A metal's F0 is its albedo, so this fades out with [`metallic`](Self::metallic). It is one
     /// number: a tinted highlight on a non-metal has no G-buffer channel to travel in.
     pub reflectance: f32,
+    /// How much light goes through the surface instead of scattering off it: glass, a thin
+    /// plastic, ice. 0 = none. Set it with [`with_transmission`](Self::with_transmission), which
+    /// also routes the material out of the G-buffer.
+    ///
+    /// The light that passes is tinted by [`albedo`](Self::albedo), blurred by
+    /// [`roughness`](Self::roughness) and bent by [`reflectance`](Self::reflectance) over
+    /// [`thickness`](Self::thickness); the highlight and the reflection stay. Alpha plays no part
+    /// and the surface writes depth. A metal lets nothing through. Only a
+    /// [`MaterialType::Pbr`] material reads this.
+    ///
+    /// It looks at the frame, so only what is on screen shows through, and what is itself
+    /// transparent does not: see [`crate::transmission`].
+    pub transmission: f32,
+    /// How far light travels inside the surface, in metres, which is how far the picture behind
+    /// it is displaced. 0 = a thin pane, which bends nothing.
+    pub thickness: f32,
 }
 
 /// The F0 of a non-metal that says nothing: index of refraction 1.5.
@@ -275,6 +291,12 @@ pub struct MaterialDesc {
     /// See [`Material::reflectance`]. A scene that does not say gets the default.
     #[serde(default = "default_reflectance")]
     pub reflectance: f32,
+    /// See [`Material::transmission`].
+    #[serde(default)]
+    pub transmission: f32,
+    /// See [`Material::thickness`].
+    #[serde(default)]
+    pub thickness: f32,
 }
 
 fn default_reflectance() -> f32 {
@@ -305,6 +327,8 @@ impl From<&Material> for MaterialDesc {
             alpha_cutoff,
             blend_mode,
             reflectance,
+            transmission,
+            thickness,
         } = m;
         Self {
             albedo: *albedo,
@@ -322,6 +346,8 @@ impl From<&Material> for MaterialDesc {
             alpha_cutoff: *alpha_cutoff,
             blend_mode: *blend_mode,
             reflectance: *reflectance,
+            transmission: *transmission,
+            thickness: *thickness,
         }
     }
 }
@@ -347,6 +373,8 @@ impl MaterialDesc {
             alpha_cutoff: self.alpha_cutoff,
             blend_mode: self.blend_mode,
             reflectance: self.reflectance,
+            transmission: self.transmission,
+            thickness: self.thickness,
         }
     }
 }
@@ -373,6 +401,8 @@ impl Default for MaterialDesc {
             alpha_cutoff: 0.0,
             blend_mode: BlendMode::Alpha,
             reflectance: DIELECTRIC_REFLECTANCE,
+            transmission: 0.0,
+            thickness: 0.0,
         }
     }
 }
@@ -426,6 +456,28 @@ macro_rules! material_builders {
     /// 1.5 is the default 0.04, 1.33 water and 2.42 diamond. 1.0 is a surface that mirrors nothing.
     pub fn with_ior(self, ior: f32) -> Self {
         self.with_reflectance(reflectance_from_ior(ior))
+    }
+
+    /// Sets [`Material::transmission`], clamped into `[0, 1]`. Above zero the material is drawn
+    /// after the opaque world and out of the G-buffer, as a transparent one is.
+    pub fn with_transmission(mut self, transmission: f32) -> Self {
+        self.transmission = transmission.clamp(0.0, 1.0);
+        if self.transmission > 0.0 {
+            self.is_transparent = true;
+        }
+        self
+    }
+
+    /// Sets [`Material::thickness`], in metres, floored at zero.
+    pub fn with_thickness(mut self, thickness: f32) -> Self {
+        self.thickness = thickness.max(0.0);
+        self
+    }
+
+    /// Whether the draw loops send this to the glass pass.
+    #[must_use]
+    pub fn is_transmissive(&self) -> bool {
+        self.transmission > 0.0 && self.is_transparent && self.material_type == MaterialType::Pbr
     }
 
     /// Sets transparency by hand.

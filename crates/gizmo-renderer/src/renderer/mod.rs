@@ -181,6 +181,10 @@ pub struct Renderer {
     /// Screen-space reflections. Requires [`deferred`](Renderer::deferred).
     pub ssr: Option<crate::ssr::SsrState>,
 
+    /// The frame under the glass. `None` until a frame draws glass, and again after a resize: see
+    /// [`crate::transmission`].
+    pub behind: Option<crate::transmission::BehindSurface>,
+
     // === SSGI — Screen-Space Global Illumination ===
     /// Screen-space global illumination. Requires [`deferred`](Renderer::deferred).
     pub ssgi: Option<crate::ssgi::SsgiState>,
@@ -668,6 +672,17 @@ impl Renderer {
         }
     }
 
+    /// Allocates the frame under the glass if this size has none yet. The draw loops call it for a
+    /// frame that has glass in view.
+    pub fn ensure_behind_surface(&mut self) {
+        if self.behind.is_none() {
+            let behind =
+                crate::transmission::BehindSurface::new(&self.device, self.size.width, self.size.height);
+            self.scene.set_behind_view(&self.device, Some(behind.view()));
+            self.behind = Some(behind);
+        }
+    }
+
     /// Resizes the swapchain and every size-dependent target: depth, G-buffer, decals, fluid.
     ///
     /// The requested size is first put through the web render cap, so a browser canvas growing to
@@ -692,6 +707,10 @@ impl Renderer {
 
             self.depth_texture_view =
                 Self::create_depth_texture(&self.device, new_size.width, new_size.height);
+
+            if self.behind.take().is_some() {
+                self.scene.set_behind_view(&self.device, None);
+            }
 
             if let Some(ref mut def) = self.deferred {
                 def.resize(&self.device, new_size.width, new_size.height);

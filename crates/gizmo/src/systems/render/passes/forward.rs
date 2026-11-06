@@ -42,180 +42,20 @@ pub fn record_forward_and_fluid(
         } else {
             wgpu::LoadOp::Clear(1.0)
         };
-        let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Default Engine Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &renderer.post.hdr_texture_view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: hdr_load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &renderer.depth_texture_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: depth_load,
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
-        // Web şemasında shadow grubu pipeline layout'unda yok (4-grup limiti).
-        #[cfg(not(gizmo_forward_only))]
-        render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-        render_pass.set_bind_group(BG_INSTANCE, &renderer.scene.instance_bind_group, &[]);
-        // Group 5 of the lit pipelines: the irradiance volume's group, for reflection probes.
-        // Bound once; it stays bound across the pipeline switches below.
-        #[cfg(not(gizmo_forward_only))]
-        if let Some(def) = renderer.deferred.as_ref() {
-            render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
-        }
-
         let show_wireframes = world.get_resource::<WireframeConfig>().map(|c| c.global).unwrap_or(false);
 
-        for item in draw_items {
-            let mut draw_solid = false;
-            // Neither the sky nor a backdrop is world geometry a wireframe overlay is about,
-            // and the wireframe pipeline is `shader.wgsl`: it neither camera-locks nor pins
-            // depth, so a backdrop's wireframe would be drawn somewhere the backdrop is not.
-            let draw_wire = show_wireframes && !item.is_skybox && !item.is_backdrop;
-
-            if item.is_skybox || item.unlit || renderer.deferred.is_none() || item.is_transparent {
-                draw_solid = true;
-            }
-
-            // Main pass: yalnız kamera-görünür instance'lar. camera_count==0 ise
-            // (tüm batch shadow-only / kamera-dışı) aralık BOŞ olur — 0-instance
-            // draw'ı hem boşa komut, hem tarayıcıda "instance count of 0 is
-            // unusual" uyarısı üretir → tamamen atla.
-            let inst_start = item.first_instance;
-            let inst_end = (item.first_instance + item.camera_count)
-                .min(uploaded_instances)
-                .max(item.first_instance);
-            if inst_end <= inst_start {
-                continue;
-            }
-
-            let skel_bg = item
-                .skeleton_bind_group
-                .as_ref()
-                .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-
-            if draw_solid {
-                // A registered material is checked BEFORE every engine branch below, because it is
-                // the one case where the engine has no opinion: the game named a pipeline and the
-                // chain of `else if`s would otherwise route it by flags it never set. An id with no
-                // entry in the registry draws nothing at all — see `Renderer::custom_materials` for
-                // why that is deliberate.
-                //
-                // Not `continue`: the wireframe overlay below is a debugging view and a custom
-                // material has no business being exempt from it.
-                let custom_pipeline = item
-                    .custom
-                    .map(|id| renderer.custom_materials.get(id).map(|c| &c.pipeline));
-
-                // A mirror with this frame's capture shows it; without one (off screen last frame,
-                // seen from behind, split screen) it falls through and draws as its plain colour.
-                let mirror = item.mirror.and_then(|owner| renderer.planar.captured(owner.id()));
-
-                let engine_pipeline = if mirror.is_some() {
-                    if item.is_water {
-                        &renderer.scene.water_mirror_pipeline
-                    } else {
-                        &renderer.scene.mirror_pipeline
-                    }
-                } else if item.is_backdrop {
-                    // FIRST, ahead of the `unlit` and `is_transparent` branches below: a
-                    // backdrop sets `unlit` (that is what keeps it out of the deferred and
-                    // shadow passes) and may well be transparent, and either of those
-                    // pipelines would draw it as ordinary world geometry — writing depth, not
-                    // camera-locked, in front of the world. The draw items reach this loop
-                    // already sorted with `DrawLayer::Backdrop` first.
-                    &renderer.scene.backdrop_pipeline
-                } else if item.is_skybox {
-                    &renderer.scene.sky_pipeline
-                } else if item.is_water {
-                    // Ahead of the `unlit` and `is_transparent` branches below, for the same
-                    // reason the backdrop branch is first: water sets `unlit` — that is what keeps
-                    // it out of the z-prepass, the G-buffer and both shadow passes — and a water
-                    // material with albedo alpha < 1 declares itself transparent too, so either of
-                    // those branches would draw the ocean with a vertex shader that does not
-                    // displace it. `water.wgsl` is the only pipeline in this chain whose *geometry*
-                    // differs from everyone else's, which is why it cannot fall through.
-                    //
-                    // Unlike the transparent pipeline, this one culls back faces, so the
-                    // double-sided flag is load-bearing here rather than redundant: a swimmer
-                    // looking up at the surface is the ordinary case.
-                    if item.is_double_sided {
-                        &renderer.scene.water_double_sided_pipeline
-                    } else {
-                        &renderer.scene.water_pipeline
-                    }
-                } else if item.is_grid {
-                    // Ahead of `unlit`, which a grid also sets (`skips_deferred`): the grid
-                    // has its own shader, as in the editor.
-                    &renderer.scene.grid_pipeline
-                } else if item.baked_lit {
-                    // A baked-lit material that declared itself transparent gets the blended
-                    // variant. Every other stage already routes it as transparent (sorted
-                    // back-to-front here, skipped by the z-prepass and the shadow pass); the
-                    // opaque pipeline was the one place that ignored the declaration, and it
-                    // discarded the fragment alpha with it.
-                    if item.is_transparent {
-                        &renderer.scene.baked_lit_transparent_pipeline
-                    } else {
-                        &renderer.scene.baked_lit_pipeline
-                    }
-                } else if item.unlit {
-                    // A transparent unlit draw blending other than by alpha — a glow, a spark —
-                    // takes that mode's variant, which also does not write depth.
-                    match item.is_transparent.then(|| renderer.scene.blend_variant(true, item.blend_mode)).flatten() {
-                        Some(p) => p,
-                        None => &renderer.scene.unlit_pipeline,
-                    }
-                } else {
-                    // There is no two-sided *variant* of the blended pipeline because the blended
-                    // pipeline already is one: `transparent` is built with `cull_mode: None`
-                    // (`pipelines.rs`, and `baked_lit_state(true)` says the same for the baked-lit
-                    // half). So transparent geometry is never back-face culled, and
-                    // `Material::double_sided` is a no-op here — redundant rather than ignored.
-                    //
-                    // This comment previously claimed the opposite ("single-sided in both paths").
-                    // Corrected 2026-08-23 against a measurement in `demo/src/bin/blend_modes.rs`:
-                    // a back-facing transparent plane renders, and toggling `with_double_sided`
-                    // produces a bit-identical frame.
-                    renderer.scene.lit_pipeline(item.lobes, item.is_transparent, item.is_double_sided, item.blend_mode)
-                };
-
-                // `Some(None)` is a registered id with nothing behind it: draw nothing rather than
-                // fall through to `engine_pipeline`, which would shade it as ordinary PBR.
-                let pipeline = match custom_pipeline {
-                    Some(Some(p)) => Some(p),
-                    Some(None) => None,
-                    None => Some(engine_pipeline),
-                };
-
-                if let Some(pipeline) = pipeline {
-                    render_pass.set_pipeline(pipeline);
-                    render_pass.set_bind_group(1, mirror.unwrap_or(&*item.bind_group), &[]);
-                    render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
-                    item.record_draw(&mut render_pass, inst_start..inst_end);
-                }
-            }
-
-            if draw_wire {
-                render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
-                render_pass.set_bind_group(1, &*item.bind_group, &[]);
-                render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
-                item.record_draw(&mut render_pass, inst_start..inst_end);
-            }
-        }
+        // Glass reads the frame behind it, and a target cannot be read while it is drawn to: with
+        // glass in view the frame is drawn in two passes and copied between them. `draw_items` is
+        // sorted by layer, so everything before the first glass is what it can see.
+        let has_glass = renderer.behind.is_some()
+            && draw_items.iter().any(|item| item.is_transmissive && item.camera_count > 0);
+        let world_end = if has_glass {
+            draw_items.partition_point(|item| item.layer < super::super::batching::DrawLayer::Transmissive)
+        } else {
+            draw_items.len()
+        };
+        let mut render_pass = begin_forward_pass(encoder, renderer, hdr_load, depth_load);
+        draw_forward_items(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances, show_wireframes);
 
         // Draw GPU Physics Spheres!
         if let Some(physics) = &renderer.gpu_physics {
@@ -229,6 +69,12 @@ pub fn record_forward_and_fluid(
         // reconstructs its surface in screen space. Deleted with the method.
 
         // (GPU Particles artık AYRI bir pass'te — aşağıda — soft-particle derinlik örneklemesi için.)
+        drop(render_pass);
+        if let Some(behind) = renderer.behind.as_ref().filter(|_| has_glass) {
+            behind.capture(encoder, &renderer.post.hdr_texture);
+            let mut render_pass = begin_forward_pass(encoder, renderer, wgpu::LoadOp::Load, wgpu::LoadOp::Load);
+            draw_forward_items(&mut render_pass, renderer, &draw_items[world_end..], uploaded_instances, show_wireframes);
+        }
     }
 
     // ── GPU Particles (SOFT PARTICLES) ──────────────────────────────────────────
@@ -291,5 +137,200 @@ pub fn record_forward_and_fluid(
             dt,
             inv_view_proj,
         );
+    }
+}
+
+/// The main pass over the HDR target and the depth buffer, with what every draw in it shares bound.
+fn begin_forward_pass<'e>(
+    encoder: &'e mut wgpu::CommandEncoder,
+    renderer: &Renderer,
+    hdr_load: wgpu::LoadOp<wgpu::Color>,
+    depth_load: wgpu::LoadOp<f32>,
+) -> wgpu::RenderPass<'e> {
+    let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Default Engine Render Pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &renderer.post.hdr_texture_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations {
+                load: hdr_load,
+                store: wgpu::StoreOp::Store,
+            },
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &renderer.depth_texture_view,
+            depth_ops: Some(wgpu::Operations {
+                load: depth_load,
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
+    // Web şemasında shadow grubu pipeline layout'unda yok (4-grup limiti).
+    #[cfg(not(gizmo_forward_only))]
+    render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+    render_pass.set_bind_group(BG_INSTANCE, &renderer.scene.instance_bind_group, &[]);
+    // Group 5 of the lit pipelines: the irradiance volume's group, for reflection probes.
+    // Bound once; it stays bound across the pipeline switches below.
+    #[cfg(not(gizmo_forward_only))]
+    if let Some(def) = renderer.deferred.as_ref() {
+        render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+    }
+    render_pass
+}
+
+/// Draws these items, in order, with the forward pipeline each one asks for.
+fn draw_forward_items(
+    render_pass: &mut wgpu::RenderPass<'_>,
+    renderer: &Renderer,
+    draw_items: &[DrawItem],
+    uploaded_instances: u32,
+    show_wireframes: bool,
+) {
+    for item in draw_items {
+        let mut draw_solid = false;
+        // Neither the sky nor a backdrop is world geometry a wireframe overlay is about,
+        // and the wireframe pipeline is `shader.wgsl`: it neither camera-locks nor pins
+        // depth, so a backdrop's wireframe would be drawn somewhere the backdrop is not.
+        let draw_wire = show_wireframes && !item.is_skybox && !item.is_backdrop;
+
+        if item.is_skybox || item.unlit || renderer.deferred.is_none() || item.is_transparent {
+            draw_solid = true;
+        }
+
+        // Main pass: yalnız kamera-görünür instance'lar. camera_count==0 ise
+        // (tüm batch shadow-only / kamera-dışı) aralık BOŞ olur — 0-instance
+        // draw'ı hem boşa komut, hem tarayıcıda "instance count of 0 is
+        // unusual" uyarısı üretir → tamamen atla.
+        let inst_start = item.first_instance;
+        let inst_end = (item.first_instance + item.camera_count)
+            .min(uploaded_instances)
+            .max(item.first_instance);
+        if inst_end <= inst_start {
+            continue;
+        }
+
+        let skel_bg = item
+            .skeleton_bind_group
+            .as_ref()
+            .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
+
+        if draw_solid {
+            // A registered material is checked BEFORE every engine branch below, because it is
+            // the one case where the engine has no opinion: the game named a pipeline and the
+            // chain of `else if`s would otherwise route it by flags it never set. An id with no
+            // entry in the registry draws nothing at all — see `Renderer::custom_materials` for
+            // why that is deliberate.
+            //
+            // Not `continue`: the wireframe overlay below is a debugging view and a custom
+            // material has no business being exempt from it.
+            let custom_pipeline = item
+                .custom
+                .map(|id| renderer.custom_materials.get(id).map(|c| &c.pipeline));
+
+            // A mirror with this frame's capture shows it; without one (off screen last frame,
+            // seen from behind, split screen) it falls through and draws as its plain colour.
+            let mirror = item.mirror.and_then(|owner| renderer.planar.captured(owner.id()));
+
+            let engine_pipeline = if mirror.is_some() {
+                if item.is_water {
+                    &renderer.scene.water_mirror_pipeline
+                } else {
+                    &renderer.scene.mirror_pipeline
+                }
+            } else if item.is_backdrop {
+                // FIRST, ahead of the `unlit` and `is_transparent` branches below: a
+                // backdrop sets `unlit` (that is what keeps it out of the deferred and
+                // shadow passes) and may well be transparent, and either of those
+                // pipelines would draw it as ordinary world geometry — writing depth, not
+                // camera-locked, in front of the world. The draw items reach this loop
+                // already sorted with `DrawLayer::Backdrop` first.
+                &renderer.scene.backdrop_pipeline
+            } else if item.is_skybox {
+                &renderer.scene.sky_pipeline
+            } else if item.is_water {
+                // Ahead of the `unlit` and `is_transparent` branches below, for the same
+                // reason the backdrop branch is first: water sets `unlit` — that is what keeps
+                // it out of the z-prepass, the G-buffer and both shadow passes — and a water
+                // material with albedo alpha < 1 declares itself transparent too, so either of
+                // those branches would draw the ocean with a vertex shader that does not
+                // displace it. `water.wgsl` is the only pipeline in this chain whose *geometry*
+                // differs from everyone else's, which is why it cannot fall through.
+                //
+                // Unlike the transparent pipeline, this one culls back faces, so the
+                // double-sided flag is load-bearing here rather than redundant: a swimmer
+                // looking up at the surface is the ordinary case.
+                if item.is_double_sided {
+                    &renderer.scene.water_double_sided_pipeline
+                } else {
+                    &renderer.scene.water_pipeline
+                }
+            } else if item.is_grid {
+                // Ahead of `unlit`, which a grid also sets (`skips_deferred`): the grid
+                // has its own shader, as in the editor.
+                &renderer.scene.grid_pipeline
+            } else if item.baked_lit {
+                // A baked-lit material that declared itself transparent gets the blended
+                // variant. Every other stage already routes it as transparent (sorted
+                // back-to-front here, skipped by the z-prepass and the shadow pass); the
+                // opaque pipeline was the one place that ignored the declaration, and it
+                // discarded the fragment alpha with it.
+                if item.is_transparent {
+                    &renderer.scene.baked_lit_transparent_pipeline
+                } else {
+                    &renderer.scene.baked_lit_pipeline
+                }
+            } else if item.unlit {
+                // A transparent unlit draw blending other than by alpha — a glow, a spark —
+                // takes that mode's variant, which also does not write depth.
+                match item.is_transparent.then(|| renderer.scene.blend_variant(true, item.blend_mode)).flatten() {
+                    Some(p) => p,
+                    None => &renderer.scene.unlit_pipeline,
+                }
+            } else {
+                // There is no two-sided *variant* of the blended pipeline because the blended
+                // pipeline already is one: `transparent` is built with `cull_mode: None`
+                // (`pipelines.rs`, and `baked_lit_state(true)` says the same for the baked-lit
+                // half). So transparent geometry is never back-face culled, and
+                // `Material::double_sided` is a no-op here — redundant rather than ignored.
+                //
+                // This comment previously claimed the opposite ("single-sided in both paths").
+                // Corrected 2026-08-23 against a measurement in `demo/src/bin/blend_modes.rs`:
+                // a back-facing transparent plane renders, and toggling `with_double_sided`
+                // produces a bit-identical frame.
+                if item.is_transmissive {
+                    renderer.scene.transmissive_pipeline(item.is_double_sided)
+                } else {
+                    renderer.scene.lit_pipeline(item.lobes, item.is_transparent, item.is_double_sided, item.blend_mode)
+                }
+            };
+
+            // `Some(None)` is a registered id with nothing behind it: draw nothing rather than
+            // fall through to `engine_pipeline`, which would shade it as ordinary PBR.
+            let pipeline = match custom_pipeline {
+                Some(Some(p)) => Some(p),
+                Some(None) => None,
+                None => Some(engine_pipeline),
+            };
+
+            if let Some(pipeline) = pipeline {
+                render_pass.set_pipeline(pipeline);
+                render_pass.set_bind_group(1, mirror.unwrap_or(&*item.bind_group), &[]);
+                render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
+                item.record_draw(render_pass, inst_start..inst_end);
+            }
+        }
+
+        if draw_wire {
+            render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
+            render_pass.set_bind_group(1, &*item.bind_group, &[]);
+            render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
+            item.record_draw(render_pass, inst_start..inst_end);
+        }
     }
 }

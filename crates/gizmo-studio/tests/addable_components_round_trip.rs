@@ -200,6 +200,8 @@ fn a_material_description_survives_the_file() {
             alpha_cutoff: 0.0,
             blend_mode: gizmo::renderer::components::BlendMode::Multiply,
             reflectance: 0.16,
+            transmission: 0.0,
+            thickness: 0.0,
         },
     );
 

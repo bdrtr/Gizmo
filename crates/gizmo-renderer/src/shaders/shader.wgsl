@@ -44,6 +44,14 @@ var<storage, read> cluster_table: array<vec2<u32>>;
 @group(0) @binding(2)
 var<storage, read> cluster_light_indices: array<u32>;
 
+#ifdef TRANSMISSION
+// The frame as it stood before any glass was drawn, with its mip chain (`transmission.rs`).
+@group(0) @binding(3)
+var t_behind: texture_2d<f32>;
+@group(0) @binding(4)
+var s_behind: sampler;
+#endif
+
 #ifdef SHADOWS
 @group(2) @binding(0)
 var t_shadow: texture_depth_2d_array;
@@ -105,6 +113,9 @@ struct VertexOutput {
     @location(7) inst_emissive: vec4<f32>,  // w = F0, < 0: receives no shadows
     @location(8) tangent: vec3<f32>,
     @location(9) bitangent: vec3<f32>,
+#ifdef TRANSMISSION
+    @location(10) inst_glass: vec2<f32>,  // Material::transmission, Material::thickness
+#endif
 };
 
 @vertex
@@ -163,6 +174,9 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_pbr = inst.pbr;
     out.inst_cutoff = inst.ambient.w;
     out.inst_emissive = inst.emissive;
+#ifdef TRANSMISSION
+    out.inst_glass = inst.ambient.xy;
+#endif
 
     // Kameraya yansıt
     out.clip_position = scene.view_proj * world_pos;
@@ -239,9 +253,11 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     // surface simply is not. The forward path read only the floor until 2026-08-22, so a cut-out
     // material shaded here faded instead of cutting, while the same material through the G-buffer
     // or baked-lit path cut correctly. Found while building `demo/src/bin/transparency_3d.rs`.
+#ifndef TRANSMISSION
     if (final_alpha < 0.01) {
         discard;
     }
+#endif
     if (in.inst_cutoff > 0.0 && final_alpha < in.inst_cutoff) {
         discard;
     }
@@ -251,8 +267,15 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
 
     let N = surface.N;
     let base_color = surface.base_color;
-    let albedo = surface.albedo;
     let metallic = surface.metallic;
+#ifdef TRANSMISSION
+    // Light that goes through does not also scatter: the diffuse gets what is left. A metal lets
+    // nothing through.
+    let glass = in.inst_glass.x * (1.0 - metallic);
+    let albedo = surface.albedo * (1.0 - glass);
+#else
+    let albedo = surface.albedo;
+#endif
 
     // Editor debug views, matching `deferred_lighting.wgsl`'s numbering exactly — the studio's
     // toolbar sets one uniform and must not mean two different things depending on which path
@@ -356,7 +379,7 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     let B = normalize(in.bitangent);
 #endif
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
-    let f0 = mix(vec3<f32>(dielectric_f0(in.inst_emissive.w)), albedo, metallic);
+    let f0 = mix(vec3<f32>(dielectric_f0(in.inst_emissive.w)), surface.albedo, metallic);
     let NdV = max(dot(N, view_dir), 0.001);
     
     // The deferred shader's environment terms, so a surface gets the same light on either path.
@@ -513,7 +536,11 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
 
     // We render to an Rgba16Float HDR buffer. Tone mapping is handled in post_process.wgsl.
     
+#ifdef TRANSMISSION
+    let alpha = 1.0;
+#else
     let alpha = final_alpha;
+#endif
     let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
     if (fog_kind == FOG_ADDITIVE) {
         final_color *= 1.0 - fog.a;
@@ -525,5 +552,42 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
         final_color = mix(final_color, fog.rgb, fog.a);
     }
 
+#ifdef TRANSMISSION
+    // After the fog: the frame behind has its own up to that surface.
+    final_color += transmitted_light(in.world_position, N, view_dir, NdV, surface.albedo, f0, surface.roughness, dielectric_f0(in.inst_emissive.w), in.inst_glass.y) * glass;
+#endif
+
     return vec4<f32>(final_color, alpha);
 }
+
+#ifdef TRANSMISSION
+// What comes through: the frame behind, where the bent ray leaves the surface, as blurred as the
+// surface is rough, tinted by it, less what the surface reflected on the way in.
+fn transmitted_light(
+    world_position: vec3<f32>,
+    N: vec3<f32>,
+    view_dir: vec3<f32>,
+    NdV: f32,
+    tint: vec3<f32>,
+    f0: vec3<f32>,
+    roughness: f32,
+    dielectric: f32,
+    thickness: f32,
+) -> vec3<f32> {
+    // F0 back to the index of refraction it came from.
+    let root = sqrt(min(dielectric, 0.99));
+    let ior = (1.0 + root) / (1.0 - root);
+    // `refract` gives zero for total internal reflection, which leaves the ray where it entered.
+    let exit = world_position + refract(-view_dir, N, 1.0 / ior) * thickness;
+    let clip = scene.view_proj * vec4<f32>(exit, 1.0);
+    let ndc = clip.xy / max(clip.w, 0.0001);
+    let uv = clamp(vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5), vec2<f32>(0.0), vec2<f32>(1.0));
+    // `surface.roughness` is floored at 0.05 for the highlight's sake; a polished pane reads level 0.
+    // The blur grows with roughness squared, as a share of the picture's height.
+    let blur = max(roughness - 0.05, 0.0);
+    let lod = log2(max(blur * blur * f32(textureDimensions(t_behind).y), 1.0));
+    let behind = textureSampleLevel(t_behind, s_behind, uv, lod).rgb;
+    let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - NdV, 5.0);
+    return behind * tint * (vec3<f32>(1.0) - fresnel);
+}
+#endif

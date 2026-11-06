@@ -72,6 +72,10 @@ pub(crate) enum DrawLayer {
     Backdrop,
     /// The solid world. Relative order is irrelevant — the depth buffer resolves it.
     Opaque,
+    /// Glass ([`Material::is_transmissive`](crate::renderer::components::Material::is_transmissive)):
+    /// after the world it looks through, ahead of what blends over everything. The frame is
+    /// copied between `Opaque` and this.
+    Transmissive,
     /// Blended geometry, sorted back-to-front among itself.
     Transparent,
 }
@@ -111,9 +115,11 @@ pub fn draws_blended(is_transparent: bool, alpha: f32, alpha_cutoff: f32) -> boo
 /// sub-1.0 albedo alpha (a haze pass over the skyline), and `is_transparent` is inferred from
 /// that alpha — but a backdrop that sorted into the transparent bucket would be painted over
 /// the world it is behind, which is the exact failure the layer exists to prevent.
-pub(crate) fn draw_layer(is_backdrop: bool, is_transparent: bool) -> DrawLayer {
+pub(crate) fn draw_layer(is_backdrop: bool, is_transmissive: bool, is_transparent: bool) -> DrawLayer {
     if is_backdrop {
         DrawLayer::Backdrop
+    } else if is_transmissive {
+        DrawLayer::Transmissive
     } else if is_transparent {
         DrawLayer::Transparent
     } else {
@@ -136,7 +142,7 @@ pub(crate) fn cmp_draw_order(a: (DrawLayer, f32), b: (DrawLayer, f32)) -> std::c
         // are composited by paint order alone → farther one first (descending depth).
         Ordering::Equal => match a.0 {
             DrawLayer::Opaque => Ordering::Equal,
-            DrawLayer::Backdrop | DrawLayer::Transparent => {
+            DrawLayer::Backdrop | DrawLayer::Transmissive | DrawLayer::Transparent => {
                 b.1.partial_cmp(&a.1).unwrap_or(Ordering::Equal)
             }
         },
@@ -197,6 +203,9 @@ pub struct DrawItem {
     pub(super) visible_in_camera: bool,
     pub(super) skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     pub(super) is_transparent: bool,
+    /// Glass: drawn in the forward pass after the frame was copied, by its own pipeline. Also
+    /// `is_transparent`, which keeps it out of the G-buffer and the shadow maps.
+    pub(super) is_transmissive: bool,
     /// How a transparent item blends (`Material::blend_mode`); `Alpha` for every opaque one.
     /// Picks the forward pipeline — see `passes::forward`.
     pub(super) blend_mode: crate::renderer::components::BlendMode,
@@ -295,6 +304,8 @@ pub(crate) struct BatchKey {
     // *which* one corrupts flips between frames. Keying on the routing flags keeps
     // same-routing instances batched while separating ones that render differently.
     is_transparent: bool,
+    /// A different pipeline and a different layer, like every flag here.
+    is_transmissive: bool,
     /// The blend is baked into the pipeline, so — like every flag here — two materials that
     /// differ only in it must not share a batch.
     blend_mode: crate::renderer::components::BlendMode,
@@ -350,6 +361,7 @@ pub(crate) struct BatchData {
     is_grid: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
+    is_transmissive: bool,
     blend_mode: crate::renderer::components::BlendMode,
     instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
     /// Casters outside the camera frustum but inside a shadow cascade's light frustum —
@@ -663,6 +675,7 @@ pub(super) fn collect_draw_items(
                 // material asks, and zero is what every shader already reads there.
                 .with_alpha_cutoff($mat.alpha_cutoff)
                 .with_reflectance($mat.reflectance)
+                .with_transmission_of($mat)
                 .with_shadow_receiving(renderers.get($e).map(|r| r.receives_shadows).unwrap_or(true));
                 // Where this entity was drawn last frame — the object half of its velocity.
                 let generation = $e.generation();
@@ -697,7 +710,8 @@ pub(super) fn collect_draw_items(
                 let is_transparent = draws_blended($mat.is_transparent, $mat.albedo.w, $mat.alpha_cutoff);
                 // Only a blended draw blends; an opaque one's mode is moot and must not split it
                 // from its opaque neighbours.
-                let blend_mode = if is_transparent { $mat.blend_mode } else { Default::default() };
+                let is_transmissive = $mat.is_transmissive();
+                let blend_mode = if is_transparent && !is_transmissive { $mat.blend_mode } else { Default::default() };
                 // Honoured by this path since 2026-08-15. `Material::with_double_sided` has been
                 // public all along and only the editor acted on it, so a cloth or a leaf authored
                 // double-sided showed both faces in the viewport and lost its back faces in the
@@ -716,6 +730,7 @@ pub(super) fn collect_draw_items(
                     mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
                     skeleton_id: skel_bg.map(|bg| std::sync::Arc::as_ptr(bg) as usize),
                     is_transparent,
+                    is_transmissive,
                     blend_mode,
                     unlit,
                     baked_lit,
@@ -752,6 +767,7 @@ pub(super) fn collect_draw_items(
                     is_grid,
                     skeleton_bind_group: skel_bg.cloned(),
                     is_transparent,
+                    is_transmissive,
                     blend_mode,
                     instances: Vec::new(),
                     shadow_instances: Vec::new(),
@@ -934,8 +950,9 @@ pub(super) fn collect_draw_items(
                 visible_in_camera: batch.visible_in_camera,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
                 is_transparent: batch.is_transparent,
+                is_transmissive: batch.is_transmissive,
                 blend_mode: batch.blend_mode,
-                layer: draw_layer(batch.is_backdrop, batch.is_transparent),
+                layer: draw_layer(batch.is_backdrop, batch.is_transmissive, batch.is_transparent),
                 first_instance,
                 camera_count,
                 shadow_first_instance: 0,
@@ -979,6 +996,9 @@ pub(super) fn collect_draw_items(
         // meshes the HashMap ordered last. A scene pathological enough for that to matter has a
         // budget problem the renderer should not be papering over by dropping geometry.
         renderer.ensure_instance_capacity(cache.instances.len());
+        if cache.draw_items.iter().any(|item| item.is_transmissive && item.camera_count > 0) {
+            renderer.ensure_behind_surface();
+        }
 
         // Instance limiti kontrolü (Taşmaları önlemek için capaciteyi zorla)
         let max_instances = renderer.scene.instance_capacity;
@@ -1031,6 +1051,7 @@ mod batch_key_tests {
             mat_id: 42,
             skeleton_id: None,
             is_transparent: false,
+            is_transmissive: false,
             blend_mode: Default::default(),
             unlit: false,
             baked_lit: false,
@@ -1059,6 +1080,7 @@ mod batch_key_tests {
             mat_id: 42, // same cached texture bind group as the variants below
             skeleton_id: None,
             is_transparent: false,
+            is_transmissive: false,
             blend_mode: Default::default(),
             unlit: false,
             baked_lit: false,
@@ -1128,7 +1150,7 @@ mod transparent_order_tests {
     use crate::renderer::gpu_types::InstanceRaw;
     use bytemuck::Zeroable;
 
-    use DrawLayer::{Backdrop, Opaque, Transparent};
+    use DrawLayer::{Backdrop, Opaque, Transmissive, Transparent};
 
     fn inst_at(x: f32, y: f32, z: f32) -> InstanceRaw {
         let mut i = InstanceRaw::zeroed();
@@ -1243,10 +1265,12 @@ mod transparent_order_tests {
     // transparent bucket and be painted over the world instead of behind it.
     #[test]
     fn a_transparent_backdrop_is_still_a_backdrop() {
-        assert_eq!(draw_layer(true, true), Backdrop);
-        assert_eq!(draw_layer(true, false), Backdrop);
-        assert_eq!(draw_layer(false, true), Transparent);
-        assert_eq!(draw_layer(false, false), Opaque);
+        assert_eq!(draw_layer(true, false, true), Backdrop);
+        assert_eq!(draw_layer(true, false, false), Backdrop);
+        assert_eq!(draw_layer(false, false, true), Transparent);
+        assert_eq!(draw_layer(false, false, false), Opaque);
+        assert_eq!(draw_layer(false, true, true), Transmissive, "glass is is_transparent too, and is not blended");
+        assert!(Opaque < Transmissive && Transmissive < Transparent, "the frame is copied after the world");
     }
 
     // A camera-locked batch's instance translations are offsets FROM THE VIEWER, so the

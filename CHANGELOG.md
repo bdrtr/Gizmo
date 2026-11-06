@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Glass: `Material::with_transmission` and `with_thickness`.** A surface lets light through instead of scattering it: tinted
+  by its albedo, blurred by its roughness, bent by its index of refraction over its thickness, with the highlight and the
+  reflection still on top. It works on both render paths and in the studio viewport. With glass in view the frame is drawn in
+  two passes and copied between them, with a mip chain for the blur; without any, there is one pass, no copy and no texture.
+  `KHR_materials_transmission` and `KHR_materials_volume` reach it, without their textures. It is screen-space: only what is
+  on screen shows through, one pane does not show through another (the nearest wins), and blended surfaces and particles
+  behind glass are not seen through it. The attenuation colour over distance is not there; albedo is the tint.
+
 - **`Material::reflectance` and `with_ior`.** How much a non-metal mirrors head on: 0.04 unless a material says otherwise,
   `with_ior(1.33)` for water, `with_ior(2.42)` for diamond, `with_ior(1.0)` for no highlight at all. It moves the highlight
   and the environment reflection on both render paths, and the Fresnel of screen-space reflections, which read a literal
@@ -75,6 +83,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Immutable components.** `impl_component!(T; immutable)`, and `&mut T` in a query does not compile.
 
 ### Fixed
+
+- **The studio viewport ignored `Renderer::sky` and `Renderer::fog`**, and its Game panel ignored the environment preset as
+  well: both built their frame from defaults. A scene that set a sky by hand was lit one way in the game and another in the
+  editor. **Looks change** in the Game panel of a project that sets any of these, to what the game draws.
 
 - **Hooks reach every write.** `add_bundle` and `clone_entity` fired nothing and `spawn_batch` fired once in four, so an
   index kept by hooks was a guess. They take the per-component route for a type with hooks, and keep their fast path for
