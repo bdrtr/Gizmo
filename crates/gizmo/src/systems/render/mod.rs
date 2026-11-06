@@ -7039,6 +7039,45 @@ mod golden_render_tests {
         });
     }
 
+    /// **A fallback glyph reaches the atlas at the size its layout chose.** The same Arabic letter
+    /// covers as many pixels as a fallback in a Latin text as it does in its own face at that size;
+    /// rasterised at the text's size it would cover about twice as many.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_fallback_glyph_is_rasterised_at_its_layout_size() {
+        use crate::renderer::components::Text;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn lit_pixels(renderer: &mut Renderer, font: crate::renderer::text::FontId, px: f32) -> usize {
+            renderer.taa = None;
+            renderer.ssgi = None;
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, Text::screen("س", font, px, gizmo_math::Vec2::new(30.0, 30.0)));
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), primary: true, ..Default::default() });
+            let frame = render_world(renderer, &mut world).await;
+            frame.as_chunks::<4>().0.iter().filter(|p| p[1] > 150).count()
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let latin = renderer.load_font(include_bytes!("../../../../gizmo-renderer/assets/fonts/NotoSans-Regular.ttf").to_vec()).expect("Noto Sans");
+            let arabic = renderer.load_font(include_bytes!("../../../../gizmo-renderer/src/text/fixtures/noto-sans-arabic-subset.ttf").to_vec()).expect("Arabic");
+            renderer.add_font_fallback(arabic);
+            let layout = renderer.text.as_ref().expect("text").library().layout(latin, 60.0, "س").expect("laid out");
+            let px = layout.glyphs[0].px;
+            assert!(px > 80.0, "the fallback is taller in ems, so it needs more than 60: {px}");
+            let as_fallback = lit_pixels(&mut renderer, latin, 60.0).await;
+            let as_itself = lit_pixels(&mut renderer, arabic, px).await;
+            assert!(as_itself > 20, "the letter did not draw: {as_itself}");
+            assert!(as_fallback.abs_diff(as_itself) * 10 < as_itself, "{as_fallback} pixels as a fallback, {as_itself} in its own face");
+        });
+    }
+
     /// **A forward material casts and receives like a deferred one.** The shadow pixels are the ones
     /// `ShadowCasting::On` darkens against `Off`, in all four pairings of the floor's path and the
     /// caster's. `unlit` drops a material from the shadow passes, which is why `forward_lit` is a flag

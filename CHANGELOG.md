@@ -192,7 +192,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Sans has, so **existing text changes width slightly**. Latin text gets no ligatures, because Noto
   Sans's `fi` hides the dot that tells i from ı. Recent layouts are remembered: a wrapped paragraph
   costs 0.97 ms the first frame and 0.5 µs after. Adds `harfrust` and `unicode-bidi`; the web build grows
-  4.9 % gzipped. Checked by glyph ids and positions; not yet looked at on screen.
+  4.9 % gzipped. Fallback faces are now drawn at the em size of the text's own face (`PositionedGlyph::px`):
+  Arabic beside Latin was two thirds as big. Checked by glyph ids and positions and looked at once in a
+  desktop frame; not yet in a browser or on a phone.
 
 - **`Material::with_forward`: a PBR material can be shaded by the forward pass.** How a surface is shaded
   and which path draws it were one setting, so drawing PBR forward was impossible. The material type no

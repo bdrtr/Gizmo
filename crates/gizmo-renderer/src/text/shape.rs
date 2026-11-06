@@ -50,6 +50,7 @@ pub(super) struct ShapedGlyph {
     pub(super) glyph: u16,
     pub(super) x: f32,
     pub(super) y: f32,
+    pub(super) px: f32,
 }
 
 /// One line, shaped: the glyphs from left to right, and how far the pen went.
@@ -165,6 +166,7 @@ fn shape_item(faces: &Faces<'_>, px: f32, text: &str, item: &Item, rtl: bool, ou
 
     // ab_glyph's scale, not px / units-per-em: `px` here means the face's ascent-to-descent height,
     // and the rasteriser draws every glyph at that scale.
+    let px = faces.px_for(item.font, px);
     let scale = face.as_scaled(px).h_scale_factor();
     for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
         out.glyphs.push(ShapedGlyph {
@@ -172,6 +174,7 @@ fn shape_item(faces: &Faces<'_>, px: f32, text: &str, item: &Item, rtl: bool, ou
             glyph: u16::try_from(info.glyph_id).unwrap_or(0),
             x: out.width + position.x_offset as f32 * scale,
             y: -(position.y_offset as f32) * scale,
+            px,
         });
         out.width += position.x_advance as f32 * scale;
     }

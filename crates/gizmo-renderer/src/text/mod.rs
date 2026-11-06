@@ -149,6 +149,10 @@ pub struct PositionedGlyph {
     pub y: f32,
     /// Which line (0-based) the glyph is on — what [`TextLayout::align`] shifts it by.
     pub line: u32,
+    /// The size to rasterise it at. The text's own size for its own face. A fallback face gets
+    /// whatever gives it the same em as the text's face: a size here means a face's height from
+    /// ascent to descent, and in Noto Sans Arabic that height takes 2.1 em against Noto Sans's 1.4.
+    pub px: f32,
 }
 
 /// What `layout` produced: the glyphs, and the box they occupy.
@@ -267,9 +271,10 @@ impl FontLibrary {
 
     /// Adds `font` to the end of the fallback chain: a character that a text's own face has no
     /// glyph for — a symbol, an emoji, a script the face does not cover — is drawn from the first
-    /// face in the chain that has one, instead of as the face's empty "missing" glyph. Shaping and
-    /// kerning work within a stretch of one face, not across a change of face, and line height comes
-    /// from the text's own face. An unknown id, or one already in the chain, changes nothing.
+    /// face in the chain that has one, instead of as the face's empty "missing" glyph, at the em size
+    /// of the text's own face. Shaping and kerning work within a stretch of one face, not across a
+    /// change of face, and line height comes from the text's own face. An unknown id, or one already
+    /// in the chain, changes nothing.
     pub fn add_fallback(&mut self, font: FontId) {
         if self.face(font).is_some() && !self.fallbacks.contains(&font) {
             self.fallbacks.push(font);
@@ -364,10 +369,24 @@ impl<'a> Faces<'a> {
             .unwrap_or((font, face, id))
     }
 
+    /// The size `font` is drawn at in a text of `px`: see [`PositionedGlyph::px`].
+    fn px_for(&self, font: FontId, px: f32) -> f32 {
+        let (primary_id, primary) = self.primary;
+        match self.library.face(font) {
+            Some(face) if font != primary_id => px * em_height(face) / em_height(primary),
+            _ => px,
+        }
+    }
+
     /// Whether `font` has a glyph of its own for `c`.
     fn covers(&self, font: FontId, c: char) -> bool {
         self.library.face(font).is_some_and(|face| face.glyph_id(c).0 != 0)
     }
+}
+
+/// A face's height from ascent to descent, in ems.
+fn em_height(face: &ab_glyph::FontVec) -> f32 {
+    face.height_unscaled() / face.units_per_em().unwrap_or(1000.0)
 }
 
 /// The pen advance of `s` on one line — the width [`layout`] would give it.
@@ -443,7 +462,7 @@ fn layout(faces: &Faces<'_>, px: f32, text: &str, max_width: Option<f32>) -> Tex
             // every consumer treat the list as "things to draw".
             let drawn = faces.library.face(g.font).is_some_and(|face| face.outline(ab_glyph::GlyphId(g.glyph)).is_some());
             if drawn {
-                out.glyphs.push(PositionedGlyph { font: g.font, glyph: g.glyph, x: g.x, y: baseline + g.y, line: line_index as u32 });
+                out.glyphs.push(PositionedGlyph { font: g.font, glyph: g.glyph, x: g.x, y: baseline + g.y, line: line_index as u32, px: g.px });
             }
         }
         widest = widest.max(shaped.width);
@@ -925,7 +944,8 @@ mod tests {
     fn a_wrapped_line_keeps_the_direction_of_its_paragraph() {
         let (mut lib, latin, arabic, _) = shaping_faces();
         lib.add_fallback(arabic);
-        let width = lib.layout(latin, 32.0, "abc سلام").expect("laid out").width + 2.0;
+        let wide = |s: &str| lib.layout(latin, 32.0, s).expect("laid out").width;
+        let width = wide("abc سلام").max(wide("سلام سلام")) + 2.0;
         let l = lib.layout_wrapped(latin, 32.0, "سلام سلام abc سلام", Some(width)).expect("laid out");
         assert_eq!(l.lines, 2);
         let on_second = |font: FontId| l.glyphs.iter().filter(|g| g.line == 1 && g.font == font).map(|g| g.x).sum::<f32>();
@@ -957,6 +977,23 @@ mod tests {
         let dotless = glyph_ids(&lib, latin, "ı")[0];
         assert_eq!(glyph_ids(&lib, latin, "fi")[1], i);
         assert_eq!(glyph_ids(&lib, latin, "fı")[1], dotless);
+    }
+
+    /// **A fallback face is as big as the text's own.** A size means a face's height from ascent to
+    /// descent, and Noto Sans Arabic is far taller in ems than Noto Sans, so at the same number its
+    /// letters came out about two thirds as big beside Latin.
+    #[test]
+    fn a_fallback_face_is_drawn_at_the_em_size_of_the_text() {
+        let (mut lib, latin, arabic, _) = shaping_faces();
+        lib.add_fallback(arabic);
+        let l = lib.layout(latin, 40.0, "Aس").expect("laid out");
+        let em = |g: &PositionedGlyph| g.px / em_height(lib.face(g.font).expect("a face"));
+        assert_eq!(l.glyphs[0].px, 40.0, "the text's own face keeps the size asked for");
+        assert_eq!(l.glyphs[1].font, arabic);
+        assert!((em(&l.glyphs[0]) - em(&l.glyphs[1])).abs() < 0.01, "{} against {}", em(&l.glyphs[0]), em(&l.glyphs[1]));
+        // The Arabic face on its own at that size gives the advance the fallback was given.
+        let alone = lib.layout(arabic, l.glyphs[1].px, "س").expect("laid out");
+        assert!((l.width - l.glyphs[1].x - alone.width).abs() < 0.01);
     }
 
     /// **Only Latin gives up `liga`.** Thai writes ฤๅ as one glyph, through that same feature.

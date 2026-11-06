@@ -117,8 +117,13 @@ Latin text gets no ligatures. Noto Sans's `fi` hides the dot of the i, which in 
 difference between two letters, and it has no Turkish entry a language setting could select. There is
 no language setting, so `locl` lookups see a face's defaults. Still not done: rich text, breaking
 lines of Chinese, Japanese or Thai between words, vertical text. Bidi and shaping are checked by glyph
-ids and positions against subsets of Noto faces in `text/fixtures`; no right-to-left text has been
-looked at on screen, in a browser or on a phone.
+ids and positions against subsets of Noto faces in `text/fixtures`, and Arabic, Hebrew, Devanagari, Thai
+and Turkish were looked at once in a desktop frame, not in a browser or on a phone.
+
+Looking caught what the glyph tests could not: **a fallback face came out too small.** A size means a
+face's height from ascent to descent, Noto Sans Arabic is 2.1 em tall against Noto Sans's 1.4, so at the
+same number its letters were two thirds as big beside Latin. `PositionedGlyph::px` now carries the size
+that gives a fallback the em of the text's own face.
 
 Measured in release, on one machine: 200 short HUD strings take 1.44 ms the first time and 15 µs once
 remembered, a wrapped 510-character paragraph 0.97 ms and 0.5 µs. That is why `FontLibrary` keeps up
