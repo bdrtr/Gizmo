@@ -76,6 +76,7 @@ pub use input::{ActionMap, Input, InputBinding};
 pub use pool::{PoolManager, Pooled};
 pub use profiler::FrameProfiler;
 pub use query::{
+    QueryKey,
     Changed, FetchComponent, Mut, Or, Query, QuerySingleError, ReadOnlyQuery, With, Without,
     WorldQuery,
 };

@@ -886,3 +886,42 @@ fn single_mut_writes_the_one_row_and_marks_nothing_on_refusal() {
         "a refused single_mut must not mark either row"
     );
 }
+/// **A query can ask for each row's whole handle.** It comes out with the generation in it, the same
+/// value `spawn` returned, and a later spawn on a recycled id is a different handle.
+#[test]
+fn entity_is_a_query_term() {
+    let mut world = World::new();
+    let a = world.spawn_bundle((Position { x: 1.0, y: 0.0 },));
+    let b = world.spawn_bundle((Position { x: 2.0, y: 0.0 }, Velocity { x: 0.0, y: 0.0 }));
+    let q = world.query::<(crate::entity::Entity, &Position)>().unwrap();
+    let mut seen: Vec<(crate::entity::Entity, f32)> = q.iter().map(|(_, (e, p))| (e, p.x)).collect();
+    seen.sort_by(|l, r| l.1.total_cmp(&r.1));
+    assert_eq!(seen, [(a, 1.0), (b, 2.0)]);
+    drop(q);
+
+    world.despawn(a);
+    let c = world.spawn_bundle((Position { x: 3.0, y: 0.0 },));
+    assert_eq!(c.id(), a.id(), "the id is recycled, which is the case being tested");
+    let q = world.query::<crate::entity::Entity>().unwrap();
+    let all: Vec<_> = q.iter().map(|(_, e)| e).collect();
+    assert!(all.contains(&c) && !all.contains(&a), "the row holds the new handle: {all:?}");
+}
+
+/// **`get` with a handle never reaches the entity that got a dead one's id;** with a raw id it does,
+/// which is what the handle is for. The check reads the row, so it takes no lock.
+#[test]
+fn get_with_a_dead_handle_does_not_reach_the_new_owner_of_its_id() {
+    let mut world = World::new();
+    let old = world.spawn_bundle((Position { x: 1.0, y: 0.0 },));
+    world.despawn(old);
+    let new = world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
+    assert_eq!(new.id(), old.id(), "the id is recycled, which is the case being tested");
+
+    assert!(world.query_mut::<Mut<Position>>().unwrap().get_mut(old).is_none());
+    let q = world.query::<&Position>().unwrap();
+    assert!(q.get(old).is_none());
+    assert!(!q.contains(old));
+    assert!(q.contains(new));
+    assert_eq!(q.get(new).map(|p| p.x), Some(2.0));
+    assert_eq!(q.get(new.id()).map(|p| p.x), Some(2.0), "a raw id still reads whoever holds the slot");
+}

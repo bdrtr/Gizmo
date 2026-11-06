@@ -91,7 +91,7 @@ impl World {
         );
 
         // Yeni entity'yi boş archetype'a kaydet
-        self.archetype_index.on_spawn(entity.id());
+        self.archetype_index.on_spawn(entity);
 
         // Entity location tracking — boş archetype (id=0), row = entity'nin sırası
         let eid = entity.id();
@@ -159,7 +159,6 @@ impl World {
 
         // Kilitlenmeleri engellemek için önce ID'leri üretelim
         let mut new_entities = Vec::with_capacity(count);
-        let mut new_eids = Vec::with_capacity(count);
 
         {
             let entities_res = self
@@ -167,7 +166,6 @@ impl World {
                 .expect("Entities resource not initialized");
             for _ in 0..count {
                 let e = entities_res.reserve_entity();
-                new_eids.push(e.id());
                 new_entities.push(e);
             }
         }
@@ -176,11 +174,12 @@ impl World {
         let arch = &mut self.archetype_index.archetypes[arch_id];
         let tick = self.tick;
         // SAFETY: `row` is a live row of this archetype (it is the template entity's own), and
-        // `new_eids` has exactly `count` freshly reserved ids — `batch_clone_row`'s contract.
-        let new_rows = unsafe { arch.batch_clone_row(row, count, &new_eids, tick) };
+        // `new_entities` has exactly `count` freshly reserved ids — `batch_clone_row`'s contract.
+        let new_rows = unsafe { arch.batch_clone_row(row, count, &new_entities, tick) };
 
         // Location güncellemeleri
-        for (i, &id) in new_eids.iter().enumerate() {
+        for (i, entity) in new_entities.iter().enumerate() {
+            let id = entity.id();
             let row = new_rows[i];
             let idx = id as usize;
             if idx >= self.entity_locations.len() {
@@ -203,7 +202,7 @@ impl World {
         for tid in sparse_types {
             if let Some(set) = self.sparse_sets.get_mut(&tid) {
                 if set.contains(source_id) {
-                    for &new_id in &new_eids {
+                    for new_id in new_entities.iter().map(|e| e.id()) {
                         set.clone_entry(source_id, new_id, tick);
                     }
                 }
@@ -361,7 +360,7 @@ impl World {
                     unsafe { crate::component::Bundle::write_to_archetype(bundle, arch, row as usize, self.tick); }
                     // One store into capacity `reserve_row` already bought: this is the instant
                     // the row exists.
-                    arch.commit_staged_row(eid);
+                    arch.commit_staged_row(entity);
                     row
                 };
 
@@ -850,7 +849,8 @@ impl World {
         // nothing to say why.
         #[cfg(debug_assertions)]
         for (arch_idx, arch) in self.archetype_index.archetypes.iter().enumerate() {
-            for (row, &id) in arch.entities().iter().enumerate() {
+            for (row, entity) in arch.entities().iter().enumerate() {
+                let id = entity.id();
                 let loc = self
                     .entity_locations
                     .get(id as usize)

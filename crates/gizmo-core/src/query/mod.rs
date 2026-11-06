@@ -578,6 +578,70 @@ impl WorldQuery for IgnoreDefaultFilters {
     }
 }
 
+// `Entity` as a query term: `Query<(Entity, &Health)>` hands out each row's whole handle, generation
+// included. It reads the archetype's own list of rows, so it takes no lock and declares no access:
+// which entity a row holds is not a component, and nothing a parallel writer can be changing.
+impl sealed::SealedQuery for crate::entity::Entity {}
+impl sealed::SealedReadOnly for crate::entity::Entity {}
+impl ReadOnlyQuery for crate::entity::Entity {}
+impl WorldQuery for crate::entity::Entity {
+    type StaticType = crate::entity::Entity;
+    type Fetch<'w> = *const crate::entity::Entity;
+    type Item<'w> = crate::entity::Entity;
+    type Slice<'w> = &'w [crate::entity::Entity];
+
+    unsafe fn fetch_raw<'w>(_world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
+        Some(arch.entities().as_ptr())
+    }
+    fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
+    fn matches_archetype(_arch: &Archetype) -> bool {
+        true
+    }
+    unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize, _e: u32) -> Self::Item<'w> {
+        // SAFETY: the caller passes a live row of the archetype `fetch` came from.
+        unsafe { *fetch.add(row) }
+    }
+    unsafe fn filter_row<'w>(_f: Self::Fetch<'w>, _r: usize, _e: u32, _t: u32) -> bool {
+        true
+    }
+    unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w> {
+        // SAFETY: `fetch` is the start of the archetype's row list and `len` its length.
+        unsafe { std::slice::from_raw_parts(fetch, len) }
+    }
+}
+
+/// What [`Query::get`] can look a row up by: an [`Entity`], which is
+/// checked against the row and so never reaches whoever got a dead entity's id, or a raw `u32`, which
+/// cannot tell them apart.
+pub trait QueryKey: Copy {
+    /// The slot to look in.
+    fn slot(self) -> u32;
+    /// Whether this key means the entity at `row` of `arch`, which is where its slot says it lives.
+    fn means(self, arch: &Archetype, row: usize) -> bool;
+}
+
+impl QueryKey for u32 {
+    #[inline]
+    fn slot(self) -> u32 {
+        self
+    }
+    #[inline]
+    fn means(self, _arch: &Archetype, _row: usize) -> bool {
+        true
+    }
+}
+
+impl QueryKey for crate::entity::Entity {
+    #[inline]
+    fn slot(self) -> u32 {
+        self.id()
+    }
+    #[inline]
+    fn means(self, arch: &Archetype, row: usize) -> bool {
+        arch.entities()[row] == self
+    }
+}
+
 impl_tick_filter!(
     /// Filter matching only entities whose `T` changed since the system last ran
     /// (`deref_mut` on `Mut<T>` stamps the change tick). Use as a query operand.

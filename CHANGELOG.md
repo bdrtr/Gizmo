@@ -207,6 +207,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Entity` is a query term, and `Query::get` takes one.** `Query<(Entity, &Health)>` hands out each row's
+  whole handle. `get`, `get_mut` and `contains` take an `Entity` or a raw `u32`: an `Entity` is checked against
+  the row, so a dead handle returns `None` even after its id went to someone else, with no lock. Archetypes store
+  `Entity` per row, so `Archetype::entities` and the first slice of `iter_chunks` are `&[Entity]`. A table's
+  `for_each` got 28 % faster (14.3 to 10.7 µs over 50 000 rows), since a query that never looks at the id no
+  longer walks the list. `get` with a raw id and the physics step are unchanged, measured against the old code
+  in alternation because a loaded machine moved those numbers by 60 %.
+
 - **`Text::rich`: several colours in one text, and lines that start on their own side.** A span colours the
   glyphs drawn from its bytes, across lines, wraps and right-to-left runs, and `Text::color` still fades the
   whole string. `TextAlign::Start` is the new default: a right-to-left line lines up on the right, and

@@ -54,9 +54,9 @@ impl ArchetypeIndex {
     }
 
     /// Entity spawn — add to the empty archetype
-    pub(crate) fn on_spawn(&mut self, entity_id: u32) {
-        self.archetypes[0].push_entity(entity_id);
-        self.entity_archetype.insert(entity_id, 0);
+    pub(crate) fn on_spawn(&mut self, entity: crate::entity::Entity) {
+        self.archetypes[0].push_entity(entity);
+        self.entity_archetype.insert(entity.id(), 0);
     }
 
     /// Component addition — move the entity to the new archetype
@@ -310,6 +310,7 @@ impl ArchetypeIndex {
                     // this entity", and every id in `entities()` IS held by this archetype
                     // whatever its location says.
                     for &entity in self.archetypes[i].entities() {
+                        let entity = entity.id();
                         let e_idx = entity as usize;
                         if let Some(loc) = entity_locations.get_mut(e_idx) {
                             if loc.archetype_id == last_id {

@@ -771,7 +771,8 @@ mod tests {
     /// that row. Nothing enforces it; this checks it.
     fn assert_locations_agree_with_archetypes(world: &World, context: &str) {
         for (arch_idx, arch) in world.archetype_index.archetypes.iter().enumerate() {
-            for (row, &id) in arch.entities().iter().enumerate() {
+            for (row, entity) in arch.entities().iter().enumerate() {
+                let id = entity.id();
                 let loc = world.entity_location(id);
                 assert!(
                     loc.is_valid(),
@@ -878,7 +879,8 @@ mod tests {
         // Whatever the hook did to each entity, the world must still agree with itself: every
         // entity listed in an archetype has a location naming that archetype and that row.
         for (arch_idx, arch) in world.archetype_index.archetypes.iter().enumerate() {
-            for (row, &id) in arch.entities().iter().enumerate() {
+            for (row, entity) in arch.entities().iter().enumerate() {
+                let id = entity.id();
                 let loc = world.entity_location(id);
                 assert!(
                     loc.is_valid()
@@ -969,7 +971,8 @@ mod tests {
     fn assert_inv(world: &World, context: &str) {
         for (arch_idx, arch) in world.archetype_index.archetypes.iter().enumerate() {
             let mut seen = std::collections::HashSet::new();
-            for (row, &id) in arch.entities().iter().enumerate() {
+            for (row, entity) in arch.entities().iter().enumerate() {
+                let id = entity.id();
                 assert!(
                     seen.insert(id),
                     "{context}: entity {id} is listed TWICE in archetype {arch_idx}"

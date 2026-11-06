@@ -365,7 +365,7 @@ impl World {
         // path is safe, and it is the only sound thing to do with memory that is part live and
         // part uninitialised with no way to tell which.
         let base_len = self.archetype_index.archetypes[target_arch_id].len();
-        let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
+        let crate::archetype::Moved { moved, new_row, swapped: moved_eid, .. } = {
             // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
             // iki `&mut ...[i] as *mut` almak, ikinci retag ile ilk pointer'ın
             // provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu (Miri
@@ -424,7 +424,7 @@ impl World {
             // SAFETY: as above, for the row the stage just prepared in the target archetype.
             unsafe { bundle.write_to_archetype(arch, new_row as usize, tick) };
             // Everything is written. THIS is where the row starts existing.
-            arch.commit_staged_row(eid);
+            arch.commit_staged_row(entity);
         }));
 
         match outcome {
@@ -550,7 +550,7 @@ impl World {
         // THE DEFERRED FORM, as `remove_component`: the bundle's destructors are user code and
         // this function's own bookkeeping has to be final before they run. This is the caller
         // that can detach MORE THAN ONE column, so more than one destructor waits on it.
-        let (crate::archetype::Moved { moved, new_row, swapped: moved_eid }, detached) = {
+        let (crate::archetype::Moved { moved, new_row, swapped: moved_eid, .. }, detached) = {
             // İki archetype'ı FARKLI indekslerden disjoint ödünç al. Aynı Vec'ten
             // iki `&mut ...[i] as *mut` almak, ikinci retag ile ilk pointer'ın
             // provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu (Miri
@@ -742,7 +742,7 @@ impl World {
         // pointer'ın provenance'ını geçersiz kılıp onu kullanınca UB üretiyordu
         // (Miri Stacked Borrows ihlali). `get_disjoint_mut` iki ayrı indekse
         // aliasing'siz `&mut` verir — unsafe'e gerek yok.
-        let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
+        let crate::archetype::Moved { moved, new_row, swapped: moved_eid, .. } = {
             let [old_arch, target_arch] = self
                 .archetype_index
                 .archetypes
@@ -913,7 +913,7 @@ impl World {
         // THE DEFERRED FORM, because `T`'s destructor is user code and this function has
         // bookkeeping of its own that has to be final before it runs. See the disposal below.
         let old_arch_id = old_loc.archetype_id as usize;
-        let (crate::archetype::Moved { moved, new_row, swapped: moved_eid }, detached) = {
+        let (crate::archetype::Moved { moved, new_row, swapped: moved_eid, .. }, detached) = {
             let [old_arch, target_arch] = self
                 .archetype_index
                 .archetypes
@@ -1137,7 +1137,7 @@ impl World {
                 let old_row = old_loc.row as usize;
 
                 // Disjoint ödünç (source != target, yukarıda 422'de guard'landı).
-                let crate::archetype::Moved { moved, new_row, swapped: moved_eid } = {
+                let crate::archetype::Moved { moved, new_row, swapped: moved_eid, .. } = {
                     let [old_arch, target_arch] = self
                         .archetype_index
                         .archetypes
@@ -1271,7 +1271,7 @@ impl World {
                 // not less: the fixup below is what makes the NEXT iteration's `old_loc` read
                 // correct, so a destructor running before it would strand the rest of the group
                 // as well as the entity that was swap-moved.
-                let (crate::archetype::Moved { moved, new_row, swapped: moved_eid }, detached) = {
+                let (crate::archetype::Moved { moved, new_row, swapped: moved_eid, .. }, detached) = {
                     let [old_arch, target_arch] = self
                         .archetype_index
                         .archetypes
@@ -2484,7 +2484,8 @@ mod tests {
     fn assert_locations_agree(world: &World, context: &str) {
         for (arch_idx, arch) in world.archetype_index.archetypes.iter().enumerate() {
             let mut seen = std::collections::HashSet::new();
-            for (row, &id) in arch.entities().iter().enumerate() {
+            for (row, entity) in arch.entities().iter().enumerate() {
+                let id = entity.id();
                 assert!(
                     seen.insert(id),
                     "{context}: entity {id} is listed TWICE in archetype {arch_idx}"

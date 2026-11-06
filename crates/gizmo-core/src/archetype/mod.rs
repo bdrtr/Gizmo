@@ -100,8 +100,8 @@ pub struct Archetype {
     /// Wrapped in UnsafeCell because the engine's Scheduler (DAG) guarantees parallel access
     /// safety at compile/planning time, not at run time (RwLock).
     columns: Vec<UnsafeCell<Column>>,
-    /// The entity IDs in this archetype (order = row index)
-    entities: Vec<u32>,
+    /// The entities in this archetype, generation included (order = row index).
+    entities: Vec<crate::entity::Entity>,
     /// Component add/remove transition cache
     /// TypeId → ArchetypeEdge
     pub(crate) edges: HashMap<TypeId, ArchetypeEdge>,
@@ -135,6 +135,8 @@ unsafe impl Sync for Archetype {}
 pub(crate) struct Moved {
     /// The entity actually taken from `source_row` — whoever was there, not whoever was meant.
     pub(crate) moved: u32,
+    /// The same entity with its generation, which is what the target's row records.
+    pub(crate) handle: crate::entity::Entity,
     /// Its row in the target archetype.
     pub(crate) new_row: u32,
     /// The entity swap-removed into the vacated source row, if the source was not the last row.
@@ -263,9 +265,9 @@ impl Archetype {
         self.entities.swap(a, b);
     }
 
-    /// A reference to the entity ID list
+    /// The entities in this archetype, by row.
     #[inline]
-    pub fn entities(&self) -> &[u32] {
+    pub fn entities(&self) -> &[crate::entity::Entity] {
         &self.entities
     }
 
@@ -323,7 +325,7 @@ impl Archetype {
     /// Adds a new entity row. Data must already have been pushed into all columns.
     /// Returns the index of the added row.
     #[inline]
-    pub(crate) fn push_entity(&mut self, entity_id: u32) -> u32 {
+    pub(crate) fn push_entity(&mut self, entity_id: crate::entity::Entity) -> u32 {
         let row = self.entities.len() as u32;
         self.entities.push(entity_id);
         row
@@ -365,7 +367,7 @@ impl Archetype {
         unsafe { self.swap_rows(row, last) };
         // The survivor now sits at `row`. Read before the truncation, which is what removes it
         // from the end.
-        let moved = (row != last).then(|| self.entities[row]);
+        let moved = (row != last).then(|| self.entities[row].id());
         // SAFETY: every column is `last + 1` long (the archetype invariant) and so is
         // `entities`, so `last` is a legal new length for all of them.
         unsafe { self.forget_rows_above(last) };
@@ -467,7 +469,7 @@ impl Archetype {
     /// that is longer than `entities` is a row no query can reach. Pushing the id is therefore
     /// the single moment the row exists — one store into capacity [`reserve_row`] already
     /// bought, which is why it cannot fail half-way.
-    pub(crate) fn commit_staged_row(&mut self, entity_id: u32) {
+    pub(crate) fn commit_staged_row(&mut self, entity_id: crate::entity::Entity) {
         debug_assert!(
             self.columns.iter().all(|c| {
                 // SAFETY: shared read of a length under `&mut self`.
@@ -544,7 +546,7 @@ impl Archetype {
     ) -> (Moved, DetachedRows) {
         // SAFETY: forwarded from this function's own contract.
         let moved = unsafe { self.stage_entity_into(source_row, target) };
-        target.commit_staged_row(moved.moved);
+        target.commit_staged_row(moved.handle);
         // Minted after the stage, from the state the stage left, so the token describes what is
         // actually there rather than what was intended.
         let rows = DetachedRows {
@@ -664,9 +666,10 @@ impl Archetype {
         // 5. The row is staged, not committed: the columns hold it, `target.entities` does not
         //    yet, so no query can see it. `commit_staged_row` is what makes it exist.
         Moved {
-            moved: entity_id,
+            moved: entity_id.id(),
+            handle: entity_id,
             new_row: target.entities.len() as u32,
-            swapped: moved_entity,
+            swapped: moved_entity.map(crate::entity::Entity::id),
         }
     }
 
@@ -701,7 +704,7 @@ impl Archetype {
         &mut self,
         row: usize,
         count: usize,
-        new_eids: &[u32],
+        new_eids: &[crate::entity::Entity],
         tick: u32,
     ) -> Vec<u32> {
         if count == 0 {
@@ -968,10 +971,10 @@ mod tests {
                 .unwrap()
                 .push_raw(&hp as *const U32Comp as *const u8, 1);
         }
-        let row = arch.push_entity(42);
+        let row = arch.push_entity(crate::entity::Entity::new(42, 0));
         assert_eq!(row, 0);
         assert_eq!(arch.len(), 1);
-        assert_eq!(arch.entities()[0], 42);
+        assert_eq!(arch.entities()[0].id(), 42);
 
         // Entity 99 ekle
         let pos2: F32Comp = F32Comp(20.0);
@@ -986,7 +989,7 @@ mod tests {
                 .unwrap()
                 .push_raw(&hp2 as *const U32Comp as *const u8, 1);
         }
-        arch.push_entity(99);
+        arch.push_entity(crate::entity::Entity::new(99, 0));
 
         // row 0'ı çıkar (entity 42) → entity 99 row 0'a taşınmalı
         let detached = arch.detach_entity_row(0);
@@ -994,7 +997,7 @@ mod tests {
         // The archetype is already final HERE, before any value is dropped — that is the whole
         // point of the split, and it is what a panicking destructor used to be able to break.
         assert_eq!(arch.len(), 1);
-        assert_eq!(arch.entities()[0], 99);
+        assert_eq!(arch.entities()[0].id(), 99);
         for cell in &arch.columns {
             // SAFETY: `&mut arch` is not held; this is a shared read of a length.
             assert_eq!(unsafe { (*cell.get()).len() }, 1);
@@ -1135,7 +1138,7 @@ mod tests {
             }
             std::mem::forget(f);
             std::mem::forget(p);
-            arch.push_entity(id)
+            arch.push_entity(crate::entity::Entity::new(id, 0))
         };
         push(&mut arch, Fuse("BOOM"), Payload("victim"), 7);
         push(&mut arch, Fuse("quiet"), Payload("survivor"), 9);
@@ -1157,7 +1160,7 @@ mod tests {
             // SAFETY: a shared read of a length; no `&mut Column` is alive here.
             assert_eq!(unsafe { (*cell.get()).len() }, arch.len(), "column/entities desync");
         }
-        assert_eq!(arch.entities()[0], 9, "the survivor moved into the vacated row");
+        assert_eq!(arch.entities()[0].id(), 9, "the survivor moved into the vacated row");
         // The victim's `Payload` was abandoned above the length rather than dropped — the
         // accepted leak on a panic path. A 1 here would mean the drop loop got past the fuse.
         assert_eq!(PAYLOAD_DROPS.load(SeqCst), 0);
@@ -1201,7 +1204,7 @@ mod tests {
                 arch.get_column_mut(TypeId::of::<Fuse>()).unwrap().push_raw(&*f as *const Fuse as *const u8, 1);
                 arch.get_column_mut(TypeId::of::<Tail>()).unwrap().push_raw(&*t as *const Tail as *const u8, 1);
             }
-            arch.push_entity(i as u32);
+            arch.push_entity(crate::entity::Entity::new(i as u32, 0));
         }
         ARMED.store(true, SeqCst);
 
@@ -1263,12 +1266,12 @@ mod tests {
             arch.get_column_mut(TypeId::of::<Counted>()).unwrap().push_raw(&*a as *const Counted as *const u8, 1);
             arch.get_column_mut(TypeId::of::<Other>()).unwrap().push_raw(&*b as *const Other as *const u8, 1);
         }
-        arch.push_entity(0);
+        arch.push_entity(crate::entity::Entity::new(0, 0));
         CLONES.store(0, SeqCst);
 
         let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             // SAFETY: row 0 is live and `new_eids` has exactly `count` ids.
-            unsafe { arch.batch_clone_row(0, 3, &[1, 2, 3], 1) }
+            unsafe { arch.batch_clone_row(0, 3, &[crate::entity::Entity::new(1, 0), crate::entity::Entity::new(2, 0), crate::entity::Entity::new(3, 0)], 1) }
         }));
         assert!(unwound.is_err(), "the clone was supposed to panic; the fixture is wrong if not");
 

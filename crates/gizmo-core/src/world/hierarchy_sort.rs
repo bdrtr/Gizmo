@@ -12,8 +12,8 @@ impl World {
             return;
         }
 
-        let entity_a = arch.entities()[row_a];
-        let entity_b = arch.entities()[row_b];
+        let entity_a = arch.entities()[row_a].id();
+        let entity_b = arch.entities()[row_b].id();
 
         // SAFETY: both rows were read from this archetype's entity list above, so both are live
         // and in range; `&mut self` means nothing else holds a view while they are permuted, and
@@ -47,7 +47,7 @@ impl World {
             let mut visited = std::collections::HashSet::new();
 
             for row in 0..arch_len {
-                let parent_entity_id = self.archetype_index.archetypes[arch_idx].entities()[row];
+                let parent_entity_id = self.archetype_index.archetypes[arch_idx].entities()[row].id();
 
                 if visited.contains(&parent_entity_id) {
                     continue;

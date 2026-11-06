@@ -96,7 +96,8 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     }
 
     #[inline]
-    fn get_inner<'a>(&'a self, entity_id: u32) -> Option<Q::Item<'a>> {
+    fn get_inner<'a, K: super::QueryKey>(&'a self, key: K) -> Option<Q::Item<'a>> {
+        let entity_id = key.slot();
         let loc = self.world.entity_location(entity_id);
         if !loc.is_valid() {
             return None;
@@ -113,6 +114,9 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
             return None;
         }
         let arch = &self.world.archetype_index.archetypes[loc.archetype_id as usize];
+        if !key.means(arch, loc.row as usize) {
+            return None;
+        }
         // SAFETY: the entity's own location names this archetype and it was checked against
         // `matching_archetypes` above, so the fetch is for an archetype this query matches and
         // `loc.row` is a live row in it. The fetch borrows the world for `'w`; aliasing was
@@ -176,7 +180,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
                     // this archetype, and every task gets a DIFFERENT row — that disjointness is
                     // what makes the shared fetch sound here.
                     .for_each(move |row| unsafe {
-                        let id = *entities_ptr.get().add(row);
+                        let id = (*entities_ptr.get().add(row)).id();
                         if Q::filter_row(wrapped_fetch.get(), row, id, ref_tick) {
                             let item = Q::get_item(wrapped_fetch.get(), row, id);
                             func_ref((id, item));
@@ -211,12 +215,12 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.iter_chunks_inner()
     }
 
-    /// Mutable access by raw `u32` id — does not check the generation (see [`Query::get`]).
+    /// Mutable access to one row, by [`Entity`] or raw id: see [`Query::get`].
     /// Because it takes `&mut self` the returned `Mut` borrows the query exclusively; a second
     /// simultaneous `get_mut`/`iter_mut` does not compile.
     #[inline]
-    pub fn get_mut(&mut self, entity_id: u32) -> Option<Q::Item<'_>> {
-        self.get_inner(entity_id)
+    pub fn get_mut(&mut self, key: impl super::QueryKey) -> Option<Q::Item<'_>> {
+        self.get_inner(key)
     }
 
     /// Every unordered pair of matching rows, **both halves mutable**.
@@ -284,10 +288,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// Generation-validated mutable access (see [`Query::get_entity`]).
     #[inline]
     pub fn get_mut_entity(&mut self, entity: Entity) -> Option<Q::Item<'_>> {
-        if !self.world.is_alive(entity) {
-            return None;
-        }
-        self.get_inner(entity.id())
+        self.get_inner(entity)
     }
 
     /// Lock-free parallel mutable iteration running on the thread pool (Work-Stealing).
@@ -468,13 +469,12 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         Ok(first)
     }
 
-    /// Access by raw `u32` id. **CAUTION: it does NOT check the generation.** If an id is given
-    /// that was despawned and whose slot has been reused, the data of the NEW entity in that
-    /// slot is returned (a silent use-after-free-like bug). If you hold an [`Entity`] handle,
-    /// use [`Query::get_entity`] — that one validates the generation.
+    /// One row, by [`Entity`] or raw id. An `Entity` is checked against the row,
+    /// so one that has died returns `None` even after its slot went to someone else. **A raw id cannot
+    /// tell them apart** and returns whoever holds the slot now.
     #[inline]
-    pub fn get(&self, entity_id: u32) -> Option<Q::Item<'_>> {
-        self.get_inner(entity_id)
+    pub fn get(&self, key: impl super::QueryKey) -> Option<Q::Item<'_>> {
+        self.get_inner(key)
     }
 
     /// Generation-validated access: returns `None` if `entity` is no longer alive (despawned or
@@ -482,16 +482,13 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// stale handle. If you hold an [`Entity`] handle, prefer this one.
     #[inline]
     pub fn get_entity(&self, entity: Entity) -> Option<Q::Item<'_>> {
-        if !self.world.is_alive(entity) {
-            return None;
-        }
-        self.get_inner(entity.id())
+        self.get_inner(entity)
     }
 
     /// Checks whether a given entity belongs to this query.
     #[inline]
-    pub fn contains(&self, entity_id: u32) -> bool {
-        self.get_inner(entity_id).is_some()
+    pub fn contains(&self, key: impl super::QueryKey) -> bool {
+        self.get_inner(key).is_some()
     }
 
     /// The matching entity ids alone, in the same order and with the same per-row filtering as
