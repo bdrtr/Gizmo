@@ -136,21 +136,21 @@ fn self_test() -> bool {
     let ring: Vec<Vec2> = (0..=8).map(|k| RED_CENTRE + Vec2::from_angle(k as f32 * std::f32::consts::TAU / 8.0) * (RED_RADIUS + 0.25)).collect();
     let mut snips = 0;
     let mut cuts = 0;
-    if let Some(mut c) = world.borrow_mut::<Cloth>().get_mut(id) {
+    if let Some(mut c) = world.query_mut::<&mut Cloth>().get_mut(id) {
         for pair in ring.windows(2) {
             cuts += cut(&mut c, pair[0], pair[1]);
             snips += 1;
         }
     }
     let red_y0: f32 = {
-        let c = world.borrow::<Cloth>();
+        let c = world.query::<&Cloth>();
         let c = c.get(id).unwrap();
         red.iter().zip(&c.nodes).filter(|(r, _)| **r).map(|(_, n)| n.position.y).sum::<f32>() / red.iter().filter(|r| **r).count() as f32
     };
     for _ in 0..180 {
         gizmo::systems::cpu_physics_step_system(&world, 1.0 / 60.0);
     }
-    let c = world.borrow::<Cloth>();
+    let c = world.query::<&Cloth>();
     let c = c.get(id).unwrap();
     let (red_off, blue_on) = score(c, &red);
     let red_y: f32 = red.iter().zip(&c.nodes).filter(|(r, _)| **r).map(|(_, n)| n.position.y).sum::<f32>() / red.iter().filter(|r| **r).count() as f32;
@@ -268,7 +268,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     if input.is_mouse_button_pressed(0) {
         if let (Some(prev), Some(now)) = (game.blade, at) {
             if prev.distance(now) > 0.01 {
-                if let Some(mut c) = world.borrow_mut::<Cloth>().get_mut(game.curtain) {
+                if let Some(mut c) = world.query_mut::<&mut Cloth>().get_mut(game.curtain) {
                     cut(&mut c, prev, now);
                 }
                 if let Some(mut g) = world.get_resource_mut::<Gizmos>() {
@@ -286,7 +286,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     game.physics.advance(world, dt.min(0.05));
     sync_transforms(world);
     let (positions, red_off, blue_on) = {
-        let c = world.borrow::<Cloth>();
+        let c = world.query::<&Cloth>();
         match c.get(game.curtain) {
             Some(c) => {
                 let p: Vec<Vec3> = game.red.iter().zip(&c.nodes).filter(|(r, _)| **r).map(|(_, n)| n.position).collect();
@@ -297,7 +297,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     };
     for (m, p) in game.markers.iter().zip(positions) {
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(*m) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(*m) {
             t.position = p + Vec3::Z * 0.03;
         }
     }
@@ -320,7 +320,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

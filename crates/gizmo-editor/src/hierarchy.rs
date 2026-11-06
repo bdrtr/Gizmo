@@ -149,12 +149,12 @@ pub fn ui_hierarchy(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
 
     // Entity listesini oluştur
     let listed = egui::ScrollArea::vertical().show(ui, |ui| {
-        let names = world.borrow::<EntityName>();
-        let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
-        let parents = world.borrow::<Parent>();
-        let children_comp = world.borrow::<Children>();
-        let is_hidden_comp = world.borrow::<gizmo_core::component::IsHidden>();
-        let is_deleted_comp = world.borrow::<gizmo_core::component::IsDeleted>();
+        let names = world.query::<&EntityName>();
+        let editor_only_markers = world.query::<&gizmo_core::component::EditorOnly>();
+        let parents = world.query::<&Parent>();
+        let children_comp = world.query::<&Children>();
+        let is_hidden_comp = world.query::<&gizmo_core::component::IsHidden>();
+        let is_deleted_comp = world.query::<&gizmo_core::component::IsDeleted>();
 
         let filter_lower = state.hierarchy_filter.to_lowercase(); // Bir kez hesaplanır
 
@@ -219,11 +219,11 @@ fn draw_entity_node(
     world: &World,
     entity: gizmo_core::entity::Entity,
     state: &mut EditorState,
-    names: &gizmo_core::StorageView<EntityName>,
-    children_comp: &gizmo_core::StorageView<Children>,
-    is_hidden_comp: &gizmo_core::StorageView<gizmo_core::component::IsHidden>,
-    is_deleted_comp: &gizmo_core::StorageView<gizmo_core::component::IsDeleted>,
-    editor_only_markers: &gizmo_core::StorageView<gizmo_core::component::EditorOnly>,
+    names: &gizmo_core::Query<&EntityName>,
+    children_comp: &gizmo_core::Query<&Children>,
+    is_hidden_comp: &gizmo_core::Query<&gizmo_core::component::IsHidden>,
+    is_deleted_comp: &gizmo_core::Query<&gizmo_core::component::IsDeleted>,
+    editor_only_markers: &gizmo_core::Query<&gizmo_core::component::EditorOnly>,
     filter_lower: &str,
     listed: &mut usize,
     // Ids this draw has already descended into — the cycle guard.
@@ -636,20 +636,20 @@ fn draw_entity_node(
 /// being scannable, which is the only thing this column is for.
 fn entity_badges(world: &World, id: Entity) -> Vec<&'static str> {
     let mut tags = Vec::new();
-    if world.borrow::<gizmo_renderer::components::Camera>().get(id).is_some() {
+    if world.query::<&gizmo_renderer::components::Camera>().get(id).is_some() {
         tags.push("cam");
     }
-    if world.borrow::<gizmo_renderer::components::DirectionalLight>().get(id).is_some()
-        || world.borrow::<gizmo_renderer::components::PointLight>().get(id).is_some()
-        || world.borrow::<gizmo_renderer::components::SpotLight>().get(id).is_some()
-        || world.borrow::<gizmo_renderer::components::RectLight>().get(id).is_some()
+    if world.query::<&gizmo_renderer::components::DirectionalLight>().get(id).is_some()
+        || world.query::<&gizmo_renderer::components::PointLight>().get(id).is_some()
+        || world.query::<&gizmo_renderer::components::SpotLight>().get(id).is_some()
+        || world.query::<&gizmo_renderer::components::RectLight>().get(id).is_some()
     {
         tags.push("lit");
     }
-    if world.borrow::<gizmo_physics_rigid::components::RigidBody>().get(id).is_some() {
+    if world.query::<&gizmo_physics_rigid::components::RigidBody>().get(id).is_some() {
         tags.push("rb");
     }
-    if world.borrow::<gizmo_physics_core::Collider>().get(id).is_some() {
+    if world.query::<&gizmo_physics_core::Collider>().get(id).is_some() {
         tags.push("col");
     }
     tags.truncate(2);

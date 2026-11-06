@@ -61,11 +61,11 @@ fn settled_box() -> (World, gizmo_core::entity::Entity) {
 }
 
 fn x_of(world: &World, e: gizmo_core::entity::Entity) -> f32 {
-    world.borrow::<Transform>().get(e).expect("transform").position.x
+    world.query::<&Transform>().get(e).expect("transform").position.x
 }
 
 fn is_asleep(world: &World, e: gizmo_core::entity::Entity) -> bool {
-    world.borrow::<RigidBody>().get(e).expect("body").is_sleeping
+    world.query::<&RigidBody>().get(e).expect("body").is_sleeping
 }
 
 /// Writing a velocity to a sleeping body and walking away must not arm anything.
@@ -85,7 +85,7 @@ fn a_velocity_written_to_a_sleeping_body_does_not_fire_when_something_else_wakes
     // Gameplay writes a velocity and does NOT wake the body — the mistake three writers in this
     // engine used to make.
     {
-        let mut vels = world.borrow_mut::<Velocity>();
+        let mut vels = world.query_mut::<&mut Velocity>();
         vels.get_mut(body).expect("velocity").linear = Vec3::new(5.0, 0.0, 0.0);
     }
 
@@ -98,7 +98,7 @@ fn a_velocity_written_to_a_sleeping_body_does_not_fire_when_something_else_wakes
 
     // Now something unrelated wakes it — the editor's button, a neighbour, a blast.
     {
-        let mut bodies = world.borrow_mut::<RigidBody>();
+        let mut bodies = world.query_mut::<&mut RigidBody>();
         bodies.get_mut(body).expect("body").wake_up();
     }
     for _ in 0..60 {
@@ -126,11 +126,11 @@ fn the_same_write_works_when_the_writer_wakes_the_body() {
     let x0 = x_of(&world, body);
 
     {
-        let mut bodies = world.borrow_mut::<RigidBody>();
+        let mut bodies = world.query_mut::<&mut RigidBody>();
         bodies.get_mut(body).expect("body").wake_up();
     }
     {
-        let mut vels = world.borrow_mut::<Velocity>();
+        let mut vels = world.query_mut::<&mut Velocity>();
         vels.get_mut(body).expect("velocity").linear = Vec3::new(5.0, 0.0, 0.0);
     }
 

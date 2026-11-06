@@ -17,7 +17,7 @@ workspace crates — `gizmo-studio` is `publish = false`). *(Said `0.9.0` until 
 CHANGELOG.md's own note says that version never reached crates.io — no tag, no release.)*
 
 - **ECS:** Entity = id, Component = data, Systems query Archetypes. `World` is the central
-  state; `Query`/`Mut`/`With`/`Without`/`Changed`/`Added` filters; `Commands` for deferred
+  state; `Query` with `&T`/`&mut T`/`Entity` terms and `With`/`Without`/`Changed`/`Added` filters; `Commands` for deferred
   structural changes; Table + SparseSet storage.
 - **Physics:** rigid (TGS-Soft solver), soft-body (FEM/cloth/rope), fracture, joints,
   vehicle/character dynamics, CCD, GJK/EPA narrowphase, BVH broadphase.

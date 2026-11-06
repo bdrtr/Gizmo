@@ -373,7 +373,7 @@ fn draw_status_bar(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         let sel_label = match selected {
             0 => "nothing selected".to_string(),
             1 => {
-                let names = world.borrow::<gizmo_core::EntityName>();
+                let names = world.query::<&gizmo_core::EntityName>();
                 let entity = state.selection.entities.iter().next().copied();
                 let name = entity
                     .and_then(|e| names.get(e).map(|n| n.0.clone()))

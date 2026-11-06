@@ -132,7 +132,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
         primary: true,
         ..Default::default()
     });
-    if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(camera) {
+    if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(camera) {
         c.clear_color = Some(Vec3::from(SKY));
     }
     let hud = world
@@ -355,7 +355,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
 
     // Kamera: arkada ve yukarıda, şeridi yumuşakça izliyor.
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         let want = Vec3::new(game.x * 0.6, 3.6 + game.y * 0.3, game.z + 7.0);
         t.position = t.position.lerp(want, (dt * 8.0).min(1.0));
         t.position.z = game.z + 7.0;
@@ -440,7 +440,7 @@ fn run(world: &mut World, game: &mut Game, dt: f32, input: &Input) {
     game.slide = (game.slide - dt).max(0.0);
     let half = if game.slide > 0.0 { SLIDE } else { STAND };
     let centre = Vec3::new(game.x, game.y + half.y, game.z);
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.player) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.player) {
         t.position = centre;
         t.scale = half;
     }
@@ -475,7 +475,7 @@ fn run(world: &mut World, game: &mut Game, dt: f32, input: &Input) {
     let spin = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2) * Quat::from_rotation_x(game.spin);
     let coins: Vec<Entity> = world.query::<(Entity, &Coin)>().iter().map(|(entity, _)| entity).collect();
     for id in coins {
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(id) {
             t.rotation = spin;
         }
     }
@@ -552,7 +552,7 @@ fn play(world: &mut World, name: &str) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

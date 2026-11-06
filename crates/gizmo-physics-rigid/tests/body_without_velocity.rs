@@ -34,10 +34,10 @@ fn a_static_floor_without_a_velocity_holds_a_body_up() {
         gizmo_physics_rigid::system::physics_step_system(&world, DT);
         world.apply_commands();
     }
-    let y = world.borrow::<Transform>().get(ball).unwrap().position.y;
+    let y = world.query::<&Transform>().get(ball).unwrap().position.y;
     assert!((y - 0.5).abs() < 0.05, "the ball should rest on the floor at y = 0.5, it is at {y}");
     assert!(
-        world.borrow::<Velocity>().get(floor).is_none(),
+        world.query::<&Velocity>().get(floor).is_none(),
         "a static body is simulated as it is — nothing is added to it"
     );
 }
@@ -56,13 +56,13 @@ fn a_moving_body_without_a_velocity_is_given_one_and_falls() {
     // The first step queues the velocity; the flush adds it.
     gizmo_physics_rigid::system::physics_step_system(&world, DT);
     world.apply_commands();
-    assert!(world.borrow::<Velocity>().get(body).is_some(), "no Velocity was added");
+    assert!(world.query::<&Velocity>().get(body).is_some(), "no Velocity was added");
 
     for _ in 0..120 {
         gizmo_physics_rigid::system::physics_step_system(&world, DT);
         world.apply_commands();
     }
-    let y = world.borrow::<Transform>().get(body).unwrap().position.y;
+    let y = world.query::<&Transform>().get(body).unwrap().position.y;
     // One second of free fall from rest is 4.9 m; the first step it missed is 1/120 s.
     assert!((y - (10.0 - 4.9)).abs() < 0.3, "a second of free fall should end near y = 5.1, got {y}");
 }

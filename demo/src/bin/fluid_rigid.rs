@@ -98,7 +98,7 @@ fn main() {
             );
 
             if let Some(clones) = world.clone_entity(template.id(), 100_000 - 1) {
-                let mut handles = world.borrow_mut::<gizmo::renderer::components::FluidHandle>();
+                let mut handles = world.query_mut::<&mut gizmo::renderer::components::FluidHandle>();
                 for (i, clone_ent) in clones.into_iter().enumerate() {
                     if let Some(mut h) = handles.get_mut(clone_ent) {
                         h.gpu_index = (i + 1) as u32;
@@ -170,7 +170,7 @@ fn main() {
                 state.cam_pitch = state.cam_pitch.clamp(-1.5, 1.5);
             }
 
-            if let Some(mut tr) = world.borrow_mut::<Transform>().get_mut(state.cam_id) {
+            if let Some(mut tr) = world.query_mut::<&mut Transform>().get_mut(state.cam_id) {
                 tr.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
                 let forward = tr.rotation * Vec3::new(0.0, 0.0, -1.0);
                 let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
@@ -192,7 +192,7 @@ fn main() {
                 state.mouse_pos = m_pos;
             }
 
-            if let Some(mut cam) = world.borrow_mut::<Camera>().get_mut(state.cam_id) {
+            if let Some(mut cam) = world.query_mut::<&mut Camera>().get_mut(state.cam_id) {
                 cam.yaw = state.cam_yaw;
                 cam.pitch = state.cam_pitch;
             }

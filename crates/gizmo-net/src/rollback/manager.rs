@@ -141,12 +141,12 @@ impl RollbackManager {
         // SAFETY: exclusive `&mut World`; the three component types are distinct, so the mutable
         // views never alias the same storage. Same argument as `PhysicsStateSnapshot::restore`.
         let mut transforms =
-            unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::components::Transform>() };
+            unsafe { world.query_unchecked::<&mut gizmo_physics_core::components::Transform>() };
         // SAFETY: as above — Velocity is a distinct component type from Transform.
-        let mut velocities = unsafe { world.borrow_mut_unchecked::<gizmo_physics_rigid::Velocity>() };
+        let mut velocities = unsafe { world.query_unchecked::<&mut gizmo_physics_rigid::Velocity>() };
         // SAFETY: as above — RigidBody is distinct from both Transform and Velocity.
         let mut rigid_bodies =
-            unsafe { world.borrow_mut_unchecked::<gizmo_physics_rigid::RigidBody>() };
+            unsafe { world.query_unchecked::<&mut gizmo_physics_rigid::RigidBody>() };
         for (id, rb, t, v) in rows {
             // A physics body is known by its raw id; the row is whoever holds that id now.
             let Some(id) = world.entity(id) else { continue };
@@ -285,7 +285,7 @@ mod tests {
 
         // Frame 1: Objeyi hareket ettir (Simülasyon adımı)
         {
-            let mut transforms = world.borrow_mut::<Transform>();
+            let mut transforms = world.query_mut::<&mut Transform>();
             if let Some(mut trans) = transforms.get_mut(ent) {
                 trans.position.x += 1.0; // pozisyon 11.0 oldu
             }
@@ -308,7 +308,7 @@ mod tests {
         // Rollback gerçekleştiği için dünya Tick 0'a dönmüş olmalı!
         // Tick 0'da pozisyon 10.0'dı.
         {
-            let transforms = world.borrow::<Transform>();
+            let transforms = world.query::<&Transform>();
             let trans = transforms.get(ent).unwrap();
             assert_eq!(trans.position.x, 10.0);
         }

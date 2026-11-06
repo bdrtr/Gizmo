@@ -65,7 +65,7 @@
 use gizmo::core::input::{
     apply_stick_deadzone, GamepadAxis, GamepadButton, GamepadDeadzone, GamepadId, Input,
 };
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -236,7 +236,7 @@ fn drive_selftest(mut input: ResMut<Input>, mut pad: ResMut<PadState>) {
 
 /// Kolu okur, küpü sürer, defteri doldurur.
 fn read_pad(
-    mut pawns: Query<(Mut<Transform>, With<Pawn>)>,
+    mut pawns: Query<(&mut Transform, With<Pawn>)>,
     mut pad: ResMut<PadState>,
     input: Res<Input>,
 ) {

@@ -91,7 +91,7 @@ fn a_saved_scene_comes_back_with_its_meshes_lights_and_camera() {
 
     // What the picture is made of.
     {
-        let meshes = loaded.borrow::<MeshSource>();
+        let meshes = loaded.query::<&MeshSource>();
         let mut sources: Vec<String> = meshes.iter().map(|m| m.0.clone()).collect();
         sources.sort();
         assert_eq!(
@@ -107,11 +107,11 @@ fn a_saved_scene_comes_back_with_its_meshes_lights_and_camera() {
 
     // What it is lit by, and what looks at it: the pair that used to vanish silently.
     {
-        let lights = loaded.borrow::<DirectionalLight>();
+        let lights = loaded.query::<&DirectionalLight>();
         let found: Vec<f32> = lights.iter().map(|l| l.intensity).collect();
         assert_eq!(found, vec![3.0], "the sun must survive the file");
 
-        let cameras = loaded.borrow::<Camera>();
+        let cameras = loaded.query::<&Camera>();
         let primaries = cameras.iter().filter(|c| c.primary).count();
         assert_eq!(primaries, 1, "a scene with no primary camera draws nothing");
     }
@@ -119,8 +119,8 @@ fn a_saved_scene_comes_back_with_its_meshes_lights_and_camera() {
     // Values, not just presence — a component that comes back with default contents is the same
     // bug wearing the shape of a pass.
     {
-        let transforms = loaded.borrow::<Transform>();
-        let materials = loaded.borrow::<MaterialSource>();
+        let transforms = loaded.query::<&Transform>();
+        let materials = loaded.query::<&MaterialSource>();
 
         let floor = loaded.query::<(Entity, &EntityName)>().iter()
             .find(|(_, n)| n.0 == "Zemin")

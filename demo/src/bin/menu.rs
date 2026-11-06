@@ -375,7 +375,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
 
     // İsim alanı: Enter ile gönderildiyse kaydet ve selamla.
     let submitted: Option<String> = world
-        .borrow::<TextInput>()
+        .query::<&TextInput>()
         .iter()
         .find(|f| f.is_submitted())
         .map(|f| f.value.clone());
@@ -387,13 +387,13 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
     // Düğme renkleri: odak `Hovered` olarak geliyor, yani üzerine gelme rengi odak rengi de.
     let states: Vec<(Entity, Interaction)> = world.query::<(Entity, &Interaction)>().iter().map(|(entity, i)| (entity, *i)).collect();
     for (id, i) in states {
-        if let Some(mut bg) = world.borrow_mut::<BackgroundColor>().get_mut(id) {
+        if let Some(mut bg) = world.query_mut::<&mut BackgroundColor>().get_mut(id) {
             bg.0 = fill(i);
         }
     }
 
     // Ses kaydırıcısı: değiştikçe uygula; bir sürükleme bitince ya da klavyeyle bir adımda kaydet.
-    if let Some(slider) = world.borrow::<gizmo::ui::Slider>().get(menu.volume_button).copied() {
+    if let Some(slider) = world.query::<&gizmo::ui::Slider>().get(menu.volume_button).copied() {
         if slider.just_changed() {
             set_volume(world, &mut menu, (slider.value * 100.0).round() as u32);
         }
@@ -404,7 +404,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
 
     // Zorluk: seçim değiştiyse kaydet.
     let picked = world
-        .borrow::<gizmo::ui::Dropdown>()
+        .query::<&gizmo::ui::Dropdown>()
         .get(menu.difficulty)
         .filter(|d| d.just_changed())
         .map(|d| d.selected);
@@ -413,7 +413,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
     }
 
     let clicked: Vec<(Entity, Action)> = {
-        let clicks = world.borrow::<Clicked>();
+        let clicks = world.query::<&Clicked>();
         world.query::<(Entity, &MenuButton)>().iter().filter(|(entity, _)| clicks.get(*entity).is_some_and(|c| c.0)).map(|(entity, b)| (entity, b.0)).collect()
     };
     for (id, action) in clicked {
@@ -449,7 +449,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
                 });
                 // Listenin seçenekleri de yeni dilde.
                 if let Some(options) = options {
-                    if let Some(mut d) = world.borrow_mut::<gizmo::ui::Dropdown>().get_mut(menu.difficulty) {
+                    if let Some(mut d) = world.query_mut::<&mut gizmo::ui::Dropdown>().get_mut(menu.difficulty) {
                         d.options = options;
                     }
                 }
@@ -461,7 +461,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
             }
         };
         if let Some(label) = label {
-            if let Some(mut t) = world.borrow_mut::<LocalizedText>().get_mut(id) {
+            if let Some(mut t) = world.query_mut::<&mut LocalizedText>().get_mut(id) {
                 *t = label;
             }
         }
@@ -486,7 +486,7 @@ fn set_volume(world: &mut World, menu: &mut Menu, v: u32) {
     if let Some(mut audio) = world.get_resource_mut::<AudioManager>() {
         audio.mixer_mut().set_master_gain(menu.volume as f32 / 100.0);
     }
-    if let Some(mut t) = world.borrow_mut::<LocalizedText>().get_mut(menu.volume_button) {
+    if let Some(mut t) = world.query_mut::<&mut LocalizedText>().get_mut(menu.volume_button) {
         *t = volume_label(menu.volume);
     }
 }

@@ -202,7 +202,7 @@ fn main() {
 
             scene.spawn_camera(state, Vec3::new(W as f32 / 2.0, -(H as f32) / 2.0, 20.0), Vec3::new(W as f32 / 2.0, -(H as f32) / 2.0, 0.0));
             let camera = scene.world.query::<(Entity, &Camera)>().iter().next().map(|(entity, _)| entity).expect("camera");
-            if let Some(mut c) = scene.world.borrow_mut::<Camera>().get_mut(camera) {
+            if let Some(mut c) = scene.world.query_mut::<&mut Camera>().get_mut(camera) {
                 c.projection = ProjectionMode::OrthographicFit { width: 22.0, height: 14.0 };
                 // Hiç görülmeyen yer siyah: harita orada boş, arkası kameranın rengi.
                 c.clear_color = Some(Vec3::ZERO);
@@ -334,7 +334,7 @@ fn line_of_sight(game: &Game, a: P, b: P) -> bool {
 
 /// Haritayı ve varlıkları görüşe göre yeniden boya.
 fn redraw(world: &mut World, game: &Game) {
-    if let Some(mut map) = world.borrow_mut::<Tilemap>().get_mut(game.map) {
+    if let Some(mut map) = world.query_mut::<&mut Tilemap>().get_mut(game.map) {
         for y in 0..H {
             for x in 0..W {
                 let p = P(x as i32, y as i32);
@@ -358,7 +358,7 @@ fn redraw(world: &mut World, game: &Game) {
         }
     }
     {
-        let mut ts = world.borrow_mut::<Transform>();
+        let mut ts = world.query_mut::<&mut Transform>();
         if let Some(mut t) = ts.get_mut(game.player_e) {
             t.position = world_of(game.player);
         }
@@ -377,7 +377,7 @@ fn redraw(world: &mut World, game: &Game) {
         .collect();
     for (id, show) in shows {
         let Some(e) = world.live(id) else { continue };
-        let hidden = world.borrow::<IsHidden>().get(id).is_some();
+        let hidden = world.query::<&IsHidden>().get(id).is_some();
         if show && hidden {
             world.remove_component::<IsHidden>(e);
         } else if !show && !hidden {
@@ -420,7 +420,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
     // Kamera oyuncuyu yumuşakça izliyor.
     let target = world_of(game.player);
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         let k = 1.0 - (-dt * 8.0).exp();
         t.position.x += (target.x - t.position.x) * k;
         t.position.y += (target.y - t.position.y) * k;
@@ -540,10 +540,10 @@ fn auto_step(game: &Game) -> Option<P> {
 }
 
 fn draw_hud(world: &mut World, game: &Game) {
-    if let Some(mut bar) = world.borrow_mut::<ProgressBar>().get_mut(game.hp_bar) {
+    if let Some(mut bar) = world.query_mut::<&mut ProgressBar>().get_mut(game.hp_bar) {
         bar.value = game.hp as f32 / MAX_HP as f32;
     }
-    let mut texts = world.borrow_mut::<Text>();
+    let mut texts = world.query_mut::<&mut Text>();
     if let Some(mut t) = texts.get_mut(game.hud) {
         t.content = format!("Kat {}   Altın {}   Can {}/{}   Düşman {}", game.depth, game.gold, game.hp, MAX_HP, game.monsters.len());
     }

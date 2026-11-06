@@ -1,5 +1,5 @@
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::math::{Quat, Vec3, Vec4};
 use gizmo::prelude::*;
@@ -162,7 +162,7 @@ fn main() {
             // ata: torus = fırçalı bakır, altın küre = izotropik, lambanın metal parçaları =
             // fırçalı, gerisi izotropik.
             {
-                let mut materials = world.borrow_mut::<Material>();
+                let mut materials = world.query_mut::<&mut Material>();
                 for mut mat in materials.iter_mut() {
                     if mat.albedo.x > 0.9 && mat.albedo.y < 0.7 {
                         mat.anisotropy = 0.9; // Torus (anizotropik bakır)
@@ -748,7 +748,7 @@ fn handle_input(
 fn camera_orbit(
     mut state: ResMut<DemoState>,
     mut camera_settings: ResMut<CameraSettings>,
-    mut q_cam: Query<(Mut<Transform>, Mut<gizmo::renderer::components::Camera>)>,
+    mut q_cam: Query<(&mut Transform, &mut gizmo::renderer::components::Camera)>,
     time: Res<Time>,
     input: Res<Input>,
 ) {
@@ -838,8 +838,8 @@ fn animate_lights(
     state: Res<DemoState>,
     lighting_settings: Res<LightingSettings>,
     mut renderer: ResMut<gizmo::renderer::Renderer>,
-    mut q_dir: Query<(Mut<Transform>, Mut<DirectionalLight>)>,
-    mut q_point: Query<(Mut<Transform>, Mut<PointLight>)>,
+    mut q_dir: Query<(&mut Transform, &mut DirectionalLight)>,
+    mut q_point: Query<(&mut Transform, &mut PointLight)>,
     time: Res<Time>,
 ) {
     let t = time.elapsed() as f32;

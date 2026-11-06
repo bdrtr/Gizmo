@@ -202,7 +202,7 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
 
     // ECS VehicleController'a girdileri aktar
     {
-        let mut q_v = world.query_mut::<Mut<VehicleController>>();
+        let mut q_v = world.query_mut::<&mut VehicleController>();
         if let Some(mut vehicle) = q_v.get_mut(state.car_entity) {
             vehicle.throttle_input = throttle;
             vehicle.brake_input = brake;
@@ -229,7 +229,7 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
     let mut car_pos = Vec3::ZERO;
     let mut car_rot = Quat::IDENTITY;
     {
-        let mut q = world.query_mut::<Mut<Transform>>();
+        let mut q = world.query_mut::<&mut Transform>();
         if let Some(t) = q.get_mut(state.car_entity) {
             car_pos = t.position;
             car_rot = t.rotation;
@@ -241,7 +241,7 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
     let mut wheel_rotations = [Quat::IDENTITY; 4];
 
     {
-        let mut q_v = world.query_mut::<Mut<VehicleController>>();
+        let mut q_v = world.query_mut::<&mut VehicleController>();
         if let Some(vehicle) = q_v.get_mut(state.car_entity) {
             for i in 0..4 {
                 let wheel = &vehicle.wheels[i];
@@ -257,7 +257,7 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
     }
 
     {
-        let mut q = world.query_mut::<Mut<Transform>>();
+        let mut q = world.query_mut::<&mut Transform>();
         for i in 0..4 {
             if let Some(mut wt) = q.get_mut(state.wheel_entities[i]) {
                 wt.set_position(wheel_positions[i]);
@@ -280,7 +280,7 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
     state.camera_pos = car_pos + Vec3::new(0.0, 4.0, 0.0) + offset;
 
     {
-        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
+        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
         for (mut trans, mut cam) in q.iter_mut() {
             trans.position = state.camera_pos;
             trans.rotation = rot;
@@ -292,7 +292,7 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
     // Debug (R basılıyken anlık fizik durumunu konsola basar)
     if input.is_key_pressed(KeyCode::KeyR as u32) {
         {
-            let mut q_v = world.query_mut::<Mut<VehicleController>>();
+            let mut q_v = world.query_mut::<&mut VehicleController>();
             if let Some(v) = q_v.get_mut(state.car_entity) {
                 println!(
                     "[Vehicle] Speed: {:.1} km/h | RPM: {:.0} | Gear: {} | Thr: {:.2} | Rev: {}",
@@ -333,7 +333,7 @@ fn ui(world: &mut World, state: &mut VehicleState, ctx: &egui::Context) {
     }
 
     {
-        let mut q_v = world.query_mut::<Mut<VehicleController>>();
+        let mut q_v = world.query_mut::<&mut VehicleController>();
         if let Some(v) = q_v.get_mut(state.car_entity) {
             speed_kmh = v.current_speed_kmh;
             rpm = v.engine_rpm;

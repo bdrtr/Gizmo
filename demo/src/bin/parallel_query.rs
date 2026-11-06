@@ -48,7 +48,7 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -197,7 +197,7 @@ fn main() {
 }
 
 /// Hareket + sekme. Kip P ile değişiyor; ölçülen şey yalnız bu geçiş.
-fn move_and_bounce(mut cubes: Query<(Mut<Transform>, Mut<Velocity>)>, mut bench: ResMut<Bench>) {
+fn move_and_bounce(mut cubes: Query<(&mut Transform, &mut Velocity)>, mut bench: ResMut<Bench>) {
     let started = std::time::Instant::now();
     let parallel = bench.parallel;
 

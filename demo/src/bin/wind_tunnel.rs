@@ -97,7 +97,7 @@ fn main() {
                     state.t,
                     state.wind_speed,
                 );
-                if let Some(m) = world.borrow::<Mesh>().get(state.ribbon_id) {
+                if let Some(m) = world.query::<&Mesh>().get(state.ribbon_id) {
                     m.update_vertices(&renderer.queue, &verts);
                 }
             }
@@ -258,7 +258,7 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
 fn fit_car(world: &mut World, root: Entity) {
     // Root'u kimliğe sabitle → doğal ölçüm.
     {
-        let mut transforms = world.borrow_mut::<Transform>();
+        let mut transforms = world.query_mut::<&mut Transform>();
         if let Some(mut t) = transforms.get_mut(root) {
             t.scale = Vec3::splat(1.0);
             t.rotation = Quat::IDENTITY;
@@ -288,7 +288,7 @@ fn fit_car(world: &mut World, root: Entity) {
     }
     let ncenter = (nmin + nmax) * 0.5;
     let pos = Vec3::new(-ncenter.x, -nmin.y, -ncenter.z);
-    let mut transforms = world.borrow_mut::<Transform>();
+    let mut transforms = world.query_mut::<&mut Transform>();
     if let Some(mut t) = transforms.get_mut(root) {
         t.scale = Vec3::splat(scale);
         t.rotation = rot;
@@ -464,9 +464,9 @@ fn build_ribbon_verts(
 
 /// Bir entity + alt hiyerarşisinin DÜNYA-uzayı AABB'si (Mesh.bounds × hiyerarşi matrisleri).
 fn world_aabb(world: &World, root: Entity) -> Option<(Vec3, Vec3)> {
-    let meshes = world.borrow::<Mesh>();
-    let transforms = world.borrow::<Transform>();
-    let children = world.borrow::<gizmo::core::component::Children>();
+    let meshes = world.query::<&Mesh>();
+    let transforms = world.query::<&Transform>();
+    let children = world.query::<&gizmo::core::component::Children>();
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     let mut found = false;
@@ -516,9 +516,9 @@ fn measure_frontal_area_m2(world: &World, root: Entity, amin: Vec3, amax: Vec3) 
     let h = (amax.y - amin.y).max(1e-4);
     let mut grid = vec![false; G * G];
 
-    let meshes = world.borrow::<Mesh>();
-    let transforms = world.borrow::<Transform>();
-    let children = world.borrow::<gizmo::core::component::Children>();
+    let meshes = world.query::<&Mesh>();
+    let transforms = world.query::<&Transform>();
+    let children = world.query::<&gizmo::core::component::Children>();
     let mut tri_count = 0usize;
 
     let mut stack: Vec<(Entity, Mat4)> = vec![(root, Mat4::IDENTITY)];

@@ -42,7 +42,7 @@
 //! # std::fs::remove_file(&script).ok();
 //!
 //! // Lua never touched the World itself — the command it enqueued did, at flush time.
-//! let pos = world.borrow::<Transform>().get(player).unwrap().position;
+//! let pos = world.query::<&Transform>().get(player).unwrap().position;
 //! assert_eq!(pos, Vec3::new(1.0, 2.0, 3.0));
 //! ```
 //!

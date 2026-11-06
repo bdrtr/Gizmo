@@ -37,17 +37,17 @@ pub fn empty_systems(criterion: &mut Criterion) {
 }
 
 pub fn busy_systems(criterion: &mut Criterion) {
-    let ab = |mut q: gizmo_core::query::Query<(gizmo_core::query::Mut<TestA>, gizmo_core::query::Mut<TestB>)>| {
+    let ab = |mut q: gizmo_core::query::Query<(&mut TestA, &mut TestB)>| {
         q.iter_mut().for_each(|(mut a, mut b)| {
             core::mem::swap(&mut a.0, &mut b.0);
         });
     };
-    let cd = |mut q: gizmo_core::query::Query<(gizmo_core::query::Mut<TestC>, gizmo_core::query::Mut<TestD>)>| {
+    let cd = |mut q: gizmo_core::query::Query<(&mut TestC, &mut TestD)>| {
         q.iter_mut().for_each(|(mut c, mut d)| {
             core::mem::swap(&mut c.0, &mut d.0);
         });
     };
-    let ce = |mut q: gizmo_core::query::Query<(gizmo_core::query::Mut<TestC>, gizmo_core::query::Mut<TestE>)>| {
+    let ce = |mut q: gizmo_core::query::Query<(&mut TestC, &mut TestE)>| {
         q.iter_mut().for_each(|(mut c, mut e)| {
             core::mem::swap(&mut c.0, &mut e.0);
         });
@@ -93,12 +93,12 @@ pub fn busy_systems(criterion: &mut Criterion) {
 }
 
 pub fn contrived(criterion: &mut Criterion) {
-    let s_0 = |mut q_0: gizmo_core::query::Query<(gizmo_core::query::Mut<TestA>, gizmo_core::query::Mut<TestB>)>| {
+    let s_0 = |mut q_0: gizmo_core::query::Query<(&mut TestA, &mut TestB)>| {
         q_0.iter_mut().for_each(|(mut c_0, mut c_1)| {
             core::mem::swap(&mut c_0.0, &mut c_1.0);
         });
     };
-    let s_1 = |mut q_0: gizmo_core::query::Query<(gizmo_core::query::Mut<TestA>, gizmo_core::query::Mut<TestC>)>, mut q_1: gizmo_core::query::Query<(gizmo_core::query::Mut<TestB>, gizmo_core::query::Mut<TestD>)>| {
+    let s_1 = |mut q_0: gizmo_core::query::Query<(&mut TestA, &mut TestC)>, mut q_1: gizmo_core::query::Query<(&mut TestB, &mut TestD)>| {
         q_0.iter_mut().for_each(|(mut c_0, mut c_1)| {
             core::mem::swap(&mut c_0.0, &mut c_1.0);
         });
@@ -106,7 +106,7 @@ pub fn contrived(criterion: &mut Criterion) {
             core::mem::swap(&mut c_0.0, &mut c_1.0);
         });
     };
-    let s_2 = |mut q_0: gizmo_core::query::Query<(gizmo_core::query::Mut<TestC>, gizmo_core::query::Mut<TestD>)>| {
+    let s_2 = |mut q_0: gizmo_core::query::Query<(&mut TestC, &mut TestD)>| {
         q_0.iter_mut().for_each(|(mut c_0, mut c_1)| {
             core::mem::swap(&mut c_0.0, &mut c_1.0);
         });
@@ -150,17 +150,17 @@ pub fn contrived(criterion: &mut Criterion) {
 }
 
 pub fn schedule_bench(c: &mut Criterion) {
-    let ab = |mut q: gizmo_core::query::Query<(gizmo_core::query::Mut<TestA>, gizmo_core::query::Mut<TestB>)>| {
+    let ab = |mut q: gizmo_core::query::Query<(&mut TestA, &mut TestB)>| {
         q.iter_mut().for_each(|(mut a, mut b)| {
             core::mem::swap(&mut a.0, &mut b.0);
         });
     };
-    let cd = |mut q: gizmo_core::query::Query<(gizmo_core::query::Mut<TestC>, gizmo_core::query::Mut<TestD>)>| {
+    let cd = |mut q: gizmo_core::query::Query<(&mut TestC, &mut TestD)>| {
         q.iter_mut().for_each(|(mut c, mut d)| {
             core::mem::swap(&mut c.0, &mut d.0);
         });
     };
-    let ce = |mut q: gizmo_core::query::Query<(gizmo_core::query::Mut<TestC>, gizmo_core::query::Mut<TestE>)>| {
+    let ce = |mut q: gizmo_core::query::Query<(&mut TestC, &mut TestE)>| {
         q.iter_mut().for_each(|(mut c, mut e)| {
             core::mem::swap(&mut c.0, &mut e.0);
         });

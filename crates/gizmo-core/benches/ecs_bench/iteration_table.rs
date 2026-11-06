@@ -1,7 +1,7 @@
 use criterion::Criterion;
 use gizmo_core::{
     world::World,
-    query::{Query, Mut},
+    query::Query,
 };
 use super::common::*;
 
@@ -17,7 +17,7 @@ pub fn bench_simple_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
+    let mut query = world.query_mut::<(&Velocity, &mut Position)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("simple_iter", |b| {
@@ -43,7 +43,7 @@ pub fn bench_contiguous_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
+    let mut query = world.query_mut::<(&Velocity, &mut Position)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("contiguous_iter", |b| {
@@ -77,7 +77,7 @@ pub fn bench_contiguous_iter_avx2(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
+    let mut query = world.query_mut::<(&Velocity, &mut Position)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     #[target_feature(enable = "avx2")]
@@ -116,7 +116,7 @@ pub fn bench_for_each_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
+    let mut query = world.query_mut::<(&Velocity, &mut Position)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("for_each_iter", |b| {
@@ -148,7 +148,7 @@ pub fn bench_cache_locality_loss(c: &mut Criterion) {
         world.despawn(e);
     }
 
-    let mut query = world.query_mut::<(Mut<A>, &B)>();
+    let mut query = world.query_mut::<(&mut A, &B)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("cache_locality_loss", |b| {
@@ -172,7 +172,7 @@ pub fn bench_bypass_change_detection(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&Velocity, Mut<Position>)>();
+    let mut query = world.query_mut::<(&Velocity, &mut Position)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("bypass_change_detection", |b| {
@@ -199,7 +199,7 @@ pub fn bench_system_iter(c: &mut Criterion) {
         )
     })).count();
 
-    fn query_system(mut query: Query<(&Velocity, Mut<Position>)>) {
+    fn query_system(mut query: Query<(&Velocity, &mut Position)>) {
         for (velocity, mut position) in query.iter_mut() {
             position.0.0[0] += velocity.0.0[0];
             position.0.0[1] += velocity.0.0[1];

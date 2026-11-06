@@ -343,10 +343,10 @@ fn restart(world: &mut World, game: &mut Game) {
     for door in &mut game.doors {
         door.y = DOOR_CLOSED_Y;
         let position = door.at + Vec3::Y * door.y;
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(door.id) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(door.id) {
             t.position = position;
         }
-        if let Some(mut k) = world.borrow_mut::<KinematicTarget>().get_mut(door.id) {
+        if let Some(mut k) = world.query_mut::<&mut KinematicTarget>().get_mut(door.id) {
             *k = KinematicTarget::new(position, Quat::IDENTITY);
         }
     }
@@ -367,13 +367,13 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
             let (mx, my) = input.move_axis();
             Vec3::new(mx, 0.0, -my)
         };
-        if let Some(mut c) = world.borrow_mut::<CharacterController>().get_mut(game.player) {
+        if let Some(mut c) = world.query_mut::<&mut CharacterController>().get_mut(game.player) {
             c.target_velocity = wish * c.speed;
         }
         game.physics.advance(world, dt);
         sync_transforms(world);
         plates_and_doors(world, &mut game, dt);
-        let p = world.borrow::<Transform>().get(game.player).map(|t| t.position).unwrap_or(game.start);
+        let p = world.query::<&Transform>().get(game.player).map(|t| t.position).unwrap_or(game.start);
         if Vec2::new(p.x - game.exit.x, p.z - game.exit.z).length() < 0.5 {
             game.won = true;
         }
@@ -386,7 +386,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 /// hepsi basılıysa iner, değilse çıkar.
 fn plates_and_doors(world: &mut World, game: &mut Game, dt: f32) {
     let stood_on: Vec<BodyHandle> = world
-        .borrow::<CharacterController>()
+        .query::<&CharacterController>()
         .get(game.player)
         .map(|c| c.triggers.clone())
         .unwrap_or_default();
@@ -405,7 +405,7 @@ fn plates_and_doors(world: &mut World, game: &mut Game, dt: f32) {
         }
     }
     for (plate, &down) in game.plates.iter().zip(&pressed) {
-        if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(plate.lamp) {
+        if let Some(mut m) = world.query_mut::<&mut MaterialDesc>().get_mut(plate.lamp) {
             let want = MaterialDesc::new().with_unlit(plate_colour(down));
             if *m != want {
                 *m = want;
@@ -417,7 +417,7 @@ fn plates_and_doors(world: &mut World, game: &mut Game, dt: f32) {
         let goal = if open { DOOR_OPEN_Y } else { DOOR_CLOSED_Y };
         let step = DOOR_SPEED * dt;
         door.y += (goal - door.y).clamp(-step, step);
-        if let Some(mut k) = world.borrow_mut::<KinematicTarget>().get_mut(door.id) {
+        if let Some(mut k) = world.query_mut::<&mut KinematicTarget>().get_mut(door.id) {
             *k = KinematicTarget::new(door.at + Vec3::Y * door.y, Quat::IDENTITY);
         }
     }
@@ -427,9 +427,9 @@ fn plates_and_doors(world: &mut World, game: &mut Game, dt: f32) {
 /// bir sonrakine geçer.
 fn auto_walk(world: &World, game: &mut Game, dt: f32) -> Vec3 {
     let Some(&(x, z)) = AUTO_PATH.get(game.auto_step) else { return Vec3::ZERO };
-    let p = world.borrow::<Transform>().get(game.player).map(|t| t.position).unwrap_or(game.start);
+    let p = world.query::<&Transform>().get(game.player).map(|t| t.position).unwrap_or(game.start);
     let to = Vec3::new(x - p.x, 0.0, z - p.z);
-    let moving = world.borrow::<Velocity>().get(game.player).is_some_and(|v| Vec2::new(v.linear.x, v.linear.z).length() > 0.3);
+    let moving = world.query::<&Velocity>().get(game.player).is_some_and(|v| Vec2::new(v.linear.x, v.linear.z).length() > 0.3);
     game.auto_stuck = if moving { 0.0 } else { game.auto_stuck + dt };
     if to.length() < 0.1 || game.auto_stuck > 0.5 {
         game.auto_step += 1;
@@ -446,7 +446,7 @@ fn hud(world: &mut World, game: &Game) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

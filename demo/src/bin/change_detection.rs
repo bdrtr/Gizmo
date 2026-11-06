@@ -15,7 +15,7 @@
 //! koşuya ayarlıyor. Bu yüzden `Changed<T>` "geçen kareden bu yana" demek — ve referans paralel
 //! grupların ÖNÜNDE bir kez ayarlandığı için sistemler arasında yarış yok.
 //!
-//! **2. Değişiklik damgası `Mut<T>`'nin `deref_mut`'ında basılır, değeri karşılaştırarak değil.**
+//! **2. Değişiklik damgası `&mut T`'nin `deref_mut`'ında basılır, değeri karşılaştırarak değil.**
 //! Yani aynı değeri geri yazmak da "değişti" sayılır. Motorda "yalnız farklıysa yaz" diye bir
 //! yardımcı **yok**, o yüzden bu demo koşulu **elle** kontrol ediyor —
 //! `if new != current { *component = new }`. Aradaki fark ekranda görünür: kontrolsüz yazan bir
@@ -38,7 +38,7 @@
 //! ## Kontroller
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera
 
-use gizmo::core::query::{Changed, Mut, Query, With};
+use gizmo::core::query::{Changed, Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -158,7 +158,7 @@ const HOT: Vec4 = Vec4::new(1.0, 0.35, 0.15, 1.0);
 /// Damga `deref_mut`'ta basıldığı için aynı değeri geri yazmak da "değişti" sayılırdı; "yalnız
 /// farklıysa yaz" için koşulu elle yazmak gerekiyor.
 fn change_component(
-    mut tracked: Query<(Mut<Tracked>, Without<Sneaky>)>,
+    mut tracked: Query<(&mut Tracked, Without<Sneaky>)>,
     mut rng: ResMut<Rng>,
     mut counters: ResMut<Counters>,
     time: Res<Time>,
@@ -182,7 +182,7 @@ fn change_component(
 /// Motorun kendi belgesi bunu açıkça uyarıyor: bu yol "`Changed<T>`'ye tepki veren her sistemi
 /// sessizce aç bırakır". Demoda bu, sondaki küpün hiç parlamaması demek.
 fn change_without_stamping(
-    mut sneaky: Query<(Mut<Tracked>, With<Sneaky>)>,
+    mut sneaky: Query<(&mut Tracked, With<Sneaky>)>,
     mut counters: ResMut<Counters>,
     time: Res<Time>,
 ) {
@@ -200,7 +200,7 @@ fn change_without_stamping(
 ///
 /// Sorgunun kendisi filtreliyor — sistem içinde "değişti mi" diye bir kontrol yok.
 fn change_detection(
-    mut changed: Query<(Mut<Material>, &Tracked, Changed<Tracked>)>,
+    mut changed: Query<(&mut Material, &Tracked, Changed<Tracked>)>,
     mut counters: ResMut<Counters>,
 ) {
     let mut seen = 0;
@@ -214,7 +214,7 @@ fn change_detection(
 }
 
 /// Boyayı her karede biraz söndürür — parlayan küp "bu karede değişti" demek olsun diye.
-fn fade_highlight(mut materials: Query<(Mut<Material>, &Tracked)>, time: Res<Time>) {
+fn fade_highlight(mut materials: Query<(&mut Material, &Tracked)>, time: Res<Time>) {
     let k = (time.dt() * 12.0).min(1.0);
     for (mut material, _) in materials.iter_mut() {
         // Doğrudan alan yazmak damga basar; burada sorun değil, çünkü `Changed<Tracked>` izliyor,

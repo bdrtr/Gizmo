@@ -59,9 +59,9 @@ fn all_changed_detection_generic<T: Component + Default + Clone>(
                     let mut world = World::new();
                     let entities: Vec<_> = world.spawn_batch(std::iter::repeat_n((T::default(),), entity_count as usize)).collect();
                     world.increment_tick();
-                    let mut query_mut = world.query_mut::<gizmo_core::query::Mut<T>>();
+                    let mut query_mut = world.query_mut::<&mut T>();
                     for mut component in query_mut.iter_mut() {
-                        // writing to Mut<T> triggers Changed tick internally! Wait, Gizmo's `Mut` doesn't automatically trigger Changed tick.
+                        // writing to &mut T triggers Changed tick internally! Wait, Gizmo's `Mut` doesn't automatically trigger Changed tick.
                         // Wait, does it? Let's assume the user has a bench_modify trait, but we can just do mutable access or manually update ticks.
                         // I will just use `world.get_component_mut::<T>(entity)` which updates the tick if Gizmo does it, or we just manually update ticks.
                         // Actually, just let me get query_mut and do something. But Gizmo `Mut` is literally `&mut T`. It doesn't wrap!
@@ -120,7 +120,7 @@ fn few_changed_detection_generic<T: Component + Default + Clone>(
 
                     for entity in entities.iter().take(amount_to_modify) {
                         // Trigger change
-                        let _ = world.query_entity_mut::<gizmo_core::query::Mut<T>>(entity.id());
+                        let _ = world.query_entity_mut::<&mut T>(entity.id());
                     }
                     (world, entities)
                 },
@@ -240,9 +240,9 @@ fn multiple_archetype_none_changed_detection_generic<T: Component + Default + Cl
                     world.begin_change_frame(spawn_tick);
 
                     let query_mut = world.query_mut::<(
-                        gizmo_core::query::Mut<ArchetypeData<0>>,
-                        gizmo_core::query::Mut<ArchetypeData<1>>,
-                        gizmo_core::query::Mut<ArchetypeData<2>>,
+                        &mut ArchetypeData<0>,
+                        &mut ArchetypeData<1>,
+                        &mut ArchetypeData<2>,
                     )>();
                     {
                         let mut query_mut = query_mut;

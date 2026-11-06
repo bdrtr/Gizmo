@@ -41,7 +41,7 @@ fn install_headless_runner(app: &mut App<()>) {
                     // Saniyede 1 kez log bas
                     if let Some(trans) = app
                         .world
-                        .borrow::<gizmo::physics::components::Transform>()
+                        .query::<&gizmo::physics::components::Transform>()
                         .get(ent)
                     {
                         println!(

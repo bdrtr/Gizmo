@@ -178,7 +178,7 @@ fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &Input) {
         // Gövdeleri yerinde sıfırla: transform → ev pozu, hız → 0, uyuyanları uyandır.
         // Rope eklemi ball entity-id'sine bağlı olduğundan despawn/respawn YOK.
         {
-            let mut ts = world.borrow_mut::<Transform>();
+            let mut ts = world.query_mut::<&mut Transform>();
             for b in &state.resets {
                 if let Some(mut t) = ts.get_mut(b.id) {
                     *t = b.transform;
@@ -186,7 +186,7 @@ fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &Input) {
             }
         }
         {
-            let mut vs = world.borrow_mut::<Velocity>();
+            let mut vs = world.query_mut::<&mut Velocity>();
             for b in &state.resets {
                 if let Some(mut v) = vs.get_mut(b.id) {
                     *v = Velocity::default();
@@ -194,7 +194,7 @@ fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &Input) {
             }
         }
         {
-            let mut rbs = world.borrow_mut::<RigidBody>();
+            let mut rbs = world.query_mut::<&mut RigidBody>();
             for b in &state.resets {
                 if let Some(mut rb) = rbs.get_mut(b.id) {
                     rb.wake_up();
@@ -205,7 +205,7 @@ fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &Input) {
 
     // İp görselini pivot↔top yüzeyi arasına ger (gerçek özel iş — her kare).
     let ball_pos = world
-        .borrow::<Transform>()
+        .query::<&Transform>()
         .get(state.ball)
         .map(|t| t.position);
     if let Some(bp) = ball_pos {
@@ -213,7 +213,7 @@ fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &Input) {
         let len = (seg.length() - BALL_R).max(0.0);
         let dir = seg.normalize_or_zero();
         let surface = bp + dir * BALL_R;
-        let mut ts = world.borrow_mut::<Transform>();
+        let mut ts = world.query_mut::<&mut Transform>();
         if let Some(mut tr) = ts.get_mut(state.rope_vis) {
             tr.position = surface + dir * (len * 0.5);
             tr.rotation = Quat::from_rotation_arc(Vec3::Y, dir);

@@ -87,8 +87,8 @@ impl gizmo_core::system::System for SpinSystem {
             // scheduler bu çalışırken başka mutable alias vermez.
             let mut q = unsafe {
             world.query_unchecked::<(
-                gizmo_core::query::Mut<Spin>,
-                gizmo_core::query::Mut<Transform>,
+                &mut Spin,
+                &mut Transform,
             )>()
         };
             for (mut spin, mut t) in q.iter_mut() {
@@ -134,7 +134,7 @@ mod tests {
             sys.run(&world, 1.0 / 60.0);
         }
 
-        let t = world.borrow::<Transform>();
+        let t = world.query::<&Transform>();
         let rot = t.get(e).unwrap().rotation;
         // 1 s'de ~2 rad dönmüş olmalı, rest'in üzerine.
         let expected = rest * Quat::from_axis_angle(Vec3::X, 2.0);
@@ -143,7 +143,7 @@ mod tests {
             "Spin rest'in üzerine ~2 rad döndürmeli"
         );
         // Spin bileşeninin biriken açısı da ~2.
-        let spins = world.borrow::<Spin>();
+        let spins = world.query::<&Spin>();
         assert!((spins.get(e).unwrap().angle - 2.0).abs() < 1e-3);
     }
 }

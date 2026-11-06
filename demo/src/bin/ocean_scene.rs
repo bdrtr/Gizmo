@@ -271,7 +271,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
 
     {
-        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
+        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
         for (mut transform, mut camera) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
@@ -323,7 +323,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     }
 
     {
-        let mut q = world.query_mut::<Mut<Transform>>();
+        let mut q = world.query_mut::<&mut Transform>();
         // Güneş rotasyonu (Gündüz/Gece döngüsü)
         if let Some(mut trans) = q.get_mut(state.sun_entity) {
             let sun_speed = 0.2; // Zamanın hızı
@@ -370,7 +370,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
         let explosion_force = 20000.0; // Güçlü bir şok dalgası
 
         {
-            let mut rbs = world.query_mut::<(Mut<Transform>, Mut<RigidBody>, Mut<Velocity>)>();
+            let mut rbs = world.query_mut::<(&mut Transform, &mut RigidBody, &mut Velocity)>();
             for (trans, rb, mut vel) in rbs.iter_mut() {
                 if rb.body_type != BodyType::Static {
                     let dir = trans.position - epicenter;
@@ -424,7 +424,7 @@ fn render(
         let mut fracture_data = Vec::new();
 
         {
-            let mut q = world.query_mut::<(Entity, Mut<Transform>, Mut<Material>, Mut<Velocity>)>();
+            let mut q = world.query_mut::<(Entity, &mut Transform, &mut Material, &mut Velocity)>();
             for (entity, trans, mat, vel) in q.iter_mut() {
                 if to_fracture.contains(&entity.id()) {
                     fracture_data.push((entity, *trans, mat.clone(), *vel));

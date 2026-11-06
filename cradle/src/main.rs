@@ -355,7 +355,7 @@ fn dir_to_quat(dir: Vec3) -> Quat {
 }
 
 fn update_ropes(world: &mut World, game: &CradleGame) {
-    let mut transforms = world.borrow_mut::<Transform>();
+    let mut transforms = world.query_mut::<&mut Transform>();
     {
         let mut updates = Vec::new();
 
@@ -391,9 +391,9 @@ fn trigger_cradle(world: &mut World, game: &mut CradleGame) {
     println!("Sarkaç bırakıldı!");
 
     // SAFETY: exclusive `&mut World`; Transform, Velocity, RigidBody are distinct component types.
-    let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
-    let mut vels = unsafe { world.borrow_mut_unchecked::<Velocity>() };
-    let mut rbs = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
+    let mut transforms = unsafe { world.query_unchecked::<&mut Transform>() };
+    let mut vels = unsafe { world.query_unchecked::<&mut Velocity>() };
+    let mut rbs = unsafe { world.query_unchecked::<&mut RigidBody>() };
     {
         if let Some(&first_id) = game.ball_ids.first() {
             if let Some(mut t) = transforms.get_mut(first_id) {
@@ -428,9 +428,9 @@ fn reset_cradle(world: &mut World, game: &mut CradleGame) {
     let start_x = -((BALL_COUNT as f32 - 1.0) / 2.0) * diameter;
 
     // SAFETY: exclusive `&mut World`; Transform, Velocity, RigidBody are distinct component types.
-    let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
-    let mut vels = unsafe { world.borrow_mut_unchecked::<Velocity>() };
-    let mut rbs = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
+    let mut transforms = unsafe { world.query_unchecked::<&mut Transform>() };
+    let mut vels = unsafe { world.query_unchecked::<&mut Velocity>() };
+    let mut rbs = unsafe { world.query_unchecked::<&mut RigidBody>() };
     {
         for (i, &ball_id) in game.ball_ids.iter().enumerate() {
             let x = start_x + (i as f32) * diameter;
@@ -492,7 +492,7 @@ fn update_camera(
         state.cam_pos.y += speed;
     }
 
-    let mut trans = world.borrow_mut::<Transform>();
+    let mut trans = world.query_mut::<&mut Transform>();
     {
         if let Some(mut t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
@@ -500,7 +500,7 @@ fn update_camera(
             t.update_local_matrix();
         }
     }
-    let mut cams = world.borrow_mut::<Camera>();
+    let mut cams = world.query_mut::<&mut Camera>();
     {
         if let Some(mut c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;

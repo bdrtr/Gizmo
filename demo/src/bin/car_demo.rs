@@ -134,7 +134,7 @@ impl CarDemoState {
 /// Bir entity'nin tüm alt-entity'lerini (özyinelemeli) toplar — parça keşfi için.
 fn collect_descendants(world: &World, root: Entity, out: &mut Vec<Entity>) {
     let kids = world
-        .borrow::<gizmo::core::component::Children>()
+        .query::<&gizmo::core::component::Children>()
         .get(root)
         .map(|c| c.0.clone());
     if let Some(kids) = kids {
@@ -234,7 +234,7 @@ fn main() {
 
             {
                 let mut vehicle_store =
-                    world.borrow_mut::<gizmo::physics::vehicle::VehicleController>();
+                    world.query_mut::<&mut gizmo::physics::vehicle::VehicleController>();
                 if let Some(mut vehicle) = vehicle_store.get_mut(state.chassis_id) {
                     // Gerçekçi model girdileri: throttle/brake 0..1, steering -1..1, reverse bool.
                     // S geri vitese alır VE geri gaz verir (eskiden throttle.max(0) ile yutulup
@@ -290,10 +290,10 @@ fn main() {
                     .is_some_and(|p| p.is_just_pressed(GamepadButton::Start))
             {
                 // SAFETY: Transform/Velocity/VehicleController ayrı bileşen tipleri, alias yok.
-                let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
-                let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+                let mut transforms = unsafe { world.query_unchecked::<&mut Transform>() };
+                let mut velocities = unsafe { world.query_unchecked::<&mut Velocity>() };
                 let mut vehicles = unsafe {
-                    world.borrow_mut_unchecked::<gizmo::physics::vehicle::VehicleController>()
+                    world.query_unchecked::<&mut gizmo::physics::vehicle::VehicleController>()
                 };
                 if let Some(mut t) = transforms.get_mut(state.chassis_id) {
                     *t = Transform::new(Vec3::new(0.0, 1.5, 0.0));
@@ -341,8 +341,8 @@ fn main() {
 
             let mut car_speed = 0.0;
             {
-                let vel_store = world.borrow::<Velocity>();
-                let trans_store = world.borrow::<Transform>();
+                let vel_store = world.query::<&Velocity>();
+                let trans_store = world.query::<&Transform>();
                 if let (Some(vel), Some(t)) = (
                     vel_store.get(state.chassis_id),
                     trans_store.get(state.chassis_id),
@@ -368,7 +368,7 @@ fn main() {
                 Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), state.steer_angle * 0.5);
 
             {
-                let mut ecs_transforms = world.borrow_mut::<Transform>();
+                let mut ecs_transforms = world.query_mut::<&mut Transform>();
                 // Tekerlekleri animate et
                 if let Some(id) = state.wheel_fl {
                     if let Some(mut t) = ecs_transforms.get_mut(id) {
@@ -407,7 +407,7 @@ fn main() {
                     || state.selected_part != state.parts_applied_selection)
             {
                 {
-                    let mut transforms = world.borrow_mut::<Transform>();
+                    let mut transforms = world.query_mut::<&mut Transform>();
                     for p in &state.parts {
                         if let Some(mut t) = transforms.get_mut(p.id) {
                             t.position = p.orig_pos + p.dir * state.explode;
@@ -416,7 +416,7 @@ fn main() {
                     }
                 }
                 {
-                    let mut materials = world.borrow_mut::<Material>();
+                    let mut materials = world.query_mut::<&mut Material>();
                     for (i, p) in state.parts.iter().enumerate() {
                         if let Some(mut m) = materials.get_mut(p.id) {
                             m.albedo = if Some(i) == state.selected_part {
@@ -445,8 +445,8 @@ fn main() {
                 let bl_pos;
                 let br_pos;
                 {
-                    let transforms = world.borrow::<Transform>();
-                    let globals = world.borrow::<GlobalTransform>();
+                    let transforms = world.query::<&Transform>();
+                    let globals = world.query::<&GlobalTransform>();
 
                     car_rot = transforms
                         .get(state.chassis_id)
@@ -463,7 +463,7 @@ fn main() {
                 }
 
                 // 2. Yaz (Mutable Borrow)
-                let mut transforms = world.borrow_mut::<Transform>();
+                let mut transforms = world.query_mut::<&mut Transform>();
 
                 if let Some(pos) = bl_pos {
                     if let Some(&skid_id) = state.skid_pool.get(state.skid_idx) {
@@ -496,7 +496,7 @@ fn main() {
             // orbit işlevsizdi. Artık iki mod ayrık.
             let orbit =
                 input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) || pad_looking(input);
-            if let Some(t) = world.borrow::<Transform>().get(state.chassis_id) {
+            if let Some(t) = world.query::<&Transform>().get(state.chassis_id) {
                 let car_pos = t.position;
                 if orbit {
                     // Kameranın bakış yönü (yaw/pitch'ten) — paylaşılan kamera yardımcısından
@@ -540,7 +540,7 @@ fn main() {
             // VehicleController.current_speed_kmh = v·forward, yalnız ileri bileşen (gerçek
             // kilometre saati gibi). abs(): geri viteste negatif göstermesin.
             let speed_kmh = world
-                .borrow::<gizmo::physics::vehicle::VehicleController>()
+                .query::<&gizmo::physics::vehicle::VehicleController>()
                 .get(state.chassis_id)
                 .map(|vc| vc.current_speed_kmh.abs())
                 .unwrap_or(0.0);
@@ -608,7 +608,7 @@ fn main() {
                 .default_pos([10.0, 150.0])
                 .show(ctx, |ui| {
                     let vehicle_store =
-                        world.borrow::<gizmo::physics::vehicle::VehicleController>();
+                        world.query::<&gizmo::physics::vehicle::VehicleController>();
                     if let Some(vehicle) = vehicle_store.get(state.chassis_id) {
                         ui.separator();
                         ui.heading("Motor & Şanzıman (gerçekçi)");
@@ -701,7 +701,7 @@ fn main() {
 
                         // Update Ground Material Color
                         if let Some(gid) = state.ground_id {
-                            let mut materials = world.borrow_mut::<Material>();
+                            let mut materials = world.query_mut::<&mut Material>();
                             if let Some(mut mat) = materials.get_mut(gid) {
                                 match state.weather_idx {
                                     0 => {
@@ -746,8 +746,8 @@ fn main() {
             egui::Window::new("🔬 İnceleme / Analiz")
                 .default_pos([10.0, 470.0])
                 .show(ctx, |ui| {
-                    let transforms = world.borrow::<Transform>();
-                    let vehicles = world.borrow::<gizmo::physics::vehicle::VehicleController>();
+                    let transforms = world.query::<&Transform>();
+                    let vehicles = world.query::<&gizmo::physics::vehicle::VehicleController>();
 
                     const GROUND_Y: f32 = 0.0;
                     // Model 2× ölçekte: görsel lastik altı = şasi merkezi + model_min_y(−0.0335)×2.
@@ -913,21 +913,21 @@ fn derive_wheel(
 
     // 2. Local matrisleri tekerlekten şasinin doğrudan çocuğuna kadar biriktir.
     let mut mat = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         ts.get(wheel_id)?.local_matrix
     };
     let mut cur = wheel_id;
     for _ in 0..16 {
         // döngü-güvenliği
         let parent = world
-            .borrow::<gizmo::core::component::Parent>()
+            .query::<&gizmo::core::component::Parent>()
             .get(cur)
             .map(|p| p.0);
         match parent {
             Some(p) if p == chassis_id => break,
             Some(p) => {
                 let p_mat = {
-                    let ts = world.borrow::<Transform>();
+                    let ts = world.query::<&Transform>();
                     ts.get(p).map(|t| t.local_matrix)
                 };
                 match p_mat {
@@ -952,7 +952,7 @@ fn derive_wheel(
 /// Tekerlek entity'sinin (ya da bir çocuğunun) Mesh.bounds'undan lastik yarıçapını
 /// kestirir: dönme düzlemindeki (Y/Z) en büyük yarı-boyut × ölçek.
 fn wheel_mesh_radius(world: &World, wheel_id: Entity, scale_y: f32) -> f32 {
-    let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
+    let meshes = world.query::<&gizmo::renderer::components::Mesh>();
     let from = |m: &gizmo::renderer::components::Mesh| -> f32 {
         let y = (m.bounds.max.y - m.bounds.min.y) * 0.5;
         let z = (m.bounds.max.z - m.bounds.min.z) * 0.5;
@@ -962,7 +962,7 @@ fn wheel_mesh_radius(world: &World, wheel_id: Entity, scale_y: f32) -> f32 {
         return from(m);
     }
     let kids = world
-        .borrow::<gizmo::core::component::Children>()
+        .query::<&gizmo::core::component::Children>()
         .get(wheel_id)
         .map(|c| c.0.clone());
     if let Some(kids) = kids {
@@ -1139,7 +1139,7 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
     // Kutu fallback'te şasi kabaca araç boyutlarına ölçeklenir (1.46 × 0.8 × 2.7 m —
     // aşağıdaki `calculate_box_inertia` ile aynı ölçüler), böylece görsel ve fizik uyuşur.
     {
-        let mut transforms = world.borrow_mut::<Transform>();
+        let mut transforms = world.query_mut::<&mut Transform>();
         if let Some(mut t) = transforms.get_mut(chassis_entity) {
             t.scale = if has_gltf_chassis {
                 Vec3::splat(2.0) // 5.0 çok büyük gelmişti
@@ -1160,11 +1160,11 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
     // orijine simetrik oturuyor.)
     if has_gltf_chassis {
         let kids = world
-            .borrow::<gizmo::core::component::Children>()
+            .query::<&gizmo::core::component::Children>()
             .get(chassis_entity)
             .map(|c| c.0.clone());
         if let Some(kids) = kids {
-            let mut transforms = world.borrow_mut::<Transform>();
+            let mut transforms = world.query_mut::<&mut Transform>();
             for kid in kids {
                 if let Some(mut t) = transforms.get_mut(kid) {
                     t.position.x = 0.0;
@@ -1279,7 +1279,7 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
 
     // GLTF yüklendiği için tekerlek entity'lerini isimlerinden bulup cache'le
     {
-        let ecs_transforms = world.borrow::<Transform>();
+        let ecs_transforms = world.query::<&Transform>();
         for (entity, name) in world.query::<(Entity, &gizmo::core::EntityName)>().iter() {
             if name.0 == "wheelFrontLeft" {
                 state.wheel_fl = Some(entity);
@@ -1347,9 +1347,9 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
     {
         let mut part_ids = Vec::new();
         collect_descendants(world, state.chassis_id, &mut part_ids);
-        let names = world.borrow::<gizmo::core::EntityName>();
-        let transforms = world.borrow::<Transform>();
-        let materials = world.borrow::<Material>();
+        let names = world.query::<&gizmo::core::EntityName>();
+        let transforms = world.query::<&Transform>();
+        let materials = world.query::<&Material>();
         for (i, id) in part_ids.iter().enumerate() {
             // Yalnız gerçekten render olan (Material'lı) parçalar.
             let Some(mat) = materials.get(*id) else {
@@ -1413,9 +1413,9 @@ fn update_camera(world: &mut World, state: &mut CarDemoState, input: &Input, dt:
     // Kamera entity'sini güncelle (hem Transform, hem Camera, hem GlobalTransform)
     {
         let cam_id = state.camera_entity_id;
-        let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() }; // SAFETY: distinct component types
-        let mut globals = unsafe { world.borrow_mut_unchecked::<GlobalTransform>() };
-        let mut cameras = unsafe { world.borrow_mut_unchecked::<Camera>() };
+        let mut transforms = unsafe { world.query_unchecked::<&mut Transform>() }; // SAFETY: distinct component types
+        let mut globals = unsafe { world.query_unchecked::<&mut GlobalTransform>() };
+        let mut cameras = unsafe { world.query_unchecked::<&mut Camera>() };
 
         if let Some(mut t) = transforms.get_mut(cam_id) {
             t.position = state.cam_pos;

@@ -47,12 +47,12 @@ fn an_edited_description_reaches_the_material() {
     pollster::block_on(async {
         let renderer = crate::test_gpu::headless_renderer(64, 64).await;
         let (mut world, e) = one_red_material(&renderer).await;
-        world.borrow_mut::<MaterialDesc>().get_mut(e).unwrap().albedo = GREEN;
+        world.query_mut::<&mut MaterialDesc>().get_mut(e).unwrap().albedo = GREEN;
         for _ in 0..2 {
             sync_material_descriptions(&mut world);
         }
-        assert_eq!(world.borrow::<Material>().get(e).unwrap().albedo, GREEN, "the material is drawn red still");
-        assert_eq!(world.borrow::<MaterialDesc>().get(e).unwrap().albedo, GREEN, "the edit was written over");
+        assert_eq!(world.query::<&Material>().get(e).unwrap().albedo, GREEN, "the material is drawn red still");
+        assert_eq!(world.query::<&MaterialDesc>().get(e).unwrap().albedo, GREEN, "the edit was written over");
     });
 }
 
@@ -66,12 +66,12 @@ fn an_edited_material_reaches_the_description() {
     pollster::block_on(async {
         let renderer = crate::test_gpu::headless_renderer(64, 64).await;
         let (mut world, e) = one_red_material(&renderer).await;
-        world.borrow_mut::<Material>().get_mut(e).unwrap().albedo = GREEN;
+        world.query_mut::<&mut Material>().get_mut(e).unwrap().albedo = GREEN;
         for _ in 0..2 {
             sync_material_descriptions(&mut world);
         }
-        assert_eq!(world.borrow::<MaterialDesc>().get(e).unwrap().albedo, GREEN);
-        assert_eq!(world.borrow::<Material>().get(e).unwrap().albedo, GREEN, "the edit was written over");
+        assert_eq!(world.query::<&MaterialDesc>().get(e).unwrap().albedo, GREEN);
+        assert_eq!(world.query::<&Material>().get(e).unwrap().albedo, GREEN, "the edit was written over");
     });
 }
 
@@ -87,11 +87,11 @@ fn a_new_texture_in_the_description_rebuilds_the_material() {
     pollster::block_on(async {
         let renderer = crate::test_gpu::headless_renderer(64, 64).await;
         let (mut world, e) = one_red_material(&renderer).await;
-        world.borrow_mut::<MaterialDesc>().get_mut(e).unwrap().texture_source = Some("grass.png".into());
+        world.query_mut::<&mut MaterialDesc>().get_mut(e).unwrap().texture_source = Some("grass.png".into());
         sync_material_descriptions(&mut world);
-        assert!(world.borrow::<Material>().get(e).is_none(), "the old bind group is still drawn");
+        assert!(world.query::<&Material>().get(e).is_none(), "the old bind group is still drawn");
         assert_eq!(
-            world.borrow::<MaterialDesc>().get(e).unwrap().texture_source.as_deref(),
+            world.query::<&MaterialDesc>().get(e).unwrap().texture_source.as_deref(),
             Some("grass.png"),
             "the description is what the rebuild reads"
         );

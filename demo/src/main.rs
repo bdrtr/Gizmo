@@ -339,8 +339,8 @@ fn trigger_first_domino(world: &mut World, game: &DominoGame) {
     let fwd = Vec3::new(angle.sin(), 0.0, angle.cos());
 
     // SAFETY: owned World (exclusive); Velocity and RigidBody are distinct component types.
-    let mut vels = unsafe { world.borrow_mut_unchecked::<Velocity>() };
-    let mut rbs = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
+    let mut vels = unsafe { world.query_unchecked::<&mut Velocity>() };
+    let mut rbs = unsafe { world.query_unchecked::<&mut RigidBody>() };
     {
         // Topa hız ver — ilk dominoya doğru
         if let Some(mut v) = vels.get_mut(game.ball_id) {
@@ -399,7 +399,7 @@ fn update_camera(
     }
     state.cam_pos += cam_move * speed;
 
-    let mut trans = world.borrow_mut::<Transform>();
+    let mut trans = world.query_mut::<&mut Transform>();
     {
         if let Some(mut t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
@@ -407,7 +407,7 @@ fn update_camera(
             t.update_local_matrix();
         }
     }
-    let mut cams = world.borrow_mut::<Camera>();
+    let mut cams = world.query_mut::<&mut Camera>();
     {
         if let Some(mut c) = cams.get_mut(state.cam_id) {
             c.yaw = state.cam_yaw;

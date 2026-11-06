@@ -80,8 +80,8 @@ fn main() {
 
     let dt = 1.0 / 120.0;
     let read = |world: &World, id: Entity| -> (Vec3, Vec3) {
-        let ts = world.borrow::<Transform>();
-        let vs = world.borrow::<Velocity>();
+        let ts = world.query::<&Transform>();
+        let vs = world.query::<&Velocity>();
         (ts.get(id).unwrap().position, vs.get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO))
     };
 

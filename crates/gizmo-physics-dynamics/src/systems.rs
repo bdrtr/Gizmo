@@ -35,7 +35,7 @@
 
 use gizmo_core::Entity;
 use gizmo_core::component::IsDeleted;
-use gizmo_core::query::{Mut, Without};
+use gizmo_core::query::Without;
 use gizmo_core::world::World;
 use gizmo_physics_core::components::{CharacterController, FighterController};
 use gizmo_physics_core::{BodyHandle, Collider, Transform};
@@ -83,8 +83,8 @@ fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
 /// Drives [`VehicleController`] (Pacejka tire model + suspension + gearbox) for
 /// every vehicle entity each fixed step.
 ///
-/// Query: `Mut<VehicleController>` + `Mut<RigidBody>` + `&Transform` +
-/// `Mut<Velocity>`. The controller reads steering/throttle/brake inputs off the
+/// Query: `&mut VehicleController` + `&mut RigidBody` + `&Transform` +
+/// `&mut Velocity`. The controller reads steering/throttle/brake inputs off the
 /// `VehicleController` component and writes the resulting forces into `Velocity`
 /// (which the rigid physics step then integrates), so this must run *before*
 /// `physics_step_system`.
@@ -182,10 +182,10 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
     let query = unsafe {
         world.query_unchecked::<(
             Entity,
-            Mut<VehicleController>,
-            Mut<RigidBody>,
+            &mut VehicleController,
+            &mut RigidBody,
             &Transform,
-            Mut<Velocity>,
+            &mut Velocity,
             Without<IsDeleted>,
         )>()
     };
@@ -219,7 +219,7 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
 /// Drives the kinematic character controller ([`CharacterController`] +
 /// [`update_character`](crate::character::update_character)) for every character entity each fixed step.
 ///
-/// Query: `Mut<CharacterController>` + `Mut<Transform>` + `Mut<Velocity>` +
+/// Query: `&mut CharacterController` + `&mut Transform` + `&mut Velocity` +
 /// `&Collider`. The KCC does its own gravity / ground-snap / step / slide
 /// integration and writes `Transform`/`Velocity` directly, so KCC entities must
 /// **not** also carry a dynamic `RigidBody` (that would double-integrate
@@ -240,13 +240,13 @@ pub fn character_controller_system(world: &World, dt: f32) {
 
     // SAFETY: see `vehicle_controller_system` — exclusive barrier system, and the
     // read-only gather query is dropped before this mutable query is opened, so
-    // the `Mut<Transform>` here never aliases the `&Transform` used above.
+    // the `&mut Transform` here never aliases the `&Transform` used above.
     let query = unsafe {
         world.query_unchecked::<(
             Entity,
-            Mut<CharacterController>,
-            Mut<Transform>,
-            Mut<Velocity>,
+            &mut CharacterController,
+            &mut Transform,
+            &mut Velocity,
             &Collider,
             Without<IsDeleted>,
         )>()
@@ -307,7 +307,7 @@ fn push_bodies(world: &World, pushes: &[(BodyHandle, gizmo_math::Vec3, f32, f32)
     }
     // SAFETY: as above — the character query is dropped, and this one is the only live one.
     let mut bodies = unsafe {
-        world.query_unchecked::<(Mut<RigidBody>, Mut<Velocity>, Without<IsDeleted>)>()
+        world.query_unchecked::<(&mut RigidBody, &mut Velocity, Without<IsDeleted>)>()
     };
     for &(body, dir, force, speed) in pushes {
         let Some((mut rb, mut vel, _)) = bodies.entity(body.id()).and_then(|e| bodies.get_mut(e)) else {
@@ -411,7 +411,7 @@ pub fn fighter_frame_system(world: &World, dt: f32) {
 
     // SAFETY: exclusive `fn(&World, f32)` system — the scheduler runs it alone — and
     // `FighterController` is the only component type borrowed here, so nothing aliases.
-    let query = unsafe { world.query_unchecked::<(Mut<FighterController>, Without<IsDeleted>)>() };
+    let query = unsafe { world.query_unchecked::<(&mut FighterController, Without<IsDeleted>)>() };
     {
         let mut query = query;
         let mut fighter_count = 0usize;
@@ -503,8 +503,8 @@ pub fn hit_detection_system(world: &World, dt: f32) {
         return;
     }
 
-    let transforms = world.borrow::<Transform>();
-    let parents = world.borrow::<Parent>();
+    let transforms = world.query::<&Transform>();
+    let parents = world.query::<&Parent>();
 
     // Composed local→world pose, walking the parent chain. Depth-guarded: a `Children`/`Parent`
     // cycle is refused elsewhere, but a system that walks links must not be the one that hangs.
@@ -556,7 +556,7 @@ pub fn hit_detection_system(world: &World, dt: f32) {
     {
         // SAFETY: exclusive `fn(&World, f32)` system — the scheduler runs it alone — and `Hitbox`
         // is a different component type from the `Transform`/`Parent` queries borrowed above.
-        let mut hitboxes = unsafe { world.query_unchecked::<(Entity, Mut<Hitbox>)>() };
+        let mut hitboxes = unsafe { world.query_unchecked::<(Entity, &mut Hitbox)>() };
         for (entity, mut hitbox) in hitboxes.iter_mut() {
             let Some(owner) = owning_fighter(entity) else {
                 continue; // not a fighter's box — its `active` is somebody else's business
@@ -640,7 +640,7 @@ pub fn hit_detection_system(world: &World, dt: f32) {
     {
         // SAFETY: as above — the `Transform`/`Parent` queries are dropped, and `FighterController`
         // is not borrowed anywhere else in this exclusive system.
-        let mut controllers = unsafe { world.borrow_mut_unchecked::<FighterController>() };
+        let mut controllers = unsafe { world.query_unchecked::<&mut FighterController>() };
         for hit in &hits {
             if let Some(mut fighter) = controllers.get_mut(hit.attacker) {
                 if !fighter.already_hit.contains(&hit.victim) {
@@ -829,7 +829,7 @@ mod tests {
         let dt = 1.0 / 60.0;
         for _ in 0..(seconds / dt).round() as usize {
             {
-                let mut tfs = world.borrow_mut::<Transform>();
+                let mut tfs = world.query_mut::<&mut Transform>();
                 let mut t = tfs.get_mut(p).unwrap();
                 t.position += linear * dt;
                 t.rotation = gizmo_math::Quat::from_scaled_axis(angular * dt) * t.rotation;
@@ -837,7 +837,7 @@ mod tests {
             character_controller_system(&world, dt);
         }
         let pos = world.query::<&Transform>().get(e).unwrap().position;
-        let grounded = world.borrow::<CharacterController>().get(e).unwrap().is_grounded;
+        let grounded = world.query::<&CharacterController>().get(e).unwrap().is_grounded;
         (pos, grounded)
     }
 
@@ -1423,7 +1423,7 @@ mod tests {
     }
 
     fn start(world: &mut World, fighter: Entity, m: CombatMove) {
-        let mut controllers = world.borrow_mut::<FighterController>();
+        let mut controllers = world.query_mut::<&mut FighterController>();
         controllers
             .get_mut(fighter)
             .expect("fighter")
@@ -1482,7 +1482,7 @@ mod tests {
     fn the_hurtbox_multiplier_scales_the_reported_damage() {
         let (mut world, attacker, _fist, defender) = versus();
         {
-            let mut hurtboxes = world.borrow_mut::<Hurtbox>();
+            let mut hurtboxes = world.query_mut::<&mut Hurtbox>();
             hurtboxes.get_mut(defender).expect("hurtbox").damage_multiplier = 1.5;
         }
         start(&mut world, attacker, jab());
@@ -1494,7 +1494,7 @@ mod tests {
 
         // And the health is untouched: reporting is not applying.
         let health = world
-            .borrow::<FighterController>()
+            .query::<&FighterController>()
             .get(defender)
             .expect("defender")
             .health;
@@ -1507,7 +1507,7 @@ mod tests {
     fn a_tagged_hitbox_only_goes_live_for_its_own_move() {
         let (mut world, attacker, fist, _defender) = versus();
         {
-            let mut hitboxes = world.borrow_mut::<Hitbox>();
+            let mut hitboxes = world.query_mut::<&mut Hitbox>();
             hitboxes.get_mut(fist).expect("fist").move_name = Some("Roundhouse".to_string());
         }
         start(&mut world, attacker, jab());
@@ -1540,7 +1540,7 @@ mod tests {
         }
         // And move the defender out of reach so only the self-hit could report.
         {
-            let mut transforms = world.borrow_mut::<Transform>();
+            let mut transforms = world.query_mut::<&mut Transform>();
             transforms.get_mut(defender).expect("defender").position = Vec3::new(0.0, 0.0, -50.0);
         }
         start(&mut world, attacker, jab());

@@ -1,7 +1,6 @@
 use criterion::Criterion;
 use gizmo_core::{
     world::World,
-    query::Mut,
     entity::Entity,
 };
 use super::common::*;
@@ -564,7 +563,7 @@ pub fn query_get_components_mut_2(criterion: &mut Criterion) {
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("2_components_{entity_count}_entities"), |bencher| {
             let (mut world, entities) = setup_wide::<(WideTable<0>, WideTable<1>)>(entity_count);
-            let mut query = world.query_mut::<(Mut<WideTable<0>>, Mut<WideTable<1>>)>();
+            let mut query = world.query_mut::<(&mut WideTable<0>, &mut WideTable<1>)>();
             bencher.iter(|| {
                 for entity in &entities {
                     assert!(query.get_mut(*entity).is_some());
@@ -584,7 +583,7 @@ pub fn query_get_components_mut_5(criterion: &mut Criterion) {
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("5_components_{entity_count}_entities"), |bencher| {
             let (mut world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>)>(entity_count);
-            let mut query = world.query_mut::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>)>();
+            let mut query = world.query_mut::<(&mut WideTable<0>, &mut WideTable<1>, &mut WideTable<2>, &mut WideTable<3>, &mut WideTable<4>)>();
             bencher.iter(|| {
                 for entity in &entities {
                     assert!(query.get_mut(*entity).is_some());
@@ -604,7 +603,7 @@ pub fn query_get_components_mut_10(criterion: &mut Criterion) {
     for entity_count in RANGE.map(|i| i * 10_000) {
         group.bench_function(format!("10_components_{entity_count}_entities"), |bencher| {
             let (mut world, entities) = setup_wide::<(WideTable<0>, WideTable<1>, WideTable<2>, WideTable<3>, WideTable<4>, WideTable<5>, WideTable<6>, WideTable<7>, WideTable<8>, WideTable<9>)>(entity_count);
-            let mut query = world.query_mut::<(Mut<WideTable<0>>, Mut<WideTable<1>>, Mut<WideTable<2>>, Mut<WideTable<3>>, Mut<WideTable<4>>, Mut<WideTable<5>>, Mut<WideTable<6>>, Mut<WideTable<7>>, Mut<WideTable<8>>, Mut<WideTable<9>>)>();
+            let mut query = world.query_mut::<(&mut WideTable<0>, &mut WideTable<1>, &mut WideTable<2>, &mut WideTable<3>, &mut WideTable<4>, &mut WideTable<5>, &mut WideTable<6>, &mut WideTable<7>, &mut WideTable<8>, &mut WideTable<9>)>();
             bencher.iter(|| {
                 for entity in &entities {
                     assert!(query.get_mut(*entity).is_some());

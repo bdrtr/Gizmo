@@ -14,12 +14,12 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
     };
 
     {
-        let cameras = world.borrow::<gizmo::renderer::components::Camera>();
-        let point_lights = world.borrow::<gizmo::renderer::components::PointLight>();
-        let spot_lights = world.borrow::<gizmo::renderer::SpotLight>();
-        let dir_lights = world.borrow::<gizmo::renderer::components::DirectionalLight>();
-        let names = world.borrow::<gizmo::core::component::EntityName>();
-        let children_storage = world.borrow::<gizmo::core::component::Children>();
+        let cameras = world.query::<&gizmo::renderer::components::Camera>();
+        let point_lights = world.query::<&gizmo::renderer::components::PointLight>();
+        let spot_lights = world.query::<&gizmo::renderer::SpotLight>();
+        let dir_lights = world.query::<&gizmo::renderer::components::DirectionalLight>();
+        let names = world.query::<&gizmo::core::component::EntityName>();
+        let children_storage = world.query::<&gizmo::core::component::Children>();
         
         let mut check_entity = |id: Entity, gizmo_name: &str| {
             let mut has_gizmo = false;
@@ -67,7 +67,7 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
     // Toggle visibility based on play mode
     for gizmo_id in existing_gizmos {
         if let Some(ent) = world.live(gizmo_id) {
-            let is_hidden = world.borrow::<gizmo::core::component::IsHidden>().contains(gizmo_id);
+            let is_hidden = world.query::<&gizmo::core::component::IsHidden>().contains(gizmo_id);
             if is_playing && !is_hidden {
                 world.add_component(ent, gizmo::core::component::IsHidden);
             } else if !is_playing && is_hidden {
@@ -78,9 +78,9 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
 
     // Play modunda "Editor " ile başlayan TÜM entity'leri gizle (Light Icon'lar, Grid vb.)
     {
-        let names = world.borrow::<gizmo::core::component::EntityName>();
-        let hidden = world.borrow::<gizmo::core::component::IsHidden>();
-        let markers = world.borrow::<gizmo::core::component::EditorOnly>();
+        let names = world.query::<&gizmo::core::component::EntityName>();
+        let hidden = world.query::<&gizmo::core::component::IsHidden>();
+        let markers = world.query::<&gizmo::core::component::EditorOnly>();
         let editor_entities: Vec<Entity> = world.query::<(Entity, &gizmo::core::component::EntityName)>().iter()
             .filter(|(entity, name)| {
                 // The editor camera is furniture too, but hiding it would hide what play mode
@@ -98,7 +98,7 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
 
         for eid in editor_entities {
             if let Some(ent) = world.live(eid) {
-                let is_hidden = world.borrow::<gizmo::core::component::IsHidden>().contains(eid);
+                let is_hidden = world.query::<&gizmo::core::component::IsHidden>().contains(eid);
                 if is_playing && !is_hidden {
                     world.add_component(ent, gizmo::core::component::IsHidden);
                 } else if !is_playing && is_hidden {
@@ -159,11 +159,11 @@ let pending_assets = world.get_resource::<DebugAssets>().map(|a| (a.cube.clone()
 
             
             let has_children_comp = {
-                world.borrow::<gizmo::core::component::Children>().contains(parent_id)
+                world.query::<&gizmo::core::component::Children>().contains(parent_id)
             };
 
             if has_children_comp {
-                let mut children_storage = world.borrow_mut::<gizmo::core::component::Children>();
+                let mut children_storage = world.query_mut::<&mut gizmo::core::component::Children>();
                 if let Some(mut ch) = children_storage.get_mut(parent_id) {
                     ch.0.push(gizmo_ent);
                 }

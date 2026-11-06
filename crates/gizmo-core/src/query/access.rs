@@ -205,7 +205,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     // views from one query can't coexist. Combined with `query_mut`/`query_unchecked`
     // gating creation, this closes the dual-`Mut` aliasing hole for safe code.
 
-    /// Mutable iteration yielding a per-element `Mut<T>`. Because it takes `&mut self`, a second
+    /// Mutable iteration yielding a per-element `&mut T`. Because it takes `&mut self`, a second
     /// live mutable iteration over the same query is blocked at compile time.
     pub fn iter_mut<'a>(&'a mut self) -> QueryIter<'a, 'w, Q> {
         QueryIter(self.iter_inner())
@@ -246,7 +246,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// # gizmo_core::impl_component!(Charge);
     /// # let mut world = World::new();
     /// # for _ in 0..3 { let e = world.spawn(); world.add_component(e, Charge(1.0)); }
-    /// let mut q = world.query_mut::<Mut<Charge>>();
+    /// let mut q = world.query_mut::<&mut Charge>();
     /// let mut pairs = q.iter_combinations_mut();
     /// while let Some([mut a, mut b]) = pairs.fetch_next() {
     ///     // Equal and opposite: what a two-pass version has to reconstruct.
@@ -317,7 +317,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// yields, not the number of items it will produce.
     ///
     /// It sums archetype lengths and never runs a per-row filter, so it is exact only for
-    /// queries whose entire test is archetype-level: Table-stored `&T`/`Mut<T>`/`With`/`Without`
+    /// queries whose entire test is archetype-level: Table-stored `&T`/`&mut T`/`With`/`Without`
     /// and tuples of those. It over-counts for `Changed`/`Added`/`Or`, and for `SparseSet`-stored
     /// operands, which narrow nothing here at all — they match *every* archetype and do their
     /// real work per row. A tuple still ANDs its operands' archetype tests, so one Table-stored
@@ -559,7 +559,7 @@ impl<'a, 'w, Q: ReadOnlyQuery, const K: usize> Iterator for QueryCombinations<'a
 /// # #[derive(Clone)] struct Tag(u32);
 /// # gizmo_core::impl_component!(Tag);
 /// # let mut world = World::new();
-/// let mut q = world.query_mut::<Mut<Tag>>();
+/// let mut q = world.query_mut::<&mut Tag>();
 /// let mut pairs = q.iter_combinations_mut::<2>();
 /// let first = pairs.fetch_next();
 /// let second = pairs.fetch_next(); // the first combination is still alive
@@ -688,7 +688,7 @@ mod combination_tests {
     fn three_writable_rows_at_once_do_not_alias() {
         let mut w = world_with(5);
         {
-            let mut q = w.query_mut::<crate::query::Mut<Tag>>();
+            let mut q = w.query_mut::<&mut Tag>();
             let mut triples = q.iter_combinations_mut::<3>();
             let mut count = 0;
             while let Some([mut a, mut b, mut c]) = triples.fetch_next() {
@@ -724,7 +724,7 @@ mod combination_tests {
             w.add_component(e, Tag(1000 + i));
         }
         {
-            let mut q = w.query_mut::<crate::query::Mut<Tag>>();
+            let mut q = w.query_mut::<&mut Tag>();
             let mut pairs = q.iter_combinations_mut();
             while let Some([mut a, mut b]) = pairs.fetch_next() {
                 a.0 += 10;
@@ -761,7 +761,7 @@ mod combination_tests {
                 q.iter_combinations().map(|[a, b]| (a.0, b.0)).collect()
             };
             let mutable: Vec<(u32, u32)> = {
-                let mut q = w.query_mut::<crate::query::Mut<Tag>>();
+                let mut q = w.query_mut::<&mut Tag>();
                 let mut pairs = q.iter_combinations_mut();
                 let mut out = Vec::new();
                 while let Some([a, b]) = pairs.fetch_next() {
@@ -781,7 +781,7 @@ mod combination_tests {
     fn a_write_is_visible_to_the_pairs_that_follow() {
         let mut w = world_with(3);
         {
-            let mut q = w.query_mut::<crate::query::Mut<Tag>>();
+            let mut q = w.query_mut::<&mut Tag>();
             let mut pairs = q.iter_combinations_mut();
             while let Some([mut a, mut b]) = pairs.fetch_next() {
                 // Each pair doubles both halves. Entity 0 is in pairs (0,1) and (0,2), so if the

@@ -76,7 +76,7 @@ fn a_dropped_block_lands_and_settles() {
     let mut world = floor_world();
     let id = world.spawn_bundle((jelly(Vec3::new(-0.5, 1.5, -0.5), 20_000.0),));
     run(&world, 6.0);
-    let q = world.borrow::<SoftBodyMesh>();
+    let q = world.query::<&SoftBodyMesh>();
     let b = q.get(id).unwrap();
     let (lo, hi) = span_y(b);
     assert!(b.nodes.iter().all(|n| n.position.is_finite()), "the block blew up");
@@ -89,7 +89,7 @@ fn a_block_on_the_floor_does_not_sink() {
     let mut world = floor_world();
     let id = world.spawn_bundle((jelly(Vec3::new(-0.5, 0.0, -0.5), 20_000.0),));
     run(&world, 6.0);
-    let (lo, _) = span_y(world.borrow::<SoftBodyMesh>().get(id).unwrap());
+    let (lo, _) = span_y(world.query::<&SoftBodyMesh>().get(id).unwrap());
     assert!(lo > -0.02, "the resting block sank to {lo:.3}");
 }
 
@@ -99,7 +99,7 @@ fn a_block_dropped_on_a_block_rests_on_it() {
     let low = world.spawn_bundle((jelly(Vec3::new(-0.5, 0.0, -0.5), 20_000.0),));
     let high = world.spawn_bundle((jelly(Vec3::new(-0.5, 1.5, -0.5), 20_000.0),));
     run(&world, 6.0);
-    let q = world.borrow::<SoftBodyMesh>();
+    let q = world.query::<&SoftBodyMesh>();
     let (_, low_top) = span_y(q.get(low).unwrap());
     let (high_bottom, high_top) = span_y(q.get(high).unwrap());
     assert!(high_bottom > low_top - 0.1, "the upper block sank into the lower: its bottom {high_bottom:.2}, the lower's top {low_top:.2}");
@@ -161,14 +161,14 @@ fn an_off_centre_stack_does_not_blow_up() {
     let mut fastest_seen = 0.0f32;
     for frame in 0..480 {
         if frame % 150 == 0 && frame < 450 {
-            let top = world.borrow::<SoftBodyMesh>().iter().map(|b| span_y(b).1).fold(0.0, f32::max);
+            let top = world.query::<&SoftBodyMesh>().iter().map(|b| span_y(b).1).fold(0.0, f32::max);
             let dx = [0.05f32, -0.04, 0.03][frame / 150];
             let mut b = SoftBodyMesh::block(Vec3::new(-0.5 + dx, top + 1.6, -0.5), Vec3::new(1.0, 0.7, 1.0), [2, 2, 2], 8.0, 15_000.0, 0.3).unwrap();
             b.damping = 0.4;
             world.spawn_bundle((b,));
         }
         run(&world, DT);
-        fastest_seen = fastest_seen.max(world.borrow::<SoftBodyMesh>().iter().map(fastest).fold(0.0, f32::max));
+        fastest_seen = fastest_seen.max(world.query::<&SoftBodyMesh>().iter().map(fastest).fold(0.0, f32::max));
     }
     assert!(fastest_seen < 15.0, "the stack blew up: a node reached {fastest_seen:.0} m/s");
 }

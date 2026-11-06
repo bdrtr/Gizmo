@@ -99,7 +99,7 @@ fn main() {
             ));
 
             if let Some(clones) = world.clone_entity(template.id(), 100_000 - 1) {
-                let mut handles = world.borrow_mut::<FluidHandle>();
+                let mut handles = world.query_mut::<&mut FluidHandle>();
                 for (i, clone_ent) in clones.into_iter().enumerate() {
                     if let Some(mut h) = handles.get_mut(clone_ent) {
                         h.gpu_index = (i + 1) as u32;
@@ -169,7 +169,7 @@ fn main() {
                 state.cam_pitch = state.cam_pitch.clamp(-1.5, 1.5);
             }
 
-            if let Some(mut tr) = world.borrow_mut::<Transform>().get_mut(state.cam_id) {
+            if let Some(mut tr) = world.query_mut::<&mut Transform>().get_mut(state.cam_id) {
                 tr.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
 
                 // İleri yön paylaşılan kamera yardımcısından; sağ/yukarı ondan türetilir.
@@ -198,7 +198,7 @@ fn main() {
                 state.mouse_pos = m_pos;
             }
 
-            if let Some(mut cam) = world.borrow_mut::<Camera>().get_mut(state.cam_id) {
+            if let Some(mut cam) = world.query_mut::<&mut Camera>().get_mut(state.cam_id) {
                 cam.yaw = state.cam_yaw;
                 cam.pitch = state.cam_pitch;
             }
@@ -269,8 +269,8 @@ fn fluid_only_render_pass(
     let mut cam_pos = Vec3::ZERO;
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
 
-    let cameras = world.borrow::<Camera>();
-    let transforms = world.borrow::<Transform>();
+    let cameras = world.query::<&Camera>();
+    let transforms = world.query::<&Transform>();
     {
         if let Some((active_cam, _)) = world.query::<(Entity, &Camera)>().iter().next() {
             if let (Some(cam), Some(trans)) = (cameras.get(active_cam), transforms.get(active_cam))
@@ -350,7 +350,7 @@ fn fluid_only_render_pass(
     if let Some(fluid) = &renderer.gpu_fluid {
         let mut colliders = Vec::new();
         {
-            let transforms = world.borrow::<Transform>();
+            let transforms = world.query::<&Transform>();
 
             for (ent, interactor) in world.query::<(Entity, &gizmo::renderer::components::FluidInteractor)>().iter() {
                 if let Some(trans) = transforms.get(ent) {

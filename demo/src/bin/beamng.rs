@@ -548,7 +548,7 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &Input) {
     state.camera_pos += cam_move * speed * dt;
 
     {
-        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
+        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
         let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2);
         let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
         let rot = yaw_rot * pitch_rot;

@@ -13,7 +13,7 @@
 //! knob is drawn over its background, at where the stick points.
 
 use gizmo_core::input::Input;
-use gizmo_core::query::{Mut, Query};
+use gizmo_core::query::Query;
 use gizmo_core::system::Res;
 use gizmo_math::{Vec2, Vec4};
 
@@ -140,8 +140,8 @@ fn inside(p: Vec2, node: &Node) -> bool {
 /// control that has been on the screen all along still claims nothing.
 pub fn touch_controls_system(
     input: Res<Input>,
-    mut sticks: Query<(&Node, Mut<VirtualStick>)>,
-    mut buttons: Query<(&Node, Mut<VirtualButton>)>,
+    mut sticks: Query<(&Node, &mut VirtualStick)>,
+    mut buttons: Query<(&Node, &mut VirtualButton)>,
     display: Option<Res<gizmo_core::window::DisplayScale>>,
 ) {
     // A thumb travels the same distance on every screen: the radius is logical pixels, and fingers
@@ -259,8 +259,8 @@ mod tests {
     #[test]
     fn a_stick_and_a_button_are_held_by_two_fingers() {
         let (mut world, stick, fire) = pad();
-        let s = |w: &gizmo_core::World| *w.borrow::<VirtualStick>().get(stick).unwrap();
-        let b = |w: &gizmo_core::World| *w.borrow::<VirtualButton>().get(fire).unwrap();
+        let s = |w: &gizmo_core::World| *w.query::<&VirtualStick>().get(stick).unwrap();
+        let b = |w: &gizmo_core::World| *w.query::<&VirtualButton>().get(fire).unwrap();
 
         touch(&mut world, 1, Started, 100.0, 500.0);
         run(&mut world);
@@ -289,10 +289,10 @@ mod tests {
     #[test]
     fn only_a_finger_landing_on_a_control_claims_it() {
         let (mut world, stick, fire) = pad();
-        let b = |w: &gizmo_core::World| *w.borrow::<VirtualButton>().get(fire).unwrap();
+        let b = |w: &gizmo_core::World| *w.query::<&VirtualButton>().get(fire).unwrap();
         touch(&mut world, 5, Started, 400.0, 100.0);
         run(&mut world);
-        assert!(!world.borrow::<VirtualStick>().get(stick).unwrap().is_held());
+        assert!(!world.query::<&VirtualStick>().get(stick).unwrap().is_held());
         touch(&mut world, 1, Started, 100.0, 500.0);
         run(&mut world);
         touch(&mut world, 1, Moved, 700.0, 500.0);
@@ -319,12 +319,12 @@ mod tests {
         let stick = world.spawn_bundle((node(0.0, 0.0, 0.0, 0.0), VirtualStick::new(50.0)));
         let fire = world.spawn_bundle((node(0.0, 0.0, 0.0, 0.0), VirtualButton::default()));
         run(&mut world);
-        let s = |w: &gizmo_core::World| *w.borrow::<VirtualStick>().get(stick).unwrap();
-        let b = |w: &gizmo_core::World| *w.borrow::<VirtualButton>().get(fire).unwrap();
+        let s = |w: &gizmo_core::World| *w.query::<&VirtualStick>().get(stick).unwrap();
+        let b = |w: &gizmo_core::World| *w.query::<&VirtualButton>().get(fire).unwrap();
         assert!(!s(&world).is_held() && !b(&world).is_pressed(), "claimed with no box to be inside");
         // Layout places them; both fingers are still down.
-        *world.borrow_mut::<Node>().get_mut(stick).unwrap() = node(0.0, 400.0, 200.0, 200.0);
-        *world.borrow_mut::<Node>().get_mut(fire).unwrap() = node(600.0, 400.0, 200.0, 200.0);
+        *world.query_mut::<&mut Node>().get_mut(stick).unwrap() = node(0.0, 400.0, 200.0, 200.0);
+        *world.query_mut::<&mut Node>().get_mut(fire).unwrap() = node(600.0, 400.0, 200.0, 200.0);
         touch(&mut world, 1, Moved, 120.0, 500.0);
         run(&mut world);
         assert!(s(&world).is_held(), "the stick made under a finger did not take it");
@@ -353,7 +353,7 @@ mod tests {
         run(&mut world);
         touch(&mut world, 1, Moved, 150.0, 500.0); // 50 frame pixels: half of 50 logical at density 2
         run(&mut world);
-        assert_eq!(world.borrow::<VirtualStick>().get(stick).unwrap().value(), Vec2::new(0.5, 0.0));
+        assert_eq!(world.query::<&VirtualStick>().get(stick).unwrap().value(), Vec2::new(0.5, 0.0));
     }
 
     /// A finger lifting over a control on its first frame is no tap.
@@ -366,7 +366,7 @@ mod tests {
         let fire = world.spawn_bundle((node(600.0, 400.0, 200.0, 200.0), VirtualButton::default()));
         touch(&mut world, 1, Ended, 700.0, 500.0);
         run(&mut world);
-        let b = *world.borrow::<VirtualButton>().get(fire).unwrap();
+        let b = *world.query::<&VirtualButton>().get(fire).unwrap();
         assert!(!b.just_pressed() && !b.just_released() && !b.is_pressed());
     }
 
@@ -382,9 +382,9 @@ mod tests {
         run(&mut world);
         world.get_resource_mut::<Input>().unwrap().on_mouse_moved(100.0, 550.0);
         run(&mut world);
-        assert_eq!(world.borrow::<VirtualStick>().get(stick).unwrap().value(), Vec2::new(0.0, -1.0));
+        assert_eq!(world.query::<&VirtualStick>().get(stick).unwrap().value(), Vec2::new(0.0, -1.0));
         world.get_resource_mut::<Input>().unwrap().on_mouse_button_released(0);
         run(&mut world);
-        assert!(!world.borrow::<VirtualStick>().get(stick).unwrap().is_held());
+        assert!(!world.query::<&VirtualStick>().get(stick).unwrap().is_held());
     }
 }

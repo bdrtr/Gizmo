@@ -14,7 +14,7 @@ pub fn draw_velocity_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+    let mut velocities = unsafe { world.query_unchecked::<&mut Velocity>() };
     // Set when any velocity field is dragged, so the body can be woken below.
     //
     // Without this the field is a lie: `PhysicsWorld::sync_bodies` drops a velocity written to a
@@ -84,7 +84,7 @@ pub fn draw_velocity_section(
     // After the `Velocity` borrow is released, because this takes one on `RigidBody`.
     if velocity_edited {
         // SAFETY: same single-threaded egui draw as the borrow above, which has ended.
-        let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
+        let mut rigid_bodies = unsafe { world.query_unchecked::<&mut RigidBody>() };
         if let Some(mut rb) = rigid_bodies.get_mut(entity_id) {
             rb.wake_up();
         }
@@ -100,7 +100,7 @@ pub fn draw_rigidbody_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut rigidbodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
+    let mut rigidbodies = unsafe { world.query_unchecked::<&mut RigidBody>() };
     {
         if let Some(mut rb) = rigidbodies.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("RigidBody"))
@@ -162,7 +162,7 @@ pub fn draw_collider_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut colliders = unsafe { world.borrow_mut_unchecked::<Collider>() };
+    let mut colliders = unsafe { world.query_unchecked::<&mut Collider>() };
     {
         if let Some(mut collider) = colliders.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("Collider"))

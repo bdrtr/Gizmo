@@ -26,7 +26,7 @@
 //!   * **A** — izlenen tuş · **Sağ-tık + fare** — bak · **WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -147,7 +147,7 @@ fn main() {
 
 /// Aynı tuşun üç kenarını da ayrı ayrı soran sistem.
 fn keyboard_input_system(
-    mut cubes: Query<(Mut<Transform>, Mut<Material>, With<KeyCube>)>,
+    mut cubes: Query<(&mut Transform, &mut Material, With<KeyCube>)>,
     mut log: ResMut<KeyLog>,
     input: Res<Input>,
 ) {

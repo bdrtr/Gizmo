@@ -467,7 +467,7 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
 
     // --- kamerayı nişana göre güncelle ---
     {
-        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
+        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
         for (mut tr, mut cam) in q.iter_mut() {
             tr.position = CANNON;
             tr.rotation = Quat::from_rotation_y(-g.yaw);

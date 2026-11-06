@@ -217,10 +217,10 @@ fn path_to_goal(rows: &[&str], from: (i32, i32)) -> Vec<(i32, i32)> {
 /// `LABIRENT_OTO`: yolun bir sonraki karesinin ortasına doğru eğ; bilyenin hızı frenler.
 fn auto_tilt(world: &World, game: &Game) -> (f32, f32) {
     let rows = LEVELS[game.level];
-    let rotation = world.borrow::<Transform>().get(game.board).map_or(Quat::IDENTITY, |t| t.rotation);
+    let rotation = world.query::<&Transform>().get(game.board).map_or(Quat::IDENTITY, |t| t.rotation);
     let (Some(p), Some(v)) = (
-        world.borrow::<Transform>().get(game.ball).map(|t| t.position),
-        world.borrow::<Velocity>().get(game.ball).map(|v| v.linear),
+        world.query::<&Transform>().get(game.ball).map(|t| t.position),
+        world.query::<&Velocity>().get(game.ball).map(|v| v.linear),
     ) else {
         return (0.0, 0.0);
     };
@@ -365,7 +365,7 @@ fn spawn_ball(world: &mut World, game: &mut Game) {
         world.despawn(e);
     }
     // Tahta eğikse başlangıç noktası da onunla birlikte.
-    let rotation = world.borrow::<Transform>().get(game.board).map_or(Quat::IDENTITY, |t| t.rotation);
+    let rotation = world.query::<&Transform>().get(game.board).map_or(Quat::IDENTITY, |t| t.rotation);
     // CCD yok: bilye 240 Hz'de adım başına birkaç santim gidiyor, 20 cm'lik zemini delemez.
     let body = RigidBody::new(0.2, true);
     let ball = world.spawn_bundle((
@@ -395,14 +395,14 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     game.tilt += (want - game.tilt).clamp_length_max(step);
     // +x eğimi sağ kenarı indirir (z ekseni etrafında), +y (ileri) uzak kenarı indirir.
     let rotation = Quat::from_rotation_x(-game.tilt.y) * Quat::from_rotation_z(-game.tilt.x);
-    if let Some(mut target) = world.borrow_mut::<KinematicTarget>().get_mut(game.board) {
+    if let Some(mut target) = world.query_mut::<&mut KinematicTarget>().get_mut(game.board) {
         *target = KinematicTarget::new(Vec3::ZERO, rotation);
     }
 
     game.physics.advance(world, dt);
     sync_transforms(world);
 
-    let ball = world.borrow::<Transform>().get(game.ball).map(|t| t.position);
+    let ball = world.query::<&Transform>().get(game.ball).map(|t| t.position);
     match (ball, game.won) {
         (_, Some(t)) => {
             let t = t - dt;
@@ -472,7 +472,7 @@ fn play(world: &mut World, name: &str) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

@@ -127,16 +127,16 @@ fn storm(seed: u64, frames: u32) -> Outcome {
                 8 if !bodies.is_empty() => {
                     let id = bodies[rng.pick(bodies.len())];
                     let kick = Vec3::new(rng.range(-15.0, 15.0), rng.range(0.0, 15.0), rng.range(-15.0, 15.0));
-                    if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(id) {
+                    if let Some(mut v) = world.query_mut::<&mut Velocity>().get_mut(id) {
                         v.linear = kick;
                     }
-                    if let Some(mut rb) = world.borrow_mut::<RigidBody>().get_mut(id) {
+                    if let Some(mut rb) = world.query_mut::<&mut RigidBody>().get_mut(id) {
                         rb.wake_up();
                     }
                 }
                 9 if !bodies.is_empty() => {
                     let id = bodies[rng.pick(bodies.len())];
-                    if let Some(mut rb) = world.borrow_mut::<RigidBody>().get_mut(id) {
+                    if let Some(mut rb) = world.query_mut::<&mut RigidBody>().get_mut(id) {
                         rb.ccd_enabled = !rb.ccd_enabled;
                     }
                 }
@@ -148,8 +148,8 @@ fn storm(seed: u64, frames: u32) -> Outcome {
 
         // After every step: finite, in bounds, sane speeds, no joint naming a dead body.
         for &id in &bodies {
-            let p = world.borrow::<Transform>().get(id).map(|t| t.position).expect("a live body has a Transform");
-            let v = world.borrow::<Velocity>().get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO);
+            let p = world.query::<&Transform>().get(id).map(|t| t.position).expect("a live body has a Transform");
+            let v = world.query::<&Velocity>().get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO);
             assert!(p.is_finite() && v.is_finite(), "frame {frame}: body {id} is not finite: p {p:?} v {v:?}");
             out.farthest = out.farthest.max(p.length());
             out.worst_speed = out.worst_speed.max(v.length());

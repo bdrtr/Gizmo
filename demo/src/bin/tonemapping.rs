@@ -86,7 +86,7 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -191,7 +191,7 @@ fn main() {
 /// Pozlamanın adresi `Camera::exposure` — `Renderer::exposure` DEĞİL. Bu demonun bulduğu şey de
 /// bu: `Renderer`'ın `exposure` alanını oyun çizim yolu hiç okumuyor.
 fn exposure_input(
-    mut cameras: Query<(Mut<Camera>, &Transform)>,
+    mut cameras: Query<(&mut Camera, &Transform)>,
     mut exposure: ResMut<Exposure>,
     input: Res<Input>,
 ) {

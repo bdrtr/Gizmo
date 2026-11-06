@@ -105,7 +105,7 @@ fn spawn_buoys(world: &mut World, visual: bool) -> Vec<Entity> {
                     world.add_component(e, MeshSource("sphere".into()));
                     world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex("#BDC3C7").to_vec4(), 0.4, 0.0));
                     world.add_component(e, MeshRenderer::new());
-                    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
+                    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(id) {
                         t.scale = Vec3::splat(0.45);
                     }
                 }
@@ -133,8 +133,8 @@ fn gate_centre(k: usize) -> Vec3 {
 /// orantılı bir sapma momenti; omurga yana kaymayı söndürür.
 fn steer(world: &mut World, boat: Entity, throttle: f32, rudder: f32) {
     let (t, v, w) = {
-        let ts = world.borrow::<Transform>();
-        let vs = world.borrow::<Velocity>();
+        let ts = world.query::<&Transform>();
+        let vs = world.query::<&Velocity>();
         let Some(t) = ts.get(boat).copied() else { return };
         let vel = vs.get(boat).copied().unwrap_or_default();
         (t, vel.linear, vel.angular)
@@ -153,7 +153,7 @@ fn steer(world: &mut World, boat: Entity, throttle: f32, rudder: f32) {
     // Sintine omurgası: yalpayı söndürür. `FluidZone`'un sürüklenmesi her yönde aynı ve bir
     // tekne gövdesinin yalpaya karşı koyan biçimini bilmiyor; o payı gövdenin kendisi veriyor.
     let roll = -forward * (w.dot(forward) * 2500.0) - side * (w.dot(side) * 2500.0);
-    if let Some(mut push) = world.borrow_mut::<ExternalForce>().get_mut(boat) {
+    if let Some(mut push) = world.query_mut::<&mut ExternalForce>().get_mut(boat) {
         *push = ExternalForce::at_point(thrust, stern, t.position).with_torque(yaw + roll);
         push.force += keel;
     }
@@ -161,7 +161,7 @@ fn steer(world: &mut World, boat: Entity, throttle: f32, rudder: f32) {
 
 /// Otomatik pilot: sıradaki kapının ortasına dön, gaz.
 fn autopilot(world: &World, boat: Entity, target: Vec3) -> (f32, f32) {
-    let Some(t) = world.borrow::<Transform>().get(boat).copied() else { return (0.0, 0.0) };
+    let Some(t) = world.query::<&Transform>().get(boat).copied() else { return (0.0, 0.0) };
     let forward = t.rotation * Vec3::NEG_Z;
     let f = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
     let to = Vec3::new(target.x - t.position.x, 0.0, target.z - t.position.z).normalize_or_zero();
@@ -177,25 +177,25 @@ fn through_gate(p: Vec3, k: usize) -> bool {
 
 /// Yandan bir rüzgâr darbesi: kayığın üst kısmına, bordasına dik bir itme.
 fn gust(world: &mut World, boat: Entity, strength: f32) {
-    let Some(t) = world.borrow::<Transform>().get(boat).copied() else { return };
+    let Some(t) = world.query::<&Transform>().get(boat).copied() else { return };
     let side = t.rotation * Vec3::X;
     let impulse = side * strength;
     let point = t.position + t.rotation * Vec3::new(0.0, 0.6, 0.0);
     let com = t.position;
-    let Some((inv_mass, inv_inertia)) = world.borrow_mut::<RigidBody>().get_mut(boat).map(|mut rb| {
+    let Some((inv_mass, inv_inertia)) = world.query_mut::<&mut RigidBody>().get_mut(boat).map(|mut rb| {
         rb.wake_up();
         (rb.inv_mass(), rb.inv_world_inertia_tensor(t.rotation))
     }) else {
         return;
     };
-    if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(boat) {
+    if let Some(mut v) = world.query_mut::<&mut Velocity>().get_mut(boat) {
         v.linear += impulse * inv_mass;
         v.angular += inv_inertia * (point - com).cross(impulse);
     }
 }
 
 fn tilt_degrees(world: &World, id: Entity) -> f32 {
-    world.borrow::<Transform>().get(id).map_or(0.0, |t| (t.rotation * Vec3::Y).angle_between(Vec3::Y).to_degrees())
+    world.query::<&Transform>().get(id).map_or(0.0, |t| (t.rotation * Vec3::Y).angle_between(Vec3::Y).to_degrees())
 }
 
 /// `--test`: üç dakika otomatik pilot, dört saniyede bir rüzgâr.
@@ -216,7 +216,7 @@ fn self_test() -> bool {
         }
         physics.advance(&mut world, dt);
         world.apply_commands();
-        let p = world.borrow::<Transform>().get(boat).map(|t| t.position).unwrap_or(Vec3::ZERO);
+        let p = world.query::<&Transform>().get(boat).map(|t| t.position).unwrap_or(Vec3::ZERO);
         if !p.is_finite() {
             break;
         }
@@ -227,7 +227,7 @@ fn self_test() -> bool {
         }
         if frame > 600 {
             for &b in &buoys {
-                buoy_low = buoy_low.min(world.borrow::<Transform>().get(b).map_or(0.0, |t| t.position.y));
+                buoy_low = buoy_low.min(world.query::<&Transform>().get(b).map_or(0.0, |t| t.position.y));
             }
         }
         if through_gate(p, next) {
@@ -347,7 +347,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     if game.finished.is_none() {
         game.clock += dt;
     }
-    let t = world.borrow::<Transform>().get(game.boat).copied().unwrap_or_default();
+    let t = world.query::<&Transform>().get(game.boat).copied().unwrap_or_default();
     if game.finished.is_none() && through_gate(t.position, game.next) {
         game.next += 1;
         if game.next == GATES.len() {
@@ -355,7 +355,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     }
     for (i, &b) in game.buoys.iter().enumerate() {
-        if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(b) {
+        if let Some(mut m) = world.query_mut::<&mut MaterialDesc>().get_mut(b) {
             m.albedo = match (i / 2).cmp(&game.next) {
                 std::cmp::Ordering::Less => Color::srgb_hex("#27AE60").to_vec4(),
                 std::cmp::Ordering::Equal => Color::srgb_hex("#F39C12").to_vec4(),
@@ -363,14 +363,14 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
             };
         }
     }
-    if let Some(mut c) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut c) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         let back = t.rotation * Vec3::Z;
         let want = t.position + Vec3::new(back.x, 0.0, back.z).normalize_or_zero() * 10.0 + Vec3::Y * 4.5;
         c.position = c.position.lerp(want, (dt * 2.5).min(1.0));
         let look = (t.position - c.position).normalize_or_zero();
         c.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, look);
     }
-    let speed = world.borrow::<Velocity>().get(game.boat).map_or(0.0, |v| Vec2::new(v.linear.x, v.linear.z).length());
+    let speed = world.query::<&Velocity>().get(game.boat).map_or(0.0, |v| Vec2::new(v.linear.x, v.linear.z).length());
     let target = gate_centre(game.next);
     let dist = Vec2::new(t.position.x - target.x, t.position.z - target.z).length();
     set_text(

@@ -11,8 +11,8 @@ fn collect_protected_ids(world: &World, editor_camera: Entity) -> std::collectio
     protected.insert(editor_camera);
 
     {
-        let names = world.borrow::<gizmo::core::component::EntityName>();
-        let markers = world.borrow::<gizmo::core::component::EditorOnly>();
+        let names = world.query::<&gizmo::core::component::EntityName>();
+        let markers = world.query::<&gizmo::core::component::EditorOnly>();
         for e in world.iter_alive_entities() {
             if gizmo::core::component::is_editor_only(
                 markers.get(e).is_some(),
@@ -25,7 +25,7 @@ fn collect_protected_ids(world: &World, editor_camera: Entity) -> std::collectio
 
     // BFS: Korunan objelerin tüm çocuklarını da ekle
     {
-        let children = world.borrow::<gizmo::core::component::Children>();
+        let children = world.query::<&gizmo::core::component::Children>();
         let mut queue: Vec<Entity> = protected.iter().copied().collect();
         let mut i = 0;
         while i < queue.len() {
@@ -366,7 +366,7 @@ pub fn render_studio(
         // Prefab spawn pozisyonunu (Asset browser'dan drop edilmişse) uygula
         if let (Ok(Some(root_id)), Some(pos)) = (&loaded_root, target_pos) {
             let root_id = *root_id;
-            let mut transforms = world.borrow_mut::<gizmo::physics::components::Transform>();
+            let mut transforms = world.query_mut::<&mut gizmo::physics::components::Transform>();
             {
                 if let Some(mut t) = transforms.get_mut(root_id) {
                     t.position = pos;
@@ -452,7 +452,7 @@ pub fn render_studio(
                 let mut p_path = String::new();
 
                 {
-                    let terrains = world.borrow::<gizmo::renderer::components::Terrain>();
+                    let terrains = world.query::<&gizmo::renderer::components::Terrain>();
                     if let Some(t) = terrains.get(ent_id) {
                         p_width = t.width;
                         p_depth = t.depth;
@@ -473,7 +473,7 @@ pub fn render_studio(
                             if let Some(ent) = world.live(ent_id) {
                                 // Material yoksa beyaz default ekle
                                 let has_mat = world
-                                    .borrow::<gizmo::prelude::Material>()
+                                    .query::<&gizmo::prelude::Material>()
                                     .contains(ent);
                                 if !has_mat {
                                     let dummy_rgba = [255, 255, 255, 255];

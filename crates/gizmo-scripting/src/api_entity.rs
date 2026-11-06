@@ -196,7 +196,7 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
     let scales = lua.create_table()?;
     let names = lua.create_table()?;
 
-    let transforms = world.borrow::<gizmo_physics_core::Transform>();
+    let transforms = world.query::<&gizmo_physics_core::Transform>();
     for (entity, _) in world.query::<(Entity, &gizmo_physics_core::Transform)>().iter() {
         if let Some(t) = transforms.get(entity) {
             let pos = lua.create_table()?;
@@ -220,7 +220,7 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
         }
     }
 
-    let vels = world.borrow::<gizmo_physics_rigid::components::Velocity>();
+    let vels = world.query::<&gizmo_physics_rigid::components::Velocity>();
     for (entity, _) in world.query::<(Entity, &gizmo_physics_rigid::components::Velocity)>().iter() {
         if let Some(v) = vels.get(entity) {
             let vel = lua.create_table()?;
@@ -231,7 +231,7 @@ pub fn update_entity_read_api(lua: &Lua, world: &World) -> Result<(), LuaError> 
         }
     }
 
-    let entity_names = world.borrow::<gizmo_core::EntityName>();
+    let entity_names = world.query::<&gizmo_core::EntityName>();
     for (entity, _) in world.query::<(Entity, &gizmo_core::EntityName)>().iter() {
         if let Some(n) = entity_names.get(entity) {
             names.set(entity.id(), n.0.clone())?;

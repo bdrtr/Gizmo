@@ -54,7 +54,7 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::{GamepadId, Input, RumbleRequest};
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -168,7 +168,7 @@ fn main() {
 
 /// Küpü zıplatır, her çarpışmada çarpma şiddetiyle orantılı titreşim ister.
 fn bounce_and_rumble(
-    mut bouncers: Query<(Mut<Transform>, Mut<Bouncer>, With<Bouncer>)>,
+    mut bouncers: Query<(&mut Transform, &mut Bouncer, With<Bouncer>)>,
     mut log: ResMut<RumbleLog>,
     mut input: ResMut<Input>,
     time: Res<Time>,

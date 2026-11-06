@@ -52,9 +52,9 @@ impl PhysicsStateSnapshot {
         use gizmo_physics_rigid::components::velocity::Velocity;
         use gizmo_physics_rigid::components::rigid_body::RigidBody;
 
-        let transforms = world.borrow::<Transform>();
-        let velocities = world.borrow::<Velocity>();
-        let rigid_bodies = world.borrow::<RigidBody>();
+        let transforms = world.query::<&Transform>();
+        let velocities = world.query::<&Velocity>();
+        let rigid_bodies = world.query::<&RigidBody>();
 
         let mut states = Vec::with_capacity(128); // Tahmini
 
@@ -90,11 +90,11 @@ impl PhysicsStateSnapshot {
 
         // SAFETY: exclusive `&mut World`; Transform/Velocity/RigidBody are distinct component
         // types, so these three mutable queries never alias the same storage.
-        let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
+        let mut transforms = unsafe { world.query_unchecked::<&mut Transform>() };
         // SAFETY: as above — Velocity is a distinct component type from Transform.
-        let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+        let mut velocities = unsafe { world.query_unchecked::<&mut Velocity>() };
         // SAFETY: as above — RigidBody is distinct from both Transform and Velocity.
-        let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
+        let mut rigid_bodies = unsafe { world.query_unchecked::<&mut RigidBody>() };
 
         // Bir state'in en az bir bileşeni canlı entity'ye uygulandı mı — aksi halde
         // (despawn/id-yeniden-kullanım, generation uyuşmazlığı) atlanmış demektir.
@@ -230,7 +230,7 @@ mod tests {
         // 5) Eski snapshot'ı geri yükle → yeni entity BOZULMAMALI.
         snap.restore(&mut world);
 
-        let transforms = world.borrow::<Transform>();
+        let transforms = world.query::<&Transform>();
         let t = transforms.get(e2).expect("yeni entity'nin transform'u olmalı");
         assert_eq!(
             t.position,
@@ -251,14 +251,14 @@ mod tests {
 
         // Durumu değiştir.
         {
-            let mut transforms = world.borrow_mut::<Transform>();
+            let mut transforms = world.query_mut::<&mut Transform>();
             let mut t = transforms.get_mut(e).unwrap();
             t.position = Vec3::new(100.0, 100.0, 100.0);
         }
 
         snap.restore(&mut world);
 
-        let transforms = world.borrow::<Transform>();
+        let transforms = world.query::<&Transform>();
         let t = transforms.get(e).unwrap();
         assert_eq!(t.position, Vec3::new(1.0, 2.0, 3.0));
     }
@@ -346,7 +346,7 @@ mod tests {
 
         // Uyku bayrağını kur, sonra snapshot al.
         {
-            let mut rbs = world.borrow_mut::<RigidBody>();
+            let mut rbs = world.query_mut::<&mut RigidBody>();
             let mut rb = rbs.get_mut(e).unwrap();
             rb.is_sleeping = true;
         }
@@ -354,17 +354,17 @@ mod tests {
 
         // Her şeyi boz.
         {
-            let mut ts = world.borrow_mut::<Transform>();
+            let mut ts = world.query_mut::<&mut Transform>();
             let mut t = ts.get_mut(e).unwrap();
             t.position = Vec3::new(-9.0, -9.0, -9.0);
         }
         {
-            let mut vs = world.borrow_mut::<Velocity>();
+            let mut vs = world.query_mut::<&mut Velocity>();
             let mut v = vs.get_mut(e).unwrap();
             v.linear = Vec3::ZERO;
         }
         {
-            let mut rbs = world.borrow_mut::<RigidBody>();
+            let mut rbs = world.query_mut::<&mut RigidBody>();
             let mut rb = rbs.get_mut(e).unwrap();
             rb.is_sleeping = false;
         }
@@ -372,7 +372,7 @@ mod tests {
         snap.restore(&mut world);
 
         {
-            let ts = world.borrow::<Transform>();
+            let ts = world.query::<&Transform>();
             assert_eq!(
                 ts.get(e).unwrap().position,
                 Vec3::new(1.0, 2.0, 3.0),
@@ -380,7 +380,7 @@ mod tests {
             );
         }
         {
-            let vs = world.borrow::<Velocity>();
+            let vs = world.query::<&Velocity>();
             assert_eq!(
                 vs.get(e).unwrap().linear,
                 Vec3::new(4.0, 5.0, 6.0),
@@ -388,7 +388,7 @@ mod tests {
             );
         }
         {
-            let rbs = world.borrow::<RigidBody>();
+            let rbs = world.query::<&RigidBody>();
             assert!(rbs.get(e).unwrap().is_sleeping, "uyku bayrağı geri gelmeli");
         }
     }

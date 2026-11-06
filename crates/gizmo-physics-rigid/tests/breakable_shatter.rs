@@ -93,7 +93,7 @@ fn debris_positions(world: &World) -> Vec<Vec3> {
 
 fn health_of(world: &World, e: Entity) -> f32 {
     world
-        .borrow::<Breakable>()
+        .query::<&Breakable>()
         .get(e)
         .expect("breakable still present")
         .current_health
@@ -101,7 +101,7 @@ fn health_of(world: &World, e: Entity) -> f32 {
 
 fn is_broken(world: &World, e: Entity) -> bool {
     world
-        .borrow::<Breakable>()
+        .query::<&Breakable>()
         .get(e)
         .expect("breakable still present")
         .is_broken
@@ -455,7 +455,7 @@ fn a_recycled_id_breakable_shatters_instead_of_outliving_its_own_debris() {
         "the debris must still spawn; the bug is the original surviving it, not the debris"
     );
     assert!(
-        world.borrow::<Breakable>().get(e).is_none(),
+        world.query::<&Breakable>().get(e).is_none(),
         "no Breakable may remain on the recycled id — a survivor here is latched is_broken and \
          can never be damaged again"
     );

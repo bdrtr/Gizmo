@@ -42,7 +42,7 @@
 //! ## Kontroller
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera
 
-use gizmo::core::query::{Mut, Query, With, Without};
+use gizmo::core::query::{Query, With, Without};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -158,7 +158,7 @@ fn main() {
 }
 
 /// Küpü kendi **önüne** doğru taşır.
-fn move_cube(mut cubes: Query<(Mut<Transform>, &CubeState)>, time: Res<Time>) {
+fn move_cube(mut cubes: Query<(&mut Transform, &CubeState)>, time: Res<Time>) {
     for (mut transform, cube) in cubes.iter_mut() {
         let ahead = transform.forward();
         let delta = ahead * cube.move_speed * time.dt();
@@ -171,7 +171,7 @@ fn move_cube(mut cubes: Query<(Mut<Transform>, &CubeState)>, time: Res<Time>) {
 /// İleri hareketle birleşince ortaya çıkan şey daire: dönüş hızı ne kadar yüksekse yörünge o
 /// kadar dar olur.
 fn rotate_cube(
-    mut cubes: Query<(Mut<Transform>, &CubeState, Without<Center>)>,
+    mut cubes: Query<(&mut Transform, &CubeState, Without<Center>)>,
     centers: Query<(&Transform, With<Center>)>,
     time: Res<Time>,
 ) {
@@ -193,7 +193,7 @@ fn rotate_cube(
 /// doldurur.
 fn scale_center(
     cubes: Query<(&Transform, &CubeState, Without<Center>)>,
-    mut centers: Query<(Mut<Transform>, &Center)>,
+    mut centers: Query<(&mut Transform, &Center)>,
     mut probe: ResMut<Probe>,
 ) {
     let mut distances = 0.0;

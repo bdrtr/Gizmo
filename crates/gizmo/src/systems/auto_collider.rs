@@ -36,11 +36,11 @@
 //! AutoBoxColliderSystem.run(&world, 1.0 / 60.0);
 //! world.apply_commands();
 //!
-//! let colliders = world.borrow::<Collider>();
+//! let colliders = world.query::<&Collider>();
 //! let shape = &colliders.get(plank).unwrap().shape;
 //! assert!(matches!(shape, ColliderShape::Box(b) if b.half_extents == Vec3::new(4.0, 0.4, 1.0)));
 //! // …and the marker is gone, so the resolution happens exactly once.
-//! assert!(world.borrow::<AutoBoxCollider>().get(plank).is_none());
+//! assert!(world.query::<&AutoBoxCollider>().get(plank).is_none());
 //! ```
 
 use gizmo_core::Entity;
@@ -133,7 +133,7 @@ impl gizmo_core::system::System for AutoBoxColliderSystem {
     #[tracing::instrument(skip_all, level = "trace", name = "auto_box_collider")]
     fn run(&mut self, world: &World, dt: f32) {
         use gizmo_core::commands::Commands;
-        use gizmo_core::query::{Added, Mut};
+        use gizmo_core::query::Added;
         use gizmo_core::system::SystemParam;
 
         // Commands YOKSA nazikçe küçül: yine de boyutlandır (Added geçidi doğruluğu korur),
@@ -157,7 +157,7 @@ impl gizmo_core::system::System for AutoBoxColliderSystem {
             // SAFETY: exclusive sistem; scheduler bu çalışırken disjoint mutable erişim garanti eder.
             let mut q = unsafe {
             world
-                .query_unchecked::<(Entity, &Transform, Mut<Collider>, &AutoBoxCollider, Added<AutoBoxCollider>)>()
+                .query_unchecked::<(Entity, &Transform, &mut Collider, &AutoBoxCollider, Added<AutoBoxCollider>)>()
         };
             for (id, t, mut col, cfg, _) in q.iter_mut() {
                 // Savunma: bir küre/kapsül collider'ı ASLA kutuya dönüştürme.
@@ -189,7 +189,7 @@ impl gizmo_core::system::System for AutoBoxColliderSystem {
             // this pass holds one, so the borrow `query_unchecked` skips cannot be violated here.
             let mut q = unsafe {
             world
-                .query_unchecked::<(&Transform, Mut<RigidBody>, &Collider, &AutoBoxCollider, Added<AutoBoxCollider>)>()
+                .query_unchecked::<(&Transform, &mut RigidBody, &Collider, &AutoBoxCollider, Added<AutoBoxCollider>)>()
         };
             for (t, mut rb, col, cfg, _) in q.iter_mut() {
                 // Pass 1 ile SİMETRİ: kutu-olmayan collider'a takılı işarette Pass 1 şekli
@@ -302,7 +302,7 @@ mod tests {
         schedule.run(&mut world, 0.016);
 
         // Marker çözülmedi → collider hâlâ yer-tutucu birim kutu (senkron yol şart).
-        let col = world.borrow::<Collider>().get(e).cloned().unwrap();
+        let col = world.query::<&Collider>().get(e).cloned().unwrap();
         match col.shape {
             ColliderShape::Box(b) => assert_eq!(
                 b.half_extents,
@@ -363,7 +363,7 @@ mod tests {
         world.apply_commands();
 
         // collider yarı-genişliği == ölçek
-        let col = world.borrow::<Collider>().get(e).cloned().unwrap();
+        let col = world.query::<&Collider>().get(e).cloned().unwrap();
         match col.shape {
             ColliderShape::Box(b) => assert_eq!(b.half_extents, Vec3::new(2.0, 3.0, 4.0)),
             _ => panic!("kutu olmalı"),
@@ -372,11 +372,11 @@ mod tests {
         // atalet: referans gövdeyle bire bir (FULL-vs-HALF kilidi)
         let mut reference = RigidBody::new(10.0, true);
         reference.update_inertia_from_collider(&Collider::box_collider(Vec3::new(2.0, 3.0, 4.0)));
-        let rb = world.borrow::<RigidBody>().get(e).cloned().unwrap();
+        let rb = world.query::<&RigidBody>().get(e).cloned().unwrap();
         assert_eq!(rb.local_inertia, reference.local_inertia);
 
         // işaret kaldırıldı
-        assert!(world.borrow::<AutoBoxCollider>().get(e).is_none());
+        assert!(world.query::<&AutoBoxCollider>().get(e).is_none());
     }
 
     /// base = 0.5 → half-extent = scale / 2 (the 0.5-factor mesh family).
@@ -393,7 +393,7 @@ mod tests {
         AutoBoxColliderSystem.run(&world, 0.016);
         world.apply_commands();
 
-        let col = world.borrow::<Collider>().get(e).cloned().unwrap();
+        let col = world.query::<&Collider>().get(e).cloned().unwrap();
         match col.shape {
             ColliderShape::Box(b) => assert_eq!(b.half_extents, Vec3::splat(2.0)),
             _ => panic!("kutu olmalı"),
@@ -414,12 +414,12 @@ mod tests {
         world.begin_change_frame(0);
         AutoBoxColliderSystem.run(&world, 0.016);
         // Commands yok → işaret hâlâ orada
-        assert!(world.borrow::<AutoBoxCollider>().get(e).is_some(), "işaret kalmalı");
+        assert!(world.query::<&AutoBoxCollider>().get(e).is_some(), "işaret kalmalı");
 
         // Frame 2: birileri collider'ı bozsun, sonra sistem YENİDEN çalışsın.
         // Added artık tetiklenmediği için collider dokunulmamış kalmalı.
         {
-            let mut q = world.borrow_mut::<Collider>();
+            let mut q = world.query_mut::<&mut Collider>();
             let mut c = q.get_mut(e).unwrap();
             c.shape = ColliderShape::Box(BoxShape { half_extents: Vec3::splat(9.0) });
         }
@@ -427,7 +427,7 @@ mod tests {
         world.begin_change_frame(prev);
         AutoBoxColliderSystem.run(&world, 0.016);
 
-        let col = world.borrow::<Collider>().get(e).cloned().unwrap();
+        let col = world.query::<&Collider>().get(e).cloned().unwrap();
         match col.shape {
             // 9.0 korunmalı — sistem yeniden boyutlandırmadı (Added kapalı).
             ColliderShape::Box(b) => assert_eq!(b.half_extents, Vec3::splat(9.0)),
@@ -449,7 +449,7 @@ mod tests {
         AutoBoxColliderSystem.run(&world, 0.016);
         world.apply_commands();
 
-        let col = world.borrow::<Collider>().get(e).cloned().unwrap();
+        let col = world.query::<&Collider>().get(e).cloned().unwrap();
         assert!(matches!(col.shape, ColliderShape::Sphere(_)), "küre korunmalı");
     }
 
@@ -467,7 +467,7 @@ mod tests {
         AutoBoxColliderSystem.run(&world, 0.016);
         world.apply_commands();
 
-        let col = world.borrow::<Collider>().get(e).cloned().unwrap();
+        let col = world.query::<&Collider>().get(e).cloned().unwrap();
         match col.shape {
             ColliderShape::Box(b) => {
                 assert_eq!(b.half_extents.x, MIN_HE);
@@ -496,7 +496,7 @@ mod tests {
         AutoBoxColliderSystem.run(&world, 0.016);
         world.apply_commands();
 
-        let col = world.borrow::<Collider>().get(e).cloned().unwrap();
+        let col = world.query::<&Collider>().get(e).cloned().unwrap();
         match col.shape {
             ColliderShape::Box(b) => assert_eq!(b.half_extents, Vec3::splat(2.0)),
             _ => panic!("kutu olmalı"),
@@ -520,7 +520,7 @@ mod tests {
         AutoBoxColliderSystem.run(&world, 0.016); // RigidBody yok → Pass 2 no-match, panik yok
         world.apply_commands();
 
-        let col = world.borrow::<Collider>().get(e).cloned().unwrap();
+        let col = world.query::<&Collider>().get(e).cloned().unwrap();
         match col.shape {
             ColliderShape::Box(b) => assert_eq!(b.half_extents, Vec3::splat(5.0)),
             _ => panic!("kutu olmalı"),
@@ -545,7 +545,7 @@ mod tests {
         AutoBoxColliderSystem.run(&world, 0.016);
         world.apply_commands();
 
-        let col = world.borrow::<Collider>().get(e).cloned().unwrap();
+        let col = world.query::<&Collider>().get(e).cloned().unwrap();
         match col.shape {
             ColliderShape::Box(b) => assert_eq!(b.half_extents, Vec3::new(600.0, 1.0, 600.0)),
             _ => panic!("kutu olmalı"),

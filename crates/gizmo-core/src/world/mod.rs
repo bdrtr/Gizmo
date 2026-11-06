@@ -375,7 +375,7 @@ mod tests {
         world.despawn(e2);
         
         // e3 hâlâ erişilebilir olmalı
-        let comps = world.borrow::<TestComp>();
+        let comps = world.query::<&TestComp>();
         let val = comps.get(e3).unwrap();
         assert_eq!(val.0, 3);
     }
@@ -404,8 +404,8 @@ mod tests {
         let loc2 = world.entity_location(e.id());
         assert_ne!(loc1.archetype_id, loc2.archetype_id);
         
-        assert_eq!(world.borrow::<TestCompI32>().get(e).unwrap().0, 10);
-        assert_eq!(world.borrow::<TestCompF32>().get(e).unwrap().0, 2.5);
+        assert_eq!(world.query::<&TestCompI32>().get(e).unwrap().0, 10);
+        assert_eq!(world.query::<&TestCompF32>().get(e).unwrap().0, 2.5);
     }
 
     #[test]
@@ -427,8 +427,8 @@ mod tests {
         assert_eq!(ents.len(), n);
 
         // Her entity'nin iki bileşeni de doğru olmalı (column/entities desync veya OOB yok).
-        let bi = world.borrow::<BatchI>();
-        let bf = world.borrow::<BatchF>();
+        let bi = world.query::<&BatchI>();
+        let bf = world.query::<&BatchF>();
         for (i, e) in ents.iter().enumerate() {
             assert_eq!(bi.get(*e).map(|c| c.0), Some(i as i32), "BatchI[{i}]");
             assert_eq!(bf.get(*e).map(|c| c.0), Some(i as f32 * 1.5), "BatchF[{i}]");
@@ -1719,7 +1719,7 @@ mod tests {
         world.add_component(e, TestCompI32(1));
         world.add_component(e, TestCompI32(99)); // overwrite
         
-        assert_eq!(world.borrow::<TestCompI32>().get(e).unwrap().0, 99);
+        assert_eq!(world.query::<&TestCompI32>().get(e).unwrap().0, 99);
     }
 
     #[test]
@@ -1795,14 +1795,14 @@ mod tests {
         
         // Query ile tüm i32'leri iki katına çıkar
         {
-            let mut q = world.query_mut::<crate::query::Mut<TestCompI32>>();
+            let mut q = world.query_mut::<&mut TestCompI32>();
             for mut val in q.iter_mut() {
                 val.0 *= 2;
             }
         }
         
-        assert_eq!(world.borrow::<TestCompI32>().get(e1).unwrap().0, 2);
-        assert_eq!(world.borrow::<TestCompI32>().get(e2).unwrap().0, 4);
+        assert_eq!(world.query::<&TestCompI32>().get(e1).unwrap().0, 2);
+        assert_eq!(world.query::<&TestCompI32>().get(e2).unwrap().0, 4);
     }
 
     #[test]

@@ -58,7 +58,7 @@
 
 use gizmo::core::hierarchy::HierarchyExt;
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -170,7 +170,7 @@ fn main() {
 /// ikinci aşamasında listede tam olarak öyle bir kimlik var.
 fn rotate(
     roots: Query<(Entity, &Children, With<Node>)>,
-    mut transforms: Query<(Entity, Mut<Transform>, With<Node>)>,
+    mut transforms: Query<(Entity, &mut Transform, With<Node>)>,
     time: Res<Time>,
 ) {
     let dt = time.dt();

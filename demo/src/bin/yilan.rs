@@ -61,8 +61,8 @@ fn global(world: &mut World, name: &str) -> Option<ScriptValue> {
 
 /// Tahtadaki yılan parçaları: adı `yilan` olan, mesh'i ve rengi olan varlıklar.
 fn segments(world: &World) -> (usize, usize) {
-    let meshes = world.borrow::<gizmo::core::component::MeshSource>();
-    let colours = world.borrow::<MaterialDesc>();
+    let meshes = world.query::<&gizmo::core::component::MeshSource>();
+    let colours = world.query::<&MaterialDesc>();
     let ids: Vec<Entity> = world.query::<(Entity, &gizmo::core::EntityName)>().iter().filter(|(_, n)| n.0 == "yilan").map(|(entity, _)| entity).collect();
     let drawn = ids.iter().filter(|id| meshes.get(**id).is_some() && colours.get(**id).is_some()).count();
     (ids.len(), drawn)
@@ -166,7 +166,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

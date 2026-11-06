@@ -156,7 +156,7 @@ fn world_with_scripted_entity(script_path: &str) -> (World, gizmo::core::Entity)
 
 fn position_of(world: &World, id: Entity) -> Vec3 {
     world
-        .borrow::<Transform>()
+        .query::<&Transform>()
         .get(id)
         .map(|t| t.position)
         .expect("entity has a Transform")
@@ -223,7 +223,7 @@ fn a_scene_saved_with_a_script_loads_and_that_script_runs() {
             .expect("the entity survived the file")
     };
     assert!(
-        world.borrow::<gizmo::scripting::Script>().get(id).is_some(),
+        world.query::<&gizmo::scripting::Script>().get(id).is_some(),
         "the Script component did not survive the scene file — an exported game would open a \
          world that looks right and does nothing"
     );
@@ -339,7 +339,7 @@ fn a_script_drives_a_car_through_the_whole_chain() {
     let mut play = PlayLoop::new();
     play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
 
-    let vehicles = world.borrow::<gizmo::physics::vehicle::VehicleController>();
+    let vehicles = world.query::<&gizmo::physics::vehicle::VehicleController>();
     let car = vehicles.get(id).expect("the car is still there");
     assert_eq!(car.steering_input, 0.5, "steering must reach the controller");
     assert_eq!(car.brake_input, 0.25, "and so must the brake");
@@ -349,7 +349,7 @@ fn a_script_drives_a_car_through_the_whole_chain() {
 
 /// Reads a fighter's `(is_locked, is_in_active_window, has_a_move)` back out of the world.
 fn fighter_state(world: &World, id: Entity) -> (bool, bool, bool) {
-    let fighters = world.borrow::<gizmo::physics::components::FighterController>();
+    let fighters = world.query::<&gizmo::physics::components::FighterController>();
     let f = fighters.get(id).expect("the fighter is still there");
     (f.is_locked(), f.is_in_active_window(), f.active_move.is_some())
 }
@@ -537,7 +537,7 @@ fn a_script_spends_the_hits_the_engine_reports() {
         play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
     }
 
-    let fighters = world.borrow::<gizmo::physics::components::FighterController>();
+    let fighters = world.query::<&gizmo::physics::components::FighterController>();
     let hit = fighters.get(defender).expect("the defender is still there");
     assert_eq!(
         hit.health, 92.0,
@@ -594,7 +594,7 @@ fn a_script_can_drive_an_animation_and_read_it_back() {
         play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
     }
 
-    let players = world.borrow::<AnimationPlayer>();
+    let players = world.query::<&AnimationPlayer>();
     let player = players.get(id).expect("the player is still there");
     assert_eq!(
         player.current_clip().map(|c| c.name.as_str()),

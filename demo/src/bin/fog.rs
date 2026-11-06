@@ -65,7 +65,7 @@
 //!   * **−/=** — karışım oranını azalt/artır · **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -250,7 +250,7 @@ fn fog_input(mut fog: ResMut<FogState>, input: Res<Input>, time: Res<Time>) {
 }
 
 /// Gökyüzünü seçili sis rengine boyar — ikisi arasında karışım varsa ona da uyar.
-fn tint_sky(mut skies: Query<(Mut<Material>, With<SkyDome>)>, fog: Res<FogState>) {
+fn tint_sky(mut skies: Query<(&mut Material, With<SkyDome>)>, fog: Res<FogState>) {
     let a = PRESETS[fog.preset_a.min(3) as usize].1;
     let b = PRESETS[fog.preset_b.min(3) as usize].1;
     let t = fog.blend;

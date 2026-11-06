@@ -38,7 +38,7 @@ fn drop_box(body: RigidBody) -> (Vec3, gizmo_math::Quat) {
     for _ in 0..120 {
         gizmo_physics_rigid::system::physics_step_system(&world, 1.0 / 60.0);
     }
-    let t = *world.borrow::<Transform>().get(b).unwrap();
+    let t = *world.query::<&Transform>().get(b).unwrap();
     (t.position, t.rotation)
 }
 

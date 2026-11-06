@@ -13,7 +13,7 @@ pub fn draw_camera_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut cameras = unsafe { world.borrow_mut_unchecked::<Camera>() };
+    let mut cameras = unsafe { world.query_unchecked::<&mut Camera>() };
     {
         if let Some(mut cam) = cameras.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("Camera"))

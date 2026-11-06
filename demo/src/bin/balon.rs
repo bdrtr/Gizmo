@@ -78,7 +78,7 @@ fn main() {
             ));
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 20.0), Vec3::ZERO);
             {
-                let mut q = scene.world.query_mut::<Mut<Camera>>();
+                let mut q = scene.world.query_mut::<&mut Camera>();
                 for mut cam in q.iter_mut() {
                     cam.projection = ProjectionMode::OrthographicFit { width: VIEW_W, height: VIEW_H };
                 }
@@ -172,7 +172,7 @@ fn spawn_balloons(world: &mut World, game: &mut Game, dt: f32) {
 fn rise(world: &mut World, game: &mut Game, dt: f32) {
     let mut escaped = Vec::new();
     {
-        let mut q = world.query_mut::<(Entity, Mut<Transform>, Mut<Balloon>)>();
+        let mut q = world.query_mut::<(Entity, &mut Transform, &mut Balloon)>();
         for (entity, mut t, mut b) in q.iter_mut() {
             b.phase += dt * 2.0;
             t.position.y += b.speed * dt;
@@ -190,14 +190,14 @@ fn rise(world: &mut World, game: &mut Game, dt: f32) {
 }
 
 fn first_balloon(world: &World) -> Option<Vec3> {
-    let tfs = world.borrow::<Transform>();
+    let tfs = world.query::<&Transform>();
     world.query::<(Entity, &Balloon)>().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position).filter(|p| p.y > -VIEW_H * 0.1))
 }
 
 /// İmlecin altındaki balon patlar: büyüyüp sönüyor, parçaları saçılıyor.
 fn pop_at(world: &mut World, game: &mut Game, p: Vec3) {
     let hit = {
-        let tfs = world.borrow::<Transform>();
+        let tfs = world.query::<&Transform>();
         world.query::<(Entity, &Balloon)>().iter()
             .filter_map(|(entity, _)| tfs.get(entity).map(|t| (entity, t.position)))
             .filter(|(_, at)| Vec2::new(at.x - p.x, at.y - p.y).length() < RADIUS)
@@ -206,7 +206,7 @@ fn pop_at(world: &mut World, game: &mut Game, p: Vec3) {
     };
     let Some(id) = hit else { return };
     let Some(e) = world.live(id) else { return };
-    let colour = world.borrow::<Sprite>().get(id).map(|s| s.color).unwrap_or(Vec4::ONE);
+    let colour = world.query::<&Sprite>().get(id).map(|s| s.color).unwrap_or(Vec4::ONE);
     world.remove_component::<Balloon>(e);
     world.add_component(e, Tween::to_scale(Vec3::splat(1.8), 0.18).with_ease(Ease::OutQuad));
     world.add_component(e, ColorTween::fade_to(0.0, 0.18));
@@ -228,7 +228,7 @@ fn pop_at(world: &mut World, game: &mut Game, p: Vec3) {
 /// Solması biten patlamış balonları siler.
 fn clear_pops(world: &mut World) {
     let done: Vec<Entity> = {
-        let fades = world.borrow::<ColorTween>();
+        let fades = world.query::<&ColorTween>();
         world.query::<(Entity, &Popping)>().iter().filter(|(entity, _)| fades.get(*entity).is_some_and(|f| f.is_finished())).map(|(entity, _)| entity).collect()
     };
     for id in done {
@@ -243,7 +243,7 @@ fn play(world: &mut World, name: &str) {
 }
 
 fn draw_hud(world: &mut World, game: &Game) {
-    let mut texts = world.borrow_mut::<Text>();
+    let mut texts = world.query_mut::<&mut Text>();
     if let Some(mut t) = texts.get_mut(game.hud) {
         t.content = format!("Patlayan {}   Can {}", game.score, game.lives);
     }

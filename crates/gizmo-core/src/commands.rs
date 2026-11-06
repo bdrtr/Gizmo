@@ -390,11 +390,11 @@ mod tests {
             commands.spawn_bundle((ComponentA(7), ComponentB(1.5))).id()
         };
         // `entity_count` counts the reserved id already, so the components are what to look at.
-        assert!(world.borrow::<ComponentA>().get(e).is_none(), "nothing is observable before the flush");
+        assert!(world.query::<&ComponentA>().get(e).is_none(), "nothing is observable before the flush");
         world.apply_commands();
         assert!(world.is_alive(e));
-        assert_eq!(world.borrow::<ComponentA>().get(e).cloned(), Some(ComponentA(7)));
-        assert_eq!(world.borrow::<ComponentB>().get(e).cloned(), Some(ComponentB(1.5)));
+        assert_eq!(world.query::<&ComponentA>().get(e).cloned(), Some(ComponentA(7)));
+        assert_eq!(world.query::<&ComponentB>().get(e).cloned(), Some(ComponentB(1.5)));
     }
 
     /// `insert_bundle` adds to what is there, and leaves a dead entity alone.
@@ -411,9 +411,9 @@ mod tests {
         }
         world.apply_commands();
         assert!(!world.is_alive(dead), "the dead entity came back");
-        assert!(world.borrow::<ComponentA>().get(dead).is_none());
-        assert_eq!(world.borrow::<ComponentA>().get(alive).cloned(), Some(ComponentA(1)));
-        assert_eq!(world.borrow::<ComponentB>().get(alive).cloned(), Some(ComponentB(2.0)));
+        assert!(world.query::<&ComponentA>().get(dead).is_none());
+        assert_eq!(world.query::<&ComponentA>().get(alive).cloned(), Some(ComponentA(1)));
+        assert_eq!(world.query::<&ComponentB>().get(alive).cloned(), Some(ComponentB(2.0)));
     }
 
     #[test]

@@ -94,8 +94,8 @@ fn decide(material: &MaterialDesc, desc: Option<&MaterialDesc>, synced: Option<&
 pub fn sync_material_descriptions(world: &mut World) {
     let mut decided: Vec<(Entity, Sync)> = Vec::new();
     {
-        let descs = world.borrow::<MaterialDesc>();
-        let synced = world.borrow::<SyncedDesc>();
+        let descs = world.query::<&MaterialDesc>();
+        let synced = world.query::<&SyncedDesc>();
         for (entity, material) in world.query::<(Entity, &Material)>().iter() {
             let live = MaterialDesc::from(material);
             match decide(&live, descs.get(entity), synced.get(entity).map(|s| &s.0)) {
@@ -118,7 +118,7 @@ pub fn sync_material_descriptions(world: &mut World) {
             }
             Sync::TakeDescription(desc) => {
                 let rebuilt = {
-                    let mut materials = world.borrow_mut::<Material>();
+                    let mut materials = world.query_mut::<&mut Material>();
                     match materials.get_mut(e) {
                         Some(mut m) if m.texture_source == desc.texture_source => {
                             *m = desc.clone().into_material(m.bind_group.clone());
@@ -148,7 +148,7 @@ pub fn sync_material_descriptions(world: &mut World) {
 /// group an untextured material already draws with, and a warning rather than a missing object.
 pub fn resolve_material_descriptions(world: &mut World, renderer: &crate::Renderer) {
     let pending: Vec<(u32, MaterialDesc)> = {
-        let materials = world.borrow::<Material>();
+        let materials = world.query::<&Material>();
         world.query::<(Entity, &MaterialDesc)>().iter()
             .filter(|(entity, _)| materials.get(*entity).is_none())
             .map(|(entity, desc)| (entity.id(), desc.clone()))

@@ -67,7 +67,7 @@ fn step(world: &World, n: usize) {
 }
 
 fn transform(world: &World, id: Entity) -> Transform {
-    *world.borrow::<Transform>().get(id).unwrap()
+    *world.query::<&Transform>().get(id).unwrap()
 }
 
 /// A cone stands on its base at its half-height — the same resting height as the cylinder that

@@ -2,7 +2,6 @@ use criterion::Criterion;
 use gizmo_core::{
     component::Component,
     world::World,
-    query::Mut,
 };
 
 // 5. Query Iteration Fragmentation
@@ -62,7 +61,7 @@ pub fn bench_fragmented_iteration(c: &mut Criterion) {
     spawn_variants!(world; C90, C91, C92, C93, C94, C95, C96, C97, C98, C99);
 
     // Warm up the query cache
-    let mut query = world.query_mut::<Mut<Data>>();
+    let mut query = world.query_mut::<&mut Data>();
     query.iter_mut().for_each(|_| {});
 
     c.bench_function("fragmented_iteration", |b| {
@@ -119,17 +118,17 @@ pub fn bench_fragmented_wide_iteration(c: &mut Criterion) {
     create_noise_entities!(world; C90, C91, C92, C93, C94, C95, C96, C97, C98, C99);
 
     let mut query = world.query_mut::<(
-        Mut<WideData<0>>,
-        Mut<WideData<1>>,
-        Mut<WideData<2>>,
-        Mut<WideData<3>>,
-        Mut<WideData<4>>,
-        Mut<WideData<5>>,
-        Mut<WideData<6>>,
-        Mut<WideData<7>>,
-        Mut<WideData<8>>,
-        Mut<WideData<9>>,
-        Mut<WideData<10>>,
+        &mut WideData<0>,
+        &mut WideData<1>,
+        &mut WideData<2>,
+        &mut WideData<3>,
+        &mut WideData<4>,
+        &mut WideData<5>,
+        &mut WideData<6>,
+        &mut WideData<7>,
+        &mut WideData<8>,
+        &mut WideData<9>,
+        &mut WideData<10>,
     )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup

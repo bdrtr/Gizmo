@@ -274,7 +274,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
             input.move_axis().0
         };
         game.hook_x = (game.hook_x + drive * HOOK_SPEED * dt).clamp(HOOK_RANGE.0, HOOK_RANGE.1);
-        if let Some(mut k) = world.borrow_mut::<KinematicTarget>().get_mut(game.hook) {
+        if let Some(mut k) = world.query_mut::<&mut KinematicTarget>().get_mut(game.hook) {
             *k = KinematicTarget::new(Vec3::new(game.hook_x, HOOK_Y, 0.0), Quat::IDENTITY);
         }
         game.physics.advance(world, dt);
@@ -294,9 +294,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 /// Yıkılmış sayılan bloklar: kırılmış (artık yok), yan yatmış ya da ilk yerinden bir kattan
 /// fazla aşağı düşmüş olanlar.
 fn count_down(world: &World, game: &mut Game) {
-    game.broken = COLUMNS * FLOORS - world.borrow::<Block>().iter().count();
+    game.broken = COLUMNS * FLOORS - world.query::<&Block>().iter().count();
     let standing = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         world.query::<(Entity, &Block)>().iter()
             .filter(|(entity, b)| {
                 ts.get(*entity).is_some_and(|t| {
@@ -310,7 +310,7 @@ fn count_down(world: &World, game: &mut Game) {
 }
 
 fn draw_rope(world: &mut World, game: &Game) {
-    let ts = world.borrow::<Transform>();
+    let ts = world.query::<&Transform>();
     let (Some(a), Some(b)) = (ts.get(game.hook).map(|t| t.position), ts.get(game.ball).map(|t| t.position)) else { return };
     drop(ts);
     if let Some(mut g) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
@@ -340,7 +340,7 @@ fn hud(world: &mut World, game: &Game) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

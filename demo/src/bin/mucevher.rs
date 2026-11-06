@@ -162,7 +162,7 @@ fn self_test() -> bool {
         for y in 0..N {
             if let Some((_, id)) = game.cells[x][y] {
                 filled += 1;
-                let at = run.world.borrow::<Transform>().get(id).map(|t| t.position);
+                let at = run.world.query::<&Transform>().get(id).map(|t| t.position);
                 if at.is_some_and(|p| (p - cell_pos(x, y)).length() < 0.01) {
                     placed += 1;
                 }
@@ -189,7 +189,7 @@ fn main() {
             let font = load_font(scene.renderer);
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 20.0), Vec3::ZERO);
             {
-                let mut q = scene.world.query_mut::<Mut<Camera>>();
+                let mut q = scene.world.query_mut::<&mut Camera>();
                 for mut cam in q.iter_mut() {
                     cam.projection = ProjectionMode::OrthographicFit { width: 10.0, height: 10.0 };
                 }
@@ -272,7 +272,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
 /// Bitmemiş bir `Tween` var mı.
 fn animating(world: &World) -> bool {
-    world.borrow::<Tween>().iter().any(|t| !t.is_finished())
+    world.query::<&Tween>().iter().any(|t| !t.is_finished())
 }
 
 fn step(world: &mut World, game: &mut Game, input: &Input) {
@@ -531,7 +531,7 @@ fn play(world: &mut World, name: &str) {
 }
 
 fn draw_hud(world: &mut World, game: &Game) {
-    let mut texts = world.borrow_mut::<Text>();
+    let mut texts = world.query_mut::<&mut Text>();
     if let Some(mut t) = texts.get_mut(game.hud) {
         let combo = if game.combo > 1 { format!("   ×{}", game.combo) } else { String::new() };
         t.content = format!(

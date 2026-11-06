@@ -8,7 +8,7 @@
 //! bileşen+sistem ikilisinin motorda hazır karşılığı vardı ([`Spin`]); burada YOK — ölçek
 //! döngüsü oyuna özgü bir kural, motorun içine gömülecek bir şey değil. Dolayısıyla bu demo
 //! Gizmo'nun ECS yüzeyini olduğu gibi kullanır: `impl_component!` ile bir bileşen,
-//! `Query<(Mut<Transform>, Mut<Scaling>)>` + `Res<Time>` ile iki sistem, `Phase::Update`'e
+//! `Query<(&mut Transform, &mut Scaling)>` + `Res<Time>` ile iki sistem, `Phase::Update`'e
 //! kayıt. İki demonun yan yana durması, "motor ne zaman yardım eder, ne zaman etmez"in
 //! kendisidir.
 //!
@@ -22,7 +22,7 @@
 //! ## Kontroller
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera · **Shift** — hızlı hareket
 
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -95,7 +95,7 @@ fn main() {
 ///
 /// `floor`/`ceil` numarası: sınır aşıldığında ölçek tam sayıya
 /// oturtulur, böylece aynı koşul bir sonraki frame'de yeniden tetiklenmez.
-fn change_scale_direction(mut cubes: Query<(Mut<Transform>, Mut<Scaling>)>) {
+fn change_scale_direction(mut cubes: Query<(&mut Transform, &mut Scaling)>) {
     for (mut transform, mut cube) in cubes.iter_mut() {
         // Gizmo'nun küpü 2 birim olduğu için sınırlar *birim* ölçeğinde okunur.
         let size = transform.scale / UNIT;
@@ -117,7 +117,7 @@ fn change_scale_direction(mut cubes: Query<(Mut<Transform>, Mut<Scaling>)>) {
 }
 
 /// Ölçeği o anki yönde büyütür.
-fn scale_cube(mut cubes: Query<(Mut<Transform>, Mut<Scaling>)>, time: Res<Time>) {
+fn scale_cube(mut cubes: Query<(&mut Transform, &mut Scaling)>, time: Res<Time>) {
     let dt = time.dt();
     for (mut transform, cube) in cubes.iter_mut() {
         transform.scale += cube.scale_direction * cube.scale_speed * dt * UNIT;

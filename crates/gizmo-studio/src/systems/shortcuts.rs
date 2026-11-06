@@ -103,10 +103,10 @@ pub fn handle_editor_shortcuts(
 
         // Ctrl+A → Tümünü Seç
         if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyA as u32) {
-            let names = world.borrow::<gizmo::core::component::EntityName>();
-            let markers = world.borrow::<gizmo::core::component::EditorOnly>();
-            let hidden = world.borrow::<gizmo::core::component::IsHidden>();
-            let deleted = world.borrow::<gizmo::core::component::IsDeleted>();
+            let names = world.query::<&gizmo::core::component::EntityName>();
+            let markers = world.query::<&gizmo::core::component::EditorOnly>();
+            let hidden = world.query::<&gizmo::core::component::IsHidden>();
+            let deleted = world.query::<&gizmo::core::component::IsDeleted>();
             for e in world.iter_alive_entities() {
                 // Editor entity'lerini ve gizli/silinmiş olanları atla
                 if hidden.contains(e) || deleted.contains(e) {
@@ -134,9 +134,9 @@ pub fn handle_editor_shortcuts(
         // Alt+H → Tüm gizli objeleri göster
         if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyH as u32) {
             let hidden_ids: Vec<Entity> = {
-                let deleted = world.borrow::<gizmo::core::component::IsDeleted>();
-                let names = world.borrow::<gizmo::core::component::EntityName>();
-                let markers = world.borrow::<gizmo::core::component::EditorOnly>();
+                let deleted = world.query::<&gizmo::core::component::IsDeleted>();
+                let names = world.query::<&gizmo::core::component::EntityName>();
+                let markers = world.query::<&gizmo::core::component::EditorOnly>();
                 world.query::<(Entity, &gizmo::core::component::IsHidden)>().iter()
                     .filter(|(id, _)| {
                         // Editor entity'lerini gösterme, sadece kullanıcı entity'leri
@@ -230,7 +230,7 @@ pub fn handle_editor_shortcuts(
 
     // Numpad 5 → Ortho/Perspektif geçişi (Blender tarzı)
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad5 as u32) {
-        let mut cam_mut = world.borrow_mut::<gizmo::renderer::components::Camera>();
+        let mut cam_mut = world.query_mut::<&mut gizmo::renderer::components::Camera>();
         if let Some(mut cam) = cam_mut.get_mut(state.editor_camera) {
             cam.toggle_projection(editor_state.prefs.camera_focus_distance.max(1.0));
             let mode = if cam.projection.is_orthographic() { "Ortografik" } else { "Perspektif" };
@@ -260,7 +260,7 @@ fn focus_on_selection(
     editor_state: &mut EditorState,
     state: &StudioState,
 ) {
-    let transforms = world.borrow::<Transform>();
+    let transforms = world.query::<&Transform>();
     let mut center_pos = gizmo::math::Vec3::ZERO;
     let mut count = 0.0;
     for &target_id in editor_state.selection.entities.iter() {
@@ -275,9 +275,9 @@ fn focus_on_selection(
         drop(transforms);
 
         // SAFETY: exclusive `&mut World`; Transform and Camera are distinct component types.
-        let mut t_mut = unsafe { world.borrow_mut_unchecked::<Transform>() };
+        let mut t_mut = unsafe { world.query_unchecked::<&mut Transform>() };
         // SAFETY: as above — Camera is a distinct component type from Transform.
-        let mut cam_mut = unsafe { world.borrow_mut_unchecked::<gizmo::renderer::components::Camera>() };
+        let mut cam_mut = unsafe { world.query_unchecked::<&mut gizmo::renderer::components::Camera>() };
         if let (Some(mut cam_t), Some(cam)) = (
             t_mut.get_mut(state.editor_camera),
             cam_mut.get_mut(state.editor_camera),

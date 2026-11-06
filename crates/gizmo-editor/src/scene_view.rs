@@ -155,7 +155,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     {
         if !state.selection.entities.is_empty() {
             // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-            let mut transforms = unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::Transform>() };
+            let mut transforms = unsafe { world.query_unchecked::<&mut gizmo_physics_core::Transform>() };
             
             let primary_id = state.selection.primary.unwrap_or_else(|| *state.selection.entities.iter().next().unwrap());
             if transforms.get_mut(primary_id).is_some() {
@@ -367,7 +367,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
     // F (Focus) Kamera Odaklanması
     if !ui.ctx().egui_wants_keyboard_input() && ui.input(|i| i.key_pressed(egui::Key::F)) {
         if let Some(entity) = state.selection.primary {
-            let transforms = world.borrow::<gizmo_physics_core::Transform>();
+            let transforms = world.query::<&gizmo_physics_core::Transform>();
             if let Some(t) = transforms.get(entity) {
                 state.camera.focus_target = Some(t.position);
             }
@@ -415,7 +415,7 @@ fn draw_viewport_overlays(
 
     // ── Chips, top-left ──────────────────────────────────────────────────────────────────────
     let camera_label = {
-        let cameras = world.borrow::<gizmo_renderer::components::Camera>();
+        let cameras = world.query::<&gizmo_renderer::components::Camera>();
         let fov = world
             .iter_alive_entities()
             .into_iter()

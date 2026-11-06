@@ -51,14 +51,14 @@ fn walk_into_crate(mass: f32, push_force: Option<f32>) -> Run {
     world.add_component(player, Velocity::default());
     world.add_component(player, Collider::capsule(0.3, 0.4));
 
-    let x = |world: &World, e: Entity| world.borrow::<Transform>().get(e).unwrap().position.x;
+    let x = |world: &World, e: Entity| world.query::<&Transform>().get(e).unwrap().position.x;
     let dt = 1.0 / 60.0;
     let mut crate_peak_vx = 0.0f32;
     for _ in 0..180 {
         gizmo_physics_dynamics::character_controller_system(&world, dt);
         gizmo_physics_rigid::system::physics_step_system(&world, dt);
         world.apply_commands();
-        let vx = world.borrow::<Velocity>().get(crate_).unwrap().linear.x;
+        let vx = world.query::<&Velocity>().get(crate_).unwrap().linear.x;
         crate_peak_vx = crate_peak_vx.max(vx);
     }
     Run { player_x: x(&world, player), crate_x: x(&world, crate_), crate_peak_vx }

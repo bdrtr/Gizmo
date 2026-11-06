@@ -188,7 +188,7 @@ fn self_test() -> bool {
         let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
         // Her karo, tahtada durduğu hücrenin yerinde çiziliyor mu.
         (0..N * N).filter(|&c| game.board[c] != 0).all(|c| {
-            run.world.borrow::<Transform>().get(game.tiles[game.board[c] as usize]).is_some_and(|t| (t.position - cell_position(c)).length() < 0.01)
+            run.world.query::<&Transform>().get(game.tiles[game.board[c] as usize]).is_some_and(|t| (t.position - cell_position(c)).length() < 0.01)
         })
     };
     // Çözülmüş tahta: son karo boşluğa kayar, geri gelir.
@@ -250,7 +250,7 @@ fn shuffle(world: &mut World, game: &mut Game) {
     }
     game.moves = 0;
     game.solved = false;
-    let mut tfs = world.borrow_mut::<Transform>();
+    let mut tfs = world.query_mut::<&mut Transform>();
     for (cell, &n) in game.board.iter().enumerate() {
         if n != 0 {
             if let Some(mut t) = tfs.get_mut(game.tiles[n as usize]) {
@@ -340,7 +340,7 @@ fn play(world: &mut World, name: &str) {
 }
 
 fn draw_hud(world: &mut World, game: &Game) {
-    let mut texts = world.borrow_mut::<Text>();
+    let mut texts = world.query_mut::<&mut Text>();
     if let Some(mut t) = texts.get_mut(game.hud) {
         t.content = format!("Hamle {}\nR: yeniden karıştır", game.moves);
     }

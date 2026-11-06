@@ -70,8 +70,8 @@ pub fn spawn_from_emitters(
     // SAFETY: exclusive `&mut World`; `ParticleEmitter` is a distinct component type from the
     // read-only `Transform` borrow below, and the read borrow above is already dropped, so this
     // mutable view never aliases another live access to the same storage.
-    let mut emitters = unsafe { world.borrow_mut_unchecked::<ParticleEmitter>() };
-    let transforms = world.borrow::<Transform>();
+    let mut emitters = unsafe { world.query_unchecked::<&mut ParticleEmitter>() };
+    let transforms = world.query::<&Transform>();
 
     // Seeded from the frame so successive frames differ, and mixed with the entity below so two
     // emitters in the same frame do not emit in lockstep.

@@ -1,5 +1,5 @@
 use gizmo_core::Entity;
-use gizmo_core::query::{Query, Mut};
+use gizmo_core::query::Query;
 use gizmo_core::system::{Res, ResMut};
 use gizmo_core::input::{GamepadButton, Input};
 use crate::components::{
@@ -25,8 +25,8 @@ fn layer_with(entity: Entity, z: impl Fn(Entity) -> Option<i32>, parent: impl Fn
 /// which lays quads out by it.
 #[must_use]
 pub fn ui_layer(world: &gizmo_core::World, entity: Entity) -> i32 {
-    let z = world.borrow::<ZIndex>();
-    let p = world.borrow::<Parent>();
+    let z = world.query::<&ZIndex>();
+    let p = world.query::<&Parent>();
     layer_with(entity, |id| z.get(id).map(|z| z.0), |id| p.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0))
 }
 
@@ -123,9 +123,9 @@ fn point_in_node(point: (f32, f32), node: &Node) -> bool {
 pub fn pointer_over_ui(world: &gizmo_core::World) -> bool {
     let Some(input) = world.get_resource::<Input>() else { return false };
     let p = input.mouse_position();
-    world.borrow::<Node>().iter().any(|n| point_in_node(p, n))
+    world.query::<&Node>().iter().any(|n| point_in_node(p, n))
         || {
-            let nodes = world.borrow::<Node>();
+            let nodes = world.query::<&Node>();
             let point = gizmo_math::Vec2::new(p.0, p.1);
             world.query::<(Entity, &Dropdown)>().iter()
                 .any(|(entity, d)| nodes.get(entity).is_some_and(|n| d.option_at(n, point).is_some()))
@@ -137,7 +137,7 @@ pub fn pointer_over_ui(world: &gizmo_core::World) -> bool {
 pub fn ui_interaction_system(
     input: Res<Input>,
     navigation: Option<ResMut<UiNavigation>>,
-    mut interactions: Query<(Entity, &Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
+    mut interactions: Query<(Entity, &Node, &mut Interaction, Option<&mut Clicked>)>,
     layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
     fields: Query<&crate::text_input::TextInput>,
     clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
@@ -244,7 +244,7 @@ pub fn ui_interaction_system(
 fn navigate(
     input: &Input,
     nav: &mut UiNavigation,
-    interactions: &mut Query<(Entity, &Node, Mut<Interaction>, Option<Mut<Clicked>>)>,
+    interactions: &mut Query<(Entity, &Node, &mut Interaction, Option<&mut Clicked>)>,
     hovered: &dyn Fn(Entity) -> bool,
     horizontal_taken: &dyn Fn(Entity) -> bool,
     dt: f32,
@@ -330,7 +330,7 @@ fn navigate(
 pub fn ui_slider_system(
     input: Res<Input>,
     navigation: Option<Res<UiNavigation>>,
-    mut sliders: Query<(Entity, &Node, &Interaction, Mut<Slider>)>,
+    mut sliders: Query<(Entity, &Node, &Interaction, &mut Slider)>,
 ) {
     let (x, y) = input.mouse_position();
     let pointer = gizmo_math::Vec2::new(x, y);
@@ -359,7 +359,7 @@ pub fn ui_slider_system(
 pub fn ui_dropdown_system(
     input: Res<Input>,
     navigation: Option<Res<UiNavigation>>,
-    mut dropdowns: Query<(Entity, &Node, &Clicked, Mut<Dropdown>)>,
+    mut dropdowns: Query<(Entity, &Node, &Clicked, &mut Dropdown)>,
 ) {
     let (x, y) = input.mouse_position();
     let pointer = gizmo_math::Vec2::new(x, y);
@@ -382,7 +382,7 @@ pub fn ui_dropdown_system(
 
 /// Flips every [`Toggle`] whose element was [`Clicked`] this frame. Runs after
 /// `ui_interaction_system`, which sets the click.
-pub fn ui_toggle_system(mut toggles: Query<(&Clicked, Mut<Toggle>)>) {
+pub fn ui_toggle_system(mut toggles: Query<(&Clicked, &mut Toggle)>) {
     for (clicked, mut toggle) in toggles.iter_mut() {
         let mut next = *toggle;
         next.step(clicked.0);
@@ -395,7 +395,7 @@ pub fn ui_toggle_system(mut toggles: Query<(&Clicked, Mut<Toggle>)>) {
 /// Advances every [`Drag`]: a press that begins on the element (it is `Pressed` on the frame the
 /// button went down) starts one, and it follows the pointer until the button is released,
 /// wherever the pointer goes. Runs after `ui_interaction_system`, whose `Pressed` it reads.
-pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, Mut<Drag>)>) {
+pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, &mut Drag)>) {
     let (x, y) = input.mouse_position();
     let pointer = gizmo_math::Vec2::new(x, y);
     let down_now = input.is_mouse_button_just_pressed(0);
@@ -417,7 +417,7 @@ pub fn ui_drag_system(input: Res<Input>, mut drags: Query<(&Interaction, Mut<Dra
 pub fn ui_tooltip_system(
     input: Res<Input>,
     time: Option<Res<gizmo_core::time::Time>>,
-    mut tips: Query<(&Node, &Interaction, Mut<Tooltip>)>,
+    mut tips: Query<(&Node, &Interaction, &mut Tooltip)>,
 ) {
     let dt = time.map_or(0.0, |t| t.raw_dt());
     let (x, y) = input.mouse_position();
@@ -438,8 +438,8 @@ pub fn ui_tooltip_system(
 /// [`Drag::over`] / [`Drag::dropped_on`]. Runs after `ui_drag_system`, which ends a drag on its
 /// release frame, so the drop is seen on that same frame.
 pub fn ui_drop_system(
-    mut drags: Query<(Entity, Mut<Drag>)>,
-    mut targets: Query<(Entity, &Node, Mut<DropTarget>)>,
+    mut drags: Query<(Entity, &mut Drag)>,
+    mut targets: Query<(Entity, &Node, &mut DropTarget)>,
     layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
     clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
 ) {
@@ -533,7 +533,7 @@ pub fn ui_scroll_system(
     navigation: Option<Res<UiNavigation>>,
     nodes: Query<&Node>,
     parents: Query<&Parent>,
-    mut scrolls: Query<(Entity, &Node, Mut<Scroll>)>,
+    mut scrolls: Query<(Entity, &Node, &mut Scroll)>,
 ) {
     let dt = time.map_or(0.0, |t| t.raw_dt());
     // The keys moved the focus: bring it into view in the nearest scrolling list around it. A held
@@ -655,7 +655,7 @@ mod tests {
     }
 
     fn clicked(world: &gizmo_core::World, id: Entity) -> bool {
-        world.borrow::<Clicked>().get(id).is_some_and(|c| c.0)
+        world.query::<&Clicked>().get(id).is_some_and(|c| c.0)
     }
 
     /// A plain panel counts as UI, not only a button; outside every node is the world.
@@ -684,7 +684,7 @@ mod tests {
 
         // The node without a `Clicked` still tracks its interaction.
         frame(&mut world, (250.0, 20.0), true);
-        assert_eq!(world.borrow::<Interaction>().get(plain).copied(), Some(Interaction::Pressed));
+        assert_eq!(world.query::<&Interaction>().get(plain).copied(), Some(Interaction::Pressed));
     }
 
     /// Three buttons in a column (deliberately spawned out of reading order) and navigation on.
@@ -749,7 +749,7 @@ mod tests {
         press(&mut world, Some("enter"));
         assert_eq!(focused(&world), None, "the focus followed the id onto a new widget");
         assert!(!clicked(&world, new), "Enter pressed a widget nobody focused");
-        assert_eq!(world.borrow::<Interaction>().get(new).copied(), Some(Interaction::None));
+        assert_eq!(world.query::<&Interaction>().get(new).copied(), Some(Interaction::None));
     }
 
     /// A game focusing a widget on a recycled id, the one it just spawned, means it: that keeps
@@ -791,8 +791,8 @@ mod tests {
         let (mut world, [top, mid, _]) = menu();
         press(&mut world, Some("down"));
         press(&mut world, Some("down"));
-        assert_eq!(world.borrow::<Interaction>().get(mid).copied(), Some(Interaction::Hovered), "focus shows as hover");
-        assert_eq!(world.borrow::<Interaction>().get(top).copied(), Some(Interaction::None));
+        assert_eq!(world.query::<&Interaction>().get(mid).copied(), Some(Interaction::Hovered), "focus shows as hover");
+        assert_eq!(world.query::<&Interaction>().get(top).copied(), Some(Interaction::None));
         press(&mut world, Some("enter"));
         assert!(clicked(&world, mid) && !clicked(&world, top));
         press(&mut world, None);
@@ -857,7 +857,7 @@ mod tests {
         let front = world.spawn_bundle(crate::ButtonBundle { node: node((50.0, 50.0), (100.0, 100.0)), ..Default::default() });
         world.add_child(panel, front);
         frame(&mut world, (75.0, 75.0), false);
-        let state = |id| world.borrow::<Interaction>().get(id).copied();
+        let state = |id| world.query::<&Interaction>().get(id).copied();
         assert_eq!(state(front), Some(Interaction::Hovered), "the front button, layer 2 through its parent");
         assert_eq!(state(back), Some(Interaction::None), "the button behind took the pointer too");
         assert_eq!(ui_layer(&world, front), 2);
@@ -885,7 +885,7 @@ mod tests {
             let hidden = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 100.0), (100.0, 40.0)), ..Default::default() });
             world.add_child(panel, shown);
             world.add_child(panel, hidden);
-            let state = |w: &gizmo_core::World, id| w.borrow::<Interaction>().get(id).copied();
+            let state = |w: &gizmo_core::World, id| w.query::<&Interaction>().get(id).copied();
             frame(&mut world, (50.0, 120.0), false);
             assert_eq!(state(&world, hidden), Some(Interaction::None), "clip={clip}: the hidden button took the pointer");
             frame(&mut world, (50.0, 80.0), false);
@@ -913,7 +913,7 @@ mod tests {
             s.build();
             s.run(world, 0.0);
         };
-        let offset = |w: &gizmo_core::World, e: gizmo_core::Entity| w.borrow::<Scroll>().get(e).unwrap().offset.y;
+        let offset = |w: &gizmo_core::World, e: gizmo_core::Entity| w.query::<&Scroll>().get(e).unwrap().offset.y;
         wheel(&mut world, (50.0, 50.0), -2.0);
         assert_eq!((offset(&world, inner), offset(&world, outer)), (50.0, 0.0), "two notches down, at its own speed");
         wheel(&mut world, (200.0, 200.0), -1.0);
@@ -943,7 +943,7 @@ mod tests {
         world.insert_resource(Input::new());
         let knob = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (100.0, 40.0)), ..Default::default() });
         world.add_component(knob, Drag::default());
-        let drag = |w: &gizmo_core::World| *w.borrow::<Drag>().get(knob).unwrap();
+        let drag = |w: &gizmo_core::World| *w.query::<&Drag>().get(knob).unwrap();
 
         drag_frame(&mut world, (50.0, 20.0), true);
         let d = drag(&world);
@@ -953,7 +953,7 @@ mod tests {
         let d = drag(&world);
         assert!(d.is_dragging() && !d.just_started(), "lost the drag when the pointer left the element");
         assert_eq!(d.delta(), Vec2::new(250.0, 180.0));
-        assert_eq!(world.borrow::<Interaction>().get(knob), Some(&Interaction::None));
+        assert_eq!(world.query::<&Interaction>().get(knob), Some(&Interaction::None));
         drag_frame(&mut world, (310.0, 200.0), false);
         let d = drag(&world);
         assert!(!d.is_dragging() && d.just_ended());
@@ -988,13 +988,13 @@ mod tests {
         let other = world.spawn_bundle((node((400.0, 0.0), (80.0, 80.0)), DropTarget::default()));
         let item = world.spawn_bundle(crate::ButtonBundle { node: node((0.0, 0.0), (80.0, 80.0)), ..Default::default() });
         world.add_component(item, Drag::default());
-        let target = |w: &gizmo_core::World, id: Entity| *w.borrow::<DropTarget>().get(id).unwrap();
-        let drag = |w: &gizmo_core::World| *w.borrow::<Drag>().get(item).unwrap();
+        let target = |w: &gizmo_core::World, id: Entity| *w.query::<&DropTarget>().get(id).unwrap();
+        let drag = |w: &gizmo_core::World| *w.query::<&Drag>().get(item).unwrap();
 
         drop_frame(&mut world, (40.0, 40.0), true);
         assert_eq!(drag(&world).over(), None);
         // The item now sits over the slot, as a game moves it — and is still under the pointer.
-        world.borrow_mut::<Node>().get_mut(item).unwrap().position = Vec2::new(200.0, 0.0);
+        world.query_mut::<&mut Node>().get_mut(item).unwrap().position = Vec2::new(200.0, 0.0);
         drop_frame(&mut world, (240.0, 40.0), true);
         assert_eq!(target(&world, slot).hovered_by(), Some(item));
         assert_eq!(target(&world, other).hovered_by(), None);
@@ -1039,15 +1039,15 @@ mod tests {
         world.add_component(item, DropTarget::default());
         let badge = spawn(&mut world, (0.0, 0.0), (20.0, 20.0));
         world.add_child(item, badge);
-        let dropped_on = |w: &gizmo_core::World| w.borrow::<Drag>().get(item).unwrap().dropped_on();
+        let dropped_on = |w: &gizmo_core::World| w.query::<&Drag>().get(item).unwrap().dropped_on();
         let throw = |w: &mut gizmo_core::World, at: (f32, f32)| {
             // Back at rest, picked up, carried to `at`, let go.
-            w.borrow_mut::<Node>().get_mut(item).unwrap().position = Vec2::ZERO;
-            w.borrow_mut::<Node>().get_mut(badge).unwrap().position = Vec2::ZERO;
+            w.query_mut::<&mut Node>().get_mut(item).unwrap().position = Vec2::ZERO;
+            w.query_mut::<&mut Node>().get_mut(badge).unwrap().position = Vec2::ZERO;
             drop_frame(w, (10.0, 10.0), true);
             // The item (and its badge) follow the pointer, as a game moves them.
-            w.borrow_mut::<Node>().get_mut(item).unwrap().position = Vec2::new(at.0 - 10.0, at.1 - 10.0);
-            w.borrow_mut::<Node>().get_mut(badge).unwrap().position = Vec2::new(at.0 - 10.0, at.1 - 10.0);
+            w.query_mut::<&mut Node>().get_mut(item).unwrap().position = Vec2::new(at.0 - 10.0, at.1 - 10.0);
+            w.query_mut::<&mut Node>().get_mut(badge).unwrap().position = Vec2::new(at.0 - 10.0, at.1 - 10.0);
             drop_frame(w, at, false);
         };
 
@@ -1065,19 +1065,19 @@ mod tests {
 
         // The slot scrolled out of its clipping panel: not a target where it would have been.
         world.add_component(panel, ClipContent);
-        world.borrow_mut::<Node>().get_mut(inner).unwrap().position = Vec2::new(100.0, 520.0);
+        world.query_mut::<&mut Node>().get_mut(inner).unwrap().position = Vec2::new(100.0, 520.0);
         throw(&mut world, (130.0, 550.0));
         assert_eq!(dropped_on(&world), None, "a clipped-away slot took the drop");
 
         // A hidden (zero-size) target is no target.
-        world.borrow_mut::<Node>().get_mut(inner).unwrap().position = Vec2::new(100.0, 300.0);
-        world.borrow_mut::<Node>().get_mut(inner).unwrap().size = Vec2::ZERO;
+        world.query_mut::<&mut Node>().get_mut(inner).unwrap().position = Vec2::new(100.0, 300.0);
+        world.query_mut::<&mut Node>().get_mut(inner).unwrap().size = Vec2::ZERO;
         throw(&mut world, (130.0, 330.0));
         assert_eq!(dropped_on(&world), Some(panel));
 
         // Neither the item nor its badge — both under the pointer the whole time — took it.
-        assert!(world.borrow::<DropTarget>().get(item).unwrap().dropped().is_none());
-        assert!(world.borrow::<DropTarget>().get(badge).unwrap().dropped().is_none());
+        assert!(world.query::<&DropTarget>().get(item).unwrap().dropped().is_none());
+        assert!(world.query::<&DropTarget>().get(badge).unwrap().dropped().is_none());
     }
 
     /// A tooltip appears after its delay of resting on the element, follows the pointer, and goes
@@ -1100,7 +1100,7 @@ mod tests {
             s.add_di_system(ui_tooltip_system.into_config());
             s.build();
             s.run(w, 0.0);
-            w.borrow::<Tooltip>().get(id).unwrap().shown_at()
+            w.query::<&Tooltip>().get(id).unwrap().shown_at()
         };
         assert_eq!(tick(&mut world, (10.0, 10.0), false), None, "0.2 s");
         assert_eq!(tick(&mut world, (10.0, 10.0), false), None, "0.4 s");
@@ -1120,21 +1120,21 @@ mod tests {
         s.add_di_system(ui_tooltip_system.into_config());
         s.build();
         s.run(&mut world, 0.0);
-        assert_eq!(world.borrow::<Tooltip>().get(id).unwrap().shown_at(), None, "right button");
+        assert_eq!(world.query::<&Tooltip>().get(id).unwrap().shown_at(), None, "right button");
         world.get_resource_mut::<Input>().unwrap().on_mouse_button_released(1);
         tick(&mut world, (10.0, 10.0), false);
         tick(&mut world, (10.0, 10.0), false);
-        world.borrow_mut::<Tooltip>().get_mut(id).unwrap().text.clear();
+        world.query_mut::<&mut Tooltip>().get_mut(id).unwrap().text.clear();
         assert_eq!(tick(&mut world, (10.0, 10.0), false), None, "empty says nothing");
 
         // Focused by the keys, the pointer elsewhere: `Hovered`, but no tooltip.
-        world.borrow_mut::<Tooltip>().get_mut(id).unwrap().text = "Fidan".into();
+        world.query_mut::<&mut Tooltip>().get_mut(id).unwrap().text = "Fidan".into();
         world.insert_resource(UiNavigation { enabled: true, ..Default::default() });
         world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(id));
         for _ in 0..5 {
             assert_eq!(tick(&mut world, (300.0, 300.0), false), None);
         }
-        assert_eq!(world.borrow::<Interaction>().get(id), Some(&Interaction::Hovered));
+        assert_eq!(world.query::<&Interaction>().get(id), Some(&Interaction::Hovered));
     }
 
     /// Interaction then sliders, the order `register` schedules them in, with the mouse at `at`
@@ -1172,7 +1172,7 @@ mod tests {
         world.insert_resource(Input::new());
         let s = world.spawn_bundle(crate::ButtonBundle { node: node((100.0, 0.0), (200.0, 30.0)), ..Default::default() });
         world.add_component(s, Slider::new(0.5));
-        let get = |w: &gizmo_core::World| *w.borrow::<Slider>().get(s).unwrap();
+        let get = |w: &gizmo_core::World| *w.query::<&Slider>().get(s).unwrap();
 
         slider_frame(&mut world, (150.0, 15.0), true, None);
         assert!((get(&world).value - 0.25).abs() < 1e-6 && get(&world).just_changed());
@@ -1193,7 +1193,7 @@ mod tests {
         let (mut world, [top, mid, _]) = menu();
         world.add_component(world.live(mid).unwrap(), Slider::new(0.5).with_step(0.1));
         world.get_resource_mut::<UiNavigation>().unwrap().focus(Some(mid));
-        let value = |w: &gizmo_core::World| w.borrow::<Slider>().get(mid).unwrap().value;
+        let value = |w: &gizmo_core::World| w.query::<&Slider>().get(mid).unwrap().value;
         slider_frame(&mut world, (500.0, 500.0), false, Some("right"));
         assert!((value(&world) - 0.6).abs() < 1e-6);
         assert_eq!(focused(&world), Some(mid), "right moved the focus off the slider");
@@ -1220,7 +1220,7 @@ mod tests {
             s.build();
             s.run(w, 0.0);
         };
-        let t = |w: &gizmo_core::World| *w.borrow::<Toggle>().get(button).unwrap();
+        let t = |w: &gizmo_core::World| *w.query::<&Toggle>().get(button).unwrap();
         step(&mut world, (50.0, 20.0), true);
         assert!(!t(&world).on, "a press is not a click");
         step(&mut world, (50.0, 20.0), false);
@@ -1258,9 +1258,9 @@ mod tests {
             s.build();
             s.run(w, 0.0);
         };
-        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list).unwrap().offset.y;
+        let offset = |w: &gizmo_core::World| w.query::<&Scroll>().get(list).unwrap().offset.y;
         run(&mut world, (95.0, 10.0), true); // on the thumb, 10 px into it
-        assert_eq!(world.borrow::<Interaction>().get(item), Some(&Interaction::None), "the press went to the item under the bar");
+        assert_eq!(world.query::<&Interaction>().get(item), Some(&Interaction::None), "the press went to the item under the bar");
         run(&mut world, (300.0, 47.5), true); // thumb top to 37.5 of 75 travel, off the box
         assert!((offset(&world) - 150.0).abs() < 1e-3, "{}", offset(&world));
         run(&mut world, (95.0, 500.0), true);
@@ -1270,7 +1270,7 @@ mod tests {
         assert_eq!(offset(&world), 300.0, "released: moving does not scroll");
         // A press on the item itself, left of the strip, is the item's.
         run(&mut world, (50.0, 10.0), true);
-        assert_eq!(world.borrow::<Interaction>().get(item), Some(&Interaction::Pressed));
+        assert_eq!(world.query::<&Interaction>().get(item), Some(&Interaction::Pressed));
     }
 
     /// A dropdown opens on a click, takes the pointer while open (the button under its list is
@@ -1302,19 +1302,19 @@ mod tests {
                 w.get_resource_mut::<Input>().unwrap().on_key_released(key(k));
             }
         };
-        let get = |w: &gizmo_core::World| w.borrow::<Dropdown>().get(dd).unwrap().clone();
+        let get = |w: &gizmo_core::World| w.query::<&Dropdown>().get(dd).unwrap().clone();
 
         run(&mut world, (50.0, 15.0), true, None);
         run(&mut world, (50.0, 15.0), false, None);
         assert!(get(&world).is_open(), "a click opens it");
         run(&mut world, (50.0, 45.0), false, None);
         assert_eq!(get(&world).hovered(), Some(0));
-        assert_eq!(world.borrow::<Interaction>().get(below), Some(&Interaction::None), "the list let the pointer through");
+        assert_eq!(world.query::<&Interaction>().get(below), Some(&Interaction::None), "the list let the pointer through");
         run(&mut world, (50.0, 75.0), true, None); // on "Medium", over nothing else... and on `below`'s edge row
         let d = get(&world);
         assert!(!d.is_open() && d.selected == 1 && d.just_changed() && d.selected_option() == Some("Medium"));
         run(&mut world, (50.0, 75.0), false, None);
-        assert!(!world.borrow::<Clicked>().get(below).unwrap().0, "picking an option clicked what was under it");
+        assert!(!world.query::<&Clicked>().get(below).unwrap().0, "picking an option clicked what was under it");
 
         // Open, then press elsewhere: closed, unchanged.
         run(&mut world, (50.0, 15.0), true, None);
@@ -1364,8 +1364,8 @@ mod tests {
             s.build();
             s.run(w, 0.0);
         };
-        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list).unwrap().offset.y;
-        let clicked = |w: &gizmo_core::World| w.borrow::<Clicked>().get(item).unwrap().0;
+        let offset = |w: &gizmo_core::World| w.query::<&Scroll>().get(list).unwrap().offset.y;
+        let clicked = |w: &gizmo_core::World| w.query::<&Clicked>().get(item).unwrap().0;
 
         // A tap: down and up in place — the item is clicked, nothing scrolls.
         step(&mut world, Some((Started, 20.0)));
@@ -1375,7 +1375,7 @@ mod tests {
 
         // A drag down that ends over the item: past the slop the content follows the finger, and
         // the release — over the item it started on — clicks nothing.
-        world.borrow_mut::<Scroll>().get_mut(list).unwrap().offset.y = 500.0;
+        world.query_mut::<&mut Scroll>().get_mut(list).unwrap().offset.y = 500.0;
         step(&mut world, Some((Started, 5.0)));
         for y in [9.0, 16.0, 25.0, 35.0] {
             step(&mut world, Some((Moved, y)));
@@ -1480,7 +1480,7 @@ mod tests {
                 e
             })
             .collect();
-        let offset = |w: &gizmo_core::World| w.borrow::<Scroll>().get(list).unwrap().offset.y;
+        let offset = |w: &gizmo_core::World| w.query::<&Scroll>().get(list).unwrap().offset.y;
         let run = |w: &mut gizmo_core::World, k: Option<&str>| {
             press(w, k);
             let mut s = Schedule::new();
@@ -1494,7 +1494,7 @@ mod tests {
         assert_eq!(offset(&world), 90.0, "its bottom (190) should meet the box's (100)");
         // Scrolled now, the layout would have moved the items; move them as it would.
         for (i, id) in items.iter().enumerate() {
-            world.borrow_mut::<Node>().get_mut(*id).unwrap().position.y = i as f32 * 50.0 - 90.0;
+            world.query_mut::<&mut Node>().get_mut(*id).unwrap().position.y = i as f32 * 50.0 - 90.0;
         }
         run(&mut world, Some("down")); // wraps to the first item, at -90, above the box
         assert_eq!(focused(&world), Some(items[0]));

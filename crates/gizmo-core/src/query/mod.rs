@@ -67,7 +67,7 @@ mod sealed {
 
 /// One operand — or a tuple of operands — of a [`Query`].
 ///
-/// Implemented for `&T`, [`Mut<T>`](Mut), the filters ([`With`], [`Without`], [`Changed`],
+/// Implemented for `&T`, `&mut T`, the filters ([`With`], [`Without`], [`Changed`],
 /// [`Added`], [`Or`]) and for tuples of 2 to 12 of those. It is *sealed*: nothing outside this
 /// crate can implement it, and every accessor is `unsafe` and speaks in raw pointers, so it is
 /// an internal DSL rather than an extension point. Being sealed also means methods may be added
@@ -89,9 +89,9 @@ pub trait WorldQuery: sealed::SealedQuery {
     /// A `'static` stand-in used as the cache key for this query's archetype-match list
     /// (see `World::query_cached`). The query machinery never constructs a value of it — only
     /// `TypeId::of::<Self::StaticType>()` is ever taken — so it is free to name an ordinary
-    /// data-carrying type, and for `&T`/[`Mut<T>`](Mut) it names the component `T` itself.
+    /// data-carrying type, and for `&T`/`&mut T` it names the component `T` itself.
     /// Queries that map to the same `StaticType` share one cache entry, so they must have
-    /// identical `matches_archetype` behaviour; `&T` and `Mut<T>` deliberately collapse to the
+    /// identical `matches_archetype` behaviour; `&T` and `&mut T` deliberately collapse to the
     /// same key because their archetype predicates are identical.
     type StaticType: 'static;
     /// Per-archetype resolved access: the raw pointers (or, for sparse storage, the address of
@@ -103,13 +103,13 @@ pub trait WorldQuery: sealed::SealedQuery {
     /// is valid only while the `&'w World` it was derived from is still borrowed and the
     /// archetype has not been structurally modified.
     type Fetch<'w>: Copy;
-    /// What one row yields: `&'w T` for `&T`, [`Mut<'w, T>`](Mut) for `Mut<T>`, and `()` for
+    /// What one row yields: `&'w T` for `&T`, [`Mut<'w, T>`](Mut) for `&mut T`, and `()` for
     /// every filter — `With`/`Without`/`Changed`/`Added`/`Or` decide membership but carry no
     /// data. For a tuple, the tuple of the operands' items; filter operands still occupy their
     /// `()` slot in it.
     type Item<'w>;
     /// What one *whole archetype* yields in chunk iteration: `&'w [T]` for `&T`, `&'w mut [T]`
-    /// for `Mut<T>`, `()` for filters. Only Table storage is contiguous — for a `SparseSet`
+    /// for `&mut T`, `()` for filters. Only Table storage is contiguous — for a `SparseSet`
     /// component [`get_slice`](WorldQuery::get_slice) panics rather than fabricating a slice.
     type Slice<'w>;
 
@@ -122,14 +122,14 @@ pub trait WorldQuery: sealed::SealedQuery {
     ///
     /// Unsound means: the same `TypeId` appears twice with at least one of the two mutable,
     /// which would hand out two `&mut T` — or a `&mut T` next to a `&T` — for the same row.
-    /// So `(Mut<A>, Mut<A>)` and `(&A, Mut<A>)` panic, while `(&A, &A)` and `(Mut<A>, Mut<B>)`
+    /// So `(&mut A, &mut A)` and `(&A, &mut A)` panic, while `(&A, &A)` and `(&mut A, &mut B)`
     /// are fine. The panic happens when the query is *constructed*, not when it is iterated.
     /// This cannot be a compile-time check because `TypeId` equality is not comparable in a
     /// const context.
     ///
     /// Filters must declare their access too, even though they yield no data:
     /// `Changed<T>`/`Added<T>` declare a *read* of `T` (they read the same `ComponentTicks`
-    /// that `Mut<T>` writes), and `Or` forwards both operands. `With`/`Without` declare
+    /// that `&mut T` writes), and `Or` forwards both operands. `With`/`Without` declare
     /// nothing — they touch no component memory. The same pairs are consumed by the system
     /// scheduler to classify a system as a reader or writer of each component.
     fn check_aliasing(types: &mut Vec<(TypeId, bool)>);
@@ -183,7 +183,7 @@ pub trait WorldQuery: sealed::SealedQuery {
 //
 // Marks queries that yield ONLY shared (`&T`) access — never `&mut T`. Such a query
 // is sound to construct and iterate from a shared `&World`: any number can coexist
-// because no `&mut T` ever escapes. `Mut<T>` is deliberately NOT `ReadOnlyQuery`.
+// because no `&mut T` ever escapes. `&mut T` is deliberately NOT `ReadOnlyQuery`.
 //
 // This is what makes the safe entry points sound:
 // - [`World::query`](crate::world::World::query) bounds `Q: ReadOnlyQuery`, so a
@@ -195,7 +195,7 @@ pub trait WorldQuery: sealed::SealedQuery {
 // Sealed: only this crate implements it (a wrong impl on a `Mut`-bearing query would
 // reopen the hole), and the supertrait `WorldQuery` keeps it inside the sealed DSL.
 /// Marker for queries that yield **only** shared access — `&T` and the data-less filters,
-/// never [`Mut<T>`](Mut).
+/// never `&mut T`.
 ///
 /// This is the bound that makes the shared entry points sound. Because no `&mut T` can escape
 /// such a query, any number of them may coexist over the same `&World`. Accordingly:
@@ -205,7 +205,7 @@ pub trait WorldQuery: sealed::SealedQuery {
 /// - [`Query`] gates its `&self` accessors (`iter`, `get`, `iter_chunks`, `par_for_each`)
 ///   behind it, so mutable access has to go through the `&mut self` variants.
 ///
-/// `Mut<T>` is pointedly *not* an implementor. A tuple implements it only when every element
+/// `&mut T` is pointedly *not* an implementor. A tuple implements it only when every element
 /// does, and `Or<A, B>` only when both operands do.
 ///
 /// Sealed — implementing it for a `Mut`-bearing query would reopen exactly the aliasing hole it
@@ -222,7 +222,7 @@ pub trait ReadOnlyQuery: WorldQuery + sealed::SealedReadOnly {}
 /// [`World::query_mut`](crate::world::World::query_mut) (exclusive) or
 /// [`World::query_unchecked`](crate::world::World::query_unchecked) (`unsafe`, for systems that
 /// only hold a `&World`). Construction runs [`WorldQuery::check_aliasing`] — which **panics**
-/// on a `Q` that would alias, e.g. `(Mut<A>, Mut<A>)` — and resolves the set of matching
+/// on a `Q` that would alias, e.g. `(&mut A, &mut A)` — and resolves the set of matching
 /// archetypes once. That set is a snapshot; the query borrows the world for `'w`, so no
 /// archetype can appear, vanish or be reordered while it is alive.
 ///
@@ -263,15 +263,15 @@ pub struct Query<'w, Q: WorldQuery + ?Sized> {
 /// Mutable aliasing check — if there are two mutable accesses to the same `TypeId` it is **UB**.
 ///
 /// # Invariant
-/// More than one mutable access (`Mut<T>`) to the same component type within a single query
-/// is **strictly forbidden**. A use such as `Query<(Mut<Position>, Mut<Position>)>` panics at
+/// More than one mutable access (`&mut T`) to the same component type within a single query
+/// is **strictly forbidden**. A use such as `Query<(&mut Position, &mut Position)>` panics at
 /// run time. This check cannot be done at compile-time because Rust's type system cannot
 /// compare `TypeId` equality in a const-context.
 ///
 /// # Safe Usage
-/// - `Query<(&Position, Mut<Velocity>)>` → ✅ (different types)
-/// - `Query<(Mut<Position>, Mut<Velocity>)>` → ✅ (different types)
-/// - `Query<(Mut<Position>, Mut<Position>)>` → ❌ PANIC!
+/// - `Query<(&Position, &mut Velocity)>` → ✅ (different types)
+/// - `Query<(&mut Position, &mut Velocity)>` → ✅ (different types)
+/// - `Query<(&mut Position, &mut Position)>` → ❌ PANIC!
 /// - `Query<(&Position, &Position)>` → ✅ (both immutable — aliasing safe)
 #[inline]
 fn check(tid: TypeId, is_mut: bool, types: &mut Vec<(TypeId, bool)>) {
@@ -337,8 +337,8 @@ macro_rules! impl_tick_filter {
             }
 
             fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
-                // Tick filters READ T's ComponentTicks — the same memory `Mut<T>` writes in
-                // deref_mut. Declare a READ so the scheduler can't co-batch a `Mut<T>` writer
+                // Tick filters READ T's ComponentTicks — the same memory `&mut T` writes in
+                // deref_mut. Declare a READ so the scheduler can't co-batch a `&mut T` writer
                 // (unsynchronized read+write = data race).
                 check(TypeId::of::<T>(), false, types);
             }
@@ -456,7 +456,7 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
     }
 }
 
-/// An optional component: `Option<&T>` / `Option<Mut<T>>` matches **every** entity the rest of
+/// An optional component: `Option<&T>` / `Option<&mut T>` matches **every** entity the rest of
 /// the query matches, and yields `Some` for the ones that carry `T` and `None` for the rest.
 ///
 /// ```
@@ -475,12 +475,12 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
 /// ```
 ///
 /// Without it, "the bonus if there is one" took two queries and a join by entity id, or a
-/// `borrow::<T>()` beside the query — which a scheduled system cannot do at all, since it holds
+/// `query::<&T>()` beside the query — which a scheduled system cannot do at all, since it holds
 /// only its parameters. `gizmo-ui`'s interaction system is the first engine code that wanted it.
 ///
 /// **The access is declared whether or not any entity has `T`**: a row that does is really read
-/// (or written), so the scheduler must treat `Option<Mut<T>>` exactly as a `Mut<T>` writer —
-/// and the aliasing check rejects `(Mut<T>, Option<&T>)` like `(Mut<T>, &T)`. Over `SparseSet`
+/// (or written), so the scheduler must treat `Option<&mut T>` exactly as a `&mut T` writer —
+/// and the aliasing check rejects `(&mut T, Option<&T>)` like `(&mut T, &T)`. Over `SparseSet`
 /// storage the column is not contiguous per archetype, so chunk iteration refuses it (as it
 /// refuses the sparse filters); over `Table` storage a chunk is the whole column or `None`.
 impl<F: FetchComponent> sealed::SealedQuery for Option<F> where F::Component: crate::component::Component {}
@@ -524,7 +524,7 @@ impl<F: FetchComponent> WorldQuery for Option<F> where F::Component: crate::comp
 impl<T: crate::component::Component> sealed::SealedReadOnly for Option<&T> {}
 impl<T: crate::component::Component> ReadOnlyQuery for Option<&T> {}
 
-// `&T` yields shared access only → read-only. `Mut<T>` (also a `FetchComponent`) is
+// `&T` yields shared access only → read-only. `&mut T` (also a `FetchComponent`) is
 // pointedly excluded: no `SealedReadOnly`/`ReadOnlyQuery` impl exists for it.
 impl<T: crate::component::Component> sealed::SealedReadOnly for &T {}
 impl<T: crate::component::Component> ReadOnlyQuery for &T {}
@@ -536,7 +536,7 @@ impl<T: crate::component::Component> ReadOnlyQuery for &T {}
 /// that manages the filtered entities has to see them, and this is how it says so:
 ///
 /// ```ignore
-/// fn re_enable(mut q: Query<(Mut<Health>, With<Disabled>, IgnoreDefaultFilters)>) { /* … */ }
+/// fn re_enable(mut q: Query<(&mut Health, With<Disabled>, IgnoreDefaultFilters)>) { /* … */ }
 /// ```
 ///
 /// It is in the **signature**, not in a comment or a builder call, so a reader of the system knows
@@ -645,7 +645,7 @@ impl RowKey for crate::entity::Entity {
 
 impl_tick_filter!(
     /// Filter matching only entities whose `T` changed since the system last ran
-    /// (`deref_mut` on `Mut<T>` stamps the change tick). Use as a query operand.
+    /// (`deref_mut` on `&mut T` stamps the change tick). Use as a query operand.
     Changed,
     changed
 );

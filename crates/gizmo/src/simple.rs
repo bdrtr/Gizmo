@@ -527,8 +527,8 @@ pub fn simple_scene_update(
     let target = crate::renderer::components::active_camera(world);
     if let Some(target) = target {
         let mut q = world.query_mut::<(
-            crate::core::query::Mut<Transform>,
-            crate::core::query::Mut<Camera>,
+            &mut Transform,
+            &mut Camera,
         )>();
         let rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2)
             * Quat::from_rotation_x(state.camera_pitch);
@@ -557,7 +557,7 @@ pub fn simple_scene_update(
 ///
 /// Sixteen of the demos carried this same function, which is the reason it is here.
 pub fn set_text(world: &mut World, id: Entity, content: &str) -> bool {
-    let mut texts = world.borrow_mut::<crate::renderer::components::Text>();
+    let mut texts = world.query_mut::<&mut crate::renderer::components::Text>();
     match texts.get_mut(id) {
         Some(mut t) if t.content != content => {
             t.content = content.to_string();
@@ -670,7 +670,7 @@ impl FixedPhysics {
         let steps = self.plan(dt);
         // Each driven body's pose now and where the caller wants it after the last step.
         let driven: Vec<(Entity, Transform, KinematicTarget)> = if steps > 1 {
-            let transforms = world.borrow::<Transform>();
+            let transforms = world.query::<&Transform>();
             world.query::<(Entity, &KinematicTarget)>().iter().filter_map(|(entity, t)| transforms.get(entity).map(|from| (entity, *from, *t))).collect()
         } else {
             Vec::new()
@@ -678,7 +678,7 @@ impl FixedPhysics {
         for step in 0..steps {
             if !driven.is_empty() {
                 let f = (step + 1) as f32 / steps as f32;
-                let mut targets = world.borrow_mut::<KinematicTarget>();
+                let mut targets = world.query_mut::<&mut KinematicTarget>();
                 for (id, from, goal) in &driven {
                     if let Some(mut t) = targets.get_mut(*id) {
                         *t = if step + 1 == steps {
@@ -1237,18 +1237,18 @@ mod fixed_physics_tests {
         let (mut tilt, mut fastest_up) = (0.0f32, 0.0f32);
         for _ in 0..18 {
             tilt = (tilt + 0.6 * frame).min(0.16);
-            if let Some(mut t) = world.borrow_mut::<KinematicTarget>().get_mut(board) {
+            if let Some(mut t) = world.query_mut::<&mut KinematicTarget>().get_mut(board) {
                 *t = KinematicTarget::new(Vec3::ZERO, Quat::from_rotation_z(-tilt));
             }
             physics.advance(&mut world, frame);
-            fastest_up = fastest_up.max(world.borrow::<Velocity>().get(ball).map_or(0.0, |v| v.linear.y));
+            fastest_up = fastest_up.max(world.query::<&Velocity>().get(ball).map_or(0.0, |v| v.linear.y));
         }
         let surface = 0.6 * 3.0;
         assert!(
             fastest_up < surface * 1.25,
             "a ball on a surface rising at {surface} m/s was thrown up at {fastest_up:.2} m/s"
         );
-        let at = world.borrow::<Transform>().get(board).map(|t| t.rotation).unwrap();
+        let at = world.query::<&Transform>().get(board).map(|t| t.rotation).unwrap();
         assert!(at.angle_between(Quat::from_rotation_z(-tilt)) < 1e-5, "the board did not end on its target");
     }
 
@@ -1315,7 +1315,7 @@ mod fixed_physics_tests {
         w.add_component(e, Text::pinned("a", font, 12.0, TextAnchor::TopLeft, crate::math::Vec2::ZERO));
         assert!(super::set_text(&mut w, e, "b"));
         assert!(!super::set_text(&mut w, e, "b"), "the same content is not a change");
-        assert_eq!(w.borrow::<Text>().get(e).unwrap().content, "b");
+        assert_eq!(w.query::<&Text>().get(e).unwrap().content, "b");
         let bare = w.spawn();
         assert!(!super::set_text(&mut w, bare, "x"));
     }
@@ -1353,7 +1353,7 @@ mod fixed_physics_tests {
             ));
             (w, e)
         }
-        let y = |w: &crate::core::World, id: Entity| w.borrow::<Transform>().get(id).unwrap().position.y;
+        let y = |w: &crate::core::World, id: Entity| w.query::<&Transform>().get(id).unwrap().position.y;
 
         // Powers of two, so the frame times are exact in f32 and both splits owe the same steps.
         let (mut a, ida) = world_with_ball();
@@ -1414,7 +1414,7 @@ mod fixed_physics_tests {
         for _ in 0..150 {
             physics.advance(&mut w, 1.0 / 60.0);
         }
-        let z = w.borrow::<Transform>().get(id).unwrap().position.z;
+        let z = w.query::<&Transform>().get(id).unwrap().position.z;
         assert!(z < -0.5, "the throttled car went forward (−Z): z = {z}");
     }
 }

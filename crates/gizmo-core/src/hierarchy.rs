@@ -140,7 +140,7 @@ impl HierarchyExt for World {
     }
 
     fn descendants_inclusive(&self, root: Entity) -> Vec<Entity> {
-        let children = self.borrow::<Children>();
+        let children = self.query::<&Children>();
         let mut out = vec![root];
         let mut seen = std::collections::HashSet::from([root]);
         let mut i = 0;
@@ -162,7 +162,7 @@ impl HierarchyExt for World {
     }
 
     fn is_ancestor(&self, ancestor: Entity, descendant: Entity) -> bool {
-        let parents = self.borrow::<Parent>();
+        let parents = self.query::<&Parent>();
         let mut visited = std::collections::HashSet::new();
         let mut current = descendant;
         // Walk up the Parent chain. `visited` also makes this safe if the existing
@@ -521,11 +521,11 @@ mod tests {
         world.add_child(parent, a);
         world.add_child(parent, b);
         world.despawn(a);
-        let children = world.borrow::<Children>().get(parent).map(|c| c.0.clone());
+        let children = world.query::<&Children>().get(parent).map(|c| c.0.clone());
         assert_eq!(children, Some(vec![b]), "only the living child is listed");
         let stranger = world.spawn();
         assert_eq!(stranger.id(), a.id(), "the id is recycled — which is what made the old list lie");
-        let children = world.borrow::<Children>().get(parent).map(|c| c.0.clone());
+        let children = world.query::<&Children>().get(parent).map(|c| c.0.clone());
         assert_eq!(children, Some(vec![b]), "and the stranger is not the parent's child");
     }
 
@@ -541,8 +541,8 @@ mod tests {
         world.add_child(parent, child);
         world.despawn(parent);
         assert!(world.is_alive(child), "a plain despawn does not take the children");
-        assert!(world.borrow::<Parent>().get(child).is_none(), "the orphan is a root now");
-        let listed = world.borrow::<Children>().get(grandparent).map(|c| c.0.clone());
+        assert!(world.query::<&Parent>().get(child).is_none(), "the orphan is a root now");
+        let listed = world.query::<&Children>().get(grandparent).map(|c| c.0.clone());
         assert_eq!(listed, Some(vec![]), "and the grandparent no longer lists the parent");
     }
 

@@ -66,7 +66,7 @@ fn step(world: &World, n: usize) {
 }
 
 fn transform(world: &World, id: Entity) -> Transform {
-    *world.borrow::<Transform>().get(id).unwrap()
+    *world.query::<&Transform>().get(id).unwrap()
 }
 
 /// A cylinder stands on its flat end at exactly its half-height. A capsule of the same numbers

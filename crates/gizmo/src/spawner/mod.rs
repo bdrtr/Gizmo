@@ -178,7 +178,7 @@ impl<'a> Commands<'a> {
     /// `yaw = -π/2` (looking towards −X), `pitch = 0` (level).
     pub fn spawn_camera(&mut self, pos: Vec3) -> EntityBuilder<'_, 'a> {
         {
-            let mut cameras = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>();
+            let mut cameras = self.world.query_mut::<&mut Camera>();
             for mut c in cameras.iter_mut() {
                 c.primary = false;
             }
@@ -218,7 +218,7 @@ impl<'a> Commands<'a> {
         far: f32,
     ) -> EntityBuilder<'_, 'a> {
         {
-            let mut cameras = self.world.query_mut::<gizmo_core::prelude::Mut<Camera>>();
+            let mut cameras = self.world.query_mut::<&mut Camera>();
             for mut c in cameras.iter_mut() {
                 c.primary = false;
             }
@@ -356,7 +356,7 @@ impl<'a> Commands<'a> {
         let id = spawn_mesh_entity(self.world, pos, mesh, mat);
         // Scale'i half_extents ile eşleştir
         {
-            let mut trans_store = self.world.borrow_mut::<Transform>();
+            let mut trans_store = self.world.query_mut::<&mut Transform>();
             if let Some(mut trans) = trans_store.get_mut(id) {
                 trans.scale = half_extents * 2.0;
                 trans.update_local_matrix();
@@ -602,11 +602,11 @@ pub trait WorldExt {
     /// # world.add_component(e, Health(100));
     /// // The second type parameter is the closure's own, so it can only be `_`.
     /// world.modify::<Health, _>("Player", |h| h.0 -= 30);
-    /// assert_eq!(world.borrow::<Health>().get(e).unwrap().0, 70);
+    /// assert_eq!(world.query::<&Health>().get(e).unwrap().0, 70);
     ///
     /// // An unknown name is a silent no-op, not a panic.
     /// world.modify::<Health, _>("Nobody", |h| h.0 = 0);
-    /// assert_eq!(world.borrow::<Health>().get(e).unwrap().0, 70);
+    /// assert_eq!(world.query::<&Health>().get(e).unwrap().0, 70);
     /// ```
     fn modify<T: gizmo_core::Component + 'static, F: FnMut(&mut T)>(&mut self, name: &str, f: F);
 }
@@ -638,7 +638,7 @@ impl WorldExt for World {
         };
         if let Some(target_id) = target {
             {
-                let mut transforms = self.query_mut::<(Entity, gizmo_core::prelude::Mut<gizmo_physics_core::Transform>)>();
+                let mut transforms = self.query_mut::<(Entity, &mut gizmo_physics_core::Transform)>();
                 for (tid, mut trans) in transforms.iter_mut() {
                     if tid == target_id {
                         f(&mut trans);
@@ -651,7 +651,7 @@ impl WorldExt for World {
 
     fn position_of(&self, name: &str) -> Option<Vec3> {
         let target_id = self.entity_named(name)?;
-        let transforms = self.borrow::<gizmo_physics_core::Transform>();
+        let transforms = self.query::<&gizmo_physics_core::Transform>();
         transforms.get(target_id).map(|t| t.position)
     }
 
@@ -675,7 +675,7 @@ impl WorldExt for World {
         };
         if let Some(target_id) = target {
             {
-                let mut storage = self.borrow_mut::<T>();
+                let mut storage = self.query_mut::<&mut T>();
                 if let Some(mut comp) = storage.get_mut(target_id) {
                     f(&mut *comp);
                 }

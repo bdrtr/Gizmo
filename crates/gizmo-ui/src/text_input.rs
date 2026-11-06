@@ -3,7 +3,7 @@
 
 use gizmo_core::Entity;
 use gizmo_core::input::Input;
-use gizmo_core::query::{Mut, Query};
+use gizmo_core::query::Query;
 use gizmo_core::system::Res;
 
 use crate::components::{Clicked, Interaction};
@@ -98,7 +98,7 @@ fn key(name: &str) -> u32 {
 /// Focuses the clicked field, unfocuses the rest on a click elsewhere, and feeds the focused one
 /// this frame's typing. Runs after [`ui_interaction_system`](crate::interaction::ui_interaction_system),
 /// whose `Clicked` it reads.
-pub fn text_input_system(input: Res<Input>, mut fields: Query<(Entity, Mut<TextInput>, Option<&Clicked>, Option<&Interaction>)>) {
+pub fn text_input_system(input: Res<Input>, mut fields: Query<(Entity, &mut TextInput, Option<&Clicked>, Option<&Interaction>)>) {
     let pressed_anywhere = input.is_mouse_button_just_pressed(0);
     let typed = input.typed_text();
     let backspace = input.is_key_just_pressed(key("backspace"));
@@ -156,20 +156,20 @@ mod tests {
             s.run(world, 0.0);
         };
         run(&mut world);
-        assert!(world.borrow::<TextInput>().get(field).unwrap().is_focused());
+        assert!(world.query::<&TextInput>().get(field).unwrap().is_focused());
 
-        world.borrow_mut::<Clicked>().get_mut(field).unwrap().0 = false;
+        world.query_mut::<&mut Clicked>().get_mut(field).unwrap().0 = false;
         world.get_resource_mut::<Input>().unwrap().on_text("hi");
         run(&mut world);
-        assert_eq!(world.borrow::<TextInput>().get(field).unwrap().value, "hi");
+        assert_eq!(world.query::<&TextInput>().get(field).unwrap().value, "hi");
 
         {
             let mut input = world.get_resource_mut::<Input>().unwrap();
             input.begin_frame();
             input.on_mouse_button_pressed(0);
         }
-        *world.borrow_mut::<Interaction>().get_mut(field).unwrap() = Interaction::None;
+        *world.query_mut::<&mut Interaction>().get_mut(field).unwrap() = Interaction::None;
         run(&mut world);
-        assert!(!world.borrow::<TextInput>().get(field).unwrap().is_focused(), "a click elsewhere kept the focus");
+        assert!(!world.query::<&TextInput>().get(field).unwrap().is_focused(), "a click elsewhere kept the focus");
     }
 }

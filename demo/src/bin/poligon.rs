@@ -184,7 +184,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
 
 /// Kaidelerinden düşmüş kutular ve toplam kutu.
 fn crates_down(world: &World) -> (usize, usize) {
-    let tfs = world.borrow::<Transform>();
+    let tfs = world.query::<&Transform>();
     let down = world.query::<(Entity, &Crate)>().iter().filter(|(entity, c)| tfs.get(*entity).is_some_and(|t| t.position.y < c.pedestal_top - 0.1)).count();
     (down, world.query::<(Entity, &Crate)>().iter().count())
 }
@@ -197,7 +197,7 @@ fn self_test() -> bool {
     let game = setup(&mut world, font, false);
     world.insert_resource(game);
     let mut run = HeadlessFrames::new(world);
-    let at = |w: &World| w.get_resource::<Game>().and_then(|g| w.borrow::<Transform>().get(g.player).map(|t| t.position)).unwrap_or_default();
+    let at = |w: &World| w.get_resource::<Game>().and_then(|g| w.query::<&Transform>().get(g.player).map(|t| t.position)).unwrap_or_default();
     while run.elapsed < 1.0 {
         run.frame(1.0 / 60.0, update);
     }
@@ -299,7 +299,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     // Yürüme.
     {
         let (mx, my) = input.move_axis();
-        let mut kccs = world.borrow_mut::<CharacterController>();
+        let mut kccs = world.query_mut::<&mut CharacterController>();
         if let Some(mut kcc) = kccs.get_mut(game.player) {
             kcc.target_velocity = (right * mx + flat_forward * my) * kcc.speed;
             if input.is_key_just_pressed(KeyCode::Space as u32) {
@@ -329,13 +329,13 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     sync_transforms(world);
 
     // Kamera oyuncunun başında.
-    let head = world.borrow::<Transform>().get(game.player).map(|t| t.position + Vec3::Y * EYE);
+    let head = world.query::<&Transform>().get(game.player).map(|t| t.position + Vec3::Y * EYE);
     if let Some(head) = head {
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
             t.position = head;
         }
     }
-    if let Some(mut cam) = world.borrow_mut::<Camera>().get_mut(game.camera) {
+    if let Some(mut cam) = world.query_mut::<&mut Camera>().get_mut(game.camera) {
         cam.yaw = game.yaw;
         cam.pitch = game.pitch;
     }
@@ -346,7 +346,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
 /// Kameranın ortasından bir ışın; çarptığı dinamik cisme çarpma noktasında bir itki.
 fn shoot(world: &mut World, game: &Game, dir: Vec3) {
-    let Some(origin) = world.borrow::<Transform>().get(game.camera).map(|t| t.position) else { return };
+    let Some(origin) = world.query::<&Transform>().get(game.camera).map(|t| t.position) else { return };
     let hit = {
         let Some(physics) = world.get_resource::<PhysicsWorld>() else { return };
         let ray = gizmo::physics::raycast::Ray::new(origin, dir);
@@ -354,7 +354,7 @@ fn shoot(world: &mut World, game: &Game, dir: Vec3) {
     };
     let Some(hit) = hit else { return };
     let Some(id) = world.entity(hit.entity.id()) else { return };
-    if world.borrow::<Crate>().get(id).is_none() {
+    if world.query::<&Crate>().get(id).is_none() {
         return;
     }
     if gizmo::physics::apply_impulse(world, id, dir * SHOT_IMPULSE, hit.point) {
@@ -365,7 +365,7 @@ fn shoot(world: &mut World, game: &Game, dir: Vec3) {
 
 /// Kameraya travma ekler.
 fn kick(world: &mut World, game: &Game, trauma: f32) {
-    if let Some(mut shake) = world.borrow_mut::<CameraShake>().get_mut(game.camera) {
+    if let Some(mut shake) = world.query_mut::<&mut CameraShake>().get_mut(game.camera) {
         shake.add(trauma);
     }
 }
@@ -378,14 +378,14 @@ fn play(world: &mut World, name: &str) {
 
 fn draw_hud(world: &mut World, game: &Game) {
     let (down, total) = {
-        let tfs = world.borrow::<Transform>();
+        let tfs = world.query::<&Transform>();
         let total = world.query::<(Entity, &Crate)>().iter().count();
         let down = world.query::<(Entity, &Crate)>().iter()
             .filter(|(entity, c)| tfs.get(*entity).is_some_and(|t| t.position.y < c.pedestal_top - 0.1))
             .count();
         (down, total)
     };
-    let mut texts = world.borrow_mut::<Text>();
+    let mut texts = world.query_mut::<&mut Text>();
     if let Some(mut t) = texts.get_mut(game.hud) {
         t.content = format!("Düşen {down}/{total}   Mermi {}", AMMO - game.shots);
     }

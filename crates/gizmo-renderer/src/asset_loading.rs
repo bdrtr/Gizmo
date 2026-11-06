@@ -44,14 +44,14 @@ pub fn run_asset_loading_system(
 
     // Hangi Entity'lerin Mesh/Material'ı eksik bul
     {
-        let mesh_sources = world.borrow::<MeshSource>();
-        let meshes = world.borrow::<Mesh>();
-        let mesh_data = world.borrow::<crate::components::MeshData>();
-        let uploaded = world.borrow::<UploadedFrom>();
+        let mesh_sources = world.query::<&MeshSource>();
+        let meshes = world.query::<&Mesh>();
+        let mesh_data = world.query::<&crate::components::MeshData>();
+        let uploaded = world.query::<&UploadedFrom>();
 
-        let material_sources = world.borrow::<MaterialSource>();
-        let materials = world.borrow::<Material>();
-        let descs = world.borrow::<crate::components::MaterialDesc>();
+        let material_sources = world.query::<&MaterialSource>();
+        let materials = world.query::<&Material>();
+        let descs = world.query::<&crate::components::MaterialDesc>();
 
         for e in world.iter_alive_entities() {
             let id = e;
@@ -220,7 +220,7 @@ pub fn run_asset_loading_system(
     // missing, so an entity that already carries one keeps whatever flags it was given.
     if !renderer_only.is_empty() {
         let needed: Vec<Entity> = {
-            let renderers = world.borrow::<MeshRenderer>();
+            let renderers = world.query::<&MeshRenderer>();
             renderer_only
                 .into_iter()
                 .filter(|id| renderers.get(*id).is_none())

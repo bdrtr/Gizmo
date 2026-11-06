@@ -23,7 +23,6 @@
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera · **Shift** — hızlı hareket
 //!     (kamera hareket etse de projeksiyon ortografik kalır — asıl görülecek şey de bu).
 
-use gizmo::core::query::Mut;
 use gizmo::prelude::*;
 use gizmo::renderer::components::ProjectionMode;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -76,7 +75,7 @@ fn main() {
             // Kamera (5, 5, 5) → orijin, sonra projeksiyonu ortografiğe çevir.
             scene.spawn_camera(state, Vec3::new(5.0, 5.0, 5.0), Vec3::ZERO);
             {
-                let mut q = scene.world.query_mut::<(Mut<Camera>, Mut<Transform>)>();
+                let mut q = scene.world.query_mut::<(&mut Camera, &mut Transform)>();
                 for (mut camera, _transform) in q.iter_mut() {
                     camera.projection = ProjectionMode::Orthographic {
                         height: VIEWPORT_HEIGHT,

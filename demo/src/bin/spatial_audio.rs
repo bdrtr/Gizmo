@@ -67,7 +67,7 @@
 
 use gizmo::audio::{spatial_gain, AudioManager, AudioSource};
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -270,7 +270,7 @@ fn main() {
 ///
 /// Susturma [`AudioSource::volume`] üzerinden — uzamsal sistem onu `base_volume` olarak okuyor.
 fn orbit_emitter(
-    mut emitters: Query<(Mut<Transform>, Mut<AudioSource>, With<Emitter>)>,
+    mut emitters: Query<(&mut Transform, &mut AudioSource, With<Emitter>)>,
     mut demo: ResMut<AudioDemo>,
     input: Res<Input>,
     time: Res<Time>,

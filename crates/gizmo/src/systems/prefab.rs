@@ -80,7 +80,7 @@ mod tests {
         prefab_request_system(&mut world);
 
         assert!(
-            world.borrow::<PrefabRequest>().get(e).is_none(),
+            world.query::<&PrefabRequest>().get(e).is_none(),
             "the request must be cleared, or it selects this entity again next frame"
         );
     }
@@ -97,7 +97,7 @@ mod tests {
         prefab_request_system(&mut world);
 
         assert!(
-            world.borrow::<PrefabRequest>().get(e).is_none(),
+            world.query::<&PrefabRequest>().get(e).is_none(),
             "a failed load must still clear the request"
         );
         assert!(world.live(e).is_some(), "and must not take the entity with it");
@@ -154,11 +154,11 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         assert!(
-            world.borrow::<PrefabRequest>().get(host).is_none(),
+            world.query::<&PrefabRequest>().get(host).is_none(),
             "a fulfilled request must be cleared — nothing else clears it"
         );
 
-        let velocities = world.borrow::<gizmo_physics_rigid::components::Velocity>();
+        let velocities = world.query::<&gizmo_physics_rigid::components::Velocity>();
         let arrived: Vec<f32> = velocities.iter().map(|v| v.linear.z).collect();
         assert_eq!(
             arrived,
@@ -168,7 +168,7 @@ mod tests {
         );
         drop(velocities);
 
-        let names = world.borrow::<EntityName>();
+        let names = world.query::<&EntityName>();
         assert_eq!(
             names.get(host).map(|n| n.0.as_str()),
             Some("crate"),

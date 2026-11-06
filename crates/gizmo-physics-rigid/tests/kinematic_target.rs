@@ -36,17 +36,17 @@ fn a_target_is_reached_in_one_step_and_held_exactly() {
     let goal = KinematicTarget::new(Vec3::new(0.0, 0.5, 0.0), Quat::from_rotation_x(0.15));
     world.add_component(b, goal);
     step(&mut world);
-    let t = *world.borrow::<Transform>().get(b).unwrap();
+    let t = *world.query::<&Transform>().get(b).unwrap();
     assert_eq!((t.position, t.rotation), (goal.position, goal.rotation), "not exactly on the target");
-    let v = *world.borrow::<Velocity>().get(b).unwrap();
+    let v = *world.query::<&Velocity>().get(b).unwrap();
     assert!((v.angular.x - 0.15 / DT).abs() < 1e-2, "the step's velocity is the motion: {v:?}");
     // Held: many steps later, still exactly there, not moving.
     for _ in 0..60 {
         step(&mut world);
     }
-    let t = *world.borrow::<Transform>().get(b).unwrap();
+    let t = *world.query::<&Transform>().get(b).unwrap();
     assert_eq!((t.position, t.rotation), (goal.position, goal.rotation));
-    assert!(world.borrow::<Velocity>().get(b).unwrap().angular.length() < 1e-4);
+    assert!(world.query::<&Velocity>().get(b).unwrap().angular.length() < 1e-4);
 
     // On a dynamic body it is ignored: the body falls.
     let ball = world.spawn();
@@ -58,7 +58,7 @@ fn a_target_is_reached_in_one_step_and_held_exactly() {
     for _ in 0..60 {
         step(&mut world);
     }
-    assert!(world.borrow::<Transform>().get(ball).unwrap().position.y < 4.0);
+    assert!(world.query::<&Transform>().get(ball).unwrap().position.y < 4.0);
 }
 
 /// A board tilted step by step towards +x carries a resting ball and rolls it downhill, while the
@@ -85,7 +85,7 @@ fn a_tilting_board_rolls_the_ball_on_it_downhill() {
     for _ in 0..60 {
         step(&mut world);
     }
-    let p = world.borrow::<Transform>().get(ball).unwrap().position;
+    let p = world.query::<&Transform>().get(ball).unwrap().position;
     assert!(p.x > 0.5, "the ball did not roll downhill: {p:?}");
     // Still on the board's surface: the surface at x is at -x·tan(8°) + 0.1, plus the radius.
     let surface = -p.x * 8f32.to_radians().tan() + 0.1 + 0.2;
@@ -119,7 +119,7 @@ fn a_compound_board_holds_a_ball_on_a_tile_and_drops_one_through_the_gap() {
     for _ in 0..120 {
         step(&mut world);
     }
-    let y = |w: &World, e: gizmo_core::entity::Entity| w.borrow::<Transform>().get(e).unwrap().position.y;
+    let y = |w: &World, e: gizmo_core::entity::Entity| w.query::<&Transform>().get(e).unwrap().position.y;
     assert!((y(&world, on_tile) - 0.3).abs() < 0.05, "on the tile: {}", y(&world, on_tile));
     assert!(y(&world, over_gap) < -1.0, "through the gap: {}", y(&world, over_gap));
 }
@@ -157,12 +157,12 @@ fn a_ball_rolls_across_tile_seams_as_on_one_slab() {
         world.add_component(ball, rb);
         world.add_component(ball, Velocity::default());
         world.add_component(ball, Collider::sphere(0.3));
-        let start = world.borrow::<Transform>().get(ball).unwrap().position;
+        let start = world.query::<&Transform>().get(ball).unwrap().position;
         for _ in 0..480 {
             gizmo_physics_rigid::system::physics_step_system(&world, dt);
             world.apply_commands();
         }
-        (world.borrow::<Transform>().get(ball).unwrap().position - start).length()
+        (world.query::<&Transform>().get(ball).unwrap().position - start).length()
     };
     let (slab, tiles) = (run(false), run(true));
     let analytic = 0.5 * 9.81 * 0.16f32.sin() * 5.0 / 7.0 * 4.0;

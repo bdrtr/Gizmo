@@ -227,7 +227,7 @@ fn spawn_gltf_node_flat(
     world.add_component(entity, Children(Vec::new()));
 
     {
-        let mut ch_store = world.borrow_mut::<Children>();
+        let mut ch_store = world.query_mut::<&mut Children>();
         // Safe to push since entity just spawned and didn't trigger any complex re-borrow updates
         if let Some(mut parent_ch) = ch_store.get_mut(parent_id) {
             parent_ch.0.push(entity);
@@ -319,10 +319,10 @@ fn spawn_gltf_node_flat(
         }
     }
 
-    // Pulling borrow_mut OUTSIDE the loop avoiding multiple overlapping mutable queries
+    // Pulling query_mut OUTSIDE the loop avoiding multiple overlapping mutable queries
     if !newly_added_prims.is_empty() {
         {
-            let mut ch_store = world.borrow_mut::<Children>();
+            let mut ch_store = world.query_mut::<&mut Children>();
             if let Some(mut parent_ch) = ch_store.get_mut(entity) {
                 parent_ch.0.extend(newly_added_prims);
             }

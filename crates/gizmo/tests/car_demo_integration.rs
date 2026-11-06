@@ -36,7 +36,7 @@ fn car_demo_full_frame() {
     scheduler.run(&mut world, 0.016);
     
     // Yerçekimi etkisiyle Y pozisyonu değişmeli
-    let t_comps = world.borrow::<Transform>();
+    let t_comps = world.query::<&Transform>();
     let t = t_comps.get(chassis).unwrap();
     assert!(t.position.y < 1.0); // düşüyor
 }

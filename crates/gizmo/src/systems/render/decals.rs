@@ -43,7 +43,7 @@ pub fn collect_decals(
     world: &World,
     cam_pos: Vec3,
 ) -> (Vec<DecalUniforms>, Vec<Arc<wgpu::BindGroup>>) {
-    let transforms = world.borrow::<gizmo_physics_core::Transform>();
+    let transforms = world.query::<&gizmo_physics_core::Transform>();
 
     let mut uniforms = Vec::new();
     let mut bind_groups = Vec::new();

@@ -1,8 +1,5 @@
 use criterion::Criterion;
-use gizmo_core::{
-    world::World,
-    query::Mut,
-};
+use gizmo_core::world::World;
 use super::common::*;
 
 pub fn bench_sparse_iter(c: &mut Criterion) {
@@ -17,7 +14,7 @@ pub fn bench_sparse_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&SparseVel, Mut<SparsePos>)>();
+    let mut query = world.query_mut::<(&SparseVel, &mut SparsePos)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("sparse_iter", |b| {
@@ -53,15 +50,15 @@ pub fn bench_wide_sparse_iter(c: &mut Criterion) {
 
     let mut query = world.query_mut::<(
         &SparseVelWide<0>,
-        Mut<SparsePosWide<0>>,
+        &mut SparsePosWide<0>,
         &SparseVelWide<1>,
-        Mut<SparsePosWide<1>>,
+        &mut SparsePosWide<1>,
         &SparseVelWide<2>,
-        Mut<SparsePosWide<2>>,
+        &mut SparsePosWide<2>,
         &SparseVelWide<3>,
-        Mut<SparsePosWide<3>>,
+        &mut SparsePosWide<3>,
         &SparseVelWide<4>,
-        Mut<SparsePosWide<4>>,
+        &mut SparsePosWide<4>,
     )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup
@@ -105,7 +102,7 @@ pub fn bench_sparse_simple_iter(c: &mut Criterion) {
         )
     })).count();
 
-    let mut query = world.query_mut::<(&SparseVel, Mut<SparsePos>)>();
+    let mut query = world.query_mut::<(&SparseVel, &mut SparsePos)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("sparse_simple_iter", |b| {
@@ -141,15 +138,15 @@ pub fn bench_wide_sparse_simple_iter(c: &mut Criterion) {
 
     let mut query = world.query_mut::<(
         &SparseVelWide<0>,
-        Mut<SparsePosWide<0>>,
+        &mut SparsePosWide<0>,
         &SparseVelWide<1>,
-        Mut<SparsePosWide<1>>,
+        &mut SparsePosWide<1>,
         &SparseVelWide<2>,
-        Mut<SparsePosWide<2>>,
+        &mut SparsePosWide<2>,
         &SparseVelWide<3>,
-        Mut<SparsePosWide<3>>,
+        &mut SparsePosWide<3>,
         &SparseVelWide<4>,
-        Mut<SparsePosWide<4>>,
+        &mut SparsePosWide<4>,
     )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup

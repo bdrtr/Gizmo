@@ -39,7 +39,7 @@ fn step(w: &World, n: usize) {
 }
 
 fn pos(w: &World, id: Entity) -> Vec3 {
-    w.borrow::<Transform>().get(id).unwrap().position
+    w.query::<&Transform>().get(id).unwrap().position
 }
 
 /// A triangle on its flat base settles on a rectangle ground: base on the ground's top, upright,
@@ -54,7 +54,7 @@ fn a_triangle_settles_on_its_base() {
     step(&w, 240);
 
     let p = pos(&w, t);
-    let rot = w.borrow::<Transform>().get(t).unwrap().rotation;
+    let rot = w.query::<&Transform>().get(t).unwrap().rotation;
     assert!(p.y.abs() < 0.03, "the base should rest on the ground's top (y = 0), the origin is at {p:?}");
     assert_eq!(p.z, 0.0, "off the plane");
     assert!((rot * Vec3::Y).y > 0.999, "it tipped over: up is {:?}", rot * Vec3::Y);

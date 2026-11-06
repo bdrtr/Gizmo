@@ -42,8 +42,8 @@ fn speed_after_one_second(fps: f32, push: Push) -> f32 {
     let mut stepped = 0.0f32;
     while stepped < 1.0 - 1e-4 {
         match push {
-            Push::Assign => world.borrow_mut::<RigidBody>().get_mut(body).unwrap().force_accumulator = Vec3::new(10.0, 0.0, 0.0),
-            Push::Add => world.borrow_mut::<RigidBody>().get_mut(body).unwrap().force_accumulator += Vec3::new(10.0, 0.0, 0.0),
+            Push::Assign => world.query_mut::<&mut RigidBody>().get_mut(body).unwrap().force_accumulator = Vec3::new(10.0, 0.0, 0.0),
+            Push::Add => world.query_mut::<&mut RigidBody>().get_mut(body).unwrap().force_accumulator += Vec3::new(10.0, 0.0, 0.0),
             Push::Component => {}
         }
         accumulator += frame;
@@ -53,7 +53,7 @@ fn speed_after_one_second(fps: f32, push: Push) -> f32 {
             stepped += STEP;
         }
     }
-    world.borrow::<Velocity>().get(body).unwrap().linear.x
+    world.query::<&Velocity>().get(body).unwrap().linear.x
 }
 
 #[test]

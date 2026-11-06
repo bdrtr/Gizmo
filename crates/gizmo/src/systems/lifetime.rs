@@ -125,7 +125,7 @@ impl gizmo_core::system::System for LifetimeSystem {
         // (Bound out of the `if let` so the comment sits directly above the `unsafe`, which is
         // where `clippy::undocumented_unsafe_blocks` looks — the lint is a ratchet in this crate.)
         let despawn_after =
-            unsafe { world.query_unchecked::<(Entity, gizmo_core::query::Mut<DespawnAfter>)>() };
+            unsafe { world.query_unchecked::<(Entity, &mut DespawnAfter)>() };
         {
             let mut q = despawn_after;
             for (entity, mut d) in q.iter_mut() {

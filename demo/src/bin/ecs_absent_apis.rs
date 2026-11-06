@@ -13,9 +13,9 @@
 //! engellenir, tek değiştirme yolu sökülüp yeniden takılmasıdır, ve bu sayede `on_insert`
 //! kancası bileşenin tek doğruluk kapısı hâline gelir.
 //!
-//! Gizmo'nun `Component` trait'inin böyle bir ayarı yok: `Mut<T>` her bileşen için kurulabiliyor.
+//! Gizmo'nun `Component` trait'inin böyle bir ayarı yok: `&mut T` her bileşen için kurulabiliyor.
 //! Yakınsayan tek şey **`&T` alan bir sorgu** yazmak — ama bu bir sözleşme değil, bir tercih:
-//! aynı türe `Mut<T>` isteyen ikinci bir sorgu yazmak serbest.
+//! aynı türe `&mut T` isteyen ikinci bir sorgu yazmak serbest.
 //!
 //! Sonuç: `component_hooks`'ta ölçülen sessiz yollar burada iki kat pahalı. Değişmez bir
 //! bileşenin her değişimi bir kancadan geçmek zorunda olurdu; Gizmo'da hem doğrudan
@@ -59,7 +59,7 @@
 //!
 //! | ne | ölçülen | ne söylüyor |
 //! |----|---------|-------------|
-//! | `Mut<Frozen>` kurulabildi mi | **evet** | "değişmezlik" bir sözleşme değil, tercih |
+//! | `&mut Frozen` kurulabildi mi | **evet** | "değişmezlik" bir sözleşme değil, tercih |
 //! | `Frozen`'ın kancasız yazılan değeri | 10 -> **−1** | doğrudan yazma açık, kapı yok |
 //! | kayıtlı bileşen türü sayısı | 0 -> 1 -> **2** | yalnız **tipli** kayıtla artıyor |
 //! | `get_component_ptr` + `TypeId` ile ham okuma | **`Some(100)`** | erişim dinamik, **tanım değil** |
@@ -97,7 +97,7 @@ struct AbsentReport {
     registered_start: usize,
     registered_after_one: usize,
     registered_after_two: usize,
-    /// `Mut<Frozen>` kurulabildi mi — evet ise "değişmezlik" bir sözleşme değil.
+    /// `&mut Frozen` kurulabildi mi — evet ise "değişmezlik" bir sözleşme değil.
     frozen_mutable: bool,
     /// `Frozen`'ın doğrudan yazılarak değişmiş değeri.
     frozen_value: f32,
@@ -151,7 +151,7 @@ fn main() {
             // 1. `immutable_components`: "değişmez" olması gereken bileşen doğrudan yazılıyor,
             //    ve motor buna karşı çıkmıyor. Sözleşme yok.
             {
-                let mut q = scene.world.query_mut::<gizmo::core::query::Mut<Frozen>>();
+                let mut q = scene.world.query_mut::<&mut Frozen>();
                 report.frozen_mutable = true;
                 for mut frozen in q.iter_mut() {
                     frozen.0 = -1.0; // hiçbir kanca, hiçbir kapı

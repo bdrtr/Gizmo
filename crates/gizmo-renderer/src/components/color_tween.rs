@@ -1,7 +1,6 @@
 //! [`ColorTween`] — a colour eased to a target: fading out, flashing, tinting.
 
 use gizmo_animation::tween::{Ease, Repeat};
-use gizmo_core::query::Mut;
 use gizmo_core::World;
 use gizmo_math::Vec4;
 
@@ -131,7 +130,7 @@ pub fn color_tween_system(world: &mut World, dt: f32) {
     if dt <= 0.0 {
         return;
     }
-    let mut q = world.query_mut::<(Mut<ColorTween>, Option<Mut<Sprite>>, Option<Mut<Text>>, Option<Mut<Material>>)>();
+    let mut q = world.query_mut::<(&mut ColorTween, Option<&mut Sprite>, Option<&mut Text>, Option<&mut Material>)>();
     for (mut tween, sprite, text, material) in q.iter_mut() {
         if tween.is_finished() {
             continue;
@@ -201,9 +200,9 @@ mod tests {
             ColorTween::to(Vec4::new(0.0, 0.0, 0.0, 1.0), 1.0),
         ));
         color_tween_system(&mut world, 0.0);
-        assert_eq!(world.borrow::<Sprite>().get(e).unwrap().color, Vec4::ONE, "a paused clock changed it");
+        assert_eq!(world.query::<&Sprite>().get(e).unwrap().color, Vec4::ONE, "a paused clock changed it");
         color_tween_system(&mut world, 1.0);
-        assert_eq!(world.borrow::<Sprite>().get(e).unwrap().color, Vec4::new(0.0, 0.0, 0.0, 1.0));
-        assert_eq!(world.borrow::<Text>().get(e).unwrap().color, Vec4::new(0.0, 0.0, 0.0, 1.0));
+        assert_eq!(world.query::<&Sprite>().get(e).unwrap().color, Vec4::new(0.0, 0.0, 0.0, 1.0));
+        assert_eq!(world.query::<&Text>().get(e).unwrap().color, Vec4::new(0.0, 0.0, 0.0, 1.0));
     }
 }

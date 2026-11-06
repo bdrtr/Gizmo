@@ -384,7 +384,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         game.refill.reset();
     }
 
-    let clicked = world.borrow::<Clicked>();
+    let clicked = world.query::<&Clicked>();
     let generate_clicked = world.query::<(Entity, &Generate)>().iter().any(|(entity, _)| clicked.get(entity).is_some_and(|c| c.0));
     drop(clicked);
     if generate_clicked || input.is_key_just_pressed(KeyCode::Space as u32) {
@@ -422,7 +422,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     // Sürükleme: görünüm imleci izliyor; bırakıldığı yer `Drag::dropped_on`.
     let mut moves: Vec<(usize, Option<Entity>)> = Vec::new();
     {
-        let drags = world.borrow::<Drag>();
+        let drags = world.query::<&Drag>();
         for (entity, v) in world.query::<(Entity, &View)>().iter() {
             let Some(d) = drags.get(entity) else { continue };
             if d.just_ended() {
@@ -468,9 +468,9 @@ fn generate(world: &mut World, game: &mut Game) {
 
 /// `from` karesindeki şey `target`'a bırakıldı: bir kare, bir sipariş ya da çöp.
 fn drop_into(world: &mut World, game: &mut Game, from: usize, target: Entity) {
-    if let Some(c) = world.borrow::<Cell>().get(target).copied() {
+    if let Some(c) = world.query::<&Cell>().get(target).copied() {
         drop_on_cell(world, game, from, c.0);
-    } else if let Some(o) = world.borrow::<OrderCard>().get(target).copied() {
+    } else if let Some(o) = world.query::<&OrderCard>().get(target).copied() {
         deliver(world, game, from, o.0);
     } else if target == game.bin && game.board[from] > 0 {
         game.board[from] = 0;
@@ -534,7 +534,7 @@ fn play(world: &mut World, name: &str) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }
@@ -542,7 +542,7 @@ fn set_text(world: &mut World, id: Entity, s: &str) {
 }
 
 fn set_fill(world: &mut World, id: Entity, c: Vec4) {
-    if let Some(mut b) = world.borrow_mut::<BackgroundColor>().get_mut(id) {
+    if let Some(mut b) = world.query_mut::<&mut BackgroundColor>().get_mut(id) {
         if b.0 != c {
             b.0 = c;
         }
@@ -555,7 +555,7 @@ fn draw(world: &mut World, game: &Game) {
         let (view, cell) = (game.views[i], game.cells[i]);
         let tier = game.board[i];
         // Sürüklenen şey imleci izliyor (düzen pikseliyle: ölçeğe böl), öbürlerinin önünde.
-        let drag = world.borrow::<Drag>().get(view).copied().unwrap_or_default();
+        let drag = world.query::<&Drag>().get(view).copied().unwrap_or_default();
         if drag.is_dragging() && tier > 0 {
             let k = world.get_resource::<UiScale>().map_or(1.0, |s| s.factor());
             if let Some(e) = world.live(view) {
@@ -569,14 +569,14 @@ fn draw(world: &mut World, game: &Game) {
         let colour = if tier == 0 { Vec4::ZERO } else { COLOURS[tier as usize - 1] };
         set_fill(world, view, colour);
         set_text(world, view, if tier == 0 { "" } else { NAMES[tier as usize - 1] });
-        let lit = world.borrow::<DropTarget>().get(cell).is_some_and(|t| t.hovered_by().is_some());
+        let lit = world.query::<&DropTarget>().get(cell).is_some_and(|t| t.hovered_by().is_some());
         set_fill(world, cell, if lit { SLOT_LIT } else { SLOT });
         let tip = match tier {
             0 => String::new(),
             t if (t as usize) < NAMES.len() => format!("{}\nİki tane → {}", NAMES[t as usize - 1], NAMES[t as usize]),
             t => format!("{}\nEn üst aşama", NAMES[t as usize - 1]),
         };
-        if let Some(mut t) = world.borrow_mut::<Tooltip>().get_mut(view) {
+        if let Some(mut t) = world.query_mut::<&mut Tooltip>().get_mut(view) {
             if t.text != tip {
                 t.text = tip;
             }
@@ -586,7 +586,7 @@ fn draw(world: &mut World, game: &Game) {
         let want = game.orders[o];
         let s = format!("{} iste · {} altın", NAMES[want as usize - 1], reward(want));
         set_text(world, card, &s);
-        let lit = world.borrow::<DropTarget>().get(card).is_some_and(|t| t.hovered_by().is_some());
+        let lit = world.query::<&DropTarget>().get(card).is_some_and(|t| t.hovered_by().is_some());
         set_fill(world, card, if lit { CARD_LIT } else { CARD });
     }
     let refill = if game.energy < MAX_ENERGY { format!(" (+1 {:.0} sn)", game.refill.remaining().ceil()) } else { String::new() };

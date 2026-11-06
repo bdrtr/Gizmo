@@ -87,11 +87,11 @@ fn run(world: &World, id: Entity, steps: usize) -> (f32, f32, f32) {
     let mut peak = f32::MIN;
     for _ in 0..steps {
         physics_step_system(world, DT);
-        let x = world.borrow::<Transform>().get(id).unwrap().position.x;
+        let x = world.query::<&Transform>().get(id).unwrap().position.x;
         peak = peak.max(x);
     }
-    let fx = world.borrow::<Transform>().get(id).unwrap().position.x;
-    let fv = world.borrow::<Velocity>().get(id).map(|v| v.linear.x).unwrap_or(0.0);
+    let fx = world.query::<&Transform>().get(id).unwrap().position.x;
+    let fv = world.query::<&Velocity>().get(id).map(|v| v.linear.x).unwrap_or(0.0);
     (peak, fx, fv)
 }
 
@@ -344,7 +344,7 @@ fn ccd_r9_spinning_thin_body_generates_contacts() {
     }
 
     let omega = w
-        .borrow::<Velocity>()
+        .query::<&Velocity>()
         .get(rod)
         .expect("rod keeps its Velocity")
         .angular

@@ -1,6 +1,5 @@
 //! Applying a [`CameraShake`] to the frame being drawn — and only to it.
 
-use gizmo_core::Mut;
 use gizmo_core::Entity;
 use crate::core::World;
 use crate::renderer::components::{Camera, CameraShake};
@@ -30,7 +29,7 @@ struct Moved {
 pub fn apply_camera_shake(world: &mut World, dt: f32) -> ShakeUndo {
     let mut undo = ShakeUndo::default();
     let shaking: Vec<(Entity, (gizmo_math::Vec3, f32, f32))> = {
-        let mut shakes = world.query_mut::<(Entity, Mut<CameraShake>)>();
+        let mut shakes = world.query_mut::<(Entity, &mut CameraShake)>();
         shakes
             .iter_mut()
             .map(|(entity, mut s)| {
@@ -44,7 +43,7 @@ pub fn apply_camera_shake(world: &mut World, dt: f32) -> ShakeUndo {
             continue;
         }
         let Some((right, up, old_yaw, old_pitch)) = ({
-            let mut cams = world.borrow_mut::<Camera>();
+            let mut cams = world.query_mut::<&mut Camera>();
             cams.get_mut(id).map(|mut c| {
                 let right = c.get_right();
                 let up = right.cross(c.get_front());
@@ -57,12 +56,12 @@ pub fn apply_camera_shake(world: &mut World, dt: f32) -> ShakeUndo {
             continue;
         };
         let shift = right * offset.x + up * offset.y;
-        let position = world.borrow_mut::<Transform>().get_mut(id).map(|mut t| {
+        let position = world.query_mut::<&mut Transform>().get_mut(id).map(|mut t| {
             let old = t.position;
             t.position += shift;
             old
         });
-        let global = world.borrow::<GlobalTransform>().get(id).copied();
+        let global = world.query::<&GlobalTransform>().get(id).copied();
         undo.0.push(Moved { id, yaw: old_yaw, pitch: old_pitch, position, global });
     }
     undo
@@ -73,17 +72,17 @@ pub fn apply_camera_shake(world: &mut World, dt: f32) -> ShakeUndo {
 /// transform pass.
 pub fn undo_camera_shake(world: &mut World, undo: ShakeUndo) {
     for m in undo.0 {
-        if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(m.id) {
+        if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(m.id) {
             c.yaw = m.yaw;
             c.pitch = m.pitch;
         }
         if let Some(p) = m.position {
-            if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(m.id) {
+            if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(m.id) {
                 t.position = p;
             }
         }
         if let Some(g) = m.global {
-            if let Some(mut gt) = world.borrow_mut::<GlobalTransform>().get_mut(m.id) {
+            if let Some(mut gt) = world.query_mut::<&mut GlobalTransform>().get_mut(m.id) {
                 *gt = g;
             }
         }
@@ -106,21 +105,21 @@ mod tests {
         shake.add(1.0);
         shake.decay = 0.0;
         let id = world.spawn_bundle((cam, start, GlobalTransform::default(), shake));
-        let global_before = *world.borrow::<GlobalTransform>().get(id).unwrap();
+        let global_before = *world.query::<&GlobalTransform>().get(id).unwrap();
 
         for _ in 0..50 {
             let undo = apply_camera_shake(&mut world, 1.0 / 60.0);
-            let moved = world.borrow::<Transform>().get(id).unwrap().position;
-            let c = *world.borrow::<Camera>().get(id).unwrap();
+            let moved = world.query::<&Transform>().get(id).unwrap().position;
+            let c = *world.query::<&Camera>().get(id).unwrap();
             assert!(moved != start.position || c.yaw != 0.3 || c.pitch != -0.2, "nothing shook");
             // The draw path's transform pass runs here and writes the world matrix.
-            world.borrow_mut::<GlobalTransform>().get_mut(id).unwrap().matrix =
+            world.query_mut::<&mut GlobalTransform>().get_mut(id).unwrap().matrix =
                 gizmo_math::Mat4::from_translation(moved);
             undo_camera_shake(&mut world, undo);
-            assert_eq!(world.borrow::<Transform>().get(id).unwrap().position, start.position);
-            let c = *world.borrow::<Camera>().get(id).unwrap();
+            assert_eq!(world.query::<&Transform>().get(id).unwrap().position, start.position);
+            let c = *world.query::<&Camera>().get(id).unwrap();
             assert_eq!((c.yaw, c.pitch), (0.3, -0.2));
-            assert_eq!(*world.borrow::<GlobalTransform>().get(id).unwrap(), global_before);
+            assert_eq!(*world.query::<&GlobalTransform>().get(id).unwrap(), global_before);
         }
     }
 
@@ -136,7 +135,7 @@ mod tests {
         let id = world.spawn_bundle((cam, Transform::new(Vec3::ZERO), shake));
         for _ in 0..20 {
             let undo = apply_camera_shake(&mut world, 0.05);
-            let p = world.borrow::<Transform>().get(id).unwrap().position;
+            let p = world.query::<&Transform>().get(id).unwrap().position;
             assert!(p.dot(front).abs() < 1e-5, "moved {} along the view", p.dot(front));
             undo_camera_shake(&mut world, undo);
         }

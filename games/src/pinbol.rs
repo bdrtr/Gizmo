@@ -115,7 +115,7 @@ fn add_visual(world: &mut World, id: Entity, mesh: MeshSource, scale: Vec3, colo
         world.add_component(e, mesh);
         world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex(colour).to_vec4(), 0.5, 0.2));
         world.add_component(e, MeshRenderer::new());
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(id) {
             t.scale = scale;
         }
     }
@@ -172,16 +172,16 @@ fn spawn_ball(world: &mut World, visual: bool) -> Entity {
 
 fn ball_state(world: &World, ball: Entity) -> (Vec3, Vec3) {
     (
-        world.borrow::<Transform>().get(ball).map(|t| t.position).unwrap_or(Vec3::ZERO),
-        world.borrow::<Velocity>().get(ball).map(|v| v.linear).unwrap_or(Vec3::ZERO),
+        world.query::<&Transform>().get(ball).map(|t| t.position).unwrap_or(Vec3::ZERO),
+        world.query::<&Velocity>().get(ball).map(|v| v.linear).unwrap_or(Vec3::ZERO),
     )
 }
 
 fn launch(world: &mut World, ball: Entity) {
-    if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(ball) {
+    if let Some(mut v) = world.query_mut::<&mut Velocity>().get_mut(ball) {
         v.linear = Vec3::new(0.0, 0.0, -4.2);
     }
-    if let Some(mut rb) = world.borrow_mut::<RigidBody>().get_mut(ball) {
+    if let Some(mut rb) = world.query_mut::<&mut RigidBody>().get_mut(ball) {
         rb.wake_up();
     }
 }
@@ -214,7 +214,7 @@ impl Table {
             *a += (want - *a).clamp(-FLIPPER_SPEED * dt, FLIPPER_SPEED * dt);
             let side = if k == 0 { -1.0 } else { 1.0 };
             let (pos, rot) = flipper_pose(side, *a);
-            if let Some(mut t) = world.borrow_mut::<KinematicTarget>().get_mut(self.flippers[k]) {
+            if let Some(mut t) = world.query_mut::<&mut KinematicTarget>().get_mut(self.flippers[k]) {
                 *t = KinematicTarget::new(pos, rot);
             }
         }
@@ -235,7 +235,7 @@ impl Table {
             let away = Vec3::new(p.x - x, 0.0, p.z - z);
             if away.length() < BUMPER_R + BALL + 0.006 {
                 let n = away.normalize_or_zero();
-                if let Some(mut bv) = world.borrow_mut::<Velocity>().get_mut(self.ball) {
+                if let Some(mut bv) = world.query_mut::<&mut Velocity>().get_mut(self.ball) {
                     let out = bv.linear.dot(n);
                     if out < KICK {
                         bv.linear += n * (KICK - out.max(0.0));
@@ -448,14 +448,14 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     if !game.touched && !input.touches().is_empty() {
         game.touched = true;
         for id in game.touch {
-            if let Some(mut bg) = world.borrow_mut::<BackgroundColor>().get_mut(id) {
+            if let Some(mut bg) = world.query_mut::<&mut BackgroundColor>().get_mut(id) {
                 bg.0 = Vec4::new(1.0, 1.0, 1.0, 0.03);
             }
         }
     }
     // Dokunmatik paletler: basılı mı, bu karede mi basıldı.
     let touch: [(bool, bool); 2] = {
-        let buttons = world.borrow::<VirtualButton>();
+        let buttons = world.query::<&VirtualButton>();
         game.touch.map(|id| buttons.get(id).map_or((false, false), |b| (b.is_pressed(), b.just_pressed())))
     };
     let tapped = touch.iter().any(|t| t.1);

@@ -59,13 +59,13 @@ fn step(world: &World, n: usize) {
 }
 
 fn pos(world: &World, id: Entity) -> Vec3 {
-    world.borrow::<Transform>().get(id).unwrap().position
+    world.query::<&Transform>().get(id).unwrap().position
 }
 fn vel(world: &World, id: Entity) -> Vec3 {
-    world.borrow::<Velocity>().get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO)
+    world.query::<&Velocity>().get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO)
 }
 fn angvel(world: &World, id: Entity) -> Vec3 {
-    world.borrow::<Velocity>().get(id).map(|v| v.angular).unwrap_or(Vec3::ZERO)
+    world.query::<&Velocity>().get(id).map(|v| v.angular).unwrap_or(Vec3::ZERO)
 }
 
 /// restitution=e, sürtünmesiz (temas testleri için); combine=Max.

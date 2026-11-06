@@ -70,7 +70,7 @@ fn lowest(mass: f32) -> f32 {
     for _ in 0..180 {
         gizmo_physics_rigid::system::physics_step_system(&world, dt);
         gizmo_physics_soft::system::cloth_step_system(&world, dt, G);
-        lowest = lowest.min(world.borrow::<Transform>().get(ball).unwrap().position.y);
+        lowest = lowest.min(world.query::<&Transform>().get(ball).unwrap().position.y);
     }
     lowest
 }
@@ -110,7 +110,7 @@ fn a_damped_hammock_settles_the_ball() {
         for frame in 0..seconds * 60 {
             gizmo_physics_rigid::system::physics_step_system(&world, dt);
             gizmo_physics_soft::system::cloth_step_system(&world, dt, G);
-            let y = world.borrow::<Transform>().get(ball).unwrap().position.y;
+            let y = world.query::<&Transform>().get(ball).unwrap().position.y;
             lo = lo.min(y);
             hi = hi.max(y);
             if frame % 60 == 59 {

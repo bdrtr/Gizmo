@@ -54,7 +54,6 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::Mut;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -208,7 +207,7 @@ fn react_on_removal(world: &mut gizmo::core::World, entity: gizmo::core::entity:
 
     // Boyama: despawn edilen varlıkta bu sessizce başarısız olur, ki doğrusu da budur.
     {
-        let mut query = world.query_mut::<Mut<Material>>();
+        let mut query = world.query_mut::<&mut Material>();
         if let Some(mut material) = query.get_mut(entity) {
             material.albedo = REACTED;
         }

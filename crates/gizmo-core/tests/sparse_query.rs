@@ -1,9 +1,9 @@
 //! REGRESYON (audit 2026-06-29): SparseSet depolamalı bileşenlerde sorgu sağlamlığı.
 //!
 //! `matches_archetype` SparseSet için her arketipte `true` döner (bilinçli olarak geniş).
-//! Eski kodda tekil `&T`/`Mut<T>` ve `With`/`Without` filtreleri satır-başı varlık
+//! Eski kodda tekil `&T`/`&mut T` ve `With`/`Without` filtreleri satır-başı varlık
 //! kontrolü yapmadığından:
-//!   - `&T`/`Mut<T>`: bileşeni OLMAYAN entity için `get_item` sparse set'i sınır-dışı
+//!   - `&T`/`&mut T`: bileşeni OLMAYAN entity için `get_item` sparse set'i sınır-dışı
 //!     indeksliyordu → güvenli koddan PANİK (veya tombstone slot'ta release'de UB).
 //!   - `With<T>`: bileşeni olmayan entity'leri de eşliyordu (yanlış sonuç).
 //!   - `Without<T>`: bileşeni OLAN entity'leri de eşliyordu (yanlış sonuç).
@@ -13,7 +13,7 @@
 
 use gizmo_core::Entity;
 use gizmo_core::component::StorageType;
-use gizmo_core::{Component, Mut, With, Without, World};
+use gizmo_core::{Component, With, Without, World};
 
 #[derive(Clone, Debug, PartialEq)]
 struct SparseTag(i32);
@@ -53,7 +53,7 @@ fn bare_mut_query_skips_entities_without_sparse_component() {
     world.add_component(b, Tableish(99));
 
     {
-        let mut q = world.query_mut::<Mut<SparseTag>>();
+        let mut q = world.query_mut::<&mut SparseTag>();
         for mut c in q.iter_mut() {
             c.0 += 1;
         }

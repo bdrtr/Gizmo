@@ -53,7 +53,7 @@
 
 use gizmo::app::headless::App;
 use gizmo::core::commands::Commands;
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Local, Res, ResMut, SetConfig, SystemSet};
 
 // ── BİLEŞENLER ───────────────────────────────────────────────────────────────────────────────
@@ -169,7 +169,7 @@ fn new_round_system(rules: Res<GameRules>, mut state: ResMut<GameState>) {
 }
 
 /// Her oyuncunun puanını ve serisini günceller.
-fn score_system(mut players: Query<(&Player, Mut<Score>, Mut<PlayerStreak>)>, mut dice: ResMut<Dice>) {
+fn score_system(mut players: Query<(&Player, &mut Score, &mut PlayerStreak)>, mut dice: ResMut<Dice>) {
     for (player, mut score, mut streak) in players.iter_mut() {
         let scored = dice.roll(2) == 0;
         if scored {

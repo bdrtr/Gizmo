@@ -128,7 +128,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
     build_track(world, &line);
 
     let camera = world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 10.0, 20.0), primary: true, ..Default::default() });
-    if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(camera) {
+    if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(camera) {
         c.clear_color = Some(Vec3::new(0.75, 0.82, 0.9));
     }
     // Küçük harita: yukarıdan bakan ikinci bir kamera, sağ üst köşede.
@@ -138,7 +138,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
         pitch: -std::f32::consts::FRAC_PI_2 + 0.001,
         ..Default::default()
     });
-    if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(map) {
+    if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(map) {
         c.viewport = Some(Viewport::new(0.75, 0.02, 0.23, 0.3));
         c.order = 1;
         c.clear_color = Some(Vec3::new(0.15, 0.2, 0.12));
@@ -185,10 +185,10 @@ fn lone_race(dt: f32) -> (Option<f32>, f32) {
     world.insert_resource(game);
     let mut run = HeadlessFrames::new(world);
     let mut lowest_up = 1.0f32;
-    let finished = |w: &World| w.borrow::<Racer>().get(player).and_then(|r| r.finished);
+    let finished = |w: &World| w.query::<&Racer>().get(player).and_then(|r| r.finished);
     while run.elapsed < 240.0 && finished(&run.world).is_none() {
         run.frame(dt, update);
-        if let Some(t) = run.world.borrow::<Transform>().get(player) {
+        if let Some(t) = run.world.query::<&Transform>().get(player) {
             lowest_up = lowest_up.min((t.rotation * Vec3::Y).y);
         }
     }
@@ -355,8 +355,8 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
     let (ax, ay) = input.move_axis_with(MoveKeys::ARROWS);
     let (mx, my) = (if wx.abs() > ax.abs() { wx } else { ax }, if wy.abs() > ay.abs() { wy } else { ay });
     let racers: Vec<(Entity, Racer, Vec3, Quat, f32)> = {
-        let transforms = world.borrow::<Transform>();
-        let cars = world.borrow::<VehicleController>();
+        let transforms = world.query::<&Transform>();
+        let cars = world.query::<&VehicleController>();
         world.query::<(Entity, &Racer)>().iter()
             .filter_map(|(entity, r)| {
                 let t = transforms.get(entity)?;
@@ -397,7 +397,7 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
             // Duvara dayanıp kalan yapay zekâ iki saniye tam gaz geri çıkıyor. (1,2 saniyelik, 0,6
             // gazlı geri çıkış arabayı 0,6 m geri götürüyordu: aynı bariyere yeniden dayanıp bir
             // arabayı yarışın sonuna kadar orada tuttu — `pist --test` buldu.)
-            if let Some(mut r) = world.borrow_mut::<Racer>().get_mut(id) {
+            if let Some(mut r) = world.query_mut::<&mut Racer>().get_mut(id) {
                 if r.backing > 0.0 {
                     r.backing -= dt;
                 } else if speed.abs() < 3.0 {
@@ -411,7 +411,7 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
                 }
             }
         }
-        if let Some(mut car) = world.borrow_mut::<VehicleController>().get_mut(id) {
+        if let Some(mut car) = world.query_mut::<&mut VehicleController>().get_mut(id) {
             // Dururken fren geri vitese geçirir.
             let reverse = backing || (brake > 0.0 && speed < 2.0 && racing && !racer.ai);
             car.set_reverse(reverse);
@@ -426,11 +426,11 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
 /// noktasından geçmek bir tur.
 fn checkpoints(world: &mut World, game: &Game) {
     let positions: Vec<(Entity, Vec3)> = {
-        let transforms = world.borrow::<Transform>();
+        let transforms = world.query::<&Transform>();
         world.query::<(Entity, &Racer)>().iter().filter_map(|(entity, _)| transforms.get(entity).map(|t| (entity, t.position))).collect()
     };
     for (id, at) in positions {
-        if let Some(mut r) = world.borrow_mut::<Racer>().get_mut(id) {
+        if let Some(mut r) = world.query_mut::<&mut Racer>().get_mut(id) {
             let target = game.line[r.next];
             if (at - target).truncate_y_len() < WIDTH {
                 r.next = (r.next + 1) % game.line.len();
@@ -453,16 +453,16 @@ impl FlatLen for Vec3 {
 }
 
 fn chase_camera(world: &mut World, game: &Game, dt: f32) {
-    let Some((at, rotation)) = world.borrow::<Transform>().get(game.player).map(|t| (t.position, t.rotation)) else { return };
+    let Some((at, rotation)) = world.query::<&Transform>().get(game.player).map(|t| (t.position, t.rotation)) else { return };
     let back = rotation * Vec3::Z;
     let flat = Vec3::new(back.x, 0.0, back.z).normalize_or_zero();
     let want = at + flat * 9.0 + Vec3::Y * 3.5;
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         t.position = t.position.lerp(want, (dt * 5.0).min(1.0));
     }
-    let from = world.borrow::<Transform>().get(game.camera).map(|t| t.position).unwrap_or(want);
+    let from = world.query::<&Transform>().get(game.camera).map(|t| t.position).unwrap_or(want);
     let look = (at + Vec3::Y * 1.0 - from).normalize_or_zero();
-    if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(game.camera) {
+    if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(game.camera) {
         c.yaw = look.z.atan2(look.x);
         c.pitch = look.y.asin();
     }
@@ -473,7 +473,7 @@ fn hud(world: &mut World, game: &Game) {
     let Some(me) = racers.iter().find(|(id, _)| *id == game.player).map(|(_, r)| *r) else { return };
     let place = 1 + racers.iter().filter(|(id, r)| *id != game.player && (r.passed > me.passed || r.finished.is_some_and(|t| me.finished.is_none_or(|m| t < m)))).count();
     let lap = (me.passed / POINTS as u32 + 1).min(LAPS);
-    let speed = world.borrow::<VehicleController>().get(game.player).map_or(0.0, |c| c.current_speed_kmh);
+    let speed = world.query::<&VehicleController>().get(game.player).map_or(0.0, |c| c.current_speed_kmh);
     let text = format!(
         "Tur {lap}/{LAPS}   Sıra {place}/{}   {:.1} sn   {:.0} km/sa\nW/S: gaz/fren   A/D: direksiyon   R: baştan",
         racers.len(),
@@ -494,7 +494,7 @@ fn hud(world: &mut World, game: &Game) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

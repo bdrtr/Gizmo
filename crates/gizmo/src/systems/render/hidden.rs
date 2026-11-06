@@ -33,7 +33,7 @@ use std::collections::HashSet;
 
 use gizmo_core::component::{Children, IsHidden};
 use gizmo_core::world::World;
-use gizmo_core::StorageView;
+use gizmo_core::Query;
 
 /// Every entity that must not be drawn: those carrying `IsHidden`, and everything below them.
 ///
@@ -46,7 +46,7 @@ use gizmo_core::StorageView;
 #[must_use]
 pub fn collect_hidden(
     world: &World,
-    children: &StorageView<'_, Children>,
+    children: &Query<'_, &Children>,
 ) -> HashSet<Entity> {
     let mut out: HashSet<Entity> = HashSet::new();
     let mut stack: Vec<Entity> = world
@@ -84,7 +84,7 @@ mod tests {
     }
 
     fn hidden_set(world: &World) -> HashSet<Entity> {
-        collect_hidden(world, &world.borrow::<Children>())
+        collect_hidden(world, &world.query::<&Children>())
     }
 
     #[test]

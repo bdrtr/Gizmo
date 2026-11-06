@@ -271,7 +271,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         build_input(world, &mut game, input);
         // Seçili düğüm büyür.
         for (i, &node) in game.nodes.iter().enumerate() {
-            if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(node) {
+            if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(node) {
                 t.scale = Vec3::splat(if game.picked == Some(i) { 0.32 } else { 0.18 });
             }
         }
@@ -363,7 +363,7 @@ fn start_test(world: &mut World, game: &mut Game) {
     let all = nodes();
     let cliff_body: Vec<(Entity, Vec3)> = world.query::<(Entity, &RigidBody)>().iter()
         .filter(|(_, rb)| rb.is_static())
-        .filter_map(|(entity, _)| world.borrow::<Transform>().get(entity).map(|t| (entity, t.position)))
+        .filter_map(|(entity, _)| world.query::<&Transform>().get(entity).map(|t| (entity, t.position)))
         .collect();
     let mut joints = Vec::new();
     game.bodies.clear();
@@ -486,9 +486,9 @@ fn colour_beams(world: &mut World, game: &Game) {
             let k = load[i].clamp(0.0, 1.0);
             Vec4::new(0.3 + 0.65 * k, 0.8 - 0.65 * k, 0.3 - 0.2 * k, 1.0)
         };
-        let child = world.borrow::<gizmo::core::component::Children>().get(body).and_then(|c| c.0.first().copied());
+        let child = world.query::<&gizmo::core::component::Children>().get(body).and_then(|c| c.0.first().copied());
         if let Some(child) = child {
-            if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(child) {
+            if let Some(mut m) = world.query_mut::<&mut MaterialDesc>().get_mut(child) {
                 if m.albedo != colour {
                     *m = m.clone().with_pbr(colour, 0.8, 0.0);
                 }
@@ -501,7 +501,7 @@ fn judge(world: &mut World, game: &mut Game) {
     if game.result.is_some() {
         return;
     }
-    let Some(p) = world.borrow::<Transform>().get(game.ball).map(|t| t.position) else { return };
+    let Some(p) = world.query::<&Transform>().get(game.ball).map(|t| t.position) else { return };
     if p.x > 7.0 && p.y > -0.5 {
         game.result = Some(true);
     } else if p.y < -8.0 {
@@ -528,7 +528,7 @@ fn hud(world: &mut World, game: &Game) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

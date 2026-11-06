@@ -201,7 +201,7 @@ pub fn self_test() -> bool {
         }
         was_alive = lives > 0;
         best = best.max((score, wave));
-        sparks_most = sparks_most.max(run.world.borrow::<DespawnAfter>().iter().count());
+        sparks_most = sparks_most.max(run.world.query::<&DespawnAfter>().iter().count());
         if lives == 0 {
             // Otomatik oyun ölünce yeniden başlar (R'ye basmış gibi).
             let mut game = run.world.remove_resource::<Game>().expect("oyun kaynağı");
@@ -353,9 +353,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 /// kıpırdamıyor.
 fn follow_with_camera(world: &mut World, game: &Game, dt: f32) {
     let aspect = world.get_resource::<gizmo::core::window::WindowInfo>().map_or(16.0 / 9.0, |w| w.aspect_ratio());
-    let fov = world.borrow::<Camera>().get(game.camera).map_or(std::f32::consts::FRAC_PI_3, |c| c.fov);
+    let fov = world.query::<&Camera>().get(game.camera).map_or(std::f32::consts::FRAC_PI_3, |c| c.fov);
     let target = camera_x(player_position(world, game).x, aspect, fov);
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         // Yumuşak: oyuncu dönünce görüntü sarsılmasın.
         let x = t.position.x + (target - t.position.x) * (1.0 - (-8.0 * dt).exp());
         t.position.x = x;
@@ -372,7 +372,7 @@ fn camera_x(player_x: f32, aspect: f32, fov: f32) -> f32 {
 }
 
 fn player_position(world: &World, game: &Game) -> Vec3 {
-    world.borrow::<Transform>().get(game.player).map(|t| t.position).unwrap_or(Vec3::ZERO)
+    world.query::<&Transform>().get(game.player).map(|t| t.position).unwrap_or(Vec3::ZERO)
 }
 
 fn move_player(world: &mut World, game: &mut Game, input: &Input, dt: f32) {
@@ -387,7 +387,7 @@ fn move_player(world: &mut World, game: &mut Game, input: &Input, dt: f32) {
     // Ekranda yukarı = dünyada -Z (kamera kuzeye bakıyor).
     let step = Vec3::new(mx, 0.0, -my);
     let step = if step.length() > 1.0 { step.normalize() } else { step };
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.player) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.player) {
         let p = t.position + step * PLAYER_SPEED * dt;
         t.position = Vec3::new(p.x.clamp(-ARENA + 0.5, ARENA - 0.5), p.y, p.z.clamp(-ARENA + 0.5, ARENA - 0.5));
     }
@@ -401,7 +401,7 @@ fn aim_and_fire(world: &mut World, game: &mut Game, input: &Input, dt: f32) {
     if game.auto {
         // En yakın düşmana.
         let nearest = {
-            let ts = world.borrow::<Transform>();
+            let ts = world.query::<&Transform>();
             world.query::<(Entity, &Enemy)>().iter()
                 .filter_map(|(entity, _)| ts.get(entity).map(|t| t.position))
                 .min_by(|a, b| a.distance(me).total_cmp(&b.distance(me)))
@@ -486,11 +486,11 @@ fn stick_bottom(world: &World) -> Val {
 
 /// Bir dokunmatik çubuğun değeri (yoksa `None`).
 fn stick(world: &World, id: Option<Entity>) -> Option<Vec2> {
-    world.borrow::<VirtualStick>().get(id?).map(|s| s.value())
+    world.query::<&VirtualStick>().get(id?).map(|s| s.value())
 }
 
 fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {
-    let alive = world.borrow::<Enemy>().iter().count();
+    let alive = world.query::<&Enemy>().iter().count();
     if game.to_spawn == 0 && alive == 0 {
         game.wave += 1;
         game.to_spawn = 6 + game.wave * 4;
@@ -528,10 +528,10 @@ fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {
 fn chase(world: &mut World, game: &Game, dt: f32) {
     let me = player_position(world, game);
     let enemies: Vec<(Entity, Vec3, f32)> = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         world.query::<(Entity, &Enemy)>().iter().filter_map(|(entity, e)| ts.get(entity).map(|t| (entity, t.position, e.speed))).collect()
     };
-    let mut ts = world.borrow_mut::<Transform>();
+    let mut ts = world.query_mut::<&mut Transform>();
     for (i, &(id, p, speed)) in enemies.iter().enumerate() {
         let mut v = (me - p).with_y(0.0).normalize_or_zero() * speed;
         for (j, &(_, q, _)) in enemies.iter().enumerate() {
@@ -549,13 +549,13 @@ fn chase(world: &mut World, game: &Game, dt: f32) {
 
 fn fly_bullets(world: &mut World, game: &mut Game, dt: f32) {
     let targets: Vec<(Entity, Vec3)> = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         world.query::<(Entity, &Enemy)>().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity, t.position))).collect()
     };
     let mut dead_bullets = Vec::new();
     let mut hits: Vec<(Entity, Vec3)> = Vec::new();
     {
-        let mut q = world.query_mut::<(Entity, Mut<Bullet>, Mut<Transform>)>();
+        let mut q = world.query_mut::<(Entity, &mut Bullet, &mut Transform)>();
         for (entity, mut b, mut t) in q.iter_mut() {
             b.life -= dt;
             t.position += b.velocity * dt;
@@ -575,7 +575,7 @@ fn fly_bullets(world: &mut World, game: &mut Game, dt: f32) {
     }
     for (enemy, at) in hits {
         let killed = {
-            let mut es = world.borrow_mut::<Enemy>();
+            let mut es = world.query_mut::<&mut Enemy>();
             let Some(mut e) = es.get_mut(enemy) else { continue };
             e.hp -= 1;
             e.hp == 0
@@ -600,7 +600,7 @@ fn get_hit(world: &mut World, game: &mut Game, dt: f32) {
     }
     let me = player_position(world, game);
     let touching: Vec<Entity> = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         world.query::<(Entity, &Enemy)>().iter()
             .filter(|(entity, _)| ts.get(*entity).is_some_and(|t| t.position.distance(me) < ENEMY_RADIUS + PLAYER_RADIUS))
             .map(|(entity, _)| entity)
@@ -633,7 +633,7 @@ fn get_hit(world: &mut World, game: &mut Game, dt: f32) {
 fn restart(world: &mut World, game: &mut Game) {
     world.despawn_all_with::<Enemy>();
     world.despawn_all_with::<Bullet>();
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.player) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.player) {
         t.position = Vec3::new(0.0, 0.4, 0.0);
     }
     if let Some(mut fade) = world.get_resource_mut::<ScreenFade>() {
@@ -665,7 +665,7 @@ fn sparks(world: &mut World, at: Vec3, colour: Vec4, count: u32) {
 }
 
 fn kick(world: &mut World, game: &Game, trauma: f32) {
-    if let Some(mut s) = world.borrow_mut::<CameraShake>().get_mut(game.camera) {
+    if let Some(mut s) = world.query_mut::<&mut CameraShake>().get_mut(game.camera) {
         s.add(trauma);
     }
 }
@@ -677,11 +677,11 @@ fn play(world: &mut World, name: &str) {
 }
 
 fn draw_hud(world: &mut World, game: &Game) {
-    let enemies = world.borrow::<Enemy>().iter().count();
-    let bullets = world.borrow::<Bullet>().iter().count();
-    let effects = world.borrow::<ParticleEmitter>().iter().count();
+    let enemies = world.query::<&Enemy>().iter().count();
+    let bullets = world.query::<&Bullet>().iter().count();
+    let effects = world.query::<&ParticleEmitter>().iter().count();
     let fps = world.get_resource::<Time>().map(|t| t.fps()).unwrap_or(0.0);
-    let mut texts = world.borrow_mut::<Text>();
+    let mut texts = world.query_mut::<&mut Text>();
     if let Some(mut t) = texts.get_mut(game.hud) {
         t.content = format!(
             "Skor {}   Can {}   Dalga {}\nDüşman {}   Mermi {}   Efekt {}   {:.0} fps",

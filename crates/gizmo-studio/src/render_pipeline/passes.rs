@@ -83,7 +83,7 @@ pub(super) fn sync_editor_settings(
     // build disagreed about the single value both of them already agreed on the meaning of.
     // `viewpoint::resolve` takes the number from here, which is why it is set before that call.
     if let Some(cam_id) = gizmo::renderer::components::active_camera(world) {
-        if let Some(cam) = world.borrow::<gizmo::renderer::components::Camera>().get(cam_id) {
+        if let Some(cam) = world.query::<&gizmo::renderer::components::Camera>().get(cam_id) {
             post_params.exposure = cam.exposure;
         }
     }

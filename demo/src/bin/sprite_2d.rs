@@ -164,7 +164,7 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO);
             let mut camera = None;
             {
-                let mut q = scene.world.query_mut::<(Entity, Mut<Camera>, Mut<Transform>)>();
+                let mut q = scene.world.query_mut::<(Entity, &mut Camera, &mut Transform)>();
                 for (entity, mut cam, _) in q.iter_mut() {
                     cam.projection = ProjectionMode::Orthographic { height: VIEW_HEIGHT };
                     camera = Some(entity);
@@ -234,7 +234,7 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
         if *taken {
             continue;
         }
-        let pos = world.borrow::<Transform>().get(*e).map(|t| t.position);
+        let pos = world.query::<&Transform>().get(*e).map(|t| t.position);
         if let Some(p) = pos {
             if (p.x - g.x).abs() < 0.8 && (p.y - (g.y + 0.8)).abs() < 1.0 {
                 *taken = true;
@@ -246,13 +246,13 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
         if let Some(entity) = world.live(e) {
             world.add_component(entity, IsHidden);
         }
-        if let Some(mut s) = world.borrow_mut::<Sprite>().get_mut(g.coin_icons[i]) {
+        if let Some(mut s) = world.query_mut::<&mut Sprite>().get_mut(g.coin_icons[i]) {
             s.color = Vec4::ONE;
         }
     }
 
     {
-        let mut tf = world.borrow_mut::<Transform>();
+        let mut tf = world.query_mut::<&mut Transform>();
         if let Some(mut t) = tf.get_mut(g.player) {
             t.position.x = g.x;
             t.position.y = g.y;
@@ -279,13 +279,13 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
 
     // Durumdan bir aralık seçiliyor; kareyi motor ilerletiyor. Aynı aralığı her karede seçmek
     // döngüyü bozmaz — `set_run` yalnızca değişince başa sarar.
-    if let Some(mut anim) = world.borrow_mut::<SpriteAnimation>().get_mut(g.player) {
+    if let Some(mut anim) = world.query_mut::<&mut SpriteAnimation>().get_mut(g.player) {
         let (first, last) = if !on_ground { (3, 3) } else if g.walk_time > 0.0 { (0, 3) } else { (0, 0) };
         anim.set_run(first, last);
     }
 
     {
-        let mut sprites = world.borrow_mut::<Sprite>();
+        let mut sprites = world.query_mut::<&mut Sprite>();
         if let Some(mut s) = sprites.get_mut(g.player) {
             s.flip_x = g.facing_left;
         }

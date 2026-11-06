@@ -391,10 +391,10 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     let it = game.client.it;
     let place = |world: &mut World, id: Entity, p: [f32; 3], is_it: bool| {
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(id) {
             t.position = Vec3::from_array(p);
         }
-        if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(id) {
+        if let Some(mut m) = world.query_mut::<&mut MaterialDesc>().get_mut(id) {
             let want = if is_it { Color::srgb_hex("#E74C3C").to_vec4() } else { m.albedo };
             m.emissive = if is_it { Vec3::new(0.6, 0.05, 0.05) } else { Vec3::ZERO };
             m.albedo = want;
@@ -427,7 +427,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     lines.sort();
     let status = if game.client.net.is_connected() { "bağlı" } else { "bağlanıyor…" };
     let text = format!("{status}{}\n{}\nWASD: koş — ebe değdiğini ebeler", if game.server.is_some() { ", ev sahibi" } else { "" }, lines.join("\n"));
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(game.hud) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(game.hud) {
         if t.content != text {
             t.content = text;
         }

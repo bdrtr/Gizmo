@@ -33,9 +33,9 @@ pub fn handle_camera(
 
     // Editor Camera WASD Controller
     // SAFETY: exclusive `&mut World`; Transform and Camera are distinct component types.
-    let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
+    let mut transforms = unsafe { world.query_unchecked::<&mut Transform>() };
     // SAFETY: as above — Camera is a distinct component type from Transform.
-    let mut cameras = unsafe { world.borrow_mut_unchecked::<gizmo::renderer::components::Camera>() };
+    let mut cameras = unsafe { world.query_unchecked::<&mut gizmo::renderer::components::Camera>() };
     {
         if let (Some(mut t), Some(mut cam)) = (
             transforms.get_mut(state.editor_camera),

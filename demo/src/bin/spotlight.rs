@@ -27,7 +27,7 @@
 //!   * **Ok tuşları** — zemini ve küpleri gezdir · **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::{Input, MoveKeys};
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res};
 use gizmo::core::HierarchyExt;
 use gizmo::prelude::*;
@@ -140,7 +140,7 @@ fn main() {
 /// İki ayrı şeye dokunuyor — `Transform.rotation` koninin nereye baktığını, `SpotLight`'ın
 /// açıları ise ne kadar geniş olduğunu belirliyor. Çocuk işaretçiler dönüşü hiyerarşiden
 /// aldıkları için ayrıca döndürülmüyor.
-fn light_sway(mut lights: Query<(Mut<Transform>, Mut<SpotLight>)>, time: Res<Time>) {
+fn light_sway(mut lights: Query<(&mut Transform, &mut SpotLight)>, time: Res<Time>) {
     let t = time.elapsed() as f32;
     let rotation = Quat::from_euler(
         EulerRot::XYZ,
@@ -159,7 +159,7 @@ fn light_sway(mut lights: Query<(Mut<Transform>, Mut<SpotLight>)>, time: Res<Tim
 
 /// Ok tuşlarıyla zemini ve küpleri gezdirir — ışıklar yerinde kalır, koniler sahnede gezinir.
 fn movement(
-    mut movables: Query<(Mut<Transform>, With<Movable>)>,
+    mut movables: Query<(&mut Transform, With<Movable>)>,
     input: Res<Input>,
     time: Res<Time>,
 ) {

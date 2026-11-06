@@ -161,7 +161,7 @@ pub trait SystemParam: sealed::Sealed {
     ///
     /// The declaration has to cover everything the fetched value can touch, including memory
     /// only touched incidentally — `Changed<T>`/`Added<T>` declare a *read* of `T` because
-    /// they inspect the change ticks a `Mut<T>` writer stamps. Whatever is omitted here may
+    /// they inspect the change ticks a `&mut T` writer stamps. Whatever is omitted here may
     /// be co-scheduled with a conflicting writer and raced on.
     fn get_access_info(info: &mut AccessInfo);
 }

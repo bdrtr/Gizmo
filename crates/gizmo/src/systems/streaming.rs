@@ -101,7 +101,7 @@ fn apply_completed_textures(world: &World) {
         return;
     }
     // SAFETY: exclusive sistem; scheduler bu çalışırken Material'a başka mutable erişim vermez.
-    let mut materials = unsafe { world.borrow_mut_unchecked::<Material>() };
+    let mut materials = unsafe { world.query_unchecked::<&mut Material>() };
     for (entity_ids, path, bind_group) in installed {
         for eid in entity_ids {
             if let Some(mut mat) = materials.entity(eid as u32).and_then(|e| materials.get_mut(e)) {
@@ -156,15 +156,15 @@ fn request_nearby_textures(world: &World) {
 
     // Aday entity'leri topla (Material read borrow'u ifade sonunda biter).
     let entities: Vec<Entity> = world.query::<(Entity, &Material)>().iter().map(|(entity, _)| entity).collect();
-    let transforms = world.borrow::<Transform>();
-    let hidden = world.borrow::<gizmo_core::component::IsHidden>();
+    let transforms = world.query::<&Transform>();
+    let hidden = world.query::<&gizmo_core::component::IsHidden>();
     let Some(mut server) = world.get_resource_mut::<crate::asset_server::AssetServer>() else {
         return;
     };
     // Read-only now. It used to be `borrow_mut_unchecked` because the loop CLEARED
     // `texture_source` as its "already asked" marker — see `should_request`, and
     // `AssetServer::streaming_requested` for what that cost.
-    let materials = world.borrow::<Material>();
+    let materials = world.query::<&Material>();
 
     let mut requests = 0usize;
     for e in entities {
@@ -309,7 +309,7 @@ mod tests {
         request_nearby_textures(&world);
         assert_eq!(
             world
-                .borrow::<Material>()
+                .query::<&Material>()
                 .get(mat_id)
                 .and_then(|m| m.texture_source.clone()),
             Some("dummy.png".to_string()),
@@ -338,7 +338,7 @@ mod tests {
 
         // (2) APPLY: worker'ın decode'u bitirdiğini simüle et (2×2 kırmızı), uygula.
         let before = world
-            .borrow::<Material>()
+            .query::<&Material>()
             .get(mat_id)
             .expect("material var")
             .bind_group
@@ -359,7 +359,7 @@ mod tests {
             });
         apply_completed_textures(&world);
         let after = world
-            .borrow::<Material>()
+            .query::<&Material>()
             .get(mat_id)
             .expect("material var")
             .bind_group
@@ -372,7 +372,7 @@ mod tests {
         // (3) IDEMPOTENTLİK: boş kuyrukta apply materyali değiştirmemeli.
         apply_completed_textures(&world);
         let after2 = world
-            .borrow::<Material>()
+            .query::<&Material>()
             .get(mat_id)
             .expect("material var")
             .bind_group

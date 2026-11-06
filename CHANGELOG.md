@@ -79,6 +79,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   `iter_combinations` now takes any `K`, not only pairs.
 
+- **A writable query term is `&mut T`, and there is one way to ask.** `Query<&mut T>`, `world.query_mut::<&mut T>()`,
+  `Option<&mut T>`; the row's item is still [`Mut<T>`], which is what records the change. `Mut<T>` is no longer a
+  query term.
+
+  | Before | Now |
+  |---|---|
+  | `world.borrow::<T>()` | `world.query::<&T>()` |
+  | `world.borrow_mut::<T>()` | `world.query_mut::<&mut T>()` |
+  | `world.borrow_mut_unchecked::<T>()` | `world.query_unchecked::<&mut T>()` |
+  | `Query<Mut<T>>`, `Query<(Mut<A>, &B)>` | `Query<&mut T>`, `Query<(&mut A, &B)>` |
+  | `StorageView<T>`, `StorageViewMut<T>` | `Query<&T>`, `Query<&mut T>` |
+
 - **`world.query::<Q>()` returns the query, not an `Option`.** Building one never failed: `Query::new` always
   said `Some`, so the type asked about 330 callers for an `.unwrap()` or `.expect()` and 130-odd for an
   `if let Some`, whose `else` branches could not run. Two of those logged a failure that did not exist. `query`, `query_mut`, `query_unchecked` and

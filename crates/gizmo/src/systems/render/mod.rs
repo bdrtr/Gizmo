@@ -308,7 +308,7 @@ fn render_viewports_unshaken(
     // skipped: one small viewport anywhere and the main view went black.
     if !views.is_empty() {
         let main = crate::renderer::components::active_camera(world);
-        let full = main.and_then(|id| world.borrow::<Camera>().get(id).filter(|c| c.viewport.is_none()).map(|c| (c.order, id)));
+        let full = main.and_then(|id| world.query::<&Camera>().get(id).filter(|c| c.viewport.is_none()).map(|c| (c.order, id)));
         if let Some((order, id)) = full {
             views.push((order, id, crate::renderer::components::Viewport::new(0.0, 0.0, 1.0, 1.0)));
         }
@@ -485,7 +485,7 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
         return;
     }
     {
-        let mut stored = world.borrow_mut::<ReflectionProbe>();
+        let mut stored = world.query_mut::<&mut ReflectionProbe>();
         for &slot in &pending {
             if let Some(mut p) = stored.get_mut(owners[slot]) {
                 p.captured = true;
@@ -507,7 +507,7 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
     let owners: Vec<Entity> = mirrors.iter().map(|m| m.0).collect();
     renderer.planar.retain(&owners.iter().map(|e| e.id()).collect::<Vec<_>>());
     let Some(camera) = camera.filter(|_| !mirrors.is_empty()) else { return };
-    let Some(cam) = world.borrow::<Camera>().get(camera).copied() else { return };
+    let Some(cam) = world.query::<&Camera>().get(camera).copied() else { return };
 
     let eye = camera_world_position(world, Some(camera));
     let aspect = renderer.size.width as f32 / renderer.size.height.max(1) as f32;
@@ -518,12 +518,12 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
 
     // Which mirrors, decided before anything is drawn: a capture takes `world` mutably.
     let visible: Vec<(Entity, gizmo_math::Vec4)> = {
-        let transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
-        let meshes = world.borrow::<crate::renderer::components::Mesh>();
-        let renderers = world.borrow::<MeshRenderer>();
+        let transforms = world.query::<&gizmo_physics_core::components::GlobalTransform>();
+        let meshes = world.query::<&crate::renderer::components::Mesh>();
+        let renderers = world.query::<&MeshRenderer>();
         let hidden = collect_hidden(
             world,
-            &world.borrow::<crate::core::component::Children>(),
+            &world.query::<&crate::core::component::Children>(),
         );
         mirrors
             .iter()
@@ -616,12 +616,12 @@ fn camera_world_position(world: &World, camera: Option<Entity>) -> Vec3 {
         return Vec3::ZERO;
     };
     world
-        .borrow::<gizmo_physics_core::components::GlobalTransform>()
+        .query::<&gizmo_physics_core::components::GlobalTransform>()
         .get(camera)
         .map(|g| g.matrix.to_scale_rotation_translation().2)
         .or_else(|| {
             world
-                .borrow::<gizmo_physics_core::components::Transform>()
+                .query::<&gizmo_physics_core::components::Transform>()
                 .get(camera)
                 .map(|t| t.position)
         })
@@ -898,9 +898,9 @@ fn draw_camera_view(
     let grade = camera.and_then(|c| shared::camera_grade(world, c));
 
     // KAMERALARI BUL VE MATRIX YARAT
-    let cameras = world.borrow::<Camera>();
-    let global_transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
-    let local_transforms = world.borrow::<gizmo_physics_core::components::Transform>();
+    let cameras = world.query::<&Camera>();
+    let global_transforms = world.query::<&gizmo_physics_core::components::GlobalTransform>();
+    let local_transforms = world.query::<&gizmo_physics_core::components::Transform>();
     {
         // Pick the camera flagged `primary` — the convention maintained by
         // `spawn_camera`/`CameraBundle` (which keep a single primary) and used by
@@ -991,7 +991,7 @@ fn draw_camera_view(
     // TAA jitter so `view_proj` is the matrix this frame actually rasterises with.
     // The rendered camera's background, if it asked for one (`Camera::clear_color`).
     let clear_color = camera
-        .and_then(|c| world.borrow::<Camera>().get(c).and_then(|cam| cam.clear_color))
+        .and_then(|c| world.query::<&Camera>().get(c).and_then(|cam| cam.clear_color))
         .map(|c| c.to_array());
     let camera = crate::renderer::CameraFrame {
         view_proj,
@@ -1745,7 +1745,7 @@ mod golden_render_tests {
             });
             // `CameraBundle` carries no projection field, so the mode is set on the component the
             // bundle just wrote — the same three lines every orthographic demo needs.
-            let mut cameras = world.borrow_mut::<crate::renderer::components::Camera>();
+            let mut cameras = world.query_mut::<&mut crate::renderer::components::Camera>();
             if let Some(mut cam) = cameras.get_mut(camera) {
                 cam.projection =
                     crate::renderer::components::ProjectionMode::Orthographic { height: 6.0 };
@@ -1923,7 +1923,7 @@ mod golden_render_tests {
             renderer.queue.submit(Some(encoder.finish()));
 
             let advanced = world
-                .borrow::<AnimationPlayer>()
+                .query::<&AnimationPlayer>()
                 .get(rig)
                 .expect("the player is still there")
                 .current_time;
@@ -3784,7 +3784,7 @@ mod golden_render_tests {
             assert_eq!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, Some(first), "a still scene does not rebake");
 
             {
-                let mut q = world.query_mut::<crate::core::query::Mut<Transform>>();
+                let mut q = world.query_mut::<&mut Transform>();
                 q.get_mut(lamp).unwrap().position.x = 1.0;
             }
             let _ = render_world(&mut renderer, &mut world).await;
@@ -4270,7 +4270,7 @@ mod golden_render_tests {
             primary,
             ..Default::default()
         });
-        if let Some(mut c) = world.borrow_mut::<crate::renderer::components::Camera>().get_mut(cam) {
+        if let Some(mut c) = world.query_mut::<&mut crate::renderer::components::Camera>().get_mut(cam) {
             c.viewport = Some(viewport);
         }
     }
@@ -4469,13 +4469,13 @@ mod golden_render_tests {
                 );
             };
             load(&mut world, &mut assets);
-            let first = world.borrow::<Mesh>().get(e).map(|m| m.vertex_count);
+            let first = world.query::<&Mesh>().get(e).map(|m| m.vertex_count);
             assert!(first.is_some(), "the first data is uploaded");
             for segments in 9..60 {
                 world.add_component(e, MeshData::cylinder(1.0, 2.0, segments));
                 load(&mut world, &mut assets);
             }
-            let last = world.borrow::<Mesh>().get(e).map(|m| m.vertex_count);
+            let last = world.query::<&Mesh>().get(e).map(|m| m.vertex_count);
             // Uploads are indexed (shared corners merged), so compare with a fresh upload.
             let expected = AssetManager::new().mesh_from_data(&renderer.device, &MeshData::cylinder(1.0, 2.0, 59)).map(|m| m.vertex_count);
             assert_ne!(last, first, "the mesh followed the data");
@@ -4483,7 +4483,7 @@ mod golden_render_tests {
             assert!(assets.data_mesh_count() <= 1, "{} uploads kept for one entity", assets.data_mesh_count());
             world.add_component(e, MeshData::new(Vec::new()));
             load(&mut world, &mut assets);
-            assert!(world.borrow::<Mesh>().get(e).is_none(), "emptied data draws nothing");
+            assert!(world.query::<&Mesh>().get(e).is_none(), "emptied data draws nothing");
         });
     }
 
@@ -4514,7 +4514,7 @@ mod golden_render_tests {
                 ..Default::default()
             });
             split_camera(&mut world, 20.0, Viewport::new(0.5, 0.0, 0.5, 0.5), false);
-            if let Some(mut c) = world.borrow_mut::<crate::renderer::components::Camera>().iter_mut().find(|c| c.viewport.is_some()) {
+            if let Some(mut c) = world.query_mut::<&mut crate::renderer::components::Camera>().iter_mut().find(|c| c.viewport.is_some()) {
                 c.order = 1;
             }
             let frame = render_world(&mut renderer, &mut world).await;
@@ -4735,7 +4735,7 @@ mod golden_render_tests {
             grade.motion_blur = shutter;
             world.add_component(cam, grade);
             let first = render_world(&mut renderer, &mut world).await;
-            if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(cam) {
+            if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(cam) {
                 c.yaw += turn;
             }
             let second = render_world(&mut renderer, &mut world).await;
@@ -5332,7 +5332,7 @@ mod golden_render_tests {
             let in_a = colours(&frame_a);
             let excess_in = excess(&frame_a);
             for (id, primary) in [(cam_a, false), (cam_b, true)] {
-                if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(id) {
+                if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(id) {
                     c.primary = primary;
                 }
             }
@@ -5347,11 +5347,11 @@ mod golden_render_tests {
             // tone-maps to pink — the fade shows as a fall in degree. (Room A, not B: the procedural
             // sky reflects a light grey the white test cannot tell from the white wall.) Nothing is
             // recaptured; the change has to reach the lighting pass on its own.
-            for mut p in world.borrow_mut::<ReflectionProbe>().iter_mut() {
+            for mut p in world.query_mut::<&mut ReflectionProbe>().iter_mut() {
                 p.blend_distance = 20.0;
             }
             for (id, primary) in [(cam_a, true), (cam_b, false)] {
-                if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(id) {
+                if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(id) {
                     c.primary = primary;
                 }
             }
@@ -5734,7 +5734,7 @@ mod golden_render_tests {
                 let moved = first.as_chunks::<2>().0.iter().filter(|h| half(u16::from_le_bytes(**h)) != 0.0).count();
                 assert_eq!(moved, 0, "the first frame has {moved} non-zero velocity components");
             }
-            if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(moving) {
+            if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(moving) {
                 t.position.x += 0.3;
             }
             render_world(&mut renderer, &mut world).await;
@@ -5821,7 +5821,7 @@ mod golden_render_tests {
             grade.motion_blur = shutter;
             world.add_component(cam, grade);
             render_world(&mut renderer, &mut world).await;
-            if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(moving) {
+            if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(moving) {
                 t.position.x += 0.3;
             }
             render_world(&mut renderer, &mut world).await
@@ -7376,7 +7376,7 @@ mod golden_render_tests {
                 if spoil == "hidden" {
                     world.add_component(entity, crate::core::component::IsHidden);
                 } else {
-                    let mut materials = world.borrow_mut::<Material>();
+                    let mut materials = world.query_mut::<&mut Material>();
                     let mut glass = materials.get_mut(entity).expect("its material");
                     glass.is_transparent = true;
                     glass.albedo.w = 0.5;
@@ -7418,7 +7418,7 @@ mod golden_render_tests {
             let cascade = gizmo_math::Mat4::orthographic_rh(-50.0, 50.0, -50.0, 50.0, -50.0, 50.0);
             let (_, casting) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, [cascade; 4], Vec3::ZERO);
             assert_eq!(casting, 1, "the setup: as a caster it goes to the shadow maps");
-            world.borrow_mut::<MeshRenderer>().get_mut(e).expect("renderer").shadows = ShadowCasting::Off;
+            world.query_mut::<&mut MeshRenderer>().get_mut(e).expect("renderer").shadows = ShadowCasting::Off;
             let (_, silent) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, [cascade; 4], Vec3::ZERO);
             assert_eq!(silent, 0, "unseen and casting nothing, and still uploaded");
         });
@@ -7661,7 +7661,7 @@ mod golden_render_tests {
                 ..Default::default()
             });
             if let Some(c) = clear {
-                let mut q = world.query_mut::<crate::core::query::Mut<crate::renderer::components::Camera>>();
+                let mut q = world.query_mut::<&mut crate::renderer::components::Camera>();
                 q.get_mut(cam).unwrap().clear_color = Some(c);
             }
             let f = render_world(&mut renderer, &mut world).await;
@@ -8069,7 +8069,7 @@ mod golden_render_tests {
             );
             assert_eq!(frame[(120 * 128 + 10) * 4], 0, "the part of the target no view covers is not black");
             let step = world
-                .borrow::<SpriteAnimation>()
+                .query::<&SpriteAnimation>()
                 .iter()
                 .map(|a| a.frame())
                 .next()
@@ -8119,7 +8119,7 @@ mod golden_render_tests {
         // Pass two: move the camera well to the side. Same entity — what matters is that the
         // second write lands after the first pass was *recorded*, which is the whole trap.
         {
-            let mut q = world.query_mut::<(Entity, crate::core::query::Mut<Transform>)>();
+            let mut q = world.query_mut::<(Entity, &mut Transform)>();
             for (entity, mut t) in q.iter_mut() {
                 if entity.id() == cam_a.id() {
                     t.position = Vec3::new(-4.0, 0.5, 5.0);

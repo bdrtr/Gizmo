@@ -2,7 +2,6 @@ use criterion::Criterion;
 use gizmo_core::{
     component::Component,
     world::World,
-    query::Mut,
 };
 use super::common::*;
 use super::iteration_frag::WideData;
@@ -40,17 +39,17 @@ pub fn bench_wide_iteration(c: &mut Criterion) {
     create_entities!(world; A, B, C, D, E, F, G, H, I, J, K, L, M, N, O, P, Q, R, S, T, U, V, W, X, Y, Z);
 
     let mut query = world.query_mut::<(
-        Mut<WideData<0>>,
-        Mut<WideData<1>>,
-        Mut<WideData<2>>,
-        Mut<WideData<3>>,
-        Mut<WideData<4>>,
-        Mut<WideData<5>>,
-        Mut<WideData<6>>,
-        Mut<WideData<7>>,
-        Mut<WideData<8>>,
-        Mut<WideData<9>>,
-        Mut<WideData<10>>,
+        &mut WideData<0>,
+        &mut WideData<1>,
+        &mut WideData<2>,
+        &mut WideData<3>,
+        &mut WideData<4>,
+        &mut WideData<5>,
+        &mut WideData<6>,
+        &mut WideData<7>,
+        &mut WideData<8>,
+        &mut WideData<9>,
+        &mut WideData<10>,
     )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup
@@ -96,15 +95,15 @@ pub fn bench_wide_simple_iter(c: &mut Criterion) {
 
     let mut query = world.query_mut::<(
         &Vel<0>,
-        Mut<Pos<0>>,
+        &mut Pos<0>,
         &Vel<1>,
-        Mut<Pos<1>>,
+        &mut Pos<1>,
         &Vel<2>,
-        Mut<Pos<2>>,
+        &mut Pos<2>,
         &Vel<3>,
-        Mut<Pos<3>>,
+        &mut Pos<3>,
         &Vel<4>,
-        Mut<Pos<4>>,
+        &mut Pos<4>,
     )>();
 
     query.iter_mut().for_each(|_| {}); // Warmup

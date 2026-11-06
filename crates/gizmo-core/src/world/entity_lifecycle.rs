@@ -577,7 +577,7 @@ impl World {
         let parent = self.query::<&Parent>().get(e).map(|p| p.0);
         if let Some(parent) = parent.filter(|p| *p != e) {
             {
-                let mut q = self.query_mut::<crate::query::Mut<Children>>();
+                let mut q = self.query_mut::<&mut Children>();
                 if let Some(mut children) = q.get_mut(parent) {
                     children.0.retain(|&c| c != e);
                 }

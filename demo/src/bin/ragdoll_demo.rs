@@ -106,7 +106,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RagdollDemo {
 
             let mut saved = Transform::new(Vec3::ZERO);
             {
-                let mut ts = world.borrow_mut::<Transform>();
+                let mut ts = world.query_mut::<&mut Transform>();
                 if let Some(mut t) = ts.get_mut(*entity) {
                     t.scale = Vec3::new(sx, sy, sz);
                     t.update_local_matrix();
@@ -114,7 +114,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RagdollDemo {
                 }
             }
             {
-                let mut vs = world.borrow_mut::<Velocity>();
+                let mut vs = world.query_mut::<&mut Velocity>();
                 if let Some(mut v) = vs.get_mut(*entity) {
                     *v = Velocity::new(lin).with_angular(ang);
                 }
@@ -140,7 +140,7 @@ fn update(world: &mut World, state: &mut RagdollDemo, _dt: f32, input: &Input) {
 
     // Kimlik tabanlı per-kemik reset → poz + hız + uyandır (topolojiye dokunmadan).
     {
-        let mut ts = world.borrow_mut::<Transform>();
+        let mut ts = world.query_mut::<&mut Transform>();
         for b in &state.resets {
             if let Some(mut t) = ts.get_mut(b.id) {
                 *t = b.transform;
@@ -148,7 +148,7 @@ fn update(world: &mut World, state: &mut RagdollDemo, _dt: f32, input: &Input) {
         }
     }
     {
-        let mut vs = world.borrow_mut::<Velocity>();
+        let mut vs = world.query_mut::<&mut Velocity>();
         for b in &state.resets {
             if let Some(mut v) = vs.get_mut(b.id) {
                 *v = Velocity::new(b.lin).with_angular(b.ang);
@@ -156,7 +156,7 @@ fn update(world: &mut World, state: &mut RagdollDemo, _dt: f32, input: &Input) {
         }
     }
     {
-        let mut rbs = world.borrow_mut::<RigidBody>();
+        let mut rbs = world.query_mut::<&mut RigidBody>();
         for b in &state.resets {
             if let Some(mut rb) = rbs.get_mut(b.id) {
                 rb.wake_up();

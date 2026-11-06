@@ -31,7 +31,6 @@
 //! ## Kontroller
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera · **Shift** — hızlı hareket
 
-use gizmo::core::query::Mut;
 use gizmo::prelude::*;
 use gizmo::renderer::components::ProjectionMode;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -98,7 +97,7 @@ fn main() {
             // Ortografik kamera — küreler ekranın her yerinde aynı boyutta görünsün diye.
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 8.0), Vec3::ZERO);
             {
-                let mut q = scene.world.query_mut::<(Mut<Camera>, Mut<Transform>)>();
+                let mut q = scene.world.query_mut::<(&mut Camera, &mut Transform)>();
                 for (mut camera, _transform) in q.iter_mut() {
                     camera.projection = ProjectionMode::Orthographic {
                         height: VIEWPORT_HEIGHT,

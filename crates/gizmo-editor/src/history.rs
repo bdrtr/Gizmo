@@ -125,7 +125,7 @@ impl History {
                         .iter()
                         .filter(|(entity, _, _)| world.is_alive(*entity))
                         .collect();
-                    let mut transforms = world.borrow_mut::<Transform>();
+                    let mut transforms = world.query_mut::<&mut Transform>();
                     for (entity, ref old_transform, _) in to_apply {
                         if let Some(mut t) = transforms.get_mut(*entity) {
                             *t = *old_transform;
@@ -166,7 +166,7 @@ impl History {
                     // actually has.
                     if world.is_alive(entity) {
                         let mut players =
-                            world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                            world.query_mut::<&mut gizmo_renderer::components::AnimationPlayer>();
                         if let Some(mut p) = players.get_mut(entity) {
                             p.animations = before.clone();
                         }
@@ -196,7 +196,7 @@ impl History {
                         .iter()
                         .filter(|(entity, _, _)| world.is_alive(*entity))
                         .collect();
-                    let mut transforms = world.borrow_mut::<Transform>();
+                    let mut transforms = world.query_mut::<&mut Transform>();
                     for (entity, _, ref new_transform) in to_apply {
                         if let Some(mut t) = transforms.get_mut(*entity) {
                             *t = *new_transform;
@@ -231,7 +231,7 @@ impl History {
                 EditorAction::AnimationClipsChanged { entity, before, after } => {
                     if world.is_alive(entity) {
                         let mut players =
-                            world.borrow_mut::<gizmo_renderer::components::AnimationPlayer>();
+                            world.query_mut::<&mut gizmo_renderer::components::AnimationPlayer>();
                         if let Some(mut p) = players.get_mut(entity) {
                             p.animations = after.clone();
                         }
@@ -283,7 +283,7 @@ mod tests {
 
     fn keyframe_times(world: &World, entity: gizmo_core::entity::Entity) -> Vec<f32> {
         world
-            .borrow::<AnimationPlayer>()
+            .query::<&AnimationPlayer>()
             .get(entity)
             .map(|p| {
                 p.animations[0].translations[0]
@@ -318,7 +318,7 @@ mod tests {
         history.undo(&mut world);
         assert_eq!(keyframe_times(&world, e), vec![0.0, 1.0, 2.0]);
         assert_eq!(
-            world.borrow::<AnimationPlayer>().get(e).unwrap().animations[0].duration,
+            world.query::<&AnimationPlayer>().get(e).unwrap().animations[0].duration,
             2.0,
             "undo must restore the duration too — it grew with the edit"
         );
@@ -326,7 +326,7 @@ mod tests {
         history.redo(&mut world);
         assert_eq!(keyframe_times(&world, e), vec![1.0, 2.0, 5.0]);
         assert_eq!(
-            world.borrow::<AnimationPlayer>().get(e).unwrap().animations[0].duration,
+            world.query::<&AnimationPlayer>().get(e).unwrap().animations[0].duration,
             5.0
         );
     }
@@ -403,7 +403,7 @@ mod tests {
         // undo: A canlı DEĞİL → guard atlamalı, B'nin Transform'u DEĞİŞMEMELİ.
         history.undo(&mut world);
 
-        let mut transforms = world.borrow_mut::<Transform>();
+        let mut transforms = world.query_mut::<&mut Transform>();
         let t_b = transforms
             .get_mut(entity_b)
             .expect("B'nin Transform'u mevcut olmalı");
@@ -444,7 +444,7 @@ mod tests {
         // redo: A canlı DEĞİL → guard atlamalı, B DEĞİŞMEMELİ.
         history.redo(&mut world);
 
-        let mut transforms = world.borrow_mut::<Transform>();
+        let mut transforms = world.query_mut::<&mut Transform>();
         let t_b = transforms
             .get_mut(entity_b)
             .expect("B'nin Transform'u mevcut olmalı");
@@ -472,7 +472,7 @@ mod tests {
 
         history.undo(&mut world);
 
-        let mut transforms = world.borrow_mut::<Transform>();
+        let mut transforms = world.query_mut::<&mut Transform>();
         let t = transforms.get_mut(entity).expect("Transform mevcut");
         assert_eq!(
             t.position,
@@ -484,7 +484,7 @@ mod tests {
     // === Yardımcılar ===
 
     /// Returns a World with Transform storage registered (an empty-changes undo calls
-    /// `borrow_mut::<Transform>()`, so the type has to be registered).
+    /// `query_mut::<&mut Transform>()`, so the type has to be registered).
     fn world_with_transform_storage() -> World {
         let mut w = World::new();
         let e = w.spawn();
@@ -494,14 +494,14 @@ mod tests {
 
     fn is_soft_deleted(world: &World, e: gizmo_core::entity::Entity) -> bool {
         world
-            .borrow::<gizmo_core::component::IsDeleted>()
+            .query::<&gizmo_core::component::IsDeleted>()
             .get(e)
             .is_some()
     }
 
     fn is_hidden(world: &World, e: gizmo_core::entity::Entity) -> bool {
         world
-            .borrow::<gizmo_core::component::IsHidden>()
+            .query::<&gizmo_core::component::IsHidden>()
             .get(e)
             .is_some()
     }

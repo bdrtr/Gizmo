@@ -183,7 +183,7 @@ fn main() {
 
             scene.spawn_camera(state, Vec3::new(0.0, 5.0, 20.0), Vec3::new(0.0, 5.0, 0.0));
             {
-                let mut q = scene.world.query_mut::<(Mut<Camera>, Mut<Transform>)>();
+                let mut q = scene.world.query_mut::<(&mut Camera, &mut Transform)>();
                 for (mut cam, _) in q.iter_mut() {
                     cam.projection =
                         ProjectionMode::OrthographicFit { width: VIEW_WIDTH, height: VIEW_MIN_HEIGHT };
@@ -312,7 +312,7 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
 
     // Oyun durumu: hedeflerden kaçı platformun altına indi?
     let down = {
-        let tf = world.borrow::<Transform>();
+        let tf = world.query::<&Transform>();
         world.query::<(Entity, &Target)>().iter()
             .filter(|(entity, _)| tf.get(*entity).is_some_and(|t| t.position.y < PLATFORM_TOP - 0.3))
             .count()
@@ -344,7 +344,7 @@ fn fit_camera(world: &mut World) {
     let Some(info) = world.get_resource::<gizmo::core::window::WindowInfo>().map(|i| *i) else { return };
     let aspect = info.width / info.height.max(1.0);
     {
-        let mut q = world.query_mut::<(Mut<Camera>, Mut<Transform>)>();
+        let mut q = world.query_mut::<(&mut Camera, &mut Transform)>();
         for (cam, mut t) in q.iter_mut() {
             if let Some(extent) = cam.projection.view_extent(aspect) {
                 // Zemin ekranın altına otursun: görüşün alt kenarı y ≈ −1.
@@ -380,7 +380,7 @@ fn draw_ui(world: &mut World, game: &Game, down: usize) {
     let v = launch_velocity(game.angle, power);
     let show = game.outcome == Outcome::Playing && game.shots_left > 0;
     {
-        let mut tf = world.borrow_mut::<Transform>();
+        let mut tf = world.query_mut::<&mut Transform>();
         for (i, &dot) in game.aim_dots.iter().enumerate() {
             let t = 0.08 * (i + 1) as f32;
             let p = LAUNCH + v * t - Vec2::new(0.0, 0.5 * GRAVITY * t * t);
@@ -393,7 +393,7 @@ fn draw_ui(world: &mut World, game: &Game, down: usize) {
         }
     }
     {
-        let mut sprites = world.borrow_mut::<Sprite>();
+        let mut sprites = world.query_mut::<&mut Sprite>();
         for &dot in &game.aim_dots {
             if let Some(mut s) = sprites.get_mut(dot) {
                 s.color.w = if show { 0.6 } else { 0.0 };
@@ -408,7 +408,7 @@ fn draw_ui(world: &mut World, game: &Game, down: usize) {
             }
         }
     }
-    let mut texts = world.borrow_mut::<Text>();
+    let mut texts = world.query_mut::<&mut Text>();
     if let Some(mut t) = texts.get_mut(game.hud_text) {
         t.content = format!("Hedef {down}/{}   Atış {}", game.targets_total, game.shots_left);
     }

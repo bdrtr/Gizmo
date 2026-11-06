@@ -35,7 +35,7 @@
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera (sahne tek bir can çubuğu)
 
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
@@ -265,7 +265,7 @@ fn play_damage_received_particle_effect(
 
 /// Can çubuğunun boyunu cana göre ayarlar — zincirin görünür ucu.
 fn update_health_bar(
-    mut bars: Query<(Mut<Transform>, With<HealthBar>)>,
+    mut bars: Query<(&mut Transform, With<HealthBar>)>,
     combat: Res<Combat>,
 ) {
     let ratio = combat.health as f32 / MAX_HEALTH as f32;

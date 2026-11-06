@@ -121,18 +121,18 @@ fn cup(hole: usize) -> Vec3 {
 /// Topu `dir` yönüne, `power` (`0..=1`) gücüyle vur.
 fn hit(world: &mut World, ball: Entity, dir: Vec3, power: f32) {
     let flat = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
-    if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(ball) {
+    if let Some(mut v) = world.query_mut::<&mut Velocity>().get_mut(ball) {
         v.linear = flat * power.clamp(0.0, 1.0) * MAX_SPEED;
         v.angular = Vec3::ZERO;
     }
-    if let Some(mut rb) = world.borrow_mut::<RigidBody>().get_mut(ball) {
+    if let Some(mut rb) = world.query_mut::<&mut RigidBody>().get_mut(ball) {
         rb.wake_up();
     }
 }
 
 fn ball_state(world: &World, ball: Entity) -> (Vec3, f32) {
-    let p = world.borrow::<Transform>().get(ball).map(|t| t.position).unwrap_or(Vec3::ZERO);
-    let v = world.borrow::<Velocity>().get(ball).map(|v| v.linear.length()).unwrap_or(0.0);
+    let p = world.query::<&Transform>().get(ball).map(|t| t.position).unwrap_or(Vec3::ZERO);
+    let v = world.query::<&Velocity>().get(ball).map(|v| v.linear.length()).unwrap_or(0.0);
     (p, v)
 }
 
@@ -195,7 +195,7 @@ fn self_test() -> bool {
                     // Sahadan çıktı: son durduğu yere, bir ceza vuruşuyla.
                     strokes += 1;
                     boost *= 0.75;
-                    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(ball) {
+                    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(ball) {
                         t.position = last_rest;
                     }
                     hit(&mut world, ball, Vec3::X, 0.0);
@@ -362,10 +362,10 @@ fn start_hole(world: &mut World, game: &mut Game, hole: usize) {
     game.power = None;
     let c = cup(hole);
     let g = world.get_resource::<PhysicsWorld>().and_then(|p| ground_at(&p, c.x, c.z, None)).unwrap_or(0.0);
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.cup_disc) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.cup_disc) {
         t.position = Vec3::new(c.x, g + 0.01, c.z);
     }
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.flag) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.flag) {
         t.position = Vec3::new(c.x, g + 1.0, c.z);
     }
 }
@@ -406,19 +406,19 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     } else if out_of_bounds(pos) {
         game.strokes[game.hole] += 1;
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.ball) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.ball) {
             t.position = game.last_rest;
         }
         hit(world, game.ball, Vec3::X, 0.0);
     }
     // Nişan çizgisi, kamera.
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.aim) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.aim) {
         let len = 0.6 + game.power.unwrap_or(0.0) * 2.0;
         t.position = pos + dir * (BALL_R + len) + Vec3::Y * 0.05;
         t.rotation = Quat::from_rotation_y(dir.x.atan2(dir.z));
         t.scale = Vec3::new(0.05, 0.02, len);
     }
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         let want = pos + Vec3::new(0.0, 9.0, 12.0);
         t.position = t.position.lerp(want, (dt * 2.5).min(1.0));
         t.rotation = Quat::from_rotation_x(-0.62);
@@ -442,7 +442,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

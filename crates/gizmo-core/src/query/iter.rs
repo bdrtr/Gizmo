@@ -167,16 +167,16 @@ where
 /// There is **no per-row filtering** here — a chunk is all-or-nothing. Queries that need it
 /// (`Changed`, `Added`, `Or`, sparse `With`/`Without`) are rejected up front by
 /// [`Query::iter_chunks`](super::Query::iter_chunks), which panics when the iterator is created.
-/// A plain `&T`/`Mut<T>` operand on a `SparseSet`-stored component declares no row filter and so
+/// A plain `&T`/`&mut T` operand on a `SparseSet`-stored component declares no row filter and so
 /// slips past that check; its data is not contiguous, so it fails later instead — panicking on
 /// the first chunk pulled from this iterator once the world actually holds a sparse-set store
 /// for `T`.
 ///
 /// Change detection follows the *operands*, not the constructor that produced the iterator.
-/// Every `Mut<T>` operand conservatively stamps the current tick onto every row of each chunk
+/// Every `&mut T` operand conservatively stamps the current tick onto every row of each chunk
 /// it yields, written or not, because a raw `&mut [T]` cannot say which elements were touched.
-/// `&T` operands and filters stamp nothing. So for a mixed `Q` such as `(&A, Mut<B>)` only
-/// `B`'s ticks move, and a chunk query with no `Mut<T>` in it marks nothing even when it came
+/// `&T` operands and filters stamp nothing. So for a mixed `Q` such as `(&A, &mut B)` only
+/// `B`'s ticks move, and a chunk query with no `&mut T` in it marks nothing even when it came
 /// from [`Query::iter_chunks_mut`](super::Query::iter_chunks_mut).
 pub struct QueryChunksIter<'a, 'w, Q: WorldQuery> {
     pub(super) world: &'a World,

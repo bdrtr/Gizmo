@@ -345,8 +345,8 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
         let mut unlinked_entities = Vec::new();
         {
             let q = world.query::<(gizmo_core::Entity, &RigidBody, &Transform, &Collider)>();
-            let links = world.borrow::<GpuPhysicsLink>();
-            let velocities = world.borrow::<Velocity>();
+            let links = world.query::<&GpuPhysicsLink>();
+            let velocities = world.query::<&Velocity>();
             for (e, rb, trans, col) in q.iter() {
                 if links.get(e).is_none() {
                     let vel = velocities.get(e).copied().unwrap_or_default();
@@ -448,7 +448,7 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
     if let Some(physics) = &renderer.gpu_physics {
         if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
             {
-                let mut q = world.query_mut::<(gizmo_core::prelude::Mut<Transform>, &GpuPhysicsLink, &gizmo_physics_core::Collider)>();
+                let mut q = world.query_mut::<(&mut Transform, &GpuPhysicsLink, &gizmo_physics_core::Collider)>();
                 for (mut trans, link, col) in q.iter_mut() {
                     let idx = link.id as usize;
                     if idx < gpu_data.len() {
@@ -636,12 +636,12 @@ mod physics_step_tests {
         world.add_component(body, Velocity::default());
         world.add_component(body, Collider::sphere(0.5));
 
-        let y0 = world.borrow::<Transform>().get(body).unwrap().position.y;
+        let y0 = world.query::<&Transform>().get(body).unwrap().position.y;
         let mut sys = PhysicsStepSystem;
         for _ in 0..30 {
             sys.run(&world, 1.0 / 60.0);
         }
-        let y1 = world.borrow::<Transform>().get(body).unwrap().position.y;
+        let y1 = world.query::<&Transform>().get(body).unwrap().position.y;
         assert!(y1 < y0 - 0.5, "body must fall under gravity via the scheduled step: {y0} -> {y1}");
     }
     /// A `Breakable` box with a heavy ball dropped on it, stepped by the facade's own step.
@@ -698,11 +698,11 @@ mod physics_step_tests {
         assert!(pieces.len() >= 2, "{} pieces", pieces.len());
         let red = MaterialDesc::new().with_unlit(gizmo_math::Vec4::new(0.9, 0.1, 0.1, 1.0));
         for id in pieces {
-            let mesh = world.borrow::<MeshData>().get(id).map(|m| m.vertices().len()).unwrap_or(0);
+            let mesh = world.query::<&MeshData>().get(id).map(|m| m.vertices().len()).unwrap_or(0);
             assert!(mesh >= 12 && mesh % 3 == 0, "piece {id} has {mesh} vertices to draw");
-            assert!(world.borrow::<MeshRenderer>().get(id).is_some(), "piece {id} is not drawn");
-            assert_eq!(world.borrow::<MaterialDesc>().get(id).cloned(), Some(red.clone()), "piece {id}'s material");
-            let scale = world.borrow::<Transform>().get(id).unwrap().scale;
+            assert!(world.query::<&MeshRenderer>().get(id).is_some(), "piece {id} is not drawn");
+            assert_eq!(world.query::<&MaterialDesc>().get(id).cloned(), Some(red.clone()), "piece {id}'s material");
+            let scale = world.query::<&Transform>().get(id).unwrap().scale;
             assert_eq!(scale, Vec3::ONE, "piece {id} would be sized twice");
         }
     }

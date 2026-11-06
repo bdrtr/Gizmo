@@ -67,7 +67,7 @@ fn step(world: &World, n: usize) {
 }
 
 fn y_of(world: &World, id: Entity) -> f32 {
-    world.borrow::<Transform>().get(id).unwrap().position.y
+    world.query::<&Transform>().get(id).unwrap().position.y
 }
 
 /// A 5×5 field, 2 m cells, flat at height 4 except for a single sample pushed down to 0 in the

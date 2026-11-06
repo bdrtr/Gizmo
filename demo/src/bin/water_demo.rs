@@ -255,7 +255,7 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
     };
     {
         if let Some(mut kcc) = world
-            .borrow_mut::<CharacterController>()
+            .query_mut::<&mut CharacterController>()
             .get_mut(state.swimmer)
         {
             // Yatay yön tuş+çubuk (`Input::move_axis`), dikey ayrı: çubukta karşılığı yok.
@@ -310,7 +310,7 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
         )
     } else {
         let h = world
-            .borrow::<Transform>()
+            .query::<&Transform>()
             .get(state.swimmer)
             .map(|t| t.position + Vec3::new(0.0, 0.7, 0.0))
             .unwrap_or(Vec3::new(0.0, 0.7, 8.0));
@@ -331,8 +331,8 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
     }
     {
         let mut q = world.query_mut::<(
-        gizmo::core::query::Mut<Transform>,
-        gizmo::core::query::Mut<Camera>,
+        &mut Transform,
+        &mut Camera,
     )>();
         for (mut t, mut c) in q.iter_mut() {
             t.position = head;

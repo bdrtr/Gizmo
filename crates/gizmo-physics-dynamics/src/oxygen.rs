@@ -6,7 +6,7 @@
 //! SAME `FluidZone`s as buoyancy, the swimming controller and the underwater fog.
 
 use gizmo_core::component::IsDeleted;
-use gizmo_core::query::{Mut, Without};
+use gizmo_core::query::Without;
 use gizmo_core::world::World;
 use gizmo_math::Vec3;
 use gizmo_physics_core::Transform;
@@ -72,7 +72,7 @@ pub fn oxygen_system(world: &World, dt: f32) {
 
     // SAFETY: exclusive `fn(&World, f32)` sistemi — scheduler tek başına çalıştırır; `Oxygen` ve
     // `Transform` ayrı bileşen tipleri, alias yok.
-    let query = unsafe { world.query_unchecked::<(gizmo_core::Entity, Mut<Oxygen>, &Transform, Without<IsDeleted>)>() };
+    let query = unsafe { world.query_unchecked::<(gizmo_core::Entity, &mut Oxygen, &Transform, Without<IsDeleted>)>() };
     {
         let mut query = query;
         for (entity, mut oxy, transform, _) in query.iter_mut() {
@@ -134,7 +134,7 @@ mod tests {
         assert!(o < 20.0 - 1.5, "batıkken oksijen tükenmeli (~2/sn), bulundu {o}");
 
         // Yüzeye taşı (kafa +2.6 → havada) → dolmalı.
-        world.borrow_mut::<Transform>().get_mut(diver).unwrap().position =
+        world.query_mut::<&mut Transform>().get_mut(diver).unwrap().position =
             Vec3::new(0.0, 2.0, 0.0);
         for _ in 0..60 {
             oxygen_system(&world, dt);

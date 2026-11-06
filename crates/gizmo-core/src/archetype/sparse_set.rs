@@ -27,7 +27,7 @@ pub struct ComponentSparseSet {
     /// (or a pointer into `dense`) across an `insert` or `remove`.
     pub dense: BlobVec,
     /// Change-detection ticks. Interior-mutable via `UnsafeCell` — just like
-    /// the raw-pointer interior mutability of `dense: BlobVec`: the `Mut<T>` query
+    /// the raw-pointer interior mutability of `dense: BlobVec`: the `&mut T` query
     /// path (`query::fetch::get_item`) accesses the set through a SHARED `&self` and
     /// writes disjoint rows (necessary for parallel `par_for_each_mut`). Were it a
     /// plain `Vec<_>`, `as_ptr(&self)` would give read-only provenance → `&mut *ticks_ptr`

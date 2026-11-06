@@ -34,9 +34,9 @@ pub struct AccessInfo {
     ///
     /// This also covers components whose *change ticks* are merely inspected — a
     /// `Changed<T>`/`Added<T>` filter declares a read of `T` even though it yields no `&T`,
-    /// because those ticks are the same memory a `Mut<T>` writer stamps.
+    /// because those ticks are the same memory a `&mut T` writer stamps.
     pub component_reads: Vec<TypeId>,
-    /// Components written through `Mut<T>`.
+    /// Components written through `&mut T`.
     ///
     /// The same `TypeId` may legitimately appear in `component_reads` as well — a merged
     /// batch info routinely holds both — because an `AccessInfo` is never checked against
@@ -243,7 +243,7 @@ pub trait System: Send + Sync {
     /// `world` is shared, never exclusive: every system of a batch is handed the same
     /// `&World`, and on native targets they are driven in parallel by rayon. Mutation
     /// therefore goes through [`SystemParam`]s whose accesses the scheduler proved disjoint
-    /// before starting the batch (component writes via `Query<Mut<T>>`, resources via their
+    /// before starting the batch (component writes via `Query<&mut T>`, resources via their
     /// lock guards), or is deferred through `Commands` and applied after the batch finishes.
     ///
     /// `dt` is the delta time in seconds that the schedule was stepped with; the `f32`
@@ -800,13 +800,13 @@ mod tests {
     }
 
     // REGRESYON (audit 2026-06-29): `Changed<T>`/`Added<T>` filtreleri T'nin
-    // `ComponentTicks` belleğini OKUR; aynı bellek `Mut<T>`'nin `deref_mut`'unda
+    // `ComponentTicks` belleğini OKUR; aynı bellek `&mut T`'nin `deref_mut`'unda
     // YAZILIR. Eskiden `check_aliasing` HİÇBİR erişim bildirmediğinden zamanlayıcı bir
-    // `Query<Changed<T>>` sistemini bir `Query<Mut<T>>` yazıcısıyla aynı paralel batch'e
+    // `Query<Changed<T>>` sistemini bir `Query<&mut T>` yazıcısıyla aynı paralel batch'e
     // koyabiliyordu (is_compatible_with == true) → ticks üzerinde data race / UB.
     #[test]
     fn changed_and_added_declare_read_conflicting_with_mut_writer() {
-        use crate::query::{Added, Changed, Mut, Query};
+        use crate::query::{Added, Changed, Query};
 
         #[derive(Clone)]
         struct Pos(#[allow(dead_code)] f32);
@@ -829,10 +829,10 @@ mod tests {
         );
 
         let mut mut_info = AccessInfo::new();
-        <Query<'static, Mut<Pos>> as SystemParam>::get_access_info(&mut mut_info);
+        <Query<'static, &mut Pos> as SystemParam>::get_access_info(&mut mut_info);
         assert!(mut_info.component_writes.contains(&pos));
 
-        // İkisi de Mut<Pos> yazıcısıyla AYNI paralel batch'e konulamamalı.
+        // İkisi de &mut Pos yazıcısıyla AYNI paralel batch'e konulamamalı.
         assert!(
             !changed_info.is_compatible_with(&mut_info),
             "Changed<Pos> okuyucu, Mut<Pos> yazıcı ile paralel çalıştırılamaz olmalı (data race)"
@@ -844,11 +844,11 @@ mod tests {
     }
 
     // REGRESYON (audit round 2): `Or<Changed<A>, Changed<B>>` operandlarının erişimini
-    // PROPAGATE etmeli — yoksa Or hiçbir şey bildirmez ve zamanlayıcı onu bir Mut<A>/Mut<B>
+    // PROPAGATE etmeli — yoksa Or hiçbir şey bildirmez ve zamanlayıcı onu bir &mut A/&mut B
     // yazıcısıyla aynı paralel batch'e koyabilir (round-1 data-race sınıfının tekrarı).
     #[test]
     fn or_propagates_operand_access() {
-        use crate::query::{Changed, Mut, Or, Query};
+        use crate::query::{Changed, Or, Query};
 
         #[derive(Clone)]
         struct A(#[allow(dead_code)] f32);
@@ -866,7 +866,7 @@ mod tests {
         );
 
         let mut writer_a = AccessInfo::new();
-        <Query<'static, Mut<A>> as SystemParam>::get_access_info(&mut writer_a);
+        <Query<'static, &mut A> as SystemParam>::get_access_info(&mut writer_a);
         assert!(
             !or_info.is_compatible_with(&writer_a),
             "Or<Changed<A>,..> okuyucu, Mut<A> yazıcı ile paralel çalışamaz olmalı (data race)"

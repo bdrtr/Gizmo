@@ -59,7 +59,7 @@ fn collider_material_restitution_reaches_the_solver() {
         gizmo_physics_rigid::system::physics_step_system(&world, 1.0 / 120.0);
     }
 
-    let vs = world.borrow::<Velocity>();
+    let vs = world.query::<&Velocity>();
     let va = vs.get(a).unwrap().linear.x;
     let vb = vs.get(b).unwrap().linear.x;
 
@@ -117,14 +117,14 @@ fn a_trigger_collider_authored_in_the_ecs_reports_and_never_pushes() {
         "a trigger overlap must not build a contact manifold; the solver saw a collision"
     );
 
-    let vs = world.borrow::<Velocity>();
+    let vs = world.query::<&Velocity>();
     let va = vs.get(a).unwrap().linear.x;
     assert!(
         va > 4.9,
         "the body passed through a sensor, so nothing should have slowed it — got vx={va}. \
          Before the fix it bounced off the door sensor instead."
     );
-    let xs = world.borrow::<Transform>();
+    let xs = world.query::<&Transform>();
     assert!(
         xs.get(a).unwrap().position.x > 0.5,
         "and it should be out the far side of the trigger by now"
@@ -164,7 +164,7 @@ fn a_collision_layer_authored_in_the_ecs_filters_in_the_solver() {
         gizmo_physics_rigid::system::physics_step_system(&world, 1.0 / 120.0);
     }
 
-    let vs = world.borrow::<Velocity>();
+    let vs = world.query::<&Velocity>();
     assert!(
         vs.get(a).unwrap().linear.x > 4.9,
         "A accepts only layer 1 and B is on layer 2, so the pair must never be solved — \
@@ -209,7 +209,7 @@ fn a_physics_material_component_overrides_the_collider_material() {
         gizmo_physics_rigid::system::physics_step_system(&world, 1.0 / 120.0);
     }
 
-    let vs = world.borrow::<Velocity>();
+    let vs = world.query::<&Velocity>();
     let vb = vs.get(b).unwrap().linear.x;
     assert!(vb > 3.5, "the component's restitution 1 did not reach the solver: vb = {vb}");
     drop(vs);

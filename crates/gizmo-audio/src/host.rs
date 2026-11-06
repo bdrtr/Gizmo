@@ -61,7 +61,7 @@ pub fn ensure_audio_manager(world: &mut World) {
     if world.get_resource::<AudioManager>().is_some() {
         return;
     }
-    if world.borrow::<AudioSource>().is_empty() {
+    if world.query::<&AudioSource>().is_empty() {
         return;
     }
     open_audio_device(world);
@@ -119,7 +119,7 @@ pub fn open_audio_device(world: &mut World) -> bool {
 ///   that is a name and nothing else (`"boom"`).
 pub fn load_scene_sounds(world: &mut World) {
     let named: Vec<String> = {
-        let sources = world.borrow::<AudioSource>();
+        let sources = world.query::<&AudioSource>();
         sources.iter().map(|s| s.sound_name.clone()).collect()
     };
     load_named_sounds(world, &named);
@@ -189,8 +189,8 @@ pub fn play_flat_sources(world: &mut World) {
     // SAFETY: the only other borrow held here is the `AudioManager` *resource* guard above, which
     // is a different storage entirely, so this view aliases nothing. (The spatial system takes the
     // same view the same way, for the same reason: a resource guard borrows the world immutably,
-    // and the checked `borrow_mut` wants `&mut World`.)
-    let mut sources = unsafe { world.borrow_mut_unchecked::<AudioSource>() };
+    // and the checked `query_mut` wants `&mut World`.)
+    let mut sources = unsafe { world.query_unchecked::<&mut AudioSource>() };
 
     for mut source in sources.iter_mut() {
         if source.is_3d {
@@ -292,7 +292,7 @@ mod tests {
 
         play_flat_sources(&mut world);
 
-        let sources = world.borrow::<AudioSource>();
+        let sources = world.query::<&AudioSource>();
         assert!(!sources.get(e).unwrap().has_played);
     }
 
@@ -319,7 +319,7 @@ mod tests {
         let manager = world
             .get_resource::<AudioManager>()
             .expect("a scene with a source opens the device");
-        let sources = world.borrow::<AudioSource>();
+        let sources = world.query::<&AudioSource>();
         let sink = sources
             .get(e)
             .unwrap()
@@ -345,7 +345,7 @@ mod tests {
         host_frame(&mut world);
 
         let sink = world
-            .borrow::<AudioSource>()
+            .query::<&AudioSource>()
             .get(e)
             .unwrap()
             ._internal_sink_id

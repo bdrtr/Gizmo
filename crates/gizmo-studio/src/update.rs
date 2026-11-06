@@ -55,8 +55,8 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
         gizmos.depth_test = false;
 
-        let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
-        let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
+        let meshes = world.query::<&gizmo::renderer::components::Mesh>();
+        let global_transforms = world.query::<&gizmo::physics::components::GlobalTransform>();
         let Some(editor_state) = world.get_resource::<gizmo::editor::EditorState>() else { return; };
 
         const ORANGE: [f32; 4] = [1.0, 0.5, 0.0, 1.0];
@@ -156,8 +156,8 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         }
 
         // --- KAMERA İKONLARI (GİZMO) ---
-        let cameras = world.borrow::<gizmo::renderer::components::Camera>();
-        let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
+        let cameras = world.query::<&gizmo::renderer::components::Camera>();
+        let global_transforms = world.query::<&gizmo::physics::components::GlobalTransform>();
         let is_playing = editor_state.is_playing();
 
         if !is_playing {
@@ -243,8 +243,8 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             }
         }
         // --- IŞIK İKONLARI (GİZMO) ---
-        let dir_lights = world.borrow::<gizmo::renderer::components::DirectionalLight>();
-        let point_lights = world.borrow::<gizmo::renderer::components::PointLight>();
+        let dir_lights = world.query::<&gizmo::renderer::components::DirectionalLight>();
+        let point_lights = world.query::<&gizmo::renderer::components::PointLight>();
 
         if !is_playing {
             // Directional Light Gizmos

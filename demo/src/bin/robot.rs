@@ -117,7 +117,7 @@ fn clamp_reach(tip: Vec3) -> Vec3 {
 fn drive_arm(world: &mut World, arm: [Entity; 2], target: Vec3) {
     let pose = arm_pose(target);
     for (k, &id) in arm.iter().enumerate() {
-        if let Some(mut t) = world.borrow_mut::<KinematicTarget>().get_mut(id) {
+        if let Some(mut t) = world.query_mut::<&mut KinematicTarget>().get_mut(id) {
             *t = KinematicTarget::new(pose[k].0, pose[k].1);
         }
     }
@@ -147,7 +147,7 @@ fn spawn_balls(world: &mut World, visual: bool) -> Vec<Entity> {
 }
 
 fn position(world: &World, id: Entity) -> Vec3 {
-    world.borrow::<Transform>().get(id).map(|t| t.position).unwrap_or(Vec3::ZERO)
+    world.query::<&Transform>().get(id).map(|t| t.position).unwrap_or(Vec3::ZERO)
 }
 
 fn in_goal(p: Vec3) -> bool {
@@ -158,15 +158,15 @@ fn in_goal(p: Vec3) -> bool {
 fn capture(world: &mut World, balls: &[Entity]) {
     for &b in balls {
         let p = position(world, b);
-        let sunk = world.borrow::<RigidBody>().get(b).is_some_and(|rb| rb.is_kinematic());
+        let sunk = world.query::<&RigidBody>().get(b).is_some_and(|rb| rb.is_kinematic());
         if in_goal(p) && !sunk {
-            if let Some(mut rb) = world.borrow_mut::<RigidBody>().get_mut(b) {
+            if let Some(mut rb) = world.query_mut::<&mut RigidBody>().get_mut(b) {
                 *rb = RigidBody::new_kinematic();
             }
-            if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(b) {
+            if let Some(mut v) = world.query_mut::<&mut Velocity>().get_mut(b) {
                 *v = Velocity::default();
             }
-            if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(b) {
+            if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(b) {
                 t.position.y = -BALL * 0.6;
             }
         }
@@ -240,7 +240,7 @@ fn self_test() -> bool {
         world.apply_commands();
         capture(&mut world, &balls);
         // Kolun ucu gerçekten istenen yerde mi (IK + kinematik sürüş).
-        let lower = world.borrow::<Transform>().get(arm[1]).copied().unwrap_or_default();
+        let lower = world.query::<&Transform>().get(arm[1]).copied().unwrap_or_default();
         let end = lower.position + lower.rotation * Vec3::Y * (LOWER * 0.5);
         worst_reach_error = worst_reach_error.max((end - tip).length());
         if balls.iter().all(|&b| in_goal(position(&world, b))) {
@@ -379,7 +379,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     for &b in &game.balls {
         let colour = if in_goal(position(world, b)) { "#27AE60" } else { "#3498DB" };
-        if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(b) {
+        if let Some(mut m) = world.query_mut::<&mut MaterialDesc>().get_mut(b) {
             m.albedo = Color::srgb_hex(colour).to_vec4();
         }
     }

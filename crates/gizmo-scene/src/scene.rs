@@ -676,12 +676,12 @@ impl SceneData {
         // (a drop is silent data loss; `serde_bridge` logs the per-component reason).
         let mut component_count = 0usize;
         let mut dropped_components = 0usize;
-        let names = world.borrow::<EntityName>();
-        let meshes = world.borrow::<MeshSource>();
-        let materials = world.borrow::<MaterialSource>();
-        let parents = world.borrow::<Parent>();
-        let children_store = world.borrow::<Children>();
-        let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
+        let names = world.query::<&EntityName>();
+        let meshes = world.query::<&MeshSource>();
+        let materials = world.query::<&MaterialSource>();
+        let parents = world.query::<&Parent>();
+        let children_store = world.query::<&Children>();
+        let editor_only_markers = world.query::<&gizmo_core::component::EditorOnly>();
 
         for &id in &entity_ids {
             let name = names.get(id).map(|n| n.0.clone());
@@ -1128,7 +1128,7 @@ impl SceneData {
             } else if world.is_alive(p_id) {
                 let p_ent = p_id;
                 let existing: Vec<Entity> = world
-                    .borrow::<Children>()
+                    .query::<&Children>()
                     .get(p_id)
                     .map(|c| c.0.clone())
                     .unwrap_or_default();
@@ -1211,7 +1211,7 @@ impl SceneData {
         let mut ids_to_save = vec![root_entity_id];
         let mut visited: std::collections::HashSet<Entity> = std::collections::HashSet::new();
         visited.insert(root_entity_id);
-        let children_storage = world.borrow::<Children>();
+        let children_storage = world.query::<&Children>();
 
         let mut i = 0;
         while i < ids_to_save.len() {
@@ -1418,7 +1418,7 @@ impl SceneData {
         if let (Some(new_r), Some(p_id)) = (new_root_id, parent_entity) {
             if let Some(p_ent) = world.live(p_id) {
                 let mut children_list = world
-                    .borrow::<Children>()
+                    .query::<&Children>()
                     .get(p_id)
                     .map(|c| c.0.clone())
                     .unwrap_or_default();
@@ -1490,7 +1490,7 @@ impl SceneData {
     /// wins follows the unsorted storage order, so this returns *an* entity with that name
     /// rather than *the* one. Resolve once and keep the id rather than re-looking it up.
     pub fn find_entity_by_name(world: &World, target_name: &str) -> Option<Entity> {
-        let names = world.borrow::<EntityName>();
+        let names = world.query::<&EntityName>();
         for (entity, _) in world.query::<(Entity, &EntityName)>().iter() {
             if let Some(name) = names.get(entity) {
                 if name.0 == target_name {
@@ -1573,8 +1573,8 @@ mod tests {
         SceneData::instantiate_entities(scene.entities, None, &mut world, &registry);
 
         // 3 varlık isim + Transform pozisyonlarıyla spawn olmalı (declarative → gerçek entity).
-        let names = world.borrow::<EntityName>();
-        let transforms = world.borrow::<Transform>();
+        let names = world.query::<&EntityName>();
+        let transforms = world.query::<&Transform>();
         let pos_of = |want: &str| -> Option<Vec3> {
             world
                 .iter_alive_entities()
@@ -1621,7 +1621,7 @@ mod tests {
 
         // İsme göre entity bul.
         let find = |w: &World, want: &str| -> Option<Entity> {
-            let names = w.borrow::<EntityName>();
+            let names = w.query::<&EntityName>();
             w.iter_alive_entities()
                 .into_iter()
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
@@ -1632,7 +1632,7 @@ mod tests {
 
         // Transform değerleri korunmalı.
         {
-            let ts = loaded.borrow::<Transform>();
+            let ts = loaded.query::<&Transform>();
             let pt = ts.get(p).expect("Parent Transform yok (reflect round-trip bozuk)");
             let ct = ts.get(c).expect("Child Transform yok");
             assert_eq!(pt.position, Vec3::new(1.0, 2.0, 3.0), "Parent pozisyonu round-trip'te bozuldu");
@@ -1641,7 +1641,7 @@ mod tests {
 
         // Hiyerarşi korunmalı: Child'ın Parent'ı yeni p id'sine çözülmeli.
         {
-            let parents = loaded.borrow::<Parent>();
+            let parents = loaded.query::<&Parent>();
             assert_eq!(parents.get(c).map(|x| x.0), Some(p), "ebeveyn-çocuk ilişkisi round-trip'te bozuldu");
         }
     }
@@ -1682,7 +1682,7 @@ mod tests {
         let new_root = new_root.expect("prefab kökü reload sonrası var olmalı");
 
         let find = |w: &World, want: &str| -> Option<Entity> {
-            let names = w.borrow::<EntityName>();
+            let names = w.query::<&EntityName>();
             w.iter_alive_entities()
                 .into_iter()
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
@@ -1690,7 +1690,7 @@ mod tests {
         let a2 = find(&loaded, "A").expect("çocuk A yüklenmedi");
         let b2 = find(&loaded, "B").expect("çocuk B yüklenmedi");
 
-        let parents = loaded.borrow::<Parent>();
+        let parents = loaded.query::<&Parent>();
         assert_eq!(
             parents.get(a2).map(|x| x.0),
             Some(new_root),
@@ -1741,7 +1741,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let alive = loaded.iter_alive_entities();
-        let names = loaded.borrow::<EntityName>();
+        let names = loaded.query::<&EntityName>();
         // Shared child C must be emitted exactly once — the old BFS pushed it twice
         // (via A and via B) → two EntityData with the same original_id → one leaked
         // empty entity on reload.
@@ -1805,14 +1805,14 @@ mod tests {
         // The child must remain parented — the bare group node was kept, so the
         // subtree isn't detached. Old skip-filter dropped it → child.parent_id
         // referenced a missing id → child became a detached root.
-        let names = loaded.borrow::<EntityName>();
+        let names = loaded.query::<&EntityName>();
         let child2 = loaded
             .iter_alive_entities()
             .into_iter()
             .find(|e| names.get(*e).map(|n| n.0.as_str()) == Some("CHILD"))
             .expect("çocuk yüklenmedi");
         drop(names);
-        let parents = loaded.borrow::<Parent>();
+        let parents = loaded.query::<&Parent>();
         assert!(
             parents.get(child2).is_some(),
             "çocuk, korunan grup node'una bağlı kalmalı (öksüz kalmamalı)"
@@ -1855,14 +1855,14 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let id = {
-            let names = loaded.borrow::<EntityName>();
+            let names = loaded.query::<&EntityName>();
             loaded
                 .iter_alive_entities()
                 .into_iter()
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some("Recycled"))
                 .expect("Recycled entity yüklenmedi")
         };
-        let ts = loaded.borrow::<Transform>();
+        let ts = loaded.query::<&Transform>();
         let t = ts
             .get(id)
             .expect("recycled-id entity'nin Transform'ı kaydedilirken DÜŞTÜ (generation-0 lookup bug)");
@@ -2118,7 +2118,7 @@ mod tests {
         assert_ne!(new_c.id(), 1001);
 
         // Child's Parent points at the REMAPPED parent id.
-        let parents = world.borrow::<Parent>();
+        let parents = world.query::<&Parent>();
         assert_eq!(
             parents.get(new_c).map(|p| p.0),
             Some(new_p),
@@ -2127,7 +2127,7 @@ mod tests {
         drop(parents);
 
         // And the parent's Children list gained the remapped child (back-link built).
-        let children = world.borrow::<Children>();
+        let children = world.query::<&Children>();
         assert!(
             children.get(new_p).map(|c| c.0.contains(&new_c)).unwrap_or(false),
             "parent's Children must include the remapped child"
@@ -2157,7 +2157,7 @@ mod tests {
             SceneData::instantiate_entities(entities, Some(host), &mut world, &registry);
         let new = id_map[&500];
 
-        let parents = world.borrow::<Parent>();
+        let parents = world.query::<&Parent>();
         assert_eq!(
             parents.get(new).map(|p| p.0),
             Some(host),
@@ -2217,14 +2217,14 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let id = {
-            let names = loaded.borrow::<EntityName>();
+            let names = loaded.query::<&EntityName>();
             loaded
                 .iter_alive_entities()
                 .into_iter()
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some("Wall"))
                 .expect("Wall entity yüklenmedi")
         };
-        let colliders = loaded.borrow::<Collider>();
+        let colliders = loaded.query::<&Collider>();
         let col = colliders.get(id).expect("Collider round-trip'te düştü");
         match &col.shape {
             ColliderShape::Box(b) => {
@@ -2277,7 +2277,7 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         let find = |w: &World, want: &str| -> Entity {
-            let names = w.borrow::<EntityName>();
+            let names = w.query::<&EntityName>();
             w.iter_alive_entities()
                 .into_iter()
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
@@ -2580,7 +2580,7 @@ mod asset_identity_tests {
                 .expect("a root came back");
         let _ = std::fs::remove_file(&path);
 
-        let sources = loaded.borrow::<MeshSource>();
+        let sources = loaded.query::<&MeshSource>();
         assert_eq!(
             sources.get(new_root).map(|m| m.0.clone()).as_deref(),
             Some("demo/assets/props/tree.obj"),
@@ -2661,7 +2661,7 @@ mod of_entities_tests {
         let map = SceneData::from_ron_str(&ron).unwrap().instantiate(&mut fresh, &registry);
         assert_eq!(map.len(), 3);
         let xs: Vec<f32> = {
-            let ts = fresh.borrow::<Transform>();
+            let ts = fresh.query::<&Transform>();
             let mut v: Vec<f32> = map.values().filter_map(|&id| ts.get(id).map(|t| t.position.x)).collect();
             v.sort_by(f32::total_cmp);
             v

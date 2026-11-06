@@ -245,7 +245,7 @@ fn self_test() -> bool {
     for _ in 0..90 {
         run.frame(1.0 / 60.0, update);
     }
-    let leaving = run.world.borrow::<Leaving>().iter().count();
+    let leaving = run.world.query::<&Leaving>().iter().count();
     let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
     let winner = if game.foe.hp <= 0 { "sen" } else if game.me.hp <= 0 { "rakip" } else { "kimse" };
     let ok = game.phase == Phase::Over && conserved && leaving == 0;
@@ -383,8 +383,8 @@ fn relayout(world: &mut World, game: &Game, fresh: usize) {
         let to = slot(i, n);
         // Ekranda şu an nerede: eski yeri artı kayması.
         let (from, shift) = {
-            let styles = world.borrow::<Style>();
-            let ts = world.borrow::<UiTransform>();
+            let styles = world.query::<&Style>();
+            let ts = world.query::<&UiTransform>();
             let s = styles.get(id).copied().unwrap_or_default();
             let at = match (s.inset.left, s.inset.top) {
                 (Val::Px(x), Val::Px(y)) => Vec2::new(x, y),
@@ -393,10 +393,10 @@ fn relayout(world: &mut World, game: &Game, fresh: usize) {
             (at, ts.get(id).map_or(Vec2::ZERO, |t| t.translation))
         };
         let delay = if i + fresh >= n { (i + fresh - n) as f32 * 0.08 } else { 0.0 };
-        if let Some(mut s) = world.borrow_mut::<Style>().get_mut(id) {
+        if let Some(mut s) = world.query_mut::<&mut Style>().get_mut(id) {
             *s = absolute(to, CARD);
         }
-        if let Some(mut t) = world.borrow_mut::<UiTransform>().get_mut(id) {
+        if let Some(mut t) = world.query_mut::<&mut UiTransform>().get_mut(id) {
             t.translation = from + shift - to;
         }
         if let Some(e) = world.live(id) {
@@ -418,7 +418,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
     // Sönen kartlar bitince siliniyor.
     let gone: Vec<Entity> = {
-        let tweens = world.borrow::<UiTween>();
+        let tweens = world.query::<&UiTween>();
         world.query::<(Entity, &Leaving)>().iter().filter(|(entity, _)| tweens.get(*entity).is_none_or(|t| t.is_finished())).map(|(entity, _)| entity).collect()
     };
     for id in gone {
@@ -458,7 +458,7 @@ fn player_turn(world: &mut World, game: &mut Game, input: &Input) {
             }
         }
     }
-    let clicked = world.borrow::<Clicked>().get(game.end_turn).is_some_and(|c| c.0);
+    let clicked = world.query::<&Clicked>().get(game.end_turn).is_some_and(|c| c.0);
     if clicked || input.is_key_just_pressed(KeyCode::Enter as u32) {
         end_turn(world, game);
         return;
@@ -466,10 +466,10 @@ fn player_turn(world: &mut World, game: &mut Game, input: &Input) {
     // Sürüklenen kart imleci izliyor; bırakılınca ya oynanıyor ya yerine dönüyor.
     let mut dropped: Option<(usize, Option<Entity>)> = None;
     for (i, &(_, id)) in game.hand.iter().enumerate() {
-        let Some(d) = world.borrow::<Drag>().get(id).copied() else { continue };
+        let Some(d) = world.query::<&Drag>().get(id).copied() else { continue };
         if d.is_dragging() {
             let follow = d.delta() / ui_scale(world);
-            if let Some(mut t) = world.borrow_mut::<UiTransform>().get_mut(id) {
+            if let Some(mut t) = world.query_mut::<&mut UiTransform>().get_mut(id) {
                 t.translation = follow;
             }
             // Kaldırıldığı an: kayıyorsa dursun, öbürlerinin önüne geçsin.
@@ -533,13 +533,13 @@ fn play(world: &mut World, game: &mut Game, i: usize, at_foe: bool) {
 /// Bir kartı `target` kutusunun üstüne uçurur ve söndürür; sönünce siliniyor.
 fn fly_away(world: &mut World, card: Entity, target: Entity) {
     let (from, to) = {
-        let nodes = world.borrow::<gizmo::ui::Node>();
+        let nodes = world.query::<&gizmo::ui::Node>();
         let k = ui_scale(world);
         let c = nodes.get(card).map(|n| n.position + n.size * 0.5).unwrap_or_default();
         let t = nodes.get(target).map(|n| n.position + n.size * 0.5).unwrap_or_default();
         (c / k, t / k)
     };
-    let shift = world.borrow::<UiTransform>().get(card).map_or(Vec2::ZERO, |t| t.translation);
+    let shift = world.query::<&UiTransform>().get(card).map_or(Vec2::ZERO, |t| t.translation);
     if let Some(e) = world.live(card) {
         world.add_component(e, Leaving);
         world.add_component(e, ZIndex(20));
@@ -594,7 +594,7 @@ fn enemy_move(world: &mut World, game: &mut Game) {
     // Rakibin kartı onun portresinden çıkıp hedefe uçuyor.
     let card = spawn_card(world, game, kind);
     let at = Vec2::new(580.0, 40.0);
-    if let Some(mut s) = world.borrow_mut::<Style>().get_mut(card) {
+    if let Some(mut s) = world.query_mut::<&mut Style>().get_mut(card) {
         *s = absolute(at, CARD);
     }
     let to = if kind.hostile() { Vec2::new(580.0, 380.0) } else { at };
@@ -620,7 +620,7 @@ fn hud(world: &mut World, game: &Game) {
     for &(kind, id) in &game.hand {
         let playable = game.phase == Phase::Player && kind.cost() <= game.mana;
         let a = if playable { 1.0 } else { 0.45 };
-        if let Some(mut b) = world.borrow_mut::<BackgroundColor>().get_mut(id) {
+        if let Some(mut b) = world.query_mut::<&mut BackgroundColor>().get_mut(id) {
             let c = kind.colour().truncate().extend(a);
             if b.0 != c {
                 b.0 = c;
@@ -630,7 +630,7 @@ fn hud(world: &mut World, game: &Game) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

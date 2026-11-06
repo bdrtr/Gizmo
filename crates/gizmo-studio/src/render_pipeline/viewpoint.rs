@@ -44,8 +44,8 @@ pub(super) fn resolve(
     aspect: f32,
     exposure: f32,
 ) -> Viewpoint {
-    let cameras = world.borrow::<Camera>();
-    let transforms = world.borrow::<Transform>();
+    let cameras = world.query::<&Camera>();
+    let transforms = world.query::<&Transform>();
 
     let is_playing_mode = world
         .get_resource::<gizmo::editor::EditorState>()
@@ -95,8 +95,8 @@ pub(super) fn camera_frame(
     aspect: f32,
     exposure: f32,
 ) -> Option<CameraFrame> {
-    let cameras = world.borrow::<Camera>();
-    let transforms = world.borrow::<Transform>();
+    let cameras = world.query::<&Camera>();
+    let transforms = world.query::<&Transform>();
     let (cam, trans) = (cameras.get(entity)?, transforms.get(entity)?);
     Some(CameraFrame {
         view_proj: cam.get_projection(aspect) * cam.get_view(trans.position),
@@ -124,8 +124,8 @@ pub(super) fn culling_frustum(
     if viewpoint.is_playing_mode {
         return drawn;
     }
-    let cameras = world.borrow::<Camera>();
-    let transforms = world.borrow::<Transform>();
+    let cameras = world.query::<&Camera>();
+    let transforms = world.query::<&Transform>();
     match (cameras.get(game_camera), transforms.get(game_camera)) {
         (Some(cam), Some(trans)) => {
             let vp = cam.get_projection(aspect) * cam.get_view(trans.position);
@@ -146,8 +146,8 @@ pub(super) fn game_view_proj(
     if viewpoint.is_playing_mode {
         return None;
     }
-    let cameras = world.borrow::<Camera>();
-    let transforms = world.borrow::<Transform>();
+    let cameras = world.query::<&Camera>();
+    let transforms = world.query::<&Transform>();
     match (cameras.get(game_camera), transforms.get(game_camera)) {
         (Some(cam), Some(trans)) => {
             Some(cam.get_projection(aspect) * cam.get_view(trans.position))

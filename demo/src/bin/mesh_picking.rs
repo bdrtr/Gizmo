@@ -30,7 +30,7 @@
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::prelude::*;
@@ -167,7 +167,7 @@ fn main() {
 
 /// İmlecin altındaki şekli bulur, çizer, ve tıklanınca rengini değiştirir.
 fn pick_under_cursor(
-    mut shapes: Query<(Entity, Mut<Shape>, Mut<Material>)>,
+    mut shapes: Query<(Entity, &mut Shape, &mut Material)>,
     cameras: Query<(&Camera, &Transform)>,
     physics: Res<PhysicsWorld>,
     window: Res<WindowInfo>,
@@ -240,7 +240,7 @@ fn pick_under_cursor(
 }
 
 /// İmlecin altındaki şekli aydınlatır, diğerlerini kendi rengine bırakır.
-fn paint_hover(mut shapes: Query<(Entity, Mut<Shape>, Mut<Material>)>, hover: Res<Hover>) {
+fn paint_hover(mut shapes: Query<(Entity, &mut Shape, &mut Material)>, hover: Res<Hover>) {
     for (entity, shape, mut material) in shapes.iter_mut() {
         let base = PALETTE[shape.palette];
         material.albedo = if hover.entity == Some(entity.id()) {

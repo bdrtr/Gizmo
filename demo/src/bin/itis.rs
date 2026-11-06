@@ -373,7 +373,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     };
     let poses: Vec<(Vec3, Quat)> = PUCK.iter().map(|&i| (w.transforms[i].position, w.transforms[i].rotation)).collect();
     for (p, &id) in game.pucks.iter().enumerate() {
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(id) {
             t.position = poses[p].0;
             t.rotation = poses[p].1;
         }
@@ -393,7 +393,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

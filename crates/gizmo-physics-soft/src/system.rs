@@ -49,7 +49,7 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
         // SAFETY: a scheduled system; the scheduler guarantees no other system holds a conflicting
         // view of SoftBodyMesh while this one runs, which is the invariant `query_unchecked` asks
         // the caller to supply in exchange for skipping the runtime borrow check.
-        let mut q = unsafe { world.query_unchecked::<gizmo_core::query::Mut<SoftBodyMesh>>() };
+        let mut q = unsafe { world.query_unchecked::<&mut SoftBodyMesh>() };
         let mut bodies: Vec<_> = q.iter_mut().collect();
         // As many sub-steps as the stiffest body needs to stay stable — see `stable_substeps`;
         // one step of the frame's `dt` exploded a dropped block at any stiffness worth calling a
@@ -170,9 +170,9 @@ pub fn apply_reaction_impulses(world: &World, impulses: &[RigidImpulse]) {
     let mut q = unsafe {
         world.query_unchecked::<(
             gizmo_core::Entity,
-            gizmo_core::query::Mut<RigidBody>,
+            &mut RigidBody,
             &Transform,
-            gizmo_core::query::Mut<Velocity>,
+            &mut Velocity,
         )>()
     };
     {
@@ -224,7 +224,7 @@ pub fn cloth_step_system(world: &World, dt: f32, gravity: Vec3) {
 
     {
         // SAFETY: scheduled system, exclusive view of Cloth — see `soft_body_step_system` above.
-        let mut q = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Cloth>>() };
+        let mut q = unsafe { world.query_unchecked::<&mut Cloth>() };
         for mut cloth in q.iter_mut() {
             cloth.step_coupled(dt, gravity, sub_steps, &rigid_colliders, &reactions, &mut impulses);
         }
@@ -241,7 +241,7 @@ pub fn rope_step_system(world: &World, dt: f32, gravity: Vec3) {
     let dt = dt.min(MAX_SOFT_DT);
     {
         // SAFETY: scheduled system, exclusive view of Rope — see `soft_body_step_system` above.
-        let mut q = unsafe { world.query_unchecked::<gizmo_core::query::Mut<Rope>>() };
+        let mut q = unsafe { world.query_unchecked::<&mut Rope>() };
         let colliders = collect_rigid_colliders(world);
         for mut rope in q.iter_mut() {
             rope.step_with_colliders(dt, gravity, &colliders);

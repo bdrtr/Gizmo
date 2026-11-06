@@ -31,7 +31,7 @@ pub fn cursor_ray(world: &World) -> Option<Ray> {
     let window = (info.width.max(1.0), info.height.max(1.0));
     let cursor = input.mouse_position();
 
-    let cameras = world.borrow::<Camera>();
+    let cameras = world.query::<&Camera>();
     // A viewport camera under the cursor, else the camera the frame is drawn through.
     let in_viewport = world.query::<(Entity, &Camera)>().iter()
         .filter_map(|(entity, c)| c.viewport.map(|v| (entity, c.order, v)))
@@ -90,7 +90,7 @@ pub fn world_to_screen(world: &World, point: Vec3) -> Option<crate::math::Vec2> 
     let info = world.get_resource::<WindowInfo>()?;
     let window = (info.width.max(1.0), info.height.max(1.0));
     let id = active_camera(world)?;
-    let camera = *world.borrow::<Camera>().get(id)?;
+    let camera = *world.query::<&Camera>().get(id)?;
     let (origin, size) = match camera.viewport {
         Some(v) => ((v.x * window.0, v.y * window.1), (v.width * window.0, v.height * window.1)),
         None => ((0.0, 0.0), window),
@@ -176,7 +176,7 @@ mod tests {
         }
         let mut world = scene(1000.0, 500.0, (0.0, 0.0));
         let id = active_camera(&world).unwrap();
-        if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(id) {
+        if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(id) {
             c.viewport = Some(Viewport::right_half());
         }
         let centre = world_to_screen(&world, Vec3::ZERO).unwrap();
@@ -222,7 +222,7 @@ mod tests {
             pitch: -std::f32::consts::FRAC_PI_4,
             ..Default::default()
         });
-        if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(right) {
+        if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(right) {
             c.viewport = Some(Viewport::right_half());
         }
         propagate(&mut world);

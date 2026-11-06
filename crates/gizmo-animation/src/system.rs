@@ -1,4 +1,4 @@
-use gizmo_core::query::{Query, Mut};
+use gizmo_core::query::Query;
 use gizmo_core::system::Res;
 use gizmo_core::Time;
 use gizmo_core::component::{Children, EntityName};
@@ -28,10 +28,10 @@ pub fn animation_system(
     time: Res<Time>,
     entities: Res<Entities>,
     mut commands: gizmo_core::Commands,
-    mut players: Query<(Entity, Mut<AnimationPlayer>)>,
+    mut players: Query<(Entity, &mut AnimationPlayer)>,
     names: Query<&EntityName>,
     children: Query<&Children>,
-    mut transforms: Query<(Mut<Transform>, gizmo_core::query::With<crate::player::Animated>)>,
+    mut transforms: Query<(&mut Transform, gizmo_core::query::With<crate::player::Animated>)>,
 ) {
     let dt = time.dt();
 
@@ -285,7 +285,7 @@ mod tests {
 
             schedule.run(&mut world, 0.016);
 
-            let players = world.borrow::<AnimationPlayer>();
+            let players = world.query::<&AnimationPlayer>();
             let player = players.get(root).expect("the player is still there");
             (player.target_entities.len(), player.elapsed_time)
         });

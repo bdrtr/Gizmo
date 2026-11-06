@@ -112,8 +112,8 @@ fn start_position(world: &World) -> Vec3 {
 /// Otomatik pilot: sıradaki noktaya dön, hız sınırının altında gaz.
 fn autopilot(world: &World, car: Entity, target: Vec3) -> (f32, f32) {
     let (t, speed) = {
-        let ts = world.borrow::<Transform>();
-        let cs = world.borrow::<VehicleController>();
+        let ts = world.query::<&Transform>();
+        let cs = world.query::<&VehicleController>();
         (ts.get(car).copied().unwrap_or_default(), cs.get(car).map_or(0.0, |c| c.current_speed_kmh))
     };
     let forward = t.rotation * Vec3::NEG_Z;
@@ -125,7 +125,7 @@ fn autopilot(world: &World, car: Entity, target: Vec3) -> (f32, f32) {
 }
 
 fn drive(world: &mut World, car: Entity, throttle: f32, steer: f32) {
-    if let Some(mut c) = world.borrow_mut::<VehicleController>().get_mut(car) {
+    if let Some(mut c) = world.query_mut::<&mut VehicleController>().get_mut(car) {
         c.throttle_input = throttle.max(0.0);
         c.brake_input = (-throttle).max(0.0);
         c.steering_input = steer;
@@ -154,7 +154,7 @@ fn self_test() -> bool {
         drive(&mut world, car, throttle, steer);
         physics.advance(&mut world, dt);
         world.apply_commands();
-        let p = world.borrow::<Transform>().get(car).map(|t| t.position).unwrap_or(Vec3::ZERO);
+        let p = world.query::<&Transform>().get(car).map(|t| t.position).unwrap_or(Vec3::ZERO);
         if let Some(g) = world.get_resource::<PhysicsWorld>().and_then(|pw| ground_at(&pw, p.x, p.z, car.id())) {
             deepest = deepest.min(p.y - g);
             airborne_max = airborne_max.max(p.y - g);
@@ -272,7 +272,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     if game.finished.is_none() {
         game.clock += dt;
     }
-    let t = world.borrow::<Transform>().get(game.car).copied().unwrap_or_default();
+    let t = world.query::<&Transform>().get(game.car).copied().unwrap_or_default();
     let target = checkpoint(world, game.next);
     if game.finished.is_none() && Vec2::new(t.position.x - target.x, t.position.z - target.z).length() < RADIUS {
         game.next += 1;
@@ -281,7 +281,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     }
     for (k, &flag) in game.flags.iter().enumerate() {
-        if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(flag) {
+        if let Some(mut m) = world.query_mut::<&mut MaterialDesc>().get_mut(flag) {
             m.albedo = match k.cmp(&game.next) {
                 std::cmp::Ordering::Less => Color::srgb_hex("#27AE60").to_vec4(),
                 std::cmp::Ordering::Equal => Color::srgb_hex("#F1C40F").to_vec4(),
@@ -290,14 +290,14 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     }
     // Takip kamerası.
-    if let Some(mut c) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut c) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         let back = t.rotation * Vec3::new(0.0, 0.0, 1.0);
         let want = t.position + Vec3::new(back.x, 0.0, back.z).normalize_or_zero() * 11.0 + Vec3::Y * 5.0;
         c.position = c.position.lerp(want, (dt * 3.0).min(1.0));
         let look = (t.position - c.position).normalize_or_zero();
         c.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, look);
     }
-    let speed = world.borrow::<VehicleController>().get(game.car).map_or(0.0, |c| c.current_speed_kmh);
+    let speed = world.query::<&VehicleController>().get(game.car).map_or(0.0, |c| c.current_speed_kmh);
     let dist = Vec2::new(t.position.x - target.x, t.position.z - target.z).length();
     set_text(
         world,

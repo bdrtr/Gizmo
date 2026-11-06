@@ -221,7 +221,7 @@ mod tests {
         for frame in 1..=6 {
             schedule.run(&mut world, 1.0 / 60.0);
             let locked = world
-                .borrow::<FighterController>()
+                .query::<&FighterController>()
                 .get(fighter_entity)
                 .expect("the fighter is still there")
                 .is_locked();

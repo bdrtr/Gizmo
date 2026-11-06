@@ -38,7 +38,7 @@ pub trait IntoCondition<Params> {
     /// World access performed by the condition's own SystemParams. The scheduler must
     /// include this in its disjointness check: a `run_if(|r: Res<Score>| ..)` condition
     /// reads `Score` at run time, so it must conflict with a `ResMut<Score>` writer (and a
-    /// `Query<&Pos>` condition with a `Query<Mut<Pos>>` writer) — otherwise they co-batch
+    /// `Query<&Pos>` condition with a `Query<&mut Pos>` writer) — otherwise they co-batch
     /// and run in parallel over a shared `&World`, racing on the resource/component.
     fn condition_access() -> AccessInfo;
 }

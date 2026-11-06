@@ -370,16 +370,16 @@ fn build_occlusion(
     size: winit::dpi::PhysicalSize<u32>,
     hidden: &std::collections::HashSet<Entity>,
 ) -> Option<crate::renderer::occlusion::OcclusionBuffer> {
-    let occluders = world.borrow::<crate::renderer::components::Occluder>();
+    let occluders = world.query::<&crate::renderer::components::Occluder>();
     occluders.iter().next()?;
-    let renderers = world.borrow::<MeshRenderer>();
-    let transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
-    let pooled = world.borrow::<gizmo_core::pool::Pooled>();
-    let editor_only = world.borrow::<crate::core::component::EditorOnly>();
-    let meshes = world.borrow::<Mesh>();
-    let materials = world.borrow::<Material>();
-    let mesh_handles = world.borrow::<gizmo_core::asset::Handle<Mesh>>();
-    let material_handles = world.borrow::<gizmo_core::asset::Handle<Material>>();
+    let renderers = world.query::<&MeshRenderer>();
+    let transforms = world.query::<&gizmo_physics_core::components::GlobalTransform>();
+    let pooled = world.query::<&gizmo_core::pool::Pooled>();
+    let editor_only = world.query::<&crate::core::component::EditorOnly>();
+    let meshes = world.query::<&Mesh>();
+    let materials = world.query::<&Material>();
+    let mesh_handles = world.query::<&gizmo_core::asset::Handle<Mesh>>();
+    let material_handles = world.query::<&gizmo_core::asset::Handle<Material>>();
     let mesh_assets = world.try_get_resource::<gizmo_core::asset::Assets<Mesh>>().ok();
     let material_assets = world.try_get_resource::<gizmo_core::asset::Assets<Material>>().ok();
 
@@ -426,7 +426,7 @@ pub(super) fn collect_draw_items(
     cascade_vp: [Mat4; 4],
     cam_pos: Vec3,
 ) -> (Vec<DrawItem>, u32) {
-    let renderers = world.borrow::<MeshRenderer>();
+    let renderers = world.query::<&MeshRenderer>();
     // **`IsHidden` is honoured here, not only in `gizmo-studio`** — the same shape as `LodGroup`
     // below. The marker's own doc says "do not display this entity" and the editor's 👁 button and
     // H shortcut are built on it, but the only draw loop that ever asked was studio's own; this
@@ -445,19 +445,19 @@ pub(super) fn collect_draw_items(
     // entity, so hiding a vehicle hides its wheels. Before it, a hidden parent left 1 886 of a
     // pair's 2 946 pixels on screen. The set is built from the same two borrows both paths hold,
     // and it costs nothing on a frame with nothing hidden.
-    let hidden = super::collect_hidden(world, &world.borrow::<crate::core::component::Children>());
+    let hidden = super::collect_hidden(world, &world.query::<&crate::core::component::Children>());
     // **Editor furniture never draws here.** A game has none, so for a game this is a no-op; it
     // matters since 2026-11-01, when the studio started capturing reflection probes through this
     // path (`capture_reflection_probes`) — without it the grid, light icons and gizmo handles
     // would be baked into every probe the editor captured.
-    let editor_only = world.borrow::<crate::core::component::EditorOnly>();
+    let editor_only = world.query::<&crate::core::component::EditorOnly>();
 
     // What this view's occluders hide. Built before the walk, from this frame's transforms; `None`
     // for a scene with no `Occluder`, which then tests nothing.
     let occlusion = build_occlusion(world, &unjittered_view_proj, renderer.size, &hidden);
-    let occluders = world.borrow::<crate::renderer::components::Occluder>();
+    let occluders = world.query::<&crate::renderer::components::Occluder>();
     let occluded_objects = std::cell::Cell::new(0u32);
-    let reflections = world.borrow::<crate::renderer::components::PlanarReflection>();
+    let reflections = world.query::<&crate::renderer::components::PlanarReflection>();
     let skip_mirrors = renderer.skip_mirrors;
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
@@ -486,7 +486,7 @@ pub(super) fn collect_draw_items(
         cache.instances.clear();
         cache.draw_items.clear();
 
-        let pooled_storage = world.borrow::<gizmo_core::pool::Pooled>();
+        let pooled_storage = world.query::<&gizmo_core::pool::Pooled>();
         
         macro_rules! process_mesh {
             ($e:expr, $mesh:expr, $trans:expr, $mat:expr, $skeleton:expr) => {
@@ -768,7 +768,7 @@ pub(super) fn collect_draw_items(
             };
         }
 
-        let skeletons = world.borrow::<crate::renderer::components::Skeleton>();
+        let skeletons = world.query::<&crate::renderer::components::Skeleton>();
 
         // **`LodGroup` is honoured here, not only in `gizmo-studio`.** The components and
         // `LodGroup::select_mesh` have always existed, but the only thing that looked at them was
@@ -784,7 +784,7 @@ pub(super) fn collect_draw_items(
         // Distance is to the entity's world translation — the same point studio measures to,
         // reached from a `GlobalTransform` here and from the assembled model matrix there. The
         // three-case answer itself is `LodGroup::pick`, so only that route is ours.
-        let lod_groups = world.borrow::<crate::renderer::components::LodGroup>();
+        let lod_groups = world.query::<&crate::renderer::components::LodGroup>();
 
         // The spatial index, if the scene put one in. Queried once for the union of the camera
         // frustum and the cascades — the same set `classify_visibility_world` decides between

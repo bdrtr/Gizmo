@@ -1046,8 +1046,8 @@ mod ecs {
 
         soft_body_step_system(&world, DT, Vec3::ZERO);
 
-        let bodies = world.borrow::<RigidBody>();
-        let vels = world.borrow::<Velocity>();
+        let bodies = world.query::<&RigidBody>();
+        let vels = world.query::<&Velocity>();
         let rb = bodies.get(target).expect("crate");
         let vel = vels.get(target).expect("crate velocity");
 
@@ -1091,8 +1091,8 @@ mod ecs {
         soft_body_step_system(&world, DT, Vec3::ZERO);
 
         {
-            let bodies = world.borrow::<RigidBody>();
-            let vels = world.borrow::<Velocity>();
+            let bodies = world.query::<&RigidBody>();
+            let vels = world.query::<&Velocity>();
             assert_eq!(
                 vels.get(floor).expect("floor velocity").linear,
                 Vec3::ZERO,
@@ -1104,7 +1104,7 @@ mod ecs {
             );
         }
 
-        let meshes = world.borrow::<SoftBodyMesh>();
+        let meshes = world.query::<&SoftBodyMesh>();
         let sb = meshes.get(soft).expect("soft body");
         assert!(
             (sb.nodes[0].velocity.y - 30.0).abs() < 1e-2,
@@ -1135,8 +1135,8 @@ mod ecs {
 
         soft_body_step_system(&world, DT, Vec3::ZERO);
 
-        let bodies = world.borrow::<RigidBody>();
-        let vels = world.borrow::<Velocity>();
+        let bodies = world.query::<&RigidBody>();
+        let vels = world.query::<&Velocity>();
         assert_eq!(
             vels.get(far).expect("far velocity").linear,
             Vec3::ZERO,
@@ -1211,8 +1211,8 @@ mod ecs {
         // is what makes the conservation claim a claim about the contact.
         soft_body_step_system(&world, DT, Vec3::ZERO);
 
-        let meshes = world.borrow::<SoftBodyMesh>();
-        let vels = world.borrow::<Velocity>();
+        let meshes = world.query::<&SoftBodyMesh>();
+        let vels = world.query::<&Velocity>();
         let stepped = meshes.get(soft).expect("soft body");
         let vel = vels.get(target).expect("crate velocity");
 

@@ -31,7 +31,7 @@
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera · **Shift** — hızlı hareket
 
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::time::PhysicsTime;
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -160,7 +160,7 @@ fn main() {
 /// Küpü sabit adımlarla ilerletir — hareket bu yüzden **kesikli**, ve düşük FPS'te bile aynı
 /// hızda: adım sayısı gerçek zamana göre ayarlanır.
 fn fixed_update(
-    mut cubes: Query<(Mut<Transform>, Mut<FixedCube>)>,
+    mut cubes: Query<(&mut Transform, &mut FixedCube)>,
     mut stats: ResMut<TickStats>,
     physics_time: Res<PhysicsTime>,
 ) {
@@ -180,7 +180,7 @@ fn fixed_update(
 /// Aynı zamanda bir önceki karede kaç sabit adım koştuğunu da defterler — bu demonun asıl
 /// ölçtüğü sayı o.
 fn frame_update(
-    mut cubes: Query<(Mut<Transform>, Mut<FrameCube>)>,
+    mut cubes: Query<(&mut Transform, &mut FrameCube)>,
     mut stats: ResMut<TickStats>,
     time: Res<Time>,
     physics_time: Res<PhysicsTime>,

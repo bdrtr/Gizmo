@@ -229,7 +229,7 @@ fn update(world: &mut World, state: &mut Showcase, dt: f32, _input: &Input) {
 
     // İp görselini pivot↔top yüzeyi arasına ger.
     let ball = world
-        .borrow::<Transform>()
+        .query::<&Transform>()
         .get(state.rope_ball)
         .map(|t| t.position);
     if let Some(ball) = ball {
@@ -237,7 +237,7 @@ fn update(world: &mut World, state: &mut Showcase, dt: f32, _input: &Input) {
         let len = (seg.length() - 0.4).max(0.0);
         let dir = seg.normalize_or_zero();
         let surface = ball + dir * 0.4;
-        let mut ts = world.borrow_mut::<Transform>();
+        let mut ts = world.query_mut::<&mut Transform>();
         if let Some(mut tr) = ts.get_mut(state.rope_vis) {
             tr.position = surface + dir * (len * 0.5);
             tr.rotation = Quat::from_rotation_arc(Vec3::Y, dir);

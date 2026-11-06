@@ -30,7 +30,7 @@
 //!   **Kapatıldı:** `gizmo::ui::pointer_over_ui(world)` — her `Node`, düğme olsun olmasın.
 //! - **Tıklama olayı yoktu** (`Interaction` her kare yeniden hesaplanan bir durum). **Kapatıldı**
 //!   bu oyundan hemen önce: `ButtonBundle`'daki `Clicked`; "Dalga" düğmesi onu okuyor. Onun için
-//!   de sorguda isteğe bağlı bileşen gerekti: `Option<Mut<Clicked>>`.
+//!   de sorguda isteğe bağlı bileşen gerekti: `Option<&mut Clicked>`.
 //! - **Izgaraya duvar eklenince ajanlar eski yolda kalıyordu** — sonraki yeniden planlamaya
 //!   kadar (0.5 s) yeni kulenin içinden yürüyorlardı; oyun her ajanın `clear_path`'ini elle
 //!   çağırıyordu. **Kapatıldı:** `NavGrid` bir revizyon tutuyor (`add_obstacle_world`,
@@ -224,7 +224,7 @@ fn self_test() -> bool {
     let mut game = setup(&mut world, HeadlessFrames::font(), false);
     game.gold = 1000;
     let rows = (HALF_D * 2.0) as i32;
-    let towers = |w: &World| w.borrow::<Tower>().iter().count();
+    let towers = |w: &World| w.query::<&Tower>().iter().count();
     for z in 0..rows {
         place_tower(&mut world, &mut game, Vec3::new(-6.5, 0.0, -HALF_D + 0.5 + z as f32));
     }
@@ -236,7 +236,7 @@ fn self_test() -> bool {
     game.auto = true;
     world.insert_resource(game);
     let mut run = HeadlessFrames::new(world).add_plugin(UiPlugin);
-    let enemies = |w: &World| w.borrow::<Enemy>().iter().count();
+    let enemies = |w: &World| w.query::<&Enemy>().iter().count();
     let mut seen = 0usize;
     loop {
         run.frame(1.0 / 60.0, update);
@@ -289,7 +289,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         start_wave(&mut game);
     }
 
-    let wave_clicked = world.borrow::<Clicked>().get(game.wave_button).is_some_and(|c| c.0);
+    let wave_clicked = world.query::<&Clicked>().get(game.wave_button).is_some_and(|c| c.0);
     if wave_clicked && game.to_spawn == 0 && game.lives > 0 {
         start_wave(&mut game);
     }
@@ -351,7 +351,7 @@ fn camera_controls(world: &mut World, input: &Input) {
     }
     let Some(cam) = world.query::<(Entity, &Camera)>().iter().next().map(|(entity, c)| (entity, c.get_front())) else { return };
     let (id, forward) = cam;
-    let mut transforms = world.borrow_mut::<Transform>();
+    let mut transforms = world.query_mut::<&mut Transform>();
     let Some(mut t) = transforms.get_mut(id) else { return };
     // Bakılan zemin noktası (y = 0) ve ona uzaklık.
     let along = if forward.y.abs() > 1e-3 { -t.position.y / forward.y } else { 10.0 };
@@ -439,12 +439,12 @@ fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {
 
 fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
     let enemies: Vec<(Entity, Vec3)> = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         world.query::<(Entity, &Enemy)>().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity, t.position))).collect()
     };
     let mut shots: Vec<(Vec3, Vec3, Entity)> = Vec::new();
     {
-        let mut towers = world.query_mut::<(Mut<Tower>, &Transform)>();
+        let mut towers = world.query_mut::<(&mut Tower, &Transform)>();
         for (mut tower, tf) in towers.iter_mut() {
             tower.reload.tick(dt);
             if !tower.reload.finished() {
@@ -479,7 +479,7 @@ fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
         // (parçacıklar GPU'da kendi ömürlerini sürüyor).
         world.spawn_bundle((Transform::new(to), GlobalTransform::default(), sparks(16, Vec4::new(1.0, 0.85, 0.3, 1.0)), Flash(0.1)));
         let dead = {
-            let mut es = world.borrow_mut::<Enemy>();
+            let mut es = world.query_mut::<&mut Enemy>();
             match es.get_mut(enemy) {
                 Some(mut e) => {
                     e.hp -= 1.0;
@@ -495,8 +495,8 @@ fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
             play(world, "olum");
         } else {
             // Can azaldıkça soluklaşan renk.
-            let frac = world.borrow::<Enemy>().get(enemy).map(|e| e.hp / e.max_hp).unwrap_or(1.0);
-            if let Some(mut m) = world.borrow_mut::<Material>().get_mut(enemy) {
+            let frac = world.query::<&Enemy>().get(enemy).map(|e| e.hp / e.max_hp).unwrap_or(1.0);
+            if let Some(mut m) = world.query_mut::<&mut Material>().get_mut(enemy) {
                 m.albedo = Vec4::new(0.85, 0.25 + (1.0 - frac) * 0.6, 0.2 + (1.0 - frac) * 0.6, 1.0);
             }
         }
@@ -519,7 +519,7 @@ fn sparks(count: u32, colour: Vec4) -> gizmo::renderer::components::ParticleEmit
 
 fn enemies_arrive(world: &mut World, game: &mut Game) {
     let arrived: Vec<Entity> = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         world.query::<(Entity, &Enemy)>().iter()
             .filter(|(entity, _)| ts.get(*entity).is_some_and(|t| Vec3::new(t.position.x - GOAL.x, 0.0, t.position.z - GOAL.z).length() < 0.6))
             .map(|(entity, _)| entity)
@@ -534,7 +534,7 @@ fn enemies_arrive(world: &mut World, game: &mut Game) {
 
 fn fade_flashes(world: &mut World, dt: f32) {
     let done: Vec<Entity> = {
-        let mut fs = world.query_mut::<(Entity, Mut<Flash>)>();
+        let mut fs = world.query_mut::<(Entity, &mut Flash)>();
         let mut done = Vec::new();
         for (entity, mut f) in fs.iter_mut() {
             f.0 -= dt;
@@ -556,8 +556,8 @@ fn play(world: &mut World, name: &str) {
 }
 
 fn draw_hud(world: &mut World, game: &Game) {
-    let alive = world.borrow::<Enemy>().iter().count();
-    let mut texts = world.borrow_mut::<Text>();
+    let alive = world.query::<&Enemy>().iter().count();
+    let mut texts = world.query_mut::<&mut Text>();
     if let Some(mut t) = texts.get_mut(game.hud) {
         t.content = format!("Altın {}   Can {}\nDalga {}   Düşman {}", game.gold, game.lives, game.wave, alive + game.to_spawn as usize);
     }

@@ -15,7 +15,7 @@ pub fn draw_animation_player_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut anim_players = unsafe { world.borrow_mut_unchecked::<gizmo_renderer::components::AnimationPlayer>() };
+    let mut anim_players = unsafe { world.query_unchecked::<&mut gizmo_renderer::components::AnimationPlayer>() };
     if let Some(mut player) = anim_players.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Animation Player"))
             .default_open(true)
@@ -89,7 +89,7 @@ pub fn draw_animation_player_section(
             });
     }
 
-    let skeletons = world.borrow::<gizmo_renderer::components::Skeleton>();
+    let skeletons = world.query::<&gizmo_renderer::components::Skeleton>();
     if let Some(skel) = skeletons.get(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Skeleton"))
             .default_open(true)
@@ -108,7 +108,7 @@ pub fn draw_name_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut names = unsafe { world.borrow_mut_unchecked::<EntityName>() };
+    let mut names = unsafe { world.query_unchecked::<&mut EntityName>() };
     {
         if let Some(mut name) = names.get_mut(entity_id) {
             ui.horizontal(|ui| {
@@ -129,7 +129,7 @@ pub fn draw_particle_emitter_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut emitters = unsafe { world.borrow_mut_unchecked::<ParticleEmitter>() };
+    let mut emitters = unsafe { world.query_unchecked::<&mut ParticleEmitter>() };
     {
         if let Some(mut emitter) = emitters.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("Particle Emitter"))
@@ -172,7 +172,7 @@ pub fn draw_script_section(
     let mut pending_text = None;
     let mut file_path = String::new();
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut scripts = unsafe { world.borrow_mut_unchecked::<gizmo_scripting::Script>() };
+    let mut scripts = unsafe { world.query_unchecked::<&mut gizmo_scripting::Script>() };
     {
         if let Some(mut script) = scripts.get_mut(entity_id) {
             file_path = script.file_path.clone();
@@ -229,7 +229,7 @@ pub fn draw_terrain_section(
     state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut terrains = unsafe { world.borrow_mut_unchecked::<gizmo_renderer::components::Terrain>() };
+    let mut terrains = unsafe { world.query_unchecked::<&mut gizmo_renderer::components::Terrain>() };
     {
         if let Some(mut terrain) = terrains.get_mut(entity_id) {
             let mut changed = false;
@@ -288,7 +288,7 @@ pub fn draw_fluid_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut fluids = unsafe { world.borrow_mut_unchecked::<FluidSimulation>() };
+    let mut fluids = unsafe { world.query_unchecked::<&mut FluidSimulation>() };
     {
         if let Some(mut fluid) = fluids.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("SPH Fluid Simulation (GPU)"))
@@ -345,7 +345,7 @@ pub fn draw_ai_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut agents = unsafe { world.borrow_mut_unchecked::<NavAgent>() };
+    let mut agents = unsafe { world.query_unchecked::<&mut NavAgent>() };
     let mut remove = false;
     {
         if let Some(mut agent) = agents.get_mut(entity_id) {
@@ -528,7 +528,7 @@ pub fn draw_hitbox_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut hitboxes = unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::components::Hitbox>() };
+    let mut hitboxes = unsafe { world.query_unchecked::<&mut gizmo_physics_core::components::Hitbox>() };
     if let Some(mut hitbox) = hitboxes.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Hitbox"))
             .default_open(true)
@@ -584,7 +584,7 @@ pub fn draw_hurtbox_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut hurtboxes = unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::components::Hurtbox>() };
+    let mut hurtboxes = unsafe { world.query_unchecked::<&mut gizmo_physics_core::components::Hurtbox>() };
     if let Some(mut hurtbox) = hurtboxes.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Hurtbox"))
             .default_open(true)
@@ -624,7 +624,7 @@ pub fn draw_bone_attachment_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut attachments = unsafe { world.borrow_mut_unchecked::<gizmo_renderer::components::BoneAttachment>() };
+    let mut attachments = unsafe { world.query_unchecked::<&mut gizmo_renderer::components::BoneAttachment>() };
     if let Some(mut attachment) = attachments.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Bone Attachment"))
             .default_open(true)
@@ -761,7 +761,7 @@ pub fn draw_fighter_controller_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut controllers = unsafe { world.borrow_mut_unchecked::<gizmo_physics_core::components::FighterController>() };
+    let mut controllers = unsafe { world.query_unchecked::<&mut gizmo_physics_core::components::FighterController>() };
     if let Some(mut fighter) = controllers.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Fighter Controller"))
             .default_open(true)
@@ -854,7 +854,7 @@ pub fn draw_mesh_renderer_section(
     use gizmo_renderer::components::{MeshRenderer, ShadowCasting};
 
     // SAFETY: the editor UI runs single-threaded inside the egui draw; no concurrent World access.
-    let mut renderers = unsafe { world.borrow_mut_unchecked::<MeshRenderer>() };
+    let mut renderers = unsafe { world.query_unchecked::<&mut MeshRenderer>() };
     let Some(mut renderer) = renderers.get_mut(entity_id) else {
         return;
     };

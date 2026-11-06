@@ -318,15 +318,15 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let clicked: Vec<Entity> = world.query::<(Entity, &Clicked)>().iter().filter(|(_, c)| c.0).map(|(entity, _)| entity).collect();
     let mut changed = false;
     for id in clicked {
-        if let Some(&SeedButton(c)) = world.borrow::<SeedButton>().get(id) {
+        if let Some(&SeedButton(c)) = world.query::<&SeedButton>().get(id) {
             game.seed = c;
         }
-        if world.borrow::<WaterButton>().get(id).is_some() && !game.garden.watered && game.garden.coins >= WATER_PRICE {
+        if world.query::<&WaterButton>().get(id).is_some() && !game.garden.watered && game.garden.coins >= WATER_PRICE {
             game.garden.coins -= WATER_PRICE;
             game.garden.watered = true;
             changed = true;
         }
-        if let Some(&PlotButton(i)) = world.borrow::<PlotButton>().get(id) {
+        if let Some(&PlotButton(i)) = world.query::<&PlotButton>().get(id) {
             changed |= tend(&mut game, i, now);
         }
     }
@@ -390,12 +390,12 @@ fn draw(world: &mut World, game: &mut Game, now: f64, dt: f32) {
             }
         };
         set_text(world, game.plot_labels[i], &label);
-        if let Some(mut bg) = world.borrow_mut::<BackgroundColor>().get_mut(game.plot_labels[i]) {
+        if let Some(mut bg) = world.query_mut::<&mut BackgroundColor>().get_mut(game.plot_labels[i]) {
             if bg.0 != colour {
                 bg.0 = colour;
             }
         }
-        if let Some(mut bar) = world.borrow_mut::<ProgressBar>().get_mut(game.plot_bars[i]) {
+        if let Some(mut bar) = world.query_mut::<&mut ProgressBar>().get_mut(game.plot_bars[i]) {
             if bar.value != p {
                 bar.value = p;
             }
@@ -403,7 +403,7 @@ fn draw(world: &mut World, game: &mut Game, now: f64, dt: f32) {
     }
     for (c, &b) in game.seed_buttons.iter().enumerate() {
         let colour = hex(if c == game.seed { SEED_ON } else { SEED });
-        if let Some(mut bg) = world.borrow_mut::<BackgroundColor>().get_mut(b) {
+        if let Some(mut bg) = world.query_mut::<&mut BackgroundColor>().get_mut(b) {
             bg.0 = colour;
         }
     }
@@ -418,7 +418,7 @@ fn draw(world: &mut World, game: &mut Game, now: f64, dt: f32) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

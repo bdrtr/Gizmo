@@ -111,9 +111,9 @@ pub fn execute_render_pipeline(
     // walk, shared with the game path, because two answers to "is this drawn" is what the
     // 2026-08-19 fix was about. The `IsHidden` borrow is still taken here rather than inside the
     // helper so this loop keeps naming the marker in code, which `render_parity` asserts.
-    let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
+    let _is_hidden_guard = world.query::<&gizmo::core::component::IsHidden>();
     let hidden = gizmo::systems::render::collect_hidden(world,
-        &world.borrow::<gizmo::core::component::Children>(),
+        &world.query::<&gizmo::core::component::Children>(),
     );
 
     // Which camera this frame is drawn from — and, separately, which one it culls against. Both
@@ -237,10 +237,10 @@ pub fn execute_render_pipeline(
         all_instances.clear();
         flat_batches.clear();
 
-        let renderers = world.borrow::<gizmo::renderer::components::MeshRenderer>();
-        let skeletons = world.borrow::<gizmo::renderer::components::Skeleton>();
-        let lod_groups = world.borrow::<gizmo::renderer::components::LodGroup>();
-        let editor_only = world.borrow::<gizmo::core::component::EditorOnly>();
+        let renderers = world.query::<&gizmo::renderer::components::MeshRenderer>();
+        let skeletons = world.query::<&gizmo::renderer::components::Skeleton>();
+        let lod_groups = world.query::<&gizmo::renderer::components::LodGroup>();
+        let editor_only = world.query::<&gizmo::core::component::EditorOnly>();
 
         {
             let mut q = world.query::<(Entity, &Mesh, &gizmo::physics::components::GlobalTransform, &Material)>();
@@ -598,9 +598,9 @@ pub fn execute_render_pipeline(
             // the read-only Transform query below, and the read borrow above is already dropped,
             // so this mutable query never aliases another live access to the same storage.
             let mut emitters =
-                unsafe { world.borrow_mut_unchecked::<gizmo::renderer::components::ParticleEmitter>() };
+                unsafe { world.query_unchecked::<&mut gizmo::renderer::components::ParticleEmitter>() };
             {
-                let transforms = world.borrow::<Transform>();
+                let transforms = world.query::<&Transform>();
                 {
                     // The emission rule is the game path's own function (`emit`): a burst and a
                     // rate, the same stream per (frame, emitter). This was a copy of the loop.
@@ -860,7 +860,7 @@ fn record_game_view(
         return false;
     };
     let cam_fov = {
-        let cameras = world.borrow::<gizmo::renderer::components::Camera>();
+        let cameras = world.query::<&gizmo::renderer::components::Camera>();
         match cameras.get(game_camera) {
             Some(c) => c.fov,
             None => return false,
@@ -869,7 +869,7 @@ fn record_game_view(
 
     // The game camera's background, as the game draws it (`Camera::clear_color`).
     let clear_color = world
-        .borrow::<gizmo::renderer::components::Camera>()
+        .query::<&gizmo::renderer::components::Camera>()
         .get(game_camera)
         .and_then(|c| c.clear_color)
         .map(|c| c.to_array());

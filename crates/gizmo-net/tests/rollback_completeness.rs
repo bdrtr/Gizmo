@@ -69,10 +69,10 @@ fn scene() -> (World, PhysicsWorld) {
 /// physics world, steps, and copies the results back.
 fn step(world: &mut World, pw: &mut PhysicsWorld) {
     let bodies: Vec<(BodyHandle, RigidBody, Transform, Velocity, Collider)> = {
-        let transforms = world.borrow::<Transform>();
-        let velocities = world.borrow::<Velocity>();
-        let rigid_bodies = world.borrow::<RigidBody>();
-        let colliders = world.borrow::<Collider>();
+        let transforms = world.query::<&Transform>();
+        let velocities = world.query::<&Velocity>();
+        let rigid_bodies = world.query::<&RigidBody>();
+        let colliders = world.query::<&Collider>();
         world
             .iter_alive_entities()
             .into_iter()
@@ -94,11 +94,11 @@ fn step(world: &mut World, pw: &mut PhysicsWorld) {
     // SAFETY: this test owns the world exclusively, and Transform/Velocity/RigidBody are three
     // distinct component types, so the views never alias the same storage — the same argument
     // the code under test makes in `PhysicsStateSnapshot::restore`.
-    let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
+    let mut transforms = unsafe { world.query_unchecked::<&mut Transform>() };
     // SAFETY: as above — a distinct component type.
-    let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+    let mut velocities = unsafe { world.query_unchecked::<&mut Velocity>() };
     // SAFETY: as above — a distinct component type.
-    let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
+    let mut rigid_bodies = unsafe { world.query_unchecked::<&mut RigidBody>() };
     for (i, handle) in pw.entities.iter().enumerate() {
         let id = world.entity(handle.id()).expect("a live body");
         if let Some(mut t) = transforms.get_mut(id) {

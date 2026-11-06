@@ -124,7 +124,7 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
     // Duvarın içine yürümesin: bir sonraki hücre kapalıysa durur, yol bulucu çevirir.
     let steps: Vec<(Entity, Vec3)> = {
         let grid = world.get_resource::<NavGrid>();
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         moves
             .into_iter()
             .filter_map(|(id, v)| {
@@ -134,13 +134,13 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
             .collect()
     };
     for (id, next) in steps {
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(id) {
             t.position = next;
         }
     }
     let ants: Vec<(Entity, Ant, Vec3, bool)> = {
-        let ts = world.borrow::<Transform>();
-        let ag = world.borrow::<NavAgent>();
+        let ts = world.query::<&Transform>();
+        let ag = world.query::<&NavAgent>();
         world.query::<(Entity, &Ant)>().iter()
             .filter_map(|(entity, ant)| Some((entity, *ant, ts.get(entity)?.position, ag.get(entity).is_some_and(|n| n.route_failed()))))
             .collect()
@@ -157,7 +157,7 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
                     new_target = Some(colony.piles[p].at);
                 }
                 if visual {
-                    if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(id) {
+                    if let Some(mut m) = world.query_mut::<&mut MaterialDesc>().get_mut(id) {
                         m.albedo = Color::srgb_hex("#3B2A1A").to_vec4();
                     }
                 }
@@ -167,7 +167,7 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
             ant.carrying = true;
             new_target = Some(NEST);
             if visual {
-                if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(id) {
+                if let Some(mut m) = world.query_mut::<&mut MaterialDesc>().get_mut(id) {
                     m.albedo = Color::srgb_hex("#E6B422").to_vec4();
                 }
             }
@@ -181,7 +181,7 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
             }
         }
         let wants = if ant.carrying { NEST } else { colony.piles[ant.pile].at };
-        if let Some(mut a) = world.borrow_mut::<NavAgent>().get_mut(id) {
+        if let Some(mut a) = world.query_mut::<&mut NavAgent>().get_mut(id) {
             if let Some(t) = new_target {
                 a.set_target(t);
             } else if a.target.is_none() {
@@ -189,7 +189,7 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
                 a.set_target(wants);
             }
         }
-        if let Some(mut stored) = world.borrow_mut::<Ant>().get_mut(id) {
+        if let Some(mut stored) = world.query_mut::<&mut Ant>().get_mut(id) {
             *stored = ant;
         }
     }
@@ -205,7 +205,7 @@ fn set_wall(world: &mut World, cell: (i32, i32), on: bool, visual: bool) {
         }
     }
     let existing: Option<Entity> = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         world.query::<(Entity, &Wall)>().iter().map(|(entity, _)| entity).find(|id| ts.get(*id).is_some_and(|t| (t.position.x - at.x).abs() < 0.1 && (t.position.z - at.z).abs() < 0.1))
     };
     match (on, existing) {
@@ -256,8 +256,8 @@ fn self_test() -> bool {
         step(&mut world, &mut colony, dt, false);
         if std::env::var_os("KARINCA_DEBUG").is_some() && frame % 300 == 299 {
             let (failed, idle, carrying) = {
-                let ag = world.borrow::<NavAgent>();
-                let ants = world.borrow::<Ant>();
+                let ag = world.query::<&NavAgent>();
+                let ants = world.query::<&Ant>();
                 (
                     ag.iter().filter(|a| a.route_failed()).count(),
                     ag.iter().filter(|a| a.target.is_none()).count(),
@@ -268,7 +268,7 @@ fn self_test() -> bool {
             println!("  {:4.0} s: taşınan {:4}, taşıyan {carrying:3}, yolsuz {failed:3}, hedefsiz {idle:3}, yığınlar {left:?}", colony.clock, colony.delivered);
         }
     }
-    let positions_ok = world.borrow::<Transform>().iter().all(|t| t.position.is_finite());
+    let positions_ok = world.query::<&Transform>().iter().all(|t| t.position.is_finite());
     let ok = colony.delivered > 300 && colony.delivered > at_unwall && at_unwall > at_wall && positions_ok;
     println!(
         "karinca --test: {} karınca, 40 s'de {} yem taşındı (duvardan önce {at_wall}, duvarken {}, sonra {}); en uzun yapay zekâ karesi {:.1} ms → {}",
@@ -380,7 +380,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     // Yığınlar yem azaldıkça küçülür.
     for pile in &game.colony.piles {
         if let Some(m) = pile.marker {
-            if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(m) {
+            if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(m) {
                 t.scale = Vec3::splat(0.2 + 0.6 * (pile.food as f32 / PILE_FOOD as f32).min(1.0));
             }
         }
@@ -391,7 +391,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         "{ANTS} karınca   taşınan yem {}   kalan {left}\nyapay zekâ {:.1} ms (en uzun {:.1})\nsol tık: duvar   sağ tık: yem   R: baştan",
         game.colony.delivered, game.colony.recent_ai_ms, game.colony.worst_ai_ms
     );
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(game.hud) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(game.hud) {
         if t.content != text {
             t.content = text;
         }

@@ -19,7 +19,7 @@
 //! adımını çalıştırsa da gövdesiz entity'ler entegre edilmez, dolayısıyla yerlerinde dururlar).
 //! O idiomlar fizik-gövdesi / geçici-uçan-nesne / sahne-reset ister; bu vitrinde bunların hiçbiri yok.
 
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -111,7 +111,7 @@ fn hsl_to_rgb(h: f32, s: f32, l: f32) -> [f32; 4] {
 }
 
 /// Küp renklerini zamanla akıcı biçimde döndüren ECS sistemi (100°/sn).
-fn animate_materials(mut q_materials: Query<(Mut<Material>, Mut<CubeHue>)>, time: Res<Time>) {
+fn animate_materials(mut q_materials: Query<(&mut Material, &mut CubeHue)>, time: Res<Time>) {
     let dt = time.dt();
     for (mut mat, mut hue) in q_materials.iter_mut() {
         hue.0 = (hue.0 + dt * 100.0).rem_euclid(360.0);

@@ -108,7 +108,7 @@
 
 use gizmo::core::input::Input;
 use gizmo::core::observer::{Insert, On, Remove, Replace};
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -498,7 +498,7 @@ fn drive_chain(world: &mut gizmo::core::World, clicked: bool) {
             },
         );
         {
-            let mut query = world.query_mut::<Mut<Material>>();
+            let mut query = world.query_mut::<&mut Material>();
             if let Some(mut material) = query.get_mut(entity) {
                 material.albedo = FIRED;
             }
@@ -561,7 +561,7 @@ fn explode_now(world: &mut gizmo::core::World, entity: gizmo::core::entity::Enti
 
     world.add_component(entity, Mine { exploded: true, ..mine });
     {
-        let mut query = world.query_mut::<Mut<Material>>();
+        let mut query = world.query_mut::<&mut Material>();
         if let Some(mut material) = query.get_mut(entity) {
             material.albedo = FIRED;
         }

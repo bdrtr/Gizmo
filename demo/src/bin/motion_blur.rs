@@ -105,7 +105,7 @@
 //!   * `GIZMO_BLUR_NO_TAA=1` — TAA'yı kapat, ölçümü ondan ayır
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
 
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, ResMut};
 use gizmo::prelude::*;
 use gizmo::renderer::components::PostProcess;
@@ -230,7 +230,7 @@ fn main() {
             if let Some(shutter) = std::env::var("GIZMO_BLUR_SHUTTER").ok().and_then(|v| v.parse::<f32>().ok()) {
                 let cams: Vec<Entity> = world.query::<(Entity, &Camera)>().iter().map(|(entity, _)| entity).collect();
                 for id in cams {
-                    if world.borrow::<PostProcess>().get(id).is_none() {
+                    if world.query::<&PostProcess>().get(id).is_none() {
                         if let Some(e) = world.live(id) {
                             let mut grade = PostProcess::default();
                             grade.motion_blur = shutter;
@@ -250,7 +250,7 @@ fn main() {
                     let pos = Vec3::new(m.angle.cos() * ORBIT_RADIUS, 1.2, m.angle.sin() * ORBIT_RADIUS);
                     let dir = (-pos).normalize();
                     {
-                        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
+                        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
                         for (mut t, mut cam) in q.iter_mut() {
                             t.position = pos;
                             cam.yaw = dir.z.atan2(dir.x);
@@ -298,8 +298,8 @@ fn main() {
 /// `dt` ile değil: kare süresine bağlı bir dönüş, iki koşuyu aynı karede farklı açıya koyar ve
 /// karşılaştırmayı yok eder.
 fn drive(
-    mut cameras: Query<(Mut<Transform>, With<Camera>)>,
-    mut spinners: Query<(Mut<Transform>, With<Spinner>)>,
+    mut cameras: Query<(&mut Transform, With<Camera>)>,
+    mut spinners: Query<(&mut Transform, With<Spinner>)>,
     mut motion: ResMut<Motion>,
     time: gizmo::core::system::Res<Time>,
 ) {

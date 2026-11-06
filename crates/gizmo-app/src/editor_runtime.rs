@@ -306,8 +306,8 @@ pub fn process_scene_requests(world: &mut World) {
     // 4. Clear + Load
     if clear_req || load_req.is_some() {
         let editor_entities: std::collections::HashSet<u32> = {
-            let names = world.borrow::<gizmo_core::EntityName>();
-            let markers = world.borrow::<gizmo_core::component::EditorOnly>();
+            let names = world.query::<&gizmo_core::EntityName>();
+            let markers = world.query::<&gizmo_core::component::EditorOnly>();
             world.query::<(Entity, &gizmo_core::EntityName)>().iter()
                 .filter_map(|(entity, _)| {
                     names.get(entity).and_then(|n| {

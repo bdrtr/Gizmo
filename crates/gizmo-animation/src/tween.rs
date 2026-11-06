@@ -18,7 +18,6 @@
 //! both draw paths (so `set_time_scale` and pause apply), before transforms are propagated — a
 //! game does not have to.
 
-use gizmo_core::query::Mut;
 use gizmo_core::world::World;
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics_core::Transform;
@@ -245,7 +244,7 @@ pub fn tween_system(world: &mut World, dt: f32) {
         return;
     }
     {
-        let mut q = world.query_mut::<(Mut<Tween>, Mut<Transform>)>();
+        let mut q = world.query_mut::<(&mut Tween, &mut Transform)>();
         for (mut tween, mut transform) in q.iter_mut() {
             if !tween.is_finished() {
                 tween.advance(dt, &mut transform);
@@ -353,8 +352,8 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn_bundle((Transform::new(Vec3::ZERO), Tween::to_position(Vec3::new(0.0, 2.0, 0.0), 1.0)));
         tween_system(&mut world, 0.0);
-        assert_eq!(world.borrow::<Transform>().get(e).unwrap().position, Vec3::ZERO, "a paused clock moved it");
+        assert_eq!(world.query::<&Transform>().get(e).unwrap().position, Vec3::ZERO, "a paused clock moved it");
         tween_system(&mut world, 0.5);
-        assert!((world.borrow::<Transform>().get(e).unwrap().position.y - 1.0).abs() < 1e-5);
+        assert!((world.query::<&Transform>().get(e).unwrap().position.y - 1.0).abs() < 1e-5);
     }
 }

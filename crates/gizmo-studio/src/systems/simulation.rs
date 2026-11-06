@@ -147,7 +147,7 @@ pub fn handle_simulation(
     // the pause overlay was still being drawn over the top of them. A paused fight is still a
     // fight; only the *countdown* below stops, because that is the part that spends time.
     if editor_state.is_in_play_session() {
-        let names = world.borrow::<gizmo::core::component::EntityName>();
+        let names = world.query::<&gizmo::core::component::EntityName>();
         let mut found_any = false;
 
         for (entity, fighter) in world.query::<(Entity, &gizmo::physics::components::FighterController)>().iter() {
@@ -186,7 +186,7 @@ pub fn handle_simulation(
                 let p1_pos;
                 let p2_pos;
                 {
-                    let transforms = world.borrow::<gizmo::prelude::Transform>();
+                    let transforms = world.query::<&gizmo::prelude::Transform>();
                     p1_pos = transforms.get(p1_id).map(|t| t.position);
                     p2_pos = transforms.get(p2_id).map(|t| t.position);
                 }
@@ -215,9 +215,9 @@ pub fn handle_simulation(
                     let cam_entity_id = state.editor_camera;
                     {
                         // SAFETY: exclusive `&mut World`; Transform and Camera are distinct component types.
-                        let mut transforms = unsafe { world.borrow_mut_unchecked::<gizmo::prelude::Transform>() };
+                        let mut transforms = unsafe { world.query_unchecked::<&mut gizmo::prelude::Transform>() };
                         // SAFETY: as above — Camera is a distinct component type from Transform.
-                        let mut cameras = unsafe { world.borrow_mut_unchecked::<gizmo::renderer::components::Camera>() };
+                        let mut cameras = unsafe { world.query_unchecked::<&mut gizmo::renderer::components::Camera>() };
 
                         if let Some(mut t) = transforms.get_mut(cam_entity_id) {
                             // Yumuşak geçiş (lerp)

@@ -26,7 +26,7 @@
 //! koyup `ResMut<T>` almak. Kaybedilen şey kapsülleme: `MyParam`'ın içindeki üç sorgu, üç ayrı
 //! parametre olarak sistemin imzasında görünmek zorunda.
 //!
-//! **`WorldQuery` yerine — demet + filtre.** `(&A, Mut<B>, With<C>, Without<D>)` epeyce yol
+//! **`WorldQuery` yerine — demet + filtre.** `(&A, &mut B, With<C>, Without<D>)` epeyce yol
 //! alıyor; alınamayan şey *türetilmiş* bir operand (örneğin "iki bileşenden hesaplanan tek bir
 //! görünüm").
 //!

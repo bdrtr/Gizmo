@@ -49,7 +49,7 @@ fn a_new_body_on_a_recycled_id_is_not_tied_to_the_old_ones_joint() {
     for _ in 0..60 {
         physics_step_system(&world, STEP);
     }
-    let at = world.borrow::<Transform>().get(new).unwrap().position;
+    let at = world.query::<&Transform>().get(new).unwrap().position;
     let joints = world.get_resource::<PhysicsWorld>().unwrap().joints.len();
     assert!(
         at.distance(start) < 1e-3 && joints == 0,
@@ -74,7 +74,7 @@ fn a_new_body_on_a_recycled_id_enters_a_trigger_it_is_born_in() {
         .id();
     let old = ball(&mut world, Vec3::ZERO);
     // Moving, so it stays awake: a sleeping pair drops out of the cache on its own.
-    world.borrow_mut::<Velocity>().get_mut(old).unwrap().linear = Vec3::new(0.3, 0.0, 0.0);
+    world.query_mut::<&mut Velocity>().get_mut(old).unwrap().linear = Vec3::new(0.3, 0.0, 0.0);
     for _ in 0..5 {
         physics_step_system(&world, STEP);
     }
@@ -113,7 +113,7 @@ fn a_body_despawned_in_a_trigger_ends_its_overlap() {
         .spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new_static(), Velocity::default(), Collider::sphere(3.0).with_trigger(true)))
         .id();
     let visitor = ball(&mut world, Vec3::ZERO);
-    world.borrow_mut::<Velocity>().get_mut(visitor).unwrap().linear = Vec3::new(0.3, 0.0, 0.0);
+    world.query_mut::<&mut Velocity>().get_mut(visitor).unwrap().linear = Vec3::new(0.3, 0.0, 0.0);
     for _ in 0..5 {
         physics_step_system(&world, STEP);
     }

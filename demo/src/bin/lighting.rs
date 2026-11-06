@@ -30,7 +30,7 @@
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera · **Shift** — hızlı hareket
 
 use gizmo::core::input::{Input, MoveKeys};
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res};
 use gizmo::core::HierarchyExt;
 use gizmo::prelude::*;
@@ -209,7 +209,7 @@ fn main() {
 /// normalize edilir). Dört tuşu elle okuyup `Vec3`'ü toplamanın yerini `MoveKeys::ARROWS`
 /// tutuyor.
 fn movement(
-    mut movables: Query<(Mut<Transform>, With<Movable>)>,
+    mut movables: Query<(&mut Transform, With<Movable>)>,
     input: Res<Input>,
     time: Res<Time>,
 ) {
@@ -228,7 +228,7 @@ fn movement(
 ///
 /// Ortam ışığı motorda malzemenin alanı olduğu için bunun karşılığı sahnedeki bütün
 /// `Material`'ları dolaşmak — tek bir kaynağı değiştirmek değil.
-fn toggle_ambient_light(mut materials: Query<Mut<Material>>, input: Res<Input>) {
+fn toggle_ambient_light(mut materials: Query<&mut Material>, input: Res<Input>) {
     if !input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Space as u32) {
         return;
     }

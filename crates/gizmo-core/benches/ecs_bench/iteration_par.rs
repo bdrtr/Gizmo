@@ -1,8 +1,5 @@
 use criterion::Criterion;
-use gizmo_core::{
-    world::World,
-    query::Mut,
-};
+use gizmo_core::world::World;
 use super::common::*;
 
 // 5. Heavy Compute
@@ -19,7 +16,7 @@ pub fn bench_heavy_compute(c: &mut Criterion) {
 
     c.bench_function("heavy_compute_par", |b| {
         b.iter(|| {
-            let mut query = world.query_mut::<(Mut<Position>, Mut<Transform>)>();
+            let mut query = world.query_mut::<(&mut Position, &mut Transform)>();
             query.par_for_each_mut(|(mut pos, mut mat)| {
                 for _ in 0..100 {
                     // simulate inverse matrix
@@ -49,7 +46,7 @@ pub fn bench_par_cache_locality_loss(c: &mut Criterion) {
         world.despawn(e);
     }
 
-    let mut query = world.query_mut::<(Mut<A>, &B)>();
+    let mut query = world.query_mut::<(&mut A, &B)>();
     query.iter_mut().for_each(|_| {}); // Warmup
 
     c.bench_function("par_cache_locality_loss", |b| {

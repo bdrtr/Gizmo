@@ -25,7 +25,7 @@ fn every_joint_of_a_new_humanoid_is_closed() {
     world.insert_resource(PhysicsWorld::new());
     let ragdoll = humanoid(&mut world);
     let pw = world.get_resource::<PhysicsWorld>().unwrap();
-    let ts = world.borrow::<Transform>();
+    let ts = world.query::<&Transform>();
     for &j in &ragdoll.joint_indices {
         let joint = &pw.joints[j];
         let at = |h: gizmo_physics_core::BodyHandle| ts.get(world.entity(h.id()).unwrap()).unwrap();
@@ -43,7 +43,7 @@ fn a_new_humanoid_in_zero_gravity_stays_still() {
     for _ in 0..60 {
         gizmo_physics_rigid::system::physics_step_system(&world, 1.0 / 60.0);
     }
-    let vs = world.borrow::<Velocity>();
+    let vs = world.query::<&Velocity>();
     let (v, w) = ragdoll.bones.iter().fold((0.0f32, 0.0f32), |(v, w), (_, e)| {
         let vel = vs.get(*e).unwrap();
         (v.max(vel.linear.length()), w.max(vel.angular.length()))

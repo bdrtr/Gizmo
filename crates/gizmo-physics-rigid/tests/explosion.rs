@@ -96,8 +96,8 @@ fn explosion_wakes_exactly_the_bodies_it_moves() {
     physics_explosion_system(&world, 1.0 / 60.0);
     world.apply_commands(); // the system despawns the (one-shot) explosion entity
 
-    let bodies = world.borrow::<RigidBody>();
-    let vels = world.borrow::<Velocity>();
+    let bodies = world.query::<&RigidBody>();
+    let vels = world.query::<&Velocity>();
 
     // ── The fix ──────────────────────────────────────────────────────────────
     let hit_rb = bodies.get(hit).expect("hit body");
@@ -178,7 +178,7 @@ fn explosion_moves_a_body_that_has_fallen_asleep() {
     }
 
     let (target_x0, far_x0) = {
-        let bodies = world.borrow::<RigidBody>();
+        let bodies = world.query::<&RigidBody>();
         assert!(
             bodies.get(target).expect("target").is_sleeping,
             "scenario invalid: the target box never fell asleep, so there is nothing to wake"
@@ -187,7 +187,7 @@ fn explosion_moves_a_body_that_has_fallen_asleep() {
             bodies.get(far).expect("far").is_sleeping,
             "scenario invalid: the control box never fell asleep"
         );
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         (
             ts.get(target).expect("target").position.x,
             ts.get(far).expect("far").position.x,
@@ -201,7 +201,7 @@ fn explosion_moves_a_body_that_has_fallen_asleep() {
     physics_step_system(&world, 1.0 / 60.0);
 
     {
-        let bodies = world.borrow::<RigidBody>();
+        let bodies = world.query::<&RigidBody>();
         assert!(
             !bodies.get(target).expect("target").is_sleeping,
             "the blasted box must be awake after the first step"
@@ -219,7 +219,7 @@ fn explosion_moves_a_body_that_has_fallen_asleep() {
         physics_step_system(&world, 1.0 / 60.0);
     }
 
-    let ts = world.borrow::<Transform>();
+    let ts = world.query::<&Transform>();
     let target_x1 = ts.get(target).expect("target").position.x;
     let far_x1 = ts.get(far).expect("far").position.x;
 

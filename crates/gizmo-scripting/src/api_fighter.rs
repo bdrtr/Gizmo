@@ -231,7 +231,7 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
         }
     }
 
-    let controllers = world.borrow::<gizmo_physics_core::components::FighterController>();
+    let controllers = world.query::<&gizmo_physics_core::components::FighterController>();
     for (entity, _) in world.query::<(Entity, &gizmo_physics_core::components::FighterController)>().iter() {
         if let Some(fighter) = controllers.get(entity) {
             let state = lua.create_table()?;

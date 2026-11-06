@@ -37,7 +37,7 @@
 //!   * **Space** ya da **sol tık** — sayacı artır · **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{
     and, not, or, IntoCondition, IntoSystem, IntoSystemConfig, Phase, Res, ResMut, SystemExtRunIf,
 };
@@ -224,7 +224,7 @@ fn count_input(mut counter: ResMut<InputCounter>, input: Res<Input>, time: Res<T
 
 /// Sol küp: sayaçla büyür. Kapı VEYA olduğu için Space ya da tık basılıyken koşar.
 fn grow_with_counter(
-    mut cubes: Query<(Mut<Transform>, With<GrowCube>)>,
+    mut cubes: Query<(&mut Transform, With<GrowCube>)>,
     counter: Res<InputCounter>,
     mut ran: ResMut<Ran>,
     time: Res<Time>,
@@ -238,7 +238,7 @@ fn grow_with_counter(
 
 /// Orta küp: yalnız sayaç yakın zamanda değiştiyse döner.
 fn spin_on_change(
-    mut cubes: Query<(Mut<Transform>, With<SpinCube>)>,
+    mut cubes: Query<(&mut Transform, With<SpinCube>)>,
     mut ran: ResMut<Ran>,
     time: Res<Time>,
 ) {
@@ -250,7 +250,7 @@ fn spin_on_change(
 
 /// Sağ küp: yalnız 2-4 saniye penceresinde yukarı süzülür, dışında yere iner.
 fn show_in_window(
-    mut cubes: Query<(Mut<Transform>, With<WindowCube>)>,
+    mut cubes: Query<(&mut Transform, With<WindowCube>)>,
     mut ran: ResMut<Ran>,
     time: Res<Time>,
 ) {

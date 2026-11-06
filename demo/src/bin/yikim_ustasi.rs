@@ -701,7 +701,7 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
     // --- hedef yıkım kontrolü ---
     let mut destroyed: Vec<(usize, Vec3)> = Vec::new();
     {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         for (i, t) in g.targets.iter().enumerate() {
             if !t.alive {
                 continue;
@@ -746,7 +746,7 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
 
     // --- kamerayı nişana göre güncelle ---
     {
-        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
+        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
         for (mut tr, mut cam) in q.iter_mut() {
             tr.position = CANNON_POS;
             tr.rotation = Quat::from_rotation_y(-g.yaw);

@@ -14,7 +14,7 @@ pub fn draw_material_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut materials = unsafe { world.borrow_mut_unchecked::<Material>() };
+    let mut materials = unsafe { world.query_unchecked::<&mut Material>() };
     {
         if let Some(mut mat) = materials.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("Material Properties"))

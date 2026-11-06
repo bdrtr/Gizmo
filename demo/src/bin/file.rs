@@ -101,7 +101,7 @@ fn spawn_fruit(world: &mut World, at: Vec3, visual: bool) {
 /// (yavaş sönen bir salınım) ve hızı o sürede sıfıra yakın değildir.
 fn settle(world: &mut World, dt: f32) -> (u32, u32) {
     let fruits: Vec<(Entity, Vec3, f32)> = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         world.query::<(Entity, &Fruit)>().iter().filter_map(|(entity, _)| Some((entity, ts.get(entity)?.position, 0.0))).collect()
     };
     let (mut caught, mut missed) = (0, 0);
@@ -115,7 +115,7 @@ fn settle(world: &mut World, dt: f32) -> (u32, u32) {
             gone = true;
         } else if p.y > NET_Y - 1.2 && p.y < NET_Y + 0.3 {
             let _ = speed;
-            let mut f = world.borrow_mut::<Fruit>();
+            let mut f = world.query_mut::<&mut Fruit>();
             if let Some(mut f) = f.get_mut(id) {
                 f.resting += dt;
                 if f.resting > 1.5 {
@@ -249,7 +249,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
                 world.despawn(e);
             }
         }
-        if let Some(mut c) = world.borrow_mut::<Cloth>().get_mut(game.net) {
+        if let Some(mut c) = world.query_mut::<&mut Cloth>().get_mut(game.net) {
             *c = net(0.0);
         }
         game.net_x = 0.0;
@@ -264,7 +264,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         let target = (game.net_x + mx * SPEED * dt).clamp(-FIELD / 2.0 + NET_W / 2.0, FIELD / 2.0 - NET_W / 2.0);
         let dx = target - game.net_x;
         game.net_x = target;
-        if let Some(mut c) = world.borrow_mut::<Cloth>().get_mut(game.net) {
+        if let Some(mut c) = world.query_mut::<&mut Cloth>().get_mut(game.net) {
             slide(&mut c, dx);
         }
         if game.clock >= game.next_drop {
@@ -292,7 +292,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

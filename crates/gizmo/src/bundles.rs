@@ -204,10 +204,10 @@ impl Bundle for SpotLightBundle {
 /// });
 /// // A single call attaches Transform + GlobalTransform + Camera together.
 /// assert_eq!(
-///     world.borrow::<Transform>().get(cam).unwrap().position,
+///     world.query::<&Transform>().get(cam).unwrap().position,
 ///     Vec3::new(0.0, 3.0, 10.0)
 /// );
-/// assert!(world.borrow::<Camera>().get(cam).unwrap().primary);
+/// assert!(world.query::<&Camera>().get(cam).unwrap().primary);
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[cfg(feature = "render")]
@@ -289,10 +289,10 @@ impl Bundle for CameraBundle {
 ///         .at(Vec3::new(0.0, 5.0, 0.0))
 /// );
 /// assert_eq!(
-///     world.borrow::<Transform>().get(player).unwrap().position,
+///     world.query::<&Transform>().get(player).unwrap().position,
 ///     Vec3::new(0.0, 5.0, 0.0)
 /// );
-/// assert_eq!(world.borrow::<EntityName>().get(player).unwrap().0, "Oyuncu");
+/// assert_eq!(world.query::<&EntityName>().get(player).unwrap().0, "Oyuncu");
 /// ```
 #[cfg(feature = "render")]
 pub struct MeshBundle {
@@ -571,7 +571,7 @@ mod tests {
         let e = world
             .spawn_bundle(RigidBodyBundle::dynamic(2.0).with_collider(Collider::sphere(0.5)));
 
-        let rbs = world.borrow::<RigidBody>();
+        let rbs = world.query::<&RigidBody>();
         let rb = rbs.get(e).expect("rigid body spawned");
 
         // Solid sphere: I = 0.4·m·r² = 0.4·2·0.25 = 0.2 per axis (calculate_sphere_inertia).
@@ -593,7 +593,7 @@ mod tests {
         let mut world = World::new();
         let e = world
             .spawn_bundle(RigidBodyBundle::static_body().with_collider(Collider::sphere(0.5)));
-        assert!(world.borrow::<RigidBody>().get(e).is_some());
+        assert!(world.query::<&RigidBody>().get(e).is_some());
     }
 }
 

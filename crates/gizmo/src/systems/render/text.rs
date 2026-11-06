@@ -42,13 +42,13 @@ type UiBox = (Entity, Vec2, Vec2, Option<Vec4>);
 /// UI tree has.
 #[cfg(feature = "ui")]
 fn ui_boxes(world: &World) -> Vec<UiBox> {
-    let nodes = world.borrow::<crate::ui::Node>();
-    let backgrounds = world.borrow::<crate::ui::BackgroundColor>();
-    let sliders = world.borrow::<crate::ui::Slider>();
-    let sticks = world.borrow::<crate::ui::VirtualStick>();
-    let bars = world.borrow::<crate::ui::ProgressBar>();
-    let toggles = world.borrow::<crate::ui::Toggle>();
-    let scrolls = world.borrow::<crate::ui::Scroll>();
+    let nodes = world.query::<&crate::ui::Node>();
+    let backgrounds = world.query::<&crate::ui::BackgroundColor>();
+    let sliders = world.query::<&crate::ui::Slider>();
+    let sticks = world.query::<&crate::ui::VirtualStick>();
+    let bars = world.query::<&crate::ui::ProgressBar>();
+    let toggles = world.query::<&crate::ui::Toggle>();
+    let scrolls = world.query::<&crate::ui::Scroll>();
     let mut out = Vec::new();
     for id in tree_order(world) {
         let Some(node) = nodes.get(id) else { continue };
@@ -104,11 +104,11 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
 /// `opacity` from it up through its parents — a card fades with its face and its label.
 #[cfg(feature = "ui")]
 fn ui_opacity(world: &World, entity: Entity) -> f32 {
-    let transforms = world.borrow::<crate::ui::UiTransform>();
+    let transforms = world.query::<&crate::ui::UiTransform>();
     if transforms.is_empty() {
         return 1.0;
     }
-    let parents = world.borrow::<crate::core::component::Parent>();
+    let parents = world.query::<&crate::core::component::Parent>();
     let mut alpha = 1.0;
     let mut at = Some(entity);
     // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
@@ -137,9 +137,9 @@ fn ui_opacity(_world: &World, _entity: Entity) -> f32 {
 /// whichever table came first was painted first — in `birlestir`, every slot over its own item.
 #[cfg(feature = "ui")]
 fn tree_order(world: &World) -> Vec<Entity> {
-    let nodes = world.borrow::<crate::ui::Node>();
-    let parents = world.borrow::<crate::core::component::Parent>();
-    let children = world.borrow::<crate::core::component::Children>();
+    let nodes = world.query::<&crate::ui::Node>();
+    let parents = world.query::<&crate::core::component::Parent>();
+    let children = world.query::<&crate::core::component::Children>();
     let parent_node = |id: Entity| {
         parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0).filter(|p| nodes.get(*p).is_some())
     };
@@ -217,10 +217,10 @@ fn ui_boxes(_world: &World) -> Vec<UiBox> {
 /// which clips everything.
 #[cfg(feature = "ui")]
 pub(crate) fn ui_clip(world: &World, entity: Entity) -> Option<[Vec2; 2]> {
-    let clips = world.borrow::<crate::ui::ClipContent>();
-    let scrolls = world.borrow::<crate::ui::Scroll>();
-    let nodes = world.borrow::<crate::ui::Node>();
-    let parents = world.borrow::<crate::core::component::Parent>();
+    let clips = world.query::<&crate::ui::ClipContent>();
+    let scrolls = world.query::<&crate::ui::Scroll>();
+    let nodes = world.query::<&crate::ui::Node>();
+    let parents = world.query::<&crate::core::component::Parent>();
     let mut out: Option<[Vec2; 2]> = None;
     let mut at = Some(entity);
     // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
@@ -250,7 +250,7 @@ pub(crate) fn ui_clip(_world: &World, _entity: Entity) -> Option<[Vec2; 2]> {
 /// placeholder).
 #[cfg(feature = "ui")]
 fn text_input_display(world: &World, entity: Entity) -> Option<String> {
-    world.borrow::<crate::ui::TextInput>().get(entity).and_then(|f| f.display())
+    world.query::<&crate::ui::TextInput>().get(entity).and_then(|f| f.display())
 }
 
 #[cfg(not(feature = "ui"))]
@@ -347,7 +347,7 @@ gizmo_core::impl_component!(Typewriter);
 /// it, on the animation clock.
 pub fn typewriter_system(world: &mut World, dt: f32) {
     let lines: Vec<(Entity, String)> = {
-        let texts = world.borrow::<Text>();
+        let texts = world.query::<&Text>();
         world.query::<(Entity, &Typewriter)>().iter()
             .filter_map(|(entity, _)| {
                 let t = texts.get(entity)?;
@@ -359,7 +359,7 @@ pub fn typewriter_system(world: &mut World, dt: f32) {
             })
             .collect()
     };
-    let mut typers = world.borrow_mut::<Typewriter>();
+    let mut typers = world.query_mut::<&mut Typewriter>();
     for (id, line) in lines {
         if let Some(mut t) = typers.get_mut(id) {
             let mut next = *t;
@@ -373,7 +373,7 @@ pub fn typewriter_system(world: &mut World, dt: f32) {
 
 /// `full` cut to what a [`Typewriter`] on `entity` has typed so far, or `None` without one.
 fn typed_display(world: &World, entity: Entity, full: &str) -> Option<String> {
-    let t = *world.borrow::<Typewriter>().get(entity)?;
+    let t = *world.query::<&Typewriter>().get(entity)?;
     Some(full.chars().take(t.visible()).collect())
 }
 
@@ -381,7 +381,7 @@ fn typed_display(world: &World, entity: Entity, full: &str) -> Option<String> {
 /// [`Locale`](crate::app::locale::Locale) — or `None` (no label, or no locale) to draw the `Text`
 /// as authored. Resolved at draw time, so a language switch relabels every one on the next frame.
 fn localized_display(world: &World, entity: Entity) -> Option<String> {
-    let label = world.borrow::<crate::app::locale::LocalizedText>().get(entity).cloned()?;
+    let label = world.query::<&crate::app::locale::LocalizedText>().get(entity).cloned()?;
     let locale = world.get_resource::<crate::app::locale::Locale>()?;
     Some(label.resolve(&locale))
 }
@@ -390,7 +390,7 @@ fn localized_display(world: &World, entity: Entity) -> Option<String> {
 /// and a down-arrow — or `None` without one.
 #[cfg(feature = "ui")]
 fn dropdown_display(world: &World, entity: Entity) -> Option<String> {
-    let d = world.borrow::<crate::ui::Dropdown>().get(entity).cloned()?;
+    let d = world.query::<&crate::ui::Dropdown>().get(entity).cloned()?;
     Some(format!("{}  ▾", d.selected_option().unwrap_or("")))
 }
 
@@ -402,7 +402,7 @@ fn dropdown_display(_world: &World, _entity: Entity) -> Option<String> {
 /// Every open dropdown's rows: `(entity, [(top-left, size, colour, label)])`.
 #[cfg(feature = "ui")]
 fn dropdown_lists(world: &World) -> Vec<(Entity, Vec<(Vec2, Vec2, Vec4, String)>)> {
-    let nodes = world.borrow::<crate::ui::Node>();
+    let nodes = world.query::<&crate::ui::Node>();
     world.query::<(Entity, &crate::ui::Dropdown)>().iter()
         .filter(|(_, d)| d.is_open())
         .filter_map(|(entity, d)| {
@@ -507,7 +507,7 @@ pub fn record_text(
     renderer: &mut Renderer,
     world: &World,
 ) {
-    let texts = world.borrow::<Text>();
+    let texts = world.query::<&Text>();
     let boxes = ui_boxes(world);
     let fade = world
         .get_resource::<crate::renderer::screen_fade::ScreenFade>()
@@ -520,7 +520,7 @@ pub fn record_text(
         }
         return;
     }
-    let transforms = world.borrow::<crate::prelude::GlobalTransform>();
+    let transforms = world.query::<&crate::prelude::GlobalTransform>();
     let screen = Vec2::new(renderer.config.width as f32, renderer.config.height as f32);
 
     // Split the borrow by hand: queueing needs `&mut` on the text renderer and `&` on the queue,
@@ -886,7 +886,7 @@ mod clip_tests {
         let e = world
             .spawn_bundle((Text::screen("Merhaba", font, 10.0, Vec2::ZERO), Typewriter::new(10.0)))
             ;
-        let tw = |w: &World| *w.borrow::<Typewriter>().get(e).unwrap();
+        let tw = |w: &World| *w.query::<&Typewriter>().get(e).unwrap();
         typewriter_system(&mut world, 0.35);
         assert_eq!(tw(&world).visible(), 3);
         assert_eq!(typed_display(&world, e, "Merhaba").as_deref(), Some("Mer"));
@@ -894,10 +894,10 @@ mod clip_tests {
         assert!(tw(&world).is_finished() && tw(&world).just_finished());
         typewriter_system(&mut world, 0.1);
         assert!(!tw(&world).just_finished(), "finished once");
-        world.borrow_mut::<Text>().get_mut(e).unwrap().content = "Yeni bir satır".into();
+        world.query_mut::<&mut Text>().get_mut(e).unwrap().content = "Yeni bir satır".into();
         typewriter_system(&mut world, 0.2);
         assert_eq!(tw(&world).visible(), 2, "a new line types from the top");
-        world.borrow_mut::<Typewriter>().get_mut(e).unwrap().skip();
+        world.query_mut::<&mut Typewriter>().get_mut(e).unwrap().skip();
         typewriter_system(&mut world, 0.0);
         assert!(tw(&world).just_finished() && tw(&world).visible() == 14);
 

@@ -70,7 +70,7 @@ pub fn ensure_nav_grid(world: &mut World) {
     if world.get_resource::<NavGrid>().is_some() {
         return;
     }
-    if world.borrow::<NavAgent>().is_empty() {
+    if world.query::<&NavAgent>().is_empty() {
         return;
     }
 
@@ -207,11 +207,11 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     // SAFETY: ai_navigation_system runs as a scheduled system; the scheduler guarantees no
     // other system mutably aliases NavAgent/Velocity while it runs. NavAgent and Velocity are
     // distinct component types, so their storages never overlap with each other either.
-    let mut agents = unsafe { world.borrow_mut_unchecked::<NavAgent>() };
-    let transforms = world.borrow::<Transform>();
+    let mut agents = unsafe { world.query_unchecked::<&mut NavAgent>() };
+    let transforms = world.query::<&Transform>();
     // SAFETY: same argument as `agents` above — Velocity is a distinct component type from
     // both NavAgent and Transform, so this view aliases neither.
-    let mut velocities = unsafe { world.borrow_mut_unchecked::<Velocity>() };
+    let mut velocities = unsafe { world.query_unchecked::<&mut Velocity>() };
 
     // Neighbours by bucket, not by scanning every agent: positions do not change during this
     // pass (it writes velocities only), so one snapshot serves every agent. Buckets are XZ cells
@@ -590,12 +590,12 @@ mod frame_tests {
             ai_frame(&mut world, 1.0 / 60.0);
         }
 
-        let velocities = world.borrow::<Velocity>();
+        let velocities = world.query::<&Velocity>();
         let v = velocities.get(e).unwrap().linear;
         assert!(v.x > 0.0, "the agent should be steered toward +X, got {v:?}");
         assert_eq!(v.y, 0.0, "navigation never adds vertical velocity");
 
-        let agents = world.borrow::<NavAgent>();
+        let agents = world.query::<&NavAgent>();
         assert_eq!(agents.get(e).unwrap().state, NavAgentState::Moving);
     }
 
@@ -603,7 +603,7 @@ mod frame_tests {
     /// out — and the new route is longer, because it goes round.
     #[test]
     fn a_wall_on_the_route_makes_the_agent_replan_at_once() {
-        use gizmo_core::query::Mut;
+        
         let (mut world, e) = world_with_agent(Vec3::new(0.5, 0.0, 0.5), Some(Vec3::new(8.5, 0.0, 0.5)));
         world.insert_resource({
             let mut g = NavGrid::centred_on(1.0, 32, 32, Vec3::ZERO);
@@ -612,7 +612,7 @@ mod frame_tests {
         });
         let step = 1.0 / 240.0; // far inside the 0.5 s replan interval
         ai_navigation_system(&world, step);
-        let straight = world.borrow::<NavAgent>().get(e).unwrap().path_len();
+        let straight = world.query::<&NavAgent>().get(e).unwrap().path_len();
         assert!(straight > 0, "no first path");
 
         // A wall across the route, thirteen cells tall: the grid steps diagonally, so going round
@@ -623,19 +623,19 @@ mod frame_tests {
             }
         }
         ai_navigation_system(&world, step);
-        let detour = world.borrow::<NavAgent>().get(e).unwrap().path_len();
+        let detour = world.query::<&NavAgent>().get(e).unwrap().path_len();
         assert!(detour > straight, "still on the old route: {straight} waypoints before, {detour} after");
 
         // And an unchanged grid does not replan every frame.
         {
-            let mut agents = world.query_mut::<Mut<NavAgent>>();
+            let mut agents = world.query_mut::<&mut NavAgent>();
             for mut a in agents.iter_mut() {
                 a.advance();
             }
         }
-        let advanced = world.borrow::<NavAgent>().get(e).unwrap().path_index();
+        let advanced = world.query::<&NavAgent>().get(e).unwrap().path_index();
         ai_navigation_system(&world, step);
-        assert_eq!(world.borrow::<NavAgent>().get(e).unwrap().path_index(), advanced, "replanned with nothing changed");
+        assert_eq!(world.query::<&NavAgent>().get(e).unwrap().path_index(), advanced, "replanned with nothing changed");
     }
 
     /// Separation is the agent's own: two agents walking side by side 1 m apart are pushed apart
@@ -665,15 +665,15 @@ mod frame_tests {
             for _ in 0..60 {
                 ai_navigation_system(&world, dt);
                 let moves: Vec<(Entity, Vec3)> = {
-                    let v = world.borrow::<Velocity>();
+                    let v = world.query::<&Velocity>();
                     ids.iter().map(|&id| (id, v.get(id).unwrap().linear)).collect()
                 };
-                let mut t = world.borrow_mut::<Transform>();
+                let mut t = world.query_mut::<&mut Transform>();
                 for (id, vel) in moves {
                     t.get_mut(id).unwrap().position += vel * dt;
                 }
             }
-            let t = world.borrow::<Transform>();
+            let t = world.query::<&Transform>();
             assert!(t.get(ids[0]).unwrap().position.x > 1.0, "they walk");
             (t.get(ids[1]).unwrap().position.z - t.get(ids[0]).unwrap().position.z).abs()
         };
@@ -719,7 +719,7 @@ mod frame_tests {
             world.add_component(far, Velocity::default());
             world.add_component(far, NavAgent::default().with_separation(far_radius, 1.5));
             ai_navigation_system(&world, 1.0 / 60.0);
-            let v = world.borrow::<Velocity>();
+            let v = world.query::<&Velocity>();
             ids.iter().map(|&id| v.get(id).unwrap().linear).collect()
         };
         let bucketed = crowd(0.5);
@@ -751,7 +751,7 @@ mod frame_tests {
             ids.push(e);
         }
         let timers = |world: &World| -> Vec<f32> {
-            let agents = world.borrow::<NavAgent>();
+            let agents = world.query::<&NavAgent>();
             ids.iter().map(|&id| agents.get(id).unwrap().recalc.timer).collect()
         };
         let dt = 1.0 / 60.0;
@@ -782,7 +782,7 @@ mod frame_tests {
             g
         });
         ai_navigation_system(&world, 1.0 / 60.0);
-        let agents = world.borrow::<NavAgent>();
+        let agents = world.query::<&NavAgent>();
         let agent = agents.get(e).unwrap();
         // `Reached` on the step it arrives; the next one, with no target, is `Idle`.
         assert_eq!((agent.target, agent.state), (None, NavAgentState::Reached));
@@ -793,7 +793,7 @@ mod frame_tests {
     fn an_agent_without_a_target_is_brought_to_a_stop() {
         let (mut world, e) = world_with_agent(Vec3::ZERO, None);
         {
-            let mut velocities = world.borrow_mut::<Velocity>();
+            let mut velocities = world.query_mut::<&mut Velocity>();
             velocities.get_mut(e).unwrap().linear = Vec3::new(4.0, 0.0, 0.0);
         }
 
@@ -801,7 +801,7 @@ mod frame_tests {
             ai_frame(&mut world, 1.0 / 60.0);
         }
 
-        let velocities = world.borrow::<Velocity>();
+        let velocities = world.query::<&Velocity>();
         assert!(velocities.get(e).unwrap().linear.length() < 0.5);
     }
 
@@ -827,20 +827,20 @@ mod frame_tests {
         world.add_component(e, agent);
         let dt = 1.0 / 60.0;
         ai_navigation_system(&world, dt);
-        assert!(world.borrow::<NavAgent>().get(e).unwrap().route_failed());
+        assert!(world.query::<&NavAgent>().get(e).unwrap().route_failed());
         // Each search reloads the timer; between searches it only counts down. Half a second of
         // frames holds one scheduled search (interval 0.5 s) and maybe the phase-shortened first.
         let mut timers = Vec::new();
         for _ in 0..30 {
             ai_navigation_system(&world, dt);
-            timers.push(world.borrow::<NavAgent>().get(e).unwrap().recalc.timer);
+            timers.push(world.query::<&NavAgent>().get(e).unwrap().recalc.timer);
         }
         let searches = timers.windows(2).filter(|w| w[1] >= w[0]).count();
         assert!(searches <= 2, "{searches} searches in 30 frames: timers {timers:?}");
         // A reachable target clears the flag.
-        world.borrow_mut::<NavAgent>().get_mut(e).unwrap().set_target(Vec3::new(8.5, 0.0, 2.5));
+        world.query_mut::<&mut NavAgent>().get_mut(e).unwrap().set_target(Vec3::new(8.5, 0.0, 2.5));
         ai_navigation_system(&world, dt);
-        let a = world.borrow::<NavAgent>().get(e).cloned().unwrap();
+        let a = world.query::<&NavAgent>().get(e).cloned().unwrap();
         assert!(!a.route_failed() && a.path_len() > 0);
     }
 
@@ -875,15 +875,15 @@ mod frame_tests {
         let grid = world.get_resource::<NavGrid>().unwrap();
         for &(id, start, target) in &ids {
             let alone = grid.find_smooth_path(start, target).map(|p| p.len()).unwrap_or(0);
-            assert_eq!(world.borrow::<NavAgent>().get(id).unwrap().path_len(), alone, "agent {id}");
+            assert_eq!(world.query::<&NavAgent>().get(id).unwrap().path_len(), alone, "agent {id}");
         }
         drop(grid);
         let (again, _) = build();
         ai_navigation_system(&again, 1.0 / 60.0);
         for &(id, ..) in &ids {
             assert_eq!(
-                world.borrow::<Velocity>().get(id).unwrap().linear,
-                again.borrow::<Velocity>().get(id).unwrap().linear,
+                world.query::<&Velocity>().get(id).unwrap().linear,
+                again.query::<&Velocity>().get(id).unwrap().linear,
                 "agent {id} differs between two runs"
             );
         }

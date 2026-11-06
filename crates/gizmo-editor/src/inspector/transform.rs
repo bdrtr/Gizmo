@@ -13,7 +13,7 @@ pub fn draw_transform_section(
     state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut transforms = unsafe { world.borrow_mut_unchecked::<Transform>() };
+    let mut transforms = unsafe { world.query_unchecked::<&mut Transform>() };
     let old_t = transforms.get_mut(entity_id).map(|t| *t);
     
     // Pointer status check for Drag operations

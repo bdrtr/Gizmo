@@ -14,7 +14,7 @@ pub fn draw_point_light_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut lights = unsafe { world.borrow_mut_unchecked::<PointLight>() };
+    let mut lights = unsafe { world.query_unchecked::<&mut PointLight>() };
     {
         if let Some(mut light) = lights.get_mut(entity_id) {
             egui::CollapsingHeader::new(crate::theme::section_title("PointLight"))
@@ -50,7 +50,7 @@ pub fn draw_directional_light_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut lights = unsafe { world.borrow_mut_unchecked::<DirectionalLight>() };
+    let mut lights = unsafe { world.query_unchecked::<&mut DirectionalLight>() };
     if let Some(mut light) = lights.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Directional Light (Güneş)"))
             .default_open(true)
@@ -96,7 +96,7 @@ pub fn draw_spot_light_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut lights = unsafe { world.borrow_mut_unchecked::<SpotLight>() };
+    let mut lights = unsafe { world.query_unchecked::<&mut SpotLight>() };
     if let Some(mut light) = lights.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Spot Light"))
             .default_open(true)
@@ -175,7 +175,7 @@ pub fn draw_rect_light_section(
     _state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
-    let mut lights = unsafe { world.borrow_mut_unchecked::<RectLight>() };
+    let mut lights = unsafe { world.query_unchecked::<&mut RectLight>() };
     if let Some(mut light) = lights.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Rect Light"))
             .default_open(true)

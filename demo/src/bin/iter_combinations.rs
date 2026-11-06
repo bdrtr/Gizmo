@@ -61,7 +61,7 @@
 //!
 //! `pair_audit` sistemi aynı çiftleri iki yoldan geziyor — elle `j = i+1` döngüsü ve
 //! `iter_combinations` — ve iki ivme dizisini karşılaştırıyor. Ayrı bir sistem, çünkü `gravity`
-//! `Mut<Transform>` alıyor ve `iter_combinations` `ReadOnlyQuery` istiyor; aynı sistemde iki sorgu
+//! `&mut Transform` alıyor ve `iter_combinations` `ReadOnlyQuery` istiyor; aynı sistemde iki sorgu
 //! açmak erişim çakışması olurdu. `Phase::User(2500)`'de koşuyor, yani `Update` ile `Physics`
 //! arasında — aynı karenin konumlarını görmesi için.
 //!
@@ -106,7 +106,7 @@
 //!
 //! ### Ödünç alma kuralının ikinci yüzü
 //!
-//! İlk yazımda toplama geçişi `iter()` kullanıyordu ve derlenmedi: **`Mut<T>` taşıyan bir sorgu
+//! İlk yazımda toplama geçişi `iter()` kullanıyordu ve derlenmedi: **`&mut T` taşıyan bir sorgu
 //! salt-okunur bile gezilemiyor** (`iter` `ReadOnlyQuery` istiyor). Yani "önce oku, sonra yaz"
 //! demek bile aynı sorgunun `iter_mut`'ını iki kez çağırmak demek — toplamda üç geçiş.
 //!
@@ -114,7 +114,7 @@
 //!   * `GIZMO_NBODY_ONEPASS=1` — çekimi `iter_combinations_mut` ile tek geçişte uygula
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -267,7 +267,7 @@ fn main() {
 /// **Denetleyici.** Aynı çiftleri motorun `iter_combinations`'ıyla gezip elle döngünün sonucuyla
 /// karşılaştırıyor.
 ///
-/// Ayrı bir sistem, çünkü `gravity` `Mut<Transform>` alıyor ve `iter_combinations`
+/// Ayrı bir sistem, çünkü `gravity` `&mut Transform` alıyor ve `iter_combinations`
 /// `ReadOnlyQuery` istiyor — aynı sistemde iki sorgu açmak erişim çakışması olurdu. Çizelge bu
 /// ikisini zaten ayırıyor: biri yazıyor, öteki okuyor.
 fn pair_audit(bodies: Query<(Entity, &Transform, &Body)>, mut report: ResMut<Conservation>) {
@@ -323,7 +323,7 @@ fn pair_audit(bodies: Query<(Entity, &Transform, &Body)>, mut report: ResMut<Con
 /// aynı depoya iki `&mut` demek. `GIZMO_NBODY_ONEPASS=1` ile açılıyor, ve `pair_audit` iki yolun
 /// aynı sonucu verdiğini ölçüyor.
 fn gravity_one_pass(
-    mut bodies: Query<(Mut<Transform>, Mut<Body>)>,
+    mut bodies: Query<(&mut Transform, &mut Body)>,
     mut report: ResMut<Conservation>,
 ) {
     // 1. geçiş: kuvvetler doğrudan hıza. Ara `Vec` yok, indeks aritmetiği yok.
@@ -365,12 +365,12 @@ fn gravity_one_pass(
     }
 }
 
-fn gravity(mut bodies: Query<(Mut<Transform>, Mut<Body>)>, mut report: ResMut<Conservation>, time: Res<Time>) {
+fn gravity(mut bodies: Query<(&mut Transform, &mut Body)>, mut report: ResMut<Conservation>, time: Res<Time>) {
     let _ = time;
 
     // 1. geçiş: durumu topla.
     //
-    // `iter()` DEĞİL `iter_mut()` — çünkü `Mut<T>` taşıyan bir sorgu salt-okunur bile
+    // `iter()` DEĞİL `iter_mut()` — çünkü `&mut T` taşıyan bir sorgu salt-okunur bile
     // gezilemiyor (`iter` için `ReadOnlyQuery` sınırı sağlanmıyor). Bu, ikili döngünün neden tek
     // geçişte yazılamadığının bir başka yüzü.
     let mut state: Vec<(Vec3, f32, Vec3)> = Vec::new();

@@ -178,7 +178,7 @@
 //!   * `GIZMO_AE_EXPOSURE=<sayı>` — elle pozlama (varsayılan 1,0)
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
 
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -627,7 +627,7 @@ fn main() {
 }
 
 /// Pozlamayı kameraya yazar. Motorda bunu **otomatik** yapan bir şey yok; değeri veren biziz.
-fn apply_exposure(mut cameras: Query<Mut<Camera>>, ae: Res<Ae>) {
+fn apply_exposure(mut cameras: Query<&mut Camera>, ae: Res<Ae>) {
     // `frame` artık `set_render` içinde artıyor: kare süresi orada ölçülüyor ve ikisi aynı sayacı
     // kullanmak zorunda.
     let e = ae.exposure;

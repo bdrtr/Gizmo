@@ -177,10 +177,10 @@ fn self_test() -> bool {
 /// Her bloğun karşılaştırılacak hâli: bloğun kendisi, yeri, rengi, çarpıştırıcısı var mı, mesh'i.
 type Look = (Block, [i32; 3], [i32; 4], bool, Option<String>);
 fn snapshot(world: &World) -> Vec<Look> {
-    let ts = world.borrow::<Transform>();
-    let ms = world.borrow::<MaterialDesc>();
-    let cs = world.borrow::<Collider>();
-    let ss = world.borrow::<MeshSource>();
+    let ts = world.query::<&Transform>();
+    let ms = world.query::<&MaterialDesc>();
+    let cs = world.query::<&Collider>();
+    let ss = world.query::<&MeshSource>();
     let q = |v: f32| (v * 1000.0).round() as i32;
     let mut out: Vec<Look> = blocks(world)
         .into_iter()
@@ -285,7 +285,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
             ));
         }
         let top = height(world, x, z);
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.cursor) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.cursor) {
             t.position = block_position(x, z, top) - Vec3::Y * (HALF - 0.02);
         }
     }
@@ -318,7 +318,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         game.colour + 1,
         game.message
     );
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(game.hud) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(game.hud) {
         if t.content != text {
             t.content = text;
         }

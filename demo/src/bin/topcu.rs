@@ -72,7 +72,7 @@ fn fire(world: &mut World, angle: f32, speed: f32, visual: bool) -> RagdollInsta
     let ragdoll = gizmo::physics::ragdoll::spawn_ragdoll(world, defs.clone());
     let v = launch_velocity(angle, speed);
     for ((_, e), def) in ragdoll.bones.iter().zip(&defs) {
-        if let Some(mut vel) = world.borrow_mut::<Velocity>().get_mut(*e) {
+        if let Some(mut vel) = world.query_mut::<&mut Velocity>().get_mut(*e) {
             vel.linear = v;
             vel.angular = Vec3::new(0.0, 0.0, -1.5);
         }
@@ -95,23 +95,23 @@ fn despawn(world: &mut World, ragdoll: &RagdollInstance) {
 }
 
 fn pelvis(world: &World, ragdoll: &RagdollInstance) -> Vec3 {
-    ragdoll.bones.first().and_then(|(_, e)| world.borrow::<Transform>().get(*e).map(|t| t.position)).unwrap_or(Vec3::ZERO)
+    ragdoll.bones.first().and_then(|(_, e)| world.query::<&Transform>().get(*e).map(|t| t.position)).unwrap_or(Vec3::ZERO)
 }
 
 fn fastest(world: &World, ragdoll: &RagdollInstance) -> f32 {
-    let vs = world.borrow::<Velocity>();
+    let vs = world.query::<&Velocity>();
     ragdoll.bones.iter().filter_map(|(_, e)| vs.get(*e).map(|v| v.linear.length())).fold(0.0, f32::max)
 }
 
 fn lowest(world: &World, ragdoll: &RagdollInstance) -> f32 {
-    let ts = world.borrow::<Transform>();
+    let ts = world.query::<&Transform>();
     ragdoll.bones.iter().filter_map(|(_, e)| ts.get(*e).map(|t| t.position.y)).fold(f32::MAX, f32::min)
 }
 
 /// Eklemlerin iki ucu arasındaki en büyük açıklık.
 fn widest_joint(world: &World, ragdoll: &RagdollInstance) -> f32 {
     let Some(pw) = world.get_resource::<PhysicsWorld>() else { return 0.0 };
-    let ts = world.borrow::<Transform>();
+    let ts = world.query::<&Transform>();
     ragdoll
         .joint_indices
         .iter()
@@ -291,11 +291,11 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     game.flying += dt;
     game.physics.advance(world, dt);
     sync_transforms(world);
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.barrel) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.barrel) {
         t.rotation = Quat::from_rotation_z(game.angle - std::f32::consts::FRAC_PI_2);
     }
     let follow = game.ragdoll.as_ref().map(|r| pelvis(world, r)).unwrap_or(MUZZLE);
-    if let Some(mut c) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut c) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         let want = Vec3::new(follow.x * 0.6 + 4.0, 7.0, 24.0);
         c.position = c.position.lerp(want, (dt * 1.5).min(1.0));
         let look = (Vec3::new(follow.x * 0.7 + 4.0, 1.0, 0.0) - c.position).normalize_or_zero();

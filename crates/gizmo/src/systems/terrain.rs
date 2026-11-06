@@ -86,8 +86,8 @@ fn is_the_old_box(collider: &crate::physics::Collider, width: f32, depth: f32, m
 fn recipes_awaiting_a_mesh(
     world: &crate::core::World,
 ) -> Vec<(Entity, String, f32, f32, f32)> {
-    let meshes = world.borrow::<Mesh>();
-    let failed = world.borrow::<TerrainBuildFailed>();
+    let meshes = world.query::<&Mesh>();
+    let failed = world.query::<&TerrainBuildFailed>();
     let mut pending = Vec::new();
     for (entity, terrain) in world.query::<(Entity, &Terrain)>().iter() {
         // Already built, already failed, or never authored — an empty path is a `Terrain` a user
@@ -139,17 +139,17 @@ pub fn terrain_mesh_system(world: &mut crate::core::World, renderer: &Renderer) 
         // A terrain with no material would be drawn with nothing to sample, so it gets the same
         // 1×1 white stand-in the editor gives it. Only when the entity has none: a material the
         // author (or a loaded scene) already chose must survive.
-        if !world.borrow::<crate::prelude::Material>().contains(id) {
+        if !world.query::<&crate::prelude::Material>().contains(id) {
             let white = renderer.create_texture(&[255, 255, 255, 255], 1, 1);
             world.add_component(
                 entity,
                 crate::prelude::Material::new(std::sync::Arc::new(white)),
             );
         }
-        if !world.borrow::<MeshRenderer>().contains(id) {
+        if !world.query::<&MeshRenderer>().contains(id) {
             world.add_component(entity, MeshRenderer::new());
         }
-        let collider = world.borrow::<crate::physics::Collider>().get(id).cloned();
+        let collider = world.query::<&crate::physics::Collider>().get(id).cloned();
         let stand_in = collider.as_ref().is_some_and(|c| is_the_old_box(c, width, depth, max_height));
         if collider.is_none() || stand_in {
             world.add_component(entity, terrain_collider(heights, cols, rows, width, depth, max_height));

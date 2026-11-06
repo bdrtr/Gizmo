@@ -221,7 +221,7 @@ fn recolor_buttons(world: &mut World) {
     let states: Vec<(Entity, Interaction)> = {
         world.query::<(Entity, &Interaction)>().iter().map(|(entity, i)| (entity, *i)).collect()
     };
-    let mut colors = world.borrow_mut::<BackgroundColor>();
+    let mut colors = world.query_mut::<&mut BackgroundColor>();
     for (id, interaction) in states {
         if let Some(mut color) = colors.get_mut(id) {
             color.0 = fill(interaction);
@@ -234,12 +234,12 @@ fn count_clicks(world: &mut World) {
     let hits: Vec<Entity> = world.query::<(Entity, &Clicked)>().iter().filter(|(_, c)| c.0).map(|(entity, _)| entity).collect();
     for id in hits {
         let text = {
-            let mut counters = world.borrow_mut::<Counter>();
+            let mut counters = world.query_mut::<&mut Counter>();
             let Some(mut c) = counters.get_mut(id) else { continue };
             c.clicks += 1;
             format!("{} ({})", c.label, c.clicks)
         };
-        if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+        if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
             t.content = text;
         }
     }

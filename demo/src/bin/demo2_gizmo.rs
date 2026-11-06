@@ -19,7 +19,7 @@
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera · **Shift** — hızlı hareket
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::prelude::*;
@@ -391,7 +391,7 @@ fn toggle_wireframes(mut cfg: ResMut<gizmo::systems::render::WireframeConfig>, i
     }
 }
 
-fn advance_rows(mut q: Query<(Mut<Row>, Mut<Transform>, With<Shape>)>, input: Res<Input>) {
+fn advance_rows(mut q: Query<(&mut Row, &mut Transform, With<Shape>)>, input: Res<Input>) {
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Tab as u32) {
         for (mut row, mut trans, _) in q.iter_mut() {
             *row = row.advance();
@@ -401,7 +401,7 @@ fn advance_rows(mut q: Query<(Mut<Row>, Mut<Transform>, With<Shape>)>, input: Re
 }
 
 fn rotate_shapes(
-    mut q: Query<(Mut<Transform>, With<Shape>)>,
+    mut q: Query<(&mut Transform, With<Shape>)>,
     mut state: ResMut<DemoState>,
     time: Res<gizmo::core::time::Time>,
 ) {
@@ -416,7 +416,7 @@ fn rotate_shapes(
 }
 
 fn camera_movement(
-    mut q: Query<(Mut<Transform>, Mut<gizmo::renderer::components::Camera>)>,
+    mut q: Query<(&mut Transform, &mut gizmo::renderer::components::Camera)>,
     mut state: ResMut<DemoState>,
     input: Res<Input>,
     time: Res<gizmo::core::time::Time>,

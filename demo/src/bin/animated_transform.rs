@@ -53,7 +53,7 @@ use gizmo::animation::clip::{AnimationClip, Keyframes, Track};
 use gizmo::animation::player::AnimationPlayer;
 use gizmo::core::hierarchy::HierarchyExt;
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::renderer::gpu_types::Vertex;
@@ -283,7 +283,7 @@ fn build_clip() -> AnimationClip {
 
 /// Duraklatma, hız, ve defterin doldurulması.
 fn controls(
-    mut players: Query<Mut<AnimationPlayer>>,
+    mut players: Query<&mut AnimationPlayer>,
     planets: Query<(&Transform, &GlobalTransform, &EntityName)>,
     mut playback: ResMut<Playback>,
     input: Res<Input>,

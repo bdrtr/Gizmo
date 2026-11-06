@@ -43,7 +43,7 @@ fn run(world: &mut World, seconds: f32) {
 fn a_thrown_ball_settles_into_rolling_at_five_sevenths_of_its_speed() {
     let (mut world, ball) = lane(RigidBody::new(6.0, true));
     run(&mut world, 1.2);
-    let v = *world.borrow::<Velocity>().get(ball).unwrap();
+    let v = *world.query::<&Velocity>().get(ball).unwrap();
     let speed = -v.linear.z;
     let expected = V0 * 5.0 / 7.0;
     assert!(
@@ -52,7 +52,7 @@ fn a_thrown_ball_settles_into_rolling_at_five_sevenths_of_its_speed() {
     );
     let rim = -v.angular.x * R;
     assert!((rim - speed).abs() / speed < 0.03, "not rolling: ω·r = {rim:.2}, v = {speed:.2}");
-    let inertia = world.borrow::<RigidBody>().get(ball).unwrap().local_inertia;
+    let inertia = world.query::<&RigidBody>().get(ball).unwrap().local_inertia;
     let solid = 0.4 * 6.0 * R * R;
     assert!((inertia - Vec3::splat(solid)).length() < 1e-4, "inertia {inertia:?}, a solid sphere's is {solid}");
 }
@@ -64,5 +64,5 @@ fn an_inertia_set_by_hand_is_kept() {
     rb.local_inertia = Vec3::splat(0.5);
     let (mut world, ball) = lane(rb);
     run(&mut world, 0.1);
-    assert_eq!(world.borrow::<RigidBody>().get(ball).unwrap().local_inertia, Vec3::splat(0.5));
+    assert_eq!(world.query::<&RigidBody>().get(ball).unwrap().local_inertia, Vec3::splat(0.5));
 }

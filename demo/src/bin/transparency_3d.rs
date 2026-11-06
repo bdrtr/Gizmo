@@ -43,7 +43,7 @@
 //! ## Kontroller
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera · **Shift** — hızlı hareket
 
-use gizmo::core::query::{Mut, Query};
+use gizmo::core::query::Query;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -158,7 +158,7 @@ fn main() {
 /// Yalnız `Fading` işaretini taşıyanlar değişiyor, çünkü Gizmo'da malzeme varlık değil
 /// **bileşen**: her nesnenin kendi kopyası var ve opak olanları da dolaşmak onları da
 /// saydamlaştırırdı.
-fn fade_transparency(mut materials: Query<(Mut<Material>, Mut<Fading>)>, time: Res<Time>) {
+fn fade_transparency(mut materials: Query<(&mut Material, &mut Fading)>, time: Res<Time>) {
     let alpha = (time.elapsed() as f32).sin() / 2.0 + 0.5;
     for (mut material, _) in materials.iter_mut() {
         material.albedo.w = alpha;

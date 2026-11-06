@@ -136,15 +136,15 @@ fn apply_script_color(
         match cmd {
             Cmd::SetColor(id, colour) => {
                 let Some(e) = world.entity(id) else { continue };
-                let has_desc = world.borrow::<MaterialDesc>().get(e).is_some();
+                let has_desc = world.query::<&MaterialDesc>().get(e).is_some();
                 if has_desc {
-                    if let Some(mut d) = world.borrow_mut::<MaterialDesc>().get_mut(e) {
+                    if let Some(mut d) = world.query_mut::<&mut MaterialDesc>().get_mut(e) {
                         d.albedo = colour;
                     }
                 } else {
                     world.add_component(e, MaterialDesc::new().with_pbr(colour, 0.6, 0.0));
                 }
-                if let Some(mut m) = world.borrow_mut::<Material>().get_mut(e) {
+                if let Some(mut m) = world.query_mut::<&mut Material>().get_mut(e) {
                     m.albedo = colour;
                 }
             }
@@ -183,7 +183,7 @@ fn apply_script_vehicle(
     use crate::scripting::ScriptCommand as Cmd;
 
     let mut rest = Vec::new();
-    let mut vehicles = world.borrow_mut::<gizmo_physics_dynamics::VehicleController>();
+    let mut vehicles = world.query_mut::<&mut gizmo_physics_dynamics::VehicleController>();
     for cmd in unhandled {
         match cmd {
             Cmd::SetVehicleEngineForce(id, force) => {
@@ -253,7 +253,7 @@ fn apply_script_camera(
                 };
                 match primary {
                     Some(entity) => {
-                        let mut cameras = world.borrow_mut::<crate::renderer::Camera>();
+                        let mut cameras = world.query_mut::<&mut crate::renderer::Camera>();
                         if let Some(mut cam) = cameras.get_mut(entity) {
                             cam.fov = radians;
                         }
@@ -718,7 +718,7 @@ mod tests {
             vec![Cmd::SetColor(fresh.id(), red), Cmd::SetColor(painted.id(), red), Cmd::HideDialogue],
         );
         assert!(matches!(rest.as_slice(), [Cmd::HideDialogue]), "{rest:?}");
-        let descs = world.borrow::<MaterialDesc>();
+        let descs = world.query::<&MaterialDesc>();
         assert_eq!(descs.get(fresh).map(|d| d.albedo), Some(red));
         let p = descs.get(painted).unwrap();
         assert_eq!((p.albedo, p.roughness), (red, 0.2), "only the colour changes on an authored material");
@@ -781,7 +781,7 @@ mod tests {
             ],
         );
 
-        let vehicles = world.borrow::<gizmo_physics_dynamics::VehicleController>();
+        let vehicles = world.query::<&gizmo_physics_dynamics::VehicleController>();
         let car = vehicles.get(id).expect("the car is still there");
         assert_eq!(car.throttle_input, 0.75);
         assert_eq!(car.steering_input, -0.4);
@@ -810,7 +810,7 @@ mod tests {
 
         apply_script_vehicle(&mut world, vec![Cmd::SetVehicleEngineForce(id.id(), -0.8)]);
         {
-            let vehicles = world.borrow::<gizmo_physics_dynamics::VehicleController>();
+            let vehicles = world.query::<&gizmo_physics_dynamics::VehicleController>();
             let car = vehicles.get(id).expect("the car");
             assert!(car.reverse_input, "a negative force must engage reverse");
             assert_eq!(car.throttle_input, 0.8, "and spend its magnitude as throttle");
@@ -819,7 +819,7 @@ mod tests {
 
         // And it must come back out again, or a script that taps reverse strands the car in it.
         apply_script_vehicle(&mut world, vec![Cmd::SetVehicleEngineForce(id.id(), 0.5)]);
-        let vehicles = world.borrow::<gizmo_physics_dynamics::VehicleController>();
+        let vehicles = world.query::<&gizmo_physics_dynamics::VehicleController>();
         let car = vehicles.get(id).expect("the car");
         assert!(!car.reverse_input);
         assert_eq!(car.throttle_input, 0.5);
@@ -845,7 +845,7 @@ mod tests {
 
         apply_script_camera(&mut world, vec![Cmd::SetCameraFov(60.0)]);
 
-        let cameras = world.borrow::<crate::renderer::Camera>();
+        let cameras = world.query::<&crate::renderer::Camera>();
         let fov = cameras.get(eye).expect("the camera").fov;
         assert!(
             (fov - std::f32::consts::FRAC_PI_3).abs() < 1e-5,
@@ -999,7 +999,7 @@ mod tests {
             loop_.step(&mut world, FIXED_DT, &input, &mut |_| {});
         }
 
-        let velocities = world.borrow::<gizmo_physics_rigid::components::Velocity>();
+        let velocities = world.query::<&gizmo_physics_rigid::components::Velocity>();
         let v = velocities.get(id).expect("the agent is still there").linear;
         assert!(
             v.x > 0.0,

@@ -74,7 +74,7 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
         return;
     };
 
-    if world.borrow::<PostProcess>().get(cam_id).is_none() {
+    if world.query::<&PostProcess>().get(cam_id).is_none() {
         ui.label(
             egui::RichText::new(
                 "Aktif kamera henüz derecelendirilmemiş: motorun nötr varsayılanlarıyla çiziliyor.",
@@ -103,7 +103,7 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
     egui::ScrollArea::vertical().show(ui, |ui| {
         // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
         // The same pattern every other inspector section uses.
-        let mut grades = unsafe { world.borrow_mut_unchecked::<PostProcess>() };
+        let mut grades = unsafe { world.query_unchecked::<&mut PostProcess>() };
         if let Some(mut grade) = grades.get_mut(cam_id) {
             let before = *grade;
 
@@ -159,7 +159,7 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
             .default_open(true)
             .show(ui, |ui| {
                 // SAFETY: as above.
-                let mut cameras = unsafe { world.borrow_mut_unchecked::<Camera>() };
+                let mut cameras = unsafe { world.query_unchecked::<&mut Camera>() };
                 if let Some(mut cam) = cameras.get_mut(cam_id) {
                     slider_row(ui, "Kamera Pozlaması (Exposure)", &mut cam.exposure, 0.1..=5.0);
                     cam.exposure = cam.exposure.clamp(0.01, 20.0);

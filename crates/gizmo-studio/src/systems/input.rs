@@ -29,8 +29,8 @@ pub fn handle_input_and_scene_view(
     // gizmo'su, kutuyla seçim) fare içeri girene kadar `None` görüyordu. Eksen gizmo'su bu yüzden
     // ilk karelerde hiç çizilmiyordu ve kusur ekran görüntüsüyle ölçüldü.
     {
-        let transforms = world.borrow::<Transform>();
-        let cameras = world.borrow::<gizmo::renderer::components::Camera>();
+        let transforms = world.query::<&Transform>();
+        let cameras = world.query::<&gizmo::renderer::components::Camera>();
         if let (Some(t), Some(cam)) = (
             transforms.get(state.editor_camera),
             cameras.get(state.editor_camera),

@@ -10,24 +10,24 @@ use std::any::TypeId;
 /// The per-component half of the query DSL: how ONE component type is located in storage and
 /// turned into an item.
 ///
-/// Implemented only for `&T` (shared) and [`Mut<T>`](Mut) (exclusive, change-tracked). Sealed —
+/// Implemented only for `&T` (shared) and `&mut T` (exclusive, change-tracked). Sealed —
 /// a hand-written impl could hand out two `&mut T` for the same row, so this is not an extension
 /// point. Every `FetchComponent` becomes a [`WorldQuery`](super::WorldQuery) through a blanket
-/// impl, which is why `&T` and `Mut<T>` can be used directly as query operands.
+/// impl, which is why `&T` and `&mut T` can be used directly as query operands.
 ///
 /// Both impls cover the two storage kinds behind one interface, and the difference leaks into
 /// the parameters of nearly every method: for `StorageType::Table` the fetch is a base pointer
 /// and `row` selects the element, whereas for `StorageType::SparseSet` the fetch is the address
 /// of the world's sparse set, `row` is ignored, and the lookup goes through `entity_id`.
 pub trait FetchComponent: sealed::SealedFetch {
-    /// The component type actually being accessed — `T` for both `&T` and `Mut<T>`. This is the
+    /// The component type actually being accessed — `T` for both `&T` and `&mut T`. This is the
     /// identity used for aliasing detection and for the scheduler's access set, which is why
-    /// `&T` and `Mut<T>` collide with each other exactly as they must.
+    /// `&T` and `&mut T` collide with each other exactly as they must.
     type Component: 'static;
     /// Per-archetype resolved access for this one component, produced by
     /// [`fetch_raw`](FetchComponent::fetch_raw). Concretely it is the archetype column's base
     /// pointer for `Table` storage, or the address of the world's `ComponentSparseSet` for
-    /// `SparseSet` storage — `Mut<T>` carries the column's `ComponentTicks` pointer and the
+    /// `SparseSet` storage — `&mut T` carries the column's `ComponentTicks` pointer and the
     /// system tick alongside. Which of the two it is stays encoded in the value, so
     /// `get_item`/`contains_entity`/`get_slice` branch on the fetch itself instead of
     /// re-reading `T::storage_type()` per row.
@@ -35,12 +35,12 @@ pub trait FetchComponent: sealed::SealedFetch {
     /// The `Copy` bound and the validity rules are those of
     /// [`WorldQuery::Fetch`](super::WorldQuery::Fetch) and apply unchanged here.
     type Fetch<'w>: Copy; // Raw pointers are Copy
-    /// One row's worth of access: `&'w T` for `&T`, [`Mut<'w, T>`](Mut) for `Mut<T>`. Obtaining
+    /// One row's worth of access: `&'w T` for `&T`, [`Mut<'w, T>`](Mut) for `&mut T`. Obtaining
     /// a `Mut` does not by itself mark the row as changed — only writing through its `DerefMut`
     /// does.
     type Item<'w>;
     /// One whole archetype's worth of contiguous access, for chunk iteration: `&'w [T]` for
-    /// `&T`, `&'w mut [T]` for `Mut<T>`. The `Mut<T>` slice is only handed out after
+    /// `&T`, `&'w mut [T]` for `&mut T`. The `&mut T` slice is only handed out after
     /// [`get_slice`](FetchComponent::get_slice) has stamped the current tick onto all `len`
     /// rows — a raw `&mut [T]` cannot report which elements were written, so every row in it
     /// counts as changed whether you touch it or not.
@@ -49,7 +49,7 @@ pub trait FetchComponent: sealed::SealedFetch {
     /// no slice form at all.
     type Slice<'w>;
 
-    /// `true` for `Mut<T>`, `false` for `&T`.
+    /// `true` for `&mut T`, `false` for `&T`.
     ///
     /// Supplies the mutability half of the `(TypeId, is_mut)` pair fed to the query aliasing
     /// check: two operands naming the same [`Component`](FetchComponent::Component) panic at
@@ -138,7 +138,7 @@ impl<T: crate::component::Component> FetchComponent for &T {
 
 /// Change-tracked (`Changed<T>`) mutable access to a component.
 ///
-/// **Aliasing:** `world.query::<Mut<T>>()` / [`World::borrow_mut`](crate::world::World::borrow_mut)
+/// **Aliasing:** `world.query::<&mut T>()`
 /// hands out `&mut T` from `&self`; two *live* `Mut` queries for the same `T` (or one `Mut`
 /// together with a `&T`) at the same time are UB. For the caller contract and for safe
 /// alternatives see the aliasing section of [`World::query`](crate::world::World::query).
@@ -182,8 +182,8 @@ impl<'a, T> Mut<'a, T> {
     }
 }
 
-impl<T: crate::component::Component> sealed::SealedFetch for Mut<'_, T> {}
-impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
+impl<T: crate::component::Component> sealed::SealedFetch for &mut T {}
+impl<T: crate::component::Component> FetchComponent for &mut T {
     type Component = T;
     type Fetch<'w> = (*mut u8, *mut crate::archetype::ComponentTicks, u32, Option<*mut crate::archetype::sparse_set::ComponentSparseSet>);
     type Item<'w> = Mut<'w, T>;
@@ -195,7 +195,7 @@ impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
             // SHARED lookup — NOT `&World -> &mut World`. Casting `&World` to
             // `*mut World` to call `HashMap::get_mut` was aliasing UB (retag from
             // SharedReadOnly to a mutable permission), reachable from 100% safe
-            // code via `query_mut::<Mut<Sparse>>().iter_mut()`. We only need the
+            // code via `query_mut::<&mut Sparse>().iter_mut()`. We only need the
             // set's address; `get_item` reaches its elements through a shared ref +
             // interior mutability (BlobVec / `UnsafeCell<ComponentTicks>`), so no
             // `&mut ComponentSparseSet` is ever formed (that would race under
@@ -215,7 +215,7 @@ impl<T: crate::component::Component> FetchComponent for Mut<'_, T> {
             // parallel; every entity lives in exactly one dense row, so the rows written are
             // disjoint across tasks. Forming an exclusive `&mut *set_ptr` per task would be
             // instant aliasing UB (many live `&mut ComponentSparseSet`) — a real data race
-            // reachable from 100% safe code (`query_mut::<Mut<Sparse>>().par_for_each_mut`).
+            // reachable from 100% safe code (`query_mut::<&mut Sparse>().par_for_each_mut`).
             // BlobVec::get_unchecked_mut takes `&self` (interior mutability) and Vec::as_ptr
             // gives the ticks base, so we reach the disjoint element through a shared ref only.
             let set = &*set_ptr;

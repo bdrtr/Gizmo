@@ -54,7 +54,7 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::renderer::asset::primitives::extrude::outline;
@@ -199,7 +199,7 @@ fn main() {
 
 /// Şekilleri döndürür — R ile durdurulabiliyor.
 fn rotate(
-    mut shapes: Query<(Mut<Transform>, With<Shape>)>,
+    mut shapes: Query<(&mut Transform, With<Shape>)>,
     mut spinning: ResMut<Spinning>,
     input: Res<Input>,
     time: Res<Time>,

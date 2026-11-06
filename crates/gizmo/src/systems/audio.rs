@@ -86,7 +86,7 @@ pub fn listener(world: &World) -> Listener {
             if cam.primary {
                 listener.position = t.position;
                 listener.right = cam.get_right();
-                if let Some(v) = world.borrow::<Velocity>().get(e) {
+                if let Some(v) = world.query::<&Velocity>().get(e) {
                     listener.velocity = v.linear;
                 }
                 break;
@@ -138,7 +138,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
     audio.update(); // Biten sesleri temizler
 
     // Kamerayı (Listener/Dinleyici) bul — script komut yolu da aynı fonksiyonu çağırıyor.
-    let transforms = world.borrow::<Transform>();
+    let transforms = world.query::<&Transform>();
     let ear = listener(world);
     let listener_pos = ear.position;
     let listener_vel = ear.velocity;
@@ -147,8 +147,8 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
     let source_ids: Vec<Entity> = world.query::<(Entity, &AudioSource)>().iter().map(|(entity, _)| entity).collect();
     // SAFETY: exclusive `&mut World`; AudioSource is a distinct component type from the
     // read-only Velocity/Transform queries, so this mutable query never aliases them.
-    let mut sources = unsafe { world.borrow_mut_unchecked::<AudioSource>() };
-    let velocities = world.borrow::<Velocity>();
+    let mut sources = unsafe { world.query_unchecked::<&mut AudioSource>() };
+    let velocities = world.query::<&Velocity>();
 
     // Tüm ses kaynaklarını güncelle
     for id in source_ids {
@@ -371,7 +371,7 @@ mod tests {
         audio_spatial_system(&mut world, 1.0 / 60.0); // must not panic
         assert!(
             !world
-                .borrow::<AudioSource>()
+                .query::<&AudioSource>()
                 .get(e)
                 .expect("the source is still there")
                 .has_played,
@@ -466,7 +466,7 @@ mod tests {
         let manager = world
             .get_resource::<AudioManager>()
             .expect("a scene with a source opens the device");
-        let sources = world.borrow::<AudioSource>();
+        let sources = world.query::<&AudioSource>();
         let source = sources.get(e).unwrap();
         let sink = source
             ._internal_sink_id
@@ -491,7 +491,7 @@ mod tests {
         audio_frame(&mut world, 1.0 / 60.0);
 
         let sink = world
-            .borrow::<AudioSource>()
+            .query::<&AudioSource>()
             .get(e)
             .unwrap()
             ._internal_sink_id

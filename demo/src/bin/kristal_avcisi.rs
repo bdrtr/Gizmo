@@ -69,7 +69,7 @@ use gizmo::audio::synth::{Blip, Wave};
 use gizmo::app::save::SaveData;
 use gizmo::audio::AudioManager;
 use gizmo::core::input::{Input, MoveKeys};
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::renderer::components::{Text, TextAlign, TextAnchor};
@@ -209,7 +209,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) {
         ..Default::default()
     });
     {
-        let mut q = world.query_mut::<Mut<Camera>>();
+        let mut q = world.query_mut::<&mut Camera>();
         if let Some(mut cam) = q.get_mut(camera) {
             cam.clear_color = Some(Vec3::new(0.01, 0.012, 0.03));
         }
@@ -253,7 +253,7 @@ fn self_test() -> bool {
     let mut lives_before = 3u32;
     while run.elapsed < ROUND_SECONDS + 10.0 && !over(&run.world) {
         let (player, target) = {
-            let tfs = run.world.borrow::<Transform>();
+            let tfs = run.world.query::<&Transform>();
             let player = run.world.query::<(Entity, &Player)>().iter().find_map(|(entity, _)| tfs.get(entity).map(|t| t.position));
             let crystals: Vec<Vec3> = run.world.query::<(Entity, &Crystal)>().iter().filter_map(|(entity, _)| tfs.get(entity).map(|t| t.position)).collect();
             let target = player.and_then(|p| crystals.into_iter().min_by(|a, b| a.distance(p).total_cmp(&b.distance(p))));
@@ -411,7 +411,7 @@ fn play(audio: Option<&mut AudioManager>, name: &str) {
 
 fn banner(world: &mut World, text: &str, colour: [f32; 3]) {
     let Some(hud) = world.get_resource::<Hud>().map(|h| *h) else { return };
-    let mut texts = world.borrow_mut::<Text>();
+    let mut texts = world.query_mut::<&mut Text>();
     if let Some(mut t) = texts.get_mut(hud.banner) {
         t.content = text.to_string();
         t.color = Vec4::new(colour[0], colour[1], colour[2], 1.0);
@@ -434,7 +434,7 @@ fn playing(state: &State<Screen>) -> bool {
     *state.get() == Screen::Playing
 }
 
-fn move_player(mut players: Query<(Mut<Transform>, With<Player>)>, input: Res<Input>, time: Res<Time>, state: Res<State<Screen>>) {
+fn move_player(mut players: Query<(&mut Transform, With<Player>)>, input: Res<Input>, time: Res<Time>, state: Res<State<Screen>>) {
     if !playing(&state) {
         return;
     }
@@ -451,7 +451,7 @@ fn player_position(players: &Query<(&Transform, With<Player>)>) -> Option<Vec3> 
     players.iter().next().map(|(tf, _)| tf.position)
 }
 
-fn chase(mut hunters: Query<(Mut<Transform>, With<Hunter>)>, players: Query<(&Transform, With<Player>)>, time: Res<Time>, state: Res<State<Screen>>) {
+fn chase(mut hunters: Query<(&mut Transform, With<Hunter>)>, players: Query<(&Transform, With<Player>)>, time: Res<Time>, state: Res<State<Screen>>) {
     if !playing(&state) {
         return;
     }
@@ -464,7 +464,7 @@ fn chase(mut hunters: Query<(Mut<Transform>, With<Hunter>)>, players: Query<(&Tr
 
 /// Bir kristale değmek: puan, kristal başka yerde yeniden belirir, bir avcı daha gelir.
 fn collect(
-    mut crystals: Query<(Mut<Transform>, With<Crystal>)>,
+    mut crystals: Query<(&mut Transform, With<Crystal>)>,
     players: Query<(&Transform, With<Player>)>,
     mut run: ResMut<Run>,
     mut rng: ResMut<Rng>,
@@ -536,7 +536,7 @@ fn tick_clock(mut run: ResMut<Run>, mut state: ResMut<State<Screen>>, time: Res<
     }
 }
 
-fn draw_hud(mut texts: Query<Mut<Text>>, run: Res<Run>, hud: Res<Hud>, state: Res<State<Screen>>) {
+fn draw_hud(mut texts: Query<&mut Text>, run: Res<Run>, hud: Res<Hud>, state: Res<State<Screen>>) {
     if let Some(mut t) = texts.get_mut(hud.status) {
         t.content = if playing(&state) {
             format!("Kristal {}   Can {}   Süre {:.0}", run.score, run.lives, run.time_left.ceil())

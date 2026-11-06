@@ -1,7 +1,6 @@
 use gizmo_physics_core::{BodyHandle, Collider, Transform};
 use crate::components::{RigidBody, Velocity};use crate::world::PhysicsWorld;
 use gizmo_core::entity::Entity;
-use gizmo_core::query::Mut;
 use gizmo_core::world::World;
 
 /// Gives the body of entity `id` an instantaneous `impulse` (N·s, world space) at world `point`
@@ -16,7 +15,7 @@ use gizmo_core::world::World;
 /// woke the body by hand and reached into `Integrator` — which the facade does not even export
 /// (`poligon`, 2026-11-02).
 pub fn apply_impulse(world: &mut World, id: Entity, impulse: gizmo_math::Vec3, point: gizmo_math::Vec3) -> bool {
-    let mut q = world.query_mut::<(Mut<RigidBody>, &Transform, Mut<Velocity>)>();
+    let mut q = world.query_mut::<(&mut RigidBody, &Transform, &mut Velocity)>();
     let Some((mut rb, transform, mut vel)) = q.get_mut(id) else { return false };
     if !rb.is_dynamic() {
         return false;
@@ -201,9 +200,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
         let mut query = unsafe {
         world.query_unchecked::<(
             Entity,
-            Mut<RigidBody>,
-            Mut<Transform>,
-            Mut<Velocity>,
+            &mut RigidBody,
+            &mut Transform,
+            &mut Velocity,
             gizmo_core::query::Without<gizmo_core::pool::Pooled>,
             gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
         )>()
@@ -280,7 +279,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
             } else if let Ok(queue) = world.try_get_resource::<gizmo_core::commands::CommandQueue>() {
                 tracing::debug!(entity = %id, "[Physics] a moving RigidBody has no Velocity — adding one; it is simulated from the next frame");
                 queue.push(move |w: &mut World| {
-                    if w.is_alive(id) && w.borrow::<Velocity>().get(id).is_none() {
+                    if w.is_alive(id) && w.query::<&Velocity>().get(id).is_none() {
                         w.add_component(id, Velocity::default());
                     }
                 });
@@ -350,9 +349,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
             // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
             let mut query = unsafe {
             world.query_unchecked::<(
-                Mut<RigidBody>,
-                Mut<Transform>,
-                Mut<Velocity>,
+                &mut RigidBody,
+                &mut Transform,
+                &mut Velocity,
                 gizmo_core::query::Without<gizmo_core::pool::Pooled>,
             )>()
         };
@@ -428,7 +427,7 @@ pub fn physics_fracture_system(world: &World, dt: f32) {
     // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
     let query_opt = unsafe {
         world.query_unchecked::<(
-            gizmo_core::query::Mut<Breakable>,
+            &mut Breakable,
             &Transform,
             &Collider,
             &Velocity,
@@ -749,7 +748,7 @@ fn center_of_mass_frame(chunk: &crate::fracture::ProceduralChunk) -> Vec<gizmo_m
 fn age_debris(world: &World, commands: &mut gizmo_core::commands::Commands, dt: f32) {
     // SAFETY: called from `physics_fracture_system` before its breakable query is opened, and
     // `Debris` is in no other query of that system.
-    let mut pieces = unsafe { world.query_unchecked::<(Entity, gizmo_core::query::Mut<crate::components::Debris>)>() };
+    let mut pieces = unsafe { world.query_unchecked::<(Entity, &mut crate::components::Debris)>() };
     for (id, mut piece) in pieces.iter_mut() {
         piece.age += dt;
         if piece.lifetime > 0.0 && piece.age >= piece.lifetime {
@@ -827,7 +826,7 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     let mut breakable_query_opt = unsafe {
         world.query_unchecked::<(
             Entity,
-            gizmo_core::query::Mut<crate::components::Breakable>,
+            &mut crate::components::Breakable,
             &Transform,
             &Collider,
             &Velocity,
@@ -889,9 +888,9 @@ pub fn physics_explosion_system(world: &World, dt: f32) {
     let mut rb_query_opt = unsafe {
         world.query_unchecked::<(
             Entity,
-            Mut<RigidBody>,
+            &mut RigidBody,
             &Transform,
-            Mut<Velocity>,
+            &mut Velocity,
             gizmo_core::query::Without<gizmo_core::pool::Pooled>,
         )>()
     };
@@ -981,17 +980,17 @@ mod apply_impulse_tests {
         rb.is_sleeping = true;
         let ball = body(&mut world, rb);
         assert!(apply_impulse(&mut world, ball, Vec3::new(4.0, 0.0, 0.0), Vec3::ZERO));
-        let v = *world.borrow::<Velocity>().get(ball).unwrap();
+        let v = *world.query::<&Velocity>().get(ball).unwrap();
         assert!((v.linear - Vec3::new(2.0, 0.0, 0.0)).length() < 1e-5, "{v:?}");
         assert!(v.angular.length() < 1e-6, "through the centre must not spin it");
-        assert!(!world.borrow::<RigidBody>().get(ball).unwrap().is_sleeping, "still asleep");
+        assert!(!world.query::<&RigidBody>().get(ball).unwrap().is_sleeping, "still asleep");
 
         assert!(apply_impulse(&mut world, ball, Vec3::new(4.0, 0.0, 0.0), Vec3::new(0.0, 0.5, 0.0)));
-        assert!(world.borrow::<Velocity>().get(ball).unwrap().angular.length() > 0.1, "off-centre must spin it");
+        assert!(world.query::<&Velocity>().get(ball).unwrap().angular.length() > 0.1, "off-centre must spin it");
 
         let wall = body(&mut world, RigidBody::new_static());
         assert!(!apply_impulse(&mut world, wall, Vec3::X, Vec3::ZERO));
-        assert_eq!(world.borrow::<Velocity>().get(wall).unwrap().linear, Vec3::ZERO);
+        assert_eq!(world.query::<&Velocity>().get(wall).unwrap().linear, Vec3::ZERO);
         assert!(!apply_impulse(&mut world, Entity::new(9999, 0), Vec3::X, Vec3::ZERO));
     }
 }
@@ -1022,7 +1021,7 @@ mod collider_less_body_tests {
             physics_step_system(&world, 1.0 / 60.0);
         }
         assert_eq!(world.get_resource::<PhysicsWorld>().unwrap().bodies_without_collider, 1);
-        let y = |e: gizmo_core::entity::Entity| world.borrow::<Transform>().get(e).unwrap().position.y;
+        let y = |e: gizmo_core::entity::Entity| world.query::<&Transform>().get(e).unwrap().position.y;
         assert_eq!(y(bare), 5.0, "not simulated");
         assert!(y(full) < 4.0, "the same body with a collider falls");
     }

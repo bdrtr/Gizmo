@@ -206,7 +206,7 @@ fn stand_still(at: Option<(usize, usize)>, limit: f32) -> (Option<f32>, u32) {
     game.auto = true;
     if let Some((x, z)) = at {
         let p = cell(x, z);
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.player) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.player) {
             t.position = Vec3::new(p.x, t.position.y, p.z);
         }
     }
@@ -336,7 +336,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     if game.over.is_none() {
         let (mx, my) = if game.auto { (0.0, 0.0) } else { input.move_axis() };
-        if let Some(mut c) = world.borrow_mut::<CharacterController>().get_mut(game.player) {
+        if let Some(mut c) = world.query_mut::<&mut CharacterController>().get_mut(game.player) {
             c.target_velocity = Vec3::new(mx, 0.0, -my) * c.speed;
         }
         patrol(world, &game);
@@ -354,19 +354,19 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 fn patrol(world: &mut World, game: &Game) {
     let guards: Vec<Entity> = world.query::<(Entity, &Guard)>().iter().map(|(entity, _)| entity).collect();
     for id in guards {
-        let done = world.borrow::<NavAgent>().get(id).is_some_and(|a| a.target.is_none());
+        let done = world.query::<&NavAgent>().get(id).is_some_and(|a| a.target.is_none());
         if !done {
             continue;
         }
-        let Some(mut g) = world.borrow::<Guard>().get(id).copied() else { continue };
+        let Some(mut g) = world.query::<&Guard>().get(id).copied() else { continue };
         g.next = (g.next + 1) % PATROLS[g.route].len();
         let label = PATROLS[g.route][g.next];
         if let Some(at) = game.points.iter().find(|(c, _)| *c == label).map(|p| p.1) {
-            if let Some(mut a) = world.borrow_mut::<NavAgent>().get_mut(id) {
+            if let Some(mut a) = world.query_mut::<&mut NavAgent>().get_mut(id) {
                 a.set_target(at);
             }
         }
-        if let Some(mut stored) = world.borrow_mut::<Guard>().get_mut(id) {
+        if let Some(mut stored) = world.query_mut::<&mut Guard>().get_mut(id) {
             *stored = g;
         }
     }
@@ -375,10 +375,10 @@ fn patrol(world: &mut World, game: &Game) {
 /// Her muhafızın görüş konisi: önüne yayılan ışınlar duvarda kesiliyor; oyuncu konide ve
 /// görünürse şüphe artar.
 fn sight(world: &mut World, game: &mut Game, dt: f32) {
-    let player = world.borrow::<Transform>().get(game.player).map(|t| t.position).unwrap_or(game.start);
+    let player = world.query::<&Transform>().get(game.player).map(|t| t.position).unwrap_or(game.start);
     let guards: Vec<(Entity, Vec3, Vec3, Entity)> = {
-        let ts = world.borrow::<Transform>();
-        let vs = world.borrow::<Velocity>();
+        let ts = world.query::<&Transform>();
+        let vs = world.query::<&Velocity>();
         world.query::<(Entity, &Guard)>().iter()
             .filter_map(|(entity, g)| {
                 let at = ts.get(entity)?.position;
@@ -410,7 +410,7 @@ fn sight(world: &mut World, game: &mut Game, dt: f32) {
                 vertices.push(Vertex { position: [p.x, 0.03, p.z], ..Default::default() });
             }
         }
-        if let Some(mut m) = world.borrow_mut::<MeshData>().get_mut(cone) {
+        if let Some(mut m) = world.query_mut::<&mut MeshData>().get_mut(cone) {
             *m = MeshData::new(vertices);
         }
         // Oyuncu konide mi ve arada duvar var mı?
@@ -435,7 +435,7 @@ fn sight(world: &mut World, game: &mut Game, dt: f32) {
 }
 
 fn pickups(world: &mut World, game: &mut Game) {
-    let Some(p) = world.borrow::<Transform>().get(game.player).map(|t| t.position) else { return };
+    let Some(p) = world.query::<&Transform>().get(game.player).map(|t| t.position) else { return };
     let flat = |a: Vec3, b: Vec3| Vec2::new(a.x - b.x, a.z - b.z).length();
     if !game.has_document && flat(p, game.document) < 0.6 {
         game.has_document = true;
@@ -465,7 +465,7 @@ fn hud(world: &mut World, game: &Game) {
 }
 
 fn set_text(world: &mut World, id: Entity, s: &str) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
         }

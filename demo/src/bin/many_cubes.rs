@@ -70,7 +70,7 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın; kamera zaten dönüyor)
 
 use gizmo::analysis::{AnalysisPlugin, Analyzer};
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -244,7 +244,7 @@ fn main() {
 /// Dönüş `dt` ile değil sabit bir adımla. Kare süresine bağlı bir kamera, ölçümün kendisini
 /// ölçüme sokar.
 fn orbit_and_measure(
-    mut cameras: Query<(Mut<Transform>, With<Camera>)>,
+    mut cameras: Query<(&mut Transform, With<Camera>)>,
     mut bench: ResMut<Bench>,
     mut analyzer: ResMut<Analyzer>,
     time: Res<Time>,

@@ -312,7 +312,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
                 // guard'ından ayrık (disjoint).
                 {
                     let mut q = 
-                    unsafe { world.query_unchecked::<(Mut<Velocity>, &RigidBody)>() };
+                    unsafe { world.query_unchecked::<(&mut Velocity, &RigidBody)>() };
                     if let Some((mut vel, rb)) = q.entity(hit.entity.id()).and_then(|e| q.get_mut(e)) {
                         if rb.is_dynamic() {
                             vel.linear += cam_forward * 20.0; // ileri fırlat

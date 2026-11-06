@@ -128,7 +128,6 @@
 //!   * `GIZMO_RTT_NO_SHADOW=1` — güneşi gölgesiz dolgu ışığına çevir (sınırı ölçmek için)
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
-use gizmo::core::query::Mut;
 use gizmo::core::World;
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -430,7 +429,7 @@ fn set_primary(world: &mut World, tag: u8) {
         }
     }
     {
-        let mut q = world.query_mut::<(Entity, Mut<Camera>)>();
+        let mut q = world.query_mut::<(Entity, &mut Camera)>();
         for (entity, mut camera) in q.iter_mut() {
             if let Some((_, want)) = wanted.iter().find(|(wid, _)| *wid == entity.id()) {
                 camera.primary = *want;

@@ -227,7 +227,7 @@ fn main() {
             let font = load_font(scene.renderer);
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 20.0), Vec3::ZERO);
             {
-                let mut q = scene.world.query_mut::<Mut<Camera>>();
+                let mut q = scene.world.query_mut::<&mut Camera>();
                 for mut cam in q.iter_mut() {
                     cam.projection = ProjectionMode::OrthographicFit { width: 7.0, height: 9.0 };
                 }
@@ -264,7 +264,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         pressed[lane] |= input.is_key_just_pressed(*key as u32);
     }
     if let Some(buttons) = game.buttons {
-        let vb = world.borrow::<VirtualButton>();
+        let vb = world.query::<&VirtualButton>();
         for (lane, id) in buttons.iter().enumerate() {
             pressed[lane] |= vb.get(*id).is_some_and(|b| b.just_pressed());
         }
@@ -350,7 +350,7 @@ fn place_notes(world: &mut World, game: &mut Game, now: f32) {
         let at = Vec3::new(lane_x(n.lane), y, 0.0);
         match n.entity {
             Some(id) => {
-                if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
+                if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(id) {
                     t.position = at;
                 }
             }
@@ -425,7 +425,7 @@ fn flash(world: &mut World, mark: Entity, colour: Vec4) {
     if let Some(e) = world.live(mark) {
         // Çalışan malzemenin rengi — `ColorTween` de onu sürüyor; açıklama (`MaterialDesc`) her
         // kare ondan geri yazılıyor.
-        if let Some(mut m) = world.borrow_mut::<Material>().get_mut(mark) {
+        if let Some(mut m) = world.query_mut::<&mut Material>().get_mut(mark) {
             m.albedo = colour;
         }
         world.add_component(e, ColorTween::to(Vec4::new(colour.x * 0.5, colour.y * 0.5, colour.z * 0.5, 1.0), 0.15));
@@ -433,7 +433,7 @@ fn flash(world: &mut World, mark: Entity, colour: Vec4) {
 }
 
 fn say(world: &mut World, id: Entity, text: &str, colour: Vec4) {
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(id) {
         t.content = text.to_string();
         t.color = colour;
     }
@@ -457,11 +457,11 @@ fn burst(world: &mut World, at: Vec3, colour: Vec4) {
 fn draw_hud(world: &mut World, game: &Game, now: f32) {
     let total = game.notes.len();
     let end = game.notes.last().map_or(1.0, |n| n.t);
-    if let Some(mut bar) = world.borrow_mut::<ProgressBar>().get_mut(game.progress) {
+    if let Some(mut bar) = world.query_mut::<&mut ProgressBar>().get_mut(game.progress) {
         bar.value = (now / end).clamp(0.0, 1.0);
     }
     let done = game.notes.iter().all(|n| n.state != NoteState::Waiting);
-    if let Some(mut t) = world.borrow_mut::<Text>().get_mut(game.hud) {
+    if let Some(mut t) = world.query_mut::<&mut Text>().get_mut(game.hud) {
         let lap = if game.loop_len > 0.0 { now / game.loop_len } else { 0.0 };
         t.content = format!(
             "Skor {}   Kombo {} (en iyi {})\nMükemmel {}   İyi {}   Kaçan {}   / {}\nŞarkı {:.2} s   tur {:.1}{}",

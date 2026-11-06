@@ -222,8 +222,8 @@ pub fn handle_scene_operations(
             // varsayılan sahnenin silinmesini istemediğimiz bir parçası. İkisi ayrı gerekçe,
             // o yüzden ayrı satırda duruyorlar.
             let is_protected = {
-                let names = world.borrow::<gizmo::core::component::EntityName>();
-                let markers = world.borrow::<gizmo::core::component::EditorOnly>();
+                let names = world.query::<&gizmo::core::component::EntityName>();
+                let markers = world.query::<&gizmo::core::component::EditorOnly>();
                 let name = names.get(ent_id).map(|n| n.0.clone());
                 gizmo::core::component::is_editor_only(
                     markers.get(ent_id).is_some(),
@@ -468,7 +468,7 @@ pub fn handle_scene_operations(
             if let Some(parent_entity) = editor_state.pending_child_parent.take() {
                 // Parent → Children listesine ekle
                 {
-                    let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
+                    let mut children_comp = world.query_mut::<&mut gizmo::core::component::Children>();
                     if let Some(mut ch) = children_comp.get_mut(parent_entity) {
                         if !ch.0.contains(&e) {
                             ch.0.push(e);
@@ -486,7 +486,7 @@ pub fn handle_scene_operations(
 
                 // İsmi parent'a göre güncelle
                 let parent_name = world
-                    .borrow::<gizmo::core::component::EntityName>()
+                    .query::<&gizmo::core::component::EntityName>()
                     .get(parent_entity)
                     .map(|n| n.0.clone())
                     .unwrap_or_default();
@@ -565,7 +565,7 @@ pub fn handle_scene_operations(
     for ent_id in toggle_requests {
         if let Some(ent) = world.live(ent_id) {
             let currently_hidden = world
-                .borrow::<gizmo::core::component::IsHidden>()
+                .query::<&gizmo::core::component::IsHidden>()
                 .contains(ent_id);
             if currently_hidden {
                 world.remove_component::<gizmo::core::component::IsHidden>(ent);
@@ -614,7 +614,7 @@ pub fn handle_scene_operations(
     // hierarchy is left describing itself two different ways.
     if let Some(child_id) = editor_state.unparent_request.take() {
         let old_parent_id = world
-            .borrow::<gizmo::core::component::Parent>()
+            .query::<&gizmo::core::component::Parent>()
             .get(child_id)
             .map(|c| c.0);
 
@@ -726,7 +726,7 @@ mod tests {
             // duplicate-freedom: `add_component` is idempotent, so a walk that visited an
             // entity twice produces the same count. The undo record can: the cascade pushes
             // one entry per VISIT, so a second visit shows up there and nowhere else.
-            let tagged = world.borrow::<gizmo::core::component::IsDeleted>().iter().count();
+            let tagged = world.query::<&gizmo::core::component::IsDeleted>().iter().count();
             let recorded = match ed.history.undo_stack().back() {
                 Some(gizmo::editor::history::EditorAction::EntityDespawned { entity_ids }) => {
                     entity_ids.len()
@@ -792,7 +792,7 @@ mod tests {
 
     fn name_of(world: &World, id: Entity) -> Option<String> {
         world
-            .borrow::<gizmo::core::component::EntityName>()
+            .query::<&gizmo::core::component::EntityName>()
             .get(id)
             .map(|n| n.0.clone())
     }
@@ -849,7 +849,7 @@ mod tests {
             let (world, _ed, new) = spawn_via_menu(kind);
             assert!(
                 world
-                    .borrow::<gizmo::renderer::components::MeshRenderer>()
+                    .query::<&gizmo::renderer::components::MeshRenderer>()
                     .get(new[0])
                     .is_none(),
                 "{kind:?} must not be given a MeshRenderer"
@@ -863,12 +863,12 @@ mod tests {
     fn the_light_camera_and_emitter_get_their_own_component() {
         let (world, _ed, new) = spawn_via_menu(SpawnKind::PointLight);
         assert!(world
-            .borrow::<gizmo::renderer::components::PointLight>()
+            .query::<&gizmo::renderer::components::PointLight>()
             .get(new[0])
             .is_some());
 
         let (world, _ed, new) = spawn_via_menu(SpawnKind::Camera);
-        let cam = world.borrow::<gizmo::renderer::components::Camera>();
+        let cam = world.query::<&gizmo::renderer::components::Camera>();
         let cam = cam.get(new[0]).expect("a Camera component");
         assert!(
             !cam.primary,
@@ -877,7 +877,7 @@ mod tests {
 
         let (world, _ed, new) = spawn_via_menu(SpawnKind::ParticleEmitter);
         assert!(world
-            .borrow::<gizmo::renderer::components::ParticleEmitter>()
+            .query::<&gizmo::renderer::components::ParticleEmitter>()
             .get(new[0])
             .is_some());
     }
@@ -925,7 +925,7 @@ mod tests {
 
         for member in [a, b] {
             assert_eq!(
-                world.borrow::<Parent>().get(member).map(|p| p.0),
+                world.query::<&Parent>().get(member).map(|p| p.0),
                 Some(group),
                 "every selected entity must end up under the group"
             );
@@ -961,7 +961,7 @@ mod tests {
 
         assert!(ed.pending_group_members.is_empty());
         assert!(ed.pending_child_parent.is_none());
-        assert!(world.borrow::<Parent>().get(a).is_none());
+        assert!(world.query::<&Parent>().get(a).is_none());
     }
 
     fn spawn(world: &mut World) -> gizmo::core::entity::Entity {
@@ -971,7 +971,7 @@ mod tests {
     }
 
     fn children_of(world: &World, parent: Entity) -> Vec<u32> {
-        world.borrow::<Children>().get(parent).map(|c| c.0.iter().map(|e| e.id()).collect()).unwrap_or_default()
+        world.query::<&Children>().get(parent).map(|c| c.0.iter().map(|e| e.id()).collect()).unwrap_or_default()
     }
 
     /// A reparent must leave BOTH halves of the hierarchy agreeing: the child points up, the
@@ -986,7 +986,7 @@ mod tests {
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
         assert_eq!(
-            world.borrow::<Parent>().get(child).map(|p| p.0),
+            world.query::<&Parent>().get(child).map(|p| p.0),
             Some(parent),
             "the child must point at its new parent"
         );
@@ -1010,7 +1010,7 @@ mod tests {
             "the old parent still lists a child it no longer has"
         );
         assert_eq!(children_of(&world, second), vec![child.id()]);
-        assert_eq!(world.borrow::<Parent>().get(child).map(|p| p.0), Some(second));
+        assert_eq!(world.query::<&Parent>().get(child).map(|p| p.0), Some(second));
     }
 
     /// Dropping a node onto itself is refused. A `Children` cycle is not a cosmetic problem: it
@@ -1024,7 +1024,7 @@ mod tests {
 
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
-        assert!(world.borrow::<Parent>().get(e).is_none(), "self-parenting must be refused");
+        assert!(world.query::<&Parent>().get(e).is_none(), "self-parenting must be refused");
     }
 
     /// …and neither can it be dropped onto its own descendant, which is the same cycle one level
@@ -1044,7 +1044,7 @@ mod tests {
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
         assert!(
-            world.borrow::<Parent>().get(root).is_none(),
+            world.query::<&Parent>().get(root).is_none(),
             "the root was adopted by its own grandchild — that is a cycle"
         );
         assert_eq!(children_of(&world, leaf), Vec::<u32>::new());
@@ -1062,7 +1062,7 @@ mod tests {
         ed.unparent_request = Some(child);
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
-        assert!(world.borrow::<Parent>().get(child).is_none(), "the child is a root now");
+        assert!(world.query::<&Parent>().get(child).is_none(), "the child is a root now");
         assert!(
             children_of(&world, parent).is_empty(),
             "the old parent must not keep listing it"
@@ -1120,7 +1120,7 @@ mod tests {
 
         ed.add_component_request = Some((ent, "Health".to_string()));
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
-        assert_eq!(world.borrow::<Health>().get(ent).cloned(), Some(Health::default()));
+        assert_eq!(world.query::<&Health>().get(ent).cloned(), Some(Health::default()));
 
         let set = world
             .get_resource::<gizmo::core::ComponentRegistry>()
@@ -1131,11 +1131,11 @@ mod tests {
             .unwrap();
         ed.pending_json_updates.push((ent, set, serde_json::json!({ "hp": 3.5, "lives": 9 })));
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
-        assert_eq!(world.borrow::<Health>().get(ent).map(|h| h.lives), Some(9));
+        assert_eq!(world.query::<&Health>().get(ent).map(|h| h.lives), Some(9));
 
         ed.remove_component_request = Some((ent, "Health".to_string()));
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
-        assert!(world.borrow::<Health>().get(ent).is_none(), "🗑 left the game component in place");
+        assert!(world.query::<&Health>().get(ent).is_none(), "🗑 left the game component in place");
     }
 
     /// **Every light type the engine draws can be created in the editor.**
@@ -1163,11 +1163,11 @@ mod tests {
             handle_scene_operations(&mut world, &mut ed, &mut studio_state());
         }
 
-        assert!(world.borrow::<PointLight>().get(ent).is_some());
-        let suns = world.borrow::<DirectionalLight>();
+        assert!(world.query::<&PointLight>().get(ent).is_some());
+        let suns = world.query::<&DirectionalLight>();
         let sun = suns.get(ent).expect("a sun can be added");
         assert!(sun.intensity > 0.0, "a sun that lights nothing reads as broken, not as neutral");
-        let spots = world.borrow::<SpotLight>();
+        let spots = world.query::<&SpotLight>();
         let spot = spots.get(ent).expect("a spot light can be added");
         assert!(
             spot.inner_angle <= spot.outer_angle,
@@ -1175,7 +1175,7 @@ mod tests {
              of the cone — the default must not ship that"
         );
         assert!(spot.radius > 0.0 && spot.intensity > 0.0);
-        let rects = world.borrow::<RectLight>();
+        let rects = world.query::<&RectLight>();
         let rect = rects.get(ent).expect("a rectangle light can be added");
         assert!(rect.width > 0.0 && rect.height > 0.0 && rect.intensity > 0.0);
     }
@@ -1184,17 +1184,17 @@ mod tests {
     /// request the UI raises is a string, and this asks the same question the same way.
     fn has_component(world: &World, id: Entity, name: &str) -> bool {
         match name {
-            "Hitbox" => world.borrow::<gizmo::physics::components::Hitbox>().get(id).is_some(),
-            "Hurtbox" => world.borrow::<gizmo::physics::components::Hurtbox>().get(id).is_some(),
+            "Hitbox" => world.query::<&gizmo::physics::components::Hitbox>().get(id).is_some(),
+            "Hurtbox" => world.query::<&gizmo::physics::components::Hurtbox>().get(id).is_some(),
             "BoneAttachment" => world
-                .borrow::<gizmo::renderer::components::BoneAttachment>()
+                .query::<&gizmo::renderer::components::BoneAttachment>()
                 .get(id)
                 .is_some(),
             "FighterController" => world
-                .borrow::<gizmo::physics::components::fighter::FighterController>()
+                .query::<&gizmo::physics::components::fighter::FighterController>()
                 .get(id)
                 .is_some(),
-            "NavAgent" => world.borrow::<gizmo::ai::components::NavAgent>().get(id).is_some(),
+            "NavAgent" => world.query::<&gizmo::ai::components::NavAgent>().get(id).is_some(),
             other => panic!("test bilinmeyen bileşen adı kullandı: {other}"),
         }
     }
@@ -1215,7 +1215,7 @@ mod tests {
             handle_scene_operations(&mut world, &mut ed, &mut studio_state());
             slots.push(
                 world
-                    .borrow::<gizmo::physics::components::fighter::FighterController>()
+                    .query::<&gizmo::physics::components::fighter::FighterController>()
                     .get(ent)
                     .expect("the fighter was added")
                     .player_id,
@@ -1238,7 +1238,7 @@ mod tests {
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
         assert_eq!(
             world
-                .borrow::<gizmo::physics::components::fighter::FighterController>()
+                .query::<&gizmo::physics::components::fighter::FighterController>()
                 .get(ent)
                 .expect("added")
                 .player_id,

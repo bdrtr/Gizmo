@@ -216,7 +216,7 @@ fn tick(world: &mut World, dt: f32, input: &Input) {
     // biçimde yazılmış — sorgu ham id veriyor, `world.entity(id)` ile `Entity`'ye çevriliyor.
     let mut due_ids: Vec<(u32, Action)> = Vec::new();
     {
-        let mut q = world.query_mut::<(Entity, gizmo::core::query::Mut<Delayed>)>();
+        let mut q = world.query_mut::<(Entity, &mut Delayed)>();
         for (entity, mut d) in q.iter_mut() {
             d.remaining -= dt;
             if d.remaining <= 0.0 {
@@ -241,7 +241,7 @@ fn tick(world: &mut World, dt: f32, input: &Input) {
             }
             Action::Grow => {
                 {
-                    let mut q = world.query_mut::<(Entity, gizmo::core::query::Mut<Transform>)>();
+                    let mut q = world.query_mut::<(Entity, &mut Transform)>();
                     for (id, mut t) in q.iter_mut() {
                         if id.id() == entity.id() {
                             t.scale *= 1.6;

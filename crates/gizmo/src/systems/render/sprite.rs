@@ -35,8 +35,8 @@ pub fn record_sprites(
     world: &World,
     view_proj: Mat4,
 ) {
-    let sprites = world.borrow::<Sprite>();
-    let tilemaps = world.borrow::<Tilemap>();
+    let sprites = world.query::<&Sprite>();
+    let tilemaps = world.query::<&Tilemap>();
     if sprites.is_empty() && tilemaps.is_empty() {
         if let Some(s) = renderer.sprites.as_mut() {
             // Last frame's runs must not survive into a frame that has none.
@@ -46,9 +46,9 @@ pub fn record_sprites(
     }
     let hidden = super::hidden::collect_hidden(
         world,
-        &world.borrow::<gizmo_core::component::Children>(),
+        &world.query::<&gizmo_core::component::Children>(),
     );
-    let transforms = world.borrow::<crate::prelude::GlobalTransform>();
+    let transforms = world.query::<&crate::prelude::GlobalTransform>();
     let screen = Vec2::new(renderer.config.width as f32, renderer.config.height as f32);
 
     let Renderer { sprites: pass_state, queue, device, post, depth_texture_view, .. } = renderer;

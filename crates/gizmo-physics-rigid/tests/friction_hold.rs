@@ -88,7 +88,7 @@ fn drift_at(fraction: f32, seconds: f32) -> f32 {
     for _ in 0..120 {
         physics_step_system(&w, DT);
     }
-    let start = w.borrow::<Transform>().get(b).unwrap().position;
+    let start = w.query::<&Transform>().get(b).unwrap().position;
     let push = fraction * MU_S * MASS * GRAVITY; // newtons the plate can just hold
 
     let steps = (seconds / DT) as usize;
@@ -98,7 +98,7 @@ fn drift_at(fraction: f32, seconds: f32) -> f32 {
         // writing an accumulator wakes the body it is written to (`world/step.rs`, and
         // `applied_forces.rs::a_force_wakes_the_body_it_is_applied_to` is the regression) — so
         // the call is gone and this file exercises that path rather than working around it.
-        let mut bodies = w.borrow_mut::<RigidBody>();
+        let mut bodies = w.query_mut::<&mut RigidBody>();
         if let Some(mut rb) = bodies.get_mut(b) {
             rb.force_accumulator.x += push;
         }
@@ -106,7 +106,7 @@ fn drift_at(fraction: f32, seconds: f32) -> f32 {
         physics_step_system(&w, DT);
     }
 
-    let end = w.borrow::<Transform>().get(b).unwrap().position;
+    let end = w.query::<&Transform>().get(b).unwrap().position;
     (end - start).length()
 }
 
@@ -173,7 +173,7 @@ fn a_force_produces_the_same_acceleration_at_every_frame_rate() {
         w.add_component(b, Velocity::default());
         w.add_component(b, Collider::box_collider(Vec3::splat(0.25)));
         for _ in 0..((1.0 / dt).round() as usize) {
-            let mut bodies = w.borrow_mut::<RigidBody>();
+            let mut bodies = w.query_mut::<&mut RigidBody>();
             if let Some(mut rb) = bodies.get_mut(b) {
                 rb.wake_up();
                 rb.force_accumulator.x += 10.0;
@@ -181,7 +181,7 @@ fn a_force_produces_the_same_acceleration_at_every_frame_rate() {
             drop(bodies);
             physics_step_system(&w, dt);
         }
-        w.borrow::<Velocity>().get(b).unwrap().linear.x
+        w.query::<&Velocity>().get(b).unwrap().linear.x
     }
 
     let rates = [1.0 / 240.0, 1.0 / 120.0, 1.0 / 60.0, 1.0 / 30.0];

@@ -247,10 +247,10 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     let top = tower_top(world);
     let hook = drop_height(world) + BLOCK.y + 0.3;
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.crane) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.crane) {
         t.position = Vec3::new(x, hook, 0.0);
     }
-    if let Some(mut c) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut c) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         let want = Vec3::new(0.0, top + 2.0, 9.0);
         c.position = c.position.lerp(want, (dt * 2.0).min(1.0));
         let look = (Vec3::new(0.0, top * 0.7, 0.0) - c.position).normalize_or_zero();

@@ -320,14 +320,14 @@ mod tests {
         world.add_component(e1, Position { x: 1.0, y: 2.0 });
         world.add_component(e1, Health(100));
 
-        assert!(world.borrow::<Position>().get(e1).is_some());
-        assert!(world.borrow::<Health>().get(e1).is_some());
+        assert!(world.query::<&Position>().get(e1).is_some());
+        assert!(world.query::<&Health>().get(e1).is_some());
 
         world.despawn(e1);
 
         assert!(!world.is_alive(e1));
-        assert!(world.borrow::<Position>().get(e1).is_none());
-        assert!(world.borrow::<Health>().get(e1).is_none());
+        assert!(world.query::<&Position>().get(e1).is_none());
+        assert!(world.query::<&Health>().get(e1).is_none());
     }
 
     #[test]
@@ -344,8 +344,8 @@ mod tests {
         // Despawn e1 — should not affect e2
         world.despawn(e1);
 
-        assert!(world.borrow::<Position>().get(e2).is_some());
-        assert!(world.borrow::<Health>().get(e2).is_some());
+        assert!(world.query::<&Position>().get(e2).is_some());
+        assert!(world.query::<&Health>().get(e2).is_some());
         assert_eq!(world.entity_count(), 1);
     }
 
@@ -390,7 +390,7 @@ mod tests {
         world.add_component(e, Health(100));
         world.add_component(e, Health(50)); // Overwrite
 
-        let hp = world.borrow::<Health>();
+        let hp = world.query::<&Health>();
         assert_eq!(hp.get(e).unwrap().0, 50);
     }
 
@@ -405,12 +405,12 @@ mod tests {
         world.despawn(e);
 
         assert!(!world.is_alive(e));
-        assert!(world.borrow::<Health>().get(e).is_none());
+        assert!(world.query::<&Health>().get(e).is_none());
 
         // ID yeniden kullanıldığında eski Health taşınmamalı
         let e2 = world.spawn();
         assert_eq!(e2.id(), e.id());
-        assert!(world.borrow::<Health>().get(e2).is_none());
+        assert!(world.query::<&Health>().get(e2).is_none());
     }
 
     #[test]
@@ -528,7 +528,7 @@ mod tests {
         assert_eq!(world.archetype_index.archetype_count(), 2);
 
         // The remaining 50 entities should still be fully accessible
-        let pos_view = world.borrow::<Position>();
+        let pos_view = world.query::<&Position>();
         let mut count = 0;
         for e in world.iter_alive_entities() {
             assert!(pos_view.get(e).is_some());

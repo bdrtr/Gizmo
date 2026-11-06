@@ -872,7 +872,7 @@ mod run_system {
         world.insert_resource(Count(0));
         world.run_system(spawn_one);
         assert_eq!(world.get_resource::<Count>().unwrap().0, 1);
-        assert_eq!(world.borrow::<Marker>().iter().count(), 1, "the command waited past the call");
+        assert_eq!(world.query::<&Marker>().iter().count(), 1, "the command waited past the call");
     }
 
     /// The frame's change window survives: a system after it does not see an old component as new.

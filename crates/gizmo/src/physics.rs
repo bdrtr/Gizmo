@@ -326,7 +326,7 @@ mod tilemap_collider_tests {
         for _ in 0..240 {
             system::physics_step_system(&world, 1.0 / 60.0);
         }
-        let y = world.borrow::<components::Transform>().get(ball).unwrap().position.y;
+        let y = world.query::<&components::Transform>().get(ball).unwrap().position.y;
         assert!((y - 0.5).abs() < 0.05, "the ball rests at y = {y}, the floor top is 0 and its radius 0.5");
     }
 }

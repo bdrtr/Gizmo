@@ -102,7 +102,7 @@ mod tests {
 
         st.add_component_request = Some((e, "Health".into()));
         apply_registry_requests(&mut world, &mut st);
-        assert_eq!(world.borrow::<Health>().get(e).cloned(), Some(Health::default()));
+        assert_eq!(world.query::<&Health>().get(e).cloned(), Some(Health::default()));
 
         let set = world
             .get_resource::<gizmo_core::ComponentRegistry>()
@@ -113,11 +113,11 @@ mod tests {
             .unwrap();
         st.pending_json_updates.push((e, set, serde_json::json!({ "hp": 2.5, "lives": 4 })));
         apply_registry_requests(&mut world, &mut st);
-        assert_eq!(world.borrow::<Health>().get(e).cloned(), Some(Health { hp: 2.5, lives: 4 }));
+        assert_eq!(world.query::<&Health>().get(e).cloned(), Some(Health { hp: 2.5, lives: 4 }));
 
         st.remove_component_request = Some((e, "Health".into()));
         apply_registry_requests(&mut world, &mut st);
-        assert!(world.borrow::<Health>().get(e).is_none());
+        assert!(world.query::<&Health>().get(e).is_none());
         assert!(st.add_component_request.is_none() && st.remove_component_request.is_none());
     }
 
@@ -139,7 +139,7 @@ mod tests {
         st.pending_json_updates.push((e, set, serde_json::json!({ "hp": 1.0, "lives": 3.0 })));
         st.last_error = None;
         apply_registry_requests(&mut world, &mut st);
-        assert_eq!(world.borrow::<Health>().get(e).map(|h| h.lives), Some(2));
+        assert_eq!(world.query::<&Health>().get(e).map(|h| h.lives), Some(2));
         assert!(st.last_error.is_some(), "the refusal was swallowed");
     }
 

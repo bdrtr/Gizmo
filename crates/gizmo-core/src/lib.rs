@@ -91,28 +91,6 @@ pub use timer::{Timer, TimerMode};
 pub use window::WindowInfo;
 pub use world::World;
 
-/// Shared read-only view over every entity carrying a single component `T`.
-///
-/// A naming alias for the one-component [`Query`], nothing more — it adds no behaviour and no
-/// runtime cost, and the read-only accessors (`iter`, `get`, `contains`, …) are available
-/// because `&T` is a [`ReadOnlyQuery`]. This is exactly the type [`World::borrow`] returns,
-/// so the two are interchangeable in a signature.
-///
-/// Any number of these may be alive over the same `T` at once; obtaining one only needs
-/// `&World`. Iteration order is the [`Query`] order — reproducible for an identical sequence
-/// of world operations, but not spawn order and not stable across structural edits.
-pub type StorageView<'w, T> = crate::query::Query<'w, &'w T>;
-/// Mutable counterpart of [`StorageView`]: a view over every entity carrying `T`, able to
-/// write it.
-///
-/// An alias for the one-component [`Query`] of [`Mut<T>`](crate::query::Mut), the type
-/// [`World::borrow_mut`] returns. Writing through it goes via `Mut`, so touched components get
-/// change ticks and [`Changed<T>`](crate::query::Changed) filters see them.
-///
-/// Unlike [`StorageView`], constructing one safely requires `&mut World`, and the mutating
-/// accessors take `&mut self` — which is what prevents two live `&mut T` to the same component
-/// from being built without `unsafe`.
-pub type StorageViewMut<'w, T> = crate::query::Query<'w, crate::query::Mut<'w, T>>;
 
 // ──── Prelude ────
 /// Access to all the basic types with a single `use gizmo_core::prelude::*;`.
@@ -126,7 +104,7 @@ pub mod prelude {
         EventMutator, EventReader, EventWriter, Events, FrameProfiler, Input, InputBinding, IntoSystem,
         IntoSystemConfig, IsHidden, IsDeleted, Local, Mut, Phase, PhysicsTime, PoolManager, Pooled,
         PrefabRequest,
-        Query, ReadOnlyQuery, Res, ResMut, Schedule, StorageView, StorageViewMut, System,
+        Query, ReadOnlyQuery, Res, ResMut, Schedule, System,
         SystemConfig, SystemParam, Time, Timer, TimerMode, WindowInfo, World,
     };
     #[cfg(feature = "reflect")]

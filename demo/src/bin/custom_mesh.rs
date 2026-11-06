@@ -36,7 +36,7 @@
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::renderer::gpu_types::Vertex;
@@ -110,7 +110,7 @@ fn main() {
                 .map(|t| t.zoomed);
             if let Some(zoomed) = pending {
                 let vertices = cube_vertices(zoomed);
-                let meshes = world.borrow::<Mesh>();
+                let meshes = world.query::<&Mesh>();
                 for mesh in meshes.iter() {
                     mesh.update_vertices(&renderer.queue, &vertices);
                 }
@@ -128,7 +128,7 @@ fn main() {
 
 /// Space UV setini değiştirir (bayrağı koyar), X/Y/Z döndürür, R sıfırlar.
 fn input_handler(
-    mut cubes: Query<(Mut<Transform>, With<CustomUv>)>,
+    mut cubes: Query<(&mut Transform, With<CustomUv>)>,
     mut toggle: ResMut<UvToggle>,
     input: Res<Input>,
     time: Res<Time>,

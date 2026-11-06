@@ -353,7 +353,7 @@ pub fn behavior_tree_system(world: &mut World, dt: f32) {
 
     for entity in entities {
         let mut root_opt = None;
-        if let Some(mut tree) = world.borrow_mut::<BehaviorTree>().get_mut(entity) {
+        if let Some(mut tree) = world.query_mut::<&mut BehaviorTree>().get_mut(entity) {
             root_opt = tree.root.take();
         }
 
@@ -367,7 +367,7 @@ pub fn behavior_tree_system(world: &mut World, dt: f32) {
             }
             tracing::trace!(entity = %entity, ?status, "[AI] Davranış ağacı köke kadar tick'lendi");
 
-            if let Some(mut tree) = world.borrow_mut::<BehaviorTree>().get_mut(entity) {
+            if let Some(mut tree) = world.query_mut::<&mut BehaviorTree>().get_mut(entity) {
                 tree.root = Some(root);
             }
         } else {
@@ -520,7 +520,7 @@ mod tests {
         world.add_component(
             e,
             BehaviorTree::new(Box::new(Action::new(move |entity, w: &mut World, _| {
-                let trees = w.borrow::<BehaviorTree>();
+                let trees = w.query::<&BehaviorTree>();
                 let root_is_none = trees.get(entity).is_some_and(|t| t.root.is_none());
                 seen.store(usize::from(root_is_none), Ordering::SeqCst);
                 BtStatus::Success
@@ -534,7 +534,7 @@ mod tests {
         );
         // …and it is back afterwards.
         assert!(
-            world.borrow::<BehaviorTree>().get(e).is_some_and(|t| t.root.is_some()),
+            world.query::<&BehaviorTree>().get(e).is_some_and(|t| t.root.is_some()),
             "the root must be restored once the tick returns"
         );
     }
@@ -562,7 +562,7 @@ mod tests {
         );
         behavior_tree_system(&mut world, 1.0 / 60.0);
         assert!(
-            world.borrow::<BehaviorTree>().get(e).is_none(),
+            world.query::<&BehaviorTree>().get(e).is_none(),
             "the component was removed mid-tick, so the root is dropped rather than restored — \
              putting it back would resurrect a component the node deliberately removed"
         );
@@ -575,6 +575,6 @@ mod tests {
         let e = world.spawn();
         world.add_component(e, BehaviorTree { root: None });
         behavior_tree_system(&mut world, 1.0 / 60.0);
-        assert!(world.borrow::<BehaviorTree>().get(e).is_some_and(|t| t.root.is_none()));
+        assert!(world.query::<&BehaviorTree>().get(e).is_some_and(|t| t.root.is_none()));
     }
 }

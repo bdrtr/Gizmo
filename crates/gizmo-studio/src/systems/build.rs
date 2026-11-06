@@ -292,13 +292,13 @@ fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<Miss
     let mut refs: Vec<(String, String, RefKind)> = Vec::new();
 
     {
-        let meshes = world.borrow::<gizmo::core::component::MeshSource>();
+        let meshes = world.query::<&gizmo::core::component::MeshSource>();
         for m in meshes.iter() {
             refs.push(("Mesh".into(), m.0.clone(), RefKind::Mesh));
         }
     }
     {
-        let mats = world.borrow::<gizmo::core::component::MaterialSource>();
+        let mats = world.query::<&gizmo::core::component::MaterialSource>();
         for m in mats.iter() {
             if let Some(t) = &m.texture_source {
                 refs.push(("Materyal dokusu".into(), t.clone(), RefKind::Texture));
@@ -306,7 +306,7 @@ fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<Miss
         }
     }
     {
-        let descs = world.borrow::<gizmo::renderer::components::MaterialDesc>();
+        let descs = world.query::<&gizmo::renderer::components::MaterialDesc>();
         for d in descs.iter() {
             if let Some(t) = &d.texture_source {
                 refs.push(("Materyal dokusu".into(), t.clone(), RefKind::Texture));
@@ -314,13 +314,13 @@ fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<Miss
         }
     }
     {
-        let terrains = world.borrow::<gizmo::renderer::components::Terrain>();
+        let terrains = world.query::<&gizmo::renderer::components::Terrain>();
         for t in terrains.iter() {
             refs.push(("Arazi heightmap".into(), t.heightmap_path.clone(), RefKind::Path));
         }
     }
     {
-        let emitters = world.borrow::<gizmo::renderer::components::ParticleEmitter>();
+        let emitters = world.query::<&gizmo::renderer::components::ParticleEmitter>();
         for e in emitters.iter() {
             if let Some(t) = &e.texture_source {
                 refs.push(("Partikül dokusu".into(), t.clone(), RefKind::Texture));
@@ -328,13 +328,13 @@ fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<Miss
         }
     }
     {
-        let scripts = world.borrow::<gizmo::scripting::Script>();
+        let scripts = world.query::<&gizmo::scripting::Script>();
         for s in scripts.iter() {
             refs.push(("Script".into(), s.file_path.clone(), RefKind::Path));
         }
     }
     {
-        let sounds = world.borrow::<gizmo::prelude::AudioSource>();
+        let sounds = world.query::<&gizmo::prelude::AudioSource>();
         for s in sounds.iter() {
             refs.push(("Ses".into(), s.sound_name.clone(), RefKind::Sound));
         }
@@ -1160,7 +1160,7 @@ mod export_copy_tests {
         .expect("staged sahne geri yüklenebilmeli");
         let _ = std::fs::remove_file(&staged);
 
-        let names = loaded.borrow::<EntityName>();
+        let names = loaded.query::<&EntityName>();
         assert!(
             names.iter().any(|n| n.0 == "Sahnedeki Kutu"),
             "the world the editor was showing is not what got staged"

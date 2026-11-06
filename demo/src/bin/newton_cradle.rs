@@ -227,7 +227,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
             let idx = 0;
             let id = state.balls[idx];
             let (pivot, at) = {
-                let ts = world.borrow::<Transform>();
+                let ts = world.query::<&Transform>();
                 (state.pivots[idx], ts.get(id).map(|t| t.position).unwrap_or(state.pivots[idx]))
             };
             // İpe dik yön, salınım düzleminde: (pivot→top) vektörünü 90° çevir.
@@ -235,7 +235,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
             let tangent = Vec3::new(-along.y, along.x, 0.0).normalize_or_zero();
             // Diğer topların bulunduğu yana doğru: sağa.
             let dir = if tangent.x < 0.0 { -tangent } else { tangent };
-            let mut vs = world.borrow_mut::<Velocity>();
+            let mut vs = world.query_mut::<&mut Velocity>();
             if let Some(mut v) = vs.get_mut(id) {
                 v.linear = dir * speed;
                 v.angular = Vec3::ZERO;
@@ -300,13 +300,13 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
                 // kazanç dt tutarsızlığına bağışık ve pürüzsüz takip eder. Gövde DİNAMİK
                 // olduğu için bu bir *istek*: temas ona karşı koyabilir, ve koymalıdır.
                 let cur = world
-                    .borrow::<Transform>()
+                    .query::<&Transform>()
                     .get(id)
                     .map(|t| t.position)
                     .unwrap_or(target);
                 const DRAG_GAIN: f32 = 18.0;
                 let vel = ((target - cur) * DRAG_GAIN).clamp_length_max(15.0);
-                let mut vs = world.borrow_mut::<Velocity>();
+                let mut vs = world.query_mut::<&mut Velocity>();
                 if let Some(mut v) = vs.get_mut(id) {
                     v.linear = vel;
                     v.angular = Vec3::ZERO;
@@ -317,7 +317,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
         // Bırakma: gövde tipi zaten Dynamic (artık kinematiğe hiç geçilmiyor); yalnız servo
         // hızı doğal bir fiske olarak bırakılır, kelepçeyle.
         let id = state.balls[idx];
-        let mut vs = world.borrow_mut::<Velocity>();
+        let mut vs = world.query_mut::<&mut Velocity>();
         if let Some(mut v) = vs.get_mut(id) {
             v.linear = v.linear.clamp_length_max(12.0);
         }
@@ -327,7 +327,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
     // Fizik (schedule'da) bu kareden önce koştu → top konumları güncel. İpi pivot
     // ile topun pivota bakan yüzeyi arasına gerilmiş ince çubuk yap.
     let centers: Vec<Vec3> = {
-        let ts = world.borrow::<Transform>();
+        let ts = world.query::<&Transform>();
         state
             .balls
             .iter()
@@ -344,7 +344,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
     // aranan şey zaten en kötü an. Yanına hızı ve kare süresini de koyar, çünkü
     // şüpheliler onlar.
     {
-        let vs = world.borrow::<Velocity>();
+        let vs = world.query::<&Velocity>();
         let vels: Vec<Vec3> = state
             .balls
             .iter()
@@ -416,7 +416,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
         }
     }
 
-    let mut ts = world.borrow_mut::<Transform>();
+    let mut ts = world.query_mut::<&mut Transform>();
     for (i, &rope) in state.ropes.iter().enumerate() {
         let pivot = state.pivots[i];
         let seg = pivot - centers[i]; // topun merkezinden pivota
@@ -446,7 +446,7 @@ fn reset(world: &mut World, state: &mut Cradle) {
     state.dumped_fast = false;
 
     {
-        let mut ts = world.borrow_mut::<Transform>();
+        let mut ts = world.query_mut::<&mut Transform>();
         for (&b, home) in state.balls.iter().zip(state.homes.iter()) {
             if let Some(mut t) = ts.get_mut(b) {
                 *t = *home; // `home` matris önbelleğiyle birlikte kuruldu → bayat kalmaz
@@ -454,7 +454,7 @@ fn reset(world: &mut World, state: &mut Cradle) {
         }
     }
     {
-        let mut vs = world.borrow_mut::<Velocity>();
+        let mut vs = world.query_mut::<&mut Velocity>();
         for &b in &state.balls {
             if let Some(mut v) = vs.get_mut(b) {
                 *v = Velocity::default();
@@ -462,7 +462,7 @@ fn reset(world: &mut World, state: &mut Cradle) {
         }
     }
     {
-        let mut rbs = world.borrow_mut::<RigidBody>();
+        let mut rbs = world.query_mut::<&mut RigidBody>();
         for &b in &state.balls {
             if let Some(mut rb) = rbs.get_mut(b) {
                 rb.body_type = BodyType::Dynamic; // tip zaten bu; sıfırlama onu da garantiye alır

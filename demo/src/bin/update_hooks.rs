@@ -166,7 +166,7 @@ fn my_hook(world: &mut World, _state: &mut SimpleSceneState, dt: f32, _input: &I
     // `World`'ün sunduğu tipli yol `query`/`query_mut`, ve tek varlık isteyen de bütünü gezip
     // kimliği karşılaştırıyor. Demonun konusu bu değil, ama demoyu yazarken çıktı.
     {
-        let mut q = world.query_mut::<(Entity, gizmo::core::query::Mut<Transform>)>();
+        let mut q = world.query_mut::<(Entity, &mut Transform)>();
         for (entity, mut t) in q.iter_mut() {
             if entity.id() == pair.parent {
                 t.rotation = Quat::from_rotation_y(report.parent_spin);

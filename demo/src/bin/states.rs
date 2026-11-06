@@ -31,7 +31,7 @@
 //!   * **Sağ-tık + fare** — bak · **WASDQE** — kamera
 
 use gizmo::core::input::{Input, MoveKeys};
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -142,7 +142,7 @@ fn main() {
 
 /// Yalnız `InGame`'de koşar: küpü ok tuşlarıyla gezdirir.
 fn movement(
-    mut cubes: Query<(Mut<Transform>, With<Player>)>,
+    mut cubes: Query<(&mut Transform, With<Player>)>,
     input: Res<Input>,
     time: Res<Time>,
 ) {

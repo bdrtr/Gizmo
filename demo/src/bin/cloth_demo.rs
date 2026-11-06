@@ -260,14 +260,14 @@ fn update(world: &mut World, state: &mut ClothDemo, dt: f32, input: &Input) {
         state.shape = (state.shape + 1) % 3;
         state.colliders[0].2 = shape_collider(state.shape);
         {
-            let mut ts = world.borrow_mut::<Transform>();
+            let mut ts = world.query_mut::<&mut Transform>();
             if let Some(mut t) = ts.get_mut(state.obj_entity) {
                 t.scale = shape_scale(state.shape);
                 t.update_local_matrix();
             }
         }
         {
-            let mut ms = world.borrow_mut::<Mesh>();
+            let mut ms = world.query_mut::<&mut Mesh>();
             if let Some(mut m) = ms.get_mut(state.obj_entity) {
                 *m = state.obj_meshes[state.shape].clone();
             }
@@ -312,7 +312,7 @@ fn render(
 ) {
     let mesh = build_cloth_mesh(&renderer.device, &s.cloth, s.grid);
     {
-        let mut ms = world.borrow_mut::<Mesh>();
+        let mut ms = world.query_mut::<&mut Mesh>();
         if let Some(mut m) = ms.get_mut(s.cloth_entity) {
             *m = mesh;
         }

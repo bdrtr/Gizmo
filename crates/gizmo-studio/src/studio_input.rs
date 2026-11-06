@@ -49,7 +49,7 @@ const EDITOR_ENTITY_PREFIXES: &[&str] = &["Editor Light Icon"];
 
 /// Is this entity an editor object (and therefore not selectable)?
 fn is_editor_entity(world: &World, id: Entity) -> bool {
-    let names = world.borrow::<gizmo::core::component::EntityName>();
+    let names = world.query::<&gizmo::core::component::EntityName>();
     if let Some(name) = names.get(id) {
         if EDITOR_ENTITY_NAMES.contains(&name.0.as_str()) {
             return true;
@@ -82,7 +82,7 @@ fn perform_raycast(
             let root_id = find_selection_root(world, hit_id);
 
             let name = world
-                .borrow::<gizmo::core::component::EntityName>()
+                .query::<&gizmo::core::component::EntityName>()
                 .get(root_id)
                 .map(|n| n.0.clone())
                 .unwrap_or_else(|| format!("Entity {}", root_id));
@@ -107,7 +107,7 @@ fn perform_raycast(
 /// For glTF models it walks from the mesh child up to the glTF root.
 /// A depth limit of 32 levels guards against an infinite loop.
 fn find_selection_root(world: &World, start_id: Entity) -> Entity {
-    let parents = world.borrow::<gizmo::core::component::Parent>();
+    let parents = world.query::<&gizmo::core::component::Parent>();
     let mut current = start_id;
 
     for _ in 0..32 {
@@ -125,10 +125,10 @@ fn find_closest_hit(world: &World, ray: &Ray, player_id: Entity) -> Option<Entit
     let mut closest_t = f32::MAX;
     let mut hit_entity = None;
 
-    let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
-    let colliders = world.borrow::<Collider>();
-    let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
-    let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
+    let global_transforms = world.query::<&gizmo::physics::components::GlobalTransform>();
+    let colliders = world.query::<&Collider>();
+    let meshes = world.query::<&gizmo::renderer::components::Mesh>();
+    let is_hidden = world.query::<&gizmo::core::component::IsHidden>();
 
     for (entity, t) in world.query::<(Entity, &Transform)>().iter() {
         // Filtreleme: Kamera, gizli, editör objeleri
@@ -247,10 +247,10 @@ fn perform_rubber_band_selection(
         state.selection.entities.clear();
     }
 
-    let global_transforms = world.borrow::<gizmo::physics::components::GlobalTransform>();
-    let is_hidden = world.borrow::<gizmo::core::component::IsHidden>();
-    let colliders = world.borrow::<Collider>();
-    let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
+    let global_transforms = world.query::<&gizmo::physics::components::GlobalTransform>();
+    let is_hidden = world.query::<&gizmo::core::component::IsHidden>();
+    let colliders = world.query::<&Collider>();
+    let meshes = world.query::<&gizmo::renderer::components::Mesh>();
 
     for (id, t) in world.query::<(Entity, &Transform)>().iter() {
         if id == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id) {
@@ -317,8 +317,8 @@ pub fn build_ray(
     aspect: f32,
     _wh: f32,
 ) -> Option<Ray> {
-    let transforms = world.borrow::<Transform>();
-    let cameras = world.borrow::<gizmo::renderer::components::Camera>();
+    let transforms = world.query::<&Transform>();
+    let cameras = world.query::<&gizmo::renderer::components::Camera>();
 
     let cam_t = transforms.get(player_id)?;
     let cam = cameras.get(player_id)?;
@@ -486,10 +486,10 @@ mod tests {
     // ── compute_entity_obb (collider fallback path — no GPU mesh needed) ─────
 
     fn obb_of(world: &World, id: Entity) -> Option<super::ObbInfo> {
-        let transforms = world.borrow::<Transform>();
-        let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
-        let colliders = world.borrow::<Collider>();
-        let gts = world.borrow::<GlobalTransform>();
+        let transforms = world.query::<&Transform>();
+        let meshes = world.query::<&gizmo::renderer::components::Mesh>();
+        let colliders = world.query::<&Collider>();
+        let gts = world.query::<&GlobalTransform>();
         let t = transforms.get(id).unwrap();
         compute_entity_obb(id, t, &meshes, &colliders, &gts)
     }

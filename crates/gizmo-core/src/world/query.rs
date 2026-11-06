@@ -1,5 +1,4 @@
 use super::World;
-use crate::component::Component;
 
 impl World {
     // ==========================================================
@@ -62,7 +61,7 @@ impl World {
     /// assert_eq!(r2.get(e).unwrap().x, 1.0);
     /// ```
     ///
-    /// A *mutable* query can NOT be built through `query` — `Mut<T>` is not
+    /// A *mutable* query can NOT be built through `query` — `&mut T` is not
     /// [`ReadOnlyQuery`](crate::query::ReadOnlyQuery), so the dual-`Mut` UB is unreachable
     /// from safe code (use [`World::query_mut`] instead):
     /// ```compile_fail
@@ -72,8 +71,8 @@ impl World {
     /// gizmo_core::impl_component!(Position);
     ///
     /// let world = World::new();
-    /// // error[E0277]: `Mut<Position>: ReadOnlyQuery` is not satisfied
-    /// let _q = world.query::<Mut<Position>>();
+    /// // error[E0277]: `&mut Position: ReadOnlyQuery` is not satisfied
+    /// let _q = world.query::<&mut Position>();
     /// ```
     pub fn query<'w, Q: crate::query::ReadOnlyQuery>(
         &'w self,
@@ -102,7 +101,7 @@ impl World {
     /// world.add_component(e, Position { x: 1.0 });
     ///
     /// {
-    ///     let mut q = world.query_mut::<Mut<Position>>();
+    ///     let mut q = world.query_mut::<&mut Position>();
     ///     for mut p in q.iter_mut() { p.x += 1.0; }
     /// }
     /// assert_eq!(world.query::<&Position>().get(e).unwrap().x, 2.0);
@@ -117,8 +116,8 @@ impl World {
     /// gizmo_core::impl_component!(Position);
     ///
     /// let mut world = World::new();
-    /// let q1 = world.query_mut::<Mut<Position>>();
-    /// let q2 = world.query_mut::<Mut<Position>>(); // second &mut World — E0499
+    /// let q1 = world.query_mut::<&mut Position>();
+    /// let q2 = world.query_mut::<&mut Position>(); // second &mut World — E0499
     /// let _ = (q1, q2);
     /// ```
     ///
@@ -132,7 +131,7 @@ impl World {
     ///
     /// let mut world = World::new();
     /// world.register_component_type::<Position>();
-    /// let mut q = world.query_mut::<Mut<Position>>();
+    /// let mut q = world.query_mut::<&mut Position>();
     /// let a = q.get_mut(0);
     /// let b = q.get_mut(0); // second &mut borrow of `q` — E0499
     /// let _ = (a, b);
@@ -147,8 +146,8 @@ impl World {
     /// gizmo_core::impl_component!(Position);
     ///
     /// let mut world = World::new();
-    /// let q = world.query_mut::<Mut<Position>>();
-    /// let _it = q.iter(); // `iter` requires `Q: ReadOnlyQuery`; Mut<Position> isn't — E0599
+    /// let q = world.query_mut::<&mut Position>();
+    /// let _it = q.iter(); // `iter` requires `Q: ReadOnlyQuery`; &mut Position isn't — E0599
     /// ```
     pub fn query_mut<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
@@ -176,35 +175,6 @@ impl World {
         crate::query::Query::new(self)
     }
 
-    /// StorageView alternative for backwards compatibility (`&T` shared access — always sound).
-    #[inline]
-    pub fn borrow<'w, T: Component>(&'w self) -> crate::query::Query<'w, &'w T> {
-        self.query::<&T>()
-    }
-
-    /// Mutable query for a single component (`Mut<T>`) — safe, requires `&mut self`.
-    /// An ergonomic shorthand for [`World::query_mut`]; carries the same type-level aliasing
-    /// guarantee.
-    #[inline]
-    pub fn borrow_mut<'w, T: Component>(
-        &'w mut self,
-    ) -> crate::query::Query<'w, crate::query::Mut<'w, T>> {
-        self.query_mut::<crate::query::Mut<T>>()
-    }
-
-    /// The `unsafe` escape-hatch version of [`World::borrow_mut`] — for parallel-scheduler
-    /// systems that build a `Mut<T>` query from `&World`.
-    ///
-    /// # Safety
-    /// The same contract as [`World::query_unchecked`]: while this query is alive no other
-    /// query that touches `T` mutably may be alive (the scheduler guarantees disjointness).
-    #[inline]
-    pub unsafe fn borrow_mut_unchecked<'w, T: Component>(
-        &'w self,
-    ) -> crate::query::Query<'w, crate::query::Mut<'w, T>> {
-        self.query_unchecked::<crate::query::Mut<T>>()
-    }
-
     /// Cached query — uses the archetype index cache.
     /// Because it requires &mut self it can only be called when you own the World.
     pub fn query_cached<'w, Q: crate::query::WorldQuery>(
@@ -219,14 +189,14 @@ impl World {
     /// # Panics
     ///
     /// Panics if `Q` asks for two mutable accesses to the same component (e.g.
-    /// `(Mut<T>, Mut<T>)`) or mixes a mutable with a shared access — producing two `&mut T` for
+    /// `(&mut T, &mut T)`) or mixes a mutable with a shared access — producing two `&mut T` for
     /// the same row would be UB. Exactly the same rule as [`World::query_mut`].
     pub fn query_entity_mut<'w, Q: crate::query::WorldQuery>(
         &'w mut self,
         entity_id: u32,
     ) -> Option<Q::Item<'w>> {
         // Bu, iteratör kuran yollarla (`Query::new`/`new_cached`, `SystemParam`) aynı aliasing
-        // kapısıdır. Burada ATLANMASI, `(Mut<T>, Mut<T>)`'nin tek bir satır için iki canlı
+        // kapısıdır. Burada ATLANMASI, `(&mut T, &mut T)`'nin tek bir satır için iki canlı
         // `&mut T` döndürmesi demekti — %100 safe koddan UB. `Q::get_item` her iki terimi de
         // aynı `fetch`'ten türettiği için tip sistemi bunu kendi başına yakalayamaz.
         let mut used_types = Vec::new();
@@ -262,7 +232,7 @@ impl World {
         &'w self,
         entity_id: u32,
     ) -> Option<Q::Item<'w>> {
-        // `Q: ReadOnlyQuery` zaten `Mut<T>`'yi dışlıyor, yani burada gerçek bir aliasing
+        // `Q: ReadOnlyQuery` zaten `&mut T`'yi dışlıyor, yani burada gerçek bir aliasing
         // riski yok. Yine de kapıyı `query_entity_mut` ile simetrik tutuyoruz: ileride
         // ReadOnlyQuery'ye iç-mutability taşıyan bir terim eklenirse bu satır onu yakalar
         // ve iki tekil-erişim yolunun davranışı ayrışmaz.
@@ -291,7 +261,7 @@ impl World {
 
 #[cfg(test)]
 mod aliasing_gate_tests {
-    use crate::query::Mut;
+    
     use crate::world::World;
 
     #[derive(Clone, Debug, PartialEq)]
@@ -310,7 +280,7 @@ mod aliasing_gate_tests {
         (w, e.id())
     }
 
-    /// Before this gate existed, `query_entity_mut::<(Mut<T>, Mut<T>)>` returned two live
+    /// Before this gate existed, `query_entity_mut::<(&mut T, &mut T)>` returned two live
     /// `&mut T` pointing at the same row — undefined behaviour reachable from 100% safe
     /// code, with no panic and no compile error. `Query::new` had always guarded against
     /// this; the single-entity path simply forgot to.
@@ -318,7 +288,7 @@ mod aliasing_gate_tests {
     #[should_panic(expected = "Query aliasing UB detected")]
     fn duplicate_mut_terms_panic_instead_of_producing_two_aliasing_refs() {
         let (mut w, id) = world_with_one_entity();
-        let _ = w.query_entity_mut::<(Mut<Pos>, Mut<Pos>)>(id);
+        let _ = w.query_entity_mut::<(&mut Pos, &mut Pos)>(id);
     }
 
     /// The mixed case is just as unsound: `&T` and `&mut T` to the same row at once.
@@ -326,7 +296,7 @@ mod aliasing_gate_tests {
     #[should_panic(expected = "Query aliasing UB detected")]
     fn mixing_shared_and_mutable_terms_for_one_component_panics() {
         let (mut w, id) = world_with_one_entity();
-        let _ = w.query_entity_mut::<(Mut<Pos>, &Pos)>(id);
+        let _ = w.query_entity_mut::<(&mut Pos, &Pos)>(id);
     }
 
     /// The gate must not reject legitimate queries: distinct components are disjoint, so
@@ -336,7 +306,7 @@ mod aliasing_gate_tests {
         let (mut w, id) = world_with_one_entity();
         {
             let (mut p, mut v) = w
-                .query_entity_mut::<(Mut<Pos>, Mut<Vel>)>(id)
+                .query_entity_mut::<(&mut Pos, &mut Vel)>(id)
                 .expect("entity has both components");
             p.0 = 10.0;
             v.0 = 20.0;
@@ -360,6 +330,6 @@ mod aliasing_gate_tests {
     #[should_panic(expected = "Query aliasing UB detected")]
     fn gate_fires_even_for_a_nonexistent_entity() {
         let mut w = World::new();
-        let _ = w.query_entity_mut::<(Mut<Pos>, Mut<Pos>)>(9999);
+        let _ = w.query_entity_mut::<(&mut Pos, &mut Pos)>(9999);
     }
 }

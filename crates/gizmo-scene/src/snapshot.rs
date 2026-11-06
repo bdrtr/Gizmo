@@ -164,8 +164,8 @@ impl SceneSnapshot {
         // Aggregates: a dropped component here means Play→Stop will silently lose that state.
         let mut component_count = 0usize;
         let mut dropped_components = 0usize;
-        let names = world.borrow::<gizmo_core::EntityName>();
-        let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
+        let names = world.query::<&gizmo_core::EntityName>();
+        let editor_only_markers = world.query::<&gizmo_core::component::EditorOnly>();
 
         for ent in world.iter_alive_entities() {
             let id = ent;
@@ -305,8 +305,8 @@ impl SceneSnapshot {
         let mut to_despawn = Vec::new();
 
         {
-            let names = world.borrow::<gizmo_core::EntityName>();
-            let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
+            let names = world.query::<&gizmo_core::EntityName>();
+            let editor_only_markers = world.query::<&gizmo_core::component::EditorOnly>();
             for ent in &alive {
                 let id = ent;
                 if protected_ids.contains(id) {
@@ -552,7 +552,7 @@ mod tests {
         assert_eq!(result.restored, 1);
 
         // İsmi kontrol et
-        let names = world.borrow::<gizmo_core::EntityName>();
+        let names = world.query::<&gizmo_core::EntityName>();
         let alive = world.iter_alive_entities();
         assert_eq!(alive.len(), 1);
         let restored_name = names.get(alive[0]);
@@ -659,7 +659,7 @@ mod tests {
         assert_eq!(result.despawned, 1, "the play-time bullet must be despawned");
         assert_eq!(result.restored, 1, "the one snapshot entity must be restored");
 
-        let names = world.borrow::<gizmo_core::EntityName>();
+        let names = world.query::<&gizmo_core::EntityName>();
         let alive_names: Vec<_> = world
             .iter_alive_entities()
             .into_iter()
@@ -691,13 +691,13 @@ mod tests {
         world.despawn(ent);
         snapshot.restore(&mut world, &registry, &protected);
 
-        let names = world.borrow::<gizmo_core::EntityName>();
+        let names = world.query::<&gizmo_core::EntityName>();
         let id = world
             .iter_alive_entities()
             .into_iter()
             .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some("Mover"))
             .expect("Mover restore edilmeli");
-        let transforms = world.borrow::<Transform>();
+        let transforms = world.query::<&Transform>();
         assert_eq!(
             transforms.get(id).map(|t| t.position),
             Some(Vec3::new(3.0, -7.0, 11.0)),
@@ -742,7 +742,7 @@ mod tests {
         world.despawn(marker);
         snapshot.restore(&mut world, &registry, &protected);
 
-        let names = world.borrow::<gizmo_core::EntityName>();
+        let names = world.query::<&gizmo_core::EntityName>();
         assert!(
             world
                 .iter_alive_entities()
@@ -802,8 +802,8 @@ mod tests {
         let result = snapshot.restore(&mut world, &registry, &protected);
         assert_eq!(result.restored, 3, "all three rows must be written back");
 
-        let names = world.borrow::<gizmo_core::EntityName>();
-        let transforms = world.borrow::<Transform>();
+        let names = world.query::<&gizmo_core::EntityName>();
+        let transforms = world.query::<&Transform>();
         let mut seen: Vec<(String, f32)> = world
             .iter_alive_entities()
             .into_iter()

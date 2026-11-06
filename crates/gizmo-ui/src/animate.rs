@@ -9,7 +9,7 @@
 
 use gizmo_core::Entity;
 use gizmo_core::commands::Commands;
-use gizmo_core::query::{Mut, Query};
+use gizmo_core::query::Query;
 use gizmo_core::system::Res;
 use gizmo_math::{Ease, Vec2};
 
@@ -157,7 +157,7 @@ impl UiTween {
 /// default one. Runs before the layout, on real time.
 pub fn ui_tween_system(
     time: Option<Res<gizmo_core::time::Time>>,
-    mut tweens: Query<(Entity, Mut<UiTween>, Option<Mut<UiTransform>>)>,
+    mut tweens: Query<(Entity, &mut UiTween, Option<&mut UiTransform>)>,
     mut commands: Commands,
 ) {
     let dt = time.map_or(0.0, |t| t.raw_dt());

@@ -27,18 +27,18 @@ struct Aligned16;
 impl_component!(Aligned16);
 
 /// An attempt at double mutable access to the same type, such as
-/// `Query<(Mut<Position>, Mut<Position>)>`, must be blocked with a panic.
+/// `Query<(&mut Position, &mut Position)>`, must be blocked with a panic.
 #[test]
 #[should_panic(expected = "Query aliasing UB detected")]
 fn test_same_type_mut_mut_panics() {
     let mut types = Vec::new();
-    // İlk Mut<Position> — sorunsuz eklenir
+    // İlk &mut Position — sorunsuz eklenir
     check(TypeId::of::<Position>(), true, &mut types);
-    // İkinci Mut<Position> — PANIC olmalı!
+    // İkinci &mut Position — PANIC olmalı!
     check(TypeId::of::<Position>(), true, &mut types);
 }
 
-/// `Query<(&Position, Mut<Position>)>` — one immutable, one mutable access to the same type:
+/// `Query<(&Position, &mut Position)>` — one immutable, one mutable access to the same type:
 /// this must panic too, because &T + &mut T forms an alias.
 #[test]
 #[should_panic(expected = "Query aliasing UB detected")]
@@ -48,7 +48,7 @@ fn test_same_type_ref_mut_panics() {
     check(TypeId::of::<Position>(), true, &mut types); // Mut<Position> — PANIC!
 }
 
-/// `Query<(Mut<Position>, Mut<Velocity>)>` — different types, must work without problems.
+/// `Query<(&mut Position, &mut Velocity)>` — different types, must work without problems.
 #[test]
 fn test_different_types_mut_mut_ok() {
     let mut types = Vec::new();
@@ -77,7 +77,7 @@ fn test_query_new_with_valid_types() {
     world.add_component(e, Velocity { x: 0.0, y: 0.0 });
 
     // Farklı tipler — Query oluşturulabilmeli
-    let _q = world.query_mut::<(Mut<Position>, Mut<Velocity>)>();
+    let _q = world.query_mut::<(&mut Position, &mut Velocity)>();
 }
 
 /// `Changed<T>`/`Added<T>` now work relative to the reference tick (the last run),
@@ -105,7 +105,7 @@ fn change_detection_is_relative_to_ref_tick() {
 
     // Frame 2 içinde mutasyon → Changed yeniden 1 olmalı.
     {
-        let mut q = world.query_mut::<Mut<Position>>();
+        let mut q = world.query_mut::<&mut Position>();
         for mut p in q.iter_mut() {
             p.x += 1.0;
         }
@@ -156,7 +156,7 @@ fn iter_chunks_mut_triggers_change_detection() {
 
     // Chunked mutable yazma.
     {
-        let mut q = world.query_mut::<Mut<Position>>();
+        let mut q = world.query_mut::<&mut Position>();
         for slice in q.iter_chunks_mut() {
             for p in slice.iter_mut() {
                 p.x += 10.0;
@@ -199,7 +199,7 @@ fn sparse_set_change_detection_tracks_ticks() {
 
     // Frame 2 içinde mutasyon → Changed yeniden tetiklenmeli.
     {
-        let mut q = world.query_mut::<Mut<SparseComp>>();
+        let mut q = world.query_mut::<&mut SparseComp>();
         for mut c in q.iter_mut() {
             c.0 += 10;
         }
@@ -318,7 +318,7 @@ fn get_honours_table_with_without_like_iter() {
 mod default_filter_tests {
     use crate::Entity;
 use crate::impl_component;
-    use crate::query::{IgnoreDefaultFilters, Mut, Query, With, Without};
+    use crate::query::{IgnoreDefaultFilters, Query, With, Without};
     use crate::system::{IntoSystemConfig, ResMut, Schedule};
     use crate::world::World;
 
@@ -425,7 +425,7 @@ use crate::impl_component;
     fn nothing_but_a_system_parameter_is_filtered() {
         let mut world = world_with_one_disabled(true);
 
-        assert_eq!(world.borrow::<Hp>().iter().count(), 3, "`World::borrow`");
+        assert_eq!(world.query::<&Hp>().iter().count(), 3, "`World::query`");
         assert_eq!(world.query::<&Hp>().iter().count(), 3, "`World::query`");
         assert!(
             world.query_entity::<&Hp>(1).is_some(),
@@ -441,14 +441,14 @@ use crate::impl_component;
         );
         // SAFETY: as above. A mutable query has no `&self` iterator (that is what keeps two
         // `&mut T` unbuildable), so the count goes through `iter_mut`.
-        let mut borrowed = unsafe { world.borrow_mut_unchecked::<Hp>() };
+        let mut borrowed = unsafe { world.query_unchecked::<&mut Hp>() };
         assert_eq!(
             borrowed.iter_mut().count(),
             3,
-            "`World::borrow_mut_unchecked` was filtered — this is what the editor inspector uses",
+            "`World::query_unchecked` with `&mut T` was filtered — this is what the editor inspector uses",
         );
         drop(borrowed);
-        assert_eq!(world.borrow_mut::<Hp>().iter_mut().count(), 3, "`World::borrow_mut`");
+        assert_eq!(world.query_mut::<&mut Hp>().iter_mut().count(), 3, "`World::query`");
         assert_eq!(
             Some(world.query_cached::<&Hp>().iter().count()),
             Some(3),
@@ -573,7 +573,7 @@ use crate::impl_component;
     /// A mutable system query is filtered too — the write path, not only the read one.
     #[test]
     fn a_mutable_system_query_is_filtered() {
-        fn bump(mut q: Query<Mut<Hp>>) {
+        fn bump(mut q: Query<&mut Hp>) {
             for mut hp in q.iter_mut() {
                 hp.0 += 100;
             }
@@ -582,7 +582,7 @@ use crate::impl_component;
         let mut world = world_with_one_disabled(true);
         run_once(&mut world, bump.into_config());
 
-        let hp = world.borrow::<Hp>();
+        let hp = world.query::<&Hp>();
         let mut values: Vec<u32> = hp.iter().map(|h| h.0).collect();
         values.sort_unstable();
         assert_eq!(
@@ -757,7 +757,7 @@ fn an_optional_sparse_component_is_tested_per_entity() {
     assert_eq!(q.iter().count(), 2);
 }
 
-/// `Option<Mut<T>>` writes through and marks the change, so `Changed<T>` sees it.
+/// `Option<&mut T>` writes through and marks the change, so `Changed<T>` sees it.
 #[test]
 fn an_optional_mut_writes_and_marks_the_change() {
     let mut world = crate::World::new();
@@ -766,7 +766,7 @@ fn an_optional_mut_writes_and_marks_the_change() {
     let prev = world.tick;
     world.begin_change_frame(prev);
     {
-        let mut q = world.query_mut::<(&Position, Option<Mut<Velocity>>)>();
+        let mut q = world.query_mut::<(&Position, Option<&mut Velocity>)>();
         for (p, v) in q.iter_mut() {
             if let Some(mut v) = v {
                 v.x = p.x * 10.0;
@@ -778,18 +778,18 @@ fn an_optional_mut_writes_and_marks_the_change() {
 }
 
 /// An optional access is still an access: beside a writer of the same type it is the aliasing
-/// panic, and an `Option<Mut<T>>` declares a write the scheduler can see.
+/// panic, and an `Option<&mut T>` declares a write the scheduler can see.
 #[test]
 #[should_panic(expected = "Query aliasing UB detected")]
 fn an_optional_read_beside_a_writer_of_the_same_type_is_rejected() {
     let mut types = Vec::new();
-    <(Mut<Position>, Option<&Position>) as WorldQuery>::check_aliasing(&mut types);
+    <(&mut Position, Option<&Position>) as WorldQuery>::check_aliasing(&mut types);
 }
 
 #[test]
 fn an_optional_mut_declares_a_write() {
     let mut types = Vec::new();
-    <Option<Mut<Velocity>> as WorldQuery>::check_aliasing(&mut types);
+    <Option<&mut Velocity> as WorldQuery>::check_aliasing(&mut types);
     assert_eq!(types, vec![(TypeId::of::<Velocity>(), true)]);
 }
 
@@ -808,7 +808,7 @@ fn a_writing_query_resolves_its_ids_to_entities() {
     world.register_component_type::<Position>();
     let a = world.spawn();
     world.add_component(a, Position { x: 1.0, y: 0.0 });
-    let q = world.query_mut::<Mut<Position>>();
+    let q = world.query_mut::<&mut Position>();
     assert_eq!(q.entity(a.id()), Some(a));
 }
 
@@ -847,7 +847,7 @@ fn single_tells_none_one_and_several_apart() {
     drop(q);
     world.begin_change_frame(world.tick);
     {
-        let mut q = world.query_mut::<Mut<Position>>();
+        let mut q = world.query_mut::<&mut Position>();
         q.get_mut(b).unwrap().x = 3.0;
     }
     let q = world.query::<(&Position, Changed<Position>)>();
@@ -866,7 +866,7 @@ fn single_mut_writes_the_one_row_and_marks_nothing_on_refusal() {
 
     world.begin_change_frame(world.tick);
     {
-        let mut q = world.query_mut::<Mut<Position>>();
+        let mut q = world.query_mut::<&mut Position>();
         let mut p = q.single_mut().expect("one entity");
         p.x = 5.0;
     }
@@ -877,7 +877,7 @@ fn single_mut_writes_the_one_row_and_marks_nothing_on_refusal() {
     world.add_component(b, Position { x: 2.0, y: 0.0 });
     world.begin_change_frame(world.tick);
     {
-        let mut q = world.query_mut::<Mut<Position>>();
+        let mut q = world.query_mut::<&mut Position>();
         assert_eq!(q.single_mut().err(), Some(QuerySingleError::MultipleEntities));
     }
     assert_eq!(
@@ -917,7 +917,7 @@ fn get_with_a_dead_handle_does_not_reach_the_new_owner_of_its_id() {
     let new = world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
     assert_eq!(new.id(), old.id(), "the id is recycled, which is the case being tested");
 
-    assert!(world.query_mut::<Mut<Position>>().get_mut(old).is_none());
+    assert!(world.query_mut::<&mut Position>().get_mut(old).is_none());
     let q = world.query::<&Position>();
     assert!(q.get(old).is_none());
     assert!(!q.contains(old));

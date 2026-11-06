@@ -144,13 +144,13 @@ fn a_particle_emitter_a_terrain_and_a_bone_attachment_survive_the_file() {
 
     assert_eq!(
         loaded
-            .borrow::<ParticleEmitter>()
+            .query::<&ParticleEmitter>()
             .get(id)
             .map(|p| p.spawn_rate),
         Some(42.0),
         "the emitter was written and read back with its rate"
     );
-    let terrain = loaded.borrow::<Terrain>();
+    let terrain = loaded.query::<&Terrain>();
     let terrain = terrain.get(id).expect("the terrain survived");
     assert_eq!(
         (terrain.heightmap_path.as_str(), terrain.width, terrain.max_height),
@@ -159,7 +159,7 @@ fn a_particle_emitter_a_terrain_and_a_bone_attachment_survive_the_file() {
     );
     assert_eq!(
         loaded
-            .borrow::<BoneAttachment>()
+            .query::<&BoneAttachment>()
             .get(id)
             .map(|b| b.bone_index),
         Some(7),
@@ -215,7 +215,7 @@ fn a_material_description_survives_the_file() {
         .map(|(entity, _)| entity)
         .next()
         .expect("the entity survived");
-    let descs = loaded.borrow::<MaterialDesc>();
+    let descs = loaded.query::<&MaterialDesc>();
     let desc = descs.get(id).expect("the material description survived");
 
     assert_eq!(desc.albedo, Vec4::new(0.2, 0.4, 0.6, 1.0), "the colour the user picked");
@@ -265,7 +265,7 @@ fn a_nav_agent_survives_the_file_with_its_tuning_and_not_its_route() {
         .next()
         .expect("the entity survived");
 
-    let agents = loaded.borrow::<NavAgent>();
+    let agents = loaded.query::<&NavAgent>();
     let agent = agents.get(id).expect("the agent survived the round trip");
     assert_eq!(
         (agent.max_speed, agent.steering_force, agent.arrival_radius),
@@ -319,7 +319,7 @@ fn a_graded_camera_survives_the_file_with_its_look_and_its_exposure() {
         .next()
         .expect("the entity survived");
 
-    let grades = loaded.borrow::<PostProcess>();
+    let grades = loaded.query::<&PostProcess>();
     let g = grades.get(id).expect("the look survived");
     assert_eq!(
         (g.bloom_intensity, g.bloom_threshold, g.vignette, g.chromatic_aberration),
@@ -332,7 +332,7 @@ fn a_graded_camera_survives_the_file_with_its_look_and_its_exposure() {
     drop(grades);
 
     assert_eq!(
-        loaded.borrow::<Camera>().get(id).map(|c| c.exposure),
+        loaded.query::<&Camera>().get(id).map(|c| c.exposure),
         Some(2.25),
         "exposure is the camera's half of the same look"
     );
@@ -541,7 +541,7 @@ fn a_mesh_renderers_lod_bias_and_shadow_mode_survive_the_file() {
         .next()
         .expect("the entity survived");
 
-    let renderers = loaded.borrow::<MeshRenderer>();
+    let renderers = loaded.query::<&MeshRenderer>();
     let r = renderers.get(id).expect("the mesh renderer survived");
     assert_eq!(
         (r.lod_bias, r.shadows),

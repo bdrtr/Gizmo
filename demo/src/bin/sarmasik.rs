@@ -62,7 +62,7 @@ fn add_visual(world: &mut World, id: Entity, mesh: MeshSource, scale: Vec3, colo
         world.add_component(e, mesh);
         world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex(colour).to_vec4(), 0.7, 0.0));
         world.add_component(e, MeshRenderer::new());
-        if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
+        if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(id) {
             t.scale = scale;
         }
     }
@@ -159,7 +159,7 @@ impl Course {
             }
             None => Vec3::X * push * PUMP * 0.3,
         };
-        if let Some(mut f) = world.borrow_mut::<ExternalForce>().get_mut(self.player) {
+        if let Some(mut f) = world.query_mut::<&mut ExternalForce>().get_mut(self.player) {
             *f = ExternalForce::new(force);
         }
         self.physics.advance(world, dt);
@@ -202,11 +202,11 @@ fn spawn_player(world: &mut World, visual: bool) -> Entity {
 }
 
 fn position(world: &World, id: Entity) -> Vec3 {
-    world.borrow::<Transform>().get(id).map(|t| t.position).unwrap_or(Vec3::ZERO)
+    world.query::<&Transform>().get(id).map(|t| t.position).unwrap_or(Vec3::ZERO)
 }
 
 fn state(world: &World, id: Entity) -> (Vec3, Vec3) {
-    (position(world, id), world.borrow::<Velocity>().get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO))
+    (position(world, id), world.query::<&Velocity>().get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO))
 }
 
 /// Şu an bırakılırsa top nereye düşer: sonraki ipin erişimine ya da hedef kayalığa varıyor mu.
@@ -358,7 +358,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     let p = position(world, game.course.player);
     // İp: tutunulan noktadan oyuncuya gerili ince bir kutu; havadayken görünmez.
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.rope_vis) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.rope_vis) {
         match game.course.holding {
             Some(k) => {
                 let a = anchor_pos(k);
@@ -370,7 +370,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
             None => t.scale = Vec3::ZERO,
         }
     }
-    if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(game.camera) {
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         t.position.x += (p.x - t.position.x) * (dt * 3.0).min(1.0);
     }
     sync_transforms(world);

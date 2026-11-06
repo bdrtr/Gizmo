@@ -79,7 +79,7 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
         // Air Control and Inputs
         // SAFETY: single-threaded demo; VehicleController, RigidBody, Velocity are distinct component types and never alias.
         let mut q_v = unsafe {
-        world.query_unchecked::<gizmo::core::query::Mut<gizmo::physics::vehicle::VehicleController>>()
+        world.query_unchecked::<&mut gizmo::physics::vehicle::VehicleController>()
     };
         if let Some(mut vehicle) = q_v.get_mut(state.car_entity) {
             let is_reverse = brake > 0.0 && vehicle.current_speed_kmh < 1.0;
@@ -96,7 +96,7 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
 
             if throttle > 0.0 || brake > 0.0 {
                 {
-                    let mut q_rb = unsafe { world.query_unchecked::<gizmo::core::query::Mut<RigidBody>>() };
+                    let mut q_rb = unsafe { world.query_unchecked::<&mut RigidBody>() };
                     if let Some(mut rb) = q_rb.get_mut(state.car_entity) {
                         rb.wake_up();
                     }
@@ -107,7 +107,7 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
             let is_grounded = vehicle.wheels.iter().any(|w| w.is_grounded);
             if !is_grounded && air_torque != 0.0 {
                 {
-                    let mut q_rb = unsafe { world.query_unchecked::<gizmo::core::query::Mut<Velocity>>() };
+                    let mut q_rb = unsafe { world.query_unchecked::<&mut Velocity>() };
                     if let Some(mut vel) = q_rb.get_mut(state.car_entity) {
                         // Directly applying torque scaled by dt
                         vel.angular.z += air_torque * dt * 0.005;
@@ -155,7 +155,7 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
             let mut pending = state.pending_particles.borrow_mut();
 
             {
-                let mut q_t = unsafe { world.query_unchecked::<gizmo::core::query::Mut<Transform>>() };
+                let mut q_t = unsafe { world.query_unchecked::<&mut Transform>() };
                 for i in 0..4 {
                     let wheel = &vehicle.wheels[i];
                     let anchor_world = car_pos + car_rot.mul_vec3(wheel.attachment_local_pos);
@@ -227,7 +227,7 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
 
     // Camera follow
     {
-        let mut q = world.query_mut::<(gizmo::core::query::Mut<Transform>, &Camera)>();
+        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
         for (mut cam_trans, _) in q.iter_mut() {
             let speed = car_vel.length();
             let look_ahead = if speed > 1.0 {
@@ -269,7 +269,7 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
             } else {
                 let decal = state.decals[state.decal_index];
                 {
-                    let mut q_t = world.query_mut::<gizmo::core::query::Mut<Transform>>();
+                    let mut q_t = world.query_mut::<&mut Transform>();
                     if let Some(mut dt) = q_t.get_mut(decal) {
                         dt.position = pd.position;
                         dt.rotation = pd.rotation;

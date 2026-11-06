@@ -69,7 +69,7 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::input::Input;
-use gizmo::core::query::{IgnoreDefaultFilters, Mut, Query, With};
+use gizmo::core::query::{IgnoreDefaultFilters, Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -243,7 +243,7 @@ fn toggle(world: &mut gizmo::core::World, input: &Input) {
 /// Devre dışı küpleri görmemesinin sebebi bu imzada değil, dünyada kayıtlı filtre. Eskiden burada
 /// `Without<Disabled>` vardı ve onu unutmak bir hataydı; şimdi unutulacak bir şey yok.
 fn spin_filtered(
-    mut spinners: Query<(Mut<Transform>, &Spinner, With<Spinner>)>,
+    mut spinners: Query<(&mut Transform, &Spinner, With<Spinner>)>,
     mut report: ResMut<DisableReport>,
     time: Res<Time>,
 ) {

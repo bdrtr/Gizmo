@@ -32,7 +32,6 @@
 //! Başsız koşuda B'ye basacak kimse yok: `GIZMO_SPLIT_LAYOUT=0..3` düzeni seçerek açıyor.
 
 use gizmo::core::input::Input;
-use gizmo::core::query::Mut;
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::renderer::components::Viewport;
@@ -162,7 +161,7 @@ fn apply_layout(world: &mut gizmo::core::World) {
     let top = world
         .query::<(Entity, &TopDown, &Camera)>().iter().next().map(|(entity, ..)| entity);
     {
-        let mut q = world.query_mut::<(Entity, Mut<Camera>)>();
+        let mut q = world.query_mut::<(Entity, &mut Camera)>();
         for (entity, mut camera) in q.iter_mut() {
             let (viewport, order) = if Some(entity) == top { top_cam } else { scene_cam };
             camera.viewport = viewport;

@@ -227,7 +227,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
 
     // --- serbest-uçuş kamera (sağ-tık basılıyken fare-look) ---
     {
-        let mut q = world.query_mut::<(Mut<Transform>, Mut<Camera>)>();
+        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
         for (mut transform, mut camera) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
@@ -325,7 +325,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
         // GÜVENLİK: tek-thread demo; GhostTrail bileşeni, tutulan Gizmos kaynak-guard'ından ayrık.
         {
             let mut q = 
-            unsafe { world.query_unchecked::<(Mut<GhostTrail>, &Transform, &Collider)>() };
+            unsafe { world.query_unchecked::<(&mut GhostTrail, &Transform, &Collider)>() };
             for (mut ghost, trans, col) in q.iter_mut() {
                 // Bu kareyi sakla, en eskiyi at.
                 ghost.history.push_front(*trans);
@@ -394,7 +394,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     let mut missing = Vec::new();
     {
         let q = world.query::<(Entity, &RigidBody, &Collider)>();
-        let meshes = world.borrow::<MeshRenderer>();
+        let meshes = world.query::<&MeshRenderer>();
         for (e, rb, _) in q.iter() {
             if meshes.get(e).is_none() && rb.mass > 0.0 {
                 missing.push(e);
@@ -415,7 +415,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
 
         let mut node_idx = 0;
         {
-            let mut q = world.query_mut::<(Mut<Transform>, &EntityName)>();
+            let mut q = world.query_mut::<(&mut Transform, &EntityName)>();
             for (mut trans, name) in q.iter_mut() {
                 if name.0 == "RopeNode" && node_idx < rope.nodes.len() {
                     trans.position = rope.nodes[node_idx].position;

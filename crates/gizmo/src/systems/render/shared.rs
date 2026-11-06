@@ -41,7 +41,7 @@ pub fn active_camera_grade(world: &World) -> Option<crate::renderer::components:
 /// [`active_camera_grade`] for a given camera — what each view of a split screen is graded by.
 pub fn camera_grade(world: &World, camera: Entity) -> Option<crate::renderer::components::PostProcess> {
     world
-        .borrow::<crate::renderer::components::PostProcess>()
+        .query::<&crate::renderer::components::PostProcess>()
         .get(camera)
         .copied()
 }
@@ -141,8 +141,8 @@ pub fn collect_scene_lights(
     cookies: &crate::renderer::cookies::CookieTable,
 ) -> SceneLights {
     let frustum = gizmo_math::Frustum::from_matrix(&view_proj);
-    let globals = world.borrow::<GlobalTransform>();
-    let locals = world.borrow::<Transform>();
+    let globals = world.query::<&GlobalTransform>();
+    let locals = world.query::<&Transform>();
 
     // (position, rotation) in world space, GlobalTransform-preferred, Transform-fallback.
     let world_tf = |e| {
@@ -382,8 +382,8 @@ pub fn sync_irradiance_volume(world: &World, renderer: &mut crate::renderer::Ren
     else {
         return;
     };
-    let globals = world.borrow::<GlobalTransform>();
-    let locals = world.borrow::<Transform>();
+    let globals = world.query::<&GlobalTransform>();
+    let locals = world.query::<&Transform>();
     let world_tf = |e| {
         globals
             .get(e)

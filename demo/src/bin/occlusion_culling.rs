@@ -195,7 +195,7 @@
 //!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
 
 use gizmo::analysis::{AnalysisPlugin, Analyzer};
-use gizmo::core::query::{Mut, Query, With};
+use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res, ResMut};
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
@@ -446,7 +446,7 @@ fn main() {
 /// az olup olmadığı — ve bu ölçülmeden bilinmiyor.
 fn measure(
     cubes: Query<(Entity, &Transform, With<MeshRenderer>)>,
-    mut cameras: Query<(Mut<Camera>, Mut<Transform>)>,
+    mut cameras: Query<(&mut Camera, &mut Transform)>,
     mut bench: ResMut<Bench>,
     mut analyzer: ResMut<Analyzer>,
     time: Res<Time>,
