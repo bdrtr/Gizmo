@@ -101,9 +101,9 @@ pass (`gizmo::systems::render::record_text`, which `gizmo-studio` calls rather t
 | anchors | nine |
 | lines | `\n`, and `Text::max_width` wraps at spaces (or between characters for a word too long to fit) — since 2026-11-01 |
 | kerning | from the face's `GPOS`, or its `kern` table if it has only that, since 2026-11-06 |
-| per-line alignment (`TextAlign`) | yes, since 2026-11-01 |
+| per-line alignment (`TextAlign`) | yes, since 2026-11-01; by default each line on the side it starts on, since 2026-11-06 |
 | shaping and bidi | yes, since 2026-11-06 (`harfrust`, `unicode-bidi`); see below |
-| **rich text** | **no** |
+| rich text | colours per span, `Text::rich`, since 2026-11-06; one size and one face per text |
 | font fallback | a chain of faces tried per character (`Renderer::add_font_fallback`), since 2026-11-03 |
 | finding a font | `Renderer::load_system_font` — `GIZMO_FONT`, then the platform's usual sans faces (`SYSTEM_FONT_PATHS`, per OS), since 2026-11-03; still no bundled face (a licensing call) |
 
@@ -115,8 +115,8 @@ font was drawn unkerned until now, so existing text changes width slightly.
 
 Latin text gets no ligatures. Noto Sans's `fi` hides the dot of the i, which in Turkish is the
 difference between two letters, and it has no Turkish entry a language setting could select. There is
-no language setting, so `locl` lookups see a face's defaults. Still not done: rich text, breaking
-lines of Chinese, Japanese or Thai between words, vertical text. Bidi and shaping are checked by glyph
+no language setting, so `locl` lookups see a face's defaults. Still not done: breaking lines of
+Chinese, Japanese or Thai between words, vertical text, and several sizes or faces in one text. Bidi and shaping are checked by glyph
 ids and positions against subsets of Noto faces in `text/fixtures`, and Arabic, Hebrew, Devanagari, Thai
 and Turkish were looked at once in a desktop frame, not in a browser or on a phone.
 

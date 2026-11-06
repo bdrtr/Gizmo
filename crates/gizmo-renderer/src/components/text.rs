@@ -43,10 +43,15 @@ pub struct Text {
     /// In glyph pixels in both spaces, like [`size_px`](Self::size_px): a world label 256 px wide
     /// at 64 px per unit wraps at 4 world units.
     pub max_width: Option<f32>,
-    /// How lines of different widths line up inside the text's box — left (the default), centred
-    /// or right. The box itself is placed by [`anchor`](Self::anchor); this moves lines within
-    /// it, so it matters only for text with more than one line.
+    /// How lines of different widths line up inside the text's box: on the side they start on (the
+    /// default, so a right-to-left paragraph lines up on the right), left, centred or right. The box
+    /// itself is placed by [`anchor`](Self::anchor); this moves lines within it, so it matters only
+    /// for text with more than one line.
     pub align: TextAlign,
+    /// Colours for parts of [`content`](Self::content), set by [`rich`](Self::rich): each entry is the
+    /// byte offset where a colour starts, ascending. Empty for a text of one colour. Multiplied by
+    /// [`color`](Self::color), so that still fades the whole string.
+    pub spans: Vec<(u32, Vec4)>,
 }
 
 impl Text {
@@ -61,7 +66,8 @@ impl Text {
             anchor: TextAnchor::TopLeft,
             space: TextSpace::Screen { position },
             max_width: None,
-            align: TextAlign::Left,
+            align: TextAlign::Start,
+            spans: Vec::new(),
         }
     }
 
@@ -80,7 +86,8 @@ impl Text {
             anchor: TextAnchor::Center,
             space: TextSpace::World { px_per_unit },
             max_width: None,
-            align: TextAlign::Left,
+            align: TextAlign::Start,
+            spans: Vec::new(),
         }
     }
 
@@ -101,7 +108,8 @@ impl Text {
             anchor,
             space: TextSpace::Pinned { at: anchor.factors(), offset },
             max_width: None,
-            align: TextAlign::Left,
+            align: TextAlign::Start,
+            spans: Vec::new(),
         }
     }
 
@@ -122,7 +130,34 @@ impl Text {
             anchor: TextAnchor::TopLeft,
             space: TextSpace::Pinned { at, offset },
             max_width: None,
-            align: TextAlign::Left,
+            align: TextAlign::Start,
+            spans: Vec::new(),
+        }
+    }
+
+    /// Makes [`content`](Self::content) out of `parts`, each drawn in its own colour.
+    ///
+    /// ```ignore
+    /// Text::screen("", font, 24.0, at).rich([("Can: ", WHITE), ("5", RED)])
+    /// ```
+    #[must_use]
+    pub fn rich<S: AsRef<str>>(mut self, parts: impl IntoIterator<Item = (S, Vec4)>) -> Self {
+        self.content.clear();
+        self.spans.clear();
+        for (part, color) in parts {
+            self.spans.push((self.content.len() as u32, color));
+            self.content.push_str(part.as_ref());
+        }
+        self
+    }
+
+    /// The colour of the character at byte offset `at`, [`color`](Self::color) included.
+    #[must_use]
+    pub fn color_at(&self, at: u32) -> Vec4 {
+        let span = self.spans.partition_point(|(start, _)| *start <= at);
+        match span.checked_sub(1) {
+            Some(i) => self.spans[i].1 * self.color,
+            None => self.color,
         }
     }
 
@@ -159,8 +194,10 @@ impl Text {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum TextAlign {
-    /// Flush left — every line starts at the box's left edge.
+    /// On the side each line starts on: right for a right-to-left line, left for the rest.
     #[default]
+    Start,
+    /// Flush left — every line starts at the box's left edge.
     Left,
     /// Each line centred in the box.
     Center,
@@ -169,12 +206,14 @@ pub enum TextAlign {
 }
 
 impl TextAlign {
-    /// How far across the slack each line moves: 0 left, 0.5 centre, 1 right — the argument
+    /// How far across the slack each line moves: 0 left, 0.5 centre, 1 right, and 0 for
+    /// [`Start`](Self::Start), which depends on the line and goes through
+    /// [`TextLayout::align_start`](crate::text::TextLayout::align_start) — the argument
     /// [`TextLayout::align`](crate::text::TextLayout::align) takes.
     #[must_use]
     pub fn factor(self) -> f32 {
         match self {
-            Self::Left => 0.0,
+            Self::Start | Self::Left => 0.0,
             Self::Center => 0.5,
             Self::Right => 1.0,
         }

@@ -207,6 +207,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Text::rich`: several colours in one text, and lines that start on their own side.** A span colours the
+  glyphs drawn from its bytes, across lines, wraps and right-to-left runs, and `Text::color` still fades the
+  whole string. `TextAlign::Start` is the new default: a right-to-left line lines up on the right, and
+  left-to-right text stays where it was.
+
 - **Text shaping and bidi.** Arabic letters join, Devanagari vowels reorder and conjuncts form,
   right-to-left and mixed lines are ordered, and marks sit where the face puts them, given a face that
   has those scripts (`add_font_fallback`). `GPOS` kerning now applies, and it is the only kerning Noto

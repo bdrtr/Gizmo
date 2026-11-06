@@ -447,7 +447,11 @@ impl TextRenderer {
         let Some(mut layout) = self.library.layout_wrapped(text.font, text.size_px, &text.content, wrap) else {
             return;
         };
-        layout.align(text.align.factor());
+        if text.align == crate::components::TextAlign::Start {
+            layout.align_start();
+        } else {
+            layout.align(text.align.factor());
+        }
         // Split so the rasteriser is the only part of this that needs a GPU: `place` is pure
         // arithmetic over glyph entries, and it is where the anchor, the y flip and the pixels →
         // NDC conversion live — i.e. where the bugs are. The closure is what keeps the atlas
@@ -683,10 +687,10 @@ fn place_clipped(
     // Where the text's box goes relative to the anchor point, in text-local pixels with y growing
     // down. Every glyph below is placed against this one offset.
     let box_offset = -text.anchor.factors() * Vec2::new(layout.width, layout.height);
-    let color = text.color.to_array();
 
     for g in &layout.glyphs {
         let Some(entry) = entry_of(g) else { continue };
+        let color = text.color_at(g.cluster).to_array();
         // The glyph box's top-left in text-local pixels, y down.
         let min = box_offset + Vec2::new(g.x + entry.offset[0], g.y + entry.offset[1]);
         let max = min + Vec2::from(entry.size);
@@ -751,11 +755,12 @@ mod tests {
     /// One glyph on the baseline at pen 0, in a 10-wide, 20-tall box.
     fn one_glyph() -> TextLayout {
         TextLayout {
-            glyphs: vec![PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0 }],
+            glyphs: vec![PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 }],
             width: 10.0,
             height: 20.0,
             lines: 1,
             line_widths: vec![10.0],
+            line_rtl: vec![false],
         }
     }
 
@@ -777,6 +782,33 @@ mod tests {
     /// The flip is the assertion that matters. Window pixels grow down and NDC grows up, so a
     /// missing negation puts the text below the anchor instead of above it — which looks like an
     /// anchor bug and is not one.
+    /// **A coloured span reaches the glyphs it covers,** in the right colour, with the text's own colour
+    /// on top so a fade still fades all of it.
+    #[test]
+    fn each_glyph_takes_the_colour_of_its_span() {
+        let (red, green) = (Vec4::new(1.0, 0.0, 0.0, 1.0), Vec4::new(0.0, 1.0, 0.0, 1.0));
+        let mut t = Text::screen("", FontId(0), 16.0, Vec2::ZERO).rich([("ab", red), ("c", green)]);
+        t.color = Vec4::new(1.0, 1.0, 1.0, 0.5);
+        assert_eq!(t.content, "abc");
+        let glyph = |cluster: u32| PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster };
+        let layout = TextLayout {
+            glyphs: vec![glyph(0), glyph(1), glyph(2)],
+            width: 30.0,
+            height: 20.0,
+            lines: 1,
+            line_widths: vec![30.0],
+            line_rtl: vec![false],
+        };
+        let (mut w, mut s) = (Vec::new(), Vec::new());
+        place(&layout, &t, Vec3::ZERO, None, Vec2::new(100.0, 100.0), &mut w, &mut s, |_| Some(entry([0.0, 0.0])));
+        let colours: Vec<[f32; 4]> = s.iter().map(|g| g.color).collect();
+        assert_eq!(colours, [[1.0, 0.0, 0.0, 0.5], [1.0, 0.0, 0.0, 0.5], [0.0, 1.0, 0.0, 0.5]]);
+
+        // Plain text has no spans and takes the text's colour.
+        let plain = Text::screen("abc", FontId(0), 16.0, Vec2::ZERO).with_color(green);
+        assert_eq!(plain.color_at(2), green);
+    }
+
     #[test]
     fn screen_text_converts_pixels_to_ndc_with_y_flipped() {
         let t = text(TextSpace::Screen { position: Vec2::new(50.0, 100.0) }, TextAnchor::TopLeft);
@@ -966,14 +998,15 @@ mod tests {
     fn a_clipped_text_keeps_only_what_is_inside() {
         let layout = TextLayout {
             glyphs: vec![
-                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0 },
-                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0, px: 16.0 },
-                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0, px: 16.0 },
+                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
             ],
             width: 30.0,
             height: 20.0,
             lines: 1,
             line_widths: vec![30.0],
+            line_rtl: vec![false],
         };
         let t = text(TextSpace::Screen { position: Vec2::ZERO }, TextAnchor::TopLeft);
         let (mut w, mut s) = (Vec::new(), Vec::new());
@@ -1012,14 +1045,15 @@ mod tests {
     fn a_missing_atlas_entry_drops_that_glyph_and_no_other() {
         let layout = TextLayout {
             glyphs: vec![
-                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0 },
-                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0, px: 16.0 },
-                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0, px: 16.0 },
+                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
             ],
             width: 30.0,
             height: 20.0,
             lines: 1,
             line_widths: vec![30.0],
+            line_rtl: vec![false],
         };
         let t = text(TextSpace::Screen { position: Vec2::ZERO }, TextAnchor::TopLeft);
         let (mut w, mut s) = (Vec::new(), Vec::new());

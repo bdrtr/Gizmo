@@ -51,6 +51,8 @@ pub(super) struct ShapedGlyph {
     pub(super) x: f32,
     pub(super) y: f32,
     pub(super) px: f32,
+    /// Byte offset into the line of the text this glyph draws.
+    pub(super) cluster: u32,
 }
 
 /// One line, shaped: the glyphs from left to right, and how far the pen went.
@@ -58,6 +60,8 @@ pub(super) struct ShapedGlyph {
 pub(super) struct ShapedLine {
     pub(super) glyphs: Vec<ShapedGlyph>,
     pub(super) width: f32,
+    /// Whether the line's base direction is right to left.
+    pub(super) rtl: bool,
 }
 
 /// A paragraph's base direction, for lines cut from it: a right-to-left paragraph stays one on a
@@ -70,6 +74,7 @@ pub(super) fn paragraph_level(paragraph: &str) -> Option<Level> {
 pub(super) fn shape_line(faces: &Faces<'_>, px: f32, line: &str, level: Option<Level>) -> ShapedLine {
     let mut out = ShapedLine::default();
     let bidi = BidiInfo::new(line, level);
+    out.rtl = bidi.paragraphs.first().map(|p| p.level).or(level).is_some_and(|l| l.is_rtl());
     for paragraph in &bidi.paragraphs {
         let (levels, runs) = bidi.visual_runs(paragraph, paragraph.range.clone());
         for run in runs {
@@ -175,6 +180,7 @@ fn shape_item(faces: &Faces<'_>, px: f32, text: &str, item: &Item, rtl: bool, ou
             x: out.width + position.x_offset as f32 * scale,
             y: -(position.y_offset as f32) * scale,
             px,
+            cluster: item.range.start as u32 + info.cluster,
         });
         out.width += position.x_advance as f32 * scale;
     }

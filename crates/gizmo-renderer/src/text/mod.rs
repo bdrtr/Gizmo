@@ -30,7 +30,8 @@
 //!
 //! # What it does not do
 //!
-//! No rich text, and no language setting: a face's `locl` lookups see its defaults, and Latin text
+//! One size and one face per text (colours can differ, see `Text::rich`), and no language setting:
+//! a face's `locl` lookups see its defaults, and Latin text
 //! gets no ligatures (see `shape`). Font fallback is a single chain for the whole library
 //! ([`FontLibrary::add_fallback`](crate::text::FontLibrary::add_fallback)): a character the text's own
 //! face has no glyph for is drawn from the first fallback face that has one. Base direction is found
@@ -153,6 +154,9 @@ pub struct PositionedGlyph {
     /// whatever gives it the same em as the text's face: a size here means a face's height from
     /// ascent to descent, and in Noto Sans Arabic that height takes 2.1 em against Noto Sans's 1.4.
     pub px: f32,
+    /// Byte offset into the text of the characters this glyph draws: what a coloured span of
+    /// [`Text`](crate::components::Text) is matched against.
+    pub cluster: u32,
 }
 
 /// What `layout` produced: the glyphs, and the box they occupy.
@@ -173,6 +177,8 @@ pub struct TextLayout {
     pub lines: u32,
     /// Each line's own width, in order: `line_widths.len() == lines`. `width` is the largest.
     pub line_widths: Vec<f32>,
+    /// Whether each line runs right to left, in order: `line_rtl.len() == lines`.
+    pub line_rtl: Vec<bool>,
 }
 
 impl TextLayout {
@@ -186,6 +192,17 @@ impl TextLayout {
         for g in &mut self.glyphs {
             let line_width = self.line_widths.get(g.line as usize).copied().unwrap_or(self.width);
             g.x += (self.width - line_width) * factor;
+        }
+    }
+
+    /// Moves each line to the side its text starts on: right-to-left lines flush right, the rest
+    /// flush left.
+    pub fn align_start(&mut self) {
+        for g in &mut self.glyphs {
+            if self.line_rtl.get(g.line as usize).copied().unwrap_or(false) {
+                let line_width = self.line_widths.get(g.line as usize).copied().unwrap_or(self.width);
+                g.x += self.width - line_width;
+            }
         }
     }
 }
@@ -440,20 +457,30 @@ fn layout(faces: &Faces<'_>, px: f32, text: &str, max_width: Option<f32>) -> Tex
 
     let mut out = TextLayout { lines: 1, ..Default::default() };
     let mut widest: f32 = 0.0;
-    let lines: Vec<(std::borrow::Cow<'_, str>, Option<unicode_bidi::Level>)> = match max_width {
-        None => text.split('\n').map(|line| (std::borrow::Cow::Borrowed(line), None)).collect(),
-        Some(max) => {
-            let mut wrapped = Vec::new();
-            for paragraph in text.split('\n') {
+    // Each line with its paragraph's direction and where it starts in `text`, which is what a glyph's
+    // `cluster` counts from.
+    let mut lines: Vec<(std::borrow::Cow<'_, str>, Option<unicode_bidi::Level>, usize)> = Vec::new();
+    let mut paragraph_start = 0;
+    for paragraph in text.split('\n') {
+        match max_width {
+            None => lines.push((std::borrow::Cow::Borrowed(paragraph), None, paragraph_start)),
+            Some(max) => {
                 let level = shape::paragraph_level(paragraph);
                 let mut cut = Vec::new();
                 wrap_paragraph(faces, px, paragraph, max, &mut cut);
-                wrapped.extend(cut.into_iter().map(|line| (std::borrow::Cow::Owned(line), level)));
+                // Every wrapped line is a piece of the paragraph, in order, with only the spaces
+                // it broke at between them.
+                let mut cursor = 0;
+                for line in cut {
+                    let at = paragraph[cursor..].find(line.as_str()).map_or(cursor, |i| cursor + i);
+                    cursor = at + line.len();
+                    lines.push((std::borrow::Cow::Owned(line), level, paragraph_start + at));
+                }
             }
-            wrapped
         }
-    };
-    for (line_index, (line, level)) in lines.iter().enumerate() {
+        paragraph_start += paragraph.len() + 1;
+    }
+    for (line_index, (line, level, line_start)) in lines.iter().enumerate() {
         let baseline = metrics.ascent + line_index as f32 * line_height;
         let shaped = shape::shape_line(faces, px, line, *level);
         for g in shaped.glyphs {
@@ -462,11 +489,20 @@ fn layout(faces: &Faces<'_>, px: f32, text: &str, max_width: Option<f32>) -> Tex
             // every consumer treat the list as "things to draw".
             let drawn = faces.library.face(g.font).is_some_and(|face| face.outline(ab_glyph::GlyphId(g.glyph)).is_some());
             if drawn {
-                out.glyphs.push(PositionedGlyph { font: g.font, glyph: g.glyph, x: g.x, y: baseline + g.y, line: line_index as u32, px: g.px });
+                out.glyphs.push(PositionedGlyph {
+                    font: g.font,
+                    glyph: g.glyph,
+                    x: g.x,
+                    y: baseline + g.y,
+                    line: line_index as u32,
+                    px: g.px,
+                    cluster: *line_start as u32 + g.cluster,
+                });
             }
         }
         widest = widest.max(shaped.width);
         out.line_widths.push(shaped.width);
+        out.line_rtl.push(shaped.rtl);
         out.lines = u32::try_from(line_index + 1).unwrap_or(u32::MAX);
     }
     out.width = widest;
@@ -994,6 +1030,40 @@ mod tests {
         // The Arabic face on its own at that size gives the advance the fallback was given.
         let alone = lib.layout(arabic, l.glyphs[1].px, "س").expect("laid out");
         assert!((l.width - l.glyphs[1].x - alone.width).abs() < 0.01);
+    }
+
+    /// **A glyph knows which bytes of the text it draws,** across lines, wraps and multi-byte letters,
+    /// and in a right-to-left run, where the screen order is the reverse of the text's.
+    #[test]
+    fn a_glyph_knows_where_in_the_text_it_came_from() {
+        let (mut lib, latin, arabic, _) = shaping_faces();
+        let clusters = |l: &TextLayout| l.glyphs.iter().map(|g| g.cluster).collect::<Vec<_>>();
+        assert_eq!(clusters(&lib.layout(latin, 32.0, "ab\ncd").expect("laid out")), [0, 1, 3, 4]);
+        assert_eq!(clusters(&lib.layout(latin, 32.0, "şğa").expect("laid out")), [0, 2, 4], "bytes, not characters");
+
+        let word = lib.layout(latin, 32.0, "kelime").expect("laid out").width;
+        let wrapped = lib.layout_wrapped(latin, 32.0, "iki kelime", Some(word + 2.0)).expect("laid out");
+        assert_eq!(wrapped.lines, 2);
+        assert_eq!(clusters(&wrapped), [0, 1, 2, 4, 5, 6, 7, 8, 9], "the second line starts after the space");
+
+        lib.add_fallback(arabic);
+        let rtl = lib.layout(arabic, 32.0, "س ل").expect("laid out");
+        assert_eq!(clusters(&rtl), [3, 0], "the letter read second is drawn first from the left");
+    }
+
+    /// **A right-to-left paragraph starts on the right.** Each line of it is flush with the right edge
+    /// of the box, and left-to-right lines beside it stay on the left.
+    #[test]
+    fn align_start_puts_each_line_on_the_side_it_starts_on() {
+        let (mut lib, latin, arabic, _) = shaping_faces();
+        lib.add_fallback(arabic);
+        let mut l = lib.layout(latin, 32.0, "سلام\niki kelime uzun").expect("laid out");
+        assert_eq!(l.line_rtl, [true, false]);
+        let before: Vec<f32> = l.glyphs.iter().map(|g| g.x).collect();
+        l.align_start();
+        let moved = l.glyphs.iter().zip(&before).filter(|(g, _)| g.line == 0).map(|(g, b)| g.x - b).next().expect("a glyph");
+        assert!((moved - (l.width - l.line_widths[0])).abs() < 1e-3, "the Arabic line moved {moved}");
+        assert!(l.glyphs.iter().zip(&before).filter(|(g, _)| g.line == 1).all(|(g, b)| g.x == *b), "the Latin line stayed");
     }
 
     /// **Only Latin gives up `liga`.** Thai writes ฤๅ as one glyph, through that same feature.
