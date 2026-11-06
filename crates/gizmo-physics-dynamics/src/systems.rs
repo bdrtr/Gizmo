@@ -70,8 +70,8 @@ fn gather_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collider)> {
     // fallback and the broadphase path agree on how much grip a surface has.
     let materials = world.query::<&gizmo_physics_core::components::PhysicsMaterial>();
     {
-        let query = world.query::<(Entity, &Transform, &Collider, Without<IsDeleted>)>();
-        for (entity, transform, collider, _) in query.iter() {
+        let query = world.query_filtered::<(Entity, &Transform, &Collider), Without<IsDeleted>>();
+        for (entity, transform, collider) in query.iter() {
             let mut collider = collider.clone();
             collider.material = collider.material_with(materials.get(entity));
             colliders.push((BodyHandle::from_id(entity.id()), *transform, collider));
@@ -180,19 +180,12 @@ pub fn vehicle_controller_system(world: &World, dt: f32) {
     // one is live. The read-only `gather_colliders` query above (fallback path only)
     // was already dropped, so there is no overlapping `&`/`&mut` on `Transform` either.
     let query = unsafe {
-        world.query_unchecked::<(
-            Entity,
-            &mut VehicleController,
-            &mut RigidBody,
-            &Transform,
-            &mut Velocity,
-            Without<IsDeleted>,
-        )>()
+        world.query_filtered_unchecked::<(Entity, &mut VehicleController, &mut RigidBody, &Transform, &mut Velocity), Without<IsDeleted>>()
     };
     {
         let mut query = query;
         let mut vehicle_count = 0usize;
-        for (entity, mut vehicle, mut rb, transform, mut vel, _) in query.iter_mut() {
+        for (entity, mut vehicle, mut rb, transform, mut vel) in query.iter_mut() {
             // Aquaplaning hıza bağlı → her araç kendi hızıyla değerlendirilir.
             let wg = weather_grip_factor(weather, vel.linear.length());
             update_vehicle_with_query(
@@ -242,14 +235,7 @@ pub fn character_controller_system(world: &World, dt: f32) {
     // read-only gather query is dropped before this mutable query is opened, so
     // the `&mut Transform` here never aliases the `&Transform` used above.
     let query = unsafe {
-        world.query_unchecked::<(
-            Entity,
-            &mut CharacterController,
-            &mut Transform,
-            &mut Velocity,
-            &Collider,
-            Without<IsDeleted>,
-        )>()
+        world.query_filtered_unchecked::<(Entity, &mut CharacterController, &mut Transform, &mut Velocity, &Collider), Without<IsDeleted>>()
     };
     // What each character walked into: `(body, unit walking direction, push force, walking
     // speed)`, applied after the character query is dropped.
@@ -258,7 +244,7 @@ pub fn character_controller_system(world: &World, dt: f32) {
     {
         let mut query = query;
         let mut char_count = 0usize;
-        for (entity, mut kcc, mut transform, mut vel, collider, _) in query.iter_mut() {
+        for (entity, mut kcc, mut transform, mut vel, collider) in query.iter_mut() {
             if let Some((_, carry)) = carried.iter().find(|(c, _)| *c == entity.id()) {
                 transform.position += *carry;
             }
@@ -307,10 +293,10 @@ fn push_bodies(world: &World, pushes: &[(BodyHandle, gizmo_math::Vec3, f32, f32)
     }
     // SAFETY: as above — the character query is dropped, and this one is the only live one.
     let mut bodies = unsafe {
-        world.query_unchecked::<(&mut RigidBody, &mut Velocity, Without<IsDeleted>)>()
+        world.query_filtered_unchecked::<(&mut RigidBody, &mut Velocity), Without<IsDeleted>>()
     };
     for &(body, dir, force, speed) in pushes {
-        let Some((mut rb, mut vel, _)) = bodies.entity(body.id()).and_then(|e| bodies.get_mut(e)) else {
+        let Some((mut rb, mut vel)) = bodies.entity(body.id()).and_then(|e| bodies.get_mut(e)) else {
             continue;
         };
         let inv_mass = rb.inv_mass();
@@ -345,9 +331,9 @@ fn platform_carry(world: &World, colliders: &[(BodyHandle, Transform, Collider)]
     use gizmo_physics_core::raycast::{Ray, Raycast};
     use gizmo_math::Vec3;
     let mut out = Vec::new();
-    let characters = world.query::<(Entity, &CharacterController, &Transform, &Collider, Without<IsDeleted>)>();
+    let characters = world.query_filtered::<(Entity, &CharacterController, &Transform, &Collider), Without<IsDeleted>>();
     let velocities = world.query::<&Velocity>();
-    for (entity, kcc, transform, collider, _) in characters.iter() {
+    for (entity, kcc, transform, collider) in characters.iter() {
         if !kcc.is_grounded || kcc.is_submerged {
             continue;
         }
@@ -411,11 +397,11 @@ pub fn fighter_frame_system(world: &World, dt: f32) {
 
     // SAFETY: exclusive `fn(&World, f32)` system — the scheduler runs it alone — and
     // `FighterController` is the only component type borrowed here, so nothing aliases.
-    let query = unsafe { world.query_unchecked::<(&mut FighterController, Without<IsDeleted>)>() };
+    let query = unsafe { world.query_filtered_unchecked::<&mut FighterController, Without<IsDeleted>>() };
     {
         let mut query = query;
         let mut fighter_count = 0usize;
-        for (mut fighter, _) in query.iter_mut() {
+        for mut fighter in query.iter_mut() {
             fighter.tick();
             fighter_count += 1;
         }

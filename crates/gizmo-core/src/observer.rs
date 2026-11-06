@@ -462,7 +462,7 @@ mod tests {
         assert_eq!(table.lock().unwrap().removed, vec![e.id()], "the Table component");
         assert_eq!(sparse.lock().unwrap().removed, vec![e.id()], "the sparse component");
         // And the data really is gone — the notification is not standing in for the removal.
-        assert!(world.query_entity::<&Health>(e.id()).is_none());
+        assert!(world.query_entity::<&Health>(e).is_none());
     }
 
     /// A bundle naming a component the entity does not have notifies nothing for it.

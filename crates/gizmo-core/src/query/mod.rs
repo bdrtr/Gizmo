@@ -212,6 +212,35 @@ pub trait WorldQuery: sealed::SealedQuery {
 /// exists to close.
 pub trait ReadOnlyQuery: WorldQuery + sealed::SealedReadOnly {}
 
+/// What a [`Query`] hands out per row, its first parameter: `&T`, `&mut T`, `Option<&T>`,
+/// [`Entity`](crate::entity::Entity), `()` for nothing, and tuples of those.
+///
+/// A filter is not one of these, which is what keeps the item free of `()`: `Query<&T, With<U>>` yields
+/// `&T`. Sealed through [`WorldQuery`].
+///
+/// ```compile_fail,E0277
+/// # use gizmo_core::prelude::*;
+/// # #[derive(Clone)] struct A;
+/// # gizmo_core::impl_component!(A);
+/// # #[derive(Clone)] struct B;
+/// # gizmo_core::impl_component!(B);
+/// # let world = World::new();
+/// let _ = world.query::<(&A, With<B>)>(); // a filter belongs in `query_filtered::<&A, With<B>>()`
+/// ```
+pub trait QueryData: WorldQuery {}
+
+/// What narrows a [`Query`] without handing anything out, its second parameter: [`With`], [`Without`],
+/// [`Changed`], [`Added`], [`Or`], `()` for nothing, and tuples of those, which must all hold.
+///
+/// Sealed through [`WorldQuery`].
+pub trait QueryFilter: ReadOnlyQuery {}
+
+impl<T0: FetchComponent> QueryData for T0 where T0::Component: crate::component::Component {}
+impl<C: FetchComponent> QueryData for Option<C> where C::Component: crate::component::Component {}
+impl QueryData for crate::entity::Entity {}
+impl QueryFilter for IgnoreDefaultFilters {}
+impl<T1: ReadOnlyQuery, T2: ReadOnlyQuery> QueryFilter for Or<T1, T2> {}
+
 // =========================================================================
 // QUERY STRUCT
 // =========================================================================
@@ -249,10 +278,10 @@ pub trait ReadOnlyQuery: WorldQuery + sealed::SealedReadOnly {}
 /// entity-id order, and it is not stable across edits to the world: despawning an entity or
 /// adding/removing a component relocates rows by swap-remove, and archetype indices themselves
 /// get renumbered when empty archetypes are collected. Never treat the order as a sort.
-pub struct Query<'w, Q: WorldQuery + ?Sized> {
+pub struct Query<'w, D: QueryData, F: QueryFilter = ()> {
     world: &'w World,
     matching_archetypes: Vec<usize>,
-    _marker: PhantomData<Q>,
+    _marker: PhantomData<(D, F)>,
 }
 
 
@@ -316,6 +345,7 @@ macro_rules! impl_tick_filter {
         // Tick filters carry no data (`Item = ()`) → read-only.
         impl<T: crate::component::Component> sealed::SealedReadOnly for $name<T> {}
         impl<T: crate::component::Component> ReadOnlyQuery for $name<T> {}
+        impl<T: crate::component::Component> QueryFilter for $name<T> {}
         impl<T: crate::component::Component> WorldQuery for $name<T> {
             type StaticType = $name<T>;
             // (table ticks ptr, or the sparse set ptr for SparseSet storage)
@@ -378,6 +408,7 @@ macro_rules! impl_presence_filter {
         // Presence filters carry no data (`Item = ()`) → read-only.
         impl<T: crate::component::Component> sealed::SealedReadOnly for $name<T> {}
         impl<T: crate::component::Component> ReadOnlyQuery for $name<T> {}
+        impl<T: crate::component::Component> QueryFilter for $name<T> {}
         impl<T: crate::component::Component> WorldQuery for $name<T> {
             type StaticType = $name<T>;
             // (is_sparse, sparse set ptr). Table storage is always `(false, None)`.
@@ -536,7 +567,7 @@ impl<T: crate::component::Component> ReadOnlyQuery for &T {}
 /// that manages the filtered entities has to see them, and this is how it says so:
 ///
 /// ```ignore
-/// fn re_enable(mut q: Query<(&mut Health, With<Disabled>, IgnoreDefaultFilters)>) { /* … */ }
+/// fn re_enable(mut q: Query<&mut Health, (With<Disabled>, IgnoreDefaultFilters)>) { /* … */ }
 /// ```
 ///
 /// It is in the **signature**, not in a comment or a builder call, so a reader of the system knows
@@ -662,7 +693,9 @@ macro_rules! impl_query_tuple {
         // A tuple is read-only iff EVERY element is read-only.
         impl<$($t: ReadOnlyQuery),*> sealed::SealedReadOnly for ($($t,)*) {}
         impl<$($t: ReadOnlyQuery),*> ReadOnlyQuery for ($($t,)*) {}
-        #[allow(non_snake_case)]
+        impl<$($t: QueryData),*> QueryData for ($($t,)*) {}
+        impl<$($t: QueryFilter),*> QueryFilter for ($($t,)*) {}
+        #[allow(non_snake_case, unused_variables, clippy::unused_unit)]
         impl<$($t: WorldQuery),*> WorldQuery for ($($t,)*) {
             type StaticType = ($($t::StaticType,)*);
             type Fetch<'w> = ($($t::Fetch<'w>,)*);
@@ -702,6 +735,7 @@ macro_rules! impl_query_tuple {
     };
 }
 
+impl_query_tuple!();
 impl_query_tuple!(T0, T1);
 impl_query_tuple!(T0, T1, T2);
 impl_query_tuple!(T0, T1, T2, T3);

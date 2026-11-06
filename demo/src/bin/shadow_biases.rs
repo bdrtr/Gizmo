@@ -206,7 +206,7 @@ fn sun_rotation(elevation_deg: f32) -> Quat {
 
 /// Yükseklik tuşları ve ışığın yeniden yönlendirilmesi.
 fn sun_input(
-    mut lights: Query<(&mut Transform, With<SunLight>)>,
+    mut lights: Query<&mut Transform, With<SunLight>>,
     mut sun: ResMut<Sun>,
     input: Res<Input>,
 ) {
@@ -227,7 +227,7 @@ fn sun_input(
         return;
     }
     let rotation = sun_rotation(sun.elevation_deg);
-    for (mut transform, _) in lights.iter_mut() {
+    for mut transform in lights.iter_mut() {
         transform.rotation = rotation;
     }
 }

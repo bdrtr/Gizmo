@@ -445,7 +445,7 @@ fn main() {
 /// değmediğini söyleyecek olan şey, ağacı **güncel tutmanın** maliyetinin sorguda kazandırdığından
 /// az olup olmadığı — ve bu ölçülmeden bilinmiyor.
 fn measure(
-    cubes: Query<(Entity, &Transform, With<MeshRenderer>)>,
+    cubes: Query<(Entity, &Transform), With<MeshRenderer>>,
     mut cameras: Query<(&mut Camera, &mut Transform)>,
     mut bench: ResMut<Bench>,
     mut analyzer: ResMut<Analyzer>,
@@ -475,7 +475,7 @@ fn measure(
         // ── Doğrusal yürüyüş: batcher'ın yaptığı işin aynısı ────────────────
         let t_linear = std::time::Instant::now();
         let mut n = 0usize;
-        for (_, t, _) in cubes.iter() {
+        for (_, t) in cubes.iter() {
             let m = Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
             if gizmo::renderer::frustum_cull::visible_in_frustum(&frustum, &m, unit) {
                 n += 1;
@@ -498,7 +498,7 @@ fn measure(
         let rebuild_every_frame = std::env::var("GIZMO_CULL_INDEX_STATIC").is_err();
         let t_update = std::time::Instant::now();
         if rebuild_every_frame || tree.is_empty() {
-            for (e, t, _) in cubes.iter() {
+            for (e, t) in cubes.iter() {
                 let m = Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
                 tree.insert(e.id(), unit.transform(&m));
             }

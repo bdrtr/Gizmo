@@ -95,16 +95,16 @@ fn with_and_without_respect_sparse_presence() {
 
     // With<SparseTag>: yalnız a ve c eşlenmeli.
     {
-        let q = world.query::<(With<SparseTag>, &Tableish)>();
-        let mut vals: Vec<i32> = q.iter().map(|(_, t)| t.0).collect();
+        let q = world.query_filtered::<&Tableish, With<SparseTag>>();
+        let mut vals: Vec<i32> = q.iter().map(|t| t.0).collect();
         vals.sort();
         assert_eq!(vals, vec![1, 3], "With<sparse> yalnız bileşeni taşıyanları eşlemeli");
     }
 
     // Without<SparseTag>: yalnız b eşlenmeli.
     {
-        let q = world.query::<(Without<SparseTag>, &Tableish)>();
-        let vals: Vec<i32> = q.iter().map(|(_, t)| t.0).collect();
+        let q = world.query_filtered::<&Tableish, Without<SparseTag>>();
+        let vals: Vec<i32> = q.iter().map(|t| t.0).collect();
         assert_eq!(vals, vec![2], "Without<sparse> yalnız bileşeni TAŞIMAYANLARI eşlemeli");
     }
 }

@@ -434,7 +434,7 @@ fn playing(state: &State<Screen>) -> bool {
     *state.get() == Screen::Playing
 }
 
-fn move_player(mut players: Query<(&mut Transform, With<Player>)>, input: Res<Input>, time: Res<Time>, state: Res<State<Screen>>) {
+fn move_player(mut players: Query<&mut Transform, With<Player>>, input: Res<Input>, time: Res<Time>, state: Res<State<Screen>>) {
     if !playing(&state) {
         return;
     }
@@ -442,21 +442,21 @@ fn move_player(mut players: Query<(&mut Transform, With<Player>)>, input: Res<In
     let (ax, az) = input.move_axis_with(MoveKeys::ARROWS);
     let dir = Vec3::new(x + ax, 0.0, -(z + az));
     let step = dir.normalize_or_zero() * PLAYER_SPEED * time.dt();
-    for (mut tf, _) in players.iter_mut() {
+    for mut tf in players.iter_mut() {
         tf.position = (tf.position + step).clamp(Vec3::new(-ARENA + 0.6, 0.5, -ARENA + 0.6), Vec3::new(ARENA - 0.6, 0.5, ARENA - 0.6));
     }
 }
 
-fn player_position(players: &Query<(&Transform, With<Player>)>) -> Option<Vec3> {
-    players.iter().next().map(|(tf, _)| tf.position)
+fn player_position(players: &Query<&Transform, With<Player>>) -> Option<Vec3> {
+    players.iter().next().map(|tf| tf.position)
 }
 
-fn chase(mut hunters: Query<(&mut Transform, With<Hunter>)>, players: Query<(&Transform, With<Player>)>, time: Res<Time>, state: Res<State<Screen>>) {
+fn chase(mut hunters: Query<&mut Transform, With<Hunter>>, players: Query<&Transform, With<Player>>, time: Res<Time>, state: Res<State<Screen>>) {
     if !playing(&state) {
         return;
     }
     let Some(target) = player_position(&players) else { return };
-    for (mut tf, _) in hunters.iter_mut() {
+    for mut tf in hunters.iter_mut() {
         let to = (target - tf.position) * Vec3::new(1.0, 0.0, 1.0);
         tf.position += to.normalize_or_zero() * HUNTER_SPEED * time.dt();
     }
@@ -464,8 +464,8 @@ fn chase(mut hunters: Query<(&mut Transform, With<Hunter>)>, players: Query<(&Tr
 
 /// Bir kristale değmek: puan, kristal başka yerde yeniden belirir, bir avcı daha gelir.
 fn collect(
-    mut crystals: Query<(&mut Transform, With<Crystal>)>,
-    players: Query<(&Transform, With<Player>)>,
+    mut crystals: Query<&mut Transform, With<Crystal>>,
+    players: Query<&Transform, With<Player>>,
     mut run: ResMut<Run>,
     mut rng: ResMut<Rng>,
     mut commands: gizmo::core::Commands,
@@ -478,7 +478,7 @@ fn collect(
     }
     let Some(player) = player_position(&players) else { return };
     let spin = Quat::from_rotation_y(time.dt() * 2.0) * Quat::from_rotation_x(time.dt() * 1.3);
-    for (mut tf, _) in crystals.iter_mut() {
+    for mut tf in crystals.iter_mut() {
         tf.rotation = spin * tf.rotation;
         if tf.position.distance(player) < 0.9 {
             run.score += 1;
@@ -494,8 +494,8 @@ fn collect(
 
 /// Bir avcıya yakalanmak can götürür; ardından kısa bir dokunulmazlık.
 fn get_caught(
-    hunters: Query<(&Transform, With<Hunter>)>,
-    players: Query<(&Transform, With<Player>)>,
+    hunters: Query<&Transform, With<Hunter>>,
+    players: Query<&Transform, With<Player>>,
     mut run: ResMut<Run>,
     mut state: ResMut<State<Screen>>,
     time: Res<Time>,
@@ -507,7 +507,7 @@ fn get_caught(
     }
     run.grace = (run.grace - time.dt()).max(0.0);
     let Some(player) = player_position(&players) else { return };
-    let caught = hunters.iter().any(|(tf, _)| tf.position.distance(player) < 0.9);
+    let caught = hunters.iter().any(|tf| tf.position.distance(player) < 0.9);
     if caught && run.grace == 0.0 {
         run.lives = run.lives.saturating_sub(1);
         run.grace = 1.5;

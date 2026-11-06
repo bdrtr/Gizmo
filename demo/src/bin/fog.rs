@@ -250,7 +250,7 @@ fn fog_input(mut fog: ResMut<FogState>, input: Res<Input>, time: Res<Time>) {
 }
 
 /// Gökyüzünü seçili sis rengine boyar — ikisi arasında karışım varsa ona da uyar.
-fn tint_sky(mut skies: Query<(&mut Material, With<SkyDome>)>, fog: Res<FogState>) {
+fn tint_sky(mut skies: Query<&mut Material, With<SkyDome>>, fog: Res<FogState>) {
     let a = PRESETS[fog.preset_a.min(3) as usize].1;
     let b = PRESETS[fog.preset_b.min(3) as usize].1;
     let t = fog.blend;
@@ -261,7 +261,7 @@ fn tint_sky(mut skies: Query<(&mut Material, With<SkyDome>)>, fog: Res<FogState>
         mix(a[2], b[2]),
         1.0,
     );
-    for (mut material, _) in skies.iter_mut() {
+    for mut material in skies.iter_mut() {
         material.albedo = color;
     }
 }

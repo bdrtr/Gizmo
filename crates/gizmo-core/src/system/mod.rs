@@ -802,7 +802,7 @@ mod tests {
     // REGRESYON (audit 2026-06-29): `Changed<T>`/`Added<T>` filtreleri T'nin
     // `ComponentTicks` belleğini OKUR; aynı bellek `&mut T`'nin `deref_mut`'unda
     // YAZILIR. Eskiden `check_aliasing` HİÇBİR erişim bildirmediğinden zamanlayıcı bir
-    // `Query<Changed<T>>` sistemini bir `Query<&mut T>` yazıcısıyla aynı paralel batch'e
+    // `Query<(), Changed<T>>` sistemini bir `Query<&mut T>` yazıcısıyla aynı paralel batch'e
     // koyabiliyordu (is_compatible_with == true) → ticks üzerinde data race / UB.
     #[test]
     fn changed_and_added_declare_read_conflicting_with_mut_writer() {
@@ -815,14 +815,14 @@ mod tests {
         let pos = TypeId::of::<Pos>();
 
         let mut changed_info = AccessInfo::new();
-        <Query<'static, Changed<Pos>> as SystemParam>::get_access_info(&mut changed_info);
+        <Query<'static, (), Changed<Pos>> as SystemParam>::get_access_info(&mut changed_info);
         assert!(
             changed_info.component_reads.contains(&pos),
             "Changed<Pos> Pos'u READ olarak bildirmeli (ticks'i okuyor)"
         );
 
         let mut added_info = AccessInfo::new();
-        <Query<'static, Added<Pos>> as SystemParam>::get_access_info(&mut added_info);
+        <Query<'static, (), Added<Pos>> as SystemParam>::get_access_info(&mut added_info);
         assert!(
             added_info.component_reads.contains(&pos),
             "Added<Pos> Pos'u READ olarak bildirmeli"
@@ -858,7 +858,7 @@ mod tests {
         impl crate::component::Component for B {}
 
         let mut or_info = AccessInfo::new();
-        <Query<'static, Or<Changed<A>, Changed<B>>> as SystemParam>::get_access_info(&mut or_info);
+        <Query<'static, (), Or<Changed<A>, Changed<B>>> as SystemParam>::get_access_info(&mut or_info);
         assert!(
             or_info.component_reads.contains(&TypeId::of::<A>())
                 && or_info.component_reads.contains(&TypeId::of::<B>()),

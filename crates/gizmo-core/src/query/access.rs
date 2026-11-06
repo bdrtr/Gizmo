@@ -6,13 +6,13 @@
 use super::iter::QueryRows;
 use super::*;
 
-impl<'w, Q: WorldQuery> Query<'w, Q> {
+impl<'w, D: QueryData, F: QueryFilter> Query<'w, D, F> {
     pub(crate) fn new(world: &'w World) -> Self {
         let mut used_types = Vec::new();
-        Q::check_aliasing(&mut used_types);
+        <(D, F)>::check_aliasing(&mut used_types);
         let matching = world
             .archetype_index
-            .matching_archetypes_readonly(Q::matches_archetype);
+            .matching_archetypes_readonly(<(D, F)>::matches_archetype);
         Self {
             world,
             matching_archetypes: matching,
@@ -37,7 +37,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         let mut query = Self::new(world);
         // Two early outs, in the order that makes the common case free: no filters registered at
         // all (every world that never asked for the feature), then this query opting out.
-        if world.default_query_filters.is_empty() || Q::ignores_default_filters() {
+        if world.default_query_filters.is_empty() || <(D, F)>::ignores_default_filters() {
             return query;
         }
         let filters = &world.default_query_filters;
@@ -50,10 +50,10 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
 
     pub(crate) fn new_cached(world: &'w mut World) -> Self {
         let mut used_types = Vec::new();
-        Q::check_aliasing(&mut used_types);
+        <(D, F)>::check_aliasing(&mut used_types);
         let matching = world
             .archetype_index
-            .matching_archetypes(TypeId::of::<Q::StaticType>(), Q::matches_archetype)
+            .matching_archetypes(TypeId::of::<<(D, F) as WorldQuery>::StaticType>(), <(D, F)>::matches_archetype)
             .to_vec();
         Self {
             world,
@@ -69,7 +69,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     // exclusive borrow (so two live `&mut T` from one query are impossible). Keeping
     // these private is what makes the gating airtight.
 
-    fn iter_inner<'a>(&'a self) -> QueryRows<'a, 'w, Q> {
+    fn iter_inner<'a>(&'a self) -> QueryRows<'a, 'w, (D, F)> {
         QueryRows {
             world: self.world,
             archetype_indices: &self.matching_archetypes,
@@ -81,18 +81,18 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         }
     }
 
-    fn single_inner(&self) -> Result<Q::Item<'_>, QuerySingleError> {
+    fn single_inner(&self) -> Result<D::Item<'_>, QuerySingleError> {
         let mut rows = self.iter_inner();
-        let (_, first) = rows.next().ok_or(QuerySingleError::NoEntities)?;
+        let (_, (first, _)) = rows.next().ok_or(QuerySingleError::NoEntities)?;
         if rows.next().is_some() {
             return Err(QuerySingleError::MultipleEntities);
         }
         Ok(first)
     }
 
-    fn iter_chunks_inner<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
+    fn iter_chunks_inner<'a>(&'a self) -> QueryChunksIter<'a, 'w, D, F> {
         assert!(
-            !Q::has_row_filter(),
+            !<(D, F)>::has_row_filter(),
             "iter_chunks does not support per-row-filtered queries \
              (sparse With/Without, Changed, Added, Or) — they need per-row narrowing that \
              a contiguous chunk cannot express; use iter()/iter_mut() instead"
@@ -106,7 +106,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     }
 
     #[inline]
-    fn get_inner<'a, K: super::RowKey>(&'a self, key: K) -> Option<Q::Item<'a>> {
+    fn get_inner<'a, K: super::RowKey>(&'a self, key: K) -> Option<D::Item<'a>> {
         let entity_id = key.slot();
         let loc = self.world.entity_location(entity_id);
         if !loc.is_valid() {
@@ -132,17 +132,17 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         // `loc.row` is a live row in it. The fetch borrows the world for `'w`; aliasing was
         // settled at construction by `check_aliasing`.
         unsafe {
-            let fetch = Q::fetch_raw(self.world, arch, self.world.tick)?;
-            if !Q::filter_row(fetch, loc.row as usize, entity_id, self.world.change_ref_tick) {
+            let fetch = <(D, F)>::fetch_raw(self.world, arch, self.world.tick)?;
+            if !<(D, F)>::filter_row(fetch, loc.row as usize, entity_id, self.world.change_ref_tick) {
                 return None;
             }
-            Some(Q::get_item(fetch, loc.row as usize, entity_id))
+            Some(<(D, F)>::get_item(fetch, loc.row as usize, entity_id).0)
         }
     }
 
-    fn par_inner<F>(&self, func: F)
+    fn par_inner<Func>(&self, func: Func)
     where
-        F: Fn((u32, Q::Item<'_>)) + Send + Sync,
+        Func: Fn((u32, D::Item<'_>)) + Send + Sync,
     {
         #[cfg(not(target_arch = "wasm32"))]
         use rayon::prelude::*;
@@ -174,7 +174,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
             let arch = &self.world.archetype_index.archetypes[arch_idx];
             // SAFETY: `arch_idx` is from `matching_archetypes` and the archetype is borrowed from
             // the world for the whole parallel section, so the fetch outlives every task.
-            if let Some(fetch) = unsafe { Q::fetch_raw(self.world, arch, tick) } {
+            if let Some(fetch) = unsafe { <(D, F)>::fetch_raw(self.world, arch, tick) } {
                 let len = arch.len();
                 let wrapped_fetch = FetchWrapper(fetch);
                 let entities_ptr = FetchWrapper(arch.entities().as_ptr());
@@ -191,8 +191,8 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
                     // what makes the shared fetch sound here.
                     .for_each(move |row| unsafe {
                         let id = (*entities_ptr.get().add(row)).id();
-                        if Q::filter_row(wrapped_fetch.get(), row, id, ref_tick) {
-                            let item = Q::get_item(wrapped_fetch.get(), row, id);
+                        if <(D, F)>::filter_row(wrapped_fetch.get(), row, id, ref_tick) {
+                            let item = <(D, F)>::get_item(wrapped_fetch.get(), row, id).0;
                             func_ref((id, item));
                         }
                     });
@@ -207,7 +207,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
 
     /// Mutable iteration yielding a per-element `&mut T`. Because it takes `&mut self`, a second
     /// live mutable iteration over the same query is blocked at compile time.
-    pub fn iter_mut<'a>(&'a mut self) -> QueryIter<'a, 'w, Q> {
+    pub fn iter_mut<'a>(&'a mut self) -> QueryIter<'a, 'w, D, F> {
         QueryIter(self.iter_inner())
     }
 
@@ -221,7 +221,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// - If you will only read → [`Query::iter_chunks`] (does not mark).
     /// - If you will write some of them with precise marking → `iter_mut` (per-element `Mut`).
     /// - If you will write all of them → this method (marking all of them is already correct).
-    pub fn iter_chunks_mut<'a>(&'a mut self) -> QueryChunksIter<'a, 'w, Q> {
+    pub fn iter_chunks_mut<'a>(&'a mut self) -> QueryChunksIter<'a, 'w, D, F> {
         self.iter_chunks_inner()
     }
 
@@ -229,7 +229,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// Because it takes `&mut self` the returned `Mut` borrows the query exclusively; a second
     /// simultaneous `get_mut`/`iter_mut` does not compile.
     #[inline]
-    pub fn get_mut(&mut self, entity: crate::entity::Entity) -> Option<Q::Item<'_>> {
+    pub fn get_mut(&mut self, entity: crate::entity::Entity) -> Option<D::Item<'_>> {
         self.get_inner(entity)
     }
 
@@ -264,7 +264,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// combination.
     pub fn iter_combinations_mut<'a, const K: usize>(
         &'a mut self,
-    ) -> QueryCombinationsMut<'a, 'w, Q, K> {
+    ) -> QueryCombinationsMut<'a, 'w, D, F, K> {
         let ids: Vec<u32> = self.iter_inner().map(|(id, _)| id).collect();
         let subsets = Subsets::new(ids.len());
         QueryCombinationsMut {
@@ -279,14 +279,14 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// Sound for the same reason [`iter_mut`](Self::iter_mut) is: the result borrows the query
     /// exclusively. To tell "one" from "several" it has to look at a second row; that second item
     /// is built and dropped without being written, so it is not marked changed.
-    pub fn single_mut(&mut self) -> Result<Q::Item<'_>, QuerySingleError> {
+    pub fn single_mut(&mut self) -> Result<D::Item<'_>, QuerySingleError> {
         self.single_inner()
     }
 
     /// Lock-free parallel mutable iteration running on the thread pool (Work-Stealing).
-    pub fn par_for_each_mut<F>(&mut self, func: F)
+    pub fn par_for_each_mut<Func>(&mut self, func: Func)
     where
-        F: Fn(Q::Item<'_>) + Send + Sync,
+        Func: Fn(D::Item<'_>) + Send + Sync,
     {
         self.par_inner(|(_, item)| func(item));
     }
@@ -357,7 +357,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
 // ── READ-ONLY accessors (only for queries that never yield `&mut T`) ──────
 // Sound from a shared `&self` because `Q: ReadOnlyQuery` guarantees `Q::Item` is a
 // shared borrow — any number may coexist.
-impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
+impl<'w, D: QueryData + ReadOnlyQuery, F: QueryFilter> Query<'w, D, F> {
     /// Shared row-by-row iteration, yielding `(entity_id, item)` and skipping rows rejected by
     /// per-row filters.
     ///
@@ -366,7 +366,7 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// [`Query::iter_mut`], which ties the iterator to an exclusive borrow instead.
     ///
     /// See [`QueryIter`] for the visit order.
-    pub fn iter<'a>(&'a self) -> QueryIter<'a, 'w, Q> {
+    pub fn iter<'a>(&'a self) -> QueryIter<'a, 'w, D, F> {
         QueryIter(self.iter_inner())
     }
 
@@ -398,7 +398,7 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// The ids are collected once rather than re-scanned, and before the first combination is
     /// yielded, so a structural change during iteration is impossible anyway (the query holds a
     /// borrow), and the visit order is the one [`QueryIter`] documents.
-    pub fn iter_combinations<'a, const K: usize>(&'a self) -> QueryCombinations<'a, 'w, Q, K> {
+    pub fn iter_combinations<'a, const K: usize>(&'a self) -> QueryCombinations<'a, 'w, D, F, K> {
         let ids: Vec<u32> = self.iter_inner().map(|(id, _)| id).collect();
         let subsets = Subsets::new(ids.len());
         QueryCombinations {
@@ -417,7 +417,7 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     /// whereas those filters select per row (see [`WorldQuery::has_row_filter`]).
     /// Rather than silently returning an unfiltered result it refuses loudly — use
     /// [`Query::iter`]/[`Query::iter_mut`] instead. (Table `With`/`Without` is safe.)
-    pub fn iter_chunks<'a>(&'a self) -> QueryChunksIter<'a, 'w, Q> {
+    pub fn iter_chunks<'a>(&'a self) -> QueryChunksIter<'a, 'w, D, F> {
         self.iter_chunks_inner()
     }
 
@@ -444,14 +444,14 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     ///
     /// It walks at most two rows, and it applies the per-row filters exactly as
     /// [`iter`](Self::iter) does, so a `Changed<T>` query is "the one that changed this frame".
-    pub fn single(&self) -> Result<Q::Item<'_>, QuerySingleError> {
+    pub fn single(&self) -> Result<D::Item<'_>, QuerySingleError> {
         self.single_inner()
     }
 
     /// One row. It is checked against the row, so a dead entity returns `None` even after its slot went
     /// to someone else.
     #[inline]
-    pub fn get(&self, entity: crate::entity::Entity) -> Option<Q::Item<'_>> {
+    pub fn get(&self, entity: crate::entity::Entity) -> Option<D::Item<'_>> {
         self.get_inner(entity)
     }
 
@@ -462,11 +462,35 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
     }
 
     /// Lock-free parallel iteration running on the thread pool (Work-Stealing)
-    pub fn par_for_each<F>(&self, func: F)
+    pub fn par_for_each<Func>(&self, func: Func)
     where
-        F: Fn(Q::Item<'_>) + Send + Sync,
+        Func: Fn(D::Item<'_>) + Send + Sync,
     {
         self.par_inner(|(_, item)| func(item));
+    }
+}
+
+impl<'a, 'w, D: QueryData + ReadOnlyQuery, F: QueryFilter> IntoIterator for &'a Query<'w, D, F>
+where
+    'w: 'a,
+{
+    type Item = D::Item<'a>;
+    type IntoIter = QueryIter<'a, 'w, D, F>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a, 'w, D: QueryData, F: QueryFilter> IntoIterator for &'a mut Query<'w, D, F>
+where
+    'w: 'a,
+{
+    type Item = D::Item<'a>;
+    type IntoIter = QueryIter<'a, 'w, D, F>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }
 
@@ -518,16 +542,16 @@ impl<const K: usize> Subsets<K> {
 
 /// Every unordered `K`-element combination of matching rows. Built by
 /// [`Query::iter_combinations`].
-pub struct QueryCombinations<'a, 'w, Q: ReadOnlyQuery, const K: usize> {
-    query: &'a Query<'w, Q>,
+pub struct QueryCombinations<'a, 'w, D: QueryData + ReadOnlyQuery, F: QueryFilter, const K: usize> {
+    query: &'a Query<'w, D, F>,
     /// The matching rows, collected once. Re-scanning per combination would be `n` times the work
     /// for the same answer.
     ids: Vec<u32>,
     subsets: Subsets<K>,
 }
 
-impl<'a, 'w, Q: ReadOnlyQuery, const K: usize> Iterator for QueryCombinations<'a, 'w, Q, K> {
-    type Item = [Q::Item<'a>; K];
+impl<'a, 'w, D: QueryData + ReadOnlyQuery, F: QueryFilter, const K: usize> Iterator for QueryCombinations<'a, 'w, D, F, K> {
+    type Item = [D::Item<'a>; K];
 
     fn next(&mut self) -> Option<Self::Item> {
         let chosen = self.subsets.advance()?;
@@ -565,20 +589,20 @@ impl<'a, 'w, Q: ReadOnlyQuery, const K: usize> Iterator for QueryCombinations<'a
 /// let second = pairs.fetch_next(); // the first combination is still alive
 /// drop((first, second));
 /// ```
-pub struct QueryCombinationsMut<'a, 'w, Q: WorldQuery, const K: usize> {
-    query: &'a mut Query<'w, Q>,
+pub struct QueryCombinationsMut<'a, 'w, D: QueryData, F: QueryFilter, const K: usize> {
+    query: &'a mut Query<'w, D, F>,
     ids: Vec<u32>,
     subsets: Subsets<K>,
 }
 
-impl<'a, 'w, Q: WorldQuery, const K: usize> QueryCombinationsMut<'a, 'w, Q, K> {
+impl<'a, 'w, D: QueryData, F: QueryFilter, const K: usize> QueryCombinationsMut<'a, 'w, D, F, K> {
     /// The next combination, valid until this is called again.
-    pub fn fetch_next(&mut self) -> Option<[Q::Item<'_>; K]> {
+    pub fn fetch_next(&mut self) -> Option<[D::Item<'_>; K]> {
         let chosen = self.subsets.advance()?;
         // `Subsets` gives strictly increasing positions and `ids` holds each matching row once, so
         // these are different rows and the items do not alias. Exclusive access to the query for
         // this borrow is what keeps anyone else from looking at them.
-        let query: &Query<'w, Q> = self.query;
+        let query: &Query<'w, D, F> = self.query;
         let ids = &self.ids;
         Some(chosen.map(|i| {
             query

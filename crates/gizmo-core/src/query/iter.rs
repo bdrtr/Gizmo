@@ -23,26 +23,26 @@ use std::marker::PhantomData;
 /// resumable per-row state machine of `next`. The override always restarts from the first
 /// matching archetype and does not consult how far `next` has already advanced, so call it on
 /// a *fresh* iterator: on a partially consumed one it replays the items already yielded.
-pub struct QueryIter<'a, 'w, Q: WorldQuery>(pub(super) QueryRows<'a, 'w, Q>);
+pub struct QueryIter<'a, 'w, D: WorldQuery, F: WorldQuery = ()>(pub(super) QueryRows<'a, 'w, (D, F)>);
 
-impl<'a, 'w, Q: WorldQuery> Iterator for QueryIter<'a, 'w, Q>
+impl<'a, 'w, D: WorldQuery, F: WorldQuery> Iterator for QueryIter<'a, 'w, D, F>
 where
     'w: 'a,
 {
-    type Item = Q::Item<'a>;
+    type Item = D::Item<'a>;
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        self.0.next().map(|(_, item)| item)
+        self.0.next().map(|(_, (item, _))| item)
     }
 
     #[inline(always)]
-    fn for_each<F>(self, mut f: F)
+    fn for_each<Func>(self, mut f: Func)
     where
         Self: Sized,
-        F: FnMut(Self::Item),
+        Func: FnMut(Self::Item),
     {
-        self.0.for_each(|(_, item)| f(item));
+        self.0.for_each(|(_, (item, _))| f(item));
     }
 }
 
@@ -178,18 +178,18 @@ where
 /// `&T` operands and filters stamp nothing. So for a mixed `Q` such as `(&A, &mut B)` only
 /// `B`'s ticks move, and a chunk query with no `&mut T` in it marks nothing even when it came
 /// from [`Query::iter_chunks_mut`](super::Query::iter_chunks_mut).
-pub struct QueryChunksIter<'a, 'w, Q: WorldQuery> {
+pub struct QueryChunksIter<'a, 'w, D: WorldQuery, F: WorldQuery = ()> {
     pub(super) world: &'a World,
     pub(super) archetype_indices: &'a [usize],
     pub(super) current_arch_idx: usize,
-    pub(super) _marker: PhantomData<&'w Q>,
+    pub(super) _marker: PhantomData<&'w (D, F)>,
 }
 
-impl<'a, 'w, Q: WorldQuery> Iterator for QueryChunksIter<'a, 'w, Q>
+impl<'a, 'w, D: WorldQuery, F: WorldQuery> Iterator for QueryChunksIter<'a, 'w, D, F>
 where
     'w: 'a,
 {
-    type Item = Q::Slice<'a>;
+    type Item = D::Slice<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while self.current_arch_idx < self.archetype_indices.len() {
@@ -203,14 +203,14 @@ where
             }
 
             // SAFETY: matched archetype, borrowed from the world for `'w` — see `next`.
-            let fetch = match unsafe { Q::fetch_raw(self.world, arch, self.world.tick) } {
+            let fetch = match unsafe { <(D, F)>::fetch_raw(self.world, arch, self.world.tick) } {
                 Some(f) => f,
                 None => continue,
             };
 
             // SAFETY: `fetch` is this archetype's and `len` is its row count, which is what
             // `get_slice` requires; it panics for SparseSet storage rather than fabricating one.
-            return Some(unsafe { Q::get_slice(fetch, len) });
+            return Some(unsafe { <(D, F)>::get_slice(fetch, len) }.0);
         }
         None
     }

@@ -159,7 +159,7 @@ fn light_sway(mut lights: Query<(&mut Transform, &mut SpotLight)>, time: Res<Tim
 
 /// Ok tuşlarıyla zemini ve küpleri gezdirir — ışıklar yerinde kalır, koniler sahnede gezinir.
 fn movement(
-    mut movables: Query<(&mut Transform, With<Movable>)>,
+    mut movables: Query<&mut Transform, With<Movable>>,
     input: Res<Input>,
     time: Res<Time>,
 ) {
@@ -168,7 +168,7 @@ fn movement(
         return;
     }
     let step = Vec3::new(x, 0.0, -z) * MOVE_SPEED * time.dt();
-    for (mut transform, _) in movables.iter_mut() {
+    for mut transform in movables.iter_mut() {
         transform.position += step;
     }
 }

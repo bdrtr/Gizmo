@@ -886,7 +886,7 @@ mod run_system {
         world.begin_change_frame(0);
         let settled = world.tick;
         world.begin_change_frame(settled);
-        let added = |w: &World| w.query::<crate::query::Added<Marker>>().iter().count();
+        let added = |w: &World| w.query_filtered::<(), crate::query::Added<Marker>>().iter().count();
         assert_eq!(added(&world), 0, "the setup: nothing is new in this frame");
         let tick = world.tick;
         world.run_system(nothing);

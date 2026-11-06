@@ -157,9 +157,9 @@ impl gizmo_core::system::System for AutoBoxColliderSystem {
             // SAFETY: exclusive sistem; scheduler bu çalışırken disjoint mutable erişim garanti eder.
             let mut q = unsafe {
             world
-                .query_unchecked::<(Entity, &Transform, &mut Collider, &AutoBoxCollider, Added<AutoBoxCollider>)>()
+                .query_filtered_unchecked::<(Entity, &Transform, &mut Collider, &AutoBoxCollider), Added<AutoBoxCollider>>()
         };
-            for (id, t, mut col, cfg, _) in q.iter_mut() {
+            for (id, t, mut col, cfg) in q.iter_mut() {
                 // Savunma: bir küre/kapsül collider'ı ASLA kutuya dönüştürme.
                 if !matches!(col.shape, ColliderShape::Box(_)) {
                     skipped_non_box += 1;
@@ -189,9 +189,9 @@ impl gizmo_core::system::System for AutoBoxColliderSystem {
             // this pass holds one, so the borrow `query_unchecked` skips cannot be violated here.
             let mut q = unsafe {
             world
-                .query_unchecked::<(&Transform, &mut RigidBody, &Collider, &AutoBoxCollider, Added<AutoBoxCollider>)>()
+                .query_filtered_unchecked::<(&Transform, &mut RigidBody, &Collider, &AutoBoxCollider), Added<AutoBoxCollider>>()
         };
-            for (t, mut rb, col, cfg, _) in q.iter_mut() {
+            for (t, mut rb, col, cfg) in q.iter_mut() {
                 // Pass 1 ile SİMETRİ: kutu-olmayan collider'a takılı işarette Pass 1 şekli
                 // KORUDU (atladı); burada da inertia'yı EZME — yoksa collider küre kalır ama
                 // rb.local_inertia kutu-inertia olur (≫60× hata, tutarsız iki pass).

@@ -391,9 +391,11 @@ impl SystemParam for f32 {
     fn get_access_info(_info: &mut AccessInfo) {}
 }
 
-impl<Q: crate::query::WorldQuery + 'static> sealed::Sealed for crate::query::Query<'static, Q> {}
-impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<'static, Q> {
-    type Item<'w> = crate::query::Query<'w, Q>;
+impl<D: crate::query::QueryData + 'static, F: crate::query::QueryFilter + 'static> sealed::Sealed for crate::query::Query<'static, D, F> {}
+impl<D: crate::query::QueryData + 'static, F: crate::query::QueryFilter + 'static> SystemParam
+    for crate::query::Query<'static, D, F>
+{
+    type Item<'w> = crate::query::Query<'w, D, F>;
     type State = ();
     fn fetch<'w>(
         world: &'w World,
@@ -413,11 +415,11 @@ impl<Q: crate::query::WorldQuery + 'static> SystemParam for crate::query::Query<
         // too, which blanked the inspector, froze transform subtrees and made `sync_bodies`
         // *destroy* a disabled rigid body. This function is the one place a query is built as a
         // PARAMETER, so it is the one place the filter belongs.
-        Ok(crate::query::Query::<Q>::new_for_system(world))
+        Ok(crate::query::Query::<D, F>::new_for_system(world))
     }
     fn get_access_info(info: &mut AccessInfo) {
         let mut types = Vec::new();
-        Q::check_aliasing(&mut types);
+        <(D, F) as crate::query::WorldQuery>::check_aliasing(&mut types);
         for (tid, is_mut) in types {
             if is_mut {
                 info.component_writes.push(tid);

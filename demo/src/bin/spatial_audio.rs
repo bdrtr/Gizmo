@@ -270,7 +270,7 @@ fn main() {
 ///
 /// Susturma [`AudioSource::volume`] üzerinden — uzamsal sistem onu `base_volume` olarak okuyor.
 fn orbit_emitter(
-    mut emitters: Query<(&mut Transform, &mut AudioSource, With<Emitter>)>,
+    mut emitters: Query<(&mut Transform, &mut AudioSource), With<Emitter>>,
     mut demo: ResMut<AudioDemo>,
     input: Res<Input>,
     time: Res<Time>,
@@ -288,7 +288,7 @@ fn orbit_emitter(
 
     let angle = demo.angle;
     let volume = if demo.muted { 0.0 } else { 1.0 };
-    for (mut transform, mut source, _) in emitters.iter_mut() {
+    for (mut transform, mut source) in emitters.iter_mut() {
         transform.position = Vec3::new(angle.cos() * ORBIT_RADIUS, 0.0, angle.sin() * ORBIT_RADIUS);
         source.volume = volume;
     }

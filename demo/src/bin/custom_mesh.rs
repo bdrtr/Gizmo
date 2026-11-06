@@ -128,7 +128,7 @@ fn main() {
 
 /// Space UV setini değiştirir (bayrağı koyar), X/Y/Z döndürür, R sıfırlar.
 fn input_handler(
-    mut cubes: Query<(&mut Transform, With<CustomUv>)>,
+    mut cubes: Query<&mut Transform, With<CustomUv>>,
     mut toggle: ResMut<UvToggle>,
     input: Res<Input>,
     time: Res<Time>,
@@ -143,7 +143,7 @@ fn input_handler(
         toggle.dirty = true;
     }
 
-    for (mut transform, _) in cubes.iter_mut() {
+    for mut transform in cubes.iter_mut() {
         if key(KeyCode::KeyX) {
             transform.rotation *= Quat::from_rotation_x(TURN_RATE * dt);
         }

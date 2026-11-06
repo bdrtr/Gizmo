@@ -199,7 +199,7 @@ fn main() {
 
 /// Şekilleri döndürür — R ile durdurulabiliyor.
 fn rotate(
-    mut shapes: Query<(&mut Transform, With<Shape>)>,
+    mut shapes: Query<&mut Transform, With<Shape>>,
     mut spinning: ResMut<Spinning>,
     input: Res<Input>,
     time: Res<Time>,
@@ -210,7 +210,7 @@ fn rotate(
     if !spinning.0 {
         return;
     }
-    for (mut transform, _) in shapes.iter_mut() {
+    for mut transform in shapes.iter_mut() {
         transform.rotate_y(time.dt() / 2.0);
     }
 }

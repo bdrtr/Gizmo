@@ -298,8 +298,8 @@ fn main() {
 /// `dt` ile değil: kare süresine bağlı bir dönüş, iki koşuyu aynı karede farklı açıya koyar ve
 /// karşılaştırmayı yok eder.
 fn drive(
-    mut cameras: Query<(&mut Transform, With<Camera>)>,
-    mut spinners: Query<(&mut Transform, With<Spinner>)>,
+    mut cameras: Query<&mut Transform, With<Camera>>,
+    mut spinners: Query<&mut Transform, With<Spinner>>,
     mut motion: ResMut<Motion>,
     time: gizmo::core::system::Res<Time>,
 ) {
@@ -327,7 +327,7 @@ fn drive(
         // YALNIZ Y ekseni, ve yalnız `a` ile. İlk kurulumda `from_rotation_x(a * 0.6)` de
         // vardı: `a` tam tur katıyken `a * 0.6` değil, yani iki koşu yakalama karesinde aynı
         // duruşta olmuyordu ve fark bulanıklık değil **poz** farkıydı.
-        for (mut t, _) in spinners.iter_mut() {
+        for mut t in spinners.iter_mut() {
             t.rotation = Quat::from_rotation_y(a);
         }
     } else {

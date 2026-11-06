@@ -210,7 +210,7 @@ fn main() {
 
 /// Eşiği kürenin kendi yarıçapından hesaplar ve günlüğe basar.
 fn measure(
-    subjects: Query<(&Transform, With<Subject>)>,
+    subjects: Query<&Transform, With<Subject>>,
     mut report: ResMut<LodReport>,
     time: Res<Time>,
 ) {
@@ -220,7 +220,7 @@ fn measure(
     let radius = subjects
         .iter()
         .next()
-        .map(|(t, _)| t.scale.x.max(t.scale.y).max(t.scale.z))
+        .map(|t| t.scale.x.max(t.scale.y).max(t.scale.z))
         .unwrap_or(1.0);
     report.threshold = radius * 15.0;
 

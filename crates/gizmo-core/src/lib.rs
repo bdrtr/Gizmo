@@ -76,7 +76,7 @@ pub use input::{ActionMap, Input, InputBinding};
 pub use pool::{PoolManager, Pooled};
 pub use profiler::FrameProfiler;
 pub use query::{
-    Changed, FetchComponent, Mut, Or, Query, QuerySingleError, ReadOnlyQuery, With, Without,
+    Changed, FetchComponent, Mut, Or, Query, QueryData, QueryFilter, QuerySingleError, ReadOnlyQuery, With, Without,
     WorldQuery,
 };
 pub use registry::{ComponentRegistry, RegistryError};
@@ -104,7 +104,7 @@ pub mod prelude {
         EventMutator, EventReader, EventWriter, Events, FrameProfiler, Input, InputBinding, IntoSystem,
         IntoSystemConfig, IsHidden, IsDeleted, Local, Mut, Phase, PhysicsTime, PoolManager, Pooled,
         PrefabRequest,
-        Query, ReadOnlyQuery, Res, ResMut, Schedule, System,
+        Query, QueryData, QueryFilter, ReadOnlyQuery, Res, ResMut, Schedule, System,
         SystemConfig, SystemParam, Time, Timer, TimerMode, WindowInfo, World,
     };
     #[cfg(feature = "reflect")]

@@ -74,9 +74,18 @@ impl World {
     /// // error[E0277]: `&mut Position: ReadOnlyQuery` is not satisfied
     /// let _q = world.query::<&mut Position>();
     /// ```
-    pub fn query<'w, Q: crate::query::ReadOnlyQuery>(
+    pub fn query<'w, D: crate::query::QueryData + crate::query::ReadOnlyQuery>(
         &'w self,
-    ) -> crate::query::Query<'w, Q> {
+    ) -> crate::query::Query<'w, D> {
+        crate::query::Query::new(self)
+    }
+
+    /// [`query`](Self::query) with a filter: `world.query_filtered::<&Enemy, With<Boss>>()`.
+    pub fn query_filtered<'w, D, F>(&'w self) -> crate::query::Query<'w, D, F>
+    where
+        D: crate::query::QueryData + crate::query::ReadOnlyQuery,
+        F: crate::query::QueryFilter,
+    {
         crate::query::Query::new(self)
     }
 
@@ -149,9 +158,16 @@ impl World {
     /// let q = world.query_mut::<&mut Position>();
     /// let _it = q.iter(); // `iter` requires `Q: ReadOnlyQuery`; &mut Position isn't — E0599
     /// ```
-    pub fn query_mut<'w, Q: crate::query::WorldQuery>(
-        &'w mut self,
-    ) -> crate::query::Query<'w, Q> {
+    pub fn query_mut<'w, D: crate::query::QueryData>(&'w mut self) -> crate::query::Query<'w, D> {
+        crate::query::Query::new(self)
+    }
+
+    /// [`query_mut`](Self::query_mut) with a filter.
+    pub fn query_filtered_mut<'w, D, F>(&'w mut self) -> crate::query::Query<'w, D, F>
+    where
+        D: crate::query::QueryData,
+        F: crate::query::QueryFilter,
+    {
         crate::query::Query::new(self)
     }
 
@@ -169,32 +185,40 @@ impl World {
     ///
     /// If this contract is violated two `&mut T` aliases are formed → undefined behaviour. If
     /// you have exclusive access, use the safe [`World::query_mut`] instead.
-    pub unsafe fn query_unchecked<'w, Q: crate::query::WorldQuery>(
-        &'w self,
-    ) -> crate::query::Query<'w, Q> {
+    pub unsafe fn query_unchecked<'w, D: crate::query::QueryData>(&'w self) -> crate::query::Query<'w, D> {
+        crate::query::Query::new(self)
+    }
+
+    /// [`query_unchecked`](Self::query_unchecked) with a filter.
+    ///
+    /// # Safety
+    /// The same contract as [`query_unchecked`](Self::query_unchecked).
+    pub unsafe fn query_filtered_unchecked<'w, D, F>(&'w self) -> crate::query::Query<'w, D, F>
+    where
+        D: crate::query::QueryData,
+        F: crate::query::QueryFilter,
+    {
         crate::query::Query::new(self)
     }
 
     /// Cached query — uses the archetype index cache.
     /// Because it requires &mut self it can only be called when you own the World.
-    pub fn query_cached<'w, Q: crate::query::WorldQuery>(
-        &'w mut self,
-    ) -> crate::query::Query<'w, Q> {
+    pub fn query_cached<'w, D: crate::query::QueryData>(&'w mut self) -> crate::query::Query<'w, D> {
         crate::query::Query::new_cached(self)
     }
 
-    /// **By raw `u32` id — it does not check the generation.** After a despawn+reuse the wrong
-    /// entity's data may be returned; if liveness is critical, call [`World::is_alive`] first.
+    /// `None` for a dead `entity`, even after its id went to someone else.
     ///
     /// # Panics
     ///
     /// Panics if `Q` asks for two mutable accesses to the same component (e.g.
     /// `(&mut T, &mut T)`) or mixes a mutable with a shared access — producing two `&mut T` for
     /// the same row would be UB. Exactly the same rule as [`World::query_mut`].
-    pub fn query_entity_mut<'w, Q: crate::query::WorldQuery>(
+    pub fn query_entity_mut<'w, Q: crate::query::QueryData>(
         &'w mut self,
-        entity_id: u32,
+        entity: crate::entity::Entity,
     ) -> Option<Q::Item<'w>> {
+        let entity_id = entity.id();
         // Bu, iteratör kuran yollarla (`Query::new`/`new_cached`, `SystemParam`) aynı aliasing
         // kapısıdır. Burada ATLANMASI, `(&mut T, &mut T)`'nin tek bir satır için iki canlı
         // `&mut T` döndürmesi demekti — %100 safe koddan UB. `Q::get_item` her iki terimi de
@@ -207,7 +231,7 @@ impl World {
             return None;
         }
         let arch = &self.archetype_index.archetypes[loc.archetype_id as usize];
-        if !Q::matches_archetype(arch) {
+        if arch.entities()[loc.row as usize] != entity || !Q::matches_archetype(arch) {
             return None;
         }
         // SAFETY: the archetype is the entity's own and was just checked to match `Q`, so the
@@ -227,11 +251,12 @@ impl World {
     /// Bounded by `Q: ReadOnlyQuery` (it cannot return a mutable result from a shared `&self`);
     /// for mutable single access see [`World::query_entity_mut`] (`&mut self`).
     ///
-    /// **By raw `u32` id — it does not check the generation** (see [`World::query_entity_mut`]).
-    pub fn query_entity<'w, Q: crate::query::ReadOnlyQuery>(
+    /// `None` for a dead `entity`, even after its id went to someone else.
+    pub fn query_entity<'w, Q: crate::query::QueryData + crate::query::ReadOnlyQuery>(
         &'w self,
-        entity_id: u32,
+        entity: crate::entity::Entity,
     ) -> Option<Q::Item<'w>> {
+        let entity_id = entity.id();
         // `Q: ReadOnlyQuery` zaten `&mut T`'yi dışlıyor, yani burada gerçek bir aliasing
         // riski yok. Yine de kapıyı `query_entity_mut` ile simetrik tutuyoruz: ileride
         // ReadOnlyQuery'ye iç-mutability taşıyan bir terim eklenirse bu satır onu yakalar
@@ -244,7 +269,7 @@ impl World {
             return None;
         }
         let arch = &self.archetype_index.archetypes[loc.archetype_id as usize];
-        if !Q::matches_archetype(arch) {
+        if arch.entities()[loc.row as usize] != entity || !Q::matches_archetype(arch) {
             return None;
         }
         // SAFETY: as in the read-only counterpart above — the entity's own archetype, matched
@@ -261,6 +286,7 @@ impl World {
 
 #[cfg(test)]
 mod aliasing_gate_tests {
+    use crate::Entity;
     
     use crate::world::World;
 
@@ -272,12 +298,12 @@ mod aliasing_gate_tests {
     struct Vel(f32);
     crate::impl_component!(Vel);
 
-    fn world_with_one_entity() -> (World, u32) {
+    fn world_with_one_entity() -> (World, Entity) {
         let mut w = World::new();
         let e = w.spawn();
         w.add_component(e, Pos(1.0));
         w.add_component(e, Vel(2.0));
-        (w, e.id())
+        (w, e)
     }
 
     /// Before this gate existed, `query_entity_mut::<(&mut T, &mut T)>` returned two live
@@ -330,6 +356,6 @@ mod aliasing_gate_tests {
     #[should_panic(expected = "Query aliasing UB detected")]
     fn gate_fires_even_for_a_nonexistent_entity() {
         let mut w = World::new();
-        let _ = w.query_entity_mut::<(&mut Pos, &mut Pos)>(9999);
+        let _ = w.query_entity_mut::<(&mut Pos, &mut Pos)>(Entity::new(9999, 0));
     }
 }

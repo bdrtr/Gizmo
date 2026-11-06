@@ -147,7 +147,7 @@ fn main() {
 
 /// Aynı tuşun üç kenarını da ayrı ayrı soran sistem.
 fn keyboard_input_system(
-    mut cubes: Query<(&mut Transform, &mut Material, With<KeyCube>)>,
+    mut cubes: Query<(&mut Transform, &mut Material), With<KeyCube>>,
     mut log: ResMut<KeyLog>,
     input: Res<Input>,
 ) {
@@ -184,7 +184,7 @@ fn keyboard_input_system(
     } else {
         (0.35, Vec4::new(0.25, 0.5, 0.9, 1.0))
     };
-    for (mut transform, mut material, _) in cubes.iter_mut() {
+    for (mut transform, mut material) in cubes.iter_mut() {
         transform.scale = Vec3::splat(scale);
         material.albedo = albedo;
     }

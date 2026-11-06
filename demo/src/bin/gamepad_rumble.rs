@@ -168,7 +168,7 @@ fn main() {
 
 /// Küpü zıplatır, her çarpışmada çarpma şiddetiyle orantılı titreşim ister.
 fn bounce_and_rumble(
-    mut bouncers: Query<(&mut Transform, &mut Bouncer, With<Bouncer>)>,
+    mut bouncers: Query<(&mut Transform, &mut Bouncer), With<Bouncer>>,
     mut log: ResMut<RumbleLog>,
     mut input: ResMut<Input>,
     time: Res<Time>,
@@ -205,7 +205,7 @@ fn bounce_and_rumble(
 
     let mut fired: Option<(f32, f32, f32)> = None;
 
-    for (mut transform, mut bouncer, _) in bouncers.iter_mut() {
+    for (mut transform, mut bouncer) in bouncers.iter_mut() {
         bouncer.velocity += GRAVITY * dt;
         transform.position.y += bouncer.velocity * dt;
         if transform.position.y <= FLOOR {

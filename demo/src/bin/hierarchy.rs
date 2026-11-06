@@ -169,8 +169,8 @@ fn main() {
 /// yaşayan varlığa çevrilmesi gerekiyor, ve **ölü bir kimlik sessizce atlanıyor**. Demonun
 /// ikinci aşamasında listede tam olarak öyle bir kimlik var.
 fn rotate(
-    roots: Query<(Entity, &Children, With<Node>)>,
-    mut transforms: Query<(Entity, &mut Transform, With<Node>)>,
+    roots: Query<(Entity, &Children), With<Node>>,
+    mut transforms: Query<(Entity, &mut Transform), With<Node>>,
     time: Res<Time>,
 ) {
     let dt = time.dt();
@@ -178,12 +178,12 @@ fn rotate(
     // Önce hangi varlığın ne kadar döneceğini topla: iki sorgu aynı anda ödünç alınamaz.
     let mut root_ids = Vec::new();
     let mut child_ids = Vec::new();
-    for (entity, children, _) in roots.iter() {
+    for (entity, children) in roots.iter() {
         root_ids.push(entity);
         child_ids.extend(children.0.iter().map(|c| c.id()));
     }
 
-    for (entity, mut transform, _) in transforms.iter_mut() {
+    for (entity, mut transform) in transforms.iter_mut() {
         if root_ids.contains(&entity) {
             transform.rotate_z(-PI / 2.0 * dt);
         } else if child_ids.contains(&entity.id()) {
@@ -195,7 +195,7 @@ fn rotate(
 /// Süreyi biriktirir, defteri günceller, **R**'yi dinler.
 fn tick(
     mut tree: ResMut<Tree>,
-    roots: Query<(&Children, With<Node>)>,
+    roots: Query<&Children, With<Node>>,
     nodes: Query<(Entity, &Node)>,
     input: Res<Input>,
     time: Res<Time>,
@@ -207,7 +207,7 @@ fn tick(
 
     let living: Vec<Entity> = nodes.iter().map(|(entity, _)| entity).collect();
     let (mut listed, mut alive) = (0, 0);
-    for (children, _) in roots.iter() {
+    for children in roots.iter() {
         listed += children.0.len();
         alive += children.0.iter().filter(|c| living.contains(c)).count();
     }

@@ -22,9 +22,9 @@ fn all_added_detection_generic<T: Component + Default + Clone>(group: &mut crite
                     (world, entities)
                 },
                 |(world, _)| {
-                    let query = world.query::<(Entity, gizmo_core::query::Added<T>)>();
+                    let query = world.query_filtered::<Entity, gizmo_core::query::Added<T>>();
                     let mut count = 0;
-                    for (entity, _) in query.iter() {
+                    for entity in query.iter() {
                         core::hint::black_box(entity);
                         count += 1;
                     }
@@ -73,9 +73,9 @@ fn all_changed_detection_generic<T: Component + Default + Clone>(
                     (world, entities)
                 },
                 |(world, _)| {
-                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>();
+                    let query = world.query_filtered::<Entity, gizmo_core::query::Changed<T>>();
                     let mut count = 0;
-                    for (entity, _) in query.iter() {
+                    for entity in query.iter() {
                         core::hint::black_box(entity);
                         count += 1;
                     }
@@ -120,13 +120,13 @@ fn few_changed_detection_generic<T: Component + Default + Clone>(
 
                     for entity in entities.iter().take(amount_to_modify) {
                         // Trigger change
-                        let _ = world.query_entity_mut::<&mut T>(entity.id());
+                        let _ = world.query_entity_mut::<&mut T>(*entity);
                     }
                     (world, entities)
                 },
                 |(world, _)| {
-                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>();
-                    for (entity, _) in query.iter() {
+                    let query = world.query_filtered::<Entity, gizmo_core::query::Changed<T>>();
+                    for entity in query.iter() {
                         core::hint::black_box(entity);
                     }
                 },
@@ -170,9 +170,9 @@ fn none_changed_detection_generic<T: Component + Default + Clone>(
                     (world, entities)
                 },
                 |(world, _)| {
-                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>();
+                    let query = world.query_filtered::<Entity, gizmo_core::query::Changed<T>>();
                     let mut count = 0;
-                    for (entity, _) in query.iter() {
+                    for entity in query.iter() {
                         core::hint::black_box(entity);
                         count += 1;
                     }
@@ -253,9 +253,9 @@ fn multiple_archetype_none_changed_detection_generic<T: Component + Default + Cl
                     world
                 },
                 |world| {
-                    let query = world.query::<(Entity, gizmo_core::query::Changed<T>)>();
+                    let query = world.query_filtered::<Entity, gizmo_core::query::Changed<T>>();
                     let mut count = 0;
-                    for (entity, _) in query.iter() {
+                    for entity in query.iter() {
                         core::hint::black_box(entity);
                         count += 1;
                     }

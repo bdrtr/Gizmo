@@ -431,7 +431,7 @@ fn follow_ball(world: &mut World, game: &Game) {
 }
 
 /// Top bir lobuta, ya da lobut lobuta yeni çarptığında bir "tok".
-fn clatter(events: EventReader<CollisionEvent>, pins: Query<With<Pin>>, audio: Option<ResMut<AudioManager>>) {
+fn clatter(events: EventReader<CollisionEvent>, pins: Query<(), With<Pin>>, audio: Option<ResMut<AudioManager>>) {
     let Some(mut audio) = audio else { return };
     let is_pin = |id: Entity| pins.get(id).is_some();
     let hits = events

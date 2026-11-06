@@ -177,7 +177,7 @@ fn main() {
 /// `&mut World` tutamıyor (bkz. `docs/CAPABILITY_GAPS.md` C2).
 fn toggle_grid(
     mut grid: ResMut<GridState>,
-    planes: Query<(Entity, &EngineGrid, With<EngineGrid>)>,
+    planes: Query<(Entity, &EngineGrid), With<EngineGrid>>,
     mut commands: Commands,
     input: Res<Input>,
 ) {

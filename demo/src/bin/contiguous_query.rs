@@ -207,10 +207,10 @@ fn main() {
 
 /// Üç gezinmeyi karşılaştırır: filtresiz dilim, Table-`With` dilim, satır satır.
 fn measure(
-    all: Query<(&Sample, Without<GroupA>, Without<GroupB>)>,
-    group_a: Query<(&Sample, With<GroupA>)>,
+    all: Query<&Sample, (Without<GroupA>, Without<GroupB>)>,
+    group_a: Query<&Sample, With<GroupA>>,
     everything: Query<&Sample>,
-    changed: Query<(&Sample, gizmo::core::query::Changed<Sample>)>,
+    changed: Query<&Sample, gizmo::core::query::Changed<Sample>>,
     mut report: ResMut<ChunkReport>,
 ) {
     report.frame += 1;
@@ -234,7 +234,7 @@ fn measure(
     // 2. Table depolu `With` — dilim gezinmesiyle uyumlu, çünkü arketip eşleşmesi yetiyor.
     let mut filtered_chunks = Vec::new();
     for chunk in group_a.iter_chunks() {
-        filtered_chunks.push(chunk.0.len());
+        filtered_chunks.push(chunk.len());
     }
     report.filtered_total = filtered_chunks.iter().sum();
     report.filtered_chunks = filtered_chunks;
@@ -274,7 +274,7 @@ fn measure(
 /// Paniği yakalamak burada meşru: motorun kendi koyduğu, belgelenmiş bir koruma bu, bozulmuş bir
 /// durum değil. Panik kancası ölçüm süresince susturuluyor ki günlük kirlenmesin.
 fn probe_row_filter(
-    query: &Query<'_, (&Sample, gizmo::core::query::Changed<Sample>)>,
+    query: &Query<'_, &Sample, gizmo::core::query::Changed<Sample>>,
 ) -> String {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));

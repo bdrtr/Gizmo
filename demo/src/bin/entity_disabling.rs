@@ -243,13 +243,13 @@ fn toggle(world: &mut gizmo::core::World, input: &Input) {
 /// Devre dışı küpleri görmemesinin sebebi bu imzada değil, dünyada kayıtlı filtre. Eskiden burada
 /// `Without<Disabled>` vardı ve onu unutmak bir hataydı; şimdi unutulacak bir şey yok.
 fn spin_filtered(
-    mut spinners: Query<(&mut Transform, &Spinner, With<Spinner>)>,
+    mut spinners: Query<(&mut Transform, &Spinner), With<Spinner>>,
     mut report: ResMut<DisableReport>,
     time: Res<Time>,
 ) {
     let dt = time.dt();
     let mut seen = 0usize;
-    for (mut transform, spinner, _) in spinners.iter_mut() {
+    for (mut transform, spinner) in spinners.iter_mut() {
         seen += 1;
         // Her küpün kendi hızı — `Spinner`'ın yükü burada iş görüyor.
         transform.rotation *= Quat::from_rotation_y(dt * (0.6 + spinner.0));
@@ -270,8 +270,8 @@ fn spin_filtered(
 /// `the_forgetful_system_can_no_longer_be_written` aynı 240 karede farkın sıfır olduğunu ileri
 /// sürüyor. Buradaki `hidden_now` onun yerine geçen ölçüm: iki FARKLI görüşün farkı.
 fn count_all(
-    all: Query<(&Spinner, With<Spinner>, IgnoreDefaultFilters)>,
-    ordinary: Query<(&Spinner, With<Spinner>)>,
+    all: Query<&Spinner, (With<Spinner>, IgnoreDefaultFilters)>,
+    ordinary: Query<&Spinner, With<Spinner>>,
     mut report: ResMut<DisableReport>,
 ) {
     report.unfiltered = all.iter().count();

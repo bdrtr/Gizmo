@@ -1505,11 +1505,11 @@ mod tests {
         world.insert_batch(&[a1, a2, b1, b2], Tag(7));
 
         // The survivors got the component…
-        assert_eq!(world.query_entity::<&Tag>(a1.id()).map(|t| t.0), Some(7), "a1 lost its insert");
-        assert_eq!(world.query_entity::<&Tag>(b1.id()).map(|t| t.0), Some(7), "b1 lost its insert");
+        assert_eq!(world.query_entity::<&Tag>(a1).map(|t| t.0), Some(7), "a1 lost its insert");
+        assert_eq!(world.query_entity::<&Tag>(b1).map(|t| t.0), Some(7), "b1 lost its insert");
         // …and kept what they already had, so no row was moved out from under them.
-        assert_eq!(world.query_entity::<&Pos>(a1.id()).map(|p| p.0), Some(1));
-        assert_eq!(world.query_entity::<&Vel>(b1.id()).map(|v| v.0), Some(1));
+        assert_eq!(world.query_entity::<&Pos>(a1).map(|p| p.0), Some(1));
+        assert_eq!(world.query_entity::<&Vel>(b1).map(|v| v.0), Some(1));
         // The despawned ones are gone rather than half-written.
         assert!(!world.is_alive(a2) && !world.is_alive(b2), "the victims should be despawned");
         assert_eq!(world.query::<&Tag>().iter().count(), 2, "exactly the survivors carry Tag");
@@ -1573,18 +1573,18 @@ mod tests {
 
         assert!(!world.is_alive(a1) && !world.is_alive(b2), "the victims should be despawned");
         assert_eq!(
-            world.query_entity::<&Mark>(a2.id()).map(|m| m.0),
+            world.query_entity::<&Mark>(a2).map(|m| m.0),
             Some(9),
             "the migration group was skipped wholesale because its first member was despawned"
         );
         assert_eq!(
-            world.query_entity::<&Mark>(b1.id()).map(|m| m.0),
+            world.query_entity::<&Mark>(b1).map(|m| m.0),
             Some(9),
             "the surviving member of the overwrite group lost its write"
         );
         // Neither survivor had a row moved out from under it.
-        assert_eq!(world.query_entity::<&Pos>(a2.id()).map(|p| p.0), Some(2));
-        assert_eq!(world.query_entity::<&Vel>(b1.id()).map(|v| v.0), Some(1));
+        assert_eq!(world.query_entity::<&Pos>(a2).map(|p| p.0), Some(2));
+        assert_eq!(world.query_entity::<&Vel>(b1).map(|v| v.0), Some(1));
     }
 
     /// The same hazard on `remove_batch`, which shares the snapshot-then-process shape and runs
@@ -1634,16 +1634,16 @@ mod tests {
 
         assert!(!world.is_alive(a2) && !world.is_alive(b2), "the victims should be despawned");
         assert!(
-            world.query_entity::<&Doomed>(a1.id()).is_none(),
+            world.query_entity::<&Doomed>(a1).is_none(),
             "a1 kept the component remove_batch was asked to take"
         );
         assert!(
-            world.query_entity::<&Doomed>(b1.id()).is_none(),
+            world.query_entity::<&Doomed>(b1).is_none(),
             "b1 kept the component remove_batch was asked to take"
         );
         // The survivors keep everything else, so no row was moved out from under them.
-        assert_eq!(world.query_entity::<&Pos>(a1.id()).map(|p| p.0), Some(1));
-        assert_eq!(world.query_entity::<&Vel>(b1.id()).map(|v| v.0), Some(1));
+        assert_eq!(world.query_entity::<&Pos>(a1).map(|p| p.0), Some(1));
+        assert_eq!(world.query_entity::<&Vel>(b1).map(|v| v.0), Some(1));
         assert_eq!(world.query::<&Doomed>().iter().count(), 0);
     }
 
@@ -1692,7 +1692,7 @@ mod tests {
         struct Tag;
         impl Component for Tag {}
 
-        let read = |w: &World, e: Entity| w.query_entity::<&Loud>(e.id()).map(|l| l.0.clone());
+        let read = |w: &World, e: Entity| w.query_entity::<&Loud>(e).map(|l| l.0.clone());
 
         DROPS.store(0, Ordering::SeqCst);
         let mut world = World::new();
@@ -1764,7 +1764,7 @@ mod tests {
         world.add_bundle(e, (Loud("inner".into()),).with(Loud("outer".into())));
 
         assert_eq!(
-            world.query_entity::<&Loud>(e.id()).map(|l| l.0.clone()).as_deref(),
+            world.query_entity::<&Loud>(e).map(|l| l.0.clone()).as_deref(),
             Some("outer"),
             "`with` documents the appended component as the one that survives"
         );
@@ -1865,7 +1865,7 @@ mod tests {
              value was released by the unwind because the write never happened."
         );
         assert_eq!(
-            world.query_entity::<&Payload>(e.id()).map(|p| p.0.clone()).as_deref(),
+            world.query_entity::<&Payload>(e).map(|p| p.0.clone()).as_deref(),
             Some("new"),
             "the bundle was applied before any destructor ran, so the row holds the new value"
         );
@@ -1948,12 +1948,12 @@ mod tests {
              defect"
         );
         assert_eq!(
-            world.query_entity::<&Payload>(e.id()).map(|p| p.0.clone()).as_deref(),
+            world.query_entity::<&Payload>(e).map(|p| p.0.clone()).as_deref(),
             Some("new"),
             "the write reached `Payload` before giving up"
         );
         assert_eq!(
-            world.query_entity::<&Tail>(e.id()).map(|t| t.0.clone()).as_deref(),
+            world.query_entity::<&Tail>(e).map(|t| t.0.clone()).as_deref(),
             Some("tail"),
             "the write never reached `Tail`, so it must still hold its original value — not a \
              hole left by a drop that happened up front"
@@ -2026,7 +2026,7 @@ mod tests {
              unwind because the write never happened."
         );
         assert_eq!(
-            world.query_entity::<&Loud>(e.id()).map(|l| l.0.clone()).as_deref(),
+            world.query_entity::<&Loud>(e).map(|l| l.0.clone()).as_deref(),
             Some("new"),
             "the slot is refilled before the old value's `Drop` gets control"
         );
@@ -2101,7 +2101,7 @@ mod tests {
         }));
         assert!(unwound.is_err(), "the drop was supposed to panic; the fixture is wrong if not");
 
-        let read = |w: &World, e: Entity| w.query_entity::<&Batched>(e.id()).map(|v| v.0.clone());
+        let read = |w: &World, e: Entity| w.query_entity::<&Batched>(e).map(|v| v.0.clone());
         assert_eq!(read(&world, a).as_deref(), Some("new"), "written before the panic");
         assert_eq!(
             read(&world, b).as_deref(),
@@ -2193,7 +2193,7 @@ mod tests {
              if the caller relinquishes ownership after the call instead of before it."
         );
         assert_eq!(
-            world.query_entity::<&SparseLoud>(e.id()).map(|l| l.0.clone()).as_deref(),
+            world.query_entity::<&SparseLoud>(e).map(|l| l.0.clone()).as_deref(),
             Some("new"),
             "the incoming value is in the set before the old one's destructor runs"
         );
@@ -2276,7 +2276,7 @@ mod tests {
         let loc = world.entity_location(survivor.id());
         assert_eq!(loc.row, 0, "the survivor's location must name the row it was moved into");
         assert_eq!(
-            world.query_entity::<&Fuse>(survivor.id()).map(|f| f.0),
+            world.query_entity::<&Fuse>(survivor).map(|f| f.0),
             Some("quiet"),
             "reading the survivor must give the survivor"
         );
@@ -2286,7 +2286,7 @@ mod tests {
         // handles, and it is unchanged by this fix — recorded here so it is a documented outcome
         // rather than a surprise for the next reader.
         assert!(!world.entity_location(victim.id()).is_valid());
-        assert!(world.query_entity::<&Fuse>(victim.id()).is_none());
+        assert!(world.query_entity::<&Fuse>(victim).is_none());
     }
 
     /// `ComponentSparseSet::remove`, reached through `World::remove_component`.
@@ -2343,8 +2343,8 @@ mod tests {
             assert_eq!(set.entities[row as usize], id as u32, "sparse[{id}] names a stranger");
         }
         // The removal completed as far as anything can see.
-        assert!(world.query_entity::<&SparseFuse>(victim.id()).is_none());
-        assert_eq!(world.query_entity::<&SparseFuse>(tail.id()).map(|f| f.0), Some("tail"));
+        assert!(world.query_entity::<&SparseFuse>(victim).is_none());
+        assert_eq!(world.query_entity::<&SparseFuse>(tail).map(|f| f.0), Some("tail"));
     }
 
     /// `World::clear_entities` over a world that has already survived one caught panic.
@@ -2570,7 +2570,7 @@ mod tests {
             "the archetype map and the location table must agree about where the victim went"
         );
         assert!(
-            world.query_entity::<&Fuse>(victim.id()).is_none(),
+            world.query_entity::<&Fuse>(victim).is_none(),
             "the removal completed as far as anything can see"
         );
 
@@ -2578,7 +2578,7 @@ mod tests {
         assert_eq!(survivor_loc.archetype_id, source_arch);
         assert_eq!(survivor_loc.row, 0, "the survivor was swap-moved into the vacated row");
         assert_eq!(
-            world.query_entity::<&Fuse>(survivor.id()).map(|f| f.owned.clone()),
+            world.query_entity::<&Fuse>(survivor).map(|f| f.owned.clone()),
             Some("quiet".to_string()),
             "reading the survivor must give the survivor"
         );
@@ -2631,14 +2631,14 @@ mod tests {
 
         assert_locations_agree(&world, "after a panicking remove_bundle");
         assert_columns_match_entities(&world, "after a panicking remove_bundle");
-        assert!(world.query_entity::<&Fuse>(victim.id()).is_none());
+        assert!(world.query_entity::<&Fuse>(victim).is_none());
         assert_eq!(world.entity_location(survivor.id()).archetype_id, source_arch);
         assert_eq!(world.entity_location(survivor.id()).row, 0);
         assert_eq!(
-            world.query_entity::<&Fuse>(survivor.id()).map(|f| f.owned.clone()),
+            world.query_entity::<&Fuse>(survivor).map(|f| f.owned.clone()),
             Some("quiet".to_string())
         );
-        assert_eq!(world.query_entity::<&Tag>(survivor.id()).map(|t| t.0), Some(2));
+        assert_eq!(world.query_entity::<&Tag>(survivor).map(|t| t.0), Some(2));
     }
 
     /// `World::remove_batch` — where the repair the destructor used to precede is also what makes
@@ -2685,15 +2685,15 @@ mod tests {
         assert_columns_match_entities(&world, "after a panicking remove_batch");
         // The first entity migrated; the last was swap-moved into the row it vacated; the middle
         // one never moved and never migrated.
-        assert!(world.query_entity::<&Fuse>(ids[0].id()).is_none());
+        assert!(world.query_entity::<&Fuse>(ids[0]).is_none());
         assert_eq!(world.entity_location(ids[2].id()).archetype_id, source_arch);
         assert_eq!(world.entity_location(ids[2].id()).row, 0);
         assert_eq!(
-            world.query_entity::<&Fuse>(ids[2].id()).map(|f| f.owned.clone()),
+            world.query_entity::<&Fuse>(ids[2]).map(|f| f.owned.clone()),
             Some("last".to_string())
         );
         assert_eq!(
-            world.query_entity::<&Fuse>(ids[1].id()).map(|f| f.owned.clone()),
+            world.query_entity::<&Fuse>(ids[1]).map(|f| f.owned.clone()),
             Some("middle".to_string())
         );
     }

@@ -190,8 +190,8 @@ fn main() {
 /// Alınabilen şey bu; alınamayan şey **türetilmiş** bir operand — iki bileşenden hesaplanan tek
 /// bir görünüm yazılamıyor, çünkü `FetchComponent` mühürlü.
 fn filtered(
-    spinning: Query<(&Transform, With<Spinner>, Without<Frozen>)>,
-    frozen: Query<(&Transform, With<Frozen>)>,
+    spinning: Query<&Transform, (With<Spinner>, Without<Frozen>)>,
+    frozen: Query<&Transform, With<Frozen>>,
     mut counters: ResMut<Counters>,
     input: Res<Input>,
     time: Res<Time>,
@@ -204,7 +204,7 @@ fn filtered(
     // Kaybedilen şey iki parçanın ayrı ayrı çizelgelenebilmesi, sonucun kendisi değil.
     let total: f32 = spinning
         .iter()
-        .map(|(t, _, _)| t.position.x)
+        .map(|t| t.position.x)
         .sum();
     counters.piped = normalise(total, counters.spinning);
 

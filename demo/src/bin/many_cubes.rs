@@ -244,7 +244,7 @@ fn main() {
 /// Dönüş `dt` ile değil sabit bir adımla. Kare süresine bağlı bir kamera, ölçümün kendisini
 /// ölçüme sokar.
 fn orbit_and_measure(
-    mut cameras: Query<(&mut Transform, With<Camera>)>,
+    mut cameras: Query<&mut Transform, With<Camera>>,
     mut bench: ResMut<Bench>,
     mut analyzer: ResMut<Analyzer>,
     time: Res<Time>,
@@ -258,7 +258,7 @@ fn orbit_and_measure(
         (angle * 0.37).sin() * SHELL_RADIUS * 0.5,
         angle.sin() * SHELL_RADIUS * 1.8,
     );
-    for (mut transform, _) in cameras.iter_mut() {
+    for mut transform in cameras.iter_mut() {
         transform.position = eye;
     }
 

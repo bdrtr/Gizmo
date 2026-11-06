@@ -102,12 +102,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         // Query to get root transforms (no Parent)
         // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
         let root_query = unsafe {
-            world.query_unchecked::<(
-                Entity,
-                &gizmo_physics_core::Transform,
-                &mut gizmo_physics_core::components::GlobalTransform,
-                gizmo_core::query::Without<gizmo_core::component::Parent>,
-            )>()
+            world.query_filtered_unchecked::<(Entity, &gizmo_physics_core::Transform, &mut gizmo_physics_core::components::GlobalTransform), gizmo_core::query::Without<gizmo_core::component::Parent>>()
         };
 
         let mut queue = Vec::new();
@@ -124,7 +119,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
         {
             let mut roots = root_query;
             let mut children_query = world.query::<&gizmo_core::component::Children>();
-            for (entity, local, mut global, _) in roots.iter_mut() {
+            for (entity, local, mut global) in roots.iter_mut() {
                 // Compare-then-write. `Mut::deref_mut` stamps `ticks.changed` on EVERY use,
                 // so writing unconditionally marked every node of the hierarchy as changed
                 // every single frame — `Changed<GlobalTransform>` then matched 100% of the
@@ -455,7 +450,7 @@ mod tests {
 
     fn changed_globals(world: &World) -> Vec<Entity> {
         let mut ids: Vec<Entity> = world
-            .query::<(Entity, gizmo_core::query::Changed<GlobalTransform>)>().iter().map(|(entity, _)| entity).collect();
+            .query_filtered::<Entity, gizmo_core::query::Changed<GlobalTransform>>().iter().collect();
         ids.sort_unstable();
         ids
     }
@@ -508,7 +503,7 @@ mod tests {
         world.add_component(moving, Transform::new(gizmo_math::Vec3::ZERO));
         let changed = |w: &World| -> Vec<u32> {
             let mut v: Vec<u32> = w
-                .query::<(Entity, gizmo_core::query::Changed<Transform>)>().iter().map(|(entity, _)| entity.id()).collect();
+                .query_filtered::<Entity, gizmo_core::query::Changed<Transform>>().iter().map(|entity| entity.id()).collect();
             v.sort_unstable();
             v
         };

@@ -79,6 +79,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
   `iter_combinations` now takes any `K`, not only pairs.
 
+- **A filter is the query's second parameter.** `Query<&T, With<U>>` yields `&T`; the old
+  `Query<(&T, With<U>)>` yielded `(&T, ())`, and every loop carried a `_` for it. A filter in the first place no
+  longer compiles (`QueryData` and `QueryFilter` are the two sides). From a world, `query_filtered`,
+  `query_filtered_mut` and `query_filtered_unchecked`. Entities without data: `Query<Entity, With<U>>` and
+  `Query<(), With<U>>`.
+
+  ```rust
+  // before
+  fn sys(q: Query<(Entity, &mut T, With<U>, Without<V>)>) { for (e, mut t, _, _) in q.iter_mut() {} }
+  // after
+  fn sys(mut q: Query<(Entity, &mut T), (With<U>, Without<V>)>) { for (e, mut t) in &mut q {} }
+  ```
+
+- **`for x in &q` and `for x in &mut q`** work, as they do on any Rust collection.
+
+- **`World::query_entity` and `query_entity_mut` take an `Entity`** and check it, like `Query::get`. They were the
+  last query entry points with a raw id, and answered for whoever held the slot.
+
 - **A writable query term is `&mut T`, and there is one way to ask.** `Query<&mut T>`, `world.query_mut::<&mut T>()`,
   `Option<&mut T>`; the row's item is still [`Mut<T>`], which is what records the change. `Mut<T>` is no longer a
   query term.

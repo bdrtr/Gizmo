@@ -159,7 +159,7 @@ fn main() {
 ///
 /// Üç seri türü de burada: sayaç birikir, gösterge o anki değeri tutar, örnek dağılımı taşır.
 fn measure(
-    spinners: Query<(&Transform, With<Spinner>)>,
+    spinners: Query<&Transform, With<Spinner>>,
     mut census: ResMut<Census>,
     mut analyzer: ResMut<Analyzer>,
     time: Res<Time>,

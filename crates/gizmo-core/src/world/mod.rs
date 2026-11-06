@@ -473,7 +473,7 @@ mod tests {
         world.apply_commands();
 
         assert!(
-            world.query_entity::<&Marker>(stranger.id()).is_none(),
+            world.query_entity::<&Marker>(stranger).is_none(),
             "a command queued for an entity destroyed by clear_entities was delivered to its \
              bit-identical successor"
         );
@@ -517,7 +517,7 @@ mod tests {
         let b = world.spawn();
         world.add_component(b, SparseE("second".into()));
         assert_eq!(
-            world.query_entity::<&SparseE>(b.id()).map(|c| c.0.clone()),
+            world.query_entity::<&SparseE>(b).map(|c| c.0.clone()),
             Some("second".to_string()),
             "a compacted-empty set must still accept and return a value"
         );
@@ -556,7 +556,7 @@ mod tests {
         let fresh = world.spawn();
         assert_eq!(fresh, survivor, "ids restart, so this is the same handle the second command holds");
         assert!(
-            world.query_entity::<&Late>(fresh.id()).is_none(),
+            world.query_entity::<&Late>(fresh).is_none(),
             "the command queued behind the clear must not have run — and must certainly not \
              have landed on the id that replaced its target"
         );
@@ -619,7 +619,7 @@ mod tests {
         world.apply_commands();
 
         assert_eq!(
-            world.query_entity::<&Kept>(e.id()).map(|c| c.0),
+            world.query_entity::<&Kept>(e).map(|c| c.0),
             Some(7),
             "clearing the queue at teardown must not disable it afterwards"
         );
@@ -661,7 +661,7 @@ mod tests {
         world.remove_component::<Tbl>(reserved);
 
         assert!(
-            world.query_entity::<&Tbl>(reserved.id()).is_none(),
+            world.query_entity::<&Tbl>(reserved).is_none(),
             "and nothing was invented for it"
         );
     }
@@ -697,7 +697,7 @@ mod tests {
         // Reaching this line is the assertion; the rest is evidence the real entity was still
         // processed rather than the whole call bailing out.
         assert!(
-            world.query_entity::<&Tag>(real.id()).is_none(),
+            world.query_entity::<&Tag>(real).is_none(),
             "the flushed entity's component was removed by the batch"
         );
         assert!(world.is_alive(reserved), "and the reserved id is untouched");
@@ -824,7 +824,7 @@ mod tests {
 
         assert_locations_agree_with_archetypes(&world, "after a duplicated insert_batch");
         // And the component actually arrived, exactly once, on exactly that entity.
-        assert_eq!(world.query_entity::<&B>(ents[0].id()).map(|c| c.0), Some(9));
+        assert_eq!(world.query_entity::<&B>(ents[0]).map(|c| c.0), Some(9));
         assert_eq!(world.query::<&B>().iter().count(), 1);
     }
 
@@ -848,7 +848,7 @@ mod tests {
         world.remove_batch::<B2>(&[ents[0], ents[0]]);
 
         assert_locations_agree_with_archetypes(&world, "after a duplicated remove_batch");
-        assert!(world.query_entity::<&B2>(ents[0].id()).is_none());
+        assert!(world.query_entity::<&B2>(ents[0]).is_none());
         assert_eq!(world.query::<&B2>().iter().count(), 3);
     }
 
@@ -1032,8 +1032,8 @@ mod tests {
 
         assert_inv(&world, "after a despawn whose sparse on_remove hook touched the world");
         // The survivors keep their own values: nothing was dragged anywhere.
-        assert_eq!(world.query_entity::<&Late>(a.id()).map(|c| c.0), Some(10));
-        assert_eq!(world.query_entity::<&Late>(tail.id()).map(|c| c.0), Some(12));
+        assert_eq!(world.query_entity::<&Late>(a).map(|c| c.0), Some(10));
+        assert_eq!(world.query_entity::<&Late>(tail).map(|c| c.0), Some(12));
         assert!(!world.is_alive(victim));
     }
 
@@ -1309,7 +1309,7 @@ mod tests {
         // The survivor is still reachable — a truncation that went one entry too far would
         // make this `None` (or, on the unchecked query path, panic).
         assert_eq!(
-            world.query_entity::<&SparseC>(ents[0].id()).map(|c| c.0),
+            world.query_entity::<&SparseC>(ents[0]).map(|c| c.0),
             Some(0),
             "compaction must not lose the entry it kept"
         );
@@ -1363,11 +1363,11 @@ mod tests {
             1,
             "only the entity that still has the component"
         );
-        assert!(world.query_entity::<&SparseP>(ents[N - 1].id()).is_none());
+        assert!(world.query_entity::<&SparseP>(ents[N - 1]).is_none());
         // The high entity is alive and keeps its table component: sparse compaction must not
         // have reached anything but the sparse side.
         assert_eq!(
-            world.query_entity::<&Tableish>(ents[N - 1].id()).map(|c| c.0),
+            world.query_entity::<&Tableish>(ents[N - 1]).map(|c| c.0),
             Some(9)
         );
         assert_eq!(world.query::<&Tableish>().iter().count(), 1);
@@ -1412,7 +1412,7 @@ mod tests {
         );
         assert_eq!(set.dense.len(), 1, "…while the dense side holds exactly one row");
         assert_eq!(
-            world.query_entity::<&SparseH>(ents[N - 1].id()).map(|c| c.0),
+            world.query_entity::<&SparseH>(ents[N - 1]).map(|c| c.0),
             Some(N as i32 - 1),
         );
     }
@@ -1551,7 +1551,7 @@ mod tests {
         // ...and a reused id must not inherit it (stale data).
         let e2 = world.spawn();
         assert!(
-            world.query_entity::<&SparseC>(e2.id()).is_none(),
+            world.query_entity::<&SparseC>(e2).is_none(),
             "reused entity id inherited a stale sparse component from the despawned entity"
         );
     }
@@ -1601,7 +1601,7 @@ mod tests {
         assert_eq!(e2.id(), e.id(), "sanity: clear_entities restarts ids");
 
         assert!(
-            world.query_entity::<&SparseC>(e2.id()).is_none(),
+            world.query_entity::<&SparseC>(e2).is_none(),
             "an entity spawned after clear_entities inherited a stale sparse component"
         );
         assert_eq!(
@@ -1655,7 +1655,7 @@ mod tests {
         assert_eq!(clones.len(), 3);
         for c in &clones {
             assert_eq!(
-                world.query_entity::<&SparseC>(c.id()).map(|s| s.0),
+                world.query_entity::<&SparseC>(*c).map(|s| s.0),
                 Some(2),
                 "clone is missing the source's sparse component"
             );

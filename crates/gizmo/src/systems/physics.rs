@@ -190,12 +190,8 @@ pub fn physics_debug_system(world: &crate::core::World) {
         }
 
         {
-            let q = world.query::<(
-            &gizmo_physics_core::Transform,
-            &gizmo_physics_core::Collider,
-            crate::core::query::Without<gizmo_physics_rigid::components::RigidBody>,
-        )>();
-            for (trans, col, _) in q.iter() {
+            let q = world.query_filtered::<(&gizmo_physics_core::Transform, &gizmo_physics_core::Collider), crate::core::query::Without<gizmo_physics_rigid::components::RigidBody>>();
+            for (trans, col) in q.iter() {
                 draw_collider(trans, col, [0.5, 0.5, 0.5, 1.0], &mut gizmos);
             }
         }

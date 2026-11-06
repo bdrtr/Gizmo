@@ -317,7 +317,7 @@ pub fn world_get(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(world.query_entity::<&Table>(entity.id()).is_some());
+                    assert!(world.query_entity::<&Table>(*entity).is_some());
                 }
             });
         });
@@ -326,7 +326,7 @@ pub fn world_get(criterion: &mut Criterion) {
 
             bencher.iter(|| {
                 for entity in &entities {
-                    assert!(world.query_entity::<&Sparse>(entity.id()).is_some());
+                    assert!(world.query_entity::<&Sparse>(*entity).is_some());
                 }
             });
         });

@@ -224,38 +224,38 @@ fn count_input(mut counter: ResMut<InputCounter>, input: Res<Input>, time: Res<T
 
 /// Sol küp: sayaçla büyür. Kapı VEYA olduğu için Space ya da tık basılıyken koşar.
 fn grow_with_counter(
-    mut cubes: Query<(&mut Transform, With<GrowCube>)>,
+    mut cubes: Query<&mut Transform, With<GrowCube>>,
     counter: Res<InputCounter>,
     mut ran: ResMut<Ran>,
     time: Res<Time>,
 ) {
     ran.grow = time.frame();
     let scale = 0.35 + (counter.value as f32 * 0.02).min(0.5);
-    for (mut transform, _) in cubes.iter_mut() {
+    for mut transform in cubes.iter_mut() {
         transform.scale = Vec3::splat(scale);
     }
 }
 
 /// Orta küp: yalnız sayaç yakın zamanda değiştiyse döner.
 fn spin_on_change(
-    mut cubes: Query<(&mut Transform, With<SpinCube>)>,
+    mut cubes: Query<&mut Transform, With<SpinCube>>,
     mut ran: ResMut<Ran>,
     time: Res<Time>,
 ) {
     ran.spin = time.frame();
-    for (mut transform, _) in cubes.iter_mut() {
+    for mut transform in cubes.iter_mut() {
         transform.rotation *= Quat::from_rotation_y(time.dt() * 3.0);
     }
 }
 
 /// Sağ küp: yalnız 2-4 saniye penceresinde yukarı süzülür, dışında yere iner.
 fn show_in_window(
-    mut cubes: Query<(&mut Transform, With<WindowCube>)>,
+    mut cubes: Query<&mut Transform, With<WindowCube>>,
     mut ran: ResMut<Ran>,
     time: Res<Time>,
 ) {
     ran.window = time.frame();
-    for (mut transform, _) in cubes.iter_mut() {
+    for mut transform in cubes.iter_mut() {
         transform.position.y = 0.6 + ((time.elapsed() as f32 - 2.0) * 1.5).min(1.5);
     }
 }

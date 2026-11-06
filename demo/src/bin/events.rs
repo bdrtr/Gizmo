@@ -265,11 +265,11 @@ fn play_damage_received_particle_effect(
 
 /// Can çubuğunun boyunu cana göre ayarlar — zincirin görünür ucu.
 fn update_health_bar(
-    mut bars: Query<(&mut Transform, With<HealthBar>)>,
+    mut bars: Query<&mut Transform, With<HealthBar>>,
     combat: Res<Combat>,
 ) {
     let ratio = combat.health as f32 / MAX_HEALTH as f32;
-    for (mut transform, _) in bars.iter_mut() {
+    for mut transform in bars.iter_mut() {
         transform.scale.x = 2.0 * ratio.max(0.02);
     }
 }

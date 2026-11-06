@@ -72,10 +72,10 @@ pub fn oxygen_system(world: &World, dt: f32) {
 
     // SAFETY: exclusive `fn(&World, f32)` sistemi — scheduler tek başına çalıştırır; `Oxygen` ve
     // `Transform` ayrı bileşen tipleri, alias yok.
-    let query = unsafe { world.query_unchecked::<(gizmo_core::Entity, &mut Oxygen, &Transform, Without<IsDeleted>)>() };
+    let query = unsafe { world.query_filtered_unchecked::<(gizmo_core::Entity, &mut Oxygen, &Transform), Without<IsDeleted>>() };
     {
         let mut query = query;
-        for (entity, mut oxy, transform, _) in query.iter_mut() {
+        for (entity, mut oxy, transform) in query.iter_mut() {
             let head = transform.position + Vec3::new(0.0, oxy.head_offset, 0.0);
             let submerged = phys.as_ref().is_some_and(|pw| pw.is_submerged(head));
             if submerged {

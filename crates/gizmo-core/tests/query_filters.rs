@@ -54,9 +54,9 @@ fn or_with_sparse_operands_matches_either_never_neither() {
     };
 
     let mut got: Vec<u32> = world
-        .query::<(&Marker, Or<With<SparseA>, With<SparseB>>)>()
+        .query_filtered::<&Marker, Or<With<SparseA>, With<SparseB>>>()
         .iter()
-        .map(|(m, _)| m.0)
+        .map(|m| m.0)
         .collect();
     got.sort();
     assert_eq!(
@@ -85,9 +85,9 @@ fn or_with_without_sparse_mixed() {
 
     // has A  OR  lacks B  → a(hasA), c(lacksB), d(hasA). b is excluded (no A, has B).
     let mut got: Vec<u32> = world
-        .query::<(&Marker, Or<With<SparseA>, Without<SparseB>>)>()
+        .query_filtered::<&Marker, Or<With<SparseA>, Without<SparseB>>>()
         .iter()
-        .map(|(m, _)| m.0)
+        .map(|m| m.0)
         .collect();
     got.sort();
     assert_eq!(got, vec![1, 3, 4]);
@@ -106,9 +106,9 @@ fn or_with_table_operands_still_works() {
     world.add_component(c, Marker(3));
 
     let mut got: Vec<u32> = world
-        .query::<(&Marker, Or<With<TableA>, With<TableB>>)>()
+        .query_filtered::<&Marker, Or<With<TableA>, With<TableB>>>()
         .iter()
-        .map(|(m, _)| m.0)
+        .map(|m| m.0)
         .collect();
     got.sort();
     assert_eq!(got, vec![1, 2], "the common Or<With<table>,...> case must still work");
@@ -122,7 +122,7 @@ fn iter_chunks_rejects_sparse_filtered_query() {
     let a = world.spawn();
     world.add_component(a, Marker(1));
     world.add_component(a, SparseA);
-    let q = world.query::<(&Marker, With<SparseA>)>();
+    let q = world.query_filtered::<&Marker, With<SparseA>>();
     let _ = q.iter_chunks().count(); // must panic, not silently ignore the filter
 }
 
@@ -145,7 +145,7 @@ fn iter_chunks_works_on_plain_data_and_table_filter() {
     w2.add_component(a, TableA);
     let b = w2.spawn();
     w2.add_component(b, Marker(2)); // no TableA → different archetype
-    let q2 = w2.query::<(&Marker, With<TableA>)>();
-    let total2: usize = q2.iter_chunks().map(|(s, _)| s.len()).sum();
+    let q2 = w2.query_filtered::<&Marker, With<TableA>>();
+    let total2: usize = q2.iter_chunks().map(|s| s.len()).sum();
     assert_eq!(total2, 1, "table With selects the archetype; chunks yields only it");
 }

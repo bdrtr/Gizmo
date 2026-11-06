@@ -158,13 +158,13 @@ const HOT: Vec4 = Vec4::new(1.0, 0.35, 0.15, 1.0);
 /// Damga `deref_mut`'ta basıldığı için aynı değeri geri yazmak da "değişti" sayılırdı; "yalnız
 /// farklıysa yaz" için koşulu elle yazmak gerekiyor.
 fn change_component(
-    mut tracked: Query<(&mut Tracked, Without<Sneaky>)>,
+    mut tracked: Query<&mut Tracked, Without<Sneaky>>,
     mut rng: ResMut<Rng>,
     mut counters: ResMut<Counters>,
     time: Res<Time>,
 ) {
     let now = (time.elapsed() as f32 * 2.0).round();
-    for (mut component, _) in tracked.iter_mut() {
+    for mut component in tracked.iter_mut() {
         if !rng.chance(0.08) {
             continue;
         }
@@ -182,12 +182,12 @@ fn change_component(
 /// Motorun kendi belgesi bunu açıkça uyarıyor: bu yol "`Changed<T>`'ye tepki veren her sistemi
 /// sessizce aç bırakır". Demoda bu, sondaki küpün hiç parlamaması demek.
 fn change_without_stamping(
-    mut sneaky: Query<(&mut Tracked, With<Sneaky>)>,
+    mut sneaky: Query<&mut Tracked, With<Sneaky>>,
     mut counters: ResMut<Counters>,
     time: Res<Time>,
 ) {
     let now = (time.elapsed() as f32 * 2.0).round();
-    for (mut component, _) in sneaky.iter_mut() {
+    for mut component in sneaky.iter_mut() {
         let target = component.bypass_change_detection();
         if target.0 != now {
             target.0 = now;
@@ -200,11 +200,11 @@ fn change_without_stamping(
 ///
 /// Sorgunun kendisi filtreliyor — sistem içinde "değişti mi" diye bir kontrol yok.
 fn change_detection(
-    mut changed: Query<(&mut Material, &Tracked, Changed<Tracked>)>,
+    mut changed: Query<(&mut Material, &Tracked), Changed<Tracked>>,
     mut counters: ResMut<Counters>,
 ) {
     let mut seen = 0;
-    for (mut material, tracked, _) in changed.iter_mut() {
+    for (mut material, tracked) in changed.iter_mut() {
         material.albedo = HOT;
         seen += 1;
         gizmo::gizmo_log!(Info, "değişiklik: Tracked({})", tracked.0);

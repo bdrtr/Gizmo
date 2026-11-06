@@ -391,9 +391,9 @@ fn toggle_wireframes(mut cfg: ResMut<gizmo::systems::render::WireframeConfig>, i
     }
 }
 
-fn advance_rows(mut q: Query<(&mut Row, &mut Transform, With<Shape>)>, input: Res<Input>) {
+fn advance_rows(mut q: Query<(&mut Row, &mut Transform), With<Shape>>, input: Res<Input>) {
     if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Tab as u32) {
-        for (mut row, mut trans, _) in q.iter_mut() {
+        for (mut row, mut trans) in q.iter_mut() {
             *row = row.advance();
             trans.position.z = row.z();
         }
@@ -401,14 +401,14 @@ fn advance_rows(mut q: Query<(&mut Row, &mut Transform, With<Shape>)>, input: Re
 }
 
 fn rotate_shapes(
-    mut q: Query<(&mut Transform, With<Shape>)>,
+    mut q: Query<&mut Transform, With<Shape>>,
     mut state: ResMut<DemoState>,
     time: Res<gizmo::core::time::Time>,
 ) {
     let dt = time.dt();
     if state.rotate {
         state.time += dt;
-        for (mut trans, _) in q.iter_mut() {
+        for mut trans in q.iter_mut() {
             trans.rotation = Quat::from_rotation_y(state.time);
             trans.rotation *= Quat::from_rotation_x(state.time * 0.5);
         }

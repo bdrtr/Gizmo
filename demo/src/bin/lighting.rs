@@ -209,7 +209,7 @@ fn main() {
 /// normalize edilir). Dört tuşu elle okuyup `Vec3`'ü toplamanın yerini `MoveKeys::ARROWS`
 /// tutuyor.
 fn movement(
-    mut movables: Query<(&mut Transform, With<Movable>)>,
+    mut movables: Query<&mut Transform, With<Movable>>,
     input: Res<Input>,
     time: Res<Time>,
 ) {
@@ -219,7 +219,7 @@ fn movement(
     }
 
     let step = Vec3::new(x, y, 0.0) * MOVE_SPEED * time.dt();
-    for (mut transform, _) in movables.iter_mut() {
+    for mut transform in movables.iter_mut() {
         transform.position += step;
     }
 }

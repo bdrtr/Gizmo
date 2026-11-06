@@ -102,7 +102,7 @@ pub fn ensure_global_transforms(world: &mut World) {
     // query borrow is live.
     let mut missing = Vec::new();
     {
-        let q = world.query::<(Entity, &Mesh, &Transform, Without<GlobalTransform>)>();
+        let q = world.query_filtered::<(Entity, &Mesh, &Transform), Without<GlobalTransform>>();
         for (entity, ..) in q.iter() {
             missing.push(entity);
         }

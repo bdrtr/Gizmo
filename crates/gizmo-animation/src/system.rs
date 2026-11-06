@@ -31,7 +31,7 @@ pub fn animation_system(
     mut players: Query<(Entity, &mut AnimationPlayer)>,
     names: Query<&EntityName>,
     children: Query<&Children>,
-    mut transforms: Query<(&mut Transform, gizmo_core::query::With<crate::player::Animated>)>,
+    mut transforms: Query<&mut Transform, gizmo_core::query::With<crate::player::Animated>>,
 ) {
     let dt = time.dt();
 
@@ -158,7 +158,7 @@ pub fn animation_system(
                 let target_id = target_entity;
                 let interpolated = track.sample(player.elapsed_time);
 
-                if let Some((mut transform, _)) = transforms.get_mut(target_id) {
+                if let Some(mut transform) = transforms.get_mut(target_id) {
                     apply_interpolated(&mut transform, interpolated);
                     applied += 1;
                 } else {
