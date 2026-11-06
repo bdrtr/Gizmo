@@ -177,6 +177,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   direct light get noticeably darker and lose the warm cast.
   `pinbol`'s chrome ball went nearly black on its dark table for the same reason, so the game now sets
   a `Renderer::sky` matching the pale background behind it, and it reads again.
+- **The forward shader reads the whole material: textured surfaces look different in the browser, on
+  Android, in the editor viewport and wherever they are transparent.** It read the base colour and nothing
+  else, so normal, metallic-roughness, emissive and occlusion maps, the UV transform, anisotropy, clear coat
+  and subsurface never reached those paths. `surface.wgsl` now evaluates a material for both shaders, and
+  each knob and map comes out under 2 of 255 apart forward and deferred. Irradiance volumes reach forward
+  surfaces on the desktop path.
 - **Height fog covers every material path: transparent, forward, baked-lit, water and mirrors, and
   `Renderer::fog` now works in the browser and on Android.** It was the deferred shader's alone. Each
   blend mode treats it as it needs: alpha and opaque fade to its colour, additive fades out, multiply
@@ -200,8 +206,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and which path draws it were one setting, so drawing PBR forward was impossible. The material type no
   longer changes. It stays in the z-prepass and the G-buffer, so TAA, motion blur, SSR, SSGI and SSAO
   treat it like any other surface, and the forward pass draws its final colour over the deferred one, so
-  its pixels are shaded twice. It gives up what `shader.wgsl` lacks: SSAO on its own surface, decals,
-  anisotropy, clear coat, subsurface, irradiance volumes and PCSS. `MaterialDesc` carries it, older scenes
+  its pixels are shaded twice. It gives up SSAO on its own surface, decals and PCSS. `MaterialDesc` carries it, older scenes
   read as deferred, and the inspector has a checkbox. Desktop only in effect: the browser, Android and the
   editor viewport draw everything forward already.
 

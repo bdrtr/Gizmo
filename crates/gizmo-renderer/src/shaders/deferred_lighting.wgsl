@@ -7,7 +7,7 @@
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
 #import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
-#import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, compute_clear_coat}
+#import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
 #import gizmo::irradiance::{gi_sample}
@@ -296,16 +296,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let irradiance = get_procedural_environment(N, 1.0) + ambient_base;
     var ambient = albedo * irradiance * (1.0 - metallic);
     if (subsurface > 0.0) {
-        let sss_color = vec3<f32>(0.96, 0.28, 0.15);
-        ambient += ambient * subsurface * sss_color * 0.45;
+        ambient = subsurface_ambient(ambient, subsurface);
     }
     
     // 2. Specular IBL (Pre-filtered Environment Map with Anisotropic Stretch)
     var R = reflect(-V, N);
     if (anisotropy > 0.0) {
-        let anisotropy_stretch = anisotropy * (1.0 - roughness);
-        let anisotropic_direction = cross(cross(N, T), N);
-        R = normalize(mix(R, anisotropic_direction, anisotropy_stretch));
+        R = anisotropic_reflection(R, N, T, anisotropy, roughness);
     }
     let R_rough = normalize(mix(R, N, roughness)); 
     // Probes are prefiltered by roughness already, so they take the mirror direction and a mip;
@@ -318,8 +315,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     // --- 4. Clear Coat Specular & Attenuation IBL ---
     if (clear_coat > 0.0) {
-        let F_env = 0.04 + (1.0 - 0.04) * pow(1.0 - NdV, 5.0);
-        let coat_atten_env = 1.0 - clear_coat * F_env;
+        let coat_atten_env = coat_env_attenuation(NdV, clear_coat);
 
         ambient = ambient * coat_atten_env;
         specular_ibl = specular_ibl * coat_atten_env;
@@ -327,10 +323,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let R_coat = normalize(mix(reflect(-V, N), N, 0.08));
         // The coat is a second, nearly smooth layer: it reflects the probes too, at its own 0.08.
         let specular_env_coat = probe_environment(reflect(-V, N), world_pos, 0.08, get_procedural_environment(R_coat, 0.08));
-        let env_brdf_lut_coat = approximate_env_brdf(NdV, 0.08);
-        let specular_ibl_coat = specular_env_coat * (0.04 * env_brdf_lut_coat.x + env_brdf_lut_coat.y);
-
-        specular_ibl += specular_ibl_coat * clear_coat;
+        specular_ibl += coat_env_specular(specular_env_coat, NdV) * clear_coat;
     }
 
     // --- CSM Shadow ---
@@ -407,26 +400,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
 
         if (clear_coat > 0.0) {
-            let H = normalize(V + L);
-            let VoH = max(dot(V, H), 0.0);
-            let F_c = 0.04 + (1.0 - 0.04) * pow(1.0 - VoH, 5.0);
-            let coat_atten = 1.0 - clear_coat * F_c;
-
-            let coat_spec = compute_clear_coat(N, V, L, scene.sun_color.rgb, scene.sun_color.w, shadow_visibility);
-            sun_light = sun_light * coat_atten + coat_spec * clear_coat;
+            sun_light = layer_clear_coat(sun_light, N, V, L, scene.sun_color.rgb, scene.sun_color.w, shadow_visibility, clear_coat);
         }
 
         if (subsurface > 0.0) {
-            let sss_wrap = 0.35;
-            let sss_ndl = max((dot(N, L) + sss_wrap) / (1.0 + sss_wrap), 0.0);
-            let sss_power = 8.0;
-            let sss_scale = 0.65;
-            let sss_trans = pow(max(dot(-V, L), 0.0), sss_power) * sss_scale * (1.0 - metallic);
-            
-            let sss_color = vec3<f32>(0.96, 0.28, 0.15);
-            let sss_contrib = (sss_ndl * 0.12 + sss_trans) * subsurface * sss_color;
-            
-            sun_light += sss_contrib * scene.sun_color.rgb * scene.sun_color.w * shadow_visibility;
+            sun_light += subsurface_light(N, V, L, metallic, subsurface) * scene.sun_color.rgb * scene.sun_color.w * shadow_visibility;
         }
 
         total_lighting += sun_light;
@@ -566,13 +544,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
 
         if (clear_coat > 0.0) {
-            let H = normalize(V + L);
-            let VoH = max(dot(V, H), 0.0);
-            let F_c = 0.04 + (1.0 - 0.04) * pow(1.0 - VoH, 5.0);
-            let coat_atten = 1.0 - clear_coat * F_c;
-
-            let coat_spec = compute_clear_coat(N, V, L, light_rgb, intensity, atten);
-            light_color_contrib = light_color_contrib * coat_atten + coat_spec * clear_coat;
+            light_color_contrib = layer_clear_coat(light_color_contrib, N, V, L, light_rgb, intensity, atten, clear_coat);
         }
 
         total_lighting += light_color_contrib;

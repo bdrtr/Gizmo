@@ -216,9 +216,16 @@ viewport, which is why the field is game-only in `render_parity`.
 the root: TAA reprojects from the G-buffer's world position, motion blur reads its velocity, and SSR
 and SSGI its normals and positions, so every one of them saw the surface *behind* the object. Now they
 see the object, it occludes its neighbours in SSAO, and the forward pass draws its colour over the
-deferred one. The cost is that its pixels are shaded twice. What is still lost is what `shader.wgsl`
-does not have: SSAO on its own surface, decals, anisotropy, clear coat, subsurface, irradiance volumes
-and PCSS.
+deferred one. The cost is that its pixels are shaded twice. Three things are still lost: SSAO on its
+own surface, decals, and PCSS, since the forward shader filters shadows with fixed PCF.
+
+**The forward shader reads the whole material, same day.** It read the base colour and nothing else, so
+normal, metallic-roughness, emissive and occlusion maps, the UV transform, anisotropy, clear coat and
+subsurface never reached a browser, a phone, the editor viewport or a transparent surface. `surface.wgsl`
+now evaluates a material for the G-buffer and the forward shader alike, the lighting terms for the extra
+lobes are shared functions in `pbr_ext.wgsl`, and on the desktop path the forward shader samples
+irradiance volumes too. One tilted cube under a bright sky, per knob and map: at most 0.4 of 255 apart
+when measured, under 2 asserted.
 
 Unlit and baked-lit surfaces do not fill the G-buffer, so those effects still see through them, and a
 moving one gets no motion blur. Baked-lit exists to skip that cost, so changing this is its own

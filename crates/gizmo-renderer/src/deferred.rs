@@ -1,5 +1,5 @@
 use crate::gpu_types::Vertex;
-use crate::pipeline::{load_shader, SceneState};
+use crate::pipeline::SceneState;
 
 // Single source of truth for the deferred G-buffer render-target formats.
 //
@@ -479,7 +479,7 @@ impl DeferredState {
         cull_mode: Option<wgpu::Face>,
         label: &str,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader(
+        let shader = crate::pipeline::shaders::load_shader_composed(
             device,
             "demo/assets/shaders/gbuffer.wgsl",
             include_str!("shaders/gbuffer.wgsl"),
@@ -578,7 +578,7 @@ impl DeferredState {
         cull_mode: Option<wgpu::Face>,
         label: &str,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader(
+        let shader = crate::pipeline::shaders::load_shader_composed(
             device,
             "demo/assets/shaders/gbuffer.wgsl",
             include_str!("shaders/gbuffer.wgsl"),

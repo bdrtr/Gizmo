@@ -2,6 +2,8 @@
 // Writes opaque PBR surfaces to three MRTs; unlit/skybox objects are discarded here
 // and drawn in a subsequent forward pass.
 
+#import gizmo::surface::{evaluate_surface}
+
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
     let cross01 = cross(m[0], m[1]);
     let cross12 = cross(m[1], m[2]);
@@ -27,26 +29,6 @@ struct SceneUniforms {
 struct SkeletonData {
     joints: array<mat4x4<f32>, 128>,
 };
-
-// Per-material scalar params (group 1, binding 6). Mirrors `gpu_types::MaterialParams`.
-struct MaterialParams {
-    // xyz = emissive factor (linear), w = normal-map scale.
-    emissive_and_normal_scale: vec4<f32>,
-    // x = occlusion (AO) strength; y = UV rotation (radians); zw = UV offset.
-    occlusion_uv_rot_offset: vec4<f32>,
-    // xy = UV scale; z = alpha cutoff (glTF Mask; 0 = no cutout); w reserved.
-    uv_scale: vec4<f32>,
-};
-
-// KHR_texture_transform: scale, then rotate, then translate the UV
-// (matrix = translation * rotation * scale, per the extension's reference).
-fn apply_uv_transform(uv: vec2<f32>, offset: vec2<f32>, rot: f32, scale: vec2<f32>) -> vec2<f32> {
-    let s = uv * scale;
-    let c = cos(rot);
-    let sn = sin(rot);
-    let rotated = vec2<f32>(c * s.x - sn * s.y, sn * s.x + c * s.y);
-    return rotated + offset;
-}
 
 struct InstanceData {
     model_matrix_0: vec4<f32>,
@@ -88,13 +70,6 @@ struct VertexOutput {
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
-@group(1) @binding(0) var t_diffuse:  texture_2d<f32>;
-@group(1) @binding(1) var s_diffuse:  sampler;
-@group(1) @binding(2) var t_normal:   texture_2d<f32>;
-@group(1) @binding(3) var t_mr:       texture_2d<f32>;  // g=roughness, b=metallic
-@group(1) @binding(4) var t_emissive: texture_2d<f32>;
-@group(1) @binding(5) var t_ao:       texture_2d<f32>;  // r=occlusion
-@group(1) @binding(6) var<uniform> material: MaterialParams;
 @group(3) @binding(0) var<uniform> skeleton: SkeletonData;
 @group(4) @binding(0) var<storage, read> instances: array<InstanceData>;
 
@@ -184,90 +159,22 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     // Skip unlit / skybox objects — they are drawn in a forward pass
     if (in.inst_pbr.z > 0.5) { discard; }
 
-    // KHR_texture_transform: transform the incoming UV once, reuse for every map.
-    let uv = apply_uv_transform(
-        in.tex_coords,
-        material.occlusion_uv_rot_offset.zw,
-        material.occlusion_uv_rot_offset.y,
-        material.uv_scale.xy,
+    let surface = evaluate_surface(
+        in.tex_coords, in.normal, in.world_tangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
     );
-
-    let tex_color   = textureSample(t_diffuse, s_diffuse, uv);
-    let final_alpha = in.inst_albedo.a * tex_color.a;
-    // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff (uv_scale.z).
+    // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.
     // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
-    let alpha_cutoff = material.uv_scale.z;
-    if (alpha_cutoff > 0.0 && final_alpha < alpha_cutoff) { discard; }
+    if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }
 
-    // ── Geometric tangent basis (TBN) ─────────────────────────────────────
-    var raw_normal = in.normal;
-    if (length(raw_normal) < 0.001) { raw_normal = vec3<f32>(0.0, 1.0, 0.0); }
-    let geo_N = normalize(raw_normal);
-
-    var raw_tangent = in.world_tangent.xyz;
-    // Fall back to a synthesised tangent when the supplied one is missing OR nearly
-    // PARALLEL to the normal. Gram-Schmidt of parallel vectors is normalize(0) = NaN/garbage,
-    // which produced a per-pixel-varying TBN → normal-map streaks ONLY on the ±X cube faces,
-    // whose default vertex tangent [1,0,0] coincides with the face normal. (Front/back/top/
-    // bottom faces have a non-parallel tangent, so they were always clean.)
-    let tan_len = length(raw_tangent);
-    if (tan_len < 0.001 || abs(dot(raw_tangent / max(tan_len, 1e-8), geo_N)) > 0.999) {
-        if (abs(geo_N.x) > 0.9) {
-            raw_tangent = cross(vec3<f32>(0.0, 1.0, 0.0), geo_N);
-        } else {
-            raw_tangent = cross(vec3<f32>(1.0, 0.0, 0.0), geo_N);
-        }
-    }
-    // Gram-Schmidt re-orthogonalise the tangent against the (interpolated) normal.
-    let T = normalize(raw_tangent - geo_N * dot(geo_N, raw_tangent));
-    let B = cross(geo_N, T) * sign(in.world_tangent.w);
-
-    // ── Normal map (tangent-space → world) ────────────────────────────────
-    // Flat-default map (0.5,0.5,1.0) → (0,0,1) → geometric normal unchanged.
-    let normal_scale = material.emissive_and_normal_scale.w;
-    var ts_normal = textureSample(t_normal, s_diffuse, uv).xyz * 2.0 - 1.0;
-    ts_normal = vec3<f32>(ts_normal.xy * normal_scale, max(ts_normal.z, 1e-4));
-    ts_normal = normalize(ts_normal);
-    let N = normalize(T * ts_normal.x + B * ts_normal.y + geo_N * ts_normal.z);
-
-    // ── Metallic-roughness map (glTF: factor × texture) ───────────────────
-    // White-default map → sampled g=b=1 → scalar factors preserved.
-    let mr = textureSample(t_mr, s_diffuse, uv);
-    let roughness = clamp(in.inst_pbr.x * mr.g, 0.05, 1.0);
-    let metallic  = clamp(in.inst_pbr.y * mr.b, 0.0, 1.0);
-
-    // ── Ambient occlusion (glTF: 1 + strength·(ao-1)) ─────────────────────
-    // White-default map (r=1) → ao=1 → no darkening.
-    let ao_strength = material.occlusion_uv_rot_offset.x;
-    let ao = 1.0 + ao_strength * (textureSample(t_ao, s_diffuse, uv).r - 1.0);
-
-    // ── Emissive ──────────────────────────────────────────────────────────
-    // The material's own (`Material::emissive`, per instance) plus glTF's emissiveFactor × its
-    // texture (white-default map × zero factor → nothing). Written to RT5 and added UNLIT, in
-    // HDR, by the lighting pass. It used to be added to the albedo instead — lit, and clamped to
-    // 1 by the 8-bit target — and the per-instance half was read by nobody but `baked_lit.wgsl`:
-    // `with_emissive` on a PBR material changed no pixel of the deferred frame.
-    let emissive = in.inst_emissive.xyz
-                 + material.emissive_and_normal_scale.xyz * textureSample(t_emissive, s_diffuse, uv).rgb;
-
-    // Vertex colour, taken at face value — `baked_lit.wgsl`'s rule and its reason: a source with
-    // no colours is already opaque white (`gpu_types::Vertex::default`, and import normalises), so
-    // rewriting a near-black colour to white only turns a surface painted black white. Every engine
-    // primitive is white; this changes only meshes that colour their vertices, which the deferred
-    // path used to draw as if they did not.
-    let vertex_color = in.color;
-
-    // Base albedo, modulated by AO (the G-buffer has no channel of its own for AO).
-    var albedo = in.inst_albedo.rgb * tex_color.rgb * vertex_color;
-    albedo = albedo * ao;
-
-    // Unpack anisotropy, clear_coat, and subsurface from in.inst_pbr.w (packed_params)
-    // Two digits per field — see `pack_pbr_params`. Three needed nine digits, which an f32
-    // cannot hold as an exact integer, and the low field carried into its neighbour above 2^24.
-    let subsurface_raw = floor(in.inst_pbr.w / 10000.0) / 100.0;
-    let rem_packed = in.inst_pbr.w - floor(in.inst_pbr.w / 10000.0) * 10000.0;
-    let clear_coat_raw = floor(rem_packed / 100.0) / 100.0;
-    let anisotropy_raw = (rem_packed - floor(rem_packed / 100.0) * 100.0) / 100.0;
+    let albedo = surface.albedo;
+    let metallic = surface.metallic;
+    let N = surface.N;
+    let T = surface.T;
+    let roughness = surface.roughness;
+    let emissive = surface.emissive;
+    let subsurface_raw = surface.subsurface;
+    let clear_coat_raw = surface.clear_coat;
+    let anisotropy_raw = surface.anisotropy;
 
     // `select`, not `sign`: `sign(0.0)` is 0, which would zero the clear-coat magnitude as well as
     // the handedness for any mesh whose tangent w is 0. The decoder already resolves 0 to +1

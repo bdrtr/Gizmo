@@ -431,10 +431,10 @@ macro_rules! material_builders {
     /// forward: every type but [`MaterialType::Pbr`], anything blended, and every material on the
     /// browser and Android path, which has no G-buffer.
     ///
-    /// Only what `shader.wgsl` does not have is lost: no SSAO on its own surface, no decals, no
-    /// anisotropy, clear coat, subsurface or irradiance volumes, and fixed PCF shadows instead of
-    /// PCSS. Environment light and height fog are the same on both paths. Measured on one red cube
-    /// under all four presets and a set sky, with and without a sun, metal too: under 8 of 255 apart.
+    /// Every material knob and map, the environment, height fog and irradiance volumes mean the same
+    /// on both paths. Measured on one cube: under 2 of 255 apart for each knob and map, under 8 across
+    /// all four presets and a set sky. Only three things are lost: SSAO on its own surface, decals,
+    /// and PCSS, since the forward shader filters shadows with fixed PCF.
     #[must_use]
     pub fn with_forward(mut self, forward: bool) -> Self {
         self.is_forward = forward;

@@ -102,3 +102,52 @@ fn compute_clear_coat(
 
     return vec3<f32>(D * V_term * F) * light_color * intensity * visibility * NoL;
 }
+
+// Subsurface's lift of the ambient term.
+fn subsurface_ambient(ambient: vec3<f32>, subsurface: f32) -> vec3<f32> {
+    let sss_color = vec3<f32>(0.96, 0.28, 0.15);
+    return ambient + ambient * subsurface * sss_color * 0.45;
+}
+
+// The mirror ray, bent along the tangent by anisotropy. A smooth surface bends it most.
+fn anisotropic_reflection(R: vec3<f32>, N: vec3<f32>, T: vec3<f32>, anisotropy: f32, roughness: f32) -> vec3<f32> {
+    let stretch = anisotropy * (1.0 - roughness);
+    let direction = cross(cross(N, T), N);
+    return normalize(mix(R, direction, stretch));
+}
+
+// How much of the environment gets through the clear coat to the layer under it.
+fn coat_env_attenuation(NdV: f32, clear_coat: f32) -> f32 {
+    let F_env = 0.04 + (1.0 - 0.04) * pow(1.0 - NdV, 5.0);
+    return 1.0 - clear_coat * F_env;
+}
+
+// The clear coat's own reflection of `env`, seen from `NdV`, before weighting by the coat.
+fn coat_env_specular(env: vec3<f32>, NdV: f32) -> vec3<f32> {
+    let lut = approximate_env_brdf(NdV, 0.08);
+    return env * (0.04 * lut.x + lut.y);
+}
+
+// One light's `lit` result with the clear coat laid over it.
+fn layer_clear_coat(
+    lit: vec3<f32>, N: vec3<f32>, V: vec3<f32>, L: vec3<f32>,
+    light_color: vec3<f32>, intensity: f32, attenuation: f32, clear_coat: f32,
+) -> vec3<f32> {
+    let H = normalize(V + L);
+    let VoH = max(dot(V, H), 0.0);
+    let F_c = 0.04 + (1.0 - 0.04) * pow(1.0 - VoH, 5.0);
+    let coat_atten = 1.0 - clear_coat * F_c;
+    let coat_spec = compute_clear_coat(N, V, L, light_color, intensity, attenuation);
+    return lit * coat_atten + coat_spec * clear_coat;
+}
+
+// What scatters through the surface from a light, per unit of that light.
+fn subsurface_light(N: vec3<f32>, V: vec3<f32>, L: vec3<f32>, metallic: f32, subsurface: f32) -> vec3<f32> {
+    let sss_wrap = 0.35;
+    let sss_ndl = max((dot(N, L) + sss_wrap) / (1.0 + sss_wrap), 0.0);
+    let sss_power = 8.0;
+    let sss_scale = 0.65;
+    let sss_trans = pow(max(dot(-V, L), 0.0), sss_power) * sss_scale * (1.0 - metallic);
+    let sss_color = vec3<f32>(0.96, 0.28, 0.15);
+    return (sss_ndl * 0.12 + sss_trans) * subsurface * sss_color;
+}

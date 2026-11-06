@@ -12,6 +12,9 @@ const COMMON_WGSL: &str = include_str!("../shaders/common.wgsl");
 /// clear-coat, and the Lazarov env-BRDF LUT. Imports `gizmo::common`, so it is registered
 /// AFTER it below.
 const PBR_EXT_WGSL: &str = include_str!("../shaders/pbr_ext.wgsl");
+/// What a material is at a fragment (`#define_import_path gizmo::surface`), shared by the G-buffer
+/// and the forward shader.
+const SURFACE_WGSL: &str = include_str!("../shaders/surface.wgsl");
 
 /// Irradiance-volume sampling (`#define_import_path gizmo::irradiance`): the WGSL port of
 /// `gi::ProbeGrid::sample` and `gi::SHCoeffs::evaluate`. Only `deferred_lighting.wgsl` imports it,
@@ -90,6 +93,14 @@ pub(crate) fn compose_module(
             ..Default::default()
         })
         .map_err(|e| format!("composing pbr_ext.wgsl failed: {e}"))?;
+    composer
+        .add_composable_module(ComposableModuleDescriptor {
+            source: SURFACE_WGSL,
+            file_path: "gizmo/surface.wgsl",
+            language: ShaderLanguage::Wgsl,
+            ..Default::default()
+        })
+        .map_err(|e| format!("composing surface.wgsl failed: {e}"))?;
     composer
         .add_composable_module(ComposableModuleDescriptor {
             source: IRRADIANCE_WGSL,

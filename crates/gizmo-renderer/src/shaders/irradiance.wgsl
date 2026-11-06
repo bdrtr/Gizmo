@@ -26,8 +26,8 @@ struct GridMeta {
 // 28 floats per probe: 27 coefficients (L0, 3×L1, 5×L2, three channels each) + one pad. Flat
 // rather than a struct of vec3s because WGSL would pad every vec3 to 16 bytes and the Rust side
 // packs them at 12.
-@group(3) @binding(0) var<storage, read> gi_probes: array<f32>;
-@group(3) @binding(1) var<uniform> gi_meta: GridMeta;
+@group(#{REFLECTION_GROUP}) @binding(0) var<storage, read> gi_probes: array<f32>;
+@group(#{REFLECTION_GROUP}) @binding(1) var<uniform> gi_meta: GridMeta;
 
 fn gi_l0(i: u32) -> vec3<f32> {
     let b = i * 28u;

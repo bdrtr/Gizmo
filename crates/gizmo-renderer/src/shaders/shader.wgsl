@@ -1,14 +1,17 @@
 // SceneUniforms, LightData and the core BRDF (D_GGX/V_SmithJointGGX/F_Schlick/
 // compute_direct_lighting) come from gizmo::common, composed by load_shader_composed
-// (native) / load_shader_composed_web (web). The forward shader diverges from the deferred
+// (native) / load_shader_composed_web (web), and what a material is comes from gizmo::surface,
+// shared with the G-buffer. The forward shader diverges from the deferred
 // path only in bind-group layout: WebGPU caps groups at 4, so the CSM shadow group is
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
 #import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
-#import gizmo::pbr_ext::{approximate_env_brdf}
+#import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
+#import gizmo::surface::{evaluate_surface}
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment}
+#import gizmo::irradiance::{gi_sample}
 #endif
 
 // Inverse of a 3x3 matrix for correct normal transformation under non-uniform scale
@@ -49,11 +52,6 @@ var t_cookie: texture_2d_array<f32>;
 var s_cookie: sampler;
 #endif
 
-@group(1) @binding(0)
-var t_diffuse: texture_2d<f32>;
-@group(1) @binding(1)
-var s_diffuse: sampler;
-
 struct SkeletonData {
     joints: array<mat4x4<f32>, 128>, // Maksimum 128 kemik destegi
 };
@@ -83,6 +81,7 @@ struct VertexInput {
     @location(3) tex_coords: vec2<f32>,
     @location(4) joint_indices: vec4<u32>,
     @location(5) joint_weights: vec4<f32>,
+    @location(6) tangent: vec4<f32>,
 };
 
 struct VertexOutput {
@@ -98,6 +97,7 @@ struct VertexOutput {
     @location(6) inst_cutoff: f32,
     // `Material::emissive` — added unlit, as the deferred path adds RT5.
     @location(7) inst_emissive: vec4<f32>,  // w = 1: receives no shadows
+    @location(8) world_tangent: vec4<f32>,
 };
 
 @vertex
@@ -145,6 +145,11 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let normal_matrix = inverse_transpose_3x3(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz));
     let world_normal = normal_matrix * skinned_normal;
     out.normal = world_normal;
+
+    // A tangent is a direction on the surface, so it goes through the plain matrices, not the
+    // inverse transpose.
+    let skinned_tangent = skin_mat * vec4<f32>(input.tangent.xyz, 0.0);
+    out.world_tangent = vec4<f32>(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz) * skinned_tangent.xyz, input.tangent.w);
     
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr = inst.pbr;
@@ -208,7 +213,9 @@ fn fs_premultiplied(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 
 fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
-    let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    let surface = evaluate_surface(
+        in.tex_coords, in.normal, in.world_tangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
+    );
 #ifdef WIREFRAME
     // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0
     // means none was asked for, and the lines keep the lit colour below.
@@ -217,7 +224,7 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     }
 #endif
     
-    let final_alpha = in.inst_albedo.a * tex_color.a;
+    let final_alpha = surface.alpha;
     // **Two thresholds, and they are different questions.** The 0.01 is a floor: a fully
     // transparent texel has nothing to contribute and shading it is waste. The material's own
     // `alpha_cutoff` is a cut-out — foliage on a quad, a pierced fence — and it says where the
@@ -230,15 +237,14 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     if (in.inst_cutoff > 0.0 && final_alpha < in.inst_cutoff) {
         discard;
     }
-
-    var raw_normal = in.normal;
-    if (length(raw_normal) < 0.001) {
-        raw_normal = vec3<f32>(0.0, 1.0, 0.0);
+    if (surface.alpha_cutoff > 0.0 && final_alpha < surface.alpha_cutoff) {
+        discard;
     }
-    let N = normalize(raw_normal);
-    
-    let base_color = in.inst_albedo.rgb * tex_color.rgb;
-    let metallic = clamp(in.inst_pbr.y, 0.0, 1.0);
+
+    let N = surface.N;
+    let base_color = surface.base_color;
+    let albedo = surface.albedo;
+    let metallic = surface.metallic;
 
     // Editor debug views, matching `deferred_lighting.wgsl`'s numbering exactly — the studio's
     // toolbar sets one uniform and must not mean two different things depending on which path
@@ -325,35 +331,67 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
         }
         return vec4<f32>(final_bg, 1.0);
     } else if (in.inst_pbr.z > 0.5) {
-        return vec4<f32>(base_color, in.inst_albedo.a * tex_color.a);
+        return vec4<f32>(base_color, final_alpha);
     }
     
-    let min_roughness = max(in.inst_pbr.x, 0.05);
+    let min_roughness = surface.roughness;
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
-    let f0 = mix(vec3<f32>(0.04), base_color, metallic);
+    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let NdV = max(dot(N, view_dir), 0.001);
     
     // The deferred shader's environment terms, so a surface gets the same light on either path.
     let ambient_base = vec3<f32>(0.02, 0.02, 0.025);
-    let ambient = base_color * (get_procedural_environment(N, 1.0) + ambient_base) * (1.0 - metallic);
+    var ambient = albedo * (get_procedural_environment(N, 1.0) + ambient_base) * (1.0 - metallic);
+    if (surface.subsurface > 0.0) {
+        ambient = subsurface_ambient(ambient, surface.subsurface);
+    }
 
-    let R = reflect(-view_dir, N);
+    var R = reflect(-view_dir, N);
+    if (surface.anisotropy > 0.0) {
+        R = anisotropic_reflection(R, N, surface.T, surface.anisotropy, min_roughness);
+    }
     var env_color = get_procedural_environment(normalize(mix(R, N, min_roughness)), min_roughness);
     // With reflection probes in the scene the environment is theirs (native: group 5, the
     // irradiance volume's); with none, `probe_environment` hands back the environment it was given.
 #ifdef PROBES
     env_color = probe_environment(R, in.world_position, min_roughness, env_color);
 #endif
-    let env_brdf = approximate_env_brdf(max(dot(N, view_dir), 0.001), min_roughness);
-    let specular_ibl = env_color * (f0 * env_brdf.x + env_brdf.y);
+    let env_brdf = approximate_env_brdf(NdV, min_roughness);
+    var specular_ibl = env_color * (f0 * env_brdf.x + env_brdf.y);
+
+    if (surface.clear_coat > 0.0) {
+        let coat_atten_env = coat_env_attenuation(NdV, surface.clear_coat);
+        ambient *= coat_atten_env;
+        specular_ibl *= coat_atten_env;
+        var coat_env = get_procedural_environment(normalize(mix(reflect(-view_dir, N), N, 0.08)), 0.08);
+#ifdef PROBES
+        coat_env = probe_environment(reflect(-view_dir, N), in.world_position, 0.08, coat_env);
+#endif
+        specular_ibl += coat_env_specular(coat_env, NdV) * surface.clear_coat;
+    }
 
     var total_lighting = vec3<f32>(0.0);
 
     if (scene.sun_direction.w > 0.5) { 
         let L = normalize(-scene.sun_direction.xyz);
-        let sun_light = compute_direct_lighting(
-            N, view_dir, L, base_color, min_roughness, metallic, f0,
-            scene.sun_color.rgb, scene.sun_color.w, shadow_visibility
-        );
+        var sun_light = vec3<f32>(0.0);
+        if (surface.anisotropy > 0.0) {
+            sun_light = compute_direct_lighting_anisotropic(
+                N, view_dir, L, surface.T, surface.B, albedo, min_roughness, metallic, surface.anisotropy, f0,
+                scene.sun_color.rgb, scene.sun_color.w, shadow_visibility
+            );
+        } else {
+            sun_light = compute_direct_lighting(
+                N, view_dir, L, albedo, min_roughness, metallic, f0,
+                scene.sun_color.rgb, scene.sun_color.w, shadow_visibility
+            );
+        }
+        if (surface.clear_coat > 0.0) {
+            sun_light = layer_clear_coat(sun_light, N, view_dir, L, scene.sun_color.rgb, scene.sun_color.w, shadow_visibility, surface.clear_coat);
+        }
+        if (surface.subsurface > 0.0) {
+            sun_light += subsurface_light(N, view_dir, L, metallic, surface.subsurface) * scene.sun_color.rgb * scene.sun_color.w * shadow_visibility;
+        }
         total_lighting += sun_light;
     }
 
@@ -405,37 +443,47 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
             // A rectangle light (`compute_rect_lighting`; one-sided, so it gates itself).
             light_color_contrib = compute_rect_lighting(
                 N, view_dir, light.position.xyz - in.world_position, light.direction, light.params.z,
-                light.params.w, base_color, min_roughness, metallic, f0, light_rgb, intensity, window
+                light.params.w, albedo, min_roughness, metallic, f0, light_rgb, intensity, window
+            );
+        } else if (surface.anisotropy > 0.0) {
+            light_color_contrib = compute_direct_lighting_anisotropic(
+                N, view_dir, L, surface.T, surface.B, albedo, min_roughness, metallic, surface.anisotropy, f0,
+                light_rgb, intensity, attenuation
             );
         } else if (light_type == 0u && light.params.w > 0.0) {
             // A tube light (`compute_tube_lighting`).
             light_color_contrib = compute_tube_lighting(
                 N, view_dir, light.position.xyz - in.world_position, light.direction.xyz, light.params.w,
-                light.params.z, base_color, min_roughness, metallic, f0, light_rgb, intensity, attenuation
+                light.params.z, albedo, min_roughness, metallic, f0, light_rgb, intensity, attenuation
             );
         } else if (light_type != 2u && light.params.z > 0.0) {
             // A sphere-sourced point or spot light (`compute_sphere_lighting`).
             light_color_contrib = compute_sphere_lighting(
-                N, view_dir, light.position.xyz - in.world_position, light.params.z, base_color,
+                N, view_dir, light.position.xyz - in.world_position, light.params.z, albedo,
                 min_roughness, metallic, f0, light_rgb, intensity, attenuation
             );
         } else {
             light_color_contrib = compute_direct_lighting(
-                N, view_dir, L, base_color, min_roughness, metallic, f0,
+                N, view_dir, L, albedo, min_roughness, metallic, f0,
                 light_rgb, intensity, attenuation
             );
+        }
+        if (surface.clear_coat > 0.0) {
+            light_color_contrib = layer_clear_coat(light_color_contrib, N, view_dir, L, light_rgb, intensity, attenuation, surface.clear_coat);
         }
         total_lighting += light_color_contrib;
     }
     
-    // Vertex colour at face value, as `gbuffer.wgsl` and `baked_lit.wgsl` take it: an uncoloured
-    // source is already white, so rewriting near-black to white only un-paints a black surface.
-    let v_color = in.color;
-    var final_color = v_color * (ambient + total_lighting + specular_ibl) + in.inst_emissive.xyz;
-    
+    var indirect = vec3<f32>(0.0);
+#ifdef PROBES
+    // The baked probe grid, as the deferred shader adds it.
+    indirect = gi_sample(in.world_position, N) * albedo;
+#endif
+    var final_color = ambient + indirect + total_lighting + specular_ibl + surface.emissive;
+
     // We render to an Rgba16Float HDR buffer. Tone mapping is handled in post_process.wgsl.
     
-    let alpha = in.inst_albedo.a * tex_color.a;
+    let alpha = final_alpha;
     let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
     if (fog_kind == FOG_ADDITIVE) {
         final_color *= 1.0 - fog.a;

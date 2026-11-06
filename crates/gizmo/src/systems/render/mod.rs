@@ -7078,6 +7078,134 @@ mod golden_render_tests {
         });
     }
 
+    /// **Every material knob and map means the same on both paths.** The forward shader read only the
+    /// base colour for as long as both existed: a normal map never reached a browser, nor anisotropy,
+    /// clear coat, subsurface or a metallic-roughness, emissive or occlusion map. Each case has to
+    /// change the picture, or it proves nothing, and has to change it alike on both paths.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn every_material_knob_and_map_means_the_same_forward_and_deferred() {
+        use std::sync::Arc;
+        use wgpu::util::DeviceExt;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        fn pixel(renderer: &Renderer, rgba: [u8; 4]) -> wgpu::TextureView {
+            renderer
+                .device
+                .create_texture_with_data(
+                    &renderer.queue,
+                    &wgpu::TextureDescriptor {
+                        label: Some("one texel"),
+                        size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                        view_formats: &[],
+                    },
+                    wgpu::util::TextureDataOrder::default(),
+                    &rgba,
+                )
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        }
+        async fn centre(renderer: &mut Renderer, bind_group: Arc<wgpu::BindGroup>, knob: fn(Material) -> Material, forward: bool) -> [f32; 3] {
+            let format = renderer.config.format;
+            let mut world = World::new();
+            let cube = world.spawn();
+            // Tilted, under a sky whose colours differ by direction, so a bent reflection reads something
+            // else than a straight one.
+            let tilt = gizmo_math::Quat::from_rotation_y(0.5) * gizmo_math::Quat::from_rotation_x(0.4);
+            world.add_component(cube, Transform::new(Vec3::ZERO).with_rotation(tilt));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            let material = Material::new(bind_group).with_pbr(Vec4::new(0.8, 0.3, 0.2, 1.0), 0.3, 0.5).with_forward(forward);
+            world.add_component(cube, knob(material));
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(renderer, &mut world).await;
+            [centre_mean(&frame, format, 0), centre_mean(&frame, format, 1), centre_mean(&frame, format, 2)]
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::gradient([0.3, 0.5, 3.0], [2.0, 0.8, 0.2], [0.1, 0.6, 0.1]));
+            let layout = renderer.scene.texture_bind_group_layout.clone();
+            let mut assets = AssetManager::new();
+            let plain = Arc::clone(&AssetManager::material().build(&mut assets, &renderer.device, &renderer.queue, &layout));
+            let tilted = pixel(&renderer, [220, 128, 170, 255]);
+            let smooth_plastic = pixel(&renderer, [255, 30, 40, 255]);
+            let glow = pixel(&renderer, [255, 128, 0, 255]);
+            let occluded = pixel(&renderer, [60, 60, 60, 255]);
+            let glowing_params = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("emissive factor"),
+                contents: bytemuck::bytes_of(&gizmo_renderer::gpu_types::MaterialParams::new(
+                    [1.5, 1.5, 1.5],
+                    1.0,
+                    1.0,
+                    Default::default(),
+                    0.0,
+                )),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let with_normal = AssetManager::material().normal(&tilted).build(&mut assets, &renderer.device, &renderer.queue, &layout);
+            let with_mr = AssetManager::material().metallic_roughness(&smooth_plastic).build(&mut assets, &renderer.device, &renderer.queue, &layout);
+            let with_emissive = AssetManager::material().emissive(&glow).params(&glowing_params).build(&mut assets, &renderer.device, &renderer.queue, &layout);
+            let with_ao = AssetManager::material().occlusion(&occluded).build(&mut assets, &renderer.device, &renderer.queue, &layout);
+
+            let nothing: fn(Material) -> Material = |m| m;
+            let cases: [(&str, Arc<wgpu::BindGroup>, fn(Material) -> Material); 8] = [
+                ("anisotropy", plain.clone(), |m| m.with_anisotropy(0.9)),
+                ("clear coat", plain.clone(), |m| m.with_clear_coat(1.0)),
+                ("subsurface", plain.clone(), |m| m.with_subsurface(1.0)),
+                ("instance emissive", plain.clone(), |m| m.with_emissive(Vec3::new(0.0, 2.0, 0.0))),
+                ("normal map", with_normal, nothing),
+                ("metallic-roughness map", with_mr, nothing),
+                ("emissive map", with_emissive, nothing),
+                ("occlusion map", with_ao, nothing),
+            ];
+            let plain_frame = centre(&mut renderer, plain.clone(), nothing, true).await;
+            for (name, bind_group, knob) in cases {
+                let f = centre(&mut renderer, bind_group.clone(), knob, true).await;
+                let d = centre(&mut renderer, bind_group, knob, false).await;
+                let changed = (0..3).map(|i| (f[i] - plain_frame[i]).abs()).fold(0.0, f32::max);
+                assert!(changed > 1.0, "{name} changed nothing on the forward path: {f:?}, plain {plain_frame:?}");
+                // Measured: at most 0.4 of 255.
+                let apart = (0..3).map(|i| (f[i] - d[i]).abs()).fold(0.0, f32::max);
+                assert!(apart < 2.0, "{name}: forward {f:?}, deferred {d:?}");
+            }
+
+            // A baked irradiance grid, last, since it stays in the renderer: L0 alone is a red sky.
+            let mut grid = gizmo_renderer::gi::ProbeGrid::new(Vec3::new(-8.0, -2.0, -8.0), Vec3::new(8.0, 4.0, 8.0), [3, 3, 3]);
+            for p in &mut grid.probes {
+                p.coeffs.l0 = Vec3::new(1.0, 0.05, 0.05);
+            }
+            if let Some(def) = renderer.deferred.as_mut() {
+                def.irradiance.upload(&renderer.device, &renderer.queue, &grid);
+            }
+            let f = centre(&mut renderer, plain.clone(), nothing, true).await;
+            let d = centre(&mut renderer, plain.clone(), nothing, false).await;
+            assert!(f[0] > plain_frame[0] + 1.0, "a baked grid did not reach the forward path: {f:?}, plain {plain_frame:?}");
+            let apart = (0..3).map(|i| (f[i] - d[i]).abs()).fold(0.0, f32::max);
+            assert!(apart < 2.0, "baked grid: forward {f:?}, deferred {d:?}");
+        });
+    }
+
     /// **A forward material casts and receives like a deferred one.** The shadow pixels are the ones
     /// `ShadowCasting::On` darkens against `Off`, in all four pairings of the floor's path and the
     /// caster's. `unlit` drops a material from the shadow passes, which is why `forward_lit` is a flag
