@@ -553,6 +553,7 @@ impl Renderer {
             grid_pipeline: scene.grid_pipeline,
             blend_lit_pipelines: scene.blend_lit_pipelines,
             blend_unlit_pipelines: scene.blend_unlit_pipelines,
+            lit_lobes: scene.lit_lobes,
             shadow_texture_view: scene.shadow_texture_view,
             shadow_cascade_layer_views: scene.shadow_cascade_layer_views,
             shadow_depth_texture: scene.shadow_depth_texture,

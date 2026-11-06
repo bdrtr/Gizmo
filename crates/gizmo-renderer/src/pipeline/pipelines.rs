@@ -65,6 +65,9 @@ pub(super) struct CorePipelines {
     pub(super) grid: wgpu::RenderPipeline,
     /// The lit transparent pipeline under each of `BlendMode::VARIANTS`.
     pub(super) blend_lit: [wgpu::RenderPipeline; 3],
+    /// The lit pipelines with anisotropy, clear coat and subsurface, on the path where the ones above
+    /// leave them out. See [`LitLobes`](super::LitLobes).
+    pub(super) lobes: Option<super::LitLobes>,
     /// The unlit pipeline under each of them — and, unlike `unlit`, not writing depth: a blended
     /// draw is sorted, and a glow writing depth would hide the glow behind it.
     pub(super) blend_unlit: [wgpu::RenderPipeline; 3],
@@ -298,7 +301,31 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     let blended_state = baked_lit_state(true);
     let backdrop = crate::backdrop::backdrop_state();
 
+    // The forward-only path's second set: the same states as `render`, `render_double_sided`,
+    // `transparent` and `blend_lit` below, from the shader with the lobes in.
+    #[cfg(gizmo_forward_only)]
+    let lobes = {
+        let shader = super::shaders::load_shader_composed_web_with(
+            device,
+            include_str!("../shaders/shader.wgsl"),
+            "Lit Shader With Lobes",
+            &[("LOBES", naga_oil::compose::ShaderDefValue::Bool(true))],
+        );
+        let blend = wgpu::BlendState::ALPHA_BLENDING;
+        Some(super::LitLobes {
+            render: create_main(lit_layout, &shader, "Render Pipeline (lobes)", true, Some(wgpu::Face::Back), Some(blend), wgpu::PolygonMode::Fill),
+            render_double_sided: create_main(lit_layout, &shader, "Render TwoSided Pipeline (lobes)", true, None, Some(blend), wgpu::PolygonMode::Fill),
+            transparent: create_main(lit_layout, &shader, "Transparent Pipeline (lobes)", false, None, Some(blend), wgpu::PolygonMode::Fill),
+            blend: crate::components::BlendMode::VARIANTS.map(|mode| {
+                create_at(lit_fragment_entry(mode), lit_layout, &shader, &format!("Transparent Pipeline ({mode:?}, lobes)"), false, None, Some(mode.state()), wgpu::PolygonMode::Fill)
+            }),
+        })
+    };
+    #[cfg(not(gizmo_forward_only))]
+    let lobes = None;
+
     CorePipelines {
+        lobes,
         render: create_main(
             lit_layout,
             &shader,

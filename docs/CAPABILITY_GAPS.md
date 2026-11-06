@@ -227,6 +227,17 @@ lobes are shared functions in `pbr_ext.wgsl`, and on the desktop path the forwar
 irradiance volumes too. One tilted cube under a bright sky, per knob and map: at most 0.4 of 255 apart
 when measured, under 2 asserted.
 
+**The first version took a phone from 62 fps to 20,** an Adreno 618 drawing a cube and a floor, and only
+the phone could say so. Measured by taking pieces out: the extra samples cost nothing visible, the
+anisotropy, clear coat and subsurface branches took it from 43 to 20 though no material used them, and
+the UV transform and tangent basis per fragment from 69 to 44. Both have a right place to go. The UV
+transform and the tangent basis are linear, so they are computed per vertex now, on both paths: 64 fps
+with every map still read. The three lobes moved to a second set of lit pipelines on the forward-only
+path, which batching picks for a material that uses one; `the_plain_web_shader_leaves_the_lobes_out`
+holds that in place, since no test without a phone can measure it. **What is left is a real limit:** a
+clear coat on a floor filling the screen reads 20 fps on that phone, because that surface really does
+pay for all three.
+
 Unlit and baked-lit surfaces do not fill the G-buffer, so those effects still see through them, and a
 moving one gets no motion blur. Baked-lit exists to skip that cost, so changing this is its own
 decision.

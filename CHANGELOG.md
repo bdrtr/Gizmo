@@ -183,6 +183,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and subsurface never reached those paths. `surface.wgsl` now evaluates a material for both shaders, and
   each knob and map comes out under 2 of 255 apart forward and deferred. Irradiance volumes reach forward
   surfaces on the desktop path.
+  On Android and in the browser a material with anisotropy, clear coat or subsurface takes a second set of
+  lit pipelines, because an Adreno 618 pays for those branches even untaken: a cube and a floor hold 64 fps,
+  and a clear coat on a floor filling the screen reads 20.
 - **Height fog covers every material path: transparent, forward, baked-lit, water and mirrors, and
   `Renderer::fog` now works in the browser and on Android.** It was the deferred shader's alone. Each
   blend mode treats it as it needs: alpha and opaque fade to its colour, additive fades out, multiply

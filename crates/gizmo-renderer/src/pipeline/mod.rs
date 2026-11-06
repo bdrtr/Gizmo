@@ -23,6 +23,23 @@ use crate::gpu_types::ShadowVsUniform;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+/// The lit pipelines with anisotropy, clear coat and subsurface in, on the forward-only path.
+///
+/// An Adreno 618 pays for those branches whether they are taken or not: 43 fps without them and 20
+/// with them, drawing a cube and a floor. So materials that use none of them get pipelines without
+/// the code, and batching sends the ones that do here. What uses them still costs that much: a clear
+/// coat on a floor filling the screen reads 20 fps.
+pub struct LitLobes {
+    /// As [`SceneState::render_pipeline`].
+    pub render: wgpu::RenderPipeline,
+    /// As [`SceneState::render_double_sided_pipeline`].
+    pub render_double_sided: wgpu::RenderPipeline,
+    /// As [`SceneState::transparent_pipeline`].
+    pub transparent: wgpu::RenderPipeline,
+    /// As [`SceneState::blend_lit_pipelines`].
+    pub blend: [wgpu::RenderPipeline; 3],
+}
+
 /// Sahne render durumu — pipeline'lar, shadow, skeleton ve global bind group'lar
 pub struct SceneState {
     /// The main opaque PBR pipeline, back faces culled.
@@ -70,6 +87,9 @@ pub struct SceneState {
     pub blend_lit_pipelines: [wgpu::RenderPipeline; 3],
     /// The unlit pipeline under each of them, not writing depth.
     pub blend_unlit_pipelines: [wgpu::RenderPipeline; 3],
+    /// The lit pipelines with anisotropy, clear coat and subsurface, where the ones above leave them
+    /// out. `None` on the desktop path, whose lit pipelines always have them.
+    pub lit_lobes: Option<LitLobes>,
     /// The [`SceneUniforms`](crate::gpu_types::SceneUniforms) buffer — group 0, rewritten each
     /// frame.
     pub global_uniform_buffer: wgpu::Buffer,
@@ -316,6 +336,26 @@ impl SceneState {
     pub fn blend_variant(&self, unlit: bool, mode: crate::components::BlendMode) -> Option<&wgpu::RenderPipeline> {
         let i = crate::components::BlendMode::VARIANTS.iter().position(|m| *m == mode)?;
         Some(if unlit { &self.blend_unlit_pipelines[i] } else { &self.blend_lit_pipelines[i] })
+    }
+
+    /// The pipeline for a lit, non-custom draw. `lobes` says the material uses anisotropy, clear coat
+    /// or subsurface, which only the desktop path's pipelines always carry.
+    pub fn lit_pipeline(&self, lobes: bool, transparent: bool, double_sided: bool, mode: crate::components::BlendMode) -> &wgpu::RenderPipeline {
+        let index = crate::components::BlendMode::VARIANTS.iter().position(|m| *m == mode);
+        match self.lit_lobes.as_ref().filter(|_| lobes) {
+            Some(set) => match (transparent, index) {
+                (true, Some(i)) => &set.blend[i],
+                (true, None) => &set.transparent,
+                (false, _) if double_sided => &set.render_double_sided,
+                (false, _) => &set.render,
+            },
+            None => match (transparent, index) {
+                (true, Some(i)) => &self.blend_lit_pipelines[i],
+                (true, None) => &self.transparent_pipeline,
+                (false, _) if double_sided => &self.render_double_sided_pipeline,
+                (false, _) => &self.render_pipeline,
+            },
+        }
     }
 }
 
@@ -704,6 +744,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         grid_pipeline: core_pipelines.grid,
         blend_lit_pipelines: core_pipelines.blend_lit,
         blend_unlit_pipelines: core_pipelines.blend_unlit,
+        lit_lobes: core_pipelines.lobes,
         shadow_pipeline,
         global_uniform_buffer,
         global_bind_group_layout: layouts.global,
@@ -764,6 +805,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let core_pipelines = build_core_pipelines(device, &layouts);
     let shadow_pipeline = build_shadow_pipeline(device, &layouts);
 
+    renderer.scene.lit_lobes = core_pipelines.lobes;
     renderer.scene.render_pipeline = core_pipelines.render;
     renderer.scene.render_double_sided_pipeline = core_pipelines.render_double_sided;
     renderer.scene.wireframe_pipeline = core_pipelines.wireframe;
@@ -807,6 +849,26 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
 
 #[cfg(test)]
 mod tests {
+    /// **The forward-only path's plain lit shader carries no anisotropy, clear coat or subsurface.**
+    /// An Adreno 618 pays for those branches even when no material takes them: 20 fps against 43,
+    /// drawing a cube and a floor. Only a phone can measure that, so this holds the cause in place.
+    #[test]
+    fn the_plain_web_shader_leaves_the_lobes_out_and_the_variant_has_them() {
+        use super::shaders::{compose_wgsl, native_render_defs, web_render_defs};
+        let src = include_str!("../shaders/shader.wgsl");
+        let lobes = ["compute_direct_lighting_anisotropic", "layer_clear_coat", "subsurface_light"];
+        let plain = compose_wgsl(src, "shader.wgsl", web_render_defs());
+        let mut defs = web_render_defs();
+        defs.insert("LOBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+        let variant = compose_wgsl(src, "shader.wgsl", defs);
+        let desktop = compose_wgsl(src, "shader.wgsl", native_render_defs());
+        for lobe in lobes {
+            assert!(!plain.contains(lobe), "the plain web shader has {lobe}");
+            assert!(variant.contains(lobe), "the web variant lost {lobe}");
+            assert!(desktop.contains(lobe), "the desktop shader lost {lobe}");
+        }
+    }
+
     use super::*;
 
     /// The core WGSL shaders must compile with naga on a headless device.
@@ -942,6 +1004,11 @@ mod tests {
                     variants.push(("native", shaders::compose_wgsl(src, name, shaders::native_render_defs())));
                     if web_path.contains(name) {
                         variants.push(("web", shaders::compose_wgsl(src, name, shaders::web_render_defs())));
+                    }
+                    if *name == "shader.wgsl" {
+                        let mut defs = shaders::web_render_defs();
+                        defs.insert("LOBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        variants.push(("web with lobes", shaders::compose_wgsl(src, name, defs)));
                     }
                 } else {
                     variants.push(("raw", src.to_string()));

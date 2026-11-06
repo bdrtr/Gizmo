@@ -38,6 +38,9 @@ pub(crate) fn native_render_defs() -> HashMap<String, ShaderDefValue> {
         // volume's group, for its reflection probes. The web has no group left, so no `PROBES`.
         ("PROBES".to_string(), ShaderDefValue::Bool(true)),
         ("REFLECTION_GROUP".to_string(), ShaderDefValue::UInt(5)),
+        // Anisotropy, clear coat and subsurface in `shader.wgsl`. Always on here; the forward-only
+        // path builds a second set of lit pipelines with them, for the materials that use them.
+        ("LOBES".to_string(), ShaderDefValue::Bool(true)),
     ])
 }
 

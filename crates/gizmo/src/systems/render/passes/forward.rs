@@ -179,12 +179,7 @@ pub fn record_forward_and_fluid(
                         Some(p) => p,
                         None => &renderer.scene.unlit_pipeline,
                     }
-                } else if let Some(p) =
-                    item.is_transparent.then(|| renderer.scene.blend_variant(false, item.blend_mode)).flatten()
-                {
-                    // Transparent PBR blending additively, multiplicatively or premultiplied.
-                    p
-                } else if item.is_transparent {
+                } else {
                     // There is no two-sided *variant* of the blended pipeline because the blended
                     // pipeline already is one: `transparent` is built with `cull_mode: None`
                     // (`pipelines.rs`, and `baked_lit_state(true)` says the same for the baked-lit
@@ -195,11 +190,7 @@ pub fn record_forward_and_fluid(
                     // Corrected 2026-08-23 against a measurement in `demo/src/bin/blend_modes.rs`:
                     // a back-facing transparent plane renders, and toggling `with_double_sided`
                     // produces a bit-identical frame.
-                    &renderer.scene.transparent_pipeline
-                } else if item.is_double_sided {
-                    &renderer.scene.render_double_sided_pipeline
-                } else {
-                    &renderer.scene.render_pipeline
+                    renderer.scene.lit_pipeline(item.lobes, item.is_transparent, item.is_double_sided, item.blend_mode)
                 };
 
                 // `Some(None)` is a registered id with nothing behind it: draw nothing rather than

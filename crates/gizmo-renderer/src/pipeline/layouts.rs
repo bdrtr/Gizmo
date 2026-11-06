@@ -156,7 +156,7 @@ pub(super) fn build_layouts(device: &wgpu::Device) -> Layouts {
             filterable_tex(5), // ambient occlusion
             wgpu::BindGroupLayoutEntry {
                 binding: 6,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,

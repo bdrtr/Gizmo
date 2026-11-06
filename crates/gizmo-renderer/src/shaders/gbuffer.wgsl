@@ -2,7 +2,7 @@
 // Writes opaque PBR surfaces to three MRTs; unlit/skybox objects are discarded here
 // and drawn in a subsequent forward pass.
 
-#import gizmo::surface::{evaluate_surface}
+#import gizmo::surface::{evaluate_surface, surface_uv, tangent_frame, surface_lobes}
 
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
     let cross01 = cross(m[0], m[1]);
@@ -67,6 +67,7 @@ struct VertexOutput {
     @location(8) motion_before:  vec4<f32>,
     // `Material::emissive`, per instance — what game code sets with `with_emissive`.
     @location(9) inst_emissive:  vec4<f32>,  // w = 1: receives no shadows
+    @location(10) bitangent:     vec3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -87,7 +88,7 @@ struct Motion {
 fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.color     = input.color;
-    out.tex_coords = input.tex_coords;
+    out.tex_coords = surface_uv(input.tex_coords);
 
     let inst  = instances[instance_idx];
     let model = mat4x4<f32>(
@@ -117,13 +118,15 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let skin_normal_mat = inverse_transpose_3x3(mat3x3<f32>(skin_mat[0].xyz, skin_mat[1].xyz, skin_mat[2].xyz));
     let skinned_normal = skin_normal_mat * input.normal;
     let normal_mat     = inverse_transpose_3x3(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz));
-    out.normal = normal_mat * skinned_normal;
 
-    // Tangent bir yüzey YÖNÜdür → düz model 3x3 ile taşınır, inverse-transpose DEĞİL
-    // (yorum satır 120-122). skin yarısı (skin_mat) zaten düz; model yarısı da düz olmalı.
+    // Tangent bir yüzey YÖNÜdür → düz model 3x3 ile taşınır, inverse-transpose DEĞİL.
+    // skin yarısı (skin_mat) zaten düz; model yarısı da düz olmalı.
     let skinned_tangent = skin_mat * vec4<f32>(input.tangent.xyz, 0.0);
     let model_mat3 = mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz);
-    out.world_tangent = vec4<f32>(model_mat3 * skinned_tangent.xyz, input.tangent.w);
+    let frame = tangent_frame(normal_mat * skinned_normal, model_mat3 * skinned_tangent.xyz, input.tangent.w);
+    out.normal = frame.N;
+    out.world_tangent = vec4<f32>(frame.T, input.tangent.w);
+    out.bitangent = frame.B;
 
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr    = inst.pbr;
@@ -160,7 +163,7 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     if (in.inst_pbr.z > 0.5) { discard; }
 
     let surface = evaluate_surface(
-        in.tex_coords, in.normal, in.world_tangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
+        in.tex_coords, in.normal, in.world_tangent.xyz, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
     );
     // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.
     // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
@@ -169,12 +172,13 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let albedo = surface.albedo;
     let metallic = surface.metallic;
     let N = surface.N;
-    let T = surface.T;
+    let T = normalize(in.world_tangent.xyz);
     let roughness = surface.roughness;
     let emissive = surface.emissive;
-    let subsurface_raw = surface.subsurface;
-    let clear_coat_raw = surface.clear_coat;
-    let anisotropy_raw = surface.anisotropy;
+    let lobes = surface_lobes(in.inst_pbr);
+    let anisotropy_raw = lobes.x;
+    let clear_coat_raw = lobes.y;
+    let subsurface_raw = lobes.z;
 
     // `select`, not `sign`: `sign(0.0)` is 0, which would zero the clear-coat magnitude as well as
     // the handedness for any mesh whose tangent w is 0. The decoder already resolves 0 to +1

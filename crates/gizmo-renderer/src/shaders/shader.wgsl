@@ -7,8 +7,14 @@
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
 #import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
-#import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
-#import gizmo::surface::{evaluate_surface}
+#import gizmo::pbr_ext::{approximate_env_brdf}
+#ifdef LOBES
+#import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
+#endif
+#import gizmo::surface::{evaluate_surface, surface_uv, tangent_frame}
+#ifdef LOBES
+#import gizmo::surface::{surface_lobes}
+#endif
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment}
 #import gizmo::irradiance::{gi_sample}
@@ -97,14 +103,15 @@ struct VertexOutput {
     @location(6) inst_cutoff: f32,
     // `Material::emissive` — added unlit, as the deferred path adds RT5.
     @location(7) inst_emissive: vec4<f32>,  // w = 1: receives no shadows
-    @location(8) world_tangent: vec4<f32>,
+    @location(8) tangent: vec3<f32>,
+    @location(9) bitangent: vec3<f32>,
 };
 
 @vertex
 fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.color = input.color;
-    out.tex_coords = input.tex_coords;
+    out.tex_coords = surface_uv(input.tex_coords);
     
     let inst = instances[instance_idx];
     let model = mat4x4<f32>(
@@ -144,12 +151,13 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     let skinned_normal = skin_normal_mat * input.normal;
     let normal_matrix = inverse_transpose_3x3(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz));
     let world_normal = normal_matrix * skinned_normal;
-    out.normal = world_normal;
-
     // A tangent is a direction on the surface, so it goes through the plain matrices, not the
     // inverse transpose.
     let skinned_tangent = skin_mat * vec4<f32>(input.tangent.xyz, 0.0);
-    out.world_tangent = vec4<f32>(mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz) * skinned_tangent.xyz, input.tangent.w);
+    let frame = tangent_frame(world_normal, mat3x3<f32>(model[0].xyz, model[1].xyz, model[2].xyz) * skinned_tangent.xyz, input.tangent.w);
+    out.normal = frame.N;
+    out.tangent = frame.T;
+    out.bitangent = frame.B;
     
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr = inst.pbr;
@@ -214,7 +222,7 @@ fn fs_premultiplied(in: VertexOutput) -> @location(0) vec4<f32> {
 
 fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     let surface = evaluate_surface(
-        in.tex_coords, in.normal, in.world_tangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
+        in.tex_coords, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
     );
 #ifdef WIREFRAME
     // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0
@@ -335,6 +343,18 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     }
     
     let min_roughness = surface.roughness;
+#ifdef LOBES
+    // Anisotropy, clear coat and subsurface are this variant's alone: on a phone their branches cost
+    // as much as if they were always taken (20 fps against 43 on an Adreno 618 with a cube and a
+    // floor), so on the forward-only path only a material that uses them pays for them. See
+    // `SceneState::lit_pipeline`.
+    let lobes = surface_lobes(in.inst_pbr);
+    let anisotropy = lobes.x;
+    let clear_coat = lobes.y;
+    let subsurface = lobes.z;
+    let T = normalize(in.tangent);
+    let B = normalize(in.bitangent);
+#endif
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
     let f0 = mix(vec3<f32>(0.04), albedo, metallic);
     let NdV = max(dot(N, view_dir), 0.001);
@@ -342,14 +362,18 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     // The deferred shader's environment terms, so a surface gets the same light on either path.
     let ambient_base = vec3<f32>(0.02, 0.02, 0.025);
     var ambient = albedo * (get_procedural_environment(N, 1.0) + ambient_base) * (1.0 - metallic);
-    if (surface.subsurface > 0.0) {
-        ambient = subsurface_ambient(ambient, surface.subsurface);
+#ifdef LOBES
+    if (subsurface > 0.0) {
+        ambient = subsurface_ambient(ambient, subsurface);
     }
+#endif
 
     var R = reflect(-view_dir, N);
-    if (surface.anisotropy > 0.0) {
-        R = anisotropic_reflection(R, N, surface.T, surface.anisotropy, min_roughness);
+#ifdef LOBES
+    if (anisotropy > 0.0) {
+        R = anisotropic_reflection(R, N, T, anisotropy, min_roughness);
     }
+#endif
     var env_color = get_procedural_environment(normalize(mix(R, N, min_roughness)), min_roughness);
     // With reflection probes in the scene the environment is theirs (native: group 5, the
     // irradiance volume's); with none, `probe_environment` hands back the environment it was given.
@@ -359,39 +383,41 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     let env_brdf = approximate_env_brdf(NdV, min_roughness);
     var specular_ibl = env_color * (f0 * env_brdf.x + env_brdf.y);
 
-    if (surface.clear_coat > 0.0) {
-        let coat_atten_env = coat_env_attenuation(NdV, surface.clear_coat);
+#ifdef LOBES
+    if (clear_coat > 0.0) {
+        let coat_atten_env = coat_env_attenuation(NdV, clear_coat);
         ambient *= coat_atten_env;
         specular_ibl *= coat_atten_env;
         var coat_env = get_procedural_environment(normalize(mix(reflect(-view_dir, N), N, 0.08)), 0.08);
 #ifdef PROBES
         coat_env = probe_environment(reflect(-view_dir, N), in.world_position, 0.08, coat_env);
 #endif
-        specular_ibl += coat_env_specular(coat_env, NdV) * surface.clear_coat;
+        specular_ibl += coat_env_specular(coat_env, NdV) * clear_coat;
     }
+#endif
 
     var total_lighting = vec3<f32>(0.0);
 
     if (scene.sun_direction.w > 0.5) { 
         let L = normalize(-scene.sun_direction.xyz);
-        var sun_light = vec3<f32>(0.0);
-        if (surface.anisotropy > 0.0) {
+        var sun_light = compute_direct_lighting(
+            N, view_dir, L, albedo, min_roughness, metallic, f0,
+            scene.sun_color.rgb, scene.sun_color.w, shadow_visibility
+        );
+#ifdef LOBES
+        if (anisotropy > 0.0) {
             sun_light = compute_direct_lighting_anisotropic(
-                N, view_dir, L, surface.T, surface.B, albedo, min_roughness, metallic, surface.anisotropy, f0,
-                scene.sun_color.rgb, scene.sun_color.w, shadow_visibility
-            );
-        } else {
-            sun_light = compute_direct_lighting(
-                N, view_dir, L, albedo, min_roughness, metallic, f0,
+                N, view_dir, L, T, B, albedo, min_roughness, metallic, anisotropy, f0,
                 scene.sun_color.rgb, scene.sun_color.w, shadow_visibility
             );
         }
-        if (surface.clear_coat > 0.0) {
-            sun_light = layer_clear_coat(sun_light, N, view_dir, L, scene.sun_color.rgb, scene.sun_color.w, shadow_visibility, surface.clear_coat);
+        if (clear_coat > 0.0) {
+            sun_light = layer_clear_coat(sun_light, N, view_dir, L, scene.sun_color.rgb, scene.sun_color.w, shadow_visibility, clear_coat);
         }
-        if (surface.subsurface > 0.0) {
-            sun_light += subsurface_light(N, view_dir, L, metallic, surface.subsurface) * scene.sun_color.rgb * scene.sun_color.w * shadow_visibility;
+        if (subsurface > 0.0) {
+            sun_light += subsurface_light(N, view_dir, L, metallic, subsurface) * scene.sun_color.rgb * scene.sun_color.w * shadow_visibility;
         }
+#endif
         total_lighting += sun_light;
     }
 
@@ -445,11 +471,13 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
                 N, view_dir, light.position.xyz - in.world_position, light.direction, light.params.z,
                 light.params.w, albedo, min_roughness, metallic, f0, light_rgb, intensity, window
             );
-        } else if (surface.anisotropy > 0.0) {
+#ifdef LOBES
+        } else if (anisotropy > 0.0) {
             light_color_contrib = compute_direct_lighting_anisotropic(
-                N, view_dir, L, surface.T, surface.B, albedo, min_roughness, metallic, surface.anisotropy, f0,
+                N, view_dir, L, T, B, albedo, min_roughness, metallic, anisotropy, f0,
                 light_rgb, intensity, attenuation
             );
+#endif
         } else if (light_type == 0u && light.params.w > 0.0) {
             // A tube light (`compute_tube_lighting`).
             light_color_contrib = compute_tube_lighting(
@@ -468,9 +496,11 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
                 light_rgb, intensity, attenuation
             );
         }
-        if (surface.clear_coat > 0.0) {
-            light_color_contrib = layer_clear_coat(light_color_contrib, N, view_dir, L, light_rgb, intensity, attenuation, surface.clear_coat);
+#ifdef LOBES
+        if (clear_coat > 0.0) {
+            light_color_contrib = layer_clear_coat(light_color_contrib, N, view_dir, L, light_rgb, intensity, attenuation, clear_coat);
         }
+#endif
         total_lighting += light_color_contrib;
     }
     
