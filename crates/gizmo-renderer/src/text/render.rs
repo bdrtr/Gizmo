@@ -444,7 +444,13 @@ impl TextRenderer {
         clip: Option<[Vec2; 2]>,
     ) {
         let wrap = wrap_width(text, screen_anchor, screen_size);
-        let Some(mut layout) = self.library.layout_wrapped(text.font, text.size_px, &text.content, wrap) else {
+        let runs = text.style_runs();
+        let laid_out = if text.vertical {
+            self.library.layout_vertical(text.font, text.size_px, &text.content, wrap, &runs)
+        } else {
+            self.library.layout_styled(text.font, text.size_px, &text.content, wrap, &runs)
+        };
+        let Some(mut layout) = laid_out else {
             return;
         };
         if text.align == crate::components::TextAlign::Start {
@@ -753,6 +759,28 @@ mod tests {
     }
 
     /// One glyph on the baseline at pen 0, in a 10-wide, 20-tall box.
+    /// A part of a rich text says its look; a text of colours alone asks for no style runs, so it costs
+    /// no allocation and takes the cheap path.
+    #[test]
+    fn rich_parts_carry_their_face_and_size() {
+        use crate::components::Span;
+        let red = Vec4::new(1.0, 0.0, 0.0, 1.0);
+        let colours = Text::screen("", FontId(0), 16.0, Vec2::ZERO).rich([("a", red), ("b", Vec4::ONE)]);
+        assert_eq!(colours.content, "ab");
+        assert!(colours.style_runs().is_empty());
+        assert_eq!(colours.color_at(0), red);
+
+        let t = Text::screen("", FontId(0), 16.0, Vec2::ZERO)
+            .rich([Span::new("Can: "), Span::new("5").color(red).size(32.0), Span::new("!").font(FontId(1))]);
+        assert_eq!(t.content, "Can: 5!");
+        let runs = t.style_runs();
+        assert_eq!(runs.len(), 3);
+        assert_eq!((runs[0].start, runs[0].px, runs[0].font), (0, 16.0, FontId(0)), "the text's own");
+        assert_eq!((runs[1].start, runs[1].px, runs[1].font), (5, 32.0, FontId(0)));
+        assert_eq!((runs[2].start, runs[2].px, runs[2].font), (6, 16.0, FontId(1)));
+        assert_eq!(t.color_at(5), red);
+    }
+
     fn one_glyph() -> TextLayout {
         TextLayout {
             glyphs: vec![PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 }],

@@ -48,10 +48,71 @@ pub struct Text {
     /// itself is placed by [`anchor`](Self::anchor); this moves lines within it, so it matters only
     /// for text with more than one line.
     pub align: TextAlign,
-    /// Colours for parts of [`content`](Self::content), set by [`rich`](Self::rich): each entry is the
-    /// byte offset where a colour starts, ascending. Empty for a text of one colour. Multiplied by
-    /// [`color`](Self::color), so that still fades the whole string.
-    pub spans: Vec<(u32, Vec4)>,
+    /// Parts of [`content`](Self::content) with a look of their own, set by [`rich`](Self::rich),
+    /// ascending. Empty for a text of one look.
+    pub spans: Vec<TextSpan>,
+    /// Set in columns, read top to bottom with the first on the right, as [`in_columns`](Self::in_columns)
+    /// asks. [`max_width`](Self::max_width) is then how long a column may be.
+    pub vertical: bool,
+}
+
+/// One part of a [`Text::rich`]: `("Can: ", WHITE)`, or for more than a colour
+/// `Span::new("5").color(RED).size(32.0).font(bold)`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Span {
+    text: String,
+    color: Vec4,
+    font: Option<FontId>,
+    size_px: Option<f32>,
+}
+
+impl Span {
+    /// White text in the look of the [`Text`] around it.
+    #[must_use]
+    pub fn new(text: impl Into<String>) -> Self {
+        Self { text: text.into(), color: Vec4::ONE, font: None, size_px: None }
+    }
+
+    /// Its colour, multiplied by the text's.
+    #[must_use]
+    pub fn color(mut self, color: Vec4) -> Self {
+        self.color = color;
+        self
+    }
+
+    /// Its face, instead of the text's. A face with a bold or an italic is simply another face.
+    #[must_use]
+    pub fn font(mut self, font: FontId) -> Self {
+        self.font = Some(font);
+        self
+    }
+
+    /// Its size, instead of the text's.
+    #[must_use]
+    pub fn size(mut self, size_px: f32) -> Self {
+        self.size_px = Some(size_px);
+        self
+    }
+}
+
+impl<S: Into<String>> From<(S, Vec4)> for Span {
+    fn from((text, color): (S, Vec4)) -> Self {
+        Self::new(text).color(color)
+    }
+}
+
+/// A part of a [`Text`] with a look of its own, from byte `start` to the next one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct TextSpan {
+    /// Byte offset it starts at.
+    pub start: u32,
+    /// Multiplied by [`Text::color`], so that still fades the whole string.
+    pub color: Vec4,
+    /// Its face, if not the text's.
+    pub font: Option<FontId>,
+    /// Its size, if not the text's.
+    pub size_px: Option<f32>,
 }
 
 impl Text {
@@ -68,6 +129,7 @@ impl Text {
             max_width: None,
             align: TextAlign::Start,
             spans: Vec::new(),
+            vertical: false,
         }
     }
 
@@ -88,6 +150,7 @@ impl Text {
             max_width: None,
             align: TextAlign::Start,
             spans: Vec::new(),
+            vertical: false,
         }
     }
 
@@ -110,6 +173,7 @@ impl Text {
             max_width: None,
             align: TextAlign::Start,
             spans: Vec::new(),
+            vertical: false,
         }
     }
 
@@ -132,6 +196,7 @@ impl Text {
             max_width: None,
             align: TextAlign::Start,
             spans: Vec::new(),
+            vertical: false,
         }
     }
 
@@ -141,24 +206,52 @@ impl Text {
     /// Text::screen("", font, 24.0, at).rich([("Can: ", WHITE), ("5", RED)])
     /// ```
     #[must_use]
-    pub fn rich<S: AsRef<str>>(mut self, parts: impl IntoIterator<Item = (S, Vec4)>) -> Self {
+    pub fn rich<P: Into<Span>>(mut self, parts: impl IntoIterator<Item = P>) -> Self {
         self.content.clear();
         self.spans.clear();
-        for (part, color) in parts {
-            self.spans.push((self.content.len() as u32, color));
-            self.content.push_str(part.as_ref());
+        for part in parts {
+            let part = part.into();
+            self.spans.push(TextSpan {
+                start: self.content.len() as u32,
+                color: part.color,
+                font: part.font,
+                size_px: part.size_px,
+            });
+            self.content.push_str(&part.text);
         }
         self
+    }
+
+    /// The stretches in another face or size, for [`FontLibrary::layout_styled`](crate::text::FontLibrary::layout_styled).
+    /// Empty, and no allocation, for a text in one.
+    #[must_use]
+    pub fn style_runs(&self) -> Vec<crate::text::StyleRun> {
+        if self.spans.iter().all(|s| s.font.is_none() && s.size_px.is_none()) {
+            return Vec::new();
+        }
+        self.spans
+            .iter()
+            .map(|s| {
+                crate::text::StyleRun::new(s.start, s.font.unwrap_or(self.font), s.size_px.unwrap_or(self.size_px))
+            })
+            .collect()
     }
 
     /// The colour of the character at byte offset `at`, [`color`](Self::color) included.
     #[must_use]
     pub fn color_at(&self, at: u32) -> Vec4 {
-        let span = self.spans.partition_point(|(start, _)| *start <= at);
+        let span = self.spans.partition_point(|s| s.start <= at);
         match span.checked_sub(1) {
-            Some(i) => self.spans[i].1 * self.color,
+            Some(i) => self.spans[i].color * self.color,
             None => self.color,
         }
+    }
+
+    /// Sets the text in columns: see [`vertical`](Self#structfield.vertical).
+    #[must_use]
+    pub fn in_columns(mut self) -> Self {
+        self.vertical = true;
+        self
     }
 
     /// Replaces the colour.

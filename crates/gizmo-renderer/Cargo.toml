@@ -49,6 +49,9 @@ ab_glyph = "0.2"
 # egui (`epaint` uses it). Both are pure Rust and build for wasm.
 harfrust = "0.12"
 unicode-bidi = "0.3"
+# Where a line may break: UAX #14 for every script, and the LSTM models Thai, Lao, Khmer and Burmese need,
+# which write no spaces between words. Sealed like the other two.
+icu_segmenter = "2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 meshopt = "0.6.2"

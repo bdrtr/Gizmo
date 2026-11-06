@@ -48,6 +48,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+
+- **Lines break where each script allows.** `Text::max_width` used to break only at spaces, so Chinese, Japanese and
+  Thai, which have none, were cut between arbitrary characters, a full stop could start a line, and a Thai word was
+  torn in half. `icu_segmenter` now gives the opportunities: UAX #14 for every script and the LSTM models Thai, Lao,
+  Khmer and Burmese need. **Latin wraps differently too:** a line can now break after a hyphen.
+
+- **Several sizes and faces in one text.** `Text::rich` still takes `("Can: ", WHITE)`, and now also
+  `Span::new("5").color(RED).size(32.0).font(bold)`. Each line is as tall as the tallest thing on it, everything on a
+  line shares a baseline, and wrapping measures each part at its own size. `FontLibrary::layout_styled` is the layout
+  underneath. **Breaks:** `Text::spans` is `Vec<TextSpan>`, not `Vec<(u32, Vec4)>`.
+
+- **Vertical text.** `Text::in_columns` sets a text top to bottom with the first column on the right, as Chinese,
+  Japanese and Korean can be. `max_width` is then a column's length. Upright only: Latin is not turned on its side.
+
+- **The line breaker costs the browser build 0.32 MB gzipped** (5.20 → 5.52 MB, +6.2 %; +0.40 MB raw). It carries the
+  models for the scripts that write no spaces, and there is no way to choose a smaller set yet.
+
 ### Changed
 
 - **`Query` has the shape of Bevy's.** `iter()` and `iter_mut()` yield the row's item and nothing else;

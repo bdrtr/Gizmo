@@ -30,17 +30,13 @@
 //!
 //! # What it does not do
 //!
-//! One size and one face per text (colours can differ, see `Text::rich`), and no language setting:
-//! a face's `locl` lookups see its defaults, and Latin text
+//! No language setting: a face's `locl` lookups see its defaults, and Latin text
 //! gets no ligatures (see `shape`). Font fallback is a single chain for the whole library
 //! ([`FontLibrary::add_fallback`](crate::text::FontLibrary::add_fallback)): a character the text's own
 //! face has no glyph for is drawn from the first fallback face that has one. Base direction is found
 //! per paragraph; a bidi control that opens on one wrapped line does not carry to the next. Lines
-//! break on `\n`, and — given a width ([`FontLibrary::layout_wrapped`](crate::text::FontLibrary::layout_wrapped)) —
-//! at spaces, which is right for scripts that separate words with spaces and wrong for those that do
-//! not (Chinese, Japanese, Thai wrap only between characters here). Vertical text is not laid out.
-//! These are named here rather than discovered later: a text system that silently draws the wrong
-//! glyphs for a script is worse than one that says it cannot.
+//! break on `\n` and, given a width ([`FontLibrary::layout_wrapped`](crate::text::FontLibrary::layout_wrapped)),
+//! wherever Unicode lets them.
 
 use std::collections::HashMap;
 
@@ -170,7 +166,7 @@ pub struct TextLayout {
     pub glyphs: Vec<PositionedGlyph>,
     /// Width of the widest line.
     pub width: f32,
-    /// `lines * line_height`.
+    /// The lines' heights added up, each as tall as the tallest thing on it.
     pub height: f32,
     /// How many lines there are — from `\n` and from wrapping. Always at least 1, including for
     /// the empty string.
@@ -223,8 +219,106 @@ pub struct FontLibrary {
     recent: std::sync::Mutex<HashMap<LayoutKey, HashMap<String, TextLayout>>>,
 }
 
-/// Face, size and wrap width, as bits: what a layout depends on, next to its text.
-type LayoutKey = (u32, u32, Option<u32>);
+/// Face, size, wrap width and the runs of another style, as bits: what a layout depends on, next to its
+/// text.
+type LayoutKey = (u32, u32, Option<u32>, Vec<(u32, u32, u32)>, bool);
+
+/// A stretch of a text in another face or size, from byte `start` of it to the next run. Whatever comes
+/// before the first run is in the text's own.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct StyleRun {
+    /// Byte offset the run starts at.
+    pub start: u32,
+    /// The run's face.
+    pub font: FontId,
+    /// The run's size, in the same pixels as the text's.
+    pub px: f32,
+}
+
+impl StyleRun {
+    /// A run of `font` at `px` from byte `start`.
+    #[must_use]
+    pub fn new(start: u32, font: FontId, px: f32) -> Self {
+        Self { start, font, px }
+    }
+}
+
+/// Which faces and size each byte of a text is in: style 0 is the text's own.
+struct Styles<'a> {
+    faces: Vec<Faces<'a>>,
+    px: Vec<f32>,
+    /// Where each style starts, ascending; the first is 0.
+    starts: Vec<usize>,
+    /// Lines are columns, read top to bottom, the first on the right.
+    vertical: bool,
+}
+
+impl<'a> Styles<'a> {
+    fn single(faces: Faces<'a>, px: f32) -> Self {
+        Self { faces: vec![faces], px: vec![px], starts: vec![0], vertical: false }
+    }
+
+    /// Adds `runs`, kept to byte offsets that are in `text`, on a character and in order. One that names
+    /// a face never loaded falls back on the text's own, as an unknown face draws nothing.
+    fn with_runs(mut self, library: &'a FontLibrary, text: &str, runs: &[StyleRun]) -> Self {
+        for run in runs {
+            let start = run.start as usize;
+            if start > text.len() || !text.is_char_boundary(start) || start < *self.starts.last().unwrap_or(&0) {
+                continue;
+            }
+            let font = if library.face(run.font).is_some() { run.font } else { self.faces[0].primary.0 };
+            let Some(faces) = Faces::new(library, font) else { continue };
+            if start == *self.starts.last().unwrap_or(&0) {
+                let last = self.faces.len() - 1;
+                self.faces[last] = faces;
+                self.px[last] = run.px;
+            } else {
+                self.faces.push(faces);
+                self.px.push(run.px);
+                self.starts.push(start);
+            }
+        }
+        self
+    }
+
+    /// The style of byte `at`.
+    fn at(&self, at: usize) -> usize {
+        self.starts.partition_point(|&s| s <= at).saturating_sub(1)
+    }
+
+    /// Cuts `range`, in a line starting at `line_start`, wherever the style changes.
+    fn pieces(&self, line_start: usize, range: std::ops::Range<usize>) -> Vec<(usize, std::ops::Range<usize>)> {
+        let mut out = Vec::new();
+        let mut at = range.start;
+        while at < range.end {
+            let style = self.at(line_start + at);
+            let end = self.starts.get(style + 1).map_or(range.end, |&next| (next - line_start).min(range.end));
+            out.push((style, at..end));
+            at = end;
+        }
+        out
+    }
+
+    /// The tallest of what the bytes `range` of the text are set in.
+    fn metrics(&self, range: std::ops::Range<usize>) -> LineMetrics {
+        let last = self.at(range.end.saturating_sub(1).max(range.start));
+        let mut metrics: Option<LineMetrics> = None;
+        for style in self.at(range.start)..=last {
+            let scaled = self.faces[style].primary.1.as_scaled(self.px[style]);
+            let here = LineMetrics { ascent: scaled.ascent(), descent: scaled.descent(), line_gap: scaled.line_gap() };
+            metrics = Some(match metrics {
+                None => here,
+                Some(m) => LineMetrics {
+                    ascent: m.ascent.max(here.ascent),
+                    descent: m.descent.min(here.descent),
+                    line_gap: m.line_gap.max(here.line_gap),
+                },
+            });
+        }
+        metrics.unwrap_or(LineMetrics { ascent: 0.0, descent: 0.0, line_gap: 0.0 })
+    }
+}
 
 /// Layouts kept per [`LayoutKey`]. A counter or a timer makes a new string every frame, so the map
 /// is emptied at this size rather than left to grow.
@@ -327,21 +421,70 @@ impl FontLibrary {
 
     /// [`layout`](Self::layout), also breaking any line wider than `max_width` pixels.
     ///
-    /// Lines break at spaces, and the space a line breaks at is dropped. A word wider than
-    /// `max_width` on its own is split between characters — text that overflows its box is the
-    /// failure a width exists to prevent, so it is not allowed even for one long word. `None`, or
-    /// a width that is not finite and positive, wraps nothing.
+    /// Lines break where Unicode says they may: after spaces and hyphens, between ideographs but not
+    /// before a closing mark, between Thai, Lao, Khmer and Burmese words, which have no spaces. The
+    /// spaces a line breaks at are dropped. A stretch wider than `max_width` on its own is split
+    /// between characters — text that overflows its box is the failure a width exists to prevent, so
+    /// it is not allowed even for one long word. `None`, or a width that is not finite and positive,
+    /// wraps nothing.
     #[must_use]
     pub fn layout_wrapped(&self, font: FontId, px: f32, text: &str, max_width: Option<f32>) -> Option<TextLayout> {
+        self.layout_styled(font, px, text, max_width, &[])
+    }
+
+    /// [`layout_wrapped`](Self::layout_wrapped), with `runs` in another face or size. Each line is as tall
+    /// as the tallest thing on it, and everything on a line shares its baseline.
+    #[must_use]
+    pub fn layout_styled(
+        &self,
+        font: FontId,
+        px: f32,
+        text: &str,
+        max_width: Option<f32>,
+        runs: &[StyleRun],
+    ) -> Option<TextLayout> {
+        self.laid_out(font, px, text, max_width, runs, false)
+    }
+
+    /// Text in columns, as Chinese, Japanese and Korean can be set: each line of [`layout_styled`] runs
+    /// top to bottom, breaking past `max_height`, and the first column is on the right. The face's `vert`
+    /// forms apply where it has them. Everything stands upright, Latin included: a run of Latin turned on
+    /// its side, as some vertical settings do, is not drawn.
+    ///
+    /// [`layout_styled`]: Self::layout_styled
+    #[must_use]
+    pub fn layout_vertical(
+        &self,
+        font: FontId,
+        px: f32,
+        text: &str,
+        max_height: Option<f32>,
+        runs: &[StyleRun],
+    ) -> Option<TextLayout> {
+        self.laid_out(font, px, text, max_height, runs, true)
+    }
+
+    fn laid_out(
+        &self,
+        font: FontId,
+        px: f32,
+        text: &str,
+        max_width: Option<f32>,
+        runs: &[StyleRun],
+        vertical: bool,
+    ) -> Option<TextLayout> {
         let faces = Faces::new(self, font)?;
         let max_width = max_width.filter(|w| w.is_finite() && *w > 0.0);
-        let key = (font.0, px.to_bits(), max_width.map(f32::to_bits));
+        let bits = runs.iter().map(|r| (r.start, r.font.0, r.px.to_bits())).collect();
+        let key = (font.0, px.to_bits(), max_width.map(f32::to_bits), bits, vertical);
         let mut recent = self.recent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let same_style = recent.entry(key).or_default();
         if let Some(found) = same_style.get(text) {
             return Some(found.clone());
         }
-        let laid_out = layout(&faces, px, text, max_width);
+        let mut styles = Styles::single(faces, px).with_runs(self, text, runs);
+        styles.vertical = vertical;
+        let laid_out = layout(&styles, text, max_width);
         if same_style.len() >= RECENT_LAYOUTS {
             same_style.clear();
         }
@@ -406,55 +549,76 @@ fn em_height(face: &ab_glyph::FontVec) -> f32 {
     face.height_unscaled() / face.units_per_em().unwrap_or(1000.0)
 }
 
-/// The pen advance of `s` on one line — the width [`layout`] would give it.
-fn measure(faces: &Faces<'_>, px: f32, s: &str) -> f32 {
-    shape::shape_line(faces, px, s, None).width
+/// The pen advance of `s`, which starts at byte `at` of the text, on one line — the width [`layout`] would
+/// give it.
+fn measure(styles: &Styles<'_>, s: &str, at: usize) -> f32 {
+    shape::shape_line(styles, s, at, None).width
+}
+
+/// The byte offsets `paragraph` may break at, ascending, the last being its end: after a space, between
+/// ideographs but not before a closing mark, between Thai words, after a hyphen.
+fn break_opportunities(paragraph: &str) -> Vec<usize> {
+    icu_segmenter::LineSegmenter::new_auto(Default::default())
+        .segment_str(paragraph)
+        .filter(|&at| at > 0)
+        .collect()
 }
 
 /// Breaks one `\n`-free paragraph into lines no wider than `max` — see
 /// [`FontLibrary::layout_wrapped`] for the rule.
-fn wrap_paragraph(faces: &Faces<'_>, px: f32, paragraph: &str, max: f32, out: &mut Vec<String>) {
-    let fits = |s: &str| measure(faces, px, s) <= max;
-    let mut line = String::new();
-    let mut started = false;
-    // `split(' ')`, not `split_whitespace`: runs of spaces inside a line are kept as authored.
-    for word in paragraph.split(' ') {
-        let candidate = if started { format!("{line} {word}") } else { word.to_string() };
-        if !started || fits(&candidate) {
-            line = candidate;
-            started = true;
-        } else {
-            out.push(std::mem::replace(&mut line, word.to_string()));
-        }
-        // A word too wide on its own: cut it between characters, at least one per line.
-        while !fits(&line) && line.chars().nth(1).is_some() {
-            let mut cut = line.char_indices().nth(1).map_or(line.len(), |(i, _)| i);
-            for (i, _) in line.char_indices().skip(2) {
-                if fits(&line[..i]) {
-                    cut = i;
-                } else {
-                    break;
-                }
+fn wrap_paragraph(styles: &Styles<'_>, paragraph: &str, paragraph_start: usize, max: f32, out: &mut Vec<String>) {
+    // The spaces a line breaks at hang off its end: they take no room and are not drawn.
+    let fits = |s: &str, at: usize| measure(styles, s.trim_end_matches(' '), paragraph_start + at) <= max;
+    let breaks = break_opportunities(paragraph);
+    let mut start = 0;
+    let mut next = 0; // the first opportunity past `start`
+    while next < breaks.len() {
+        // Width only grows with the text, so the last opportunity that fits is found by halving: a
+        // paragraph of ideographs has one per character, and shaping them all per line would not end.
+        let (mut fitting, mut over) = (next, breaks.len());
+        while fitting < over {
+            let mid = (fitting + over) / 2;
+            if fits(&paragraph[start..breaks[mid]], start) {
+                fitting = mid + 1;
+            } else {
+                over = mid;
             }
-            let rest = line.split_off(cut);
-            out.push(std::mem::replace(&mut line, rest));
         }
+        if fitting > next {
+            let end = breaks[fitting - 1];
+            out.push(paragraph[start..end].trim_end_matches(' ').to_string());
+            start = end;
+            next = fitting;
+            continue;
+        }
+        // Nothing fits, so this one unbreakable stretch is wider than the box: cut it between
+        // characters, at least one per line, and carry on with what is left of it.
+        let end = breaks[next];
+        let piece = &paragraph[start..end];
+        let mut cut = piece.char_indices().nth(1).map_or(piece.len(), |(i, _)| i);
+        for (i, _) in piece.char_indices().skip(2) {
+            if fits(&piece[..i], start) {
+                cut = i;
+            } else {
+                break;
+            }
+        }
+        if cut == piece.len() {
+            out.push(piece.trim_end_matches(' ').to_string());
+            next += 1;
+        } else {
+            out.push(piece[..cut].to_string());
+        }
+        start += cut;
     }
-    out.push(line);
+    if paragraph.is_empty() {
+        out.push(String::new());
+    }
 }
 
-/// Places `text` at `px`, breaking on `\n` and, given a width, wherever a line would exceed it.
-/// The library-free half, so it can be tested against a face directly.
-fn layout(faces: &Faces<'_>, px: f32, text: &str, max_width: Option<f32>) -> TextLayout {
-    // Line height is the text's own face's, whatever a fallback glyph would want.
-    let scaled = faces.primary.1.as_scaled(px);
-    let metrics = LineMetrics {
-        ascent: scaled.ascent(),
-        descent: scaled.descent(),
-        line_gap: scaled.line_gap(),
-    };
-    let line_height = metrics.line_height();
-
+/// Places `text`, breaking on `\n` and, given a width, wherever a line would exceed it. The library-free
+/// half, so it can be tested against a face directly.
+fn layout(styles: &Styles<'_>, text: &str, max_width: Option<f32>) -> TextLayout {
     let mut out = TextLayout { lines: 1, ..Default::default() };
     let mut widest: f32 = 0.0;
     // Each line with its paragraph's direction and where it starts in `text`, which is what a glyph's
@@ -467,7 +631,7 @@ fn layout(faces: &Faces<'_>, px: f32, text: &str, max_width: Option<f32>) -> Tex
             Some(max) => {
                 let level = shape::paragraph_level(paragraph);
                 let mut cut = Vec::new();
-                wrap_paragraph(faces, px, paragraph, max, &mut cut);
+                wrap_paragraph(styles, paragraph, paragraph_start, max, &mut cut);
                 // Every wrapped line is a piece of the paragraph, in order, with only the spaces
                 // it broke at between them.
                 let mut cursor = 0;
@@ -480,20 +644,34 @@ fn layout(faces: &Faces<'_>, px: f32, text: &str, max_width: Option<f32>) -> Tex
         }
         paragraph_start += paragraph.len() + 1;
     }
+    let mut top = 0.0;
+    // Columns are laid out from the right, so the box's width comes first.
+    let columns: f32 = if styles.vertical {
+        lines.iter().map(|(line, _, at)| styles.metrics(*at..at + line.len()).line_height()).sum()
+    } else {
+        0.0
+    };
     for (line_index, (line, level, line_start)) in lines.iter().enumerate() {
-        let baseline = metrics.ascent + line_index as f32 * line_height;
-        let shaped = shape::shape_line(faces, px, line, *level);
+        // Line height is the faces' the text asked for, whatever a fallback glyph would want.
+        let metrics = styles.metrics(*line_start..line_start + line.len());
+        let (pen_x, pen_y) = if styles.vertical {
+            (columns - top - metrics.line_height() / 2.0, 0.0)
+        } else {
+            (0.0, top + metrics.ascent)
+        };
+        top += metrics.line_height();
+        let shaped = shape::shape_line(styles, line, *line_start, *level);
         for g in shaped.glyphs {
             // A glyph with no outline — a space, or a codepoint this face does not cover — still
             // advanced the pen and rasterises to nothing. Keeping it out of `glyphs` is what lets
             // every consumer treat the list as "things to draw".
-            let drawn = faces.library.face(g.font).is_some_and(|face| face.outline(ab_glyph::GlyphId(g.glyph)).is_some());
+            let drawn = styles.faces[0].library.face(g.font).is_some_and(|face| face.outline(ab_glyph::GlyphId(g.glyph)).is_some());
             if drawn {
                 out.glyphs.push(PositionedGlyph {
                     font: g.font,
                     glyph: g.glyph,
-                    x: g.x,
-                    y: baseline + g.y,
+                    x: pen_x + g.x,
+                    y: pen_y + g.y,
                     line: line_index as u32,
                     px: g.px,
                     cluster: *line_start as u32 + g.cluster,
@@ -501,12 +679,12 @@ fn layout(faces: &Faces<'_>, px: f32, text: &str, max_width: Option<f32>) -> Tex
             }
         }
         widest = widest.max(shaped.width);
-        out.line_widths.push(shaped.width);
+        // `align` moves a line by what it lacks of the box's width, and a column lacks nothing.
+        out.line_widths.push(if styles.vertical { columns } else { shaped.width });
         out.line_rtl.push(shaped.rtl);
         out.lines = u32::try_from(line_index + 1).unwrap_or(u32::MAX);
     }
-    out.width = widest;
-    out.height = out.lines as f32 * line_height;
+    (out.width, out.height) = if styles.vertical { (columns, widest) } else { (widest, top) };
     out
 }
 
@@ -1225,7 +1403,199 @@ mod tests {
 
     /// Words wrap at spaces; the box is as wide as the widest line and never wider than the width.
     /// Every advance is 600 px at this size, so each expectation is arithmetic.
-    #[test]
+    /// **A run has its own size.** Its glyphs are that size, its advances move the pen by that size, the line
+/// is as tall as the run and everything on the line sits on one baseline.
+#[test]
+fn a_run_in_another_size_scales_its_glyphs_and_makes_its_line_taller() {
+    let (lib, id) = library();
+    let plain = lib.layout(id, 20.0, "AAAA").unwrap();
+    let big = lib.layout(id, 40.0, "AA").unwrap();
+    let mixed = lib.layout_styled(id, 20.0, "AAAA", None, &[StyleRun::new(2, id, 40.0)]).unwrap();
+
+    assert_eq!(mixed.glyphs.iter().map(|g| g.px).collect::<Vec<_>>(), [20.0, 20.0, 40.0, 40.0]);
+    let half = lib.layout(id, 20.0, "AA").unwrap().width;
+    assert_eq!(mixed.width, half + big.width, "each part advances at its own size");
+    assert_eq!(mixed.glyphs[2].x, half, "and the large part starts where the small one ended");
+    assert_eq!(mixed.height, big.height, "the line is as tall as what is tallest on it");
+    assert!(mixed.height > plain.height);
+    assert!(
+        mixed.glyphs.iter().all(|g| g.y == mixed.glyphs[0].y),
+        "one baseline: {:?}",
+        mixed.glyphs.iter().map(|g| g.y).collect::<Vec<_>>()
+    );
+    assert_eq!(mixed.glyphs[2].y, big.glyphs[0].y, "at the large part's ascent");
+}
+
+/// Each line is as tall as its own tallest thing, and a line below a tall one starts below it.
+#[test]
+fn each_line_takes_the_height_of_what_is_on_it() {
+    let (lib, id) = library();
+    let small = lib.layout(id, 20.0, "A").unwrap();
+    let large = lib.layout(id, 40.0, "A").unwrap();
+    let l = lib.layout_styled(id, 20.0, "A\nAA\nA", None, &[StyleRun::new(2, id, 40.0), StyleRun::new(5, id, 20.0)]).unwrap();
+    assert_eq!(l.lines, 3);
+    assert_eq!(l.height, small.height * 2.0 + large.height);
+    let ys: Vec<f32> = l.glyphs.iter().map(|g| g.y).collect();
+    assert_eq!(ys[0], small.glyphs[0].y);
+    assert_eq!(ys[1], small.height + large.glyphs[0].y, "below the first line, at its own ascent");
+    assert_eq!(ys[3], small.height + large.height + small.glyphs[0].y);
+}
+
+/// Wrapping measures a run at its own size: what fits at 20 px does not at 40.
+#[test]
+fn wrapping_measures_a_run_at_its_size() {
+    let (lib, id) = library();
+    let word = lib.layout(id, 20.0, "AAAA").unwrap().width;
+    let max = Some(word * 2.5);
+    assert_eq!(lib.layout_wrapped(id, 20.0, "AAAA AAAA", max).unwrap().lines, 1);
+    let styled = lib.layout_styled(id, 20.0, "AAAA AAAA", max, &[StyleRun::new(5, id, 40.0)]).unwrap();
+    assert_eq!(styled.lines, 2, "the second word is twice as wide");
+
+    // In a later paragraph too: the offset a candidate is measured at counts from the whole text.
+    let later = lib.layout_styled(id, 20.0, "AA\nAAAA AAAA", max, &[StyleRun::new(8, id, 40.0)]).unwrap();
+    assert_eq!(later.lines, 3, "the large word goes to a line of its own");
+}
+
+/// **A run has its own face,** and its own face's fallbacks work from it: the em of a fallback is matched
+/// to the run's face, not the text's.
+#[test]
+fn a_run_in_another_face_draws_from_it() {
+    let mut lib = FontLibrary::new();
+    let latin = lib.load(include_bytes!("../../assets/fonts/NotoSans-Regular.ttf").to_vec()).unwrap();
+    let thai = lib.load(include_bytes!("fixtures/noto-sans-thai-subset.ttf").to_vec()).unwrap();
+    let l = lib.layout_styled(latin, 24.0, "aฤ", None, &[StyleRun::new(1, thai, 24.0)]).unwrap();
+    assert_eq!(l.glyphs.iter().map(|g| g.font).collect::<Vec<_>>(), [latin, thai]);
+}
+
+/// A run that cannot apply does nothing rather than panic: past the end, inside a character, out of order,
+/// or naming a face that was never loaded.
+#[test]
+fn a_bad_run_is_ignored() {
+    let (lib, id) = library();
+    let plain = lib.layout(id, 20.0, "AöB").unwrap();
+    for bad in [
+        StyleRun::new(99, id, 40.0),
+        StyleRun::new(2, id, 40.0), // inside `ö`
+    ] {
+        assert_eq!(lib.layout_styled(id, 20.0, "AöB", None, &[bad]).unwrap(), plain, "{bad:?}");
+    }
+    let out_of_order = [StyleRun::new(3, id, 40.0), StyleRun::new(1, id, 80.0)];
+    let once = lib.layout_styled(id, 20.0, "AöB", None, &out_of_order[..1]).unwrap();
+    assert_eq!(lib.layout_styled(id, 20.0, "AöB", None, &out_of_order).unwrap(), once);
+    let unknown = lib.layout_styled(id, 20.0, "AöB", None, &[StyleRun::new(0, FontId(99), 20.0)]).unwrap();
+    assert_eq!(unknown, plain);
+}
+
+/// The remembered layout is per set of runs: the same string in another size must not come back as the
+/// old one.
+#[test]
+fn a_remembered_layout_knows_its_runs() {
+    let (lib, id) = library();
+    let plain = lib.layout(id, 20.0, "ABAB").unwrap();
+    let styled = lib.layout_styled(id, 20.0, "ABAB", None, &[StyleRun::new(2, id, 40.0)]).unwrap();
+    assert_ne!(plain, styled);
+    assert_eq!(lib.layout(id, 20.0, "ABAB").unwrap(), plain);
+}
+
+/// **Columns read top to bottom, the first on the right.** Each glyph starts below the last, a column's
+/// glyphs share an `x`, and the box is as wide as the columns and as tall as the longest.
+#[test]
+fn vertical_text_runs_down_in_columns_from_the_right() {
+    let (lib, id) = library();
+    let line_height = lib.layout(id, 20.0, "A").unwrap().height;
+    let l = lib.layout_vertical(id, 20.0, "AAA\nA", None, &[]).unwrap();
+    assert_eq!(l.lines, 2);
+    assert!((l.width - 2.0 * line_height).abs() < 1e-3, "{} against {line_height}", l.width);
+    let (first, second): (Vec<&PositionedGlyph>, Vec<&PositionedGlyph>) = l.glyphs.iter().partition(|g| g.line == 0);
+    assert_eq!((first.len(), second.len()), (3, 1));
+    assert!(first.windows(2).all(|p| p[1].y > p[0].y), "down the column: {first:?}");
+    assert!(first.iter().all(|g| g.x == first[0].x), "one column");
+    assert!(second[0].x < first[0].x, "the second column is to the left of the first");
+    assert!(l.height > 0.0 && first[2].y < l.height, "the box holds the longest column");
+
+    // Nothing moves a column along the box: there is no line shorter than it.
+    let mut aligned = l.clone();
+    aligned.align(1.0);
+    assert_eq!(aligned, l);
+}
+
+/// `max_height` breaks a column the way a width breaks a line, and a remembered layout knows which it is.
+#[test]
+fn a_column_breaks_at_its_height() {
+    let (lib, id) = library();
+    let long = lib.layout_vertical(id, 20.0, "AAAA", None, &[]).unwrap();
+    let broken = lib.layout_vertical(id, 20.0, "AAAA", Some(long.height * 0.6), &[]).unwrap();
+    assert_eq!(broken.lines, 2);
+    assert!(broken.height <= long.height * 0.6 + 1e-3);
+    assert_ne!(lib.layout(id, 20.0, "AAAA").unwrap(), long);
+}
+
+/// Where a line may break, for each of the things a space does not mark. Spaces and hyphens in Latin;
+/// between ideographs, but a closing mark stays with what it closes; and between Thai words, which
+/// nothing separates.
+#[test]
+fn lines_may_break_where_each_script_allows() {
+    assert_eq!(break_opportunities("foo bar-baz"), [4, 8, 11]);
+
+    let cjk = "你好世界。再见";
+    let breaks = break_opportunities(cjk);
+    assert!(breaks.contains(&3) && breaks.contains(&6), "between ideographs: {breaks:?}");
+    assert!(!breaks.contains(&12), "a line must not start with the full stop: {breaks:?}");
+    assert_eq!(breaks.last(), Some(&cjk.len()));
+
+    // `สวัสดี` then `ครับ`, three bytes a letter, with no mark between them but the words themselves.
+    let thai = "สวัสดีครับ";
+    let breaks = break_opportunities(thai);
+    assert!(breaks.contains(&18), "between the two words: {breaks:?}");
+    // The model may also break a word at a syllable, as Thai allows, but never inside one: `สวั` is one.
+    assert!(!breaks.contains(&3) && !breaks.contains(&6), "inside a syllable: {breaks:?}");
+}
+
+/// Wrapping uses those: at every width, no line of Chinese starts with a closing mark, none of Thai
+/// starts inside a word while the word still fits, and the text survives whole.
+#[test]
+fn a_width_wraps_chinese_and_thai_where_they_may_break() {
+    let mut lib = FontLibrary::new();
+    let latin = lib.load(include_bytes!("../../assets/fonts/NotoSans-Regular.ttf").to_vec()).unwrap();
+    let styles = Styles::single(Faces::new(&lib, latin).unwrap(), 24.0);
+    let cjk = "你好世界。再见你好世界。再见";
+    let whole = measure(&styles, cjk, 0);
+    for step in 1..40 {
+        let max = whole * step as f32 / 40.0;
+        let mut lines = Vec::new();
+        wrap_paragraph(&styles, cjk, 0, max, &mut lines);
+        assert_eq!(lines.concat(), cjk, "at {max}");
+        // A width narrower than one stretch cuts between characters, which is the rule's last resort.
+        if max >= measure(&styles, "界。", 0) {
+            assert!(lines.iter().all(|l| !l.starts_with('。')), "at {max}: {lines:?}");
+        }
+        assert!(lines.iter().all(|l| measure(&styles, l, 0) <= max || l.chars().count() == 1), "at {max}: {lines:?}");
+    }
+
+    let thai = "สวัสดีครับ";
+    let first = "สวัสดี";
+    let max = measure(&styles, first, 0) + 1.0;
+    let mut lines = Vec::new();
+    wrap_paragraph(&styles, thai, 0, max, &mut lines);
+    assert_eq!(lines, [first, "ครับ"]);
+}
+
+/// A paragraph of ideographs has a break after every character. Halving finds the line, so wrapping it
+/// measures a handful of candidates per line rather than every one.
+#[test]
+fn a_long_paragraph_of_ideographs_wraps_every_line_full() {
+    let mut lib = FontLibrary::new();
+    let latin = lib.load(include_bytes!("../../assets/fonts/NotoSans-Regular.ttf").to_vec()).unwrap();
+    let styles = Styles::single(Faces::new(&lib, latin).unwrap(), 16.0);
+    let text = "界".repeat(400);
+    let one = measure(&styles, "界", 0);
+    let mut lines = Vec::new();
+    wrap_paragraph(&styles, &text, 0, one * 20.5, &mut lines);
+    assert_eq!(lines.len(), 20);
+    assert!(lines.iter().all(|l| l.chars().count() == 20), "a line was not filled: {lines:?}");
+}
+
+#[test]
     fn a_width_wraps_at_spaces_and_drops_the_space_it_breaks_at() {
         let (lib, id) = library();
         let adv = ADVANCE as f32;

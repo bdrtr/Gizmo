@@ -21,7 +21,7 @@ use ab_glyph::{Font as _, ScaleFont as _};
 use harfrust::{script, Direction, Feature, FontRef, Script, ShapeOptions, ShapePlan, ShaperData, Tag, UnicodeBuffer};
 use unicode_bidi::{BidiInfo, Level};
 
-use super::{Faces, FontId};
+use super::{Faces, FontId, Styles};
 
 /// What a face needs to be shaped, kept with the library because building it reads the font's
 /// tables and a plan compiles its lookups: both are far too slow to redo per string.
@@ -32,8 +32,8 @@ pub(super) struct Shaping {
     plans: Mutex<HashMap<PlanKey, Arc<ShapePlan>>>,
 }
 
-/// A face, a script and whether it runs right to left: all a plan depends on.
-type PlanKey = (u32, Option<Script>, bool);
+/// A face, a script and the direction it runs in: all a plan depends on.
+type PlanKey = (u32, Option<Script>, u8);
 
 impl Shaping {
     /// Registers a face, or says it cannot be shaped.
@@ -70,31 +70,45 @@ pub(super) fn paragraph_level(paragraph: &str) -> Option<Level> {
     BidiInfo::new(paragraph, None).paragraphs.first().map(|p| p.level)
 }
 
-/// Shapes `line`, which holds no `\n`. With `level` as `None` the line finds its own direction.
-pub(super) fn shape_line(faces: &Faces<'_>, px: f32, line: &str, level: Option<Level>) -> ShapedLine {
+/// Shapes `line`, which holds no `\n` and starts at byte `line_start` of the text `styles` counts in.
+/// With `level` as `None` the line finds its own direction.
+pub(super) fn shape_line(styles: &Styles<'_>, line: &str, line_start: usize, level: Option<Level>) -> ShapedLine {
     let mut out = ShapedLine::default();
+    if styles.vertical {
+        // Top to bottom has no levels to order: a column is read as it is stored.
+        for (style, piece) in styles.pieces(line_start, 0..line.len()) {
+            for item in itemize(&styles.faces[style], style, line, piece) {
+                shape_item(styles, line, &item, false, &mut out);
+            }
+        }
+        return out;
+    }
     let bidi = BidiInfo::new(line, level);
     out.rtl = bidi.paragraphs.first().map(|p| p.level).or(level).is_some_and(|l| l.is_rtl());
     for paragraph in &bidi.paragraphs {
         let (levels, runs) = bidi.visual_runs(paragraph, paragraph.range.clone());
         for run in runs {
             let rtl = levels[run.start].is_rtl();
-            let mut items = itemize(faces, line, run);
+            let mut items = Vec::new();
+            for (style, piece) in styles.pieces(line_start, run) {
+                items.extend(itemize(&styles.faces[style], style, line, piece));
+            }
             // Runs arrive in visual order, but what is inside one is still in logical order.
             if rtl {
                 items.reverse();
             }
             for item in &items {
-                shape_item(faces, px, line, item, rtl, &mut out);
+                shape_item(styles, line, item, rtl, &mut out);
             }
         }
     }
     out
 }
 
-/// A stretch of one face and one script.
+/// A stretch of one style, one face and one script.
 struct Item {
     range: Range<usize>,
+    style: usize,
     font: FontId,
     /// `None` while only characters of no script of their own have been seen.
     script: Option<Script>,
@@ -103,7 +117,7 @@ struct Item {
 /// Cuts a bidi run wherever the face or the script changes. A character of no script of its own (a
 /// space, a digit, a comma, a combining mark, a joiner) stays with what came before it while that
 /// face covers it, so a mark is never shaped apart from its letter.
-fn itemize(faces: &Faces<'_>, text: &str, run: Range<usize>) -> Vec<Item> {
+fn itemize(faces: &Faces<'_>, style: usize, text: &str, run: Range<usize>) -> Vec<Item> {
     let mut items: Vec<Item> = Vec::new();
     let mut probe = UnicodeBuffer::new();
     for (offset, c) in text[run.clone()].char_indices() {
@@ -121,7 +135,7 @@ fn itemize(faces: &Faces<'_>, text: &str, run: Range<usize>) -> Vec<Item> {
                 continue;
             }
         }
-        items.push(Item { range: start..end, font: faces.pick(c).0, script });
+        items.push(Item { range: start..end, style, font: faces.pick(c).0, script });
     }
     items
 }
@@ -129,7 +143,7 @@ fn itemize(faces: &Faces<'_>, text: &str, run: Range<usize>) -> Vec<Item> {
 /// The runs [`itemize`] cuts all of `text` into.
 #[cfg(test)]
 pub(super) fn itemize_for_test(faces: &Faces<'_>, text: &str) -> Vec<Range<usize>> {
-    itemize(faces, text, 0..text.len()).into_iter().map(|item| item.range).collect()
+    itemize(faces, 0, text, 0..text.len()).into_iter().map(|item| item.range).collect()
 }
 
 /// The script of `c`, or `None` for the Common and Inherited characters that take their
@@ -143,20 +157,25 @@ fn script_of(probe: &mut UnicodeBuffer, c: char) -> Option<Script> {
 }
 
 /// Shapes one item and appends its glyphs, in visual order, at the line's pen.
-fn shape_item(faces: &Faces<'_>, px: f32, text: &str, item: &Item, rtl: bool, out: &mut ShapedLine) {
+fn shape_item(styles: &Styles<'_>, text: &str, item: &Item, rtl: bool, out: &mut ShapedLine) {
+    let (faces, px) = (&styles.faces[item.style], styles.px[item.style]);
     let library = faces.library;
     let (Some(face), Some(data)) = (library.face(item.font), library.shaping.data.get(item.font.0 as usize)) else {
         return;
     };
     let Ok(font) = FontRef::from_index(face.as_slice(), 0) else { return };
     let shaper = data.shaper(&font).build();
-    let direction = if rtl { Direction::RightToLeft } else { Direction::LeftToRight };
+    let (direction, key) = match (styles.vertical, rtl) {
+        (true, _) => (Direction::TopToBottom, 2u8),
+        (false, true) => (Direction::RightToLeft, 1),
+        (false, false) => (Direction::LeftToRight, 0),
+    };
     let no_ligatures = [Feature::new(Tag::new(b"liga"), 0, ..), Feature::new(Tag::new(b"clig"), 0, ..)];
     let features: &[Feature] = if item.script == Some(script::LATIN) { &no_ligatures } else { &[] };
     let plan = {
         let mut plans = library.shaping.plans.lock().unwrap_or_else(PoisonError::into_inner);
         plans
-            .entry((item.font.0, item.script, rtl))
+            .entry((item.font.0, item.script, key))
             .or_insert_with(|| Arc::new(ShapePlan::new(&shaper, direction, item.script, None, features)))
             .clone()
     };
@@ -174,14 +193,24 @@ fn shape_item(faces: &Faces<'_>, px: f32, text: &str, item: &Item, rtl: bool, ou
     let px = faces.px_for(item.font, px);
     let scale = face.as_scaled(px).h_scale_factor();
     for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
+        // In a column the pen runs down `y` and `width` is how far it went; a shaper's `y` grows up.
+        let (x, y) = if styles.vertical {
+            (position.x_offset as f32 * scale, out.width - position.y_offset as f32 * scale)
+        } else {
+            (out.width + position.x_offset as f32 * scale, -(position.y_offset as f32) * scale)
+        };
         out.glyphs.push(ShapedGlyph {
             font: item.font,
             glyph: u16::try_from(info.glyph_id).unwrap_or(0),
-            x: out.width + position.x_offset as f32 * scale,
-            y: -(position.y_offset as f32) * scale,
+            x,
+            y,
             px,
             cluster: item.range.start as u32 + info.cluster,
         });
-        out.width += position.x_advance as f32 * scale;
+        out.width += if styles.vertical {
+            -(position.y_advance as f32) * scale
+        } else {
+            position.x_advance as f32 * scale
+        };
     }
 }
