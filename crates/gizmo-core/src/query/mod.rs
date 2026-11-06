@@ -610,17 +610,18 @@ impl WorldQuery for crate::entity::Entity {
     }
 }
 
-/// What [`Query::get`] can look a row up by: an [`Entity`](crate::entity::Entity), which is
-/// checked against the row and so never reaches whoever got a dead entity's id, or a raw `u32`, which
-/// cannot tell them apart.
-pub trait QueryKey: Copy {
+/// How the query finds one row. The public `get` takes only an [`Entity`](crate::entity::Entity),
+/// which is checked against the row and so never reaches whoever got a dead entity's id. The raw `u32`
+/// is the query's own: [`Query::iter_combinations`] holds ids it scanned a moment ago, under a borrow
+/// that keeps them true, and pays for no check.
+pub(crate) trait RowKey: Copy {
     /// The slot to look in.
     fn slot(self) -> u32;
     /// Whether this key means the entity at `row` of `arch`, which is where its slot says it lives.
     fn means(self, arch: &Archetype, row: usize) -> bool;
 }
 
-impl QueryKey for u32 {
+impl RowKey for u32 {
     #[inline]
     fn slot(self) -> u32 {
         self
@@ -631,7 +632,7 @@ impl QueryKey for u32 {
     }
 }
 
-impl QueryKey for crate::entity::Entity {
+impl RowKey for crate::entity::Entity {
     #[inline]
     fn slot(self) -> u32 {
         self.id()

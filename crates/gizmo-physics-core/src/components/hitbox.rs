@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use gizmo_math::{Quat, Vec3};
 
 use serde::{Deserialize, Serialize};
@@ -197,19 +198,19 @@ pub fn hit_volumes_overlap(
 /// Without that a three-frame active window would report three hits.
 #[derive(Debug, Clone)]
 pub struct HitEvent {
-    /// Entity id of the fighter that landed it — the owner of the hitbox, which is the entity
+    /// The fighter that landed it — the owner of the hitbox, which is the entity
     /// carrying the [`FighterController`](crate::components::fighter::FighterController), not
     /// necessarily the entity the box itself sits on.
-    pub attacker: u32,
-    /// Entity id the active [`Hitbox`] is on: the fighter itself, or a child of it (a fist, a
+    pub attacker: Entity,
+    /// The entity the active [`Hitbox`] is on: the fighter itself, or a child of it (a fist, a
     /// foot). Equal to `attacker` when the box is on the fighter.
-    pub attacker_hitbox: u32,
-    /// Entity id of the fighter that was hit, if the hurtbox belongs to one; otherwise the
+    pub attacker_hitbox: Entity,
+    /// The fighter that was hit, if the hurtbox belongs to one; otherwise the
     /// hurtbox's own entity. A hurtbox on something that is not a fighter still reports.
-    pub victim: u32,
-    /// Entity id the [`Hurtbox`] is on — the region that was struck, which is what makes
+    pub victim: Entity,
+    /// The entity the [`Hurtbox`] is on — the region that was struck, which is what makes
     /// head/torso/limb hits distinguishable.
-    pub victim_hurtbox: u32,
+    pub victim_hurtbox: Entity,
     /// Damage this hit is worth: the **move's**
     /// [`FrameData::damage`](crate::components::fighter::FrameData::damage) scaled by the
     /// region's [`Hurtbox::damage_multiplier`].

@@ -25,17 +25,17 @@ use gizmo_physics_soft::cloth::Cloth;
 /// inverse of its `Transform`, if it has one), so a cloth entity can sit anywhere. Rewriting the
 /// `MeshData` every frame re-uploads it, which is what a moving cloth costs.
 pub fn cloth_mesh_system(world: &mut crate::core::World) {
-    let built: Vec<(u32, MeshData)> = {
+    let built: Vec<(Entity, MeshData)> = {
         let transforms = world.borrow::<Transform>();
         world.query::<(Entity, &Cloth)>().unwrap().iter()
             .map(|(entity, cloth)| {
                 let to_local = transforms.get(entity).map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse()).unwrap_or(gizmo_math::Mat4::IDENTITY);
-                (entity.id(), MeshData::new(cloth_vertices(cloth, to_local)))
+                (entity, MeshData::new(cloth_vertices(cloth, to_local)))
             })
             .collect()
     };
     for (id, mesh) in built {
-        let Some(e) = world.get_entity(id) else { continue };
+        let Some(e) = world.live(id) else { continue };
         let first = world.borrow::<MeshRenderer>().get(id).is_none();
         world.add_component(e, mesh);
         if first {
@@ -75,7 +75,7 @@ fn cloth_vertices(cloth: &Cloth, to_local: gizmo_math::Mat4) -> Vec<Vertex> {
 /// `advanced_physics` kept its rope outside the ECS and placed a sphere on every node by hand.
 pub fn rope_mesh_system(world: &mut crate::core::World) {
     use gizmo_physics_soft::rope::Rope;
-    let built: Vec<(u32, MeshData)> = {
+    let built: Vec<(Entity, MeshData)> = {
         let transforms = world.borrow::<Transform>();
         world.query::<(Entity, &Rope)>().unwrap().iter()
             .map(|(entity, rope)| {
@@ -83,12 +83,12 @@ pub fn rope_mesh_system(world: &mut crate::core::World) {
                     .get(entity)
                     .map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse())
                     .unwrap_or(gizmo_math::Mat4::IDENTITY);
-                (entity.id(), MeshData::new(rope_vertices(rope, to_local)))
+                (entity, MeshData::new(rope_vertices(rope, to_local)))
             })
             .collect()
     };
     for (id, mesh) in built {
-        let Some(e) = world.get_entity(id) else { continue };
+        let Some(e) = world.live(id) else { continue };
         let first = world.borrow::<MeshRenderer>().get(id).is_none();
         world.add_component(e, mesh);
         if first {
@@ -134,7 +134,7 @@ fn rope_vertices(rope: &gizmo_physics_soft::rope::Rope, to_local: gizmo_math::Ma
 /// lines (`physics_debug_system`), so a game had none to show.
 pub fn soft_body_mesh_system(world: &mut crate::core::World) {
     use gizmo_physics_soft::SoftBodyMesh;
-    let built: Vec<(u32, MeshData)> = {
+    let built: Vec<(Entity, MeshData)> = {
         let transforms = world.borrow::<Transform>();
         world.query::<(Entity, &SoftBodyMesh)>().unwrap().iter()
             .map(|(entity, body)| {
@@ -142,12 +142,12 @@ pub fn soft_body_mesh_system(world: &mut crate::core::World) {
                     .get(entity)
                     .map(|t| gizmo_math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position).inverse())
                     .unwrap_or(gizmo_math::Mat4::IDENTITY);
-                (entity.id(), MeshData::new(soft_body_vertices(body, to_local)))
+                (entity, MeshData::new(soft_body_vertices(body, to_local)))
             })
             .collect()
     };
     for (id, mesh) in built {
-        let Some(e) = world.get_entity(id) else { continue };
+        let Some(e) = world.live(id) else { continue };
         let first = world.borrow::<MeshRenderer>().get(id).is_none();
         world.add_component(e, mesh);
         if first {

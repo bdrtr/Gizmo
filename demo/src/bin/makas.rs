@@ -111,7 +111,7 @@ fn score(cloth: &Cloth, red: &[bool]) -> (f32, f32) {
     (red_off as f32 / red_n.max(1) as f32, blue_on as f32 / blue_n.max(1) as f32)
 }
 
-fn spawn_curtain(world: &mut World) -> (u32, Vec<bool>) {
+fn spawn_curtain(world: &mut World) -> (Entity, Vec<bool>) {
     let (cloth, red) = curtain();
     let id = world
         .spawn_bundle((
@@ -120,7 +120,7 @@ fn spawn_curtain(world: &mut World) -> (u32, Vec<bool>) {
             MaterialDesc::new().with_pbr(Color::srgb_hex("#3D6FB6").to_vec4(), 0.85, 0.0),
             Curtain,
         ))
-        .id();
+        ;
     (id, red)
 }
 
@@ -169,13 +169,13 @@ fn self_test() -> bool {
 
 struct Game {
     physics: FixedPhysics,
-    curtain: u32,
+    curtain: Entity,
     red: Vec<bool>,
-    markers: Vec<u32>,
+    markers: Vec<Entity>,
     blade: Option<Vec2>,
     snips: u32,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
 }
 
 fn main() {
@@ -214,14 +214,14 @@ fn main() {
                 MaterialDesc::new().with_pbr(Color::srgb_hex("#E0D6C8").to_vec4(), 0.9, 0.0),
                 MeshRenderer::new(),
             ));
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.2), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
-            let mut game = Game { physics: FixedPhysics::new(60), curtain: 0, red: Vec::new(), markers: Vec::new(), blade: None, snips: 0, hud, banner };
+                ;
+            let mut game = Game { physics: FixedPhysics::new(60), curtain: Entity::new(0, 0), red: Vec::new(), markers: Vec::new(), blade: None, snips: 0, hud, banner };
             restart(scene.world, &mut game);
             scene.world.insert_resource(game);
         })
@@ -231,9 +231,9 @@ fn main() {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let old: Vec<u32> = world.query::<(Entity, &Curtain)>().unwrap().iter().map(|(entity, _)| entity.id()).chain(game.markers.drain(..)).collect();
+    let old: Vec<Entity> = world.query::<(Entity, &Curtain)>().unwrap().iter().map(|(entity, _)| entity).chain(game.markers.drain(..)).collect();
     for id in old {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn(e);
         }
     }
@@ -249,7 +249,7 @@ fn restart(world: &mut World, game: &mut Game) {
                 MaterialDesc::new().with_unlit(Color::srgb_hex("#E74C3C").to_vec4()),
                 MeshRenderer::new(),
             ))
-            .id();
+            ;
         game.markers.push(m);
     }
     game.red = red;
@@ -319,7 +319,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     world.insert_resource(game);
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

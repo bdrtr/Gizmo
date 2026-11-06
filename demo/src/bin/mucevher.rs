@@ -72,7 +72,7 @@ gizmo::core::impl_component!(Gem);
 
 struct Game {
     /// `cells[x][y]`: taşın türü ve varlığı; `y = 0` en alt satır.
-    cells: [[Option<(u8, u32)>; N]; N],
+    cells: [[Option<(u8, Entity)>; N]; N],
     phase: Phase,
     selected: Option<(usize, usize)>,
     pressed: Option<(usize, usize)>,
@@ -81,8 +81,8 @@ struct Game {
     best: u32,
     combo: u32,
     clock: Timer,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     auto: bool,
 }
 
@@ -110,12 +110,12 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
 
     let hud = world
         .spawn_bundle((Text::pinned("", font, 24.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.45), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
 
     if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
         audio.load_sound_bytes("tak", Blip::new(Wave::Triangle, 520.0, 0.06).with_volume(0.3).wav());
@@ -206,7 +206,7 @@ fn fill_board(world: &mut World, game: &mut Game) {
     for x in 0..N {
         for y in 0..N {
             if let Some((_, id)) = game.cells[x][y].take() {
-                world.despawn_by_id(id);
+                world.despawn(id);
             }
         }
     }
@@ -230,7 +230,7 @@ fn kind_at(game: &Game, x: usize, y: usize) -> Option<u8> {
     game.cells[x][y].map(|(k, _)| k)
 }
 
-fn spawn_gem(world: &mut World, kind: u8, at: Vec3) -> u32 {
+fn spawn_gem(world: &mut World, kind: u8, at: Vec3) -> Entity {
     let colour = COLOURS[kind as usize];
     world
         .spawn_bundle((
@@ -241,7 +241,7 @@ fn spawn_gem(world: &mut World, kind: u8, at: Vec3) -> u32 {
             MeshRenderer::new(),
             Gem,
         ))
-        .id()
+        
 }
 
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
@@ -352,7 +352,7 @@ fn adjacent(a: (usize, usize), b: (usize, usize)) -> bool {
 fn set_selected(world: &mut World, game: &mut Game, cell: Option<(usize, usize)>) {
     for (c, s) in [(game.selected, 0.36), (cell, 0.46)] {
         if let Some((_, id)) = c.and_then(|(x, y)| game.cells[x][y]) {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.add_component(e, Tween::to_scale(Vec3::splat(s), 0.08));
             }
         }
@@ -366,7 +366,7 @@ fn start_swap(world: &mut World, game: &mut Game, a: (usize, usize), b: (usize, 
     game.cells[b.0][b.1] = ga;
     for (cell, gem) in [(b, ga), (a, gb)] {
         if let Some((_, id)) = gem {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.add_component(e, Tween::to_position(cell_pos(cell.0, cell.1), 0.16).with_ease(Ease::InOutQuad).and_scale(Vec3::splat(0.36)));
             }
         }
@@ -404,7 +404,7 @@ fn clear(world: &mut World, game: &mut Game) {
     game.score += cells.len() as u32 * 10 * game.combo;
     for (x, y) in cells {
         if let Some((kind, id)) = game.cells[x][y].take() {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.add_component(e, Tween::to_scale(Vec3::ZERO, 0.14).with_ease(Ease::InQuad));
                 world.add_component(e, Dying);
             }
@@ -447,8 +447,8 @@ fn fall(world: &mut World, game: &mut Game) {
 
 /// Düşüş: uzağa düşen uzun sürüyor, ve sütunlar soldan sağa birer an arayla başlıyor — tahta
 /// dalga gibi doluyor.
-fn move_to(world: &mut World, id: u32, to: Vec3, rows: usize, column: usize) {
-    if let Some(e) = world.get_entity(id) {
+fn move_to(world: &mut World, id: Entity, to: Vec3, rows: usize, column: usize) {
+    if let Some(e) = world.live(id) {
         world.add_component(
             e,
             Tween::to_position(to, 0.1 + rows as f32 * 0.05).with_ease(Ease::OutBounce).with_delay(column as f32 * 0.03),
@@ -492,8 +492,8 @@ fn placeholder() -> Game {
         best: 0,
         combo: 1,
         clock: Timer::once(ROUND),
-        hud: 0,
-        banner: 0,
+        hud: Entity::new(0, 0),
+        banner: Entity::new(0, 0),
         auto: false,
     }
 }

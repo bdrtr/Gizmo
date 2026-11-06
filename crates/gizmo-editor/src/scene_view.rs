@@ -256,7 +256,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         let scale = transform_gizmo_egui::mint::Vector3 { x: t.scale.x as f64, y: t.scale.y as f64, z: t.scale.z as f64 };
                         
                         gizmo_transforms.push(GizmoTransform::from_scale_rotation_translation(scale, rotation, translation));
-                        selected_ids.push(id.id());
+                        selected_ids.push(id);
                     }
                 }
 
@@ -271,7 +271,7 @@ pub fn ui_scene_view(ui: &mut egui::Ui, world: &World, state: &mut EditorState) 
                         if state.scene.gizmo_original_transforms.is_empty() {
                             for &id in &selected_ids {
                                 if let Some(t) = transforms.get_mut(id).map(|t| *t) {
-                                    state.scene.gizmo_original_transforms.insert(gizmo_core::entity::Entity::new(id, 0), t);
+                                    state.scene.gizmo_original_transforms.insert(gizmo_core::entity::Entity::new(id.id(), 0), t);
                                 }
                             }
                         }

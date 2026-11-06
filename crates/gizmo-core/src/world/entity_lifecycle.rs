@@ -574,8 +574,7 @@ impl World {
     /// names it. Part of every despawn.
     fn unlink_from_hierarchy(&mut self, e: Entity) {
         use crate::component::{Children, Parent};
-        let id = e.id();
-        let parent = self.query::<&Parent>().and_then(|q| q.get(id).map(|p| p.0));
+        let parent = self.query::<&Parent>().and_then(|q| q.get(e).map(|p| p.0));
         if let Some(parent) = parent.filter(|p| *p != e) {
             if let Some(mut q) = self.query_mut::<crate::query::Mut<Children>>() {
                 if let Some(mut children) = q.get_mut(parent) {
@@ -584,7 +583,7 @@ impl World {
             }
         }
         let children: Vec<Entity> =
-            self.query::<&Children>().and_then(|q| q.get(id).map(|c| c.0.clone())).unwrap_or_default();
+            self.query::<&Children>().and_then(|q| q.get(e).map(|c| c.0.clone())).unwrap_or_default();
         for child in children {
             let points_here = self.query::<&Parent>().and_then(|q| q.get(child).map(|p| p.0 == e)).unwrap_or(false);
             if points_here && child != e && self.is_alive(child) {
@@ -901,6 +900,13 @@ impl World {
         }
     }
 
+    /// `entity` if it is still alive. How to follow a stored handle: unlike looking up its id, this
+    /// says `None` once the entity has died, even after its id went to someone else.
+    #[must_use]
+    pub fn live(&self, entity: Entity) -> Option<Entity> {
+        self.is_alive(entity).then_some(entity)
+    }
+
     /// Despawns ALL entities that have the `C` component; returns the number deleted.
     /// It reduces common operations such as "clear this scene/group wholesale" (e.g. every
     /// `LevelEntity` when the level is reloaded) or "delete all the bullets" to a single line —
@@ -1008,21 +1014,15 @@ impl World {
     /// the id slot has been recycled (despawn→spawn bumps the generation), which silently
     /// loses data / points at the wrong entity. This was the root of several audit bugs.
     pub fn entity(&self, id: u32) -> Option<Entity> {
-        if id as usize >= self.entity_locations.len() || !self.entity_locations[id as usize].is_valid() {
+        let loc = self.entity_location(id);
+        if !loc.is_valid() {
             return None;
         }
-        let entities = self.get_resource::<Entities>()?;
-        let state = entities.state.lock().unwrap_or_else(|e| e.into_inner());
-        if id as usize >= state.generations.len() || state.free_set.contains(&id) {
-            return None;
-        }
-        Some(Entity::new(id, state.generations[id as usize]))
-    }
-
-    /// Deprecated alias for [`World::entity`].
-    #[deprecated(note = "renamed to `World::entity`")]
-    pub fn reconstruct_entity(&self, id: u32) -> Option<Entity> {
-        self.entity(id)
+        // The row holds the whole handle, so this needs neither the allocator nor its lock.
+        self.archetype_index.archetypes[loc.archetype_id as usize]
+            .entities()
+            .get(loc.row as usize)
+            .copied()
     }
 
     /// Returns the Entity's archetype location — O(1) lookup.

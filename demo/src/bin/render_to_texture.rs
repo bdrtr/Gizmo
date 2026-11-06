@@ -221,8 +221,8 @@ fn main() {
             let front = scene
                 .world
                 .query::<(Entity, &Camera)>()
-                .and_then(|q| q.iter().next().map(|(entity, _)| entity.id()));
-            if let Some(id) = front.and_then(|id| scene.world.entity(id)) {
+                .and_then(|q| q.iter().next().map(|(entity, _)| entity));
+            if let Some(id) = front.and_then(|id| scene.world.live(id)) {
                 scene.world.add_component(id, CameraTag(0));
             }
             // İkinci kamera — tepeden bakıyor, ve `primary` DEĞİL.

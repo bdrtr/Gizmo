@@ -19,6 +19,7 @@
 //! Kontrol: ↑/↓ (veya HUD slider) rüzgar hızı (HUD drag okuması). Çalıştır:
 //! `cargo run -p demo --bin wind_tunnel`
 
+use gizmo::core::Entity;
 use gizmo::app::App;
 use gizmo::core::world::World;
 use gizmo::egui;
@@ -54,9 +55,9 @@ const CAR_REAL_LENGTH_M: f32 = 4.6; // Mercedes-AMG GT ~4.6 m (araç değişirse
 
 struct WindTunnel {
     wind_speed: f32, // m/s
-    cam_id: u32,
+    cam_id: Entity,
     t: f32,
-    ribbon_id: u32,           // akış-çizgisi şerit mesh entity'si
+    ribbon_id: Entity,           // akış-çizgisi şerit mesh entity'si
     seeds: Vec<Vec3>,         // akış çizgisi başlangıç noktaları (girişte)
     obstacles: Vec<[f32; 4]>, // arabayı temsil eden engel küreleri (her frame entegrasyonda)
     view_dir: Vec3,           // kameraya bakan şerit yönü
@@ -157,17 +158,17 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
                 .id(),
         }
     };
-    fit_car(world, chassis.id());
+    fit_car(world, chassis);
 
     // Arabanın GERÇEK dünya AABB'si → engel/kamera/tohum bundan türetilir.
-    let (car_min, car_max) = world_aabb(world, chassis.id())
+    let (car_min, car_max) = world_aabb(world, chassis)
         .unwrap_or((Vec3::new(-2.0, 0.0, -4.0), Vec3::new(2.0, 3.0, 4.0)));
     let center = (car_min + car_max) * 0.5;
     let diag = (car_max - car_min).length();
     println!("[wind_tunnel] araba AABB boyut={:?}", car_max - car_min);
 
     // GERÇEK frontal alanı mesh silüetinden ölç (m²).
-    let frontal_area_m2 = measure_frontal_area_m2(world, chassis.id(), car_min, car_max);
+    let frontal_area_m2 = measure_frontal_area_m2(world, chassis, car_min, car_max);
     println!(
         "[wind_tunnel] ölçülen frontal alan ≈ {:.3} m²",
         frontal_area_m2
@@ -194,7 +195,6 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
                 },
                 Camera::new(1.05, 0.1, 500.0, yaw, pitch, true),
             ))
-            .id()
     };
 
     // AKIŞ-ÇİZGİSİ ŞERİTLERİ: ön kesiti kaplayan tohum ızgarası. Şeritler HER FRAME (render'da)
@@ -238,7 +238,6 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
                 Material::new(white.clone()).with_unlit(Vec4::new(0.95, 0.97, 1.0, 0.30)),
                 MeshRenderer::new(),
             ))
-            .id()
     };
 
     WindTunnel {
@@ -256,7 +255,7 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
 
 /// Modeli hedef uzunluğa ölçekle, uzun yatay kenarı Z'ye hizala (gerekirse 90°Y),
 /// X/Z'de orijine ortala, alt yüzü y=0'a otur. Herhangi bir araba GLB'sine uyar.
-fn fit_car(world: &mut World, root: u32) {
+fn fit_car(world: &mut World, root: Entity) {
     // Root'u kimliğe sabitle → doğal ölçüm.
     {
         let mut transforms = world.borrow_mut::<Transform>();
@@ -464,14 +463,14 @@ fn build_ribbon_verts(
 }
 
 /// Bir entity + alt hiyerarşisinin DÜNYA-uzayı AABB'si (Mesh.bounds × hiyerarşi matrisleri).
-fn world_aabb(world: &World, root: u32) -> Option<(Vec3, Vec3)> {
+fn world_aabb(world: &World, root: Entity) -> Option<(Vec3, Vec3)> {
     let meshes = world.borrow::<Mesh>();
     let transforms = world.borrow::<Transform>();
     let children = world.borrow::<gizmo::core::component::Children>();
     let mut min = Vec3::splat(f32::INFINITY);
     let mut max = Vec3::splat(f32::NEG_INFINITY);
     let mut found = false;
-    let mut stack: Vec<(u32, Mat4)> = vec![(root, Mat4::IDENTITY)];
+    let mut stack: Vec<(Entity, Mat4)> = vec![(root, Mat4::IDENTITY)];
     while let Some((e, parent_m)) = stack.pop() {
         let local = transforms
             .get(e)
@@ -494,7 +493,7 @@ fn world_aabb(world: &World, root: u32) -> Option<(Vec3, Vec3)> {
         }
         if let Some(c) = children.get(e) {
             for &kid in &c.0 {
-                stack.push((kid.id(), world_m));
+                stack.push((kid, world_m));
             }
         }
     }
@@ -509,7 +508,7 @@ fn world_aabb(world: &World, root: u32) -> Option<(Vec3, Vec3)> {
 /// X-Y düzlemine (akış Z boyunca → frontal kesit = X-Y) izdüşürüp bir ızgaraya rasterize eder,
 /// kaplanan hücre alanını toplar → world² → (CAR_REAL_LENGTH_M/TARGET_LEN)² ile m²'ye çevirir.
 /// Üçgen yoksa (cpu_vertices boş) AABB kutusunun %80'ine düşer.
-fn measure_frontal_area_m2(world: &World, root: u32, amin: Vec3, amax: Vec3) -> f32 {
+fn measure_frontal_area_m2(world: &World, root: Entity, amin: Vec3, amax: Vec3) -> f32 {
     const G: usize = 384;
     let min_x = amin.x;
     let min_y = amin.y;
@@ -522,7 +521,7 @@ fn measure_frontal_area_m2(world: &World, root: u32, amin: Vec3, amax: Vec3) -> 
     let children = world.borrow::<gizmo::core::component::Children>();
     let mut tri_count = 0usize;
 
-    let mut stack: Vec<(u32, Mat4)> = vec![(root, Mat4::IDENTITY)];
+    let mut stack: Vec<(Entity, Mat4)> = vec![(root, Mat4::IDENTITY)];
     while let Some((e, parent_m)) = stack.pop() {
         let local = transforms
             .get(e)
@@ -553,7 +552,7 @@ fn measure_frontal_area_m2(world: &World, root: u32, amin: Vec3, amax: Vec3) -> 
         }
         if let Some(ch) = children.get(e) {
             for &k in &ch.0 {
-                stack.push((k.id(), world_m));
+                stack.push((k, world_m));
             }
         }
     }

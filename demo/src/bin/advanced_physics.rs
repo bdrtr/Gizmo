@@ -399,7 +399,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
         }
     }
     for e in missing {
-        if let Some(ent) = world.get_entity(e.id()) {
+        if let Some(ent) = world.live(e) {
             world.add_component(ent, state.sphere_mesh.clone());
             world.add_component(ent, state.chunk_material.clone());
             world.add_component(ent, MeshRenderer::new());

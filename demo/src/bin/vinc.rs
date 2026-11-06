@@ -66,14 +66,14 @@ gizmo::core::impl_component!(Block);
 
 struct Game {
     physics: FixedPhysics,
-    hook: u32,
+    hook: Entity,
     hook_x: f32,
-    ball: u32,
+    ball: Entity,
     clock: f32,
     down: usize,
     broken: usize,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     over: Option<bool>,
     auto: bool,
 }
@@ -112,17 +112,17 @@ fn setup(world: &mut World, font: FontId) -> Game {
         MaterialDesc::new().with_pbr(Color::srgb_hex("#E1A73B").to_vec4(), 0.5, 0.6),
         MeshRenderer::new(),
     ));
-    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     let mut game = Game {
         physics: FixedPhysics::new(60),
-        hook: 0,
+        hook: Entity::new(0, 0),
         hook_x: HOOK_RANGE.0,
-        ball: 0,
+        ball: Entity::new(0, 0),
         clock: 0.0,
         down: 0,
         broken: 0,
@@ -177,10 +177,10 @@ fn self_test() -> bool {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let actors: Vec<u32> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
-    let debris: Vec<u32> = world.query::<(Entity, &gizmo::physics::components::Debris)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let actors: Vec<Entity> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity).collect();
+    let debris: Vec<Entity> = world.query::<(Entity, &gizmo::physics::components::Debris)>().unwrap().iter().map(|(entity, _)| entity).collect();
     for id in actors.into_iter().chain(debris) {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn(e);
         }
     }
@@ -199,7 +199,7 @@ fn restart(world: &mut World, game: &mut Game) {
             KinematicTarget::new(hook_at, Quat::IDENTITY),
             Actor,
         ))
-        .id();
+        ;
     let mut ball = RigidBody::new(BALL_MASS, true);
     ball.lock_translation_z = true;
     game.ball = world
@@ -214,7 +214,7 @@ fn restart(world: &mut World, game: &mut Game) {
             Collider::sphere(BALL_R),
             Actor,
         ))
-        .id();
+        ;
     let colours = ["#C0392B", "#B03A2E", "#A93226", "#CB4335"];
     for floor in 0..FLOORS {
         for col in 0..COLUMNS {
@@ -249,7 +249,7 @@ fn restart(world: &mut World, game: &mut Game) {
         physics.joints.clear();
         physics
             .joints
-            .push(Joint::rope(BodyHandle::from_id(game.hook), BodyHandle::from_id(game.ball), Vec3::ZERO, Vec3::ZERO, ROPE));
+            .push(Joint::rope(BodyHandle::from_id(game.hook.id()), BodyHandle::from_id(game.ball.id()), Vec3::ZERO, Vec3::ZERO, ROPE));
     }
     game.clock = 0.0;
     game.down = 0;
@@ -339,7 +339,7 @@ fn hud(world: &mut World, game: &Game) {
     set_text(world, game.banner, banner);
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

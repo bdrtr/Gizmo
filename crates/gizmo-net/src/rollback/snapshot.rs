@@ -59,7 +59,7 @@ impl PhysicsStateSnapshot {
         let mut states = Vec::with_capacity(128); // Tahmini
 
         for ent in world.iter_alive_entities() {
-            let id = ent.id();
+            let id = ent;
             
             // Sadece Transform ve Velocity'si olan (hareketli) objeleri snapshot al
             if let (Some(t), Some(v)) = (transforms.get(id), velocities.get(id)) {

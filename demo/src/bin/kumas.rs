@@ -2,7 +2,7 @@ use gizmo::prelude::*;
 use gizmo::renderer::gpu_physics::GpuJoint;
 
 struct KumasGame {
-    cam_id: u32,
+    cam_id: Entity,
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
@@ -16,7 +16,7 @@ struct KumasGame {
 impl KumasGame {
     fn new() -> Self {
         Self {
-            cam_id: 0,
+            cam_id: Entity::new(0, 0),
             cam_yaw: std::f32::consts::FRAC_PI_4,
             cam_pitch: -0.3,
             cam_pos: Vec3::new(40.0, 30.0, 40.0),
@@ -57,7 +57,7 @@ fn main() {
                     true,
                 ),
             );
-            game.cam_id = cam_entity.id();
+            game.cam_id = cam_entity;
 
             // Işık
             let sun = world.spawn();

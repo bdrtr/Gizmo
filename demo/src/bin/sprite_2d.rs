@@ -50,13 +50,13 @@ const BAR_FULL: Vec4 = Vec4::new(0.04, 0.75, 0.08, 1.0);
 const BAR_LOW: Vec4 = Vec4::new(0.9, 0.06, 0.03, 1.0);
 
 struct Game {
-    player: u32,
-    camera: u32,
+    player: Entity,
+    camera: Entity,
     /// `(varlık, paralaks oranı, kopya sırası)`.
-    hills: Vec<(u32, f32, f32)>,
-    coins: Vec<(u32, bool)>,
-    coin_icons: Vec<u32>,
-    bar_fill: u32,
+    hills: Vec<(Entity, f32, f32)>,
+    coins: Vec<(Entity, bool)>,
+    coin_icons: Vec<Entity>,
+    bar_fill: Entity,
     x: f32,
     y: f32,
     vy: f32,
@@ -84,7 +84,7 @@ fn main() {
             let world_sprite = |world: &mut World, pos: Vec3, sprite: Sprite| {
                 world
                     .spawn_bundle((Transform::new(pos), GlobalTransform::default(), sprite))
-                    .id()
+                    
             };
 
             // Gökyüzü kameraya bağlı: her kare kameranın x'ine taşınıyor (bkz. `update`).
@@ -118,7 +118,7 @@ fn main() {
                 ground,
             ));
 
-            let coins: Vec<(u32, bool)> = (0..12)
+            let coins: Vec<(Entity, bool)> = (0..12)
                 .map(|i| {
                     let x = -25.0 + i as f32 * 5.0;
                     let y = GROUND_TOP + 1.2 + (i % 3) as f32 * 0.9;
@@ -136,10 +136,10 @@ fn main() {
                     .with_layer(2),
             );
             // 4 karelik şerit, saniyede 10 kare. Hangi aralığın oynayacağını `update` seçiyor.
-            scene.world.add_component(scene.world.get_entity(player).expect("az önce doğdu"), SpriteAnimation::new(4, 1, 0, 3, 10.0));
+            scene.world.add_component(scene.world.live(player).expect("az önce doğdu"), SpriteAnimation::new(4, 1, 0, 3, 10.0));
 
             // ── HUD ──────────────────────────────────────────────────────────────────────
-            let hud = |world: &mut World, sprite: Sprite| world.spawn_bundle((sprite,)).id();
+            let hud = |world: &mut World, sprite: Sprite| world.spawn_bundle((sprite,));
             hud(
                 scene.world,
                 Sprite::screen(white, Vec2::new(BAR_WIDTH + 6.0, 26.0), Vec2::new(16.0, 16.0))
@@ -162,17 +162,17 @@ fn main() {
                 .collect();
 
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 10.0), Vec3::ZERO);
-            let mut camera = 0;
+            let mut camera = None;
             if let Some(mut q) = scene.world.query_mut::<(Entity, Mut<Camera>, Mut<Transform>)>() {
                 for (entity, mut cam, _) in q.iter_mut() {
                     cam.projection = ProjectionMode::Orthographic { height: VIEW_HEIGHT };
-                    camera = entity.id();
+                    camera = Some(entity);
                 }
             }
 
             scene.world.insert_resource(Game {
                 player,
-                camera,
+                camera: camera.expect("the scene has a camera"),
                 hills: hills_list,
                 coins,
                 coin_icons,
@@ -242,7 +242,7 @@ fn update(world: &mut World, dt: f32, input: &gizmo::core::input::Input) {
         }
     }
     for (e, i) in collected {
-        if let Some(entity) = world.get_entity(e) {
+        if let Some(entity) = world.live(e) {
             world.add_component(entity, IsHidden);
         }
         if let Some(mut s) = world.borrow_mut::<Sprite>().get_mut(g.coin_icons[i]) {

@@ -21,9 +21,9 @@ const BALL_MASS: f32 = 1.0;
 const BALL_RADIUS: f32 = 0.20;
 
 struct DominoGame {
-    domino_ids: Vec<u32>,
-    ball_id: u32,
-    cam_id: u32,
+    domino_ids: Vec<Entity>,
+    ball_id: Entity,
+    cam_id: Entity,
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
@@ -40,8 +40,8 @@ impl DominoGame {
     fn new() -> Self {
         Self {
             domino_ids: Vec::new(),
-            ball_id: 0,
-            cam_id: 0,
+            ball_id: Entity::new(0, 0),
+            cam_id: Entity::new(0, 0),
             cam_yaw: -std::f32::consts::FRAC_PI_2,
             cam_pitch: -0.4,
             cam_pos: Vec3::new(0.0, 8.0, 20.0),
@@ -80,7 +80,7 @@ fn main() {
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
 
-            game.cam_id = cam_entity.id();
+            game.cam_id = cam_entity;
             game
         })
         .set_update(|world, state, dt, input| {
@@ -249,7 +249,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
         world.add_component(entity, Collider::box_collider(Vec3::new(HX, HY, HZ)));
         world.add_component(entity, EntityName(format!("Domino_{}", i)));
 
-        game.domino_ids.push(entity.id());
+        game.domino_ids.push(entity);
     }
 
     // İtme topu — ilk dominonun arkasına yerleştir
@@ -287,7 +287,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Domin
     world.add_component(ball, Collider::sphere(BALL_RADIUS));
     world.add_component(ball, EntityName("İtme Topu".into()));
 
-    game.ball_id = ball.id();
+    game.ball_id = ball;
     world.insert_resource(asset_manager);
 
     println!("Sahne hazır: {} domino taşı + 1 top", DOMINO_COUNT);

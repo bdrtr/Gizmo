@@ -147,10 +147,10 @@ struct Game {
     since_drop: f32,
     dropped: usize,
     over: bool,
-    crane: u32,
-    camera: u32,
-    hud: u32,
-    banner: u32,
+    crane: Entity,
+    camera: Entity,
+    hud: Entity,
+    banner: Entity,
 }
 
 fn main() {
@@ -187,18 +187,18 @@ fn main() {
                     MaterialDesc::new().with_unlit(Color::srgb_hex("#ECF0F1").to_vec4()),
                     MeshRenderer::new(),
                 ))
-                .id();
+                ;
             let camera = scene
                 .world
                 .spawn_bundle(CameraBundle { position: Vec3::new(0.0, 3.0, 9.0), pitch: -0.15, primary: true, ..Default::default() })
-                .id();
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+                ;
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             scene.world.insert_resource(Game {
                 physics: FixedPhysics::new(60),
                 clock: 0.0,
@@ -220,9 +220,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let Some(mut game) = world.remove_resource::<Game>() else { return };
     let dt = dt.min(0.05);
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        let blocks: Vec<u32> = world.query::<(Entity, &SoftBodyMesh)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+        let blocks: Vec<Entity> = world.query::<(Entity, &SoftBodyMesh)>().unwrap().iter().map(|(entity, _)| entity).collect();
         for id in blocks {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.despawn(e);
             }
         }

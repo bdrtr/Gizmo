@@ -4,6 +4,7 @@
 //! Each test asserts a position the geometry dictates, not merely "it did not explode": a shape
 //! built in the wrong frame, or a strip whose triangles face nowhere, lands somewhere else.
 
+use gizmo_core::Entity;
 use gizmo_core::world::World;
 use gizmo_math::{Vec2, Vec3};
 use gizmo_physics_core::{Collider, ColliderShape, Transform};
@@ -16,13 +17,13 @@ fn world() -> World {
     w
 }
 
-fn spawn(w: &mut World, pos: Vec3, body: RigidBody, col: Collider) -> u32 {
+fn spawn(w: &mut World, pos: Vec3, body: RigidBody, col: Collider) -> Entity {
     let e = w.spawn();
     w.add_component(e, Transform::new(pos));
     w.add_component(e, body);
     w.add_component(e, Velocity::default());
     w.add_component(e, col);
-    e.id()
+    e
 }
 
 fn dynamic(mass: f32, col: &Collider) -> RigidBody {
@@ -37,7 +38,7 @@ fn step(w: &World, n: usize) {
     }
 }
 
-fn pos(w: &World, id: u32) -> Vec3 {
+fn pos(w: &World, id: Entity) -> Vec3 {
     w.borrow::<Transform>().get(id).unwrap().position
 }
 

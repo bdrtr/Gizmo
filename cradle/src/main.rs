@@ -13,15 +13,15 @@ const HINGE_HEIGHT: f32 = 5.0;
 const BALL_COUNT: usize = 5;
 
 struct RopeData {
-    ball_id: u32,
-    rope_id: u32,
+    ball_id: Entity,
+    rope_id: Entity,
     pivot: Vec3,
 }
 
 struct CradleGame {
-    ball_ids: Vec<u32>,
+    ball_ids: Vec<Entity>,
     ropes: Vec<RopeData>,
-    cam_id: u32,
+    cam_id: Entity,
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
@@ -39,7 +39,7 @@ impl CradleGame {
         Self {
             ball_ids: Vec::new(),
             ropes: Vec::new(),
-            cam_id: 0,
+            cam_id: Entity::new(0, 0),
             cam_yaw: -std::f32::consts::FRAC_PI_2,
             cam_pitch: -0.2,
             cam_pos: Vec3::new(0.0, 5.0, 15.0),
@@ -83,7 +83,7 @@ fn main() {
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
 
-            game.cam_id = cam_entity.id();
+            game.cam_id = cam_entity;
             game
         })
         .set_update(|world, state, dt, input| {
@@ -285,7 +285,7 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         world.add_component(ball, Collider::sphere(BALL_RADIUS));
         world.add_component(ball, EntityName(format!("Ball_{}", i)));
 
-        game.ball_ids.push(ball.id());
+        game.ball_ids.push(ball);
 
         // İp (Rope) arka
         let rope_back = world.spawn();
@@ -299,8 +299,8 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         world.add_component(rope_back, EntityName(format!("Rope_Back_{}", i)));
 
         game.ropes.push(RopeData {
-            ball_id: ball.id(),
-            rope_id: rope_back.id(),
+            ball_id: ball,
+            rope_id: rope_back,
             pivot: Vec3::new(x, HINGE_HEIGHT, -z_offset),
         });
 
@@ -316,8 +316,8 @@ fn setup_scene(world: &mut World, renderer: &gizmo::renderer::Renderer) -> Cradl
         world.add_component(rope_front, EntityName(format!("Rope_Front_{}", i)));
 
         game.ropes.push(RopeData {
-            ball_id: ball.id(),
-            rope_id: rope_front.id(),
+            ball_id: ball,
+            rope_id: rope_front,
             pivot: Vec3::new(x, HINGE_HEIGHT, z_offset),
         });
 

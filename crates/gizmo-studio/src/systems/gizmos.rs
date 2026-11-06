@@ -21,11 +21,11 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
         let names = world.borrow::<gizmo::core::component::EntityName>();
         let children_storage = world.borrow::<gizmo::core::component::Children>();
         
-        let mut check_entity = |id: u32, gizmo_name: &str| {
+        let mut check_entity = |id: Entity, gizmo_name: &str| {
             let mut has_gizmo = false;
             if let Some(children) = children_storage.get(id) {
                 for &child in &children.0 {
-                    let child_id = child.id();
+                    let child_id = child;
                     if !world.is_alive(child) {
                         continue;
                     }
@@ -44,7 +44,7 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
         };
 
         for e in world.iter_alive_entities() {
-            let id = e.id();
+            let id = e;
             
             // Skip the Editor Camera
             if id == state.editor_camera {
@@ -66,7 +66,7 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
 
     // Toggle visibility based on play mode
     for gizmo_id in existing_gizmos {
-        if let Some(ent) = world.get_entity(gizmo_id) {
+        if let Some(ent) = world.live(gizmo_id) {
             let is_hidden = world.borrow::<gizmo::core::component::IsHidden>().contains(gizmo_id);
             if is_playing && !is_hidden {
                 world.add_component(ent, gizmo::core::component::IsHidden);
@@ -81,23 +81,23 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
         let names = world.borrow::<gizmo::core::component::EntityName>();
         let hidden = world.borrow::<gizmo::core::component::IsHidden>();
         let markers = world.borrow::<gizmo::core::component::EditorOnly>();
-        let editor_entities: Vec<u32> = world.query::<(Entity, &gizmo::core::component::EntityName)>().unwrap().iter()
+        let editor_entities: Vec<Entity> = world.query::<(Entity, &gizmo::core::component::EntityName)>().unwrap().iter()
             .filter(|(entity, name)| {
                 // The editor camera is furniture too, but hiding it would hide what play mode
                 // draws from — so it is the one deliberate exception, kept as its own clause.
                 gizmo::core::component::is_editor_only(
                     markers.get(*entity).is_some(),
                     Some(name.0.as_str()),
-                ) && (*entity).id() != state.editor_camera
+                ) && *entity != state.editor_camera
             })
-            .map(|(entity, _)| entity.id())
+            .map(|(entity, _)| entity)
             .collect();
         drop(names);
         drop(hidden);
         drop(markers);
 
         for eid in editor_entities {
-            if let Some(ent) = world.get_entity(eid) {
+            if let Some(ent) = world.live(eid) {
                 let is_hidden = world.borrow::<gizmo::core::component::IsHidden>().contains(eid);
                 if is_playing && !is_hidden {
                     world.add_component(ent, gizmo::core::component::IsHidden);
@@ -145,7 +145,7 @@ let pending_assets = world.get_resource::<DebugAssets>().map(|a| (a.cube.clone()
             }
             world.add_component(gizmo_ent, trans);
             world.add_component(gizmo_ent, gizmo::physics::components::GlobalTransform::default());
-            if let Some(parent) = world.get_entity(parent_id) {
+            if let Some(parent) = world.live(parent_id) {
                 world.add_component(gizmo_ent, gizmo::core::component::Parent(parent));
             }
             
@@ -167,7 +167,7 @@ let pending_assets = world.get_resource::<DebugAssets>().map(|a| (a.cube.clone()
                 if let Some(mut ch) = children_storage.get_mut(parent_id) {
                     ch.0.push(gizmo_ent);
                 }
-            } else if let Some(ent) = world.get_entity(parent_id) {
+            } else if let Some(ent) = world.live(parent_id) {
                 world.add_component(
                     ent, 
                     gizmo::core::component::Children(vec![gizmo_ent])

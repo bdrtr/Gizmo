@@ -39,8 +39,8 @@ pub(super) struct Viewpoint {
 /// is a panic in the render loop.
 pub(super) fn resolve(
     world: &World,
-    editor_camera: u32,
-    game_camera: u32,
+    editor_camera: Entity,
+    game_camera: Entity,
     aspect: f32,
     exposure: f32,
 ) -> Viewpoint {
@@ -91,7 +91,7 @@ pub(super) fn resolve(
 /// picture that claims to be the game.
 pub(super) fn camera_frame(
     world: &World,
-    entity: u32,
+    entity: Entity,
     aspect: f32,
     exposure: f32,
 ) -> Option<CameraFrame> {
@@ -116,7 +116,7 @@ pub(super) fn camera_frame(
 /// game camera in the scene it falls back to the drawing camera's own frustum.
 pub(super) fn culling_frustum(
     world: &World,
-    game_camera: u32,
+    game_camera: Entity,
     aspect: f32,
     viewpoint: &Viewpoint,
 ) -> Frustum {
@@ -139,7 +139,7 @@ pub(super) fn culling_frustum(
 /// would see. `None` in play mode (you are already looking through it) or with no game camera.
 pub(super) fn game_view_proj(
     world: &World,
-    game_camera: u32,
+    game_camera: Entity,
     aspect: f32,
     viewpoint: &Viewpoint,
 ) -> Option<Mat4> {
@@ -164,14 +164,14 @@ mod tests {
 
     /// Spawns a camera at `pos` with a distinctive far plane, so which one was picked is readable
     /// from the result.
-    fn camera_at(world: &mut World, pos: Vec3, far: f32) -> u32 {
+    fn camera_at(world: &mut World, pos: Vec3, far: f32) -> Entity {
         let e = world.spawn();
         world.add_component(e, Transform::new(pos));
         world.add_component(
             e,
             Camera::new(std::f32::consts::FRAC_PI_4, 0.1, far, -std::f32::consts::FRAC_PI_2, 0.0, false),
         );
-        e.id()
+        e
     }
 
     fn playing(world: &mut World, yes: bool) {
@@ -215,7 +215,7 @@ mod tests {
         playing(&mut world, true);
 
         // An id no entity has.
-        let v = resolve(&world, editor, 4242, ASPECT, 1.0);
+        let v = resolve(&world, editor, Entity::new(4242, 0), ASPECT, 1.0);
         assert_eq!(v.camera.far, 111.0, "a missing game camera must not blank the viewport");
         assert!(v.is_playing_mode, "the mode is still play — only the camera fell back");
     }
@@ -224,7 +224,7 @@ mod tests {
     #[test]
     fn no_camera_at_all_yields_the_documented_default() {
         let world = World::new();
-        let v = resolve(&world, 1, 2, ASPECT, 1.25);
+        let v = resolve(&world, Entity::new(1, 0), Entity::new(2, 0), ASPECT, 1.25);
         assert_eq!((v.camera.near, v.camera.far), (0.1, 2000.0));
         assert_eq!(v.camera.position, Vec3::ZERO);
         assert_eq!(v.camera.forward, Vec3::new(0.0, 0.0, -1.0));
@@ -287,8 +287,8 @@ mod tests {
         let editor = camera_at(&mut world, Vec3::ZERO, 500.0);
         playing(&mut world, false);
 
-        let v = resolve(&world, editor, 4242, ASPECT, 1.0);
-        let culling = culling_frustum(&world, 4242, ASPECT, &v);
+        let v = resolve(&world, editor, Entity::new(4242, 0), ASPECT, 1.0);
+        let culling = culling_frustum(&world, Entity::new(4242, 0), ASPECT, &v);
         let boxed = gizmo::math::Aabb::new(Vec3::new(-1.0, -1.0, -11.0), Vec3::new(1.0, 1.0, -9.0));
         assert!(culling.intersects_aabb(boxed));
     }

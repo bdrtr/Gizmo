@@ -63,7 +63,7 @@ fn global(world: &mut World, name: &str) -> Option<ScriptValue> {
 fn segments(world: &World) -> (usize, usize) {
     let meshes = world.borrow::<gizmo::core::component::MeshSource>();
     let colours = world.borrow::<MaterialDesc>();
-    let ids: Vec<u32> = world.query::<(Entity, &gizmo::core::EntityName)>().unwrap().iter().filter(|(_, n)| n.0 == "yilan").map(|(entity, _)| entity.id()).collect();
+    let ids: Vec<Entity> = world.query::<(Entity, &gizmo::core::EntityName)>().unwrap().iter().filter(|(_, n)| n.0 == "yilan").map(|(entity, _)| entity).collect();
     let drawn = ids.iter().filter(|id| meshes.get(**id).is_some() && colours.get(**id).is_some()).count();
     (ids.len(), drawn)
 }
@@ -107,8 +107,8 @@ fn self_test() -> bool {
 
 struct Game {
     play: PlayLoop,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
 }
 
 fn main() {
@@ -137,13 +137,13 @@ fn main() {
                 MaterialDesc::new().with_pbr(Color::srgb_hex("#2C3E50").to_vec4(), 0.9, 0.0),
                 MeshRenderer::new(),
             ));
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             scene.world.insert_resource(engine(std::env::var_os("YILAN_OTO").is_some()));
             scene.world.insert_resource(Game { play: PlayLoop::new(), hud, banner });
         })
@@ -165,7 +165,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     world.insert_resource(game);
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

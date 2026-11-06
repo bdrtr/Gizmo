@@ -397,10 +397,10 @@ mod tests {
 
         assert_eq!(lines(&world), ["enter menu", "exit menu", "enter playing"]);
         assert_eq!(*world.get_resource::<State<Screen>>().unwrap().get(), Screen::Playing);
-        assert!(world.entity(button.id()).is_none(), "the menu's button went with the menu");
-        assert!(world.entity(label.id()).is_none(), "and its child with it");
-        assert!(world.entity(hud.id()).is_some(), "the playing HUD stays");
-        assert!(world.entity(level.id()).is_some(), "an unscoped entity stays");
+        assert!(world.live(button).is_none(), "the menu's button went with the menu");
+        assert!(world.live(label).is_none(), "and its child with it");
+        assert!(world.live(hud).is_some(), "the playing HUD stays");
+        assert!(world.live(level).is_some(), "an unscoped entity stays");
     }
 
     /// A `set` made inside a hook is the next frame's switch, not this one's; and a hook added

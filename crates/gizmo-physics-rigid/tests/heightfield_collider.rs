@@ -8,6 +8,7 @@
 //!
 //! Driven through the real ECS path (`physics_step_system`), like `analytical.rs`.
 
+use gizmo_core::Entity;
 use gizmo_core::world::World;
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics_core::components::{CombineMode, PhysicsMaterial};
@@ -46,7 +47,7 @@ fn terrain(world: &mut World, heights: Vec<f32>, rows: u32, cols: u32, scale: Ve
     world.add_component(e, collider);
 }
 
-fn drop_box(world: &mut World, half: Vec3, position: Vec3) -> u32 {
+fn drop_box(world: &mut World, half: Vec3, position: Vec3) -> Entity {
     let e = world.spawn();
     let mut collider = Collider::box_collider(half);
     collider.material = grippy();
@@ -56,7 +57,7 @@ fn drop_box(world: &mut World, half: Vec3, position: Vec3) -> u32 {
     world.add_component(e, rb);
     world.add_component(e, Velocity::default());
     world.add_component(e, collider);
-    e.id()
+    e
 }
 
 fn step(world: &World, n: usize) {
@@ -65,7 +66,7 @@ fn step(world: &World, n: usize) {
     }
 }
 
-fn y_of(world: &World, id: u32) -> f32 {
+fn y_of(world: &World, id: Entity) -> f32 {
     world.borrow::<Transform>().get(id).unwrap().position.y
 }
 

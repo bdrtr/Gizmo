@@ -148,6 +148,8 @@ impl RollbackManager {
         let mut rigid_bodies =
             unsafe { world.borrow_mut_unchecked::<gizmo_physics_rigid::RigidBody>() };
         for (id, rb, t, v) in rows {
+            // A physics body is known by its raw id; the row is whoever holds that id now.
+            let Some(id) = world.entity(id) else { continue };
             if let Some(mut slot) = transforms.get_mut(id) {
                 *slot = t;
             }

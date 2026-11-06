@@ -12,6 +12,7 @@
 //! Rung 1-7 GEÇER (koruma). `ccd_hole_*` rungları BİLİNEN AÇIKLARI belgeler ve
 //! `#[ignore]`'dur (CI'yi kırmadan sınırı kilitler; `--ignored` ile çalıştırılır).
 
+use gizmo_core::Entity;
 use gizmo_core::world::World;
 use gizmo_math::Vec3;
 use gizmo_physics_core::components::{CombineMode, PhysicsMaterial};
@@ -53,7 +54,7 @@ fn wall(world: &mut World, cx: f32, half_thick: f32) -> u32 {
 }
 
 /// +x yönünde `speed` ile giden dinamik küre mermi. `ccd` bayrağı doğrudan set edilir.
-fn bullet(world: &mut World, x0: f32, speed: f32, r: f32, ccd: bool) -> u32 {
+fn bullet(world: &mut World, x0: f32, speed: f32, r: f32, ccd: bool) -> Entity {
     let mut rb = RigidBody::new(1.0, false); // yerçekimi yok
     rb.linear_damping = 0.0;
     rb.ccd_enabled = ccd;
@@ -63,11 +64,11 @@ fn bullet(world: &mut World, x0: f32, speed: f32, r: f32, ccd: bool) -> u32 {
     world.add_component(e, rb);
     world.add_component(e, Velocity::new(Vec3::new(speed, 0.0, 0.0)));
     world.add_component(e, Collider::sphere(r).with_material(sticky()));
-    e.id()
+    e
 }
 
 /// Küre yerine kutu mermi (GJK'nın ince-en-boy oranında bozulduğu hâli sınamak için).
-fn box_bullet(world: &mut World, x0: f32, speed: f32, r: f32, ccd: bool) -> u32 {
+fn box_bullet(world: &mut World, x0: f32, speed: f32, r: f32, ccd: bool) -> Entity {
     let mut rb = RigidBody::new(1.0, false);
     rb.linear_damping = 0.0;
     rb.ccd_enabled = ccd;
@@ -77,12 +78,12 @@ fn box_bullet(world: &mut World, x0: f32, speed: f32, r: f32, ccd: bool) -> u32 
     world.add_component(e, rb);
     world.add_component(e, Velocity::new(Vec3::new(speed, 0.0, 0.0)));
     world.add_component(e, Collider::box_collider(Vec3::splat(r)).with_material(sticky()));
-    e.id()
+    e
 }
 
 /// `steps` alt-adım sür; (tepe_x, son_x, son_vx) döndür. Tepe, backstop düzeltmesinden
 /// SONRAKİ (physics_step_system çıkışındaki) konumdur — anlık integrasyon üstü değil.
-fn run(world: &World, id: u32, steps: usize) -> (f32, f32, f32) {
+fn run(world: &World, id: Entity, steps: usize) -> (f32, f32, f32) {
     let mut peak = f32::MIN;
     for _ in 0..steps {
         physics_step_system(world, DT);
@@ -214,7 +215,7 @@ fn ccd_r6_kinematic_fast_body_does_not_tunnel() {
     w.add_component(e, rb);
     w.add_component(e, Velocity::new(Vec3::new(1200.0, 0.0, 0.0)));
     w.add_component(e, Collider::sphere(0.05).with_material(sticky()));
-    let (peak, _, _) = run(&w, e.id(), 240);
+    let (peak, _, _) = run(&w, e, 240);
     assert!(peak < 0.0, "kinematik CCD cismi tünellememeli, tepe_x={peak}");
 }
 

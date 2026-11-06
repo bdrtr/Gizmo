@@ -3,6 +3,7 @@
 //! `Material` (with its GPU bind group) and `MaterialDesc` (what a scene file holds) describe the
 //! same thing, and `sync_material_descriptions` runs every frame to keep them together.
 
+use gizmo_core::Entity;
 use crate::core::World;
 use crate::math::Vec4;
 use crate::renderer::asset::AssetManager;
@@ -11,14 +12,14 @@ use crate::renderer::material_sync::sync_material_descriptions;
 use crate::renderer::Renderer;
 
 /// A world holding one red material, synced once (so it has its description), and the entity.
-async fn one_red_material(renderer: &Renderer) -> (World, u32) {
+async fn one_red_material(renderer: &Renderer) -> (World, Entity) {
     let mut assets = AssetManager::new();
     let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
     let mut world = World::new();
     let e = world.spawn();
     world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.9, 0.1, 0.1, 1.0), 0.5, 0.0));
     sync_material_descriptions(&mut world);
-    (world, e.id())
+    (world, e)
 }
 
 fn gpu_or_skip(name: &str) -> bool {

@@ -28,7 +28,8 @@ fn every_joint_of_a_new_humanoid_is_closed() {
     let ts = world.borrow::<Transform>();
     for &j in &ragdoll.joint_indices {
         let joint = &pw.joints[j];
-        let (a, b) = (ts.get(joint.entity_a.id()).unwrap(), ts.get(joint.entity_b.id()).unwrap());
+        let at = |h: gizmo_physics_core::BodyHandle| ts.get(world.entity(h.id()).unwrap()).unwrap();
+        let (a, b) = (at(joint.entity_a), at(joint.entity_b));
         let gap = ((a.position + a.rotation * joint.local_anchor_a) - (b.position + b.rotation * joint.local_anchor_b)).length();
         assert!(gap < 1e-4, "joint {j} is {gap:.3} m apart at spawn");
     }

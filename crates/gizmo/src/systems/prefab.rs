@@ -38,8 +38,8 @@ use gizmo_core::PrefabRequest;
 pub fn prefab_request_system(world: &mut crate::core::World) {
     // Collect first: loading a prefab spawns entities, and structural changes cannot run while a
     // query borrow is live.
-    let pending: Vec<(u32, String)> = {
-        world.query::<(Entity, &PrefabRequest)>().unwrap().iter().map(|(entity, req)| (entity.id(), req.0.clone())).collect()
+    let pending: Vec<(Entity, String)> = {
+        world.query::<(Entity, &PrefabRequest)>().unwrap().iter().map(|(entity, req)| (entity, req.0.clone())).collect()
     };
     if pending.is_empty() {
         return;
@@ -51,7 +51,7 @@ pub fn prefab_request_system(world: &mut crate::core::World) {
             tracing::warn!("[Prefab] a request with an empty key cannot name a file; dropped");
         } else {
             match crate::scene::scene::SceneData::load_prefab(&key, Some(id), world, &registry) {
-                Ok(_) => tracing::info!(prefab = %key, entity = id, "[Prefab] instantiated"),
+                Ok(_) => tracing::info!(prefab = %key, entity = %id, "[Prefab] instantiated"),
                 Err(e) => tracing::warn!(
                     prefab = %key,
                     error = %e,
@@ -59,7 +59,7 @@ pub fn prefab_request_system(world: &mut crate::core::World) {
                 ),
             }
         }
-        if let Some(entity) = world.get_entity(id) {
+        if let Some(entity) = world.live(id) {
             world.remove_component::<PrefabRequest>(entity);
         }
     }
@@ -100,7 +100,7 @@ mod tests {
             world.borrow::<PrefabRequest>().get(e).is_none(),
             "a failed load must still clear the request"
         );
-        assert!(world.get_entity(e.id()).is_some(), "and must not take the entity with it");
+        assert!(world.live(e).is_some(), "and must not take the entity with it");
     }
 
     /// **The whole point, driven through a real file.** A prefab is written from one world and
@@ -136,7 +136,7 @@ mod tests {
             );
             crate::scene::scene::SceneData::save_prefab(
                 &source,
-                e.id(),
+                e,
                 &path,
                 &crate::full_scene_registry(),
             )
@@ -182,6 +182,6 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         prefab_request_system(&mut world);
-        assert!(world.get_entity(e.id()).is_some());
+        assert!(world.live(e).is_some());
     }
 }

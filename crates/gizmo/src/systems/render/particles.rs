@@ -62,7 +62,7 @@ pub fn spawn_from_emitters(
 ) {
     // Collected through a read borrow that ends with this statement, so the mutable borrow below
     // never coexists with a read borrow of the same storage.
-    let emitter_entities: Vec<u32> = world.query::<(Entity, &ParticleEmitter)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let emitter_entities: Vec<Entity> = world.query::<(Entity, &ParticleEmitter)>().unwrap().iter().map(|(entity, _)| entity).collect();
     if emitter_entities.is_empty() {
         return;
     }
@@ -98,7 +98,7 @@ pub fn spawn_from_emitters(
 
         // One stream per (frame, emitter): the same frame replays the same sparks, and neighbouring
         // emitters do not emit in lockstep.
-        let mut rng = gizmo_math::Rng::with_stream(frame, u64::from(id));
+        let mut rng = gizmo_math::Rng::with_stream(frame, u64::from(id.id()));
         emit(&mut emitter, origin, dt, &mut rng, &mut spawned);
     }
 

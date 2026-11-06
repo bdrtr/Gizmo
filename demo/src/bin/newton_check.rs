@@ -2,6 +2,7 @@
 //! Topları + hinge'leri kurar, adımlar, uç topların hız/konumunu basar — momentum
 //! dalgasının gerçekten aktarıldığını (top0 durur, topN-1 fırlar) sayısal görürüz.
 
+use gizmo::core::Entity;
 use gizmo::physics::components::{Collider, CombineMode, PhysicsMaterial, RigidBody, Velocity};
 use gizmo::physics::joints::Joint;
 use gizmo::physics::world::PhysicsWorld;
@@ -65,7 +66,7 @@ fn main() {
         world.add_component(ball, rb);
         world.add_component(ball, Velocity::default());
         world.add_component(ball, Collider::sphere(R).with_material(elastic()));
-        balls.push(ball.id());
+        balls.push(ball);
 
         phys.joints.push(Joint::hinge(
             BodyHandle::from_id(beam.id()),
@@ -78,7 +79,7 @@ fn main() {
     world.insert_resource(phys);
 
     let dt = 1.0 / 120.0;
-    let read = |world: &World, id: u32| -> (Vec3, Vec3) {
+    let read = |world: &World, id: Entity| -> (Vec3, Vec3) {
         let ts = world.borrow::<Transform>();
         let vs = world.borrow::<Velocity>();
         (ts.get(id).unwrap().position, vs.get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO))

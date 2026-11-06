@@ -50,12 +50,12 @@ struct Game {
     /// `board[row * N + col]` = o hücredeki karonun numarası (1..15) ya da 0 (boşluk).
     board: [u8; N * N],
     /// Numara → karonun varlığı.
-    tiles: [u32; N * N],
+    tiles: [Entity; N * N],
     moves: u32,
     solved: bool,
     rng: Rng,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     auto: u32,
 }
 
@@ -91,7 +91,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
     });
 
     // On beş karo, her birinin üstünde numarası.
-    let mut tiles = [0u32; N * N];
+    let mut tiles = [Entity::new(0, 0); N * N];
     for (n, slot) in tiles.iter_mut().enumerate().skip(1) {
         let hue = n as f32 / 15.0;
         let tile = world.spawn_bundle((
@@ -110,17 +110,17 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
             Text::world(n.to_string(), font, 64.0, 110.0).with_color(Vec4::new(1.0, 1.0, 1.0, 1.0)),
         ));
         world.add_child(tile, label);
-        *slot = tile.id();
+        *slot = tile;
     }
 
     let hud = world
         .spawn_bundle((Text::pinned("", font, 24.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.12), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
 
     if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
         audio.load_sound_bytes("kay", Blip::new(Wave::Triangle, 260.0, 0.07).with_slide(200.0).with_volume(0.35).wav());
@@ -261,7 +261,7 @@ fn shuffle(world: &mut World, game: &mut Game) {
     drop(tfs);
     // Yarım kalmış bir kayma yeni dizilişin üstüne yazmasın: tween'leri (karoları değil) kaldır.
     for &id in &game.tiles[1..] {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.remove_component::<Tween>(e);
         }
     }
@@ -295,7 +295,7 @@ fn try_move(world: &mut World, game: &mut Game, cell: usize) {
     game.board.swap(empty, cell);
     game.moves += 1;
     world.add_component(
-        world.get_entity(game.tiles[n]).expect("karo yaşıyor"),
+        game.tiles[n],
         Tween::to_position(cell_position(empty), 0.15).with_ease(Ease::OutCubic),
     );
     play(world, "kay");

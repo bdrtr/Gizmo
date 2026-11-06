@@ -12,6 +12,7 @@
 
 #![cfg(feature = "rigid-coupling")]
 
+use gizmo_core::Entity;
 use gizmo_core::World;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, Transform};
@@ -24,7 +25,7 @@ const N: usize = 11;
 const HEIGHT: f32 = 2.0;
 
 /// A 2 m × 2 m hammock pinned on all four edges at `HEIGHT`, and a ball of `mass` 0.8 m above it.
-fn scene(mass: f32, damping: f32) -> (World, u32) {
+fn scene(mass: f32, damping: f32) -> (World, Entity) {
     let mut world = World::new();
     world.insert_resource(PhysicsWorld::new().with_gravity(G));
     let ground = world.spawn();
@@ -58,7 +59,7 @@ fn scene(mass: f32, damping: f32) -> (World, u32) {
     world.add_component(ball, rb);
     world.add_component(ball, Velocity::default());
     world.add_component(ball, col);
-    (world, ball.id())
+    (world, ball)
 }
 
 /// The lowest the ball gets over three seconds.

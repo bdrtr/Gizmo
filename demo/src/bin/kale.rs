@@ -103,9 +103,9 @@ struct Game {
     /// Bu dalgada daha doğacak düşman sayısı ve bir sonrakine kalan süre.
     to_spawn: u32,
     spawn: Timer,
-    hud: u32,
-    banner: u32,
-    wave_button: u32,
+    hud: Entity,
+    banner: Entity,
+    wave_button: Entity,
     rng: Rng,
     auto: bool,
     /// Bu basış iki parmaklı bir jeste döndü mü — dönmüşse bırakış kule kurmuyor.
@@ -181,12 +181,12 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
     let hud = world
         .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopRight, Vec2::new(-16.0, 16.0))
             .with_align(TextAlign::Right),))
-        .id();
+        ;
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.4), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
 
     if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
         audio.load_sound_bytes("ates", Blip::new(Wave::Square, 1200.0, 0.05).with_slide(700.0).with_volume(0.12).wav());
@@ -205,7 +205,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
         spawn: Timer::repeating(0.9),
         hud,
         banner,
-        wave_button: wave_button.id(),
+        wave_button,
         rng: Rng::new(7),
         auto: std::env::var_os("KALE_OTO").is_some(),
         gesture: false,
@@ -349,7 +349,7 @@ fn camera_controls(world: &mut World, input: &Input) {
     if zoom == 1.0 && pan.is_none() {
         return;
     }
-    let Some(cam) = world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, c)| (entity.id(), c.get_front())) else { return };
+    let Some(cam) = world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, c)| (entity, c.get_front())) else { return };
     let (id, forward) = cam;
     let mut transforms = world.borrow_mut::<Transform>();
     let Some(mut t) = transforms.get_mut(id) else { return };
@@ -438,11 +438,11 @@ fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {
 }
 
 fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
-    let enemies: Vec<(u32, Vec3)> = {
+    let enemies: Vec<(Entity, Vec3)> = {
         let ts = world.borrow::<Transform>();
-        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity.id(), t.position))).collect()
+        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity, t.position))).collect()
     };
-    let mut shots: Vec<(Vec3, Vec3, u32)> = Vec::new();
+    let mut shots: Vec<(Vec3, Vec3, Entity)> = Vec::new();
     {
         let Some(mut towers) = world.query_mut::<(Mut<Tower>, &Transform)>() else { return };
         for (mut tower, tf) in towers.iter_mut() {
@@ -490,7 +490,7 @@ fn towers_fire(world: &mut World, game: &mut Game, dt: f32) {
         };
         if dead {
             world.spawn_bundle((Transform::new(to), GlobalTransform::default(), sparks(70, Vec4::new(1.0, 0.3, 0.15, 1.0)), Flash(0.1)));
-            world.despawn_by_id(enemy);
+            world.despawn(enemy);
             game.gold += 3;
             play(world, "olum");
         } else {
@@ -518,34 +518,34 @@ fn sparks(count: u32, colour: Vec4) -> gizmo::renderer::components::ParticleEmit
 }
 
 fn enemies_arrive(world: &mut World, game: &mut Game) {
-    let arrived: Vec<u32> = {
+    let arrived: Vec<Entity> = {
         let ts = world.borrow::<Transform>();
         world.query::<(Entity, &Enemy)>().unwrap().iter()
             .filter(|(entity, _)| ts.get(*entity).is_some_and(|t| Vec3::new(t.position.x - GOAL.x, 0.0, t.position.z - GOAL.z).length() < 0.6))
-            .map(|(entity, _)| entity.id())
+            .map(|(entity, _)| entity)
             .collect()
     };
     for id in arrived {
-        world.despawn_by_id(id);
+        world.despawn(id);
         game.lives = game.lives.saturating_sub(1);
         play(world, "kacak");
     }
 }
 
 fn fade_flashes(world: &mut World, dt: f32) {
-    let done: Vec<u32> = {
+    let done: Vec<Entity> = {
         let mut fs = world.query_mut::<(Entity, Mut<Flash>)>().unwrap();
         let mut done = Vec::new();
         for (entity, mut f) in fs.iter_mut() {
             f.0 -= dt;
             if f.0 <= 0.0 {
-                done.push(entity.id());
+                done.push(entity);
             }
         }
         done
     };
     for id in done {
-        world.despawn_by_id(id);
+        world.despawn(id);
     }
 }
 

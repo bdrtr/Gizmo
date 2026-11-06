@@ -64,7 +64,7 @@ struct P(i32, i32);
 struct Monster {
     at: P,
     hp: i32,
-    entity: u32,
+    entity: Entity,
 }
 
 struct Game {
@@ -76,14 +76,14 @@ struct Game {
     gold: u32,
     depth: u32,
     monsters: Vec<Monster>,
-    coins: Vec<(P, u32)>,
+    coins: Vec<(P, Entity)>,
     rng: Rng,
-    map: u32,
-    player_e: u32,
-    camera: u32,
-    hud: u32,
-    hp_bar: u32,
-    banner: u32,
+    map: Entity,
+    player_e: Entity,
+    camera: Entity,
+    hud: Entity,
+    hp_bar: Entity,
+    banner: Entity,
     walk: HoldRepeat,
     descending: bool,
     auto: bool,
@@ -107,19 +107,19 @@ fn world_of(p: P) -> Vec3 {
 
 /// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır):
 /// resimler `[karolar, kahraman, canavar, altın]`, kamera hazır.
-fn setup(world: &mut World, font: FontId, [tiles, hero, monster, coin]: [SpriteImageId; 4], camera: u32) -> Game {
+fn setup(world: &mut World, font: FontId, [tiles, hero, monster, coin]: [SpriteImageId; 4], camera: Entity) -> Game {
     let map = world
         .spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), Tilemap::new(tiles, 3, 1, W as u32, H as u32, Vec2::ONE)))
-        .id();
+        ;
     let player_e = world
         .spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), Sprite::world(hero, Vec2::splat(0.9)).with_layer(3)))
-        .id();
+        ;
     world.insert_resource(ScreenFade::default());
 
-    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 40.0)),)).id();
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 40.0)),));
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.4), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),))
-        .id();
+        ;
     let hp_bar = world.spawn_bundle(NodeBundle {
         style: Style {
             position_type: PositionType::Absolute,
@@ -148,7 +148,7 @@ fn setup(world: &mut World, font: FontId, [tiles, hero, monster, coin]: [SpriteI
         player_e,
         camera,
         hud,
-        hp_bar: hp_bar.id(),
+        hp_bar,
         banner,
         walk: HoldRepeat::new(0.25, 0.11),
         descending: false,
@@ -165,7 +165,7 @@ fn setup(world: &mut World, font: FontId, [tiles, hero, monster, coin]: [SpriteI
 /// gördüğü her düşmana saldırıyor ve ikinci katta ölüyor; zar tohumlu, sonuç her seferinde aynı.)
 fn self_test() -> bool {
     let mut world = World::new();
-    let camera = world.spawn_bundle(CameraBundle::default()).id();
+    let camera = world.spawn_bundle(CameraBundle::default());
     let images = [0, 1, 2, 3].map(SpriteImageId::placeholder);
     let mut game = setup(&mut world, HeadlessFrames::font(), images, camera);
     game.auto = true;
@@ -201,7 +201,7 @@ fn main() {
             let coin = r.load_sprite_rgba(&glyph([255, 210, 60]), 8, 8, SpriteFilter::Nearest).expect("coin");
 
             scene.spawn_camera(state, Vec3::new(W as f32 / 2.0, -(H as f32) / 2.0, 20.0), Vec3::new(W as f32 / 2.0, -(H as f32) / 2.0, 0.0));
-            let camera = scene.world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, _)| entity.id()).expect("camera");
+            let camera = scene.world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, _)| entity).expect("camera");
             if let Some(mut c) = scene.world.borrow_mut::<Camera>().get_mut(camera) {
                 c.projection = ProjectionMode::OrthographicFit { width: 22.0, height: 14.0 };
                 // Hiç görülmeyen yer siyah: harita orada boş, arkası kameranın rengi.
@@ -223,10 +223,10 @@ fn cell(game: &Game, p: P) -> Cell {
 /// Odalar ve onları sırayla bağlayan L biçimli koridorlar; son odanın ortasında merdiven.
 fn new_level(world: &mut World, game: &mut Game) {
     for m in game.monsters.drain(..) {
-        world.despawn_by_id(m.entity);
+        world.despawn(m.entity);
     }
     for (_, e) in game.coins.drain(..) {
-        world.despawn_by_id(e);
+        world.despawn(e);
     }
     game.cells = vec![Cell::Wall; W * H];
     game.seen = vec![false; W * H];
@@ -282,10 +282,10 @@ fn new_level(world: &mut World, game: &mut Game) {
     redraw(world, game);
 }
 
-fn spawn_sprite(world: &mut World, image: SpriteImageId, p: P, layer: i32) -> u32 {
+fn spawn_sprite(world: &mut World, image: SpriteImageId, p: P, layer: i32) -> Entity {
     world
         .spawn_bundle((Transform::new(world_of(p)), GlobalTransform::default(), Sprite::world(image, Vec2::splat(0.8)).with_layer(layer)))
-        .id()
+        
 }
 
 /// Görüş: yarıçap içindeki her hücreye bir doğru çiz; duvar ötesini görmez.
@@ -369,14 +369,14 @@ fn redraw(world: &mut World, game: &Game) {
         }
     }
     // Düşman yalnız görülürken, altın görüldüyse: `IsHidden` (sprite'lar da ona uyuyor).
-    let shows: Vec<(u32, bool)> = game
+    let shows: Vec<(Entity, bool)> = game
         .monsters
         .iter()
         .map(|m| (m.entity, game.visible.contains(&m.at)))
         .chain(game.coins.iter().map(|(p, e)| (*e, idx(*p).is_some_and(|i| game.seen[i]))))
         .collect();
     for (id, show) in shows {
-        let Some(e) = world.get_entity(id) else { continue };
+        let Some(e) = world.live(id) else { continue };
         let hidden = world.borrow::<IsHidden>().get(id).is_some();
         if show && hidden {
             world.remove_component::<IsHidden>(e);
@@ -449,13 +449,13 @@ fn act(world: &mut World, game: &mut Game, d: P) {
         game.monsters[i].hp -= 1;
         if game.monsters[i].hp <= 0 {
             let m = game.monsters.remove(i);
-            world.despawn_by_id(m.entity);
+            world.despawn(m.entity);
         }
     } else if cell(game, to) != Cell::Wall {
         game.player = to;
         if let Some(i) = game.coins.iter().position(|(p, _)| *p == to) {
             let (_, e) = game.coins.remove(i);
-            world.despawn_by_id(e);
+            world.despawn(e);
             game.gold += 1;
         }
         if cell(game, to) == Cell::Stairs {

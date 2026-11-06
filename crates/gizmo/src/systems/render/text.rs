@@ -30,7 +30,7 @@ use crate::renderer::Renderer;
 ///
 /// Deliberately carries no `gizmo-ui` type. Everything past [`ui_boxes`] is the same code whether
 /// the `ui` feature is on or off, which is what keeps the feature from forking the draw loop.
-type UiBox = (u32, Vec2, Vec2, Option<Vec4>);
+type UiBox = (Entity, Vec2, Vec2, Option<Vec4>);
 
 /// Every entity `gizmo-ui` has laid out this frame — and, right after a [`Slider`](crate::ui::Slider)'s
 /// own box, a second box for its fill: from the left edge to `value` of the width. Same entity, so
@@ -103,7 +103,7 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
 /// The opacity `entity` is drawn at: the product of every [`UiTransform`](crate::ui::UiTransform)
 /// `opacity` from it up through its parents — a card fades with its face and its label.
 #[cfg(feature = "ui")]
-fn ui_opacity(world: &World, entity: u32) -> f32 {
+fn ui_opacity(world: &World, entity: Entity) -> f32 {
     let transforms = world.borrow::<crate::ui::UiTransform>();
     if transforms.is_empty() {
         return 1.0;
@@ -117,13 +117,13 @@ fn ui_opacity(world: &World, entity: u32) -> f32 {
         if let Some(t) = transforms.get(id) {
             alpha *= t.opacity.clamp(0.0, 1.0);
         }
-        at = parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0.id());
+        at = parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0);
     }
     alpha
 }
 
 #[cfg(not(feature = "ui"))]
-fn ui_opacity(_world: &World, _entity: u32) -> f32 {
+fn ui_opacity(_world: &World, _entity: Entity) -> f32 {
     1.0
 }
 
@@ -136,20 +136,20 @@ fn ui_opacity(_world: &World, _entity: u32) -> f32 {
 /// a drop target) and the item inside it (`ButtonBundle` + a drag) live in different tables, and
 /// whichever table came first was painted first — in `birlestir`, every slot over its own item.
 #[cfg(feature = "ui")]
-fn tree_order(world: &World) -> Vec<u32> {
+fn tree_order(world: &World) -> Vec<Entity> {
     let nodes = world.borrow::<crate::ui::Node>();
     let parents = world.borrow::<crate::core::component::Parent>();
     let children = world.borrow::<crate::core::component::Children>();
-    let parent_node = |id: u32| {
-        parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0.id()).filter(|p| nodes.get(*p).is_some())
+    let parent_node = |id: Entity| {
+        parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0).filter(|p| nodes.get(*p).is_some())
     };
     // A node whose parent is not a node starts a tree of its own. Ids order the trees: spawned
     // earlier, painted earlier.
-    let mut roots: Vec<u32> = world.query::<(Entity, &crate::ui::Node)>().unwrap().iter().map(|(entity, _)| entity.id()).filter(|&id| parent_node(id).is_none()).collect();
+    let mut roots: Vec<Entity> = world.query::<(Entity, &crate::ui::Node)>().unwrap().iter().map(|(entity, _)| entity).filter(|&id| parent_node(id).is_none()).collect();
     roots.sort_unstable();
     let total = world.query::<(Entity, &crate::ui::Node)>().unwrap().iter().count();
     let mut order = Vec::with_capacity(total);
-    let mut stack: Vec<u32> = roots.into_iter().rev().collect();
+    let mut stack: Vec<Entity> = roots.into_iter().rev().collect();
     // Bounded: a `Children` list written by hand can name a node twice or form a loop.
     while let Some(id) = stack.pop() {
         if order.len() >= total {
@@ -158,7 +158,7 @@ fn tree_order(world: &World) -> Vec<u32> {
         order.push(id);
         if let Some(c) = children.get(id) {
             stack.extend(
-                c.0.iter().rev().filter(|k| world.is_alive(**k)).map(|k| k.id()).filter(|&k| parent_node(k) == Some(id)),
+                c.0.iter().rev().filter(|k| world.is_alive(**k)).copied().filter(|&k| parent_node(k) == Some(id)),
             );
         }
     }
@@ -216,7 +216,7 @@ fn ui_boxes(_world: &World) -> Vec<UiBox> {
 /// window pixels), or `None` when none of them clips. An empty intersection is a zero-size rect,
 /// which clips everything.
 #[cfg(feature = "ui")]
-pub(crate) fn ui_clip(world: &World, entity: u32) -> Option<[Vec2; 2]> {
+pub(crate) fn ui_clip(world: &World, entity: Entity) -> Option<[Vec2; 2]> {
     let clips = world.borrow::<crate::ui::ClipContent>();
     let scrolls = world.borrow::<crate::ui::Scroll>();
     let nodes = world.borrow::<crate::ui::Node>();
@@ -235,13 +235,13 @@ pub(crate) fn ui_clip(world: &World, entity: u32) -> Option<[Vec2; 2]> {
                 });
             }
         }
-        at = parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0.id());
+        at = parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0);
     }
     out
 }
 
 #[cfg(not(feature = "ui"))]
-pub(crate) fn ui_clip(_world: &World, _entity: u32) -> Option<[Vec2; 2]> {
+pub(crate) fn ui_clip(_world: &World, _entity: Entity) -> Option<[Vec2; 2]> {
     None
 }
 
@@ -249,12 +249,12 @@ pub(crate) fn ui_clip(_world: &World, _entity: u32) -> Option<[Vec2; 2]> {
 /// the value (with a caret while focused) — or `None` to draw the `Text` as authored (its
 /// placeholder).
 #[cfg(feature = "ui")]
-fn text_input_display(world: &World, entity: u32) -> Option<String> {
+fn text_input_display(world: &World, entity: Entity) -> Option<String> {
     world.borrow::<crate::ui::TextInput>().get(entity).and_then(|f| f.display())
 }
 
 #[cfg(not(feature = "ui"))]
-fn text_input_display(_world: &World, _entity: u32) -> Option<String> {
+fn text_input_display(_world: &World, _entity: Entity) -> Option<String> {
     None
 }
 
@@ -346,16 +346,16 @@ gizmo_core::impl_component!(Typewriter);
 /// Advances every [`Typewriter`] by `dt` against what its label would show. Both draw paths call
 /// it, on the animation clock.
 pub fn typewriter_system(world: &mut World, dt: f32) {
-    let lines: Vec<(u32, String)> = {
+    let lines: Vec<(Entity, String)> = {
         let texts = world.borrow::<Text>();
         world.query::<(Entity, &Typewriter)>().unwrap().iter()
             .filter_map(|(entity, _)| {
                 let t = texts.get(entity)?;
-                let s = text_input_display(world, entity.id())
-                    .or_else(|| dropdown_display(world, entity.id()))
-                    .or_else(|| localized_display(world, entity.id()))
+                let s = text_input_display(world, entity)
+                    .or_else(|| dropdown_display(world, entity))
+                    .or_else(|| localized_display(world, entity))
                     .unwrap_or_else(|| t.content.clone());
-                Some((entity.id(), s))
+                Some((entity, s))
             })
             .collect()
     };
@@ -372,7 +372,7 @@ pub fn typewriter_system(world: &mut World, dt: f32) {
 }
 
 /// `full` cut to what a [`Typewriter`] on `entity` has typed so far, or `None` without one.
-fn typed_display(world: &World, entity: u32, full: &str) -> Option<String> {
+fn typed_display(world: &World, entity: Entity, full: &str) -> Option<String> {
     let t = *world.borrow::<Typewriter>().get(entity)?;
     Some(full.chars().take(t.visible()).collect())
 }
@@ -380,7 +380,7 @@ fn typed_display(world: &World, entity: u32, full: &str) -> Option<String> {
 /// What a [`LocalizedText`](crate::app::locale::LocalizedText) on `entity` shows in the world's
 /// [`Locale`](crate::app::locale::Locale) — or `None` (no label, or no locale) to draw the `Text`
 /// as authored. Resolved at draw time, so a language switch relabels every one on the next frame.
-fn localized_display(world: &World, entity: u32) -> Option<String> {
+fn localized_display(world: &World, entity: Entity) -> Option<String> {
     let label = world.borrow::<crate::app::locale::LocalizedText>().get(entity).cloned()?;
     let locale = world.get_resource::<crate::app::locale::Locale>()?;
     Some(label.resolve(&locale))
@@ -389,19 +389,19 @@ fn localized_display(world: &World, entity: u32) -> Option<String> {
 /// What a [`Dropdown`](crate::ui::Dropdown) on `entity` shows on its button: the selected option
 /// and a down-arrow — or `None` without one.
 #[cfg(feature = "ui")]
-fn dropdown_display(world: &World, entity: u32) -> Option<String> {
+fn dropdown_display(world: &World, entity: Entity) -> Option<String> {
     let d = world.borrow::<crate::ui::Dropdown>().get(entity).cloned()?;
     Some(format!("{}  ▾", d.selected_option().unwrap_or("")))
 }
 
 #[cfg(not(feature = "ui"))]
-fn dropdown_display(_world: &World, _entity: u32) -> Option<String> {
+fn dropdown_display(_world: &World, _entity: Entity) -> Option<String> {
     None
 }
 
 /// Every open dropdown's rows: `(entity, [(top-left, size, colour, label)])`.
 #[cfg(feature = "ui")]
-fn dropdown_lists(world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> {
+fn dropdown_lists(world: &World) -> Vec<(Entity, Vec<(Vec2, Vec2, Vec4, String)>)> {
     let nodes = world.borrow::<crate::ui::Node>();
     world.query::<(Entity, &crate::ui::Dropdown)>().unwrap().iter()
         .filter(|(_, d)| d.is_open())
@@ -423,21 +423,21 @@ fn dropdown_lists(world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> 
                     (at, size, colour, label.clone())
                 })
                 .collect();
-            Some((entity.id(), rows))
+            Some((entity, rows))
         })
         .collect()
 }
 
 /// Every tooltip that is up: its element, the pointer, what it says.
 #[cfg(feature = "ui")]
-fn tooltips(world: &World) -> Vec<(u32, Vec2, String)> {
+fn tooltips(world: &World) -> Vec<(Entity, Vec2, String)> {
     world.query::<(Entity, &crate::ui::Tooltip)>().unwrap().iter()
-        .filter_map(|(entity, t)| t.shown_at().map(|p| (entity.id(), p, t.text.clone())))
+        .filter_map(|(entity, t)| t.shown_at().map(|p| (entity, p, t.text.clone())))
         .collect()
 }
 
 #[cfg(not(feature = "ui"))]
-fn tooltips(_world: &World) -> Vec<(u32, Vec2, String)> {
+fn tooltips(_world: &World) -> Vec<(Entity, Vec2, String)> {
     Vec::new()
 }
 
@@ -457,18 +457,18 @@ fn tooltip_box(pointer: Vec2, text: Vec2, pad: f32, screen: Vec2) -> (Vec2, Vec2
 }
 
 #[cfg(not(feature = "ui"))]
-fn dropdown_lists(_world: &World) -> Vec<(u32, Vec<(Vec2, Vec2, Vec4, String)>)> {
+fn dropdown_lists(_world: &World) -> Vec<(Entity, Vec<(Vec2, Vec2, Vec4, String)>)> {
     Vec::new()
 }
 
 /// The overlay layer `entity` is drawn on — its `ZIndex`, inherited through its parents.
 #[cfg(feature = "ui")]
-fn ui_layer(world: &World, entity: u32) -> i32 {
+fn ui_layer(world: &World, entity: Entity) -> i32 {
     crate::ui::ui_layer(world, entity)
 }
 
 #[cfg(not(feature = "ui"))]
-fn ui_layer(_world: &World, _entity: u32) -> i32 {
+fn ui_layer(_world: &World, _entity: Entity) -> i32 {
     0
 }
 
@@ -559,21 +559,21 @@ pub fn record_text(
             // button rather than centring it on the button's top-left.
             let anchor = boxes
                 .iter()
-                .find(|(e, ..)| *e == id.id())
+                .find(|(e, ..)| *e == id)
                 .map(|(_, position, size, _)| *position + *size * item.anchor.factors());
             (Vec3::ZERO, anchor)
         };
         // A clipping UI box above it (or on it) cuts screen text to the box.
-        let clip = if item.space.needs_world_position() { None } else { ui_clip(world, id.id()) };
-        text.set_layer(ui_layer(world, id.id()));
+        let clip = if item.space.needs_world_position() { None } else { ui_clip(world, id) };
+        text.set_layer(ui_layer(world, id));
         // A text field draws its value where its `Text` holds the placeholder; otherwise a
         // `LocalizedText` draws the current language's string (the placeholder too).
         // A `Typewriter` then shows only as much of that as it has typed.
         let field;
-        let shown = text_input_display(world, id.id())
-            .or_else(|| dropdown_display(world, id.id()))
-            .or_else(|| localized_display(world, id.id()));
-        let shown = typed_display(world, id.id(), shown.as_deref().unwrap_or(&item.content)).or(shown);
+        let shown = text_input_display(world, id)
+            .or_else(|| dropdown_display(world, id))
+            .or_else(|| localized_display(world, id));
+        let shown = typed_display(world, id, shown.as_deref().unwrap_or(&item.content)).or(shown);
         let item = match shown {
             Some(shown) => {
                 field = {
@@ -588,7 +588,7 @@ pub fn record_text(
         // A label on a UI box grows with the layout's `UiScale`, as the box did, and fades with
         // its `UiTransform`s.
         let scaled;
-        let alpha = ui_opacity(world, id.id());
+        let alpha = ui_opacity(world, id);
         let k = text_scale(world, anchor.is_some(), item.space.needs_world_position());
         let item = match (k, alpha < 1.0) {
             (None, false) => item,
@@ -699,10 +699,10 @@ mod clip_tests {
         world.add_child(plain, label);
         let loose = world.spawn_bundle((node(0.0, 0.0, 10.0, 10.0),));
 
-        assert_eq!(ui_clip(&world, panel.id()), Some([Vec2::ZERO, Vec2::splat(100.0)]));
-        assert_eq!(ui_clip(&world, label.id()), Some([Vec2::splat(50.0), Vec2::splat(100.0)]), "the intersection");
-        assert_eq!(ui_clip(&world, plain.id()), Some([Vec2::splat(50.0), Vec2::splat(100.0)]));
-        assert_eq!(ui_clip(&world, loose.id()), None);
+        assert_eq!(ui_clip(&world, panel), Some([Vec2::ZERO, Vec2::splat(100.0)]));
+        assert_eq!(ui_clip(&world, label), Some([Vec2::splat(50.0), Vec2::splat(100.0)]), "the intersection");
+        assert_eq!(ui_clip(&world, plain), Some([Vec2::splat(50.0), Vec2::splat(100.0)]));
+        assert_eq!(ui_clip(&world, loose), None);
     }
 
     /// A slider is its box, then its fill: `value` of the width from the left, in its fill colour,
@@ -718,8 +718,8 @@ mod clip_tests {
         ));
         let boxes = ui_boxes(&world);
         assert_eq!(boxes.len(), 2);
-        assert_eq!(boxes[0], (s.id(), Vec2::new(10.0, 20.0), Vec2::new(200.0, 30.0), Some(Vec4::ONE)));
-        assert_eq!(boxes[1], (s.id(), Vec2::new(10.0, 20.0), Vec2::new(50.0, 30.0), Some(fill)));
+        assert_eq!(boxes[0], (s, Vec2::new(10.0, 20.0), Vec2::new(200.0, 30.0), Some(Vec4::ONE)));
+        assert_eq!(boxes[1], (s, Vec2::new(10.0, 20.0), Vec2::new(50.0, 30.0), Some(fill)));
     }
 
     /// Within a layer, boxes come out in tree order whatever tables the nodes live in: a parent
@@ -735,8 +735,8 @@ mod clip_tests {
         let other = world.spawn_bundle((node(40.0, 0.0, 18.0, 18.0), crate::ui::BackgroundColor(Vec4::ZERO), crate::ui::Clicked(false)));
         world.add_child(slot, second);
         world.add_child(slot, item);
-        let ids: Vec<u32> = ui_boxes(&world).iter().map(|b| b.0).collect();
-        assert_eq!(ids, vec![slot.id(), second.id(), item.id(), other.id()]);
+        let ids: Vec<Entity> = ui_boxes(&world).iter().map(|b| b.0).collect();
+        assert_eq!(ids, vec![slot, second, item, other]);
     }
 
     /// A `UiTransform`'s opacity fades a box and everything under it — background, extra parts,
@@ -757,7 +757,7 @@ mod clip_tests {
             crate::ui::UiTransform { translation: Vec2::ZERO, opacity: 0.5 },
         ));
         world.add_child(card, face);
-        assert_eq!(ui_opacity(&world, face.id()), 0.25);
+        assert_eq!(ui_opacity(&world, face), 0.25);
         let alphas: Vec<f32> = ui_boxes(&world).iter().map(|b| b.3.unwrap().w).collect();
         assert_eq!(alphas, vec![0.5, 0.2, 0.25]);
     }
@@ -820,7 +820,7 @@ mod clip_tests {
     fn a_localized_label_follows_the_language() {
         use crate::app::locale::{Locale, LocalizedText};
         let mut world = World::new();
-        let label = world.spawn_bundle((LocalizedText::new("menu.score").with_arg("n", 3),)).id();
+        let label = world.spawn_bundle((LocalizedText::new("menu.score").with_arg("n", 3),));
         assert_eq!(localized_display(&world, label), None, "no locale: the Text as authored");
         let mut locale = Locale::new("tr");
         locale.insert("tr", "menu.score", "Skor: {n}");
@@ -829,7 +829,7 @@ mod clip_tests {
         assert_eq!(localized_display(&world, label).as_deref(), Some("Skor: 3"));
         world.get_resource_mut::<Locale>().unwrap().set_language("en");
         assert_eq!(localized_display(&world, label).as_deref(), Some("Score: 3"));
-        let plain = world.spawn().id();
+        let plain = world.spawn();
         assert_eq!(localized_display(&world, plain), None);
 
         let code: String = include_str!("text.rs")
@@ -842,7 +842,7 @@ mod clip_tests {
         assert!(
             // `let shown =` is record_text's own line — the typewriter has the same chain, so a
             // looser match would find that one and pass with the draw loop's removed.
-            code.contains(concat!("letshown=text_input_display(world,id.id())", ".or_else(||dropdown_display(world,id.id()))", ".or_else(||localized_display(world,id.id()));")),
+            code.contains(concat!("letshown=text_input_display(world,id)", ".or_else(||dropdown_display(world,id))", ".or_else(||localized_display(world,id));")),
             "record_text no longer draws localized labels"
         );
     }
@@ -855,12 +855,12 @@ mod clip_tests {
         let bar = world.spawn_bundle((node(0.0, 0.0, 200.0, 20.0), crate::ui::ProgressBar::new(0.75)));
         let boxes = ui_boxes(&world);
         assert_eq!(boxes.len(), 2);
-        assert_eq!((boxes[1].0, boxes[1].2), (bar.id(), Vec2::new(150.0, 20.0)));
+        assert_eq!((boxes[1].0, boxes[1].2), (bar, Vec2::new(150.0, 20.0)));
         let off = world.spawn_bundle((node(0.0, 100.0, 200.0, 40.0), crate::ui::Toggle::new(false)));
         let on = world.spawn_bundle((node(0.0, 200.0, 200.0, 40.0), crate::ui::Toggle::new(true)));
         let boxes = ui_boxes(&world);
-        let parts = |id: u32| boxes.iter().filter(|b| b.0 == id).count();
-        assert_eq!((parts(off.id()), parts(on.id())), (2, 3), "box + frame, and + mark when on");
+        let parts = |id: Entity| boxes.iter().filter(|b| b.0 == id).count();
+        assert_eq!((parts(off), parts(on)), (2, 3), "box + frame, and + mark when on");
     }
 
     /// A stick's knob sits in the middle of its box at rest — and is a box after the stick's own.
@@ -870,7 +870,7 @@ mod clip_tests {
         let s = world.spawn_bundle((node(0.0, 0.0, 200.0, 100.0), crate::ui::VirtualStick::new(40.0)));
         let boxes = ui_boxes(&world);
         assert_eq!(boxes.len(), 2);
-        assert_eq!(boxes[1].0, s.id());
+        assert_eq!(boxes[1].0, s);
         assert_eq!(boxes[1].2, Vec2::splat(35.0));
         assert_eq!(boxes[1].1 + boxes[1].2 * 0.5, Vec2::new(100.0, 50.0));
     }
@@ -885,7 +885,7 @@ mod clip_tests {
             .expect("the synthetic face parses");
         let e = world
             .spawn_bundle((Text::screen("Merhaba", font, 10.0, Vec2::ZERO), Typewriter::new(10.0)))
-            .id();
+            ;
         let tw = |w: &World| *w.borrow::<Typewriter>().get(e).unwrap();
         typewriter_system(&mut world, 0.35);
         assert_eq!(tw(&world).visible(), 3);
@@ -908,7 +908,7 @@ mod clip_tests {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
-        assert!(code.contains(concat!("typed_display(world,id.id(),", "shown.as_deref()")), "record_text no longer cuts typed labels");
+        assert!(code.contains(concat!("typed_display(world,id,", "shown.as_deref()")), "record_text no longer cuts typed labels");
     }
 
     /// A scrolling list clips like a `ClipContent` panel: its rows scroll out of sight.
@@ -918,6 +918,6 @@ mod clip_tests {
         let list = world.spawn_bundle((node(10.0, 10.0, 100.0, 50.0), crate::ui::Scroll::default()));
         let row = world.spawn_bundle((node(10.0, -20.0, 100.0, 40.0),));
         world.add_child(list, row);
-        assert_eq!(ui_clip(&world, row.id()), Some([Vec2::splat(10.0), Vec2::new(110.0, 60.0)]));
+        assert_eq!(ui_clip(&world, row), Some([Vec2::splat(10.0), Vec2::new(110.0, 60.0)]));
     }
 }

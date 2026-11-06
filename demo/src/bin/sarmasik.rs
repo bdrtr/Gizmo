@@ -50,14 +50,14 @@ fn spawn_rock(world: &mut World, (x0, x1, top): (f32, f32, f32), visual: bool) {
     let half = Vec3::new((x1 - x0) * 0.5, 2.5, 1.0);
     let id = world
         .spawn_bundle((Transform::new(Vec3::new((x0 + x1) * 0.5, top - half.y, 0.0)), RigidBody::new_static(), Velocity::default(), Collider::box_collider(half)))
-        .id();
+        ;
     if visual {
         add_visual(world, id, MeshSource("standard_cube".into()), half, "#7E5109");
     }
 }
 
-fn add_visual(world: &mut World, id: u32, mesh: MeshSource, scale: Vec3, colour: &str) {
-    if let Some(e) = world.get_entity(id) {
+fn add_visual(world: &mut World, id: Entity, mesh: MeshSource, scale: Vec3, colour: &str) {
+    if let Some(e) = world.live(id) {
         world.add_component(e, GlobalTransform::default());
         world.add_component(e, mesh);
         world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex(colour).to_vec4(), 0.7, 0.0));
@@ -74,8 +74,8 @@ fn anchor_pos(k: usize) -> Vec3 {
 
 struct Course {
     physics: FixedPhysics,
-    player: u32,
-    anchors: Vec<u32>,
+    player: Entity,
+    anchors: Vec<Entity>,
     /// Tutunulan ipin sırası; `None` havada ya da kayalıkta.
     holding: Option<usize>,
     /// Tutulan ipin boyu.
@@ -93,7 +93,7 @@ impl Course {
         spawn_rock(world, GOAL, visual);
         let anchors = (0..ANCHORS.len())
             .map(|k| {
-                let id = world.spawn_bundle((Transform::new(anchor_pos(k)), RigidBody::new_static(), Velocity::default(), Collider::sphere(0.08))).id();
+                let id = world.spawn_bundle((Transform::new(anchor_pos(k)), RigidBody::new_static(), Velocity::default(), Collider::sphere(0.08)));
                 if visual {
                     add_visual(world, id, MeshSource("sphere".into()), Vec3::splat(0.08), "#27AE60");
                 }
@@ -113,7 +113,7 @@ impl Course {
         // kapatmasıyla oyuncuyu ipin ucuna fırlatırdı (0.2 m'lik fark 3 m/s'lik bir sıçrama).
         let length = anchor_pos(k).distance(position(world, self.player)).max(ROPE);
         if let Some(mut pw) = world.get_resource_mut::<PhysicsWorld>() {
-            pw.joints.push(Joint::rope(BodyHandle::from_id(self.anchors[k]), BodyHandle::from_id(self.player), Vec3::ZERO, Vec3::ZERO, length));
+            pw.joints.push(Joint::rope(BodyHandle::from_id(self.anchors[k].id()), BodyHandle::from_id(self.player.id()), Vec3::ZERO, Vec3::ZERO, length));
         }
         self.length = length;
         self.holding = Some(k);
@@ -121,7 +121,7 @@ impl Course {
     }
 
     fn release(&mut self, world: &mut World) {
-        let player = BodyHandle::from_id(self.player);
+        let player = BodyHandle::from_id(self.player.id());
         if let Some(mut pw) = world.get_resource_mut::<PhysicsWorld>() {
             pw.joints.retain(|j| j.entity_b != player);
         }
@@ -179,7 +179,7 @@ impl Course {
 
     fn restart(&mut self, world: &mut World, visual: bool) {
         self.release(world);
-        if let Some(e) = world.get_entity(self.player) {
+        if let Some(e) = world.live(self.player) {
             world.despawn(e);
         }
         world.apply_commands();
@@ -189,23 +189,23 @@ impl Course {
     }
 }
 
-fn spawn_player(world: &mut World, visual: bool) -> u32 {
+fn spawn_player(world: &mut World, visual: bool) -> Entity {
     let col = Collider::sphere(PLAYER_R);
     let mut rb = RigidBody::new(MASS, true);
     rb.update_inertia_from_collider(&col);
     rb.lock_translation_z = true;
-    let id = world.spawn_bundle((Transform::new(SPAWN), rb, Velocity::default(), col, ExternalForce::default())).id();
+    let id = world.spawn_bundle((Transform::new(SPAWN), rb, Velocity::default(), col, ExternalForce::default()));
     if visual {
         add_visual(world, id, MeshSource("sphere".into()), Vec3::splat(PLAYER_R), "#E67E22");
     }
     id
 }
 
-fn position(world: &World, id: u32) -> Vec3 {
+fn position(world: &World, id: Entity) -> Vec3 {
     world.borrow::<Transform>().get(id).map(|t| t.position).unwrap_or(Vec3::ZERO)
 }
 
-fn state(world: &World, id: u32) -> (Vec3, Vec3) {
+fn state(world: &World, id: Entity) -> (Vec3, Vec3) {
     (position(world, id), world.borrow::<Velocity>().get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO))
 }
 
@@ -298,10 +298,10 @@ fn self_test() -> bool {
 struct Game {
     course: Course,
     auto: Autopilot,
-    rope_vis: u32,
-    hud: u32,
-    banner: u32,
-    camera: u32,
+    rope_vis: Entity,
+    hud: Entity,
+    banner: Entity,
+    camera: Entity,
 }
 
 fn main() {
@@ -320,16 +320,16 @@ fn main() {
             let camera = scene
                 .world
                 .spawn_bundle(CameraBundle { position: Vec3::new(0.0, 3.5, 13.0), yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.08, primary: true, ..Default::default() })
-                .id();
-            let rope_vis = scene.world.spawn_bundle((Transform::new(Vec3::ZERO),)).id();
+                ;
+            let rope_vis = scene.world.spawn_bundle((Transform::new(Vec3::ZERO),));
             add_visual(scene.world, rope_vis, MeshSource("standard_cube".into()), Vec3::ZERO, "#A0522D");
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             scene.world.insert_resource(Game { course, auto: Autopilot::default(), rope_vis, hud, banner, camera });
         })
         .replace_update(update)

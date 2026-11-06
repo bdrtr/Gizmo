@@ -589,7 +589,6 @@ impl SceneData {
             world
                 .iter_alive_entities()
                 .into_iter()
-                .map(|e| e.id())
                 .collect(),
             registry,
         );
@@ -669,7 +668,7 @@ impl SceneData {
     #[tracing::instrument(skip_all, name = "serialize_entities")]
     pub fn serialize_entities(
         world: &World,
-        entity_ids: Vec<u32>,
+        entity_ids: Vec<Entity>,
         registry: &gizmo_core::registry::ComponentRegistry,
     ) -> Vec<EntityData> {
         let mut entities_data = Vec::new();
@@ -717,7 +716,7 @@ impl SceneData {
             // dinamik bileşenler (Transform, RigidBody, Collider…) diske kaydedilirken
             // sessizce kaybolurdu. Name/Mesh/Material/Parent raw-id ile okunduğu için
             // etkilenmez.
-            if let Some(entity) = world.entity(id) {
+            if let Some(entity) = world.live(id) {
                 let types = world.entity_component_types(entity);
                 for type_id in types {
                     if let Some(reg) = registry.get_registration(type_id) {
@@ -753,7 +752,7 @@ impl SceneData {
                 || is_group_node
             {
                 entities_data.push(EntityData {
-                    original_id: id,
+                    original_id: id.id(),
                     name,
                     mesh_source,
                     mesh_uuid: None,
@@ -938,7 +937,7 @@ impl SceneData {
     /// in the map is dropped with a warning, and without a `PhysicsWorld` all of them are.
     fn add_joints(
         joints: Vec<gizmo_physics_rigid::joints::Joint>,
-        id_map: &HashMap<u32, u32>,
+        id_map: &HashMap<u32, Entity>,
         world: &mut World,
     ) -> usize {
         let mut joints_added = 0usize;
@@ -946,8 +945,8 @@ impl SceneData {
         if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
             for mut joint in joints {
                 if let (Some(&new_a), Some(&new_b)) = (id_map.get(&joint.entity_a.id()), id_map.get(&joint.entity_b.id())) {
-                    joint.entity_a = gizmo_physics_rigid::BodyHandle::from_id(new_a);
-                    joint.entity_b = gizmo_physics_rigid::BodyHandle::from_id(new_b);
+                    joint.entity_a = gizmo_physics_rigid::BodyHandle::from_id(new_a.id());
+                    joint.entity_b = gizmo_physics_rigid::BodyHandle::from_id(new_b.id());
                     physics_world.joints.push(joint);
                     joints_added += 1;
                 } else {
@@ -977,8 +976,8 @@ impl SceneData {
     /// `SceneData` is `#[non_exhaustive]`, so a game could not write the struct itself: building
     /// one meant a `default()` with its fields assigned one by one, and the joints left out
     /// (`atolye` found it).
-    pub fn of_entities(world: &World, entity_ids: Vec<u32>, registry: &gizmo_core::registry::ComponentRegistry) -> Self {
-        let wanted: std::collections::HashSet<u32> = entity_ids.iter().copied().collect();
+    pub fn of_entities(world: &World, entity_ids: Vec<Entity>, registry: &gizmo_core::registry::ComponentRegistry) -> Self {
+        let wanted: std::collections::HashSet<u32> = entity_ids.iter().map(|e| e.id()).collect();
         let joints = world
             .try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>()
             .map(|pw| {
@@ -1001,7 +1000,7 @@ impl SceneData {
     /// [`load_into`](Self::load_into), for a scene from [`from_ron_str`](Self::from_ron_str) or
     /// [`of_entities`](Self::of_entities). It adds to the world; clearing what was there is the
     /// caller's call.
-    pub fn instantiate(self, world: &mut World, registry: &gizmo_core::registry::ComponentRegistry) -> HashMap<u32, u32> {
+    pub fn instantiate(self, world: &mut World, registry: &gizmo_core::registry::ComponentRegistry) -> HashMap<u32, Entity> {
         let id_map = Self::instantiate_entities(self.entities, None, world, registry);
         Self::add_joints(self.joints, &id_map, world);
         id_map
@@ -1034,29 +1033,26 @@ impl SceneData {
     #[tracing::instrument(skip_all, name = "instantiate_entities")]
     pub fn instantiate_entities(
         entities: Vec<EntityData>,
-        root_parent: Option<u32>,
+        root_parent: Option<Entity>,
         world: &mut World,
         registry: &gizmo_core::registry::ComponentRegistry,
-    ) -> HashMap<u32, u32> {
+    ) -> HashMap<u32, Entity> {
         let requested = entities.len();
         let mut id_map = HashMap::new();
-        let mut entity_structs = HashMap::new();
 
         for data in &entities {
             let root_ent = world.spawn();
-            id_map.insert(data.original_id, root_ent.id());
-            entity_structs.insert(root_ent.id(), root_ent);
+            id_map.insert(data.original_id, root_ent);
         }
 
-        let mut children_map: HashMap<u32, Vec<gizmo_core::entity::Entity>> = HashMap::new();
+        let mut children_map: HashMap<Entity, Vec<Entity>> = HashMap::new();
         // Per-load aggregates for the exit summary.
         let mut components_loaded = 0usize;
         let mut components_failed = 0usize;
         let mut unknown_type_names: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
 
         for data in entities {
-            let new_id = id_map[&data.original_id];
-            let entity = entity_structs[&new_id];
+            let entity = id_map[&data.original_id];
 
             if let Some(n) = data.name {
                 world.add_component(entity, EntityName::new(&n));
@@ -1074,7 +1070,7 @@ impl SceneData {
                                 components_failed += 1;
                                 tracing::warn!(
                                     component = %comp_name,
-                                    entity = new_id,
+                                    entity = %entity,
                                     error = %e,
                                     "[Scene] bileşen deserialize edilemedi — entity'ye eklenmedi",
                                 );
@@ -1119,19 +1115,19 @@ impl SceneData {
                 .or(root_parent);
 
             if let Some(p_id) = resolved_parent {
-                let parent = entity_structs.get(&p_id).copied().or_else(|| world.get_entity(p_id));
-                if let Some(parent) = parent {
-                    world.add_component(entity, Parent(parent));
+                if world.is_alive(p_id) {
+                    world.add_component(entity, Parent(p_id));
                     children_map.entry(p_id).or_default().push(entity);
                 }
             }
         }
 
         for (p_id, mut c_list) in children_map {
-            if let Some(&p_ent) = entity_structs.get(&p_id) {
-                world.add_component(p_ent, Children(c_list));
-            } else if let Some(p_ent) = world.get_entity(p_id) {
-                let existing: Vec<gizmo_core::entity::Entity> = world
+            if id_map.values().any(|&new| new == p_id) {
+                world.add_component(p_id, Children(c_list));
+            } else if world.is_alive(p_id) {
+                let p_ent = p_id;
+                let existing: Vec<Entity> = world
                     .borrow::<Children>()
                     .get(p_id)
                     .map(|c| c.0.clone())
@@ -1176,7 +1172,7 @@ impl SceneData {
     /// be written.
     pub fn save_prefab(
         world: &World,
-        root_entity_id: u32,
+        root_entity_id: Entity,
         file_path: &str,
         registry: &gizmo_core::registry::ComponentRegistry,
     ) -> Result<(), SceneError> {
@@ -1193,10 +1189,10 @@ impl SceneData {
     ///
     /// # Errors
     /// The same as [`save_prefab`](Self::save_prefab).
-    #[tracing::instrument(skip_all, name = "save_prefab", fields(path = %file_path, root = root_entity_id))]
+    #[tracing::instrument(skip_all, name = "save_prefab", fields(path = %file_path, root = %root_entity_id))]
     pub fn save_prefab_with_identity(
         world: &World,
-        root_entity_id: u32,
+        root_entity_id: Entity,
         file_path: &str,
         registry: &gizmo_core::registry::ComponentRegistry,
         identity: &dyn AssetIdentity,
@@ -1213,7 +1209,7 @@ impl SceneData {
         }
 
         let mut ids_to_save = vec![root_entity_id];
-        let mut visited: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        let mut visited: std::collections::HashSet<Entity> = std::collections::HashSet::new();
         visited.insert(root_entity_id);
         let children_storage = world.borrow::<Children>();
 
@@ -1222,7 +1218,7 @@ impl SceneData {
             let current = ids_to_save[i];
             if let Some(children_comp) = children_storage.get(current) {
                 for &child in &children_comp.0 {
-                    let child_id = child.id();
+                    let child_id = child;
                     // A dead child, written in directly, has nothing to save, and its id may be
                     // someone else's by now.
                     if !world.is_alive(child) {
@@ -1249,10 +1245,10 @@ impl SceneData {
         // root is never spawned, and its whole subtree detaches.
         if !entities_data
             .iter()
-            .any(|d| d.original_id == root_entity_id)
+            .any(|d| d.original_id == root_entity_id.id())
         {
             entities_data.push(EntityData {
-                original_id: root_entity_id,
+                original_id: root_entity_id.id(),
                 name: None,
                 mesh_source: None,
                 mesh_uuid: None,
@@ -1264,7 +1260,7 @@ impl SceneData {
 
         if let Some(root_data) = entities_data
             .iter_mut()
-            .find(|d| d.original_id == root_entity_id)
+            .find(|d| d.original_id == root_entity_id.id())
         {
             root_data.parent_id = None;
         }
@@ -1272,7 +1268,7 @@ impl SceneData {
         let mut joints = Vec::new();
         if let Ok(physics_world) = world.try_get_resource::<gizmo_physics_rigid::world::PhysicsWorld>() {
             for joint in &physics_world.joints {
-                if ids_to_save.contains(&joint.entity_a.id()) && ids_to_save.contains(&joint.entity_b.id()) {
+                if ids_to_save.iter().any(|e| e.id() == joint.entity_a.id()) && ids_to_save.iter().any(|e| e.id() == joint.entity_b.id()) {
                     joints.push(joint.clone());
                 }
             }
@@ -1280,7 +1276,7 @@ impl SceneData {
 
         let mut prefab = PrefabData {
             version: CURRENT_SCENE_VERSION,
-            root_id: root_entity_id,
+            root_id: root_entity_id.id(),
             entities: entities_data,
             joints,
         };
@@ -1312,7 +1308,7 @@ impl SceneData {
 
         tracing::info!(
             path = %file_path,
-            root = root_entity_id,
+            root = %root_entity_id,
             entity_count = prefab.entities.len(),
             joint_count = prefab.joints.len(),
             bytes = byte_len,
@@ -1342,10 +1338,10 @@ impl SceneData {
     /// RON.
     pub fn load_prefab(
         file_path: &str,
-        parent_entity: Option<u32>,
+        parent_entity: Option<Entity>,
         world: &mut World,
         registry: &gizmo_core::registry::ComponentRegistry,
-    ) -> Result<Option<u32>, SceneError> {
+    ) -> Result<Option<Entity>, SceneError> {
         Self::load_prefab_with_identity(file_path, parent_entity, world, registry, &NoAssetIdentity)
     }
 
@@ -1361,11 +1357,11 @@ impl SceneData {
     #[tracing::instrument(skip_all, name = "load_prefab", fields(path = %file_path))]
     pub fn load_prefab_with_identity(
         file_path: &str,
-        parent_entity: Option<u32>,
+        parent_entity: Option<Entity>,
         world: &mut World,
         registry: &gizmo_core::registry::ComponentRegistry,
         identity: &dyn AssetIdentity,
-    ) -> Result<Option<u32>, SceneError> {
+    ) -> Result<Option<Entity>, SceneError> {
         let string_data = fs::read_to_string(file_path).map_err(|e| {
             // Same reasoning as `load_into`: not-UTF-8 is a wrong-format report, not an I/O one.
             // The repository shipped exactly such a prefab (`prefab_8.prefab`, binary), and its
@@ -1420,7 +1416,7 @@ impl SceneData {
         }
 
         if let (Some(new_r), Some(p_id)) = (new_root_id, parent_entity) {
-            if let Some(p_ent) = world.get_entity(p_id) {
+            if let Some(p_ent) = world.live(p_id) {
                 let mut children_list = world
                     .borrow::<Children>()
                     .get(p_id)
@@ -1429,7 +1425,7 @@ impl SceneData {
                 // Idempotent: `instantiate_entities` may already have linked the root into
                 // the parent's Children when it set the root's Parent(p_id). Pushing again
                 // duplicated the child. Only add if not already present.
-                if let Some(new_root) = world.get_entity(new_r) {
+                if let Some(new_root) = world.live(new_r) {
                     if !children_list.contains(&new_root) {
                         children_list.push(new_root);
                         world.add_component(p_ent, Children(children_list));
@@ -1443,8 +1439,8 @@ impl SceneData {
         if let Ok(mut physics_world) = world.try_get_resource_mut::<gizmo_physics_rigid::world::PhysicsWorld>() {
             for mut joint in prefab.joints {
                 if let (Some(&new_a), Some(&new_b)) = (id_map.get(&joint.entity_a.id()), id_map.get(&joint.entity_b.id())) {
-                    joint.entity_a = gizmo_physics_rigid::BodyHandle::from_id(new_a);
-                    joint.entity_b = gizmo_physics_rigid::BodyHandle::from_id(new_b);
+                    joint.entity_a = gizmo_physics_rigid::BodyHandle::from_id(new_a.id());
+                    joint.entity_b = gizmo_physics_rigid::BodyHandle::from_id(new_b.id());
                     physics_world.joints.push(joint);
                     joints_added += 1;
                 } else {
@@ -1477,10 +1473,10 @@ impl SceneData {
     ///
     /// Unnamed entities are absent, and names are not unique, so the returned pairs can share a
     /// name.
-    pub fn entity_names(world: &World) -> Vec<(u32, String)> {
+    pub fn entity_names(world: &World) -> Vec<(Entity, String)> {
         let mut result = Vec::new();
         for (entity, name) in world.query::<(Entity, &EntityName)>().unwrap().iter() {
-            result.push((entity.id(), name.0.clone()));
+            result.push((entity, name.0.clone()));
         }
         result
     }
@@ -1493,12 +1489,12 @@ impl SceneData {
     /// A name is not an identity: nothing prevents two entities sharing one, and which of them
     /// wins follows the unsorted storage order, so this returns *an* entity with that name
     /// rather than *the* one. Resolve once and keep the id rather than re-looking it up.
-    pub fn find_entity_by_name(world: &World, target_name: &str) -> Option<u32> {
+    pub fn find_entity_by_name(world: &World, target_name: &str) -> Option<Entity> {
         let names = world.borrow::<EntityName>();
         for (entity, _) in world.query::<(Entity, &EntityName)>().unwrap().iter() {
             if let Some(name) = names.get(entity) {
                 if name.0 == target_name {
-                    return Some(entity.id());
+                    return Some(entity);
                 }
             }
         }
@@ -1583,7 +1579,6 @@ mod tests {
             world
                 .iter_alive_entities()
                 .into_iter()
-                .map(|e| e.id())
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
                 .and_then(|id| transforms.get(id).map(|t| t.position))
         };
@@ -1625,11 +1620,10 @@ mod tests {
         let _ = std::fs::remove_file(&path);
 
         // İsme göre entity bul.
-        let find = |w: &World, want: &str| -> Option<u32> {
+        let find = |w: &World, want: &str| -> Option<Entity> {
             let names = w.borrow::<EntityName>();
             w.iter_alive_entities()
                 .into_iter()
-                .map(|e| e.id())
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
         };
 
@@ -1648,7 +1642,7 @@ mod tests {
         // Hiyerarşi korunmalı: Child'ın Parent'ı yeni p id'sine çözülmeli.
         {
             let parents = loaded.borrow::<Parent>();
-            assert_eq!(parents.get(c).map(|x| x.0.id()), Some(p), "ebeveyn-çocuk ilişkisi round-trip'te bozuldu");
+            assert_eq!(parents.get(c).map(|x| x.0), Some(p), "ebeveyn-çocuk ilişkisi round-trip'te bozuldu");
         }
     }
 
@@ -1675,23 +1669,22 @@ mod tests {
             .join("gizmo_prefab_bare_root_test.ron")
             .to_string_lossy()
             .into_owned();
-        SceneData::save_prefab(&world, root.id(), &path, &registry).expect("save_prefab başarısız");
+        SceneData::save_prefab(&world, root, &path, &registry).expect("save_prefab başarısız");
 
         // Taze dünyaya bir host altına yükle.
         let mut loaded = World::new();
         let host = loaded.spawn();
-        let new_root = SceneData::load_prefab(&path, Some(host.id()), &mut loaded, &registry)
+        let new_root = SceneData::load_prefab(&path, Some(host), &mut loaded, &registry)
             .expect("load_prefab başarısız");
         let _ = std::fs::remove_file(&path);
 
         // Kök round-trip'te var olmalı (fix'ten önce düşüyordu → None).
         let new_root = new_root.expect("prefab kökü reload sonrası var olmalı");
 
-        let find = |w: &World, want: &str| -> Option<u32> {
+        let find = |w: &World, want: &str| -> Option<Entity> {
             let names = w.borrow::<EntityName>();
             w.iter_alive_entities()
                 .into_iter()
-                .map(|e| e.id())
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
         };
         let a2 = find(&loaded, "A").expect("çocuk A yüklenmedi");
@@ -1699,18 +1692,18 @@ mod tests {
 
         let parents = loaded.borrow::<Parent>();
         assert_eq!(
-            parents.get(a2).map(|x| x.0.id()),
+            parents.get(a2).map(|x| x.0),
             Some(new_root),
             "A prefab köküne bağlı kalmalı (öksüz kalmamalı)"
         );
         assert_eq!(
-            parents.get(b2).map(|x| x.0.id()),
+            parents.get(b2).map(|x| x.0),
             Some(new_root),
             "B prefab köküne bağlı kalmalı"
         );
         assert_eq!(
-            parents.get(new_root).map(|x| x.0.id()),
-            Some(host.id()),
+            parents.get(new_root).map(|x| x.0),
+            Some(host),
             "prefab kökü istenen host'a bağlanmalı"
         );
     }
@@ -1739,11 +1732,11 @@ mod tests {
             .join("gizmo_prefab_diamond_test.ron")
             .to_string_lossy()
             .into_owned();
-        SceneData::save_prefab(&world, root.id(), &path, &registry).expect("save_prefab başarısız");
+        SceneData::save_prefab(&world, root, &path, &registry).expect("save_prefab başarısız");
 
         let mut loaded = World::new();
         let host = loaded.spawn();
-        SceneData::load_prefab(&path, Some(host.id()), &mut loaded, &registry)
+        SceneData::load_prefab(&path, Some(host), &mut loaded, &registry)
             .expect("load_prefab başarısız");
         let _ = std::fs::remove_file(&path);
 
@@ -1754,7 +1747,7 @@ mod tests {
         // empty entity on reload.
         let c_count = alive
             .iter()
-            .filter(|e| names.get(e.id()).map(|n| n.0.as_str()) == Some("C"))
+            .filter(|&&e| names.get(e).map(|n| n.0.as_str()) == Some("C"))
             .count();
         assert_eq!(c_count, 1, "paylaşılan çocuk C tam bir kez görünmeli");
         // host + ROOT + A + B + C = 5 (eski kod 6. bir boş entity sızdırırdı).
@@ -1778,7 +1771,7 @@ mod tests {
             .join("gizmo_prefab_cycle_test.ron")
             .to_string_lossy()
             .into_owned();
-        SceneData::save_prefab(&world, root.id(), &path, &registry)
+        SceneData::save_prefab(&world, root, &path, &registry)
             .expect("save_prefab bir döngüde sonlanmalı");
         let _ = std::fs::remove_file(&path);
     }
@@ -1866,7 +1859,6 @@ mod tests {
             loaded
                 .iter_alive_entities()
                 .into_iter()
-                .map(|x| x.id())
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some("Recycled"))
                 .expect("Recycled entity yüklenmedi")
         };
@@ -2122,13 +2114,13 @@ mod tests {
         let id_map = SceneData::instantiate_entities(entities, None, &mut world, &registry);
         let new_p = id_map[&1000];
         let new_c = id_map[&1001];
-        assert_ne!(new_p, 1000, "original id must be remapped to a fresh world id");
-        assert_ne!(new_c, 1001);
+        assert_ne!(new_p.id(), 1000, "original id must be remapped to a fresh world id");
+        assert_ne!(new_c.id(), 1001);
 
         // Child's Parent points at the REMAPPED parent id.
         let parents = world.borrow::<Parent>();
         assert_eq!(
-            parents.get(new_c).map(|p| p.0.id()),
+            parents.get(new_c).map(|p| p.0),
             Some(new_p),
             "child must be reparented to the remapped parent"
         );
@@ -2137,7 +2129,7 @@ mod tests {
         // And the parent's Children list gained the remapped child (back-link built).
         let children = world.borrow::<Children>();
         assert!(
-            children.get(new_p).map(|c| c.0.iter().any(|e| e.id() == new_c)).unwrap_or(false),
+            children.get(new_p).map(|c| c.0.contains(&new_c)).unwrap_or(false),
             "parent's Children must include the remapped child"
         );
     }
@@ -2162,13 +2154,13 @@ mod tests {
         }];
 
         let id_map =
-            SceneData::instantiate_entities(entities, Some(host.id()), &mut world, &registry);
+            SceneData::instantiate_entities(entities, Some(host), &mut world, &registry);
         let new = id_map[&500];
 
         let parents = world.borrow::<Parent>();
         assert_eq!(
-            parents.get(new).map(|p| p.0.id()),
-            Some(host.id()),
+            parents.get(new).map(|p| p.0),
+            Some(host),
             "unresolved parent must fall back to root_parent, not orphan the entity"
         );
     }
@@ -2186,10 +2178,9 @@ mod tests {
         let player = world.spawn();
         world.add_component(player, EntityName::new("Player"));
 
-        let ids: Vec<u32> = world
+        let ids: Vec<Entity> = world
             .iter_alive_entities()
             .into_iter()
-            .map(|e| e.id())
             .collect();
         let data = SceneData::serialize_entities(&world, ids, &registry);
         let names: Vec<String> = data.iter().filter_map(|d| d.name.clone()).collect();
@@ -2230,7 +2221,6 @@ mod tests {
             loaded
                 .iter_alive_entities()
                 .into_iter()
-                .map(|x| x.id())
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some("Wall"))
                 .expect("Wall entity yüklenmedi")
         };
@@ -2286,11 +2276,10 @@ mod tests {
         SceneData::load_into(&path, &mut loaded, &registry).expect("load başarısız");
         let _ = std::fs::remove_file(&path);
 
-        let find = |w: &World, want: &str| -> u32 {
+        let find = |w: &World, want: &str| -> Entity {
             let names = w.borrow::<EntityName>();
             w.iter_alive_entities()
                 .into_iter()
-                .map(|e| e.id())
                 .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some(want))
                 .unwrap_or_else(|| panic!("{want} yüklenmedi"))
         };
@@ -2302,8 +2291,8 @@ mod tests {
             .expect("PhysicsWorld resource yüklendi");
         assert_eq!(pw.joints.len(), 1, "joint round-trip'te kayboldu");
         let j = &pw.joints[0];
-        assert_eq!(j.entity_a.id(), new_a, "entity_a yeni id'ye remap edilmeli");
-        assert_eq!(j.entity_b.id(), new_b, "entity_b yeni id'ye remap edilmeli");
+        assert_eq!(j.entity_a.id(), new_a.id(), "entity_a yeni id'ye remap edilmeli");
+        assert_eq!(j.entity_b.id(), new_b.id(), "entity_b yeni id'ye remap edilmeli");
         assert_eq!(j.break_force, 123.0, "break_force korunmalı");
         assert_eq!(j.break_torque, 456.0, "break_torque korunmalı");
     }
@@ -2349,8 +2338,8 @@ mod tests {
         let b = world.spawn();
         world.add_component(b, EntityName::new("Beta"));
 
-        assert_eq!(SceneData::find_entity_by_name(&world, "Beta"), Some(b.id()));
-        assert_eq!(SceneData::find_entity_by_name(&world, "Alpha"), Some(a.id()));
+        assert_eq!(SceneData::find_entity_by_name(&world, "Beta"), Some(b));
+        assert_eq!(SceneData::find_entity_by_name(&world, "Alpha"), Some(a));
         assert_eq!(
             SceneData::find_entity_by_name(&world, "Missing"),
             None,
@@ -2359,8 +2348,8 @@ mod tests {
 
         let names = SceneData::entity_names(&world);
         assert_eq!(names.len(), 2);
-        assert!(names.iter().any(|(id, n)| *id == a.id() && n == "Alpha"));
-        assert!(names.iter().any(|(id, n)| *id == b.id() && n == "Beta"));
+        assert!(names.iter().any(|(id, n)| *id == a && n == "Alpha"));
+        assert!(names.iter().any(|(id, n)| *id == b && n == "Beta"));
     }
 }
 
@@ -2570,7 +2559,7 @@ mod asset_identity_tests {
         )]);
         let path = std::env::temp_dir().join(format!("gizmo_prefab_id_{}.prefab", std::process::id()));
         let path = path.to_string_lossy().to_string();
-        SceneData::save_prefab_with_identity(&world, root.id(), &path, &registry, &at_save)
+        SceneData::save_prefab_with_identity(&world, root, &path, &registry, &at_save)
             .expect("save");
 
         let written = std::fs::read_to_string(&path).expect("the prefab is on disk");
@@ -2614,7 +2603,7 @@ mod asset_identity_tests {
         let path =
             std::env::temp_dir().join(format!("gizmo_prefab_noid_{}.prefab", std::process::id()));
         let path = path.to_string_lossy().to_string();
-        SceneData::save_prefab(&world, root.id(), &path, &registry).expect("save");
+        SceneData::save_prefab(&world, root, &path, &registry).expect("save");
         let written = std::fs::read_to_string(&path).expect("the prefab is on disk");
         let _ = std::fs::remove_file(&path);
 
@@ -2637,13 +2626,13 @@ mod of_entities_tests {
     use gizmo_physics_rigid::world::PhysicsWorld;
     use gizmo_physics_rigid::BodyHandle;
 
-    fn body(world: &mut World, x: f32) -> u32 {
+    fn body(world: &mut World, x: f32) -> Entity {
         let e = world.spawn();
         world.add_component(e, Transform::new(Vec3::new(x, 1.0, 0.0)));
         world.add_component(e, RigidBody::new(1.0, true));
         world.add_component(e, Velocity::default());
         world.add_component(e, Collider::sphere(0.5));
-        e.id()
+        e
     }
 
     /// Part of a world round-trips through a RON string — the part's entities, and the joints
@@ -2654,10 +2643,10 @@ mod of_entities_tests {
         let registry = crate::registry::default_scene_registry();
         let mut world = World::new();
         world.insert_resource(PhysicsWorld::new());
-        let ids: Vec<u32> = (0..4).map(|i| body(&mut world, i as f32 * 2.0)).collect();
+        let ids: Vec<Entity> = (0..4).map(|i| body(&mut world, i as f32 * 2.0)).collect();
         {
             let mut pw = world.get_resource_mut::<PhysicsWorld>().unwrap();
-            let h = |i: usize| BodyHandle::from_id(ids[i]);
+            let h = |i: usize| BodyHandle::from_id(ids[i].id());
             pw.joints.push(Joint::rope(h(0), h(1), Vec3::ZERO, Vec3::ZERO, 2.5));
             pw.joints.push(Joint::rope(h(1), h(3), Vec3::ZERO, Vec3::ZERO, 4.5));
         }
@@ -2681,6 +2670,6 @@ mod of_entities_tests {
         let pw = fresh.get_resource::<PhysicsWorld>().unwrap();
         assert_eq!(pw.joints.len(), 1);
         let j = &pw.joints[0];
-        assert_eq!((j.entity_a.id(), j.entity_b.id()), (map[&ids[0]], map[&ids[1]]), "the joint still names the saved ids");
+        assert_eq!((j.entity_a.id(), j.entity_b.id()), (map[&ids[0].id()].id(), map[&ids[1].id()].id()), "the joint still names the saved ids");
     }
 }

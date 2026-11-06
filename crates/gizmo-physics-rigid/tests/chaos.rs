@@ -12,6 +12,7 @@
 //! - no joint names a body that is no longer there;
 //! - and, at the end, that the same seed gives the same world bit for bit.
 
+use gizmo_core::Entity;
 use gizmo_core::World;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{BodyHandle, Collider, Transform};
@@ -73,7 +74,7 @@ fn storm(seed: u64, frames: u32) -> Outcome {
     for (at, half) in statics {
         world.spawn_bundle((Transform::new(at), RigidBody::new_static(), Velocity::default(), Collider::box_collider(half)));
     }
-    let mut bodies: Vec<u32> = Vec::new();
+    let mut bodies: Vec<Entity> = Vec::new();
     let mut out = Outcome { hash: 0, spawned: 0, despawned: 0, joints_made: 0, joints_cut: 0, worst_speed: 0.0, farthest: 0.0 };
 
     for frame in 0..frames {
@@ -92,13 +93,13 @@ fn storm(seed: u64, frames: u32) -> Outcome {
                     rb.ccd_enabled = rng.unit() < 0.3;
                     rb.update_inertia_from_collider(&col);
                     let v = Vec3::new(rng.range(-8.0, 8.0), rng.range(-4.0, 8.0), rng.range(-8.0, 8.0));
-                    let id = world.spawn_bundle((Transform::new(at), rb, Velocity::new(v), col)).id();
+                    let id = world.spawn_bundle((Transform::new(at), rb, Velocity::new(v), col));
                     bodies.push(id);
                     out.spawned += 1;
                 }
                 4 | 5 if !bodies.is_empty() => {
                     let id = bodies.swap_remove(rng.pick(bodies.len()));
-                    if let Some(e) = world.get_entity(id) {
+                    if let Some(e) = world.live(id) {
                         world.despawn(e);
                     }
                     out.despawned += 1;
@@ -109,7 +110,7 @@ fn storm(seed: u64, frames: u32) -> Outcome {
                     if a != b {
                         let length = rng.range(0.5, 4.0);
                         if let Some(mut pw) = world.get_resource_mut::<PhysicsWorld>() {
-                            pw.joints.push(Joint::rope(BodyHandle::from_id(a), BodyHandle::from_id(b), Vec3::ZERO, Vec3::ZERO, length));
+                            pw.joints.push(Joint::rope(BodyHandle::from_id(a.id()), BodyHandle::from_id(b.id()), Vec3::ZERO, Vec3::ZERO, length));
                         }
                         out.joints_made += 1;
                     }

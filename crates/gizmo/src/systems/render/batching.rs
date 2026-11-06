@@ -174,7 +174,7 @@ pub struct DrawItem {
     /// forward type, and this flag is what says *which* forward pipeline.
     pub(super) is_water: bool,
     /// The `PlanarReflection` this batch is: its own batch, because each mirror has its own capture.
-    pub(super) mirror: Option<u32>,
+    pub(super) mirror: Option<Entity>,
     /// The reference grid (`MaterialType::Grid`): drawn forward through `grid.wgsl`.
     pub(super) is_grid: bool,
     /// The material asked for both faces (`Material::with_double_sided`). Selects the cull-off
@@ -324,7 +324,7 @@ pub(crate) struct BatchKey {
     /// an otherwise **identical** key — and the batch would inherit whichever the ECS iteration
     /// reached first, drawing one of the two with the other's pipeline.
     is_water: bool,
-    mirror: Option<u32>,
+    mirror: Option<Entity>,
     /// The grid has its own pipeline, so it must not share a batch with anything that has not.
     is_grid: bool,
 }
@@ -346,7 +346,7 @@ pub(crate) struct BatchData {
     visible_in_camera: bool,
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
     is_water: bool,
-    mirror: Option<u32>,
+    mirror: Option<Entity>,
     is_grid: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
@@ -368,7 +368,7 @@ fn build_occlusion(
     world: &World,
     view_proj: &Mat4,
     size: winit::dpi::PhysicalSize<u32>,
-    hidden: &std::collections::HashSet<u32>,
+    hidden: &std::collections::HashSet<Entity>,
 ) -> Option<crate::renderer::occlusion::OcclusionBuffer> {
     let occluders = world.borrow::<crate::renderer::components::Occluder>();
     occluders.iter().next()?;
@@ -387,7 +387,7 @@ fn build_occlusion(
     let mut buffer = crate::renderer::occlusion::OcclusionBuffer::new(*view_proj, aspect);
     for (e, occluder) in world.query::<(Entity, &crate::renderer::components::Occluder)>().unwrap().iter() {
         let Some(shown) = renderers.get(e) else { continue };
-        if !shown.shadows.visible() || hidden.contains(&e.id()) || pooled.get(e).is_some() || editor_only.get(e).is_some() {
+        if !shown.shadows.visible() || hidden.contains(&e) || pooled.get(e).is_some() || editor_only.get(e).is_some() {
             continue;
         }
         let Some(trans) = transforms.get(e) else { continue };
@@ -664,8 +664,8 @@ pub(super) fn collect_draw_items(
                 .with_alpha_cutoff($mat.alpha_cutoff)
                 .with_shadow_receiving(renderers.get($e).map(|r| r.receives_shadows).unwrap_or(true));
                 // Where this entity was drawn last frame — the object half of its velocity.
-                let generation = world.get_entity($e).map_or(0, |e| e.generation());
-                let previous_model = renderer.motion_history.previous($e, generation, upload_model.to_cols_array_2d());
+                let generation = $e.generation();
+                let previous_model = renderer.motion_history.previous($e.id(), generation, upload_model.to_cols_array_2d());
                 let skel_bg = $skeleton.map(|s: &crate::renderer::components::Skeleton| &s.bind_group);
 
                 // Compute the pass-routing flags up front so they can be part of the
@@ -808,7 +808,8 @@ pub(super) fn collect_draw_items(
 
         if let Some(mut q) = world.query::<(Entity, &Mesh, &gizmo_physics_core::components::GlobalTransform, &Material)>() {
             if let Some(candidates) = index_candidates.as_ref() {
-                for &e in candidates {
+                for &candidate in candidates {
+                    let Some(e) = q.entity(candidate) else { continue };
                     let Some((_, mesh, trans, mat)) = q.get(e) else {
                         continue;
                     };
@@ -830,7 +831,7 @@ pub(super) fn collect_draw_items(
                     ) else {
                         continue;
                     };
-                    process_mesh!(e.id(), mesh, trans, mat, skeletons.get(e));
+                    process_mesh!(e, mesh, trans, mat, skeletons.get(e));
                 }
             }
         }
@@ -849,7 +850,7 @@ pub(super) fn collect_draw_items(
                         ) else {
                             continue;
                         };
-                        process_mesh!(e.id(), mesh, trans, mat, skeletons.get(e));
+                        process_mesh!(e, mesh, trans, mat, skeletons.get(e));
                     }
                 }
             }

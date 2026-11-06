@@ -85,7 +85,7 @@ fn is_the_old_box(collider: &crate::physics::Collider, width: f32, depth: f32, m
 /// collects first.
 fn recipes_awaiting_a_mesh(
     world: &crate::core::World,
-) -> Vec<(u32, String, f32, f32, f32)> {
+) -> Vec<(Entity, String, f32, f32, f32)> {
     let meshes = world.borrow::<Mesh>();
     let failed = world.borrow::<TerrainBuildFailed>();
     let mut pending = Vec::new();
@@ -97,7 +97,7 @@ fn recipes_awaiting_a_mesh(
             continue;
         }
         pending.push((
-            entity.id(),
+            entity,
             terrain.heightmap_path.clone(),
             terrain.width,
             terrain.depth,
@@ -120,7 +120,7 @@ pub fn terrain_mesh_system(world: &mut crate::core::World, renderer: &Renderer) 
             depth,
             max_height,
         );
-        let Some(entity) = world.get_entity(id) else {
+        let Some(entity) = world.live(id) else {
             continue;
         };
         let (mesh, heights, cols, rows) = match built {
@@ -230,14 +230,14 @@ mod tests {
         assert!(!is_the_old_box(&terrain_collider(HEIGHTS.to_vec(), 4, 3, W, D, H), W, D, H));
     }
 
-    fn a_world_with_a_terrain(path: &str) -> (World, u32) {
+    fn a_world_with_a_terrain(path: &str) -> (World, Entity) {
         let mut world = World::new();
         let e = world.spawn();
         world.add_component(
             e,
             Terrain::new(path.to_string(), 100.0, 80.0, 20.0),
         );
-        (world, e.id())
+        (world, e)
     }
 
     /// **The case that was never asked.** A scene that has just loaded is exactly this: the recipe
@@ -274,7 +274,7 @@ mod tests {
         let (mut world, id) = a_world_with_a_terrain("heightmaps/does_not_exist.png");
         assert_eq!(recipes_awaiting_a_mesh(&world).len(), 1, "the first frame tries");
 
-        let entity = world.get_entity(id).expect("the entity is alive");
+        let entity = world.live(id).expect("the entity is alive");
         world.add_component(entity, TerrainBuildFailed);
         assert!(
             recipes_awaiting_a_mesh(&world).is_empty(),

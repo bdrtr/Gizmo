@@ -72,7 +72,7 @@ enum NoteState {
 struct Note {
     t: f32,
     lane: usize,
-    entity: Option<u32>,
+    entity: Option<Entity>,
     state: NoteState,
 }
 
@@ -91,12 +91,12 @@ struct Game {
     perfect: u32,
     good: u32,
     missed: u32,
-    hud: u32,
-    judgement: u32,
-    lane_marks: [u32; LANES],
-    buttons: Option<[u32; LANES]>,
+    hud: Entity,
+    judgement: Entity,
+    lane_marks: [Entity; LANES],
+    buttons: Option<[Entity; LANES]>,
     /// Şarkının ilerlemesi, en üstte ince bir çubuk.
-    progress: u32,
+    progress: Entity,
     auto: bool,
 }
 
@@ -113,7 +113,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
         DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun),
     ));
     // Şeritler ve çizgi.
-    let mut lane_marks = [0; LANES];
+    let mut lane_marks = [Entity::new(0, 0); LANES];
     for (lane, mark) in lane_marks.iter_mut().enumerate() {
         let c = LANE_COLOURS[lane];
         world.spawn_bundle((
@@ -131,17 +131,17 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
                 MaterialDesc::new().with_unlit(Vec4::new(c.x * 0.5, c.y * 0.5, c.z * 0.5, 1.0)),
                 MeshRenderer::new(),
             ))
-            .id();
+            ;
     }
 
     let hud = world
         .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let judgement = world
         .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
 
     let progress = world.spawn_bundle(NodeBundle {
         style: Style {
@@ -155,7 +155,6 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
         ..Default::default()
     });
     world.add_component(progress, ProgressBar::new(0.0).with_fill(Vec4::new(0.9, 0.85, 0.4, 0.9)));
-    let progress = progress.id();
 
     // Müzik: sentezlenmiş bir döngü; notalar onun vuruşlarına göre.
     let (samples, loop_len) = song();
@@ -313,7 +312,7 @@ fn judge(world: &mut World, game: &mut Game, lane: usize, now: f32) {
     game.best_combo = game.best_combo.max(game.combo);
     game.score += points * (1 + game.combo / 10);
     if let Some(id) = entity {
-        world.despawn_by_id(id);
+        world.despawn(id);
     }
     burst(world, Vec3::new(lane_x(lane), HIT_Y, 0.0), LANE_COLOURS[lane]);
     say(world, game.judgement, text, Vec4::new(1.0, 1.0, 0.8, 1.0));
@@ -326,7 +325,7 @@ fn sweep_misses(world: &mut World, game: &mut Game, now: f32) {
             n.state = NoteState::Missed;
             missed += 1;
             if let Some(id) = n.entity.take() {
-                world.despawn_by_id(id);
+                world.despawn(id);
             }
         }
     }
@@ -365,7 +364,7 @@ fn place_notes(world: &mut World, game: &mut Game, now: f32) {
                             MaterialDesc::new().with_unlit(c).with_emissive(c.truncate() * 0.6),
                             MeshRenderer::new(),
                         ))
-                        .id(),
+                        ,
                 );
             }
         }
@@ -375,7 +374,7 @@ fn place_notes(world: &mut World, game: &mut Game, now: f32) {
 fn restart(world: &mut World, game: &mut Game) {
     for n in &mut game.notes {
         if let Some(id) = n.entity.take() {
-            world.despawn_by_id(id);
+            world.despawn(id);
         }
     }
     game.notes = chart();
@@ -398,7 +397,7 @@ fn restart(world: &mut World, game: &mut Game) {
 }
 
 /// Dokunmatik: ekranın altında dört düğme, şeritlerin altında.
-fn spawn_buttons(world: &mut World) -> [u32; LANES] {
+fn spawn_buttons(world: &mut World) -> [Entity; LANES] {
     std::array::from_fn(|lane| {
         let e = world.spawn_bundle(NodeBundle {
             style: Style {
@@ -417,12 +416,12 @@ fn spawn_buttons(world: &mut World) -> [u32; LANES] {
             ..Default::default()
         });
         world.add_component(e, VirtualButton::default());
-        e.id()
+        e
     })
 }
 
-fn flash(world: &mut World, mark: u32, colour: Vec4) {
-    if let Some(e) = world.get_entity(mark) {
+fn flash(world: &mut World, mark: Entity, colour: Vec4) {
+    if let Some(e) = world.live(mark) {
         // Çalışan malzemenin rengi — `ColorTween` de onu sürüyor; açıklama (`MaterialDesc`) her
         // kare ondan geri yazılıyor.
         if let Some(mut m) = world.borrow_mut::<Material>().get_mut(mark) {
@@ -432,12 +431,12 @@ fn flash(world: &mut World, mark: u32, colour: Vec4) {
     }
 }
 
-fn say(world: &mut World, id: u32, text: &str, colour: Vec4) {
+fn say(world: &mut World, id: Entity, text: &str, colour: Vec4) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         t.content = text.to_string();
         t.color = colour;
     }
-    if let Some(e) = world.get_entity(id) {
+    if let Some(e) = world.live(id) {
         world.add_component(e, ColorTween::fade_to(0.0, 0.5).with_delay(0.2));
     }
 }

@@ -93,8 +93,8 @@ struct Chunk {
 gizmo::core::impl_component!(Chunk);
 
 struct Game {
-    player: u32,
-    camera: u32,
+    player: Entity,
+    camera: Entity,
     lane: i32,
     /// Oyuncunun yanal konumu (şeride doğru yumuşakça kayıyor).
     x: f32,
@@ -109,8 +109,8 @@ struct Game {
     /// Bir sonraki parçanın başlangıç z'si.
     next_chunk: f32,
     rng: Rng,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     auto: bool,
     spin: f32,
     /// Geçen karenin yön girdisi — bir yöne geçişi (hamleyi) basılı tutmaktan ayırmak için.
@@ -137,12 +137,12 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
     }
     let hud = world
         .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     let player = world
         .spawn_bundle((
             Transform::new(Vec3::new(0.0, STAND.y, 0.0)).with_scale(STAND),
@@ -151,7 +151,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
             MaterialDesc::new().with_pbr(Vec4::new(0.9, 0.3, 0.2, 1.0), 0.5, 0.0),
             MeshRenderer::new(),
         ))
-        .id();
+        ;
     if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
         audio.load_sound_bytes("altin", Blip::new(Wave::Square, 988.0, 0.08).with_slide(1318.0).with_volume(0.15).wav());
         audio.load_sound_bytes("zipla", Blip::new(Wave::Triangle, 330.0, 0.15).with_slide(660.0).with_volume(0.25).wav());
@@ -162,7 +162,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
     let best = SaveData::open("kosucu").get::<f32>("best").unwrap_or(0.0);
     let mut game = Game {
         player,
-        camera: camera.id(),
+        camera,
         lane: 0,
         x: 0.0,
         y: 0.0,
@@ -250,9 +250,9 @@ fn lane_x(lane: i32) -> f32 {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let chunks: Vec<u32> = world.query::<(Entity, &Chunk)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let chunks: Vec<Entity> = world.query::<(Entity, &Chunk)>().unwrap().iter().map(|(entity, _)| entity).collect();
     for id in chunks {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn_recursive(e);
         }
     }
@@ -473,7 +473,7 @@ fn run(world: &mut World, game: &mut Game, dt: f32, input: &Input) {
     // Altınlar dönüyor.
     game.spin += dt * 4.0;
     let spin = Quat::from_rotation_z(std::f32::consts::FRAC_PI_2) * Quat::from_rotation_x(game.spin);
-    let coins: Vec<u32> = world.query::<(Entity, &Coin)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let coins: Vec<Entity> = world.query::<(Entity, &Coin)>().unwrap().iter().map(|(entity, _)| entity).collect();
     for id in coins {
         if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
             t.rotation = spin;
@@ -501,12 +501,12 @@ fn run(world: &mut World, game: &mut Game, dt: f32, input: &Input) {
     while game.next_chunk > game.z - CHUNK * AHEAD as f32 {
         spawn_chunk(world, game, false);
     }
-    let behind: Vec<u32> = world.query::<(Entity, &Chunk)>().unwrap().iter()
+    let behind: Vec<Entity> = world.query::<(Entity, &Chunk)>().unwrap().iter()
         .filter(|(_, c)| c.z0 - CHUNK > game.z + 10.0)
-        .map(|(entity, _)| entity.id())
+        .map(|(entity, _)| entity)
         .collect();
     for id in behind {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn_recursive(e);
         }
     }
@@ -551,7 +551,7 @@ fn play(world: &mut World, name: &str) {
     }
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

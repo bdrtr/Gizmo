@@ -230,9 +230,9 @@ fn apply_look(world: &mut gizmo::core::World) {
         .and_then(|q| {
             q.iter()
                 .find(|(_, c, _)| c.primary)
-                .map(|(entity, ..)| entity.id())
+                .map(|(entity, ..)| entity)
         })
-        .and_then(|id| world.get_entity(id));
+        .and_then(|id| world.live(id));
     let Some(camera) = camera else { return };
 
     if look == Look::NoComponent {

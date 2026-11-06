@@ -859,7 +859,7 @@ fn animate_lights(
     let show_point = state.light_mode == LightMode::Point || state.light_mode == LightMode::Both;
 
     if let Some(dir_ent) = state.dir_light_ent {
-        let dir_id = dir_ent.id();
+        let dir_id = dir_ent;
         if let Some((mut trans, mut dir)) = q_dir.get_mut(dir_id) {
             dir.intensity = if show_dir {
                 lighting_settings.direct_intensity
@@ -875,7 +875,7 @@ fn animate_lights(
     }
 
     if let Some(point_ent) = state.point_light_ent {
-        let point_id = point_ent.id();
+        let point_id = point_ent;
         if let Some((mut trans, mut pt)) = q_point.get_mut(point_id) {
             pt.intensity = if show_point { 15.0 } else { 0.0 };
             // Point light represents the bulb, so it must stay stationary inside the lamp!

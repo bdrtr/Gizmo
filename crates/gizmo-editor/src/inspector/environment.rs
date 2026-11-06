@@ -84,7 +84,7 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
         );
         ui.add_space(6.0);
         if ui.button("🎨 Bu kameraya look ekle").clicked() {
-            if let Some(entity) = world.get_entity(cam_id) {
+            if let Some(entity) = world.live(cam_id) {
                 state.add_component_request = Some((entity, "PostProcess".to_string()));
             }
         }

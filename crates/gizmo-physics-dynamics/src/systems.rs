@@ -309,7 +309,7 @@ fn push_bodies(world: &World, pushes: &[(BodyHandle, gizmo_math::Vec3, f32, f32)
         return;
     };
     for &(body, dir, force, speed) in pushes {
-        let Some((mut rb, mut vel, _)) = bodies.get_mut(body.id()) else {
+        let Some((mut rb, mut vel, _)) = bodies.entity(body.id()).and_then(|e| bodies.get_mut(e)) else {
             continue;
         };
         let inv_mass = rb.inv_mass();
@@ -367,7 +367,7 @@ fn platform_carry(world: &World, colliders: &[(BodyHandle, Transform, Collider)]
             }
         }
         let Some((d, handle, centre)) = floor else { continue };
-        let Some(v) = velocities.as_ref().and_then(|q| q.get(handle.id())) else { continue };
+        let Some(v) = velocities.as_ref().and_then(|q| q.get(q.entity(handle.id())?)) else { continue };
         let contact = feet - Vec3::Y * d;
         let at_contact = v.linear + v.angular.cross(contact - centre);
         if at_contact != Vec3::ZERO {
@@ -477,12 +477,12 @@ pub fn hit_detection_system(world: &World, dt: f32) {
     }
 
     // ── 1. Every fighter, and which of them are swinging this frame ──────────────────────────
-    let mut is_fighter: HashMap<u32, ()> = HashMap::new();
+    let mut is_fighter: HashMap<Entity, ()> = HashMap::new();
     let mut attacks: HashMap<u32, Attack> = HashMap::new();
     let mut already_hit: HashMap<u32, Vec<gizmo_core::entity::Entity>> = HashMap::new();
     {
         for (entity, fighter) in world.query::<(Entity, &FighterController)>().unwrap().iter() {
-            is_fighter.insert(entity.id(), ());
+            is_fighter.insert(entity, ());
             already_hit.insert(entity.id(), fighter.already_hit.clone());
             if let Some(active) = &fighter.active_move {
                 if fighter.is_in_active_window() {
@@ -508,13 +508,13 @@ pub fn hit_detection_system(world: &World, dt: f32) {
 
     // Composed local→world pose, walking the parent chain. Depth-guarded: a `Children`/`Parent`
     // cycle is refused elsewhere, but a system that walks links must not be the one that hangs.
-    let world_pose = |start: u32| -> Option<(gizmo_math::Vec3, gizmo_math::Quat)> {
+    let world_pose = |start: Entity| -> Option<(gizmo_math::Vec3, gizmo_math::Quat)> {
         let mut chain = Vec::new();
         let mut cur = start;
         for _ in 0..32 {
             chain.push(cur);
             match parents.get(cur) {
-                Some(p) if world.is_alive(p.0) => cur = p.0.id(),
+                Some(p) if world.is_alive(p.0) => cur = p.0,
                 _ => break,
             }
         }
@@ -529,7 +529,7 @@ pub fn hit_detection_system(world: &World, dt: f32) {
     };
 
     // The nearest fighter at or above `start`, if any.
-    let owning_fighter = |start: u32| -> Option<u32> {
+    let owning_fighter = |start: Entity| -> Option<Entity> {
         let mut cur = start;
         for _ in 0..32 {
             if is_fighter.contains_key(&cur) {
@@ -539,15 +539,15 @@ pub fn hit_detection_system(world: &World, dt: f32) {
             if !world.is_alive(parent) {
                 return None;
             }
-            cur = parent.id();
+            cur = parent;
         }
         None
     };
 
     // ── 2. Drive `active`, and collect the boxes that are live ───────────────────────────────
     struct LiveBox {
-        entity: u32,
-        owner: u32,
+        entity: Entity,
+        owner: Entity,
         hitbox: Hitbox,
         pos: gizmo_math::Vec3,
         rot: gizmo_math::Quat,
@@ -559,10 +559,10 @@ pub fn hit_detection_system(world: &World, dt: f32) {
         let mut hitboxes = unsafe { world.query_unchecked::<(Entity, Mut<Hitbox>)>() }
             .expect("one component never aliases itself");
         for (entity, mut hitbox) in hitboxes.iter_mut() {
-            let Some(owner) = owning_fighter(entity.id()) else {
+            let Some(owner) = owning_fighter(entity) else {
                 continue; // not a fighter's box — its `active` is somebody else's business
             };
-            let swinging = attacks.get(&owner).is_some_and(|attack| {
+            let swinging = attacks.get(&owner.id()).is_some_and(|attack| {
                 hitbox
                     .move_name
                     .as_ref()
@@ -570,9 +570,9 @@ pub fn hit_detection_system(world: &World, dt: f32) {
             });
             hitbox.active = swinging;
             if swinging {
-                if let Some((pos, rot)) = world_pose(entity.id()) {
+                if let Some((pos, rot)) = world_pose(entity) {
                     live.push(LiveBox {
-                        entity: entity.id(),
+                        entity,
                         owner,
                         hitbox: hitbox.clone(),
                         pos,
@@ -590,19 +590,16 @@ pub fn hit_detection_system(world: &World, dt: f32) {
     let mut hits: Vec<HitEvent> = Vec::new();
     {
         for (victim_entity, hurtbox) in world.query::<(Entity, &Hurtbox)>().unwrap().iter() {
-            let victim_owner = owning_fighter(victim_entity.id());
-            let Some((u_pos, u_rot)) = world_pose(victim_entity.id()) else {
+            let victim_owner = owning_fighter(victim_entity);
+            let Some((u_pos, u_rot)) = world_pose(victim_entity) else {
                 continue;
             };
             for attacker_box in &live {
-                if victim_owner == Some(attacker_box.owner) || victim_entity.id() == attacker_box.owner {
+                if victim_owner == Some(attacker_box.owner) || victim_entity == attacker_box.owner {
                     continue; // your own hurtboxes are not targets
                 }
-                let victim = victim_owner.unwrap_or(victim_entity.id());
-                let victim_handle = world.entity(victim);
-                if victim_handle.is_some_and(|handle| {
-                    already_hit.get(&attacker_box.owner).is_some_and(|hit| hit.contains(&handle))
-                }) {
+                let victim = victim_owner.unwrap_or(victim_entity);
+                if already_hit.get(&attacker_box.owner.id()).is_some_and(|hit| hit.contains(&victim)) {
                     continue; // this move already connected with them
                 }
                 if !hit_volumes_overlap(
@@ -616,16 +613,16 @@ pub fn hit_detection_system(world: &World, dt: f32) {
                     continue;
                 }
 
-                let attack = &attacks[&attacker_box.owner];
+                let attack = &attacks[&attacker_box.owner.id()];
                 already_hit
-                    .entry(attacker_box.owner)
+                    .entry(attacker_box.owner.id())
                     .or_default()
-                    .extend(victim_handle);
+                    .push(victim);
                 hits.push(HitEvent {
                     attacker: attacker_box.owner,
                     attacker_hitbox: attacker_box.entity,
                     victim,
-                    victim_hurtbox: victim_entity.id(),
+                    victim_hurtbox: victim_entity,
                     damage: attack.damage * hurtbox.damage_multiplier,
                     hitstun: attack.hitstun,
                     hitstop: attack.hitstop,
@@ -647,10 +644,8 @@ pub fn hit_detection_system(world: &World, dt: f32) {
         let mut controllers = unsafe { world.borrow_mut_unchecked::<FighterController>() };
         for hit in &hits {
             if let Some(mut fighter) = controllers.get_mut(hit.attacker) {
-                if let Some(victim) = world.entity(hit.victim) {
-                    if !fighter.already_hit.contains(&victim) {
-                        fighter.already_hit.push(victim);
-                    }
+                if !fighter.already_hit.contains(&hit.victim) {
+                    fighter.already_hit.push(hit.victim);
                 }
             }
         }
@@ -1396,7 +1391,7 @@ mod tests {
 
     /// Two fighters a metre apart, the attacker's fist parented to it and reaching the defender's
     /// torso. Returns `(world, attacker, fist, defender)`.
-    fn versus() -> (World, u32, u32, u32) {
+    fn versus() -> (World, Entity, Entity, Entity) {
         let mut world = World::new();
         world.insert_resource(Events::<HitEvent>::new());
 
@@ -1415,7 +1410,7 @@ mod tests {
         world.add_component(defender, FighterController::new(2));
         world.add_component(defender, Hurtbox::new(Vec3::new(0.3, 0.5, 0.3)));
 
-        (world, attacker.id(), fist.id(), defender.id())
+        (world, attacker, fist, defender)
     }
 
     /// Runs one fixed frame of the fight: clock, then hit detection, then the event swap an app
@@ -1430,7 +1425,7 @@ mod tests {
         queue.iter().cloned().collect()
     }
 
-    fn start(world: &mut World, fighter: u32, m: CombatMove) {
+    fn start(world: &mut World, fighter: Entity, m: CombatMove) {
         let mut controllers = world.borrow_mut::<FighterController>();
         controllers
             .get_mut(fighter)
@@ -1543,7 +1538,7 @@ mod tests {
         let (mut world, attacker, _fist, defender) = versus();
         // Give the attacker a hurtbox of its own, right where its fist is.
         {
-            let e = world.get_entity(attacker).expect("attacker");
+            let e = world.live(attacker).expect("attacker");
             world.add_component(e, Hurtbox::new(Vec3::splat(0.6)));
         }
         // And move the defender out of reach so only the self-hit could report.
@@ -1594,11 +1589,11 @@ mod tests {
         }
         assert_eq!(first, 1, "the setup: the swing connected");
 
-        let dead = world.get_entity(defender).expect("the victim");
+        let dead = world.live(defender).expect("the victim");
         world.despawn(dead);
         let reborn = (0..64)
             .map(|_| world.spawn())
-            .find(|e| e.id() == defender)
+            .find(|e| e.id() == defender.id())
             .expect("the id came back");
         world.add_component(reborn, Transform::new(Vec3::new(0.0, 0.0, -1.0)));
         world.add_component(reborn, FighterController::new(3));
@@ -1606,7 +1601,7 @@ mod tests {
 
         let hits = fight_frame(&mut world);
         assert_eq!(hits.len(), 1, "the newcomer was immune because of who had its id before");
-        assert_eq!(hits[0].victim, defender);
+        assert_eq!(hits[0].victim, reborn);
         assert!(fight_frame(&mut world).is_empty(), "and it too is hit only once");
     }
 }

@@ -77,12 +77,12 @@ gizmo::core::impl_component!(Racer);
 struct Game {
     physics: FixedPhysics,
     line: Vec<Vec3>,
-    player: u32,
-    camera: u32,
+    player: Entity,
+    camera: Entity,
     clock: f32,
     countdown: f32,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     auto: bool,
 }
 
@@ -144,17 +144,17 @@ fn setup(world: &mut World, font: FontId) -> Game {
         c.clear_color = Some(Vec3::new(0.15, 0.2, 0.12));
     }
 
-    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 48.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     let mut game = Game {
         physics: FixedPhysics::new(120),
         line,
-        player: 0,
-        camera: camera.id(),
+        player: Entity::new(0, 0),
+        camera,
         clock: 0.0,
         countdown: 3.0,
         hud,
@@ -174,9 +174,9 @@ fn lone_race(dt: f32) -> (Option<f32>, f32) {
     restart(&mut world, &mut game);
     // Rakipler yok: arabalar birbirine çarpınca yarış makineden makineye dağılıyor (CI'da biri
     // ters döndü, burada dönmedi); sınanan aracın kendisi.
-    let rivals: Vec<u32> = world.query::<(Entity, &Racer)>().unwrap().iter().filter(|(entity, _)| (*entity).id() != game.player).map(|(entity, _)| entity.id()).collect();
+    let rivals: Vec<Entity> = world.query::<(Entity, &Racer)>().unwrap().iter().filter(|(entity, _)| *entity != game.player).map(|(entity, _)| entity).collect();
     for id in rivals {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             use gizmo::core::hierarchy::HierarchyExt;
             world.despawn_recursive(e);
         }
@@ -274,7 +274,7 @@ fn build_track(world: &mut World, line: &[Vec3]) {
     }
 }
 
-fn spawn_car(world: &mut World, at: Vec3, heading: f32, colour: Vec4, racer: Racer) -> u32 {
+fn spawn_car(world: &mut World, at: Vec3, heading: f32, colour: Vec4, racer: Racer) -> Entity {
     let collider = Collider::box_collider(Vec3::new(0.9, 0.35, 2.0));
     let mut body = RigidBody::new(900.0, true);
     body.update_inertia_from_collider(&collider);
@@ -294,9 +294,9 @@ fn spawn_car(world: &mut World, at: Vec3, heading: f32, colour: Vec4, racer: Rac
             car,
             racer,
         ))
-        .id();
+        ;
     // Görünüş: gövde ve kabin, arabanın çocukları.
-    let e = world.get_entity(id).expect("just spawned");
+    let e = world.live(id).expect("just spawned");
     for (offset, half, c) in [
         (Vec3::ZERO, Vec3::new(0.9, 0.35, 2.0), colour),
         (Vec3::new(0.0, 0.55, 0.3), Vec3::new(0.75, 0.25, 1.0), Vec4::new(0.15, 0.17, 0.22, 1.0)),
@@ -309,9 +309,9 @@ fn spawn_car(world: &mut World, at: Vec3, heading: f32, colour: Vec4, racer: Rac
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let racers: Vec<u32> = world.query::<(Entity, &Racer)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let racers: Vec<Entity> = world.query::<(Entity, &Racer)>().unwrap().iter().map(|(entity, _)| entity).collect();
     for id in racers {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             use gizmo::core::hierarchy::HierarchyExt;
             world.despawn_recursive(e);
         }
@@ -354,13 +354,13 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
     let (wx, wy) = input.move_axis();
     let (ax, ay) = input.move_axis_with(MoveKeys::ARROWS);
     let (mx, my) = (if wx.abs() > ax.abs() { wx } else { ax }, if wy.abs() > ay.abs() { wy } else { ay });
-    let racers: Vec<(u32, Racer, Vec3, Quat, f32)> = {
+    let racers: Vec<(Entity, Racer, Vec3, Quat, f32)> = {
         let transforms = world.borrow::<Transform>();
         let cars = world.borrow::<VehicleController>();
         world.query::<(Entity, &Racer)>().unwrap().iter()
             .filter_map(|(entity, r)| {
                 let t = transforms.get(entity)?;
-                Some((entity.id(), *r, t.position, t.rotation, cars.get(entity)?.current_speed_kmh))
+                Some((entity, *r, t.position, t.rotation, cars.get(entity)?.current_speed_kmh))
             })
             .collect()
     };
@@ -425,9 +425,9 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
 /// Bir arabanın bir sonraki kontrol noktasına yakınlaşması onu geçmek sayılır; başlangıç
 /// noktasından geçmek bir tur.
 fn checkpoints(world: &mut World, game: &Game) {
-    let positions: Vec<(u32, Vec3)> = {
+    let positions: Vec<(Entity, Vec3)> = {
         let transforms = world.borrow::<Transform>();
-        world.query::<(Entity, &Racer)>().unwrap().iter().filter_map(|(entity, _)| transforms.get(entity).map(|t| (entity.id(), t.position))).collect()
+        world.query::<(Entity, &Racer)>().unwrap().iter().filter_map(|(entity, _)| transforms.get(entity).map(|t| (entity, t.position))).collect()
     };
     for (id, at) in positions {
         if let Some(mut r) = world.borrow_mut::<Racer>().get_mut(id) {
@@ -469,7 +469,7 @@ fn chase_camera(world: &mut World, game: &Game, dt: f32) {
 }
 
 fn hud(world: &mut World, game: &Game) {
-    let racers: Vec<(u32, Racer)> = world.query::<(Entity, &Racer)>().unwrap().iter().map(|(entity, r)| (entity.id(), *r)).collect();
+    let racers: Vec<(Entity, Racer)> = world.query::<(Entity, &Racer)>().unwrap().iter().map(|(entity, r)| (entity, *r)).collect();
     let Some(me) = racers.iter().find(|(id, _)| *id == game.player).map(|(_, r)| *r) else { return };
     let place = 1 + racers.iter().filter(|(id, r)| *id != game.player && (r.passed > me.passed || r.finished.is_some_and(|t| me.finished.is_none_or(|m| t < m)))).count();
     let lap = (me.passed / POINTS as u32 + 1).min(LAPS);
@@ -493,7 +493,7 @@ fn hud(world: &mut World, game: &Game) {
     set_text(world, game.banner, &banner);
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

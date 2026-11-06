@@ -250,7 +250,7 @@ pub fn execute_render_pipeline(
                 }
 
                 // Gizli olarak işaretlenmiş objeleri (ve gizli bir ebeveynin altındakileri) atla
-                if hidden.contains(&e.id()) {
+                if hidden.contains(&e) {
                     continue;
                 }
 
@@ -588,11 +588,11 @@ pub fn execute_render_pipeline(
             // Collect emitter entities up front through a read borrow that is dropped at the
             // end of this statement, so the mutable ParticleEmitter query below never coexists
             // with a same-type read borrow.
-            let emitter_entities: Vec<u32> = world
+            let emitter_entities: Vec<Entity> = world
                 .query::<(gizmo::core::Entity, &gizmo::renderer::components::ParticleEmitter)>()
                 .unwrap()
                 .iter()
-                .map(|(entity, _)| entity.id())
+                .map(|(entity, _)| entity)
                 .collect();
             // SAFETY: exclusive `&mut World`; ParticleEmitter is a distinct component type from
             // the read-only Transform query below, and the read borrow above is already dropped,
@@ -616,7 +616,7 @@ pub fn execute_render_pipeline(
                             } else {
                                 emitter.local_offset
                             };
-                            let mut rng = gizmo::math::Rng::with_stream(frame, u64::from(e_id));
+                            let mut rng = gizmo::math::Rng::with_stream(frame, u64::from(e_id.id()));
                             gizmo::systems::render::emit(&mut emitter, base_pos, delta_time, &mut rng, &mut all_new_particles);
                         }
                     }
@@ -843,7 +843,7 @@ fn record_game_view(
     world: &World,
     renderer: &mut gizmo::renderer::Renderer,
     batches: &[batching::FlatBatchData],
-    game_camera: u32,
+    game_camera: Entity,
     aspect: f32,
     ed_shading_mode: u32,
     elapsed_time: f32,

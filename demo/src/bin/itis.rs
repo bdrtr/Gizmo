@@ -251,9 +251,9 @@ enum Net {
 struct Game {
     net: Net,
     acc: f32,
-    pucks: [u32; 2],
-    hud: u32,
-    banner: u32,
+    pucks: [Entity; 2],
+    hud: Entity,
+    banner: Entity,
 }
 
 fn parse_net() -> Result<Net, String> {
@@ -317,15 +317,14 @@ fn main() {
                         MaterialDesc::new().with_pbr(Color::srgb_hex(colours[p]).to_vec4(), 0.35, 0.1),
                         MeshRenderer::new(),
                     ))
-                    .id()
             });
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             let net = net.take().expect("kurulum bir kez çalışır");
             scene.world.insert_resource(Game { net, acc: 0.0, pucks, hud, banner });
         })
@@ -393,7 +392,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     world.insert_resource(game);
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

@@ -117,7 +117,7 @@ fn widest_joint(world: &World, ragdoll: &RagdollInstance) -> f32 {
         .iter()
         .filter_map(|&j| {
             let joint = pw.joints.get(j)?;
-            let (a, b) = (ts.get(joint.entity_a.id())?, ts.get(joint.entity_b.id())?);
+            let (a, b) = (ts.get(world.entity(joint.entity_a.id())?)?, ts.get(world.entity(joint.entity_b.id())?)?);
             Some(((a.position + a.rotation * joint.local_anchor_a) - (b.position + b.rotation * joint.local_anchor_b)).length())
         })
         .fold(0.0, f32::max)
@@ -170,10 +170,10 @@ struct Game {
     shots: usize,
     total: u32,
     last: Option<u32>,
-    barrel: u32,
-    camera: u32,
-    hud: u32,
-    banner: u32,
+    barrel: Entity,
+    camera: Entity,
+    hud: Entity,
+    banner: Entity,
 }
 
 fn main() {
@@ -210,7 +210,7 @@ fn main() {
                     MaterialDesc::new().with_pbr(Color::srgb_hex("#2C3E50").to_vec4(), 0.4, 0.8),
                     MeshRenderer::new(),
                 ))
-                .id();
+                ;
             scene.world.spawn_bundle((
                 Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.9)),
                 GlobalTransform::default(),
@@ -219,14 +219,14 @@ fn main() {
             let camera = scene
                 .world
                 .spawn_bundle(CameraBundle { position: Vec3::new(10.0, 8.0, 26.0), pitch: -0.25, primary: true, ..Default::default() })
-                .id();
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+                ;
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             scene.world.insert_resource(Game {
                 physics: FixedPhysics::new(60),
                 angle: 40f32.to_radians(),

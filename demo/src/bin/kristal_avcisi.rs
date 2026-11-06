@@ -119,8 +119,8 @@ struct Run {
 /// HUD metinleri.
 #[derive(Clone, Copy)]
 struct Hud {
-    status: u32,
-    banner: u32,
+    status: Entity,
+    banner: Entity,
 }
 
 /// Arenada, duvarlardan bir birim içeride rastgele bir nokta.
@@ -217,11 +217,11 @@ fn setup(world: &mut World, font: FontId, sound: bool) {
     // `pinned`: pencere boyutu ne olursa olsun sol üst köşe ve orta — mutlak piksel değil.
     let status = world
         .spawn_bundle((Text::pinned("", font, 24.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let banner_text = world
         .spawn_bundle((Text::pinned("", font, 40.0, TextAnchor::Center, Vec2::new(0.0, -40.0))
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     world.insert_resource(Hud { status, banner: banner_text });
     // En iyi skor bir önceki oturumdan.
     let best = SaveData::open("kristal_avcisi").get("best").unwrap_or(0);

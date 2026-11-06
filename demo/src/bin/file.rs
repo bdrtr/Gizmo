@@ -100,9 +100,9 @@ fn spawn_fruit(world: &mut World, at: Vec3, visual: bool) {
 /// `(yakalanan, kaçan)`. Hıza değil konuma bakılır: fileye düşen meyve birkaç saniye zıplar
 /// (yavaş sönen bir salınım) ve hızı o sürede sıfıra yakın değildir.
 fn settle(world: &mut World, dt: f32) -> (u32, u32) {
-    let fruits: Vec<(u32, Vec3, f32)> = {
+    let fruits: Vec<(Entity, Vec3, f32)> = {
         let ts = world.borrow::<Transform>();
-        world.query::<(Entity, &Fruit)>().unwrap().iter().filter_map(|(entity, _)| Some((entity.id(), ts.get(entity)?.position, 0.0))).collect()
+        world.query::<(Entity, &Fruit)>().unwrap().iter().filter_map(|(entity, _)| Some((entity, ts.get(entity)?.position, 0.0))).collect()
     };
     let (mut caught, mut missed) = (0, 0);
     for (id, p, speed) in fruits {
@@ -125,7 +125,7 @@ fn settle(world: &mut World, dt: f32) -> (u32, u32) {
             }
         }
         if gone {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.despawn(e);
             }
         }
@@ -170,15 +170,15 @@ fn self_test() -> bool {
 
 struct Game {
     physics: FixedPhysics,
-    net: u32,
+    net: Entity,
     net_x: f32,
     caught: u32,
     missed: u32,
     clock: f32,
     next_drop: f32,
     seed: u64,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
 }
 
 fn main() {
@@ -212,14 +212,14 @@ fn main() {
             let net_id = scene
                 .world
                 .spawn_bundle((Transform::new(Vec3::ZERO), net(0.0), MaterialDesc::new().with_pbr(Color::srgb_hex("#F2E8CF").to_vec4(), 0.9, 0.0)))
-                .id();
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+                ;
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             scene.world.insert_resource(Game {
                 physics: FixedPhysics::new(60),
                 net: net_id,
@@ -243,9 +243,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let dt = dt.min(0.05);
     let over = game.missed >= MISSES;
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        let fruits: Vec<u32> = world.query::<(Entity, &Fruit)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+        let fruits: Vec<Entity> = world.query::<(Entity, &Fruit)>().unwrap().iter().map(|(entity, _)| entity).collect();
         for id in fruits {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.despawn(e);
             }
         }
@@ -291,7 +291,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     world.insert_resource(game);
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

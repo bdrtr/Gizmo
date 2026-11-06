@@ -81,10 +81,10 @@ fn terrain_collider() -> Collider {
 
 /// Sahanın `(x, z)`'deki yüksekliği — aşağı bir ışınla, çarpıştırıcının kendisinden; `ball` (varsa)
 /// ışının yolundan çıkarılır, yoksa topun tepesi zemin sanılır.
-fn ground_at(physics: &PhysicsWorld, x: f32, z: f32, ball: Option<u32>) -> Option<f32> {
+fn ground_at(physics: &PhysicsWorld, x: f32, z: f32, ball: Option<Entity>) -> Option<f32> {
     let ray = gizmo::physics::Ray::new(Vec3::new(x, 50.0, z), Vec3::NEG_Y);
     match ball {
-        Some(b) => physics.raycast_excluding(&ray, 100.0, gizmo::physics::BodyHandle::from_id(b)),
+        Some(b) => physics.raycast_excluding(&ray, 100.0, gizmo::physics::BodyHandle::from_id(b.id())),
         None => physics.raycast(&ray, 100.0),
     }
     .map(|hit| 50.0 - hit.distance)
@@ -97,14 +97,14 @@ fn spawn_course(world: &mut World) -> u32 {
         .id()
 }
 
-fn spawn_ball(world: &mut World, at: Vec3) -> u32 {
+fn spawn_ball(world: &mut World, at: Vec3) -> Entity {
     let col = Collider::sphere(BALL_R).with_material(PhysicsMaterial { rolling_friction: 0.08, restitution: 0.1, ..Default::default() });
     let mut rb = RigidBody::new(BALL_MASS, true);
     rb.linear_damping = 0.35;
     rb.angular_damping = 0.6;
     rb.ccd_enabled = true;
     rb.update_inertia_from_collider(&col);
-    world.spawn_bundle((Transform::new(at).with_scale(Vec3::splat(BALL_R)), rb, Velocity::default(), col)).id()
+    world.spawn_bundle((Transform::new(at).with_scale(Vec3::splat(BALL_R)), rb, Velocity::default(), col))
 }
 
 fn start_position(world: &World, hole: usize) -> Vec3 {
@@ -119,7 +119,7 @@ fn cup(hole: usize) -> Vec3 {
 }
 
 /// Topu `dir` yönüne, `power` (`0..=1`) gücüyle vur.
-fn hit(world: &mut World, ball: u32, dir: Vec3, power: f32) {
+fn hit(world: &mut World, ball: Entity, dir: Vec3, power: f32) {
     let flat = Vec3::new(dir.x, 0.0, dir.z).normalize_or_zero();
     if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(ball) {
         v.linear = flat * power.clamp(0.0, 1.0) * MAX_SPEED;
@@ -130,7 +130,7 @@ fn hit(world: &mut World, ball: u32, dir: Vec3, power: f32) {
     }
 }
 
-fn ball_state(world: &World, ball: u32) -> (Vec3, f32) {
+fn ball_state(world: &World, ball: Entity) -> (Vec3, f32) {
     let p = world.borrow::<Transform>().get(ball).map(|t| t.position).unwrap_or(Vec3::ZERO);
     let v = world.borrow::<Velocity>().get(ball).map(|v| v.linear.length()).unwrap_or(0.0);
     (p, v)
@@ -223,7 +223,7 @@ fn self_test() -> bool {
             if through { " — ARAZİNİN İÇİNE DÜŞTÜ" } else { "" }
         );
         ok &= sunk && !through;
-        if let Some(e) = world.get_entity(ball) {
+        if let Some(e) = world.live(ball) {
             world.despawn(e);
         }
     }
@@ -234,17 +234,17 @@ fn self_test() -> bool {
 struct Game {
     physics: FixedPhysics,
     hole: usize,
-    ball: u32,
+    ball: Entity,
     strokes: Vec<u32>,
     power: Option<f32>,
     still: f32,
     last_rest: Vec3,
-    camera: u32,
-    flag: u32,
-    cup_disc: u32,
-    aim: u32,
-    hud: u32,
-    banner: u32,
+    camera: Entity,
+    flag: Entity,
+    cup_disc: Entity,
+    aim: Entity,
+    hud: Entity,
+    banner: Entity,
     done: bool,
 }
 
@@ -273,7 +273,7 @@ fn main() {
             let camera = scene
                 .world
                 .spawn_bundle(CameraBundle { position: Vec3::new(0.0, 14.0, 20.0), pitch: -0.6, primary: true, ..Default::default() })
-                .id();
+                ;
             let flag = scene
                 .world
                 .spawn_bundle((
@@ -283,7 +283,7 @@ fn main() {
                     MaterialDesc::new().with_unlit(Color::srgb_hex("#E74C3C").to_vec4()),
                     MeshRenderer::new(),
                 ))
-                .id();
+                ;
             let cup_disc = scene
                 .world
                 .spawn_bundle((
@@ -293,7 +293,7 @@ fn main() {
                     MaterialDesc::new().with_unlit(Color::srgb_hex("#111111").to_vec4()),
                     MeshRenderer::new(),
                 ))
-                .id();
+                ;
             let aim = scene
                 .world
                 .spawn_bundle((
@@ -303,18 +303,18 @@ fn main() {
                     MaterialDesc::new().with_unlit(Vec4::new(1.0, 1.0, 1.0, 0.8)),
                     MeshRenderer::new(),
                 ))
-                .id();
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+                ;
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             let mut game = Game {
                 physics: FixedPhysics::new(60),
                 hole: 0,
-                ball: 0,
+                ball: Entity::new(0, 0),
                 strokes: vec![0; HOLES.len()],
                 power: None,
                 still: 0.0,
@@ -342,16 +342,16 @@ struct Ball;
 gizmo::core::impl_component!(Ball);
 
 fn start_hole(world: &mut World, game: &mut Game, hole: usize) {
-    let balls: Vec<u32> = world.query::<(Entity, &Ball)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let balls: Vec<Entity> = world.query::<(Entity, &Ball)>().unwrap().iter().map(|(entity, _)| entity).collect();
     for id in balls {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn(e);
         }
     }
     game.hole = hole;
     let at = start_position(world, hole);
     game.ball = spawn_ball(world, at);
-    if let Some(e) = world.get_entity(game.ball) {
+    if let Some(e) = world.live(game.ball) {
         world.add_component(e, GlobalTransform::default());
         world.add_component(e, MeshSource("sphere".into()));
         world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex("#F8F8F8").to_vec4(), 0.3, 0.0));
@@ -441,7 +441,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     world.insert_resource(game);
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

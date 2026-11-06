@@ -430,7 +430,7 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                 };
                 physics.update_box(&renderer.queue, id, &gpu_box);
 
-                world.add_component(world.get_entity(e.id()).unwrap(), GpuPhysicsLink { id });
+                world.add_component(world.live(e).unwrap(), GpuPhysicsLink { id });
             }
         }
     }
@@ -524,10 +524,10 @@ fn queue_debris_visuals(world: &crate::core::World) {
     use gizmo_physics_rigid::components::Breakable;
     let Some(breakables) = world.query::<(gizmo_core::Entity, &Breakable)>() else { return };
     let descs = world.query::<&MaterialDesc>();
-    let looks: Vec<(u32, Option<MaterialDesc>)> = breakables
+    let looks: Vec<(gizmo_core::Entity, Option<MaterialDesc>)> = breakables
         .iter()
         .filter(|(_, b)| b.is_broken)
-        .map(|(entity, _)| (entity.id(), descs.as_ref().and_then(|q| q.get(entity)).cloned()))
+        .map(|(entity, _)| (entity, descs.as_ref().and_then(|q| q.get(entity)).cloned()))
         .collect();
     if looks.is_empty() {
         return;
@@ -543,23 +543,23 @@ fn queue_debris_visuals(world: &crate::core::World) {
 /// material of the body it came from (`looks`, by source id; a plain grey without one), a
 /// renderer and a `GlobalTransform`.
 #[cfg(feature = "render")]
-pub(crate) fn attach_debris_visuals(world: &mut crate::core::World, looks: &[(u32, Option<crate::renderer::components::MaterialDesc>)]) {
+pub(crate) fn attach_debris_visuals(world: &mut crate::core::World, looks: &[(gizmo_core::Entity, Option<crate::renderer::components::MaterialDesc>)]) {
     use crate::renderer::components::{MaterialDesc, MeshData, MeshRenderer};
     use gizmo_physics_rigid::components::Debris;
-    let pending: Vec<(u32, MeshData, u32)> = {
+    let pending: Vec<(gizmo_core::Entity, MeshData, u32)> = {
         let Some(pieces) = world.query::<(gizmo_core::Entity, &Debris)>() else { return };
         let drawn = world.query::<&MeshRenderer>();
         pieces
             .iter()
             .filter(|(entity, _)| drawn.as_ref().is_none_or(|q| q.get(*entity).is_none()))
-            .map(|(entity, d)| (entity.id(), debris_mesh(d), d.source))
+            .map(|(entity, d)| (entity, debris_mesh(d), d.source))
             .collect()
     };
     for (id, mesh, source) in pending {
-        let Some(e) = world.get_entity(id) else { continue };
+        let Some(e) = world.live(id) else { continue };
         let material = looks
             .iter()
-            .find(|(s, _)| *s == source)
+            .find(|(s, _)| s.id() == source)
             .and_then(|(_, m)| m.clone())
             .unwrap_or_else(|| MaterialDesc::new().with_pbr(gizmo_math::Vec4::new(0.6, 0.6, 0.6, 1.0), 0.8, 0.0));
         world.add_component(e, mesh);
@@ -676,8 +676,8 @@ mod physics_step_tests {
     }
 
     #[cfg(feature = "render")]
-    fn debris_ids(world: &World) -> Vec<u32> {
-        world.query::<(Entity, &gizmo_physics_rigid::components::Debris)>().unwrap().iter().map(|(entity, _)| entity.id()).collect()
+    fn debris_ids(world: &World) -> Vec<Entity> {
+        world.query::<(Entity, &gizmo_physics_rigid::components::Debris)>().unwrap().iter().map(|(entity, _)| entity).collect()
     }
 
     #[test]

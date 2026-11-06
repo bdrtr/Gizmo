@@ -28,6 +28,7 @@
 //! each entity to walk its ancestors — is `O(entities × depth)` and pays on every frame whether
 //! anything is hidden or not.
 
+use gizmo_core::Entity;
 use std::collections::HashSet;
 
 use gizmo_core::component::{Children, IsHidden};
@@ -46,11 +47,11 @@ use gizmo_core::StorageView;
 pub fn collect_hidden(
     world: &World,
     children: &StorageView<'_, Children>,
-) -> HashSet<u32> {
-    let mut out: HashSet<u32> = HashSet::new();
-    let mut stack: Vec<u32> = world
+) -> HashSet<Entity> {
+    let mut out: HashSet<Entity> = HashSet::new();
+    let mut stack: Vec<Entity> = world
         .query::<(gizmo_core::Entity, &IsHidden)>()
-        .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
+        .map(|q| q.iter().map(|(entity, _)| entity).collect())
         .unwrap_or_default();
     // The set doubles as the visited set. A `Parent`/`Children` cycle should be impossible, but
     // "should be" is what makes an infinite loop in a render pass; descending only into ids the
@@ -60,7 +61,7 @@ pub fn collect_hidden(
             continue;
         }
         if let Some(kids) = children.get(id) {
-            stack.extend(kids.0.iter().filter(|k| world.is_alive(**k)).map(|k| k.id()));
+            stack.extend(kids.0.iter().filter(|k| world.is_alive(**k)).copied());
         }
     }
     out
@@ -68,22 +69,23 @@ pub fn collect_hidden(
 
 #[cfg(test)]
 mod tests {
+    use gizmo_core::Entity;
     use super::*;
     use gizmo_core::hierarchy::HierarchyExt;
     use gizmo_core::world::World;
 
     /// Builds `a -> b -> c` plus an unrelated `d`, and returns their ids in that order.
-    fn chain(world: &mut World) -> [u32; 4] {
+    fn chain(world: &mut World) -> [Entity; 4] {
         let a = world.spawn();
         let b = world.spawn();
         let c = world.spawn();
         let d = world.spawn();
         world.add_child(a, b);
         world.add_child(b, c);
-        [a.id(), b.id(), c.id(), d.id()]
+        [a, b, c, d]
     }
 
-    fn hidden_set(world: &World) -> HashSet<u32> {
+    fn hidden_set(world: &World) -> HashSet<Entity> {
         collect_hidden(world, &world.borrow::<Children>())
     }
 
@@ -102,7 +104,7 @@ mod tests {
     fn hiding_a_parent_hides_its_whole_subtree_and_no_sibling() {
         let mut world = World::new();
         let [a, b, c, d] = chain(&mut world);
-        world.add_component(gizmo_core::entity::Entity::new(a, 0), IsHidden);
+        world.add_component(gizmo_core::entity::Entity::new(a.id(), 0), IsHidden);
 
         let set = hidden_set(&world);
         assert!(set.contains(&a), "the hidden entity itself");
@@ -116,7 +118,7 @@ mod tests {
     fn hiding_a_child_leaves_its_parent_alone() {
         let mut world = World::new();
         let [a, b, c, _] = chain(&mut world);
-        world.add_component(gizmo_core::entity::Entity::new(b, 0), IsHidden);
+        world.add_component(gizmo_core::entity::Entity::new(b.id(), 0), IsHidden);
 
         let set = hidden_set(&world);
         assert!(!set.contains(&a));
@@ -153,7 +155,7 @@ mod tests {
         world.add_component(parent, Children(vec![dead]));
         world.add_component(parent, IsHidden);
         let hidden = hidden_set(&world);
-        assert!(hidden.contains(&parent.id()));
-        assert!(!hidden.contains(&stranger.id()), "the stranger was hidden through a dead child's id");
+        assert!(hidden.contains(&parent));
+        assert!(!hidden.contains(&stranger), "the stranger was hidden through a dead child's id");
     }
 }

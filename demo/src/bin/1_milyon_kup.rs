@@ -1,7 +1,7 @@
 use gizmo::prelude::*;
 
 struct MillionKupGame {
-    cam_id: u32,
+    cam_id: Entity,
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
@@ -14,7 +14,7 @@ struct MillionKupGame {
 impl MillionKupGame {
     fn new() -> Self {
         Self {
-            cam_id: 0,
+            cam_id: Entity::new(0, 0),
             cam_yaw: -std::f32::consts::FRAC_PI_2,
             cam_pitch: -0.4,
             cam_pos: Vec3::new(0.0, 150.0, 300.0), // Kamerayı küp kalabalığından tamamen dışarı aldık
@@ -58,7 +58,7 @@ fn run(cube_count: u32) {
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
 
-            game.cam_id = cam_entity.id();
+            game.cam_id = cam_entity;
 
             // Siyah ekranı önlemek için sahneye güçlü bir Güneş ekleyelim
             let sun = world.spawn();

@@ -228,10 +228,10 @@ fn main() {
             // `GIZMO_BLUR_SHUTTER=0.5`: kameraya deklanşörü açık bir `PostProcess`. Bileşenin
             // varsayılanı bileşensiz davranış, yani değişen tek şey bulanıklık.
             if let Some(shutter) = std::env::var("GIZMO_BLUR_SHUTTER").ok().and_then(|v| v.parse::<f32>().ok()) {
-                let cams: Vec<u32> = world.query::<(Entity, &Camera)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+                let cams: Vec<Entity> = world.query::<(Entity, &Camera)>().unwrap().iter().map(|(entity, _)| entity).collect();
                 for id in cams {
                     if world.borrow::<PostProcess>().get(id).is_none() {
-                        if let Some(e) = world.get_entity(id) {
+                        if let Some(e) = world.live(id) {
                             let mut grade = PostProcess::default();
                             grade.motion_blur = shutter;
                             world.add_component(e, grade);

@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use gizmo_math::{Vec2, Vec4};
 
 /// A length used by [`Style`].
@@ -517,8 +518,8 @@ pub struct Drag {
     position: Vec2,
     just_started: bool,
     just_ended: bool,
-    over: Option<u32>,
-    dropped_on: Option<u32>,
+    over: Option<Entity>,
+    dropped_on: Option<Entity>,
 }
 
 impl Drag {
@@ -559,7 +560,7 @@ impl Drag {
     }
 
     /// The drop system's answer for this frame.
-    pub(crate) fn set_target(&mut self, over: Option<u32>, dropped_on: Option<u32>) {
+    pub(crate) fn set_target(&mut self, over: Option<Entity>, dropped_on: Option<Entity>) {
         self.over = over;
         self.dropped_on = dropped_on;
     }
@@ -567,7 +568,7 @@ impl Drag {
     /// The [`DropTarget`] the drag is over right now, if any — for highlighting where it would
     /// land. `None` when no drag is under way.
     #[must_use]
-    pub fn over(&self) -> Option<u32> {
+    pub fn over(&self) -> Option<Entity> {
         self.over
     }
 
@@ -575,7 +576,7 @@ impl Drag {
     /// ([`just_ended`](Self::just_ended)); `None` on every other frame, and when it was let go
     /// over no target.
     #[must_use]
-    pub fn dropped_on(&self) -> Option<u32> {
+    pub fn dropped_on(&self) -> Option<Entity> {
         self.dropped_on
     }
 
@@ -615,25 +616,25 @@ impl Drag {
 /// dragged without dropping onto itself.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DropTarget {
-    hovered_by: Option<u32>,
-    dropped: Option<u32>,
+    hovered_by: Option<Entity>,
+    dropped: Option<Entity>,
 }
 
 impl DropTarget {
     /// The dragged element over this target right now, if any.
     #[must_use]
-    pub fn hovered_by(&self) -> Option<u32> {
+    pub fn hovered_by(&self) -> Option<Entity> {
         self.hovered_by
     }
 
     /// The element let go over this target this frame, if any — the frame its
     /// [`Drag::just_ended`] is `true`.
     #[must_use]
-    pub fn dropped(&self) -> Option<u32> {
+    pub fn dropped(&self) -> Option<Entity> {
         self.dropped
     }
 
-    pub(crate) fn answer(hovered_by: Option<u32>, dropped: Option<u32>) -> Self {
+    pub(crate) fn answer(hovered_by: Option<Entity>, dropped: Option<Entity>) -> Self {
         Self { hovered_by, dropped }
     }
 }

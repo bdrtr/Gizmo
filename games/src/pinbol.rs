@@ -68,7 +68,7 @@ fn spawn_table(world: &mut World, visual: bool) {
     // Kanalın dibi: atılmayı bekleyen top burada durur.
     walls.push((Vec3::new((LANE_X - 0.07 + HALF_W) * 0.5, h, HALF_L + WALL), Vec3::new((HALF_W - LANE_X + 0.07) * 0.5, h, WALL), rail, "#D4AC0D"));
     for (c, half, mat, colour) in walls {
-        let id = world.spawn_bundle((Transform::new(c), RigidBody::new_static(), Velocity::default(), Collider::box_collider(half).with_material(mat))).id();
+        let id = world.spawn_bundle((Transform::new(c), RigidBody::new_static(), Velocity::default(), Collider::box_collider(half).with_material(mat)));
         if visual {
             add_visual(world, id, MeshSource("standard_cube".into()), half, colour);
         }
@@ -89,7 +89,7 @@ fn spawn_table(world: &mut World, visual: bool) {
         let rot = Quat::from_rotation_y(along.x.atan2(along.z));
         let id = world
             .spawn_bundle((Transform::new(mid).with_rotation(rot), RigidBody::new_static(), Velocity::default(), Collider::box_collider(half).with_material(rail)))
-            .id();
+            ;
         if visual {
             add_visual(world, id, MeshSource("standard_cube".into()), half, "#D4AC0D");
         }
@@ -102,15 +102,15 @@ fn spawn_table(world: &mut World, visual: bool) {
                 Velocity::default(),
                 Collider::cylinder(BUMPER_R, 0.08).with_material(PhysicsMaterial { restitution: 0.9, ..Default::default() }),
             ))
-            .id();
+            ;
         if visual {
             add_visual(world, id, MeshSource("cylinder".into()), Vec3::new(BUMPER_R, 0.08, BUMPER_R), "#E74C3C");
         }
     }
 }
 
-fn add_visual(world: &mut World, id: u32, mesh: MeshSource, scale: Vec3, colour: &str) {
-    if let Some(e) = world.get_entity(id) {
+fn add_visual(world: &mut World, id: Entity, mesh: MeshSource, scale: Vec3, colour: &str) {
+    if let Some(e) = world.live(id) {
         world.add_component(e, GlobalTransform::default());
         world.add_component(e, mesh);
         world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex(colour).to_vec4(), 0.5, 0.2));
@@ -131,8 +131,8 @@ fn flipper_pose(side: f32, angle: f32) -> (Vec3, Quat) {
     (pivot + dir * (FLIPPER_LEN * 0.5), rot)
 }
 
-fn spawn_flippers(world: &mut World, visual: bool) -> [u32; 2] {
-    let mut out = [0u32; 2];
+fn spawn_flippers(world: &mut World, visual: bool) -> [Entity; 2] {
+    let mut out = [Entity::new(0, 0); 2];
     for (k, side) in [-1.0f32, 1.0].into_iter().enumerate() {
         let (pos, rot) = flipper_pose(side, FLIPPER_DOWN);
         let half = Vec3::new(0.025, 0.035, FLIPPER_LEN * 0.5);
@@ -144,7 +144,7 @@ fn spawn_flippers(world: &mut World, visual: bool) -> [u32; 2] {
                 Collider::box_collider(half).with_material(PhysicsMaterial { restitution: 0.3, ..Default::default() }),
                 KinematicTarget::new(pos, rot),
             ))
-            .id();
+            ;
         if visual {
             add_visual(world, id, MeshSource("standard_cube".into()), half, "#ECF0F1");
         }
@@ -153,14 +153,14 @@ fn spawn_flippers(world: &mut World, visual: bool) -> [u32; 2] {
     out
 }
 
-fn spawn_ball(world: &mut World, visual: bool) -> u32 {
+fn spawn_ball(world: &mut World, visual: bool) -> Entity {
     let col = Collider::sphere(BALL).with_material(PhysicsMaterial { restitution: 0.3, ..Default::default() });
     let mut rb = RigidBody::new(0.08, true);
     rb.ccd_enabled = true;
     rb.update_inertia_from_collider(&col);
-    let id = world.spawn_bundle((Transform::new(Vec3::new(LANE_X, BALL, HALF_L - 0.15)), rb, Velocity::default(), col)).id();
+    let id = world.spawn_bundle((Transform::new(Vec3::new(LANE_X, BALL, HALF_L - 0.15)), rb, Velocity::default(), col));
     if visual {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.add_component(e, GlobalTransform::default());
             world.add_component(e, MeshData::sphere(BALL, 10, 14));
             world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex("#BDC3C7").to_vec4(), 0.15, 1.0));
@@ -170,14 +170,14 @@ fn spawn_ball(world: &mut World, visual: bool) -> u32 {
     id
 }
 
-fn ball_state(world: &World, ball: u32) -> (Vec3, Vec3) {
+fn ball_state(world: &World, ball: Entity) -> (Vec3, Vec3) {
     (
         world.borrow::<Transform>().get(ball).map(|t| t.position).unwrap_or(Vec3::ZERO),
         world.borrow::<Velocity>().get(ball).map(|v| v.linear).unwrap_or(Vec3::ZERO),
     )
 }
 
-fn launch(world: &mut World, ball: u32) {
+fn launch(world: &mut World, ball: Entity) {
     if let Some(mut v) = world.borrow_mut::<Velocity>().get_mut(ball) {
         v.linear = Vec3::new(0.0, 0.0, -4.2);
     }
@@ -188,9 +188,9 @@ fn launch(world: &mut World, ball: u32) {
 
 struct Table {
     physics: FixedPhysics,
-    flippers: [u32; 2],
+    flippers: [Entity; 2],
     angles: [f32; 2],
-    ball: u32,
+    ball: Entity,
     in_lane: bool,
     score: u32,
     hits: u32,
@@ -256,7 +256,7 @@ impl Table {
         // Düştü: alttaki boşluktan çıktı.
         if p.z > HALF_L + 0.1 || p.y < -0.5 || !p.is_finite() {
             self.drains += 1;
-            if let Some(e) = world.get_entity(self.ball) {
+            if let Some(e) = world.live(self.ball) {
                 world.despawn(e);
             }
             world.apply_commands();
@@ -322,14 +322,14 @@ struct Game {
     table: Table,
     balls_left: u32,
     auto: Autopilot,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     /// Dokunmatik paletler (sol, sağ). Kurulumda, görünmez kuruluyorlar: bir düğme yalnızca
     /// üstüne inen parmağı sahipleniyor, yani ilk dokunuşta kurulan bir düğme o dokunuşu
     /// kaçırıyordu — telefonda ilk palet vuruşu boşa gidiyordu. Motor artık yeni kurulan bir
     /// kontrole altında duran parmağı veriyor (2026-11-05); düğmeler yine de kurulumda kuruluyor,
     /// ilk karede yerleşimleri hazır olsun diye.
-    touch: [u32; 2],
+    touch: [Entity; 2],
     /// Ekrana dokunuldu mu: düğmeler o zaman görünür, HUD dokunmatik ipucunu yazar.
     touched: bool,
 }
@@ -371,12 +371,12 @@ fn setup(world: &mut World, font: gizmo::renderer::text::FontId) -> Game {
         primary: true,
         ..Default::default()
     });
-    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     let touch = spawn_touch_buttons(world);
     Game { table, balls_left: BALLS, auto: Autopilot::default(), hud, banner, touch, touched: false }
 }
@@ -419,7 +419,7 @@ fn touch_test() -> bool {
 
 /// Ekranın iki yarısını kaplayan iki dokunmatik palet düğmesi (sol, sağ), görünmez. Her biri kendi
 /// parmağını tutuyor: iki palet aynı anda kaldırılabiliyor.
-fn spawn_touch_buttons(world: &mut World) -> [u32; 2] {
+fn spawn_touch_buttons(world: &mut World) -> [Entity; 2] {
     let mut half = |left: Val, right: Val| {
         let e = world.spawn_bundle(NodeBundle {
             style: Style {
@@ -432,7 +432,7 @@ fn spawn_touch_buttons(world: &mut World) -> [u32; 2] {
             ..Default::default()
         });
         world.add_component(e, VirtualButton::default());
-        e.id()
+        e
     };
     [half(Val::Percent(0.0), Val::Auto), half(Val::Auto, Val::Percent(0.0))]
 }

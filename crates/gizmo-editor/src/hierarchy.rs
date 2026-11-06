@@ -1,5 +1,6 @@
 //! The scene hierarchy panel — shows the entity tree in the left panel.
 
+use gizmo_core::Entity;
 use crate::editor_state::EditorState;
 use crate::theme::palette::{ACCENT, ACCENT_LIGHT, BORDER_HOT, SURFACE, TEXT_BODY, TEXT_BRIGHT, TEXT_DIM, TEXT_MUTED};
 use egui;
@@ -388,7 +389,7 @@ fn draw_entity_node(
         // Component badges, derived from what the entity actually has rather than from its name.
         let badge_color = if is_selected { TEXT_BRIGHT } else { ACCENT_LIGHT };
         let mut badge_x = right - 20.0;
-        for tag in entity_badges(world, entity.id()).into_iter().rev() {
+        for tag in entity_badges(world, entity).into_iter().rev() {
             let bg = painter.layout_no_wrap(tag.to_string(), egui::FontId::proportional(9.0), badge_color);
             badge_x -= bg.size().x + 6.0;
             painter.galley(egui::pos2(badge_x, rect.center().y - bg.size().y * 0.5), bg, badge_color);
@@ -633,7 +634,7 @@ fn draw_entity_node(
 /// on the substrings "camera" and "light" — would make a crate called "lightbox" claim to be a
 /// lamp. Capped at two: the column is 40 px wide and a row that spells out five components stops
 /// being scannable, which is the only thing this column is for.
-fn entity_badges(world: &World, id: u32) -> Vec<&'static str> {
+fn entity_badges(world: &World, id: Entity) -> Vec<&'static str> {
     let mut tags = Vec::new();
     if world.borrow::<gizmo_renderer::components::Camera>().get(id).is_some() {
         tags.push("cam");

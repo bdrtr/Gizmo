@@ -8,7 +8,7 @@ use gizmo::renderer::components::{DirectionalLight, MeshRenderer};
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 struct DominoGame {
-    cam_id: u32,
+    cam_id: Entity,
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
@@ -23,7 +23,7 @@ struct DominoGame {
 impl DominoGame {
     fn new() -> Self {
         Self {
-            cam_id: 0,
+            cam_id: Entity::new(0, 0),
             cam_yaw: -std::f32::consts::FRAC_PI_2,
             cam_pitch: -0.2,
             cam_pos: Vec3::new(40.0, 15.0, 45.0),
@@ -61,7 +61,7 @@ fn main() {
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
 
-            game.cam_id = cam_entity.id();
+            game.cam_id = cam_entity;
             game
         })
         .set_update(|world, state, dt, input| {

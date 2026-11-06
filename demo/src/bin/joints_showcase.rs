@@ -32,8 +32,8 @@ use gizmo::physics::BodyHandle;
 use gizmo::prelude::*;
 
 struct Showcase {
-    rope_vis: u32,
-    rope_ball: u32,
+    rope_vis: Entity,
+    rope_ball: Entity,
     rope_pivot: Vec3,
     servo_idx: usize,
     time: f32,
@@ -96,10 +96,10 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Showcase {
             MeshRenderer::new(),
             RigidBodyBundle::dynamic(1.0).with_collider(Collider::sphere(0.4)),
         ))
-        .id();
+        ;
     phys.joints.push(Joint::rope(
         BodyHandle::from_id(post1),
-        BodyHandle::from_id(rope_ball),
+        BodyHandle::from_id(rope_ball.id()),
         Vec3::ZERO,
         Vec3::ZERO,
         rope_len,
@@ -111,7 +111,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Showcase {
             Material::new(tex.clone()).with_pbr(Vec4::new(0.05, 0.05, 0.06, 1.0), 0.7, 0.2),
             MeshRenderer::new(),
         ))
-        .id();
+        ;
 
     // ── 2) TORSİYONEL YAY paçavra (x=-2) ───────────────────────────────────
     let pivot2 = Vec3::new(-2.0, 4.5, 0.0);

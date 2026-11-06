@@ -143,7 +143,7 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
     let listener_vel = ear.velocity;
     let (left_ear_arr, right_ear_arr) = ear.ears();
 
-    let source_ids: Vec<u32> = world.query::<(Entity, &AudioSource)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let source_ids: Vec<Entity> = world.query::<(Entity, &AudioSource)>().unwrap().iter().map(|(entity, _)| entity).collect();
     // SAFETY: exclusive `&mut World`; AudioSource is a distinct component type from the
     // read-only Velocity/Transform queries, so this mutable query never aliases them.
     let mut sources = unsafe { world.borrow_mut_unchecked::<AudioSource>() };

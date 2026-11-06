@@ -92,7 +92,7 @@ fn decide(material: &MaterialDesc, desc: Option<&MaterialDesc>, synced: Option<&
 /// Which side was edited is told by a hidden copy of the description as this pass last left it.
 /// The cost is that copy per material and a comparison or two per frame.
 pub fn sync_material_descriptions(world: &mut World) {
-    let mut decided: Vec<(u32, Sync)> = Vec::new();
+    let mut decided: Vec<(Entity, Sync)> = Vec::new();
     {
         let descs = world.borrow::<MaterialDesc>();
         let synced = world.borrow::<SyncedDesc>();
@@ -100,7 +100,7 @@ pub fn sync_material_descriptions(world: &mut World) {
             let live = MaterialDesc::from(material);
             match decide(&live, descs.get(entity), synced.get(entity).map(|s| &s.0)) {
                 Sync::Nothing => {}
-                other => decided.push((entity.id(), other)),
+                other => decided.push((entity, other)),
             }
         }
     }
@@ -109,8 +109,7 @@ pub fn sync_material_descriptions(world: &mut World) {
     }
 
     let count = decided.len();
-    for (entity, what) in decided {
-        let Some(e) = world.get_entity(entity) else { continue };
+    for (e, what) in decided {
         match what {
             Sync::Nothing => {}
             Sync::TakeMaterial(desc) => {
@@ -120,7 +119,7 @@ pub fn sync_material_descriptions(world: &mut World) {
             Sync::TakeDescription(desc) => {
                 let rebuilt = {
                     let mut materials = world.borrow_mut::<Material>();
-                    match materials.get_mut(entity) {
+                    match materials.get_mut(e) {
                         Some(mut m) if m.texture_source == desc.texture_source => {
                             *m = desc.clone().into_material(m.bind_group.clone());
                             true

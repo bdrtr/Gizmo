@@ -164,9 +164,9 @@ fn main() {
 
             // 2b. `dynamic`'in erişim yarısı: ham işaretçi var, ama `TypeId` istiyor — yani
             //     zaten var olan bir tür gerekiyor.
-            let first = scene.world.query::<(Entity, &SlotA)>().and_then(|q| q.iter().next().map(|(entity, _)| entity.id()));
+            let first = scene.world.query::<(Entity, &SlotA)>().and_then(|q| q.iter().next().map(|(entity, _)| entity));
             report.raw_read = first
-                .and_then(|id| scene.world.entity(id))
+                .and_then(|id| scene.world.live(id))
                 .and_then(|entity| {
                     scene
                         .world

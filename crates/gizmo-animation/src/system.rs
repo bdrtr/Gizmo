@@ -155,7 +155,7 @@ pub fn animation_system(
                     skipped_dead += 1;
                     continue;
                 }
-                let target_id = target_entity.id();
+                let target_id = target_entity;
                 let interpolated = track.sample(player.elapsed_time);
 
                 if let Some((mut transform, _)) = transforms.get_mut(target_id) {

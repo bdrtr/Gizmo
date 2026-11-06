@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use gizmo_core::input::Input;
 use gizmo_core::World;
 use mlua::prelude::*;
@@ -17,7 +18,7 @@ use tracing::{debug, error, info, trace, warn};
 /// happen, and then saw the crate leap when something unrelated disturbed the stack.
 ///
 /// Called after the `Velocity` borrow is released, because this takes its own on `RigidBody`.
-fn wake_after_velocity_write(world: &mut World, id: u32) {
+fn wake_after_velocity_write(world: &mut World, id: Entity) {
     let mut rbs = world.borrow_mut::<gizmo_physics_rigid::components::RigidBody>();
     if let Some(mut rb) = rbs.get_mut(id) {
         rb.wake_up();
@@ -739,30 +740,34 @@ impl ScriptEngine {
         for cmd in commands {
             match cmd {
                 ScriptCommand::SetPosition(id, pos) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(mut t) = transforms.get_mut(id) {
                         t.position = pos;
                     } else {
-                        trace!(entity = id, "[Scripting] SetPosition: hedefte Transform yok, komut atlandı");
+                        trace!(entity = %id, "[Scripting] SetPosition: hedefte Transform yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetRotation(id, rot) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(mut t) = transforms.get_mut(id) {
                         t.rotation = rot;
                     } else {
-                        trace!(entity = id, "[Scripting] SetRotation: hedefte Transform yok, komut atlandı");
+                        trace!(entity = %id, "[Scripting] SetRotation: hedefte Transform yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetScale(id, scale) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut transforms = world.borrow_mut::<gizmo_physics_core::Transform>();
                     if let Some(mut t) = transforms.get_mut(id) {
                         t.scale = scale;
                     } else {
-                        trace!(entity = id, "[Scripting] SetScale: hedefte Transform yok, komut atlandı");
+                        trace!(entity = %id, "[Scripting] SetScale: hedefte Transform yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetVelocity(id, vel) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut written = false;
                     {
                         let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
@@ -770,7 +775,7 @@ impl ScriptEngine {
                             v.linear = vel;
                             written = true;
                         } else {
-                            trace!(entity = id, "[Scripting] SetVelocity: hedefte Velocity yok, komut atlandı");
+                            trace!(entity = %id, "[Scripting] SetVelocity: hedefte Velocity yok, komut atlandı");
                         }
                     }
                     if written {
@@ -778,6 +783,7 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::SetAngularVelocity(id, ang_vel) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut written = false;
                     {
                         let mut velocities = world.borrow_mut::<gizmo_physics_rigid::components::Velocity>();
@@ -785,7 +791,7 @@ impl ScriptEngine {
                             v.angular = ang_vel;
                             written = true;
                         } else {
-                            trace!(entity = id, "[Scripting] SetAngularVelocity: hedefte Velocity yok, komut atlandı");
+                            trace!(entity = %id, "[Scripting] SetAngularVelocity: hedefte Velocity yok, komut atlandı");
                         }
                     }
                     if written {
@@ -793,6 +799,7 @@ impl ScriptEngine {
                     }
                 }
                 ScriptCommand::ApplyForce(id, force) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let rbs = world.borrow::<gizmo_physics_rigid::components::RigidBody>();
                     if let Some(rb) = rbs.get(id) {
                         if rb.mass > 0.0 {
@@ -805,7 +812,7 @@ impl ScriptEngine {
                                 .get(id)
                                 .is_none()
                             {
-                                if let Some(e) = world.entity(id) {
+                                if let Some(e) = world.live(id) {
                                     world.add_component(
                                         e,
                                         gizmo_physics_rigid::components::Velocity::new(
@@ -824,10 +831,11 @@ impl ScriptEngine {
                             wake_after_velocity_write(world, id);
                         }
                     } else {
-                        trace!(entity = id, "[Scripting] ApplyForce: hedefte RigidBody yok, kuvvet yok sayıldı");
+                        trace!(entity = %id, "[Scripting] ApplyForce: hedefte RigidBody yok, kuvvet yok sayıldı");
                     }
                 }
                 ScriptCommand::ApplyImpulse(id, impulse) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let rbs = world.borrow::<gizmo_physics_rigid::components::RigidBody>();
                     if let Some(rb) = rbs.get(id) {
                         if rb.mass > 0.0 {
@@ -840,7 +848,7 @@ impl ScriptEngine {
                                 .get(id)
                                 .is_none()
                             {
-                                if let Some(e) = world.entity(id) {
+                                if let Some(e) = world.live(id) {
                                     world.add_component(
                                         e,
                                         gizmo_physics_rigid::components::Velocity::new(
@@ -859,7 +867,7 @@ impl ScriptEngine {
                             wake_after_velocity_write(world, id);
                         }
                     } else {
-                        trace!(entity = id, "[Scripting] ApplyImpulse: hedefte RigidBody yok, impuls yok sayıldı");
+                        trace!(entity = %id, "[Scripting] ApplyImpulse: hedefte RigidBody yok, impuls yok sayıldı");
                     }
                 }
                 ScriptCommand::AddRigidBody {
@@ -867,7 +875,8 @@ impl ScriptEngine {
                     mass,
                     use_gravity,
                 } => {
-                    let entity = world.entity(id);
+                    let Some(id) = world.entity(id) else { continue };
+                    let entity = world.live(id);
                     if let Some(e) = entity {
                         let rb = gizmo_physics_rigid::components::RigidBody::new(mass, use_gravity);
                         world.add_component(e, rb);
@@ -883,7 +892,7 @@ impl ScriptEngine {
                             );
                         }
                     } else {
-                        trace!(entity = id, "[Scripting] AddRigidBody: entity bulunamadı, komut atlandı");
+                        trace!(entity = %id, "[Scripting] AddRigidBody: entity bulunamadı, komut atlandı");
                     }
                 }
                 ScriptCommand::AddBoxCollider { id, hx, hy, hz } => {
@@ -893,7 +902,7 @@ impl ScriptEngine {
                             gizmo_physics_core::Collider::aabb(gizmo_math::Vec3::new(hx, hy, hz));
                         world.add_component(e, col);
                     } else {
-                        trace!(entity = id, "[Scripting] AddBoxCollider: entity bulunamadı, komut atlandı");
+                        trace!(entity = %id, "[Scripting] AddBoxCollider: entity bulunamadı, komut atlandı");
                     }
                 }
                 ScriptCommand::AddSphereCollider { id, radius } => {
@@ -902,7 +911,7 @@ impl ScriptEngine {
                         let col = gizmo_physics_core::Collider::sphere(radius);
                         world.add_component(e, col);
                     } else {
-                        trace!(entity = id, "[Scripting] AddSphereCollider: entity bulunamadı, komut atlandı");
+                        trace!(entity = %id, "[Scripting] AddSphereCollider: entity bulunamadı, komut atlandı");
                     }
                 }
 
@@ -954,7 +963,7 @@ impl ScriptEngine {
                     if let Some(e) = world.get_entity(id) {
                         world.add_component(e, gizmo_core::component::MeshSource(key));
                     } else {
-                        trace!(entity = id, "[Scripting] SetMesh: no such entity, skipped");
+                        trace!(entity = %id, "[Scripting] SetMesh: no such entity, skipped");
                     }
                 }
                 ScriptCommand::DestroyEntity(id) => {
@@ -964,27 +973,30 @@ impl ScriptEngine {
                     }
                 }
 ScriptCommand::SetEntityName(id, name) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut names = world.borrow_mut::<gizmo_core::EntityName>();
                     if let Some(mut n) = names.get_mut(id) {
                         n.0 = name;
                     } else {
-                        trace!(entity = id, "[Scripting] SetEntityName: hedefte EntityName yok, komut atlandı");
+                        trace!(entity = %id, "[Scripting] SetEntityName: hedefte EntityName yok, komut atlandı");
                     }
                 }
 ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut players = world.borrow_mut::<gizmo_animation::skeletal::AnimationPlayer>();
                     if let Some(mut player) = players.get_mut(id) {
                         player.play_animation_by_name(&name, blend, loop_anim);
                     } else {
-                        trace!(entity = id, anim = %name, "[Scripting] PlayAnimation: hedefte AnimationPlayer yok, komut atlandı");
+                        trace!(entity = %id, anim = %name, "[Scripting] PlayAnimation: hedefte AnimationPlayer yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetAnimationSpeed(id, speed) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut players = world.borrow_mut::<gizmo_animation::skeletal::AnimationPlayer>();
                     if let Some(mut player) = players.get_mut(id) {
                         player.speed = speed;
                     } else {
-                        trace!(entity = id, "[Scripting] SetAnimationSpeed: hedefte AnimationPlayer yok, komut atlandı");
+                        trace!(entity = %id, "[Scripting] SetAnimationSpeed: hedefte AnimationPlayer yok, komut atlandı");
                     }
                 }
                 ScriptCommand::AddNavAgent(id) => {
@@ -992,28 +1004,31 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                     if let Some(e) = entity {
                         world.add_component(e, gizmo_ai::components::NavAgent::default());
                     } else {
-                        trace!(entity = id, "[Scripting] AddNavAgent: entity bulunamadı, komut atlandı");
+                        trace!(entity = %id, "[Scripting] AddNavAgent: entity bulunamadı, komut atlandı");
                     }
                 }
                 ScriptCommand::SetAiTarget(id, target) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
                     if let Some(mut agent) = agents.get_mut(id) {
                         agent.set_target(target);
                     } else {
-                        trace!(entity = id, "[Scripting] SetAiTarget: hedefte NavAgent yok, komut atlandı");
+                        trace!(entity = %id, "[Scripting] SetAiTarget: hedefte NavAgent yok, komut atlandı");
                     }
                 }
                 ScriptCommand::ClearAiTarget(id) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut agents = world.borrow_mut::<gizmo_ai::components::NavAgent>();
                     if let Some(mut agent) = agents.get_mut(id) {
                         // Must clear the TARGET, not just the path — clearing only the path
                         // leaves target set, so ai_navigation_system recomputes and keeps going.
                         agent.clear_target();
                     } else {
-                        trace!(entity = id, "[Scripting] ClearAiTarget: hedefte NavAgent yok, komut atlandı");
+                        trace!(entity = %id, "[Scripting] ClearAiTarget: hedefte NavAgent yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetFighterMove { id, name, startup, active, recovery, damage, hitstun, hitstop } => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         let mut frame_data =
@@ -1032,31 +1047,34 @@ ScriptCommand::PlayAnimation { id, name, blend, loop_anim } => {
                         // move had already hit, which is what lets the new one connect at all.
                         fighter.start_move(combat_move);
                     } else {
-                        trace!(entity = id, "[Scripting] SetFighterMove: hedefte FighterController yok, komut atlandı");
+                        trace!(entity = %id, "[Scripting] SetFighterMove: hedefte FighterController yok, komut atlandı");
                     }
                 }
                 ScriptCommand::SetFighterHealth(id, health) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         fighter.health = health;
                     } else {
-                        trace!(entity = id, health, "[Scripting] SetFighterHealth: hedefte FighterController yok, komut atlandı");
+                        trace!(entity = %id, health, "[Scripting] SetFighterHealth: hedefte FighterController yok, komut atlandı");
                     }
                 }
                 ScriptCommand::ApplyHitstop(id, frames) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         fighter.apply_hitstop(frames);
                     } else {
-                        trace!(entity = id, frames, "[Scripting] ApplyHitstop: hedefte FighterController yok, komut atlandı");
+                        trace!(entity = %id, frames, "[Scripting] ApplyHitstop: hedefte FighterController yok, komut atlandı");
                     }
                 }
                 ScriptCommand::ApplyHitstun(id, frames) => {
+                    let Some(id) = world.entity(id) else { continue };
                     let mut fighters = world.borrow_mut::<gizmo_physics_core::components::FighterController>();
                     if let Some(mut fighter) = fighters.get_mut(id) {
                         fighter.apply_hitstun(frames);
                     } else {
-                        trace!(entity = id, frames, "[Scripting] ApplyHitstun: hedefte FighterController yok, komut atlandı");
+                        trace!(entity = %id, frames, "[Scripting] ApplyHitstun: hedefte FighterController yok, komut atlandı");
                     }
                 }
                 // The scene, dialogue, race and camera commands used to be matched here by an
@@ -1216,7 +1234,7 @@ mod tests {
         let Some(ScriptValue::Num(id)) = engine.get_global(&path, "made") else {
             panic!("entity.spawn returned {:?}", engine.get_global(&path, "made"));
         };
-        let id = id as u32;
+        let id = world.entity(id as u32).expect("the script's entity");
         assert_eq!(world.borrow::<gizmo_core::EntityName>().get(id).map(|n| n.0.clone()).as_deref(), Some("kutu"));
         assert_eq!(
             world.borrow::<gizmo_physics_core::Transform>().get(id).map(|t| t.position),
@@ -1244,7 +1262,7 @@ mod tests {
         engine.update_entity_in(&world, 7, &path, 0.016, &Default::default()).unwrap();
         engine.flush_commands(&mut world, 0.016);
         let Some(ScriptValue::Num(id)) = engine.get_global(&path, "got") else { panic!("no id from on_entity_update") };
-        assert_eq!(world.borrow::<gizmo_core::EntityName>().get(id as u32).map(|n| n.0.clone()).as_deref(), Some("anahtar"));
+        assert_eq!(world.borrow::<gizmo_core::EntityName>().get(world.entity(id as u32).unwrap()).map(|n| n.0.clone()).as_deref(), Some("anahtar"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1259,7 +1277,7 @@ mod tests {
         engine.update(&world, &Input::default(), 0.016).unwrap();
         engine.flush_commands(&mut world, 0.016);
         let Some(ScriptValue::Num(id)) = engine.get_global(&path, "made") else { panic!("no id") };
-        assert_eq!(world.borrow::<gizmo_core::PrefabRequest>().get(id as u32).map(|r| r.0.clone()).as_deref(), Some("crate.prefab"));
+        assert_eq!(world.borrow::<gizmo_core::PrefabRequest>().get(world.entity(id as u32).unwrap()).map(|r| r.0.clone()).as_deref(), Some("crate.prefab"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -1676,11 +1694,11 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.add_component(e, Transform::new(Vec3::ZERO));
-        let id = e.id();
+        let id = e;
 
-        engine.command_queue().push(ScriptCommand::SetPosition(id, Vec3::new(1.0, 2.0, 3.0)));
-        engine.command_queue().push(ScriptCommand::SetScale(id, Vec3::new(2.0, 4.0, 8.0)));
-        engine.command_queue().push(ScriptCommand::SetRotation(id, Quat::from_xyzw(1.0, 0.0, 0.0, 0.0)));
+        engine.command_queue().push(ScriptCommand::SetPosition(id.id(), Vec3::new(1.0, 2.0, 3.0)));
+        engine.command_queue().push(ScriptCommand::SetScale(id.id(), Vec3::new(2.0, 4.0, 8.0)));
+        engine.command_queue().push(ScriptCommand::SetRotation(id.id(), Quat::from_xyzw(1.0, 0.0, 0.0, 0.0)));
         engine.flush_commands(&mut world, 0.016);
 
         let transforms = world.borrow::<Transform>();
@@ -1697,10 +1715,10 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.add_component(e, Velocity::new(Vec3::ZERO));
-        let id = e.id();
+        let id = e;
 
-        engine.command_queue().push(ScriptCommand::SetVelocity(id, Vec3::new(3.0, 0.0, -2.0)));
-        engine.command_queue().push(ScriptCommand::SetAngularVelocity(id, Vec3::new(0.0, 1.0, 0.0)));
+        engine.command_queue().push(ScriptCommand::SetVelocity(id.id(), Vec3::new(3.0, 0.0, -2.0)));
+        engine.command_queue().push(ScriptCommand::SetAngularVelocity(id.id(), Vec3::new(0.0, 1.0, 0.0)));
         engine.flush_commands(&mut world, 0.016);
 
         let vels = world.borrow::<Velocity>();
@@ -1717,9 +1735,9 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.add_component(e, RigidBody::new(0.0, false));
-        let id = e.id();
+        let id = e;
 
-        engine.command_queue().push(ScriptCommand::ApplyForce(id, Vec3::new(100.0, 0.0, 0.0)));
+        engine.command_queue().push(ScriptCommand::ApplyForce(id.id(), Vec3::new(100.0, 0.0, 0.0)));
         engine.flush_commands(&mut world, 0.016);
 
         assert!(
@@ -1736,10 +1754,10 @@ mod tests {
         let e = world.spawn();
         world.add_component(e, RigidBody::new(2.0, false));
         world.add_component(e, Velocity::new(Vec3::ZERO));
-        let id = e.id();
+        let id = e;
 
-        engine.command_queue().push(ScriptCommand::ApplyForce(id, Vec3::new(4.0, 0.0, 0.0)));
-        engine.command_queue().push(ScriptCommand::ApplyForce(id, Vec3::new(0.0, 6.0, 0.0)));
+        engine.command_queue().push(ScriptCommand::ApplyForce(id.id(), Vec3::new(4.0, 0.0, 0.0)));
+        engine.command_queue().push(ScriptCommand::ApplyForce(id.id(), Vec3::new(0.0, 6.0, 0.0)));
         engine.flush_commands(&mut world, 0.5);
 
         let vels = world.borrow::<Velocity>();
@@ -1755,9 +1773,9 @@ mod tests {
         let engine = ScriptEngine::new().unwrap();
         let mut world = World::new();
         let e = world.spawn();
-        let id = e.id();
+        let id = e;
 
-        engine.command_queue().push(ScriptCommand::AddRigidBody { id, mass: 3.0, use_gravity: true });
+        engine.command_queue().push(ScriptCommand::AddRigidBody { id: id.id(), mass: 3.0, use_gravity: true });
         engine.flush_commands(&mut world, 0.016);
 
         let rbs = world.borrow::<RigidBody>();
@@ -1783,11 +1801,11 @@ mod tests {
         engine.flush_commands(&mut world, 0.016);
 
         let cols = world.borrow::<Collider>();
-        match &cols.get(bid).unwrap().shape {
+        match &cols.get(e_box).unwrap().shape {
             ColliderShape::Box(b) => assert_eq!(b.half_extents, Vec3::new(1.0, 2.0, 3.0)),
             other => panic!("beklenen Box, gelen {other:?}"),
         }
-        match &cols.get(sid).unwrap().shape {
+        match &cols.get(e_sphere).unwrap().shape {
             ColliderShape::Sphere(s) => assert!((s.radius - 4.0).abs() < 1e-6),
             other => panic!("beklenen Sphere, gelen {other:?}"),
         }
@@ -1808,7 +1826,7 @@ mod tests {
 
         // İsimli entity'yi bul.
         let names = world.borrow::<gizmo_core::EntityName>();
-        let found = world.query::<(Entity, &gizmo_core::EntityName)>().unwrap().iter().filter_map(|(entity, _)| names.get(entity).map(|n| (entity.id(), n.0.clone())))
+        let found = world.query::<(Entity, &gizmo_core::EntityName)>().unwrap().iter().filter_map(|(entity, _)| names.get(entity).map(|n| (entity, n.0.clone())))
             .find(|(_, name)| name == "hero");
         let (eid, _) = found.expect("'hero' isimli entity oluşmalıydı");
         drop(names);
@@ -1845,9 +1863,9 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.add_component(e, gizmo_core::EntityName::new("old"));
-        let id = e.id();
+        let id = e;
 
-        engine.command_queue().push(ScriptCommand::SetEntityName(id, "new".into()));
+        engine.command_queue().push(ScriptCommand::SetEntityName(id.id(), "new".into()));
         engine.flush_commands(&mut world, 0.016);
 
         let names = world.borrow::<gizmo_core::EntityName>();
@@ -1862,17 +1880,17 @@ mod tests {
         let engine = ScriptEngine::new().unwrap();
         let mut world = World::new();
         let e = world.spawn();
-        let id = e.id();
+        let id = e;
 
-        engine.command_queue().push(ScriptCommand::AddNavAgent(id));
-        engine.command_queue().push(ScriptCommand::SetAiTarget(id, Vec3::new(9.0, 0.0, 0.0)));
+        engine.command_queue().push(ScriptCommand::AddNavAgent(id.id()));
+        engine.command_queue().push(ScriptCommand::SetAiTarget(id.id(), Vec3::new(9.0, 0.0, 0.0)));
         engine.flush_commands(&mut world, 0.016);
         {
             let agents = world.borrow::<NavAgent>();
             assert_eq!(agents.get(id).unwrap().target, Some(Vec3::new(9.0, 0.0, 0.0)));
         }
 
-        engine.command_queue().push(ScriptCommand::ClearAiTarget(id));
+        engine.command_queue().push(ScriptCommand::ClearAiTarget(id.id()));
         engine.flush_commands(&mut world, 0.016);
         {
             let agents = world.borrow::<NavAgent>();

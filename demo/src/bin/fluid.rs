@@ -25,7 +25,7 @@ use gizmo::renderer::components::{FluidHandle, FluidParticle, FluidPhase, FluidP
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
 
 struct FluidDemo {
-    cam_id: u32,
+    cam_id: Entity,
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
@@ -43,7 +43,7 @@ struct FluidDemo {
 impl FluidDemo {
     fn new() -> Self {
         Self {
-            cam_id: 0,
+            cam_id: Entity::new(0, 0),
             cam_yaw: -FRAC_PI_2,
             cam_pitch: -0.2,
             cam_pos: Vec3::new(0.0, 4.0, 10.0),
@@ -77,7 +77,7 @@ fn main() {
                     Camera::new(FRAC_PI_3, 0.1, 500.0, state.cam_yaw, state.cam_pitch, true),
                     EntityName("Kamera".into()),
                 ))
-                .id();
+                ;
 
             // Güneş ışığı
             world.spawn_bundle((

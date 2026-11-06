@@ -141,7 +141,7 @@ struct Game {
     deck: Vec<Kind>,
     discard: Vec<Kind>,
     /// Eldeki kartlar, soldan sağa: türü ve varlığı.
-    hand: Vec<(Kind, u32)>,
+    hand: Vec<(Kind, Entity)>,
     mana: u32,
     /// Rakibin bu turda kalan manası.
     foe_mana: u32,
@@ -149,12 +149,12 @@ struct Game {
     phase: Phase,
     rng: Rng,
     font: FontId,
-    table: u32,
-    me_box: u32,
-    foe_box: u32,
-    end_turn: u32,
-    deck_box: u32,
-    log: u32,
+    table: Entity,
+    me_box: Entity,
+    foe_box: Entity,
+    end_turn: Entity,
+    deck_box: Entity,
+    log: Entity,
     auto: Option<u32>,
 }
 
@@ -170,11 +170,11 @@ fn setup(world: &mut World, font: FontId) -> Game {
         background_color: BackgroundColor(Vec4::new(0.06, 0.12, 0.09, 1.0)),
         ..Default::default()
     });
-    let table_id = table.id();
+    let table_id = table;
     let foe_box = panel(world, table, Vec2::new(520.0, 40.0), Vec2::new(240.0, 110.0), Vec4::new(0.3, 0.12, 0.12, 1.0), font, 22.0);
-    world.add_component(world.entity(foe_box).unwrap(), DropTarget::default());
+    world.add_component(world.live(foe_box).unwrap(), DropTarget::default());
     let me_box = panel(world, table, Vec2::new(520.0, 380.0), Vec2::new(240.0, 110.0), Vec4::new(0.12, 0.22, 0.3, 1.0), font, 22.0);
-    world.add_component(world.entity(me_box).unwrap(), DropTarget::default());
+    world.add_component(world.live(me_box).unwrap(), DropTarget::default());
     let deck_box = panel(world, table, DECK_AT, CARD, Vec4::new(0.2, 0.17, 0.12, 1.0), font, 20.0);
     let log = panel(world, table, Vec2::new(40.0, 230.0), Vec2::new(420.0, 90.0), Vec4::ZERO, font, 20.0);
     let end_turn = world.spawn_bundle(ButtonBundle {
@@ -200,7 +200,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
         table: table_id,
         me_box,
         foe_box,
-        end_turn: end_turn.id(),
+        end_turn,
         deck_box,
         log,
         auto: std::env::var_os("DUELLO_OTO").is_some().then_some(0),
@@ -285,7 +285,7 @@ fn absolute(at: Vec2, size: Vec2) -> Style {
     }
 }
 
-fn panel(world: &mut World, parent: Entity, at: Vec2, size: Vec2, colour: Vec4, font: FontId, px: f32) -> u32 {
+fn panel(world: &mut World, parent: Entity, at: Vec2, size: Vec2, colour: Vec4, font: FontId, px: f32) -> Entity {
     let e = world.spawn_bundle(NodeBundle {
         style: absolute(at, size),
         background_color: BackgroundColor(colour),
@@ -293,7 +293,7 @@ fn panel(world: &mut World, parent: Entity, at: Vec2, size: Vec2, colour: Vec4, 
     });
     world.add_component(e, Text::screen("", font, px, Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center));
     world.add_child(parent, e);
-    e.id()
+    e
 }
 
 fn slot(i: usize, n: usize) -> Vec2 {
@@ -303,7 +303,7 @@ fn slot(i: usize, n: usize) -> Vec2 {
 
 fn new_duel(world: &mut World, game: &mut Game) {
     for (_, id) in game.hand.drain(..) {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn_recursive(e);
         }
     }
@@ -353,7 +353,7 @@ fn draw(world: &mut World, game: &mut Game, n: usize) {
     relayout(world, game, drawn);
 }
 
-fn spawn_card(world: &mut World, game: &Game, kind: Kind) -> u32 {
+fn spawn_card(world: &mut World, game: &Game, kind: Kind) -> Entity {
     let card = world.spawn_bundle(ButtonBundle {
         style: absolute(DECK_AT, CARD),
         background_color: BackgroundColor(kind.colour()),
@@ -369,10 +369,10 @@ fn spawn_card(world: &mut World, game: &Game, kind: Kind) -> u32 {
     world.add_component(card, UiTransform::default());
     let target = if kind.hostile() { "rakibe" } else { "kendine" };
     world.add_component(card, Tooltip::new(format!("{} — {}, {} mana.\nOynamak için {} sürükle.", kind.name(), kind.text(), kind.cost(), target)));
-    if let Some(table) = world.get_entity(game.table) {
+    if let Some(table) = world.live(game.table) {
         world.add_child(table, card);
     }
-    card.id()
+    card
 }
 
 /// Kartları yeni yerlerine koyar; ekranda oldukları yerden oraya kayarak (`fresh` kadar son
@@ -399,7 +399,7 @@ fn relayout(world: &mut World, game: &Game, fresh: usize) {
         if let Some(mut t) = world.borrow_mut::<UiTransform>().get_mut(id) {
             t.translation = from + shift - to;
         }
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.add_component(e, UiTween::translation(Vec2::ZERO, 0.35).with_ease(Ease::OutCubic).with_delay(delay));
         }
     }
@@ -417,12 +417,12 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
 
     // Sönen kartlar bitince siliniyor.
-    let gone: Vec<u32> = {
+    let gone: Vec<Entity> = {
         let tweens = world.borrow::<UiTween>();
-        world.query::<(Entity, &Leaving)>().unwrap().iter().filter(|(entity, _)| tweens.get(*entity).is_none_or(|t| t.is_finished())).map(|(entity, _)| entity.id()).collect()
+        world.query::<(Entity, &Leaving)>().unwrap().iter().filter(|(entity, _)| tweens.get(*entity).is_none_or(|t| t.is_finished())).map(|(entity, _)| entity).collect()
     };
     for id in gone {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn_recursive(e);
         }
     }
@@ -464,7 +464,7 @@ fn player_turn(world: &mut World, game: &mut Game, input: &Input) {
         return;
     }
     // Sürüklenen kart imleci izliyor; bırakılınca ya oynanıyor ya yerine dönüyor.
-    let mut dropped: Option<(usize, Option<u32>)> = None;
+    let mut dropped: Option<(usize, Option<Entity>)> = None;
     for (i, &(_, id)) in game.hand.iter().enumerate() {
         let Some(d) = world.borrow::<Drag>().get(id).copied() else { continue };
         if d.is_dragging() {
@@ -474,7 +474,7 @@ fn player_turn(world: &mut World, game: &mut Game, input: &Input) {
             }
             // Kaldırıldığı an: kayıyorsa dursun, öbürlerinin önüne geçsin.
             if d.just_started() {
-                if let Some(e) = world.get_entity(id) {
+                if let Some(e) = world.live(id) {
                     world.remove_component::<UiTween>(e);
                     world.add_component(e, ZIndex(10));
                 }
@@ -490,7 +490,7 @@ fn player_turn(world: &mut World, game: &mut Game, input: &Input) {
             Some(t) if t == game.me_box => !kind.hostile(),
             _ => false,
         };
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.remove_component::<ZIndex>(e);
         }
         if target_ok && kind.cost() <= game.mana {
@@ -500,7 +500,7 @@ fn player_turn(world: &mut World, game: &mut Game, input: &Input) {
                 say(world, game, "Mana yetmiyor.");
             }
             // Yerine dön.
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.add_component(e, UiTween::translation(Vec2::ZERO, 0.3).with_ease(Ease::OutBack));
             }
         }
@@ -531,7 +531,7 @@ fn play(world: &mut World, game: &mut Game, i: usize, at_foe: bool) {
 }
 
 /// Bir kartı `target` kutusunun üstüne uçurur ve söndürür; sönünce siliniyor.
-fn fly_away(world: &mut World, card: u32, target: u32) {
+fn fly_away(world: &mut World, card: Entity, target: Entity) {
     let (from, to) = {
         let nodes = world.borrow::<gizmo::ui::Node>();
         let k = ui_scale(world);
@@ -540,7 +540,7 @@ fn fly_away(world: &mut World, card: u32, target: u32) {
         (c / k, t / k)
     };
     let shift = world.borrow::<UiTransform>().get(card).map_or(Vec2::ZERO, |t| t.translation);
-    if let Some(e) = world.get_entity(card) {
+    if let Some(e) = world.live(card) {
         world.add_component(e, Leaving);
         world.add_component(e, ZIndex(20));
         world.add_component(
@@ -563,7 +563,7 @@ fn apply(world: &mut World, game: &mut Game, kind: Kind, mine: bool) {
     if kind.hostile() {
         // Vurulan sarsılsın.
         let hit = if mine { game.foe_box } else { game.me_box };
-        if let Some(e) = world.get_entity(hit) {
+        if let Some(e) = world.live(hit) {
             world.add_component(e, UiTransform { translation: Vec2::new(14.0, 0.0), ..Default::default() });
             world.add_component(e, UiTween::translation(Vec2::ZERO, 0.4).with_ease(Ease::OutElastic));
         }
@@ -598,7 +598,7 @@ fn enemy_move(world: &mut World, game: &mut Game) {
         *s = absolute(at, CARD);
     }
     let to = if kind.hostile() { Vec2::new(580.0, 380.0) } else { at };
-    if let Some(e) = world.get_entity(card) {
+    if let Some(e) = world.live(card) {
         world.remove_component::<Drag>(e);
         world.remove_component::<Tooltip>(e);
         world.add_component(e, Leaving);
@@ -629,7 +629,7 @@ fn hud(world: &mut World, game: &Game) {
     }
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

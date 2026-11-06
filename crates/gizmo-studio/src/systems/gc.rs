@@ -31,7 +31,7 @@ pub fn garbage_collection_system(
         let mut to_despawn = Vec::new();
         {
             for (entity, _) in world.query::<(Entity, &gizmo::core::component::IsDeleted)>().unwrap().iter() {
-                to_despawn.push(entity.id());
+                to_despawn.push(entity);
             }
         }
 
@@ -46,7 +46,7 @@ pub fn garbage_collection_system(
 
                 // Tüm torunları ve kendisini sil (ters sıra — yapraklardan başla)
                 for &del_id in all_ids.iter().rev() {
-                    if let Some(ent) = world.get_entity(del_id) {
+                    if let Some(ent) = world.live(del_id) {
                         world.despawn(ent);
                     }
                 }

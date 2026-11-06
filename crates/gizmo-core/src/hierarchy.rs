@@ -21,7 +21,7 @@ pub trait HierarchyExt {
     /// Returns `true` if `ancestor` is an ancestor of `descendant` (walking up the
     /// `Parent` chain). Cycle-safe: stops if the existing chain already loops.
     /// Use before reparenting to reject links that would create a hierarchy cycle.
-    fn is_ancestor(&self, ancestor: u32, descendant: u32) -> bool;
+    fn is_ancestor(&self, ancestor: Entity, descendant: Entity) -> bool;
 
     /// Every entity reachable from `root` down the [`Children`] links, `root` itself first,
     /// then breadth-first — **cycle-safe and duplicate-free**.
@@ -69,9 +69,8 @@ pub trait HierarchyExt {
     /// two lists — terminates on its own but is visited twice, which double-counts a delete
     /// cascade and adds the same child collider to a compound body twice.
     ///
-    /// Ids are returned, not [`Entity`] handles. A child that has died is left out, since its id may
-    /// be someone else's by now.
-    fn descendants_inclusive(&self, root: u32) -> Vec<u32>;
+    /// A child that has died is left out.
+    fn descendants_inclusive(&self, root: Entity) -> Vec<Entity>;
 }
 
 impl HierarchyExt for World {
@@ -98,7 +97,7 @@ impl HierarchyExt for World {
         // [`HierarchyExt::descendants_inclusive`], three by an inline set of their own.
         // What a cycle costs still depends on who walks it, not on this line: the point of the
         // paragraph is that a walker may not lean on this refusal, and that survives the fix.
-        if parent.id() == child.id() || self.is_ancestor(child.id(), parent.id()) {
+        if parent == child || self.is_ancestor(child, parent) {
             return;
         }
 
@@ -140,7 +139,7 @@ impl HierarchyExt for World {
         }
     }
 
-    fn descendants_inclusive(&self, root: u32) -> Vec<u32> {
+    fn descendants_inclusive(&self, root: Entity) -> Vec<Entity> {
         let children = self.borrow::<Children>();
         let mut out = vec![root];
         let mut seen = std::collections::HashSet::from([root]);
@@ -152,8 +151,8 @@ impl HierarchyExt for World {
             if let Some(list) = children.get(out[i]) {
                 for &child in &list.0 {
                     // A child written in directly can be dead, and its id someone else's by now.
-                    if self.is_alive(child) && seen.insert(child.id()) {
-                        out.push(child.id());
+                    if self.is_alive(child) && seen.insert(child) {
+                        out.push(child);
                     }
                 }
             }
@@ -162,7 +161,7 @@ impl HierarchyExt for World {
         out
     }
 
-    fn is_ancestor(&self, ancestor: u32, descendant: u32) -> bool {
+    fn is_ancestor(&self, ancestor: Entity, descendant: Entity) -> bool {
         let parents = self.borrow::<Parent>();
         let mut visited = std::collections::HashSet::new();
         let mut current = descendant;
@@ -171,8 +170,8 @@ impl HierarchyExt for World {
         while visited.insert(current) {
             match parents.get(current).map(|p| p.0) {
                 Some(parent) if !self.is_alive(parent) => return false,
-                Some(parent) if parent.id() == ancestor => return true,
-                Some(parent) => current = parent.id(),
+                Some(parent) if parent == ancestor => return true,
+                Some(parent) => current = parent,
                 None => return false,
             }
         }
@@ -239,8 +238,8 @@ mod tests {
 
         world.add_component(parent, Children(vec![dead]));
         assert_eq!(
-            world.descendants_inclusive(parent.id()),
-            vec![parent.id()],
+            world.descendants_inclusive(parent),
+            vec![parent],
             "the stranger is not under the parent",
         );
 
@@ -354,8 +353,8 @@ mod tests {
         world.add_child(a, b); // a -> b
         world.add_child(b, c); // b -> c  (chain a -> b -> c)
 
-        assert!(world.is_ancestor(a.id(), c.id()), "a is an ancestor of c");
-        assert!(!world.is_ancestor(c.id(), a.id()));
+        assert!(world.is_ancestor(a, c), "a is an ancestor of c");
+        assert!(!world.is_ancestor(c, a));
 
         // Dragging a under its own descendant c would create a cycle → refused.
         world.add_child(c, a);
@@ -373,7 +372,7 @@ mod tests {
         // A legitimate reparent still works: d -> a -> b -> c.
         let d = world.spawn();
         world.add_child(d, a);
-        assert!(world.is_ancestor(d.id(), c.id()), "valid reparent kept the chain intact");
+        assert!(world.is_ancestor(d, c), "valid reparent kept the chain intact");
     }
 
     /// Runs `f` on a worker thread and fails if it has not finished within `secs`.
@@ -438,7 +437,7 @@ mod tests {
             world.add_child(a, b);
             world.add_child(a, c);
             world.add_child(b, d);
-            (world.descendants_inclusive(a.id()), a.id(), b.id(), c.id(), d.id())
+            (world.descendants_inclusive(a), a, b, c, d)
         });
         let (out, a, b, c, d) = ids;
         assert_eq!(out, vec![a, b, c, d], "root, then both siblings, then the grandchild");
@@ -449,7 +448,7 @@ mod tests {
         let (out, a) = within(10, || {
             let mut world = World::new();
             let a = world.spawn();
-            (world.descendants_inclusive(a.id()), a.id())
+            (world.descendants_inclusive(a), a)
         });
         // The identity, not just the count: `vec![0]` or somebody else's id would satisfy a
         // length check while making the name of this test false.
@@ -465,7 +464,7 @@ mod tests {
             link(&mut world, a, &[b]);
             link(&mut world, b, &[c]);
             link(&mut world, c, &[a]); // …and back to the root.
-            world.descendants_inclusive(a.id())
+            world.descendants_inclusive(a)
         });
         assert_eq!(out.len(), 3, "each entity of the cycle is visited exactly once");
     }
@@ -477,7 +476,7 @@ mod tests {
             let mut world = World::new();
             let a = world.spawn();
             link(&mut world, a, &[a]); // its own child
-            world.descendants_inclusive(a.id())
+            world.descendants_inclusive(a)
         });
         assert_eq!(out.len(), 1, "an entity that is its own child is still one entity");
     }
@@ -493,7 +492,7 @@ mod tests {
             link(&mut world, a, &[b, c]);
             link(&mut world, b, &[d]);
             link(&mut world, c, &[d]); // same child, reachable two ways
-            (world.descendants_inclusive(a.id()), d.id())
+            (world.descendants_inclusive(a), d)
         });
         let (out, d) = out;
         assert_eq!(out.len(), 4, "a, b, c, d — d once, not twice");
@@ -508,7 +507,7 @@ mod tests {
         let dead = world.spawn();
         world.despawn(dead);
         world.add_component(root, Children(vec![dead]));
-        assert_eq!(world.descendants_inclusive(root.id()), vec![root.id()]);
+        assert_eq!(world.descendants_inclusive(root), vec![root]);
     }
 
     /// A plain `despawn` of a child takes it out of its parent's list. Before, the id stayed —

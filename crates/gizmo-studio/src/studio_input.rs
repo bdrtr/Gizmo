@@ -26,7 +26,7 @@ pub fn handle_studio_input(
     world: &mut World,
     state: &mut EditorState,
     ray: Ray,
-    player_id: u32,
+    player_id: Entity,
     do_raycast: bool,
     ctrl_pressed: bool,
 ) {
@@ -48,7 +48,7 @@ const EDITOR_ENTITY_NAMES: &[&str] = &["Editor Grid", "Editor Guidelines", "Dire
 const EDITOR_ENTITY_PREFIXES: &[&str] = &["Editor Light Icon"];
 
 /// Is this entity an editor object (and therefore not selectable)?
-fn is_editor_entity(world: &World, id: u32) -> bool {
+fn is_editor_entity(world: &World, id: Entity) -> bool {
     let names = world.borrow::<gizmo::core::component::EntityName>();
     if let Some(name) = names.get(id) {
         if EDITOR_ENTITY_NAMES.contains(&name.0.as_str()) {
@@ -69,7 +69,7 @@ fn perform_raycast(
     world: &mut World,
     state: &mut EditorState,
     ray: Ray,
-    player_id: u32,
+    player_id: Entity,
     ctrl_pressed: bool,
 ) {
     state.do_raycast = false;
@@ -88,7 +88,7 @@ fn perform_raycast(
                 .unwrap_or_else(|| format!("Entity {}", root_id));
             state.log_info(&format!("Seçildi: {}", name));
 
-            if let Some(entity) = world.get_entity(root_id) {
+            if let Some(entity) = world.live(root_id) {
                 if ctrl_pressed {
                     state.toggle_selection(entity);
                 } else {
@@ -106,13 +106,13 @@ fn perform_raycast(
 /// Finds an entity's topmost selectable ancestor (its root).
 /// For glTF models it walks from the mesh child up to the glTF root.
 /// A depth limit of 32 levels guards against an infinite loop.
-fn find_selection_root(world: &World, start_id: u32) -> u32 {
+fn find_selection_root(world: &World, start_id: Entity) -> Entity {
     let parents = world.borrow::<gizmo::core::component::Parent>();
     let mut current = start_id;
 
     for _ in 0..32 {
         match parents.get(current) {
-            Some(parent) if world.is_alive(parent.0) => current = parent.0.id(),
+            Some(parent) if world.is_alive(parent.0) => current = parent.0,
             _ => break, // Root'a ulaştık
         }
     }
@@ -121,7 +121,7 @@ fn find_selection_root(world: &World, start_id: u32) -> u32 {
 }
 
 /// Sweeps the ray against every object in the scene and returns the id of the nearest hit.
-fn find_closest_hit(world: &World, ray: &Ray, player_id: u32) -> Option<u32> {
+fn find_closest_hit(world: &World, ray: &Ray, player_id: Entity) -> Option<Entity> {
     let mut closest_t = f32::MAX;
     let mut hit_entity = None;
 
@@ -132,12 +132,12 @@ fn find_closest_hit(world: &World, ray: &Ray, player_id: u32) -> Option<u32> {
 
     for (entity, t) in world.query::<(Entity, &Transform)>().unwrap().iter() {
         // Filtreleme: Kamera, gizli, editör objeleri
-        if entity.id() == player_id || is_hidden.get(entity).is_some() || is_editor_entity(world, entity.id()) {
+        if entity == player_id || is_hidden.get(entity).is_some() || is_editor_entity(world, entity) {
             continue;
         }
 
         // Objenin OBB bilgilerini topla
-        let obb = match compute_entity_obb(entity.id(), t, &meshes, &colliders, &global_transforms) {
+        let obb = match compute_entity_obb(entity, t, &meshes, &colliders, &global_transforms) {
             Some(obb) => obb,
             None => continue, // Hacmi olmayan objeleri atla
         };
@@ -146,7 +146,7 @@ fn find_closest_hit(world: &World, ray: &Ray, player_id: u32) -> Option<u32> {
         if let Some(hit_t) = ray.intersect_obb(obb.center, obb.half_extents, obb.rotation) {
             if hit_t > 0.0 && hit_t < closest_t {
                 closest_t = hit_t;
-                hit_entity = Some(entity.id());
+                hit_entity = Some(entity);
             }
         }
     }
@@ -162,7 +162,7 @@ struct ObbInfo {
 }
 
 fn compute_entity_obb(
-    id: u32,
+    id: Entity,
     local_transform: &Transform,
     meshes: &gizmo::core::Query<'_, &gizmo::renderer::components::Mesh>,
     colliders: &gizmo::core::Query<'_, &Collider>,
@@ -225,7 +225,7 @@ fn perform_rubber_band_selection(
     state: &mut EditorState,
     start: gizmo::math::Vec2,
     end: gizmo::math::Vec2,
-    player_id: u32,
+    player_id: Entity,
     ctrl_pressed: bool,
 ) {
     let (view_mat, proj_mat, scene_rect) =
@@ -253,7 +253,7 @@ fn perform_rubber_band_selection(
     let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
 
     for (id, t) in world.query::<(Entity, &Transform)>().unwrap().iter() {
-        if id.id() == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id.id()) {
+        if id == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id) {
             continue;
         }
 
@@ -295,8 +295,8 @@ fn perform_rubber_band_selection(
 
         if screen_x >= min_x && screen_x <= max_x && screen_y >= min_y && screen_y <= max_y {
             // Child mesh yerine root entity'yi seç (raycast ile aynı davranış)
-            let root_id = find_selection_root(world, id.id());
-            if let Some(entity) = world.get_entity(root_id) {
+            let root_id = find_selection_root(world, id);
+            if let Some(entity) = world.live(root_id) {
                 state.selection.entities.insert(entity);
             }
         }
@@ -311,7 +311,7 @@ fn perform_rubber_band_selection(
 /// `ndc_x`, `ndc_y` are screen coordinates normalised into -1..1.
 pub fn build_ray(
     world: &World,
-    player_id: u32,
+    player_id: Entity,
     ndc_x: f32,
     ndc_y: f32,
     aspect: f32,
@@ -340,6 +340,7 @@ mod tests {
     // spawn entities and drive the actual picking/selection logic. Private helpers
     // (`find_selection_root`, `is_editor_entity`, `compute_entity_obb`) are reachable
     // because this module is a descendant of the one that defines them.
+    use gizmo::core::Entity;
     use super::{
         build_ray, compute_entity_obb, find_selection_root, is_editor_entity,
         perform_rubber_band_selection,
@@ -357,11 +358,11 @@ mod tests {
         Camera::new(90.0_f32.to_radians(), 0.1, 100.0, yaw, pitch, true)
     }
 
-    fn spawn_camera(world: &mut World, pos: Vec3, yaw: f32, pitch: f32) -> u32 {
+    fn spawn_camera(world: &mut World, pos: Vec3, yaw: f32, pitch: f32) -> Entity {
         let e = world.spawn();
         world.add_component(e, Transform::new(pos));
         world.add_component(e, make_camera(yaw, pitch));
-        e.id()
+        e
     }
 
     // ── build_ray ──────────────────────────────────────────────────────────
@@ -411,14 +412,14 @@ mod tests {
 
         let no_cam = world.spawn();
         world.add_component(no_cam, Transform::new(Vec3::ZERO));
-        assert!(build_ray(&world, no_cam.id(), 0.0, 0.0, 1.0, 1.0).is_none());
+        assert!(build_ray(&world, no_cam, 0.0, 0.0, 1.0, 1.0).is_none());
 
         let no_tf = world.spawn();
         world.add_component(no_tf, make_camera(0.0, 0.0));
-        assert!(build_ray(&world, no_tf.id(), 0.0, 0.0, 1.0, 1.0).is_none());
+        assert!(build_ray(&world, no_tf, 0.0, 0.0, 1.0, 1.0).is_none());
 
         // Entirely unknown id.
-        assert!(build_ray(&world, 987_654, 0.0, 0.0, 1.0, 1.0).is_none());
+        assert!(build_ray(&world, Entity::new(987_654, 0), 0.0, 0.0, 1.0, 1.0).is_none());
     }
 
     // ── find_selection_root (Blender-style parent walk) ─────────────────────
@@ -433,11 +434,11 @@ mod tests {
         world.add_component(c, Parent(b));
 
         // A root resolves to itself.
-        assert_eq!(find_selection_root(&world, a.id()), a.id());
+        assert_eq!(find_selection_root(&world, a), a);
         // A direct child resolves to its parent.
-        assert_eq!(find_selection_root(&world, b.id()), a.id());
+        assert_eq!(find_selection_root(&world, b), a);
         // A grandchild walks the whole chain up to the root.
-        assert_eq!(find_selection_root(&world, c.id()), a.id());
+        assert_eq!(find_selection_root(&world, c), a);
     }
 
     /// A pathological Parent cycle must NOT hang: the 32-level cap bounds the walk.
@@ -450,8 +451,8 @@ mod tests {
         world.add_component(a, Parent(b));
         world.add_component(b, Parent(a));
 
-        let root = find_selection_root(&world, a.id());
-        assert!(root == a.id() || root == b.id());
+        let root = find_selection_root(&world, a);
+        assert!(root == a || root == b);
     }
 
     // ── is_editor_entity (unpickable-object whitelist) ──────────────────────
@@ -462,7 +463,7 @@ mod tests {
         let named = |world: &mut World, name: &str| {
             let e = world.spawn();
             world.add_component(e, EntityName(name.to_string()));
-            e.id()
+            e
         };
 
         for exact in ["Editor Grid", "Editor Guidelines", "Directional Light"] {
@@ -479,12 +480,12 @@ mod tests {
 
         // An entity with no name is never an editor entity.
         let anon = world.spawn();
-        assert!(!is_editor_entity(&world, anon.id()));
+        assert!(!is_editor_entity(&world, anon));
     }
 
     // ── compute_entity_obb (collider fallback path — no GPU mesh needed) ─────
 
-    fn obb_of(world: &World, id: u32) -> Option<super::ObbInfo> {
+    fn obb_of(world: &World, id: Entity) -> Option<super::ObbInfo> {
         let transforms = world.borrow::<Transform>();
         let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
         let colliders = world.borrow::<Collider>();
@@ -500,7 +501,7 @@ mod tests {
         world.add_component(e, Transform::new(Vec3::new(5.0, 0.0, 0.0)));
         world.add_component(e, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
 
-        let obb = obb_of(&world, e.id()).expect("collider yields an OBB");
+        let obb = obb_of(&world, e).expect("collider yields an OBB");
         assert!((obb.center - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-4);
         assert!((obb.half_extents - Vec3::new(0.5, 0.5, 0.5)).length() < 1e-4);
         // No GlobalTransform present → OBB inherits the identity local rotation.
@@ -520,7 +521,7 @@ mod tests {
         );
         world.add_component(e, Collider::box_collider(Vec3::new(0.5, 0.5, 0.5)));
 
-        let obb = obb_of(&world, e.id()).unwrap();
+        let obb = obb_of(&world, e).unwrap();
         assert!((obb.half_extents - Vec3::new(1.0, 1.5, 2.0)).length() < 1e-4);
         // Center unaffected by scale because the collider offset is zero.
         assert!((obb.center - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-4);
@@ -531,7 +532,7 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.add_component(e, Transform::new(Vec3::ZERO));
-        assert!(obb_of(&world, e.id()).is_none());
+        assert!(obb_of(&world, e).is_none());
     }
 
     // ── Rubber-band world→screen projection (mirror of
@@ -621,7 +622,7 @@ mod tests {
             "an object BEHIND the camera projects to a screen point too — `clip.w <= 0` is the \
              only thing keeping it out of the box"
         );
-        assert!(!ids.contains(&cam), "the camera being looked through is never a target");
+        assert!(!ids.contains(&cam.id()), "the camera being looked through is never a target");
     }
 
     /// A box over one half of the screen takes only what falls in that half.

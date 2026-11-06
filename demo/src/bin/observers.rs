@@ -590,7 +590,7 @@ fn explode_now(world: &mut gizmo::core::World, entity: gizmo::core::entity::Enti
         if !still_armed {
             continue;
         }
-        if let Some(target) = world.get_entity(other.id()) {
+        if let Some(target) = world.live(other) {
             world.trigger(Explode { target });
         }
     }

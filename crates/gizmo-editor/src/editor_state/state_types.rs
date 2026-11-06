@@ -521,9 +521,9 @@ pub struct FightHudState {
     /// Seconds left on the round timer.
     pub timer_seconds: f32,
     /// Player one's entity, so the HUD can follow the right fighter.
-    pub p1_entity: Option<u32>,
+    pub p1_entity: Option<gizmo_core::Entity>,
     /// Player two's entity.
-    pub p2_entity: Option<u32>,
+    pub p2_entity: Option<gizmo_core::Entity>,
 }
 
 impl Default for FightHudState {

@@ -75,22 +75,22 @@ const HIDE: (usize, usize) = (3, 8);
 struct Guard {
     route: usize,
     next: usize,
-    cone: u32,
+    cone: Entity,
 }
 gizmo::core::impl_component!(Guard);
 
 struct Game {
     physics: FixedPhysics,
-    player: u32,
+    player: Entity,
     start: Vec3,
     exit: Vec3,
     document: Vec3,
     has_document: bool,
     suspicion: f32,
     points: Vec<(char, Vec3)>,
-    camera: u32,
-    hud: u32,
-    banner: u32,
+    camera: Entity,
+    hud: Entity,
+    banner: Entity,
     over: Option<bool>,
     auto: bool,
     /// Oyuncunun bir muhafızın konisinde ve menzilinde olup araya duvar girdiği kareler (sınama).
@@ -119,7 +119,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
             primary: true,
             ..Default::default()
         })
-        .id();
+        ;
     // Zemin ve duvarlar; ızgara muhafızların yol bulması için.
     world.spawn_bundle((
         Transform::new(Vec3::new(w * 0.5, -0.1, h * 0.5)),
@@ -172,15 +172,15 @@ fn setup(world: &mut World, font: FontId) -> Game {
         MaterialDesc::new().with_unlit(Color::srgb_hex("#3CB371").to_vec4()),
         MeshRenderer::new(),
     ));
-    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     let mut game = Game {
         physics: FixedPhysics::new(60),
-        player: 0,
+        player: Entity::new(0, 0),
         start,
         exit,
         document,
@@ -260,9 +260,9 @@ struct Actor;
 gizmo::core::impl_component!(Actor);
 
 fn restart(world: &mut World, game: &mut Game) {
-    let actors: Vec<u32> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let actors: Vec<Entity> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity).collect();
     for id in actors {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             use gizmo::core::hierarchy::HierarchyExt;
             world.despawn_recursive(e);
         }
@@ -280,7 +280,7 @@ fn restart(world: &mut World, game: &mut Game) {
             Collider::capsule(0.3, 0.2),
             Actor,
         ))
-        .id();
+        ;
     world.spawn_bundle((
         Transform::new(game.document + Vec3::Y * 0.3).with_scale(Vec3::new(0.25, 0.03, 0.18)),
         GlobalTransform::default(),
@@ -301,7 +301,7 @@ fn restart(world: &mut World, game: &mut Game) {
                 MeshRenderer::new(),
                 Actor,
             ))
-            .id();
+            ;
         let mut agent = NavAgent::new(1.6, 8.0, 0.3).with_separation(0.0, 0.0);
         agent.set_target(at);
         world.spawn_bundle((
@@ -352,7 +352,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
 /// Bir muhafız hedefine varınca rotasının bir sonraki noktasına yönelir.
 fn patrol(world: &mut World, game: &Game) {
-    let guards: Vec<u32> = world.query::<(Entity, &Guard)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let guards: Vec<Entity> = world.query::<(Entity, &Guard)>().unwrap().iter().map(|(entity, _)| entity).collect();
     for id in guards {
         let done = world.borrow::<NavAgent>().get(id).is_some_and(|a| a.target.is_none());
         if !done {
@@ -376,7 +376,7 @@ fn patrol(world: &mut World, game: &Game) {
 /// görünürse şüphe artar.
 fn sight(world: &mut World, game: &mut Game, dt: f32) {
     let player = world.borrow::<Transform>().get(game.player).map(|t| t.position).unwrap_or(game.start);
-    let guards: Vec<(u32, Vec3, Vec3, u32)> = {
+    let guards: Vec<(Entity, Vec3, Vec3, Entity)> = {
         let ts = world.borrow::<Transform>();
         let vs = world.borrow::<Velocity>();
         world.query::<(Entity, &Guard)>().unwrap().iter()
@@ -384,14 +384,14 @@ fn sight(world: &mut World, game: &mut Game, dt: f32) {
                 let at = ts.get(entity)?.position;
                 let v = vs.get(entity).map(|v| v.linear).unwrap_or(Vec3::Z);
                 let facing = Vec3::new(v.x, 0.0, v.z).try_normalize().unwrap_or(Vec3::Z);
-                Some((entity.id(), at, facing, g.cone))
+                Some((entity, at, facing, g.cone))
             })
             .collect()
     };
     let mut seen = false;
     for (id, at, facing, cone) in guards {
         // The eye is inside the guard's own collider: every ray must skip it.
-        let me = gizmo::physics::BodyHandle::from_id(id);
+        let me = gizmo::physics::BodyHandle::from_id(id.id());
         let eye = Vec3::new(at.x, 0.6, at.z);
         let mut vertices = Vec::with_capacity(RAYS * 3);
         let ends: Vec<Vec3> = {
@@ -439,9 +439,9 @@ fn pickups(world: &mut World, game: &mut Game) {
     let flat = |a: Vec3, b: Vec3| Vec2::new(a.x - b.x, a.z - b.z).length();
     if !game.has_document && flat(p, game.document) < 0.6 {
         game.has_document = true;
-        let doc: Vec<u32> = world.query::<(Entity, &Document)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+        let doc: Vec<Entity> = world.query::<(Entity, &Document)>().unwrap().iter().map(|(entity, _)| entity).collect();
         for id in doc {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.despawn(e);
             }
         }
@@ -464,7 +464,7 @@ fn hud(world: &mut World, game: &Game) {
     set_text(world, game.banner, banner);
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

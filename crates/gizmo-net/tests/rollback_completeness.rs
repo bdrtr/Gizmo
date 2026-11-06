@@ -100,7 +100,7 @@ fn step(world: &mut World, pw: &mut PhysicsWorld) {
     // SAFETY: as above — a distinct component type.
     let mut rigid_bodies = unsafe { world.borrow_mut_unchecked::<RigidBody>() };
     for (i, handle) in pw.entities.iter().enumerate() {
-        let id = handle.id();
+        let id = world.entity(handle.id()).expect("a live body");
         if let Some(mut t) = transforms.get_mut(id) {
             *t = pw.transforms[i];
         }

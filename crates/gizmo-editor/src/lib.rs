@@ -374,10 +374,10 @@ fn draw_status_bar(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
             0 => "nothing selected".to_string(),
             1 => {
                 let names = world.borrow::<gizmo_core::EntityName>();
-                let id = state.selection.entities.iter().next().map(|e| e.id());
-                let name = id
-                    .and_then(|id| names.get(id).map(|n| n.0.clone()))
-                    .unwrap_or_else(|| format!("Entity {}", id.unwrap_or(0)));
+                let entity = state.selection.entities.iter().next().copied();
+                let name = entity
+                    .and_then(|e| names.get(e).map(|n| n.0.clone()))
+                    .unwrap_or_else(|| format!("Entity {}", entity.map_or(0, |e| e.id())));
                 format!("{name} selected")
             }
             n => format!("{n} selected"),

@@ -380,9 +380,9 @@ fn drive(world: &mut World, input: &Input) {
         // Halkayı dizin sırasına göre değil, taşıdığı `Link` derinliğine göre bul — zincir
         // yeniden düzenlense de doğru halkayı keser.
         let middle_id = world.query::<(Entity, &Link)>().and_then(|q| {
-            q.iter().find(|(_, link)| link.0 == DEPTH / 2).map(|(entity, _)| entity.id())
+            q.iter().find(|(_, link)| link.0 == DEPTH / 2).map(|(entity, _)| entity)
         });
-        let Some(middle) = middle_id.and_then(|id| world.entity(id)) else {
+        let Some(middle) = middle_id.and_then(|id| world.live(id)) else {
             return;
         };
         world.despawn(middle);

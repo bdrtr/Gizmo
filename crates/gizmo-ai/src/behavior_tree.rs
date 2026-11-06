@@ -47,7 +47,7 @@ pub trait BtNode: Send + Sync {
     /// re-creates the tree between ticks. Ticking is synchronous and recurses into
     /// children, so an implementation is expected to return promptly and tree
     /// depth is bounded only by the stack.
-    fn tick(&mut self, entity: u32, world: &mut World, dt: f32) -> BtStatus;
+    fn tick(&mut self, entity: Entity, world: &mut World, dt: f32) -> BtStatus;
 }
 
 /// Sequence (logical AND): ticks its children front to back until one fails or is
@@ -82,7 +82,7 @@ impl Sequence {
 }
 
 impl BtNode for Sequence {
-    fn tick(&mut self, entity: u32, world: &mut World, dt: f32) -> BtStatus {
+    fn tick(&mut self, entity: Entity, world: &mut World, dt: f32) -> BtStatus {
         while self.current_idx < self.children.len() {
             let status = self.children[self.current_idx].tick(entity, world, dt);
             match status {
@@ -132,7 +132,7 @@ impl Selector {
 }
 
 impl BtNode for Selector {
-    fn tick(&mut self, entity: u32, world: &mut World, dt: f32) -> BtStatus {
+    fn tick(&mut self, entity: Entity, world: &mut World, dt: f32) -> BtStatus {
         while self.current_idx < self.children.len() {
             let status = self.children[self.current_idx].tick(entity, world, dt);
             match status {
@@ -172,7 +172,7 @@ impl Inverter {
 }
 
 impl BtNode for Inverter {
-    fn tick(&mut self, entity: u32, world: &mut World, dt: f32) -> BtStatus {
+    fn tick(&mut self, entity: Entity, world: &mut World, dt: f32) -> BtStatus {
         match self.child.tick(entity, world, dt) {
             BtStatus::Success => BtStatus::Failure,
             BtStatus::Failure => BtStatus::Success,
@@ -189,14 +189,14 @@ impl BtNode for Inverter {
 /// `(entity, &mut World, dt)` triple as [`BtNode::tick`], with `dt` in seconds.
 pub struct Action<F>
 where
-    F: FnMut(u32, &mut World, f32) -> BtStatus + Send + Sync,
+    F: FnMut(Entity, &mut World, f32) -> BtStatus + Send + Sync,
 {
     func: F,
 }
 
 impl<F> Action<F>
 where
-    F: FnMut(u32, &mut World, f32) -> BtStatus + Send + Sync,
+    F: FnMut(Entity, &mut World, f32) -> BtStatus + Send + Sync,
 {
     /// Wraps `func` by value. `Action<F>` is generic over the closure rather than
     /// boxing it, so putting one into a composite's `Vec<Box<dyn BtNode>>` needs an
@@ -210,9 +210,9 @@ where
 
 impl<F> BtNode for Action<F>
 where
-    F: FnMut(u32, &mut World, f32) -> BtStatus + Send + Sync,
+    F: FnMut(Entity, &mut World, f32) -> BtStatus + Send + Sync,
 {
-    fn tick(&mut self, entity: u32, world: &mut World, dt: f32) -> BtStatus {
+    fn tick(&mut self, entity: Entity, world: &mut World, dt: f32) -> BtStatus {
         (self.func)(entity, world, dt)
     }
 }
@@ -226,14 +226,14 @@ where
 /// advisable, since composites re-tick it on later frames.
 pub struct Condition<F>
 where
-    F: FnMut(u32, &mut World) -> bool + Send + Sync,
+    F: FnMut(Entity, &mut World) -> bool + Send + Sync,
 {
     func: F,
 }
 
 impl<F> Condition<F>
 where
-    F: FnMut(u32, &mut World) -> bool + Send + Sync,
+    F: FnMut(Entity, &mut World) -> bool + Send + Sync,
 {
     /// Wraps the predicate by value.
     ///
@@ -247,9 +247,9 @@ where
 
 impl<F> BtNode for Condition<F>
 where
-    F: FnMut(u32, &mut World) -> bool + Send + Sync,
+    F: FnMut(Entity, &mut World) -> bool + Send + Sync,
 {
-    fn tick(&mut self, entity: u32, world: &mut World, _dt: f32) -> BtStatus {
+    fn tick(&mut self, entity: Entity, world: &mut World, _dt: f32) -> BtStatus {
         if (self.func)(entity, world) {
             BtStatus::Success
         } else {
@@ -309,7 +309,7 @@ impl BehaviorTree {
     /// `dt` is the frame time in seconds and is handed down unchanged to every
     /// node. The call recurses through the tree; nothing here bounds the depth or
     /// catches a panic raised by a node.
-    pub fn tick(&mut self, entity: u32, world: &mut World, dt: f32) -> BtStatus {
+    pub fn tick(&mut self, entity: Entity, world: &mut World, dt: f32) -> BtStatus {
         if let Some(root) = &mut self.root {
             root.tick(entity, world, dt)
         } else {
@@ -338,11 +338,11 @@ impl BehaviorTree {
 /// errors, and a node's panic propagates out of it.
 #[tracing::instrument(skip_all, name = "behavior_tree_system")]
 pub fn behavior_tree_system(world: &mut World, dt: f32) {
-    let entities: Vec<u32> = world
+    let entities: Vec<Entity> = world
         .query::<(Entity, &BehaviorTree)>()
         .unwrap()
         .iter()
-        .map(|(entity, _)| entity.id())
+        .map(|(entity, _)| entity)
         .collect();
 
     let tree_count = entities.len();
@@ -366,7 +366,7 @@ pub fn behavior_tree_system(world: &mut World, dt: f32) {
                 BtStatus::Failure => failure += 1,
                 BtStatus::Running => running += 1,
             }
-            tracing::trace!(entity, ?status, "[AI] Davranış ağacı köke kadar tick'lendi");
+            tracing::trace!(entity = %entity, ?status, "[AI] Davranış ağacı köke kadar tick'lendi");
 
             if let Some(mut tree) = world.borrow_mut::<BehaviorTree>().get_mut(entity) {
                 tree.root = Some(root);
@@ -401,7 +401,7 @@ mod tests {
 
     fn tick(node: &mut dyn BtNode) -> BtStatus {
         let mut w = World::new();
-        node.tick(0, &mut w, 0.0)
+        node.tick(Entity::new(0, 0), &mut w, 0.0)
     }
 
     #[test]
@@ -443,10 +443,10 @@ mod tests {
     fn empty_behavior_tree_ticks_to_failure() {
         let mut w = World::new();
         let mut bt = BehaviorTree { root: None };
-        assert_eq!(bt.tick(0, &mut w, 0.0), BtStatus::Failure);
+        assert_eq!(bt.tick(Entity::new(0, 0), &mut w, 0.0), BtStatus::Failure);
         // Clone yields an empty tree (documented), which also ticks to Failure.
         let mut cloned = bt.clone();
-        assert_eq!(cloned.tick(0, &mut w, 0.0), BtStatus::Failure);
+        assert_eq!(cloned.tick(Entity::new(0, 0), &mut w, 0.0), BtStatus::Failure);
     }
 
     #[test]
@@ -471,8 +471,8 @@ mod tests {
         let mut seq = Sequence::new(vec![child0, child1]);
         let mut w = World::new();
 
-        assert_eq!(seq.tick(0, &mut w, 0.0), BtStatus::Running, "first tick: child1 is running");
-        assert_eq!(seq.tick(0, &mut w, 0.0), BtStatus::Success, "second tick: child1 completes");
+        assert_eq!(seq.tick(Entity::new(0, 0), &mut w, 0.0), BtStatus::Running, "first tick: child1 is running");
+        assert_eq!(seq.tick(Entity::new(0, 0), &mut w, 0.0), BtStatus::Success, "second tick: child1 completes");
         assert_eq!(
             c0.load(Ordering::SeqCst),
             1,

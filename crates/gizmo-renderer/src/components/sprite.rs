@@ -281,12 +281,12 @@ impl SpriteAnimation {
 pub fn sprite_animation_system(world: &mut gizmo_core::World, dt: f32) {
     // Two passes: an animation advances whether or not its entity has a sprite, so it cannot be
     // a joint `(SpriteAnimation, Sprite)` query.
-    let frames: Vec<(u32, [f32; 4])> = match world.query_mut::<(Entity, gizmo_core::query::Mut<SpriteAnimation>)>() {
+    let frames: Vec<(Entity, [f32; 4])> = match world.query_mut::<(Entity, gizmo_core::query::Mut<SpriteAnimation>)>() {
         Some(mut q) => q
             .iter_mut()
             .filter_map(|(entity, mut anim)| {
                 anim.advance(dt);
-                sheet_frame(anim.frame(), anim.columns, anim.rows).map(|rect| (entity.id(), rect))
+                sheet_frame(anim.frame(), anim.columns, anim.rows).map(|rect| (entity, rect))
             })
             .collect(),
         None => return,

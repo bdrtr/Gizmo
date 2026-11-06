@@ -190,10 +190,10 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     let grid_changed = grid.take_change();
     let grid = &*grid;
 
-    let (agent_entities, cell): (Vec<u32>, f32) = {
+    let (agent_entities, cell): (Vec<Entity>, f32) = {
         let agents = world.query::<(Entity, &NavAgent)>().unwrap();
         let widest = agents.iter().map(|(_, a)| a.separation_radius).fold(0.0f32, f32::max);
-        (agents.iter().map(|(entity, _)| entity.id()).collect(), widest.max(0.01))
+        (agents.iter().map(|(entity, _)| entity).collect(), widest.max(0.01))
     };
     let agent_count = agent_entities.len();
 
@@ -247,7 +247,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
                     if agent.state != crate::components::NavAgentState::Stuck {
                         stuck_count += 1;
                         tracing::trace!(
-                            entity = agent_id,
+                            entity = %agent_id,
                             stuck_timer = agent.stuck_timer,
                             "[AI] Ajan sıkıştı — yol temizleniyor, yeniden hesaplanacak"
                         );
@@ -283,7 +283,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             // spread over it instead of all landing on one frame every `interval` (measured,
             // 1000 agents: 58 ms on every 30th frame against a 0.27 ms median).
             agent.recalc.timer = if forced {
-                agent.recalc.interval * replan_phase(agent_id)
+                agent.recalc.interval * replan_phase(agent_id.id())
             } else {
                 agent.recalc.interval
             };
@@ -349,7 +349,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
                 agent.set_route_failed(false);
                 path_found += 1;
                 tracing::trace!(
-                    entity = agent_id,
+                    entity = %agent_id,
                     path_len,
                     "[AI] Ajan yolu yeniden hesaplandı"
                 );
@@ -359,7 +359,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
                 agent.set_route_failed(true);
                 path_failed += 1;
                 tracing::trace!(
-                    entity = agent_id,
+                    entity = %agent_id,
                     "[AI] Ajan için yol bulunamadı (hedef ulaşılamaz/duvar içinde?)"
                 );
             }
@@ -427,7 +427,7 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
                     agent.target = None;
                     agent.state = crate::components::NavAgentState::Reached;
                     reached_count += 1;
-                    tracing::trace!(entity = agent_id, "[AI] Ajan hedefe ulaştı");
+                    tracing::trace!(entity = %agent_id, "[AI] Ajan hedefe ulaştı");
                     continue;
                 } else {
                     next_node = agent.current_waypoint().copied().unwrap_or(t.position);
@@ -658,12 +658,12 @@ mod frame_tests {
                 let mut a = agent.clone();
                 a.target = Some(Vec3::new(30.0, 0.0, z));
                 world.add_component(e, a);
-                ids.push(e.id());
+                ids.push(e);
             }
             let dt = 1.0 / 60.0;
             for _ in 0..60 {
                 ai_navigation_system(&world, dt);
-                let moves: Vec<(u32, Vec3)> = {
+                let moves: Vec<(Entity, Vec3)> = {
                     let v = world.borrow::<Velocity>();
                     ids.iter().map(|&id| (id, v.get(id).unwrap().linear)).collect()
                 };
@@ -711,7 +711,7 @@ mod frame_tests {
                 let mut a = NavAgent::default().with_separation(rng.range(0.4..3.0), 1.5);
                 a.target = Some(Vec3::new(20.0, 0.0, rng.range(-5.0..5.0)));
                 world.add_component(e, a);
-                ids.push(e.id());
+                ids.push(e);
             }
             let far = world.spawn();
             world.add_component(far, Transform::new(Vec3::new(900.0, 0.0, 0.0)));
@@ -747,7 +747,7 @@ mod frame_tests {
             let mut a = NavAgent::default();
             a.target = Some(Vec3::new(50.0, 0.0, 50.0));
             world.add_component(e, a);
-            ids.push(e.id());
+            ids.push(e);
         }
         let timers = |world: &World| -> Vec<f32> {
             let agents = world.borrow::<NavAgent>();
@@ -865,7 +865,7 @@ mod frame_tests {
                 let mut a = NavAgent::new(2.0, 8.0, 0.3);
                 a.set_target(Vec3::new(35.5, 0.0, (i % 40) as f32 + 0.5));
                 world.add_component(e, a);
-                ids.push((e.id(), start, Vec3::new(35.5, 0.0, (i % 40) as f32 + 0.5)));
+                ids.push((e, start, Vec3::new(35.5, 0.0, (i % 40) as f32 + 0.5)));
             }
             (world, ids)
         };

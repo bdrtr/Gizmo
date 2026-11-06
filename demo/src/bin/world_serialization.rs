@@ -222,11 +222,11 @@ fn demo_registry() -> SceneRegistry {
 /// Yalnız `Crate` taşıyanlar siliniyor: zemin, güneş ve kamera yerinde kalsın diye. Dosya
 /// hepsini içeriyor, ama bu demoda görülmek istenen şey kutuların gidip geri gelmesi.
 fn despawn_crates(world: &mut World) {
-    let doomed: Vec<u32> = world
+    let doomed: Vec<Entity> = world
         .query::<(Entity, &Crate)>()
-        .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
+        .map(|q| q.iter().map(|(entity, _)| entity).collect())
         .unwrap_or_default();
     for entity in doomed {
-        world.despawn_by_id(entity);
+        world.despawn(entity);
     }
 }

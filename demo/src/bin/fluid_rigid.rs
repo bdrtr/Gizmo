@@ -1,7 +1,7 @@
 use gizmo::prelude::*;
 
 struct FluidRigidDemo {
-    cam_id: u32,
+    cam_id: Entity,
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
@@ -19,7 +19,7 @@ struct FluidRigidDemo {
 impl FluidRigidDemo {
     fn new() -> Self {
         Self {
-            cam_id: 0,
+            cam_id: Entity::new(0, 0),
             cam_yaw: -std::f32::consts::FRAC_PI_2,
             cam_pitch: -0.2,
             cam_pos: Vec3::new(0.0, 4.0, 10.0),
@@ -63,7 +63,7 @@ fn main() {
                     true,
                 ),
             );
-            state.cam_id = cam.id();
+            state.cam_id = cam;
 
             // Güneş
             let sun = world.spawn();

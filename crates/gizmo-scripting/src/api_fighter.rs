@@ -219,10 +219,10 @@ pub fn update_fighter_read_api(lua: &Lua, world: &World) -> Result<(), LuaError>
     {
         for (i, hit) in queue.iter().enumerate() {
             let entry = lua.create_table()?;
-            entry.set("attacker", hit.attacker)?;
-            entry.set("attacker_hitbox", hit.attacker_hitbox)?;
-            entry.set("victim", hit.victim)?;
-            entry.set("victim_hurtbox", hit.victim_hurtbox)?;
+            entry.set("attacker", hit.attacker.id())?;
+            entry.set("attacker_hitbox", hit.attacker_hitbox.id())?;
+            entry.set("victim", hit.victim.id())?;
+            entry.set("victim_hurtbox", hit.victim_hurtbox.id())?;
             entry.set("damage", hit.damage)?;
             entry.set("hitstun", hit.hitstun)?;
             entry.set("hitstop", hit.hitstop)?;
@@ -751,10 +751,10 @@ mod tests {
         let mut world = World::new();
         let mut queue = Events::<HitEvent>::new();
         queue.send(HitEvent {
-            attacker: 7,
-            attacker_hitbox: 8,
-            victim: 9,
-            victim_hurtbox: 10,
+            attacker: Entity::new(7, 0),
+            attacker_hitbox: Entity::new(8, 0),
+            victim: Entity::new(9, 0),
+            victim_hurtbox: Entity::new(10, 0),
             damage: 12.0,
             hitstun: 20,
             hitstop: 5,

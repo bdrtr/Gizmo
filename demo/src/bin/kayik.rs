@@ -59,15 +59,15 @@ fn spawn_lake(world: &mut World) {
     world.insert_resource(physics);
 }
 
-fn spawn_boat(world: &mut World, visual: bool) -> u32 {
+fn spawn_boat(world: &mut World, visual: bool) -> Entity {
     let collider = Collider::box_collider(HULL);
     let mut body = RigidBody::new(hull_mass(), true);
     body.update_inertia_from_collider(&collider);
     let id = world
         .spawn_bundle((Transform::new(Vec3::new(0.0, 0.1, 0.0)), body, Velocity::default(), collider, ExternalForce::default()))
-        .id();
+        ;
     if visual {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.add_component(e, GlobalTransform::default());
             for (offset, half, colour) in [
                 (Vec3::ZERO, HULL, Color::srgb_hex("#ECF0F1").to_vec4()),
@@ -89,7 +89,7 @@ fn spawn_boat(world: &mut World, visual: bool) -> u32 {
 }
 
 /// Kapının iki şamandırası — yüzen küreler.
-fn spawn_buoys(world: &mut World, visual: bool) -> Vec<u32> {
+fn spawn_buoys(world: &mut World, visual: bool) -> Vec<Entity> {
     let mut ids = Vec::new();
     for (k, &(x, z)) in GATES.iter().enumerate() {
         let across = gate_across(k);
@@ -98,9 +98,9 @@ fn spawn_buoys(world: &mut World, visual: bool) -> Vec<u32> {
             let col = Collider::sphere(0.45);
             let mut rb = RigidBody::new(200.0 * col.volume(), true);
             rb.update_inertia_from_collider(&col);
-            let id = world.spawn_bundle((Transform::new(at), rb, Velocity::default(), col)).id();
+            let id = world.spawn_bundle((Transform::new(at), rb, Velocity::default(), col));
             if visual {
-                if let Some(e) = world.get_entity(id) {
+                if let Some(e) = world.live(id) {
                     world.add_component(e, GlobalTransform::default());
                     world.add_component(e, MeshSource("sphere".into()));
                     world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex("#BDC3C7").to_vec4(), 0.4, 0.0));
@@ -131,7 +131,7 @@ fn gate_centre(k: usize) -> Vec3 {
 
 /// Motor ve dümen: `throttle` −1…1, `rudder` −1…1. Kuvvet kıçta, suyun altında; dümen, hızla
 /// orantılı bir sapma momenti; omurga yana kaymayı söndürür.
-fn steer(world: &mut World, boat: u32, throttle: f32, rudder: f32) {
+fn steer(world: &mut World, boat: Entity, throttle: f32, rudder: f32) {
     let (t, v, w) = {
         let ts = world.borrow::<Transform>();
         let vs = world.borrow::<Velocity>();
@@ -160,7 +160,7 @@ fn steer(world: &mut World, boat: u32, throttle: f32, rudder: f32) {
 }
 
 /// Otomatik pilot: sıradaki kapının ortasına dön, gaz.
-fn autopilot(world: &World, boat: u32, target: Vec3) -> (f32, f32) {
+fn autopilot(world: &World, boat: Entity, target: Vec3) -> (f32, f32) {
     let Some(t) = world.borrow::<Transform>().get(boat).copied() else { return (0.0, 0.0) };
     let forward = t.rotation * Vec3::NEG_Z;
     let f = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
@@ -176,7 +176,7 @@ fn through_gate(p: Vec3, k: usize) -> bool {
 }
 
 /// Yandan bir rüzgâr darbesi: kayığın üst kısmına, bordasına dik bir itme.
-fn gust(world: &mut World, boat: u32, strength: f32) {
+fn gust(world: &mut World, boat: Entity, strength: f32) {
     let Some(t) = world.borrow::<Transform>().get(boat).copied() else { return };
     let side = t.rotation * Vec3::X;
     let impulse = side * strength;
@@ -194,7 +194,7 @@ fn gust(world: &mut World, boat: u32, strength: f32) {
     }
 }
 
-fn tilt_degrees(world: &World, id: u32) -> f32 {
+fn tilt_degrees(world: &World, id: Entity) -> f32 {
     world.borrow::<Transform>().get(id).map_or(0.0, |t| (t.rotation * Vec3::Y).angle_between(Vec3::Y).to_degrees())
 }
 
@@ -254,15 +254,15 @@ fn self_test() -> bool {
 
 struct Game {
     physics: FixedPhysics,
-    boat: u32,
-    buoys: Vec<u32>,
+    boat: Entity,
+    buoys: Vec<Entity>,
     next: usize,
     clock: f32,
     gust_in: f32,
     finished: Option<f32>,
-    camera: u32,
-    hud: u32,
-    banner: u32,
+    camera: Entity,
+    hud: Entity,
+    banner: Entity,
 }
 
 fn main() {
@@ -290,14 +290,14 @@ fn main() {
             let camera = scene
                 .world
                 .spawn_bundle(CameraBundle { position: Vec3::new(0.0, 8.0, 14.0), pitch: -0.4, primary: true, ..Default::default() })
-                .id();
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+                ;
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             scene.world.insert_resource(Game {
                 physics: FixedPhysics::new(60),
                 boat,
@@ -320,7 +320,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let Some(mut game) = world.remove_resource::<Game>() else { return };
     let dt = dt.min(0.05);
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        if let Some(e) = world.get_entity(game.boat) {
+        if let Some(e) = world.live(game.boat) {
             use gizmo::core::hierarchy::HierarchyExt;
             world.despawn_recursive(e);
         }

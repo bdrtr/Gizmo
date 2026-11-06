@@ -62,8 +62,8 @@ struct ClothDemo {
     cloth: Cloth,
     grid: usize, // kenar başına düğüm = segment + 1
     segments: usize,
-    cloth_entity: u32,
-    obj_entity: u32,
+    cloth_entity: Entity,
+    obj_entity: Entity,
     obj_meshes: Vec<Mesh>, // [küre, kapsül, kutu]
     shape: usize,
     colliders: Vec<(BodyHandle, Transform, Collider)>,
@@ -183,7 +183,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> ClothDemo {
             Material::new(tex.clone()).with_pbr(Vec4::new(0.35, 0.55, 0.9, 1.0), 0.3, 0.5),
             MeshRenderer::new(),
         ))
-        .id();
+        ;
 
     // Solver collider'ları: [0]=serilen cisim (C ile değişir), [1]=zemin. ECS gövdesi değil,
     // doğrudan `Cloth::step`'e verilen üçlüler.
@@ -209,7 +209,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> ClothDemo {
             Material::new(tex.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.7, 0.15),
             MeshRenderer::new(),
         ))
-        .id();
+        ;
 
     eprintln!(
         "cisim: {}  ·  segment: {segments}  (↑↓ segment, C cisim, R yeniden)",

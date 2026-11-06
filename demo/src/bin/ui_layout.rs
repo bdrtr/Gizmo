@@ -218,8 +218,8 @@ fn main() {
 /// `Hovered`. Tıklamayı ayırt etmek isteyen iki karenin farkını kendisi tutmak zorunda, ve
 /// `gizmo-ui`'nin belgeleri bunu eksik olarak sayıyor.
 fn recolor_buttons(world: &mut World) {
-    let states: Vec<(u32, Interaction)> = {
-        world.query::<(Entity, &Interaction)>().unwrap().iter().map(|(entity, i)| (entity.id(), *i)).collect()
+    let states: Vec<(Entity, Interaction)> = {
+        world.query::<(Entity, &Interaction)>().unwrap().iter().map(|(entity, i)| (entity, *i)).collect()
     };
     let mut colors = world.borrow_mut::<BackgroundColor>();
     for (id, interaction) in states {
@@ -231,7 +231,7 @@ fn recolor_buttons(world: &mut World) {
 
 /// Tıklanan düğmenin sayacını artırır ve etiketine yazar. `Clicked` tam bir kare `true`.
 fn count_clicks(world: &mut World) {
-    let hits: Vec<u32> = world.query::<(Entity, &Clicked)>().unwrap().iter().filter(|(_, c)| c.0).map(|(entity, _)| entity.id()).collect();
+    let hits: Vec<Entity> = world.query::<(Entity, &Clicked)>().unwrap().iter().filter(|(_, c)| c.0).map(|(entity, _)| entity).collect();
     for id in hits {
         let text = {
             let mut counters = world.borrow_mut::<Counter>();

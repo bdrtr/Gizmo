@@ -58,8 +58,8 @@ struct Game {
     spawn: Timer,
     score: u32,
     lives: u32,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     auto: u32,
 }
 
@@ -86,13 +86,13 @@ fn main() {
             let hud = scene
                 .world
                 .spawn_bundle((Text::pinned("", font, 26.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-                .id();
+                ;
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.4), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
 
             if let Ok(mut audio) = AudioManager::new() {
                 audio.load_sound_bytes("pat", Blip::new(Wave::Noise, 2600.0, 0.12).with_slide(300.0).with_volume(0.45).wav());
@@ -181,7 +181,7 @@ fn rise(world: &mut World, game: &mut Game, dt: f32) {
         }
     }
     for id in escaped {
-        world.despawn_by_id(id.id());
+        world.despawn(id);
         game.lives = game.lives.saturating_sub(1);
         play(world, "kac");
     }
@@ -197,13 +197,13 @@ fn pop_at(world: &mut World, game: &mut Game, p: Vec3) {
     let hit = {
         let tfs = world.borrow::<Transform>();
         world.query::<(Entity, &Balloon)>().unwrap().iter()
-            .filter_map(|(entity, _)| tfs.get(entity).map(|t| (entity.id(), t.position)))
+            .filter_map(|(entity, _)| tfs.get(entity).map(|t| (entity, t.position)))
             .filter(|(_, at)| Vec2::new(at.x - p.x, at.y - p.y).length() < RADIUS)
             .map(|(id, _)| id)
             .next()
     };
     let Some(id) = hit else { return };
-    let Some(e) = world.get_entity(id) else { return };
+    let Some(e) = world.live(id) else { return };
     let colour = world.borrow::<Sprite>().get(id).map(|s| s.color).unwrap_or(Vec4::ONE);
     world.remove_component::<Balloon>(e);
     world.add_component(e, Tween::to_scale(Vec3::splat(1.8), 0.18).with_ease(Ease::OutQuad));
@@ -225,12 +225,12 @@ fn pop_at(world: &mut World, game: &mut Game, p: Vec3) {
 
 /// Solması biten patlamış balonları siler.
 fn clear_pops(world: &mut World) {
-    let done: Vec<u32> = {
+    let done: Vec<Entity> = {
         let fades = world.borrow::<ColorTween>();
-        world.query::<(Entity, &Popping)>().unwrap().iter().filter(|(entity, _)| fades.get(*entity).is_some_and(|f| f.is_finished())).map(|(entity, _)| entity.id()).collect()
+        world.query::<(Entity, &Popping)>().unwrap().iter().filter(|(entity, _)| fades.get(*entity).is_some_and(|f| f.is_finished())).map(|(entity, _)| entity).collect()
     };
     for id in done {
-        world.despawn_by_id(id);
+        world.despawn(id);
     }
 }
 

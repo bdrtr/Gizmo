@@ -13,7 +13,7 @@ pub struct ShakeUndo(Vec<Moved>);
 
 #[derive(Debug)]
 struct Moved {
-    id: u32,
+    id: Entity,
     yaw: f32,
     pitch: f32,
     position: Option<gizmo_math::Vec3>,
@@ -29,13 +29,13 @@ struct Moved {
 /// is not `p` in floating point, and a camera that drifts by an ulp a frame drifts for good.
 pub fn apply_camera_shake(world: &mut World, dt: f32) -> ShakeUndo {
     let mut undo = ShakeUndo::default();
-    let shaking: Vec<(u32, (gizmo_math::Vec3, f32, f32))> = {
+    let shaking: Vec<(Entity, (gizmo_math::Vec3, f32, f32))> = {
         let mut shakes = world.query_mut::<(Entity, Mut<CameraShake>)>().unwrap();
         shakes
             .iter_mut()
             .map(|(entity, mut s)| {
                 s.advance(dt);
-                (entity.id(), s.sample())
+                (entity, s.sample())
             })
             .collect()
     };
@@ -105,7 +105,7 @@ mod tests {
         let mut shake = CameraShake::default();
         shake.add(1.0);
         shake.decay = 0.0;
-        let id = world.spawn_bundle((cam, start, GlobalTransform::default(), shake)).id();
+        let id = world.spawn_bundle((cam, start, GlobalTransform::default(), shake));
         let global_before = *world.borrow::<GlobalTransform>().get(id).unwrap();
 
         for _ in 0..50 {
@@ -133,7 +133,7 @@ mod tests {
         let mut shake = CameraShake::default();
         shake.add(1.0);
         shake.max_angle = 0.0;
-        let id = world.spawn_bundle((cam, Transform::new(Vec3::ZERO), shake)).id();
+        let id = world.spawn_bundle((cam, Transform::new(Vec3::ZERO), shake));
         for _ in 0..20 {
             let undo = apply_camera_shake(&mut world, 0.05);
             let p = world.borrow::<Transform>().get(id).unwrap().position;

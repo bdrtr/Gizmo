@@ -40,7 +40,7 @@ const BUILD_CENTER: Vec3 = Vec3::new(0.0, 25.0, 0.0);
 // --------------------------------------------------------------- durum
 struct DestructionGame {
     // kamera
-    cam_id: u32,
+    cam_id: Entity,
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
@@ -101,7 +101,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> DestructionGame {
     ));
 
     DestructionGame {
-        cam_id: cam.id(),
+        cam_id: cam,
         cam_yaw,
         cam_pitch,
         cam_pos,

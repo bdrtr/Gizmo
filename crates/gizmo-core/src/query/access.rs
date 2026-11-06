@@ -106,7 +106,7 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     }
 
     #[inline]
-    fn get_inner<'a, K: super::QueryKey>(&'a self, key: K) -> Option<Q::Item<'a>> {
+    fn get_inner<'a, K: super::RowKey>(&'a self, key: K) -> Option<Q::Item<'a>> {
         let entity_id = key.slot();
         let loc = self.world.entity_location(entity_id);
         if !loc.is_valid() {
@@ -225,12 +225,12 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.iter_chunks_inner()
     }
 
-    /// Mutable access to one row, by [`Entity`](crate::entity::Entity) or raw id: see [`Query::get`].
+    /// Mutable access to one row: see [`Query::get`].
     /// Because it takes `&mut self` the returned `Mut` borrows the query exclusively; a second
     /// simultaneous `get_mut`/`iter_mut` does not compile.
     #[inline]
-    pub fn get_mut(&mut self, key: impl super::QueryKey) -> Option<Q::Item<'_>> {
-        self.get_inner(key)
+    pub fn get_mut(&mut self, entity: crate::entity::Entity) -> Option<Q::Item<'_>> {
+        self.get_inner(entity)
     }
 
     /// Every unordered `K`-element combination of matching rows, **all of them writable**.
@@ -300,18 +300,17 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
     /// [`World::entity`](crate::world::World::entity) (it is never given the world). This is the
     /// same lookup through the world the query already holds, so a system can turn an id into a
     /// handle for `Commands` or for storing, without forging one with `Entity::new(id, 0)` — which
-    /// compiles and is wrong for every recycled id. Reads the allocator under its lock, as
-    /// `Commands` does, so it is safe from systems running in parallel. It reads no component, so
-    /// a query that writes has it too.
+    /// compiles and is wrong for every recycled id. It reads no component, so a query that
+    /// writes has it too.
     pub fn entity(&self, entity_id: u32) -> Option<crate::entity::Entity> {
         self.world.entity(entity_id)
     }
 
-    /// The id of `entity` if it is still alive: how to follow a stored handle, such as a
+    /// `entity` if it is still alive: how to follow a stored handle, such as a
     /// [`Parent`](crate::component::Parent) or an entry of [`Children`](crate::component::Children),
     /// to the row it means. `None` for a dead one, whose id may belong to someone else by now.
-    pub fn live(&self, entity: crate::entity::Entity) -> Option<u32> {
-        self.world.is_alive(entity).then_some(entity.id())
+    pub fn live(&self, entity: crate::entity::Entity) -> Option<crate::entity::Entity> {
+        self.world.is_alive(entity).then_some(entity)
     }
 
     /// Total rows held by the matching archetypes — an **upper bound** on what iteration
@@ -449,18 +448,17 @@ impl<'w, Q: ReadOnlyQuery> Query<'w, Q> {
         self.single_inner()
     }
 
-    /// One row, by [`Entity`](crate::entity::Entity) or raw id. An `Entity` is checked against the row,
-    /// so one that has died returns `None` even after its slot went to someone else. **A raw id cannot
-    /// tell them apart** and returns whoever holds the slot now.
+    /// One row. It is checked against the row, so a dead entity returns `None` even after its slot went
+    /// to someone else.
     #[inline]
-    pub fn get(&self, key: impl super::QueryKey) -> Option<Q::Item<'_>> {
-        self.get_inner(key)
+    pub fn get(&self, entity: crate::entity::Entity) -> Option<Q::Item<'_>> {
+        self.get_inner(entity)
     }
 
     /// Checks whether a given entity belongs to this query.
     #[inline]
-    pub fn contains(&self, key: impl super::QueryKey) -> bool {
-        self.get_inner(key).is_some()
+    pub fn contains(&self, entity: crate::entity::Entity) -> bool {
+        self.get_inner(entity).is_some()
     }
 
     /// Lock-free parallel iteration running on the thread pool (Work-Stealing)

@@ -124,7 +124,7 @@ fn a_saved_scene_comes_back_with_its_meshes_lights_and_camera() {
 
         let floor = loaded.query::<(Entity, &EntityName)>().unwrap().iter()
             .find(|(_, n)| n.0 == "Zemin")
-            .map(|(entity, _)| entity.id())
+            .map(|(entity, _)| entity)
             .expect("adlar da dosyadan geliyor");
         let t = transforms.get(floor).expect("zeminin transform'u");
         assert_eq!(t.position, Vec3::new(0.0, -1.0, 0.0));

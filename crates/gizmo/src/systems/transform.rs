@@ -135,7 +135,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
                     if let Some(children) = children_q.get(entity) {
                         for &child in &children.0 {
                             if world.is_alive(child) && visited.insert(child.id()) {
-                                queue.push((global.matrix, child.id()));
+                                queue.push((global.matrix, child));
                             }
                         }
                     }
@@ -168,7 +168,7 @@ impl gizmo_core::system::System for TransformPropagateSystem {
                         if let Some(children) = cq.get(current_id) {
                             for &child in &children.0 {
                                 if world.is_alive(child) && visited.insert(child.id()) {
-                                    queue.push((global.matrix, child.id()));
+                                    queue.push((global.matrix, child));
                                 }
                             }
                         }
@@ -406,7 +406,7 @@ mod tests {
     // disappears — so the two directions are not equally cheap to get wrong.
 
     /// A hierarchy of `roots` roots, each with one child and one grandchild.
-    fn spawn_chain(world: &mut World, roots: usize) -> Vec<[u32; 3]> {
+    fn spawn_chain(world: &mut World, roots: usize) -> Vec<[Entity; 3]> {
         let mut out = Vec::with_capacity(roots);
         for i in 0..roots {
             let r = world.spawn();
@@ -438,15 +438,15 @@ mod tests {
             // both a root and a child and gets written twice per frame.
             world.add_component(c, gizmo_core::component::Parent(r));
             world.add_component(g, gizmo_core::component::Parent(c));
-            out.push([r.id(), c.id(), g.id()]);
+            out.push([r, c, g]);
         }
         out
     }
 
-    fn changed_globals(world: &World) -> Vec<u32> {
-        let mut ids: Vec<u32> = world
+    fn changed_globals(world: &World) -> Vec<Entity> {
+        let mut ids: Vec<Entity> = world
             .query::<(Entity, gizmo_core::query::Changed<GlobalTransform>)>()
-            .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
+            .map(|q| q.iter().map(|(entity, _)| entity).collect())
             .unwrap_or_default();
         ids.sort_unstable();
         ids
@@ -482,7 +482,7 @@ mod tests {
         propagate_in_new_frame(&mut world);
         assert_eq!(
             changed_globals(&world),
-            Vec::<u32>::new(),
+            Vec::<Entity>::new(),
             "an unmoved hierarchy must not stamp GlobalTransform: `Changed` matching 100% of \
              the scene is what makes a change-driven refresh cost the same as no filter at all"
         );

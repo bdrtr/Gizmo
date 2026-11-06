@@ -36,7 +36,7 @@ pub struct AssetServer {
     /// Keyed by path as well as entity so re-assigning a texture in the inspector is a new request
     /// rather than a permanently suppressed one. Entries are never removed: the material stays
     /// near the camera and keeps its path, which is exactly the condition that would re-request.
-    pub streaming_requested: std::collections::HashSet<(u32, String)>,
+    pub streaming_requested: std::collections::HashSet<(gizmo_core::Entity, String)>,
     #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
     /// The file watcher behind hot reload; `None` when the asset directory could not be watched.
     pub watcher: Option<crate::renderer::hot_reload::AssetWatcher>,

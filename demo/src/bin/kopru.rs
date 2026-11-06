@@ -86,13 +86,13 @@ struct Game {
     /// Kurma: seçili ilk düğüm.
     picked: Option<usize>,
     /// Deneme: her kirişin cismi, ve her eklemin hangi kirişe ait olduğu.
-    bodies: Vec<u32>,
+    bodies: Vec<Entity>,
     joint_beam: Vec<usize>,
-    ball: u32,
-    previews: Vec<u32>,
-    nodes: Vec<u32>,
-    hud: u32,
-    banner: u32,
+    ball: Entity,
+    previews: Vec<Entity>,
+    nodes: Vec<Entity>,
+    hud: Entity,
+    banner: Entity,
     clock: f32,
     result: Option<bool>,
     auto: bool,
@@ -148,15 +148,14 @@ fn setup(world: &mut World, font: FontId) -> Game {
                     MaterialDesc::new().with_unlit(colour),
                     MeshRenderer::new(),
                 ))
-                .id()
         })
         .collect();
-    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.2), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     let auto = std::env::var_os("KOPRU_OTO").is_some();
     let mut game = Game {
         physics: FixedPhysics::new(120),
@@ -165,7 +164,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
         picked: None,
         bodies: Vec::new(),
         joint_beam: Vec::new(),
-        ball: 0,
+        ball: Entity::new(0, 0),
         previews: Vec::new(),
         nodes: node_ids,
         hud,
@@ -334,7 +333,7 @@ fn beam_transform(a: Vec3, b: Vec3) -> (Vec3, Quat, f32) {
 /// Kurma kipinde kirişlerin yalnızca görünüşü.
 fn rebuild_previews(world: &mut World, game: &mut Game) {
     for id in game.previews.drain(..) {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn(e);
         }
     }
@@ -349,7 +348,7 @@ fn rebuild_previews(world: &mut World, game: &mut Game) {
                 MaterialDesc::new().with_pbr(Vec4::new(0.6, 0.45, 0.25, 1.0), 0.8, 0.0),
                 MeshRenderer::new(),
             ))
-            .id();
+            ;
         game.previews.push(id);
     }
 }
@@ -357,14 +356,14 @@ fn rebuild_previews(world: &mut World, game: &mut Game) {
 /// Kirişleri cisme, düğümleri eklemlere çevirir ve topu bırakır.
 fn start_test(world: &mut World, game: &mut Game) {
     for id in game.previews.drain(..) {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn(e);
         }
     }
     let all = nodes();
-    let cliff_body: Vec<(u32, Vec3)> = world.query::<(Entity, &RigidBody)>().unwrap().iter()
+    let cliff_body: Vec<(Entity, Vec3)> = world.query::<(Entity, &RigidBody)>().unwrap().iter()
         .filter(|(_, rb)| rb.is_static())
-        .filter_map(|(entity, _)| world.borrow::<Transform>().get(entity).map(|t| (entity.id(), t.position)))
+        .filter_map(|(entity, _)| world.borrow::<Transform>().get(entity).map(|t| (entity, t.position)))
         .collect();
     let mut joints = Vec::new();
     game.bodies.clear();
@@ -389,7 +388,7 @@ fn start_test(world: &mut World, game: &mut Game) {
                 collider,
                 BeamBody,
             ))
-            .id();
+            ;
         let look = world.spawn_bundle((
             Transform::new(Vec3::ZERO).with_scale(Vec3::new(half, BEAM_HALF_THICK, 0.25)),
             GlobalTransform::default(),
@@ -399,7 +398,7 @@ fn start_test(world: &mut World, game: &mut Game) {
         ));
         {
             use gizmo::core::hierarchy::HierarchyExt;
-            let parent = world.get_entity(id).expect("just spawned");
+            let parent = world.live(id).expect("just spawned");
             world.add_child(parent, look);
         }
         game.bodies.push(id);
@@ -428,7 +427,7 @@ fn start_test(world: &mut World, game: &mut Game) {
     if let Some(mut physics) = world.get_resource_mut::<PhysicsWorld>() {
         physics.joints.clear();
         for (beam, a, end_a, b, end_b) in joints {
-            let mut joint = Joint::ball_socket(BodyHandle::from_id(a), BodyHandle::from_id(b), end_a, end_b);
+            let mut joint = Joint::ball_socket(BodyHandle::from_id(a.id()), BodyHandle::from_id(b.id()), end_a, end_b);
             joint.break_force = BREAK_FORCE;
             physics.joints.push(joint);
             game.joint_beam.push(beam);
@@ -447,7 +446,7 @@ fn start_test(world: &mut World, game: &mut Game) {
             Velocity { linear: Vec3::new(6.0, 0.0, 0.0), ..Default::default() },
             Collider::sphere(BALL_R),
         ))
-        .id();
+        ;
     game.physics.reset();
     game.mode = Mode::Test;
     game.clock = 0.0;
@@ -456,7 +455,7 @@ fn start_test(world: &mut World, game: &mut Game) {
 
 fn stop_test(world: &mut World, game: &mut Game) {
     for id in game.bodies.drain(..).chain(std::iter::once(game.ball)) {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             use gizmo::core::hierarchy::HierarchyExt;
             world.despawn_recursive(e);
         }
@@ -528,7 +527,7 @@ fn hud(world: &mut World, game: &Game) {
     set_text(world, game.banner, banner);
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

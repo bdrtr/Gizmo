@@ -14,6 +14,7 @@
 //!   Tier 3 — kısıt/eklem: sarkaç periyodu (2π√(L/g)), hinge uzunluk-koruması
 //!   Tier 4 — invaryant: sürtünmesiz zincirde momentum korunumu
 
+use gizmo_core::Entity;
 use gizmo_core::world::World;
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics_core::components::{CombineMode, PhysicsMaterial};
@@ -34,13 +35,13 @@ fn scene(gravity: Vec3) -> World {
     w
 }
 
-fn spawn(world: &mut World, t: Transform, rb: RigidBody, v: Velocity, c: Collider) -> u32 {
+fn spawn(world: &mut World, t: Transform, rb: RigidBody, v: Velocity, c: Collider) -> Entity {
     let e = world.spawn();
     world.add_component(e, t);
     world.add_component(e, rb);
     world.add_component(e, v);
     world.add_component(e, c);
-    e.id()
+    e
 }
 
 fn floor(world: &mut World, top_y: f32) {
@@ -57,13 +58,13 @@ fn step(world: &World, n: usize) {
     }
 }
 
-fn pos(world: &World, id: u32) -> Vec3 {
+fn pos(world: &World, id: Entity) -> Vec3 {
     world.borrow::<Transform>().get(id).unwrap().position
 }
-fn vel(world: &World, id: u32) -> Vec3 {
+fn vel(world: &World, id: Entity) -> Vec3 {
     world.borrow::<Velocity>().get(id).map(|v| v.linear).unwrap_or(Vec3::ZERO)
 }
-fn angvel(world: &World, id: u32) -> Vec3 {
+fn angvel(world: &World, id: Entity) -> Vec3 {
     world.borrow::<Velocity>().get(id).map(|v| v.angular).unwrap_or(Vec3::ZERO)
 }
 
@@ -265,7 +266,7 @@ fn t1_friction_stops_a_sliding_box() {
 // TIER 2 — İki-cisim çarpışma: momentum/enerji kapalı-formu.
 // ═══════════════════════════════════════════════════════════════════════════
 
-fn ball_at(world: &mut World, x: f32, vx: f32, mass: f32, mat: PhysicsMaterial) -> u32 {
+fn ball_at(world: &mut World, x: f32, vx: f32, mass: f32, mat: PhysicsMaterial) -> Entity {
     let mut rb = RigidBody::new(mass, false);
     rb.calculate_sphere_inertia(0.5);
     spawn(
@@ -311,7 +312,7 @@ fn t2_inelastic_bodies_move_together() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Tek hinge sarkacı kur: (dünya, top_id, pivot). Kiriş sabit çapa, top L uzakta.
-fn build_pendulum(l: f32, angle_deg: f32) -> (World, u32, Vec3) {
+fn build_pendulum(l: f32, angle_deg: f32) -> (World, Entity, Vec3) {
     let py = 6.0;
     let pivot = Vec3::new(0.0, py, 0.0);
     let mut w = World::new();
@@ -341,7 +342,7 @@ fn build_pendulum(l: f32, angle_deg: f32) -> (World, u32, Vec3) {
         Vec3::Z,
     ));
     w.insert_resource(phys);
-    (w, ball.id(), pivot)
+    (w, ball, pivot)
 }
 
 #[test]

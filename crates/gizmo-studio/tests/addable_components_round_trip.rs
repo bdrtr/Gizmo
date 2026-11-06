@@ -138,7 +138,7 @@ fn a_particle_emitter_a_terrain_and_a_bone_attachment_survive_the_file() {
     let _ = std::fs::remove_file(&path);
 
     let id = loaded.query::<(Entity, &Transform)>().unwrap().iter()
-        .map(|(entity, _)| entity.id())
+        .map(|(entity, _)| entity)
         .next()
         .expect("the entity survived");
 
@@ -212,7 +212,7 @@ fn a_material_description_survives_the_file() {
     let _ = std::fs::remove_file(&path);
 
     let id = loaded.query::<(Entity, &Transform)>().unwrap().iter()
-        .map(|(entity, _)| entity.id())
+        .map(|(entity, _)| entity)
         .next()
         .expect("the entity survived");
     let descs = loaded.borrow::<MaterialDesc>();
@@ -261,7 +261,7 @@ fn a_nav_agent_survives_the_file_with_its_tuning_and_not_its_route() {
     let _ = std::fs::remove_file(&path);
 
     let id = loaded.query::<(Entity, &Transform)>().unwrap().iter()
-        .map(|(entity, _)| entity.id())
+        .map(|(entity, _)| entity)
         .next()
         .expect("the entity survived");
 
@@ -315,7 +315,7 @@ fn a_graded_camera_survives_the_file_with_its_look_and_its_exposure() {
     let _ = std::fs::remove_file(&path);
 
     let id = loaded.query::<(Entity, &Transform)>().unwrap().iter()
-        .map(|(entity, _)| entity.id())
+        .map(|(entity, _)| entity)
         .next()
         .expect("the entity survived");
 
@@ -537,7 +537,7 @@ fn a_mesh_renderers_lod_bias_and_shadow_mode_survive_the_file() {
     let _ = std::fs::remove_file(&path);
 
     let id = loaded.query::<(Entity, &Transform)>().unwrap().iter()
-        .map(|(entity, _)| entity.id())
+        .map(|(entity, _)| entity)
         .next()
         .expect("the entity survived");
 

@@ -101,19 +101,19 @@ pub fn ui_layout_system(
     //    20 px tall and there would be nothing to scroll. (CSS has the same trap and makes you
     //    write `flex-shrink: 0`; a list that has to be told not to squash its rows is no list.)
     for (entity, style) in styles.iter() {
-        current_entities.insert(entity.id());
+        current_entities.insert(entity);
         // (`get_mut` only to ask: a `Mut` marks a change on write, not on fetch.)
         let in_scroll = match parents.get(entity) {
-            Some(p) => parents.live(p.0).is_some_and(|id| scrolls.get_mut(id).is_some()),
+            Some(p) => scrolls.get_mut(p.0).is_some(),
             None => false,
         };
         if in_scroll && style.flex_shrink != 0.0 {
-            ctx.sync_style(entity.id(), &Style { flex_shrink: 0.0, ..*style });
+            ctx.sync_style(entity, &Style { flex_shrink: 0.0, ..*style });
         } else if parents.get(entity).is_none() && style.position_type == crate::components::PositionType::Absolute {
             let stretched = stretched_root(style, ctx.window_size);
-            ctx.sync_style(entity.id(), &stretched);
+            ctx.sync_style(entity, &stretched);
         } else {
-            ctx.sync_style(entity.id(), style);
+            ctx.sync_style(entity, style);
         }
     }
 
@@ -126,7 +126,7 @@ pub fn ui_layout_system(
     // A root is any node without a Parent, or without a parent that has a Style.
     // Technically we should check if the parent also has a Style.
     // For simplicity, we assume the ECS hierarchy accurately represents the UI tree.
-    let roots: Vec<u32> = current_entities
+    let roots: Vec<Entity> = current_entities
         .iter()
         .copied()
         .filter(|&entity| parents.get(entity).is_none())
@@ -158,18 +158,18 @@ pub fn ui_layout_system(
     // whenever an unstyled entity's `Children` happens to name a UI entity, which a scene file
     // is free to say. Before this pass descended the graph it could not happen: the loop was
     // over `styles.iter()`, so only a styled entity ever wrote a child list.
-    let mut mirrored: std::collections::HashSet<u32> = roots.iter().copied().collect();
+    let mut mirrored: std::collections::HashSet<Entity> = roots.iter().copied().collect();
     // The adjacency the mirror actually handed taffy, pruned exactly as taffy received it.
     // Step 5 walks THIS rather than `Children` — see the comment there for why the two must
     // not be allowed to disagree.
-    let mut mirrored_children: std::collections::HashMap<u32, Vec<u32>> =
+    let mut mirrored_children: std::collections::HashMap<Entity, Vec<Entity>> =
         std::collections::HashMap::new();
     let mut to_mirror = roots.clone();
     while let Some(entity) = to_mirror.pop() {
         if !ctx.is_tracked(entity) {
             continue;
         }
-        let kids: Vec<u32> = match children.get(entity) {
+        let kids: Vec<Entity> = match children.get(entity) {
             Some(children_comp) => children_comp
                 .0
                 .iter()
@@ -183,8 +183,8 @@ pub fn ui_layout_system(
         mirrored_children.insert(entity, kids);
     }
     for (entity, _) in styles.iter() {
-        if !mirrored.contains(&entity.id()) {
-            ctx.set_children(entity.id(), &[]);
+        if !mirrored.contains(&entity) {
+            ctx.set_children(entity, &[]);
         }
     }
 
@@ -212,7 +212,7 @@ pub fn ui_layout_system(
     // its `inset` places it in the window (taffy always puts the root it lays out at the origin,
     // so this is the one place that can).
     let window_size = ctx.window_size;
-    let mut stack: Vec<(u32, gizmo_math::Vec2)> = roots
+    let mut stack: Vec<(Entity, gizmo_math::Vec2)> = roots
         .iter()
         .map(|&e| {
             let origin = match (styles.get(e), ctx.relative_layout(e)) {
@@ -573,7 +573,7 @@ mod tests {
         // pinning down the accumulation logic under test.
         let (loc_root, loc_mid, loc_leaf) = {
             let ctx = world.get_resource::<UiContext>().unwrap();
-            let rel = |e: Entity| ctx.relative_layout(e.id()).unwrap().1;
+            let rel = |e: Entity| ctx.relative_layout(e).unwrap().1;
             (rel(root), rel(mid), rel(leaf))
         };
 
@@ -890,7 +890,7 @@ mod tests {
         schedule.run(&mut world, 0.016);
         {
             let ctx = world.get_resource::<UiContext>().unwrap();
-            assert!(ctx.is_tracked(e.id()), "node mapped after first frame");
+            assert!(ctx.is_tracked(e), "node mapped after first frame");
             assert_eq!(ctx.tracked_count(), 1);
             assert_eq!(ctx.node_count(), 1);
         }
@@ -901,7 +901,7 @@ mod tests {
         schedule.run(&mut world, 0.016);
         {
             let ctx = world.get_resource::<UiContext>().unwrap();
-            assert!(!ctx.is_tracked(e.id()), "mapping evicted");
+            assert!(!ctx.is_tracked(e), "mapping evicted");
             assert_eq!(ctx.tracked_count(), 0);
             assert_eq!(ctx.node_count(), 0, "layout node freed");
         }

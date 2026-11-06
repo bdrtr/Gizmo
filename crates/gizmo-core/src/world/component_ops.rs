@@ -983,7 +983,7 @@ impl World {
     ///
     /// let q = world.query::<&Team>().unwrap();
     /// assert_eq!(q.iter().count(), 3);
-    /// assert_eq!(q.get(ids[2].id()).unwrap().0, 2);
+    /// assert_eq!(q.get(ids[2]).unwrap().0, 2);
     /// ```
     ///
     /// **A repeated entity in `entities` is applied once.** Duplicates are collapsed rather than

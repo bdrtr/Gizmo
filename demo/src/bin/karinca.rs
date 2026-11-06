@@ -54,7 +54,7 @@ gizmo::core::impl_component!(Wall);
 struct Pile {
     at: Vec3,
     food: u32,
-    marker: Option<u32>,
+    marker: Option<Entity>,
 }
 
 struct Colony {
@@ -120,9 +120,9 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
     let ms = t0.elapsed().as_secs_f32() * 1000.0;
     colony.worst_ai_ms = colony.worst_ai_ms.max(ms);
     colony.recent_ai_ms = colony.recent_ai_ms * 0.95 + ms * 0.05;
-    let moves: Vec<(u32, Vec3)> = world.query::<(Entity, &Velocity)>().unwrap().iter().map(|(entity, v)| (entity.id(), v.linear)).collect();
+    let moves: Vec<(Entity, Vec3)> = world.query::<(Entity, &Velocity)>().unwrap().iter().map(|(entity, v)| (entity, v.linear)).collect();
     // Duvarın içine yürümesin: bir sonraki hücre kapalıysa durur, yol bulucu çevirir.
-    let steps: Vec<(u32, Vec3)> = {
+    let steps: Vec<(Entity, Vec3)> = {
         let grid = world.get_resource::<NavGrid>();
         let ts = world.borrow::<Transform>();
         moves
@@ -138,11 +138,11 @@ fn step(world: &mut World, colony: &mut Colony, dt: f32, visual: bool) {
             t.position = next;
         }
     }
-    let ants: Vec<(u32, Ant, Vec3, bool)> = {
+    let ants: Vec<(Entity, Ant, Vec3, bool)> = {
         let ts = world.borrow::<Transform>();
         let ag = world.borrow::<NavAgent>();
         world.query::<(Entity, &Ant)>().unwrap().iter()
-            .filter_map(|(entity, ant)| Some((entity.id(), *ant, ts.get(entity)?.position, ag.get(entity).is_some_and(|n| n.route_failed()))))
+            .filter_map(|(entity, ant)| Some((entity, *ant, ts.get(entity)?.position, ag.get(entity).is_some_and(|n| n.route_failed()))))
             .collect()
     };
     for (id, mut ant, pos, failed) in ants {
@@ -204,9 +204,9 @@ fn set_wall(world: &mut World, cell: (i32, i32), on: bool, visual: bool) {
             g.remove_obstacle_world(at);
         }
     }
-    let existing: Option<u32> = {
+    let existing: Option<Entity> = {
         let ts = world.borrow::<Transform>();
-        world.query::<(Entity, &Wall)>().unwrap().iter().map(|(entity, _)| entity.id()).find(|id| ts.get(*id).is_some_and(|t| (t.position.x - at.x).abs() < 0.1 && (t.position.z - at.z).abs() < 0.1))
+        world.query::<(Entity, &Wall)>().unwrap().iter().map(|(entity, _)| entity).find(|id| ts.get(*id).is_some_and(|t| (t.position.x - at.x).abs() < 0.1 && (t.position.z - at.z).abs() < 0.1))
     };
     match (on, existing) {
         (true, None) => {
@@ -221,7 +221,7 @@ fn set_wall(world: &mut World, cell: (i32, i32), on: bool, visual: bool) {
             }
         }
         (false, Some(id)) => {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.despawn(e);
             }
         }
@@ -284,7 +284,7 @@ fn self_test() -> bool {
 
 struct Game {
     colony: Colony,
-    hud: u32,
+    hud: Entity,
 }
 
 fn main() {
@@ -324,7 +324,7 @@ fn main() {
             for pile in &mut colony.piles {
                 pile.marker = Some(spawn_pile_marker(scene.world, pile.at));
             }
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             scene.world.insert_resource(Game { colony, hud });
         })
         .replace_update(update)
@@ -332,7 +332,7 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-fn spawn_pile_marker(world: &mut World, at: Vec3) -> u32 {
+fn spawn_pile_marker(world: &mut World, at: Vec3) -> Entity {
     world
         .spawn_bundle((
             Transform::new(at + Vec3::Y * 0.3).with_scale(Vec3::splat(0.8)),
@@ -341,7 +341,7 @@ fn spawn_pile_marker(world: &mut World, at: Vec3) -> u32 {
             MaterialDesc::new().with_pbr(Color::srgb_hex("#7CB342").to_vec4(), 0.6, 0.0),
             MeshRenderer::new(),
         ))
-        .id()
+        
 }
 
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
@@ -361,13 +361,13 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
     }
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        let gone: Vec<u32> = world.query::<(Entity, &Ant)>().unwrap().iter()
-            .map(|(entity, _)| entity.id())
-            .chain(world.query::<(Entity, &Wall)>().unwrap().iter().map(|(entity, _)| entity.id()))
+        let gone: Vec<Entity> = world.query::<(Entity, &Ant)>().unwrap().iter()
+            .map(|(entity, _)| entity)
+            .chain(world.query::<(Entity, &Wall)>().unwrap().iter().map(|(entity, _)| entity))
             .chain(game.colony.piles.iter().filter_map(|p| p.marker))
             .collect();
         for id in gone {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.despawn(e);
             }
         }

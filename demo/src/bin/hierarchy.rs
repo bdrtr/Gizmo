@@ -72,7 +72,7 @@ gizmo::core::impl_component!(Node);
 /// Ağacın o anki durumu ve ölçüm defteri.
 #[derive(Default, Clone)]
 struct Tree {
-    root: Option<u32>,
+    root: Option<Entity>,
     /// Kökün `Children` listesindeki kayıt sayısı — HUD bunu okur.
     listed: usize,
     /// Bu kayıtların kaçı gerçekten yaşayan bir varlığı gösteriyor.
@@ -205,11 +205,11 @@ fn tick(
         tree.restart = true;
     }
 
-    let living: Vec<u32> = nodes.iter().map(|(entity, _)| entity.id()).collect();
+    let living: Vec<Entity> = nodes.iter().map(|(entity, _)| entity).collect();
     let (mut listed, mut alive) = (0, 0);
     for (children, _) in roots.iter() {
         listed += children.0.len();
-        alive += children.0.iter().filter(|c| living.contains(&c.id())).count();
+        alive += children.0.iter().filter(|c| living.contains(c)).count();
     }
     tree.listed = listed;
     tree.alive = alive;
@@ -229,25 +229,23 @@ fn advance_stages(world: &mut gizmo::core::World) {
         return;
     }
     let Some(root_id) = root else { return };
-    let Some(root_entity) = world.get_entity(root_id) else {
-        return;
-    };
+    let root_entity = root_id;
 
     // Kökün çocuk listesinin bir kopyası — listeyi tutan bileşeni ödünç alırken dünyayı
     // değiştiremeyiz.
-    let children: Vec<u32> = world
+    let children: Vec<Entity> = world
         .query::<(Entity, &Children)>()
         .and_then(|q| {
             q.iter()
-                .find(|(entity, _)| (*entity).id() == root_id)
-                .map(|(_, c)| c.0.iter().map(|e| e.id()).collect())
+                .find(|(entity, _)| *entity == root_id)
+                .map(|(_, c)| c.0.to_vec())
         })
         .unwrap_or_default();
 
     match stage {
         // 2 s: son çocuğu DÜZ despawn ile öldür — bakım çağrısına uğramadan.
         0 if elapsed >= 2.0 => {
-            if let Some(last) = children.last().and_then(|id| world.get_entity(*id)) {
+            if let Some(last) = children.last().and_then(|id| world.get_entity((*id).id())) {
                 world.despawn(last);
                 note(
                     world,
@@ -258,10 +256,10 @@ fn advance_stages(world: &mut gizmo::core::World) {
         }
         // 3 s: defteri elle temizle — motorun bu iş için verdiği çağrı.
         1 if elapsed >= 3.0 => {
-            let dead: Vec<u32> = children
+            let dead: Vec<Entity> = children
                 .iter()
                 .copied()
-                .filter(|id| world.get_entity(*id).is_none())
+                .filter(|id| world.get_entity((*id).id()).is_none())
                 .collect();
             for id in &dead {
                 // Ölü kimlik için `Entity` üretilemiyor; `remove_child` yaşayan bir tanesini
@@ -291,8 +289,8 @@ fn advance_stages(world: &mut gizmo::core::World) {
 }
 
 /// Kökün `Children` listesinden ölü bir kimliği çıkarır.
-fn prune_child(world: &mut gizmo::core::World, root_id: u32, dead_id: u32) {
-    let Some(root) = world.get_entity(root_id) else {
+fn prune_child(world: &mut gizmo::core::World, root_id: Entity, dead_id: Entity) {
+    let Some(root) = world.live(root_id) else {
         return;
     };
     let Some(ptr) = world.get_component_mut_ptr(root, std::any::TypeId::of::<Children>()) else {
@@ -302,7 +300,7 @@ fn prune_child(world: &mut gizmo::core::World, root_id: u32, dead_id: u32) {
     // gösteriyor; `&mut World` üzerinden alındığı için tek canlı referans bu, ve blok içinde
     // hiçbir yapısal değişiklik olmuyor.
     let children = unsafe { &mut *(ptr as *mut Children) };
-    children.0.retain(|c| c.id() != dead_id);
+    children.0.retain(|c| *c != dead_id);
 }
 
 /// Deftere bir satır yazar.
@@ -342,7 +340,7 @@ fn build_tree(world: &mut gizmo::core::World, cube: &Mesh, template: &Material) 
     world.add_child(root, child_b);
 
     if let Some(mut tree) = world.get_resource_mut::<Tree>() {
-        tree.root = Some(root.id());
+        tree.root = Some(root);
         tree.elapsed = 0.0;
         tree.stage = 0;
         tree.log = vec!["0,0 s — kök + iki çocuk bağlandı".to_string()];
@@ -352,12 +350,12 @@ fn build_tree(world: &mut gizmo::core::World, cube: &Mesh, template: &Material) 
 
 /// **R**: kalan düğümleri silip ağacı yeniden kurar.
 fn rebuild(world: &mut gizmo::core::World) {
-    let doomed: Vec<u32> = world
+    let doomed: Vec<Entity> = world
         .query::<(Entity, &Node)>()
-        .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
+        .map(|q| q.iter().map(|(entity, _)| entity).collect())
         .unwrap_or_default();
     for id in doomed {
-        if let Some(entity) = world.get_entity(id) {
+        if let Some(entity) = world.live(id) {
             world.despawn(entity);
         }
     }

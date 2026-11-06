@@ -52,7 +52,7 @@ impl<'a> Commands<'a> {
                     spawn_gltf_node_flat(
                         self.world,
                         node,
-                        root.id(),
+                        root,
                         default_mat.clone(),
                         attach_colliders,
                         &skeletons,
@@ -152,7 +152,7 @@ impl<'a> Commands<'a> {
                     spawn_gltf_node_flat(
                         self.world,
                         node,
-                        root.id(),
+                        root,
                         default_mat.clone(),
                         attach_colliders,
                         &skeletons,
@@ -212,7 +212,7 @@ impl<'a> Commands<'a> {
 fn spawn_gltf_node_flat(
     world: &mut World,
     node: &gizmo_renderer::asset::GltfNodeData,
-    parent_id: u32,
+    parent_id: Entity,
     default_mat: Material,
     attach_colliders: bool,
     skeletons: &[gizmo_renderer::components::Skeleton],
@@ -221,7 +221,7 @@ fn spawn_gltf_node_flat(
     let entity = world.spawn();
     let name = node.name.clone().unwrap_or_else(|| "GLTF_Node".to_string());
     world.add_component(entity, EntityName(name));
-    if let Some(parent) = world.entity(parent_id) {
+    if let Some(parent) = world.live(parent_id) {
         world.add_component(entity, Parent(parent));
     }
     world.add_component(entity, Children(Vec::new()));
@@ -333,7 +333,7 @@ fn spawn_gltf_node_flat(
         spawn_gltf_node_flat(
             world,
             child_node,
-            entity.id(),
+            entity,
             default_mat.clone(),
             attach_colliders,
             skeletons,

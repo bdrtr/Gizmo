@@ -257,7 +257,7 @@ fn the_headless_runtime_accepts_a_plugin_in_a_windowed_build() {
         app.world.apply_commands();
     }
     assert!(
-        app.world.entity(e.id()).is_none(),
+        app.world.live(e).is_none(),
         "the plugin's despawn system did not run in the headless app"
     );
 }

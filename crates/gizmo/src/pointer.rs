@@ -34,7 +34,7 @@ pub fn cursor_ray(world: &World) -> Option<Ray> {
     let cameras = world.borrow::<Camera>();
     // A viewport camera under the cursor, else the camera the frame is drawn through.
     let in_viewport = world.query::<(Entity, &Camera)>().unwrap().iter()
-        .filter_map(|(entity, c)| c.viewport.map(|v| (entity.id(), c.order, v)))
+        .filter_map(|(entity, c)| c.viewport.map(|v| (entity, c.order, v)))
         .filter(|(_, _, v)| {
             let (x, y) = (cursor.0 / window.0, cursor.1 / window.1);
             x >= v.x && x < v.x + v.width && y >= v.y && y < v.y + v.height
@@ -103,8 +103,8 @@ pub fn world_to_screen(world: &World, point: Vec3) -> Option<crate::math::Vec2> 
 /// ([`world_position`](crate::systems::transform::world_position)). It used to read
 /// `GlobalTransform` first, which in game code is a frame behind: a camera spawned this frame read
 /// as the origin, and one following a player was a frame late against the frame it renders.
-fn camera_position(world: &World, id: u32) -> Option<Vec3> {
-    crate::systems::transform::world_position(world, world.get_entity(id)?)
+fn camera_position(world: &World, id: Entity) -> Option<Vec3> {
+    crate::systems::transform::world_position(world, world.live(id)?)
 }
 
 #[cfg(test)]

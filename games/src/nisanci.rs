@@ -80,10 +80,10 @@ struct Bullet {
 gizmo::core::impl_component!(Bullet);
 
 struct Game {
-    player: u32,
-    camera: u32,
-    hud: u32,
-    banner: u32,
+    player: Entity,
+    camera: Entity,
+    hud: Entity,
+    banner: Entity,
     rng: Rng,
     fire: Timer,
     spawn: Timer,
@@ -96,7 +96,7 @@ struct Game {
     auto: bool,
     t: f32,
     /// Dokunmatik çubuklar: ilk dokunuşta kuruluyor (hareket, nişan).
-    sticks: Option<(u32, u32)>,
+    sticks: Option<(Entity, Entity)>,
     /// Son canın gittiği an (`t`): bir saniye geçmeden gelen dokunuş oyunu yeniden başlatmıyor.
     ended_at: f32,
 }
@@ -126,7 +126,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
             MeshRenderer::new(),
             Player,
         ))
-        .id();
+        ;
     let camera = world
         .spawn_bundle(CameraBundle {
             position: Vec3::new(0.0, CAMERA_HEIGHT, CAMERA_BACK),
@@ -135,24 +135,24 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
             primary: true,
             ..Default::default()
         })
-        .id();
+        ;
     let mut shake = CameraShake::default();
     shake.max_offset = 0.25;
     shake.max_angle = 0.0;
     shake.decay = 1.6;
-    if let Some(e) = world.get_entity(camera) {
+    if let Some(e) = world.live(camera) {
         world.add_component(e, shake);
     }
     world.insert_resource(ScreenFade::default());
 
     let hud = world
         .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.4), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
 
     if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
         audio.load_sound_bytes("ates", Blip::new(Wave::Square, 900.0, 0.04).with_slide(500.0).with_volume(0.06).wav());
@@ -449,7 +449,7 @@ fn aim_and_fire(world: &mut World, game: &mut Game, input: &Input, dt: f32) {
 }
 
 /// Dokunmatik çubuklar: ekranın sol alt ve sağ alt köşelerinde iki yarı saydam kutu.
-fn spawn_sticks(world: &mut World) -> (u32, u32) {
+fn spawn_sticks(world: &mut World) -> (Entity, Entity) {
     // Telefonda ekranın altı gezinme çubuğunun altında: çubuklar başparmağın erişeceği yerde dursun.
     let bottom = stick_bottom(world);
     let mut spawn = |left: Val, right: Val| {
@@ -466,7 +466,7 @@ fn spawn_sticks(world: &mut World) -> (u32, u32) {
             ..Default::default()
         });
         world.add_component(e, VirtualStick::new(70.0));
-        e.id()
+        e
     };
     (spawn(Val::Percent(2.0), Val::Auto), spawn(Val::Auto, Val::Percent(2.0)))
 }
@@ -485,7 +485,7 @@ fn stick_bottom(world: &World) -> Val {
 }
 
 /// Bir dokunmatik çubuğun değeri (yoksa `None`).
-fn stick(world: &World, id: Option<u32>) -> Option<Vec2> {
+fn stick(world: &World, id: Option<Entity>) -> Option<Vec2> {
     world.borrow::<VirtualStick>().get(id?).map(|s| s.value())
 }
 
@@ -527,9 +527,9 @@ fn spawn_enemies(world: &mut World, game: &mut Game, dt: f32) {
 /// Düşmanlar oyuncuya yürüyor, birbirlerinden biraz itilerek (yoksa tek bir küpe dönüşürler).
 fn chase(world: &mut World, game: &Game, dt: f32) {
     let me = player_position(world, game);
-    let enemies: Vec<(u32, Vec3, f32)> = {
+    let enemies: Vec<(Entity, Vec3, f32)> = {
         let ts = world.borrow::<Transform>();
-        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, e)| ts.get(entity).map(|t| (entity.id(), t.position, e.speed))).collect()
+        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, e)| ts.get(entity).map(|t| (entity, t.position, e.speed))).collect()
     };
     let mut ts = world.borrow_mut::<Transform>();
     for (i, &(id, p, speed)) in enemies.iter().enumerate() {
@@ -548,12 +548,12 @@ fn chase(world: &mut World, game: &Game, dt: f32) {
 }
 
 fn fly_bullets(world: &mut World, game: &mut Game, dt: f32) {
-    let targets: Vec<(u32, Vec3)> = {
+    let targets: Vec<(Entity, Vec3)> = {
         let ts = world.borrow::<Transform>();
-        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity.id(), t.position))).collect()
+        world.query::<(Entity, &Enemy)>().unwrap().iter().filter_map(|(entity, _)| ts.get(entity).map(|t| (entity, t.position))).collect()
     };
     let mut dead_bullets = Vec::new();
-    let mut hits: Vec<(u32, Vec3)> = Vec::new();
+    let mut hits: Vec<(Entity, Vec3)> = Vec::new();
     if let Some(mut q) = world.query_mut::<(Entity, Mut<Bullet>, Mut<Transform>)>() {
         for (entity, mut b, mut t) in q.iter_mut() {
             b.life -= dt;
@@ -570,7 +570,7 @@ fn fly_bullets(world: &mut World, game: &mut Game, dt: f32) {
         }
     }
     for id in dead_bullets {
-        world.despawn_by_id(id.id());
+        world.despawn(id);
     }
     for (enemy, at) in hits {
         let killed = {
@@ -581,7 +581,7 @@ fn fly_bullets(world: &mut World, game: &mut Game, dt: f32) {
         };
         if killed {
             let colour = Vec4::new(1.0, 0.5, 0.2, 1.0);
-            world.despawn_by_id(enemy);
+            world.despawn(enemy);
             sparks(world, at, colour, 30);
             game.score += 10;
             kick(world, game, 0.12);
@@ -598,11 +598,11 @@ fn get_hit(world: &mut World, game: &mut Game, dt: f32) {
         return;
     }
     let me = player_position(world, game);
-    let touching: Vec<u32> = {
+    let touching: Vec<Entity> = {
         let ts = world.borrow::<Transform>();
         world.query::<(Entity, &Enemy)>().unwrap().iter()
             .filter(|(entity, _)| ts.get(*entity).is_some_and(|t| t.position.distance(me) < ENEMY_RADIUS + PLAYER_RADIUS))
-            .map(|(entity, _)| entity.id())
+            .map(|(entity, _)| entity)
             .collect()
     };
     if touching.is_empty() {
@@ -612,7 +612,7 @@ fn get_hit(world: &mut World, game: &mut Game, dt: f32) {
     game.grace = 1.5;
     // Değenleri it: aynı kalabalık bir sonraki karede yine vurmasın.
     for id in touching {
-        world.despawn_by_id(id);
+        world.despawn(id);
         sparks(world, me, Vec4::new(0.3, 0.8, 1.0, 1.0), 20);
     }
     kick(world, game, 0.6);

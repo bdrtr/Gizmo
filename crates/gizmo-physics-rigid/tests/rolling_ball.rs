@@ -6,6 +6,7 @@
 //! could not spin it up, so it slid the whole lane and lost 80 % of its speed in 1.5 s
 //! (`lobut`, measured). The step now derives the tensor from the collider the first time.
 
+use gizmo_core::Entity;
 use gizmo_core::world::World;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, Transform};
@@ -16,7 +17,7 @@ const HZ: f32 = 240.0;
 const R: f32 = 0.2;
 const V0: f32 = 9.6;
 
-fn lane(ball_rb: RigidBody) -> (World, u32) {
+fn lane(ball_rb: RigidBody) -> (World, Entity) {
     let mut world = World::new();
     world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
     let floor = world.spawn();
@@ -28,7 +29,7 @@ fn lane(ball_rb: RigidBody) -> (World, u32) {
     world.add_component(ball, ball_rb);
     world.add_component(ball, Velocity::new(Vec3::new(0.0, 0.0, -V0)));
     world.add_component(ball, Collider::sphere(R));
-    (world, ball.id())
+    (world, ball)
 }
 
 fn run(world: &mut World, seconds: f32) {

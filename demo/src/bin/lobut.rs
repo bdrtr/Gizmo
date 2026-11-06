@@ -99,8 +99,8 @@ struct Game {
     scores: Vec<u32>,
     /// Bu çerçevede ilk atışta devrilenler.
     first_roll: u32,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     auto_shot: Option<f32>,
 }
 
@@ -139,12 +139,12 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
 
     let hud = world
         .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
 
     if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
         audio.load_sound_bytes("tok", Blip::new(Wave::Noise, 2400.0, 0.09).with_slide(600.0).with_volume(0.6).wav());
@@ -381,12 +381,12 @@ fn finish_roll(world: &mut World, game: &mut Game) {
         game.first_roll = down;
         game.roll = 2;
         // Devrilenleri kaldır; ayaktakiler yerinde kalır.
-        let fallen: Vec<u32> = {
+        let fallen: Vec<Entity> = {
             let tfs = world.borrow::<Transform>();
-            world.query::<(Entity, &Pin)>().unwrap().iter().filter(|(entity, _)| tfs.get(*entity).is_some_and(knocked)).map(|(entity, _)| entity.id()).collect()
+            world.query::<(Entity, &Pin)>().unwrap().iter().filter(|(entity, _)| tfs.get(*entity).is_some_and(knocked)).map(|(entity, _)| entity).collect()
         };
         for id in fallen {
-            world.despawn_by_id(id);
+            world.despawn(id);
         }
         world.despawn_all_with::<Ball>();
         game.phase = Phase2::Aiming;
@@ -420,7 +420,7 @@ fn follow_ball(world: &mut World, game: &Game) {
         (Phase2::Settling(_), _) => PIN_Z + 4.5,
         _ => BALL_Z + 3.2,
     };
-    let cams: Vec<u32> = world.query::<(Entity, &Camera)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let cams: Vec<Entity> = world.query::<(Entity, &Camera)>().unwrap().iter().map(|(entity, _)| entity).collect();
     let mut tfs = world.borrow_mut::<Transform>();
     for id in cams {
         if let Some(mut t) = tfs.get_mut(id) {
@@ -433,11 +433,11 @@ fn follow_ball(world: &mut World, game: &Game) {
 /// Top bir lobuta, ya da lobut lobuta yeni çarptığında bir "tok".
 fn clatter(events: EventReader<CollisionEvent>, pins: Query<With<Pin>>, audio: Option<ResMut<AudioManager>>) {
     let Some(mut audio) = audio else { return };
-    let is_pin = |id: u32| pins.get(id).is_some();
+    let is_pin = |id: Entity| pins.get(id).is_some();
     let hits = events
         .iter()
         .filter(|e| e.event_type == CollisionEventType::Started)
-        .filter(|e| is_pin(e.entity_a.id()) || is_pin(e.entity_b.id()))
+        .filter(|e| [e.entity_a, e.entity_b].iter().any(|h| pins.entity(h.id()).is_some_and(is_pin)))
         .filter(|e| e.contact_points.iter().any(|p| p.normal_impulse > 0.4))
         .count();
     for _ in 0..hits.min(3) {

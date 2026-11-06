@@ -74,9 +74,9 @@ struct Unit {
     hp: f32,
     reload: f32,
     /// Bu birimin can çubuğu (arayüz düğümü) ve seçim halkası.
-    bar: u32,
-    fill: u32,
-    ring: u32,
+    bar: Entity,
+    fill: Entity,
+    ring: Entity,
 }
 gizmo::core::impl_component!(Unit);
 
@@ -88,12 +88,12 @@ gizmo::core::impl_component!(Tracer);
 
 struct Game {
     physics: FixedPhysics,
-    selected: Vec<u32>,
+    selected: Vec<Entity>,
     /// Sol tuşun basıldığı piksel (sürükleme sürüyorsa).
     drag_from: Option<Vec2>,
-    marquee: u32,
-    hud: u32,
-    banner: u32,
+    marquee: Entity,
+    hud: Entity,
+    banner: Entity,
     rng: Rng,
     auto: bool,
     auto_clock: f32,
@@ -124,12 +124,12 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
     });
     let hud = world
         .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     // Seçim kutusu: sürükleme sürerken görünen yarı saydam bir arayüz dikdörtgeni.
     let marquee = world
         .spawn_bundle(NodeBundle {
@@ -137,8 +137,8 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
             background_color: BackgroundColor(Vec4::new(0.4, 0.8, 1.0, 0.0)),
             ..Default::default()
         })
-        .id();
-    world.add_component(world.get_entity(marquee).expect("just spawned"), ZIndex(10));
+        ;
+    world.add_component(world.live(marquee).expect("just spawned"), ZIndex(10));
     if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
         audio.load_sound_bytes("ates", Blip::new(Wave::Noise, 900.0, 0.05).with_volume(0.08).wav());
         audio.load_sound_bytes("emir", Blip::new(Wave::Square, 660.0, 0.06).with_slide(880.0).with_volume(0.12).wav());
@@ -209,7 +209,7 @@ fn main() {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let units: Vec<u32> = world.query::<(Entity, &Unit)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let units: Vec<Entity> = world.query::<(Entity, &Unit)>().unwrap().iter().map(|(entity, _)| entity).collect();
     for id in units {
         despawn_unit(world, id);
     }
@@ -296,18 +296,18 @@ fn spawn_unit(world: &mut World, side: Side, at: Vec3) {
         Collider::sphere(0.3),
         // Düzen 1,2 m aralıklı: ayrışma ondan kısa, yoksa yerine varan bölük kendini dağıtır.
         NavAgent::new(3.0, 12.0, 0.6).with_separation(1.0, 1.5),
-        Unit { side, hp: HP, reload: 0.0, bar: bar.id(), fill: fill.id(), ring: ring.id() },
+        Unit { side, hp: HP, reload: 0.0, bar, fill, ring },
     ));
 }
 
-fn despawn_unit(world: &mut World, id: u32) {
+fn despawn_unit(world: &mut World, id: Entity) {
     let Some(unit) = world.borrow::<Unit>().get(id).copied() else { return };
     for part in [unit.bar, unit.ring] {
-        if let Some(e) = world.get_entity(part) {
+        if let Some(e) = world.live(part) {
             world.despawn_recursive(e);
         }
     }
-    if let Some(e) = world.get_entity(id) {
+    if let Some(e) = world.live(id) {
         world.despawn(e);
     }
 }
@@ -370,7 +370,7 @@ fn select_and_order(world: &mut World, game: &mut Game, input: &Input) {
             let (lo, hi) = (from.min(mouse), from.max(mouse));
             let boxed = (hi - lo).max_element() > DRAG_PX;
             let mut picked = Vec::new();
-            let mut nearest: Option<(f32, u32)> = None;
+            let mut nearest: Option<(f32, Entity)> = None;
             for (id, at) in blue_units(world) {
                 let Some(p) = gizmo::pointer::world_to_screen(world, at + Vec3::Y * 0.35) else { continue };
                 if boxed {
@@ -395,11 +395,11 @@ fn select_and_order(world: &mut World, game: &mut Game, input: &Input) {
     }
 }
 
-fn blue_units(world: &World) -> Vec<(u32, Vec3)> {
+fn blue_units(world: &World) -> Vec<(Entity, Vec3)> {
     let transforms = world.borrow::<Transform>();
     world.query::<(Entity, &Unit)>().unwrap().iter()
         .filter(|(_, u)| u.side == Side::Blue)
-        .filter_map(|(entity, _)| transforms.get(entity).map(|t| (entity.id(), t.position)))
+        .filter_map(|(entity, _)| transforms.get(entity).map(|t| (entity, t.position)))
         .collect()
 }
 
@@ -422,11 +422,11 @@ fn order(world: &mut World, game: &mut Game, to: Vec3) {
 
 /// Menzildeki en yakın düşmana ateş; kırmızılar da birimleri menzile girince karşılık veriyor.
 fn combat(world: &mut World, game: &mut Game, dt: f32) {
-    let all: Vec<(u32, Side, Vec3)> = {
+    let all: Vec<(Entity, Side, Vec3)> = {
         let transforms = world.borrow::<Transform>();
-        world.query::<(Entity, &Unit)>().unwrap().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity.id(), u.side, t.position))).collect()
+        world.query::<(Entity, &Unit)>().unwrap().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity, u.side, t.position))).collect()
     };
-    let mut hits: Vec<(u32, Vec3, Vec3)> = Vec::new();
+    let mut hits: Vec<(Entity, Vec3, Vec3)> = Vec::new();
     {
         let mut units = world.borrow_mut::<Unit>();
         for &(id, side, at) in &all {
@@ -490,9 +490,9 @@ fn combat(world: &mut World, game: &mut Game, dt: f32) {
 /// Can çubukları birimlerin üstünde (ekrana izdüşüm), seçim halkaları ayaklarında, seçim kutusu
 /// sürüklenirken.
 fn overlays(world: &mut World, game: &Game) {
-    let units: Vec<(u32, Unit, Vec3)> = {
+    let units: Vec<(Entity, Unit, Vec3)> = {
         let transforms = world.borrow::<Transform>();
-        world.query::<(Entity, &Unit)>().unwrap().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity.id(), *u, t.position))).collect()
+        world.query::<(Entity, &Unit)>().unwrap().iter().filter_map(|(entity, u)| transforms.get(entity).map(|t| (entity, *u, t.position))).collect()
     };
     for (id, unit, at) in units {
         let screen = gizmo::pointer::world_to_screen(world, at + Vec3::Y * 1.0);
@@ -512,7 +512,7 @@ fn overlays(world: &mut World, game: &Game) {
             t.position = Vec3::new(at.x, 0.02, at.z);
         }
         let selected = game.selected.contains(&id);
-        if let Some(e) = world.get_entity(unit.ring) {
+        if let Some(e) = world.live(unit.ring) {
             let hidden = world.borrow::<gizmo::core::component::IsHidden>().get(unit.ring).is_some();
             if selected && hidden {
                 world.remove_component::<gizmo::core::component::IsHidden>(e);
@@ -545,7 +545,7 @@ fn overlays(world: &mut World, game: &Game) {
 fn camera_controls(world: &mut World, input: &Input, dt: f32) {
     let (mx, my) = input.move_axis();
     let wheel = input.mouse_scroll();
-    let Some(id) = world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, _)| entity.id()) else { return };
+    let Some(id) = world.query::<(Entity, &Camera)>().unwrap().iter().next().map(|(entity, _)| entity) else { return };
     if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
         t.position += Vec3::new(mx, 0.0, -my) * 14.0 * dt;
         t.position.y = (t.position.y - wheel * 1.5).clamp(8.0, 30.0);
@@ -581,7 +581,7 @@ fn play(world: &mut World, name: &str) {
     }
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

@@ -429,13 +429,13 @@ impl Camera {
 /// It lives here rather than in the facade because the editor needs it too and sits below the
 /// facade: an inspector panel editing "the scene's" camera has to mean the same camera the frame
 /// renders from, or the panel is editing something the player will never look through.
-pub fn active_camera(world: &gizmo_core::World) -> Option<u32> {
+pub fn active_camera(world: &gizmo_core::World) -> Option<gizmo_core::Entity> {
     let cameras = world.query::<(gizmo_core::Entity, &Camera)>()?;
     cameras
         .iter()
         .find(|(_, c)| c.primary)
         .or_else(|| cameras.iter().next())
-        .map(|(entity, _)| entity.id())
+        .map(|(entity, _)| entity)
 }
 
 #[cfg(test)]

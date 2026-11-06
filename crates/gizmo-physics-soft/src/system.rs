@@ -89,7 +89,7 @@ fn collect_rigid_colliders(world: &World) -> Vec<(BodyHandle, Transform, Collide
     let mut rigid_colliders = Vec::new();
     if let Some(q) = world.query::<(Entity, &Transform, &Collider)>() {
         for (e, trans, col) in q.iter() {
-            if let Some(entity) = world.get_entity(e.id()) {
+            if let Some(entity) = world.live(e) {
                 // Bridge: ECS entity -> opaque physics BodyHandle (id only).
                 rigid_colliders.push((BodyHandle::from_id(entity.id()), *trans, col.clone()));
             }
@@ -119,7 +119,7 @@ pub fn collect_rigid_reactions(world: &World) -> Vec<(BodyHandle, RigidReaction)
             if rb.is_static() {
                 continue;
             }
-            let Some(entity) = world.get_entity(e.id()) else {
+            let Some(entity) = world.live(e) else {
                 continue;
             };
             out.push((

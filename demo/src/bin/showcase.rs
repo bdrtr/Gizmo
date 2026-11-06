@@ -3,7 +3,7 @@ use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{Decal, DirectionalLight, MeshRenderer};
 
 struct ShowcaseDemo {
-    cam_id: u32,
+    cam_id: Entity,
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
@@ -12,7 +12,7 @@ struct ShowcaseDemo {
     frames: u32,
     fps: f32,
     time: f32,
-    sun_id: u32,
+    sun_id: Entity,
     // Post Processing Cinematics
     bloom_intensity: f32,
     exposure: f32,
@@ -22,9 +22,9 @@ struct ShowcaseDemo {
     dof_focus_dist: f32,
     dof_focus_range: f32,
     dof_blur_size: f32,
-    light_1_id: u32,
-    light_2_id: u32,
-    light_3_id: u32,
+    light_1_id: Entity,
+    light_2_id: Entity,
+    light_3_id: Entity,
     cube_mesh: Option<Mesh>,
     tex: Option<std::sync::Arc<wgpu::BindGroup>>,
     last_shot_time: f32,
@@ -48,7 +48,7 @@ struct ShowcaseDemo {
 impl ShowcaseDemo {
     fn new() -> Self {
         Self {
-            cam_id: 0,
+            cam_id: Entity::new(0, 0),
             cam_yaw: -1.57, // -PI/2 (Look straight at -Z)
             cam_pitch: -0.2,
             cam_pos: Vec3::new(0.0, 5.0, 20.0),
@@ -57,7 +57,7 @@ impl ShowcaseDemo {
             frames: 0,
             fps: 0.0,
             time: 0.0,
-            sun_id: 0,
+            sun_id: Entity::new(0, 0),
             bloom_intensity: 0.3,
             exposure: 1.0,
             chromatic_aberration: 0.0,
@@ -66,9 +66,9 @@ impl ShowcaseDemo {
             dof_focus_dist: 20.0, // Odak noktası (20 birim uzakta, sütunun olduğu yer)
             dof_focus_range: 15.0, // Odak alanının genişliği
             dof_blur_size: 4.0,   // Max bulanıklık çapı
-            light_1_id: 0,
-            light_2_id: 0,
-            light_3_id: 0,
+            light_1_id: Entity::new(0, 0),
+            light_2_id: Entity::new(0, 0),
+            light_3_id: Entity::new(0, 0),
             cube_mesh: None,
             tex: None,
             last_shot_time: 0.0,
@@ -126,7 +126,7 @@ fn main() {
                 ),
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
-            game.cam_id = cam_entity.id();
+            game.cam_id = cam_entity;
 
             // Güneş (Gün batımı açısı ve rengi)
             let sun = world.spawn();
@@ -143,7 +143,7 @@ fn main() {
                     gizmo::renderer::components::LightRole::Sun,
                 ),
             );
-            game.sun_id = sun.id();
+            game.sun_id = sun;
 
             let ground_tex = asset_manager
                 .load_material_texture(
@@ -232,7 +232,7 @@ fn main() {
                 l1,
                 gizmo::renderer::components::PointLight::new(Vec3::new(1.0, 0.0, 0.0), 50.0, 10.0),
             );
-            game.light_1_id = l1.id();
+            game.light_1_id = l1;
 
             let l2 = world.spawn();
             world.add_component(l2, Transform::new(Vec3::new(0.0, 5.0, -20.0)));
@@ -240,7 +240,7 @@ fn main() {
                 l2,
                 gizmo::renderer::components::PointLight::new(Vec3::new(0.0, 1.0, 0.0), 50.0, 10.0),
             );
-            game.light_2_id = l2.id();
+            game.light_2_id = l2;
 
             let l3 = world.spawn();
             world.add_component(l3, Transform::new(Vec3::new(0.0, 5.0, -20.0)));
@@ -248,7 +248,7 @@ fn main() {
                 l3,
                 gizmo::renderer::components::PointLight::new(Vec3::new(0.0, 0.5, 1.0), 50.0, 10.0),
             );
-            game.light_3_id = l3.id();
+            game.light_3_id = l3;
 
             game.cube_mesh = Some(cube_mesh);
             game.tex = Some(tex);

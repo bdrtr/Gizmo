@@ -87,12 +87,12 @@ struct Game {
     outcome: Outcome,
     /// Sabit adımlı fizik. `simple_scene_update` kullanılamıyor, çünkü kamerayı da WASD ile uçuruyor.
     physics: FixedPhysics,
-    hud_text: u32,
-    banner: u32,
-    power_fill: u32,
-    shot_icons: Vec<u32>,
-    aim_dots: Vec<u32>,
-    launcher_arm: u32,
+    hud_text: Entity,
+    banner: Entity,
+    power_fill: Entity,
+    shot_icons: Vec<Entity>,
+    aim_dots: Vec<Entity>,
+    launcher_arm: Entity,
 }
 
 fn main() {
@@ -137,10 +137,10 @@ fn main() {
                         .with_color(Vec4::new(0.35, 0.2, 0.08, 1.0))
                         .with_layer(2),
                 ))
-                .id();
+                ;
 
             // HUD — ekran uzayı; tone-mapping'den sonra çizildiği için renkler olduğu gibi.
-            let hud = |world: &mut World, s: Sprite| world.spawn_bundle((s,)).id();
+            let hud = |world: &mut World, s: Sprite| world.spawn_bundle((s,));
             hud(
                 scene.world,
                 Sprite::screen(images.white, Vec2::new(206.0, 18.0), Vec2::new(16.0, 52.0))
@@ -158,14 +158,14 @@ fn main() {
             let hud_text = scene
                 .world
                 .spawn_bundle((Text::screen("", font, 22.0, Vec2::new(16.0, 16.0)),))
-                .id();
+                ;
             let banner = scene
                 .world
                 // Pencerenin ortası, %30 aşağısı — boyut değişince birlikte geliyor.
                 .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(gizmo::renderer::components::TextAlign::Center),))
-                .id();
+                ;
 
             let aim_dots = (0..14)
                 .map(|_| {
@@ -178,7 +178,6 @@ fn main() {
                                 .with_color(Vec4::new(1.0, 1.0, 1.0, 0.6))
                                 .with_layer(5),
                         ))
-                        .id()
                 })
                 .collect();
 

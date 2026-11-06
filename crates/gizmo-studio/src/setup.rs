@@ -351,8 +351,8 @@ world.insert_resource(editor_state);
     StudioState {
         current_fps: 0.0,
         actual_dt: 0.0,
-        editor_camera: cam.id(),
-        game_camera: game_cam.id(),
+        editor_camera: cam,
+        game_camera: game_cam,
         do_raycast: false,
         play: gizmo::systems::PlayLoop::new(),
         asset_watcher: gizmo::renderer::hot_reload::AssetWatcher::new(&["demo/assets", "scripts"]),

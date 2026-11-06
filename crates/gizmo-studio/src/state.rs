@@ -6,9 +6,9 @@ pub struct StudioState {
     /// The last frame's real duration in seconds, before any time scaling.
     pub actual_dt: f32,
     /// Entity id of the editor's own camera — the one the viewport flies.
-    pub editor_camera: u32,
+    pub editor_camera: gizmo::core::Entity,
     /// Entity id of the camera the game view renders through.
-    pub game_camera: u32,
+    pub game_camera: gizmo::core::Entity,
     /// Set by the scene view when a click needs picking; cleared once the raycast has run.
     pub do_raycast: bool,
     /// The running game's frame — the *same* loop an exported game runs

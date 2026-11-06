@@ -29,6 +29,7 @@
 //! `pre_linear`/`pre_angular` integrator history) come back at their `Default`, not at
 //! their Play-time values.
 
+use gizmo_core::Entity;
 use gizmo_core::World;
 
 #[cfg(target_arch = "wasm32")]
@@ -156,7 +157,7 @@ impl SceneSnapshot {
     pub fn capture(
         world: &World,
         registry: &crate::registry::SceneRegistry,
-        protected_ids: &std::collections::HashSet<u32>,
+        protected_ids: &std::collections::HashSet<Entity>,
     ) -> Self {
         let start = Instant::now();
         let mut entities = Vec::new();
@@ -167,7 +168,7 @@ impl SceneSnapshot {
         let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
 
         for ent in world.iter_alive_entities() {
-            let id = ent.id();
+            let id = ent;
             if protected_ids.contains(&id) {
                 continue;
             }
@@ -210,7 +211,7 @@ impl SceneSnapshot {
             // Yalnızca bir bileşeni olan entity'leri kaydet
             if name.is_some() || !components.is_empty() {
                 entities.push(EntitySnapshot {
-                    entity_id: id,
+                    entity_id: id.id(),
                     name,
                     components,
                 });
@@ -284,7 +285,7 @@ impl SceneSnapshot {
         &self,
         world: &mut World,
         registry: &crate::registry::SceneRegistry,
-        protected_ids: &std::collections::HashSet<u32>,
+        protected_ids: &std::collections::HashSet<Entity>,
     ) -> RestoreResult {
         let start = Instant::now();
         let mut restored_count = 0u32;
@@ -307,18 +308,18 @@ impl SceneSnapshot {
             let names = world.borrow::<gizmo_core::EntityName>();
             let editor_only_markers = world.borrow::<gizmo_core::component::EditorOnly>();
             for ent in &alive {
-                let id = ent.id();
-                if protected_ids.contains(&id) {
+                let id = ent;
+                if protected_ids.contains(id) {
                     continue;
                 }
                 if gizmo_core::component::is_editor_only(
-                    editor_only_markers.get(id).is_some(),
-                    names.get(id).map(|n| n.0.as_str()),
+                    editor_only_markers.get(*id).is_some(),
+                    names.get(*id).map(|n| n.0.as_str()),
                 ) {
                     continue;
                 }
                 
-                if !snap_ids.contains(&id) {
+                if !snap_ids.contains(&id.id()) {
                     to_despawn.push(*ent);
                 }
             }
@@ -554,7 +555,7 @@ mod tests {
         let names = world.borrow::<gizmo_core::EntityName>();
         let alive = world.iter_alive_entities();
         assert_eq!(alive.len(), 1);
-        let restored_name = names.get(alive[0].id());
+        let restored_name = names.get(alive[0]);
         assert!(restored_name.is_some());
         assert_eq!(restored_name.unwrap().0, "TestCube");
     }
@@ -605,7 +606,7 @@ mod tests {
         world.add_component(normal, gizmo_core::EntityName::new("Cube"));
 
         let mut protected = std::collections::HashSet::new();
-        protected.insert(keep.id());
+        protected.insert(keep);
 
         let snapshot = SceneSnapshot::capture(&world, &registry, &protected);
         assert_eq!(snapshot.entity_count(), 1, "only the unprotected entity is captured");
@@ -694,7 +695,6 @@ mod tests {
         let id = world
             .iter_alive_entities()
             .into_iter()
-            .map(|e| e.id())
             .find(|&id| names.get(id).map(|n| n.0.as_str()) == Some("Mover"))
             .expect("Mover restore edilmeli");
         let transforms = world.borrow::<Transform>();

@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 /// Identifies the editor's own objects (camera, grid, light, highlight box) and returns the set
 /// of protected ids. Used to keep them from being deleted while a scene is cleared or loaded.
-fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
+fn collect_protected_ids(world: &World, editor_camera: Entity) -> std::collections::HashSet<Entity> {
     let mut protected = HashSet::new();
     protected.insert(editor_camera);
 
@@ -18,7 +18,7 @@ fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
                 markers.get(e).is_some(),
                 names.get(e).map(|n| n.0.as_str()),
             ) {
-                protected.insert(e.id());
+                protected.insert(e);
             }
         }
     }
@@ -26,14 +26,14 @@ fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
     // BFS: Korunan objelerin tüm çocuklarını da ekle
     {
         let children = world.borrow::<gizmo::core::component::Children>();
-        let mut queue: Vec<u32> = protected.iter().copied().collect();
+        let mut queue: Vec<Entity> = protected.iter().copied().collect();
         let mut i = 0;
         while i < queue.len() {
             let id = queue[i];
             if let Some(c) = children.get(id) {
                 for &child in &c.0 {
-                    if world.is_alive(child) && protected.insert(child.id()) {
-                        queue.push(child.id());
+                    if world.is_alive(child) && protected.insert(child) {
+                        queue.push(child);
                     }
                 }
             }
@@ -46,10 +46,10 @@ fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
 
 /// Despawns every non-editor entity in the world.
 /// The protected objects (camera, grid, lights) are left alone.
-fn despawn_non_protected(world: &mut World, protected: &HashSet<u32>) {
+fn despawn_non_protected(world: &mut World, protected: &HashSet<Entity>) {
     let ents = world.iter_alive_entities();
     for e in ents {
-        if !protected.contains(&e.id()) {
+        if !protected.contains(&e) {
             world.despawn(e);
         }
     }
@@ -316,14 +316,14 @@ pub fn render_studio(
         let save = match &manager {
             Some(m) => gizmo::scene::SceneData::save_prefab_with_identity(
                 world,
-                ent_id.id(),
+                ent_id,
                 &path,
                 &scene_registry,
                 &gizmo::asset_identity::ManagerIdentity(m),
             ),
             None => gizmo::scene::SceneData::save_prefab(
                 world,
-                ent_id.id(),
+                ent_id,
                 &path,
                 &scene_registry,
             ),
@@ -347,14 +347,14 @@ pub fn render_studio(
         let loaded_root = match &manager {
             Some(m) => gizmo::scene::SceneData::load_prefab_with_identity(
                 &path,
-                parent.map(|p| p.id()),
+                parent,
                 world,
                 &scene_registry,
                 &gizmo::asset_identity::ManagerIdentity(m),
             ),
             None => gizmo::scene::SceneData::load_prefab(
                 &path,
-                parent.map(|p| p.id()),
+                parent,
                 world,
                 &scene_registry,
             ),
@@ -402,7 +402,7 @@ pub fn render_studio(
         // error about a file the user never asked for.
         let save = gizmo::scene::SceneData::save_prefab(
             world,
-            ent_id.id(),
+            ent_id,
             &temp_path,
             &scene_registry,
         );
@@ -414,7 +414,7 @@ pub fn render_studio(
                 world,
                 &scene_registry,
             ) {
-                Ok(Some(new_id)) => DuplicateOutcome::Duplicated(new_id),
+                Ok(Some(new_id)) => DuplicateOutcome::Duplicated(new_id.id()),
                 Ok(None) => DuplicateOutcome::NothingLoaded,
                 Err(e) => DuplicateOutcome::LoadFailed(e.to_string()),
             },
@@ -470,7 +470,7 @@ pub fn render_studio(
                         p_max_h,
                     ) {
                         Ok((mesh, heights, cols, rows)) => {
-                            if let Some(ent) = world.get_entity(ent_id.id()) {
+                            if let Some(ent) = world.live(ent_id) {
                                 // Material yoksa beyaz default ekle
                                 let has_mat = world
                                     .borrow::<gizmo::prelude::Material>()

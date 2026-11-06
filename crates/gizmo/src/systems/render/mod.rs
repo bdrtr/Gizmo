@@ -299,8 +299,8 @@ fn render_viewports_unshaken(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
-    let mut views: Vec<(i32, u32, crate::renderer::components::Viewport)> = world.query::<(Entity, &Camera)>().unwrap().iter()
-        .filter_map(|(entity, c)| c.viewport.map(|v| (c.order, entity.id(), v)))
+    let mut views: Vec<(i32, Entity, crate::renderer::components::Viewport)> = world.query::<(Entity, &Camera)>().unwrap().iter()
+        .filter_map(|(entity, c)| c.viewport.map(|v| (c.order, entity, v)))
         .collect();
     // The camera the frame is drawn through, when it has no rectangle of its own, is the whole
     // target — the base a picture-in-picture view (a minimap, a mirror) is drawn over. It was
@@ -384,8 +384,8 @@ fn render_viewports_unshaken(
 pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     use crate::renderer::components::ReflectionProbe;
     use crate::renderer::reflection::{ReflectionProbeGpu, FACES, MAX_PROBES};
-    let mut probes: Vec<(u32, ReflectionProbe)> =
-        world.query::<(Entity, &ReflectionProbe)>().unwrap().iter().map(|(entity, p)| (entity.id(), *p)).collect();
+    let mut probes: Vec<(Entity, ReflectionProbe)> =
+        world.query::<(Entity, &ReflectionProbe)>().unwrap().iter().map(|(entity, p)| (entity, *p)).collect();
     probes.sort_by_key(|&(id, _)| id);
     probes.truncate(MAX_PROBES);
     if probes.is_empty() {
@@ -396,7 +396,7 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
         }
         return;
     }
-    let owners: Vec<u32> = probes.iter().map(|&(id, _)| id).collect();
+    let owners: Vec<Entity> = probes.iter().map(|&(id, _)| id).collect();
     let size = probes
         .iter()
         .map(|(_, p)| p.resolution.clamp(8, 1024).next_power_of_two())
@@ -407,10 +407,10 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     let rebuild = renderer
         .reflection_probe
         .as_ref()
-        .is_none_or(|g| g.size != size || g.owners != owners);
+        .is_none_or(|g| g.size != size || g.owners.len() != owners.len() || g.owners.iter().zip(&owners).any(|(a, b)| *a != b.id()));
     if rebuild {
         let mut gpu = ReflectionProbeGpu::new(&renderer.device, size, owners.len() as u32);
-        gpu.owners = owners.clone();
+        gpu.owners = owners.iter().map(|e| e.id()).collect();
         renderer.reflection_probe = Some(gpu);
     }
     let pending: Vec<usize> = (0..probes.len()).filter(|&slot| rebuild || !probes[slot].1.captured).collect();
@@ -497,14 +497,14 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
 /// Draws the scene again for each [`PlanarReflection`] the camera can see from the front, into that
 /// mirror's texture, before the frame's own draw. A mirror out of view or seen from behind costs
 /// nothing and draws plain this frame. See [`crate::renderer::planar`].
-fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera: Option<u32>, lods: (f32, f32)) {
+fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera: Option<Entity>, lods: (f32, f32)) {
     use crate::renderer::components::PlanarReflection;
     use crate::renderer::planar::{oblique_projection, reflect_direction, reflect_point};
     renderer.planar.begin_frame();
-    let mirrors: Vec<(u32, PlanarReflection)> =
-        world.query::<(Entity, &PlanarReflection)>().unwrap().iter().map(|(entity, r)| (entity.id(), *r)).collect();
-    let owners: Vec<u32> = mirrors.iter().map(|m| m.0).collect();
-    renderer.planar.retain(&owners);
+    let mirrors: Vec<(Entity, PlanarReflection)> =
+        world.query::<(Entity, &PlanarReflection)>().unwrap().iter().map(|(entity, r)| (entity, *r)).collect();
+    let owners: Vec<Entity> = mirrors.iter().map(|m| m.0).collect();
+    renderer.planar.retain(&owners.iter().map(|e| e.id()).collect::<Vec<_>>());
     let Some(camera) = camera.filter(|_| !mirrors.is_empty()) else { return };
     let Some(cam) = world.borrow::<Camera>().get(camera).copied() else { return };
 
@@ -516,7 +516,7 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
     let frustum = crate::math::Frustum::from_matrix(&(projection * cam.get_view(eye)));
 
     // Which mirrors, decided before anything is drawn: a capture takes `world` mutably.
-    let visible: Vec<(u32, gizmo_math::Vec4)> = {
+    let visible: Vec<(Entity, gizmo_math::Vec4)> = {
         let transforms = world.borrow::<gizmo_physics_core::components::GlobalTransform>();
         let meshes = world.borrow::<crate::renderer::components::Mesh>();
         let renderers = world.borrow::<MeshRenderer>();
@@ -550,7 +550,7 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
     let ssgi = renderer.ssgi.take();
     let history = renderer.previous_view_proj.take();
     for (owner, plane) in visible {
-        if !renderer.planar.prepare(owner, size) {
+        if !renderer.planar.prepare(owner.id(), size) {
             let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("planar_reflection"),
                 size: wgpu::Extent3d { width: size.0, height: size.1, depth_or_array_layers: 1 },
@@ -577,7 +577,7 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
                     &renderer.scene.texture_bind_group_layout,
                 )
             };
-            renderer.planar.insert(owner, texture, bind_group);
+            renderer.planar.insert(owner.id(), texture, bind_group);
         }
 
         let normal = plane.truncate();
@@ -599,7 +599,7 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
         let hdr = renderer.post.hdr_texture_view.clone();
         draw_camera_view(world, &mut encoder, &hdr, renderer, Some(camera), lods, None, false, Some(fixed));
         let Renderer { planar, post, .. } = renderer;
-        planar.record_copy(&mut encoder, &post.hdr_texture, owner);
+        planar.record_copy(&mut encoder, &post.hdr_texture, owner.id());
         renderer.queue.submit(std::iter::once(encoder.finish()));
     }
     renderer.taa = taa;
@@ -610,7 +610,7 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
 /// Where `camera` is in the world: its synced `GlobalTransform`, else its own `Transform`, else the
 /// origin — the same fallback the camera's view matrix is built with, so the level of detail and
 /// the picture never disagree about where the camera stands.
-fn camera_world_position(world: &World, camera: Option<u32>) -> Vec3 {
+fn camera_world_position(world: &World, camera: Option<Entity>) -> Vec3 {
     let Some(camera) = camera else {
         return Vec3::ZERO;
     };
@@ -854,7 +854,7 @@ fn draw_camera_view(
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
-    camera: Option<u32>,
+    camera: Option<Entity>,
     lods: (f32, f32),
     region: Option<[f32; 4]>,
     overlay: bool,
@@ -5330,7 +5330,7 @@ mod golden_render_tests {
             let frame_a = render_world(&mut renderer, &mut world).await;
             let in_a = colours(&frame_a);
             let excess_in = excess(&frame_a);
-            for (id, primary) in [(cam_a.id(), false), (cam_b.id(), true)] {
+            for (id, primary) in [(cam_a, false), (cam_b, true)] {
                 if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(id) {
                     c.primary = primary;
                 }
@@ -5349,7 +5349,7 @@ mod golden_render_tests {
             for mut p in world.borrow_mut::<ReflectionProbe>().iter_mut() {
                 p.blend_distance = 20.0;
             }
-            for (id, primary) in [(cam_a.id(), true), (cam_b.id(), false)] {
+            for (id, primary) in [(cam_a, true), (cam_b, false)] {
                 if let Some(mut c) = world.borrow_mut::<Camera>().get_mut(id) {
                     c.primary = primary;
                 }

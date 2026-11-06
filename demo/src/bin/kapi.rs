@@ -79,7 +79,7 @@ const AUTO_PATH: [(f32, f32); 16] = [
 ];
 
 struct Door {
-    id: u32,
+    id: Entity,
     group: char,
     at: Vec3,
     y: f32,
@@ -88,20 +88,20 @@ struct Door {
 struct Plate {
     group: char,
     at: Vec3,
-    body: u32,
-    lamp: u32,
+    body: Entity,
+    lamp: Entity,
 }
 
 struct Game {
     physics: FixedPhysics,
-    player: u32,
+    player: Entity,
     start: Vec3,
     exit: Vec3,
     crate_starts: Vec<Vec3>,
     doors: Vec<Door>,
     plates: Vec<Plate>,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     won: bool,
     auto: bool,
     auto_step: usize,
@@ -188,7 +188,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
                             Velocity::default(),
                             plate_collider(),
                         ))
-                        .id();
+                        ;
                     let lamp = world
                         .spawn_bundle((
                             Transform::new(at + Vec3::Y * 0.02).with_scale(Vec3::new(0.4, 0.02, 0.4)),
@@ -197,7 +197,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
                             MaterialDesc::new().with_unlit(plate_colour(false)),
                             MeshRenderer::new(),
                         ))
-                        .id();
+                        ;
                     plates.push(Plate { group: c, at, body, lamp });
                 }
                 _ => {}
@@ -211,15 +211,15 @@ fn setup(world: &mut World, font: FontId) -> Game {
         MaterialDesc::new().with_unlit(Color::srgb_hex("#3CB371").to_vec4()),
         MeshRenderer::new(),
     ));
-    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     let mut game = Game {
         physics: FixedPhysics::new(60),
-        player: 0,
+        player: Entity::new(0, 0),
         start,
         exit,
         crate_starts,
@@ -298,7 +298,7 @@ fn spawn_door(world: &mut World, at: Vec3, group: char) -> Door {
             Collider::box_collider(Vec3::new(0.5, 0.6, 0.45)),
             KinematicTarget::new(position, Quat::IDENTITY),
         ))
-        .id();
+        ;
     Door { id, group, at, y: DOOR_CLOSED_Y }
 }
 
@@ -307,9 +307,9 @@ fn plate_colour(pressed: bool) -> Vec4 {
 }
 
 fn restart(world: &mut World, game: &mut Game) {
-    let actors: Vec<u32> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let actors: Vec<Entity> = world.query::<(Entity, &Actor)>().unwrap().iter().map(|(entity, _)| entity).collect();
     for id in actors {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn(e);
         }
     }
@@ -325,7 +325,7 @@ fn restart(world: &mut World, game: &mut Game) {
             Collider::capsule(0.3, 0.2),
             Actor,
         ))
-        .id();
+        ;
     for &at in &game.crate_starts {
         world.spawn_bundle((
             Transform::new(at + Vec3::Y * 0.4).with_scale(Vec3::splat(0.4)),
@@ -390,17 +390,17 @@ fn plates_and_doors(world: &mut World, game: &mut Game, dt: f32) {
         .get(game.player)
         .map(|c| c.triggers.clone())
         .unwrap_or_default();
-    let crates: Vec<u32> = world.query::<(Entity, &Crate)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let crates: Vec<Entity> = world.query::<(Entity, &Crate)>().unwrap().iter().map(|(entity, _)| entity).collect();
     let mut pressed = Vec::with_capacity(game.plates.len());
     {
         let Some(physics) = world.get_resource::<PhysicsWorld>() else { return };
         let shape = plate_collider().shape;
         for plate in &game.plates {
-            let by_player = stood_on.contains(&BodyHandle::from_id(plate.body));
+            let by_player = stood_on.contains(&BodyHandle::from_id(plate.body.id()));
             let by_crate = physics
                 .overlap_shape(&shape, plate.at + Vec3::Y * 0.3, Quat::IDENTITY, QueryFilter::default())
                 .iter()
-                .any(|h| crates.contains(&h.id()));
+                .any(|h| crates.iter().any(|c| c.id() == h.id()));
             pressed.push(by_player || by_crate);
         }
     }
@@ -445,7 +445,7 @@ fn hud(world: &mut World, game: &Game) {
     set_text(world, game.banner, if game.won { "Çıktın!\nR ile yeniden" } else { "" });
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

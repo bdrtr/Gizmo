@@ -154,7 +154,7 @@ fn world_with_scripted_entity(script_path: &str) -> (World, gizmo::core::Entity)
     (world, e)
 }
 
-fn position_of(world: &World, id: u32) -> Vec3 {
+fn position_of(world: &World, id: Entity) -> Vec3 {
     world
         .borrow::<Transform>()
         .get(id)
@@ -175,7 +175,7 @@ fn position_of(world: &World, id: u32) -> Vec3 {
 fn a_scripted_entity_moves_in_the_frame_its_script_asked() {
     let script = TempScript::new("mover", MOVER);
     let (mut world, entity) = world_with_scripted_entity(&script.path());
-    let id = entity.id();
+    let id = entity;
     let input = Input::default();
     let mut play = PlayLoop::new();
 
@@ -219,7 +219,7 @@ fn a_scene_saved_with_a_script_loads_and_that_script_runs() {
     let id = {
         world.query::<(Entity, &EntityName)>().unwrap().iter()
             .find(|(_, n)| n.0 == "Oyuncu")
-            .map(|(entity, _)| entity.id())
+            .map(|(entity, _)| entity)
             .expect("the entity survived the file")
     };
     assert!(
@@ -249,7 +249,7 @@ fn a_missing_script_is_reported_once_and_does_not_stop_the_frame() {
     let _ = std::fs::remove_file(&missing);
 
     let (mut world, entity) = world_with_scripted_entity(&missing);
-    let id = entity.id();
+    let id = entity;
     let input = Input::default();
     let mut play = PlayLoop::new();
 
@@ -332,7 +332,7 @@ fn a_script_can_make_a_sound() {
 fn a_script_drives_a_car_through_the_whole_chain() {
     let script = TempScript::new("driver", DRIVER);
     let (mut world, entity) = world_with_scripted_entity(&script.path());
-    let id = entity.id();
+    let id = entity;
     world.add_component(entity, gizmo::physics::vehicle::VehicleController::new());
 
     let input = Input::default();
@@ -348,7 +348,7 @@ fn a_script_drives_a_car_through_the_whole_chain() {
 }
 
 /// Reads a fighter's `(is_locked, is_in_active_window, has_a_move)` back out of the world.
-fn fighter_state(world: &World, id: u32) -> (bool, bool, bool) {
+fn fighter_state(world: &World, id: Entity) -> (bool, bool, bool) {
     let fighters = world.borrow::<gizmo::physics::components::FighterController>();
     let f = fighters.get(id).expect("the fighter is still there");
     (f.is_locked(), f.is_in_active_window(), f.active_move.is_some())
@@ -369,7 +369,7 @@ fn fighter_state(world: &World, id: u32) -> (bool, bool, bool) {
 fn a_hitstop_from_a_script_ends_after_the_frames_it_asked_for() {
     let script = TempScript::new("freezer", FREEZER);
     let (mut world, entity) = world_with_scripted_entity(&script.path());
-    let id = entity.id();
+    let id = entity;
     world.add_component(
         entity,
         gizmo::physics::components::FighterController::new(1),
@@ -408,7 +408,7 @@ fn a_hitstop_from_a_script_ends_after_the_frames_it_asked_for() {
 fn a_move_from_a_script_reaches_its_active_window_and_ends() {
     let script = TempScript::new("jabber", JABBER);
     let (mut world, entity) = world_with_scripted_entity(&script.path());
-    let id = entity.id();
+    let id = entity;
     world.add_component(
         entity,
         gizmo::physics::components::FighterController::new(1),
@@ -461,7 +461,7 @@ fn a_move_from_a_script_reaches_its_active_window_and_ends() {
 fn a_script_can_read_the_move_it_started() {
     let script = TempScript::new("watcher", WATCHER);
     let (mut world, entity) = world_with_scripted_entity(&script.path());
-    let id = entity.id();
+    let id = entity;
     world.add_component(
         entity,
         gizmo::physics::components::FighterController::new(1),
@@ -578,7 +578,7 @@ fn a_script_can_drive_an_animation_and_read_it_back() {
 
     let script = TempScript::new("dancer", DANCER);
     let (mut world, entity) = world_with_scripted_entity(&script.path());
-    let id = entity.id();
+    let id = entity;
 
     world.add_component(
         entity,

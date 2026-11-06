@@ -399,18 +399,17 @@ mod tests {
     fn test_double_add_component_despawn_safe() {
         let mut world = World::new();
         let e = world.spawn();
-        let id = e.id();
         world.add_component(e, Health(100));
         world.add_component(e, Health(50));
 
         world.despawn(e);
 
         assert!(!world.is_alive(e));
-        assert!(world.borrow::<Health>().get(id).is_none());
+        assert!(world.borrow::<Health>().get(e).is_none());
 
         // ID yeniden kullanıldığında eski Health taşınmamalı
         let e2 = world.spawn();
-        assert_eq!(e2.id(), id);
+        assert_eq!(e2.id(), e.id());
         assert!(world.borrow::<Health>().get(e2).is_none());
     }
 
@@ -532,8 +531,7 @@ mod tests {
         let pos_view = world.borrow::<Position>();
         let mut count = 0;
         for e in world.iter_alive_entities() {
-            let eid: u32 = e.id();
-            assert!(pos_view.get(eid).is_some());
+            assert!(pos_view.get(e).is_some());
             count += 1;
         }
         assert_eq!(count, 50);

@@ -429,7 +429,7 @@ fn render(
         }
 
         for (ent_id, trans, mat, vel) in fracture_data {
-            world.despawn_by_id(ent_id.id()); // Orijinal objeyi yok et
+            world.despawn(ent_id); // Orijinal objeyi yok et
 
             // Voronoi Shatter ile objeyi rastgele parçalara böl
             let chunks =

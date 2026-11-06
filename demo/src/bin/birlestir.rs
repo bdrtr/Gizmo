@@ -123,11 +123,11 @@ struct Game {
     energy: u32,
     refill: Timer,
     rng: Rng,
-    cells: [u32; CELLS],
-    views: [u32; CELLS],
-    cards: [u32; ORDERS],
-    bin: u32,
-    status: u32,
+    cells: [Entity; CELLS],
+    views: [Entity; CELLS],
+    cards: [Entity; ORDERS],
+    bin: Entity,
+    status: Entity,
     /// Kendi kendine oynarken kaçıncı karede olduğu.
     auto: Option<u32>,
 }
@@ -167,8 +167,8 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
     });
     world.add_child(root, field);
 
-    let mut cells = [0; CELLS];
-    let mut views = [0; CELLS];
+    let mut cells = [Entity::new(0, 0); CELLS];
+    let mut views = [Entity::new(0, 0); CELLS];
     for i in 0..CELLS {
         let cell = world.spawn_bundle(NodeBundle {
             style: Style {
@@ -199,8 +199,8 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
                 .with_color(Vec4::new(0.05, 0.06, 0.04, 1.0)),
         );
         world.add_child(cell, view);
-        cells[i] = cell.id();
-        views[i] = view.id();
+        cells[i] = cell;
+        views[i] = view;
     }
 
     // Sağ sütun: altın, siparişler, Üret, çöp.
@@ -224,10 +224,10 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
         });
         world.add_component(n, Text::screen("", font, size, Vec2::ZERO).with_anchor(TextAnchor::Center));
         world.add_child(parent, n);
-        n.id()
+        n
     };
     let status = label(world, side, 64.0, 22.0);
-    let mut cards = [0; ORDERS];
+    let mut cards = [Entity::new(0, 0); ORDERS];
     for (o, card_id) in cards.iter_mut().enumerate() {
         let card = world.spawn_bundle(NodeBundle {
             style: Style { height: Val::Px(70.0), ..Default::default() },
@@ -238,7 +238,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
         world.add_component(card, DropTarget::default());
         world.add_component(card, Text::screen("", font, 19.0, Vec2::ZERO).with_anchor(TextAnchor::Center));
         world.add_child(side, card);
-        *card_id = card.id();
+        *card_id = card;
     }
     let generate = world.spawn_bundle(ButtonBundle {
         style: Style { height: Val::Px(56.0), ..Default::default() },
@@ -285,7 +285,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
         cells,
         views,
         cards,
-        bin: bin.id(),
+        bin,
         status,
         auto: std::env::var_os("BIRLESTIR_OTO").is_some().then_some(0),
     };
@@ -420,7 +420,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
 
     // Sürükleme: görünüm imleci izliyor; bırakıldığı yer `Drag::dropped_on`.
-    let mut moves: Vec<(usize, Option<u32>)> = Vec::new();
+    let mut moves: Vec<(usize, Option<Entity>)> = Vec::new();
     {
         let drags = world.borrow::<Drag>();
         for (entity, v) in world.query::<(Entity, &View)>().unwrap().iter() {
@@ -437,7 +437,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         }
         // Bir yere gitti: görünüm boşaldı (ya da yeni içeriğiyle) yerinde. Gitmediyse yerine kayarak
         // dönüyor.
-        let view = world.get_entity(game.views[from]);
+        let view = Some(game.views[from]);
         if let Some(e) = view {
             world.remove_component::<ZIndex>(e);
             if game.board[from] == before[from] && before[from] > 0 {
@@ -467,7 +467,7 @@ fn generate(world: &mut World, game: &mut Game) {
 }
 
 /// `from` karesindeki şey `target`'a bırakıldı: bir kare, bir sipariş ya da çöp.
-fn drop_into(world: &mut World, game: &mut Game, from: usize, target: u32) {
+fn drop_into(world: &mut World, game: &mut Game, from: usize, target: Entity) {
     if let Some(c) = world.borrow::<Cell>().get(target).copied() {
         drop_on_cell(world, game, from, c.0);
     } else if let Some(o) = world.borrow::<OrderCard>().get(target).copied() {
@@ -533,7 +533,7 @@ fn play(world: &mut World, name: &str) {
     }
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();
@@ -541,7 +541,7 @@ fn set_text(world: &mut World, id: u32, s: &str) {
     }
 }
 
-fn set_fill(world: &mut World, id: u32, c: Vec4) {
+fn set_fill(world: &mut World, id: Entity, c: Vec4) {
     if let Some(mut b) = world.borrow_mut::<BackgroundColor>().get_mut(id) {
         if b.0 != c {
             b.0 = c;
@@ -558,7 +558,7 @@ fn draw(world: &mut World, game: &Game) {
         let drag = world.borrow::<Drag>().get(view).copied().unwrap_or_default();
         if drag.is_dragging() && tier > 0 {
             let k = world.get_resource::<UiScale>().map_or(1.0, |s| s.factor());
-            if let Some(e) = world.get_entity(view) {
+            if let Some(e) = world.live(view) {
                 if drag.just_started() {
                     world.add_component(e, ZIndex(50));
                     world.remove_component::<UiTween>(e);

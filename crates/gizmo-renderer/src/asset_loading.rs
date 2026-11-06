@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use gizmo_core::World;
 use gizmo_core::component::{MeshSource, MaterialSource};
 use crate::components::{Mesh, Material, MeshRenderer};
@@ -53,7 +54,7 @@ pub fn run_asset_loading_system(
         let descs = world.borrow::<crate::components::MaterialDesc>();
 
         for e in world.iter_alive_entities() {
-            let id = e.id();
+            let id = e;
 
             // Data made in code, not uploaded yet. A `MeshSource` on the same entity loses: the
             // data is the more specific of the two.
@@ -68,7 +69,7 @@ pub fn run_asset_loading_system(
                     None => meshes.get(id).is_none(),
                 };
                 if stale {
-                    missing_data.push((id, data.clone(), from));
+                    missing_data.push((id.id(), data.clone(), from));
                 }
             }
 
@@ -123,7 +124,7 @@ pub fn run_asset_loading_system(
 
     // Eksik Mesh'leri yükle ve world'e ekle
     for (id, mesh_src) in missing_meshes {
-        if let Some(entity) = world.get_entity(id) {
+        if let Some(entity) = world.live(id) {
             // A built-in primitive is uploaded once and shared by every entity that names it.
             let mesh = if let Some(primitive) = asset_manager.primitive_mesh(device, &mesh_src) {
                 primitive
@@ -177,7 +178,7 @@ pub fn run_asset_loading_system(
 
     // Eksik Material'ları yükle ve world'e ekle
     for (id, mat_data) in missing_materials {
-        if let Some(entity) = world.get_entity(id) {
+        if let Some(entity) = world.live(id) {
             let bind_group = if let Some(tex_path) = &mat_data.texture_source {
                 asset_manager
                     .load_material_texture(device, queue, texture_bind_group_layout, tex_path)
@@ -218,7 +219,7 @@ pub fn run_asset_loading_system(
     // `MeshRenderer` that has to sit beside it is still this system's guarantee. Added only when
     // missing, so an entity that already carries one keeps whatever flags it was given.
     if !renderer_only.is_empty() {
-        let needed: Vec<u32> = {
+        let needed: Vec<Entity> = {
             let renderers = world.borrow::<MeshRenderer>();
             renderer_only
                 .into_iter()
@@ -226,7 +227,7 @@ pub fn run_asset_loading_system(
                 .collect()
         };
         for id in needed {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.add_component(e, MeshRenderer::new());
             }
         }

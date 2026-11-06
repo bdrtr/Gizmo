@@ -156,7 +156,7 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
                     let up = car_rot.mul_vec3(Vec3::new(0.0, 1.0, 0.0));
                     let wheel_world_pos = anchor_world - up * wheel.suspension_length;
 
-                    if let Some(mut wt) = q_t.get_mut(state.wheel_entities[i].id()) {
+                    if let Some(mut wt) = q_t.get_mut(state.wheel_entities[i]) {
                         wt.set_position(wheel_world_pos);
 
                         let align_rot = Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2);
@@ -168,7 +168,7 @@ pub(super) fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &
                         }
                     }
 
-                    if let Some(mut st) = q_t.get_mut(state.suspension_entities[i].id()) {
+                    if let Some(mut st) = q_t.get_mut(state.suspension_entities[i]) {
                         st.set_position((anchor_world + wheel_world_pos) * 0.5);
                         let mut scale = st.scale;
                         scale.y = wheel.suspension_length * 0.5;

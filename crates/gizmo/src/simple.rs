@@ -558,7 +558,7 @@ pub fn simple_scene_update(
 /// Returns whether it changed. Nothing happens to an entity without a `Text`.
 ///
 /// Sixteen of the demos carried this same function, which is the reason it is here.
-pub fn set_text(world: &mut World, id: u32, content: &str) -> bool {
+pub fn set_text(world: &mut World, id: Entity, content: &str) -> bool {
     let mut texts = world.borrow_mut::<crate::renderer::components::Text>();
     match texts.get_mut(id) {
         Some(mut t) if t.content != content => {
@@ -671,9 +671,9 @@ impl FixedPhysics {
         use crate::physics::components::KinematicTarget;
         let steps = self.plan(dt);
         // Each driven body's pose now and where the caller wants it after the last step.
-        let driven: Vec<(u32, Transform, KinematicTarget)> = if steps > 1 {
+        let driven: Vec<(Entity, Transform, KinematicTarget)> = if steps > 1 {
             let transforms = world.borrow::<Transform>();
-            world.query::<(Entity, &KinematicTarget)>().unwrap().iter().filter_map(|(entity, t)| transforms.get(entity).map(|from| (entity.id(), *from, *t))).collect()
+            world.query::<(Entity, &KinematicTarget)>().unwrap().iter().filter_map(|(entity, t)| transforms.get(entity).map(|from| (entity, *from, *t))).collect()
         } else {
             Vec::new()
         };
@@ -1226,11 +1226,11 @@ mod fixed_physics_tests {
                 Collider::box_collider(Vec3::new(4.0, 0.1, 1.0)),
                 KinematicTarget::new(Vec3::ZERO, Quat::IDENTITY),
             ))
-            .id();
+            ;
         let mut body = RigidBody::new(0.2, true);
         let col = Collider::sphere(0.3);
         body.update_inertia_from_collider(&col);
-        let ball = world.spawn_bundle((Transform::new(Vec3::new(-3.0, 0.4, 0.0)), body, Velocity::default(), col)).id();
+        let ball = world.spawn_bundle((Transform::new(Vec3::new(-3.0, 0.4, 0.0)), body, Velocity::default(), col));
         let mut physics = FixedPhysics::new(240);
         let frame = 1.0 / 60.0;
         // Settle, then tilt the right edge down at 0.6 rad/s: the ball's side rises.
@@ -1316,11 +1316,11 @@ mod fixed_physics_tests {
             .expect("the synthetic face parses");
         let e = w.spawn();
         w.add_component(e, Text::pinned("a", font, 12.0, TextAnchor::TopLeft, crate::math::Vec2::ZERO));
-        assert!(super::set_text(&mut w, e.id(), "b"));
-        assert!(!super::set_text(&mut w, e.id(), "b"), "the same content is not a change");
+        assert!(super::set_text(&mut w, e, "b"));
+        assert!(!super::set_text(&mut w, e, "b"), "the same content is not a change");
         assert_eq!(w.borrow::<Text>().get(e).unwrap().content, "b");
         let bare = w.spawn();
-        assert!(!super::set_text(&mut w, bare.id(), "x"));
+        assert!(!super::set_text(&mut w, bare, "x"));
     }
 
     /// A simple scene has somewhere for debug lines to go, and a setup's own `Gizmos` survives.
@@ -1343,7 +1343,7 @@ mod fixed_physics_tests {
     /// the same total time split two ways leaves it bit-identical.
     #[test]
     fn advance_steps_the_world_independently_of_the_frame_split() {
-        fn world_with_ball() -> (crate::core::World, u32) {
+        fn world_with_ball() -> (crate::core::World, Entity) {
             let mut w = crate::core::World::new();
             w.insert_resource(
                 PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)),
@@ -1354,9 +1354,9 @@ mod fixed_physics_tests {
                 crate::physics::Velocity::default(),
                 crate::physics::Collider::sphere(0.5),
             ));
-            (w, e.id())
+            (w, e)
         }
-        let y = |w: &crate::core::World, id: u32| w.borrow::<Transform>().get(id).unwrap().position.y;
+        let y = |w: &crate::core::World, id: Entity| w.borrow::<Transform>().get(id).unwrap().position.y;
 
         // Powers of two, so the frame times are exact in f32 and both splits owe the same steps.
         let (mut a, ida) = world_with_ball();
@@ -1412,7 +1412,7 @@ mod fixed_physics_tests {
         car.throttle_input = 1.0;
         let id = w
             .spawn_bundle((Transform::new(Vec3::new(0.0, 0.6, 0.0)), body, Velocity::default(), collider, car))
-            .id();
+            ;
         let mut physics = FixedPhysics::new(120);
         for _ in 0..150 {
             physics.advance(&mut w, 1.0 / 60.0);
@@ -1514,7 +1514,7 @@ mod headless_frames_tests {
         let mut world = World::new();
         let id = world
             .spawn_bundle((crate::renderer::components::Text::pinned("puan 3", font, 22.0, crate::renderer::components::TextAnchor::TopLeft, crate::math::Vec2::ZERO),))
-            .id();
+            ;
         assert!(set_text(&mut world, id, "puan 4"));
     }
 

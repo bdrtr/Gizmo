@@ -304,9 +304,9 @@ fn self_test() -> bool {
 struct Game {
     server: Option<Server>,
     client: Client,
-    me: u32,
-    others: HashMap<u64, u32>,
-    hud: u32,
+    me: Entity,
+    others: HashMap<u64, Entity>,
+    hud: Entity,
 }
 
 fn main() {
@@ -360,7 +360,7 @@ fn main() {
                 MeshRenderer::new(),
             ));
             let me = spawn_runner(scene.world, "#2E86C1");
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let (server, client) = parts.take().expect("kurulum bir kez çalışır");
             scene.world.insert_resource(Game { server, client, me, others: HashMap::new(), hud });
         })
@@ -369,7 +369,7 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-fn spawn_runner(world: &mut World, colour: &str) -> u32 {
+fn spawn_runner(world: &mut World, colour: &str) -> Entity {
     world
         .spawn_bundle((
             Transform::new(Vec3::new(0.0, 0.5, 0.0)).with_scale(Vec3::new(0.4, 0.5, 0.4)),
@@ -378,7 +378,7 @@ fn spawn_runner(world: &mut World, colour: &str) -> u32 {
             MaterialDesc::new().with_pbr(Color::srgb_hex(colour).to_vec4(), 0.5, 0.0),
             MeshRenderer::new(),
         ))
-        .id()
+        
 }
 
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
@@ -390,7 +390,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         server.update(dt);
     }
     let it = game.client.it;
-    let place = |world: &mut World, id: u32, p: [f32; 3], is_it: bool| {
+    let place = |world: &mut World, id: Entity, p: [f32; 3], is_it: bool| {
         if let Some(mut t) = world.borrow_mut::<Transform>().get_mut(id) {
             t.position = Vec3::from_array(p);
         }

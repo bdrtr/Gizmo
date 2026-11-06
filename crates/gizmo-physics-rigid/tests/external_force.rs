@@ -31,9 +31,9 @@ fn speed_after_one_second(fps: f32, push: Push) -> f32 {
     let mut rb = RigidBody::new(1.0, false);
     rb.linear_damping = 0.0;
     rb.update_inertia_from_collider(&col);
-    let body = world.spawn_bundle((Transform::new(Vec3::ZERO), rb, Velocity::default(), col)).id();
+    let body = world.spawn_bundle((Transform::new(Vec3::ZERO), rb, Velocity::default(), col));
     if let Push::Component = push {
-        let e = world.get_entity(body).unwrap();
+        let e = world.live(body).unwrap();
         world.add_component(e, ExternalForce::new(Vec3::new(10.0, 0.0, 0.0)));
     }
 

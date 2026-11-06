@@ -225,6 +225,7 @@ pub fn touch_controls_system(
 
 #[cfg(test)]
 mod tests {
+    use gizmo_core::Entity;
     use super::*;
     use gizmo_core::input::TouchPhase::*;
     use gizmo_core::system::{IntoSystemConfig, Schedule};
@@ -245,11 +246,11 @@ mod tests {
         world.get_resource_mut::<Input>().unwrap().on_touch(id, phase, x, y);
     }
 
-    fn pad() -> (gizmo_core::World, u32, u32) {
+    fn pad() -> (gizmo_core::World, Entity, Entity) {
         let mut world = gizmo_core::World::new();
         world.insert_resource(Input::new());
-        let stick = world.spawn_bundle((node(0.0, 400.0, 200.0, 200.0), VirtualStick::new(50.0))).id();
-        let fire = world.spawn_bundle((node(600.0, 400.0, 200.0, 200.0), VirtualButton::default())).id();
+        let stick = world.spawn_bundle((node(0.0, 400.0, 200.0, 200.0), VirtualStick::new(50.0)));
+        let fire = world.spawn_bundle((node(600.0, 400.0, 200.0, 200.0), VirtualButton::default()));
         (world, stick, fire)
     }
 
@@ -315,8 +316,8 @@ mod tests {
         touch(&mut world, 2, Started, 700.0, 500.0);
         run(&mut world);
         // Made in answer to it, with no box yet: layout has not run.
-        let stick = world.spawn_bundle((node(0.0, 0.0, 0.0, 0.0), VirtualStick::new(50.0))).id();
-        let fire = world.spawn_bundle((node(0.0, 0.0, 0.0, 0.0), VirtualButton::default())).id();
+        let stick = world.spawn_bundle((node(0.0, 0.0, 0.0, 0.0), VirtualStick::new(50.0)));
+        let fire = world.spawn_bundle((node(0.0, 0.0, 0.0, 0.0), VirtualButton::default()));
         run(&mut world);
         let s = |w: &gizmo_core::World| *w.borrow::<VirtualStick>().get(stick).unwrap();
         let b = |w: &gizmo_core::World| *w.borrow::<VirtualButton>().get(fire).unwrap();
@@ -362,7 +363,7 @@ mod tests {
         world.insert_resource(Input::new());
         touch(&mut world, 1, Started, 700.0, 500.0);
         run(&mut world);
-        let fire = world.spawn_bundle((node(600.0, 400.0, 200.0, 200.0), VirtualButton::default())).id();
+        let fire = world.spawn_bundle((node(600.0, 400.0, 200.0, 200.0), VirtualButton::default()));
         touch(&mut world, 1, Ended, 700.0, 500.0);
         run(&mut world);
         let b = *world.borrow::<VirtualButton>().get(fire).unwrap();

@@ -39,7 +39,7 @@ pub fn active_camera_grade(world: &World) -> Option<crate::renderer::components:
 }
 
 /// [`active_camera_grade`] for a given camera — what each view of a split screen is graded by.
-pub fn camera_grade(world: &World, camera: u32) -> Option<crate::renderer::components::PostProcess> {
+pub fn camera_grade(world: &World, camera: Entity) -> Option<crate::renderer::components::PostProcess> {
     world
         .borrow::<crate::renderer::components::PostProcess>()
         .get(camera)

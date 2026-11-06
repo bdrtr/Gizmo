@@ -135,8 +135,6 @@ fn get_with_a_handle_rejects_it_after_despawn_and_reuse() {
     assert_ne!(e2.generation(), stale.generation(), "generation artmalı");
 
     let q = world.query::<&Position>().unwrap();
-    // Ham id: generation kontrolü yok → yeni entity'nin verisi (footgun).
-    assert_eq!(q.get(stale.id()).map(|p| p.x), Some(2.0));
     // Generation-doğrulamalı: stale handle reddedilir.
     assert!(q.get(stale).is_none(), "stale handle None dönmeli");
     // Geçerli handle çalışır.
@@ -502,8 +500,9 @@ use crate::impl_component;
             out.iter_ids = q.iter().map(|(entity, _)| entity.id()).collect();
             out.count = q.iter().count();
             // The disabled entity is id 1 — spawned second, and ids start at 0.
-            out.got_disabled = q.get(1).is_some();
-            out.contains_disabled = q.contains(1);
+            let disabled = Entity::new(1, 0);
+            out.got_disabled = q.get(disabled).is_some();
+            out.contains_disabled = q.contains(disabled);
             out.chunk_total = q.iter_chunks().map(|(_, s)| s.len()).sum();
         }
 
@@ -926,4 +925,48 @@ fn get_with_a_dead_handle_does_not_reach_the_new_owner_of_its_id() {
     assert!(q.contains(new));
     assert_eq!(q.get(new).map(|p| p.x), Some(2.0));
     assert_eq!(q.get(new).map(|p| p.x), Some(2.0), "a raw id still reads whoever holds the slot");
+}
+
+/// **A handle follows its entity, an id follows whoever holds the slot.** `World::live` and
+/// `Query::get` say the old handle is gone even though its id came back; `World::entity`, the one way
+/// across from a raw id, names the new occupant, generation included, and nothing for an empty slot.
+#[test]
+fn live_and_get_refuse_a_dead_handle_and_entity_names_the_new_occupant() {
+    let mut world = World::new();
+    let old = world.spawn_bundle((Position { x: 1.0, y: 0.0 },));
+    assert_eq!(world.live(old), Some(old));
+    assert_eq!(world.entity(old.id()), Some(old));
+
+    world.despawn(old);
+    assert_eq!(world.live(old), None);
+    assert_eq!(world.entity(old.id()), None, "an empty slot names nobody");
+
+    let new = world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
+    assert_eq!(new.id(), old.id(), "the id is recycled, which is the case being tested");
+    assert_ne!(new, old);
+    assert_eq!(world.live(old), None, "the old handle stays dead");
+    assert_eq!(world.live(new), Some(new));
+    assert_eq!(world.entity(old.id()), Some(new), "the id means whoever holds it now");
+
+    let q = world.query::<&Position>().unwrap();
+    assert!(q.get(old).is_none() && !q.contains(old));
+    assert_eq!(q.get(new).map(|p| p.x), Some(2.0));
+    assert_eq!(q.entity(old.id()), Some(new));
+    assert_eq!(q.live(old), None);
+}
+
+/// `World::entity` reads the row, so it has to stay right after the row moves: a swap-remove in the
+/// archetype puts another entity in the slot, and an archetype change moves the entity itself.
+#[test]
+fn entity_finds_the_handle_after_its_row_moved() {
+    let mut world = World::new();
+    let a = world.spawn_bundle((Position { x: 1.0, y: 0.0 },));
+    let b = world.spawn_bundle((Position { x: 2.0, y: 0.0 },));
+    let c = world.spawn_bundle((Position { x: 3.0, y: 0.0 },));
+    world.despawn(a);
+    assert_eq!(world.entity(c.id()), Some(c), "c took a's row");
+    assert_eq!(world.entity(b.id()), Some(b));
+    world.add_component(b, Velocity { x: 0.0, y: 0.0 });
+    assert_eq!(world.entity(b.id()), Some(b), "b moved to another archetype");
+    assert_eq!(world.entity(c.id()), Some(c));
 }

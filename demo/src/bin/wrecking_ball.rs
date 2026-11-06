@@ -35,13 +35,13 @@ const HALF: f32 = 0.25; // duvar tuğlası yarı-boyu
 
 /// R'ye basınca gövdenin döndürüleceği "ev" pozu (id-anahtarlı yerinde reset).
 struct BodyReset {
-    id: u32,
+    id: Entity,
     transform: Transform,
 }
 
 struct Wrecking {
-    rope_vis: u32,
-    ball: u32,
+    rope_vis: Entity,
+    ball: Entity,
     pivot: Vec3,
     resets: Vec<BodyReset>,
 }
@@ -117,14 +117,14 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Wrecking {
                 .with_collider(Collider::sphere(BALL_R))
                 .with_ccd(),
         ))
-        .id();
+        ;
     resets.push(BodyReset {
         id: ball,
         transform: ball_t,
     });
     phys.joints.push(Joint::rope(
         BodyHandle::from_id(anchor),
-        BodyHandle::from_id(ball),
+        BodyHandle::from_id(ball.id()),
         Vec3::ZERO,
         Vec3::ZERO,
         ROPE_LEN,
@@ -138,7 +138,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Wrecking {
             Material::new(tex.clone()).with_pbr(Vec4::new(0.05, 0.05, 0.06, 1.0), 0.7, 0.2),
             MeshRenderer::new(),
         ))
-        .id();
+        ;
 
     // KUTU DUVARI (topun salınım düzleminde) — tek Prefab blueprint, collider Transform.scale'den.
     let brick = Prefab::new(cube.clone(), Material::new(tex.clone()))
@@ -157,7 +157,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Wrecking {
             let color = colors[(ci + row) % colors.len()];
             let e = brick.clone().with_pbr(color, 0.6, 0.3).spawn(world, t);
             resets.push(BodyReset {
-                id: e.id(),
+                id: e,
                 transform: t,
             });
         }

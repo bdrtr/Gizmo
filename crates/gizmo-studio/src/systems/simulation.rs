@@ -153,14 +153,14 @@ pub fn handle_simulation(
         for (entity, fighter) in world.query::<(Entity, &gizmo::physics::components::FighterController)>().unwrap().iter() {
             found_any = true;
             if fighter.player_id == 1 {
-                editor_state.fight_hud.p1_entity = Some(entity.id());
+                editor_state.fight_hud.p1_entity = Some(entity);
                 editor_state.fight_hud.p1_health = fighter.health;
                 editor_state.fight_hud.p1_max_health = fighter.max_health;
                 if let Some(name) = names.get(entity) {
                     editor_state.fight_hud.p1_name = name.0.clone();
                 }
             } else if fighter.player_id == 2 {
-                editor_state.fight_hud.p2_entity = Some(entity.id());
+                editor_state.fight_hud.p2_entity = Some(entity);
                 editor_state.fight_hud.p2_health = fighter.health;
                 editor_state.fight_hud.p2_max_health = fighter.max_health;
                 if let Some(name) = names.get(entity) {
@@ -451,8 +451,8 @@ mod tests {
         StudioState {
             current_fps: 0.0,
             actual_dt: 0.016,
-            editor_camera: 0,
-            game_camera: 0,
+            editor_camera: Entity::new(0, 0),
+            game_camera: Entity::new(0, 0),
             do_raycast: false,
             play: gizmo::systems::PlayLoop::new(),
             asset_watcher: None,

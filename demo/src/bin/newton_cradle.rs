@@ -69,8 +69,8 @@ fn elastic() -> PhysicsMaterial {
 
 /// Statik ön-görünüm kamerası + sürükleme durumu + sıfırlama için ev pozları.
 struct Cradle {
-    balls: Vec<u32>,
-    ropes: Vec<u32>, // her topa karşılık gelen görsel ip (fiziksiz ince çubuk)
+    balls: Vec<Entity>,
+    ropes: Vec<Entity>, // her topa karşılık gelen görsel ip (fiziksiz ince çubuk)
     pivots: Vec<Vec3>,
     homes: Vec<Transform>, // topların kuruluş pozu — R ile buraya dönülür
     cam: Camera,
@@ -183,8 +183,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Cradle {
             MeshRenderer::new(),
         ));
 
-        balls.push(ball.id());
-        ropes.push(rope.id());
+        balls.push(ball);
+        ropes.push(rope);
         pivots.push(pivot);
         homes.push(home);
     }
@@ -263,7 +263,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
             .get_resource::<PhysicsWorld>()
             .and_then(|p| p.raycast(&Ray::new(ro, rd), 100.0))
             .map(|h| h.entity.id());
-        if let Some(idx) = hit_id.and_then(|id| state.balls.iter().position(|&b| b == id)) {
+        if let Some(idx) = hit_id.and_then(|id| state.balls.iter().position(|&b| b.id() == id)) {
             state.dragging = Some(idx);
             // **Tutulan top DİNAMİK kalır.** Eskiden kinematik yapılırdı, gerekçesi de
             // makuldü — "komşuları itsin" — ama kinematik cisim tanım gereği **geri

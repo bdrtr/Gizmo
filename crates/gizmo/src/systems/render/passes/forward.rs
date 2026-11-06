@@ -122,7 +122,7 @@ pub fn record_forward_and_fluid(
 
                 // A mirror with this frame's capture shows it; without one (off screen last frame,
                 // seen from behind, split screen) it falls through and draws as its plain colour.
-                let mirror = item.mirror.and_then(|owner| renderer.planar.captured(owner));
+                let mirror = item.mirror.and_then(|owner| renderer.planar.captured(owner.id()));
 
                 let engine_pipeline = if mirror.is_some() {
                     if item.is_water {

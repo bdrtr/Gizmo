@@ -74,7 +74,7 @@ fn a_block_is_conforming_and_its_surface_faces_out() {
 #[test]
 fn a_dropped_block_lands_and_settles() {
     let mut world = floor_world();
-    let id = world.spawn_bundle((jelly(Vec3::new(-0.5, 1.5, -0.5), 20_000.0),)).id();
+    let id = world.spawn_bundle((jelly(Vec3::new(-0.5, 1.5, -0.5), 20_000.0),));
     run(&world, 6.0);
     let q = world.borrow::<SoftBodyMesh>();
     let b = q.get(id).unwrap();
@@ -87,7 +87,7 @@ fn a_dropped_block_lands_and_settles() {
 #[test]
 fn a_block_on_the_floor_does_not_sink() {
     let mut world = floor_world();
-    let id = world.spawn_bundle((jelly(Vec3::new(-0.5, 0.0, -0.5), 20_000.0),)).id();
+    let id = world.spawn_bundle((jelly(Vec3::new(-0.5, 0.0, -0.5), 20_000.0),));
     run(&world, 6.0);
     let (lo, _) = span_y(world.borrow::<SoftBodyMesh>().get(id).unwrap());
     assert!(lo > -0.02, "the resting block sank to {lo:.3}");
@@ -96,8 +96,8 @@ fn a_block_on_the_floor_does_not_sink() {
 #[test]
 fn a_block_dropped_on_a_block_rests_on_it() {
     let mut world = floor_world();
-    let low = world.spawn_bundle((jelly(Vec3::new(-0.5, 0.0, -0.5), 20_000.0),)).id();
-    let high = world.spawn_bundle((jelly(Vec3::new(-0.5, 1.5, -0.5), 20_000.0),)).id();
+    let low = world.spawn_bundle((jelly(Vec3::new(-0.5, 0.0, -0.5), 20_000.0),));
+    let high = world.spawn_bundle((jelly(Vec3::new(-0.5, 1.5, -0.5), 20_000.0),));
     run(&world, 6.0);
     let q = world.borrow::<SoftBodyMesh>();
     let (_, low_top) = span_y(q.get(low).unwrap());

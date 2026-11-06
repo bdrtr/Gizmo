@@ -133,7 +133,7 @@ pub fn handle_editor_shortcuts(
     if alt_pressed {
         // Alt+H → Tüm gizli objeleri göster
         if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyH as u32) {
-            let hidden_ids: Vec<u32> = {
+            let hidden_ids: Vec<Entity> = {
                 let deleted = world.borrow::<gizmo::core::component::IsDeleted>();
                 let names = world.borrow::<gizmo::core::component::EntityName>();
                 let markers = world.borrow::<gizmo::core::component::EditorOnly>();
@@ -151,13 +151,13 @@ pub fn handle_editor_shortcuts(
                         }
                         true
                     })
-                    .map(|(entity, _)| entity.id())
+                    .map(|(entity, _)| entity)
                     .collect()
             };
 
             let count = hidden_ids.len();
             for id in hidden_ids {
-                if let Some(ent) = world.get_entity(id) {
+                if let Some(ent) = world.live(id) {
                     world.remove_component::<gizmo::core::component::IsHidden>(ent);
                 }
             }

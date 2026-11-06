@@ -221,9 +221,9 @@ fn toggle(world: &mut gizmo::core::World, input: &Input) {
     report.disabled_now = now;
     drop(report);
 
-    let mut ids: Vec<u32> = world
+    let mut ids: Vec<Entity> = world
         .query::<(Entity, &Spinner)>()
-        .map(|q| q.iter().map(|(entity, _)| entity.id()).collect())
+        .map(|q| q.iter().map(|(entity, _)| entity).collect())
         .unwrap_or_default();
     ids.sort_unstable();
     for (index, id) in ids.iter().enumerate() {
@@ -231,7 +231,7 @@ fn toggle(world: &mut gizmo::core::World, input: &Input) {
             continue;
         }
         // Nesil kontrollü: uydurma yok.
-        let Some(entity) = world.entity(*id) else { continue };
+        let Some(entity) = world.entity((*id).id()) else { continue };
         if now {
             world.add_component(entity, Disabled);
         } else {

@@ -114,8 +114,8 @@ gizmo::core::impl_component!(Part);
 struct Game {
     physics: FixedPhysics,
     level: usize,
-    board: u32,
-    ball: u32,
+    board: Entity,
+    ball: Entity,
     /// Başlangıç ve hedef, tahtanın kendi uzayında.
     start: Vec3,
     goal: Vec3,
@@ -125,8 +125,8 @@ struct Game {
     best: Vec<Option<f32>>,
     /// Bölüm bitti: bir sonrakine geçmeden önce kalan süre.
     won: Option<f32>,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     auto: bool,
 }
 
@@ -149,12 +149,12 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
     world.insert_resource(ScreenFade::default());
     let hud = world
         .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
     if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
         audio.load_sound_bytes("dus", Blip::new(Wave::Sine, 420.0, 0.35).with_slide(90.0).with_volume(0.3).wav());
         audio.load_sound_bytes("hedef", Blip::new(Wave::Square, 523.0, 0.4).with_slide(1046.0).with_volume(0.2).wav());
@@ -165,8 +165,8 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
     let mut game = Game {
         physics: FixedPhysics::new(PHYSICS_HZ),
         level: 0,
-        board: 0,
-        ball: 0,
+        board: Entity::new(0, 0),
+        ball: Entity::new(0, 0),
         start: Vec3::ZERO,
         goal: Vec3::ZERO,
         tilt: Vec2::ZERO,
@@ -295,7 +295,7 @@ fn main() {
 /// çocukları; bilye başlangıçta.
 fn build_level(world: &mut World, game: &mut Game) {
     for id in [game.board, game.ball] {
-        if let Some(e) = world.get_entity(id).filter(|_| id != 0) {
+        if let Some(e) = world.live(id).filter(|_| id != Entity::new(0, 0)) {
             world.despawn_recursive(e);
         }
     }
@@ -352,7 +352,7 @@ fn build_level(world: &mut World, game: &mut Game) {
         ));
         world.add_child(board, part);
     }
-    game.board = board.id();
+    game.board = board;
     game.tilt = Vec2::ZERO;
     game.clock = 0.0;
     game.falls = 0;
@@ -361,7 +361,7 @@ fn build_level(world: &mut World, game: &mut Game) {
 }
 
 fn spawn_ball(world: &mut World, game: &mut Game) {
-    if let Some(e) = world.get_entity(game.ball).filter(|_| game.ball != 0) {
+    if let Some(e) = world.live(game.ball).filter(|_| game.ball != Entity::new(0, 0)) {
         world.despawn(e);
     }
     // Tahta eğikse başlangıç noktası da onunla birlikte.
@@ -378,7 +378,7 @@ fn spawn_ball(world: &mut World, game: &mut Game) {
         Velocity::default(),
         Collider::sphere(BALL_R),
     ));
-    game.ball = ball.id();
+    game.ball = ball;
 }
 
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
@@ -471,7 +471,7 @@ fn play(world: &mut World, name: &str) {
     }
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

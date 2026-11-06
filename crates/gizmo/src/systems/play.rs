@@ -17,6 +17,7 @@
 //! scaffolding was written for is no longer commented out anywhere: the fight clock
 //! (`fighter_frame_system`) runs here, on the fixed step, for both paths.
 
+use gizmo_core::Entity;
 use crate::core::World;
 
 /// The fixed simulation step: 60 Hz, and the value both paths have always used.
@@ -53,7 +54,7 @@ pub enum PlayReport<'a> {
     /// One entity's `on_update` failed. Others still ran.
     EntityScriptError {
         /// The entity whose script failed.
-        entity: u32,
+        entity: Entity,
         /// The script file it was running.
         path: &'a str,
         /// What it reported.
@@ -134,16 +135,16 @@ fn apply_script_color(
     for cmd in unhandled {
         match cmd {
             Cmd::SetColor(id, colour) => {
-                let Some(e) = world.get_entity(id) else { continue };
-                let has_desc = world.borrow::<MaterialDesc>().get(id).is_some();
+                let Some(e) = world.entity(id) else { continue };
+                let has_desc = world.borrow::<MaterialDesc>().get(e).is_some();
                 if has_desc {
-                    if let Some(mut d) = world.borrow_mut::<MaterialDesc>().get_mut(id) {
+                    if let Some(mut d) = world.borrow_mut::<MaterialDesc>().get_mut(e) {
                         d.albedo = colour;
                     }
                 } else {
                     world.add_component(e, MaterialDesc::new().with_pbr(colour, 0.6, 0.0));
                 }
-                if let Some(mut m) = world.borrow_mut::<Material>().get_mut(id) {
+                if let Some(mut m) = world.borrow_mut::<Material>().get_mut(e) {
                     m.albedo = colour;
                 }
             }
@@ -186,7 +187,7 @@ fn apply_script_vehicle(
     for cmd in unhandled {
         match cmd {
             Cmd::SetVehicleEngineForce(id, force) => {
-                if let Some(mut vehicle) = vehicles.get_mut(id) {
+                if let Some(mut vehicle) = vehicles.entity(id).and_then(|e| vehicles.get_mut(e)) {
                     vehicle.set_reverse(force < 0.0);
                     vehicle.throttle_input = force.abs();
                 } else {
@@ -194,14 +195,14 @@ fn apply_script_vehicle(
                 }
             }
             Cmd::SetVehicleSteering(id, steering) => {
-                if let Some(mut vehicle) = vehicles.get_mut(id) {
+                if let Some(mut vehicle) = vehicles.entity(id).and_then(|e| vehicles.get_mut(e)) {
                     vehicle.steering_input = steering;
                 } else {
                     tracing::trace!(entity = id, "[Scripting] set_steering: hedefte VehicleController yok");
                 }
             }
             Cmd::SetVehicleBrake(id, brake) => {
-                if let Some(mut vehicle) = vehicles.get_mut(id) {
+                if let Some(mut vehicle) = vehicles.entity(id).and_then(|e| vehicles.get_mut(e)) {
                     vehicle.brake_input = brake;
                 } else {
                     tracing::trace!(entity = id, "[Scripting] set_brake: hedefte VehicleController yok");
@@ -248,7 +249,7 @@ fn apply_script_camera(
                 // The primary is found through a read borrow and written through a write one:
                 // the mutable query is not iterable, and holding both at once is a panic.
                 let primary = {
-                    world.query::<(crate::core::Entity, &crate::renderer::Camera)>().unwrap().iter().find(|(_, cam)| cam.primary).map(|(entity, _)| entity.id())
+                    world.query::<(crate::core::Entity, &crate::renderer::Camera)>().unwrap().iter().find(|(_, cam)| cam.primary).map(|(entity, _)| entity)
                 };
                 match primary {
                     Some(entity) => {
@@ -585,7 +586,7 @@ impl PlayLoop {
                 }
                 if let Err(e) = engine.update_entity_in(world, entity_id.id(), &path, dt, &properties) {
                     report(PlayReport::EntityScriptError {
-                        entity: entity_id.id(),
+                        entity: entity_id,
                         path: &path,
                         error: &e,
                     });
@@ -708,13 +709,13 @@ mod tests {
         use crate::renderer::components::MaterialDesc;
         use crate::scripting::ScriptCommand as Cmd;
         let mut world = World::new();
-        let fresh = world.spawn().id();
+        let fresh = world.spawn();
         let painted = world.spawn();
         world.add_component(painted, MaterialDesc::new().with_pbr(crate::math::Vec4::ONE, 0.2, 0.9));
         let red = crate::math::Vec4::new(0.9, 0.1, 0.1, 1.0);
         let rest = super::apply_script_color(
             &mut world,
-            vec![Cmd::SetColor(fresh, red), Cmd::SetColor(painted.id(), red), Cmd::HideDialogue],
+            vec![Cmd::SetColor(fresh.id(), red), Cmd::SetColor(painted.id(), red), Cmd::HideDialogue],
         );
         assert!(matches!(rest.as_slice(), [Cmd::HideDialogue]), "{rest:?}");
         let descs = world.borrow::<MaterialDesc>();
@@ -768,14 +769,14 @@ mod tests {
         let mut world = World::new();
         let car = world.spawn();
         world.add_component(car, gizmo_physics_dynamics::VehicleController::new());
-        let id = car.id();
+        let id = car;
 
         let rest = apply_script_vehicle(
             &mut world,
             vec![
-                Cmd::SetVehicleEngineForce(id, 0.75),
-                Cmd::SetVehicleSteering(id, -0.4),
-                Cmd::SetVehicleBrake(id, 0.2),
+                Cmd::SetVehicleEngineForce(id.id(), 0.75),
+                Cmd::SetVehicleSteering(id.id(), -0.4),
+                Cmd::SetVehicleBrake(id.id(), 0.2),
                 Cmd::LoadScene("level2".into()),
             ],
         );
@@ -805,9 +806,9 @@ mod tests {
         let mut world = World::new();
         let car = world.spawn();
         world.add_component(car, gizmo_physics_dynamics::VehicleController::new());
-        let id = car.id();
+        let id = car;
 
-        apply_script_vehicle(&mut world, vec![Cmd::SetVehicleEngineForce(id, -0.8)]);
+        apply_script_vehicle(&mut world, vec![Cmd::SetVehicleEngineForce(id.id(), -0.8)]);
         {
             let vehicles = world.borrow::<gizmo_physics_dynamics::VehicleController>();
             let car = vehicles.get(id).expect("the car");
@@ -817,7 +818,7 @@ mod tests {
         }
 
         // And it must come back out again, or a script that taps reverse strands the car in it.
-        apply_script_vehicle(&mut world, vec![Cmd::SetVehicleEngineForce(id, 0.5)]);
+        apply_script_vehicle(&mut world, vec![Cmd::SetVehicleEngineForce(id.id(), 0.5)]);
         let vehicles = world.borrow::<gizmo_physics_dynamics::VehicleController>();
         let car = vehicles.get(id).expect("the car");
         assert!(!car.reverse_input);
@@ -990,7 +991,7 @@ mod tests {
         let mut nav = crate::ai::components::NavAgent::default();
         nav.target = Some(Vec3::new(12.0, 0.0, 0.0));
         world.add_component(agent, nav);
-        let id = agent.id();
+        let id = agent;
 
         let mut loop_ = PlayLoop::new();
         let input = crate::core::input::Input::default();

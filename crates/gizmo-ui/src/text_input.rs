@@ -104,10 +104,10 @@ pub fn text_input_system(input: Res<Input>, mut fields: Query<(Entity, Mut<TextI
     let backspace = input.is_key_just_pressed(key("backspace"));
     let enter = input.is_key_just_pressed(key("enter"));
     let escape = input.is_key_just_pressed(key("escape"));
-    let clicked: Option<u32> = fields.iter_mut().find(|(_, _, c, _)| c.is_some_and(|c| c.0)).map(|(entity, ..)| entity.id());
+    let clicked: Option<Entity> = fields.iter_mut().find(|(_, _, c, _)| c.is_some_and(|c| c.0)).map(|(entity, ..)| entity);
     for (entity, mut field, _, interaction) in fields.iter_mut() {
         if let Some(c) = clicked {
-            field.focused = c == entity.id();
+            field.focused = c == entity;
         } else if pressed_anywhere && interaction.is_none_or(|i| *i == Interaction::None) {
             // A press that is not on this field takes its focus away.
             field.focused = false;
@@ -148,7 +148,7 @@ mod tests {
         use gizmo_core::system::{IntoSystemConfig, Schedule};
         let mut world = gizmo_core::World::new();
         world.insert_resource(Input::new());
-        let field = world.spawn_bundle((TextInput::new(0), Clicked(true), Interaction::Hovered)).id();
+        let field = world.spawn_bundle((TextInput::new(0), Clicked(true), Interaction::Hovered));
         let run = |world: &mut gizmo_core::World| {
             let mut s = Schedule::new();
             s.add_di_system(text_input_system.into_config());

@@ -80,8 +80,8 @@ fn colour(i: u8) -> Vec4 {
     Color::srgb_hex(COLOURS[i as usize % COLOURS.len()]).to_vec4()
 }
 
-fn blocks(world: &World) -> Vec<(u32, Block)> {
-    world.query::<(Entity, &Block)>().unwrap().iter().map(|(entity, b)| (entity.id(), *b)).collect()
+fn blocks(world: &World) -> Vec<(Entity, Block)> {
+    world.query::<(Entity, &Block)>().unwrap().iter().map(|(entity, b)| (entity, *b)).collect()
 }
 
 /// Sütunun bir sonraki boş katı.
@@ -106,15 +106,15 @@ fn place(world: &mut World, x: i32, z: i32, colour_index: u8) {
 
 fn remove_top(world: &mut World, x: i32, z: i32) {
     let top = blocks(world).into_iter().filter(|(_, b)| b.x == x && b.z == z).max_by_key(|(_, b)| b.level);
-    if let Some(e) = top.and_then(|(id, _)| world.get_entity(id)) {
+    if let Some(e) = top.and_then(|(id, _)| world.live(id)) {
         world.despawn(e);
     }
 }
 
 fn clear(world: &mut World) {
-    let ids: Vec<u32> = blocks(world).into_iter().map(|(id, _)| id).chain(world.query::<(Entity, &Ball)>().unwrap().iter().map(|(entity, _)| entity.id())).collect();
+    let ids: Vec<Entity> = blocks(world).into_iter().map(|(id, _)| id).chain(world.query::<(Entity, &Ball)>().unwrap().iter().map(|(entity, _)| entity)).collect();
     for id in ids {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.despawn(e);
         }
     }
@@ -122,7 +122,7 @@ fn clear(world: &mut World) {
 
 /// Yalnız blokları, motorun sahne biçiminde.
 fn save_level(world: &World) -> Result<String, String> {
-    let mut ids: Vec<u32> = blocks(world).into_iter().map(|(id, _)| id).collect();
+    let mut ids: Vec<Entity> = blocks(world).into_iter().map(|(id, _)| id).collect();
     ids.sort_unstable();
     SceneData::of_entities(world, ids, &registry()).to_ron_string().map_err(|e| e.to_string())
 }
@@ -197,9 +197,9 @@ fn snapshot(world: &World) -> Vec<Look> {
 struct Game {
     physics: FixedPhysics,
     colour: u8,
-    hud: u32,
+    hud: Entity,
     message: String,
-    cursor: u32,
+    cursor: Entity,
 }
 
 fn main() {
@@ -243,8 +243,8 @@ fn main() {
                     MaterialDesc::new().with_unlit(Vec4::new(1.0, 1.0, 1.0, 0.35)),
                     MeshRenderer::new(),
                 ))
-                .id();
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+                ;
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             scene.world.insert_resource(Game { physics: FixedPhysics::new(60), colour: 0, hud, message: String::new(), cursor });
         })
         .replace_update(update)

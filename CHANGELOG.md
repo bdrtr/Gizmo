@@ -77,9 +77,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   | `q.entities()` | `(Entity, ...)` in the query; `q.is_empty()` to ask whether there is anything |
   | `q.get_entity(e)`, `q.get_mut_entity(e)` | `q.get(e)`, `q.get_mut(e)` |
 
-  `get` still accepts a raw `u32` beside an `Entity`, because callers still hold raw ids from
-  `Vec<u32>`, `HitEvent` and the Lua API; those are the next piece of work, not this one. `iter_combinations`
-  now takes any `K`, not only pairs. `collect_hidden` lost its `hidden` parameter: it asks the world.
+  `iter_combinations` now takes any `K`, not only pairs.
+
+- **`Query::get`, `get_mut` and `contains` take an `Entity` and nothing else,** so a lookup can no longer
+  reach whoever got a dead entity's id. What held raw ids holds handles now, and code that passed `x.id()`
+  around passes `x`:
+
+  | Type or function | Was | Is |
+  |---|---|---|
+  | `HitEvent::{attacker, attacker_hitbox, victim, victim_hurtbox}` | `u32` | `Entity` |
+  | `UiNavigation::{focused, focus}`, `Drag::{over, dropped_on}`, `DropTarget::{hovered_by, dropped}` | `Option<u32>` | `Option<Entity>` |
+  | `HierarchyExt::{is_ancestor, descendants_inclusive}` | `u32` | `Entity` |
+  | `active_camera`, `SceneData::{find_entity_by_name, entity_names, of_entities, save_prefab, load_prefab}`, `instantiate` | `u32` | `Entity` |
+  | `collect_hidden` | `HashSet<u32>`, and a `hidden` parameter | `HashSet<Entity>`, no parameter: it asks the world |
+  | `Action`/`Condition` behaviour-tree callbacks | `FnMut(u32, ..)` | `FnMut(Entity, ..)` |
+  | `Query::live`, new `World::live` | `Option<u32>` | `Option<Entity>` |
+
+  `World::reconstruct_entity` is gone. **Raw ids remain where they are the format, not a shortcut:**
+  `BodyHandle` and the physics solver (its state hash keys on them), Lua numbers and `ScriptCommand`, scene
+  files' `original_id`, renderer caches. `World::entity(u32)` is the one way across, and it no longer takes
+  the allocator's lock: it reads the handle from the entity's row.
+
+  `Entity` gained `Ord`. It sorts by generation first, so a sorted list of handles is not in id order.
 
   Measured against the previous commit, alternating the two: row iteration is within noise
   (`for_each_iter` +3 %). `get` by `Entity` pays for the generation check, over 50 000 entities in order:
@@ -88,6 +107,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   measurement.
 
 ### Fixed
+
+- **A stale handle reached a new entity through `world.get_entity(x.id())`.** About 120 callers that went
+  through the id now ask `world.live(x)`, which says `None` once `x` has died. `UiNavigation` loses its
+  `focused_handle`, a second copy kept only to detect exactly this.
 
 - **`iter_combinations_mut` could give two live `&mut` to one row, in safe code.** It was an `Iterator`, whose
   items outlive the call that made them, and row 0 is in the pairs `(0, 1)` and `(0, 2)` alike:

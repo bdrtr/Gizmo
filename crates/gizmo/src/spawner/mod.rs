@@ -579,7 +579,7 @@ pub(super) fn spawn_mesh_entity(
 /// Brought in automatically with `use gizmo::prelude::*;`.
 pub trait WorldExt {
     /// Find the Entity ID (u32) by name.
-    fn entity_named(&self, name: &str) -> Option<u32>;
+    fn entity_named(&self, name: &str) -> Option<Entity>;
 
     /// Modify an entity's Transform by name. The Transform matrix is updated automatically.
     fn move_entity_named<F: FnMut(&mut gizmo_physics_core::Transform)>(&mut self, name: &str, f: F);
@@ -610,23 +610,23 @@ pub trait WorldExt {
 }
 
 impl WorldExt for World {
-    fn entity_named(&self, name: &str) -> Option<u32> {
+    fn entity_named(&self, name: &str) -> Option<Entity> {
         let mut names = self.query::<(Entity, &EntityName)>()?;
         for (entity, n) in names.iter_mut() {
             if n.0 == name {
-                return Some(entity.id());
+                return Some(entity);
             }
         }
         None
     }
 
     fn move_entity_named<F: FnMut(&mut gizmo_physics_core::Transform)>(&mut self, name: &str, mut f: F) {
-        let target: Option<u32> = {
+        let target: Option<Entity> = {
             if let Some(mut names) = self.query::<(Entity, &EntityName)>() {
                 let mut found = None;
                 for (entity, n) in names.iter_mut() {
                     if n.0 == name {
-                        found = Some(entity.id());
+                        found = Some(entity);
                         break;
                     }
                 }
@@ -640,7 +640,7 @@ impl WorldExt for World {
                 self.query_mut::<(Entity, gizmo_core::prelude::Mut<gizmo_physics_core::Transform>)>()
             {
                 for (tid, mut trans) in transforms.iter_mut() {
-                    if tid.id() == target_id {
+                    if tid == target_id {
                         f(&mut trans);
                         trans.update_local_matrix();
                     }
@@ -660,12 +660,12 @@ impl WorldExt for World {
         name: &str,
         mut f: F,
     ) {
-        let target: Option<u32> = {
+        let target: Option<Entity> = {
             if let Some(mut names) = self.query::<(Entity, &EntityName)>() {
                 let mut found = None;
                 for (entity, n) in names.iter_mut() {
                     if n.0 == name {
-                        found = Some(entity.id());
+                        found = Some(entity);
                         break;
                     }
                 }

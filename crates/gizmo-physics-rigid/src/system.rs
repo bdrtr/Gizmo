@@ -15,7 +15,7 @@ use gizmo_core::world::World;
 /// step carries the velocity it writes. Before this a game borrowed the three components itself,
 /// woke the body by hand and reached into `Integrator` — which the facade does not even export
 /// (`poligon`, 2026-11-02).
-pub fn apply_impulse(world: &mut World, id: u32, impulse: gizmo_math::Vec3, point: gizmo_math::Vec3) -> bool {
+pub fn apply_impulse(world: &mut World, id: Entity, impulse: gizmo_math::Vec3, point: gizmo_math::Vec3) -> bool {
     let Some(mut q) = world.query_mut::<(Mut<RigidBody>, &Transform, Mut<Velocity>)>() else { return false };
     let Some((mut rb, transform, mut vel)) = q.get_mut(id) else { return false };
     if !rb.is_dynamic() {
@@ -113,7 +113,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
                     if let Some(children_query_ref) = &mut children_query {
                         if let Some(children) = children_query_ref.get(curr_id) {
                             for &child in &children.0 {
-                                let child_id = child.id();
+                                let child_id = child;
                                 if !world.is_alive(child) || !visited.insert(child) {
                                     continue;
                                 }
@@ -183,6 +183,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
 
     // 3. Query Rigid Bodies (Write Locks)
     let mut rigid_bodies = Vec::new();
+    // The handle of each entry above, for the write-back: a `BodyHandle` is the physics side's raw id.
+    let mut body_entities: Vec<Entity> = Vec::new();
     // Kinematic bodies driven to a pose: their index in `rigid_bodies`, and the pose to put them
     // on after the step.
     let mut targets: Vec<(usize, crate::components::KinematicTarget)> = Vec::new();
@@ -239,6 +241,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
                 // unused by physics; bodies are keyed by id only).
                 rigid_bodies.push((BodyHandle::from_id(id.id()), rb, *transform, vel, final_collider));
+                body_entities.push(id);
             }
         }
     } else {
@@ -272,6 +275,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
             if rb.is_static() {
                 if let Some(final_collider) = compound_shapes_map.remove(&id) {
                     rigid_bodies.push((BodyHandle::from_id(id.id()), *rb, *transform, Velocity::default(), final_collider));
+                    body_entities.push(id);
                 }
             } else if let Ok(queue) = world.try_get_resource::<gizmo_core::commands::CommandQueue>() {
                 tracing::debug!(entity = %id, "[Physics] a moving RigidBody has no Velocity — adding one; it is simulated from the next frame");
@@ -292,7 +296,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // body spawned 15 m away on a dead body's id was pulled 5 m by the dead body's rope in a
     // second (`tests/joint_recycled_id.rs`).
     for (handle, ..) in &rigid_bodies {
-        if let Some(entity) = world.get_entity(handle.id()) {
+        if let Some(entity) = world.entity(handle.id()) {
             physics_world.note_ecs_generation(handle.id(), entity.generation());
         }
     }
@@ -351,8 +355,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 gizmo_core::query::Without<gizmo_core::pool::Pooled>,
             )>()
         } {
-            for (entity, rb, transform, vel, _collider) in rigid_bodies {
-                if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel, _)) = query.get_mut(entity.id()) {
+            for ((_, rb, transform, vel, _collider), entity) in rigid_bodies.into_iter().zip(body_entities) {
+                if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel, _)) = query.get_mut(entity) {
                     *ecs_rb = rb;
                     *ecs_trans = transform;
                     *ecs_vel = vel;
@@ -962,13 +966,13 @@ mod apply_impulse_tests {
     use super::*;
     use gizmo_math::Vec3;
 
-    fn body(world: &mut World, rb: RigidBody) -> u32 {
+    fn body(world: &mut World, rb: RigidBody) -> Entity {
         let e = world.spawn();
         world.add_component(e, Transform::new(Vec3::ZERO));
         world.add_component(e, rb);
         world.add_component(e, Velocity::default());
         world.add_component(e, Collider::sphere(0.5));
-        e.id()
+        e
     }
 
     /// Through the centre: pure linear, `impulse / mass`. Off the centre: it spins too. A
@@ -992,7 +996,7 @@ mod apply_impulse_tests {
         let wall = body(&mut world, RigidBody::new_static());
         assert!(!apply_impulse(&mut world, wall, Vec3::X, Vec3::ZERO));
         assert_eq!(world.borrow::<Velocity>().get(wall).unwrap().linear, Vec3::ZERO);
-        assert!(!apply_impulse(&mut world, 9999, Vec3::X, Vec3::ZERO));
+        assert!(!apply_impulse(&mut world, Entity::new(9999, 0), Vec3::X, Vec3::ZERO));
     }
 }
 

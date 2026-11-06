@@ -1,3 +1,4 @@
+use gizmo_core::Entity;
 use std::collections::{HashMap, HashSet};
 use taffy::geometry::{Rect as TaffyRect, Size as TaffySize};
 use taffy::style::{
@@ -29,7 +30,7 @@ pub struct UiContext {
     /// The taffy layout tree backing all UI nodes.
     taffy: TaffyTree,
     /// Mapping from entity id to its corresponding taffy node.
-    entity_to_node: HashMap<u32, NodeId>,
+    entity_to_node: HashMap<Entity, NodeId>,
     /// Size of the window, used as available space for root layout.
     pub window_size: Vec2,
 }
@@ -52,7 +53,7 @@ pub struct UiContext {
 // from safe code to a pointer-tagged length in this tree.
 // `no_length_conversion_produces_a_calc_tagged_value` below asserts the tags.
 //
-// The remaining fields (`HashMap<u32, NodeId>`, `Vec2`) are plain data.
+// The remaining fields (`HashMap<Entity, NodeId>`, `Vec2`) are plain data.
 // `UiContext` is stored as a `World` resource, which requires `Send + Sync`.
 unsafe impl Send for UiContext {}
 // SAFETY: see the `Send` impl above — same invariant.
@@ -264,7 +265,7 @@ impl UiContext {
     /// Errors from taffy are swallowed: on the rare allocation/insertion failure
     /// the entity is skipped for this frame and retried on the next one, which
     /// is safe because every read path goes through [`Self::relative_layout`].
-    pub(crate) fn sync_style(&mut self, entity: u32, style: &Style) {
+    pub(crate) fn sync_style(&mut self, entity: Entity, style: &Style) {
         let taffy_style = Self::to_taffy_style(style);
         match self.entity_to_node.get(&entity) {
             Some(&node_id) => {
@@ -279,8 +280,8 @@ impl UiContext {
     }
 
     /// Drops the layout nodes of every tracked entity that is not in `keep`.
-    pub(crate) fn retain_entities(&mut self, keep: &HashSet<u32>) {
-        let stale: Vec<(u32, NodeId)> = self
+    pub(crate) fn retain_entities(&mut self, keep: &HashSet<Entity>) {
+        let stale: Vec<(Entity, NodeId)> = self
             .entity_to_node
             .iter()
             .filter(|(entity, _)| !keep.contains(*entity))
@@ -294,7 +295,7 @@ impl UiContext {
 
     /// Replaces `entity`'s children in the layout tree. Child ids with no layout
     /// node of their own are skipped; a no-op if `entity` itself is untracked.
-    pub(crate) fn set_children(&mut self, entity: u32, children: &[u32]) {
+    pub(crate) fn set_children(&mut self, entity: Entity, children: &[Entity]) {
         let Some(&node_id) = self.entity_to_node.get(&entity) else {
             return;
         };
@@ -307,7 +308,7 @@ impl UiContext {
 
     /// Computes layout for the subtree rooted at `entity`, against the current
     /// [`UiContext::window_size`] as available space.
-    pub(crate) fn compute_root_layout(&mut self, entity: u32) {
+    pub(crate) fn compute_root_layout(&mut self, entity: Entity) {
         let Some(&node_id) = self.entity_to_node.get(&entity) else {
             return;
         };
@@ -323,7 +324,7 @@ impl UiContext {
     /// The position is **parent-relative**, straight out of the layout
     /// algorithm. The `Node` component written by the layout system holds the
     /// *absolute* window position instead; that is the one hit-testing uses.
-    pub fn relative_layout(&self, entity: u32) -> Option<(Vec2, Vec2)> {
+    pub fn relative_layout(&self, entity: Entity) -> Option<(Vec2, Vec2)> {
         let &node_id = self.entity_to_node.get(&entity)?;
         let layout = self.taffy.layout(node_id).ok()?;
         Some((
@@ -334,7 +335,7 @@ impl UiContext {
 
     /// The right and bottom padding plus border of `entity` from the last layout — the room a
     /// scrolled-to-the-end list keeps below its last row, as it keeps above its first.
-    pub(crate) fn inner_end(&self, entity: u32) -> Vec2 {
+    pub(crate) fn inner_end(&self, entity: Entity) -> Vec2 {
         let Some(layout) = self.entity_to_node.get(&entity).and_then(|&n| self.taffy.layout(n).ok()) else {
             return Vec2::ZERO;
         };
@@ -342,7 +343,7 @@ impl UiContext {
     }
 
     /// Whether `entity` currently has a layout node.
-    pub fn is_tracked(&self, entity: u32) -> bool {
+    pub fn is_tracked(&self, entity: Entity) -> bool {
         self.entity_to_node.contains_key(&entity)
     }
 
@@ -361,6 +362,7 @@ impl UiContext {
 
 #[cfg(test)]
 mod tests {
+    use gizmo_core::Entity;
     use super::*;
     use taffy::style::CompactLength;
 
@@ -532,11 +534,11 @@ mod tests {
         // Path A: the production path — POD styles through UiContext.
         let mut ctx = UiContext::new();
         ctx.window_size = Vec2::new(1024.0, 768.0);
-        ctx.sync_style(1, &pod_parent);
-        ctx.sync_style(2, &pod_fixed);
-        ctx.sync_style(3, &pod_grower);
-        ctx.set_children(1, &[2, 3]);
-        ctx.compute_root_layout(1);
+        ctx.sync_style(Entity::new(1, 0), &pod_parent);
+        ctx.sync_style(Entity::new(2, 0), &pod_fixed);
+        ctx.sync_style(Entity::new(3, 0), &pod_grower);
+        ctx.set_children(Entity::new(1, 0), &[Entity::new(2, 0), Entity::new(3, 0)]);
+        ctx.compute_root_layout(Entity::new(1, 0));
 
         // Path B: a raw taffy tree built from the hand-written styles.
         let mut raw: TaffyTree = TaffyTree::new();
@@ -553,7 +555,7 @@ mod tests {
         .unwrap();
 
         for (entity, raw_node, name) in
-            [(1u32, raw_parent, "parent"), (2, raw_fixed, "fixed"), (3, raw_grower, "grower")]
+            [(Entity::new(1, 0), raw_parent, "parent"), (Entity::new(2, 0), raw_fixed, "fixed"), (Entity::new(3, 0), raw_grower, "grower")]
         {
             let (size, pos) = ctx.relative_layout(entity).expect("laid out");
             let expected = raw.layout(raw_node).unwrap();
@@ -572,8 +574,8 @@ mod tests {
         // Guard against the whole assertion being vacuous: the flex settings must
         // actually have done something. `grower` fills the leftover main-axis
         // space, so it is wider than nothing and the two children do not overlap.
-        let (fixed_size, fixed_pos) = ctx.relative_layout(2).unwrap();
-        let (grower_size, grower_pos) = ctx.relative_layout(3).unwrap();
+        let (fixed_size, fixed_pos) = ctx.relative_layout(Entity::new(2, 0)).unwrap();
+        let (grower_size, grower_pos) = ctx.relative_layout(Entity::new(3, 0)).unwrap();
         // 80px wide; the height is 50% of the parent's *content* box, which is
         // 200px minus the 20px top padding = 180px, so 90px.
         assert_eq!(fixed_size, Vec2::new(80.0, 90.0));
@@ -591,16 +593,16 @@ mod tests {
     #[test]
     fn retain_entities_frees_dropped_nodes() {
         let mut ctx = UiContext::new();
-        ctx.sync_style(7, &Style::default());
-        ctx.sync_style(8, &Style::default());
-        assert!(ctx.is_tracked(7) && ctx.is_tracked(8));
+        ctx.sync_style(Entity::new(7, 0), &Style::default());
+        ctx.sync_style(Entity::new(8, 0), &Style::default());
+        assert!(ctx.is_tracked(Entity::new(7, 0)) && ctx.is_tracked(Entity::new(8, 0)));
         assert_eq!(ctx.tracked_count(), 2);
         assert_eq!(ctx.node_count(), 2);
 
-        let keep: HashSet<u32> = [7].into_iter().collect();
+        let keep: HashSet<Entity> = [Entity::new(7, 0)].into_iter().collect();
         ctx.retain_entities(&keep);
-        assert!(ctx.is_tracked(7));
-        assert!(!ctx.is_tracked(8));
+        assert!(ctx.is_tracked(Entity::new(7, 0)));
+        assert!(!ctx.is_tracked(Entity::new(8, 0)));
         assert_eq!(ctx.tracked_count(), 1);
         assert_eq!(ctx.node_count(), 1, "the dropped entity's taffy node must be freed");
     }

@@ -5,6 +5,7 @@
 //! the old body's joints: a ball spawned 15 m away was pulled 5 m toward the dead ball's anchor in
 //! a second.
 
+use gizmo_core::Entity;
 use gizmo_core::World;
 use gizmo_math::Vec3;
 use gizmo_physics_core::{BodyHandle, Collider, Transform};
@@ -15,11 +16,11 @@ use gizmo_physics_rigid::world::PhysicsWorld;
 
 const STEP: f32 = 1.0 / 60.0;
 
-fn ball(world: &mut World, at: Vec3) -> u32 {
+fn ball(world: &mut World, at: Vec3) -> Entity {
     let col = Collider::sphere(0.3);
     let mut rb = RigidBody::new(10.0, false);
     rb.update_inertia_from_collider(&col);
-    world.spawn_bundle((Transform::new(at), rb, Velocity::default(), col)).id()
+    world.spawn_bundle((Transform::new(at), rb, Velocity::default(), col))
 }
 
 #[test]
@@ -34,17 +35,17 @@ fn a_new_body_on_a_recycled_id_is_not_tied_to_the_old_ones_joint() {
         .get_resource_mut::<PhysicsWorld>()
         .unwrap()
         .joints
-        .push(Joint::rope(BodyHandle::from_id(anchor), BodyHandle::from_id(old), Vec3::ZERO, Vec3::ZERO, 2.0));
+        .push(Joint::rope(BodyHandle::from_id(anchor), BodyHandle::from_id(old.id()), Vec3::ZERO, Vec3::ZERO, 2.0));
     for _ in 0..10 {
         physics_step_system(&world, STEP);
     }
 
-    let e = world.get_entity(old).unwrap();
+    let e = world.live(old).unwrap();
     world.despawn(e);
     world.apply_commands();
     let start = Vec3::new(15.0, 0.0, 0.0);
     let new = ball(&mut world, start);
-    assert_eq!(old, new, "the scenario needs the id to be recycled");
+    assert_eq!(old.id(), new.id(), "the scenario needs the id to be recycled");
     for _ in 0..60 {
         physics_step_system(&world, STEP);
     }
@@ -77,18 +78,18 @@ fn a_new_body_on_a_recycled_id_enters_a_trigger_it_is_born_in() {
     for _ in 0..5 {
         physics_step_system(&world, STEP);
     }
-    let e = world.get_entity(old).unwrap();
+    let e = world.live(old).unwrap();
     world.despawn(e);
     world.apply_commands();
     let new = ball(&mut world, Vec3::new(-0.5, 0.0, 0.0));
-    assert_eq!(old, new, "the scenario needs the id to be recycled");
+    assert_eq!(old.id(), new.id(), "the scenario needs the id to be recycled");
     physics_step_system(&world, STEP);
     let events: Vec<CollisionEventType> = world
         .get_resource::<PhysicsWorld>()
         .unwrap()
         .trigger_events()
         .iter()
-        .filter(|t| [t.trigger_entity.id(), t.other_entity.id()].contains(&zone) && [t.trigger_entity.id(), t.other_entity.id()].contains(&new))
+        .filter(|t| [t.trigger_entity.id(), t.other_entity.id()].contains(&zone) && [t.trigger_entity.id(), t.other_entity.id()].contains(&new.id()))
         .map(|t| t.event_type)
         .collect();
     // The dead body leaves, then the new one comes in — in that order, on the shared id.
@@ -116,7 +117,7 @@ fn a_body_despawned_in_a_trigger_ends_its_overlap() {
     for _ in 0..5 {
         physics_step_system(&world, STEP);
     }
-    let e = world.get_entity(visitor).unwrap();
+    let e = world.live(visitor).unwrap();
     world.despawn(e);
     world.apply_commands();
     physics_step_system(&world, STEP);
@@ -126,7 +127,7 @@ fn a_body_despawned_in_a_trigger_ends_its_overlap() {
         .trigger_events()
         .iter()
         .filter(|t| t.event_type == CollisionEventType::Ended)
-        .filter(|t| [t.trigger_entity.id(), t.other_entity.id()].contains(&zone) && [t.trigger_entity.id(), t.other_entity.id()].contains(&visitor))
+        .filter(|t| [t.trigger_entity.id(), t.other_entity.id()].contains(&zone) && [t.trigger_entity.id(), t.other_entity.id()].contains(&visitor.id()))
         .count();
     assert_eq!(ended, 1, "the zone was not told its visitor left");
 }

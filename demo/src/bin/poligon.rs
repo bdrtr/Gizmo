@@ -82,13 +82,13 @@ gizmo::core::impl_component!(Crate);
 
 struct Game {
     physics: FixedPhysics,
-    player: u32,
-    camera: u32,
+    player: Entity,
+    camera: Entity,
     yaw: f32,
     pitch: f32,
     shots: u32,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
     looking: bool,
     auto_shots: u32,
 }
@@ -127,7 +127,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
             Collider::capsule(0.3, 0.3),
             Velocity::default(),
         ))
-        .id();
+        ;
     let camera = world
         .spawn_bundle(CameraBundle {
             position: Vec3::new(0.0, 0.9 + EYE, 0.0),
@@ -136,25 +136,25 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Game {
             primary: true,
             ..Default::default()
         })
-        .id();
+        ;
     // Sarsıntı yalnızca resimde: nişan ışını ve bakış açısı onu hiç görmüyor.
     let mut shake = CameraShake::default();
     shake.max_offset = 0.04;
     shake.max_angle = 0.012;
     shake.decay = 3.0;
-    if let Some(e) = world.get_entity(camera) {
+    if let Some(e) = world.live(camera) {
         world.add_component(e, shake);
     }
 
     let _crosshair = world.spawn_bundle((Text::pinned("+", font, 28.0, TextAnchor::Center, Vec2::ZERO),));
     let hud = world
         .spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),))
-        .id();
+        ;
     let banner = world
         .spawn_bundle((Text::pinned_at("", font, 40.0, Vec2::new(0.5, 0.35), Vec2::ZERO)
             .with_anchor(TextAnchor::Center)
             .with_align(TextAlign::Center),))
-        .id();
+        ;
 
     if let Some(mut audio) = sound.then(AudioManager::new).and_then(Result::ok) {
         audio.load_sound_bytes("ates", Blip::new(Wave::Noise, 3000.0, 0.12).with_slide(400.0).with_volume(0.35).wav());
@@ -350,10 +350,10 @@ fn shoot(world: &mut World, game: &Game, dir: Vec3) {
     let hit = {
         let Some(physics) = world.get_resource::<PhysicsWorld>() else { return };
         let ray = gizmo::physics::raycast::Ray::new(origin, dir);
-        physics.raycast_excluding(&ray, 100.0, gizmo::physics::BodyHandle::from_id(game.player))
+        physics.raycast_excluding(&ray, 100.0, gizmo::physics::BodyHandle::from_id(game.player.id()))
     };
     let Some(hit) = hit else { return };
-    let id = hit.entity.id();
+    let Some(id) = world.entity(hit.entity.id()) else { return };
     if world.borrow::<Crate>().get(id).is_none() {
         return;
     }

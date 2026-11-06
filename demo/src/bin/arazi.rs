@@ -71,7 +71,7 @@ fn spawn_world(world: &mut World) {
     ));
 }
 
-fn spawn_car(world: &mut World, at: Vec3, visual: bool) -> u32 {
+fn spawn_car(world: &mut World, at: Vec3, visual: bool) -> Entity {
     let collider = Collider::box_collider(Vec3::new(0.9, 0.35, 2.0));
     let mut body = RigidBody::new(900.0, true);
     body.update_inertia_from_collider(&collider);
@@ -81,9 +81,9 @@ fn spawn_car(world: &mut World, at: Vec3, visual: bool) -> u32 {
         wheel.suspension_max_travel = 0.35;
     }
     car.max_steering_angle = 0.55;
-    let id = world.spawn_bundle((Transform::new(at), body, Velocity::default(), collider, car)).id();
+    let id = world.spawn_bundle((Transform::new(at), body, Velocity::default(), collider, car));
     if visual {
-        if let Some(e) = world.get_entity(id) {
+        if let Some(e) = world.live(id) {
             world.add_component(e, GlobalTransform::default());
             for (offset, half, colour) in [
                 (Vec3::ZERO, Vec3::new(0.9, 0.35, 2.0), Color::srgb_hex("#D35400").to_vec4()),
@@ -110,7 +110,7 @@ fn start_position(world: &World) -> Vec3 {
 }
 
 /// Otomatik pilot: sıradaki noktaya dön, hız sınırının altında gaz.
-fn autopilot(world: &World, car: u32, target: Vec3) -> (f32, f32) {
+fn autopilot(world: &World, car: Entity, target: Vec3) -> (f32, f32) {
     let (t, speed) = {
         let ts = world.borrow::<Transform>();
         let cs = world.borrow::<VehicleController>();
@@ -124,7 +124,7 @@ fn autopilot(world: &World, car: u32, target: Vec3) -> (f32, f32) {
     (throttle, (angle * 1.6).clamp(-1.0, 1.0))
 }
 
-fn drive(world: &mut World, car: u32, throttle: f32, steer: f32) {
+fn drive(world: &mut World, car: Entity, throttle: f32, steer: f32) {
     if let Some(mut c) = world.borrow_mut::<VehicleController>().get_mut(car) {
         c.throttle_input = throttle.max(0.0);
         c.brake_input = (-throttle).max(0.0);
@@ -155,7 +155,7 @@ fn self_test() -> bool {
         physics.advance(&mut world, dt);
         world.apply_commands();
         let p = world.borrow::<Transform>().get(car).map(|t| t.position).unwrap_or(Vec3::ZERO);
-        if let Some(g) = world.get_resource::<PhysicsWorld>().and_then(|pw| ground_at(&pw, p.x, p.z, car)) {
+        if let Some(g) = world.get_resource::<PhysicsWorld>().and_then(|pw| ground_at(&pw, p.x, p.z, car.id())) {
             deepest = deepest.min(p.y - g);
             airborne_max = airborne_max.max(p.y - g);
         }
@@ -183,14 +183,14 @@ fn self_test() -> bool {
 
 struct Game {
     physics: FixedPhysics,
-    car: u32,
+    car: Entity,
     next: usize,
     clock: f32,
     finished: Option<f32>,
-    flags: Vec<u32>,
-    camera: u32,
-    hud: u32,
-    banner: u32,
+    flags: Vec<Entity>,
+    camera: Entity,
+    hud: Entity,
+    banner: Entity,
 }
 
 fn main() {
@@ -214,7 +214,7 @@ fn main() {
                 DirectionalLight::new(Vec3::new(1.0, 0.95, 0.85), 2.0, LightRole::Sun),
             ));
             gizmo::physics::physics_step_system(scene.world, 1.0 / 60.0);
-            let flags: Vec<u32> = (0..CHECKPOINTS.len())
+            let flags: Vec<Entity> = (0..CHECKPOINTS.len())
                 .map(|k| {
                     let at = checkpoint(scene.world, k);
                     scene
@@ -226,7 +226,6 @@ fn main() {
                             MaterialDesc::new().with_unlit(Color::srgb_hex("#BDC3C7").to_vec4()),
                             MeshRenderer::new(),
                         ))
-                        .id()
                 })
                 .collect();
             let start = start_position(scene.world);
@@ -234,14 +233,14 @@ fn main() {
             let camera = scene
                 .world
                 .spawn_bundle(CameraBundle { position: Vec3::new(0.0, 12.0, 18.0), pitch: -0.4, primary: true, ..Default::default() })
-                .id();
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+                ;
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             scene.world.insert_resource(Game { physics: FixedPhysics::new(60), car, next: 0, clock: 0.0, finished: None, flags, camera, hud, banner });
         })
         .replace_update(update)
@@ -253,7 +252,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let Some(mut game) = world.remove_resource::<Game>() else { return };
     let dt = dt.min(0.05);
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        if let Some(e) = world.get_entity(game.car) {
+        if let Some(e) = world.live(game.car) {
             use gizmo::core::hierarchy::HierarchyExt;
             world.despawn_recursive(e);
         }

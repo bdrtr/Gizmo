@@ -17,7 +17,7 @@ pub fn handle_scene_operations(
 
     // --- DİNAMİK COMPONENT EKLEME İŞLEMİ ---
     if let Some((ent_id, comp_name)) = editor_state.add_component_request.take() {
-        if let Some(ent) = world.get_entity(ent_id.id()) {
+        if let Some(ent) = world.live(ent_id) {
             match comp_name.as_str() {
                 "Transform" => world.add_component(ent, Transform::new(Vec3::ZERO)),
                 "Velocity" => world.add_component(ent, gizmo::physics::Velocity::new(Vec3::ZERO)),
@@ -152,7 +152,7 @@ pub fn handle_scene_operations(
     }
 
     if let Some((ent_id, comp_name)) = editor_state.remove_component_request.take() {
-        if let Some(ent) = world.get_entity(ent_id.id()) {
+        if let Some(ent) = world.live(ent_id) {
             match comp_name.as_str() {
                 "Hitbox" => { world.remove_component::<gizmo::physics::components::Hitbox>(ent); }
                 "Hurtbox" => { world.remove_component::<gizmo::physics::components::Hurtbox>(ent); }
@@ -242,11 +242,11 @@ pub fn handle_scene_operations(
             // A `Children` cycle grew `ids_to_delete` without bound — on a Delete keypress, so
             // the editor hung and then died — and a diamond counted the shared child twice in
             // the message below. `descendants_inclusive` owns the guard now.
-            let ids_to_delete = world.descendants_inclusive(ent_id.id());
+            let ids_to_delete = world.descendants_inclusive(ent_id);
 
             // 2. Etiketleri ekle (Soft Delete)
             for &id in &ids_to_delete {
-                if let Some(ent) = world.get_entity(id) {
+                if let Some(ent) = world.live(id) {
                     world.add_component(ent, gizmo::core::component::IsDeleted);
                     world.add_component(ent, gizmo::core::component::IsHidden);
                     soft_deleted_entities.push(ent);
@@ -443,7 +443,7 @@ pub fn handle_scene_operations(
                 "'{}' oluşturulamadı: mesh varlıkları henüz hazır değil.",
                 kind.entity_name()
             ));
-            world.despawn_by_id(e.id());
+            world.despawn(e);
             editor_state.pending_child_parent = None;
             editor_state.pending_group_members.clear();
             editor_state.pending_child_components.clear();
@@ -505,7 +505,7 @@ pub fn handle_scene_operations(
                     "Hitbox" => {
                         world.add_component(e, gizmo::physics::components::Hitbox::default());
                         // İsmi güncelle
-                        if let Some(ent) = world.get_entity(e.id()) {
+                        if let Some(ent) = world.live(e) {
                             world.add_component(
                                 ent,
                                 gizmo::core::component::EntityName("Hitbox".to_string()),
@@ -515,7 +515,7 @@ pub fn handle_scene_operations(
                     }
                     "Hurtbox" => {
                         world.add_component(e, gizmo::physics::components::Hurtbox::default());
-                        if let Some(ent) = world.get_entity(e.id()) {
+                        if let Some(ent) = world.live(e) {
                             world.add_component(
                                 ent,
                                 gizmo::core::component::EntityName("Hurtbox".to_string()),
@@ -546,7 +546,7 @@ pub fn handle_scene_operations(
                     continue;
                 }
                 if let (Some(child), Some(parent)) =
-                    (world.get_entity(member.id()), world.get_entity(e.id()))
+                    (world.live(member), world.live(e))
                 {
                     world.add_child(parent, child);
                     grouped += 1;
@@ -563,7 +563,7 @@ pub fn handle_scene_operations(
     // --- GÖRÜNÜRLÜK AÇMA / KAPATMA ---
     let toggle_requests: Vec<_> = std::mem::take(&mut editor_state.toggle_visibility_requests);
     for ent_id in toggle_requests {
-        if let Some(ent) = world.get_entity(ent_id.id()) {
+        if let Some(ent) = world.live(ent_id) {
             let currently_hidden = world
                 .borrow::<gizmo::core::component::IsHidden>()
                 .contains(ent_id);
@@ -590,15 +590,14 @@ pub fn handle_scene_operations(
     // returns silently, so the condition is tested here for the message and then the core call
     // does the work.
     if let Some((child_id, new_parent_id)) = editor_state.reparent_request.take() {
-        let would_cycle = new_parent_id.id() == child_id.id()
-            || world.is_ancestor(child_id.id(), new_parent_id.id());
+        let would_cycle = new_parent_id == child_id || world.is_ancestor(child_id, new_parent_id);
         if would_cycle {
             editor_state.log_info(&format!(
                 "Reparent reddedildi: {child_id} → {new_parent_id} bir hiyerarşi döngüsü oluştururdu."
             ));
         } else if let (Some(child), Some(parent)) = (
-            world.get_entity(child_id.id()),
-            world.get_entity(new_parent_id.id()),
+            world.live(child_id),
+            world.live(new_parent_id),
         ) {
             world.add_child(parent, child);
             editor_state.log_info(&format!(
@@ -619,7 +618,7 @@ pub fn handle_scene_operations(
             .get(child_id)
             .map(|c| c.0);
 
-        if let (Some(old_pid), Some(child)) = (old_parent_id, world.get_entity(child_id.id())) {
+        if let (Some(old_pid), Some(child)) = (old_parent_id, world.live(child_id)) {
             if world.is_alive(old_pid) {
                 world.remove_child(old_pid, child);
                 editor_state.log_info(&format!("Entity {} kök (root) yapıldı.", child_id));
@@ -662,8 +661,8 @@ mod tests {
         StudioState {
             current_fps: 0.0,
             actual_dt: 0.016,
-            editor_camera: 0,
-            game_camera: 0,
+            editor_camera: Entity::new(0, 0),
+            game_camera: Entity::new(0, 0),
             do_raycast: false,
             play: gizmo::systems::PlayLoop::new(),
             asset_watcher: None,
@@ -791,23 +790,22 @@ mod tests {
 
     use gizmo::editor::SpawnKind;
 
-    fn name_of(world: &World, id: u32) -> Option<String> {
+    fn name_of(world: &World, id: Entity) -> Option<String> {
         world
             .borrow::<gizmo::core::component::EntityName>()
             .get(id)
             .map(|n| n.0.clone())
     }
 
-    fn spawn_via_menu(kind: SpawnKind) -> (World, EditorState, Vec<u32>) {
+    fn spawn_via_menu(kind: SpawnKind) -> (World, EditorState, Vec<Entity>) {
         let mut world = World::new();
-        let before: Vec<u32> = world.iter_alive_entities().iter().map(|e| e.id()).collect();
+        let before: Vec<Entity> = world.iter_alive_entities();
         let mut ed = EditorState::default();
         ed.spawn_request = Some(kind);
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
-        let new: Vec<u32> = world
+        let new: Vec<Entity> = world
             .iter_alive_entities()
-            .iter()
-            .map(|e| e.id())
+            .into_iter()
             .filter(|id| !before.contains(id))
             .collect();
         (world, ed, new)
@@ -922,7 +920,7 @@ mod tests {
         let group = world
             .iter_alive_entities()
             .into_iter()
-            .find(|e| name_of(&world, e.id()).as_deref() == Some("Grup"))
+            .find(|e| name_of(&world, *e).as_deref() == Some("Grup"))
             .expect("the group itself");
 
         for member in [a, b] {
@@ -932,7 +930,7 @@ mod tests {
                 "every selected entity must end up under the group"
             );
         }
-        let mut listed = children_of(&world, group.id());
+        let mut listed = children_of(&world, group);
         listed.sort_unstable();
         let mut expected = vec![a.id(), b.id()];
         expected.sort_unstable();
@@ -972,7 +970,7 @@ mod tests {
         e
     }
 
-    fn children_of(world: &World, parent: u32) -> Vec<u32> {
+    fn children_of(world: &World, parent: Entity) -> Vec<u32> {
         world.borrow::<Children>().get(parent).map(|c| c.0.iter().map(|e| e.id()).collect()).unwrap_or_default()
     }
 
@@ -992,7 +990,7 @@ mod tests {
             Some(parent),
             "the child must point at its new parent"
         );
-        assert_eq!(children_of(&world, parent.id()), vec![child.id()], "…and be listed by it");
+        assert_eq!(children_of(&world, parent), vec![child.id()], "…and be listed by it");
     }
 
     /// Moving a child from one parent to another must take it OUT of the first one's list.
@@ -1008,10 +1006,10 @@ mod tests {
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 
         assert!(
-            children_of(&world, first.id()).is_empty(),
+            children_of(&world, first).is_empty(),
             "the old parent still lists a child it no longer has"
         );
-        assert_eq!(children_of(&world, second.id()), vec![child.id()]);
+        assert_eq!(children_of(&world, second), vec![child.id()]);
         assert_eq!(world.borrow::<Parent>().get(child).map(|p| p.0), Some(second));
     }
 
@@ -1049,7 +1047,7 @@ mod tests {
             world.borrow::<Parent>().get(root).is_none(),
             "the root was adopted by its own grandchild — that is a cycle"
         );
-        assert_eq!(children_of(&world, leaf.id()), Vec::<u32>::new());
+        assert_eq!(children_of(&world, leaf), Vec::<u32>::new());
     }
 
     /// Unparenting drops the `Parent` component and the entry in the old parent's list together.
@@ -1066,7 +1064,7 @@ mod tests {
 
         assert!(world.borrow::<Parent>().get(child).is_none(), "the child is a root now");
         assert!(
-            children_of(&world, parent.id()).is_empty(),
+            children_of(&world, parent).is_empty(),
             "the old parent must not keep listing it"
         );
     }
@@ -1090,14 +1088,14 @@ mod tests {
             ed.add_component_request = Some((ent, name.to_string()));
             handle_scene_operations(&mut world, &mut ed, &mut studio_state());
             assert!(
-                has_component(&world, ent.id(), name),
+                has_component(&world, ent, name),
                 "{name} was not added, so the removal below would prove nothing"
             );
 
             ed.remove_component_request = Some((ent, name.to_string()));
             handle_scene_operations(&mut world, &mut ed, &mut studio_state());
             assert!(
-                !has_component(&world, ent.id(), name),
+                !has_component(&world, ent, name),
                 "the inspector's delete button for {name} left the component in place"
             );
         }
@@ -1184,7 +1182,7 @@ mod tests {
 
     /// Is `name`'s component on `id`? Written as a match rather than generically because the
     /// request the UI raises is a string, and this asks the same question the same way.
-    fn has_component(world: &World, id: u32, name: &str) -> bool {
+    fn has_component(world: &World, id: Entity, name: &str) -> bool {
         match name {
             "Hitbox" => world.borrow::<gizmo::physics::components::Hitbox>().get(id).is_some(),
             "Hurtbox" => world.borrow::<gizmo::physics::components::Hurtbox>().get(id).is_some(),
@@ -1229,9 +1227,9 @@ mod tests {
         // And a freed slot is reused rather than skipped: delete player 2, add another.
         let p2 = world.query::<(Entity, &gizmo::physics::components::fighter::FighterController)>().unwrap().iter()
             .find(|(_, f)| f.player_id == 2)
-            .map(|(entity, _)| entity.id())
+            .map(|(entity, _)| entity)
             .expect("player 2 is there");
-        let p2 = world.get_entity(p2).expect("still alive");
+        let p2 = world.live(p2).expect("still alive");
         ed.remove_component_request = Some((p2, "FighterController".to_string()));
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
 

@@ -112,11 +112,11 @@ gizmo::core::impl_component!(MenuButton);
 
 struct Menu {
     volume: u32,
-    banner: u32,
+    banner: Entity,
     /// Ses kaydırıcısı (`Slider` taşıyan düğme).
-    volume_button: u32,
+    volume_button: Entity,
     /// Zorluk listesi (`Dropdown` taşıyan düğme).
-    difficulty: u32,
+    difficulty: Entity,
     /// Çalan müzik ve hangisi olduğu (menü mü, "oyun" mu).
     music: Option<u64>,
     in_game: bool,
@@ -265,15 +265,15 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Menu {
                 dropdown.set_open(true); // ekran görüntüsü için
             }
             world.add_component(button, dropdown);
-            difficulty = Some(button.id());
+            difficulty = Some(button);
         }
         if action == Action::Volume {
             // Sürüklenen ya da odaktayken ←/→ ile adım adım değişen bir kaydırıcı; dolgusunu
             // motor çiziyor, etiketin altında.
             world.add_component(button, gizmo::ui::Slider::new(volume as f32 / 100.0));
-            slider = Some(button.id());
+            slider = Some(button);
         }
-        first.get_or_insert(button.id());
+        first.get_or_insert(button);
     }
 
     let banner = world
@@ -282,7 +282,7 @@ fn setup(world: &mut World, font: FontId, sound: bool) -> Menu {
             // Her yeni duyuru harf harf yazılıyor.
             Typewriter::new(40.0),
         ))
-        .id();
+        ;
     world.spawn_bundle((
         Text::pinned("", font, 18.0, TextAnchor::BottomRight, Vec2::new(-16.0, -16.0))
             .with_color(Vec4::new(0.7, 0.72, 0.78, 1.0)),
@@ -385,7 +385,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
     }
 
     // Düğme renkleri: odak `Hovered` olarak geliyor, yani üzerine gelme rengi odak rengi de.
-    let states: Vec<(u32, Interaction)> = world.query::<(Entity, &Interaction)>().unwrap().iter().map(|(entity, i)| (entity.id(), *i)).collect();
+    let states: Vec<(Entity, Interaction)> = world.query::<(Entity, &Interaction)>().unwrap().iter().map(|(entity, i)| (entity, *i)).collect();
     for (id, i) in states {
         if let Some(mut bg) = world.borrow_mut::<BackgroundColor>().get_mut(id) {
             bg.0 = fill(i);
@@ -412,9 +412,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, _dt: f32, _input: &I
         remember("difficulty", &i);
     }
 
-    let clicked: Vec<(u32, Action)> = {
+    let clicked: Vec<(Entity, Action)> = {
         let clicks = world.borrow::<Clicked>();
-        world.query::<(Entity, &MenuButton)>().unwrap().iter().filter(|(entity, _)| clicks.get(*entity).is_some_and(|c| c.0)).map(|(entity, b)| (entity.id(), b.0)).collect()
+        world.query::<(Entity, &MenuButton)>().unwrap().iter().filter(|(entity, _)| clicks.get(*entity).is_some_and(|c| c.0)).map(|(entity, b)| (entity, b.0)).collect()
     };
     for (id, action) in clicked {
         let label = match action {
@@ -506,8 +506,8 @@ fn remember<T: serde::Serialize>(key: &str, value: &T) {
 }
 
 /// Alttaki duyuruyu değiştirir — bir anahtar, dil değişince o da değişsin diye.
-fn set_banner(world: &mut World, id: u32, text: LocalizedText) {
-    if let Some(e) = world.get_entity(id) {
+fn set_banner(world: &mut World, id: Entity, text: LocalizedText) {
+    if let Some(e) = world.live(id) {
         world.add_component(e, text);
     }
 }

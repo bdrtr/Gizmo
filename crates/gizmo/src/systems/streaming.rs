@@ -104,7 +104,7 @@ fn apply_completed_textures(world: &World) {
     let mut materials = unsafe { world.borrow_mut_unchecked::<Material>() };
     for (entity_ids, path, bind_group) in installed {
         for eid in entity_ids {
-            if let Some(mut mat) = materials.get_mut(eid as u32) {
+            if let Some(mut mat) = materials.entity(eid as u32).and_then(|e| materials.get_mut(e)) {
                 if still_wants(mat.texture_source.as_deref(), &path) {
                     mat.bind_group = bind_group.clone();
                 }
@@ -157,7 +157,7 @@ fn request_nearby_textures(world: &World) {
     }
 
     // Aday entity'leri topla (Material read borrow'u ifade sonunda biter).
-    let entities: Vec<u32> = world.query::<(Entity, &Material)>().unwrap().iter().map(|(entity, _)| entity.id()).collect();
+    let entities: Vec<Entity> = world.query::<(Entity, &Material)>().unwrap().iter().map(|(entity, _)| entity).collect();
     let transforms = world.borrow::<Transform>();
     let hidden = world.borrow::<gizmo_core::component::IsHidden>();
     let Some(mut server) = world.get_resource_mut::<crate::asset_server::AssetServer>() else {
@@ -188,7 +188,7 @@ fn request_nearby_textures(world: &World) {
         if cam_pos.distance_squared(t.position) < STREAM_IN_DISTANCE * STREAM_IN_DISTANCE
             && should_request(&mut server.streaming_requested, e, &path)
         {
-            server.loader.request_texture_reload(path, e as usize);
+            server.loader.request_texture_reload(path, e.id() as usize);
             requests += 1;
         }
     }
@@ -207,8 +207,8 @@ fn request_nearby_textures(world: &World) {
 /// Split out from the loop because it needs no GPU, and the GPU is why the test around it is
 /// skipped on a headless machine — the rule itself is assertable everywhere.
 fn should_request(
-    requested: &mut std::collections::HashSet<(u32, String)>,
-    entity: u32,
+    requested: &mut std::collections::HashSet<(Entity, String)>,
+    entity: Entity,
     path: &str,
 ) -> bool {
     requested.insert((entity, path.to_string()))
@@ -241,15 +241,15 @@ mod tests {
     fn a_pair_is_asked_for_once_and_a_new_path_is_a_new_question() {
         let mut requested = std::collections::HashSet::new();
 
-        assert!(should_request(&mut requested, 7, "rock.png"), "the first frame asks");
-        assert!(!should_request(&mut requested, 7, "rock.png"), "and no frame after it does");
+        assert!(should_request(&mut requested, Entity::new(7, 0), "rock.png"), "the first frame asks");
+        assert!(!should_request(&mut requested, Entity::new(7, 0), "rock.png"), "and no frame after it does");
 
         assert!(
-            should_request(&mut requested, 8, "rock.png"),
+            should_request(&mut requested, Entity::new(8, 0), "rock.png"),
             "a different entity is a different question — they get separate bind groups"
         );
         assert!(
-            should_request(&mut requested, 7, "moss.png"),
+            should_request(&mut requested, Entity::new(7, 0), "moss.png"),
             "and re-assigning the texture in the inspector must be asked again, or the new one \
              never streams in"
         );
@@ -263,7 +263,7 @@ mod tests {
 
     /// Headless Renderer + AssetServer + a primary camera (at the origin) + a Material entity
     /// with a `dummy.png` texture_source, close (1 m) to the camera. Returns `mat_id`.
-    fn setup() -> (World, u32) {
+    fn setup() -> (World, Entity) {
         let renderer = pollster::block_on(crate::test_gpu::headless_renderer(64, 64));
         let mut world = World::new();
 
@@ -279,7 +279,7 @@ mod tests {
 
         world.insert_resource(renderer);
         world.insert_resource(AssetServer::new());
-        (world, ent.id())
+        (world, ent)
     }
 
     /// One test, one headless Renderer: verifies both the request path (nearby material →
@@ -357,7 +357,7 @@ mod tests {
                 ],
                 width: 2,
                 height: 2,
-                entity_ids: vec![mat_id as usize],
+                entity_ids: vec![mat_id.id() as usize],
             });
         apply_completed_textures(&world);
         let after = world

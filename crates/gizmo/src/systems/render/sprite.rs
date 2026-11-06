@@ -58,7 +58,7 @@ pub fn record_sprites(
 
     state.begin_frame();
     for (entity, sprite) in world.query::<(Entity, &Sprite)>().unwrap().iter() {
-        if hidden.contains(&entity.id()) {
+        if hidden.contains(&entity) {
             continue;
         }
         let model = if sprite.space.needs_world_transform() {
@@ -72,7 +72,7 @@ pub fn record_sprites(
     // A tilemap is a run of world sprites sharing one image: queued here, it is sorted and
     // batched with them, so a whole map is one draw call on both draw paths.
     for (entity, map) in world.query::<(Entity, &Tilemap)>().unwrap().iter() {
-        if hidden.contains(&entity.id()) {
+        if hidden.contains(&entity) {
             continue;
         }
         let Some(t) = transforms.get(entity) else { continue };

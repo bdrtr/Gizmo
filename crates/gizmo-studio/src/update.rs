@@ -72,9 +72,9 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
             // a cycle under a selected entity froze the studio on selection rather than on an
             // action the user took deliberately.
             let descendants: Vec<_> = world
-                .descendants_inclusive(selected_entity.id())
+                .descendants_inclusive(selected_entity)
                 .into_iter()
-                .filter_map(|id| world.get_entity(id))
+                .filter_map(|id| world.live(id))
                 .collect();
 
             // İlk mesh'li entity'nin GT matrisini "referans frame" olarak al.
@@ -163,7 +163,7 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
         if !is_playing {
             for (entity_id, _) in world.query::<(Entity, &gizmo::renderer::components::Camera)>().unwrap().iter() {
                 // Editor kamerasını göstermeye gerek yok
-                if entity_id.id() == state.editor_camera {
+                if entity_id == state.editor_camera {
                     continue;
                 }
 

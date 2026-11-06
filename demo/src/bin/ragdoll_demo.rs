@@ -25,7 +25,7 @@ use gizmo::prelude::*;
 
 /// Bir kemiğin yeniden-başlatma durumu: ilk poz + başlangıç hızı.
 struct BoneReset {
-    id: u32,
+    id: Entity,
     transform: Transform,
     lin: Vec3,
     ang: Vec3,
@@ -120,7 +120,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RagdollDemo {
                 }
             }
             resets.push(BoneReset {
-                id: entity.id(),
+                id: *entity,
                 transform: saved,
                 lin,
                 ang,

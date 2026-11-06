@@ -48,7 +48,7 @@ impl Default for CarConfig {
 
 /// Keşfedilebilir araç parçası (GLTF alt-mesh'i): explode ofseti ve highlight için gereken veri.
 struct CarPart {
-    id: u32,
+    id: Entity,
     name: String,
     orig_pos: Vec3,    // parçanın orijinal yerel konumu
     dir: Vec3,         // explode yönü (merkezden dışa); ZERO = merkezde kalır
@@ -60,21 +60,21 @@ struct CarDemoState {
     cam_yaw: f32,
     cam_pitch: f32,
     cam_pos: Vec3,
-    chassis_id: u32,
-    camera_entity_id: u32,
-    ground_id: Option<u32>,
+    chassis_id: Entity,
+    camera_entity_id: Entity,
+    ground_id: Option<Entity>,
     weather_idx: usize,
     steer_angle: f32,
     wheel_spin: f32,
-    wheel_fl: Option<u32>,
-    wheel_fr: Option<u32>,
-    wheel_bl: Option<u32>,
-    wheel_br: Option<u32>,
+    wheel_fl: Option<Entity>,
+    wheel_fr: Option<Entity>,
+    wheel_bl: Option<Entity>,
+    wheel_br: Option<Entity>,
     wheel_fl_rot: Quat,
     wheel_fr_rot: Quat,
     wheel_bl_rot: Quat,
     wheel_br_rot: Quat,
-    skid_pool: Vec<u32>,
+    skid_pool: Vec<Entity>,
     skid_idx: usize,
     last_skid_time: f32,
     is_drifting: bool,
@@ -100,8 +100,8 @@ impl CarDemoState {
             cam_yaw: -std::f32::consts::FRAC_PI_2,
             cam_pitch: -0.4,
             cam_pos: Vec3::new(0.0, 5.0, 15.0),
-            chassis_id: 0,
-            camera_entity_id: 0,
+            chassis_id: Entity::new(0, 0),
+            camera_entity_id: Entity::new(0, 0),
             ground_id: None,
             weather_idx: 0,
             steer_angle: 0.0,
@@ -132,15 +132,15 @@ impl CarDemoState {
 }
 
 /// Bir entity'nin tüm alt-entity'lerini (özyinelemeli) toplar — parça keşfi için.
-fn collect_descendants(world: &World, root: u32, out: &mut Vec<u32>) {
+fn collect_descendants(world: &World, root: Entity, out: &mut Vec<Entity>) {
     let kids = world
         .borrow::<gizmo::core::component::Children>()
         .get(root)
         .map(|c| c.0.clone());
     if let Some(kids) = kids {
         for k in kids {
-            out.push(k.id());
-            collect_descendants(world, k.id(), out);
+            out.push(k);
+            collect_descendants(world, k, out);
         }
     }
 }
@@ -895,7 +895,7 @@ fn main() {
 /// içermiyorsa `None` döner → çağıran varsayılana düşer.
 fn derive_wheel(
     world: &World,
-    chassis_id: u32,
+    chassis_id: Entity,
     chassis_scale: Vec3,
     name: &str,
 ) -> Option<(Vec3, f32)> {
@@ -904,7 +904,7 @@ fn derive_wheel(
         let mut found = None;
         for (entity, n) in world.query::<(Entity, &gizmo::core::EntityName)>().unwrap().iter() {
             if n.0 == name {
-                found = Some(entity.id());
+                found = Some(entity);
                 break;
             }
         }
@@ -922,7 +922,7 @@ fn derive_wheel(
         let parent = world
             .borrow::<gizmo::core::component::Parent>()
             .get(cur)
-            .map(|p| p.0.id());
+            .map(|p| p.0);
         match parent {
             Some(p) if p == chassis_id => break,
             Some(p) => {
@@ -951,7 +951,7 @@ fn derive_wheel(
 
 /// Tekerlek entity'sinin (ya da bir çocuğunun) Mesh.bounds'undan lastik yarıçapını
 /// kestirir: dönme düzlemindeki (Y/Z) en büyük yarı-boyut × ölçek.
-fn wheel_mesh_radius(world: &World, wheel_id: u32, scale_y: f32) -> f32 {
+fn wheel_mesh_radius(world: &World, wheel_id: Entity, scale_y: f32) -> f32 {
     let meshes = world.borrow::<gizmo::renderer::components::Mesh>();
     let from = |m: &gizmo::renderer::components::Mesh| -> f32 {
         let y = (m.bounds.max.y - m.bounds.min.y) * 0.5;
@@ -1212,7 +1212,7 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
     ];
     for name in wheel_names {
         let (pos, radius) =
-            derive_wheel(world, chassis_entity.id(), cs, name).unwrap_or_else(|| {
+            derive_wheel(world, chassis_entity, cs, name).unwrap_or_else(|| {
                 // VC konvansiyonu (modelin 180° Y çevirisi dahil): +X = sağ, -Z = ön.
                 let x = if name.contains("Right") { 0.41 } else { -0.41 };
                 let z = if name.contains("Front") {
@@ -1273,34 +1273,34 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
 
     println!("Sahne Hazır!");
     let mut state = CarDemoState::new(config);
-    state.chassis_id = chassis_entity.id();
-    state.camera_entity_id = camera_ent.id();
-    state.ground_id = Some(ground.id());
+    state.chassis_id = chassis_entity;
+    state.camera_entity_id = camera_ent;
+    state.ground_id = Some(ground);
 
     // GLTF yüklendiği için tekerlek entity'lerini isimlerinden bulup cache'le
     {
         let ecs_transforms = world.borrow::<Transform>();
         for (entity, name) in world.query::<(Entity, &gizmo::core::EntityName)>().unwrap().iter() {
             if name.0 == "wheelFrontLeft" {
-                state.wheel_fl = Some(entity.id());
+                state.wheel_fl = Some(entity);
                 state.wheel_fl_rot = ecs_transforms
                     .get(entity)
                     .map(|t| t.rotation)
                     .unwrap_or(Quat::IDENTITY);
             } else if name.0 == "wheelFrontRight" {
-                state.wheel_fr = Some(entity.id());
+                state.wheel_fr = Some(entity);
                 state.wheel_fr_rot = ecs_transforms
                     .get(entity)
                     .map(|t| t.rotation)
                     .unwrap_or(Quat::IDENTITY);
             } else if name.0 == "wheelBackLeft" {
-                state.wheel_bl = Some(entity.id());
+                state.wheel_bl = Some(entity);
                 state.wheel_bl_rot = ecs_transforms
                     .get(entity)
                     .map(|t| t.rotation)
                     .unwrap_or(Quat::IDENTITY);
             } else if name.0 == "wheelBackRight" {
-                state.wheel_br = Some(entity.id());
+                state.wheel_br = Some(entity);
                 state.wheel_br_rot = ecs_transforms
                     .get(entity)
                     .map(|t| t.rotation)
@@ -1339,7 +1339,7 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
         world.add_component(e, skid_mesh.clone());
         world.add_component(e, skid_mat.clone());
         world.add_component(e, MeshRenderer::new());
-        state.skid_pool.push(e.id());
+        state.skid_pool.push(e);
     }
 
     // ── PARÇA KEŞFİ: araç GLTF'inin tüm alt-mesh'lerini (parçalarını) topla ──────────

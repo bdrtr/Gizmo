@@ -8,6 +8,7 @@
 //! Driven through the real ECS path (`physics_step_system`), like `analytical.rs`, because the
 //! question is what the solver ends up doing, not what one function returns.
 
+use gizmo_core::Entity;
 use gizmo_core::world::World;
 use gizmo_math::{Quat, Vec3};
 use gizmo_physics_core::components::{CombineMode, PhysicsMaterial};
@@ -45,7 +46,7 @@ fn grippy() -> PhysicsMaterial {
     }
 }
 
-fn drop_body(world: &mut World, collider: Collider, position: Vec3, rotation: Quat) -> u32 {
+fn drop_body(world: &mut World, collider: Collider, position: Vec3, rotation: Quat) -> Entity {
     let e = world.spawn();
     let mut t = Transform::new(position);
     t.rotation = rotation;
@@ -55,7 +56,7 @@ fn drop_body(world: &mut World, collider: Collider, position: Vec3, rotation: Qu
     world.add_component(e, rb);
     world.add_component(e, Velocity::default());
     world.add_component(e, collider);
-    e.id()
+    e
 }
 
 fn step(world: &World, n: usize) {
@@ -64,7 +65,7 @@ fn step(world: &World, n: usize) {
     }
 }
 
-fn transform(world: &World, id: u32) -> Transform {
+fn transform(world: &World, id: Entity) -> Transform {
     *world.borrow::<Transform>().get(id).unwrap()
 }
 

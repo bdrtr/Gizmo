@@ -110,11 +110,11 @@ gizmo::core::impl_component!(WaterButton);
 struct Game {
     garden: Garden,
     seed: usize,
-    plot_bars: Vec<u32>,
-    plot_labels: Vec<u32>,
-    seed_buttons: Vec<u32>,
-    status: u32,
-    note: u32,
+    plot_bars: Vec<Entity>,
+    plot_labels: Vec<Entity>,
+    seed_buttons: Vec<Entity>,
+    status: Entity,
+    note: Entity,
     note_time: f32,
     auto: bool,
     auto_clock: f32,
@@ -179,8 +179,8 @@ fn setup(world: &mut World, font: FontId) -> Game {
             world.add_child(plot, bar);
             world.add_child(field, plot);
         }
-        plot_bars.push(bar.id());
-        plot_labels.push(plot.id());
+        plot_bars.push(bar);
+        plot_labels.push(plot);
     }
     let side = world.spawn_bundle(NodeBundle {
         style: Style { width: Val::Px(280.0), flex_direction: FlexDirection::Column, row_gap: Val::Px(12.0), ..Default::default() },
@@ -211,7 +211,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
             Text::screen(format!("{} — {} altın, {:.0} sn → {}", crop.0, crop.2, crop.1, crop.3), font, 17.0, Vec2::ZERO)
                 .with_anchor(TextAnchor::Center),
         );
-        seed_buttons.push(b.id());
+        seed_buttons.push(b);
         children.push(b);
     }
     let water = world.spawn_bundle(ButtonBundle {
@@ -243,8 +243,8 @@ fn setup(world: &mut World, font: FontId) -> Game {
         plot_bars,
         plot_labels,
         seed_buttons,
-        status: status.id(),
-        note: note.id(),
+        status,
+        note,
         note_time: 0.0,
         auto,
         auto_clock: 0.0,
@@ -315,7 +315,7 @@ fn main() {
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
     let Some(mut game) = world.remove_resource::<Game>() else { return };
     let now = unix_time();
-    let clicked: Vec<u32> = world.query::<(Entity, &Clicked)>().unwrap().iter().filter(|(_, c)| c.0).map(|(entity, _)| entity.id()).collect();
+    let clicked: Vec<Entity> = world.query::<(Entity, &Clicked)>().unwrap().iter().filter(|(_, c)| c.0).map(|(entity, _)| entity).collect();
     let mut changed = false;
     for id in clicked {
         if let Some(&SeedButton(c)) = world.borrow::<SeedButton>().get(id) {
@@ -417,7 +417,7 @@ fn draw(world: &mut World, game: &mut Game, now: f64, dt: f32) {
     }
 }
 
-fn set_text(world: &mut World, id: u32, s: &str) {
+fn set_text(world: &mut World, id: Entity, s: &str) {
     if let Some(mut t) = world.borrow_mut::<Text>().get_mut(id) {
         if t.content != s {
             t.content = s.to_string();

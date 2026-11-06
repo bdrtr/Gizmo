@@ -255,7 +255,7 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
 
     if let Some(mut q) = world.query_mut::<Mut<Transform>>() {
         for i in 0..4 {
-            if let Some(mut wt) = q.get_mut(state.wheel_entities[i].id()) {
+            if let Some(mut wt) = q.get_mut(state.wheel_entities[i]) {
                 wt.set_position(wheel_positions[i]);
                 wt.set_rotation(wheel_rotations[i]);
             }

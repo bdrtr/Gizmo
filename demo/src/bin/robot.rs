@@ -74,16 +74,16 @@ fn spawn_table(world: &mut World) {
 }
 
 /// İki kol parçası — kinematik kapsüller, `KinematicTarget` ile sürülen.
-fn spawn_arm(world: &mut World, visual: bool) -> [u32; 2] {
+fn spawn_arm(world: &mut World, visual: bool) -> [Entity; 2] {
     let pose = arm_pose(HOME);
-    let mut ids = [0u32; 2];
+    let mut ids = [Entity::new(0, 0); 2];
     for (k, (len, (pos, rot))) in [(UPPER, pose[0]), (LOWER, pose[1])].into_iter().enumerate() {
         let col = Collider::capsule(ARM_RADIUS, len * 0.5);
         let id = world
             .spawn_bundle((Transform::new(pos).with_rotation(rot), RigidBody::new_kinematic(), Velocity::default(), col, KinematicTarget::new(pos, rot)))
-            .id();
+            ;
         if visual {
-            if let Some(e) = world.get_entity(id) {
+            if let Some(e) = world.live(id) {
                 world.add_component(e, GlobalTransform::default());
                 world.add_component(e, MeshData::capsule(ARM_RADIUS, len, 6, 12));
                 world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex(if k == 0 { "#F39C12" } else { "#E67E22" }).to_vec4(), 0.4, 0.6));
@@ -114,7 +114,7 @@ fn clamp_reach(tip: Vec3) -> Vec3 {
     ROOT + d.try_normalize().unwrap_or(Vec3::X) * len
 }
 
-fn drive_arm(world: &mut World, arm: [u32; 2], target: Vec3) {
+fn drive_arm(world: &mut World, arm: [Entity; 2], target: Vec3) {
     let pose = arm_pose(target);
     for (k, &id) in arm.iter().enumerate() {
         if let Some(mut t) = world.borrow_mut::<KinematicTarget>().get_mut(id) {
@@ -123,7 +123,7 @@ fn drive_arm(world: &mut World, arm: [u32; 2], target: Vec3) {
     }
 }
 
-fn spawn_balls(world: &mut World, visual: bool) -> Vec<u32> {
+fn spawn_balls(world: &mut World, visual: bool) -> Vec<Entity> {
     BALLS
         .iter()
         .map(|&(x, z)| {
@@ -132,9 +132,9 @@ fn spawn_balls(world: &mut World, visual: bool) -> Vec<u32> {
             let col = Collider::sphere(BALL).with_material(PhysicsMaterial { rolling_friction: 0.08, ..Default::default() });
             let mut rb = RigidBody::new(0.6, true);
             rb.update_inertia_from_collider(&col);
-            let id = world.spawn_bundle((Transform::new(Vec3::new(x, BALL, z)), rb, Velocity::default(), col)).id();
+            let id = world.spawn_bundle((Transform::new(Vec3::new(x, BALL, z)), rb, Velocity::default(), col));
             if visual {
-                if let Some(e) = world.get_entity(id) {
+                if let Some(e) = world.live(id) {
                     world.add_component(e, GlobalTransform::default());
                     world.add_component(e, MeshData::sphere(BALL, 12, 16));
                     world.add_component(e, MaterialDesc::new().with_pbr(Color::srgb_hex("#3498DB").to_vec4(), 0.3, 0.0));
@@ -146,7 +146,7 @@ fn spawn_balls(world: &mut World, visual: bool) -> Vec<u32> {
         .collect()
 }
 
-fn position(world: &World, id: u32) -> Vec3 {
+fn position(world: &World, id: Entity) -> Vec3 {
     world.borrow::<Transform>().get(id).map(|t| t.position).unwrap_or(Vec3::ZERO)
 }
 
@@ -155,7 +155,7 @@ fn in_goal(p: Vec3) -> bool {
 }
 
 /// Hedef bir delik: içine giren top orada kalır (kinematik olur, biraz batar).
-fn capture(world: &mut World, balls: &[u32]) {
+fn capture(world: &mut World, balls: &[Entity]) {
     for &b in balls {
         let p = position(world, b);
         let sunk = world.borrow::<RigidBody>().get(b).is_some_and(|rb| rb.is_kinematic());
@@ -180,7 +180,7 @@ fn reachable(p: Vec3) -> bool {
 
 /// Otomatik pilot. `phase` 0: sıradaki topun hedefe göre arkasının üstüne git; 1: in; 2: topu
 /// hedefe doğru it; 3: kalk.
-fn autopilot(world: &World, balls: &[u32], tip: Vec3, phase: &mut f32, dt: f32) -> Vec3 {
+fn autopilot(world: &World, balls: &[Entity], tip: Vec3, phase: &mut f32, dt: f32) -> Vec3 {
     let step = |from: Vec3, to: Vec3, speed: f32| from + (to - from).clamp_length_max(speed * dt);
     let behind_of = |p: Vec3| {
         let to_goal = Vec3::new(GOAL.x - p.x, 0.0, GOAL.z - p.z).normalize_or_zero();
@@ -259,14 +259,14 @@ fn self_test() -> bool {
 
 struct Game {
     physics: FixedPhysics,
-    arm: [u32; 2],
-    balls: Vec<u32>,
+    arm: [Entity; 2],
+    balls: Vec<Entity>,
     tip: Vec3,
     phase: f32,
     time: f32,
     done: Option<f32>,
-    hud: u32,
-    banner: u32,
+    hud: Entity,
+    banner: Entity,
 }
 
 fn main() {
@@ -306,13 +306,13 @@ fn main() {
             scene.world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 7.5, 6.0), pitch: -0.9, primary: true, ..Default::default() });
             let arm = spawn_arm(scene.world, true);
             let balls = spawn_balls(scene.world, true);
-            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),)).id();
+            let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
             let banner = scene
                 .world
                 .spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
                     .with_anchor(TextAnchor::Center)
                     .with_align(TextAlign::Center),))
-                .id();
+                ;
             scene.world.insert_resource(Game {
                 physics: FixedPhysics::new(60),
                 arm,
@@ -335,7 +335,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let dt = dt.min(0.05);
     if input.is_key_just_pressed(KeyCode::KeyR as u32) {
         for &b in &game.balls {
-            if let Some(e) = world.get_entity(b) {
+            if let Some(e) = world.live(b) {
                 world.despawn(e);
             }
         }
