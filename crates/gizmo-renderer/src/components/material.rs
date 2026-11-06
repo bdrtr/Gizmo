@@ -202,6 +202,28 @@ pub struct Material {
     /// How this draw blends, if it is transparent — see [`BlendMode`]. Set it with
     /// [`with_blend_mode`](Self::with_blend_mode), which also makes the material transparent.
     pub blend_mode: BlendMode,
+    /// How much light a non-metal mirrors head on: F0, in `[`[`MIN_REFLECTANCE`]`, 1]`.
+    ///
+    /// [`DIELECTRIC_REFLECTANCE`] (0.04, plastic, glass, skin) unless set. Water is about 0.02,
+    /// a gem 0.1 and up. It moves the highlight and the environment reflection and takes from the
+    /// diffuse what it adds there, on both render paths and in screen-space reflections.
+    ///
+    /// A metal's F0 is its albedo, so this fades out with [`metallic`](Self::metallic). It is one
+    /// number: a tinted highlight on a non-metal has no G-buffer channel to travel in.
+    pub reflectance: f32,
+}
+
+/// The F0 of a non-metal that says nothing: index of refraction 1.5.
+pub const DIELECTRIC_REFLECTANCE: f32 = 0.04;
+
+/// The lowest [`Material::reflectance`]. A zero in the instance's slot means "not set", and a
+/// highlight this faint (a fortieth of the default) is already invisible.
+pub const MIN_REFLECTANCE: f32 = 0.001;
+
+/// F0 at normal incidence for an index of refraction, against air.
+pub fn reflectance_from_ior(ior: f32) -> f32 {
+    let r = (ior - 1.0) / (ior + 1.0);
+    r * r
 }
 
 /// Everything a [`Material`] is, minus the one thing a file cannot hold: the bind group.
@@ -250,6 +272,13 @@ pub struct MaterialDesc {
     /// See [`Material::blend_mode`]. `#[serde(default)]`: scenes saved before it read as alpha.
     #[serde(default)]
     pub blend_mode: BlendMode,
+    /// See [`Material::reflectance`]. A scene that does not say gets the default.
+    #[serde(default = "default_reflectance")]
+    pub reflectance: f32,
+}
+
+fn default_reflectance() -> f32 {
+    DIELECTRIC_REFLECTANCE
 }
 
 impl From<&Material> for MaterialDesc {
@@ -275,6 +304,7 @@ impl From<&Material> for MaterialDesc {
             is_double_sided,
             alpha_cutoff,
             blend_mode,
+            reflectance,
         } = m;
         Self {
             albedo: *albedo,
@@ -291,6 +321,7 @@ impl From<&Material> for MaterialDesc {
             is_double_sided: *is_double_sided,
             alpha_cutoff: *alpha_cutoff,
             blend_mode: *blend_mode,
+            reflectance: *reflectance,
         }
     }
 }
@@ -315,6 +346,7 @@ impl MaterialDesc {
             is_double_sided: self.is_double_sided,
             alpha_cutoff: self.alpha_cutoff,
             blend_mode: self.blend_mode,
+            reflectance: self.reflectance,
         }
     }
 }
@@ -340,6 +372,7 @@ impl Default for MaterialDesc {
             is_double_sided: false,
             alpha_cutoff: 0.0,
             blend_mode: BlendMode::Alpha,
+            reflectance: DIELECTRIC_REFLECTANCE,
         }
     }
 }
@@ -381,6 +414,18 @@ macro_rules! material_builders {
     pub fn with_subsurface(mut self, subsurface: f32) -> Self {
         self.subsurface = subsurface.clamp(0.0, 1.0);
         self
+    }
+
+    /// Sets [`Material::reflectance`] directly, clamped into `[`[`MIN_REFLECTANCE`]`, 1]`.
+    pub fn with_reflectance(mut self, reflectance: f32) -> Self {
+        self.reflectance = reflectance.clamp(MIN_REFLECTANCE, 1.0);
+        self
+    }
+
+    /// Sets [`Material::reflectance`] from an index of refraction: `((n - 1) / (n + 1))²`, so
+    /// 1.5 is the default 0.04, 1.33 water and 2.42 diamond. 1.0 is a surface that mirrors nothing.
+    pub fn with_ior(self, ior: f32) -> Self {
+        self.with_reflectance(reflectance_from_ior(ior))
     }
 
     /// Sets transparency by hand.

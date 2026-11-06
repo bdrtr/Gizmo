@@ -330,6 +330,13 @@ fn V_SmithJointGGX(NoV: f32, NoL: f32, roughness: f32) -> f32 {
     return 0.5 / max(lambdaV + lambdaL, 0.0001);
 }
 
+// What `InstanceRaw.emissive.w` (and RT5's alpha, its copy) says about a non-metal's F0: the
+// magnitude, with 0 standing for "not set". Its sign is `receives_shadows`, tested by the callers.
+fn dielectric_f0(packed: f32) -> f32 {
+    let m = abs(packed);
+    return select(m, 0.04, m == 0.0);
+}
+
 fn F_Schlick(VoH: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - VoH, 0.0, 1.0), 5.0);
 }

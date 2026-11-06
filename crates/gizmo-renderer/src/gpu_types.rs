@@ -525,12 +525,37 @@ impl InstanceRaw {
     }
 
     /// Carry [`MeshRenderer::receives_shadows`](crate::components::MeshRenderer::receives_shadows)
-    /// in `emissive.w`, padding until now: `1.0` means "no shadow falls on this", `0.0` (what
-    /// [`new`](Self::new) writes) the usual. The G-buffer copies it to RT5's alpha for the
-    /// lighting pass; the forward shader reads it directly.
+    /// in the sign of `emissive.w`: negative means "no shadow falls on this". The magnitude is
+    /// [`with_reflectance`](Self::with_reflectance)'s and survives this call.
+    ///
+    /// The G-buffer copies the whole value to RT5's alpha for the lighting pass; the forward
+    /// shader reads it directly. A half float keeps a sign and a magnitude down to well below any
+    /// reflectance a material can ask for, so no new render target was needed for either.
     #[must_use]
     pub fn with_shadow_receiving(mut self, receives: bool) -> Self {
-        self.emissive[3] = if receives { 0.0 } else { 1.0 };
+        let w = self.emissive[3].abs();
+        self.emissive[3] = if receives {
+            w
+        } else if w == 0.0 {
+            // A zero has no sign a shader can rely on: spell out the default it stands for.
+            -crate::components::DIELECTRIC_REFLECTANCE
+        } else {
+            -w
+        };
+        self
+    }
+
+    /// Carry [`Material::reflectance`](crate::components::Material::reflectance) in the magnitude
+    /// of `emissive.w`, keeping the sign [`with_shadow_receiving`](Self::with_shadow_receiving)
+    /// put there.
+    ///
+    /// [`new`](Self::new) leaves it at zero, which every shader reads as
+    /// [`DIELECTRIC_REFLECTANCE`](crate::components::DIELECTRIC_REFLECTANCE) (`dielectric_f0` in
+    /// `common.wgsl`), so an instance that says nothing is still all zero bytes there.
+    #[must_use]
+    pub fn with_reflectance(mut self, reflectance: f32) -> Self {
+        let r = reflectance.clamp(crate::components::MIN_REFLECTANCE, 1.0);
+        self.emissive[3] = if self.emissive[3] < 0.0 { -r } else { r };
         self
     }
 }
@@ -803,6 +828,25 @@ mod tests {
         assert_eq!(&bytes[96..], &[0u8; 32], "unset knobs must be all-zero bytes");
         assert_eq!(std::mem::offset_of!(InstanceRaw, ambient), 96);
         assert_eq!(std::mem::offset_of!(InstanceRaw, emissive), 112);
+    }
+
+    // A sign and a magnitude in one float: each write has to leave the other alone, in either
+    // order, and a zero (which has no sign a shader can read) must not swallow the flag.
+    #[test]
+    fn reflectance_and_the_shadow_flag_share_a_slot_without_touching_each_other() {
+        let base = InstanceRaw::new([[0.0; 4]; 4], [1.0; 4], 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, [0.0; 3], [0.0; 3]);
+        assert_eq!(base.emissive[3], 0.0, "an instance that says nothing stays zero");
+        assert_eq!(base.with_shadow_receiving(true).emissive[3], 0.0);
+        let d = crate::components::DIELECTRIC_REFLECTANCE;
+        assert_eq!(base.with_shadow_receiving(false).emissive[3], -d, "the flag on the default");
+        assert_eq!(base.with_reflectance(0.16).emissive[3], 0.16);
+        assert_eq!(base.with_reflectance(0.16).with_shadow_receiving(false).emissive[3], -0.16);
+        assert_eq!(base.with_shadow_receiving(false).with_reflectance(0.16).emissive[3], -0.16);
+        assert_eq!(base.with_shadow_receiving(false).with_reflectance(0.16).with_shadow_receiving(true).emissive[3], 0.16);
+        let floor = crate::components::MIN_REFLECTANCE;
+        assert_eq!(base.with_reflectance(0.0).emissive[3], floor, "a zero would read as the default");
+        assert_eq!(base.with_shadow_receiving(false).with_reflectance(0.0).emissive[3], -floor);
+        assert_eq!(base.with_reflectance(5.0).emissive[3], 1.0);
     }
 
     #[test]

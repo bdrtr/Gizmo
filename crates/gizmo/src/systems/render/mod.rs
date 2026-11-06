@@ -3409,6 +3409,10 @@ mod golden_render_tests {
     /// neighbour on screen to bounce from. `disabled` switches one pass off so a caller can
     /// compare like with like.
     async fn render_mirror_scene(disabled: Effect) -> Vec<u8> {
+        render_mirror_floor(disabled, |m| m.with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 1.0, 0.05)).await
+    }
+
+    async fn render_mirror_floor(disabled: Effect, floor_material: fn(Material) -> Material) -> Vec<u8> {
         const W: u32 = 128;
         const H: u32 = 128;
 
@@ -3452,8 +3456,9 @@ mod golden_render_tests {
             &renderer.scene.texture_bind_group_layout,
         );
 
-        // Ground: a flattened cube, top face at y = -1, and polished — SSR rejects anything
-        // rougher than 0.5 outright, so a matte floor would measure the fixture, not the pass.
+        // Ground: a flattened cube, top face at y = -1. Unless a test says otherwise it is matte and
+        // bright: what SSR measures here is the polished cube below reflecting it. (This comment
+        // called the floor polished for as long as the numbers said roughness 1.0.)
         let floor = world.spawn();
         world.add_component(
             floor,
@@ -3463,7 +3468,7 @@ mod golden_render_tests {
         world.add_component(floor, AssetManager::create_cube(&renderer.device));
         world.add_component(
             floor,
-            Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 1.0, 0.05),
+            floor_material(Material::new(tex.clone())),
         );
         world.add_component(floor, MeshRenderer::new());
 
@@ -3531,6 +3536,31 @@ mod golden_render_tests {
                      not reach the frame (expected at least {floor})",
                 );
             }
+        });
+    }
+
+    /// A screen-space reflection is weighted by the surface's own Fresnel, so a floor that mirrors
+    /// more shows more of the cube. It read a literal 0.04 until 2026-11-07.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn screen_space_reflections_follow_the_surface_reflectance() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn what_ssr_adds(floor: fn(Material) -> Material) -> u64 {
+            let on = render_mirror_floor(Effect::None, floor).await;
+            let off = render_mirror_floor(Effect::Ssr, floor).await;
+            on.iter().zip(&off).map(|(a, b)| a.abs_diff(*b) as u64).sum()
+        }
+        pollster::block_on(async {
+            let plain = what_ssr_adds(|m| m.with_pbr(Vec4::new(0.1, 0.1, 0.1, 1.0), 0.05, 0.0)).await;
+            let gem = what_ssr_adds(|m| m.with_pbr(Vec4::new(0.1, 0.1, 0.1, 1.0), 0.05, 0.0).with_reflectance(0.5)).await;
+            eprintln!("SSR adds {plain} at the default reflectance, {gem} at 0.5");
+            assert!(plain > 0 && gem as f64 > plain as f64 * 1.5, "default {plain}, reflectance 0.5 {gem}");
         });
     }
 
@@ -7171,10 +7201,11 @@ mod golden_render_tests {
             let with_ao = AssetManager::material().occlusion(&occluded).build(&mut assets, &renderer.device, &renderer.queue, &layout);
 
             let nothing: fn(Material) -> Material = |m| m;
-            let cases: [(&str, Arc<wgpu::BindGroup>, fn(Material) -> Material); 8] = [
+            let cases: [(&str, Arc<wgpu::BindGroup>, fn(Material) -> Material); 9] = [
                 ("anisotropy", plain.clone(), |m| m.with_anisotropy(0.9)),
                 ("clear coat", plain.clone(), |m| m.with_clear_coat(1.0)),
                 ("subsurface", plain.clone(), |m| m.with_subsurface(1.0)),
+                ("reflectance", plain.clone(), |m| m.with_reflectance(0.3)),
                 ("instance emissive", plain.clone(), |m| m.with_emissive(Vec3::new(0.0, 2.0, 0.0))),
                 ("normal map", with_normal, nothing),
                 ("metallic-roughness map", with_mr, nothing),
@@ -7194,6 +7225,23 @@ mod golden_render_tests {
                     assert!(apart < 2.0, "{name}, head on {head_on}: forward {f:?}, deferred {d:?}");
                 }
                 assert!(changed > 1.0, "{name} changed nothing on the forward path");
+            }
+
+            // Reflectance does what it says, not merely something: on a dark non-metal, where the
+            // specular is most of the light, an index of 1 takes the sky's reflection away and a
+            // high one brings more of it, on both paths.
+            let total = |c: [f32; 3]| c[0] + c[1] + c[2];
+            let dark: fn(Material) -> Material = |m| m.with_pbr(Vec4::new(0.02, 0.02, 0.02, 1.0), 0.3, 0.0);
+            let none: fn(Material) -> Material = |m| m.with_pbr(Vec4::new(0.02, 0.02, 0.02, 1.0), 0.3, 0.0).with_ior(1.0);
+            let gem: fn(Material) -> Material = |m| m.with_pbr(Vec4::new(0.02, 0.02, 0.02, 1.0), 0.3, 0.0).with_ior(2.42);
+            for forward in [true, false] {
+                let (n, d, g) = (
+                    total(centre(&mut renderer, plain.clone(), none, forward, false).await),
+                    total(centre(&mut renderer, plain.clone(), dark, forward, false).await),
+                    total(centre(&mut renderer, plain.clone(), gem, forward, false).await),
+                );
+                eprintln!("reflectance, forward {forward}: none {n:.1}, default {d:.1}, diamond {g:.1}");
+                assert!(n + 2.0 < d && d + 2.0 < g, "forward {forward}: none {n}, default {d}, diamond {g}");
             }
 
             // A baked irradiance grid, last, since it stays in the renderer: L0 alone is a red sky.
@@ -9582,6 +9630,218 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
             let hidden = render_sprite_scene(&[C::HiddenScreen]).await;
             let (diff, _) = changed_pixels(&blank, &hidden, 128);
             assert_eq!(diff, 0, "an `IsHidden` sprite changed {diff} pixels");
+        });
+    }
+
+    /// **A large image drawn small does not alias.** A one-pixel checker shrunk eightfold is an even grey
+    /// with mipmaps, and with nearest sampling, which has none, it stays hard black and white. Pixels in the
+    /// sprite's middle, so an edge cannot make the numbers.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_linear_sprite_shrinks_smoothly_and_a_nearest_one_does_not() {
+        use gizmo_math::Vec2;
+        use gizmo_renderer::components::Sprite;
+        use gizmo_renderer::sprite::SpriteFilter;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            const W: u32 = 128;
+            let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+            renderer.taa = None;
+            let side = 512u32;
+            let checker: Vec<u8> = (0..side * side)
+                .flat_map(|i| {
+                    let (x, y) = (i % side, i / side);
+                    let v = if (x + y) % 2 == 0 { 0 } else { 255 };
+                    [v, v, v, 255]
+                })
+                .collect();
+            let mut spread = |filter| {
+                let image = renderer.load_sprite_rgba(&checker, side, side, filter).expect("loads");
+                let mut world = World::new();
+                world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+                let e = world.spawn();
+                // Not a whole ratio: at exactly 8:1 nearest lands on the same colour of the checker every time.
+                world.add_component(e, Sprite::screen(image, Vec2::splat(61.0), Vec2::splat(32.0)));
+                world
+            };
+            let (mut smooth, mut hard) = (spread(SpriteFilter::Linear), spread(SpriteFilter::Nearest));
+            let measure = |frame: &[u8]| {
+                let (mut lo, mut hi) = (255u8, 0u8);
+                for y in 44..84u32 {
+                    for x in 44..84u32 {
+                        let v = frame[((y * W + x) * 4) as usize];
+                        lo = lo.min(v);
+                        hi = hi.max(v);
+                    }
+                }
+                (lo, hi)
+            };
+            let smooth = measure(&render_world(&mut renderer, &mut smooth).await);
+            let hard = measure(&render_world(&mut renderer, &mut hard).await);
+            assert!(smooth.1 - smooth.0 < 16, "the shrunken checker is not even: {smooth:?}");
+            assert!(i32::from(smooth.0) > 150, "and it should be the checker's real brightness, not 128: {smooth:?}");
+            assert!(hard.1 - hard.0 > 150, "nearest keeps its hard texels, or this measures nothing: {hard:?}");
+        });
+    }
+
+    /// **Shrinking a sprite does not step between mip levels.** A two-pixel checker survives level 1 and is
+    /// flat at level 2, so sampling one level at a time would show the pattern just above a level and a half
+    /// and nothing just below. Blending the two, the contrast at either side is about the same.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_shrinking_sprite_does_not_step_between_mip_levels() {
+        use gizmo_math::Vec2;
+        use gizmo_renderer::components::Sprite;
+        use gizmo_renderer::sprite::SpriteFilter;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            const W: u32 = 128;
+            let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+            renderer.taa = None;
+            let side = 256u32;
+            let checker: Vec<u8> = (0..side * side)
+                .flat_map(|i| {
+                    let (x, y) = (i % side, i / side);
+                    let v = if (x / 2 + y / 2) % 2 == 0 { 0 } else { 255 };
+                    [v, v, v, 255]
+                })
+                .collect();
+            let image = renderer.load_sprite_rgba(&checker, side, side, SpriteFilter::Linear).expect("loads");
+            let mut spread_at = async |lod: f32| {
+                let size = side as f32 / 2f32.powf(lod);
+                let mut world = World::new();
+                world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+                let e = world.spawn();
+                world.add_component(e, Sprite::screen(image, Vec2::splat(size), Vec2::splat(64.0 - size / 2.0)));
+                let frame = render_world(&mut renderer, &mut world).await;
+                let values: Vec<f64> = (56..72u32)
+                    .flat_map(|y| (56..72u32).map(move |x| (y, x)))
+                    .map(|(y, x)| f64::from(frame[((y * W + x) * 4) as usize]))
+                    .collect();
+                let mean = values.iter().sum::<f64>() / values.len() as f64;
+                (values.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / values.len() as f64).sqrt()
+            };
+            let (above, below) = (spread_at(1.45).await, spread_at(1.55).await);
+            eprintln!("contrast just above a level and a half: {above:.2}, just below: {below:.2}");
+            assert!(above > 2.0, "the pattern has to show, or this measures nothing: {above}");
+            assert!(below > above * 0.5, "a step between levels: {above} above, {below} below");
+        });
+    }
+
+    /// **A neighbour in the atlas stays out.** The margin repeats each edge so that the mip levels a packed
+    /// sprite is normally drawn at, down to a quarter of its size, average its own colours and not the next
+    /// image's. Red beside blue, drawn at a quarter: no blue on any pixel of the sprite, edges included.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_packed_sprite_shrunk_to_a_quarter_keeps_its_neighbour_out() {
+        use gizmo_math::Vec2;
+        use gizmo_renderer::components::Sprite;
+        use gizmo_renderer::sprite::{AtlasImage, SpriteFilter};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            const W: u32 = 128;
+            let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+            renderer.taa = None;
+            let red = [255u8, 0, 0, 255].repeat(64 * 64);
+            let blue = [0u8, 0, 255, 255].repeat(64 * 64);
+            let image = |rgba| AtlasImage { rgba, width: 64, height: 64 };
+            let regions = renderer.load_sprite_atlas(&[image(&red), image(&blue)], SpriteFilter::Linear).expect("packs");
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+            let e = world.spawn();
+            let mut sprite = Sprite::screen(regions[0].image, Vec2::splat(16.0), Vec2::splat(40.0));
+            sprite.uv_rect = regions[0].uv_rect;
+            world.add_component(e, sprite);
+            let frame = render_world(&mut renderer, &mut world).await;
+            let (mut most_blue, mut most_red) = (0u8, 0u8);
+            for y in 40..56usize {
+                for x in 40..56usize {
+                    let p = &frame[(y * W as usize + x) * 4..][..4];
+                    most_red = most_red.max(p[0]);
+                    most_blue = most_blue.max(p[2]);
+                }
+            }
+            assert!(most_red > 200, "the sprite is there: {most_red}");
+            assert!(most_blue < 8, "the neighbour bled in: blue {most_blue}");
+        });
+    }
+
+    /// **An atlas is one draw call whatever the order.** Red, blue, red loaded apart cost three; packed they
+    /// cost one, and each still shows its own image.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn sprites_of_an_atlas_share_a_draw_call_and_keep_their_images() {
+        use gizmo_math::Vec2;
+        use gizmo_renderer::components::Sprite;
+        use gizmo_renderer::sprite::{AtlasImage, SpriteFilter};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            const W: u32 = 128;
+            let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+            renderer.taa = None;
+            let red = [255u8, 0, 0, 255].repeat(64);
+            let blue = [0u8, 0, 255, 255].repeat(64);
+            let image = |rgba| AtlasImage { rgba, width: 8, height: 8 };
+            let regions = renderer.load_sprite_atlas(&[image(&red), image(&blue)], SpriteFilter::Linear).expect("packs");
+            assert_eq!(regions[0].image, regions[1].image);
+            let at = |x: f32| Vec2::new(x, 40.0);
+            let screen = |region: gizmo_renderer::sprite::SpriteRegion, x: f32| {
+                let mut s = Sprite::screen(region.image, Vec2::splat(24.0), at(x));
+                s.uv_rect = region.uv_rect;
+                s
+            };
+            let scene = |sprites: Vec<Sprite>| {
+                let mut world = World::new();
+                world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+                for (i, s) in sprites.into_iter().enumerate() {
+                    let e = world.spawn();
+                    world.add_component(e, s.with_layer(i as i32));
+                }
+                world
+            };
+            let mut packed = scene(vec![screen(regions[0], 4.0), screen(regions[1], 44.0), screen(regions[0], 84.0)]);
+            let frame = render_world(&mut renderer, &mut packed).await;
+            let (_, screen_calls) = renderer.sprites.as_ref().expect("sprites").draw_calls();
+            let pixel = |x: u32, y: u32| {
+                let i = ((y * W + x) * 4) as usize;
+                [frame[i], frame[i + 1], frame[i + 2]]
+            };
+            let (l, m, r) = (pixel(16, 52), pixel(56, 52), pixel(96, 52));
+            assert!(l[0] > 200 && l[2] < 50, "left is red: {l:?}");
+            assert!(m[2] > 200 && m[0] < 50, "middle is blue: {m:?}");
+            assert!(r[0] > 200 && r[2] < 50, "right is red: {r:?}");
+
+            let apart_red = renderer.load_sprite_rgba(&red, 8, 8, SpriteFilter::Linear).unwrap();
+            let apart_blue = renderer.load_sprite_rgba(&blue, 8, 8, SpriteFilter::Linear).unwrap();
+            let sprite = |image, x: f32| Sprite::screen(image, Vec2::splat(24.0), at(x));
+            let mut apart = scene(vec![sprite(apart_red, 4.0), sprite(apart_blue, 44.0), sprite(apart_red, 84.0)]);
+            render_world(&mut renderer, &mut apart).await;
+            let (_, apart_calls) = renderer.sprites.as_ref().expect("sprites").draw_calls();
+            assert_eq!(screen_calls + apart_calls, 1 + 3, "{screen_calls} packed, {apart_calls} apart");
         });
     }
 

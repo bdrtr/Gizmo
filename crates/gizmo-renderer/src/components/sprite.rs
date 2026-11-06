@@ -58,6 +58,14 @@ pub struct Sprite {
 }
 
 impl Sprite {
+    /// A world sprite of an atlas's image: see [`SpriteRenderer::load_atlas`](crate::sprite::SpriteRenderer::load_atlas).
+    #[must_use]
+    pub fn from_region(region: crate::sprite::SpriteRegion, size: Vec2) -> Self {
+        let mut sprite = Self::world(region.image, size);
+        sprite.uv_rect = region.uv_rect;
+        sprite
+    }
+
     /// A white-tinted world sprite `size` world units across, centred on the entity.
     #[must_use]
     pub fn world(image: SpriteImageId, size: Vec2) -> Self {

@@ -199,6 +199,7 @@ fn a_material_description_survives_the_file() {
             // 550a7df ile eklendi: kesme yok (opak) — testin ilgilendiği tur, alanın kendisi değil.
             alpha_cutoff: 0.0,
             blend_mode: gizmo::renderer::components::BlendMode::Multiply,
+            reflectance: 0.16,
         },
     );
 

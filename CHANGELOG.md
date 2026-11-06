@@ -50,6 +50,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Material::reflectance` and `with_ior`.** How much a non-metal mirrors head on: 0.04 unless a material says otherwise,
+  `with_ior(1.33)` for water, `with_ior(2.42)` for diamond, `with_ior(1.0)` for no highlight at all. It moves the highlight
+  and the environment reflection on both render paths, and the Fresnel of screen-space reflections, which read a literal
+  0.04. A glTF file's `KHR_materials_ior` and `KHR_materials_specular` reach it; the specular colour contributes its
+  luminance and its hue is lost, and the extension's textures are not read. No new render target: the magnitude of the
+  channel that held `receives_shadows`, whose sign now holds it. A material that sets nothing draws as before.
+
+- **Sprites have mipmaps and can be packed.** A `SpriteFilter::Linear` image has mipmaps, so a large image drawn small
+  stops aliasing, built weighted by alpha and in linear light so a soft edge does not go dark and a checker keeps its
+  brightness. `Renderer::load_sprite_atlas` packs a set into one texture with edges repeated into a margin, and sprites of
+  it share a draw call however they are ordered: red, blue, red cost 3 apart and 1 packed. **Looks change:** a `Linear`
+  sprite shrunk below its size is now smoother, and a `Linear` sheet shrunk far below its size can bleed between cells;
+  `Nearest` has no mipmaps.
+
 - **`a.pipe(b)` hands a value over.** What `a` returns arrives as `b`'s first parameter, `In<T>`; a pipe is one system to
   the scheduler, with the union of what its halves touch, each half keeping its own `Local`s, and it can be piped again.
   **Breaks:** what was called `pipe`, which handed nothing over, is now `then`.

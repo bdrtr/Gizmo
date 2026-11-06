@@ -145,6 +145,7 @@ impl SsrState {
             hdr_view,
             &deferred.normal_roughness_view,
             &deferred.world_position_view,
+            &deferred.emissive_view,
             &linear_sampler,
             &params_buffer,
         );
@@ -191,6 +192,7 @@ impl SsrState {
             hdr_view,
             &deferred.normal_roughness_view,
             &deferred.world_position_view,
+            &deferred.emissive_view,
             &self.nearest_sampler,
             &self.params_buffer,
         );
@@ -277,6 +279,17 @@ impl SsrState {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    // t_emissive: RT5, whose alpha is the surface's reflectance
+                    binding: 5,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -311,6 +324,7 @@ impl SsrState {
         hdr_view: &wgpu::TextureView,
         normal_view: &wgpu::TextureView,
         pos_view: &wgpu::TextureView,
+        emissive_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         params: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
@@ -337,6 +351,10 @@ impl SsrState {
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(emissive_view),
                 },
             ],
         })

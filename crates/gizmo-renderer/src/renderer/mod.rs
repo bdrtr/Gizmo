@@ -461,6 +461,23 @@ impl Renderer {
         sprites.load_rgba(&self.device, &self.queue, rgba, width, height, filter)
     }
 
+    /// Packs images into one texture, so sprites drawn from them share a draw call: see
+    /// [`SpriteRenderer::load_atlas`](crate::sprite::SpriteRenderer::load_atlas).
+    ///
+    /// # Errors
+    ///
+    /// See [`SpriteRenderer::load_atlas`](crate::sprite::SpriteRenderer::load_atlas).
+    pub fn load_sprite_atlas(
+        &mut self,
+        images: &[crate::sprite::AtlasImage<'_>],
+        filter: crate::sprite::SpriteFilter,
+    ) -> Result<Vec<crate::sprite::SpriteRegion>, crate::sprite::SpriteError> {
+        let Some(sprites) = self.sprites.as_mut() else {
+            return Err(crate::sprite::SpriteError::Invalid);
+        };
+        sprites.load_atlas(&self.device, &self.queue, images, filter)
+    }
+
     /// The same from a file.
     ///
     /// # Errors

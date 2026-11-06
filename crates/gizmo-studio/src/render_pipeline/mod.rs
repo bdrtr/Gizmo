@@ -360,6 +360,7 @@ pub fn execute_render_pipeline(
                 // 16 384 pixels that should have been discarded, measured in
                 // `a_cut_out_material_cuts_in_the_editor_viewport`.
                 .with_alpha_cutoff(mat.alpha_cutoff)
+                .with_reflectance(mat.reflectance)
                 .with_shadow_receiving(renderers.get(e).map(|r| r.receives_shadows).unwrap_or(true));
 
                 // --- SKELETON (KEMİK) ARAMASI ---

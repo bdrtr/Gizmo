@@ -21,14 +21,16 @@
 //!
 //! # What it does not do
 //!
-//! - **No mipmaps.** A large image drawn small aliases. Right for pixel art and for UI drawn near
-//!   its native size; wrong for a big texture shrunk on a distant card.
+//! - **Sheets and mipmaps.** A [`SpriteFilter::Linear`](crate::sprite::SpriteFilter::Linear) image has mipmaps, so a large image drawn small
+//!   does not alias, built weighted by alpha and in linear light so a soft edge does not go dark. A cell of a
+//!   sheet is not separated from its neighbours in them, so a sheet shrunk far below its size bleeds; give it
+//!   [`SpriteFilter::Nearest`](crate::sprite::SpriteFilter::Nearest), which has none, or pack it with [`SpriteRenderer::load_atlas`](crate::sprite::SpriteRenderer::load_atlas), which pads.
 //! - **World sprites are pre-tonemap.** They are drawn into the HDR target with the scene and so
 //!   are exposed and bloomed with it — right for a card standing in a lit level. **Screen**
 //!   sprites are not: they go onto the final image after the post chain (`crate::overlay`), so a
 //!   HUD colour reaches the screen as authored.
-//! - **No texture atlas packing.** One image is one texture and one bind group; a sheet of frames
-//!   is one image with [`Sprite::uv_rect`](crate::components::Sprite::uv_rect) choosing the cell.
+//! - **Packing is asked for.** One image is one texture and one bind group, so loaded apart they cost a draw
+//!   call per change of image. [`SpriteRenderer::load_atlas`](crate::sprite::SpriteRenderer::load_atlas) packs a set into one.
 
 use gizmo_math::{Mat4, Vec2, Vec4};
 
@@ -60,10 +62,10 @@ impl SpriteImageId {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum SpriteFilter {
-    /// Bilinear — smooth when scaled. Photographs, painted art, UI.
+    /// Bilinear, with mipmaps — smooth when scaled, up or down. Photographs, painted art, UI.
     #[default]
     Linear,
-    /// Nearest texel — hard edges when scaled. Pixel art.
+    /// Nearest texel, no mipmaps — hard edges when scaled. Pixel art.
     Nearest,
 }
 
@@ -242,7 +244,7 @@ impl SpriteRenderer {
                 label: Some(label),
                 mag_filter: filter,
                 min_filter: filter,
-                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                mipmap_filter: wgpu::MipmapFilterMode::Linear,
                 // Clamp: a sheet cell sampled at its edge must not bleed in the opposite edge of
                 // the image, which is what repeat does at u = 1.
                 address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -406,11 +408,15 @@ impl SpriteRenderer {
             max,
         })?;
 
+        let levels = match filter {
+            SpriteFilter::Linear => mip_chain(rgba, width, height),
+            SpriteFilter::Nearest => Vec::new(),
+        };
         let extent = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("Sprite Image"),
             size: extent,
-            mip_level_count: 1,
+            mip_level_count: 1 + levels.len() as u32,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
@@ -432,6 +438,23 @@ impl SpriteRenderer {
             },
             extent,
         );
+        for (i, level) in levels.iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: i as u32 + 1,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &level.rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(level.width * 4),
+                    rows_per_image: Some(level.height),
+                },
+                wgpu::Extent3d { width: level.width, height: level.height, depth_or_array_layers: 1 },
+            );
+        }
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let sampler = match filter {
             SpriteFilter::Linear => &self.linear,
@@ -447,6 +470,44 @@ impl SpriteRenderer {
         });
         self.images.push(Image { bind_group, size: [width, height] });
         Ok(SpriteImageId(id))
+    }
+
+    /// Packs `images` into one texture and uploads it, so sprites drawn from them share a draw call however
+    /// they are ordered. Each comes back as a [`SpriteRegion`] to draw with
+    /// [`Sprite::from_region`](crate::components::Sprite::from_region), in the order given.
+    ///
+    /// Each image's edge is repeated into a margin around it, so neither filtering nor the first mipmaps reach
+    /// its neighbour.
+    ///
+    /// # Errors
+    ///
+    /// As [`load_rgba`](Self::load_rgba), and [`SpriteError::TooLarge`] if they do not fit one texture.
+    pub fn load_atlas(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        images: &[AtlasImage<'_>],
+        filter: SpriteFilter,
+    ) -> Result<Vec<SpriteRegion>, SpriteError> {
+        for image in images {
+            if image.width == 0 || image.height == 0 {
+                return Err(SpriteError::Empty);
+            }
+            let expected = image.width as usize * image.height as usize * 4;
+            if image.rgba.len() != expected {
+                return Err(SpriteError::WrongLength { expected, actual: image.rgba.len() });
+            }
+        }
+        let sizes: Vec<[u32; 2]> = images.iter().map(|i| [i.width, i.height]).collect();
+        let max = device.limits().max_texture_dimension_2d;
+        let Some(packed) = pack_atlas(&sizes, max) else {
+            let widest = sizes.iter().map(|s| s[0]).max().unwrap_or(0);
+            let tallest = sizes.iter().map(|s| s[1]).max().unwrap_or(0);
+            return Err(SpriteError::TooLarge { width: widest, height: tallest, max });
+        };
+        let rgba = compose_atlas(images, &packed);
+        let image = self.load_rgba(device, queue, &rgba, packed.width, packed.height, filter)?;
+        Ok(packed.regions(&sizes, image))
     }
 
     /// Decodes an encoded image (PNG, JPEG, WebP, …) and uploads it.
@@ -652,10 +713,260 @@ fn runs(list: &[Queued], base: u32) -> Vec<Run> {
     out
 }
 
+/// One image for [`SpriteRenderer::load_atlas`]: straight-alpha sRGB RGBA8, rows top to bottom.
+#[derive(Debug, Clone, Copy)]
+pub struct AtlasImage<'a> {
+    /// `width × height × 4` bytes.
+    pub rgba: &'a [u8],
+    /// Its width in pixels.
+    pub width: u32,
+    /// Its height in pixels.
+    pub height: u32,
+}
+
+/// Where an image ended up in an atlas.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpriteRegion {
+    /// The atlas.
+    pub image: SpriteImageId,
+    /// The part of it holding this image, for [`Sprite::uv_rect`](crate::components::Sprite::uv_rect).
+    pub uv_rect: [f32; 4],
+    /// The image's own size in pixels.
+    pub size: [u32; 2],
+}
+
+/// Margin around each image in an atlas: its edge repeated, enough for filtering and for the mipmaps down to
+/// a quarter of the size.
+const ATLAS_MARGIN: u32 = 4;
+
+/// A packing: the texture's size and the top-left of each image, margin excluded.
+#[derive(Debug, PartialEq)]
+struct PackedAtlas {
+    width: u32,
+    height: u32,
+    at: Vec<[u32; 2]>,
+}
+
+impl PackedAtlas {
+    fn regions(&self, sizes: &[[u32; 2]], image: SpriteImageId) -> Vec<SpriteRegion> {
+        let (w, h) = (self.width as f32, self.height as f32);
+        self.at
+            .iter()
+            .zip(sizes)
+            .map(|(&[x, y], &size)| SpriteRegion {
+                image,
+                uv_rect: [x as f32 / w, y as f32 / h, (x + size[0]) as f32 / w, (y + size[1]) as f32 / h],
+                size,
+            })
+            .collect()
+    }
+}
+
+/// Packs `sizes` into shelves, tallest first, in the smallest power-of-two square-ish texture they fit, up to
+/// `max` a side. `None` if they do not fit.
+fn pack_atlas(sizes: &[[u32; 2]], max: u32) -> Option<PackedAtlas> {
+    let cell = |s: [u32; 2]| [s[0] + 2 * ATLAS_MARGIN, s[1] + 2 * ATLAS_MARGIN];
+    let area: u64 = sizes.iter().map(|&s| u64::from(cell(s)[0]) * u64::from(cell(s)[1])).sum();
+    let widest = sizes.iter().map(|&s| cell(s)[0]).max().unwrap_or(1);
+    let mut width = ((area as f64).sqrt().ceil() as u32).max(widest).next_power_of_two();
+    let mut order: Vec<usize> = (0..sizes.len()).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse((sizes[i][1], sizes[i][0])));
+    while width <= max {
+        let (mut x, mut y, mut shelf) = (0, 0, 0);
+        let mut at = vec![[0, 0]; sizes.len()];
+        for &i in &order {
+            let [w, h] = cell(sizes[i]);
+            if x + w > width {
+                (x, y) = (0, y + shelf);
+                shelf = 0;
+            }
+            at[i] = [x + ATLAS_MARGIN, y + ATLAS_MARGIN];
+            x += w;
+            shelf = shelf.max(h);
+        }
+        let height = (y + shelf).max(1).next_power_of_two();
+        if height <= max {
+            return Some(PackedAtlas { width, height, at });
+        }
+        width = width.checked_mul(2)?;
+    }
+    None
+}
+
+/// Draws the images into the packed texture, each edge repeated into its margin. The margin is the same image,
+/// so its colour and alpha are what filtering at the edge should find.
+fn compose_atlas(images: &[AtlasImage<'_>], packed: &PackedAtlas) -> Vec<u8> {
+    let stride = packed.width as usize * 4;
+    let mut out = vec![0u8; stride * packed.height as usize];
+    for (image, &[x, y]) in images.iter().zip(&packed.at) {
+        let (w, h) = (image.width as i64, image.height as i64);
+        let m = i64::from(ATLAS_MARGIN);
+        for dy in -m..h + m {
+            for dx in -m..w + m {
+                let from = (dy.clamp(0, h - 1) * w + dx.clamp(0, w - 1)) as usize * 4;
+                let to_x = (i64::from(x) + dx) as usize;
+                let to_y = (i64::from(y) + dy) as usize;
+                let to = to_y * stride + to_x * 4;
+                out[to..to + 4].copy_from_slice(&image.rgba[from..from + 4]);
+            }
+        }
+    }
+    out
+}
+
+/// One level of a mip chain.
+struct MipLevel {
+    rgba: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+fn srgb_to_linear(c: u8) -> f32 {
+    let c = f32::from(c) / 255.0;
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+
+fn linear_to_srgb(c: f32) -> u8 {
+    let c = c.clamp(0.0, 1.0);
+    let s = if c <= 0.003_130_8 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 };
+    (s * 255.0 + 0.5) as u8
+}
+
+/// Every level below the top, each a 2×2 average of the last. Colour is averaged weighted by alpha, or a
+/// transparent neighbour's colour, usually black, would darken a soft edge; and in linear light, or a shrunken
+/// checker would come out too dark.
+fn mip_chain(rgba: &[u8], width: u32, height: u32) -> Vec<MipLevel> {
+    let lut: Vec<f32> = (0..=255).map(srgb_to_linear).collect();
+    let mut levels: Vec<MipLevel> = Vec::new();
+    let (mut w, mut h) = (width, height);
+    while w > 1 || h > 1 {
+        let source: &[u8] = levels.last().map_or(rgba, |l| &l.rgba);
+        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
+        let mut out = Vec::with_capacity(nw as usize * nh as usize * 4);
+        for y in 0..nh {
+            for x in 0..nw {
+                let (mut sum, mut alpha) = ([0.0f32; 3], 0.0f32);
+                let (mut sum_plain, mut samples) = ([0.0f32; 3], 0.0f32);
+                for sy in [y * 2, (y * 2 + 1).min(h - 1)] {
+                    for sx in [x * 2, (x * 2 + 1).min(w - 1)] {
+                        let i = (sy as usize * w as usize + sx as usize) * 4;
+                        let a = f32::from(source[i + 3]) / 255.0;
+                        for c in 0..3 {
+                            let v = lut[source[i + c] as usize];
+                            sum[c] += v * a;
+                            sum_plain[c] += v;
+                        }
+                        alpha += a;
+                        samples += 1.0;
+                    }
+                }
+                for c in 0..3 {
+                    // Wholly transparent: nothing weights it, so keep what is there for the next level's edge.
+                    let v = if alpha > 0.0 { sum[c] / alpha } else { sum_plain[c] / samples };
+                    out.push(linear_to_srgb(v));
+                }
+                out.push((alpha / samples * 255.0 + 0.5) as u8);
+            }
+        }
+        levels.push(MipLevel { rgba: out, width: nw, height: nh });
+        (w, h) = (nw, nh);
+    }
+    levels
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use gizmo_math::{Quat, Vec3};
+
+    /// The chain goes down to one pixel, odd sizes included, and each level is the size it says.
+    #[test]
+    fn a_mip_chain_goes_down_to_one_pixel() {
+        let rgba = vec![255u8; 5 * 3 * 4];
+        let levels = mip_chain(&rgba, 5, 3);
+        let sizes: Vec<[u32; 2]> = levels.iter().map(|l| [l.width, l.height]).collect();
+        assert_eq!(sizes, [[2, 1], [1, 1]]);
+        for l in &levels {
+            assert_eq!(l.rgba.len(), (l.width * l.height * 4) as usize);
+        }
+        assert!(mip_chain(&[1, 2, 3, 4], 1, 1).is_empty());
+    }
+
+    /// **A soft edge does not go dark.** Red beside transparent black is half-transparent red, not half-dark
+    /// red, which is what plain averaging gives and what draws as a dark halo around every shrunken cut-out.
+    #[test]
+    fn a_transparent_neighbour_does_not_darken_the_colour() {
+        let rgba = [255, 0, 0, 255, 0, 0, 0, 0];
+        let level = &mip_chain(&rgba, 2, 1)[0];
+        assert_eq!(&level.rgba[..3], &[255, 0, 0], "the colour survives");
+        assert!((i32::from(level.rgba[3]) - 128).abs() <= 1, "alpha {}", level.rgba[3]);
+    }
+
+    /// **Averaging is in linear light.** A black and white checker shrinks to what looks like its average,
+    /// 188 in sRGB, not the 128 that averaging the encoded numbers gives.
+    #[test]
+    fn a_checker_shrinks_to_its_real_brightness() {
+        let rgba = [0, 0, 0, 255, 255, 255, 255, 255];
+        let level = &mip_chain(&rgba, 2, 1)[0];
+        assert!((i32::from(level.rgba[0]) - 188).abs() <= 1, "{}", level.rgba[0]);
+    }
+
+    fn overlap(a: ([u32; 2], [u32; 2]), b: ([u32; 2], [u32; 2])) -> bool {
+        let m = ATLAS_MARGIN;
+        let (ax, ay, aw, ah) = (a.0[0], a.0[1], a.1[0] + 2 * m, a.1[1] + 2 * m);
+        let (bx, by, bw, bh) = (b.0[0], b.0[1], b.1[0] + 2 * m, b.1[1] + 2 * m);
+        ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah
+    }
+
+    /// Nothing overlaps, margins included, everything is inside, across a spread of sizes.
+    #[test]
+    fn an_atlas_packs_without_overlap() {
+        let sizes: Vec<[u32; 2]> = (0..40).map(|i| [8 + (i * 37) % 90, 8 + (i * 53) % 70]).collect();
+        let packed = pack_atlas(&sizes, 4096).expect("fits");
+        assert!(packed.width.is_power_of_two() && packed.height.is_power_of_two());
+        for (i, (&at, &size)) in packed.at.iter().zip(&sizes).enumerate() {
+            assert!(at[0] >= ATLAS_MARGIN && at[1] >= ATLAS_MARGIN, "{i}");
+            assert!(at[0] + size[0] + ATLAS_MARGIN <= packed.width, "{i}");
+            assert!(at[1] + size[1] + ATLAS_MARGIN <= packed.height, "{i}");
+            for (j, (&other_at, &other_size)) in packed.at.iter().zip(&sizes).enumerate().take(i) {
+                assert!(!overlap((at, size), (other_at, other_size)), "{i} and {j}");
+            }
+        }
+        assert_eq!(pack_atlas(&[[5000, 5000]], 4096), None);
+        assert_eq!(pack_atlas(&[[3000, 3000], [3000, 3000], [3000, 3000]], 4096), None);
+    }
+
+    /// Each image lands where its region says, and its edge is repeated into the margin.
+    #[test]
+    fn composing_puts_each_image_where_its_region_says() {
+        let red = [255u8, 0, 0, 255].repeat(4);
+        let blue = [0u8, 0, 255, 255].repeat(9);
+        let images = [
+            AtlasImage { rgba: &red, width: 2, height: 2 },
+            AtlasImage { rgba: &blue, width: 3, height: 3 },
+        ];
+        let sizes = [[2, 2], [3, 3]];
+        let packed = pack_atlas(&sizes, 256).unwrap();
+        let rgba = compose_atlas(&images, &packed);
+        let at = |x: u32, y: u32| {
+            let i = (y * packed.width + x) as usize * 4;
+            [rgba[i], rgba[i + 1], rgba[i + 2], rgba[i + 3]]
+        };
+        let [rx, ry] = packed.at[0];
+        let [bx, by] = packed.at[1];
+        assert_eq!(at(rx, ry), [255, 0, 0, 255]);
+        assert_eq!(at(rx + 1, ry + 1), [255, 0, 0, 255]);
+        assert_eq!(at(bx + 2, by + 2), [0, 0, 255, 255]);
+        assert_eq!(at(rx - ATLAS_MARGIN, ry - ATLAS_MARGIN), [255, 0, 0, 255], "the margin repeats the edge");
+        assert_eq!(at(bx + 2 + ATLAS_MARGIN, by), [0, 0, 255, 255]);
+
+        let regions = packed.regions(&sizes, SpriteImageId(7));
+        assert_eq!(regions[0].image, SpriteImageId(7));
+        assert_eq!(regions[1].size, [3, 3]);
+        let u = regions[0].uv_rect;
+        assert_eq!(u[0], rx as f32 / packed.width as f32);
+        assert_eq!(u[3], (ry + 2) as f32 / packed.height as f32);
+    }
 
     #[test]
     fn placeholders_are_distinct_and_far_from_issued_ids() {

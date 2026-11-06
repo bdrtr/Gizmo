@@ -67,7 +67,7 @@ struct VertexOutput {
     @location(3) world_pos: vec3<f32>,
     @location(4) world_normal: vec3<f32>,
     @location(5) inst_ambient: vec3<f32>,
-    @location(6) inst_emissive: vec4<f32>,  // w = 1: receives no shadows
+    @location(6) inst_emissive: vec4<f32>,  // w < 0: receives no shadows
     @location(7) inst_cutoff: f32,
 };
 
@@ -208,7 +208,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // and put the range boundary on a sphere instead of a plane.)
     let view_depth = dot(in.world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
     // `MeshRenderer::receives_shadows == false` keeps the sun's share whole.
-    let vis = select(sun_visibility(in.world_pos, in.world_normal, view_depth), 1.0, in.inst_emissive.w > 0.5);
+    let vis = select(sun_visibility(in.world_pos, in.world_normal, view_depth), 1.0, in.inst_emissive.w < 0.0);
 
     // The shadow darkens rather than replaces. Baked lighting already includes the sky and the
     // bounce; a shadowed patch of it is dimmer, not black, and multiplying the whole thing by the

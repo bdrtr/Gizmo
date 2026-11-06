@@ -110,6 +110,17 @@ fn emissive_with_strength(factor: [f32; 3], strength: Option<f32>) -> [f32; 3] {
     [factor[0] * s, factor[1] * s, factor[2] * s]
 }
 
+/// F0 for a glTF material: `KHR_materials_ior` (default 1.5), scaled by `KHR_materials_specular`.
+///
+/// The extension's own expression is `min(f0 * specular_color, 1) * specular_factor`, per channel.
+/// [`Material::reflectance`](crate::components::Material::reflectance) is one number, so a tinted
+/// specular colour contributes its luminance and loses its hue. Its textures are not read either.
+fn gltf_reflectance(ior: Option<f32>, specular: Option<(f32, [f32; 3])>) -> f32 {
+    let f0 = crate::components::reflectance_from_ior(ior.unwrap_or(1.5));
+    let (factor, [r, g, b]) = specular.unwrap_or((1.0, [1.0; 3]));
+    (f0 * (0.2126 * r + 0.7152 * g + 0.0722 * b)).min(1.0) * factor
+}
+
 /// Resolve the `KHR_texture_transform` (UV offset / rotation / scale) for a
 /// material, from its base-colour texture (identity when absent).
 ///
@@ -283,6 +294,10 @@ pub(super) fn build_gltf_materials(
             mat.albedo = gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], alpha);
             mat.metallic = pbr.metallic_factor();
             mat.roughness = pbr.roughness_factor();
+            mat = mat.with_reflectance(gltf_reflectance(
+                material.ior(),
+                material.specular().map(|s| (s.specular_factor(), s.specular_color_factor())),
+            ));
 
             // Only `Blend` routes to the transparent pass. `Mask` (cutout) is opaque geometry
             // with a per-texel discard (handled in gbuffer.wgsl via alpha_cutoff) — routing it
@@ -310,6 +325,32 @@ mod tests {
         assert_eq!(emissive_with_strength([1.0, 0.5, 0.25], Some(4.0)), [4.0, 2.0, 1.0]);
         // Zero strength kills emission.
         assert_eq!(emissive_with_strength([1.0, 1.0, 1.0], Some(0.0)), [0.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn ior_and_specular_extensions_reach_the_reflectance() {
+        let json = r#"{
+          "asset": { "version": "2.0" },
+          "extensionsUsed": ["KHR_materials_ior", "KHR_materials_specular"],
+          "materials": [
+            {},
+            { "extensions": { "KHR_materials_ior": { "ior": 2.0 } } },
+            { "extensions": { "KHR_materials_specular": { "specularFactor": 0.5 } } },
+            { "extensions": {
+                "KHR_materials_ior": { "ior": 2.0 },
+                "KHR_materials_specular": { "specularColorFactor": [0.0, 1.0, 0.0] } } }
+          ]
+        }"#;
+        let doc = gltf::Gltf::from_slice(json.as_bytes()).expect("parse");
+        let got: Vec<f32> = doc
+            .materials()
+            .map(|m| gltf_reflectance(m.ior(), m.specular().map(|s| (s.specular_factor(), s.specular_color_factor()))))
+            .collect();
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        assert!(close(got[0], 0.04), "no extension is ior 1.5: {}", got[0]);
+        assert!(close(got[1], 1.0 / 9.0), "ior 2: {}", got[1]);
+        assert!(close(got[2], 0.02), "half the specular: {}", got[2]);
+        assert!(close(got[3], 0.7152 / 9.0), "a green tint keeps its luminance: {}", got[3]);
     }
 
     #[test]

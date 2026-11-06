@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -267,7 +267,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let world_pos = pos_sample.xyz + scene.camera_pos.xyz;
 
     let min_roughness = max(roughness, 0.05);
-    let f0            = mix(vec3<f32>(0.04), albedo, metallic);
+    let dielectric    = textureLoad(t_emissive_gbuf, iuv, 0).w;
+    let f0            = mix(vec3<f32>(dielectric_f0(dielectric)), albedo, metallic);
 
     var raw_tangent = tangent_sample.xyz;
     if (length(raw_tangent) < 0.001) {
@@ -374,9 +375,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     if (scene.sun_direction.w > 0.5 && shadow_visibility > 0.0) {
         shadow_visibility = min(shadow_visibility, contact_shadow(world_pos, N, normalize(-scene.sun_direction.xyz)));
     }
-    // `MeshRenderer::receives_shadows == false` (RT5's alpha): no shadow falls here — not the
-    // cascades, not contact shadows, and below, not the point-light cube.
-    let receives_shadows = textureLoad(t_emissive_gbuf, iuv, 0).w < 0.5;
+    // `MeshRenderer::receives_shadows == false` (RT5's alpha is negative): no shadow falls here —
+    // not the cascades, not contact shadows, and below, not the point-light cube.
+    let receives_shadows = dielectric >= 0.0;
     if (!receives_shadows) {
         shadow_visibility = 1.0;
     }

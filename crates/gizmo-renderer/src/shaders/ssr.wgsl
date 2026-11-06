@@ -1,6 +1,6 @@
 // SSR Raymarching Shader
 // SceneUniforms shared from gizmo::common (composed by load_shader_composed).
-#import gizmo::common::{SceneUniforms}
+#import gizmo::common::{SceneUniforms, dielectric_f0}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
@@ -22,6 +22,8 @@ struct SsrParams {
     edge_fade: f32,
 }
 @group(1) @binding(4) var<uniform> params: SsrParams;
+// RT5: its alpha holds `Material::reflectance` (see `dielectric_f0`).
+@group(1) @binding(5) var t_emissive: texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -52,7 +54,8 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     // Fresnel effect
     let cos_theta = max(dot(-view_dir, normal), 0.0);
-    let fresnel = 0.04 + (1.0 - 0.04) * pow(1.0 - cos_theta, 5.0);
+    let f0 = dielectric_f0(textureLoad(t_emissive, iuv, 0).w);
+    let fresnel = f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
     let fade_roughness = 1.0 - smoothstep(params.fade_start, params.fade_end, normal_roughness.w);
 
     // Ray marching params

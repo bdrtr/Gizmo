@@ -6,7 +6,7 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
+#import gizmo::common::{SceneUniforms, dielectric_f0, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
@@ -102,7 +102,7 @@ struct VertexOutput {
     // `baked_lit.wgsl` reads it from. See the discard in `fs_main`.
     @location(6) inst_cutoff: f32,
     // `Material::emissive` — added unlit, as the deferred path adds RT5.
-    @location(7) inst_emissive: vec4<f32>,  // w = 1: receives no shadows
+    @location(7) inst_emissive: vec4<f32>,  // w = F0, < 0: receives no shadows
     @location(8) tangent: vec3<f32>,
     @location(9) bitangent: vec3<f32>,
 };
@@ -318,7 +318,7 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
 #endif
     // `MeshRenderer::receives_shadows == false`: computed above (the comparison needs uniform
     // control flow), discarded here.
-    if (in.inst_emissive.w > 0.5) {
+    if (in.inst_emissive.w < 0.0) {
         shadow_visibility = 1.0;
     }
 
@@ -356,7 +356,7 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
     let B = normalize(in.bitangent);
 #endif
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
-    let f0 = mix(vec3<f32>(0.04), albedo, metallic);
+    let f0 = mix(vec3<f32>(dielectric_f0(in.inst_emissive.w)), albedo, metallic);
     let NdV = max(dot(N, view_dir), 0.001);
     
     // The deferred shader's environment terms, so a surface gets the same light on either path.

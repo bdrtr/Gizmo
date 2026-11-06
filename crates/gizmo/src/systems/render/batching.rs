@@ -662,6 +662,7 @@ pub(super) fn collect_draw_items(
                 // The cut-out threshold rides in `ambient.w`, which was padding. Zero unless the
                 // material asks, and zero is what every shader already reads there.
                 .with_alpha_cutoff($mat.alpha_cutoff)
+                .with_reflectance($mat.reflectance)
                 .with_shadow_receiving(renderers.get($e).map(|r| r.receives_shadows).unwrap_or(true));
                 // Where this entity was drawn last frame — the object half of its velocity.
                 let generation = $e.generation();

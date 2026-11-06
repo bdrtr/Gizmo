@@ -66,7 +66,7 @@ struct VertexOutput {
     @location(7) motion_now:     vec4<f32>,
     @location(8) motion_before:  vec4<f32>,
     // `Material::emissive`, per instance — what game code sets with `with_emissive`.
-    @location(9) inst_emissive:  vec4<f32>,  // w = 1: receives no shadows
+    @location(9) inst_emissive:  vec4<f32>,  // w = F0, < 0: receives no shadows
     @location(10) bitangent:     vec3<f32>,
 };
 
@@ -212,7 +212,8 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
     let now_ndc    = in.motion_now.xy / in.motion_now.w;
     let before_ndc = in.motion_before.xy / in.motion_before.w;
     out.velocity   = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
-    // .w: `MeshRenderer::receives_shadows == false` — the lighting pass skips every shadow term.
+    // .w: `Material::reflectance`, negative when `MeshRenderer::receives_shadows == false`. The
+    // lighting pass reads both; see `dielectric_f0`.
     out.emissive   = vec4<f32>(max(emissive, vec3<f32>(0.0)), in.inst_emissive.w);
     return out;
 }
