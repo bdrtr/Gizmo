@@ -65,7 +65,7 @@ pub fn setup_studio_scene(
         gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)),
     );
     world.add_component(icon1, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(icon1, gizmo::core::component::Parent(light.id()));
+    world.add_component(icon1, gizmo::core::component::Parent(light));
     world.add_component(icon1, gizmo::core::component::EditorOnly);
 
     let icon2 = world.spawn();
@@ -87,7 +87,7 @@ pub fn setup_studio_scene(
         gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)),
     );
     world.add_component(icon2, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(icon2, gizmo::core::component::Parent(light.id()));
+    world.add_component(icon2, gizmo::core::component::Parent(light));
     world.add_component(icon2, gizmo::core::component::EditorOnly);
 
     let icon3 = world.spawn();
@@ -109,12 +109,12 @@ pub fn setup_studio_scene(
         gizmo::prelude::Material::new(white_tex.clone()).with_unlit(Vec4::new(1.0, 0.8, 0.1, 1.0)),
     );
     world.add_component(icon3, gizmo::renderer::components::MeshRenderer::new());
-    world.add_component(icon3, gizmo::core::component::Parent(light.id()));
+    world.add_component(icon3, gizmo::core::component::Parent(light));
     world.add_component(icon3, gizmo::core::component::EditorOnly);
 
     world.add_component(
         light,
-        gizmo::core::component::Children(vec![icon1.id(), icon2.id(), icon3.id()]),
+        gizmo::core::component::Children(vec![icon1, icon2, icon3]),
     );
 
     // Editor Gizmos Root Node
@@ -139,7 +139,7 @@ pub fn setup_studio_scene(
     );
     world.add_component(grid_entity, Transform::new(Vec3::ZERO));
     world.add_component(grid_entity, gizmo::physics::components::GlobalTransform::default());
-    world.add_component(grid_entity, gizmo::core::component::Parent(gizmo_root.id()));
+    world.add_component(grid_entity, gizmo::core::component::Parent(gizmo_root));
 
     let grid_mesh =
         gizmo::renderer::asset::AssetManager::create_editor_grid_mesh(&renderer.device, 500.0);
@@ -157,7 +157,7 @@ pub fn setup_studio_scene(
         gizmo::renderer::components::MeshRenderer::new(),
     );
     world.add_component(grid_entity, gizmo::core::component::EditorOnly);
-    gizmo_children.push(grid_entity.id());
+    gizmo_children.push(grid_entity);
 
     // Merkez Eksenler (Kırmızı/Mavi Çizgiler) artık Grid Shader (grid.wgsl) tarafından
     // tam kalbinde 0 GPU sızıntısı ile çizilmektedir! Bu yüzden gereksiz Transform küplerini sildik.

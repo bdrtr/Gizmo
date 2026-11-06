@@ -1113,8 +1113,8 @@ mod tests {
         let mut world = World::new();
         let a = world.spawn();
         let b = world.spawn();
-        world.add_component(a, Parent(b.id()));
-        world.add_component(b, Parent(a.id()));
+        world.add_component(a, Parent(b));
+        world.add_component(b, Parent(a));
 
         let hits = Arc::new(Mutex::new(0));
         for entity in [a, b] {

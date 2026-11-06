@@ -526,6 +526,7 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
         let meshes = world.borrow::<crate::renderer::components::Mesh>();
         let renderers = world.borrow::<MeshRenderer>();
         let hidden = collect_hidden(
+            world,
             &world.borrow::<crate::core::component::IsHidden>(),
             &world.borrow::<crate::core::component::Children>(),
         );

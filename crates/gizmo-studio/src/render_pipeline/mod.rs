@@ -112,8 +112,7 @@ pub fn execute_render_pipeline(
     // 2026-08-19 fix was about. The `IsHidden` borrow is still taken here rather than inside the
     // helper so this loop keeps naming the marker in code, which `render_parity` asserts.
     let _is_hidden_guard = world.borrow::<gizmo::core::component::IsHidden>();
-    let hidden = gizmo::systems::render::collect_hidden(
-        &_is_hidden_guard,
+    let hidden = gizmo::systems::render::collect_hidden(world, &_is_hidden_guard,
         &world.borrow::<gizmo::core::component::Children>(),
     );
 

@@ -24,7 +24,11 @@ pub fn update_editor_gizmos(world: &mut World, state: &crate::state::StudioState
         let mut check_entity = |id: u32, gizmo_name: &str| {
             let mut has_gizmo = false;
             if let Some(children) = children_storage.get(id) {
-                for &child_id in &children.0 {
+                for &child in &children.0 {
+                    let child_id = child.id();
+                    if !world.is_alive(child) {
+                        continue;
+                    }
                     if let Some(c_name) = names.get(child_id) {
                         if c_name.0 == gizmo_name {
                             has_gizmo = true;
@@ -141,7 +145,9 @@ let pending_assets = world.get_resource::<DebugAssets>().map(|a| (a.cube.clone()
             }
             world.add_component(gizmo_ent, trans);
             world.add_component(gizmo_ent, gizmo::physics::components::GlobalTransform::default());
-            world.add_component(gizmo_ent, gizmo::core::component::Parent(parent_id));
+            if let Some(parent) = world.get_entity(parent_id) {
+                world.add_component(gizmo_ent, gizmo::core::component::Parent(parent));
+            }
             
             // Ensure collider for raycast picking
             world.add_component(gizmo_ent, gizmo::physics::Collider::box_collider(gizmo::math::Vec3::new(0.4, 0.4, 0.4)));
@@ -159,12 +165,12 @@ let pending_assets = world.get_resource::<DebugAssets>().map(|a| (a.cube.clone()
             if has_children_comp {
                 let mut children_storage = world.borrow_mut::<gizmo::core::component::Children>();
                 if let Some(mut ch) = children_storage.get_mut(parent_id) {
-                    ch.0.push(gizmo_ent.id());
+                    ch.0.push(gizmo_ent);
                 }
             } else if let Some(ent) = world.get_entity(parent_id) {
                 world.add_component(
                     ent, 
-                    gizmo::core::component::Children(vec![gizmo_ent.id()])
+                    gizmo::core::component::Children(vec![gizmo_ent])
                 );
             }
         }

@@ -445,7 +445,7 @@ pub(super) fn collect_draw_items(
     // pair's 2 946 pixels on screen. The set is built from the same two borrows both paths hold,
     // and it costs nothing on a frame with nothing hidden.
     let hidden = world.borrow::<crate::core::component::IsHidden>();
-    let hidden = super::collect_hidden(&hidden, &world.borrow::<crate::core::component::Children>());
+    let hidden = super::collect_hidden(world, &hidden, &world.borrow::<crate::core::component::Children>());
     // **Editor furniture never draws here.** A game has none, so for a game this is a no-op; it
     // matters since 2026-11-01, when the studio started capturing reflection probes through this
     // path (`capture_reflection_probes`) — without it the grid, light icons and gizmo handles

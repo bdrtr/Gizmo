@@ -121,22 +121,22 @@ macro_rules! impl_component {
 }
 
 // --- Hiyerarşi (Scene Graph) Bileşenleri ---
-/// Up-link from a child to its parent, carrying the parent's raw
-/// [`Entity::id`](crate::Entity::id) — a slot index with the generation stripped off.
+/// Up-link from a child to its parent.
 ///
-/// Because the generation is gone the value cannot distinguish a live parent from a recycled
-/// id, and nothing revalidates it when the parent is despawned. Resolve it through
-/// [`World::entity`](crate::World::entity), which returns `None` for an id that is dead or has
-/// no storage, instead of trusting the number.
+/// A whole [`Entity`](crate::Entity), generation included, so a parent that died and whose id went to
+/// someone else no longer reads as this entity's parent: check it with
+/// [`World::is_alive`](crate::World::is_alive). Despawning unlinks through
+/// [`HierarchyExt`](crate::HierarchyExt) and the despawn path, but a value written directly, or one a
+/// system kept from before the despawn, can still name a dead entity.
 ///
 /// This is only half of a link: [`Children`] on the parent is the other half. Nothing
 /// synchronises the two halves automatically, so adding or editing this component directly
 /// leaves the parent's `Children` list stale.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Parent(pub u32);
+pub struct Parent(pub crate::Entity);
 
-/// Down-link from a parent to its children: raw entity ids (no generations), in the order they
-/// were attached.
+/// Down-link from a parent to its children, in the order they were attached. Whole
+/// [`Entity`](crate::Entity) values, so a walker can tell a live child from a recycled id.
 ///
 /// The order is stable and meaningful. [`HierarchyExt::add_child`](crate::HierarchyExt::add_child)
 /// appends and skips ids already in the list, and `remove_child` retains, so iteration over a
@@ -145,7 +145,9 @@ pub struct Parent(pub u32);
 /// [`World::sort_archetype_hierarchy`](crate::World::sort_archetype_hierarchy), which permutes
 /// rows to put parents and children next to each other.
 ///
-/// Entries are not validated: a child despawned outside `HierarchyExt` leaves a dangling id.
+/// Entries are not validated when written: one written directly can be dead, which
+/// [`World::is_alive`](crate::World::is_alive) answers. Despawning takes an entity out of its
+/// parent's list.
 /// Duplicates and cycles are impossible through `HierarchyExt` (it rejects self-parenting and
 /// any reparent that would close a loop) but perfectly possible via direct component writes or
 /// a scene file, whose parent edges `SceneData::instantiate_entities` writes verbatim.
@@ -160,7 +162,7 @@ pub struct Parent(pub u32);
 /// over [`Parent`], assume the graph is cyclic. [`HierarchyExt::descendants_inclusive`](crate::hierarchy::HierarchyExt::descendants_inclusive)
 /// is the guarded one to reach for.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct Children(pub Vec<u32>);
+pub struct Children(pub Vec<crate::Entity>);
 
 /// Human-readable label for an entity — for editor lists, logs and scene files.
 ///

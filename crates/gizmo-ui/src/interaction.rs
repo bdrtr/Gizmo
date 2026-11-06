@@ -26,7 +26,7 @@ fn layer_with(entity: u32, z: impl Fn(u32) -> Option<i32>, parent: impl Fn(u32) 
 pub fn ui_layer(world: &gizmo_core::World, entity: u32) -> i32 {
     let z = world.borrow::<ZIndex>();
     let p = world.borrow::<Parent>();
-    layer_with(entity, |id| z.get(id).map(|z| z.0), |id| p.get(id).map(|p| p.0))
+    layer_with(entity, |id| z.get(id).map(|z| z.0), |id| p.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0.id()))
 }
 
 /// Keyboard and gamepad navigation of the interactive elements — a resource.
@@ -159,13 +159,13 @@ pub fn ui_interaction_system(
         layer_with(
             id,
             |e| layers.get(e).and_then(|(z, _)| z.map(|z| z.0)),
-            |e| layers.get(e).and_then(|(_, p)| p.map(|p| p.0)),
+            |e| layers.get(e).and_then(|(_, p)| p.and_then(|p| layers.live(p.0))),
         )
     };
     // Inside every clipping ancestor too: a list item scrolled out of its panel is not drawn, so it
     // must not be clickable where it would have been.
     let visible = |id: u32| {
-        let mut at = layers.get(id).and_then(|(_, p)| p.map(|p| p.0));
+        let mut at = layers.get(id).and_then(|(_, p)| p.and_then(|p| layers.live(p.0)));
         for _ in 0..256 {
             let Some(a) = at else { return true };
             if let Some((n, c, s)) = clippers.get(a) {
@@ -183,7 +183,7 @@ pub fn ui_interaction_system(
                     return false;
                 }
             }
-            at = layers.get(a).and_then(|(_, p)| p.map(|p| p.0));
+            at = layers.get(a).and_then(|(_, p)| p.and_then(|p| layers.live(p.0)));
         }
         true
     };
@@ -454,7 +454,7 @@ pub fn ui_drop_system(
     layers: Query<(Option<&ZIndex>, Option<&Parent>)>,
     clippers: Query<(&Node, Option<&ClipContent>, Option<&Scroll>)>,
 ) {
-    let parent = |id: u32| layers.get(id).and_then(|(_, p)| p.map(|p| p.0));
+    let parent = |id: u32| layers.get(id).and_then(|(_, p)| p.and_then(|p| layers.live(p.0)));
     let layer_of = |id: u32| layer_with(id, |e| layers.get(e).and_then(|(z, _)| z.map(|z| z.0)), parent);
     // `id` is `ancestor` or lies under it.
     let within = |id: u32, ancestor: u32| {
@@ -551,7 +551,7 @@ pub fn ui_scroll_system(
     // ↓ walking down a long menu used to walk the focus out of sight.
     if let Some(focused) = navigation.as_ref().filter(|n| n.enabled && n.moved_this_frame()).and_then(|n| n.focused()) {
         if let Some(item) = nodes.get(focused).copied() {
-            let mut at = parents.get(focused).map(|p| p.0);
+            let mut at = parents.get(focused).and_then(|p| parents.live(p.0));
             for _ in 0..256 {
                 let Some(a) = at else { break };
                 if let Some((list, mut scroll)) = scrolls.get_mut(a) {
@@ -570,7 +570,7 @@ pub fn ui_scroll_system(
                     }
                     break;
                 }
-                at = parents.get(a).map(|p| p.0);
+                at = parents.get(a).and_then(|p| parents.live(p.0));
             }
         }
     }

@@ -470,19 +470,19 @@ pub fn handle_scene_operations(
                 {
                     let mut children_comp = world.borrow_mut::<gizmo::core::component::Children>();
                     if let Some(mut ch) = children_comp.get_mut(parent_entity.id()) {
-                        if !ch.0.contains(&e.id()) {
-                            ch.0.push(e.id());
+                        if !ch.0.contains(&e) {
+                            ch.0.push(e);
                         }
                     } else {
                         drop(children_comp);
                         world.add_component(
                             parent_entity,
-                            gizmo::core::component::Children(vec![e.id()]),
+                            gizmo::core::component::Children(vec![e]),
                         );
                     }
                 }
                 // Child → Parent bileşenini ayarla
-                world.add_component(e, gizmo::core::component::Parent(parent_entity.id()));
+                world.add_component(e, gizmo::core::component::Parent(parent_entity));
 
                 // İsmi parent'a göre güncelle
                 let parent_name = world
@@ -620,8 +620,8 @@ pub fn handle_scene_operations(
             .map(|c| c.0);
 
         if let (Some(old_pid), Some(child)) = (old_parent_id, world.get_entity(child_id.id())) {
-            if let Some(old_parent) = world.get_entity(old_pid) {
-                world.remove_child(old_parent, child);
+            if world.is_alive(old_pid) {
+                world.remove_child(old_pid, child);
                 editor_state.log_info(&format!("Entity {} kök (root) yapıldı.", child_id));
             }
         }
@@ -714,11 +714,11 @@ mod tests {
             let (a, b, c) = (world.spawn(), world.spawn(), world.spawn());
             // a -> b -> c -> a. Written directly: `add_child` refuses to build a cycle, but
             // `SceneData::instantiate_entities` writes a file's parent edges verbatim.
-            world.add_component(a, Children(vec![b.id()]));
-            world.add_component(b, Children(vec![c.id()]));
-            world.add_component(c, Children(vec![a.id()]));
-            world.add_component(b, Parent(a.id()));
-            world.add_component(c, Parent(b.id()));
+            world.add_component(a, Children(vec![b]));
+            world.add_component(b, Children(vec![c]));
+            world.add_component(c, Children(vec![a]));
+            world.add_component(b, Parent(a));
+            world.add_component(c, Parent(b));
 
             let mut ed = EditorState::default();
             ed.despawn_requests.push(a);
@@ -761,12 +761,12 @@ mod tests {
         let mut world = World::new();
         let (a, b, c, d) = (world.spawn(), world.spawn(), world.spawn(), world.spawn());
         // a -> {b, c}, and BOTH name `d`. Acyclic, so nothing here can hang.
-        world.add_component(a, Children(vec![b.id(), c.id()]));
-        world.add_component(b, Children(vec![d.id()]));
-        world.add_component(c, Children(vec![d.id()]));
-        world.add_component(b, Parent(a.id()));
-        world.add_component(c, Parent(a.id()));
-        world.add_component(d, Parent(b.id()));
+        world.add_component(a, Children(vec![b, c]));
+        world.add_component(b, Children(vec![d]));
+        world.add_component(c, Children(vec![d]));
+        world.add_component(b, Parent(a));
+        world.add_component(c, Parent(a));
+        world.add_component(d, Parent(b));
 
         let mut ed = EditorState::default();
         ed.despawn_requests.push(a);
@@ -930,7 +930,7 @@ mod tests {
         for member in [a, b] {
             assert_eq!(
                 world.borrow::<Parent>().get(member.id()).map(|p| p.0),
-                Some(group.id()),
+                Some(group),
                 "every selected entity must end up under the group"
             );
         }
@@ -975,7 +975,7 @@ mod tests {
     }
 
     fn children_of(world: &World, parent: u32) -> Vec<u32> {
-        world.borrow::<Children>().get(parent).map(|c| c.0.clone()).unwrap_or_default()
+        world.borrow::<Children>().get(parent).map(|c| c.0.iter().map(|e| e.id()).collect()).unwrap_or_default()
     }
 
     /// A reparent must leave BOTH halves of the hierarchy agreeing: the child points up, the
@@ -991,7 +991,7 @@ mod tests {
 
         assert_eq!(
             world.borrow::<Parent>().get(child.id()).map(|p| p.0),
-            Some(parent.id()),
+            Some(parent),
             "the child must point at its new parent"
         );
         assert_eq!(children_of(&world, parent.id()), vec![child.id()], "…and be listed by it");
@@ -1014,7 +1014,7 @@ mod tests {
             "the old parent still lists a child it no longer has"
         );
         assert_eq!(children_of(&world, second.id()), vec![child.id()]);
-        assert_eq!(world.borrow::<Parent>().get(child.id()).map(|p| p.0), Some(second.id()));
+        assert_eq!(world.borrow::<Parent>().get(child.id()).map(|p| p.0), Some(second));
     }
 
     /// Dropping a node onto itself is refused. A `Children` cycle is not a cosmetic problem: it

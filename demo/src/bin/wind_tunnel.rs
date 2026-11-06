@@ -494,7 +494,7 @@ fn world_aabb(world: &World, root: u32) -> Option<(Vec3, Vec3)> {
         }
         if let Some(c) = children.get(e) {
             for &kid in &c.0 {
-                stack.push((kid, world_m));
+                stack.push((kid.id(), world_m));
             }
         }
     }
@@ -553,7 +553,7 @@ fn measure_frontal_area_m2(world: &World, root: u32, amin: Vec3, amax: Vec3) -> 
         }
         if let Some(ch) = children.get(e) {
             for &k in &ch.0 {
-                stack.push((k, world_m));
+                stack.push((k.id(), world_m));
             }
         }
     }

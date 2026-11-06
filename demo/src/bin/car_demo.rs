@@ -139,8 +139,8 @@ fn collect_descendants(world: &World, root: u32, out: &mut Vec<u32>) {
         .map(|c| c.0.clone());
     if let Some(kids) = kids {
         for k in kids {
-            out.push(k);
-            collect_descendants(world, k, out);
+            out.push(k.id());
+            collect_descendants(world, k.id(), out);
         }
     }
 }
@@ -923,7 +923,7 @@ fn derive_wheel(
         let parent = world
             .borrow::<gizmo::core::component::Parent>()
             .get(cur)
-            .map(|p| p.0);
+            .map(|p| p.0.id());
         match parent {
             Some(p) if p == chassis_id => break,
             Some(p) => {
@@ -968,7 +968,7 @@ fn wheel_mesh_radius(world: &World, wheel_id: u32, scale_y: f32) -> f32 {
         .map(|c| c.0.clone());
     if let Some(kids) = kids {
         for k in kids {
-            if let Some(m) = meshes.get(k) {
+            if let Some(m) = meshes.get(k.id()) {
                 return from(m);
             }
         }
@@ -1167,7 +1167,7 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
         if let Some(kids) = kids {
             let mut transforms = world.borrow_mut::<Transform>();
             for kid in kids {
-                if let Some(mut t) = transforms.get_mut(kid) {
+                if let Some(mut t) = transforms.get_mut(kid.id()) {
                     t.position.x = 0.0;
                     t.position.z = 0.0;
                     // VehicleController "ileri" = local -Z (Ackermann konvansiyonu), ama Kenney

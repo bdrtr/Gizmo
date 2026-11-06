@@ -271,7 +271,7 @@ fn main() {
             scene.world.add_component(child, GlobalTransform::default());
             scene
                 .world
-                .add_component(child, gizmo::core::component::Parent(parent.id()));
+                .add_component(child, gizmo::core::component::Parent(parent));
             scene.world.add_component(child, cube);
             scene.world.add_component(
                 child,
@@ -284,7 +284,7 @@ fn main() {
             // `Parent` yazmak sessizce hiçbir şey yapmıyor — aşağıdaki ölçüm notuna bakın.
             scene
                 .world
-                .add_component(parent, gizmo::core::component::Children(vec![child.id()]));
+                .add_component(parent, gizmo::core::component::Children(vec![child]));
 
             scene.world.spawn_bundle((
                 Transform::new(Vec3::new(0.0, -1.6, 0.0)),

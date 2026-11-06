@@ -168,7 +168,7 @@ fn main() {
                     Link(depth),
                 ));
                 if let Some(parent) = chain.last().copied() {
-                    scene.world.add_component(entity, gizmo::core::component::Parent(parent.id()));
+                    scene.world.add_component(entity, gizmo::core::component::Parent(parent));
                 }
                 chain.push(entity);
             }

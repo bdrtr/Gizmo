@@ -69,9 +69,8 @@ pub trait HierarchyExt {
     /// two lists — terminates on its own but is visited twice, which double-counts a delete
     /// cascade and adds the same child collider to a compound body twice.
     ///
-    /// Ids are returned, not [`Entity`] handles, and are not checked for liveness: a `Children`
-    /// list can name an id that has been despawned. Resolve with [`World::entity`] if you need a
-    /// handle, and expect `None`.
+    /// Ids are returned, not [`Entity`] handles. A child that has died is left out, since its id may
+    /// be someone else's by now.
     fn descendants_inclusive(&self, root: u32) -> Vec<u32>;
 }
 
@@ -107,16 +106,14 @@ impl HierarchyExt for World {
         if let Some(parent_ptr) = self.get_component_ptr(child, std::any::TypeId::of::<Parent>()) {
             // SAFETY: the pointer was keyed by `TypeId::of::<Parent>()`, so it addresses a live
             // `Parent`; the id is copied out immediately, before anything can move the row.
-            let old_parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
-            if old_parent_id != parent.id() {
-                if let Some(old_parent) = self.entity(old_parent_id) {
-                    self.remove_child(old_parent, child);
-                }
+            let old_parent = unsafe { (*(parent_ptr as *const Parent)).0 };
+            if old_parent != parent && self.is_alive(old_parent) {
+                self.remove_child(old_parent, child);
             }
         }
 
         // Add Parent component to child
-        self.add_component(child, Parent(parent.id()));
+        self.add_component(child, Parent(parent));
 
         // Add to new parent's Children list
         if let Some(children_ptr) = self.get_component_mut_ptr(parent, std::any::TypeId::of::<Children>()) {
@@ -124,11 +121,11 @@ impl HierarchyExt for World {
             // is the only live reference to that component; it is used and dropped inside this
             // block, with no structural change in between.
             let children = unsafe { &mut *(children_ptr as *mut Children) };
-            if !children.0.contains(&child.id()) {
-                children.0.push(child.id());
+            if !children.0.contains(&child) {
+                children.0.push(child);
             }
         } else {
-            self.add_component(parent, Children(vec![child.id()]));
+            self.add_component(parent, Children(vec![child]));
         }
     }
 
@@ -139,7 +136,7 @@ impl HierarchyExt for World {
             // SAFETY: as in `add_child` — right type by construction, exclusive by `&mut self`,
             // consumed before any structural change.
             let children = unsafe { &mut *(children_ptr as *mut Children) };
-            children.0.retain(|&id| id != child.id());
+            children.0.retain(|&c| c != child);
         }
     }
 
@@ -154,8 +151,9 @@ impl HierarchyExt for World {
         while i < out.len() {
             if let Some(list) = children.get(out[i]) {
                 for &child in &list.0 {
-                    if seen.insert(child) {
-                        out.push(child);
+                    // A child written in directly can be dead, and its id someone else's by now.
+                    if self.is_alive(child) && seen.insert(child.id()) {
+                        out.push(child.id());
                     }
                 }
             }
@@ -172,8 +170,9 @@ impl HierarchyExt for World {
         // hierarchy already contains a cycle (stop instead of looping forever).
         while visited.insert(current) {
             match parents.get(current).map(|p| p.0) {
-                Some(pid) if pid == ancestor => return true,
-                Some(pid) => current = pid,
+                Some(parent) if !self.is_alive(parent) => return false,
+                Some(parent) if parent.id() == ancestor => return true,
+                Some(parent) => current = parent.id(),
                 None => return false,
             }
         }
@@ -198,9 +197,9 @@ fn despawn_recursive_inner(
         // READ here (the ids are copied into `children_to_despawn`) and the despawns happen
         // after this borrow ends — reading it while despawning would be the dangling case.
         let children = unsafe { &*(children_ptr as *const Children) };
-        for &child_id in &children.0 {
-            if let Some(child_entity) = world.entity(child_id) {
-                children_to_despawn.push(child_entity);
+        for &child in &children.0 {
+            if world.is_alive(child) {
+                children_to_despawn.push(child);
             }
         }
     }
@@ -208,9 +207,9 @@ fn despawn_recursive_inner(
     // Detach from the (surviving) parent's Children list.
     if let Some(parent_ptr) = world.get_component_ptr(entity, std::any::TypeId::of::<Parent>()) {
         // SAFETY: right type by construction; the id is copied out before anything moves the row.
-        let parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
-        if let Some(parent_entity) = world.entity(parent_id) {
-            world.remove_child(parent_entity, entity);
+        let parent = unsafe { (*(parent_ptr as *const Parent)).0 };
+        if world.is_alive(parent) {
+            world.remove_child(parent, entity);
         }
     }
 
@@ -226,6 +225,42 @@ mod tests {
     use super::*;
     use crate::world::World;
 
+    /// **A link to a dead entity stays a link to the dead entity,** whoever gets its id next. The
+    /// lists held raw ids, so a `Children` or `Parent` written directly quietly came to mean a
+    /// stranger once the id was recycled.
+    #[test]
+    fn a_stale_link_does_not_reach_the_entity_that_got_its_id() {
+        let mut world = World::new();
+        let parent = world.spawn();
+        let dead = world.spawn();
+        world.despawn(dead);
+        let stranger = world.spawn();
+        assert_eq!(stranger.id(), dead.id(), "the id is recycled, which is the case being tested");
+
+        world.add_component(parent, Children(vec![dead]));
+        assert_eq!(
+            world.descendants_inclusive(parent.id()),
+            vec![parent.id()],
+            "the stranger is not under the parent",
+        );
+
+        let other = world.spawn();
+        world.add_component(other, Parent(dead));
+        assert_eq!(world.get::<Parent>(other).map(|p| p.0), Some(dead), "it still names who it named");
+        assert!(!world.is_alive(world.get::<Parent>(other).expect("the link").0));
+
+        // Reparenting away from a dead parent leaves the stranger's own list alone.
+        let their_child = world.spawn();
+        world.add_child(stranger, their_child);
+        world.add_child(parent, other);
+        assert_eq!(world.get::<Children>(stranger).map(|c| c.0.clone()), Some(vec![their_child]));
+        assert_eq!(world.get::<Parent>(other).map(|p| p.0), Some(parent));
+
+        // A recursive despawn does not follow a dead entry into the stranger.
+        world.despawn_recursive(parent);
+        assert!(world.is_alive(stranger), "despawn_recursive followed a dead child's id");
+    }
+
     #[test]
     fn test_hierarchy_add_remove() {
         let mut world = World::new();
@@ -238,8 +273,8 @@ mod tests {
         if let Some(parent_ptr) = world.get_component_ptr(child, std::any::TypeId::of::<Parent>()) {
             // SAFETY: test-local — the pointer was looked up by `TypeId::of::<Parent>()`, so the cast matches
             // the bytes, and the world outlives this read.
-            let parent_id = unsafe { (*(parent_ptr as *const Parent)).0 };
-            assert_eq!(parent_id, parent.id());
+            let linked = unsafe { (*(parent_ptr as *const Parent)).0 };
+            assert_eq!(linked, parent);
         } else {
             panic!("Child missing Parent component");
         }
@@ -250,7 +285,7 @@ mod tests {
             // the bytes, and the world outlives this read.
             let children = unsafe { &*(children_ptr as *const Children) };
             assert_eq!(children.0.len(), 1);
-            assert_eq!(children.0[0], child.id());
+            assert_eq!(children.0[0], child);
         } else {
             panic!("Parent missing Children component");
         }
@@ -301,8 +336,8 @@ mod tests {
         // loaded scene file or direct component edits, where the per-node parent
         // detach can't break the loop. The old recursive walk had no visited set and
         // recursed forever (stack overflow); with the guard it terminates.
-        world.add_component(a, Children(vec![b.id()]));
-        world.add_component(b, Children(vec![a.id()]));
+        world.add_component(a, Children(vec![b]));
+        world.add_component(b, Children(vec![a]));
         assert_eq!(world.entity_count(), 2);
 
         world.despawn_recursive(a);
@@ -385,7 +420,7 @@ mod tests {
     /// a cycle reaches the engine in practice, since scene loading writes a file's parent edges
     /// verbatim.
     fn link(world: &mut World, parent: Entity, children: &[Entity]) {
-        world.add_component(parent, Children(children.iter().map(|e| e.id()).collect()));
+        world.add_component(parent, Children(children.to_vec()));
     }
 
     /// The documented order: `root` first, then breadth-first.
@@ -465,19 +500,15 @@ mod tests {
         assert_eq!(out.iter().filter(|&&id| id == d).count(), 1);
     }
 
-    /// A `Children` list may name a despawned id; the walk reports it rather than filtering it,
-    /// and must not panic on the missing storage.
+    /// A child written in directly that has since died is left out: its id may be someone else's.
     #[test]
-    fn a_dangling_child_id_is_reported_not_skipped() {
-        let out = within(10, || {
-            let mut world = World::new();
-            let (a, b) = (world.spawn(), world.spawn());
-            link(&mut world, a, &[b]);
-            world.despawn(b);
-            (world.descendants_inclusive(a.id()), b.id())
-        });
-        let (out, b) = out;
-        assert!(out.contains(&b), "the id is returned; liveness is the caller's to check");
+    fn a_dead_child_is_left_out_of_the_descendants() {
+        let mut world = World::new();
+        let root = world.spawn();
+        let dead = world.spawn();
+        world.despawn(dead);
+        world.add_component(root, Children(vec![dead]));
+        assert_eq!(world.descendants_inclusive(root.id()), vec![root.id()]);
     }
 
     /// A plain `despawn` of a child takes it out of its parent's list. Before, the id stayed —
@@ -492,11 +523,11 @@ mod tests {
         world.add_child(parent, b);
         world.despawn(a);
         let children = world.borrow::<Children>().get(parent.id()).map(|c| c.0.clone());
-        assert_eq!(children, Some(vec![b.id()]), "only the living child is listed");
+        assert_eq!(children, Some(vec![b]), "only the living child is listed");
         let stranger = world.spawn();
         assert_eq!(stranger.id(), a.id(), "the id is recycled — which is what made the old list lie");
         let children = world.borrow::<Children>().get(parent.id()).map(|c| c.0.clone());
-        assert_eq!(children, Some(vec![b.id()]), "and the stranger is not the parent's child");
+        assert_eq!(children, Some(vec![b]), "and the stranger is not the parent's child");
     }
 
     /// A plain `despawn` of a parent leaves its children alive, as roots: their `Parent` named an

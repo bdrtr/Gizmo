@@ -116,8 +116,8 @@ pub fn animation_system(
                 // Add children to stack — only the ones this walk has not already queued.
                 if let Some(child_comp) = children.get(current) {
                     for &child in &child_comp.0 {
-                        if visited.insert(child) {
-                            stack.push(child);
+                        if children.entity(child.id()) == Some(child) && visited.insert(child.id()) {
+                            stack.push(child.id());
                         }
                     }
                 }
@@ -279,9 +279,9 @@ mod tests {
             // root -> {bone, loop_a}, and loop_a -> loop_b -> loop_a. Written directly,
             // bypassing `add_child`'s refusal. `loop_a` is listed last, so the walk — which
             // pops — enters the cycle FIRST and only reaches `bone` if it gets out again.
-            world.add_component(root, Children(vec![bone.id(), loop_a.id()]));
-            world.add_component(loop_a, Children(vec![loop_b.id()]));
-            world.add_component(loop_b, Children(vec![loop_a.id()]));
+            world.add_component(root, Children(vec![bone, loop_a]));
+            world.add_component(loop_a, Children(vec![loop_b]));
+            world.add_component(loop_b, Children(vec![loop_a]));
 
             schedule.run(&mut world, 0.016);
 

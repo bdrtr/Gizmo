@@ -108,9 +108,9 @@ fn a_children_cycle_under_a_body_does_not_hang_the_step() {
         let b = spawn_bare(&mut world, Vec3::Y);
 
         // body -> a -> b -> a. Written directly, bypassing `add_child`'s refusal.
-        world.add_component(body, Children(vec![a.id()]));
-        world.add_component(a, Children(vec![b.id()]));
-        world.add_component(b, Children(vec![a.id()]));
+        world.add_component(body, Children(vec![a]));
+        world.add_component(a, Children(vec![b]));
+        world.add_component(b, Children(vec![a]));
 
         physics_step_system(&world, 1.0 / 60.0);
         // Neither cycle member carries a collider, so the body keeps its own single shape and
@@ -132,9 +132,9 @@ fn a_diamond_adds_the_shared_child_collider_once() {
     let shared = spawn_child_collider(&mut world, Vec3::Y);
 
     // body -> {left, right}, and BOTH name `shared` as their child.
-    world.add_component(body, Children(vec![left.id(), right.id()]));
-    world.add_component(left, Children(vec![shared.id()]));
-    world.add_component(right, Children(vec![shared.id()]));
+    world.add_component(body, Children(vec![left, right]));
+    world.add_component(left, Children(vec![shared]));
+    world.add_component(right, Children(vec![shared]));
 
     physics_step_system(&world, 1.0 / 60.0);
 

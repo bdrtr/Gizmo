@@ -44,6 +44,7 @@ pub fn record_sprites(
         return;
     }
     let hidden = super::hidden::collect_hidden(
+        world,
         &world.borrow::<gizmo_core::component::IsHidden>(),
         &world.borrow::<gizmo_core::component::Children>(),
     );

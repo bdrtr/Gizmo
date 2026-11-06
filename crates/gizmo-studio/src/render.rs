@@ -31,9 +31,9 @@ fn collect_protected_ids(world: &World, editor_camera: u32) -> HashSet<u32> {
         while i < queue.len() {
             let id = queue[i];
             if let Some(c) = children.get(id) {
-                for &child_id in &c.0 {
-                    if protected.insert(child_id) {
-                        queue.push(child_id);
+                for &child in &c.0 {
+                    if world.is_alive(child) && protected.insert(child.id()) {
+                        queue.push(child.id());
                     }
                 }
             }

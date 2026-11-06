@@ -283,7 +283,7 @@ fn draw_entity_node(
         if let Some(children) = children_comp.get(entity.id()) {
             for &child_id in &children.0 {
                 // Generation güvenliği sağlandı, world üzerinden çekildi
-                if let Some(child_ent) = world.get_entity(child_id) {
+                if let Some(child_ent) = Some(child_id).filter(|c| world.is_alive(*c)) {
                     if world.is_alive(child_ent) {
                         draw_entity_node(
                             ui,
@@ -597,7 +597,7 @@ fn draw_entity_node(
             ui.indent(id, |ui| {
                 if let Some(children) = children_comp.get(entity.id()) {
                     for &child_id in &children.0 {
-                        if let Some(child_ent) = world.get_entity(child_id) {
+                        if let Some(child_ent) = Some(child_id).filter(|c| world.is_alive(*c)) {
                             if world.is_alive(child_ent) {
                                 draw_entity_node(
                                     ui,
@@ -780,13 +780,13 @@ mod hierarchy_count_tests {
             world.add_component(e, EntityName(name.to_string()));
         }
         // A → B → C → A. Written directly, bypassing `add_child`'s refusal.
-        world.add_component(a, Children(vec![b.id()]));
-        world.add_component(b, Children(vec![c.id()]));
-        world.add_component(c, Children(vec![a.id()]));
+        world.add_component(a, Children(vec![b]));
+        world.add_component(b, Children(vec![c]));
+        world.add_component(c, Children(vec![a]));
         // Only `a` is a root — B and C carry `Parent`, so the root query skips them and the
         // descent has to reach them through the cycle.
-        world.add_component(b, gizmo_core::component::Parent(a.id()));
-        world.add_component(c, gizmo_core::component::Parent(b.id()));
+        world.add_component(b, gizmo_core::component::Parent(a));
+        world.add_component(c, gizmo_core::component::Parent(b));
 
         let mut state = EditorState {
             hide_editor_entities: true,

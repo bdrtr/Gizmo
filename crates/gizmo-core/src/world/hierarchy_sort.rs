@@ -74,7 +74,8 @@ impl World {
                 };
 
                 let mut current_insert_row = row + 1;
-                for child_id in children_list {
+                for child in children_list {
+                    let child_id = child.id();
                     let loc = self.entity_location(child_id);
                     if loc.is_valid() && loc.archetype_id == arch_idx as u32 {
                         let child_row = loc.row as usize;

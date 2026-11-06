@@ -112,8 +112,8 @@ fn find_selection_root(world: &World, start_id: u32) -> u32 {
 
     for _ in 0..32 {
         match parents.get(current) {
-            Some(parent) => current = parent.0,
-            None => break, // Root'a ulaştık
+            Some(parent) if world.is_alive(parent.0) => current = parent.0.id(),
+            _ => break, // Root'a ulaştık
         }
     }
 
@@ -431,8 +431,8 @@ mod tests {
         let a = world.spawn(); // root
         let b = world.spawn();
         let c = world.spawn();
-        world.add_component(b, Parent(a.id()));
-        world.add_component(c, Parent(b.id()));
+        world.add_component(b, Parent(a));
+        world.add_component(c, Parent(b));
 
         // A root resolves to itself.
         assert_eq!(find_selection_root(&world, a.id()), a.id());
@@ -449,8 +449,8 @@ mod tests {
         let mut world = World::new();
         let a = world.spawn();
         let b = world.spawn();
-        world.add_component(a, Parent(b.id()));
-        world.add_component(b, Parent(a.id()));
+        world.add_component(a, Parent(b));
+        world.add_component(b, Parent(a));
 
         let root = find_selection_root(&world, a.id());
         assert!(root == a.id() || root == b.id());
@@ -762,7 +762,8 @@ mod tests {
         let root = spawn_solid(&mut world, Vec3::new(0.0, 0.0, -10.0));
         let child = spawn_solid(&mut world, Vec3::new(0.2, 0.0, -10.0));
         let child_e = world.get_entity(child).unwrap();
-        world.add_component(child_e, Parent(root));
+        let root_e = world.get_entity(root).unwrap();
+        world.add_component(child_e, Parent(root_e));
 
         let mut ed = box_select_state(800.0, 600.0);
         perform_rubber_band_selection(

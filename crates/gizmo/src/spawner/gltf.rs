@@ -221,14 +221,16 @@ fn spawn_gltf_node_flat(
     let entity = world.spawn();
     let name = node.name.clone().unwrap_or_else(|| "GLTF_Node".to_string());
     world.add_component(entity, EntityName(name));
-    world.add_component(entity, Parent(parent_id));
+    if let Some(parent) = world.entity(parent_id) {
+        world.add_component(entity, Parent(parent));
+    }
     world.add_component(entity, Children(Vec::new()));
 
     {
         let mut ch_store = world.borrow_mut::<Children>();
         // Safe to push since entity just spawned and didn't trigger any complex re-borrow updates
         if let Some(mut parent_ch) = ch_store.get_mut(parent_id) {
-            parent_ch.0.push(entity.id());
+            parent_ch.0.push(entity);
         }
     }
 
@@ -283,10 +285,10 @@ fn spawn_gltf_node_flat(
         prim_t.update_local_matrix();
         world.add_component(prim, prim_t);
         world.add_component(prim, gizmo_physics_core::components::GlobalTransform::default());
-        world.add_component(prim, Parent(entity.id()));
+        world.add_component(prim, Parent(entity));
         world.add_component(prim, Children(Vec::new()));
 
-        newly_added_prims.push(prim.id());
+        newly_added_prims.push(prim);
 
         world.add_component(prim, mesh.clone());
         world.add_component(prim, mat_opt.clone().unwrap_or_else(|| default_mat.clone()));

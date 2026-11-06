@@ -68,7 +68,7 @@ fn clone_hierarchy_recursive(world: &mut World, source_id: u32) -> Option<gizmo_
     world.remove_component::<Parent>(cloned_parent);
 
     for child_id in children_to_clone {
-        if let Some(cloned_child) = clone_hierarchy_recursive(world, child_id) {
+        if let Some(cloned_child) = clone_hierarchy_recursive(world, child_id.id()) {
             world.add_child(cloned_parent, cloned_child);
         }
     }

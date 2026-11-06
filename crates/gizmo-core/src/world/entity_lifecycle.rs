@@ -577,19 +577,19 @@ impl World {
         use crate::component::{Children, Parent};
         let id = e.id();
         let parent = self.query::<&Parent>().and_then(|q| q.get(id).map(|p| p.0));
-        if let Some(parent) = parent.filter(|p| *p != id) {
+        if let Some(parent) = parent.filter(|p| *p != e) {
             if let Some(mut q) = self.query_mut::<crate::query::Mut<Children>>() {
-                if let Some(mut children) = q.get_mut(parent) {
-                    children.0.retain(|&c| c != id);
+                if let Some(mut children) = q.get_mut(parent.id()) {
+                    children.0.retain(|&c| c != e);
                 }
             }
         }
-        let children: Vec<u32> =
+        let children: Vec<Entity> =
             self.query::<&Children>().and_then(|q| q.get(id).map(|c| c.0.clone())).unwrap_or_default();
         for child in children {
-            let points_here = self.query::<&Parent>().and_then(|q| q.get(child).map(|p| p.0 == id)).unwrap_or(false);
-            if let (true, Some(handle)) = (points_here && child != id, self.entity(child)) {
-                self.remove_component::<Parent>(handle);
+            let points_here = self.query::<&Parent>().and_then(|q| q.get(child.id()).map(|p| p.0 == e)).unwrap_or(false);
+            if points_here && child != e && self.is_alive(child) {
+                self.remove_component::<Parent>(child);
             }
         }
     }

@@ -180,7 +180,7 @@ fn rotate(
     let mut child_ids = Vec::new();
     for (entity, (children, _)) in roots.iter() {
         root_ids.push(entity);
-        child_ids.extend(children.0.iter().copied());
+        child_ids.extend(children.0.iter().map(|c| c.id()));
     }
 
     for (entity, (mut transform, _)) in transforms.iter_mut() {
@@ -209,7 +209,7 @@ fn tick(
     let (mut listed, mut alive) = (0, 0);
     for (_entity, (children, _)) in roots.iter() {
         listed += children.0.len();
-        alive += children.0.iter().filter(|id| living.contains(id)).count();
+        alive += children.0.iter().filter(|c| living.contains(&c.id())).count();
     }
     tree.listed = listed;
     tree.alive = alive;
@@ -240,7 +240,7 @@ fn advance_stages(world: &mut gizmo::core::World) {
         .and_then(|q| {
             q.iter()
                 .find(|(entity, _)| *entity == root_id)
-                .map(|(_, c)| c.0.clone())
+                .map(|(_, c)| c.0.iter().map(|e| e.id()).collect())
         })
         .unwrap_or_default();
 
@@ -302,7 +302,7 @@ fn prune_child(world: &mut gizmo::core::World, root_id: u32, dead_id: u32) {
     // gösteriyor; `&mut World` üzerinden alındığı için tek canlı referans bu, ve blok içinde
     // hiçbir yapısal değişiklik olmuyor.
     let children = unsafe { &mut *(ptr as *mut Children) };
-    children.0.retain(|id| *id != dead_id);
+    children.0.retain(|c| c.id() != dead_id);
 }
 
 /// Deftere bir satır yazar.

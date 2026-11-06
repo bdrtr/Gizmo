@@ -111,8 +111,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 while let Some(curr_id) = stack.pop() {
                     if let Some(children_query_ref) = &mut children_query {
                         if let Some(children) = children_query_ref.get(curr_id) {
-                            for &child_id in &children.0 {
-                                if !visited.insert(child_id) {
+                            for &child in &children.0 {
+                                let child_id = child.id();
+                                if !world.is_alive(child) || !visited.insert(child_id) {
                                     continue;
                                 }
                                 stack.push(child_id);

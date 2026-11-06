@@ -103,7 +103,7 @@ pub fn ui_layout_system(
         current_entities.insert(entity);
         // (`get_mut` only to ask: a `Mut` marks a change on write, not on fetch.)
         let in_scroll = match parents.get(entity) {
-            Some(p) => scrolls.get_mut(p.0).is_some(),
+            Some(p) => parents.live(p.0).is_some_and(|id| scrolls.get_mut(id).is_some()),
             None => false,
         };
         if in_scroll && style.flex_shrink != 0.0 {
@@ -172,7 +172,7 @@ pub fn ui_layout_system(
             Some(children_comp) => children_comp
                 .0
                 .iter()
-                .copied()
+                .filter_map(|&child| children.live(child))
                 .filter(|&child| ctx.is_tracked(child) && mirrored.insert(child))
                 .collect(),
             None => Vec::new(),
@@ -370,10 +370,10 @@ mod tests {
             }
             world.add_component(e, style);
             world.add_component(e, Node::default());
-            world.add_component(e, Parent(grid.id()));
+            world.add_component(e, Parent(grid));
             kids.push(e);
         }
-        world.add_component(grid, Children(kids.iter().map(|e| e.id()).collect()));
+        world.add_component(grid, Children(kids.to_vec()));
         schedule.run(&mut world, 0.016);
 
         let share = (330.0 - 100.0 - 20.0) / 3.0;
@@ -419,8 +419,8 @@ mod tests {
             Style { grid_column: GridPlacement::LineSpan(2, 2), grid_row: GridPlacement::Line(2), ..Default::default() },
         );
         world.add_component(item, Node::default());
-        world.add_component(item, Parent(grid.id()));
-        world.add_component(grid, Children(vec![item.id()]));
+        world.add_component(item, Parent(grid));
+        world.add_component(grid, Children(vec![item]));
         schedule.run(&mut world, 0.016);
         let n = node_of(&world, item);
         assert_vec2(n.position, 100.0, 30.0);
@@ -554,15 +554,15 @@ mod tests {
         let mid = world.spawn();
         world.add_component(mid, padded_style(200.0, 200.0, 20.0, 30.0));
         world.add_component(mid, Node::default());
-        world.add_component(mid, Parent(root.id()));
+        world.add_component(mid, Parent(root));
 
         let leaf = world.spawn();
         world.add_component(leaf, sized_style(50.0, 50.0));
         world.add_component(leaf, Node::default());
-        world.add_component(leaf, Parent(mid.id()));
+        world.add_component(leaf, Parent(mid));
 
-        world.add_component(root, Children(vec![mid.id()]));
-        world.add_component(mid, Children(vec![leaf.id()]));
+        world.add_component(root, Children(vec![mid]));
+        world.add_component(mid, Children(vec![leaf]));
 
         schedule.run(&mut world, 0.016);
 
@@ -615,11 +615,11 @@ mod tests {
                 let r = world.spawn();
                 world.add_component(r, sized_style(100.0, 40.0));
                 world.add_component(r, Node::default());
-                world.add_component(r, Parent(list.id()));
+                world.add_component(r, Parent(list));
                 r
             })
             .collect();
-        world.add_component(list, Children(rows.iter().map(|r| r.id()).collect()));
+        world.add_component(list, Children(rows.to_vec()));
 
         schedule.run(&mut world, 0.016);
         // Five 40 px rows in a 100 px box: they reach 200, so it can scroll 100.
@@ -665,8 +665,8 @@ mod tests {
         let child = world.spawn();
         world.add_component(child, sized_style(30.0, 40.0));
         world.add_component(child, Node::default());
-        world.add_component(child, Parent(root.id()));
-        world.add_component(root, Children(vec![child.id()]));
+        world.add_component(child, Parent(root));
+        world.add_component(root, Children(vec![child]));
         let wide = world.spawn();
         world.add_component(wide, Style { width: Val::Percent(100.0), height: Val::Px(5.0), ..Default::default() });
         world.add_component(wide, Node::default());
@@ -697,11 +697,11 @@ mod tests {
                 let r = world.spawn();
                 world.add_component(r, sized_style(100.0, 40.0));
                 world.add_component(r, Node::default());
-                world.add_component(r, Parent(list.id()));
+                world.add_component(r, Parent(list));
                 r
             })
             .collect();
-        world.add_component(list, Children(rows.iter().map(|r| r.id()).collect()));
+        world.add_component(list, Children(rows.to_vec()));
         schedule.run(&mut world, 0.016);
         assert_vec2(world.borrow::<Scroll>().get(list.id()).unwrap().max_offset(), 0.0, 200.0);
         world.borrow_mut::<Scroll>().get_mut(list.id()).unwrap().offset.y = 50.0;
@@ -721,17 +721,17 @@ mod tests {
         let card = world.spawn();
         world.add_component(card, padded_style(100.0, 100.0, 10.0, 10.0));
         world.add_component(card, Node::default());
-        world.add_component(card, Parent(root.id()));
+        world.add_component(card, Parent(root));
         let label = world.spawn();
         world.add_component(label, sized_style(20.0, 20.0));
         world.add_component(label, Node::default());
-        world.add_component(label, Parent(card.id()));
-        world.add_component(card, Children(vec![label.id()]));
+        world.add_component(label, Parent(card));
+        world.add_component(card, Children(vec![label]));
         let next = world.spawn();
         world.add_component(next, sized_style(100.0, 50.0));
         world.add_component(next, Node::default());
-        world.add_component(next, Parent(root.id()));
-        world.add_component(root, Children(vec![card.id(), next.id()]));
+        world.add_component(next, Parent(root));
+        world.add_component(root, Children(vec![card, next]));
 
         world.add_component(card, UiTransform { translation: Vec2::new(40.0, 5.0), opacity: 1.0 });
         schedule.run(&mut world, 0.016);
@@ -783,11 +783,11 @@ mod tests {
         }
         // root -> a -> b -> root. Only `root` is parentless, so it is the only root and the
         // descent has to reach the loop through it.
-        world.add_component(a, Parent(root.id()));
-        world.add_component(b, Parent(a.id()));
-        world.add_component(root, Children(vec![a.id()]));
-        world.add_component(a, Children(vec![b.id()]));
-        world.add_component(b, Children(vec![root.id()]));
+        world.add_component(a, Parent(root));
+        world.add_component(b, Parent(a));
+        world.add_component(root, Children(vec![a]));
+        world.add_component(a, Children(vec![b]));
+        world.add_component(b, Children(vec![root]));
 
         schedule.run(&mut world, 0.016);
 
@@ -823,13 +823,13 @@ mod tests {
         for e in [root, a, b] {
             world.add_component(e, Node::default());
         }
-        world.add_component(a, Parent(root.id()));
-        world.add_component(b, Parent(a.id()));
+        world.add_component(a, Parent(root));
+        world.add_component(b, Parent(a));
         // `root` names BOTH of them and lists `b` first; `a` also names `b`. The mirror pops
         // `a` before `b` (LIFO), so the pre-fix write-back reached `b` through `a` and added
         // `b`'s root-relative offset to `a`'s origin.
-        world.add_component(root, Children(vec![b.id(), a.id()]));
-        world.add_component(a, Children(vec![b.id()]));
+        world.add_component(root, Children(vec![b, a]));
+        world.add_component(a, Children(vec![b]));
 
         schedule.run(&mut world, 0.016);
 
@@ -862,14 +862,14 @@ mod tests {
             world.add_component(e, Node::default());
         }
         // `unstyled` gets NO Style — it never enters `current_entities` and has no layout node.
-        world.add_component(styled_parent, Parent(root.id()));
-        world.add_component(unstyled, Parent(root.id()));
-        world.add_component(child, Parent(styled_parent.id()));
+        world.add_component(styled_parent, Parent(root));
+        world.add_component(unstyled, Parent(root));
+        world.add_component(child, Parent(styled_parent));
 
         // Both name `child`. `unstyled` is listed second, so the mirror pops it FIRST.
-        world.add_component(root, Children(vec![styled_parent.id(), unstyled.id()]));
-        world.add_component(styled_parent, Children(vec![child.id()]));
-        world.add_component(unstyled, Children(vec![child.id()]));
+        world.add_component(root, Children(vec![styled_parent, unstyled]));
+        world.add_component(styled_parent, Children(vec![child]));
+        world.add_component(unstyled, Children(vec![child]));
 
         schedule.run(&mut world, 0.016);
 

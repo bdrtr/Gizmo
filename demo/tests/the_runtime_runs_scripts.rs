@@ -516,7 +516,7 @@ fn a_script_spends_the_hits_the_engine_reports() {
     // The attacker's fist, parented to it: hit detection composes the pose through the link.
     let fist = world.spawn();
     world.add_component(fist, Transform::new(Vec3::new(0.0, 0.0, -0.8)));
-    world.add_component(fist, gizmo::core::component::Parent(attacker.id()));
+    world.add_component(fist, gizmo::core::component::Parent(attacker));
     world.add_component(
         fist,
         gizmo::physics::components::Hitbox::new(Vec3::splat(0.2), 99.0),

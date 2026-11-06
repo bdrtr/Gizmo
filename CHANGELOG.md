@@ -174,6 +174,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`Parent` and `Children` hold `Entity`, not `u32` (breaking).** A link to a dead entity stays a link to
+  the dead entity, whoever gets its id next. A list written directly, or a handle kept past a despawn, could
+  hide, move or despawn the stranger on the recycled id, and `collect_hidden` did hide one. Walkers check
+  `World::is_alive`, or the new `Query::live` where a system has no `World`. `collect_hidden` takes the `World`.
+  `descendants_inclusive` leaves dead children out. Scene files are unchanged: they store plain ids and load
+  remaps them. To migrate, `Parent(e.id())` becomes `Parent(e)`, and a walk uses `child.id()`.
+
 - **The forward shader uses the environment presets: transparent surfaces, the editor viewport and every
   browser and Android game look different.** The presets lived in the deferred shader alone, and
   `shader.wgsl` lit everything with a fixed warm hemisphere, so one red cube with no sun read red 182

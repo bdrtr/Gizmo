@@ -706,7 +706,7 @@ impl SceneData {
                 // renderer, a layer above.
                 texture_uuid: None,
             });
-            let parent_id = parents.get(id).map(|p| p.0);
+            let parent_id = parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0.id());
 
             let mut dynamic_components = std::collections::BTreeMap::new();
 
@@ -1047,7 +1047,7 @@ impl SceneData {
             entity_structs.insert(root_ent.id(), root_ent);
         }
 
-        let mut children_map: HashMap<u32, Vec<u32>> = HashMap::new();
+        let mut children_map: HashMap<u32, Vec<gizmo_core::entity::Entity>> = HashMap::new();
         // Per-load aggregates for the exit summary.
         let mut components_loaded = 0usize;
         let mut components_failed = 0usize;
@@ -1118,8 +1118,11 @@ impl SceneData {
                 .or(root_parent);
 
             if let Some(p_id) = resolved_parent {
-                world.add_component(entity, Parent(p_id));
-                children_map.entry(p_id).or_default().push(new_id);
+                let parent = entity_structs.get(&p_id).copied().or_else(|| world.get_entity(p_id));
+                if let Some(parent) = parent {
+                    world.add_component(entity, Parent(parent));
+                    children_map.entry(p_id).or_default().push(entity);
+                }
             }
         }
 
@@ -1127,7 +1130,7 @@ impl SceneData {
             if let Some(&p_ent) = entity_structs.get(&p_id) {
                 world.add_component(p_ent, Children(c_list));
             } else if let Some(p_ent) = world.get_entity(p_id) {
-                let existing: Vec<u32> = world
+                let existing: Vec<gizmo_core::entity::Entity> = world
                     .borrow::<Children>()
                     .get(p_id)
                     .map(|c| c.0.clone())
@@ -1217,7 +1220,13 @@ impl SceneData {
         while i < ids_to_save.len() {
             let current = ids_to_save[i];
             if let Some(children_comp) = children_storage.get(current) {
-                for &child_id in &children_comp.0 {
+                for &child in &children_comp.0 {
+                    let child_id = child.id();
+                    // A dead child, written in directly, has nothing to save, and its id may be
+                    // someone else's by now.
+                    if !world.is_alive(child) {
+                        continue;
+                    }
                     // Guard the BFS with a visited set: a `Children` CYCLE would
                     // otherwise grow `ids_to_save` forever (hang/OOM), and a SHARED
                     // child on a diamond hierarchy would be emitted twice → duplicate
@@ -1419,9 +1428,11 @@ impl SceneData {
                 // Idempotent: `instantiate_entities` may already have linked the root into
                 // the parent's Children when it set the root's Parent(p_id). Pushing again
                 // duplicated the child. Only add if not already present.
-                if !children_list.contains(&new_r) {
-                    children_list.push(new_r);
-                    world.add_component(p_ent, Children(children_list));
+                if let Some(new_root) = world.get_entity(new_r) {
+                    if !children_list.contains(&new_root) {
+                        children_list.push(new_root);
+                        world.add_component(p_ent, Children(children_list));
+                    }
                 }
             }
         }
@@ -1602,7 +1613,7 @@ mod tests {
         let child = world.spawn();
         world.add_component(child, EntityName::new("Child"));
         world.add_component(child, Transform::new(Vec3::new(-4.0, 5.0, -6.0)));
-        world.add_component(child, Parent(parent.id()));
+        world.add_component(child, Parent(parent));
 
         let path = std::env::temp_dir()
             .join("gizmo_scene_roundtrip_test.ron")
@@ -1639,7 +1650,7 @@ mod tests {
         // Hiyerarşi korunmalı: Child'ın Parent'ı yeni p id'sine çözülmeli.
         {
             let parents = loaded.borrow::<Parent>();
-            assert_eq!(parents.get(c).map(|x| x.0), Some(p), "ebeveyn-çocuk ilişkisi round-trip'te bozuldu");
+            assert_eq!(parents.get(c).map(|x| x.0.id()), Some(p), "ebeveyn-çocuk ilişkisi round-trip'te bozuldu");
         }
     }
 
@@ -1657,10 +1668,10 @@ mod tests {
         let a = world.spawn();
         let b = world.spawn();
         world.add_component(a, EntityName::new("A"));
-        world.add_component(a, Parent(root.id()));
+        world.add_component(a, Parent(root));
         world.add_component(b, EntityName::new("B"));
-        world.add_component(b, Parent(root.id()));
-        world.add_component(root, Children(vec![a.id(), b.id()]));
+        world.add_component(b, Parent(root));
+        world.add_component(root, Children(vec![a, b]));
 
         let path = std::env::temp_dir()
             .join("gizmo_prefab_bare_root_test.ron")
@@ -1690,17 +1701,17 @@ mod tests {
 
         let parents = loaded.borrow::<Parent>();
         assert_eq!(
-            parents.get(a2).map(|x| x.0),
+            parents.get(a2).map(|x| x.0.id()),
             Some(new_root),
             "A prefab köküne bağlı kalmalı (öksüz kalmamalı)"
         );
         assert_eq!(
-            parents.get(b2).map(|x| x.0),
+            parents.get(b2).map(|x| x.0.id()),
             Some(new_root),
             "B prefab köküne bağlı kalmalı"
         );
         assert_eq!(
-            parents.get(new_root).map(|x| x.0),
+            parents.get(new_root).map(|x| x.0.id()),
             Some(host.id()),
             "prefab kökü istenen host'a bağlanmalı"
         );
@@ -1719,12 +1730,12 @@ mod tests {
         world.add_component(a, EntityName::new("A"));
         world.add_component(b, EntityName::new("B"));
         world.add_component(c, EntityName::new("C"));
-        world.add_component(a, Parent(root.id()));
-        world.add_component(b, Parent(root.id()));
-        world.add_component(c, Parent(a.id()));
-        world.add_component(root, Children(vec![a.id(), b.id()]));
-        world.add_component(a, Children(vec![c.id()]));
-        world.add_component(b, Children(vec![c.id()])); // shared child C (diamond)
+        world.add_component(a, Parent(root));
+        world.add_component(b, Parent(root));
+        world.add_component(c, Parent(a));
+        world.add_component(root, Children(vec![a, b]));
+        world.add_component(a, Children(vec![c]));
+        world.add_component(b, Children(vec![c])); // shared child C (diamond)
 
         let path = std::env::temp_dir()
             .join("gizmo_prefab_diamond_test.ron")
@@ -1762,8 +1773,8 @@ mod tests {
         world.add_component(x, EntityName::new("X"));
         // `Children` cycle root -> x -> root. The old BFS had no visited set → grew
         // `ids_to_save` forever (hang/OOM). Completing at all is the assertion.
-        world.add_component(root, Children(vec![x.id()]));
-        world.add_component(x, Children(vec![root.id()]));
+        world.add_component(root, Children(vec![x]));
+        world.add_component(x, Children(vec![root]));
 
         let path = std::env::temp_dir()
             .join("gizmo_prefab_cycle_test.ron")
@@ -1787,8 +1798,8 @@ mod tests {
         let child = world.spawn();
         world.add_component(child, EntityName::new("CHILD"));
         world.add_component(child, Transform::new(Vec3::new(1.0, 2.0, 3.0)));
-        world.add_component(child, Parent(group.id()));
-        world.add_component(group, Children(vec![child.id()]));
+        world.add_component(child, Parent(group));
+        world.add_component(group, Children(vec![child]));
 
         let path = std::env::temp_dir()
             .join("gizmo_scene_bare_group_test.ron")
@@ -2119,7 +2130,7 @@ mod tests {
         // Child's Parent points at the REMAPPED parent id.
         let parents = world.borrow::<Parent>();
         assert_eq!(
-            parents.get(new_c).map(|p| p.0),
+            parents.get(new_c).map(|p| p.0.id()),
             Some(new_p),
             "child must be reparented to the remapped parent"
         );
@@ -2128,7 +2139,7 @@ mod tests {
         // And the parent's Children list gained the remapped child (back-link built).
         let children = world.borrow::<Children>();
         assert!(
-            children.get(new_p).map(|c| c.0.contains(&new_c)).unwrap_or(false),
+            children.get(new_p).map(|c| c.0.iter().any(|e| e.id() == new_c)).unwrap_or(false),
             "parent's Children must include the remapped child"
         );
     }
@@ -2158,7 +2169,7 @@ mod tests {
 
         let parents = world.borrow::<Parent>();
         assert_eq!(
-            parents.get(new).map(|p| p.0),
+            parents.get(new).map(|p| p.0.id()),
             Some(host.id()),
             "unresolved parent must fall back to root_parent, not orphan the entity"
         );

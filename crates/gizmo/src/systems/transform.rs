@@ -130,9 +130,9 @@ impl gizmo_core::system::System for TransformPropagateSystem {
                 visited.insert(id);
                 if let Some(children_q) = &mut children_query {
                     if let Some(children) = children_q.get(id) {
-                        for &child_id in &children.0 {
-                            if visited.insert(child_id) {
-                                queue.push((global.matrix, child_id));
+                        for &child in &children.0 {
+                            if world.is_alive(child) && visited.insert(child.id()) {
+                                queue.push((global.matrix, child.id()));
                             }
                         }
                     }
@@ -163,9 +163,9 @@ impl gizmo_core::system::System for TransformPropagateSystem {
 
                     if let Some(cq) = &mut children_query {
                         if let Some(children) = cq.get(current_id) {
-                            for &child_id in &children.0 {
-                                if visited.insert(child_id) {
-                                    queue.push((global.matrix, child_id));
+                            for &child in &children.0 {
+                                if world.is_alive(child) && visited.insert(child.id()) {
+                                    queue.push((global.matrix, child.id()));
                                 }
                             }
                         }
@@ -218,7 +218,7 @@ pub fn world_matrix(world: &gizmo_core::world::World, entity: gizmo_core::entity
         let Some(parent) = world.get::<Parent>(current) else {
             return Some(matrix);
         };
-        let parent = world.get_entity(parent.0)?;
+        let parent = Some(parent.0).filter(|p| world.is_alive(*p))?;
         matrix = local(world.get::<Transform>(parent)?) * matrix;
         current = parent;
     }
@@ -348,24 +348,23 @@ mod tests {
         let (a, b) = (world.spawn(), world.spawn());
         world.add_component(a, Transform::default());
         world.add_component(b, Transform::default());
-        world.add_component(a, Parent(bare.id()));
+        world.add_component(a, Parent(bare));
         assert_eq!(world_matrix(&world, a), None, "an ancestor without a Transform");
 
-        world.add_component(a, Parent(b.id()));
-        world.add_component(b, Parent(a.id()));
+        world.add_component(a, Parent(b));
+        world.add_component(b, Parent(a));
         assert_eq!(world_matrix(&world, a), None, "a cycle through the entity");
         let c = world.spawn();
         world.add_component(c, Transform::default());
-        world.add_component(c, Parent(a.id()));
+        world.add_component(c, Parent(a));
         assert_eq!(world_matrix(&world, c), None, "a cycle above the entity");
 
         // `d` first: spawned after the despawn it would recycle the dead id and name itself.
         let d = world.spawn();
         let gone = world.spawn();
-        let gone_id = gone.id();
         world.despawn(gone);
         world.add_component(d, Transform::default());
-        world.add_component(d, Parent(gone_id));
+        world.add_component(d, Parent(gone));
         assert_eq!(world_matrix(&world, d), None, "a Parent naming a dead id");
 
         world.despawn(d);
@@ -384,8 +383,8 @@ mod tests {
         // A `Children` cycle with neither node parented (both are propagation roots).
         // The old BFS had no visited set → its queue grew forever and this per-frame
         // system hung the whole app. Completing at all is the assertion.
-        world.add_component(a, Children(vec![b.id()]));
-        world.add_component(b, Children(vec![a.id()]));
+        world.add_component(a, Children(vec![b]));
+        world.add_component(b, Children(vec![a]));
 
         let mut sys = TransformPropagateSystem;
         sys.run(&world, 0.0);
@@ -429,12 +428,12 @@ mod tests {
                     t.update_local_matrix();
                 }
             }
-            world.add_component(r, Children(vec![c.id()]));
-            world.add_component(c, Children(vec![g.id()]));
+            world.add_component(r, Children(vec![c]));
+            world.add_component(c, Children(vec![g]));
             // `Parent` is what keeps the child off the ROOT query — without it the child is
             // both a root and a child and gets written twice per frame.
-            world.add_component(c, gizmo_core::component::Parent(r.id()));
-            world.add_component(g, gizmo_core::component::Parent(c.id()));
+            world.add_component(c, gizmo_core::component::Parent(r));
+            world.add_component(g, gizmo_core::component::Parent(c));
             out.push([r.id(), c.id(), g.id()]);
         }
         out

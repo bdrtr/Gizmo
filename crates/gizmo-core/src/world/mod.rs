@@ -267,7 +267,7 @@ mod tests {
 
         // Hiyerarşi kuralım: e0'ın çocukları e3 ve e4 olsun.
         // Başlangıçta e0(0), e1(1), e2(2), e3(3), e4(4) sırasıyla dizilidir.
-        world.add_component(e0, Children(vec![e3.id(), e4.id()]));
+        world.add_component(e0, Children(vec![e3, e4]));
 
         // Sadece e0'da Children olunca farklı archetype'a geçer (Archetype değişimi).
         // Bu yüzden hepsine Children eklemeliyiz ki AYNI archetype'da kalsınlar.
@@ -322,9 +322,9 @@ mod tests {
         world.add_component(e3, Transform(3.0));
 
         // e0 -> e1 -> e2 -> e3 zinciri
-        world.add_component(e0, Children(vec![e1.id()]));
-        world.add_component(e1, Children(vec![e2.id()]));
-        world.add_component(e2, Children(vec![e3.id()]));
+        world.add_component(e0, Children(vec![e1]));
+        world.add_component(e1, Children(vec![e2]));
+        world.add_component(e2, Children(vec![e3]));
         world.add_component(e3, Children(vec![]));
 
         world.sort_archetype_hierarchy();

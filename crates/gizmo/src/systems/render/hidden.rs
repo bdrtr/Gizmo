@@ -31,6 +31,7 @@
 use std::collections::HashSet;
 
 use gizmo_core::component::{Children, IsHidden};
+use gizmo_core::world::World;
 use gizmo_core::StorageView;
 
 /// Every entity that must not be drawn: those carrying `IsHidden`, and everything below them.
@@ -39,11 +40,11 @@ use gizmo_core::StorageView;
 /// gate `gizmo-studio/tests/render_parity.rs` asserts is in the *code* of both draw paths, on the
 /// grounds that a path which deleted the check and kept the comment would otherwise pass.
 ///
-/// A child id that no longer resolves to an entity is inserted anyway and costs nothing: a plain
-/// `despawn` leaves a dangling id in its parent's `Children` (recorded in the capability list),
-/// and filtering here would mean a second opinion about what a live entity is.
+/// A child that is no longer alive is skipped. Its id may belong to someone else by now, and that
+/// stranger is not under the hidden entity.
 #[must_use]
 pub fn collect_hidden(
+    world: &World,
     hidden: &StorageView<'_, IsHidden>,
     children: &StorageView<'_, Children>,
 ) -> HashSet<u32> {
@@ -57,7 +58,7 @@ pub fn collect_hidden(
             continue;
         }
         if let Some(kids) = children.get(id) {
-            stack.extend(kids.0.iter().copied());
+            stack.extend(kids.0.iter().filter(|k| world.is_alive(**k)).map(|k| k.id()));
         }
     }
     out
@@ -83,7 +84,7 @@ mod tests {
     fn hidden_set(world: &World) -> HashSet<u32> {
         let hidden = world.borrow::<IsHidden>();
         let children = world.borrow::<Children>();
-        collect_hidden(&hidden, &children)
+        collect_hidden(world, &hidden, &children)
     }
 
     #[test]
@@ -131,21 +132,28 @@ mod tests {
         let mut world = World::new();
         let a = world.spawn();
         let b = world.spawn();
-        world.add_component(a, Children(vec![b.id()]));
-        world.add_component(b, Children(vec![a.id()]));
+        world.add_component(a, Children(vec![b]));
+        world.add_component(b, Children(vec![a]));
         world.add_component(a, IsHidden);
 
         let set = hidden_set(&world);
         assert_eq!(set.len(), 2, "both entities of the cycle, visited once each");
     }
 
-    /// A dangling child id is kept rather than filtered — see [`collect_hidden`].
+    /// **A dead child's id going to someone else does not hide them.** The list was raw ids, so the
+    /// new entity read as a child of the hidden one and vanished from the frame.
     #[test]
-    fn a_dangling_child_id_is_harmless() {
+    fn a_recycled_id_in_a_hidden_list_does_not_hide_a_stranger() {
         let mut world = World::new();
-        let a = world.spawn();
-        world.add_component(a, Children(vec![9_999]));
-        world.add_component(a, IsHidden);
-        assert!(hidden_set(&world).contains(&9_999));
+        let parent = world.spawn();
+        let dead = world.spawn();
+        world.despawn(dead);
+        let stranger = world.spawn();
+        assert_eq!(stranger.id(), dead.id(), "the id is recycled, which is the case being tested");
+        world.add_component(parent, Children(vec![dead]));
+        world.add_component(parent, IsHidden);
+        let hidden = hidden_set(&world);
+        assert!(hidden.contains(&parent.id()));
+        assert!(!hidden.contains(&stranger.id()), "the stranger was hidden through a dead child's id");
     }
 }

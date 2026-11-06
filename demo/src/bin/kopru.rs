@@ -491,7 +491,7 @@ fn colour_beams(world: &mut World, game: &Game) {
         };
         let child = world.borrow::<gizmo::core::component::Children>().get(body).and_then(|c| c.0.first().copied());
         if let Some(child) = child {
-            if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(child) {
+            if let Some(mut m) = world.borrow_mut::<MaterialDesc>().get_mut(child.id()) {
                 if m.albedo != colour {
                     *m = m.clone().with_pbr(colour, 0.8, 0.0);
                 }

@@ -116,7 +116,7 @@ fn ui_opacity(world: &World, entity: u32) -> f32 {
         if let Some(t) = transforms.get(id) {
             alpha *= t.opacity.clamp(0.0, 1.0);
         }
-        at = parents.get(id).map(|p| p.0);
+        at = parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0.id());
     }
     alpha
 }
@@ -139,7 +139,9 @@ fn tree_order(world: &World) -> Vec<u32> {
     let nodes = world.borrow::<crate::ui::Node>();
     let parents = world.borrow::<crate::core::component::Parent>();
     let children = world.borrow::<crate::core::component::Children>();
-    let parent_node = |id: u32| parents.get(id).map(|p| p.0).filter(|p| nodes.get(*p).is_some());
+    let parent_node = |id: u32| {
+        parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0.id()).filter(|p| nodes.get(*p).is_some())
+    };
     // A node whose parent is not a node starts a tree of its own. Ids order the trees: spawned
     // earlier, painted earlier.
     let mut roots: Vec<u32> = nodes.iter().map(|(id, _)| id).filter(|&id| parent_node(id).is_none()).collect();
@@ -154,7 +156,9 @@ fn tree_order(world: &World) -> Vec<u32> {
         }
         order.push(id);
         if let Some(c) = children.get(id) {
-            stack.extend(c.0.iter().rev().copied().filter(|&k| parent_node(k) == Some(id)));
+            stack.extend(
+                c.0.iter().rev().filter(|k| world.is_alive(**k)).map(|k| k.id()).filter(|&k| parent_node(k) == Some(id)),
+            );
         }
     }
     order
@@ -230,7 +234,7 @@ pub(crate) fn ui_clip(world: &World, entity: u32) -> Option<[Vec2; 2]> {
                 });
             }
         }
-        at = parents.get(id).map(|p| p.0);
+        at = parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0.id());
     }
     out
 }

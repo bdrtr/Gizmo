@@ -512,8 +512,8 @@ pub fn hit_detection_system(world: &World, dt: f32) {
         for _ in 0..32 {
             chain.push(cur);
             match parents.get(cur) {
-                Some(p) => cur = p.0,
-                None => break,
+                Some(p) if world.is_alive(p.0) => cur = p.0.id(),
+                _ => break,
             }
         }
         let mut pos = gizmo_math::Vec3::ZERO;
@@ -533,7 +533,11 @@ pub fn hit_detection_system(world: &World, dt: f32) {
             if is_fighter.contains_key(&cur) {
                 return Some(cur);
             }
-            cur = parents.get(cur)?.0;
+            let parent = parents.get(cur)?.0;
+            if !world.is_alive(parent) {
+                return None;
+            }
+            cur = parent.id();
         }
         None
     };
@@ -1401,7 +1405,7 @@ mod tests {
         // The fist: a child, so the pose has to be composed through the parent link.
         let fist = world.spawn();
         world.add_component(fist, Transform::new(Vec3::new(0.0, 0.0, -0.8)));
-        world.add_component(fist, Parent(attacker.id()));
+        world.add_component(fist, Parent(attacker));
         world.add_component(fist, Hitbox::new(Vec3::splat(0.2), 99.0));
 
         let defender = world.spawn();

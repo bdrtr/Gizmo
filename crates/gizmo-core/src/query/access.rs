@@ -314,6 +314,13 @@ impl<'w, Q: WorldQuery> Query<'w, Q> {
         self.world.entity(entity_id)
     }
 
+    /// The id of `entity` if it is still alive: how to follow a stored handle, such as a
+    /// [`Parent`](crate::component::Parent) or an entry of [`Children`](crate::component::Children),
+    /// to the row it means. `None` for a dead one, whose id may belong to someone else by now.
+    pub fn live(&self, entity: crate::entity::Entity) -> Option<u32> {
+        self.world.is_alive(entity).then_some(entity.id())
+    }
+
     /// Total rows held by the matching archetypes — an **upper bound** on what iteration
     /// yields, not the number of items it will produce.
     ///
