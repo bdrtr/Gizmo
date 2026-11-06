@@ -81,6 +81,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Vec<u32>`, `HitEvent` and the Lua API; those are the next piece of work, not this one. `iter_combinations`
   now takes any `K`, not only pairs. `collect_hidden` lost its `hidden` parameter: it asks the world.
 
+  Measured against the previous commit, alternating the two: row iteration is within noise
+  (`for_each_iter` +3 %). `get` by `Entity` pays for the generation check, over 50 000 entities in order:
+  sparse 368 → 636 µs (7.4 → 12.7 ns a call), table 566 → 632 µs (11.3 → 12.6 ns), wide queries +1–3 %.
+  The commit message of this change gives 26 ns for 10 000 table rows; that is wrong and this is the
+  measurement.
+
 ### Fixed
 
 - **`iter_combinations_mut` could give two live `&mut` to one row, in safe code.** It was an `Iterator`, whose
