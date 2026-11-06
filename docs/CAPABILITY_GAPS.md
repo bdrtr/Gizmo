@@ -204,28 +204,24 @@ field that read true and did nothing. An id with nothing behind it draws **nothi
 falling back to PBR; restoring the fallback leaks 5770/16384 pixels, which is what the guard test
 measures.
 
-**Choosing the forward path for a built-in material: closed 2026-11-06.** Measured in
-`deferred_rendering`, doing so used to mean changing the material type, which also changed the
-shading: two axes that ought to be separate were one. `Material::with_forward` is the second axis.
-The type stays `Pbr`, the final colour comes from the forward pass, and it casts and receives (more
-than 80 shadow pixels asserted in all four pairings of floor and caster paths). It only matters on the
-desktop path: the browser and Android draw everything forward already, and so does the editor
-viewport, which is why the field is game-only in `render_parity`.
+**Choosing the forward path for a built-in material: tried and removed, 2026-11-06.** Measured in
+`deferred_rendering`, it meant changing the material type. `Material::with_forward` was built and removed
+the same day, before any release. A PBR material fits the G-buffer entirely, and TAA, motion blur, SSR,
+SSGI and SSAO all need it there, so it had to stay in. The forward pass then only drew a lesser copy over
+the deferred result: no decals, no SSAO on its own surface, no PCSS, and its pixels shaded twice. Bringing
+those three across would have made it the same picture at twice the cost. A material goes forward when the
+G-buffer cannot hold it: blended, unlit, baked-lit, water, custom.
 
-**It stays in the z-prepass and the G-buffer.** The first version took it out, and that was wrong at
-the root: TAA reprojects from the G-buffer's world position, motion blur reads its velocity, and SSR
-and SSGI its normals and positions, so every one of them saw the surface *behind* the object. Now they
-see the object, it occludes its neighbours in SSAO, and the forward pass draws its colour over the
-deferred one. The cost is that its pixels are shaded twice. Three things are still lost: SSAO on its
-own surface, decals, and PCSS, since the forward shader filters shadows with fixed PCF.
+What the attempt uncovered stayed, because the browser, Android, transparent surfaces and the editor
+viewport are all drawn by `shader.wgsl`.
 
 **The forward shader reads the whole material, same day.** It read the base colour and nothing else, so
 normal, metallic-roughness, emissive and occlusion maps, the UV transform, anisotropy, clear coat and
 subsurface never reached a browser, a phone, the editor viewport or a transparent surface. `surface.wgsl`
 now evaluates a material for the G-buffer and the forward shader alike, the lighting terms for the extra
 lobes are shared functions in `pbr_ext.wgsl`, and on the desktop path the forward shader samples
-irradiance volumes too. One tilted cube under a bright sky, per knob and map: at most 0.4 of 255 apart
-when measured, under 2 asserted.
+irradiance volumes too. One panel under a bright sky, tilted and head on, per knob and map: at most 0.8
+of 255 apart when measured, under 2 asserted.
 
 **The first version took a phone from 62 fps to 20,** an Adreno 618 drawing a cube and a floor, and only
 the phone could say so. Measured by taking pieces out: the extra samples cost nothing visible, the

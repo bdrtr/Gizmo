@@ -86,7 +86,7 @@ pub fn record_forward_and_fluid(
             // depth, so a backdrop's wireframe would be drawn somewhere the backdrop is not.
             let draw_wire = show_wireframes && !item.is_skybox && !item.is_backdrop;
 
-            if item.is_skybox || item.unlit || item.forward_lit || renderer.deferred.is_none() || item.is_transparent {
+            if item.is_skybox || item.unlit || renderer.deferred.is_none() || item.is_transparent {
                 draw_solid = true;
             }
 

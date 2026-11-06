@@ -182,11 +182,6 @@ pub struct DrawItem {
     /// The material uses anisotropy, clear coat or subsurface, and needs the pipelines with them
     /// (`SceneState::lit_pipeline`). Always false where every lit pipeline has them.
     pub(super) lobes: bool,
-    /// Lit, opaque, and shaded by the forward pass (`Material::with_forward`). **Not** `unlit`, which
-    /// would take it out of the shadow passes, the z-prepass and the G-buffer and pick the unlit
-    /// pipeline: this object is in all of those like any other, and the forward pass draws its final
-    /// colour over the deferred one.
-    pub(super) forward_lit: bool,
     /// Per-object shadow casting (`MeshRenderer::shadows`). Two objects sharing a mesh and a
     /// material can answer differently, so it belongs in the key.
     ///
@@ -314,9 +309,6 @@ pub(crate) struct BatchKey {
     /// Which lit pipeline: a material with anisotropy, clear coat or subsurface next to one without
     /// them can share a mesh and a texture bind group, and only one of the pipelines shades the first.
     lobes: bool,
-    /// Which pass draws it: two materials differing only in this share a texture bind group and a
-    /// mesh, and one batch would put both in the same pass.
-    forward_lit: bool,
     /// Per-object shadow casting (`MeshRenderer::shadows`) — in the key for exactly the reason
     /// above: two objects sharing a mesh and a material can answer differently.
     casts_shadows: bool,
@@ -348,7 +340,6 @@ pub(crate) struct BatchData {
     is_skybox: bool,
     is_backdrop: bool,
     is_double_sided: bool,
-    forward_lit: bool,
     lobes: bool,
     casts_shadows: bool,
     visible_in_camera: bool,
@@ -711,9 +702,6 @@ pub(super) fn collect_draw_items(
                 // double-sided showed both faces in the viewport and lost its back faces in the
                 // game.
                 let is_double_sided = $mat.is_double_sided;
-                // Only says something about a material that would otherwise reach the G-buffer:
-                // everything `skips_deferred` and everything blended is forward already.
-                let forward_lit = $mat.is_forward && !routing.skips_deferred && !is_transparent;
                 let lobes = cfg!(gizmo_forward_only)
                     && ($mat.anisotropy > 0.0 || $mat.clear_coat > 0.0 || $mat.subsurface > 0.0);
                 // Honoured by BOTH paths from the start, unlike `is_double_sided` above — a flag
@@ -733,7 +721,6 @@ pub(super) fn collect_draw_items(
                     is_skybox,
                     is_backdrop,
                     is_double_sided,
-                    forward_lit,
                     lobes,
                     casts_shadows,
                     visible_in_camera,
@@ -755,7 +742,6 @@ pub(super) fn collect_draw_items(
                     is_skybox,
                     is_backdrop,
                     is_double_sided,
-                    forward_lit,
                     lobes,
                     casts_shadows,
                     visible_in_camera,
@@ -939,7 +925,6 @@ pub(super) fn collect_draw_items(
                 mirror: batch.mirror,
                 is_grid: batch.is_grid,
                 is_double_sided: batch.is_double_sided,
-                forward_lit: batch.forward_lit,
                 lobes: batch.lobes,
                 casts_shadows: batch.casts_shadows,
                 visible_in_camera: batch.visible_in_camera,
@@ -1048,7 +1033,6 @@ mod batch_key_tests {
             is_skybox: false,
             is_backdrop: false,
             is_double_sided: false,
-            forward_lit: false,
             lobes: false,
             casts_shadows: true,
             visible_in_camera: true,
@@ -1077,7 +1061,6 @@ mod batch_key_tests {
             is_skybox: false,
             is_backdrop: false,
             is_double_sided: false,
-            forward_lit: false,
             lobes: false,
             casts_shadows: true,
             visible_in_camera: true,
@@ -1116,11 +1099,6 @@ mod batch_key_tests {
         assert_ne!(base, two_sided, "one-sided and double-sided must be separate batches");
 
         assert_ne!(base, transparent, "opaque and transparent must be separate batches");
-        assert_ne!(
-            base,
-            BatchKey { forward_lit: true, ..base.clone() },
-            "the G-buffer and the forward pass cannot draw one batch",
-        );
         assert_ne!(base, BatchKey { lobes: true, ..base.clone() }, "the two lit pipelines cannot draw one batch");
         assert_ne!(base, unlit, "PBR and unlit must be separate batches");
         assert_ne!(base, skybox, "PBR and skybox must be separate batches");

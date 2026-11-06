@@ -198,7 +198,6 @@ fn a_material_description_survives_the_file() {
             material_type: MaterialType::Pbr,
             is_transparent: false,
             is_double_sided: true,
-            is_forward: true,
             // 550a7df ile eklendi: kesme yok (opak) — testin ilgilendiği tur, alanın kendisi değil.
             alpha_cutoff: 0.0,
             blend_mode: gizmo::renderer::components::BlendMode::Multiply,
@@ -232,7 +231,6 @@ fn a_material_description_survives_the_file() {
         "and the texture path — which is what lets the load rebuild the bind group at all"
     );
     assert!(desc.is_double_sided, "and the flags");
-    assert!(desc.is_forward, "and the draw path");
     assert_eq!(desc.blend_mode, gizmo::renderer::components::BlendMode::Multiply, "and how it blends");
 }
 

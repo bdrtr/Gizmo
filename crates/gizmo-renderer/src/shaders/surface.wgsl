@@ -85,7 +85,8 @@ fn tangent_frame(world_normal: vec3<f32>, world_tangent: vec3<f32>, handedness: 
     var frame: TangentFrame;
     frame.N = N;
     frame.T = T;
-    frame.B = cross(N, T) * sign(handedness);
+    // `select`, not `sign`: `sign(0.0)` is 0, which would zero the bitangent of a mesh whose tangent w is 0.
+    frame.B = cross(N, T) * select(-1.0, 1.0, handedness >= 0.0);
     return frame;
 }
 
