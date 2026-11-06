@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Fluid was drawn over the whole frame, and through what stood in front of it.** `fluid_composite.wgsl`
+  read the depth from the normal's channel, so no background pixel counted as empty, and it wrote no depth
+  to test. It reads the right channel, writes `frag_depth`, and uses the real normal and view vector, so **the
+  fluid looks different**. The demos that draw it open a window and were not looked at afterwards.
+
 - **An unseen object that casts nothing was still built and uploaded.** `ShadowCasting::Off` kept an
   off-screen object from the shadow pass but not from the shadow-only instance list: a camera turned
   away from 19 882 such cubes still uploaded all of them. Now it uploads none.
@@ -191,7 +196,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   blend mode treats it as it needs: alpha and opaque fade to its colour, additive fades out, multiply
   fades to white. **Baked-lit surfaces are now fogged, by the default preset's fog too**: a game with
   its own lighting sets `Renderer::fog` to choose. Unlit materials keep their exact colour. Particles,
-  GPU physics bodies, FEM soft bodies, fluid and smoke are not fogged yet.
+  smoke, GPU physics bodies and the fluid surface and spray stand in it too.
 
 ### Added
 

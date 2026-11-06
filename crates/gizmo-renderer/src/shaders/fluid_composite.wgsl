@@ -1,22 +1,5 @@
-struct LightData {
-    position: vec4<f32>,
-    color: vec4<f32>,
-    direction: vec4<f32>,
-    params: vec4<f32>,
-}
+#import gizmo::common::{SceneUniforms, height_fog}
 
-struct SceneUniforms {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    sun_direction: vec4<f32>,
-    sun_color: vec4<f32>,
-    lights: array<LightData, 256>,
-    light_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,
-    camera_forward: vec4<f32>,
-    cascade_params: vec4<f32>,
-    num_lights: u32,
-}
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
 @group(1) @binding(0) var t_depth: texture_2d<f32>;
@@ -38,25 +21,6 @@ fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     out.uv = vec2<f32>(x * 0.5, y * 0.5);
     out.clip_position = vec4<f32>(x - 1.0, 1.0 - y, 0.0, 1.0);
     return out;
-}
-
-fn compute_normal(uv: vec2<f32>, depth: f32) -> vec3<f32> {
-    let size = textureDimensions(t_depth);
-    let texel = 1.0 / vec2<f32>(f32(size.x), f32(size.y));
-    
-    // Central difference for smoother normals
-    let d_r = textureSampleLevel(t_depth, s_depth, uv + vec2<f32>(texel.x, 0.0), 0.0).x;
-    let d_l = textureSampleLevel(t_depth, s_depth, uv - vec2<f32>(texel.x, 0.0), 0.0).x;
-    let d_u = textureSampleLevel(t_depth, s_depth, uv + vec2<f32>(0.0, texel.y), 0.0).x;
-    let d_d = textureSampleLevel(t_depth, s_depth, uv - vec2<f32>(0.0, texel.y), 0.0).x;
-    
-    let dx = (d_r - d_l) * 0.5;
-    let dy = (d_u - d_d) * 0.5;
-    
-    // Normal strength. Reduced to prevent overly sharp edges on large tanks
-    let normal_strength = 150.0;
-    let N = normalize(vec3<f32>(-dx * normal_strength, dy * normal_strength, 1.0));
-    return N;
 }
 
 // Procedural Noise Functions for Water Surface
@@ -125,20 +89,34 @@ fn caustic_pattern(uv: vec2<f32>, time: f32) -> f32 {
     return pow(1.0 - c1, 4.0) * pow(1.0 - c2, 4.0) * 8.0;
 }
 
+struct CompositeOut {
+    @location(0) color: vec4<f32>,
+    // The surface's own depth, against the scene's: this pass is a full-screen triangle, and without
+    // it water showed through anything in front of it.
+    @builtin(frag_depth) depth: f32,
+}
+
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let depth = textureSample(t_depth, s_depth, in.uv).x;
-    
+fn fs_main(in: VertexOutput) -> CompositeOut {
+    // The depth pass and the blur keep the world-space normal in xyz and the NDC depth in w, and the
+    // background reads (0, 0, 0, 1). This read x as the depth, which is the normal's: no background
+    // pixel ever reached 1, so water was composited over the whole frame.
+    let sample = textureSample(t_depth, s_depth, in.uv);
+    let depth = sample.w;
     if (depth >= 1.0) {
         discard;
     }
-    
+
+    let surface_ndc = vec2<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0);
+    let surface_h = scene.inv_view_proj * vec4<f32>(surface_ndc, depth, 1.0);
+    let surface_pos = surface_h.xyz / surface_h.w;
+
     let thickness = textureSample(t_thickness, s_thickness, in.uv).x;
-    let N = compute_normal(in.uv, depth);
-    
+    let N = normalize(sample.xyz);
+
     // Light and View vectors
     let L = normalize(-scene.sun_direction.xyz);
-    let V = vec3<f32>(0.0, 0.0, 1.0); // View vector in screen space approximation
+    let V = normalize(scene.camera_pos.xyz - surface_pos);
     let H = normalize(L + V);
     
     // Beer-Lambert Volume Absorption (Thickness Tinting)
@@ -154,7 +132,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Refraction
     // Distort UV based on normal XY and thickness
     let refraction_strength = 0.05 * clamp(thickness, 0.0, 1.0);
-    let distorted_uv = in.uv + N.xy * refraction_strength;
+    // The normal as the screen sees it: refraction bends the picture, not the world.
+    let camera_right = normalize(cross(scene.camera_forward.xyz, vec3<f32>(0.0, 1.0, 0.0)));
+    let camera_up = cross(camera_right, scene.camera_forward.xyz);
+    let screen_normal = vec2<f32>(dot(N, camera_right), -dot(N, camera_up));
+    let distorted_uv = in.uv + screen_normal * refraction_strength;
     let bg_color = textureSample(t_opaque_bg, s_thickness, distorted_uv).rgb;
     
     // Multiply background with our volume absorption color
@@ -164,7 +146,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // ── Underwater Caustics ──
     // Project animated Voronoi caustic pattern onto refracted background
     let time = scene.cascade_params.z;
-    let caustic_uv = distorted_uv + N.xy * 0.02; // Slightly offset by surface normal
+    let caustic_uv = distorted_uv + screen_normal * 0.02; // Slightly offset by surface normal
     let caustic = caustic_pattern(caustic_uv, time);
     let caustic_color = vec3<f32>(0.5, 0.7, 1.0) * caustic * transmittance;
     refracted_color += caustic_color * (1.0 - clamp(thickness * 5.0, 0.0, 0.8));
@@ -173,7 +155,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let diff = max(dot(N, L), 0.0);
     
     // Specular Highlight (Blinn-Phong) broken up by noise
-    let wave_uv = in.uv * 15.0 + N.xy * 2.0 + vec2<f32>(time * 0.3, time * 0.2);
+    let wave_uv = in.uv * 15.0 + screen_normal * 2.0 + vec2<f32>(time * 0.3, time * 0.2);
     let surface_noise = fbm(wave_uv);
     
     let shininess = 150.0;
@@ -212,5 +194,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Alpha blending based on thickness and fresnel (edges are more opaque)
     let alpha = clamp(thickness * 10.0 + fresnel, 0.0, 1.0);
     
-    return vec4<f32>(lit_color, alpha);
+    let fog = height_fog(surface_pos, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    var out: CompositeOut;
+    out.color = vec4<f32>(mix(lit_color, fog.rgb, fog.a), alpha);
+    out.depth = depth;
+    return out;
 }

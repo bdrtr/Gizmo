@@ -1,6 +1,6 @@
 // Uses the same `SceneUniforms` / global buffer layout as the main scene (binding 0 only).
 // SceneUniforms shared from gizmo::common (composed by load_shader_composed).
-#import gizmo::common::{SceneUniforms}
+#import gizmo::common::{SceneUniforms, height_fog}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
@@ -88,5 +88,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     
     let final_color = ambient + diffuse + specular;
-    return vec4<f32>(final_color, in.color.a);
+    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    return vec4<f32>(mix(final_color, fog.rgb, fog.a), in.color.a);
 }

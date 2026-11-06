@@ -6894,6 +6894,145 @@ mod golden_render_tests {
         });
     }
 
+    /// What the fog tests below draw: a wall behind everything, the thing itself around y = 8, and a
+    /// camera at that height. One renderer per test: a device apiece is what this driver does not
+    /// survive, and each new renderer allocates a whole fluid simulation.
+    async fn fog_wall_frame(renderer: &mut Renderer, density: f32, wall_z: f32, emitter: bool, frames: u32) -> Vec<u8> {
+        use crate::renderer::components::ParticleEmitter;
+        renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.6, 0.0], density));
+        let mut world = World::new();
+        world.insert_resource(gizmo_core::time::Time::new());
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let wall = world.spawn();
+        world.add_component(wall, Transform::new(Vec3::new(0.0, 0.0, wall_z)).with_scale(Vec3::new(60.0, 60.0, 0.1)));
+        world.add_component(wall, GlobalTransform::default());
+        world.add_component(wall, AssetManager::create_cube(&renderer.device));
+        world.add_component(wall, Material::new(tex).with_pbr(Vec4::new(0.3, 0.1, 0.6, 1.0), 0.8, 0.0));
+        world.add_component(wall, MeshRenderer::new());
+        if emitter {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 8.0, 0.0)));
+            world.add_component(e, GlobalTransform::default());
+            let mut source = ParticleEmitter::with_rate(400.0);
+            source.size_start = 0.6;
+            world.add_component(e, source);
+        }
+        world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 8.0, 8.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            primary: true,
+            ..Default::default()
+        });
+        let mut last = Vec::new();
+        for _ in 0..frames {
+            if let Some(mut t) = world.get_resource_mut::<gizmo_core::time::Time>() {
+                t.update(1.0 / 60.0);
+            }
+            last = render_world(renderer, &mut world).await;
+        }
+        last
+    }
+
+    /// **Particles and smoke stand in the fog like everything else.** In fog thick enough to hide a
+    /// surface entirely, each vanishes into the wall behind it: the frame with it is the frame without
+    /// it. With no fog it is plainly there, or this would prove nothing.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn particles_and_smoke_vanish_into_thick_fog() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.gpu_fluid = None;
+            let clear_wall = fog_wall_frame(&mut renderer, 0.0, -8.0, false, 20).await;
+            let thick_wall = fog_wall_frame(&mut renderer, 5.0, -8.0, false, 20).await;
+
+            let seen = changed_pixels(&fog_wall_frame(&mut renderer, 0.0, -8.0, true, 20).await, &clear_wall, 128).0;
+            let left = changed_pixels(&fog_wall_frame(&mut renderer, 5.0, -8.0, true, 20).await, &thick_wall, 128).0;
+            assert!(seen >= 40, "particles do not show without fog: {seen} pixels");
+            assert!(left * 10 <= seen, "particles stand out of thick fog: {left} pixels, {seen} without fog");
+
+            let hdr = renderer.post.hdr_texture.format();
+            let mut smoke = gizmo_renderer::gpu_smoke::SmokeVolume::new(&renderer.device, &renderer.scene.global_bind_group_layout, hdr);
+            smoke.bounds_min = [-2.0, 6.0, -2.0];
+            smoke.bounds_max = [2.0, 10.0, 2.0];
+            smoke.source = [0.0, 7.0, 0.0];
+            smoke.source_radius = 1.5;
+            smoke.inject = 8.0;
+            renderer.smoke = Some(smoke);
+            let seen = changed_pixels(&fog_wall_frame(&mut renderer, 0.0, -8.0, false, 20).await, &clear_wall, 128).0;
+            let left = changed_pixels(&fog_wall_frame(&mut renderer, 5.0, -8.0, false, 20).await, &thick_wall, 128).0;
+            assert!(seen >= 40, "smoke does not show without fog: {seen} pixels");
+            assert!(left * 10 <= seen, "smoke stands out of thick fog: {left} pixels, {seen} without fog");
+        });
+    }
+
+    /// **The water is where the water is.** It read its depth from the normal's channel, so no background
+    /// pixel ever counted as empty and it was composited over the whole frame, and through whatever stood
+    /// in front of it. It stands in the fog too. A small pool, as the `fluid` demo starts with: the
+    /// default hundred thousand particles have hung this machine's GPU in a test.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_fluid_surface_is_where_the_water_is_and_stands_in_the_fog() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let hdr = renderer.post.hdr_texture.format();
+            let (width, height) = (renderer.config.width, renderer.config.height);
+            renderer.gpu_fluid = Some(gizmo_renderer::gpu_fluid::GpuFluidSystem::new(
+                &renderer.device,
+                &renderer.queue,
+                10_000,
+                &renderer.scene.global_bind_group_layout,
+                hdr,
+                width,
+                height,
+            ));
+
+            renderer.fluid_enabled = false;
+            let clear_wall = fog_wall_frame(&mut renderer, 0.0, -8.0, false, 1).await;
+            let thick_wall = fog_wall_frame(&mut renderer, 5.0, -8.0, false, 1).await;
+            let near_wall = fog_wall_frame(&mut renderer, 0.0, 6.0, false, 1).await;
+
+            renderer.fluid_enabled = true;
+            let water = fog_wall_frame(&mut renderer, 0.0, -8.0, false, 2).await;
+            let seen = changed_pixels(&water, &clear_wall, 128).0;
+            assert!(seen >= 40, "the water does not show without fog: {seen} pixels");
+            let high_up = |f: &[u8]| f[..128 * 4 * 20].to_vec();
+            assert_eq!(high_up(&water), high_up(&clear_wall), "the top of the frame has no water in it");
+
+            let in_fog = fog_wall_frame(&mut renderer, 5.0, -8.0, false, 2).await;
+            let left = changed_pixels(&in_fog, &thick_wall, 128).0;
+            assert!(left * 10 <= seen, "the water stands out of thick fog: {left} pixels, {seen} without fog");
+
+            let behind = fog_wall_frame(&mut renderer, 0.0, 6.0, false, 2).await;
+            assert_eq!(changed_pixels(&behind, &near_wall, 128).0, 0, "water shows through a wall in front of it");
+        });
+    }
+
     /// **A fallback glyph reaches the atlas at the size its layout chose.** The same Arabic letter
     /// covers as many pixels as a fallback in a Latin text as it does in its own face at that size;
     /// rasterised at the text's size it would cover about twice as many.

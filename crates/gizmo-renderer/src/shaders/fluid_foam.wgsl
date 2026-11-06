@@ -5,23 +5,8 @@
 //  Phase 2 = Foam  (medium, white, soft circles on surface)
 // ═══════════════════════════════════════════════════════════════════════
 
-struct LightData {
-    position: vec4<f32>,
-    color: vec4<f32>,
-    direction: vec4<f32>,
-    params: vec4<f32>,
-}
+#import gizmo::common::{SceneUniforms, height_fog}
 
-struct SceneUniforms {
-    view_proj: mat4x4<f32>,
-    camera_pos: vec4<f32>,
-    sun_direction: vec4<f32>,
-    sun_color: vec4<f32>,
-    lights: array<LightData, 256>,
-    light_view_proj: array<mat4x4<f32>, 4>,
-    cascade_splits: vec4<f32>,
-    camera_forward: vec4<f32>,
-}
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
 struct FluidParticle {
@@ -40,6 +25,7 @@ struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) world_position: vec3<f32>,
 }
 
 @vertex
@@ -56,6 +42,7 @@ fn vs_main(
         out.clip_position = vec4<f32>(0.0, 0.0, 2.0, 1.0); // Behind far plane
         out.uv = vec2<f32>(0.0);
         out.color = vec4<f32>(0.0);
+        out.world_position = vec3<f32>(0.0);
         return out;
     }
     
@@ -107,6 +94,7 @@ fn vs_main(
     
     let vertex_world_pos = world_pos + (right * stretch_offset.x + billboard_up * stretch_offset.y) * radius;
     out.clip_position = scene.view_proj * vec4<f32>(vertex_world_pos, 1.0);
+    out.world_position = vertex_world_pos;
     out.uv = offset;
     out.color = particle_color;
     
@@ -120,7 +108,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     // Soft Gaussian falloff
     let falloff = exp(-dist * dist * 3.0);
-    let alpha = in.color.a * falloff;
+    // Spray only adds light, so fog fades it out rather than tinting it.
+    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    let alpha = in.color.a * falloff * (1.0 - fog.a);
     
     // Premultiplied alpha output for additive blending
     return vec4<f32>(in.color.rgb * alpha, alpha);

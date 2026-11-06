@@ -2,7 +2,7 @@
 // 3B fBm yoğunluğunu ışın boyunca march eder; Beer-Lambert geçirgenlik + güneş saçılımı + sahne
 // derinliğine göre occlusion; HDR'ye premultiplied-over kompozit. (Grid/advect/pressure YOK —
 // gerçek Eulerian sim bir sonraki adım.)
-#import gizmo::common::{SceneUniforms}
+#import gizmo::common::{SceneUniforms, height_fog}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 @group(1) @binding(0) var scene_depth: texture_depth_2d;
@@ -138,5 +138,9 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
             break;
         }
     }
-    return vec4<f32>(accum, 1.0 - transm); // premultiplied over
+    // Premultiplied over: the fog in front of the volume replaces what the volume shows, by how much
+    // of the view the volume blocks.
+    let fog = height_fog(ro + rd * start, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    let opacity = 1.0 - transm;
+    return vec4<f32>(accum * (1.0 - fog.a) + fog.rgb * fog.a * opacity, opacity);
 }

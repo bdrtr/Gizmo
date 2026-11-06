@@ -255,8 +255,19 @@ do both by their alpha. **Baked-lit surfaces are fogged now**, by the default pr
 a game with its own lighting will see at a distance until it sets `Renderer::fog`. Unlit materials stay
 outside it on purpose: their contract is the exact colour asked for, and editor furniture relies on it.
 
-Still outside the fog: particles, GPU physics bodies, FEM soft bodies, fluid and smoke, each its own
-shader outside the material paths. That is separate work, one shader and one test scene each.
+Particles, smoke and the fluid surface and its spray joined it the same day, in the way each blends: smoke
+replaces what it shows by how much of the view it blocks, spray fades out. GPU physics bodies have the same
+fog, but nothing in the workspace turns that system on, so no test draws them, and spray is not exercised
+either, since a settled pool classifies as all liquid. `fem_render.wgsl` belongs to the `beamng` demo, with
+uniforms of its own, and is not an engine path.
+
+**Adding fog to the water found that it was drawn over the whole frame.** The depth pass and the blur had
+come to keep the world normal in xyz and the depth in w, and `fluid_composite.wgsl` still read x as the
+depth, so no background pixel counted as empty. It also had no depth of its own to test, so water showed
+through anything in front of it. It reads w and writes `frag_depth` now, and takes the real normal and view
+vector instead of screen-space stand-ins, so **the fluid looks different**: `fluid`, `fluid_rigid` and
+`ocean_scene` were not looked at afterwards, because they open a window. The test uses a pool of 10 000 in one
+renderer: a new renderer per frame with the default 100 000 particles reset this machine's GPU ring eight times.
 
 Still open: a custom material cannot be drawn deferred.
 

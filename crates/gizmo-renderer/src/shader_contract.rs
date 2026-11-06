@@ -244,7 +244,7 @@ fn every_scene_uniform_declaration_matches_the_bytes_rust_uploads() {
         "the source of truth was not among the shaders checked — the walk found {checked:?}"
     );
     assert!(
-        checked.len() >= 8,
+        checked.len() >= 6,
         "only {} shaders declare a scene block; the copies were expected too: {checked:?}",
         checked.len()
     );

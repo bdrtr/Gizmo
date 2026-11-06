@@ -386,10 +386,12 @@ pub fn create_fluid_pipelines(
         label: Some("Thickness Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/fluid_thickness.wgsl").into()),
     });
-    let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Composite Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/fluid_composite.wgsl").into()),
-    });
+    let composite_shader = crate::pipeline::load_shader_composed(
+        device,
+        "crates/gizmo-renderer/src/shaders/fluid_composite.wgsl",
+        include_str!("../shaders/fluid_composite.wgsl"),
+        "Composite Shader",
+    );
     let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some("Blur Shader"),
         source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/fluid_blur.wgsl").into()),
@@ -529,10 +531,12 @@ pub fn create_fluid_pipelines(
     });
 
     // AAA: Foam/Spray render pipeline
-    let foam_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Foam Shader"),
-        source: wgpu::ShaderSource::Wgsl(include_str!("../shaders/fluid_foam.wgsl").into()),
-    });
+    let foam_shader = crate::pipeline::load_shader_composed(
+        device,
+        "crates/gizmo-renderer/src/shaders/fluid_foam.wgsl",
+        include_str!("../shaders/fluid_foam.wgsl"),
+        "Foam Shader",
+    );
 
     let pipeline_foam = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("SSFR Foam/Spray"),
