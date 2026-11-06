@@ -60,8 +60,8 @@ impl World {
     /// a "set these fields" call does every frame. [`World::add_component`] documents the same
     /// sentence for the single-component path, and the two now agree.
     ///
-    /// The drop is **silent**: it is not a `Remove`, and no hook or observer sees it. The
-    /// bundle path fires nothing at all (below), so there is no phase for it to be reported in.
+    /// The drop is **silent**: it is not a `Remove`, and no hook or observer sees it. A component with
+    /// hooks does not come this way (below).
     ///
     /// **If a component's `Drop` or the `Bundle` impl panics**, the two branches answer
     /// differently and both answers are deliberate. A bundle that changes the entity's
@@ -74,11 +74,9 @@ impl World {
     /// a slot that is counted and destroyed; that was possible until 2026-08-31 and needed no
     /// `unsafe` from the caller to reach.
     ///
-    /// Hooks: an all-`Table` bundle takes the block-move fast path and fires **no**
-    /// `on_add`/`on_set` hooks — observers registered with [`World::add_observer`] do not see
-    /// it. A bundle carrying a `SparseSet` component is routed through
-    /// [`crate::component::Bundle::apply`] instead and does fire them per component. See
-    /// [`crate::world::hooks::ComponentHooks`] for the full list of hook-free paths.
+    /// Hooks: an all-`Table` bundle that nothing listens to takes the block-move fast path. A bundle with a
+    /// `SparseSet` component, or with a hook or an observer on any of its components, is routed through
+    /// [`crate::component::Bundle::apply`] and fires them per component.
     pub fn add_bundle<B: crate::component::Bundle>(&mut self, entity: Entity, bundle: B) {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();
@@ -90,9 +88,10 @@ impl World {
         // whole bundle through `apply` — per-component `add_component`, which
         // places each component in its correct storage. All-table bundles keep the
         // single-migration fast path.
+        // A component with hooks takes that route too, or they would not hear about it.
         if infos
             .iter()
-            .any(|i| i.storage_type == crate::component::StorageType::SparseSet)
+            .any(|i| i.storage_type == crate::component::StorageType::SparseSet || self.has_hooks(i.type_id))
         {
             bundle.apply(self, entity);
             return;

@@ -215,6 +215,26 @@ impl World {
             archetype = arch_id,
             "clone_entity: prefab splice complete"
         );
+        // A clone is a first write of everything it carries, and an index kept by hooks has to hear of it.
+        if !self.component_hooks.is_empty() {
+            let mut heard: Vec<TypeId> = self.archetype_index.archetypes[arch_id as usize]
+                .sorted_component_types()
+                .iter()
+                .copied()
+                .filter(|t| self.has_hooks(*t))
+                .collect();
+            heard.extend(
+                self.sparse_sets
+                    .iter()
+                    .filter(|(t, set)| set.contains(source_id) && self.has_hooks(**t))
+                    .map(|(t, _)| *t),
+            );
+            for &entity in &new_entities {
+                for &type_id in &heard {
+                    self.fire_inserted(type_id, entity);
+                }
+            }
+        }
         Some(new_entities)
     }
 
@@ -226,8 +246,7 @@ impl World {
     /// Since every bundle has the same Rust type they all land in one archetype: the first
     /// is spawned normally to discover it and the rest are appended straight into its
     /// columns, which is where the win over a loop of [`World::spawn_bundle`] comes from.
-    /// That fast path writes columns directly, so **no `on_add`/`on_set` hooks run for any
-    /// entity after the first**.
+    /// A component with hooks takes the per-entity route, so they hear about every entity.
     ///
     /// A bundle carrying a `SparseSet`-storage component cannot use the fast path (there is
     /// no archetype column to write) and transparently falls back to per-entity
@@ -244,12 +263,13 @@ impl World {
         // bundle contains any sparse component, fall back to per-entity
         // `spawn_bundle`, which routes every component through `add_component`
         // (sparse-aware). All-table bundles keep the O(1) archetype-reuse path.
-        let has_sparse = <I::Item as crate::component::Bundle>::get_infos()
+        // A component with hooks takes the same route, or they would hear about the first entity only.
+        let per_entity = <I::Item as crate::component::Bundle>::get_infos()
             .iter()
-            .any(|info| info.storage_type == crate::component::StorageType::SparseSet);
-        if has_sparse {
+            .any(|info| info.storage_type == crate::component::StorageType::SparseSet || self.has_hooks(info.type_id));
+        if per_entity {
             let entities: Vec<Entity> = iter.into_iter().map(|b| self.spawn_bundle(b)).collect();
-            tracing::debug!(count = entities.len(), "spawn_batch: sparse fallback (per-entity)");
+            tracing::debug!(count = entities.len(), "spawn_batch: per-entity (sparse component or hooks)");
             return entities.into_iter();
         }
 

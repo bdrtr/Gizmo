@@ -191,6 +191,7 @@ impl<T: crate::component::Component> FetchComponent for &mut T {
     const IS_MUT: bool = true;
 
     unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, system_tick: u32) -> Option<Self::Fetch<'w>> {
+        const { assert!(T::MUTABLE, "this component is immutable: insert a new value instead of writing through `&mut`") };
         if T::storage_type() == crate::component::StorageType::SparseSet {
             // SHARED lookup — NOT `&World -> &mut World`. Casting `&World` to
             // `*mut World` to call `HashMap::get_mut` was aliasing UB (retag from

@@ -13,13 +13,13 @@ pub fn bench_combinator_system(criterion: &mut Criterion) {
     let mut schedule = Schedule::new();
     schedule.add_system(
         (|| {})
-            .pipe(|| {})
-            .pipe(|| {})
-            .pipe(|| {})
-            .pipe(|| {})
-            .pipe(|| {})
-            .pipe(|| {})
-            .pipe(|| {}),
+            .then(|| {})
+            .then(|| {})
+            .then(|| {})
+            .then(|| {})
+            .then(|| {})
+            .then(|| {})
+            .then(|| {}),
     );
     // run once to initialize systems
     schedule.run(&mut world, 0.0);

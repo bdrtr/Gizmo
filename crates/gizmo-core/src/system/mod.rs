@@ -60,6 +60,15 @@ pub struct AccessInfo {
 }
 
 impl AccessInfo {
+    /// Adds what `other` touches to this.
+    pub(crate) fn merge(&mut self, mut other: AccessInfo) {
+        self.component_reads.append(&mut other.component_reads);
+        self.component_writes.append(&mut other.component_writes);
+        self.resource_reads.append(&mut other.resource_reads);
+        self.resource_writes.append(&mut other.resource_writes);
+        self.is_exclusive = self.is_exclusive || other.is_exclusive;
+    }
+
     /// An access set that touches nothing and is not exclusive: compatible with every other
     /// non-exclusive set. Same value as `Default`; the lists are then filled in by pushing.
     pub fn new() -> Self {
@@ -278,6 +287,7 @@ pub trait System: Send + Sync {
 mod condition;
 mod config;
 mod into_system;
+mod pipe;
 /// System parameters — [`Res`], [`ResMut`], [`Query`](crate::Query), `Option<P>`, and the seal
 /// that decides who may add to that list.
 ///
@@ -289,6 +299,7 @@ mod schedule;
 pub use condition::*;
 pub use config::*;
 pub use into_system::*;
+pub use pipe::*;
 pub use params::*;
 pub use schedule::*;
 

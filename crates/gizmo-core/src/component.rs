@@ -71,6 +71,11 @@ pub trait Component: 'static + Any + Send + Sync + Clone {
     fn storage_type() -> StorageType {
         StorageType::Table
     }
+
+    /// Whether a query may ask for `&mut Self`. `impl_component!(T; immutable)` says no, and then `&mut T`
+    /// in a query is a compile error: the value changes only by inserting another, which hooks hear
+    /// about and a write through `&mut` would not.
+    const MUTABLE: bool = true;
 }
 
 /// Writes an empty [`Component`] impl for one or more types, optionally choosing their
@@ -104,6 +109,13 @@ pub trait Component: 'static + Any + Send + Sync + Clone {
 /// `#[macro_export]` puts it at the crate root: `gizmo_core::impl_component!`.
 #[macro_export]
 macro_rules! impl_component {
+    ($($t:ty),+ ; immutable) => {
+        $(
+            impl $crate::Component for $t {
+                const MUTABLE: bool = false;
+            }
+        )+
+    };
     ($($t:ty),+ $(,)?) => {
         $(
             impl $crate::Component for $t {}

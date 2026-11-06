@@ -768,7 +768,7 @@ bound back onto a material (same `pub(crate)` wall as C1). What remains is SSR, 
 contributes +7.91 of red−blue to it while on screen and **exactly nothing** once it moves behind
 the camera. Showing what the camera cannot see is the case a mirror exists for.
 
-### A8. No render-world extraction, no runtime component definition, no immutable components, no system hot-patching
+### A8. No render-world extraction, no runtime component definition, no system hot-patching
 
 Measured in `ecs_absent_apis`:
 
@@ -778,8 +778,8 @@ Measured in `ecs_absent_apis`:
 - **Component registration is typed.** `register_component_type::<T>()` only — the registered-type
   count moves `0 → 1 → 2` through typed registration alone. Raw access exists
   (`get_component_ptr` + `TypeId` read `Some(100)`), so *access* is dynamic but *definition* is not.
-- **No immutable components.** `&mut Frozen` builds fine and wrote `−1` through no hook at all, so
-  immutability is a preference, not a contract.
+- ~~**No immutable components.**~~ **Closed 2026-11-07:** `impl_component!(T; immutable)`, and `&mut T` in a query is
+  a compile error.
 - **No system hot-patching.** Shaders *are* hot-reloadable (`demo/assets/shaders/*.wgsl`); Rust
   system bodies are not.
 
@@ -842,8 +842,9 @@ Measured in `ecs_extension_points`. Four traits are sealed and cannot be impleme
 | `FetchComponent` | No custom fetch |
 
 ~~`run_system`~~ **closed 2026-11-05:** `World::run_system(system)` runs a system once, now, inside
-the frame's change window, its `Commands` applied before it returns. **`pipe`** is still absent;
-one function calling another does its job when the first needs no parameters of its own. The seal is a
+the frame's change window, its `Commands` applied before it returns. ~~`pipe`~~ **closed 2026-11-07:**
+`a.pipe(b)` hands what `a` returns to `b`'s first parameter, `In<T>`. What used to be called `pipe`, which handed
+nothing over, is `then`. The seal is a
 deliberate design choice — the scheduler has to know statically what a parameter touches or
 parallel execution is unsound — but the consequence is real: several common patterns cannot be
 expressed, only approximated.
@@ -899,7 +900,7 @@ borrow conflict still panics, because it is a scheduling bug rather than a state
 | ~~Fallible system params~~ | **CLOSED — and the row was stale when re-read on 2026-11-03.** `Option<P>` has been a system parameter since 2026-08-23 (`027d0ef9`): `Option<Res<T>>`, `Option<ResMut<T>>`, `Option<Query<Q>>` read `None` for an absent resource and the system still runs, which is the `else` branch this row said was missing. Only absence becomes `None`; a borrow conflict still panics, because it is a scheduling bug. Without the `Option` a missing parameter still panics by design. The neighbouring single-entity case closed the same day: `Query::single` / `single_mut` return the one match or `QuerySingleError::{NoEntities, MultipleEntities}` | `fallible_params`, `error_handling` |
 | ~~Systems returning `Result`, `?`, an error handler~~ | **CLOSED 2026-11-02.** A system function may return `()` or `Result<(), E: Display>` (`SystemOutput`), so `?` works in its body. An `Err` goes to the world's `SystemErrorHandler` resource — a plain `fn(system, error)`, read without synchronisation by systems in parallel, so it has no state to race on — and by default to one `tracing::error!` naming the system; the system runs again next frame. Every system form takes it (0–12 parameters, closures included), and every existing system still compiles unchanged — the whole workspace and its demos built on the first try. Tested: `Ok` reaches no handler, an `Err` reaches it every frame with the system's name and the message, the default does not panic; dropping the forwarding fails the test. Run conditions still return `bool` | `error_handling` |
 | ~~Default query filters~~ | **CLOSED 2026-08-24.** `World::default_query_filters_mut().add::<T>()`, and an entity carrying `T` is invisible to every query a system **declares as a parameter**. The hatch is the `IgnoreDefaultFilters` operand, in the signature. **The pricing was wrong twice, in opposite directions.** It predicted "seven entry points, each needing an opt-out": there are seventeen public `Query` methods and they all read one archetype list, so the filter is one predicate applied at construction — nothing per row, `has_row_filter` untouched, chunk iteration intact, and `entity_count`/`len` become exact rather than over-counts. But it also missed the only hard question, *which constructor*, and the first answer was **wrong**: filtering `World::query_unchecked` looked like "the system path" (the parameter impl goes through it) and is in fact the engine's mutable-from-shared hatch — **98 sites in 37 files, nine of them editor panels and seven of those the inspector**. Review traced four consequences before it shipped: the inspector went blank for a disabled entity with no UI left to re-enable it; transform propagation froze whole subtrees, stranding *enabled* descendants; `sync_bodies` **destroyed** a disabled rigid body rather than pausing it, leaving joints dangling and rollback snapshots invalid; and netcode captured unfiltered while restoring filtered, i.e. a desync. The boundary is therefore the parameter itself — `SystemParam for Query`'s fetch, one function — covering the **44** demo files and **3** engine files that declare a `Query` parameter. **Named limitation:** disabling hides an entity from *your systems*; it does not pause physics, transform propagation, audio or rollback, all of which read the world directly, and the four consequences above are why they must keep doing so | `entity_disabling` |
-| Custom relationships | No relationship trait or derive; only the fixed `Parent`/`Children`. A reverse index can be hand-built from hooks — but see C3 for the hole that leaves | `relationships` |
+| ~~Custom relationships~~ | **CLOSED 2026-11-07.** `relationship!(struct Likes -> LikedBy;)` declares both sides as immutable components; `World::register_relationship` keeps the reverse index through insert, overwrite, remove, despawn and clone, and `OnTargetDespawn` says whether a target takes its sources with it. | `crates/gizmo-core/src/relationship.rs` |
 | ~~Observer propagation control~~ (cancel) | **CLOSED 2026-08-24.** `World::stop_propagation()` from inside a listener ends the walk once that listener returns. This row had already diagnosed itself correctly — *"what is missing is not access but a return channel"* — and the fix is that diagnosis taken literally: handing the listener a `&mut World` earlier the same day **was** the channel, so the listener's return type never changed. Measured on the same five-link chain the row was written from: `[4, 3, 2, 1, 0]` with **2** links visited after a listener tries to veto, and `[4, 3, 2]` with **0** when it can. The remaining listeners on the vetoing entity still run — the flag is read once that entity is finished, not between its listeners — and `trigger` saves and restores the flag around its own walk, so a nested dispatch cancelling itself cannot truncate the walk that called it. Both halves of that save/restore are load-bearing and a different test catches each. **Still open in this row's other half:** the walk's *path* is always the `Parent` chain, and there is no way to choose another | `observer_propagation` |
 
 ### C2. `.exclusive()` is a concurrency barrier, not a mutability upgrade
@@ -910,42 +911,29 @@ Anything that needs one — despawning what a query found, running a stored clos
 app-level `set_update` / `set_render` hook. The
 engine's own `LifetimeSystem` takes the same route (`query_unchecked` + `world.entity(id)`).
 
-### C3. Component hooks are not an audit trail
+### C3. Component hooks reach every write — **closed 2026-11-07**
 
-Hooks exist — `register_on_add` / `on_set` / `on_replace` / `on_remove`, plus a global despawn
-hook, and the lists accumulate. But several paths write components **without firing anything**.
-Re-measured in `component_hooks` on 2026-08-24, when `on_replace` was added and `remove_bundle`'s
-Table half stopped being silent:
+`register_on_add` / `on_set` / `on_replace` / `on_remove`, plus a global despawn hook. Every path now fires them:
 
 | path | add | set | replace | remove | despawn |
 |---|---|---|---|---|---|
 | `spawn_bundle` | 1 | 1 | 0 | 0 | 0 |
 | `add_component` (new) | 1 | 1 | 0 | 0 | 0 |
-| `add_component` (overwrite) | **0** | 1 | **1** | 0 | 0 |
+| `add_component` (overwrite) | 0 | 1 | 1 | 0 | 0 |
 | `remove_component` | 0 | 0 | 0 | 1 | 0 |
-| `add_bundle` (all-Table) | **0** | **0** | **0** | **0** | **0** |
-| `remove_bundle` (Table) | 0 | 0 | 0 | **1** | 0 |
+| `add_bundle` (all-Table) | 1 | 1 | 0 | 0 | 0 |
+| `remove_bundle` (Table) | 0 | 0 | 0 | 1 | 0 |
 | `insert_batch` (3) | 3 | 3 | 0 | 0 | 0 |
 | `remove_batch` (3) | 0 | 0 | 0 | 3 | 0 |
-| `spawn_batch` (**4**) | **1** | **1** | 0 | 0 | 0 |
-| `clone_entity` (3) | **0** | **0** | **0** | **0** | **0** |
+| `spawn_batch` (4) | 4 | 4 | 0 | 0 | 0 |
+| `clone_entity` (3) | 3 | 3 | 0 | 0 | 0 |
 | `despawn` | 0 | 0 | 0 | 1 | 1 |
 
-Two rows moved on 2026-08-24 and both were this table's own findings. `remove_bundle` (Table) read
-**0/0/0/0** because the bundle's Table members went out through the archetype migration in silence;
-giving `On<Remove, T>` a dispatch path turned that from an internal quirk into a broken promise and
-it was fixed in the same change. `add_component` (overwrite) gained the **replace** column: `on_set`
-fires on every write and `on_add` only on the first, so "this overwrote something" was a question
-only the caller could answer, by keeping a per-entity ledger. The dispatcher knows which branch it
-took, so `on_replace` answers it — every write fires `on_add` **xor** `on_replace`.
-
-**The silent list is shorter, not empty**, and that is what keeps this row open: `add_bundle`
-(all-Table) and `clone_entity` still fire nothing, and `spawn_batch` fires once for four entities.
-
-The cost is concrete. `relationships` hand-builds a reverse index from hooks, then adds four
-entities with `spawn_batch`: the world gained 4 relationships, **the index gained 1**. Three
-silently missing — exactly the 1-in-4 the table predicts. An index maintained by hooks is only as
-complete as the code paths that reach it.
+`add_bundle`, `spawn_batch` and `clone_entity` wrote columns directly and fired nothing, or once for four entities,
+which made an index kept by hooks a guess: `relationships` measured 10 links and 7 in its index. They now take the
+per-component route for a type with hooks and keep their fast path for one without, so a type nothing listens to
+pays nothing. The one write hooks cannot hear is through `&mut T`; `impl_component!(T; immutable)` makes that a compile
+error, and `relationship!` is the index, kept by the engine.
 
 ### C4. No custom executor or stepping — but phases of your own now exist
 

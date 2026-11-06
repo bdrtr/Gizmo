@@ -162,6 +162,23 @@ impl World {
         world
     }
 
+    /// Whether anything is listening to `type_id`. The bulk write paths ask, and take the per-component
+    /// route for a type with hooks: a hook is only worth having if every path reaches it.
+    pub(crate) fn has_hooks(&self, type_id: TypeId) -> bool {
+        self.component_hooks.get(&type_id).is_some_and(|h| {
+            !h.on_add.is_empty() || !h.on_set.is_empty() || !h.on_replace.is_empty() || !h.on_remove.is_empty()
+        })
+    }
+
+    /// What a first write of `type_id` on `entity` fires, for a path that wrote it some other way.
+    pub(crate) fn fire_inserted(&mut self, type_id: TypeId, entity: crate::entity::Entity) {
+        self.run_hooks(type_id, |hooks, world| {
+            for hook in hooks.on_add.iter_mut().chain(hooks.on_set.iter_mut()) {
+                hook(world, entity);
+            }
+        });
+    }
+
     fn run_hooks<F>(&mut self, type_id: TypeId, mut f: F)
     where
         F: FnMut(&mut ComponentHooks, &mut World),

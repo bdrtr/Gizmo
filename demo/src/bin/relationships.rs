@@ -29,21 +29,9 @@
 //!
 //! ## Ölçüldü
 //!
-//! Ölçüldü (2026-08-23, 6 birim çember üstünde + 4 birim toplu doğurmayla):
-//!
-//! | | dünyada gerçekte | ters indekste |
-//! |---|------------------|---------------|
-//! | A) 6 × `add_component` | 6 | **6** |
-//! | B) + `spawn_batch` ile 4 tane daha | 10 | **7** |
-//!
-//! Dünya dört ilişki kazandı, indeks **bir**. Üçü sessizce kayıp — ve sayı tesadüf değil:
-//! `spawn_batch` dört varlığın yalnız ilkinde kanca ateşliyor, geri kalan üçünü doğrudan
-//! arketip sütunlarına yazıyor. `component_hooks`'un tablosunda ölçülen `1/4` oranının
-//! buradaki bedeli bu.
-//!
-//! Delik indeksin **dışarıda** olmasından geliyor: indeksi motor tutsaydı her yol onun içinden
-//! geçerdi. Burada ilişki kurmak isteyen bir oyunun ya **yalnız kancanın gördüğü yolları**
-//! kullanması, ya da indeksi kancaya değil bir sisteme (her kare tarayan) bağlaması gerekiyor.
+//! Ölçüldü (2026-08-23, 6 birim çember üstünde + 4 birim toplu doğurmayla) dünya 10 ilişki kazanmıştı, indeks
+//! 7: `spawn_batch` dört varlığın yalnız ilkinde kanca ateşliyordu. 2026-11-07'den beri kancası olan bir tür
+//! için her varlıkta ateşliyor, ve aynı işi motorun kendisi `relationship!` ile yapıyor.
 //!
 //! **Boşluk** tuşu bunu gösteriyor: hedefleri `add_component` ile yeniden dağıtmak indeksi
 //! toparlıyor, çünkü o yol kanca ateşliyor.

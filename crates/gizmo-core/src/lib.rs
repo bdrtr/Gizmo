@@ -58,6 +58,7 @@ pub mod profiler;
 pub mod query;
 pub mod registry;
 
+pub mod relationship;
 pub mod system;
 pub mod time;
 pub mod timer;
@@ -70,6 +71,7 @@ pub use commands::{CommandQueue, Commands, EntityCommands};
 pub use component::{Bundle, BundleExt, Component, EntityName, IsHidden, IsDeleted, PrefabRequest};
 pub use cvar::{CVarRegistry, CVarValue, DevConsoleState};
 pub use entity::Entity;
+pub use relationship::{OnTargetDespawn, Relationship, RelationshipTarget};
 pub use event::{EventMutator, EventReader, EventWriter, Events};
 pub use hierarchy::HierarchyExt;
 pub use input::{ActionMap, Input, InputBinding};

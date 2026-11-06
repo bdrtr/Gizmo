@@ -32,12 +32,12 @@
 //! | `add_component` (yeni) | 1 | 1 | 0 | 0 | 0 |
 //! | `add_component` (üstüne yaz) | **0** | 1 | **1** | 0 | 0 |
 //! | `remove_component` | 0 | 0 | 0 | 1 | 0 |
-//! | `add_bundle` (hepsi Table) | **0** | **0** | **0** | **0** | **0** |
+//! | `add_bundle` (hepsi Table) | 1 | 1 | 0 | 0 | 0 |
 //! | `remove_bundle::<(Tracked,)>` | 0 | 0 | 0 | **1** | 0 |
 //! | `insert_batch` (3 varlık) | 3 | 3 | 0 | 0 | 0 |
 //! | `remove_batch` (3 varlık) | 0 | 0 | 0 | 3 | 0 |
-//! | `spawn_batch` (**4** varlık, Table) | **1** | **1** | 0 | 0 | 0 |
-//! | `clone_entity` (3 kopya) | **0** | **0** | **0** | **0** | **0** |
+//! | `spawn_batch` (4 varlık, Table) | 4 | 4 | 0 | 0 | 0 |
+//! | `clone_entity` (3 kopya) | 3 | 3 | 0 | 0 | 0 |
 //! | `despawn` | 0 | 0 | 0 | 1 | 1 |
 //!
 //! **İki satır 2026-08-23'ten beri değişti ve ikisi de bu demonun ölçtüğü şeydi.**
@@ -52,10 +52,9 @@
 //! tutmadan görmesinin yolu yoktu. `on_replace` o farkı dağıtım anında ayırıyor: her yazma
 //! `on_add` **ya da** `on_replace` tetikliyor, ikisini birden değil.
 //!
-//! Geriye **iki** sessiz yol kalıyor, ve ikisi de sütunlara doğrudan yazan toplu yollar:
-//! `add_bundle` (hepsi Table) ve `clone_entity`. `spawn_batch` de dört varlık doğurup **bir**
-//! kanca ateşliyor — geri kalan üçü sütunlara doğrudan yazılıyor. Yani kanca hâlâ bir denetim
-//! izi değil; sessiz yolların listesi kısaldı, sıfırlanmadı.
+//! Sessiz yol kalmadı (2026-11-07): `add_bundle`, `spawn_batch` ve `clone_entity`, kancası olan bir tür için
+//! bileşen bileşen yazıyor, kancası olmayan için hızlı yolu koruyor. Kancanın duymadığı tek yazma `&mut T`
+//! üzerinden olanı; `impl_component!(T; immutable)` onu da derleme hatası yapıyor.
 //!
 //! ## Kancaya değer gelmiyor — ve `World`'de tipli okuyucu yok
 //!
@@ -73,10 +72,8 @@
 //!
 //! ## Neden önemli
 //!
-//! "Bir indeksi bileşenle senkron tut" — kancaların baş gerekçesi bu, ve Gizmo'da da geçerli
-//! bir kullanım. Ama sessiz yolların varlığı şu demek: indeksinizi kancayla tutuyorsanız,
-//! `add_bundle`/`spawn_batch`/`clone_entity` kullanan her kod yolu indeksinizi **sessizce**
-//! bozuyor. Yavaş yolu seçmek (`spawn_bundle` döngüsü) doğruluk için gerekli olabiliyor.
+//! "Bir indeksi bileşenle senkron tut" kancaların baş gerekçesi. Motor bunu `relationship!` ile kendisi
+//! yapıyor; elle yazılan bir indeks için de her toplu yol artık kancaya ulaşıyor.
 //!
 //! ## Kontroller
 //!   * **Sağ-tık + fare / WASDQE** — kamera

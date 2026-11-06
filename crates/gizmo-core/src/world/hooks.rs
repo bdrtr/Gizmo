@@ -72,16 +72,11 @@ pub type ReplaceHook = Box<dyn FnMut(&mut World, Entity) + Send + Sync>;
 /// from inside that same type's dispatch is merged back afterwards, and its position relative
 /// to the ones already there is not guaranteed (see the module docs above).
 ///
-/// Not every path that gives a component a value runs them. The per-component paths do —
-/// `World::add_component`, `remove_component`, `insert_batch`, `remove_batch` and `despawn` —
-/// and so does anything routed through them: `World::spawn_bundle` applies a bundle one
-/// component at a time whatever it contains, and `World::add_bundle` falls back to that same
-/// routing when the bundle carries a sparse component. The bulk paths that write archetype
-/// columns directly fire nothing — `World::add_bundle` on an all-Table bundle, every entity
-/// after the first in `World::spawn_batch`, and `World::clone_entity`, which materialises
-/// whole component sets by copying columns and sparse entries with no hook call anywhere.
-/// Hooks are therefore not a complete audit trail of every value the component ever took: a
-/// cloned prefab, in particular, appears without firing `on_add` or `on_set`.
+/// Every path that gives a component a value runs them: `World::add_component`, `remove_component`,
+/// `insert_batch`, `remove_batch`, `despawn`, `spawn_bundle`, and since 2026-11-07 `add_bundle`, `spawn_batch`
+/// and `clone_entity`, which take a slower route for a type with hooks and keep their fast one for a type
+/// without. A direct write through `&mut T` fires nothing: declare the component immutable
+/// (`impl_component!(T; immutable)`) if nothing may change it unheard.
 #[derive(Default)]
 #[non_exhaustive]
 pub struct ComponentHooks {

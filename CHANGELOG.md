@@ -50,6 +50,24 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`a.pipe(b)` hands a value over.** What `a` returns arrives as `b`'s first parameter, `In<T>`; a pipe is one system to
+  the scheduler, with the union of what its halves touch, each half keeping its own `Local`s, and it can be piped again.
+  **Breaks:** what was called `pipe`, which handed nothing over, is now `then`.
+
+- **Custom relationships.** `relationship!(struct Likes -> LikedBy;)` and `World::register_relationship::<Likes>()`: the
+  reverse index stays right through insert, overwrite, remove, despawn and clone. `register_relationship_with` and
+  `OnTargetDespawn::Despawn` make a target take its sources with it.
+
+- **Immutable components.** `impl_component!(T; immutable)`, and `&mut T` in a query does not compile.
+
+### Fixed
+
+- **Hooks reach every write.** `add_bundle` and `clone_entity` fired nothing and `spawn_batch` fired once in four, so an
+  index kept by hooks was a guess. They take the per-component route for a type with hooks, and keep their fast path for
+  one without.
+
+### Added
+
 - **Lines break where each script allows.** `Text::max_width` used to break only at spaces, so Chinese, Japanese and
   Thai, which have none, were cut between arbitrary characters, a full stop could start a line, and a Thai word was
   torn in half. `icu_segmenter` now gives the opportunities: UAX #14 for every script and the LSTM models Thai, Lao,

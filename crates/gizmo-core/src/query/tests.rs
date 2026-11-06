@@ -1058,3 +1058,49 @@ fn a_query_iterates_by_reference() {
     }
     assert_eq!(sum, 30.0);
 }
+
+/// **The table in `docs/CAPABILITY_GAPS.md` §C3, measured.** Every path that writes a component fires what it
+/// says, and these three used to fire nothing or once in four.
+#[test]
+fn every_bulk_write_path_fires_the_hooks() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    #[derive(Clone, Default)]
+    struct Tracked;
+    crate::impl_component!(Tracked);
+
+    let mut world = World::new();
+    let added = Arc::new(AtomicUsize::new(0));
+    let set = Arc::new(AtomicUsize::new(0));
+    let (a, s) = (added.clone(), set.clone());
+    world.register_on_add::<Tracked>(Box::new(move |_, _| {
+        a.fetch_add(1, Ordering::SeqCst);
+    }));
+    world.register_on_set::<Tracked>(Box::new(move |_, _| {
+        s.fetch_add(1, Ordering::SeqCst);
+    }));
+    let take = |c: &AtomicUsize| c.swap(0, Ordering::SeqCst);
+
+    let e = world.spawn();
+    world.add_bundle(e, (Tracked,));
+    assert_eq!((take(&added), take(&set)), (1, 1), "add_bundle");
+
+    let batch: Vec<Entity> = world.spawn_batch((0..4).map(|_| (Tracked,))).collect();
+    assert_eq!(batch.len(), 4);
+    assert_eq!((take(&added), take(&set)), (4, 4), "spawn_batch");
+
+    let clones = world.clone_entity(e.id(), 3).unwrap();
+    assert_eq!(clones.len(), 3);
+    assert_eq!((take(&added), take(&set)), (3, 3), "clone_entity");
+    assert_eq!(world.query::<&Tracked>().iter().count(), 1 + 4 + 3);
+}
+
+/// A type nothing listens to keeps the fast path and still arrives whole.
+#[test]
+fn a_type_without_hooks_still_spawns_in_bulk() {
+    let mut world = World::new();
+    let batch: Vec<Entity> = world.spawn_batch((0..4).map(|i| (Position { x: i as f32, y: 0.0 },))).collect();
+    assert_eq!(batch.len(), 4);
+    let q = world.query::<&Position>();
+    assert_eq!(q.iter().map(|p| p.x).sum::<f32>(), 6.0);
+}
