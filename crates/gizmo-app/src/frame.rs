@@ -126,6 +126,7 @@ where
     // applied, its `on_exit` / `on_enter` hooks run, and then every schedule of this frame — fixed
     // steps and update alike — sees the one state. Nothing happens in a world without one.
     gizmo_core::state::run_state_drivers(world);
+    gizmo_core::system::run_startup_systems(world);
 
     if world.get_resource::<PhysicsTime>().is_none() {
         world.insert_resource(PhysicsTime::default());
@@ -206,6 +207,51 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A startup system is an ordinary one, with a query and commands, and it runs once: after the
+    /// initial state's `on_enter`, before the first fixed step and update.
+    #[test]
+    fn a_startup_system_runs_once_before_the_first_frame() {
+        use gizmo_core::prelude::*;
+        #[derive(Clone)]
+        struct Seed(u32);
+        #[derive(Clone)]
+        struct Grown;
+        gizmo_core::impl_component!(Seed, Grown);
+        #[derive(Default)]
+        struct Log(Vec<&'static str>);
+        #[derive(Clone, PartialEq, Eq)]
+        enum Screen {
+            Only,
+        }
+
+        fn grow(seeds: Query<(Entity, &Seed)>, mut commands: Commands, mut log: ResMut<Log>) {
+            log.0.push("startup");
+            for (entity, seed) in &seeds {
+                assert_eq!(seed.0, 7);
+                commands.entity(entity).insert(Grown);
+            }
+        }
+        fn update(mut log: ResMut<Log>, grown: Query<&Grown>) {
+            assert_eq!(grown.iter().count(), 1, "the startup system's commands are applied by then");
+            log.0.push("update");
+        }
+
+        let mut world = World::new();
+        world.insert_resource(Log::default());
+        let seed = world.spawn();
+        world.add_component(seed, Seed(7));
+        gizmo_core::state::add_state(&mut world, Screen::Only);
+        gizmo_core::state::on_enter(&mut world, Screen::Only, |w| {
+            w.get_resource_mut::<Log>().unwrap().0.push("enter");
+        });
+        gizmo_core::system::add_startup_system(&mut world, grow);
+        let (mut fixed, mut updates) = (Schedule::new(), Schedule::new());
+        updates.add_di_system(update);
+        run_fixed_and_update(&mut world, &mut fixed, &mut updates, 0.0, 0.016, |_| {});
+        run_fixed_and_update(&mut world, &mut fixed, &mut updates, 0.0, 0.016, |_| {});
+        assert_eq!(world.get_resource::<Log>().unwrap().0, ["enter", "startup", "update", "update"]);
+    }
     use std::sync::atomic::{AtomicU32, Ordering};
     use std::sync::Arc;
 

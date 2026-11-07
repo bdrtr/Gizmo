@@ -1,6 +1,8 @@
 // SSR Raymarching Shader
 // SceneUniforms shared from gizmo::common (composed by load_shader_composed).
-#import gizmo::common::{SceneUniforms, dielectric_f0}
+#import gizmo::common::{SceneUniforms, dielectric_f0, sky_gradient, preset_environment}
+#import gizmo::pbr_ext::{approximate_env_brdf}
+#import gizmo::reflection_probes::{probe_environment}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
@@ -24,6 +26,21 @@ struct SsrParams {
 @group(1) @binding(4) var<uniform> params: SsrParams;
 // RT5: its alpha holds `Material::reflectance` (see `dielectric_f0`).
 @group(1) @binding(5) var t_emissive: texture_2d<f32>;
+// RT0: albedo, and metallic in its alpha. A metal's reflection is coloured by its albedo.
+@group(1) @binding(6) var t_albedo_metallic: texture_2d<f32>;
+
+// The environment the lighting pass reflected, which this pass takes back wherever it finds what is
+// really there. The same expression as `deferred_lighting.wgsl`'s.
+fn reflected_environment(R: vec3<f32>, N: vec3<f32>, world_pos: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let bent = normalize(mix(R, N, roughness));
+    var sky = vec3<f32>(0.0);
+    if (scene.sky_zenith.a >= 0.0) {
+        sky = sky_gradient(bent, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, roughness) * scene.sky_zenith.a;
+    } else {
+        sky = preset_environment(bent, roughness, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz));
+    }
+    return probe_environment(R, world_pos, roughness, sky);
+}
 
 @vertex
 fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
@@ -52,10 +69,13 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Reflect vector
     let R = normalize(reflect(view_dir, normal));
 
-    // Fresnel effect
-    let cos_theta = max(dot(-view_dir, normal), 0.0);
-    let f0 = dielectric_f0(textureLoad(t_emissive, iuv, 0).w);
-    let fresnel = f0 + (1.0 - f0) * pow(1.0 - cos_theta, 5.0);
+    // How much of what it reflects this surface shows: the lighting pass's own weight, so a metal
+    // shows nearly all of it in its own colour.
+    let cos_theta = max(dot(-view_dir, normal), 0.001);
+    let albedo_metallic = textureLoad(t_albedo_metallic, iuv, 0);
+    let f0 = mix(vec3<f32>(dielectric_f0(textureLoad(t_emissive, iuv, 0).w)), albedo_metallic.rgb, albedo_metallic.a);
+    let brdf = approximate_env_brdf(cos_theta, normal_roughness.w);
+    let weight = f0 * brdf.x + brdf.y;
     let fade_roughness = 1.0 - smoothstep(params.fade_start, params.fade_end, normal_roughness.w);
 
     // Ray marching params
@@ -106,8 +126,12 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 let edge_fade = smoothstep(0.0, ef, screen_uv.x) * smoothstep(1.0, 1.0 - ef, screen_uv.x) *
                                 smoothstep(0.0, ef, screen_uv.y) * smoothstep(1.0, 1.0 - ef, screen_uv.y);
                 
-                let reflection_intensity = fresnel * fade_roughness * edge_fade;
-                return vec4(hit_color * reflection_intensity, 1.0);
+                // The lighting pass has already added the environment here. What it found replaces that,
+                // so this can be negative, and the additive pass that applies it takes light away: a
+                // dark thing reflected in a metal floor is dark. Added on top, a metal would have shown
+                // both pictures at once, which is why this was held down at 4 % for everything.
+                let environment = reflected_environment(R, normal, world_pos, normal_roughness.w);
+                return vec4((hit_color - environment) * weight * fade_roughness * edge_fade, 1.0);
             }
         }
     }

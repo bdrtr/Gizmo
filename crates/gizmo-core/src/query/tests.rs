@@ -1104,3 +1104,121 @@ fn a_type_without_hooks_still_spawns_in_bulk() {
     let q = world.query::<&Position>();
     assert_eq!(q.iter().map(|p| p.x).sum::<f32>(), 6.0);
 }
+
+mod named_query_data {
+    use crate::prelude::*;
+    use crate::query::{Changed, With};
+
+    #[derive(Clone)]
+    struct Position(f32);
+    #[derive(Clone)]
+    struct Health(i32);
+    #[derive(Clone)]
+    struct Shield;
+    #[derive(Clone)]
+    struct Enemy;
+    crate::impl_component!(Position, Health, Shield, Enemy);
+
+    query_data! {
+        struct Seen -> SeenItem {
+            entity: Entity,
+            position: &'static Position,
+            shield: Option<&'static Shield>,
+        }
+    }
+
+    query_data! {
+        mut struct Target -> TargetItem {
+            position: &'static Position,
+            health: &'static mut Health,
+        }
+    }
+
+    query_data! {
+        struct OnlyOne -> OnlyOneItem {
+            position: &'static Position,
+        }
+    }
+
+    fn world() -> (World, Entity, Entity, Entity) {
+        let mut w = World::new();
+        let a = w.spawn();
+        w.add_component(a, Position(1.0));
+        w.add_component(a, Health(10));
+        let b = w.spawn();
+        w.add_component(b, Position(2.0));
+        w.add_component(b, Health(20));
+        w.add_component(b, Shield);
+        w.add_component(b, Enemy);
+        let no_health = w.spawn();
+        w.add_component(no_health, Position(3.0));
+        (w, a, b, no_health)
+    }
+
+    /// Reads like the tuple it stands for: every term, optional ones included, on `&self`, by entity,
+    /// from a plain world query.
+    #[test]
+    fn a_named_read_only_query_reads() {
+        let (w, a, b, no_health) = world();
+        let q = w.query::<Seen>();
+        let mut rows: Vec<(Entity, f32, bool)> = q.iter().map(|s: SeenItem<'_>| (s.entity, s.position.0, s.shield.is_some())).collect();
+        rows.sort_by(|l, r| l.1.total_cmp(&r.1));
+        assert_eq!(rows, [(a, 1.0, false), (b, 2.0, true), (no_health, 3.0, false)]);
+        assert_eq!(q.get(b).map(|s| s.position.0), Some(2.0));
+        assert_eq!(w.query::<OnlyOne>().iter().count(), 3, "one term works too");
+        let sum: f32 = w.query_filtered::<OnlyOne, With<Enemy>>().iter().map(|o| o.position.0).sum();
+        assert_eq!(sum, 2.0, "a filter sits beside it");
+    }
+
+    /// Writes through a named term, match only rows with every required term, and mark `Changed`.
+    #[test]
+    fn a_named_mutable_query_writes_and_marks_the_change() {
+        let (mut w, a, b, _) = world();
+        let frame = w.tick;
+        w.begin_change_frame(frame);
+        {
+            let mut q = w.query_filtered_mut::<Target, With<Enemy>>();
+            for mut t in &mut q {
+                t.health.0 -= t.position.0 as i32;
+            }
+        }
+        assert_eq!(w.get::<Health>(a).map(|h| h.0), Some(10), "the filter held");
+        assert_eq!(w.get::<Health>(b).map(|h| h.0), Some(18));
+        let changed: Vec<Entity> = w.query_filtered::<Entity, Changed<Health>>().iter().collect();
+        assert_eq!(changed, [b]);
+    }
+
+    /// The scheduler sees through it: a system with a named mutable query does not share a batch with
+    /// another writer of the same component, and two named readers do.
+    #[test]
+    fn the_scheduler_sees_a_named_query_s_access() {
+        fn writes(mut q: Query<Target>) {
+            for mut t in &mut q {
+                t.health.0 += 1;
+            }
+        }
+        fn also_writes(mut q: Query<&mut Health>) {
+            for mut h in &mut q {
+                h.0 *= 2;
+            }
+        }
+        fn reads(q: Query<Seen>) {
+            assert!(q.iter().count() > 0);
+        }
+        fn also_reads(q: Query<OnlyOne>) {
+            assert!(q.iter().count() > 0);
+        }
+        let (mut w, _, _, _) = world();
+        let mut together = Schedule::new();
+        together.add_di_system(reads);
+        together.add_di_system(also_reads);
+        together.build();
+        assert_eq!(together.total_batch_count(), 1, "two readers");
+        let mut apart = Schedule::new();
+        apart.add_di_system(writes);
+        apart.add_di_system(also_writes);
+        apart.build();
+        assert_eq!(apart.total_batch_count(), 2, "two writers of Health");
+        apart.run(&mut w, 0.0);
+    }
+}

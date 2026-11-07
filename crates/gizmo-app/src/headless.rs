@@ -135,6 +135,16 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Registers a system to run once, before the first frame; see
+    /// [`gizmo_core::system::add_startup_system`].
+    pub fn add_startup_system<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(
+        mut self,
+        system: S,
+    ) -> Self {
+        gizmo_core::system::add_startup_system(&mut self.world, system);
+        self
+    }
+
     /// Registers a system on the fixed-timestep schedule — the same schedule and the same
     /// constant `dt` the windowed runtime steps physics on.
     pub fn add_system<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(

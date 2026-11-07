@@ -200,6 +200,24 @@ pub struct EnvironmentFrame {
     pub sky: Option<Sky>,
 }
 
+/// How a [`Fog`] thickens with distance.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[non_exhaustive]
+pub enum FogMode {
+    /// `1 - e^(-τ)`, where `τ` is the thickness passed through, thinning with height. What a real
+    /// haze does, and what the presets do.
+    #[default]
+    Exponential,
+    /// `1 - e^(-τ²)`: nearly clear close up, then closing in fast.
+    ExponentialSquared,
+    /// A straight ramp from `start` metres to [`Fog::density`], which here is the distance at which it
+    /// is solid. Takes no account of height. See [`Fog::linear`].
+    Linear {
+        /// Where the ramp starts, in metres.
+        start: f32,
+    },
+}
+
 /// Height fog, set by hand rather than by the environment preset — `Renderer::fog`.
 ///
 /// The deferred pass integrates it along each view ray: `density` is how thick it is at
@@ -211,6 +229,8 @@ pub struct EnvironmentFrame {
 pub struct Fog {
     /// Linear RGB the fog fades toward.
     pub color: [f32; 3],
+    /// How the fog thickens with distance. See [`FogMode`].
+    pub mode: FogMode,
     /// Thickness at `base_height`, per metre. 0 = no fog at all.
     pub density: f32,
     /// How fast it thins with height, per metre. 0 = the same at every height.
@@ -223,7 +243,20 @@ impl Fog {
     /// Fog of `color` and `density`, thinning by 0.05 per metre above −5 m (the default preset's
     /// shape).
     pub fn new(color: [f32; 3], density: f32) -> Self {
-        Self { color, density: density.max(0.0), height_falloff: 0.05, base_height: -5.0 }
+        Self { color, mode: FogMode::Exponential, density: density.max(0.0), height_falloff: 0.05, base_height: -5.0 }
+    }
+
+    /// A fog with no height to it, clear out to `start` metres and solid from `end`.
+    pub fn linear(color: [f32; 3], start: f32, end: f32) -> Self {
+        let start = start.max(0.0);
+        Self { mode: FogMode::Linear { start }, ..Self::new(color, end.max(start + 0.001)) }
+    }
+
+    /// The same fog, closing in as the square of its thickness: clear for longer, then quickly. `density`
+    /// keeps its meaning.
+    pub fn squared(mut self) -> Self {
+        self.mode = FogMode::ExponentialSquared;
+        self
     }
 
     /// The same fog, thinning by `falloff` per metre above `base_height`.
@@ -363,7 +396,14 @@ impl SceneUniforms {
                 [scale, bias, sun.contact_shadow_length.max(0.0), 0.0]
             },
             fog: environment.fog.map_or([0.0, 0.0, 0.0, -1.0], |f| [f.color[0], f.color[1], f.color[2], f.density.max(0.0)]),
-            fog_shape: environment.fog.map_or([0.0; 4], |f| [f.height_falloff.max(0.0), f.base_height, 0.0, 0.0]),
+            fog_shape: environment.fog.map_or([0.0; 4], |f| {
+                let (mode, start) = match f.mode {
+                    FogMode::Exponential => (0.0, 0.0),
+                    FogMode::ExponentialSquared => (1.0, 0.0),
+                    FogMode::Linear { start } => (2.0, start),
+                };
+                [f.height_falloff.max(0.0), f.base_height, mode, start]
+            }),
             shadow_bias: [shadows.bias_scale[0], shadows.bias_scale[1], 0.0, 0.0],
             sky_zenith: environment.sky.map_or([0.0, 0.0, 0.0, -1.0], |s| [s.zenith[0], s.zenith[1], s.zenith[2], s.intensity.max(0.0)]),
             sky_horizon: environment.sky.map_or([0.0; 4], |s| [s.horizon[0], s.horizon[1], s.horizon[2], 0.0]),
@@ -430,13 +470,15 @@ impl Default for PostProcessUniforms {
             tonemap_curve: crate::gpu_types::TonemapCurve::Aces.as_f32(),
             tonemap_white_point: 4.0,
             deband_dither: 0.0,
-            _tonemap_pad: 0.0,
+            bloom_softness: 0.3,
             // Off: a still frame is the picture every scene was authored against.
             motion_blur: 0.0,
             motion_blur_max: 0.05,
             dof_lens: 0.0,
             dof_max_depth: 0.0,
             reproject: gizmo_math::Mat4::IDENTITY.to_cols_array_2d(),
+            bloom_energy_conserving: 0.0,
+            _bloom_pad: [0.0; 3],
         }
     }
 }

@@ -1053,6 +1053,8 @@ fn draw_camera_view(
         tonemap_curve: renderer.tonemap_curve.as_f32(),
         tonemap_white_point: renderer.tonemap_white_point,
         deband_dither: if renderer.deband_dither { 1.0 } else { 0.0 },
+        bloom_softness: renderer.bloom_softness.clamp(0.0, 1.0),
+        bloom_energy_conserving: if renderer.bloom_energy_conserving { 1.0 } else { 0.0 },
         ..post
     };
     // **Camera motion blur's one input**: where this frame's clip space was last frame. Both
@@ -3566,6 +3568,73 @@ mod golden_render_tests {
         });
     }
 
+    /// **A polished metal floor shows the scene.** A red cube on a mirror-like floor under a blue sky:
+    /// below the cube the floor reads red where the sky's blue would be, because what the reflection found
+    /// replaces the environment rather than adding to it. Both sides of that are asserted: red goes up and
+    /// blue comes down.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_metal_floor_reflects_the_scene_instead_of_the_sky() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(ssr: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.1, 0.2, 1.0]));
+            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            if let Some(s) = renderer.ssr.as_mut() {
+                s.enabled = ssr;
+            }
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -1.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.95, 0.95, 0.95, 1.0), 0.05, 1.0));
+            world.add_component(floor, MeshRenderer::new());
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::ZERO));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            // Lit, so it is in the G-buffer, which is all a screen-space ray can hit.
+            world.add_component(cube, Material::new(tex).with_pbr(Vec4::new(0.1, 0.0, 0.0, 1.0), 0.9, 0.0).with_emissive(Vec3::new(2.0, 0.0, 0.0)));
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-5.0, 2.0, 0.0),
+                yaw: 0.0,
+                pitch: -0.35,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let (off, on) = (frame(false).await, frame(true).await);
+            // The most changed pixel of the lower half, which is floor.
+            let (mut red_up, mut blue_down) = (0i32, 0i32);
+            for y in 80..128usize {
+                for x in 44..84usize {
+                    let i = (y * 128 + x) * 4;
+                    red_up = red_up.max(i32::from(on[i]) - i32::from(off[i]));
+                    blue_down = blue_down.max(i32::from(off[i + 2]) - i32::from(on[i + 2]));
+                }
+            }
+            eprintln!("the floor under the cube: red up by {red_up}, blue down by {blue_down}");
+            assert!(red_up > 40, "the cube is in the floor: red up by {red_up}");
+            assert!(blue_down > 40, "and the sky it replaced is not: blue down by {blue_down}");
+        });
+    }
+
     /// The reversible off switch has to produce the *same* frame as the destructive one.
     ///
     /// Before this, the only way to switch a screen-space pass off was `renderer.ssr = None`,
@@ -3637,6 +3706,7 @@ mod golden_render_tests {
             let extended = render_bright_scene(TonemapCurve::ReinhardExtended).await;
             let agx = render_bright_scene(TonemapCurve::AgX).await;
             let neutral = render_bright_scene(TonemapCurve::PbrNeutral).await;
+            let luminance = render_bright_scene(TonemapCurve::ReinhardLuminance).await;
 
             // Every pair must differ, or a curve is selecting nothing.
             for (an, a) in [
@@ -3645,6 +3715,7 @@ mod golden_render_tests {
                 ("ReinhardExtended", &extended),
                 ("AgX", &agx),
                 ("PbrNeutral", &neutral),
+                ("ReinhardLuminance", &luminance),
             ] {
                 let (changed, total) = changed_pixels(&aces, a, 128);
                 assert!(
@@ -8107,6 +8178,54 @@ mod golden_render_tests {
         });
     }
 
+    /// **The fog's three ways of closing in.** A white wall 40 m away, black fog that fades it. Squared is
+    /// clearer than plain at a thin density and thicker at a heavy one; linear is clear before its start
+    /// and solid after its end.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_fog_modes_close_in_differently() {
+        use gizmo_renderer::frame_uniforms::Fog;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn wall(fog: Fog) -> u8 {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.fog = Some(fog);
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let e = world.spawn();
+            let up = std::f32::consts::FRAC_PI_2;
+            world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, -40.0)).with_rotation(gizmo_math::Quat::from_rotation_x(up)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_plane(&renderer.device, 200.0));
+            world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.0, 0.0, 0.0, 1.0), 0.9, 0.0).with_emissive(Vec3::splat(0.5)));
+            world.add_component(e, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -up, primary: true, ..Default::default() });
+            render_world(&mut renderer, &mut world).await[(64 * 128 + 64) * 4]
+        }
+        let black = [0.0, 0.0, 0.0];
+        let flat = |f: Fog| f.with_height(0.0, 0.0);
+        pollster::block_on(async {
+            let (thin, thin_squared) = (wall(flat(Fog::new(black, 0.01))).await, wall(flat(Fog::new(black, 0.01).squared())).await);
+            let (thick, thick_squared) = (wall(flat(Fog::new(black, 0.05))).await, wall(flat(Fog::new(black, 0.05).squared())).await);
+            let (before, between, after) = (
+                wall(Fog::linear(black, 50.0, 100.0)).await,
+                wall(Fog::linear(black, 20.0, 60.0)).await,
+                wall(Fog::linear(black, 5.0, 30.0)).await,
+            );
+            eprintln!("thin {thin} squared {thin_squared}; thick {thick} squared {thick_squared}; linear {before} {between} {after}");
+            assert!(thin_squared > thin + 10, "thin, squared is clearer: {thin} and {thin_squared}");
+            assert!(thick_squared < thick, "thick, it is not: {thick} and {thick_squared}");
+            assert!(after < 10 && between > after + 40 && before > between + 20, "linear: {before} {between} {after}");
+        });
+    }
+
     /// `Renderer::fog` replaces the environment preset's fog. A white wall 40 m away: red fog of
     /// density 0.1 turns it red; density 0 leaves it unfogged, brighter and neutral; with no override
     /// it wears the default preset's blue-grey haze; and a fog that does not thin with height
@@ -8306,6 +8425,60 @@ mod golden_render_tests {
             assert!(default > 40, "the cube casts a shadow at all: {default}");
             assert!(depth + 12 < default, "a large depth bias thins the shadow: {default} → {depth}");
             assert!(normal * 2 < default, "a large normal offset thins it further: {default} → {normal}");
+        });
+    }
+
+    /// **Bloom's edge and its budget.** A patch just under the threshold glows with a soft edge and not
+    /// with a hard one; and added, a bloom brightens the whole frame, where conserving energy it does not.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn bloom_softness_and_energy_conservation_do_what_they_say() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // A small emissive square of this brightness on a black sky.
+        async fn frame(brightness: f32, softness: f32, conserving: bool) -> Vec<u8> {
+            use crate::renderer::components::PostProcess;
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
+            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            renderer.bloom_softness = softness;
+            renderer.bloom_energy_conserving = conserving;
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, -6.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex).with_unlit(Vec4::new(brightness, brightness, brightness, 1.0)));
+            world.add_component(e, MeshRenderer::new());
+            let camera = world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+            world.add_component(camera, PostProcess::new().with_bloom(1.0, 1.0));
+            render_world(&mut renderer, &mut world).await
+        }
+        let total = |f: &[u8]| -> u64 { f.as_chunks::<4>().0.iter().map(|p| u64::from(p[0])).sum() };
+        pollster::block_on(async {
+            let hard = total(&frame(0.8, 0.0, false).await);
+            let soft = total(&frame(0.8, 0.5, false).await);
+            eprintln!("0.8 under a threshold of 1: hard edge {hard}, soft edge {soft}");
+            assert!(soft > hard + 10_000, "a soft edge lets it glow: {hard} and {soft}");
+
+            let (added_frame, conserving_frame) = (frame(4.0, 0.3, false).await, frame(4.0, 0.3, true).await);
+            let (added, conserving) = (total(&added_frame), total(&conserving_frame));
+            let dark = frame(0.0, 0.3, false).await;
+            eprintln!("a bright square: added {added}, conserving {conserving}, background {}", total(&dark));
+            assert!(conserving < added, "added {added}, conserving {conserving}");
+            assert_eq!(conserving_frame[4], dark[4], "what does not bloom is not taken away: a corner's pixel");
         });
     }
 

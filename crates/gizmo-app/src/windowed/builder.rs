@@ -359,6 +359,16 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Registers a system to run once, before the first frame; see
+    /// [`gizmo_core::system::add_startup_system`].
+    pub fn add_startup_system<Params, S: gizmo_core::system::IntoSystemConfig<Params>>(
+        mut self,
+        system: S,
+    ) -> Self {
+        gizmo_core::system::add_startup_system(&mut self.world, system);
+        self
+    }
+
     /// Registers a system on the **fixed-timestep** schedule — the one physics runs on.
     ///
     /// It runs `0..N` times per rendered frame depending on the accumulator, with a constant

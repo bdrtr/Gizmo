@@ -294,6 +294,12 @@ pub struct Renderer {
     /// the blur this engine always had; 2 doubles the halo's reach at the cost of a coarser
     /// falloff. Clamped to 0..=16. Native only, as is bloom.
     pub bloom_radius: f32,
+    /// How far below `bloom_threshold` bloom starts, as a share of it: 0 is a hard edge, 1 starts from
+    /// black. 0.3 is the curve this engine always had. Native only, as is bloom.
+    pub bloom_softness: f32,
+    /// Whether bloom replaces light rather than adding to it: the glow comes out of the light that made it,
+    /// so a bright thing dims as it spreads and the total holds, where added it can only brighten.
+    pub bloom_energy_conserving: bool,
     /// How many times the separable blur runs (1–8, default 1). Each round spreads the halo
     /// again — wider and smoother than a larger radius, at two passes a round.
     pub bloom_iterations: u32,

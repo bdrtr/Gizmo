@@ -24,7 +24,7 @@ The instability is not there. It is one layer down, where the doors are locked:
 | what a game wants | what stops it | measured in |
 |---|---|---|
 | its own system parameter | `SystemParam` is sealed — **4 impls exist**: `Res`, `ResMut`, `f32`, `Query` | `ecs_extension_points` |
-| a derived query operand | `WorldQuery` / `ReadOnlyQuery` / `FetchComponent` all sealed | `ecs_extension_points` |
+| ~~a derived query operand~~ | **opened 2026-11-07** — `query_data!`, through the tuple of its fields; a primitive one stays sealed | `ecs_extension_points` |
 | ~~a schedule phase of its own~~ | **opened 2026-08-23** — `Phase::User(u16)`, positioned | `schedule_internals` |
 | ~~its own material or shader~~ | **opened 2026-08-23** — `MaterialType::Custom(MaterialId)` | `custom_material` |
 | ~~a normal map on a hand-built material~~ | **opened 2026-08-23** — `AssetManager::material()` | `parallax_mapping` |

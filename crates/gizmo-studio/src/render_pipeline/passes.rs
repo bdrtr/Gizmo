@@ -76,6 +76,14 @@ pub(super) fn sync_editor_settings(
         },
     };
 
+    // The renderer's in both arms, as on the game path: a viewport that tone-mapped differently would
+    // lie about every colour in it. It read the default curve until 2026-11-07.
+    post_params.tonemap_curve = renderer.tonemap_curve.as_f32();
+    post_params.tonemap_white_point = renderer.tonemap_white_point;
+    post_params.deband_dither = if renderer.deband_dither { 1.0 } else { 0.0 };
+    post_params.bloom_softness = renderer.bloom_softness.clamp(0.0, 1.0);
+    post_params.bloom_energy_conserving = if renderer.bloom_energy_conserving { 1.0 } else { 0.0 };
+
     // **Exposure comes from the camera, in this viewport too.** It never moved into the grade
     // because it never had to: `Camera::exposure` round-trips in a scene and is the one
     // post-process value the shipped game has always read. What it did NOT do was reach this

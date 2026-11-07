@@ -245,8 +245,8 @@ pub struct PostProcessUniforms {
     /// 1 = add half a step of noise before the 8-bit output (`Renderer::deband_dither`), so smooth
     /// dark gradients do not show as bands. Was the first word of `_tonemap_pad`.
     pub deband_dither: f32,
-    /// Padding to the next 16-byte boundary. Not a knob.
-    pub _tonemap_pad: f32,
+    /// How far below the threshold bloom starts, as a share of it (`Renderer::bloom_softness`).
+    pub bloom_softness: f32,
 
     // ── Camera motion blur ──
     /// The shutter fraction, [`PostProcess::motion_blur`](crate::components::PostProcess::motion_blur).
@@ -265,6 +265,10 @@ pub struct PostProcessUniforms {
     /// Maps this frame's clip space to the last frame's: `previous_view_proj · inverse(view_proj)`,
     /// both unjittered. Identity — no motion — when there is no last frame.
     pub reproject: [[f32; 4]; 4],
+    /// 1 = bloom replaces light rather than adding it (`Renderer::bloom_energy_conserving`).
+    pub bloom_energy_conserving: f32,
+    /// Padding to the next 16-byte boundary. Not a knob.
+    pub _bloom_pad: [f32; 3],
 }
 
 /// Which curve maps HDR to the display range.
@@ -297,6 +301,9 @@ pub enum TonemapCurve {
     /// Khronos PBR Neutral: leaves everything below about 0.76 untouched — a material's base colour
     /// reads as authored — and compresses only the highlights, desaturating them a little.
     PbrNeutral = 5,
+    /// Reinhard on luminance, the colour scaled to match: bright saturated light keeps its hue, where
+    /// [`Self::Reinhard`] channel by channel washes it towards white.
+    ReinhardLuminance = 6,
 }
 
 impl TonemapCurve {
@@ -717,7 +724,7 @@ mod tonemap_default_tests {
     #[test]
     fn the_block_is_still_a_whole_number_of_vec4s() {
         assert_eq!(std::mem::size_of::<PostProcessUniforms>() % 16, 0);
-        assert_eq!(std::mem::size_of::<PostProcessUniforms>(), 160);
+        assert_eq!(std::mem::size_of::<PostProcessUniforms>(), 176);
         assert_eq!(std::mem::offset_of!(PostProcessUniforms, reproject), 96, "the matrix must start on a vec4 boundary");
     }
 }

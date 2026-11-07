@@ -55,7 +55,8 @@ impl std::error::Error for QuerySingleError {}
 // bir impl aliasing/UB ihlali doğurur) ve cross-crate hiçbir impl yoktur.
 // Sealed supertrait deseni hem kaçak manuel impl'leri engeller hem de gelecekte
 // metod eklemeyi non-breaking yapar.
-mod sealed {
+#[doc(hidden)]
+pub mod sealed {
     pub trait SealedFetch {}
     pub trait SealedQuery {}
     pub trait SealedReadOnly {}
@@ -175,6 +176,139 @@ pub trait WorldQuery: sealed::SealedQuery {
     fn ignores_default_filters() -> bool {
         false
     }
+}
+
+// =========================================================================
+// NAMED QUERY DATA
+// =========================================================================
+
+/// A named query term: a struct of the terms a query asks for, so several systems can share one, and
+/// `hero.health` reads better than `.2`. What Bevy's `#[derive(QueryData)]` does, with the item's name
+/// written out because a declarative macro cannot make one up.
+///
+/// ```
+/// use gizmo_core::prelude::*;
+/// use gizmo_core::query_data;
+/// # #[derive(Clone)] pub struct Position(f32);
+/// # #[derive(Clone)] pub struct Health(i32);
+/// # #[derive(Clone)] pub struct Shield;
+/// # gizmo_core::impl_component!(Position, Health, Shield);
+///
+/// query_data! {
+///     /// What the damage system needs of a target.
+///     pub mut struct Target -> TargetItem {
+///         pub entity: Entity,
+///         pub position: &'static Position,
+///         pub health: &'static mut Health,
+///         pub shield: Option<&'static Shield>,
+///     }
+/// }
+///
+/// fn hurt(mut targets: Query<Target>) {
+///     for mut target in &mut targets {
+///         if target.shield.is_none() && target.position.0 > 0.0 {
+///             target.health.0 -= 1;
+///         }
+///     }
+/// }
+/// ```
+///
+/// Without `mut` the struct is read-only, so it works with [`World::query`](crate::world::World::query)
+/// and `&self` iteration, and a `&'static mut` term in it does not compile:
+///
+/// ```compile_fail
+/// # use gizmo_core::query_data;
+/// # #[derive(Clone)] struct Health(i32);
+/// # gizmo_core::impl_component!(Health);
+/// query_data! {
+///     struct Sneaky -> SneakyItem {
+///         health: &'static mut Health,
+///     }
+/// }
+/// ```
+///
+/// Everything goes through the tuple of its fields: which rows match, what aliases, what the scheduler
+/// is told. So it is as safe as writing the tuple, which is why this may implement a sealed trait and a
+/// hand-written impl may not. It takes up to eleven terms.
+#[macro_export]
+macro_rules! query_data {
+    (
+        $(#[$meta:meta])*
+        $vis:vis struct $name:ident -> $item:ident {
+            $( $(#[$fmeta:meta])* $fvis:vis $field:ident : $term:ty ),+ $(,)?
+        }
+    ) => {
+        $crate::query_data!(@common [$(#[$meta])*] $vis $name $item { $( [$(#[$fmeta])*] $fvis $field : $term ),+ });
+        impl $crate::query::sealed::SealedReadOnly for $name {}
+        impl $crate::query::ReadOnlyQuery for $name {}
+        const _: fn() = || {
+            fn every_term_is_read_only<T: $crate::query::ReadOnlyQuery>() {}
+            $( every_term_is_read_only::<$term>(); )+
+        };
+    };
+    (
+        $(#[$meta:meta])*
+        $vis:vis mut struct $name:ident -> $item:ident {
+            $( $(#[$fmeta:meta])* $fvis:vis $field:ident : $term:ty ),+ $(,)?
+        }
+    ) => {
+        $crate::query_data!(@common [$(#[$meta])*] $vis $name $item { $( [$(#[$fmeta])*] $fvis $field : $term ),+ });
+    };
+    (@common [$($meta:tt)*] $vis:vis $name:ident $item:ident {
+        $( [$($fmeta:tt)*] $fvis:vis $field:ident : $term:ty ),+
+    }) => {
+        $($meta)*
+        $vis struct $name;
+
+        /// What one row of the query of the same name yields.
+        $vis struct $item<'w> {
+            $( $($fmeta)* $fvis $field: <$term as $crate::query::WorldQuery>::Item<'w>, )+
+        }
+
+        impl $crate::query::sealed::SealedQuery for $name {}
+        impl $crate::query::QueryData for $name {}
+
+        impl $crate::query::WorldQuery for $name {
+            type StaticType = <($($term,)+ ()) as $crate::query::WorldQuery>::StaticType;
+            type Fetch<'w> = <($($term,)+ ()) as $crate::query::WorldQuery>::Fetch<'w>;
+            type Item<'w> = $item<'w>;
+            type Slice<'w> = <($($term,)+ ()) as $crate::query::WorldQuery>::Slice<'w>;
+
+            unsafe fn fetch_raw<'w>(
+                world: &'w $crate::world::World,
+                arch: &$crate::archetype::Archetype,
+                tick: u32,
+            ) -> ::std::option::Option<Self::Fetch<'w>> {
+                // SAFETY: the same contract as this method's, passed on to the tuple of the fields.
+                unsafe { <($($term,)+ ()) as $crate::query::WorldQuery>::fetch_raw(world, arch, tick) }
+            }
+            fn check_aliasing(types: &mut ::std::vec::Vec<(::std::any::TypeId, bool)>) {
+                <($($term,)+ ()) as $crate::query::WorldQuery>::check_aliasing(types)
+            }
+            fn matches_archetype(arch: &$crate::archetype::Archetype) -> bool {
+                <($($term,)+ ()) as $crate::query::WorldQuery>::matches_archetype(arch)
+            }
+            unsafe fn get_item<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32) -> Self::Item<'w> {
+                // SAFETY: as `fetch_raw`.
+                let ($($field,)+ _) = unsafe { <($($term,)+ ()) as $crate::query::WorldQuery>::get_item(fetch, row, entity_id) };
+                $item { $($field,)+ }
+            }
+            unsafe fn filter_row<'w>(fetch: Self::Fetch<'w>, row: usize, entity_id: u32, tick: u32) -> bool {
+                // SAFETY: as `fetch_raw`.
+                unsafe { <($($term,)+ ()) as $crate::query::WorldQuery>::filter_row(fetch, row, entity_id, tick) }
+            }
+            unsafe fn get_slice<'w>(fetch: Self::Fetch<'w>, len: usize) -> Self::Slice<'w> {
+                // SAFETY: as `fetch_raw`.
+                unsafe { <($($term,)+ ()) as $crate::query::WorldQuery>::get_slice(fetch, len) }
+            }
+            fn has_row_filter() -> bool {
+                <($($term,)+ ()) as $crate::query::WorldQuery>::has_row_filter()
+            }
+            fn ignores_default_filters() -> bool {
+                <($($term,)+ ()) as $crate::query::WorldQuery>::ignores_default_filters()
+            }
+        }
+    };
 }
 
 // =========================================================================

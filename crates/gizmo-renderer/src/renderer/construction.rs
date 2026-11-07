@@ -753,6 +753,8 @@ impl Renderer {
             bloom_intensity: 0.8,
             bloom_threshold: 0.85,
             bloom_radius: 1.0,
+            bloom_softness: 0.3,
+            bloom_energy_conserving: false,
             bloom_iterations: 1,
             occluded_objects: 0,
             planar: Default::default(),

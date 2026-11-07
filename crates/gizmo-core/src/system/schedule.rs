@@ -1131,3 +1131,25 @@ mod cross_phase_constraints {
         );
     }
 }
+
+/// The systems that run once, before the first frame's schedules. See [`add_startup_system`].
+#[derive(Default)]
+pub struct StartupSystems(Schedule);
+
+/// Registers a system to run once, before the first frame: an ordinary system, with a `Query` and
+/// `Commands` and the rest, which is what a setup closure cannot be. In the app loop it runs after the
+/// initial state's `on_enter` hooks and before the first fixed step. `dt` is 0.
+pub fn add_startup_system<Params, S: IntoSystemConfig<Params>>(world: &mut World, system: S) {
+    if world.get_resource::<StartupSystems>().is_none() {
+        world.insert_resource(StartupSystems::default());
+    }
+    world.get_resource_mut::<StartupSystems>().expect("just ensured").0.add_di_system(system);
+}
+
+/// Runs what [`add_startup_system`] registered, and forgets it, so this does nothing the second time.
+/// Every app loop calls it at the head of each frame. A startup system added later runs on the next.
+pub fn run_startup_systems(world: &mut World) {
+    if let Some(mut startup) = world.remove_resource::<StartupSystems>() {
+        startup.0.run(world, 0.0);
+    }
+}

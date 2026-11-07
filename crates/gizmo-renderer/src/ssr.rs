@@ -53,7 +53,7 @@ impl Default for SsrParams {
         }
     }
 }
-use crate::pipeline::{load_shader, load_shader_composed, SceneState};
+use crate::pipeline::{load_shader, SceneState};
 
 /// Screen-space reflections: reflections marched through the depth buffer.
 ///
@@ -146,13 +146,14 @@ impl SsrState {
             &deferred.normal_roughness_view,
             &deferred.world_position_view,
             &deferred.emissive_view,
+            &deferred.albedo_metallic_view,
             &linear_sampler,
             &params_buffer,
         );
 
         let apply_bind_group = Self::mk_apply_bg(device, &apply_bgl, &ssr_view, &linear_sampler);
 
-        let ssr_pipeline = Self::mk_ssr_pipeline(device, scene, &ssr_bgl);
+        let ssr_pipeline = Self::mk_ssr_pipeline(device, scene, &ssr_bgl, &deferred.irradiance.bind_group_layout);
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl);
 
         Self {
@@ -193,6 +194,7 @@ impl SsrState {
             &deferred.normal_roughness_view,
             &deferred.world_position_view,
             &deferred.emissive_view,
+            &deferred.albedo_metallic_view,
             &self.nearest_sampler,
             &self.params_buffer,
         );
@@ -290,6 +292,17 @@ impl SsrState {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    // t_albedo_metallic: RT0
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -325,6 +338,7 @@ impl SsrState {
         normal_view: &wgpu::TextureView,
         pos_view: &wgpu::TextureView,
         emissive_view: &wgpu::TextureView,
+        albedo_metallic_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         params: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
@@ -356,6 +370,10 @@ impl SsrState {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(emissive_view),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(albedo_metallic_view),
+                },
             ],
         })
     }
@@ -386,16 +404,19 @@ impl SsrState {
         device: &wgpu::Device,
         scene: &SceneState,
         bgl: &wgpu::BindGroupLayout,
+        reflections: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
-        let shader = load_shader_composed(
+        let shader = crate::pipeline::shaders::load_shader_composed_with(
             device,
             "demo/assets/shaders/ssr.wgsl",
             include_str!("shaders/ssr.wgsl"),
             "SSR Shader",
+            &[("REFLECTION_GROUP", naga_oil::compose::ShaderDefValue::UInt(2))],
         );
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ssr_layout"),
-            bind_group_layouts: &[Some(&scene.global_bind_group_layout), Some(bgl)],
+            // Group 2 is the irradiance volume's, which holds the reflection probes.
+            bind_group_layouts: &[Some(&scene.global_bind_group_layout), Some(bgl), Some(reflections)],
             immediate_size: 0,
         });
         device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {

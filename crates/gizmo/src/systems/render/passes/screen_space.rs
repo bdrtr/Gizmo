@@ -31,6 +31,9 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
             pass.set_pipeline(&ssr.ssr_pipeline);
             pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
             pass.set_bind_group(1, &ssr.ssr_bind_group, &[]);
+            if let Some(def) = renderer.deferred.as_ref() {
+                pass.set_bind_group(2, &def.irradiance.bind_group, &[]);
+            }
             pass.draw(0..3, 0..1);
         }
 

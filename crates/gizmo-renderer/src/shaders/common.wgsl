@@ -269,7 +269,15 @@ fn height_fog(world_pos: vec3<f32>, camera_pos: vec3<f32>, preset: u32, preset_b
         fog_amount = (fog_density * exp(-fog_height_falloff * cam_y) * (1.0 - exp(-falloff_dir_y * dist))) / falloff_dir_y;
     }
 
-    let fog_factor = 1.0 - clamp(exp(-fog_amount), 0.0, 1.0);
+    var fog_factor = 1.0 - clamp(exp(-fog_amount), 0.0, 1.0);
+    // `FogMode`, for a hand-set fog: `fog_shape.z`.
+    if (fog.a >= 0.0 && fog_shape.z > 0.5) {
+        if (fog_shape.z < 1.5) {
+            fog_factor = 1.0 - clamp(exp(-fog_amount * fog_amount), 0.0, 1.0);
+        } else {
+            fog_factor = clamp((dist - fog_shape.w) / max(fog.a - fog_shape.w, 0.001), 0.0, 1.0);
+        }
+    }
     return vec4<f32>(fog_color, fog_factor);
 }
 

@@ -43,6 +43,8 @@ struct PostProcessParams {
     motion: vec4<f32>,
     // This frame's clip space → the last frame's (both unjittered).
     reproject: mat4x4<f32>,
+    // x: 1 = bloom replaces light rather than adding it.
+    bloom_mode: vec4<f32>,
 };
 
 const DOF_TAPS: i32 = 24;
@@ -160,14 +162,16 @@ fn hash12(p: vec2<f32>) -> f32 {
 @fragment
 fn fs_bright_extract(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let color = textureSample(t_source, s_source, in.uv);
-    let luminance = dot(color.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    
+    return vec4<f32>(bright_part(color.rgb), 1.0);
+}
+
+// The share of a colour that blooms.
+fn bright_part(color: vec3<f32>) -> vec3<f32> {
+    let luminance = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
     let threshold = params.bloom_threshold;
-    let soft_threshold = threshold * 0.7; // Yumuşatılmış alt sınır
+    let soft_threshold = threshold * (1.0 - params.tonemap.w); // `Renderer::bloom_softness`
     let knee = max(luminance - soft_threshold, 0.0) / (threshold - soft_threshold + 0.0001);
-    let contribution = clamp(knee * knee, 0.0, 1.0);
-    
-    return vec4<f32>(color.rgb * contribution, 1.0);
+    return color * clamp(knee * knee, 0.0, 1.0);
 }
 
 // ============================
@@ -296,7 +300,12 @@ fn apply_tonemap(x: vec3<f32>) -> vec3<f32> {
     if (curve < 4.5) {
         return clamp(agx_tonemap(x), vec3<f32>(0.0), vec3<f32>(1.0));
     }
-    return clamp(pbr_neutral_tonemap(x), vec3<f32>(0.0), vec3<f32>(1.0));
+    if (curve < 5.5) {
+        return clamp(pbr_neutral_tonemap(x), vec3<f32>(0.0), vec3<f32>(1.0));
+    }
+    // Reinhard on luminance. The hue holds, so a channel can pass 1 and clip where the others have not.
+    let luminance = dot(x, vec3<f32>(0.2126, 0.7152, 0.0722));
+    return clamp(x / (1.0 + luminance), vec3<f32>(0.0), vec3<f32>(1.0));
 }
 
 @fragment
@@ -355,7 +364,13 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 
     // 3. Bloom Addition
     let bloom_color = textureSample(t_bloom, s_bloom, in.uv).rgb;
-    let combined = (dof_color + bloom_color * params.bloom_intensity) * params.exposure * auto_exposure[0];
+    // Added, the default, a bloom can only brighten. Conserving, the glow comes out of the light that
+    // made it: what spreads is taken from where it was, and the total stays what it was.
+    var with_bloom = dof_color + bloom_color * params.bloom_intensity;
+    if (params.bloom_mode.x > 0.5) {
+        with_bloom = dof_color + (bloom_color - bright_part(dof_color)) * min(params.bloom_intensity, 1.0);
+    }
+    let combined = with_bloom * params.exposure * auto_exposure[0];
     
     // 3. Tone mapping — ACES by default, `TonemapCurve` chooses.
     let mapped = apply_tonemap(combined);

@@ -50,6 +50,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`FogMode`.** `Fog::squared()` closes in as the square of the thickness, `Fog::linear(color, start, end)` is a straight ramp.
+- **`Renderer::bloom_softness` and `bloom_energy_conserving`.** How far below its threshold bloom starts, and whether the glow
+  comes out of the light that made it rather than adding to it.
+- **`TonemapCurve::ReinhardLuminance`.** Bright saturated light keeps its hue.
+
+- **`query_data!`: a named query term.** `query_data! { pub mut struct Target -> TargetItem { pub health: &'static mut Health, .. } }`
+  and then `Query<Target>`, `target.health`. What Bevy's `#[derive(QueryData)]` does; the item's name is written out because a
+  declarative macro cannot make one. Without `mut` it is read-only, and a `&'static mut` term in it does not compile. Everything
+  goes through the tuple of its fields, so the scheduler sees the same access.
+
+- **`add_startup_system`, on both `App`s and `gizmo_core::system`.** A system that runs once before the first frame, with a `Query`
+  and `Commands` and the rest, which a setup closure cannot be. After the initial state's `on_enter`, before the first fixed step.
+
 - **`LodGroup::with_crossfade(metres)`.** A level change dissolves over a band around its far edge instead of popping: the two
   levels split the pixels between them by a screen-space pattern, so no pixel gets both or neither and nothing blends. After the
   last level, the entity fades out and then is gone. Both draw loops, lit and unlit.
@@ -107,6 +120,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Immutable components.** `impl_component!(T; immutable)`, and `&mut T` in a query does not compile.
 
 ### Fixed
+
+- **The studio viewport ignored `Renderer::tonemap_curve`, its white point and `deband_dither`**, always drawing ACES.
+
+- **A metal floor did not reflect the scene.** Screen-space reflections were added on top of the environment reflection and held down
+  to a dielectric's Fresnel, so a polished metal showed the sky with a faint trace of what stood on it. What the ray finds now
+  replaces the environment, weighted as the lighting pass weights it, in the metal's own colour: a red cube on a polished floor
+  under a blue sky moves red up by 150 and blue down by 207 of 255. **Looks change** on anything shiny.
 
 - **A cut-out's holes showed the sky on the deferred path, whatever stood behind them.** The depth prepass has no fragment stage,
   so it wrote depth over the holes, and the G-buffer pass then rejected what was behind them. A draw that discards has a prepass
