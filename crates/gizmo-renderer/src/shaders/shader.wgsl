@@ -16,7 +16,7 @@
 #import gizmo::surface::{surface_lobes}
 #endif
 #ifdef PROBES
-#import gizmo::reflection_probes::{probe_environment}
+#import gizmo::reflection_probes::{probe_environment, environment_irradiance}
 #import gizmo::irradiance::{gi_sample}
 #endif
 
@@ -403,7 +403,11 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
     
     // The deferred shader's environment terms, so a surface gets the same light on either path.
     let ambient_base = vec3<f32>(0.02, 0.02, 0.025);
-    var ambient = albedo * (get_procedural_environment(N, 1.0) + ambient_base) * (1.0 - metallic);
+    var irradiance = get_procedural_environment(N, 1.0);
+#ifdef PROBES
+    irradiance = environment_irradiance(N, irradiance);
+#endif
+    var ambient = albedo * (irradiance + ambient_base) * (1.0 - metallic);
 #ifdef LOBES
     if (subsurface > 0.0) {
         ambient = subsurface_ambient(ambient, subsurface);

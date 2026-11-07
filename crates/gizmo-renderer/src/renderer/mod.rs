@@ -181,6 +181,11 @@ pub struct Renderer {
     /// Screen-space reflections. Requires [`deferred`](Renderer::deferred).
     pub ssr: Option<crate::ssr::SsrState>,
 
+    /// The image that lights the scene and stands behind it. See [`Self::set_environment_map`].
+    pub environment_map: Option<crate::environment::EnvironmentMap>,
+    /// Whether [`Self::environment_map`] has yet to reach the cube array.
+    pub environment_map_dirty: bool,
+
     /// The frame under the glass. `None` until a frame draws glass, and again after a resize: see
     /// [`crate::transmission`].
     pub behind: Option<crate::transmission::BehindSurface>,
@@ -676,6 +681,13 @@ impl Renderer {
             }
             Err(e) => tracing::error!(error = %e, "[Renderer] the surface could not be made again"),
         }
+    }
+
+    /// Lights the scene from this image and puts it behind the scene, or goes back to the sky with
+    /// `None`. Takes effect on the next frame. See [`crate::environment`].
+    pub fn set_environment_map(&mut self, map: Option<crate::environment::EnvironmentMap>) {
+        self.environment_map = map;
+        self.environment_map_dirty = true;
     }
 
     /// Allocates the frame under the glass if this size has none yet. The draw loops call it for a

@@ -111,6 +111,9 @@ pub struct DeferredState {
     /// discard the back face's depth and leave the G-buffer pass drawing it against whatever was
     /// behind.
     pub z_prepass_double_sided_pipeline: wgpu::RenderPipeline,
+    /// An [`EnvironmentMap`](crate::environment::EnvironmentMap) behind the scene, drawn first in the
+    /// forward pass.
+    pub environment_sky_pipeline: wgpu::RenderPipeline,
     /// The prepass of a draw that discards, single-sided then double-sided: see `fs_prepass` in
     /// `gbuffer.wgsl`.
     pub z_prepass_discard_pipelines: [wgpu::RenderPipeline; 2],
@@ -202,6 +205,7 @@ impl DeferredState {
             Self::create_gbuffer_pipeline(device, scene, &motion.layout, None, "GBuffer TwoSided Pipeline");
         let (velocity_tex, velocity_view) = Self::create_velocity_texture(device, width, height);
         let irradiance = crate::irradiance::IrradianceState::new(device);
+        let environment_sky_pipeline = Self::create_environment_sky_pipeline(device, scene, &irradiance.bind_group_layout);
         let lighting_pipeline = Self::create_lighting_pipeline(
             device,
             scene,
@@ -228,6 +232,7 @@ impl DeferredState {
             z_prepass_pipeline,
             z_prepass_double_sided_pipeline,
             z_prepass_discard_pipelines,
+            environment_sky_pipeline,
             lighting_pipeline,
             irradiance,
             gbuffer_bind_group_layout,
@@ -636,6 +641,56 @@ impl DeferredState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: Some(true),
                 depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    fn create_environment_sky_pipeline(
+        device: &wgpu::Device,
+        scene: &SceneState,
+        reflections: &wgpu::BindGroupLayout,
+    ) -> wgpu::RenderPipeline {
+        let shader = crate::pipeline::shaders::load_shader_composed_with(
+            device,
+            "demo/assets/shaders/environment_sky.wgsl",
+            include_str!("shaders/environment_sky.wgsl"),
+            "Environment Sky Shader",
+            &[("REFLECTION_GROUP", naga_oil::compose::ShaderDefValue::UInt(1))],
+        );
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Environment Sky Layout"),
+            bind_group_layouts: &[Some(&scene.global_bind_group_layout), Some(reflections)],
+            immediate_size: 0,
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Environment Sky Pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
             }),

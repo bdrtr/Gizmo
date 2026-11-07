@@ -54,6 +54,7 @@ pub fn record_forward_and_fluid(
             draw_items.len()
         };
         let mut render_pass = begin_forward_pass(encoder, renderer, hdr_load, depth_load);
+        draw_environment_sky(&mut render_pass, renderer);
         draw_forward_items(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances);
 
         // Draw GPU Physics Spheres!
@@ -340,4 +341,16 @@ fn draw_forward_items(
             }
         }
     }
+}
+
+/// An [`EnvironmentMap`](crate::renderer::environment::EnvironmentMap) behind the scene: at the far
+/// plane, so only where nothing was drawn, ahead of everything that blends over it.
+fn draw_environment_sky(render_pass: &mut wgpu::RenderPass<'_>, renderer: &Renderer) {
+    if renderer.environment_map.is_none() {
+        return;
+    }
+    let Some(def) = renderer.deferred.as_ref() else { return };
+    render_pass.set_pipeline(&def.environment_sky_pipeline);
+    render_pass.set_bind_group(1, &def.irradiance.bind_group, &[]);
+    render_pass.draw(0..3, 0..1);
 }

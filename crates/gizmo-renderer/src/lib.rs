@@ -174,6 +174,8 @@ pub mod ssao;
 pub mod ssgi;
 /// Screen-space reflections.
 pub mod ssr;
+/// An image as the sky: [`EnvironmentMap`](environment::EnvironmentMap).
+pub mod environment;
 /// Temporal anti-aliasing.
 pub mod taa;
 /// The frame copied under glass, for [`Material::transmission`](crate::components::Material::transmission).

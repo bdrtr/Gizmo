@@ -90,7 +90,8 @@ impl ReflectionProbeGpu {
             format: FORMAT,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC,
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         let cube_view = texture.create_view(&wgpu::TextureViewDescriptor {
@@ -285,6 +286,23 @@ impl ReflectionProbeGpu {
     ) {
         let group = self.bind(device, &self.jobs[face], frame, &self.dummy_cube);
         self.fullscreen(encoder, &self.face_view(0, slot, face), &self.copy_pipeline, &group);
+    }
+
+    /// Writes a panorama's six faces into mip 0 of slot `slot`, for [`record_prefilter`](Self::record_prefilter).
+    pub fn write_environment(&self, queue: &wgpu::Queue, slot: u32, map: &crate::environment::EnvironmentMap) {
+        for (face, texels) in map.cube_faces(self.size).iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: slot * FACES as u32 + face as u32 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                bytemuck::cast_slice(texels),
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(self.size * 8), rows_per_image: Some(self.size) },
+                wgpu::Extent3d { width: self.size, height: self.size, depth_or_array_layers: 1 },
+            );
+        }
     }
 
     /// Records prefiltering every mip above 0 of slot `slot` from the ones below it. Call once all

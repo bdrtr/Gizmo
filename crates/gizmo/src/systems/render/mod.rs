@@ -388,8 +388,11 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     let mut probes: Vec<(Entity, ReflectionProbe)> =
         world.query::<(Entity, &ReflectionProbe)>().iter().map(|(entity, p)| (entity, *p)).collect();
     probes.sort_by_key(|&(id, _)| id);
-    probes.truncate(MAX_PROBES);
-    if probes.is_empty() {
+    // An environment map takes the last slot.
+    let environment = renderer.environment_map.is_some();
+    probes.truncate(MAX_PROBES - usize::from(environment));
+    if probes.is_empty() && !environment {
+        renderer.environment_map_dirty = false;
         if renderer.reflection_probe.take().is_some() {
             if let Some(def) = renderer.deferred.as_mut() {
                 def.irradiance.set_reflection(&renderer.device, &renderer.queue, None);
@@ -401,21 +404,42 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     let size = probes
         .iter()
         .map(|(_, p)| p.resolution.clamp(8, 1024).next_power_of_two())
+        .chain(renderer.environment_map.as_ref().map(|m| m.resolution.clamp(8, 1024).next_power_of_two()))
         .max()
         .unwrap_or(128);
+    let slots = owners.len() + usize::from(environment);
+    // Not an entity's: an environment map is in the owner list as this.
+    const ENVIRONMENT_OWNER: u32 = u32::MAX;
+    let owner_ids: Vec<u32> =
+        owners.iter().map(|e| e.id()).chain(environment.then_some(ENVIRONMENT_OWNER)).collect();
     // A different set of probes, or a different size, is a new array — and every slot in it is
     // captured afresh.
     let rebuild = renderer
         .reflection_probe
         .as_ref()
-        .is_none_or(|g| g.size != size || g.owners.len() != owners.len() || g.owners.iter().zip(&owners).any(|(a, b)| *a != b.id()));
+        .is_none_or(|g| g.size != size || g.owners != owner_ids);
     if rebuild {
-        let mut gpu = ReflectionProbeGpu::new(&renderer.device, size, owners.len() as u32);
-        gpu.owners = owners.iter().map(|e| e.id()).collect();
+        let mut gpu = ReflectionProbeGpu::new(&renderer.device, size, slots as u32);
+        gpu.owners = owner_ids;
         renderer.reflection_probe = Some(gpu);
     }
     let pending: Vec<usize> = (0..probes.len()).filter(|&slot| rebuild || !probes[slot].1.captured).collect();
     let positions: Vec<Vec3> = owners.iter().map(|&id| camera_world_position(world, Some(id))).collect();
+
+    // The image goes in ahead of any probe, whose capture will show it behind the scene.
+    let environment_changed = environment && (rebuild || renderer.environment_map_dirty);
+    if environment_changed {
+        if let (Some(gpu), Some(map)) = (renderer.reflection_probe.as_ref(), renderer.environment_map.as_ref()) {
+            let slot = (slots - 1) as u32;
+            gpu.write_environment(&renderer.queue, slot, map);
+            let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("environment_map_prefilter"),
+            });
+            gpu.record_prefilter(&renderer.device, &mut encoder, slot);
+            renderer.queue.submit(std::iter::once(encoder.finish()));
+        }
+    }
+    renderer.environment_map_dirty = false;
 
     let taa = if pending.is_empty() { None } else { renderer.taa.take() };
     let ssgi = if pending.is_empty() { None } else { renderer.ssgi.take() };
@@ -472,10 +496,14 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
                 crate::renderer::irradiance::ReflectionSource::new(p.intensity, *at)
                     .with_box(p.influence.map(|h| h.to_array()), p.blend_distance)
             })
+            .chain(renderer.environment_map.as_ref().map(|m| {
+                crate::renderer::irradiance::ReflectionSource::new(m.intensity, [0.0; 3])
+            }))
             .collect();
-        if !pending.is_empty() || sources != gpu.uploaded {
+        if environment_changed || !pending.is_empty() || sources != gpu.uploaded {
             gpu.uploaded = sources.clone();
-            let set = crate::renderer::irradiance::ReflectionSet::new(&gpu.cube_view, gpu.mip_count, sources);
+            let mut set = crate::renderer::irradiance::ReflectionSet::new(&gpu.cube_view, gpu.mip_count, sources);
+            set.environment = environment.then_some(slots - 1);
             if let Some(def) = renderer.deferred.as_mut() {
                 def.irradiance.set_reflection(&renderer.device, &renderer.queue, Some(set));
             }
@@ -10315,6 +10343,96 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                     }
                 }
             }
+        });
+    }
+
+    /// **An image lights, is reflected in and stands behind the scene.** A panorama red towards +X and
+    /// blue towards −X, looked at along −Z so the frame sits across the seam between them: the left half of
+    /// the frame's background is blue and the right is red; a mirror reflects the side it faces, a matte
+    /// ball takes its colour from the side each part of it faces; `None` goes back to the sky.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn an_environment_map_lights_reflects_and_backs_the_scene() {
+        use gizmo_renderer::environment::EnvironmentMap;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        fn panorama() -> EnvironmentMap {
+            let (w, h) = (128u32, 64u32);
+            let pixels = (0..h)
+                .flat_map(|_| {
+                    (0..w).map(move |x| {
+                        let u = (x as f32 + 0.5) / w as f32;
+                        if (0.25..0.75).contains(&u) { [2.0, 0.0, 0.0] } else { [0.0, 0.0, 2.0] }
+                    })
+                })
+                .collect();
+            EnvironmentMap::from_equirectangular(pixels, w, h).with_resolution(64)
+        }
+        async fn frame(renderer: &mut Renderer, sphere: Option<(f32, f32)>) -> Vec<u8> {
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            if let Some((roughness, metallic)) = sphere {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, -4.0)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_sphere(&renderer.device, 1.0, 32, 48));
+                world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), roughness, metallic));
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+            render_world(renderer, &mut world).await
+        }
+        let px = |f: &[u8], x: usize, y: usize| -> [i32; 3] {
+            let p = &f[(y * 128 + x) * 4..][..3];
+            [i32::from(p[0]), i32::from(p[1]), i32::from(p[2])]
+        };
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            let plain = frame(&mut renderer, None).await;
+
+            renderer.set_environment_map(Some(panorama()));
+            let empty = frame(&mut renderer, None).await;
+            let (left, right) = (px(&empty, 10, 64), px(&empty, 118, 64));
+            eprintln!("behind the scene: left {left:?}, right {right:?}");
+            assert!(left[2] > left[0] + 60, "looking along −Z with +X on the right, the left is −X: blue: {left:?}");
+            assert!(right[0] > right[2] + 60, "and the right is +X: red: {right:?}");
+
+            // Matte: the side towards +X is lit red, the side towards −X blue.
+            renderer.set_environment_map(Some(panorama().with_intensity(0.25)));
+            let matte = frame(&mut renderer, Some((1.0, 0.0))).await;
+            let (ml, mr) = (px(&matte, 42, 64), px(&matte, 86, 64));
+            renderer.set_environment_map(Some(panorama()));
+            eprintln!("a matte ball: left {ml:?}, right {mr:?}");
+            assert!(ml[2] > ml[0] + 15, "the side towards −X: {ml:?}");
+            assert!(mr[0] > mr[2] + 15, "the side towards +X: {mr:?}");
+
+            // A mirror ball: at its rim the reflection has swung round to the side it faces.
+            let mirror = frame(&mut renderer, Some((0.05, 1.0))).await;
+            let (ol, or) = (px(&mirror, 52, 64), px(&mirror, 76, 64));
+            eprintln!("a mirror ball: left {ol:?}, right {or:?}");
+            assert!(ol[2] > ol[0] + 40, "{ol:?}");
+            assert!(or[0] > or[2] + 40, "{or:?}");
+
+            // Intensity reaches all of it.
+            renderer.set_environment_map(Some(panorama().with_intensity(0.1)));
+            let dim = frame(&mut renderer, None).await;
+            assert!(px(&dim, 118, 64)[0] < right[0] - 30, "intensity: {:?} against {right:?}", px(&dim, 118, 64));
+
+            renderer.set_environment_map(None);
+            let back = frame(&mut renderer, None).await;
+            assert_eq!(px(&back, 118, 64), px(&plain, 118, 64), "None goes back to the sky");
         });
     }
 

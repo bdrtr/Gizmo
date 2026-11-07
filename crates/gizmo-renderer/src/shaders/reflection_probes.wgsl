@@ -5,7 +5,7 @@
 // `REFLECTION_GROUP`: 3 in the deferred pass, 5 in the forward one.
 // Up to four captures of
 // the scene in one prefiltered cube array, slot i = probe i. Header = [count, max_mip, background
-// slot or −1, 0]; per slot: origin = [position, has box], box_min = [min, blend distance],
+// slot or −1, environment map's slot + 1 or 0]; per slot: origin = [position, has box], box_min = [min, blend distance],
 // box_max = [max, intensity]. With no probes `probe_environment` returns the sky it is given,
 // unchanged — frames are bit-identical to before probes existed.
 struct ProbeSlot {
@@ -72,4 +72,25 @@ fn probe_environment(r: vec3<f32>, world_pos: vec3<f32>, roughness: f32, sky: ve
             * reflections.probes[bg].box_max.w;
     }
     return local + background * (1.0 - weight);
+}
+
+// The diffuse from an `EnvironmentMap`, along the normal: the blurriest mip of its slot. Otherwise the
+// sky it is given.
+fn environment_irradiance(n: vec3<f32>, sky: vec3<f32>) -> vec3<f32> {
+    let slot = i32(reflections.header.w) - 1;
+    if (slot < 0) {
+        return sky;
+    }
+    return textureSampleLevel(t_reflection, s_reflection, n, slot, reflections.header.y).rgb
+        * reflections.probes[slot].box_max.w;
+}
+
+// What an `EnvironmentMap` shows along a view ray, sharp.
+fn environment_background(direction: vec3<f32>) -> vec3<f32> {
+    let slot = i32(reflections.header.w) - 1;
+    if (slot < 0) {
+        discard;
+    }
+    return textureSampleLevel(t_reflection, s_reflection, direction, slot, 0.0).rgb
+        * reflections.probes[slot].box_max.w;
 }

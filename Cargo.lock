@@ -2887,6 +2887,7 @@ dependencies = [
  "gizmo-core",
  "gizmo-math",
  "gltf",
+ "half",
  "harfrust",
  "icu_segmenter",
  "image",

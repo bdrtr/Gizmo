@@ -11,7 +11,7 @@
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
 #import gizmo::irradiance::{gi_sample}
-#import gizmo::reflection_probes::{probe_environment}
+#import gizmo::reflection_probes::{probe_environment, environment_irradiance}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
@@ -297,7 +297,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     
     // 1. Diffuse IBL (Irradiance)
     let ambient_base = vec3<f32>(0.02, 0.02, 0.025);
-    let irradiance = get_procedural_environment(N, 1.0) + ambient_base;
+    let irradiance = environment_irradiance(N, get_procedural_environment(N, 1.0)) + ambient_base;
     var ambient = albedo * irradiance * (1.0 - metallic);
     if (subsurface > 0.0) {
         ambient = subsurface_ambient(ambient, subsurface);

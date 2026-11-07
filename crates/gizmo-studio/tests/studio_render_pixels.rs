@@ -1746,8 +1746,35 @@ fn an_entitys_wireframe_shows_in_the_editor_viewport() {
     assert!(lined > 50, "the pane's diagonal is green: {lined} pixels");
 }
 
+/// **An environment map stands behind the scene in the viewport too**, seen here through clear glass, in
+/// a corner the cube does not reach.
+#[test]
+fn an_environment_map_shows_in_the_editor_viewport() {
+    use gizmo::renderer::environment::EnvironmentMap;
+    let _gpu = gpu_lock();
+    let green = |f: &[u8]| i32::from(f[(8 * W as usize + 8) * BPP as usize + 1]);
+    let map = EnvironmentMap::from_equirectangular(vec![[0.0, 1.0, 0.0]; 16], 4, 4).with_resolution(16);
+    let (Some(without), Some(with)) = (
+        render_pane_frame(|m| m.with_transmission(1.0), |_, _| {}),
+        render_pane_frame_with(|m| m.with_transmission(1.0), |_, _| {}, Some(map)),
+    ) else {
+        return;
+    };
+    let (without, with) = (green(&without), green(&with));
+    eprintln!("green in the corner: {without} without, {with} with");
+    assert!(with > without + 60, "{without} without, {with} with");
+}
+
 /// The editor's pipeline over a red cube with a pane between it and the camera. `tag` gets the pane.
 fn render_pane_frame(pane: fn(Material) -> Material, tag: fn(&mut World, Entity)) -> Option<Vec<u8>> {
+    render_pane_frame_with(pane, tag, None)
+}
+
+fn render_pane_frame_with(
+    pane: fn(Material) -> Material,
+    tag: fn(&mut World, Entity),
+    environment: Option<gizmo::renderer::environment::EnvironmentMap>,
+) -> Option<Vec<u8>> {
     if !pollster::block_on(Renderer::headless_adapter_available())
         || pollster::block_on(Renderer::headless_adapter_is_software())
     {
@@ -1760,6 +1787,7 @@ fn render_pane_frame(pane: fn(Material) -> Material, tag: fn(&mut World, Entity)
         // No light, a black sky and no fog, so that all the red there is came through the pane.
         renderer.sky = Some(gizmo::renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
         renderer.fog = Some(gizmo::renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+        renderer.set_environment_map(environment);
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
         let tex = asset_manager.create_white_texture(

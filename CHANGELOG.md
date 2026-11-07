@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **An image as the sky: `Renderer::set_environment_map`.** `EnvironmentMap::from_hdr` reads a Radiance `.hdr` panorama,
+  `from_equirectangular` takes pixels, `with_intensity` and `with_rotation` shape it. It lights the scene, is reflected in it, and
+  stands behind it, on the desktop path and in the studio viewport. It takes a slot of the reflection probes' array, so a scene
+  has three probes beside one. Not on the web, as probes are not.
+
 - **`FogMode`.** `Fog::squared()` closes in as the square of the thickness, `Fog::linear(color, start, end)` is a straight ramp.
 - **`Renderer::bloom_softness` and `bloom_energy_conserving`.** How far below its threshold bloom starts, and whether the glow
   comes out of the light that made it rather than adding to it.

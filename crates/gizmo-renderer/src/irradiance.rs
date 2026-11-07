@@ -99,12 +99,15 @@ pub struct ReflectionSet<'a> {
     pub mip_count: u32,
     /// Up to [`MAX_PROBES`](crate::reflection::MAX_PROBES); the rest are ignored.
     pub probes: Vec<ReflectionSource>,
+    /// Which slot holds the [`EnvironmentMap`](crate::environment::EnvironmentMap), if one is set:
+    /// the diffuse and the background read it.
+    pub environment: Option<usize>,
 }
 
 impl<'a> ReflectionSet<'a> {
     /// The probes in `view`'s slots.
     pub fn new(view: &'a wgpu::TextureView, mip_count: u32, probes: Vec<ReflectionSource>) -> Self {
-        Self { view, mip_count, probes }
+        Self { view, mip_count, probes, environment: None }
     }
 }
 
@@ -341,7 +344,7 @@ impl IrradianceState {
     /// Points the specular term at a set of reflection probes, or back at the procedural sky with
     /// `None`. See `deferred_lighting.wgsl`'s `probe_environment` for how they combine.
     pub fn set_reflection(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, set: Option<ReflectionSet<'_>>) {
-        // Header [count, max_mip, background slot or −1, 0], then per slot
+        // Header [count, max_mip, background slot or −1, environment slot + 1 or 0], then per slot
         // [origin, has box] · [box min, blend distance] · [box max, intensity].
         let mut data = [0.0f32; REFLECTION_FLOATS];
         data[2] = -1.0;
@@ -352,6 +355,7 @@ impl IrradianceState {
             if let Some(background) = probes.iter().position(|p| p.box_half_extents.is_none()) {
                 data[2] = background as f32;
             }
+            data[3] = set.environment.map_or(0.0, |slot| slot as f32 + 1.0);
             for (slot, p) in probes.iter().enumerate() {
                 let at = 4 + 12 * slot;
                 data[at..at + 3].copy_from_slice(&p.position);

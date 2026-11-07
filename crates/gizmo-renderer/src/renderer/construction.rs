@@ -716,6 +716,8 @@ impl Renderer {
             deferred,
             ssao,
             ssr,
+            environment_map: None,
+            environment_map_dirty: false,
             behind: None,
             ssgi,
             volumetric,

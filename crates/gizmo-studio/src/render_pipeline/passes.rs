@@ -453,6 +453,15 @@ pub(super) fn record_studio_main_pass(
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
             }
 
+            // The image behind the scene, as the game path has it. The pass is shared, so it is drawn
+            // here, after the opaque world, with the depth test keeping it behind.
+            if let (true, Some(def)) = (renderer.environment_map.is_some(), renderer.deferred.as_ref()) {
+                render_pass.set_pipeline(&def.environment_sky_pipeline);
+                render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
+                render_pass.set_bind_group(1, &def.irradiance.bind_group, &[]);
+                render_pass.draw(0..3, 0..1);
+            }
+
             // 3a. Wireframes asked for per entity or by `WireframeConfig::global`, over the solids.
             for batch in flat_batches {
                 let Some(wire) = batch.wire.as_ref().filter(|_| {
