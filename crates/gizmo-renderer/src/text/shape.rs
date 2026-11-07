@@ -53,6 +53,8 @@ pub(super) struct ShapedGlyph {
     pub(super) px: f32,
     /// Byte offset into the line of the text this glyph draws.
     pub(super) cluster: u32,
+    /// Lying on its side, in a column.
+    pub(super) sideways: bool,
 }
 
 /// One line, shaped: the glyphs from left to right, and how far the pen went.
@@ -78,7 +80,9 @@ pub(super) fn shape_line(styles: &Styles<'_>, line: &str, line_start: usize, lev
         // Top to bottom has no levels to order: a column is read as it is stored.
         for (style, piece) in styles.pieces(line_start, 0..line.len()) {
             for item in itemize(&styles.faces[style], style, line, piece) {
-                shape_item(styles, line, &item, false, &mut out);
+                for part in by_orientation(styles, line, item) {
+                    shape_item(styles, line, &part, false, &mut out);
+                }
             }
         }
         return out;
@@ -112,6 +116,8 @@ struct Item {
     font: FontId,
     /// `None` while only characters of no script of their own have been seen.
     script: Option<Script>,
+    /// In a column, lying on its side: shaped along a line, and turned when drawn.
+    sideways: bool,
 }
 
 /// Cuts a bidi run wherever the face or the script changes. A character of no script of its own (a
@@ -135,7 +141,7 @@ fn itemize(faces: &Faces<'_>, style: usize, text: &str, run: Range<usize>) -> Ve
                 continue;
             }
         }
-        items.push(Item { range: start..end, style, font: faces.pick(c).0, script });
+        items.push(Item { range: start..end, style, font: faces.pick(c).0, script, sideways: false });
     }
     items
 }
@@ -157,6 +163,46 @@ fn script_of(probe: &mut UnicodeBuffer, c: char) -> Option<Script> {
 }
 
 /// Shapes one item and appends its glyphs, in visual order, at the line's pen.
+/// Cuts an item of a column where its characters change between standing and lying down.
+fn by_orientation(styles: &Styles<'_>, text: &str, item: Item) -> Vec<Item> {
+    let mut parts: Vec<Item> = Vec::new();
+    for (offset, c) in text[item.range.clone()].char_indices() {
+        let start = item.range.start + offset;
+        let sideways = !styles.upright && !stands_upright_in_a_column(c);
+        match parts.last_mut() {
+            Some(last) if last.sideways == sideways => last.range.end = start + c.len_utf8(),
+            _ => parts.push(Item {
+                range: start..start + c.len_utf8(),
+                style: item.style,
+                font: item.font,
+                script: item.script,
+                sideways,
+            }),
+        }
+    }
+    parts
+}
+
+/// Whether a character stands in a column rather than lying on its side: the scripts written in columns,
+/// and what is set beside them. The blocks Unicode's Vertical_Orientation (UAX #50) marks upright, by range
+/// rather than by its table, which a column of Latin and Han does not need the whole of.
+pub(super) fn stands_upright_in_a_column(c: char) -> bool {
+    matches!(u32::from(c),
+        0x1100..=0x11FF // Hangul Jamo
+        | 0x2E80..=0x2FFF // CJK radicals, Kangxi, description characters
+        | 0x3000..=0x318F // CJK symbols, Hiragana, Katakana, Bopomofo, Hangul compatibility
+        | 0x3190..=0x4DBF // Kanbun, enclosed CJK, CJK compatibility, Extension A
+        | 0x4E00..=0xA4CF // Unified ideographs, Yi
+        | 0xA960..=0xA97F // Hangul Jamo Extended-A
+        | 0xAC00..=0xD7FF // Hangul syllables, Jamo Extended-B
+        | 0xF900..=0xFAFF // CJK compatibility ideographs
+        | 0xFE10..=0xFE1F | 0xFE30..=0xFE6F // vertical forms, compatibility forms, small forms
+        | 0xFF00..=0xFFEF // full and half width forms
+        | 0x1F000..=0x1FAFF // tiles, cards, emoji and the rest
+        | 0x20000..=0x3FFFF // the ideographic planes
+    )
+}
+
 fn shape_item(styles: &Styles<'_>, text: &str, item: &Item, rtl: bool, out: &mut ShapedLine) {
     let (faces, px) = (&styles.faces[item.style], styles.px[item.style]);
     let library = faces.library;
@@ -165,7 +211,8 @@ fn shape_item(styles: &Styles<'_>, text: &str, item: &Item, rtl: bool, out: &mut
     };
     let Ok(font) = FontRef::from_index(face.as_slice(), 0) else { return };
     let shaper = data.shaper(&font).build();
-    let (direction, key) = match (styles.vertical, rtl) {
+    let in_column = styles.vertical && !item.sideways;
+    let (direction, key) = match (in_column, rtl) {
         (true, _) => (Direction::TopToBottom, 2u8),
         (false, true) => (Direction::RightToLeft, 1),
         (false, false) => (Direction::LeftToRight, 0),
@@ -191,10 +238,16 @@ fn shape_item(styles: &Styles<'_>, text: &str, item: &Item, rtl: bool, out: &mut
     // ab_glyph's scale, not px / units-per-em: `px` here means the face's ascent-to-descent height,
     // and the rasteriser draws every glyph at that scale.
     let px = faces.px_for(item.font, px);
-    let scale = face.as_scaled(px).h_scale_factor();
+    let scaled = face.as_scaled(px);
+    let scale = scaled.h_scale_factor();
+    // A quarter turn clockwise puts a glyph's ascender to the right of its baseline, so the baseline goes
+    // this far left of the column's middle for the face's height to sit centred on it.
+    let turned_baseline = -(scaled.ascent() + scaled.descent()) / 2.0;
     for (info, position) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
         // In a column the pen runs down `y` and `width` is how far it went; a shaper's `y` grows up.
-        let (x, y) = if styles.vertical {
+        let (x, y) = if item.sideways {
+            (turned_baseline + position.y_offset as f32 * scale, out.width + position.x_offset as f32 * scale)
+        } else if styles.vertical {
             (position.x_offset as f32 * scale, out.width - position.y_offset as f32 * scale)
         } else {
             (out.width + position.x_offset as f32 * scale, -(position.y_offset as f32) * scale)
@@ -206,8 +259,9 @@ fn shape_item(styles: &Styles<'_>, text: &str, item: &Item, rtl: bool, out: &mut
             y,
             px,
             cluster: item.range.start as u32 + info.cluster,
+            sideways: item.sideways,
         });
-        out.width += if styles.vertical {
+        out.width += if in_column {
             -(position.y_advance as f32) * scale
         } else {
             position.x_advance as f32 * scale

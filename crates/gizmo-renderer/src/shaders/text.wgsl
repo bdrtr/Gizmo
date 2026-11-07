@@ -43,7 +43,10 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: GlyphInstance) -> VertexOutput 
     let c = corners[vi];
 
     var out: VertexOutput;
-    out.uv = mix(inst.uv.xy, inst.uv.zw, c);
+    // `|origin.w| == 2`: a glyph on its side, a quarter turn clockwise. The box is already the turned
+    // one, so the texture runs the other way: u down the screen, v across it.
+    let turned = abs(inst.origin.w) > 1.5;
+    out.uv = select(mix(inst.uv.xy, inst.uv.zw, c), mix(inst.uv.xy, inst.uv.zw, c.yx), turned);
     out.color = inst.color;
     let p = mix(inst.rect.xy, inst.rect.zw, c);
 

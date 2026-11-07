@@ -10436,6 +10436,67 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         });
     }
 
+    /// **A letter lies on its side in a column, and is the same letter.** An "L" standing is taller than wide,
+    /// and on its side wider than tall. Its texture has to turn with its box and not mirror: turned clockwise,
+    /// its foot is at the left end.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_letter_lies_on_its_side_in_a_column() {
+        use crate::renderer::components::Text;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let font = renderer.load_font(include_bytes!("../../../../gizmo-renderer/assets/fonts/NotoSans-Regular.ttf").to_vec()).expect("loads");
+            // The bright pixels' box, and how many sit in its left and right halves.
+            let measure = |frame: &[u8]| {
+                let (mut x0, mut y0, mut x1, mut y1) = (128usize, 128usize, 0usize, 0usize);
+                for y in 0..128 {
+                    for x in 0..128 {
+                        if frame[(y * 128 + x) * 4] > 180 {
+                            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+                        }
+                    }
+                }
+                let middle = (x0 + x1) / 2;
+                let count = |range: std::ops::Range<usize>| -> usize {
+                    (y0..=y1).map(|y| range.clone().filter(|&x| frame[(y * 128 + x) * 4] > 180).count()).sum()
+                };
+                ((x1 + 1 - x0, y1 + 1 - y0), count(x0..middle), count(middle + 1..x1 + 1))
+            };
+            let mut draw = async |text: Text| {
+                let mut world = World::new();
+                world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
+                world.spawn_bundle((text,));
+                render_world(&mut renderer, &mut world).await
+            };
+            let at = gizmo_math::Vec2::new(40.0, 20.0);
+            let standing = measure(&draw(Text::screen("L", font, 64.0, at).in_columns().upright()).await);
+            let lying = measure(&draw(Text::screen("L", font, 64.0, at).in_columns()).await);
+            eprintln!("standing {standing:?}, lying {lying:?}");
+            assert!(standing.0 .1 > standing.0 .0, "standing, it is taller than wide: {standing:?}");
+            assert!(lying.0 .0 > lying.0 .1, "lying, it is wider than tall: {lying:?}");
+            // Turned clockwise, an L's foot, which points right from its bottom, points down from its left
+            // end: so the left half holds the thick of it. Mirrored, the right half would.
+            assert!(lying.1 > lying.2, "the foot is at the left end: {lying:?}");
+
+            // And it is turned, not flipped and stretched into the same box: an F's stem runs along its
+            // top once it lies down, where flipped it would run down the side and leave the top row short.
+            let frame = draw(Text::screen("F", font, 64.0, at).in_columns()).await;
+            let rows: Vec<usize> = (0..128).map(|y| (0..128).filter(|&x| frame[(y * 128 + x) * 4] > 180).count()).collect();
+            let top = rows.iter().position(|&n| n > 0).expect("drawn");
+            let wide = *rows.iter().max().unwrap();
+            eprintln!("an F on its side, row by row from its top: {:?}, widest {wide}", &rows[top..top + 4]);
+            assert!(rows[top + 1] * 10 > wide * 8, "its stem is its top edge: {:?}, widest {wide}", &rows[top..top + 4]);
+        });
+    }
+
     /// A row of what glass is measured against: a red cube at the centre, on a black sky, and a pane
     /// between it and the camera. Returns the frame; `pane` makes the pane's material from a neutral one.
     async fn frame_through_pane(renderer: &mut Renderer, pane: fn(Material) -> Material, tilt: f32) -> Vec<u8> {

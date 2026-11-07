@@ -445,7 +445,9 @@ impl TextRenderer {
     ) {
         let wrap = wrap_width(text, screen_anchor, screen_size);
         let runs = text.style_runs();
-        let laid_out = if text.vertical {
+        let laid_out = if text.vertical && text.upright {
+            self.library.layout_vertical_upright(text.font, text.size_px, &text.content, wrap, &runs)
+        } else if text.vertical {
             self.library.layout_vertical(text.font, text.size_px, &text.content, wrap, &runs)
         } else {
             self.library.layout_styled(text.font, text.size_px, &text.content, wrap, &runs)
@@ -698,8 +700,20 @@ fn place_clipped(
         let Some(entry) = entry_of(g) else { continue };
         let color = text.color_at(g.cluster).to_array();
         // The glyph box's top-left in text-local pixels, y down.
-        let min = box_offset + Vec2::new(g.x + entry.offset[0], g.y + entry.offset[1]);
-        let max = min + Vec2::from(entry.size);
+        let [w, h] = entry.size;
+        let [ox, oy] = entry.offset;
+        // A quarter turn clockwise about the pen sends (x, y) to (-y, x), so the box swaps its sides and its
+        // texture runs down the screen. The instance says so by `|origin.w| == 2`.
+        let min = if g.sideways {
+            box_offset + Vec2::new(g.x - (oy + h), g.y + ox)
+        } else {
+            box_offset + Vec2::new(g.x + ox, g.y + oy)
+        };
+        let max = min + if g.sideways { Vec2::new(h, w) } else { Vec2::new(w, h) };
+        // The atlas box as the shader reads it for a turned glyph: u from top to bottom, v from left to right.
+        let [u0, v0, u1, v1] = entry.uv;
+        let turned = [u0, v1, u1, v0];
+        let turn = if g.sideways { 2.0 } else { 1.0 };
 
         match text.space {
             TextSpace::Screen { .. } | TextSpace::Pinned { .. } => {
@@ -715,10 +729,25 @@ fn place_clipped(
                     )
                 };
                 let (lo, hi, uv) = match clip {
+                    Some(c) if g.sideways => match clip_quad(position + min, position + max, [0.0, 0.0, 1.0, 1.0], c) {
+                        // The fractions of the box that are left, along the screen's axes.
+                        Some((lo, hi, [fx0, fy0, fx1, fy1])) => {
+                            let along = |from: f32, to: f32, t: f32| from + (to - from) * t;
+                            let uv = [
+                                along(turned[0], turned[2], fy0),
+                                along(turned[1], turned[3], fx0),
+                                along(turned[0], turned[2], fy1),
+                                along(turned[1], turned[3], fx1),
+                            ];
+                            (lo, hi, uv)
+                        }
+                        None => continue,
+                    },
                     Some(c) => match clip_quad(position + min, position + max, entry.uv, c) {
                         Some(q) => q,
                         None => continue,
                     },
+                    None if g.sideways => (position + min, position + max, turned),
                     None => (position + min, position + max, entry.uv),
                 };
                 let a = to_ndc(lo);
@@ -727,7 +756,7 @@ fn place_clipped(
                     rect: [a.x, a.y, b.x, b.y],
                     uv,
                     color,
-                    origin: [0.0, 0.0, 0.0, -1.0],
+                    origin: [0.0, 0.0, 0.0, -turn],
                 });
             }
             TextSpace::World { px_per_unit } => {
@@ -736,9 +765,9 @@ fn place_clipped(
                 // vector grows up, so the box's top becomes the larger world offset.
                 world.push(GlyphInstance {
                     rect: [min.x * scale, -min.y * scale, max.x * scale, -max.y * scale],
-                    uv: entry.uv,
+                    uv: if g.sideways { turned } else { entry.uv },
                     color,
-                    origin: [world_origin.x, world_origin.y, world_origin.z, 1.0],
+                    origin: [world_origin.x, world_origin.y, world_origin.z, turn],
                 });
             }
         }
@@ -783,7 +812,7 @@ mod tests {
 
     fn one_glyph() -> TextLayout {
         TextLayout {
-            glyphs: vec![PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 }],
+            glyphs: vec![PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 , sideways: false }],
             width: 10.0,
             height: 20.0,
             lines: 1,
@@ -818,7 +847,7 @@ mod tests {
         let mut t = Text::screen("", FontId(0), 16.0, Vec2::ZERO).rich([("ab", red), ("c", green)]);
         t.color = Vec4::new(1.0, 1.0, 1.0, 0.5);
         assert_eq!(t.content, "abc");
-        let glyph = |cluster: u32| PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster };
+        let glyph = |cluster: u32| PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster, sideways: false };
         let layout = TextLayout {
             glyphs: vec![glyph(0), glyph(1), glyph(2)],
             width: 30.0,
@@ -1009,6 +1038,46 @@ mod tests {
 
     /// A glyph straddling the clip edge keeps the part inside, with its texture cut by the same
     /// fraction; one wholly outside is gone; one wholly inside is untouched.
+    /// A glyph on its side: the box swaps its sides about the pen, the instance says it is turned, and the
+    /// texture runs the other way. Clipped, the texture goes with the part of the box that is left.
+    #[test]
+    fn a_sideways_glyph_turns_its_box_and_its_texture() {
+        let layout = TextLayout {
+            glyphs: vec![PositionedGlyph { font: FontId(0), glyph: 1, x: 100.0, y: 200.0, line: 0, px: 16.0, cluster: 0, sideways: true }],
+            width: 0.0,
+            height: 0.0,
+            lines: 1,
+            line_widths: vec![0.0],
+            line_rtl: vec![false],
+        };
+        // 4 wide and 10 tall, with its top 10 above the baseline and starting 1 right of the pen. Pixels
+        // here equal NDC scale, so the box can be read off the instance: a window of 2 by 2 would flip y.
+        let entry = GlyphEntry { uv: [0.1, 0.2, 0.3, 0.4], size: [4.0, 10.0], offset: [1.0, -10.0] };
+        let text = Text::screen("x", FontId(0), 16.0, Vec2::ZERO);
+        let size = Vec2::new(1000.0, 1000.0);
+        let run = |clip: Option<[Vec2; 2]>| {
+            let (mut world, mut screen) = (Vec::new(), Vec::new());
+            place_clipped(&layout, &text, Vec3::ZERO, Some(Vec2::ZERO), size, clip, &mut world, &mut screen, |_| Some(entry));
+            screen
+        };
+        let whole = run(None);
+        let px = |ndc: f32| (ndc + 1.0) * 500.0;
+        let py = |ndc: f32| (1.0 - ndc) * 500.0;
+        let i = whole[0];
+        // (x, y) goes to (-y, x): x from 100 + 0 to 100 + 10, y from 200 + 1 to 200 + 5.
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-3;
+        assert!(close(px(i.rect[0]), 100.0) && close(px(i.rect[2]), 110.0), "{:?}", i.rect);
+        assert!(close(py(i.rect[1]), 201.0) && close(py(i.rect[3]), 205.0), "{:?}", i.rect);
+        assert_eq!(i.origin[3], -2.0, "the shader is told");
+        assert_eq!(i.uv, [0.1, 0.4, 0.3, 0.2], "u down the screen, v from the glyph's foot at the left");
+
+        let right_half = run(Some([Vec2::new(105.0, 0.0), Vec2::new(500.0, 500.0)]));
+        let c = right_half[0];
+        assert!(close(px(c.rect[0]), 105.0), "{:?}", c.rect);
+        assert!(close(c.uv[0], 0.1) && close(c.uv[2], 0.3), "u is untouched: {:?}", c.uv);
+        assert!(close(c.uv[1], 0.3) && close(c.uv[3], 0.2), "v starts halfway: {:?}", c.uv);
+    }
+
     #[test]
     fn a_clip_trims_a_glyph_and_its_texture_together() {
         let uv = [0.2, 0.4, 0.6, 0.8];
@@ -1026,9 +1095,9 @@ mod tests {
     fn a_clipped_text_keeps_only_what_is_inside() {
         let layout = TextLayout {
             glyphs: vec![
-                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
-                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
-                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 , sideways: false },
+                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0, px: 16.0, cluster: 0 , sideways: false },
+                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0, px: 16.0, cluster: 0 , sideways: false },
             ],
             width: 30.0,
             height: 20.0,
@@ -1073,9 +1142,9 @@ mod tests {
     fn a_missing_atlas_entry_drops_that_glyph_and_no_other() {
         let layout = TextLayout {
             glyphs: vec![
-                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
-                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
-                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0, px: 16.0, cluster: 0 },
+                PositionedGlyph { font: FontId(0), glyph: 1, x: 0.0, y: 0.0, line: 0, px: 16.0, cluster: 0 , sideways: false },
+                PositionedGlyph { font: FontId(0), glyph: 2, x: 10.0, y: 0.0, line: 0, px: 16.0, cluster: 0 , sideways: false },
+                PositionedGlyph { font: FontId(0), glyph: 3, x: 20.0, y: 0.0, line: 0, px: 16.0, cluster: 0 , sideways: false },
             ],
             width: 30.0,
             height: 20.0,

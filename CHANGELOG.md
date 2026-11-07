@@ -50,6 +50,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Latin lies on its side in a column.** `Text::in_columns` sets Han, kana and Hangul standing and everything else a quarter turn
+  clockwise, as CSS's `text-orientation: mixed` does, on the screen and in the world. `.upright()` stands everything, which is what
+  columns did until now. **Looks change** for Latin in a column.
+
 - **`Schedule::set_executor(ExecutorKind::Sequential)` and `Stepping`.** A batch's systems one at a time in the order they were
   added, for a frame that must repeat exactly; and a resource that holds every schedule until told to go on, a frame or a system at
   a time, without losing a change made during the hold.

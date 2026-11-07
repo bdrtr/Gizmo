@@ -153,6 +153,9 @@ pub struct PositionedGlyph {
     /// Byte offset into the text of the characters this glyph draws: what a coloured span of
     /// [`Text`](crate::components::Text) is matched against.
     pub cluster: u32,
+    /// Lying on its side, a quarter turn clockwise, as Latin does in a column: `x` is then its baseline
+    /// and `y` its pen, running down.
+    pub sideways: bool,
 }
 
 /// What `layout` produced: the glyphs, and the box they occupy.
@@ -221,7 +224,7 @@ pub struct FontLibrary {
 
 /// Face, size, wrap width and the runs of another style, as bits: what a layout depends on, next to its
 /// text.
-type LayoutKey = (u32, u32, Option<u32>, Vec<(u32, u32, u32)>, bool);
+type LayoutKey = (u32, u32, Option<u32>, Vec<(u32, u32, u32)>, u8);
 
 /// A stretch of a text in another face or size, from byte `start` of it to the next run. Whatever comes
 /// before the first run is in the text's own.
@@ -252,11 +255,13 @@ struct Styles<'a> {
     starts: Vec<usize>,
     /// Lines are columns, read top to bottom, the first on the right.
     vertical: bool,
+    /// And everything in them stands, Latin included.
+    upright: bool,
 }
 
 impl<'a> Styles<'a> {
     fn single(faces: Faces<'a>, px: f32) -> Self {
-        Self { faces: vec![faces], px: vec![px], starts: vec![0], vertical: false }
+        Self { faces: vec![faces], px: vec![px], starts: vec![0], vertical: false, upright: false }
     }
 
     /// Adds `runs`, kept to byte offsets that are in `text`, on a character and in order. One that names
@@ -443,13 +448,14 @@ impl FontLibrary {
         max_width: Option<f32>,
         runs: &[StyleRun],
     ) -> Option<TextLayout> {
-        self.laid_out(font, px, text, max_width, runs, false)
+        self.laid_out(font, px, text, max_width, runs, 0)
     }
 
-    /// Text in columns, as Chinese, Japanese and Korean can be set: each line of [`layout_styled`] runs
-    /// top to bottom, breaking past `max_height`, and the first column is on the right. The face's `vert`
-    /// forms apply where it has them. Everything stands upright, Latin included: a run of Latin turned on
-    /// its side, as some vertical settings do, is not drawn.
+    /// Text in columns, as Chinese, Japanese and Korean can be set: each line top to bottom, breaking past
+    /// `max_height`, and the first column is on the right. A face's vertical forms apply where it has
+    /// them. Han, kana and Hangul stand, and Latin and the rest lie on their side, a quarter turn clockwise,
+    /// as CSS's `text-orientation: mixed` has them. [`layout_vertical_upright`](Self::layout_vertical_upright)
+    /// stands everything.
     ///
     /// [`layout_styled`]: Self::layout_styled
     #[must_use]
@@ -461,7 +467,20 @@ impl FontLibrary {
         max_height: Option<f32>,
         runs: &[StyleRun],
     ) -> Option<TextLayout> {
-        self.laid_out(font, px, text, max_height, runs, true)
+        self.laid_out(font, px, text, max_height, runs, 1)
+    }
+
+    /// [`layout_vertical`](Self::layout_vertical) with every character standing, one below the other.
+    #[must_use]
+    pub fn layout_vertical_upright(
+        &self,
+        font: FontId,
+        px: f32,
+        text: &str,
+        max_height: Option<f32>,
+        runs: &[StyleRun],
+    ) -> Option<TextLayout> {
+        self.laid_out(font, px, text, max_height, runs, 2)
     }
 
     fn laid_out(
@@ -471,19 +490,21 @@ impl FontLibrary {
         text: &str,
         max_width: Option<f32>,
         runs: &[StyleRun],
-        vertical: bool,
+        // 0 in lines, 1 in columns, 2 in columns with everything standing.
+        orientation: u8,
     ) -> Option<TextLayout> {
         let faces = Faces::new(self, font)?;
         let max_width = max_width.filter(|w| w.is_finite() && *w > 0.0);
         let bits = runs.iter().map(|r| (r.start, r.font.0, r.px.to_bits())).collect();
-        let key = (font.0, px.to_bits(), max_width.map(f32::to_bits), bits, vertical);
+        let key = (font.0, px.to_bits(), max_width.map(f32::to_bits), bits, orientation);
         let mut recent = self.recent.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         let same_style = recent.entry(key).or_default();
         if let Some(found) = same_style.get(text) {
             return Some(found.clone());
         }
         let mut styles = Styles::single(faces, px).with_runs(self, text, runs);
-        styles.vertical = vertical;
+        styles.vertical = orientation != 0;
+        styles.upright = orientation == 2;
         let laid_out = layout(&styles, text, max_width);
         if same_style.len() >= RECENT_LAYOUTS {
             same_style.clear();
@@ -675,6 +696,7 @@ fn layout(styles: &Styles<'_>, text: &str, max_width: Option<f32>) -> TextLayout
                     line: line_index as u32,
                     px: g.px,
                     cluster: *line_start as u32 + g.cluster,
+                    sideways: g.sideways,
                 });
             }
         }
@@ -1517,6 +1539,37 @@ fn vertical_text_runs_down_in_columns_from_the_right() {
     let mut aligned = l.clone();
     aligned.align(1.0);
     assert_eq!(aligned, l);
+}
+
+/// **Latin lies on its side in a column, unless asked to stand.** Lying down it advances by its width, on a
+/// baseline left of the column's middle; standing, by the height a vertical run gives it, on the middle.
+#[test]
+fn latin_lies_on_its_side_in_a_column() {
+    let (lib, id) = library();
+    let across = lib.layout(id, 20.0, "AA").unwrap();
+    let lying = lib.layout_vertical(id, 20.0, "AA", None, &[]).unwrap();
+    let standing = lib.layout_vertical_upright(id, 20.0, "AA", None, &[]).unwrap();
+    assert!(lying.glyphs.iter().all(|g| g.sideways));
+    assert!(standing.glyphs.iter().all(|g| !g.sideways));
+    assert!(across.glyphs.iter().all(|g| !g.sideways), "only a column turns anything");
+    let lying_step = lying.glyphs[1].y - lying.glyphs[0].y;
+    let across_step = across.glyphs[1].x - across.glyphs[0].x;
+    assert!((lying_step - across_step).abs() < 1e-3, "it advances by its width: {lying_step} and {across_step}");
+    assert!((lying.height - across.width).abs() < 1e-3);
+    assert!(lying.glyphs[0].x < lying.width / 2.0, "the baseline is left of the middle, for its ascender to reach right");
+    assert_ne!(lying, standing, "and a remembered layout knows which it is");
+}
+
+/// What stands and what lies down, by the characters a column mixes.
+#[test]
+fn han_kana_and_hangul_stand_and_latin_lies_down() {
+    use shape::stands_upright_in_a_column as stands;
+    for c in ['中', 'あ', 'ア', '한', '。', '「', 'Ａ', '１', '😀'] {
+        assert!(stands(c), "{c}");
+    }
+    for c in ['A', 'z', '1', 'ş', 'я', 'ا', ' '] {
+        assert!(!stands(c), "{c}");
+    }
 }
 
 /// `max_height` breaks a column the way a width breaks a line, and a remembered layout knows which it is.

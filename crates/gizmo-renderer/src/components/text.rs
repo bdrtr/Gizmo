@@ -54,6 +54,9 @@ pub struct Text {
     /// Set in columns, read top to bottom with the first on the right, as [`in_columns`](Self::in_columns)
     /// asks. [`max_width`](Self::max_width) is then how long a column may be.
     pub vertical: bool,
+    /// In columns, everything stands, Latin included, instead of Latin lying on its side.
+    /// [`upright`](Self::upright) asks.
+    pub upright: bool,
 }
 
 /// One part of a [`Text::rich`]: `("Can: ", WHITE)`, or for more than a colour
@@ -130,6 +133,7 @@ impl Text {
             align: TextAlign::Start,
             spans: Vec::new(),
             vertical: false,
+            upright: false,
         }
     }
 
@@ -151,6 +155,7 @@ impl Text {
             align: TextAlign::Start,
             spans: Vec::new(),
             vertical: false,
+            upright: false,
         }
     }
 
@@ -174,6 +179,7 @@ impl Text {
             align: TextAlign::Start,
             spans: Vec::new(),
             vertical: false,
+            upright: false,
         }
     }
 
@@ -197,6 +203,7 @@ impl Text {
             align: TextAlign::Start,
             spans: Vec::new(),
             vertical: false,
+            upright: false,
         }
     }
 
@@ -251,6 +258,14 @@ impl Text {
     #[must_use]
     pub fn in_columns(mut self) -> Self {
         self.vertical = true;
+        self
+    }
+
+    /// In columns, stands everything, one character below the other. By default Latin lies on its side
+    /// and Han, kana and Hangul stand, as CSS's `text-orientation: mixed` has them.
+    #[must_use]
+    pub fn upright(mut self) -> Self {
+        self.upright = true;
         self
     }
 
