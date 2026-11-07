@@ -1078,8 +1078,8 @@ mod tests {
         // 64 when `underwater` + `fog` were added, and the number is asserted rather than derived
         // so that the *next* field also has to be a deliberate change to this line.
         // 160 since 2026-11-01: camera motion blur, a vec4 (shutter, max, pad) and the reprojection
-        // matrix.
-        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 160, "PostProcessUniforms size shifted from target 160 bytes (motion blur eklendi)!");
+        // matrix. 176 since 2026-11-07: bloom's composite mode.
+        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 176, "PostProcessUniforms size shifted from target 160 bytes (motion blur eklendi)!");
         assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 128, "InstanceRaw size shifted from target 128 bytes!");
         // Textured-PBR per-material params: three std140 vec4 slots.
         assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 48, "MaterialParams size shifted from target 48 bytes!");
