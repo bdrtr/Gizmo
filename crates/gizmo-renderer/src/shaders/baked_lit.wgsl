@@ -10,7 +10,7 @@
 // It samples the shadow group the forward pass already binds at slot 2, so it needs no plumbing of
 // its own. On the web schema that group does not exist (the 4-bind-group limit), and there the
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
-#import gizmo::common::{SceneUniforms, height_fog}
+#import gizmo::common::{SceneUniforms, height_fog, instance_keeps}
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
@@ -188,7 +188,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // because the sorted pass cannot hold a decal against its own surface. Same threshold and
     // same test as `gbuffer.wgsl`; zero disables it, which is every material that does not ask.
     let final_alpha = in.color.a * in.inst_albedo.a * tex.a;
-    if (in.inst_cutoff > 0.0 && final_alpha < in.inst_cutoff) {
+    if (!instance_keeps(in.inst_cutoff, final_alpha, in.clip_position.xy)) {
         discard;
     }
 

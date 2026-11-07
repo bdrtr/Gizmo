@@ -280,7 +280,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     }
     let T = normalize(raw_tangent);
     let bitangent_sign = select(-1.0, 1.0, tangent_sample.w >= 0.0); // handedness only; never 0 (a null tangent.w would zero the bitangent)
-    let clear_coat = clamp((abs(tangent_sample.w) - 0.01) / 0.99, 0.0, 1.0);
+    // See `gbuffer.wgsl`: 1 + 32 x coat steps + roughness steps.
+    let coat_packed = max(round(abs(tangent_sample.w)) - 1.0, 0.0);
+    let clear_coat = floor(coat_packed / 32.0) / 31.0;
+    let coat_roughness = 0.08 + 0.92 * (coat_packed - 32.0 * floor(coat_packed / 32.0)) / 31.0;
 
     let B = normalize(cross(N, T) * bitangent_sign);
 
@@ -321,10 +324,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         ambient = ambient * coat_atten_env;
         specular_ibl = specular_ibl * coat_atten_env;
 
-        let R_coat = normalize(mix(reflect(-V, N), N, 0.08));
-        // The coat is a second, nearly smooth layer: it reflects the probes too, at its own 0.08.
-        let specular_env_coat = probe_environment(reflect(-V, N), world_pos, 0.08, get_procedural_environment(R_coat, 0.08));
-        specular_ibl += coat_env_specular(specular_env_coat, NdV) * clear_coat;
+        let R_coat = normalize(mix(reflect(-V, N), N, coat_roughness));
+        // The coat is a second, nearly smooth layer: it reflects the probes too, at its own roughness.
+        let specular_env_coat = probe_environment(reflect(-V, N), world_pos, coat_roughness, get_procedural_environment(R_coat, coat_roughness));
+        specular_ibl += coat_env_specular(specular_env_coat, NdV, coat_roughness) * clear_coat;
     }
 
     // --- CSM Shadow ---
@@ -401,7 +404,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
 
         if (clear_coat > 0.0) {
-            sun_light = layer_clear_coat(sun_light, N, V, L, scene.sun_color.rgb, scene.sun_color.w, shadow_visibility, clear_coat);
+            sun_light = layer_clear_coat(sun_light, N, V, L, scene.sun_color.rgb, scene.sun_color.w, shadow_visibility, clear_coat, coat_roughness);
         }
 
         if (subsurface > 0.0) {
@@ -545,7 +548,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         }
 
         if (clear_coat > 0.0) {
-            light_color_contrib = layer_clear_coat(light_color_contrib, N, V, L, light_rgb, intensity, atten, clear_coat);
+            light_color_contrib = layer_clear_coat(light_color_contrib, N, V, L, light_rgb, intensity, atten, clear_coat, coat_roughness);
         }
 
         total_lighting += light_color_contrib;

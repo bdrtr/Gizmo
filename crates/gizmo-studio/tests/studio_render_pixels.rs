@@ -1688,6 +1688,37 @@ fn glass_shows_what_is_behind_it_in_the_editor_viewport() {
     assert!(cyan < 10, "a cyan pane stops red: {cyan}");
 }
 
+/// **A LOD crossfade dissolves in the viewport too.** The pane is one level with its far edge at the
+/// camera's distance, so it is halfway through fading out, and the red cube shows through half of it.
+#[test]
+fn a_lod_crossfade_dissolves_in_the_editor_viewport() {
+    use gizmo::renderer::components::{LodGroup, LodLevel};
+    let _gpu = gpu_lock();
+    let red = |frame: &[u8]| {
+        let mut sum = 0i32;
+        for y in 56..72usize {
+            for x in 56..72usize {
+                let p = &frame[(y * W as usize + x) * BPP as usize..][..3];
+                sum += i32::from(p[0]) - i32::from(p[1]);
+            }
+        }
+        sum / 256
+    };
+    let (Some(solid), Some(clear), Some(fading)) = (
+        render_pane_frame(|m| m, |_, _| {}),
+        render_pane_frame(|m| m.with_transmission(1.0), |_, _| {}),
+        render_pane_frame(|m| m, |world, pane| {
+            let mesh = world.get::<gizmo::renderer::components::Mesh>(pane).expect("the pane has a mesh").clone();
+            world.add_component(pane, LodGroup::new(vec![LodLevel::new(mesh, 6.0)]).with_crossfade(4.0));
+        }),
+    ) else {
+        return;
+    };
+    let (solid, clear, fading) = (red(&solid), red(&clear), red(&fading));
+    eprintln!("red through the pane: solid {solid}, clear {clear}, halfway out {fading}");
+    assert!(solid < 10 && fading > solid + 30 && fading < clear - 30, "solid {solid}, clear {clear}, halfway out {fading}");
+}
+
 /// **A wireframe asked for per entity shows in the viewport**, in its own colour, as it does in the game.
 #[test]
 fn an_entitys_wireframe_shows_in_the_editor_viewport() {

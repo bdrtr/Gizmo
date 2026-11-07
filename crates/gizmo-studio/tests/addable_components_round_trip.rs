@@ -189,6 +189,7 @@ fn a_material_description_survives_the_file() {
             metallic: 0.8,
             anisotropy: 0.0,
             clear_coat: 0.0,
+            clear_coat_roughness: 0.08,
             subsurface: 0.0,
             ambient: Vec3::ZERO,
             emissive: Vec3::new(0.0, 1.0, 0.0),

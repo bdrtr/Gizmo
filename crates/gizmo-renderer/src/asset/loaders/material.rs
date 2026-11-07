@@ -294,6 +294,8 @@ pub(super) fn build_gltf_materials(
             mat.albedo = gizmo_math::Vec4::new(base_color[0], base_color[1], base_color[2], alpha);
             mat.metallic = pbr.metallic_factor();
             mat.roughness = pbr.roughness_factor();
+            // So the draw loops know it discards. The material's own uniform is what the shader tests.
+            mat.alpha_cutoff = alpha_cutoff;
             mat = mat.with_reflectance(gltf_reflectance(
                 material.ior(),
                 material.specular().map(|s| (s.specular_factor(), s.specular_color_factor())),

@@ -2,6 +2,7 @@
 // Writes opaque PBR surfaces to three MRTs; unlit/skybox objects are discarded here
 // and drawn in a subsequent forward pass.
 
+#import gizmo::common::{instance_keeps}
 #import gizmo::surface::{evaluate_surface, surface_uv, tangent_frame, surface_lobes}
 
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
@@ -68,6 +69,10 @@ struct VertexOutput {
     // `Material::emissive`, per instance — what game code sets with `with_emissive`.
     @location(9) inst_emissive:  vec4<f32>,  // w = F0, < 0: receives no shadows
     @location(10) bitangent:     vec3<f32>,
+    // `Material::clear_coat_roughness`.
+    @location(11) inst_coat_roughness: f32,
+    // The instance's cut-out and LOD crossfade, `instance_keeps`.
+    @location(12) inst_keep: f32,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -131,6 +136,8 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr    = inst.pbr;
     out.inst_emissive = inst.emissive;
+    out.inst_coat_roughness = inst.ambient.z;
+    out.inst_keep = inst.ambient.w;
     out.clip_position = scene.view_proj * world_pos;
     out.motion_now    = motion.view_proj * world_pos;
     out.motion_before = motion.prev_view_proj * (previous_models[instance_idx] * vec4<f32>(skinned_pos.xyz, 1.0));
@@ -157,6 +164,18 @@ struct GBufferOut {
     @location(5) emissive:         vec4<f32>,
 };
 
+// The depth prepass of a draw that discards: a cut-out, or a LOD crossfade. The plain prepass has no
+// fragment stage, which is right for everything else and wrong here: it writes depth over the holes,
+// and what stands behind them then fails the depth test in the G-buffer pass.
+@fragment
+fn fs_prepass(in: VertexOutput) {
+    let surface = evaluate_surface(
+        in.tex_coords, in.normal, in.world_tangent.xyz, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz
+    );
+    if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }
+    if (!instance_keeps(in.inst_keep, surface.alpha, in.clip_position.xy)) { discard; }
+}
+
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // Skip unlit / skybox objects — they are drawn in a forward pass
@@ -168,6 +187,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.
     // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }
+    if (!instance_keeps(in.inst_keep, surface.alpha, in.clip_position.xy)) { discard; }
 
     let albedo = surface.albedo;
     let metallic = surface.metallic;
@@ -187,7 +207,11 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // (`tangent_sample.w >= 0.0`); this makes the encoder agree, instead of leaving the two ends
     // with different ideas about the same edge case.
     let handedness = select(-1.0, 1.0, in.world_tangent.w >= 0.0);
-    let packed_tangent_w = handedness * (0.01 + 0.99 * clear_coat_raw);
+    // Two numbers and a sign in one half float, as an integer it holds exactly (up to 2048): 32 steps
+    // of coat, 32 of its roughness from the hard lacquer up, and 1 so that nothing is still signed.
+    let coat_steps = round(clear_coat_raw * 31.0);
+    let coat_rough_steps = round(clamp((in.inst_coat_roughness - 0.08) / 0.92, 0.0, 1.0) * 31.0);
+    let packed_tangent_w = handedness * (1.0 + coat_steps * 32.0 + coat_rough_steps);
 
     var out: GBufferOut;
     out.albedo_metallic  = vec4<f32>(albedo, metallic);

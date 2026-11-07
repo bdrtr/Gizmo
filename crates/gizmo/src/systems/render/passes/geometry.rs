@@ -33,7 +33,7 @@ pub fn record_deferred_geometry(
         // The cull mode is baked into the pipeline, so a double-sided material needs its own.
         // Tracked and set only on change rather than per item: the batches are not sorted by this
         // flag and a scene is overwhelmingly one-sided, so this is a handful of switches at most.
-        let mut two_sided_bound: Option<bool> = None;
+        let mut bound: Option<(bool, bool)> = None;
         for item in draw_items {
             // `ShadowCasting::Only`: casts, is not drawn. Checked in the z-prepass as well as the
             // G-buffer below, or the object would still write depth and punch a hole in whatever
@@ -44,13 +44,13 @@ pub fn record_deferred_geometry(
             if item.unlit || item.is_skybox || item.is_transparent {
                 continue;
             }
-            if two_sided_bound != Some(item.is_double_sided) {
-                z_pass.set_pipeline(if item.is_double_sided {
-                    &def.z_prepass_double_sided_pipeline
-                } else {
-                    &def.z_prepass_pipeline
+            if bound != Some((item.is_double_sided, item.discards)) {
+                z_pass.set_pipeline(match (item.discards, item.is_double_sided) {
+                    (true, two_sided) => &def.z_prepass_discard_pipelines[usize::from(two_sided)],
+                    (false, true) => &def.z_prepass_double_sided_pipeline,
+                    (false, false) => &def.z_prepass_pipeline,
                 });
-                two_sided_bound = Some(item.is_double_sided);
+                bound = Some((item.is_double_sided, item.discards));
             }
             let skel_bg = item
                 .skeleton_bind_group

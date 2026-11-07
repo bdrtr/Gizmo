@@ -204,6 +204,9 @@ pub struct DrawItem {
     pub(super) skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     /// The wireframe overlay's group 5, if this item's lines are drawn.
     pub(super) wire: Option<std::sync::Arc<wgpu::BindGroup>>,
+    /// A cut-out or a LOD crossfade: its depth prepass has to discard too, or it writes depth over its
+    /// own holes.
+    pub(super) discards: bool,
     pub(super) is_transparent: bool,
     /// Glass: drawn in the forward pass after the frame was copied, by its own pipeline. Also
     /// `is_transparent`, which keeps it out of the G-buffer and the shadow maps.
@@ -310,6 +313,8 @@ pub(crate) struct BatchKey {
     is_transmissive: bool,
     /// Which line colour's bind group, if its wireframe is drawn at all: another draw.
     wire: Option<usize>,
+    /// Its prepass is another pipeline.
+    discards: bool,
     /// The blend is baked into the pipeline, so — like every flag here — two materials that
     /// differ only in it must not share a batch.
     blend_mode: crate::renderer::components::BlendMode,
@@ -365,6 +370,7 @@ pub(crate) struct BatchData {
     is_grid: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
     wire: Option<std::sync::Arc<wgpu::BindGroup>>,
+    discards: bool,
     is_transparent: bool,
     is_transmissive: bool,
     blend_mode: crate::renderer::components::BlendMode,
@@ -512,7 +518,7 @@ pub(super) fn collect_draw_items(
         let pooled_storage = world.query::<&gizmo_core::pool::Pooled>();
         
         macro_rules! process_mesh {
-            ($e:expr, $mesh:expr, $trans:expr, $mat:expr, $skeleton:expr) => {
+            ($e:expr, $mesh:expr, $trans:expr, $mat:expr, $skeleton:expr, $fade:expr) => {
                 if renderers.get($e).is_none() {
                     continue;
                 }
@@ -685,8 +691,9 @@ pub(super) fn collect_draw_items(
                 // The cut-out threshold rides in `ambient.w`, which was padding. Zero unless the
                 // material asks, and zero is what every shader already reads there.
                 .with_alpha_cutoff($mat.alpha_cutoff)
+                .with_lod_fade($fade)
                 .with_reflectance($mat.reflectance)
-                .with_transmission_of($mat)
+                .with_lit_extras_of($mat)
                 .with_shadow_receiving(renderers.get($e).map(|r| r.receives_shadows).unwrap_or(true));
                 // Where this entity was drawn last frame — the object half of its velocity.
                 let generation = $e.generation();
@@ -743,6 +750,8 @@ pub(super) fn collect_draw_items(
                     renderer.scene.wire_color_group(&renderer.device, color)
                 });
 
+                let discards = $mat.alpha_cutoff > 0.0 || $fade.is_some();
+
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(active_vbuf) as usize,
                     mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
@@ -750,6 +759,7 @@ pub(super) fn collect_draw_items(
                     is_transparent,
                     is_transmissive,
                     wire: wire.as_ref().map(|w| std::sync::Arc::as_ptr(w) as usize),
+                    discards,
                     blend_mode,
                     unlit,
                     baked_lit,
@@ -786,6 +796,7 @@ pub(super) fn collect_draw_items(
                     is_grid,
                     skeleton_bind_group: skel_bg.cloned(),
                     wire,
+                    discards,
                     is_transparent,
                     is_transmissive,
                     blend_mode,
@@ -851,25 +862,17 @@ pub(super) fn collect_draw_items(
                     let Some((_, mesh, trans, mat)) = q.get(e) else {
                         continue;
                     };
-                    let Some(mesh) = crate::renderer::components::LodGroup::pick(
-                        lod_groups.get(e),
-                        mesh,
-                        cam_pos.distance(trans.matrix.w_axis.truncate()),
-                    ) else {
-                        continue;
-                    };
-                    process_mesh!(e, mesh, trans, mat, skeletons.get(e));
+                    let picks = crate::renderer::components::LodGroup::pick_faded(lod_groups.get(e), mesh, cam_pos.distance(trans.matrix.w_axis.truncate()));
+                    for (mesh, fade) in picks.into_iter().flatten() {
+                        process_mesh!(e, mesh, trans, mat, skeletons.get(e), fade);
+                    }
                 }
             } else {
                 for (e, mesh, trans, mat) in q.iter_mut() {
-                    let Some(mesh) = crate::renderer::components::LodGroup::pick(
-                        lod_groups.get(e),
-                        mesh,
-                        cam_pos.distance(trans.matrix.w_axis.truncate()),
-                    ) else {
-                        continue;
-                    };
-                    process_mesh!(e, mesh, trans, mat, skeletons.get(e));
+                    let picks = crate::renderer::components::LodGroup::pick_faded(lod_groups.get(e), mesh, cam_pos.distance(trans.matrix.w_axis.truncate()));
+                    for (mesh, fade) in picks.into_iter().flatten() {
+                        process_mesh!(e, mesh, trans, mat, skeletons.get(e), fade);
+                    }
                 }
             }
         }
@@ -882,14 +885,10 @@ pub(super) fn collect_draw_items(
                 let mut q = world.query::<(Entity, &gizmo_core::asset::Handle<Mesh>, &gizmo_physics_core::components::GlobalTransform, &gizmo_core::asset::Handle<Material>)>();
                 for (e, h_mesh, trans, h_mat) in q.iter_mut() {
                     if let (Some(mesh), Some(mat)) = (meshes.get(h_mesh), materials.get(h_mat)) {
-                        let Some(mesh) = crate::renderer::components::LodGroup::pick(
-                            lod_groups.get(e),
-                            mesh,
-                            cam_pos.distance(trans.matrix.w_axis.truncate()),
-                        ) else {
-                            continue;
-                        };
-                        process_mesh!(e, mesh, trans, mat, skeletons.get(e));
+                        let picks = crate::renderer::components::LodGroup::pick_faded(lod_groups.get(e), mesh, cam_pos.distance(trans.matrix.w_axis.truncate()));
+                        for (mesh, fade) in picks.into_iter().flatten() {
+                            process_mesh!(e, mesh, trans, mat, skeletons.get(e), fade);
+                        }
                     }
                 }
             }
@@ -970,6 +969,7 @@ pub(super) fn collect_draw_items(
                 visible_in_camera: batch.visible_in_camera,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
                 wire: batch.wire.clone(),
+                discards: batch.discards,
                 is_transparent: batch.is_transparent,
                 is_transmissive: batch.is_transmissive,
                 blend_mode: batch.blend_mode,
@@ -1074,6 +1074,7 @@ mod batch_key_tests {
             is_transparent: false,
             is_transmissive: false,
             wire: None,
+            discards: false,
             blend_mode: Default::default(),
             unlit: false,
             baked_lit: false,
@@ -1104,6 +1105,7 @@ mod batch_key_tests {
             is_transparent: false,
             is_transmissive: false,
             wire: None,
+            discards: false,
             blend_mode: Default::default(),
             unlit: false,
             baked_lit: false,

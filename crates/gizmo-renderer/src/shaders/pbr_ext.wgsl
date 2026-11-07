@@ -88,7 +88,7 @@ fn compute_direct_lighting_anisotropic(
 
 fn compute_clear_coat(
     N: vec3<f32>, V: vec3<f32>, L: vec3<f32>,
-    light_color: vec3<f32>, intensity: f32, visibility: f32
+    light_color: vec3<f32>, intensity: f32, visibility: f32, roughness: f32
 ) -> vec3<f32> {
     let H = normalize(V + L);
     let NoH = max(dot(N, H), 0.0);
@@ -96,8 +96,8 @@ fn compute_clear_coat(
     let NoL = max(dot(N, L), 0.0);
     let NoV = max(dot(N, V), 0.001);
 
-    let D = D_GGX(NoH, 0.08); // Lacquer gloss roughness of 0.08
-    let V_term = V_SmithJointGGX(NoV, NoL, 0.08);
+    let D = D_GGX(NoH, roughness);
+    let V_term = V_SmithJointGGX(NoV, NoL, roughness);
     let F = 0.04 + (1.0 - 0.04) * pow(1.0 - VoH, 5.0);
 
     return vec3<f32>(D * V_term * F) * light_color * intensity * visibility * NoL;
@@ -123,21 +123,21 @@ fn coat_env_attenuation(NdV: f32, clear_coat: f32) -> f32 {
 }
 
 // The clear coat's own reflection of `env`, seen from `NdV`, before weighting by the coat.
-fn coat_env_specular(env: vec3<f32>, NdV: f32) -> vec3<f32> {
-    let lut = approximate_env_brdf(NdV, 0.08);
+fn coat_env_specular(env: vec3<f32>, NdV: f32, roughness: f32) -> vec3<f32> {
+    let lut = approximate_env_brdf(NdV, roughness);
     return env * (0.04 * lut.x + lut.y);
 }
 
 // One light's `lit` result with the clear coat laid over it.
 fn layer_clear_coat(
     lit: vec3<f32>, N: vec3<f32>, V: vec3<f32>, L: vec3<f32>,
-    light_color: vec3<f32>, intensity: f32, attenuation: f32, clear_coat: f32,
+    light_color: vec3<f32>, intensity: f32, attenuation: f32, clear_coat: f32, coat_roughness: f32,
 ) -> vec3<f32> {
     let H = normalize(V + L);
     let VoH = max(dot(V, H), 0.0);
     let F_c = 0.04 + (1.0 - 0.04) * pow(1.0 - VoH, 5.0);
     let coat_atten = 1.0 - clear_coat * F_c;
-    let coat_spec = compute_clear_coat(N, V, L, light_color, intensity, attenuation);
+    let coat_spec = compute_clear_coat(N, V, L, light_color, intensity, attenuation, coat_roughness);
     return lit * coat_atten + coat_spec * clear_coat;
 }
 

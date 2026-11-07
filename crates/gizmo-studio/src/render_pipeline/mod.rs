@@ -333,14 +333,8 @@ pub fn execute_render_pipeline(
                     cam_pos.distance(Vec3::new(model.w_axis.x, model.w_axis.y, model.w_axis.z)),
                     renderers.get(e).map(|r| r.lod_bias).unwrap_or(1.0),
                 );
-                let active_mesh = match gizmo::renderer::components::LodGroup::pick(
-                    lod_groups.get(e),
-                    mesh,
-                    dist,
-                ) {
-                    Some(m) => m,
-                    None => continue, // CULL edildi!
-                };
+                let picks = gizmo::renderer::components::LodGroup::pick_faded(lod_groups.get(e), mesh, dist);
+                for (active_mesh, lod_fade) in picks.into_iter().flatten() {
 
                 // What the shader is HANDED, which is not always what was authored: the backdrop
                 // pipeline's vertex shader adds the camera position, so a PLACED backdrop needs it
@@ -368,8 +362,9 @@ pub fn execute_render_pipeline(
                 // 16 384 pixels that should have been discarded, measured in
                 // `a_cut_out_material_cuts_in_the_editor_viewport`.
                 .with_alpha_cutoff(mat.alpha_cutoff)
+                .with_lod_fade(lod_fade)
                 .with_reflectance(mat.reflectance)
-                .with_transmission_of(mat)
+                .with_lit_extras_of(mat)
                 .with_shadow_receiving(renderers.get(e).map(|r| r.receives_shadows).unwrap_or(true));
 
                 // --- SKELETON (KEMİK) ARAMASI ---
@@ -488,6 +483,7 @@ pub fn execute_render_pipeline(
                 } else {
                     // Off-screen caster kept above for shadow maps only.
                     batch.shadow_instances.push(instance_data);
+                }
                 }
             }
         }

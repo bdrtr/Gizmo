@@ -7203,9 +7203,10 @@ mod golden_render_tests {
             let with_ao = AssetManager::material().occlusion(&occluded).build(&mut assets, &renderer.device, &renderer.queue, &layout);
 
             let nothing: fn(Material) -> Material = |m| m;
-            let cases: [(&str, Arc<wgpu::BindGroup>, fn(Material) -> Material); 9] = [
+            let cases: [(&str, Arc<wgpu::BindGroup>, fn(Material) -> Material); 10] = [
                 ("anisotropy", plain.clone(), |m| m.with_anisotropy(0.9)),
                 ("clear coat", plain.clone(), |m| m.with_clear_coat(1.0)),
+                ("coat roughness", plain.clone(), |m| m.with_clear_coat(1.0).with_clear_coat_roughness(0.5)),
                 ("subsurface", plain.clone(), |m| m.with_subsurface(1.0)),
                 ("reflectance", plain.clone(), |m| m.with_reflectance(0.3)),
                 ("instance emissive", plain.clone(), |m| m.with_emissive(Vec3::new(0.0, 2.0, 0.0))),
@@ -7244,6 +7245,23 @@ mod golden_render_tests {
                 );
                 eprintln!("reflectance, forward {forward}: none {n:.1}, default {d:.1}, diamond {g:.1}");
                 assert!(n + 2.0 < d && d + 2.0 < g, "forward {forward}: none {n}, default {d}, diamond {g}");
+            }
+
+            // A coat is not an on/off switch: the row that called it near-binary measured a highlight
+            // already saturating the tone curve. Dim enough to read, the coat's share grows with the coat,
+            // on both paths. Excess over no coat, on a dark surface, head on to a faint sun.
+            let bare_base: fn(Material) -> Material = |m| m.with_pbr(Vec4::new(0.02, 0.02, 0.02, 1.0), 0.9, 0.0);
+            let thin: fn(Material) -> Material = |m| m.with_pbr(Vec4::new(0.02, 0.02, 0.02, 1.0), 0.9, 0.0).with_clear_coat(0.2);
+            let thick: fn(Material) -> Material = |m| m.with_pbr(Vec4::new(0.02, 0.02, 0.02, 1.0), 0.9, 0.0).with_clear_coat(0.8);
+            let satin: fn(Material) -> Material = |m| m.with_pbr(Vec4::new(0.02, 0.02, 0.02, 1.0), 0.9, 0.0).with_clear_coat(0.8).with_clear_coat_roughness(0.6);
+            for forward in [true, false] {
+                let base = total(centre(&mut renderer, plain.clone(), bare_base, forward, true).await);
+                let t = total(centre(&mut renderer, plain.clone(), thin, forward, true).await) - base;
+                let k = total(centre(&mut renderer, plain.clone(), thick, forward, true).await) - base;
+                let s = total(centre(&mut renderer, plain.clone(), satin, forward, true).await) - base;
+                eprintln!("coat, forward {forward}: 0.2 adds {t:.1}, 0.8 adds {k:.1}, 0.8 at roughness 0.6 adds {s:.1}");
+                assert!(t > 1.0 && k > t * 2.0, "forward {forward}: 0.2 adds {t}, 0.8 adds {k}");
+                assert!(s < k * 0.5, "a rough coat's highlight is dimmer at its peak, forward {forward}: {k} and {s}");
             }
 
             // A baked irradiance grid, last, since it stays in the renderer: L0 alone is a red sky.
@@ -9998,6 +10016,131 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                 eprintln!("forward {forward}: front {front}, back {back}");
                 assert!(front > 60.0, "the sun reaches the panel: {front}");
                 assert!((front - back).abs() < 6.0, "forward {forward}: front {front}, back {back}");
+            }
+        });
+    }
+
+    /// **A hole shows what stands behind it**, on the deferred path. The depth prepass had no fragment
+    /// stage, so a cut-out wrote depth over its own holes and whatever was behind it failed the depth test
+    /// in the G-buffer pass: the holes showed the sky, whatever was really there.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_cut_out_shows_what_stands_behind_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let behind = world.spawn();
+            world.add_component(behind, Transform::new(Vec3::new(0.0, 0.0, -6.0)));
+            world.add_component(behind, GlobalTransform::default());
+            world.add_component(behind, AssetManager::create_cube(&renderer.device));
+            world.add_component(behind, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.1, 0.1, 1.0), 0.9, 0.0).with_emissive(Vec3::new(1.5, 0.0, 0.0)));
+            world.add_component(behind, MeshRenderer::new());
+            // A pane all of whose texels fall under the threshold: nothing of it is there.
+            let pane = world.spawn();
+            world.add_component(pane, Transform::new(Vec3::new(0.0, 0.0, -3.0)).with_scale(Vec3::new(3.0, 3.0, 0.05)));
+            world.add_component(pane, GlobalTransform::default());
+            world.add_component(pane, AssetManager::create_cube(&renderer.device));
+            world.add_component(pane, Material::new(tex).with_pbr(Vec4::new(0.9, 0.9, 0.9, 0.3), 0.9, 0.0).with_alpha_cutoff(0.5).with_transparent(false));
+            world.add_component(pane, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let p = &frame[(64 * 128 + 64) * 4..][..3];
+            assert!(i32::from(p[0]) > i32::from(p[1]) + 60, "the red cube shows through the holes: {p:?}");
+        });
+    }
+
+    /// **A level change can dissolve instead of popping.** A cube out to 10 m and a sphere after, with a
+    /// 4 m band: well inside each, only that shape; halfway, about half the cube's corner and no pixel of
+    /// the overlap missing, so nothing shows through it. After the last level's band it is gone.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_lod_group_crossfades_without_holes() {
+        use crate::renderer::components::{LodGroup, LodLevel};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
+            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            for lit in [false, true] {
+                // Unlit, then lit, which goes through the G-buffer.
+                let material = |tex: &std::sync::Arc<wgpu::BindGroup>, c: Vec4| {
+                    let m = Material::new(tex.clone());
+                    if lit { m.with_pbr(c, 0.9, 0.0).with_emissive(Vec3::new(c.x, c.y, c.z)) } else { m.with_unlit(c) }
+                };
+                let mut span = 0usize;
+                for (d, want) in [(5.0f32, (true, false)), (10.0, (true, true)), (20.0, (false, true)), (33.0, (false, false))] {
+                    let mut world = World::new();
+                    let e = world.spawn();
+                    let cube = AssetManager::create_cube(&renderer.device);
+                    world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, -d)).with_scale(Vec3::splat(d * 0.2)));
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(e, cube.clone());
+                    world.add_component(e, material(&tex, Vec4::new(0.0, 1.0, 0.0, 1.0)));
+                    world.add_component(e, MeshRenderer::new());
+                    // A group has one material, so the levels are told apart by shape: a cube's corner is
+                    // outside the sphere inscribed in it, and its middle is inside.
+                    world.add_component(e, LodGroup::new(vec![LodLevel::new(cube.clone(), 10.0), LodLevel::new(AssetManager::create_sphere(&renderer.device, 1.0, 16, 16), 30.0)]).with_crossfade(4.0));
+                    let camera = world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+                    // No bloom, or the glow of the pixels each level keeps fills in the ones it does not.
+                    world.add_component(camera, crate::renderer::components::PostProcess::new().with_bloom(0.0, 100.0));
+                    let frame = render_world(&mut renderer, &mut world).await;
+                    let green = |x: usize, y: usize| frame[(y * 128 + x) * 4 + 1] > 120;
+                    // The corner of the cube's face is outside the sphere: only the cube draws there.
+                    // The middle of the face is inside both, so a hole there is a pixel of neither.
+                    // The size is proportional to the distance, so the first frame's half-width is every frame's.
+                    if span == 0 {
+                        span = (64..128).take_while(|&x| green(x, 64)).count();
+                    }
+                    // The anti-aliasing pass smears the pattern, so a corner is measured as a mean: how much
+                    // of the way from the background to the level.
+                    let mut corner = 0.0f32;
+                    for (sx, sy) in [(1i32, 1i32), (1, -1), (-1, 1), (-1, -1)] {
+                        for i in 0..3 {
+                            for j in 0..3 {
+                                let at = |sign: i32, k: i32| (64 + sign * (span as i32 - 2 - k)) as usize;
+                                corner += f32::from(frame[(at(sy, j) * 128 + at(sx, i)) * 4 + 1]) / 36.0;
+                            }
+                        }
+                    }
+                    let middle = (58..70).flat_map(|y| (58..70).map(move |x| (x, y))).filter(|&(x, y)| green(x, y)).count();
+                    eprintln!("lit {lit}, at {d} m: corners read {corner:.0}, middle {middle} of 144");
+                    match want {
+                        (true, false) => assert!(corner > 200.0 && middle == 144, "lit {lit}: all the near level"),
+                        (true, true) => {
+                            assert!(corner > 90.0 && corner < 190.0, "lit {lit}: the near level keeps about half its pixels: {corner}");
+                            assert_eq!(middle, 144, "lit {lit}: no pixel of the overlap is neither");
+                        }
+                        (false, true) => assert!(corner < 80.0 && middle == 144, "lit {lit}: all the far level: {corner}"),
+                        (false, false) => assert!(corner < 80.0 && middle == 0, "lit {lit}: gone"),
+                    }
+                }
             }
         });
     }

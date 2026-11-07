@@ -330,6 +330,27 @@ fn V_SmithJointGGX(NoV: f32, NoL: f32, roughness: f32) -> f32 {
     return 0.5 / max(lambdaV + lambdaL, 0.0001);
 }
 
+// Whether a pixel survives `InstanceRaw.ambient.w`. 0: yes. Positive: the cut-out threshold. Negative:
+// a LOD crossfade, `-(n + threshold)`: n up to 255 keeps the share of the pattern below n/256, and
+// n + 256 keeps the rest, so the two levels of a band split every pixel between them.
+fn instance_keeps(packed: f32, alpha: f32, pixel: vec2<f32>) -> bool {
+    if (packed == 0.0) {
+        return true;
+    }
+    var threshold = packed;
+    if (packed < 0.0) {
+        let whole = floor(-packed);
+        threshold = -packed - whole;
+        let pattern = fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+        let below = pattern < whole / 256.0;
+        let keep = select(below, pattern >= (whole - 256.0) / 256.0, whole > 256.0);
+        if (!keep) {
+            return false;
+        }
+    }
+    return alpha >= threshold;
+}
+
 // What `InstanceRaw.emissive.w` (and RT5's alpha, its copy) says about a non-metal's F0: the
 // magnitude, with 0 standing for "not set". Its sign is `receives_shadows`, tested by the callers.
 fn dielectric_f0(packed: f32) -> f32 {

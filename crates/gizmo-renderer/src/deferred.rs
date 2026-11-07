@@ -111,6 +111,9 @@ pub struct DeferredState {
     /// discard the back face's depth and leave the G-buffer pass drawing it against whatever was
     /// behind.
     pub z_prepass_double_sided_pipeline: wgpu::RenderPipeline,
+    /// The prepass of a draw that discards, single-sided then double-sided: see `fs_prepass` in
+    /// `gbuffer.wgsl`.
+    pub z_prepass_discard_pipelines: [wgpu::RenderPipeline; 2],
 
     // Lighting pass (fullscreen triangle → HDR texture)
     /// The lighting pass: a fullscreen triangle that reads the four targets and resolves every
@@ -179,10 +182,15 @@ impl DeferredState {
             scene,
             &motion.layout,
             Some(wgpu::Face::Back),
+            false,
             "Z-Prepass Pipeline",
         );
+        let z_prepass_discard_pipelines = [
+            Self::create_z_prepass_pipeline(device, scene, &motion.layout, Some(wgpu::Face::Back), true, "Z-Prepass Discard Pipeline"),
+            Self::create_z_prepass_pipeline(device, scene, &motion.layout, None, true, "Z-Prepass Discard TwoSided Pipeline"),
+        ];
         let z_prepass_double_sided_pipeline =
-            Self::create_z_prepass_pipeline(device, scene, &motion.layout, None, "Z-Prepass TwoSided Pipeline");
+            Self::create_z_prepass_pipeline(device, scene, &motion.layout, None, false, "Z-Prepass TwoSided Pipeline");
         let gbuffer_pipeline = Self::create_gbuffer_pipeline(
             device,
             scene,
@@ -219,6 +227,7 @@ impl DeferredState {
             gbuffer_double_sided_pipeline,
             z_prepass_pipeline,
             z_prepass_double_sided_pipeline,
+            z_prepass_discard_pipelines,
             lighting_pipeline,
             irradiance,
             gbuffer_bind_group_layout,
@@ -576,6 +585,7 @@ impl DeferredState {
         scene: &SceneState,
         motion_layout: &wgpu::BindGroupLayout,
         cull_mode: Option<wgpu::Face>,
+        discards: bool,
         label: &str,
     ) -> wgpu::RenderPipeline {
         let shader = crate::pipeline::shaders::load_shader_composed(
@@ -608,7 +618,14 @@ impl DeferredState {
                 compilation_options: Default::default(),
                 buffers: &[Some(Vertex::desc())],
             },
-            fragment: None, // NO COLOR TARGETS!
+            // No colour targets either way. No fragment stage at all unless the draw discards, which is
+            // what makes this pass cheap.
+            fragment: discards.then(|| wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_prepass"),
+                compilation_options: Default::default(),
+                targets: &[],
+            }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 front_face: wgpu::FrontFace::Ccw,

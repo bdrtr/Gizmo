@@ -6,7 +6,7 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, dielectric_f0, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
+#import gizmo::common::{SceneUniforms, dielectric_f0, instance_keeps, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
@@ -123,6 +123,9 @@ struct VertexOutput {
 #ifdef TRANSMISSION
     @location(10) inst_glass: vec2<f32>,  // Material::transmission, Material::thickness
 #endif
+#ifdef LOBES
+    @location(11) inst_coat_roughness: f32,  // Material::clear_coat_roughness
+#endif
 };
 
 @vertex
@@ -183,6 +186,9 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_emissive = inst.emissive;
 #ifdef TRANSMISSION
     out.inst_glass = inst.ambient.xy;
+#endif
+#ifdef LOBES
+    out.inst_coat_roughness = inst.ambient.z;
 #endif
 
     // Kameraya yansıt
@@ -268,7 +274,7 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
         discard;
     }
 #endif
-    if (in.inst_cutoff > 0.0 && final_alpha < in.inst_cutoff) {
+    if (!instance_keeps(in.inst_cutoff, final_alpha, in.clip_position.xy)) {
         discard;
     }
     if (surface.alpha_cutoff > 0.0 && final_alpha < surface.alpha_cutoff) {
@@ -386,6 +392,7 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
     let lobes = surface_lobes(in.inst_pbr);
     let anisotropy = lobes.x;
     let clear_coat = lobes.y;
+    let coat_roughness = max(in.inst_coat_roughness, 0.08);
     let subsurface = lobes.z;
     let T = normalize(in.tangent);
     let B = normalize(in.bitangent);
@@ -423,11 +430,11 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
         let coat_atten_env = coat_env_attenuation(NdV, clear_coat);
         ambient *= coat_atten_env;
         specular_ibl *= coat_atten_env;
-        var coat_env = get_procedural_environment(normalize(mix(reflect(-view_dir, N), N, 0.08)), 0.08);
+        var coat_env = get_procedural_environment(normalize(mix(reflect(-view_dir, N), N, coat_roughness)), coat_roughness);
 #ifdef PROBES
-        coat_env = probe_environment(reflect(-view_dir, N), in.world_position, 0.08, coat_env);
+        coat_env = probe_environment(reflect(-view_dir, N), in.world_position, coat_roughness, coat_env);
 #endif
-        specular_ibl += coat_env_specular(coat_env, NdV) * clear_coat;
+        specular_ibl += coat_env_specular(coat_env, NdV, coat_roughness) * clear_coat;
     }
 #endif
 
@@ -447,7 +454,7 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
             );
         }
         if (clear_coat > 0.0) {
-            sun_light = layer_clear_coat(sun_light, N, view_dir, L, scene.sun_color.rgb, scene.sun_color.w, shadow_visibility, clear_coat);
+            sun_light = layer_clear_coat(sun_light, N, view_dir, L, scene.sun_color.rgb, scene.sun_color.w, shadow_visibility, clear_coat, coat_roughness);
         }
         if (subsurface > 0.0) {
             sun_light += subsurface_light(N, view_dir, L, metallic, subsurface) * scene.sun_color.rgb * scene.sun_color.w * shadow_visibility;
@@ -533,7 +540,7 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
         }
 #ifdef LOBES
         if (clear_coat > 0.0) {
-            light_color_contrib = layer_clear_coat(light_color_contrib, N, view_dir, L, light_rgb, intensity, attenuation, clear_coat);
+            light_color_contrib = layer_clear_coat(light_color_contrib, N, view_dir, L, light_rgb, intensity, attenuation, clear_coat, coat_roughness);
         }
 #endif
         total_lighting += light_color_contrib;

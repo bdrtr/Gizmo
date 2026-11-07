@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`LodGroup::with_crossfade(metres)`.** A level change dissolves over a band around its far edge instead of popping: the two
+  levels split the pixels between them by a screen-space pattern, so no pixel gets both or neither and nothing blends. After the
+  last level, the entity fades out and then is gone. Both draw loops, lit and unlit.
+
+- **`Material::with_clear_coat_roughness`.** From the hard lacquer that every coat has been (0.08) up to 1: worn paint, satin.
+  Both paths, with no new render target. A coat was never near-binary, as the docs said: that was a highlight saturating the tone
+  curve. Dim enough to read, 0.2 adds 72 and 0.8 adds 217.
+
 - **Depth of field through a lens: `PostProcess::with_lens(focus, f_stops, max_blur)`.** A thin lens, with the focal length from
   the sensor (`dof_sensor_height`) and the camera's field of view, so a long lens is shallower, as is a wide aperture.
   `dof_max_depth` limits what a sky counts as. The focus band stays. **Looks change** for any camera with a blur: the radius is
@@ -99,6 +107,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Immutable components.** `impl_component!(T; immutable)`, and `&mut T` in a query does not compile.
 
 ### Fixed
+
+- **A cut-out's holes showed the sky on the deferred path, whatever stood behind them.** The depth prepass has no fragment stage,
+  so it wrote depth over the holes, and the G-buffer pass then rejected what was behind them. A draw that discards has a prepass
+  that discards. `Material::alpha_cutoff` also now works on that path at all: the G-buffer read only a glTF material's threshold,
+  and a glTF `Mask` material now sets the field too. **Looks change:** foliage and fences show the world through them.
 
 - **The back of a double-sided or transparent surface was lit with the front's normal**, on both render paths, so it read as turned
   away from a light shining straight on it (a pale panel: 195 from the front, far less from behind; 195 from both now). Found

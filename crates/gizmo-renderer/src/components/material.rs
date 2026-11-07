@@ -147,6 +147,9 @@ pub struct Material {
     pub anisotropy: f32,
     /// A second, smoother specular layer over the base — car paint, lacquer. 0 = none.
     pub clear_coat: f32,
+    /// How rough that layer is, from [`MIN_COAT_ROUGHNESS`], a hard lacquer, to 1. A rougher coat has a
+    /// broader, dimmer highlight and a blurrier reflection: worn paint, a satin varnish.
+    pub clear_coat_roughness: f32,
     /// How much light scatters through the surface — skin, wax, leaves. 0 = opaque.
     pub subsurface: f32,
     /// Light that reaches the surface no matter where the sun is (linear RGB).
@@ -229,6 +232,10 @@ pub struct Material {
     pub thickness: f32,
 }
 
+/// The smoothest a clear coat gets, and what one that says nothing is. Any smoother and the highlight is
+/// a point too small and too bright to read as anything.
+pub const MIN_COAT_ROUGHNESS: f32 = 0.08;
+
 /// The F0 of a non-metal that says nothing: index of refraction 1.5.
 pub const DIELECTRIC_REFLECTANCE: f32 = 0.04;
 
@@ -267,6 +274,9 @@ pub struct MaterialDesc {
     pub anisotropy: f32,
     /// See [`Material::clear_coat`].
     pub clear_coat: f32,
+    /// See [`Material::clear_coat_roughness`]. A scene that does not say gets the hard lacquer.
+    #[serde(default = "default_coat_roughness")]
+    pub clear_coat_roughness: f32,
     /// See [`Material::subsurface`].
     pub subsurface: f32,
     /// See [`Material::ambient`].
@@ -299,6 +309,10 @@ pub struct MaterialDesc {
     pub thickness: f32,
 }
 
+fn default_coat_roughness() -> f32 {
+    MIN_COAT_ROUGHNESS
+}
+
 fn default_reflectance() -> f32 {
     DIELECTRIC_REFLECTANCE
 }
@@ -317,6 +331,7 @@ impl From<&Material> for MaterialDesc {
             metallic,
             anisotropy,
             clear_coat,
+            clear_coat_roughness,
             subsurface,
             ambient,
             emissive,
@@ -336,6 +351,7 @@ impl From<&Material> for MaterialDesc {
             metallic: *metallic,
             anisotropy: *anisotropy,
             clear_coat: *clear_coat,
+            clear_coat_roughness: *clear_coat_roughness,
             subsurface: *subsurface,
             ambient: *ambient,
             emissive: *emissive,
@@ -363,6 +379,7 @@ impl MaterialDesc {
             metallic: self.metallic,
             anisotropy: self.anisotropy,
             clear_coat: self.clear_coat,
+            clear_coat_roughness: self.clear_coat_roughness,
             subsurface: self.subsurface,
             ambient: self.ambient,
             emissive: self.emissive,
@@ -389,6 +406,7 @@ impl Default for MaterialDesc {
             metallic: 0.0,
             anisotropy: 0.0,
             clear_coat: 0.0,
+            clear_coat_roughness: MIN_COAT_ROUGHNESS,
             subsurface: 0.0,
             // Zero: the neutral element of both terms, so a material built today shades
             // exactly as it did before these fields existed.
@@ -437,6 +455,12 @@ macro_rules! material_builders {
     /// Sets [`Material::clear_coat`], clamped into `[0, 1]`.
     pub fn with_clear_coat(mut self, clear_coat: f32) -> Self {
         self.clear_coat = clear_coat.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Sets [`Material::clear_coat_roughness`], clamped into `[`[`MIN_COAT_ROUGHNESS`]`, 1]`.
+    pub fn with_clear_coat_roughness(mut self, roughness: f32) -> Self {
+        self.clear_coat_roughness = roughness.clamp(MIN_COAT_ROUGHNESS, 1.0);
         self
     }
 

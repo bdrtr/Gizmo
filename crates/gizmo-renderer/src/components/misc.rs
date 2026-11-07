@@ -55,6 +55,20 @@ impl Terrain {
 pub struct LodGroup {
     /// The levels, finest first — [`LodGroup::new`] sorts them by [`LodLevel::max_distance`].
     pub levels: Vec<LodLevel>,
+    /// How wide the band around each level's far edge is, in metres, over which it dissolves into the
+    /// next, or into nothing after the last. 0 is a hard switch. A band is narrowed to fit between its
+    /// neighbours. See [`Self::with_crossfade`].
+    pub crossfade: f32,
+}
+
+/// How much of a level a frame draws while it crossfades. The two levels of a band split the pixels
+/// between them by a screen-space pattern, so no pixel gets both or neither, and nothing needs blending.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LodFade {
+    /// The share of the pixels on one side of the pattern, in `(0, 1)`.
+    pub edge: f32,
+    /// Whether this level is the share below [`Self::edge`], or the rest.
+    pub below: bool,
 }
 
 /// One level of a [`LodGroup`]: a mesh, and the distance out to which it is used.
@@ -100,7 +114,53 @@ impl LodGroup {
         );
         let mut levels = levels;
         levels.sort_by(|a, b| a.max_distance.total_cmp(&b.max_distance));
-        Self { levels }
+        Self { levels, crossfade: 0.0 }
+    }
+
+    /// Builder: dissolve between levels over a band this wide (metres) instead of switching, so a level
+    /// change does not pop. Both levels are drawn while in the band. Past the last level's band the
+    /// entity is gone, as without this, having faded out instead of vanishing.
+    #[must_use]
+    pub fn with_crossfade(mut self, metres: f32) -> Self {
+        self.crossfade = metres.max(0.0);
+        self
+    }
+
+    /// What an entity draws this frame: [`Self::pick`] with the crossfade, so one level with no fade, or
+    /// the two sides of a band. Empty past the last level. An entity with no group draws its own mesh.
+    pub fn pick_faded<'a>(
+        group: Option<&'a Self>,
+        own_mesh: &'a super::mesh::Mesh,
+        distance: f32,
+    ) -> [Option<(&'a super::mesh::Mesh, Option<LodFade>)>; 2] {
+        let Some(group) = group else {
+            return [Some((own_mesh, None)), None];
+        };
+        let bounds: Vec<f32> = group.levels.iter().map(|l| l.max_distance).collect();
+        Self::faded_levels(&bounds, group.crossfade, distance)
+            .map(|side| side.map(|(level, fade)| (&group.levels[level].mesh, fade)))
+    }
+
+    /// [`Self::pick_faded`] over bare bounds, testable without a GPU.
+    fn faded_levels(bounds: &[f32], crossfade: f32, distance: f32) -> [Option<(usize, Option<LodFade>)>; 2] {
+        // A band stays between its neighbours: half of it reaches no further than halfway to either.
+        let half_band = |i: usize| {
+            let below = if i == 0 { f32::INFINITY } else { bounds[i] - bounds[i - 1] };
+            let above = bounds.get(i + 1).map_or(f32::INFINITY, |next| next - bounds[i]);
+            (crossfade * 0.5).min(below * 0.5).min(above * 0.5)
+        };
+        let Some(level) = (0..bounds.len()).find(|&i| distance <= bounds[i] + half_band(i)) else {
+            return [None, None];
+        };
+        let half = half_band(level);
+        if half <= 0.0 || distance <= bounds[level] - half {
+            return [Some((level, None)), None];
+        }
+        // Across the band the outgoing level's share falls from all of the pixels to none.
+        let through = (distance - (bounds[level] - half)) / (2.0 * half);
+        let edge = (1.0 - through).clamp(1.0 / 256.0, 255.0 / 256.0);
+        let next = (level + 1 < bounds.len()).then_some((level + 1, Some(LodFade { edge, below: false })));
+        [Some((level, Some(LodFade { edge, below: true }))), next]
     }
 
     /// The mesh for `distance`, or `None` past the last level (cull).
@@ -163,6 +223,38 @@ mod lod_tests {
 
     fn pick(bounds: &[f32], distance: f32) -> Option<usize> {
         LodGroup::level_for(bounds.iter().copied(), distance)
+    }
+
+    /// The band sits around each far edge; inside it the two levels are the two sides of one pattern,
+    /// and the outgoing share falls across it. Past the last edge it fades to nothing, then culls.
+    #[test]
+    fn a_crossfade_splits_the_band_between_two_levels() {
+        let at = |d| LodGroup::faded_levels(&[10.0, 30.0], 4.0, d);
+        assert_eq!(at(5.0), [Some((0, None)), None], "well inside a level");
+        assert_eq!(at(7.9), [Some((0, None)), None], "just before the band");
+        let [out, into] = at(10.0);
+        let (out, into) = (out.unwrap(), into.unwrap());
+        assert_eq!((out.0, into.0), (0, 1));
+        let (a, b) = (out.1.unwrap(), into.1.unwrap());
+        assert_eq!(a.edge, 0.5, "halfway through the band, half the pixels each");
+        assert_eq!(b.edge, a.edge, "one pattern, so no pixel gets both or neither");
+        assert!(a.below && !b.below);
+        let early = at(8.5)[0].unwrap().1.unwrap().edge;
+        let late = at(11.5)[0].unwrap().1.unwrap().edge;
+        assert!(early > 0.5 && late < 0.5, "the outgoing share falls: {early} then {late}");
+        assert_eq!(at(20.0), [Some((1, None)), None]);
+        let [last, none] = at(31.0);
+        assert!(last.unwrap().1.unwrap().below && none.is_none(), "past the last edge there is nothing to dissolve into");
+        assert_eq!(at(33.0), [None, None], "and then it is gone");
+        // No crossfade is the old rule, closed at the top.
+        let hard = |d| LodGroup::faded_levels(&[10.0, 30.0], 0.0, d);
+        assert_eq!(hard(10.0), [Some((0, None)), None]);
+        assert_eq!(hard(10.1), [Some((1, None)), None]);
+        assert_eq!(hard(30.1), [None, None]);
+        // A band wider than the gap stops halfway to its neighbour.
+        let tight = |d| LodGroup::faded_levels(&[10.0, 12.0], 8.0, d);
+        assert_eq!(tight(10.5)[0].unwrap().0, 0);
+        assert_eq!(tight(11.5)[0].unwrap().0, 1, "past halfway it is the second level's band");
     }
 
     /// Bands are closed at the top: a distance exactly on a bound belongs to that level, not the

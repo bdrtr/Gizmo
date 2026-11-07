@@ -923,6 +923,7 @@ fn every_capability_neither_path_names_is_accounted_for() {
     /// (capability, why neither draw path names it).
     const SILENT: &[(&str, &str)] = &[
         // ── Reached only through a driver both paths run ───────────────────────────────────
+        ("LodFade", "what `LodGroup::pick_faded` hands both loops, which each pass to `with_lod_fade`; a value, not a component."),
         ("ActiveBlend", "cross-fade state inside the animation drivers; the drivers are guarded by `both_draw_paths_run_the_same_per_frame_drivers`."),
         ("AnimationClip", "the clip data those drivers sample; same guard."),
         ("AnimationState", "a state machine's state; same guard."),

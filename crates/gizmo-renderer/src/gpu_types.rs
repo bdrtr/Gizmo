@@ -529,6 +529,19 @@ impl InstanceRaw {
         self
     }
 
+    /// Carry a LOD crossfade in `ambient.w`, on top of the cut-out threshold there: negative, the whole
+    /// part says which pixels this level keeps and the fraction is the threshold (`instance_keeps` in
+    /// `common.wgsl`). `None` leaves the slot as it is, so an instance with no fade is unchanged.
+    #[must_use]
+    pub fn with_lod_fade(mut self, fade: Option<crate::components::LodFade>) -> Self {
+        if let Some(fade) = fade {
+            let edge = (fade.edge * 256.0).round().clamp(1.0, 255.0);
+            let whole = if fade.below { edge } else { edge + 256.0 };
+            self.ambient[3] = -(whole + self.ambient[3].clamp(0.0, 0.999));
+        }
+        self
+    }
+
     /// Carry [`MeshRenderer::receives_shadows`](crate::components::MeshRenderer::receives_shadows)
     /// in the sign of `emissive.w`: negative means "no shadow falls on this". The magnitude is
     /// [`with_reflectance`](Self::with_reflectance)'s and survives this call.
@@ -550,15 +563,22 @@ impl InstanceRaw {
         self
     }
 
-    /// Carry [`Material::transmission`](crate::components::Material::transmission) and
-    /// [`Material::thickness`](crate::components::Material::thickness) in `ambient.xy`, for a
-    /// material that [draws as glass](crate::components::Material::is_transmissive). Only baked-lit
-    /// reads `ambient`, and a baked-lit material never draws as glass, so the slot is free there.
+    /// Carry what only a PBR material has in `ambient.xyz`: [`transmission`] and [`thickness`] for one
+    /// that [draws as glass], and [`clear_coat_roughness`] for one with a coat. Only baked-lit reads
+    /// `ambient` as light, so the slot is free on the path these are read on.
+    ///
+    /// [`transmission`]: crate::components::Material::transmission
+    /// [`thickness`]: crate::components::Material::thickness
+    /// [draws as glass]: crate::components::Material::is_transmissive
+    /// [`clear_coat_roughness`]: crate::components::Material::clear_coat_roughness
     #[must_use]
-    pub fn with_transmission_of(mut self, material: &crate::components::Material) -> Self {
+    pub fn with_lit_extras_of(mut self, material: &crate::components::Material) -> Self {
         if material.is_transmissive() {
             self.ambient[0] = material.transmission;
             self.ambient[1] = material.thickness;
+        }
+        if material.material_type == crate::components::MaterialType::Pbr && material.clear_coat > 0.0 {
+            self.ambient[2] = material.clear_coat_roughness;
         }
         self
     }
