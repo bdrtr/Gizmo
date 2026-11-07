@@ -586,7 +586,8 @@ mod tests {
 
         let src = include_str!("shaders/common.wgsl");
         let body = &src[src.find("fn height_fog").unwrap()..];
-        let body = &body[..body.find("\n}\n").unwrap()];
+        // The closing brace at the start of a line, whichever line ending the checkout has: Windows' is `\r\n`.
+        let body = &body[..body.find("\n}").unwrap()];
         assert!(!body.contains("if ("), "a phone pays for a branch here whether or not it is taken");
     }
 
