@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -75,13 +75,12 @@ fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
     return 1.0 - smoothstep(far - band, far, view_depth);
 }
 
-// What lights and is reflected by a surface: `Renderer::sky` when one is set (intensity ≥ 0; < 0 = no
-// override), otherwise the presets. Same in `shader.wgsl`; the `scene` binding keeps it out of common.
+// What lights and is reflected by a surface: `scene_environment` along `dir`, as in `shader.wgsl`.
 fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
-    if (scene.sky_zenith.a >= 0.0) {
-        return sky_gradient(dir, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, roughness) * scene.sky_zenith.a;
-    }
-    return preset_environment(dir, roughness, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz));
+    return scene_environment(
+        dir, roughness, scene.sky_zenith, scene.sky_horizon.rgb, scene.sky_ground.rgb, scene.environment_preset,
+        scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz),
+    );
 }
 
 // The anisotropic GGX, clear-coat and env-BRDF lobes now live in gizmo::pbr_ext (imported at

@@ -101,6 +101,8 @@ pub struct SceneState {
     pub behind_view: wgpu::TextureView,
     /// How the glass shader reads that frame.
     pub behind_sampler: wgpu::Sampler,
+    /// The environment drawn into a cube, which the forward-only path's lit shader reads (`env_cube`).
+    pub(crate) env_cube: crate::env_cube::EnvironmentCube,
     /// [`unlit_pipeline`](Self::unlit_pipeline) with `KEEPS`, on the forward-only path, whose plain one
     /// cannot discard: a cut-out, a LOD crossfade. `None` on the desktop path, whose unlit pipeline can.
     pub unlit_keeps_pipeline: Option<wgpu::RenderPipeline>,
@@ -285,32 +287,15 @@ impl SceneView {
             mapped_at_creation: false,
         });
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &scene.global_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: uniform_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: cluster_table_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: cluster_index_buffer.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&scene.behind_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: wgpu::BindingResource::Sampler(&scene.behind_sampler),
-                },
-            ],
-            label: Some(label),
-        });
+        let bind_group = global_group(
+            device,
+            &scene.global_bind_group_layout,
+            label,
+            [&uniform_buffer, &cluster_table_buffer, &cluster_index_buffer],
+            &scene.behind_view,
+            &scene.behind_sampler,
+            scene.env_cube.view(),
+        );
 
         let mk_shadow_uniform = |i: usize, kind: &str| {
             device.create_buffer(&wgpu::BufferDescriptor {
@@ -403,17 +388,15 @@ impl SceneState {
         self.behind_view = behind.unwrap_or(&self.behind_fallback).clone();
         let view = &self.behind_view;
         let build = |uniform: &wgpu::Buffer, table: &wgpu::Buffer, indices: &wgpu::Buffer| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("global_bind_group"),
-                layout: &self.global_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: table.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 2, resource: indices.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(view) },
-                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&self.behind_sampler) },
-                ],
-            })
+            global_group(
+                device,
+                &self.global_bind_group_layout,
+                "global_bind_group",
+                [uniform, table, indices],
+                view,
+                &self.behind_sampler,
+                self.env_cube.view(),
+            )
         };
         let global = build(&self.global_uniform_buffer, &self.cluster_table_buffer, &self.cluster_index_buffer);
         let views: Vec<wgpu::BindGroup> = self
@@ -425,6 +408,19 @@ impl SceneState {
         for (v, group) in self.views.iter_mut().zip(views) {
             v.bind_group = group;
         }
+    }
+
+    /// Draws the environment cube again if this frame's sky, presets or sun changed what it shows; true if
+    /// it did. The forward-only path's lit shader reads the cube. The desktop path works the environment
+    /// out per pixel, next to its reflection probes, and has no reason to call this.
+    pub fn update_environment(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        uniforms: &crate::gpu_types::SceneUniforms,
+    ) -> bool {
+        self.env_cube.update(device, queue, encoder, uniforms)
     }
 
     /// The pipeline for an unlit draw blending by alpha, or not at all. `discards` says it may discard.
@@ -468,6 +464,31 @@ impl SceneState {
             },
         }
     }
+}
+
+/// Group 0 for one view: its uniforms and light lists, the frame behind glass, and the environment cube.
+/// Every place that builds one goes through here, so a binding cannot be left out of one of them.
+fn global_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    label: &str,
+    [uniform, table, indices]: [&wgpu::Buffer; 3],
+    behind: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    environment: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some(label),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 1, resource: table.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 2, resource: indices.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(behind) },
+            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(environment) },
+        ],
+    })
 }
 
 impl SceneState {
@@ -710,32 +731,16 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         mipmap_filter: wgpu::MipmapFilterMode::Linear,
         ..Default::default()
     });
-    let global_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &layouts.global,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: global_uniform_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: cluster_table_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: cluster_index_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::TextureView(&behind_fallback),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::Sampler(&behind_sampler),
-            },
-        ],
-        label: Some("global_bind_group"),
-    });
+    let env_cube = crate::env_cube::EnvironmentCube::new(device);
+    let global_bind_group = global_group(
+        device,
+        &layouts.global,
+        "global_bind_group",
+        [&global_uniform_buffer, &cluster_table_buffer, &cluster_index_buffer],
+        &behind_fallback,
+        &behind_sampler,
+        env_cube.view(),
+    );
 
     let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: &layouts.shadow,
@@ -893,6 +898,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         wire_colors: std::collections::HashMap::new(),
         transmissive: core_pipelines.transmissive,
         behind_view: behind_fallback.clone(),
+        env_cube,
         behind_fallback,
         behind_sampler,
         shadow_pipeline,
@@ -1107,6 +1113,7 @@ mod tests {
                 ("shader.wgsl", include_str!("../shaders/shader.wgsl")),
                 ("gbuffer.wgsl", include_str!("../shaders/gbuffer.wgsl")),
                 ("deferred_lighting.wgsl", include_str!("../shaders/deferred_lighting.wgsl")),
+                ("env_bake.wgsl", include_str!("../shaders/env_bake.wgsl")),
                 ("post_process.wgsl", include_str!("../shaders/post_process.wgsl")),
                 ("ssao.wgsl", include_str!("../shaders/ssao.wgsl")),
                 ("ssao_blur.wgsl", include_str!("../shaders/ssao_blur.wgsl")),

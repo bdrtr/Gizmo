@@ -258,6 +258,18 @@ this driver: an exponential-only fog for the plain tier, with strictly less to d
 by both counts, for no reason found, which `height_fog` says next to the code. The driver is a black box, so
 measure rather than reason. Not measured: a browser.
 
+**Then the environment, which was most of the frame, 2026-11-08.** With the tiers in, the presets and
+`Renderer::sky` were still worked out at every fragment, twice, for the light and for the reflection: a
+constant in their place took the same phone from 63 fps to about 140. They depend on a direction, a
+roughness and what the frame says about the sky and the sun, so on the forward-only path they are drawn
+into a cube now (`env_cube`), 128 texels at its sharpest and mip `k` at roughness `k / 4`, only when
+what they depend on changes, and the lit shader samples it (`ENV_CUBE`). One function,
+`scene_environment` in `common.wgsl`, is what the bake, the desktop's forward shader and the deferred
+pass all call. In one sitting, alternating, twenty readings each: 52.9 fps before and 92.9 after, as the
+phone warmed through the afternoon; the floor's colour moved by at most 1 of 255. A sun that moves every
+frame draws the cube every frame, 30 small passes, which was not measured. The desktop path keeps
+working it out per pixel, next to its reflection probes.
+
 Unlit and baked-lit surfaces do not fill the G-buffer, so those effects still see through them, and a
 moving one gets no motion blur. Baked-lit exists to skip that cost, so changing this is its own
 decision.

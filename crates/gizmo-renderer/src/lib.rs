@@ -176,6 +176,8 @@ pub mod ssgi;
 pub mod ssr;
 /// An image as the sky: [`EnvironmentMap`](environment::EnvironmentMap).
 pub mod environment;
+/// The environment drawn into a cube for the forward-only path.
+pub(crate) mod env_cube;
 /// Temporal anti-aliasing.
 pub mod taa;
 /// The frame copied under glass, for [`Material::transmission`](crate::components::Material::transmission).

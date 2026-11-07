@@ -173,6 +173,19 @@ fn single_preset_environment(preset: u32, dir: vec3<f32>, roughness: f32, sun_di
     return mix(ground_val, sky_val, horizon_blend);
 }
 
+// What lights and is reflected by a surface along `dir`: `Renderer::sky` when one is set (`zenith.a`, its
+// intensity, ≥ 0; < 0 = none), otherwise the presets. The forward and deferred shaders call it per pixel
+// with the frame's uniforms, and `env_bake.wgsl` once per texel of the forward-only path's cube.
+fn scene_environment(
+    dir: vec3<f32>, roughness: f32, zenith: vec4<f32>, horizon: vec3<f32>, ground: vec3<f32>, preset: u32,
+    preset_b: u32, blend_t: f32, sun_dir: vec3<f32>,
+) -> vec3<f32> {
+    if (zenith.a >= 0.0) {
+        return sky_gradient(dir, zenith.rgb, horizon, ground, roughness) * zenith.a;
+    }
+    return preset_environment(dir, roughness, preset, preset_b, blend_t, sun_dir);
+}
+
 // The environment presets along `dir`, `blend_t` of the way from `preset` to `preset_b`: what lights
 // a surface and what it reflects, for the deferred and the forward shader alike. Pure: `sun_dir` is
 // the direction towards the sun.

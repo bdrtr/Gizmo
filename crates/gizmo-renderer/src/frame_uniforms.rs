@@ -797,7 +797,8 @@ mod tests {
                     continue;
                 }
                 for block in ["SceneUniforms {", "PostProcessUniforms {"] {
-                    if !line.contains(block) {
+                    // `-> SceneUniforms {` opens a function's body, not a literal.
+                    if !line.contains(block) || line.contains(&format!("-> {block}")) {
                         continue;
                     }
                     // Partial literals are the sanctioned form: `..Default::default()` fills

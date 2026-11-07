@@ -1295,6 +1295,10 @@ fn draw_camera_view(
     // CPU-computed inverse of the (unjittered) view-projection for the volumetric smoke raymarch
     // (the WGSL inverse_mat4 returns a wrong inverse for the perspective matrix).
     let inv_view_proj = unjittered_view_proj.inverse().to_cols_array_2d();
+    // The forward-only path's lit shader reads the environment from a cube; drawn again only when this
+    // frame's sky, presets or sun changed it.
+    #[cfg(gizmo_forward_only)]
+    renderer.scene.update_environment(&renderer.device, &renderer.queue, encoder, &scene_uniform_data);
     passes::record_forward_and_fluid(
         encoder, renderer, world, &draw_items, uploaded_instances, particle_lod, fluid_lod,
         inv_view_proj, clear_color,

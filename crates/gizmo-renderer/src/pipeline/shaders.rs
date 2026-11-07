@@ -63,6 +63,8 @@ pub(crate) fn web_render_defs() -> HashMap<String, ShaderDefValue> {
     HashMap::from([
         ("SKELETON_GROUP".to_string(), ShaderDefValue::UInt(2)),
         ("INSTANCE_GROUP".to_string(), ShaderDefValue::UInt(3)),
+        // The environment from a cube drawn when it changes (`env_cube`), not worked out per pixel.
+        ("ENV_CUBE".to_string(), ShaderDefValue::Bool(true)),
     ])
 }
 

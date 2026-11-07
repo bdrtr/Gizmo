@@ -151,6 +151,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tier read about 97. **Looks change** on the browser and on a phone: an opaque material's texel alpha is drawn solid,
   as the G-buffer always has. A surface that shows through says so with `is_transparent` or `alpha_cutoff`.
 
+- **A phone draws 1.75 times as many frames: the environment comes from a cube.** On the browser and on a phone the presets and
+  `Renderer::sky` were worked out at every fragment, twice, and that was most of the frame. They are drawn into a cube now, mip by
+  roughness, when what they depend on changes (`env_cube`), and the lit shader samples it. Nişancı on an Adreno 618, upright: 52.9 fps
+  before, 92.9 after, in one sitting; the floor's colour within 1 of 255. `scene_environment` in `common.wgsl` is the one function
+  every path calls. The desktop path is unchanged.
+
 - **Fog is settled once a frame.** `frame_uniforms::frame_fog` picks the preset, the blend and the `FogMode`, and `height_fog` is
   arithmetic on every path. `SceneUniforms::fog` is always the fog in force, where its alpha used to be negative for "none set".
 

@@ -73,6 +73,18 @@ pub(super) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            // The environment, mip by roughness (`crate::env_cube`), which the forward-only path's lit
+            // shader reads in place of working it out per pixel. On the global group for the same reason.
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
         ],
     });
 

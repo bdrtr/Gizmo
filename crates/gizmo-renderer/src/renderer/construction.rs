@@ -562,6 +562,7 @@ impl Renderer {
             behind_fallback: scene.behind_fallback,
             behind_view: scene.behind_view,
             behind_sampler: scene.behind_sampler,
+            env_cube: scene.env_cube,
             shadow_texture_view: scene.shadow_texture_view,
             shadow_cascade_layer_views: scene.shadow_cascade_layer_views,
             shadow_depth_texture: scene.shadow_depth_texture,

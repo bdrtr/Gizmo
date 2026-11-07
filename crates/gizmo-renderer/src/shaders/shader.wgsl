@@ -16,7 +16,7 @@
 #ifdef DETAILS
 #import gizmo::common::{dielectric_f0, instance_keeps}
 #endif
-#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
@@ -65,8 +65,14 @@ var<uniform> wire_color: vec4<f32>;
 // The frame as it stood before any glass was drawn, with its mip chain (`transmission.rs`).
 @group(0) @binding(3)
 var t_behind: texture_2d<f32>;
+#endif
+// Linear, with linear mips: it reads the frame behind glass, and the environment cube.
 @group(0) @binding(4)
 var s_behind: sampler;
+#ifdef ENV_CUBE
+// The environment, mip by roughness (`env_cube`).
+@group(0) @binding(5)
+var t_environment: texture_cube<f32>;
 #endif
 
 #ifdef SHADOWS
@@ -221,15 +227,22 @@ fn select_cascade(view_depth: f32) -> u32 {
 // D_GGX / V_SmithJointGGX / F_Schlick / compute_direct_lighting are imported from
 // gizmo::common (see the #import at the top). Only forward-specific code stays local.
 
-// What lights and is reflected by a surface: `Renderer::sky` when one is set (intensity ≥ 0; < 0 = no
-// override), otherwise the presets. Same in `deferred_lighting.wgsl`; the `scene` binding keeps it out
-// of common.
+// What lights and is reflected by a surface: `scene_environment` along `dir`. On the forward-only path
+// it was drawn into a cube once, mip by roughness (`env_cube`), because working it out here at every
+// fragment was most of a phone's frame.
+#ifdef ENV_CUBE
 fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
-    if (scene.sky_zenith.a >= 0.0) {
-        return sky_gradient(dir, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, roughness) * scene.sky_zenith.a;
-    }
-    return preset_environment(dir, roughness, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz));
+    let lod = clamp(roughness, 0.0, 1.0) * f32(textureNumLevels(t_environment) - 1u);
+    return textureSampleLevel(t_environment, s_behind, dir, lod).rgb;
 }
+#else
+fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
+    return scene_environment(
+        dir, roughness, scene.sky_zenith, scene.sky_horizon.rgb, scene.sky_ground.rgb, scene.environment_preset,
+        scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz),
+    );
+}
+#endif
 
 #ifdef DETAILS
 // One entry point per blend mode, because fog means something different under each. Fog stands
