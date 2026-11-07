@@ -1286,8 +1286,8 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   `LocalizedText::with_count` pick `key.one` for 1 and `key.other` otherwise, the forms always from
   **one** language (the current one if it has either, else the fallback — mixing them turned a
   Turkish 1 into the English "1 coin" in the first draft); Turkish writes only `other`, since the
-  noun stays singular after a number. Two forms only — Russian, Arabic and Polish need CLDR's full
-  rules, not implemented. Not yet: right-to-left text.
+  noun stays singular after a number. CLDR's full rules since 2026-11-07 (`icu_plurals`), Russian, Arabic
+  and Polish included. Right-to-left text is in `text/shape.rs`: bidi, then shaping.
 
 - ~~**No typed-out text.**~~ **Closed 2026-11-03.** Dialogue and announcements had no way to
   appear a character at a time. `Typewriter` (in the prelude) beside a `Text`: the label draws the

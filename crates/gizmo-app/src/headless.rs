@@ -80,6 +80,12 @@ impl<State: 'static> App<State> {
     /// runtimes no longer being mutually exclusive. Since `Plugin` speaks `AppLike` rather than
     /// a concrete runtime, this is available in EVERY build — including a windowed one, where a
     /// headless app used to be unable to take a plugin at all.
+    pub fn add_plugins<P: Plugin>(self, plugins: P) -> Self {
+        self.add_plugin(plugins)
+    }
+
+    /// Applies one plugin's setup; [`add_plugins`](Self::add_plugins) is the same call, for which a tuple
+    /// of plugins is a plugin.
     pub fn add_plugin<P: Plugin>(mut self, plugin: P) -> Self {
         tracing::info!(plugin = %std::any::type_name::<P>(), "[App:headless] plugin build");
         plugin.build(&mut self);
@@ -132,6 +138,34 @@ impl<State: 'static> App<State> {
         F: FnMut(&mut World, &mut State, f32) + 'static,
     {
         self.update_fn = Some(Box::new(f));
+        self
+    }
+
+    /// Adds systems to one of the app's schedules: [`Startup`](gizmo_core::system::Startup),
+    /// [`Update`](gizmo_core::system::Update) or [`FixedUpdate`](gizmo_core::system::FixedUpdate). `systems`
+    /// is one, a tuple of them (no order between them), or `(a, b).chain()`.
+    pub fn add_systems<L: gizmo_core::system::ScheduleLabel, T, C: gizmo_core::system::IntoSystemConfigs<T>>(
+        mut self,
+        label: L,
+        systems: C,
+    ) -> Self {
+        label.with_schedule(&mut self.world, &mut self.schedule, &mut self.update_schedule, |schedule| {
+            systems.into_configs(schedule);
+        });
+        self
+    }
+
+    /// Inserts a resource, replacing any of the same type.
+    pub fn insert_resource<R: Send + Sync + 'static>(mut self, resource: R) -> Self {
+        self.world.insert_resource(resource);
+        self
+    }
+
+    /// Inserts `R`'s default, unless the world already has an `R`.
+    pub fn init_resource<R: Default + Send + Sync + 'static>(mut self) -> Self {
+        if self.world.get_resource::<R>().is_none() {
+            self.world.insert_resource(R::default());
+        }
         self
     }
 
@@ -275,6 +309,70 @@ impl<State: 'static> crate::plugin::AppLike for App<State> {
 
 #[cfg(test)]
 mod exit_tests {
+    /// The shape a Bevy program has: resources and plugins on the app, systems named by schedule, a
+    /// tuple, a chain, and the startup that runs before them all.
+    #[test]
+    fn an_app_reads_like_a_bevy_one() {
+        use gizmo_core::prelude::*;
+        use gizmo_core::system::{FixedUpdate, IntoSystemChain, Startup, Update};
+
+        #[derive(Default)]
+        struct Log(Vec<&'static str>);
+        struct Limit(u32);
+
+        struct Greet;
+        impl crate::Plugin for Greet {
+            fn build(&self, app: &mut dyn crate::AppLike) {
+                app.parts_mut().world.insert_resource(7u8);
+            }
+        }
+        struct Part;
+        impl crate::Plugin for Part {
+            fn build(&self, app: &mut dyn crate::AppLike) {
+                app.parts_mut().world.insert_resource(9u16);
+            }
+        }
+
+        fn setup(mut log: ResMut<Log>) {
+            log.0.push("startup");
+        }
+        fn first(mut log: ResMut<Log>) {
+            log.0.push("first");
+        }
+        fn second(mut log: ResMut<Log>) {
+            log.0.push("second");
+        }
+        fn alone(limit: Res<Limit>) {
+            assert_eq!(limit.0, 2);
+        }
+        fn fixed(limit: Res<Limit>) {
+            assert_eq!(limit.0, 2);
+        }
+
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = seen.clone();
+        let result = super::App::<()>::new("bevy", 1, 1)
+            .init_resource::<Log>()
+            .insert_resource(Limit(2))
+            .add_plugins((Greet, Part))
+            .add_systems(Startup, setup)
+            .add_systems(Update, (first, second).chain())
+            .add_systems(Update, alone)
+            .add_systems(FixedUpdate, (fixed, alone))
+            .set_setup(|_| ())
+            .set_update(move |world, _, _| {
+                assert_eq!(*world.get_resource::<u8>().unwrap(), 7);
+                assert_eq!(*world.get_resource::<u16>().unwrap(), 9);
+                out.lock().unwrap().clone_from(&world.get_resource::<Log>().unwrap().0);
+                if out.lock().unwrap().len() >= 5 {
+                    world.insert_resource(gizmo_core::window::AppExit);
+                }
+            })
+            .run();
+        assert!(result.is_ok());
+        assert_eq!(&seen.lock().unwrap()[..5], ["startup", "first", "second", "first", "second"]);
+    }
+
     /// A headless app whose game inserts `AppExit` on its third frame returns from `run` — the
     /// loop used to have no way out at all.
     #[test]

@@ -57,3 +57,23 @@ pub trait Plugin {
     /// Applies this plugin's setup to the given app.
     fn build(&self, app: &mut dyn AppLike);
 }
+
+macro_rules! impl_plugin_tuple {
+    ($($p:ident),+) => {
+        /// A tuple of plugins is a plugin, applied left to right: `add_plugins((a, b))`.
+        impl<$($p: Plugin),+> Plugin for ($($p,)+) {
+            fn build(&self, app: &mut dyn AppLike) {
+                #[allow(non_snake_case)]
+                let ($($p,)+) = self;
+                $($p.build(app);)+
+            }
+        }
+    };
+}
+impl_plugin_tuple!(A, B);
+impl_plugin_tuple!(A, B, C);
+impl_plugin_tuple!(A, B, C, D);
+impl_plugin_tuple!(A, B, C, D, E);
+impl_plugin_tuple!(A, B, C, D, E, F);
+impl_plugin_tuple!(A, B, C, D, E, F, G);
+impl_plugin_tuple!(A, B, C, D, E, F, G, H);

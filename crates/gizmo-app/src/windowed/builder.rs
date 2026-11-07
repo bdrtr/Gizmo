@@ -161,6 +161,12 @@ impl<State: 'static> App<State> {
 
     /// Applies a [`Plugin`](crate::Plugin): it gets to add resources, systems and schedules now,
     /// before the app runs.
+    pub fn add_plugins<P: crate::Plugin>(self, plugins: P) -> Self {
+        self.add_plugin(plugins)
+    }
+
+    /// Applies one plugin's setup; [`add_plugins`](Self::add_plugins) is the same call, for which a tuple
+    /// of plugins is a plugin.
     pub fn add_plugin<P: crate::Plugin>(mut self, plugin: P) -> Self {
         tracing::info!(plugin = %std::any::type_name::<P>(), "[App] plugin build");
         plugin.build(&mut self);
@@ -356,6 +362,34 @@ impl<State: 'static> App<State> {
         F: FnMut(&mut World, &mut State, &egui::Context) + 'static,
     {
         self.ui_fn = Some(Box::new(f));
+        self
+    }
+
+    /// Adds systems to one of the app's schedules: [`Startup`](gizmo_core::system::Startup),
+    /// [`Update`](gizmo_core::system::Update) or [`FixedUpdate`](gizmo_core::system::FixedUpdate). `systems`
+    /// is one, a tuple of them (no order between them), or `(a, b).chain()`.
+    pub fn add_systems<L: gizmo_core::system::ScheduleLabel, T, C: gizmo_core::system::IntoSystemConfigs<T>>(
+        mut self,
+        label: L,
+        systems: C,
+    ) -> Self {
+        label.with_schedule(&mut self.world, &mut self.schedule, &mut self.update_schedule, |schedule| {
+            systems.into_configs(schedule);
+        });
+        self
+    }
+
+    /// Inserts a resource, replacing any of the same type.
+    pub fn insert_resource<R: Send + Sync + 'static>(mut self, resource: R) -> Self {
+        self.world.insert_resource(resource);
+        self
+    }
+
+    /// Inserts `R`'s default, unless the world already has an `R`.
+    pub fn init_resource<R: Default + Send + Sync + 'static>(mut self) -> Self {
+        if self.world.get_resource::<R>().is_none() {
+            self.world.insert_resource(R::default());
+        }
         self
     }
 

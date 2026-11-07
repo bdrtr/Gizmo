@@ -13,6 +13,9 @@ all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
+icu_plurals = "2"
+icu_locale_core = "2"
+icu_provider = { version = "2", features = ["sync"] }
 gizmo-core = { path = "../gizmo-core" , version = "0.11.0" }
 gizmo-math = { path = "../gizmo-math" , version = "0.11.0" }
 tracing = "0.1.44"

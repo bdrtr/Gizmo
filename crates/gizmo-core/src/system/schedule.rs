@@ -1153,3 +1153,42 @@ pub fn run_startup_systems(world: &mut World) {
         startup.0.run(world, 0.0);
     }
 }
+
+/// Which of an app's schedules a group of systems goes on, the first argument of `App::add_systems`.
+pub trait ScheduleLabel {
+    /// Hands this label's schedule to `add`, from an app's two.
+    fn with_schedule(self, world: &mut World, fixed: &mut Schedule, update: &mut Schedule, add: impl FnOnce(&mut Schedule));
+}
+
+/// Once, before the first frame: see [`add_startup_system`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Startup;
+
+/// Once a rendered frame: input, cameras, UI, anything tied to what is on screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Update;
+
+/// On the fixed timestep, `0..N` times a rendered frame with a constant `dt`: what physics runs on.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FixedUpdate;
+
+impl ScheduleLabel for Startup {
+    fn with_schedule(self, world: &mut World, _: &mut Schedule, _: &mut Schedule, add: impl FnOnce(&mut Schedule)) {
+        if world.get_resource::<StartupSystems>().is_none() {
+            world.insert_resource(StartupSystems::default());
+        }
+        add(&mut world.get_resource_mut::<StartupSystems>().expect("just ensured").0);
+    }
+}
+
+impl ScheduleLabel for Update {
+    fn with_schedule(self, _: &mut World, _: &mut Schedule, update: &mut Schedule, add: impl FnOnce(&mut Schedule)) {
+        add(update);
+    }
+}
+
+impl ScheduleLabel for FixedUpdate {
+    fn with_schedule(self, _: &mut World, fixed: &mut Schedule, _: &mut Schedule, add: impl FnOnce(&mut Schedule)) {
+        add(fixed);
+    }
+}

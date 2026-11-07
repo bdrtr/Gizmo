@@ -143,33 +143,39 @@ impl Locale {
         s
     }
 
-    /// A string that depends on a count: `"{key}.one"` when `n` is 1 and the table has one, else
-    /// `"{key}.other"`, else `key` itself — with `{n}` (and `args`) filled in.
+    /// A string that depends on a count, in the form the language's own rule asks for: `"{key}.one"`,
+    /// `.few`, `.many`, `.two` or `.zero`, by CLDR's rules for that language; else `"{key}.other"`,
+    /// else `key` itself — with `{n}` (and `args`) filled in.
     ///
     /// ```text
-    /// "coins": { "one": "{n} coin", "other": "{n} coins" }   // en
+    /// "coins": { "one": "{n} coin", "other": "{n} coins" }    // en
     /// "coins": { "other": "{n} altın" }                       // tr: no plural after a number
+    /// "coins": { "one": "{n} монета", "few": "{n} монеты", "many": "{n} монет" }   // ru: 1, 21, 101;
+    ///                                                         // 2, 3, 22; 5, 11, 100
     /// ```
     ///
-    /// Two forms cover the languages this engine's games ship in so far: English and its kin say
-    /// "1 coin, 2 coins", and Turkish keeps the noun singular after any number, so it writes only
-    /// `other`. Languages with more forms (Russian, Arabic, Polish) need CLDR's full rules, which
-    /// this does not implement — their `other` is used for every count except 1.
+    /// A table need only write the forms it uses: a form it does not have reads as `other`, then as
+    /// whichever it does have. A language CLDR does not know has `one` for 1 and `other` beyond.
     #[must_use]
     pub fn format_count(&self, key: &str, n: i64, args: &[(&str, &str)]) -> String {
-        let one = format!("{key}.one");
-        let other = format!("{key}.other");
-        // The forms come from ONE language: the current one if it has either, else the fallback.
-        // Mixing them is how a Turkish `1` would come out as the English "1 coin".
-        let table = [Some(&self.language), self.fallback.as_ref()]
+        const FORMS: [&str; 6] = ["zero", "one", "two", "few", "many", "other"];
+        // The forms come from ONE language: the current one if it has any, else the fallback. Mixing
+        // them is how a Turkish `1` would come out as the English "1 coin".
+        let found = [Some(&self.language), self.fallback.as_ref()]
             .into_iter()
             .flatten()
-            .filter_map(|l| self.tables.get(l))
-            .find(|t| t.contains_key(&one) || t.contains_key(&other));
-        let pick = match table {
-            Some(t) if n == 1 && t.contains_key(&one) => t[&one].clone(),
-            Some(t) if t.contains_key(&other) => t[&other].clone(),
-            Some(t) => t[&one].clone(),
+            .filter_map(|l| self.tables.get(l).map(|t| (l, t)))
+            .find(|(_, t)| FORMS.iter().any(|form| t.contains_key(&format!("{key}.{form}"))));
+        let pick = match found {
+            Some((language, table)) => {
+                let form = plural_form(language, n);
+                [form, "other"]
+                    .into_iter()
+                    .chain(FORMS)
+                    .find_map(|form| table.get(&format!("{key}.{form}")))
+                    .cloned()
+                    .unwrap_or_default()
+            }
             None => self.get(key).to_string(),
         };
         let mut s = pick.replace("{n}", &n.to_string());
@@ -279,9 +285,59 @@ impl LocalizedText {
 
 gizmo_core::impl_component!(LocalizedText);
 
+/// Which plural form a language uses for `n`, by CLDR's cardinal rules.
+fn plural_form(language: &str, n: i64) -> &'static str {
+    use icu_plurals::{PluralCategory, PluralRules};
+    let rules = language
+        .parse::<icu_locale_core::Locale>()
+        .ok()
+        .and_then(|locale| PluralRules::try_new_cardinal(locale.into()).ok());
+    let Some(rules) = rules else {
+        return if n == 1 { "one" } else { "other" };
+    };
+    match rules.category_for(n) {
+        PluralCategory::Zero => "zero",
+        PluralCategory::One => "one",
+        PluralCategory::Two => "two",
+        PluralCategory::Few => "few",
+        PluralCategory::Many => "many",
+        PluralCategory::Other => "other",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Russian's three, Arabic's six and Polish's three, with the cases each is known by; English's two;
+    /// and a language with no plural at all, whose one form serves every count.
+    #[test]
+    fn a_count_takes_the_form_its_language_asks_for() {
+        let mut l = Locale::new("ru");
+        l.load_json("ru", r#"{"m": {"one": "монета", "few": "монеты", "many": "монет"}}"#).unwrap();
+        l.load_json("ar", r#"{"m": {"zero": "z", "one": "o", "two": "t", "few": "f", "many": "m", "other": "x"}}"#).unwrap();
+        l.load_json("pl", r#"{"m": {"one": "moneta", "few": "monety", "many": "monet"}}"#).unwrap();
+        l.load_json("en", r#"{"m": {"one": "coin", "other": "coins"}}"#).unwrap();
+        l.load_json("tr", r#"{"m": {"other": "altın"}}"#).unwrap();
+        let forms = |l: &mut Locale, language: &str, counts: &[i64]| -> Vec<String> {
+            l.set_language(language);
+            counts.iter().map(|&n| l.format_count("m", n, &[])).collect()
+        };
+        assert_eq!(forms(&mut l, "ru", &[1, 21, 2, 22, 5, 11, 100]), ["монета", "монета", "монеты", "монеты", "монет", "монет", "монет"]);
+        assert_eq!(forms(&mut l, "ar", &[0, 1, 2, 3, 11, 100]), ["z", "o", "t", "f", "m", "x"]);
+        assert_eq!(forms(&mut l, "pl", &[1, 2, 5, 22]), ["moneta", "monety", "monet", "monety"]);
+        assert_eq!(forms(&mut l, "en", &[1, 2, 0]), ["coin", "coins", "coins"]);
+        assert_eq!(forms(&mut l, "tr", &[1, 2]), ["altın", "altın"]);
+    }
+
+    /// A table with only some of its language's forms still answers, from `other` or whatever it has.
+    #[test]
+    fn a_missing_form_falls_back_within_the_language() {
+        let mut l = Locale::new("ru");
+        l.load_json("ru", r#"{"m": {"one": "монета"}, "n": {"one": "монета", "other": "монет"}}"#).unwrap();
+        assert_eq!(l.format_count("m", 5, &[]), "монета", "only one form, so that one");
+        assert_eq!(l.format_count("n", 5, &[]), "монет", "`many` is missing, so `other`");
+    }
 
     fn two_languages() -> Locale {
         let mut l = Locale::new("tr_TR.UTF-8");

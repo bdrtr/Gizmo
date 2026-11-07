@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Plurals by CLDR's rules.** `Locale::format_count` and `LocalizedText::with_count` pick `zero`, `one`, `two`, `few`, `many` or
+  `other` as the language asks: Russian's 1, 21 and 2, 22 and 5, 11, Arabic's six, Polish's three. A table need only write the
+  forms it uses. The browser build grows by what the rules weigh; see the commit.
+
+- **An app reads as a Bevy one does.** `App::add_systems(Startup, setup)`, `add_systems(Update, (a, b).chain())`,
+  `add_systems(FixedUpdate, (c, d))`, `insert_resource`, `init_resource::<T>()`, `add_plugins((a, b))`, on both `App`s, with
+  `Startup`, `Update` and `FixedUpdate` in the prelude. A tuple of systems may now hold configured ones (`a.after(..)`). The older
+  names remain as the one-at-a-time form.
+
 - **An image as the sky: `Renderer::set_environment_map`.** `EnvironmentMap::from_hdr` reads a Radiance `.hdr` panorama,
   `from_equirectangular` takes pixels, `with_intensity` and `with_rotation` shape it. It lights the scene, is reflected in it, and
   stands behind it, on the desktop path and in the studio viewport. It takes a slot of the reflection probes' array, so a scene

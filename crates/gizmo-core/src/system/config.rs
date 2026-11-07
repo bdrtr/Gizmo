@@ -468,14 +468,11 @@ impl IntoSystemConfig<()> for SystemConfig {
 /// Registers one system, or a tuple of 2–8 systems, on a [`Schedule`] in a single call —
 /// the trait behind [`Schedule::add_systems`].
 ///
-/// Every element must implement [`IntoSystem`], i.e. be a plain system function or a
-/// `Box<dyn System>`. A configured [`SystemConfig`] is *not* accepted (it does not implement
-/// [`IntoSystem`]), so labels, phases, access declarations and run conditions cannot be
-/// attached through this path; register those systems individually with
-/// [`Schedule::add_di_system`].
+/// Each element is a plain system function, a `Box<dyn System>` or a configured system (`a.after(..)`,
+/// `a.run_if(..)`), and a [`SystemChain`] counts as one group.
 pub trait IntoSystemConfigs<T> {
-    /// Pushes every system in `self` onto `schedule`, left to right, each with empty metadata
-    /// ([`Phase::Update`], no labels, no constraints).
+    /// Pushes every system in `self` onto `schedule`, left to right, each with its own configuration:
+    /// for a bare function, [`Phase::Update`], no labels, no constraints.
     ///
     /// Listing order is insertion order, **not** execution order: grouping systems in one
     /// tuple adds no ordering constraint between them, so the batcher is free to put them all
@@ -486,10 +483,17 @@ pub trait IntoSystemConfigs<T> {
 
 impl<P1, S1> IntoSystemConfigs<(P1,)> for S1
 where
-    S1: IntoSystem<P1> + 'static,
+    S1: IntoSystemConfig<P1>,
 {
     fn into_configs(self, schedule: &mut Schedule) {
-        schedule.add_system(self.into_system());
+        schedule.add_di_system(self);
+    }
+}
+
+/// A chain is a group of systems too, so `add_systems(Update, (a, b).chain())` reads as it does in Bevy.
+impl IntoSystemConfigs<SystemChain> for SystemChain {
+    fn into_configs(self, schedule: &mut Schedule) {
+        schedule.add_chain(self);
     }
 }
 
@@ -497,12 +501,12 @@ macro_rules! impl_into_system_configs {
     ($($P:ident $S:ident),+) => {
         impl<$($P, $S),+> IntoSystemConfigs<($($P,)+)> for ($($S,)+)
         where
-            $($S: IntoSystem<$P> + 'static,)+
+            $($S: IntoSystemConfig<$P>,)+
         {
             fn into_configs(self, schedule: &mut Schedule) {
                 #[allow(non_snake_case)]
                 let ($($S,)+) = self;
-                $(schedule.add_system($S.into_system());)+
+                $(schedule.add_di_system($S);)+
             }
         }
     };
