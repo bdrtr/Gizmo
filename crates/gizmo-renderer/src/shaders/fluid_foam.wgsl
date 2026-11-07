@@ -109,7 +109,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Soft Gaussian falloff
     let falloff = exp(-dist * dist * 3.0);
     // Spray only adds light, so fog fades it out rather than tinting it.
-    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.fog, scene.fog_shape);
     let alpha = in.color.a * falloff * (1.0 - fog.a);
     
     // Premultiplied alpha output for additive blending

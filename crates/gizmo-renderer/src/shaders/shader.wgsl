@@ -6,7 +6,17 @@
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
-#import gizmo::common::{SceneUniforms, dielectric_f0, instance_keeps, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
+// Three tiers on the forward-only path, where a phone pays for code whether or not a draw takes it.
+// None of the defs: a plain opaque surface, which is most of a frame. `DETAILS` adds what a draw has to
+// ask for: a back face lit as one, cut-outs, LOD crossfades, its own reflectance. `LOBES` adds anisotropy,
+// clear coat and subsurface. The desktop path has them all, always. Measured on an Adreno 618 whose big
+// draw is one floor, twenty readings each: 103 fps on the plain tier, 89 with the details compiled in and
+// nothing taking them, 84 when the floor does (and about 97 for the plain tier in that sitting). See
+// `SceneState::lit_pipeline`.
+#ifdef DETAILS
+#import gizmo::common::{dielectric_f0, instance_keeps}
+#endif
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, sky_gradient, preset_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
@@ -113,9 +123,11 @@ struct VertexOutput {
     @location(3) world_position: vec3<f32>,
     @location(4) inst_albedo: vec4<f32>,
     @location(5) inst_pbr: vec4<f32>,
-    // The cut-out threshold, carried in the instance's `ambient.w` — the same slot
-    // `baked_lit.wgsl` reads it from. See the discard in `fs_main`.
+#ifdef DETAILS
+    // The cut-out threshold and a LOD crossfade, carried in the instance's `ambient.w` — the same
+    // slot `baked_lit.wgsl` reads it from. See `instance_keeps`.
     @location(6) inst_cutoff: f32,
+#endif
     // `Material::emissive` — added unlit, as the deferred path adds RT5.
     @location(7) inst_emissive: vec4<f32>,  // w = F0, < 0: receives no shadows
     @location(8) tangent: vec3<f32>,
@@ -182,7 +194,9 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     
     out.inst_albedo = inst.albedo_color;
     out.inst_pbr = inst.pbr;
+#ifdef DETAILS
     out.inst_cutoff = inst.ambient.w;
+#endif
     out.inst_emissive = inst.emissive;
 #ifdef TRANSMISSION
     out.inst_glass = inst.ambient.xy;
@@ -217,6 +231,7 @@ fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
     return preset_environment(dir, roughness, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz));
 }
 
+#ifdef DETAILS
 // One entry point per blend mode, because fog means something different under each. Fog stands
 // between the camera and the surface, so what reaches the screen is less of the surface and, where
 // the blend lets a colour through, some of the fog. An alpha or opaque draw fades to the fog's colour.
@@ -248,6 +263,14 @@ fn fs_premultiplied(in: VertexOutput, @builtin(front_facing) front: bool) -> @lo
 }
 
 fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
+#else
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade(in);
+}
+
+fn shade(in: VertexOutput) -> vec4<f32> {
+#endif
     let surface = evaluate_surface(
         in.tex_coords, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
     );
@@ -262,6 +285,7 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
     }
 #endif
     
+#ifdef DETAILS
     let final_alpha = surface.alpha;
     // **Two thresholds, and they are different questions.** The 0.01 is a floor: a fully
     // transparent texel has nothing to contribute and shading it is waste. The material's own
@@ -284,6 +308,9 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
     // A back face, which a double-sided or transparent draw shows, is lit as what it is: the normal
     // points at the viewer. The G-buffer does the same.
     let N = select(-surface.N, surface.N, front);
+#else
+    let N = surface.N;
+#endif
     let base_color = surface.base_color;
     let metallic = surface.metallic;
 #ifdef TRANSMISSION
@@ -306,13 +333,16 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
     //
     // Placed here, before the lighting work, because that work is exactly what these views exist
     // to bypass. `shading_mode` is 0 for every non-studio caller, so the normal path pays one
-    // comparison.
+    // comparison. A phone's plain surface does not even pay that: batching sends everything to the
+    // `DETAILS` tier while a debug view is on.
+#ifdef DETAILS
     if (scene.shading_mode == 1u) {
         return vec4<f32>(N * 0.5 + vec3<f32>(0.5), 1.0);
     }
     if (scene.shading_mode == 2u) {
         return vec4<f32>(base_color, 1.0);
     }
+#endif
 
     // --- CSM Gölge (PCF) --- 
     // textureSampleCompare uniform control flow gerektirir, non-uniform branch'tan önce hesapla
@@ -357,12 +387,17 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
         }
     }
 #endif
+#ifdef SHADOWS
     // `MeshRenderer::receives_shadows == false`: computed above (the comparison needs uniform
     // control flow), discarded here.
     if (in.inst_emissive.w < 0.0) {
         shadow_visibility = 1.0;
     }
+#endif
 
+    // An unlit or sky flag only reaches this shader through the wireframe pipeline, which draws every
+    // kind of surface with it. The plain tier's pipeline draws `MaterialType::Pbr` alone.
+#ifdef DETAILS
     // Eger bu obje 'unlit' ise isiklari es gec
     if (in.inst_pbr.z > 1.5) {
         let view_dir = normalize(in.world_position - scene.camera_pos.xyz);
@@ -382,7 +417,8 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
     } else if (in.inst_pbr.z > 0.5) {
         return vec4<f32>(base_color, final_alpha);
     }
-    
+#endif
+
     let min_roughness = surface.roughness;
 #ifdef LOBES
     // Anisotropy, clear coat and subsurface are this variant's alone: on a phone their branches cost
@@ -398,7 +434,11 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
     let B = normalize(in.bitangent);
 #endif
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
+#ifdef DETAILS
     let f0 = mix(vec3<f32>(dielectric_f0(in.inst_emissive.w)), surface.albedo, metallic);
+#else
+    let f0 = mix(vec3<f32>(0.04), surface.albedo, metallic);
+#endif
     let NdV = max(dot(N, view_dir), 0.001);
     
     // The deferred shader's environment terms, so a surface gets the same light on either path.
@@ -562,9 +602,12 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
 #ifdef TRANSMISSION
     let alpha = 1.0;
 #else
+#ifdef DETAILS
     let alpha = final_alpha;
 #endif
-    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+#endif
+    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.fog, scene.fog_shape);
+#ifdef DETAILS
     if (fog_kind == FOG_ADDITIVE) {
         final_color *= 1.0 - fog.a;
     } else if (fog_kind == FOG_MULTIPLY) {
@@ -574,13 +617,20 @@ fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
     } else {
         final_color = mix(final_color, fog.rgb, fog.a);
     }
+#else
+    final_color = mix(final_color, fog.rgb, fog.a);
+#endif
 
 #ifdef TRANSMISSION
     // After the fog: the frame behind has its own up to that surface.
     final_color += transmitted_light(in.world_position, N, view_dir, NdV, surface.albedo, f0, surface.roughness, dielectric_f0(in.inst_emissive.w), in.inst_glass.y) * glass;
 #endif
 
+#ifdef DETAILS
     return vec4<f32>(final_color, alpha);
+#else
+    return vec4<f32>(final_color, 1.0);
+#endif
 }
 
 #ifdef TRANSMISSION

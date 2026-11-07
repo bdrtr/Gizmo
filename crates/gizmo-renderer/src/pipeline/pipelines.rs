@@ -68,6 +68,10 @@ pub(super) struct CorePipelines {
     /// The lit pipelines with anisotropy, clear coat and subsurface, on the path where the ones above
     /// leave them out. See [`LitLobes`](super::LitLobes).
     pub(super) lobes: Option<super::LitLobes>,
+    /// See [`SceneState::render_details_pipeline`](super::SceneState::render_details_pipeline).
+    pub(super) render_details: Option<wgpu::RenderPipeline>,
+    /// See [`SceneState::unlit_keeps_pipeline`](super::SceneState::unlit_keeps_pipeline).
+    pub(super) unlit_keeps: Option<wgpu::RenderPipeline>,
     /// The lit shader with `TRANSMISSION` on: single-sided, then double-sided.
     pub(super) transmissive: [wgpu::RenderPipeline; 2],
     /// The unlit pipeline under each of them — and, unlike `unlit`, not writing depth: a blended
@@ -146,8 +150,6 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     );
     #[cfg(not(gizmo_forward_only))]
     let wire_shader = &wire_shader_module;
-    #[cfg(gizmo_forward_only)]
-    let wire_shader = &shader;
 
     #[cfg(not(gizmo_forward_only))]
     let unlit_shader = load_shader_composed(
@@ -333,7 +335,10 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             device,
             include_str!("../shaders/shader.wgsl"),
             "Lit Shader With Lobes",
-            &[("LOBES", naga_oil::compose::ShaderDefValue::Bool(true))],
+            &[
+                ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
+                ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
+            ],
         );
         let blend = wgpu::BlendState::ALPHA_BLENDING;
         Some(super::LitLobes {
@@ -347,6 +352,61 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     };
     #[cfg(not(gizmo_forward_only))]
     let lobes = None;
+
+    // The middle tier on the forward-only path: what a double-sided, blended or cut-out draw needs and a
+    // plain one does not. On the desktop path it is the one shader there is.
+    #[cfg(gizmo_forward_only)]
+    let details_shader_module = super::shaders::load_shader_composed_web_with(
+        device,
+        include_str!("../shaders/shader.wgsl"),
+        "Lit Shader With Details",
+        &[("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true))],
+    );
+    #[cfg(gizmo_forward_only)]
+    let details_shader = &details_shader_module;
+    #[cfg(not(gizmo_forward_only))]
+    let details_shader = &shader;
+    // It draws every kind of surface, and a debugging view has nothing to save.
+    #[cfg(gizmo_forward_only)]
+    let wire_shader = details_shader;
+    #[cfg(gizmo_forward_only)]
+    let render_details = Some(create_main(
+        lit_layout,
+        details_shader,
+        "Render Pipeline (details)",
+        true,
+        Some(wgpu::Face::Back),
+        Some(wgpu::BlendState::ALPHA_BLENDING),
+        wgpu::PolygonMode::Fill,
+    ));
+    #[cfg(not(gizmo_forward_only))]
+    let render_details = None;
+
+    // Unlit that may discard, on the forward-only path. Blended unlit draws take it too: they are small,
+    // and a crossfade reaches them. On the desktop path it is the one unlit shader there is.
+    #[cfg(gizmo_forward_only)]
+    let unlit_keeps_module = super::shaders::load_shader_composed_web_with(
+        device,
+        include_str!("../shaders/unlit.wgsl"),
+        "Unlit Shader That May Discard",
+        &[("KEEPS", naga_oil::compose::ShaderDefValue::Bool(true))],
+    );
+    #[cfg(gizmo_forward_only)]
+    let unlit_keeps_shader = &unlit_keeps_module;
+    #[cfg(not(gizmo_forward_only))]
+    let unlit_keeps_shader = &unlit_shader;
+    #[cfg(gizmo_forward_only)]
+    let unlit_keeps = Some(create_main(
+        &render_pipeline_layout,
+        unlit_keeps_shader,
+        "Unlit Pipeline (may discard)",
+        true,
+        None,
+        Some(wgpu::BlendState::ALPHA_BLENDING),
+        wgpu::PolygonMode::Fill,
+    ));
+    #[cfg(not(gizmo_forward_only))]
+    let unlit_keeps = None;
 
     // Glass: the lit shader reading the frame behind it. The lobes are on, as they are on every
     // desktop lit pipeline: a phone that draws glass has already chosen to pay for a copy of the
@@ -365,6 +425,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         include_str!("../shaders/shader.wgsl"),
         "Glass Shader",
         &[
+            ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
             ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
             ("TRANSMISSION", naga_oil::compose::ShaderDefValue::Bool(true)),
         ],
@@ -376,6 +437,8 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
 
     CorePipelines {
         lobes,
+        render_details,
+        unlit_keeps,
         transmissive,
         render: create_main(
             lit_layout,
@@ -383,12 +446,16 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             "Render Pipeline",
             true,
             Some(wgpu::Face::Back),
-            Some(wgpu::BlendState::ALPHA_BLENDING),
+            // Opaque means opaque on the forward-only path, as it does in the G-buffer: this tier has no
+            // discard, and blending a texel away while writing its depth would cut whatever is drawn
+            // behind it later. A surface that shows through says so with `Material::is_transparent` or
+            // `Material::alpha_cutoff`, and is not on this tier.
+            if cfg!(gizmo_forward_only) { None } else { Some(wgpu::BlendState::ALPHA_BLENDING) },
             wgpu::PolygonMode::Fill,
         ),
         render_double_sided: create_main(
             lit_layout,
-            &shader,
+            details_shader,
             "Render TwoSided Pipeline",
             true,
             None,
@@ -411,7 +478,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         ),
         transparent: create_main(
             lit_layout,
-            &shader,
+            details_shader,
             "Transparent Pipeline",
             false,
             None,
@@ -537,7 +604,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             create_at(
                 lit_fragment_entry(mode),
                 lit_layout,
-                &shader,
+                details_shader,
                 &format!("Transparent Pipeline ({mode:?})"),
                 false,
                 None,
@@ -548,7 +615,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         blend_unlit: crate::components::BlendMode::VARIANTS.map(|mode| {
             create_main(
                 &render_pipeline_layout,
-                &unlit_shader,
+                unlit_keeps_shader,
                 &format!("Unlit Pipeline ({mode:?})"),
                 false,
                 None,

@@ -218,6 +218,48 @@ pub enum FogMode {
     },
 }
 
+/// One environment preset's fog: colour, density and height falloff. The base height is −5 m for all of
+/// them.
+fn preset_fog(preset: u32) -> ([f32; 3], f32, f32) {
+    match preset {
+        // Sunset Gold
+        0 => ([0.85, 0.38, 0.15], 0.025, 0.08),
+        // Studio Neutral
+        1 => ([0.2, 0.22, 0.25], 0.008, 0.04),
+        // Midnight Neon
+        2 => ([0.12, 0.02, 0.25], 0.035, 0.12),
+        // Daylight
+        _ => ([0.5, 0.6, 0.7], 0.015, 0.05),
+    }
+}
+
+/// The fog a frame stands in, as `height_fog` in `common.wgsl` reads it: rgb + density, then height
+/// falloff, base height, mode (0 exponential, 1 squared, 2 linear) and where a linear ramp starts. A
+/// hand-set [`Fog`] replaces the preset's outright.
+///
+/// Settled here, once a frame, because the answer is the same for every fragment and a phone pays for a
+/// fragment shader's branches whether or not it takes them.
+fn frame_fog(preset: u32, preset_2: u32, blend_t: f32, fog: Option<Fog>) -> ([f32; 4], [f32; 4]) {
+    if let Some(f) = fog {
+        let (mode, start) = match f.mode {
+            FogMode::Exponential => (0.0, 0.0),
+            FogMode::ExponentialSquared => (1.0, 0.0),
+            FogMode::Linear { start } => (2.0, start),
+        };
+        let [r, g, b] = f.color;
+        return ([r, g, b, f.density.max(0.0)], [f.height_falloff.max(0.0), f.base_height, mode, start]);
+    }
+    let (mut color, mut density, mut falloff) = preset_fog(preset);
+    if blend_t > 0.001 {
+        let mix = |a: f32, b: f32| a * (1.0 - blend_t) + b * blend_t;
+        let (color_2, density_2, falloff_2) = preset_fog(preset_2);
+        color = [mix(color[0], color_2[0]), mix(color[1], color_2[1]), mix(color[2], color_2[2])];
+        density = mix(density, density_2);
+        falloff = mix(falloff, falloff_2);
+    }
+    ([color[0], color[1], color[2], density], [falloff, -5.0, 0.0, 0.0])
+}
+
 /// Height fog, set by hand rather than by the environment preset — `Renderer::fog`.
 ///
 /// The deferred pass integrates it along each view ray: `density` is how thick it is at
@@ -361,6 +403,7 @@ impl SceneUniforms {
         let SceneFrame { camera, sun, lights, num_lights, shadows, environment, elapsed_time } =
             frame;
 
+        let (fog, fog_shape) = frame_fog(environment.preset, environment.preset_2, environment.blend_t, environment.fog);
         Self {
             view_proj: camera.view_proj.to_cols_array_2d(),
             camera_pos: camera.position.extend(1.0).to_array(),
@@ -395,15 +438,8 @@ impl SceneUniforms {
                 // lighting pass's `contact_shadow`.
                 [scale, bias, sun.contact_shadow_length.max(0.0), 0.0]
             },
-            fog: environment.fog.map_or([0.0, 0.0, 0.0, -1.0], |f| [f.color[0], f.color[1], f.color[2], f.density.max(0.0)]),
-            fog_shape: environment.fog.map_or([0.0; 4], |f| {
-                let (mode, start) = match f.mode {
-                    FogMode::Exponential => (0.0, 0.0),
-                    FogMode::ExponentialSquared => (1.0, 0.0),
-                    FogMode::Linear { start } => (2.0, start),
-                };
-                [f.height_falloff.max(0.0), f.base_height, mode, start]
-            }),
+            fog,
+            fog_shape,
             shadow_bias: [shadows.bias_scale[0], shadows.bias_scale[1], 0.0, 0.0],
             sky_zenith: environment.sky.map_or([0.0, 0.0, 0.0, -1.0], |s| [s.zenith[0], s.zenith[1], s.zenith[2], s.intensity.max(0.0)]),
             sky_horizon: environment.sky.map_or([0.0; 4], |s| [s.horizon[0], s.horizon[1], s.horizon[2], 0.0]),
@@ -526,6 +562,33 @@ impl PostProcessUniforms {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// With no fog set by hand a frame stands in its preset's, blended as the sky is, and `height_fog`
+    /// is left with arithmetic.
+    #[test]
+    fn the_fog_is_settled_before_the_shader_sees_it() {
+        let sunset = ([0.85, 0.38, 0.15, 0.025], [0.08, -5.0, 0.0, 0.0]);
+        assert_eq!(frame_fog(0, 3, 0.0, None), sunset);
+        assert_eq!(frame_fog(0, 3, 0.0005, None), sunset, "below the blend's threshold");
+        assert_eq!(frame_fog(9, 0, 0.0, None).0[3], 0.015, "anything else is daylight");
+
+        let (fog, shape) = frame_fog(0, 1, 0.5, None);
+        for (got, want) in fog.iter().zip([0.525, 0.3, 0.2, 0.0165]) {
+            assert!((got - want).abs() < 1e-6, "halfway to studio: {fog:?}");
+        }
+        assert!((shape[0] - 0.06).abs() < 1e-6, "halfway to studio: {shape:?}");
+
+        let set = Fog::new([0.1, 0.2, 0.3], 0.5).with_height(0.25, 2.0);
+        assert_eq!(frame_fog(0, 1, 0.5, Some(set)), ([0.1, 0.2, 0.3, 0.5], [0.25, 2.0, 0.0, 0.0]), "a hand-set one wins");
+        assert_eq!(frame_fog(0, 1, 0.5, Some(set.squared())).1[2], 1.0);
+        assert_eq!(frame_fog(0, 1, 0.5, Some(Fog::linear([0.0; 3], 4.0, 9.0))).0[3], 9.0, "the ramp's end");
+        assert_eq!(frame_fog(0, 1, 0.5, Some(Fog::linear([0.0; 3], 4.0, 9.0))).1[2..], [2.0, 4.0]);
+
+        let src = include_str!("shaders/common.wgsl");
+        let body = &src[src.find("fn height_fog").unwrap()..];
+        let body = &body[..body.find("\n}\n").unwrap()];
+        assert!(!body.contains("if ("), "a phone pays for a branch here whether or not it is taken");
+    }
 
     fn a_camera() -> CameraFrame {
         CameraFrame {

@@ -554,6 +554,8 @@ impl Renderer {
             blend_lit_pipelines: scene.blend_lit_pipelines,
             blend_unlit_pipelines: scene.blend_unlit_pipelines,
             lit_lobes: scene.lit_lobes,
+            render_details_pipeline: scene.render_details_pipeline,
+            unlit_keeps_pipeline: scene.unlit_keeps_pipeline,
             wire_color_layout: scene.wire_color_layout,
             wire_colors: scene.wire_colors,
             transmissive: scene.transmissive,

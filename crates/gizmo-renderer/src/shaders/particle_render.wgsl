@@ -152,6 +152,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let d_frag = length(in.world_pos - scene.camera_pos.xyz);
     let soft_depth = smoothstep(0.0, SOFT_FADE, d_scene - d_frag);
 
-    let fog = height_fog(in.world_pos, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    let fog = height_fog(in.world_pos, scene.camera_pos.xyz, scene.fog, scene.fog_shape);
     return vec4<f32>(mix(in.color.rgb * base_rgb, fog.rgb, fog.a), in.color.a * base_alpha * soft_depth);
 }

@@ -411,10 +411,11 @@ pub struct SceneUniforms {
     /// `[z_scale, z_bias, 0, 0]` for `slice = floor(log(view_depth) * z_scale + z_bias)`, from
     /// [`clustered::depth_params`](crate::clustered::depth_params) over the camera's own near/far.
     pub cluster_depth: [f32; 4],
-    /// `Renderer::fog`: rgb = colour, a = density; a < 0 = no override, the environment preset's
-    /// fog. Appended at the tail so no earlier offset moved.
+    /// The frame's fog, `Renderer::fog` or the environment preset's, already settled:
+    /// rgb = colour, a = density. Appended at the tail so no earlier offset moved.
     pub fog: [f32; 4],
-    /// x = height falloff, y = base height (metres); zw unused.
+    /// x = height falloff, y = base height (metres), z = `FogMode` (0 exponential, 1 squared,
+    /// 2 linear), w = where a linear ramp starts.
     pub fog_shape: [f32; 4],
     /// `ShadowSettings`: x = depth-bias multiplier, y = normal-offset multiplier; zw unused.
     pub shadow_bias: [f32; 4],

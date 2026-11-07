@@ -289,7 +289,7 @@ fn draw_forward_items(
                 // takes that mode's variant, which also does not write depth.
                 match item.is_transparent.then(|| renderer.scene.blend_variant(true, item.blend_mode)).flatten() {
                     Some(p) => p,
-                    None => &renderer.scene.unlit_pipeline,
+                    None => renderer.scene.unlit_for(item.discards),
                 }
             } else {
                 // There is no two-sided *variant* of the blended pipeline because the blended
@@ -305,7 +305,7 @@ fn draw_forward_items(
                 if item.is_transmissive {
                     renderer.scene.transmissive_pipeline(item.is_double_sided)
                 } else {
-                    renderer.scene.lit_pipeline(item.lobes, item.is_transparent, item.is_double_sided, item.blend_mode)
+                    renderer.scene.lit_pipeline(item.lobes, item.details, item.is_transparent, item.is_double_sided, item.blend_mode)
                 }
             };
 

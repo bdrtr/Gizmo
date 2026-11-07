@@ -1,7 +1,12 @@
 // SceneUniforms from gizmo::common. No shadow group (unlit doesn't sample shadows);
 // skeleton/instance group indices come from #{SKELETON_GROUP}/#{INSTANCE_GROUP} (3/4 native,
 // 2/3 web) so the 4-bind-group WebGPU schema works without text surgery.
-#import gizmo::common::{SceneUniforms, instance_keeps}
+#import gizmo::common::{SceneUniforms}
+// `KEEPS`: this draw may discard, for a cut-out or a LOD crossfade. Apart, because a shader that can
+// discard costs a phone's depth optimisations whether or not it does.
+#ifdef KEEPS
+#import gizmo::common::{instance_keeps}
+#endif
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
@@ -47,7 +52,9 @@ struct VertexOutput {
     @location(0) color: vec3<f32>,
     @location(1) tex_coords: vec2<f32>,
     @location(2) inst_albedo: vec4<f32>,
+#ifdef KEEPS
     @location(3) inst_keep: f32,
+#endif
 };
 
 @vertex
@@ -84,7 +91,9 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     
     out.inst_albedo = inst.albedo_color;
     out.clip_position = scene.view_proj * world_pos;
+#ifdef KEEPS
     out.inst_keep = inst.ambient.w;
+#endif
     
     return out;
 }
@@ -92,9 +101,11 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let tex_color = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+#ifdef KEEPS
     if (!instance_keeps(in.inst_keep, tex_color.a * in.inst_albedo.a, in.clip_position.xy)) {
         discard;
     }
+#endif
     let base_color = in.inst_albedo.rgb * tex_color.rgb;
     
     var v_color = in.color;

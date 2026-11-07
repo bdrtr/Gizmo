@@ -234,6 +234,30 @@ holds that in place, since no test without a phone can measure it. **What is lef
 clear coat on a floor filling the screen reads 20 fps on that phone, because that surface really does
 pay for all three.
 
+**A night of features took the same phone back down, and tiers put it right, 2026-11-07.** Coat roughness,
+reflectance, LOD crossfades, back faces lit as back faces and fog modes each went into `shader.wgsl`
+behind a branch nothing in Nişancı takes, and every gate stayed green: 63.7 fps became 53.6 with the phone
+upright and the floor filling the screen, twenty readings each in one sitting, and 102 became 89 on its side. The lit shader has three tiers now on the forward-only path. The plain one is
+single-sided, opaque and has no discard, and it is what most of a frame is. `DETAILS` adds what a draw has
+to ask for: back faces, cut-outs, crossfades, its own reflectance, the blend modes, the debug views.
+`LOBES` adds the three lobes. `routing::needs_details` and `SceneState::lit_pipeline` choose, the desktop
+path has everything always, and `the_plain_web_shader_leaves_the_lobes_out_and_the_variant_has_them` holds
+it in place. `unlit.wgsl` got the same split with `KEEPS`. Which fog and which `FogMode` stopped being
+decided per fragment altogether: `frame_uniforms::frame_fog` settles them once a frame for every path,
+and `height_fog` is arithmetic. The plain tier reads 63.1 upright and 103 on its side. **What it costs:** a floor that takes
+`DETAILS` read 84 where the plain one read about 97 in that sitting, so a cut-out filling the screen pays
+for being one. And an opaque material's texel alpha no longer shows through on these paths: with no
+discard it would have vanished while still writing depth, so the plain tier draws it solid, as the
+G-buffer always has. A surface that shows through says so with `is_transparent` or `alpha_cutoff`.
+
+**Measuring it taught more than the fix.** `Time::fps` is one frame's `1/dt`, so a few readings are noise:
+twenty per build is the least that separates them, and only in one sitting, since the same old build read
+102 and then 82 an hour later as the phone warmed. Frames counted at SurfaceFlinger are a different
+number, because frames that land in one vsync are dropped there. And less code is not always faster on
+this driver: an exponential-only fog for the plain tier, with strictly less to do, read 85 against 103
+by both counts, for no reason found, which `height_fog` says next to the code. The driver is a black box, so
+measure rather than reason. Not measured: a browser.
+
 Unlit and baked-lit surfaces do not fill the G-buffer, so those effects still see through them, and a
 moving one gets no motion blur. Baked-lit exists to skip that cost, so changing this is its own
 decision.

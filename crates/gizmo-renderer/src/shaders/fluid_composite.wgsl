@@ -194,7 +194,7 @@ fn fs_main(in: VertexOutput) -> CompositeOut {
     // Alpha blending based on thickness and fresnel (edges are more opaque)
     let alpha = clamp(thickness * 10.0 + fresnel, 0.0, 1.0);
     
-    let fog = height_fog(surface_pos, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    let fog = height_fog(surface_pos, scene.camera_pos.xyz, scene.fog, scene.fog_shape);
     var out: CompositeOut;
     out.color = vec4<f32>(mix(lit_color, fog.rgb, fog.a), alpha);
     out.depth = depth;

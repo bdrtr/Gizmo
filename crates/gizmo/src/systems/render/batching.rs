@@ -189,6 +189,8 @@ pub struct DrawItem {
     /// The material uses anisotropy, clear coat or subsurface, and needs the pipelines with them
     /// (`SceneState::lit_pipeline`). Always false where every lit pipeline has them.
     pub(super) lobes: bool,
+    /// The forward-only path's middle tier: see `routing::needs_details`.
+    pub(super) details: bool,
     /// Per-object shadow casting (`MeshRenderer::shadows`). Two objects sharing a mesh and a
     /// material can answer differently, so it belongs in the key.
     ///
@@ -330,6 +332,8 @@ pub(crate) struct BatchKey {
     /// Which lit pipeline: a material with anisotropy, clear coat or subsurface next to one without
     /// them can share a mesh and a texture bind group, and only one of the pipelines shades the first.
     lobes: bool,
+    /// The same question for the tier below: a cut-out next to a plain surface can share them too.
+    details: bool,
     /// Per-object shadow casting (`MeshRenderer::shadows`) — in the key for exactly the reason
     /// above: two objects sharing a mesh and a material can answer differently.
     casts_shadows: bool,
@@ -362,6 +366,7 @@ pub(crate) struct BatchData {
     is_backdrop: bool,
     is_double_sided: bool,
     lobes: bool,
+    details: bool,
     casts_shadows: bool,
     visible_in_camera: bool,
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
@@ -751,6 +756,8 @@ pub(super) fn collect_draw_items(
                 });
 
                 let discards = $mat.alpha_cutoff > 0.0 || $fade.is_some();
+                let details = cfg!(gizmo_forward_only)
+                    && crate::renderer::routing::needs_details($mat.alpha_cutoff, $fade.is_some(), $mat.reflectance, renderer.shading_mode);
 
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(active_vbuf) as usize,
@@ -767,6 +774,7 @@ pub(super) fn collect_draw_items(
                     is_backdrop,
                     is_double_sided,
                     lobes,
+                    details,
                     casts_shadows,
                     visible_in_camera,
                     custom: routing.custom,
@@ -788,6 +796,7 @@ pub(super) fn collect_draw_items(
                     is_backdrop,
                     is_double_sided,
                     lobes,
+                    details,
                     casts_shadows,
                     visible_in_camera,
                     custom: routing.custom,
@@ -965,6 +974,7 @@ pub(super) fn collect_draw_items(
                 is_grid: batch.is_grid,
                 is_double_sided: batch.is_double_sided,
                 lobes: batch.lobes,
+                details: batch.details,
                 casts_shadows: batch.casts_shadows,
                 visible_in_camera: batch.visible_in_camera,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
@@ -1082,6 +1092,7 @@ mod batch_key_tests {
             is_backdrop: false,
             is_double_sided: false,
             lobes: false,
+            details: false,
             casts_shadows: true,
             visible_in_camera: true,
             custom: None,
@@ -1113,6 +1124,7 @@ mod batch_key_tests {
             is_backdrop: false,
             is_double_sided: false,
             lobes: false,
+            details: false,
             casts_shadows: true,
             visible_in_camera: true,
             custom: None,
@@ -1151,6 +1163,7 @@ mod batch_key_tests {
 
         assert_ne!(base, transparent, "opaque and transparent must be separate batches");
         assert_ne!(base, BatchKey { lobes: true, ..base.clone() }, "the two lit pipelines cannot draw one batch");
+        assert_ne!(base, BatchKey { details: true, ..base.clone() }, "nor can the plain tier and the one above it");
         assert_ne!(base, unlit, "PBR and unlit must be separate batches");
         assert_ne!(base, skybox, "PBR and skybox must be separate batches");
         assert_ne!(unlit, backdrop, "unlit and backdrop must be separate batches");

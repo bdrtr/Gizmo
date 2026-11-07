@@ -88,6 +88,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     
     let final_color = ambient + diffuse + specular;
-    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.fog, scene.fog_shape);
     return vec4<f32>(mix(final_color, fog.rgb, fog.a), in.color.a);
 }

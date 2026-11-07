@@ -70,6 +70,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Schlick: `reflectance` head-on, everything at a grazing angle.
     let f = in.reflectance + (1.0 - in.reflectance) * pow(1.0 - facing, 5.0);
     // The capture has the fog up to the far side of the mirror; this is the fog on the near side.
-    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    let fog = height_fog(in.world_position, scene.camera_pos.xyz, scene.fog, scene.fog_shape);
     return vec4<f32>(mix(mix(in.base, reflected, f), fog.rgb, fog.a), 1.0);
 }

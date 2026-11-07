@@ -285,3 +285,30 @@ mod tests {
         );
     }
 }
+
+/// Whether a single-sided opaque draw on the forward-only path needs the `DETAILS` tier of the lit shader
+/// rather than the plain one: a cut-out, a LOD crossfade, a reflectance other than the default, or a debug
+/// view ([`SceneUniforms::shading_mode`](crate::gpu_types::SceneUniforms::shading_mode)) being on. See
+/// [`SceneState::lit_pipeline`](crate::pipeline::SceneState::lit_pipeline). A threshold a hand-built
+/// [`MaterialParams`](crate::gpu_types::MaterialParams) carries has to be on
+/// [`Material::alpha_cutoff`](crate::components::Material::alpha_cutoff) too, or this cannot see it.
+#[must_use]
+pub fn needs_details(alpha_cutoff: f32, faded: bool, reflectance: f32, shading_mode: u32) -> bool {
+    alpha_cutoff > 0.0 || faded || reflectance != crate::components::DIELECTRIC_REFLECTANCE || shading_mode != 0
+}
+
+#[cfg(test)]
+mod details_tests {
+    use super::needs_details;
+    use crate::components::DIELECTRIC_REFLECTANCE as D;
+
+    /// A plain surface is the one case that stays plain, and each reason alone moves it.
+    #[test]
+    fn only_a_plain_surface_stays_on_the_plain_tier() {
+        assert!(!needs_details(0.0, false, D, 0));
+        assert!(needs_details(0.5, false, D, 0), "a cut-out");
+        assert!(needs_details(0.0, true, D, 0), "a LOD crossfade");
+        assert!(needs_details(0.0, false, 0.16, 0), "its own reflectance");
+        assert!(needs_details(0.0, false, D, 1), "a debug view");
+    }
+}

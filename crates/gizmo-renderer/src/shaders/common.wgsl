@@ -61,8 +61,8 @@ struct SceneUniforms {
     // depth = (z_scale, z_bias, 0, 0) for slice = floor(log(view_depth) * z_scale + z_bias).
     cluster_dims:  vec4<u32>,
     cluster_depth: vec4<f32>,
-    // `Renderer::fog`: rgb = colour, a = density (a < 0 = the preset's fog); shape.x = height
-    // falloff, shape.y = base height.
+    // The frame's fog, a hand-set one or the preset's (`frame_uniforms::frame_fog`): rgb = colour,
+    // a = density; shape = height falloff, base height, `FogMode` (0, 1, 2), a linear ramp's start.
     fog: vec4<f32>,
     fog_shape: vec4<f32>,
     // `ShadowSettings`: x = depth-bias multiplier, y = normal-offset multiplier.
@@ -194,91 +194,38 @@ fn preset_environment(dir: vec3<f32>, roughness: f32, preset: u32, preset_b: u32
 }
 
 // The height fog at a surface: rgb is its colour, a how much of the surface it covers. `fog` and
-// `fog_shape` are `Renderer::fog` (a < 0 = none set, so the presets' applies). Every shader that draws
+// `fog_shape` are what `frame_uniforms::frame_fog` settled on for this frame. Every shader that draws
 // the world goes through this, so a surface stands in the same fog on any path.
-fn height_fog(world_pos: vec3<f32>, camera_pos: vec3<f32>, preset: u32, preset_b: u32, blend_t: f32, fog: vec4<f32>, fog_shape: vec4<f32>) -> vec4<f32> {
+//
+// It decides nothing per fragment, on purpose: which fog and which `FogMode` are the same for the whole
+// frame, and a phone pays for a branch here whether or not it is taken. Two `if`s for the mode, neither
+// of them taken, cost an Adreno 618 filling the screen 6 fps of 62. See `frame_fog`.
+//
+// Measure before making this smaller. An exponential-only copy for the plain tier, with the camera's
+// `exp` worked out once a frame, has strictly less to do and read 85 fps on that phone against this
+// function's 103, by two ways of counting and for no reason found.
+fn height_fog(world_pos: vec3<f32>, camera_pos: vec3<f32>, fog: vec4<f32>, fog_shape: vec4<f32>) -> vec4<f32> {
     let view_vec = world_pos - camera_pos;
     let dist = length(view_vec);
     let view_dir = view_vec / max(dist, 0.0001);
+    let density = fog.a;
+    let falloff = fog_shape.x;
 
-    var fog_color = vec3<f32>(0.5, 0.6, 0.7); // default Daylight
-    var fog_density = 0.015;
-    var fog_height_falloff = 0.05;
-    var fog_base_height = -5.0; // base height of fog plane
+    // Volumetric analytical scattering (height-decay fog integration): `(1 - e^(-rate·dist)) / rate`
+    // along the ray. Its limit is `dist` whenever the rate is ~0: a level ray, or fog that does not thin
+    // with height at all (`Fog::height_falloff == 0`), which the division would turn to NaN.
+    let rate = falloff * view_dir.y;
+    let level = abs(rate) < 0.000001;
+    let along_ray = select((1.0 - exp(-rate * dist)) / select(rate, 1.0, level), dist, level);
+    // Past 64 the exponential below is 1 in an f32 anyway, and an infinity would turn to NaN in the `mix`.
+    let thickness = min(density * exp(-falloff * (camera_pos.y - fog_shape.y)) * along_ray, 64.0);
 
-    if (preset == 0u) {
-        // Sunset Gold
-        fog_color = vec3<f32>(0.85, 0.38, 0.15);
-        fog_density = 0.025;
-        fog_height_falloff = 0.08;
-    } else if (preset == 1u) {
-        // Studio Neutral
-        fog_color = vec3<f32>(0.2, 0.22, 0.25);
-        fog_density = 0.008;
-        fog_height_falloff = 0.04;
-    } else if (preset == 2u) {
-        // Midnight Neon
-        fog_color = vec3<f32>(0.12, 0.02, 0.25);
-        fog_density = 0.035;
-        fog_height_falloff = 0.12;
-    }
-
-    // Blend fog color if we are interpolating presets!
-    if (blend_t > 0.001) {
-        var fog_color_2 = vec3<f32>(0.5, 0.6, 0.7);
-        var fog_density_2 = 0.015;
-        var fog_height_falloff_2 = 0.05;
-
-        if (preset_b == 0u) {
-            fog_color_2 = vec3<f32>(0.85, 0.38, 0.15);
-            fog_density_2 = 0.025;
-            fog_height_falloff_2 = 0.08;
-        } else if (preset_b == 1u) {
-            fog_color_2 = vec3<f32>(0.2, 0.22, 0.25);
-            fog_density_2 = 0.008;
-            fog_height_falloff_2 = 0.04;
-        } else if (preset_b == 2u) {
-            fog_color_2 = vec3<f32>(0.12, 0.02, 0.25);
-            fog_density_2 = 0.035;
-            fog_height_falloff_2 = 0.12;
-        }
-        fog_color = mix(fog_color, fog_color_2, blend_t);
-        fog_density = mix(fog_density, fog_density_2, blend_t);
-        fog_height_falloff = mix(fog_height_falloff, fog_height_falloff_2, blend_t);
-    }
-
-    // `Renderer::fog` replaces the preset's fog outright (density ≥ 0; < 0 = no override).
-    if (fog.a >= 0.0) {
-        fog_color = fog.rgb;
-        fog_density = fog.a;
-        fog_height_falloff = fog_shape.x;
-        fog_base_height = fog_shape.y;
-    }
-
-    // Volumetric analytical scattering (height-decay fog integration)
-    let cam_y = camera_pos.y - fog_base_height;
-    let dir_y = view_dir.y;
-
-    var fog_amount = 0.0;
-    // The linear limit whenever the exponent's rate is ~0: a level ray, or fog that does not thin
-    // with height at all (`Fog::height_falloff == 0`), which the division below would turn to NaN.
-    if (abs(fog_height_falloff * dir_y) < 0.000001) {
-        fog_amount = fog_density * exp(-fog_height_falloff * cam_y) * dist;
-    } else {
-        let falloff_dir_y = fog_height_falloff * dir_y;
-        fog_amount = (fog_density * exp(-fog_height_falloff * cam_y) * (1.0 - exp(-falloff_dir_y * dist))) / falloff_dir_y;
-    }
-
-    var fog_factor = 1.0 - clamp(exp(-fog_amount), 0.0, 1.0);
-    // `FogMode`, for a hand-set fog: `fog_shape.z`.
-    if (fog.a >= 0.0 && fog_shape.z > 0.5) {
-        if (fog_shape.z < 1.5) {
-            fog_factor = 1.0 - clamp(exp(-fog_amount * fog_amount), 0.0, 1.0);
-        } else {
-            fog_factor = clamp((dist - fog_shape.w) / max(fog.a - fog_shape.w, 0.001), 0.0, 1.0);
-        }
-    }
-    return vec4<f32>(fog_color, fog_factor);
+    // `FogMode`: `fog_shape.z` is 0, 1 or 2, so each of these is 1 in its own mode and 0 in the others.
+    let squared = 1.0 - abs(fog_shape.z - 1.0);
+    let linear = max(fog_shape.z - 1.0, 0.0);
+    let exponential = 1.0 - clamp(exp(-thickness * mix(1.0, thickness, squared)), 0.0, 1.0);
+    let ramp = clamp((dist - fog_shape.w) / max(density - fog_shape.w, 0.001), 0.0, 1.0);
+    return vec4<f32>(fog.rgb, mix(exponential, ramp, linear));
 }
 
 // ── Clustered light lookup ───────────────────────────────────────────────────

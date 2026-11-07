@@ -23,7 +23,8 @@ use crate::gpu_types::ShadowVsUniform;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
-/// The lit pipelines with anisotropy, clear coat and subsurface in, on the forward-only path.
+/// The lit pipelines with anisotropy, clear coat and subsurface in, on the forward-only path: the top
+/// tier of [`SceneState::lit_pipeline`].
 ///
 /// An Adreno 618 pays for those branches whether they are taken or not: 43 fps without them and 20
 /// with them, drawing a cube and a floor. So materials that use none of them get pipelines without
@@ -100,6 +101,13 @@ pub struct SceneState {
     pub behind_view: wgpu::TextureView,
     /// How the glass shader reads that frame.
     pub behind_sampler: wgpu::Sampler,
+    /// [`unlit_pipeline`](Self::unlit_pipeline) with `KEEPS`, on the forward-only path, whose plain one
+    /// cannot discard: a cut-out, a LOD crossfade. `None` on the desktop path, whose unlit pipeline can.
+    pub unlit_keeps_pipeline: Option<wgpu::RenderPipeline>,
+    /// [`render_pipeline`](Self::render_pipeline) with `DETAILS`, on the forward-only path, whose
+    /// plain one leaves them out: a single-sided opaque draw that needs a cut-out, a LOD crossfade or
+    /// its own reflectance. `None` on the desktop path, whose lit pipelines always have them.
+    pub render_details_pipeline: Option<wgpu::RenderPipeline>,
     /// The lit pipelines with anisotropy, clear coat and subsurface, where the ones above leave them
     /// out. `None` on the desktop path, whose lit pipelines always have them.
     pub lit_lobes: Option<LitLobes>,
@@ -419,9 +427,27 @@ impl SceneState {
         }
     }
 
-    /// The pipeline for a lit, non-custom draw. `lobes` says the material uses anisotropy, clear coat
-    /// or subsurface, which only the desktop path's pipelines always carry.
-    pub fn lit_pipeline(&self, lobes: bool, transparent: bool, double_sided: bool, mode: crate::components::BlendMode) -> &wgpu::RenderPipeline {
+    /// The pipeline for an unlit draw blending by alpha, or not at all. `discards` says it may discard.
+    pub fn unlit_for(&self, discards: bool) -> &wgpu::RenderPipeline {
+        self.unlit_keeps_pipeline.as_ref().filter(|_| discards).unwrap_or(&self.unlit_pipeline)
+    }
+
+    /// The pipeline for a lit, non-custom draw, on the tier it needs.
+    ///
+    /// Desktop has one tier. On the forward-only path a phone pays for code whether or not a draw takes
+    /// it, and not in proportion to it either (see `shader.wgsl`), so a plain surface has a pipeline of its
+    /// own: single-sided and opaque, with no discard in it. A double-sided or blended draw's pipeline
+    /// has `DETAILS` already, since its back faces show. `details` asks for them on a single-sided opaque
+    /// draw (see [`routing::needs_details`](crate::routing::needs_details)), and `lobes` says the material
+    /// uses anisotropy, clear coat or subsurface, which is the tier above.
+    pub fn lit_pipeline(
+        &self,
+        lobes: bool,
+        details: bool,
+        transparent: bool,
+        double_sided: bool,
+        mode: crate::components::BlendMode,
+    ) -> &wgpu::RenderPipeline {
         let index = crate::components::BlendMode::VARIANTS.iter().position(|m| *m == mode);
         match self.lit_lobes.as_ref().filter(|_| lobes) {
             Some(set) => match (transparent, index) {
@@ -434,7 +460,11 @@ impl SceneState {
                 (true, Some(i)) => &self.blend_lit_pipelines[i],
                 (true, None) => &self.transparent_pipeline,
                 (false, _) if double_sided => &self.render_double_sided_pipeline,
-                (false, _) => &self.render_pipeline,
+                (false, _) => self
+                    .render_details_pipeline
+                    .as_ref()
+                    .filter(|_| details)
+                    .unwrap_or(&self.render_pipeline),
             },
         }
     }
@@ -857,6 +887,8 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         blend_lit_pipelines: core_pipelines.blend_lit,
         blend_unlit_pipelines: core_pipelines.blend_unlit,
         lit_lobes: core_pipelines.lobes,
+        render_details_pipeline: core_pipelines.render_details,
+        unlit_keeps_pipeline: core_pipelines.unlit_keeps,
         wire_color_layout,
         wire_colors: std::collections::HashMap::new(),
         transmissive: core_pipelines.transmissive,
@@ -925,6 +957,8 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let shadow_pipeline = build_shadow_pipeline(device, &layouts);
 
     renderer.scene.lit_lobes = core_pipelines.lobes;
+    renderer.scene.render_details_pipeline = core_pipelines.render_details;
+    renderer.scene.unlit_keeps_pipeline = core_pipelines.unlit_keeps;
     renderer.scene.transmissive = core_pipelines.transmissive;
     renderer.scene.render_pipeline = core_pipelines.render;
     renderer.scene.render_double_sided_pipeline = core_pipelines.render_double_sided;
@@ -975,18 +1009,38 @@ mod tests {
     #[test]
     fn the_plain_web_shader_leaves_the_lobes_out_and_the_variant_has_them() {
         use super::shaders::{compose_wgsl, native_render_defs, web_render_defs};
+        use naga_oil::compose::ShaderDefValue::Bool;
         let src = include_str!("../shaders/shader.wgsl");
         let lobes = ["compute_direct_lighting_anisotropic", "layer_clear_coat", "subsurface_light"];
+        let details = ["front_facing", "discard", "dielectric_f0", "instance_keeps"];
         let plain = compose_wgsl(src, "shader.wgsl", web_render_defs());
         let mut defs = web_render_defs();
-        defs.insert("LOBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
-        let variant = compose_wgsl(src, "shader.wgsl", defs);
+        defs.insert("DETAILS".to_string(), Bool(true));
+        let with_details = compose_wgsl(src, "shader.wgsl", defs.clone());
+        defs.insert("LOBES".to_string(), Bool(true));
+        let with_lobes = compose_wgsl(src, "shader.wgsl", defs);
         let desktop = compose_wgsl(src, "shader.wgsl", native_render_defs());
         for lobe in lobes {
             assert!(!plain.contains(lobe), "the plain web shader has {lobe}");
-            assert!(variant.contains(lobe), "the web variant lost {lobe}");
+            assert!(!with_details.contains(lobe), "the details tier has {lobe}");
+            assert!(with_lobes.contains(lobe), "the web variant lost {lobe}");
             assert!(desktop.contains(lobe), "the desktop shader lost {lobe}");
         }
+        for detail in details {
+            assert!(!plain.contains(detail), "a plain surface pays for {detail} on a phone");
+            assert!(with_details.contains(detail), "the details tier lost {detail}");
+            assert!(with_lobes.contains(detail), "the lobes tier lost {detail}");
+            assert!(desktop.contains(detail), "the desktop shader lost {detail}");
+        }
+        // The entry points a blended draw needs are in every tier that draws one.
+        assert!(with_details.contains("fs_additive") && !plain.contains("fs_additive"));
+
+        let unlit = include_str!("../shaders/unlit.wgsl");
+        assert!(!compose_wgsl(unlit, "unlit.wgsl", web_render_defs()).contains("discard"));
+        let mut defs = web_render_defs();
+        defs.insert("KEEPS".to_string(), Bool(true));
+        assert!(compose_wgsl(unlit, "unlit.wgsl", defs).contains("discard"));
+        assert!(compose_wgsl(unlit, "unlit.wgsl", native_render_defs()).contains("discard"));
     }
 
     use super::*;
@@ -1125,8 +1179,15 @@ mod tests {
                     if web_path.contains(name) {
                         variants.push(("web", shaders::compose_wgsl(src, name, shaders::web_render_defs())));
                     }
+                    if *name == "unlit.wgsl" {
+                        let mut defs = shaders::web_render_defs();
+                        defs.insert("KEEPS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        variants.push(("web keeps", shaders::compose_wgsl(src, name, defs)));
+                    }
                     if *name == "shader.wgsl" {
                         let mut defs = shaders::web_render_defs();
+                        defs.insert("DETAILS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        variants.push(("web with details", shaders::compose_wgsl(src, name, defs.clone())));
                         defs.insert("LOBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         variants.push(("web with lobes", shaders::compose_wgsl(src, name, defs.clone())));
                         defs.insert("TRANSMISSION".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));

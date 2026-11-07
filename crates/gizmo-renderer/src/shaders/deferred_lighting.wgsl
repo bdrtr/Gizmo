@@ -236,7 +236,7 @@ fn filter_pcss(
 }
 
 fn compute_height_fog(world_pos: vec3<f32>, camera_pos: vec3<f32>) -> vec4<f32> {
-    return height_fog(world_pos, camera_pos, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    return height_fog(world_pos, camera_pos, scene.fog, scene.fog_shape);
 }
 
 @fragment

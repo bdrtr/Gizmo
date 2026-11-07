@@ -38,8 +38,12 @@ pub(crate) fn native_render_defs() -> HashMap<String, ShaderDefValue> {
         // volume's group, for its reflection probes. The web has no group left, so no `PROBES`.
         ("PROBES".to_string(), ShaderDefValue::Bool(true)),
         ("REFLECTION_GROUP".to_string(), ShaderDefValue::UInt(5)),
-        // Anisotropy, clear coat and subsurface in `shader.wgsl`. Always on here; the forward-only
-        // path builds a second set of lit pipelines with them, for the materials that use them.
+        // Back faces, cut-outs, LOD crossfades and a material's own reflectance, then anisotropy, clear
+        // coat and subsurface, in `shader.wgsl`. Always on here; the forward-only path builds its lit
+        // pipelines in tiers, so a plain surface does not pay for them. See `SceneState::lit_pipeline`.
+        ("DETAILS".to_string(), ShaderDefValue::Bool(true)),
+        // A cut-out or a LOD crossfade in `unlit.wgsl`, for the same reason.
+        ("KEEPS".to_string(), ShaderDefValue::Bool(true)),
         ("LOBES".to_string(), ShaderDefValue::Bool(true)),
     ])
 }

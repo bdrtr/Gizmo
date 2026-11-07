@@ -226,6 +226,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Vertex alpha multiplies through with the instance's and the texture's. It only reaches the
     // framebuffer on the blended (transparent) variant of this pipeline — the opaque variant
     // writes it to the HDR target's unread alpha channel, exactly as it did before.
-    let fog = height_fog(in.world_pos, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    let fog = height_fog(in.world_pos, scene.camera_pos.xyz, scene.fog, scene.fog_shape);
     return vec4<f32>(mix(colour, fog.rgb, fog.a), final_alpha);
 }

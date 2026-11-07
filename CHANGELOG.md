@@ -143,6 +143,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A phone lost 13 % of its frame rate to features nothing in the game used.** The lit shader has three tiers on the forward-only
+  path now: plain, `DETAILS` (back faces, cut-outs, crossfades, a material's own reflectance, blend modes, debug views) and `LOBES`.
+  Batching picks one per draw (`routing::needs_details`, `SceneState::lit_pipeline`), `unlit.wgsl` splits the same way with `KEEPS`,
+  and the desktop path has everything always. On an Adreno 618 in Nişancı, the phone upright and a floor filling the screen: 63.7 fps
+  before the features, 53.6 after them, 63.1 now; on its side, 102, 89 and 103. A floor that takes `DETAILS` reads 84 where the plain
+  tier read about 97. **Looks change** on the browser and on a phone: an opaque material's texel alpha is drawn solid,
+  as the G-buffer always has. A surface that shows through says so with `is_transparent` or `alpha_cutoff`.
+
+- **Fog is settled once a frame.** `frame_uniforms::frame_fog` picks the preset, the blend and the `FogMode`, and `height_fog` is
+  arithmetic on every path. `SceneUniforms::fog` is always the fog in force, where its alpha used to be negative for "none set".
+
 - **`Changed<T>` and `Added<T>` lost writes.** One tick per schedule run and a strict comparison meant a system saw nothing written
   after it in the same run, by a batch's commands after it, or between runs: a game's update hook, a physics step's hook. A query
   parameter now compares against the tick its own system last ran at, and the tick moves on between batches, so every system sees

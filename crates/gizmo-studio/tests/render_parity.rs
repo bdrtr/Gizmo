@@ -166,7 +166,12 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
     // And nothing else. Every field of the block is either compared above or named here.
     assert_eq!(g._pre_align_pad, e._pre_align_pad);
     assert_eq!(g.wireframe_color, e.wireframe_color);
-    assert_eq!((g.fog, g.fog_shape), (e.fog, e.fog_shape), "neither input asks for fog");
+    // Neither asks for a fog of its own, so each stands in its preset's, and the presets are a declared
+    // difference above: the editor's is preset 0, the game's halfway from 2 to 3.
+    assert_eq!(e.fog, [0.85, 0.38, 0.15, 0.025], "the editor's preset 0");
+    assert_ne!(g.fog, e.fog, "the game's blend of presets 2 and 3");
+    assert_eq!(g.fog_shape[1..], [-5.0, 0.0, 0.0], "a preset's fog: base height, exponential");
+    assert_eq!(e.fog_shape[1..], [-5.0, 0.0, 0.0], "a preset's fog: base height, exponential");
     assert_eq!(
         (g.sky_zenith, g.sky_horizon, g.sky_ground),
         (e.sky_zenith, e.sky_horizon, e.sky_ground),

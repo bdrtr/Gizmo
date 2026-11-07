@@ -140,7 +140,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     }
     // Premultiplied over: the fog in front of the volume replaces what the volume shows, by how much
     // of the view the volume blocks.
-    let fog = height_fog(ro + rd * start, scene.camera_pos.xyz, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, scene.fog, scene.fog_shape);
+    let fog = height_fog(ro + rd * start, scene.camera_pos.xyz, scene.fog, scene.fog_shape);
     let opacity = 1.0 - transm;
     return vec4<f32>(accum * (1.0 - fog.a) + fog.rgb * fog.a * opacity, opacity);
 }
