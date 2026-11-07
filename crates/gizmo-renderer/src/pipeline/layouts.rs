@@ -1,7 +1,7 @@
 //! The bind group layouts (global, shadow, texture, skeleton, instance).
 
-pub(super) struct Layouts {
-    pub(super) global: wgpu::BindGroupLayout,
+pub(crate) struct Layouts {
+    pub(crate) global: wgpu::BindGroupLayout,
     pub(super) shadow: wgpu::BindGroupLayout,
     pub(super) shadow_pass: wgpu::BindGroupLayout,
     pub(super) texture: wgpu::BindGroupLayout,
@@ -9,7 +9,7 @@ pub(super) struct Layouts {
     pub(super) instance: wgpu::BindGroupLayout,
 }
 
-pub(super) fn build_layouts(device: &wgpu::Device) -> Layouts {
+pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
     // The clustered-light buffers live on the GLOBAL group rather than a group of their own, and
     // that is a hard constraint rather than a preference: the web forward pipeline already binds
     // four groups (global, texture, skeleton, instance) and `max_bind_groups` is 4 on every WebGPU

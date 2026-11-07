@@ -3,7 +3,7 @@
 //! build_scene_pipelines, rebuild_pipelines, load_shader) is re-exported unchanged from this
 //! module.
 
-mod layouts;
+pub(crate) mod layouts;
 mod pipelines;
 // `pub(crate)` for `compose_module`: the layout contract tests parse what the pipeline composes,
 // which is the point of them — see `crate::shader_contract`.
@@ -421,6 +421,28 @@ impl SceneState {
         uniforms: &crate::gpu_types::SceneUniforms,
     ) -> bool {
         self.env_cube.update(device, queue, encoder, uniforms)
+    }
+
+    /// Lights the scene from `map`, reflects it and draws it behind the scene, on the forward-only path,
+    /// or gives the sky back with `None`. A map at another size than the cube's makes a new cube, and every
+    /// view's group 0 is built again to see it. The desktop path takes a map through its reflection probes.
+    pub fn set_environment_map(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        map: Option<&crate::environment::EnvironmentMap>,
+    ) {
+        if self.env_cube.set_map(device, queue, encoder, &self.global_bind_group_layout, map) {
+            let behind = self.behind_view.clone();
+            self.set_behind_view(device, Some(&behind));
+        }
+    }
+
+    /// What draws the environment map behind the scene on the forward-only path, while there is one. Bind
+    /// group 0 and draw three vertices.
+    pub fn environment_background(&self) -> Option<&wgpu::RenderPipeline> {
+        self.env_cube.background()
     }
 
     /// The pipeline for an unlit draw blending by alpha, or not at all. `discards` says it may discard.
@@ -1114,6 +1136,7 @@ mod tests {
                 ("gbuffer.wgsl", include_str!("../shaders/gbuffer.wgsl")),
                 ("deferred_lighting.wgsl", include_str!("../shaders/deferred_lighting.wgsl")),
                 ("env_bake.wgsl", include_str!("../shaders/env_bake.wgsl")),
+                ("environment_sky.wgsl", include_str!("../shaders/environment_sky.wgsl")),
                 ("post_process.wgsl", include_str!("../shaders/post_process.wgsl")),
                 ("ssao.wgsl", include_str!("../shaders/ssao.wgsl")),
                 ("ssao_blur.wgsl", include_str!("../shaders/ssao_blur.wgsl")),
@@ -1172,6 +1195,8 @@ mod tests {
                 "sky.wgsl",
                 "backdrop.wgsl",
                 "grid.wgsl",
+                "env_bake.wgsl",
+                "environment_sky.wgsl",
             ];
 
             let mut failures: Vec<String> = Vec::new();

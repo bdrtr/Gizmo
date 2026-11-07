@@ -383,6 +383,12 @@ fn render_viewports_unshaken(
 /// **`gizmo-studio` calls it too**, before its own passes: the capture draws the world through this
 /// path, which skips `EditorOnly` furniture, so the editor's probes match the game's.
 pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
+    // Nothing on the forward-only path reads a probe: its lit shader has no group for them, and it takes
+    // an environment map through its own cube (`SceneState::set_environment_map`). Capturing one there
+    // drew the world six times for nothing.
+    if cfg!(gizmo_forward_only) {
+        return;
+    }
     use crate::renderer::components::ReflectionProbe;
     use crate::renderer::reflection::{ReflectionProbeGpu, FACES, MAX_PROBES};
     let mut probes: Vec<(Entity, ReflectionProbe)> =
@@ -431,7 +437,7 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     if environment_changed {
         if let (Some(gpu), Some(map)) = (renderer.reflection_probe.as_ref(), renderer.environment_map.as_ref()) {
             let slot = (slots - 1) as u32;
-            gpu.write_environment(&renderer.queue, slot, map);
+            gpu.write_environment(&renderer.queue, slot, map, 1.0);
             let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("environment_map_prefilter"),
             });
@@ -1295,10 +1301,16 @@ fn draw_camera_view(
     // CPU-computed inverse of the (unjittered) view-projection for the volumetric smoke raymarch
     // (the WGSL inverse_mat4 returns a wrong inverse for the perspective matrix).
     let inv_view_proj = unjittered_view_proj.inverse().to_cols_array_2d();
-    // The forward-only path's lit shader reads the environment from a cube; drawn again only when this
-    // frame's sky, presets or sun changed it.
+    // The forward-only path's lit shader reads the environment from a cube: an environment map's, or the
+    // sky's, drawn again only when this frame's sky, presets or sun changed it.
     #[cfg(gizmo_forward_only)]
-    renderer.scene.update_environment(&renderer.device, &renderer.queue, encoder, &scene_uniform_data);
+    {
+        if renderer.environment_map_dirty {
+            renderer.environment_map_dirty = false;
+            renderer.scene.set_environment_map(&renderer.device, &renderer.queue, encoder, renderer.environment_map.as_ref());
+        }
+        renderer.scene.update_environment(&renderer.device, &renderer.queue, encoder, &scene_uniform_data);
+    }
     passes::record_forward_and_fluid(
         encoder, renderer, world, &draw_items, uploaded_instances, particle_lod, fluid_lod,
         inv_view_proj, clear_color,

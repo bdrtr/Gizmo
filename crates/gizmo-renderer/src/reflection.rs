@@ -288,9 +288,11 @@ impl ReflectionProbeGpu {
         self.fullscreen(encoder, &self.face_view(0, slot, face), &self.copy_pipeline, &group);
     }
 
-    /// Writes a panorama's six faces into mip 0 of slot `slot`, for [`record_prefilter`](Self::record_prefilter).
-    pub fn write_environment(&self, queue: &wgpu::Queue, slot: u32, map: &crate::environment::EnvironmentMap) {
-        for (face, texels) in map.cube_faces(self.size).iter().enumerate() {
+    /// Writes a panorama's six faces into mip 0 of slot `slot`, for [`record_prefilter`](Self::record_prefilter),
+    /// multiplied by `scale`. The desktop's lighting pass applies the map's intensity as it reads the
+    /// slot, so it passes 1; the forward-only path's cube has no such factor and passes the intensity.
+    pub fn write_environment(&self, queue: &wgpu::Queue, slot: u32, map: &crate::environment::EnvironmentMap, scale: f32) {
+        for (face, texels) in map.cube_faces(self.size, scale).iter().enumerate() {
             queue.write_texture(
                 wgpu::TexelCopyTextureInfo {
                     texture: &self.texture,

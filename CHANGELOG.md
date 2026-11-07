@@ -157,6 +157,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before, 92.9 after, in one sitting; the floor's colour within 1 of 255. `scene_environment` in `common.wgsl` is the one function
   every path calls. The desktop path is unchanged.
 
+- **`Renderer::set_environment_map` works on the browser and on a phone.** The map goes through the reflection probes' prefilter
+  into the cube those paths read their sky from, at its own resolution, and stands behind the scene. A `ReflectionProbe` is still
+  desktop only, and those paths no longer capture one for nothing. `ReflectionProbeGpu::write_environment` takes a scale.
+
 - **Fog is settled once a frame.** `frame_uniforms::frame_fog` picks the preset, the blend and the `FogMode`, and `height_fog` is
   arithmetic on every path. `SceneUniforms::fog` is always the fog in force, where its alpha used to be negative for "none set".
 

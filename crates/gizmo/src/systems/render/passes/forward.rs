@@ -349,6 +349,12 @@ fn draw_environment_sky(render_pass: &mut wgpu::RenderPass<'_>, renderer: &Rende
     if renderer.environment_map.is_none() {
         return;
     }
+    // The forward-only path keeps it in the cube its lit shader reads the sky from, on group 0.
+    if let Some(pipeline) = renderer.scene.environment_background() {
+        render_pass.set_pipeline(pipeline);
+        render_pass.draw(0..3, 0..1);
+        return;
+    }
     let Some(def) = renderer.deferred.as_ref() else { return };
     render_pass.set_pipeline(&def.environment_sky_pipeline);
     render_pass.set_bind_group(1, &def.irradiance.bind_group, &[]);

@@ -6,7 +6,9 @@
 //! they read any probe with no box, and the array's blurriest mip is the diffuse. A probe with no box
 //! of the scene's own takes the reflections instead, and the image still lights and backs the scene.
 //!
-//! Native only, as reflection probes are: the web's forward path has no bind group to read them through.
+//! On the browser and on a phone, whose forward path has no bind group for the probes, it goes through the
+//! same prefilter into the cube that path reads its sky from instead (`env_cube`), at the map's own
+//! resolution, and is drawn behind the scene from there. Probes themselves are still desktop only.
 
 use crate::reflection::FACES;
 
@@ -111,8 +113,9 @@ impl EnvironmentMap {
         })
     }
 
-    /// The six faces of a cube `size` texels across, as `Rgba16Float` texels, in WebGPU's layer order.
-    pub(crate) fn cube_faces(&self, size: u32) -> Vec<Vec<[u16; 4]>> {
+    /// The six faces of a cube `size` texels across, as `Rgba16Float` texels, in WebGPU's layer order,
+    /// each multiplied by `scale`.
+    pub(crate) fn cube_faces(&self, size: u32, scale: f32) -> Vec<Vec<[u16; 4]>> {
         (0..FACES)
             .map(|face| {
                 let mut texels = Vec::with_capacity((size * size) as usize);
@@ -120,7 +123,7 @@ impl EnvironmentMap {
                     for column in 0..size {
                         let s = (column as f32 + 0.5) / size as f32 * 2.0 - 1.0;
                         let t = (row as f32 + 0.5) / size as f32 * 2.0 - 1.0;
-                        let [r, g, b] = self.sample(cube_direction(face, s, t));
+                        let [r, g, b] = self.sample(cube_direction(face, s, t)).map(|v| v * scale);
                         let half = |v: f32| half::f16::from_f32(v.max(0.0)).to_bits();
                         texels.push([half(r), half(g), half(b), half(1.0)]);
                     }
