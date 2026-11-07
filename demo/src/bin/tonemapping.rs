@@ -10,8 +10,8 @@
 //! | Reinhard | **var** — `::Reinhard` |
 //! | Reinhard (beyaz noktalı) | **var** — `::ReinhardExtended` |
 //! | ACES | **var, varsayılan** — `::Aces` |
-//! | Reinhard (parlaklık üzerinden) | **yok** |
-//! | AgX | **yok** |
+//! | Reinhard (parlaklık üzerinden) | `ReinhardLuminance` (2026-11-07) |
+//! | AgX | `AgX` (2026-11-02) |
 //! | Somewhat Boring Display Transform | **yok** |
 //! | Tony McMapface | **yok** |
 //! | Blender Filmic | **yok** |

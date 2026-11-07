@@ -8,14 +8,14 @@
 //! |---------|-------|
 //! | bulanıklık kipi seçimi (gauss / bokeh) | **yok** — tek bulanıklık |
 //! | odak uzaklığı | [`Renderer::dof_focus_dist`] |
-//! | diyafram (f-değeri) | **yok** |
-//! | sensör yüksekliği | **yok** |
+//! | diyafram (f-değeri) | `PostProcess::with_lens(odak, f, azami)` (2026-11-07) |
+//! | sensör yüksekliği | `PostProcess::dof_sensor_height` |
 //! | karışıklık çemberinin en büyük çapı | [`Renderer::dof_blur_size`] (piksel yarıçapı) |
-//! | efektin uygulandığı en büyük derinlik | **yok** |
+//! | efektin uygulandığı en büyük derinlik | `PostProcess::dof_max_depth` |
 //! | karışıklık çemberinin doyduğu mesafe | [`Renderer::dof_focus_range`] |
 //! | efekti tümden açıp kapatmak | [`Renderer::dof_enabled`] |
 //!
-//! Yani optik bir model yok; shader'ın yaptığı şey doğrudan şu:
+//! Bu demo odak bandını gösteriyor, mercek modeli `with_lens`'tedir. Bandın shader'da yaptığı şey şu:
 //!
 //! ```text
 //! coc = clamp(|görüş_mesafesi − odak| / odak_menzili, 0, 1)
@@ -218,7 +218,7 @@ fn main() {
                         ui.label("sonuç = mix(keskin, bulanık, coc)");
                         ui.separator();
                         ui.label("diyafram, sensör yüksekliği ve bokeh kipi YOK");
-                        ui.label("optik model yok, üç sayı var");
+                        ui.label("odak bandı: üç sayı; mercek için with_lens");
                         ui.separator();
                         ui.label("1/2/3/4 — odak 4/10/16/24 m · 0 — kapalı");
                     });

@@ -8,11 +8,11 @@
 //! |---------|-------|
 //! | genel tel kafes anahtarı | [`WireframeConfig::global`] |
 //! | tel kafes rengi | **var, 2026-11-02'den beri** — `WireframeConfig::color` (native) |
-//! | nesne bazında tel kafes açma (bu nesneyi tel kafes çiz) | **yok** |
-//! | nesne bazında hariç tutma (bunu hariç tut) | **yok** |
-//! | nesne başına tel kafes rengi | **yok** |
+//! | nesne bazında tel kafes açma (bu nesneyi tel kafes çiz) | `Wireframe` (2026-11-07) |
+//! | nesne bazında hariç tutma (bunu hariç tut) | `NoWireframe` |
+//! | nesne başına tel kafes rengi | `WireframeColor` |
 //!
-//! Yani ya hepsi ya hiçbiri. Nesne başına seçim ve renk yok; `WireframeConfig` tek alanlı bir
+//! Bu demo `WireframeConfig`'in hepsini-birden yolunu gösteriyor; nesne başına olanlar yukarıda. `WireframeConfig` iki alanlı:
 //! kaynak.
 //!
 //! ## İki şey kodun kendisinden okunuyor
@@ -126,7 +126,7 @@ fn main() {
             renderer.ssr = None;
             renderer.ssgi = None;
 
-            // Tek kaynak — nesne başına seçim yok. Renk, açık malzemede görünmez kalan çizgiyi
+            // Tek kaynak, bu demoda nesne başına seçim kullanılmıyor. Renk, açık malzemede görünmez kalan çizgiyi
             // okunur yapıyor; `GIZMO_WIRE_LIT=1` eski hâli (aydınlatılmış renk) gösterir.
             let on = world.get_resource::<Wire>().map(|w| w.0).unwrap_or(false);
             let color = std::env::var("GIZMO_WIRE_LIT").is_err().then_some([0.05, 1.0, 0.3]);
@@ -146,7 +146,7 @@ fn main() {
                         ui.separator();
                         ui.label("WireframeConfig tek alanlı: ya hepsi ya hiçbiri.");
                         ui.label("varsayılan renk, nesne bazında açma/hariç tutma ve");
-                        ui.label("nesne başına renk ayarı yok.");
+                        ui.label("nesne başına: Wireframe, NoWireframe, WireframeColor.");
                         ui.separator();
                         ui.label("ileri geçişte çiziliyor; skybox ve backdrop bilerek hariç.");
                         ui.label("WASM'de PolygonMode::Line yok — orada dolu kalıyor.");

@@ -27,7 +27,7 @@
 //! | yetenek | Gizmo |
 //! |---------|-------|
 //! | vernik miktarı (0..1) | `Material::clear_coat` |
-//! | vernik katmanının kendi pürüzü | **yok** — katmanın pürüzü sabit |
+//! | vernik katmanının kendi pürüzü | `Material::with_clear_coat_roughness` (2026-11-07) |
 //! | vernik ve vernik pürüzü dokusu | **yok** |
 //! | vernik normal dokusu (portakal kabuğu) | **yok** |
 //!

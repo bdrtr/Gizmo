@@ -8,9 +8,9 @@
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | kademe sayısı | **bir tane**: `lod_vbufs[0]` |
-//! | her kademeye ayrı mesafe | **tek kural**: `mesafe > yarıçap × 15` |
-//! | çapraz geçiş (crossfade) | **yok** — anlık takas |
+//! | kademe sayısı | otomatik **bir tane**: `lod_vbufs[0]`; `LodGroup` ile istenildiği kadar |
+//! | her kademeye ayrı mesafe | otomatikte **tek kural**: `mesafe > yarıçap × 15`; `LodLevel::new(mesh, metre)` |
+//! | çapraz geçiş (crossfade) | otomatikte anlık takas; `LodGroup::with_crossfade(metre)` eriyerek geçer |
 //! | mesafeyi sınırlayıcı kutudan (AABB) ölçme seçeneği | **yok** |
 //! | nesne başına ayar | [`MeshRenderer::lod_bias`] — mesafeyi **bölen** bir çarpan |
 //!

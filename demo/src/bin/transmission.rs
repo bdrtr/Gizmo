@@ -1,125 +1,29 @@
 //! # Işığın içinden geçtiği malzemeler
 //!
-//! Cam, su, buzlu cam, mermer: ışığı yansıtmakla kalmayıp **içinden geçiren** yüzeyler.
-//! Fiziksel olarak bunun üç ayarı olur — ne kadar geçiriyor (transmission), ne kadar kalın
-//! (thickness), ve içeride ne kadar soğuruyor (Beer–Lambert).
+//! Cam: arkasındaki sahneyi gösterir, rengiyle boyar, pürüzlüyse bulanıklaştırır, kalınsa kırar. Üstündeki
+//! parlama ve yansıma yerinde kalır. Soldan sağa dört bölme, arkalarında kırmızı ve mavi kutular:
 //!
-//! Yanında bir dördüncü ayar daha durur: **speküler renk**. Metal olmayan bir yüzeyin
-//! yansımasının rengi. Gerçekte 0,04 civarı nötr bir değerdir ama bazı malzemelerde (altın
-//! kaplama, bazı boyalar, ıslak yüzeyler) renklidir.
+//! | bölme | malzeme |
+//! |-------|---------|
+//! | berrak | `with_transmission(1.0)` |
+//! | renkli | albedosu camgöbeği: kırmızı kutu kararır, mavi geçer |
+//! | buzlu | `with_pbr(.., 0.45, 0.0)`: pürüzlülük arkadakini bulanıklaştırır |
+//! | kalın | `with_thickness(0.6).with_ior(1.8)`: arkadaki görüntü kayar |
 //!
-//! ## Motorda ikisi de yok, ve ikisi de aynı duvara çarpıyor
+//! En sağda yansıma: `with_ior(2.42)`, elmas, aynı kürede varsayılan 1.5'ten parlak.
 //!
-//! | yetenek | Gizmo |
-//! |---------|-------|
-//! | malzeme başına geçirgenlik | **yok** — `Material`'da alan yok |
-//! | kalınlık / soğurma | **yok** (malzemede) |
-//! | kırılma indisi | **yok** |
-//! | speküler renk (F0 tinti) | **yok** — F0 sabit `0.04` |
-//! | `MaterialType::Water` | **artık canlı** (2026-08-24) — aşağıda |
-//!
-//! `Material`'ın gölgeleme alanları şunlar ve hepsi bu: `roughness`, `metallic`, `anisotropy`,
-//! `clear_coat`, `subsurface`, `alpha_cutoff`, artı `albedo`, `ambient`, `emissive`. Geçirgenlik
-//! ya da speküler renk yok.
-//!
-//! ## Duvar: G-tamponunun dört hedefi de dolu
-//!
-//! Ertelenmiş yolda malzeme bilgisi dört hedefe sığdırılmış, ve dördü de tamamen dolu:
-//!
-//! ```text
-//! RT0  albedo.rgb        + metallic
-//! RT1  normal.xyz        + roughness
-//! RT2  world_pos.xyz     + w'de ondalık paketlemeyle subsurface VE anisotropy
-//! RT3  tangent.xyz       + w'de el işareti VE clear_coat
-//! ```
-//!
-//! Yani yeni bir malzeme kanalı eklemek boş bir alana yazmak değil, **beşinci bir hedef açmak**
-//! ya da paketlemeyi daha da sıkıştırmak demek. Speküler renk üç bileşen ister; geçirgenlik en az
-//! iki. İkisi de bu bütçeye sığmıyor.
-//!
-//! ## İroni: gölgelendirici zaten renkli speküler yapabiliyor
-//!
-//! BRDF fonksiyonlarının imzası bunu **zaten** kabul ediyor: `F_Schlick(VoH: f32, f0: vec3<f32>)`,
-//! ve doğrudan aydınlatma girişleri de `f0: vec3<f32>` alıyor. Eksik olan gölgelendirici değil,
-//! oraya renkli bir değer taşıyacak Rust tarafı. Bugün her iki gölgelendirici de aynı satırı
-//! yazıyor:
-//!
-//! ```text
-//! let f0 = mix(vec3<f32>(0.04), albedo, metallic);
-//! ```
-//!
-//! Yani F0'ı oynatmanın **tek** yolu `metallic` — ve o, difüzü de birlikte kapatıyor
-//! (`kD = (1 - F) * (1 - metallic)`). Demo bunu ölçüyor: metalikliği artırmak yansımayı
-//! renklendiriyor ama nesneyi de karartıyor. İkisi ayrılamıyor.
-//!
-//! ## Üçüncü ölü rota — 2026-08-24'te bağlandı: `MaterialType::Water`
-//!
-//! 2026-08-23'te burada şu yazıyordu: `water.wgsl` yazılmış, `water_pipeline` derleniyor,
-//! `renderer.scene`'e ve `Renderer`'a konuyor — ve **hiçbir geçiş onu `set_pipeline` ile
-//! bağlamıyor**. Doğruydu: `route(Water)` tam olarak `route(Pbr)`'nin cevabını veriyordu, yani
-//! su yüzeyi sıradan ertelenmiş PBR olarak gölgeleniyordu.
-//!
-//! Artık `Routing::is_water` var, su ileri yola gidiyor (kendi vertex'lerini oynattığı için
-//! G-tamponuna giremez) ve `passes::forward` su boru hattını bağlıyor. Ölçüldü: aynı yüzey su
-//! ve PBR olarak 16 384 pikselin **10 568**'inde farklı, ve yönlendirme geri alınınca fark
-//! **tam sıfır** — iki kare bit-bit aynıydı.
-//!
-//! Bağlarken ikinci bir ölü şey çıktı: gölgelendirici zamanı `camera_pos.w`'den okuyordu, o slot
-//! sabit `1,0`. Dalgalar t = 1,0'da donmuştu. Gerçek zaman `cascade_params.z`; düzeltildi, ve
-//! iki farklı ana bakan iddia geri alınca yine tam sıfır veriyor.
-//!
-//! **Bu boşluğa etkisi yok.** Su boru hattı geçirgenlik yapmıyor: Fresnel'le gökyüzü yansıması
-//! ekliyor ve alfa harmanlıyor, arkasındaki sahneyi kırmıyor. Yukarıdaki dört satır hâlâ **yok**.
-//!
-//! Bu, `gizmo-renderer::gi` ve `gizmo-renderer::visibility`'den sonra bağlanan **üçüncüsü** —
-//! ve üçünün üçü de 2026-08-24'te kapandı.
-//!
-//! ## Ölçüldü — F0'ı oynatmanın tek yolu, iki şeyi birden bozuyor
-//!
-//! Üç turuncu küre (albedo 0,90 · 0,62 · 0,20), tek değişen `metallic`. Ölçüm sol yarı, küre
-//! bölgesi (2026-08-23, 948×492):
-//!
-//! | metaliklik | ortalama RGB | parlaklık | kırmızı − mavi |
-//! |------------|--------------|-----------|----------------|
-//! | 0,00 | (106,20 · 104,98 · 97,16) | 104,67 | **+9,04** |
-//! | 0,25 | (101,83 · 100,68 · 93,39) | 100,40 | +8,44 |
-//! | 0,50 | (95,45 · 95,07 · 89,53) | 94,75 | +5,92 |
-//! | 1,00 | (79,32 · 79,39 · 79,49) | **79,38** | **−0,17** |
-//!
-//! İki sütun birden kötüye gidiyor, ve **üç ayrı boşluk üst üste biniyor**:
-//!
-//! 1. **Difüz ölüyor.** Parlaklık %24 düşüyor (104,67 → 79,38), çünkü `kD = (1 − F)(1 − metallic)`
-//!    difüzü metalikliğe bağlamış. Speküleri renklendirmek isterken nesneyi karartıyorsunuz.
-//!
-//! 2. **Ve renk de gelmiyor.** F0 tam metalikte albedoya eşitleniyor — yani turuncu olmalı. Ama
-//!    kırmızı-mavi farkı **+9,04'ten −0,17'ye** düşüyor: küre turuncudan **griye** dönüyor.
-//!
-//! 3. Sebep üçüncü boşluk: yansıtacak bir **çevre yok**. Motorun çevre küp haritası / yansıma
-//!    probu yok, o yüzden tam metalik bir yüzeyin yansıtacağı tek şey tek yönlü ışığın parlaması
-//!    ve ortam terimi — ikisi de renksiz.
-//!
-//! Yani "speküler renk" için elde kalan tek kol, hem difüzü söndürüyor hem de vaat ettiği rengi
-//! getiremiyor. Ayrı bir `specular_tint` alanı olsaydı üçünü de aşardı — ama G-tamponunda ona yer
-//! yok.
+//! Her kare iki geçişte çizilir: önce opak dünya, sonra onun bir kopyası mip zinciriyle alınır, sonra cam.
+//! Sahnede cam yoksa ne kopya ne doku vardır (`gizmo_renderer::transmission`). Ekran uzayında çalıştığı
+//! için ekranda olmayan görünmez, bir cam başka bir camı göstermez, saydam yüzeyler ve parçacıklar
+//! kopyadan sonra çizildiği için camın ardından görünmez.
 //!
 //! ## Kontroller
-//!   * `GIZMO_TRANS_METALLIC=<0..1>` — metaliklik (F0'ı oynatmanın tek yolu)
-//!   * **Sağ-tık + fare / WASDQE** — kamera (ölçüm için dokunmayın)
+//!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
-fn metallic() -> f32 {
-    std::env::var("GIZMO_TRANS_METALLIC")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.0f32)
-        .clamp(0.0, 1.0)
-}
-
 fn main() {
-    let m = metallic();
-
     App::<SimpleSceneState>::new("Gizmo Engine - Transmission", 1280, 720)
         .with_simple_scene(move |scene, state| {
             let white = scene.asset_manager.create_white_texture(
@@ -128,20 +32,51 @@ fn main() {
                 &scene.renderer.scene.texture_bind_group_layout,
             );
             let device = &scene.renderer.device;
-            let sphere = AssetManager::create_sphere(device, 1.0, 32, 44);
 
-            // Renkli bir albedo: F0 metalikliğe göre bu renge kayıyor. Ölçülen şey tam olarak
-            // bu kaymanın difüzü de götürüp götürmediği.
-            for (i, x) in [-2.6f32, 0.0, 2.6].iter().enumerate() {
+            // Camların arkasında, sırayla kırmızı ve mavi kutular.
+            for i in 0..8 {
+                let x = -6.3 + i as f32 * 1.8;
+                let color = if i % 2 == 0 { Vec4::new(0.9, 0.1, 0.1, 1.0) } else { Vec4::new(0.1, 0.2, 0.9, 1.0) };
                 scene.world.spawn_bundle((
-                    Transform::new(Vec3::new(*x, 0.3, 0.0)),
+                    Transform::new(Vec3::new(x, -0.4, -3.0)).with_scale(Vec3::splat(0.8)),
                     GlobalTransform::default(),
-                    sphere.clone(),
-                    Material::new(white.clone()).with_pbr(
-                        Vec4::new(0.90, 0.62, 0.20, 1.0),
-                        0.15 + i as f32 * 0.2,
-                        m,
-                    ),
+                    AssetManager::create_cube(device),
+                    Material::new(white.clone()).with_pbr(color, 0.6, 0.0),
+                    MeshRenderer::new(),
+                ));
+            }
+
+            let clear_white = Vec4::new(1.0, 1.0, 1.0, 1.0);
+            let panes = [
+                (-4.8f32, Material::new(white.clone()).with_pbr(clear_white, 0.02, 0.0).with_transmission(1.0)),
+                (-1.6, Material::new(white.clone()).with_pbr(Vec4::new(0.1, 0.9, 0.9, 1.0), 0.02, 0.0).with_transmission(1.0)),
+                (1.6, Material::new(white.clone()).with_pbr(clear_white, 0.45, 0.0).with_transmission(1.0)),
+                (
+                    4.8,
+                    Material::new(white.clone())
+                        .with_pbr(clear_white, 0.02, 0.0)
+                        .with_transmission(1.0)
+                        .with_thickness(0.6)
+                        .with_ior(1.8),
+                ),
+            ];
+            for (x, material) in panes {
+                scene.world.spawn_bundle((
+                    Transform::new(Vec3::new(x, 0.4, 0.0)).with_scale(Vec3::new(1.4, 1.6, 0.05)),
+                    GlobalTransform::default(),
+                    AssetManager::create_cube(device),
+                    material,
+                    MeshRenderer::new(),
+                ));
+            }
+
+            // Aynı koyu küre, iki kırılma indisiyle: elmas daha çok yansıtır.
+            for (x, ior) in [(7.6f32, 1.5f32), (10.0, 2.42)] {
+                scene.world.spawn_bundle((
+                    Transform::new(Vec3::new(x, 0.0, 0.0)),
+                    GlobalTransform::default(),
+                    AssetManager::create_sphere(device, 1.0, 32, 44),
+                    Material::new(white.clone()).with_pbr(Vec4::new(0.03, 0.03, 0.03, 1.0), 0.12, 0.0).with_ior(ior),
                     MeshRenderer::new(),
                 ));
             }
@@ -149,7 +84,7 @@ fn main() {
             scene.world.spawn_bundle((
                 Transform::new(Vec3::new(0.0, -1.2, 0.0)),
                 GlobalTransform::default(),
-                AssetManager::create_plane(device, 26.0),
+                AssetManager::create_plane(device, 40.0),
                 Material::new(white.clone()).with_pbr(Vec4::new(0.30, 0.31, 0.34, 1.0), 0.85, 0.0),
                 MeshRenderer::new(),
             ));
@@ -158,34 +93,7 @@ fn main() {
                 intensity: 3.0,
                 ..Default::default()
             });
-            let _ = white;
-            scene.spawn_camera(state, Vec3::new(0.0, 1.4, 7.5), Vec3::new(0.0, 0.2, 0.0));
-            gizmo::gizmo_log!(Info, "metaliklik: {:.2}", m);
-        })
-        .set_ui(move |_world, _state, ctx| {
-            gizmo::egui::Area::new("tr".into())
-                .anchor(gizmo::egui::Align2::RIGHT_TOP, [-12.0, 12.0])
-                .show(ctx, |ui| {
-                    gizmo::egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_min_width(420.0);
-                        ui.heading("Geçirgenlik ve speküler renk");
-                        ui.label(format!("metaliklik: {m:.2}"));
-                        ui.separator();
-                        ui.label("geçirgenlik / kalınlık / kırılma: malzemede YOK.");
-                        ui.label("speküler renk: F0 sabit 0.04.");
-                        ui.separator();
-                        ui.label("gölgelendirici zaten f0: vec3 alıyor —");
-                        ui.label("eksik olan oraya değer taşıyan Rust tarafı.");
-                        ui.separator();
-                        ui.label("F0'ı oynatmanın tek yolu metallic,");
-                        ui.label("ve o difüzü de kapatıyor: kD = (1-F)(1-metallic).");
-                        ui.separator();
-                        ui.colored_label(
-                            gizmo::egui::Color32::from_rgb(140, 200, 140),
-                            "MaterialType::Water: 2026-08-24'te bağlandı — ama geçirgen değil",
-                        );
-                    });
-                });
+            scene.spawn_camera(state, Vec3::new(1.5, 1.6, 11.0), Vec3::new(1.5, 0.2, 0.0));
         })
         .run()
         .expect("uygulama çalıştırılamadı");
