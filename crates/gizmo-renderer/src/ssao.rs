@@ -3,7 +3,7 @@ use wgpu::util::DeviceExt;
 use crate::deferred::DeferredState;
 use crate::pipeline::{load_shader, load_shader_composed, SceneState};
 
-const KERNEL_SIZE: usize = 16;
+const KERNEL_SIZE: usize = 64;
 const NOISE_SIZE: u32 = 4;
 
 // ── CPU data types ────────────────────────────────────────────────────────────
@@ -12,8 +12,42 @@ const NOISE_SIZE: u32 = 4;
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct SsaoKernel {
     samples: [[f32; 4]; KERNEL_SIZE],
-    /// `x` = sampling radius in metres, `y` = depth bias; `zw` unused. See [`SsaoState::set_shape`].
+    /// `x` = sampling radius in metres, `y` = depth bias, `z` = how many samples to take; `w` unused.
+    /// See [`SsaoState::set_shape`] and [`SsaoState::set_quality`].
     shape: [f32; 4],
+}
+
+/// How many directions each pixel looks in for an occluder. More is a more exact shape and costs in
+/// step with it: the pass runs at half resolution, and each sample is a projection and a texture read.
+///
+/// There is no temporal stage to go with it, because there is nothing left for one to do. The noise
+/// tile is two half-resolution pixels across and the blur after this pass is five, so the noise is
+/// gone before the frame sees it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SsaoQuality {
+    /// 8 samples.
+    Low,
+    /// 16 samples, what the pass has always taken.
+    #[default]
+    Medium,
+    /// 32 samples.
+    High,
+    /// 64 samples.
+    Ultra,
+}
+
+impl SsaoQuality {
+    /// How many samples each pixel takes at this level.
+    #[must_use]
+    pub fn samples(self) -> usize {
+        match self {
+            Self::Low => 8,
+            Self::Medium => 16,
+            Self::High => 32,
+            Self::Ultra => 64,
+        }
+    }
 }
 
 /// The sampling radius the AO pass starts with, in metres — how far a crease looks for an
@@ -121,7 +155,7 @@ impl SsaoState {
     ) -> Self {
         let kernel_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ssao_kernel"),
-            contents: bytemuck::bytes_of(&build_kernel()),
+            contents: bytemuck::bytes_of(&build_kernel(SsaoQuality::default().samples())),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
@@ -258,7 +292,16 @@ impl SsaoState {
         let radius = if radius.is_finite() { radius.clamp(0.01, 10.0) } else { SSAO_DEFAULT_RADIUS };
         let bias = if bias.is_finite() { bias.clamp(0.0, 1.0) } else { SSAO_DEFAULT_BIAS };
         let offset = std::mem::offset_of!(SsaoKernel, shape) as u64;
-        queue.write_buffer(&self.kernel_buffer, offset, bytemuck::cast_slice(&[radius, bias, 0.0, 0.0]));
+        queue.write_buffer(&self.kernel_buffer, offset, bytemuck::cast_slice(&[radius, bias]));
+    }
+
+    /// How many directions each pixel looks in. Starts at [`SsaoQuality::Medium`]. The radius and bias
+    /// stay as [`set_shape`](Self::set_shape) left them.
+    pub fn set_quality(&self, queue: &wgpu::Queue, quality: SsaoQuality) {
+        let kernel = build_kernel(quality.samples());
+        queue.write_buffer(&self.kernel_buffer, 0, bytemuck::cast_slice(&kernel.samples));
+        let count = std::mem::offset_of!(SsaoKernel, shape) as u64 + 8;
+        queue.write_buffer(&self.kernel_buffer, count, bytemuck::cast_slice(&[quality.samples() as f32]));
     }
 
     /// Update the AO strength parameter at runtime.
@@ -276,7 +319,7 @@ impl SsaoState {
 
 // ── Kernel & noise generation ─────────────────────────────────────────────────
 
-fn build_kernel() -> SsaoKernel {
+fn build_kernel(count: usize) -> SsaoKernel {
     let mut state: u32 = 0xDEAD_BEEF;
     let mut rng = move || -> f32 {
         state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
@@ -285,9 +328,9 @@ fn build_kernel() -> SsaoKernel {
 
     let mut kernel = SsaoKernel {
         samples: [[0.0; 4]; KERNEL_SIZE],
-        shape: [SSAO_DEFAULT_RADIUS, SSAO_DEFAULT_BIAS, 0.0, 0.0],
+        shape: [SSAO_DEFAULT_RADIUS, SSAO_DEFAULT_BIAS, count as f32, 0.0],
     };
-    for i in 0..KERNEL_SIZE {
+    for (i, sample) in kernel.samples.iter_mut().enumerate().take(count) {
         // Uniform hemisphere sample (z > 0)
         let xi1 = rng() * 2.0 - 1.0;
         let xi2 = rng() * 2.0 - 1.0;
@@ -296,10 +339,10 @@ fn build_kernel() -> SsaoKernel {
         let (x, y, z) = (xi1 / len, xi2 / len, xi3 / len);
 
         // Concentrate samples closer to origin (better close-range occlusion)
-        let t = i as f32 / KERNEL_SIZE as f32;
+        let t = i as f32 / count as f32;
         let scale = 0.1 + t * t * 0.9;
 
-        kernel.samples[i] = [x * scale, y * scale, z.abs() * scale, 0.0];
+        *sample = [x * scale, y * scale, z.abs() * scale, 0.0];
     }
     kernel
 }

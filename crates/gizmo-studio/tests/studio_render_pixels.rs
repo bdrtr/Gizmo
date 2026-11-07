@@ -1669,9 +1669,9 @@ fn a_cut_out_material_cuts_in_the_editor_viewport() {
 fn glass_shows_what_is_behind_it_in_the_editor_viewport() {
     let _gpu = gpu_lock();
     let (Some(solid), Some(clear), Some(cyan)) = (
-        render_pane_frame(|m| m),
-        render_pane_frame(|m| m.with_transmission(1.0)),
-        render_pane_frame(|m| m.with_transmission(1.0).with_pbr(Vec4::new(0.0, 1.0, 1.0, 1.0), 0.0, 0.0)),
+        render_pane_frame(|m| m, |_, _| {}),
+        render_pane_frame(|m| m.with_transmission(1.0), |_, _| {}),
+        render_pane_frame(|m| m.with_transmission(1.0).with_pbr(Vec4::new(0.0, 1.0, 1.0, 1.0), 0.0, 0.0), |_, _| {}),
     ) else {
         return;
     };
@@ -1688,8 +1688,35 @@ fn glass_shows_what_is_behind_it_in_the_editor_viewport() {
     assert!(cyan < 10, "a cyan pane stops red: {cyan}");
 }
 
-/// The editor's pipeline over a red cube with a pane between it and the camera.
-fn render_pane_frame(pane: fn(Material) -> Material) -> Option<Vec<u8>> {
+/// **A wireframe asked for per entity shows in the viewport**, in its own colour, as it does in the game.
+#[test]
+fn an_entitys_wireframe_shows_in_the_editor_viewport() {
+    use gizmo::renderer::components::{Wireframe, WireframeColor};
+    let _gpu = gpu_lock();
+    let green = |frame: &[u8]| {
+        frame
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| i32::from(p[1]) > i32::from(p[0]) + 60 && i32::from(p[1]) > i32::from(p[2]) + 60)
+            .count()
+    };
+    let (Some(plain), Some(lined)) = (
+        render_pane_frame(|m| m, |_, _| {}),
+        render_pane_frame(|m| m, |world, pane| {
+            world.add_component(pane, Wireframe);
+            world.add_component(pane, WireframeColor([0.0, 1.0, 0.0]));
+        }),
+    ) else {
+        return;
+    };
+    let (plain, lined) = (green(&plain), green(&lined));
+    assert_eq!(plain, 0);
+    assert!(lined > 50, "the pane's diagonal is green: {lined} pixels");
+}
+
+/// The editor's pipeline over a red cube with a pane between it and the camera. `tag` gets the pane.
+fn render_pane_frame(pane: fn(Material) -> Material, tag: fn(&mut World, Entity)) -> Option<Vec<u8>> {
     if !pollster::block_on(Renderer::headless_adapter_available())
         || pollster::block_on(Renderer::headless_adapter_is_software())
     {
@@ -1721,6 +1748,7 @@ fn render_pane_frame(pane: fn(Material) -> Material) -> Option<Vec<u8>> {
         world.add_component(plane, AssetManager::create_cube(&renderer.device));
         world.add_component(plane, pane(Material::new(tex).with_pbr(Vec4::ONE, 0.0, 0.0)));
         world.add_component(plane, MeshRenderer::new());
+        tag(&mut world, plane);
 
         let cam = world.spawn();
         world.add_component(cam, Transform::new(Vec3::new(0.0, 0.0, 6.0)));

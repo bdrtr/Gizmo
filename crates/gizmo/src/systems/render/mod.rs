@@ -1026,6 +1026,8 @@ fn draw_camera_view(
             // No `dof_enabled` gate here: a blur size of 0 IS the off state, which is why the
             // component's default carries 0 rather than the renderer's 4.0.
             dof_blur_size: g.dof_blur_size,
+            dof_lens: g.dof_lens_factor(cam_fov, renderer.size.height),
+            dof_max_depth: g.dof_max_depth,
             motion_blur: g.motion_blur,
             ..Default::default()
         },
@@ -7676,6 +7678,240 @@ mod golden_render_tests {
         });
     }
 
+    /// **TAA treats the frame's edge like the rest of it.** Its history is clamped to the colours around
+    /// each pixel, and around an edge pixel that read past the frame, where a load returns zero. So black
+    /// was always in range, and what appears at an edge came in over many frames where it came in at once
+    /// everywhere else.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn taa_clamps_the_frame_s_edge_like_the_rest_of_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            const W: usize = 128;
+            let mut renderer = crate::test_gpu::headless_renderer(W as u32, W as u32).await;
+            assert!(renderer.taa.is_some());
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
+            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            let camera = || CameraBundle {
+                position: Vec3::new(0.0, 0.0, 4.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            };
+            let mut dark = World::new();
+            dark.spawn_bundle(camera());
+            for _ in 0..4 {
+                render_world(&mut renderer, &mut dark).await;
+            }
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut lit = World::new();
+            lit.spawn_bundle(camera());
+            let wall = lit.spawn();
+            let up = std::f32::consts::FRAC_PI_2;
+            lit.add_component(wall, Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_x(up)));
+            lit.add_component(wall, GlobalTransform::default());
+            lit.add_component(wall, AssetManager::create_plane(&renderer.device, 40.0));
+            lit.add_component(wall, Material::new(tex).with_unlit(Vec4::new(1.0, 1.0, 1.0, 1.0)).with_double_sided(true));
+            lit.add_component(wall, MeshRenderer::new());
+            let frame = render_world(&mut renderer, &mut lit).await;
+            // The same frame with no history at all is what the edge should read: the chain after TAA
+            // is not flat across the picture, so the middle would be the wrong yardstick.
+            renderer.taa = None;
+            let settled = render_world(&mut renderer, &mut lit).await;
+            let at = |f: &[u8], x: usize, y: usize| i32::from(f[(y * W + x) * 4]);
+            for (name, x, y) in [("top", 64, 0), ("left", 0, 64), ("inside", 64, 64)] {
+                let (got, want) = (at(&frame, x, y), at(&settled, x, y));
+                eprintln!("{name}: {got}, with no history {want}");
+                assert!(want > 100, "the wall is there: {want}");
+                assert!((got - want).abs() < 8, "{name}: {got}, with no history {want}");
+            }
+        });
+    }
+
+    /// **A lens: the f-number sets how far things leave focus, the focus sets what is sharp.** Three cubes
+    /// at 4, 8 and 16 m, focused on the middle one. Half-toned pixels around each, which is how wide its
+    /// edge has spread, against the same frame with no depth of field.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_lens_blurs_by_its_aperture_and_its_focus() {
+        use crate::renderer::components::PostProcess;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        const W: usize = 128;
+        async fn frame(grade: PostProcess) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(W as u32, W as u32).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
+            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            for (x, d, size) in [(-0.25f32, 4.0f32, 0.05f32), (0.0, 8.0, 0.1), (1.0, 16.0, 0.2)] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(x, 0.0, -d)).with_scale(Vec3::splat(size)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_unlit(Vec4::new(1.0, 1.0, 1.0, 1.0)));
+                world.add_component(e, MeshRenderer::new());
+            }
+            let camera = world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                fov: 0.25,
+                primary: true,
+                ..Default::default()
+            });
+            // A long lens on a full-frame sensor, or a 128-line frame has nothing to show: at 45 degrees
+            // the same aperture gives under a quarter of a texel.
+            let mut grade = grade;
+            grade.dof_sensor_height = 0.036;
+            world.add_component(camera, grade);
+            render_world(&mut renderer, &mut world).await
+        }
+        // How far from the sharp frame each third of the picture moved.
+        let moved = |a: &[u8], b: &[u8]| -> [u64; 3] {
+            let mut out = [0u64; 3];
+            for y in 0..W {
+                for x in 0..W {
+                    let i = (y * W + x) * 4;
+                    out[(x * 3 / W).min(2)] += u64::from(a[i].abs_diff(b[i]));
+                }
+            }
+            out
+        };
+        pollster::block_on(async {
+            let sharp = frame(PostProcess::new().with_lens(8.0, 0.0, 0.0)).await;
+            let wide = moved(&sharp, &frame(PostProcess::new().with_lens(8.0, 1.0, 16.0)).await);
+            let stopped = moved(&sharp, &frame(PostProcess::new().with_lens(8.0, 8.0, 16.0)).await);
+            let mut capped_grade = PostProcess::new().with_lens(8.0, 1.0, 16.0);
+            capped_grade.dof_max_depth = 8.0;
+            let capped = moved(&sharp, &frame(capped_grade).await);
+            eprintln!("moved, near / in focus / far: f/1 {wide:?}, f/8 {stopped:?}, f/1 limited at 8 m {capped:?}");
+            assert!(wide[0] > stopped[0] * 2 && wide[2] > stopped[2] * 2, "a wide aperture blurs more: {wide:?} and {stopped:?}");
+            // The sharp cube's glow on the sky behind it was as big as the near cube's whole blur, until
+            // each tap asked whether it may reach this far: 11944 and 2315 in the middle third.
+            assert!(wide[0] > wide[1] * 4, "what is in focus does not glow on what is behind it: {wide:?}");
+            assert!(capped[2] * 4 < wide[2], "past the limit it counts as the limit: {capped:?} and {wide:?}");
+        });
+    }
+
+    /// **A flat floor is not occluded by anything**, and the frame's edges are not lit by the samples
+    /// that fell off them. Both were in this pass until 2026-11-07: with nothing on it a floor darkened by
+    /// more than four levels over a quarter of a frame, with bright bands along its edges. And the
+    /// quality levels converge: each is nearer to the most samples than the one before.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn ssao_leaves_a_flat_floor_alone_and_converges_with_quality() {
+        use gizmo_renderer::ssao::SsaoQuality;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(quality: Option<SsaoQuality>, cube: bool, wall: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            match quality {
+                None => renderer.ssao = None,
+                Some(q) => {
+                    let ssao = renderer.ssao.as_ref().expect("built");
+                    ssao.set_shape(&renderer.queue, 1.0, 0.015);
+                    ssao.set_quality(&renderer.queue, q);
+                }
+            }
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(40.0, 0.2, 40.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            if wall {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(0.0, 5.0, -1.5)).with_scale(Vec3::new(40.0, 5.0, 0.2)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            if cube {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(0.0, 0.5, 0.0)).with_scale(Vec3::splat(0.5)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 3.0, 3.5),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.65,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+        // Summed absolute difference, and the pixels more than `by` apart.
+        let apart = |a: &[u8], b: &[u8], by: u8| -> (u64, usize) {
+            let (mut sum, mut many) = (0u64, 0usize);
+            for (p, q) in a.as_chunks::<4>().0.iter().zip(b.as_chunks::<4>().0) {
+                let d = (0..3).map(|c| p[c].abs_diff(q[c])).max().unwrap_or(0);
+                sum += u64::from(d);
+                many += usize::from(d > by);
+            }
+            (sum, many)
+        };
+        pollster::block_on(async {
+            let off = frame(None, false, false).await;
+            let on = frame(Some(SsaoQuality::default()), false, false).await;
+            let (sum, many) = apart(&off, &on, 1);
+            eprintln!("a flat floor with SSAO: {many} pixels moved, {sum} in all");
+            assert!(many < 40, "a flat floor is not occluded: {many} pixels of 16384 moved by more than 1");
+
+            // A crease across the whole frame: as dark at the edge, where half the samples fall off the
+            // screen, as in the middle. Counting those as unoccluded lit the edge.
+            let bare = frame(None, false, true).await;
+            let creased = frame(Some(SsaoQuality::default()), false, true).await;
+            let dark = |x: usize| -> i32 {
+                (0..128).map(|y| i32::from(bare[(y * 128 + x) * 4]) - i32::from(creased[(y * 128 + x) * 4])).max().unwrap_or(0)
+            };
+            let (edge, middle) = (dark(1), dark(64));
+            eprintln!("the crease's darkest: at the edge {edge}, in the middle {middle}");
+            assert!(middle > 5, "the crease is there: {middle}");
+            assert!(edge * 10 > middle * 7, "the edge is lit by samples that fell off it: {edge} against {middle}");
+
+            let ultra = frame(Some(SsaoQuality::Ultra), true, false).await;
+            let high = apart(&frame(Some(SsaoQuality::High), true, false).await, &ultra, 0).0;
+            let medium = apart(&frame(Some(SsaoQuality::Medium), true, false).await, &ultra, 0).0;
+            let low = apart(&frame(Some(SsaoQuality::Low), true, false).await, &ultra, 0).0;
+            eprintln!("away from 64 samples: 8 {low}, 16 {medium}, 32 {high}");
+            assert!(low > medium && medium > high && high > 0, "8 {low}, 16 {medium}, 32 {high}");
+        });
+    }
+
     /// `Camera::clear_color` fills the background; `None` keeps the deferred path's own grey, and
     /// geometry still draws over the colour. Corner pixel = background, centre = a cube.
     #[test]
@@ -7772,6 +8008,84 @@ mod golden_render_tests {
             // shader's WIREFRAME branch the coloured run reads 0 too.
             assert!(lit < 20, "lit lines on a pale sphere are not green: {lit}");
             assert!(green > 300, "the asked-for colour draws the lines: {green}");
+        });
+    }
+
+    /// **Lines one entity at a time.** Two pale spheres: the marker draws the left one's, the opt-out
+    /// keeps the left one's out of a global overlay, and each sphere's own colour holds under it.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn wireframes_go_entity_by_entity() {
+        use crate::renderer::components::{NoWireframe, Wireframe, WireframeColor};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // Strongly coloured pixels on each half of the frame: (green left, green right, red right).
+        async fn lines(global: bool, config_color: Option<[f32; 3]>, left: fn(&mut World, Entity), right: fn(&mut World, Entity)) -> (usize, usize, usize) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            for (x, tag) in [(-1.3, left), (1.3, right)] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(x, 0.0, -5.0)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_sphere(&renderer.device, 1.0, 12, 16));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 0.6, 0.0));
+                world.add_component(e, MeshRenderer::new());
+                tag(&mut world, e);
+            }
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            world.insert_resource(super::super::WireframeConfig { global, color: config_color });
+            let f = render_world(&mut renderer, &mut world).await;
+            let (mut gl, mut gr, mut rr) = (0, 0, 0);
+            for (i, p) in f.as_chunks::<4>().0.iter().enumerate() {
+                let left_half = i % 128 < 64;
+                let (r, g, b) = (i32::from(p[0]), i32::from(p[1]), i32::from(p[2]));
+                if g > r + 60 && g > b + 60 {
+                    if left_half { gl += 1 } else { gr += 1 }
+                }
+                if r > g + 60 && r > b + 60 && !left_half {
+                    rr += 1;
+                }
+            }
+            (gl, gr, rr)
+        }
+        let nothing: fn(&mut World, Entity) = |_, _| {};
+        let green: fn(&mut World, Entity) = |w, e| {
+            w.add_component(e, Wireframe);
+            w.add_component(e, WireframeColor([0.0, 1.0, 0.0]));
+        };
+        let red: fn(&mut World, Entity) = |w, e| {
+            w.add_component(e, Wireframe);
+            w.add_component(e, WireframeColor([1.0, 0.0, 0.0]));
+        };
+        let out: fn(&mut World, Entity) = |w, e| w.add_component(e, NoWireframe);
+        let g = Some([0.0, 1.0, 0.0]);
+        pollster::block_on(async {
+            let marked = lines(false, None, green, nothing).await;
+            eprintln!("one marked: {marked:?}");
+            assert!(marked.0 > 100 && marked.1 == 0, "only the marked sphere has lines: {marked:?}");
+            let excluded = lines(true, g, out, nothing).await;
+            eprintln!("global, one out: {excluded:?}");
+            assert!(excluded.0 == 0 && excluded.1 > 100, "the opt-out holds under the flag: {excluded:?}");
+            let own = lines(false, None, green, red).await;
+            eprintln!("two colours: {own:?}");
+            assert!(own.0 > 100 && own.1 == 0 && own.2 > 100, "each its own colour: {own:?}");
+            let over = lines(true, g, nothing, red).await;
+            eprintln!("own colour over the frame's: {over:?}");
+            assert!(over.0 > 100 && over.2 > 100 && over.1 == 0, "{over:?}");
         });
     }
 
@@ -9630,6 +9944,61 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
             let hidden = render_sprite_scene(&[C::HiddenScreen]).await;
             let (diff, _) = changed_pixels(&blank, &hidden, 128);
             assert_eq!(diff, 0, "an `IsHidden` sprite changed {diff} pixels");
+        });
+    }
+
+    /// **The back of a double-sided surface is lit like the front.** A pale panel with the sun behind the
+    /// camera, seen from each side. Both faces carried the front's normal until 2026-11-07, so the back read
+    /// as turned away from the light that was shining straight on it.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_back_of_a_double_sided_surface_is_lit_like_the_front() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn centre(renderer: &mut Renderer, from_behind: bool, forward: bool) -> f32 {
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let panel = world.spawn();
+            let up = std::f32::consts::FRAC_PI_2;
+            let turn = if from_behind { -up } else { up };
+            world.add_component(panel, Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_x(turn)));
+            world.add_component(panel, GlobalTransform::default());
+            world.add_component(panel, AssetManager::create_plane(&renderer.device, 4.0));
+            world.add_component(
+                panel,
+                Material::new(tex).with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), 0.9, 0.0).with_double_sided(true).with_transparent(forward),
+            );
+            world.add_component(panel, MeshRenderer::new());
+            world.spawn_bundle(DirectionalLightBundle { intensity: 1.5, rotation: gizmo_math::Quat::IDENTITY, ..Default::default() });
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 4.0),
+                yaw: -up,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(renderer, &mut world).await;
+            f32::from(frame[(64 * 128 + 64) * 4])
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            for forward in [false, true] {
+                let front = centre(&mut renderer, false, forward).await;
+                let back = centre(&mut renderer, true, forward).await;
+                eprintln!("forward {forward}: front {front}, back {back}");
+                assert!(front > 60.0, "the sun reaches the panel: {front}");
+                assert!((front - back).abs() < 6.0, "forward {forward}: front {front}, back {back}");
+            }
         });
     }
 

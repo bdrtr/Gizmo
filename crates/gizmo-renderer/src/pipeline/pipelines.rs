@@ -137,7 +137,12 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
         "demo/assets/shaders/shader.wgsl",
         include_str!("../shaders/shader.wgsl"),
         "Wireframe Shader",
-        &[("WIREFRAME", naga_oil::compose::ShaderDefValue::Bool(true))],
+        // Probes off: their group 5 is this pipeline's line colour, and a line in the lit colour can
+        // spare a reflection.
+        &[
+            ("WIREFRAME", naga_oil::compose::ShaderDefValue::Bool(true)),
+            ("PROBES", naga_oil::compose::ShaderDefValue::Bool(false)),
+        ],
     );
     #[cfg(not(gizmo_forward_only))]
     let wire_shader = &wire_shader_module;
@@ -237,6 +242,23 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
     let lit_layout = &lit_pipeline_layout;
     #[cfg(gizmo_forward_only)]
     let lit_layout = &render_pipeline_layout;
+    #[cfg(not(gizmo_forward_only))]
+    let wire_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Wireframe Pipeline Layout"),
+        bind_group_layouts: &[
+            Some(layouts.global),
+            Some(layouts.texture),
+            Some(layouts.shadow),
+            Some(layouts.skeleton),
+            Some(layouts.instance),
+            Some(layouts.wire_color), // 5
+        ],
+        immediate_size: 0,
+    });
+    #[cfg(not(gizmo_forward_only))]
+    let wire_layout = &wire_pipeline_layout;
+    #[cfg(gizmo_forward_only)]
+    let wire_layout = &render_pipeline_layout;
     let create_at = |entry: &str,
                      layout: &wgpu::PipelineLayout,
                      sm: &wgpu::ShaderModule,
@@ -374,7 +396,7 @@ pub(super) fn build_core_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) 
             wgpu::PolygonMode::Fill,
         ),
         wireframe: create_main(
-            lit_layout,
+            wire_layout,
             wire_shader,
             "Wireframe Pipeline",
             true,

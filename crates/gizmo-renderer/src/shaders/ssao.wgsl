@@ -7,8 +7,9 @@
 #import gizmo::common::{SceneUniforms}
 
 struct SsaoKernel {
-    samples: array<vec4<f32>, 16>,
-    // x = sampling radius (metres), y = depth bias — `SsaoState::set_shape`.
+    samples: array<vec4<f32>, 64>,
+    // x = sampling radius (metres), y = depth bias — `SsaoState::set_shape`. z = how many of the
+    // samples to take — `SsaoState::set_quality`.
     shape: vec4<f32>,
 };
 
@@ -57,7 +58,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let bias   = kernel.shape.y; // prevent self-occlusion
 
     var occlusion = 0.0;
-    for (var i = 0u; i < 16u; i++) {
+    // Samples that landed somewhere this pixel can be compared with. One off the screen or in the
+    // sky says nothing, and counting it as "not occluded" lit every edge of the frame.
+    var taken = 0.0;
+    let sample_count = u32(kernel.shape.z);
+    for (var i = 0u; i < sample_count; i++) {
         // Transform kernel sample from tangent space to world space
         let w_samp = world_pos + TBN * kernel.samples[i].xyz * radius;
 
@@ -72,6 +77,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let siuv     = vec2<i32>(i32(suv.x * dims.x), i32(suv.y * dims.y));
         let occ_samp = textureLoad(t_position_rel_camera, siuv, 0);
         if (occ_samp.w < 0.5) { continue; }
+        taken += 1.0;
 
         // Compare camera distances to detect occlusion. `occ_samp` is camera-relative, so its
         // own length already *is* the camera distance — subtracting the camera again would count
@@ -82,11 +88,14 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
         // Range falloff: ignore occluders farther than sampling radius
         let range = smoothstep(0.0, 1.0, radius / max(length(world_pos - occ_pos), 0.001));
-        if (occ_dist <= s_dist - bias) {
+        // In front of the sample, and above this surface's plane. Without the second a flat floor
+        // occludes itself: the position read back is the nearest pixel's, not the exact point, and
+        // near the horizon that is enough to put the floor in front of a sample lying on it.
+        if (occ_dist <= s_dist - bias && dot(occ_pos - world_pos, N) > bias) {
             occlusion += range;
         }
     }
 
-    let ao = 1.0 - (occlusion / 16.0);
+    let ao = 1.0 - (occlusion / max(taken, 1.0));
     return vec4(ao, ao, ao, 1.0);
 }

@@ -42,7 +42,6 @@ pub fn record_forward_and_fluid(
         } else {
             wgpu::LoadOp::Clear(1.0)
         };
-        let show_wireframes = world.get_resource::<WireframeConfig>().map(|c| c.global).unwrap_or(false);
 
         // Glass reads the frame behind it, and a target cannot be read while it is drawn to: with
         // glass in view the frame is drawn in two passes and copied between them. `draw_items` is
@@ -55,7 +54,7 @@ pub fn record_forward_and_fluid(
             draw_items.len()
         };
         let mut render_pass = begin_forward_pass(encoder, renderer, hdr_load, depth_load);
-        draw_forward_items(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances, show_wireframes);
+        draw_forward_items(&mut render_pass, renderer, &draw_items[..world_end], uploaded_instances);
 
         // Draw GPU Physics Spheres!
         if let Some(physics) = &renderer.gpu_physics {
@@ -73,7 +72,7 @@ pub fn record_forward_and_fluid(
         if let Some(behind) = renderer.behind.as_ref().filter(|_| has_glass) {
             behind.capture(encoder, &renderer.post.hdr_texture);
             let mut render_pass = begin_forward_pass(encoder, renderer, wgpu::LoadOp::Load, wgpu::LoadOp::Load);
-            draw_forward_items(&mut render_pass, renderer, &draw_items[world_end..], uploaded_instances, show_wireframes);
+            draw_forward_items(&mut render_pass, renderer, &draw_items[world_end..], uploaded_instances);
         }
     }
 
@@ -190,14 +189,13 @@ fn draw_forward_items(
     renderer: &Renderer,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
-    show_wireframes: bool,
 ) {
     for item in draw_items {
         let mut draw_solid = false;
         // Neither the sky nor a backdrop is world geometry a wireframe overlay is about,
         // and the wireframe pipeline is `shader.wgsl`: it neither camera-locks nor pins
         // depth, so a backdrop's wireframe would be drawn somewhere the backdrop is not.
-        let draw_wire = show_wireframes && !item.is_skybox && !item.is_backdrop;
+        let wire = item.wire.as_ref().filter(|_| !item.is_skybox && !item.is_backdrop);
 
         if item.is_skybox || item.unlit || renderer.deferred.is_none() || item.is_transparent {
             draw_solid = true;
@@ -326,11 +324,20 @@ fn draw_forward_items(
             }
         }
 
-        if draw_wire {
+        if let Some(wire) = wire {
             render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
             render_pass.set_bind_group(1, &*item.bind_group, &[]);
             render_pass.set_bind_group(BG_SKELETON, skel_bg.as_ref(), &[]);
+            // Group 5 is this colour for the lines, and the probes again for whatever comes next.
+            #[cfg(not(gizmo_forward_only))]
+            render_pass.set_bind_group(5, &**wire, &[]);
+            #[cfg(gizmo_forward_only)]
+            let _ = wire;
             item.record_draw(render_pass, inst_start..inst_end);
+            #[cfg(not(gizmo_forward_only))]
+            if let Some(def) = renderer.deferred.as_ref() {
+                render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
+            }
         }
     }
 }

@@ -158,7 +158,7 @@ struct GBufferOut {
 };
 
 @fragment
-fn fs_main(in: VertexOutput) -> GBufferOut {
+fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // Skip unlit / skybox objects — they are drawn in a forward pass
     if (in.inst_pbr.z > 0.5) { discard; }
 
@@ -171,7 +171,9 @@ fn fs_main(in: VertexOutput) -> GBufferOut {
 
     let albedo = surface.albedo;
     let metallic = surface.metallic;
-    let N = surface.N;
+    // A back face is lit as what it is, with the normal towards the viewer. It carried the front's
+    // until 2026-11-07, so the inside of a double-sided cube was lit from the outside.
+    let N = select(-surface.N, surface.N, front);
     let T = normalize(in.world_tangent.xyz);
     let roughness = surface.roughness;
     let emissive = surface.emissive;

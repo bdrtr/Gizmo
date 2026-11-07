@@ -243,6 +243,11 @@ pub fn execute_render_pipeline(
         let renderers = world.query::<&gizmo::renderer::components::MeshRenderer>();
         let skeletons = world.query::<&gizmo::renderer::components::Skeleton>();
         let lod_groups = world.query::<&gizmo::renderer::components::LodGroup>();
+        let wire_on = world.query::<&gizmo::renderer::components::Wireframe>();
+        let wire_off = world.query::<&gizmo::renderer::components::NoWireframe>();
+        let wire_colors = world.query::<&gizmo::renderer::components::WireframeColor>();
+        let wire_global = world.get_resource::<gizmo::systems::render::WireframeConfig>().is_some_and(|c| c.global);
+        let wire_any = wire_global || wire_on.iter().next().is_some();
         let editor_only = world.query::<&gizmo::core::component::EditorOnly>();
 
         {
@@ -431,6 +436,9 @@ pub fn execute_render_pipeline(
                     &mut *opaque_batches
                 };
 
+                let wire = (wire_any
+                    && gizmo::renderer::components::draws_wireframe(wire_global, wire_on.get(e).is_some(), wire_off.get(e).is_some()))
+                .then(|| renderer.scene.wire_color_group(&renderer.device, wire_colors.get(e).map(|c| c.0)));
                 let batch = batches
                     .entry(BatchKey {
                         vbuf: vbuf_ptr,
@@ -442,6 +450,7 @@ pub fn execute_render_pipeline(
                         is_backdrop,
                         is_water,
                         is_transmissive,
+                        wire: wire.as_ref().map(std::sync::Arc::as_ptr),
                         is_editor_only,
                         casts_shadows,
                         visible_in_camera,
@@ -465,6 +474,7 @@ pub fn execute_render_pipeline(
                         is_grid,
                         is_unlit,
                         is_transmissive,
+                        wire,
                         is_backdrop,
                         is_water,
                         is_editor_only,
@@ -531,6 +541,7 @@ pub fn execute_render_pipeline(
                         shadow_end_instance: start + count + shadow_count,
                         is_transparent,
                         is_transmissive: batch.is_transmissive,
+                        wire: batch.wire,
                         is_double_sided,
                         is_skybox: batch.is_skybox,
                         is_grid: batch.is_grid,

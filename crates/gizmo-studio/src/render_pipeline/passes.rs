@@ -85,6 +85,10 @@ pub(super) fn sync_editor_settings(
     if let Some(cam_id) = gizmo::renderer::components::active_camera(world) {
         if let Some(cam) = world.query::<&gizmo::renderer::components::Camera>().get(cam_id) {
             post_params.exposure = cam.exposure;
+            if let Some(g) = grade {
+                post_params.dof_lens = g.dof_lens_factor(cam.fov, renderer.size.height);
+                post_params.dof_max_depth = g.dof_max_depth;
+            }
         }
     }
 
@@ -235,6 +239,7 @@ pub(super) fn record_studio_main_pass(
     // The game camera's `Camera::clear_color` in the game view; `None` keeps the editor's grey.
     clear_color: Option<[f32; 3]>,
 ) {
+            let no_wire_color = renderer.scene.wire_color_group(&renderer.device, None);
             let [cr, cg, cb] = clear_color.unwrap_or([0.035, 0.035, 0.035]);
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Main Render Pass (HDR)"),
@@ -332,7 +337,10 @@ pub(super) fn record_studio_main_pass(
                 render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
                 render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
                 render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
-                if let Some(def) = renderer.deferred.as_ref() {
+                // The "Wire" chip's pipeline has the line colour at group 5, not the probes.
+                if ed_shading_mode == SHADING_WIREFRAME {
+                    render_pass.set_bind_group(5, &*no_wire_color, &[]);
+                } else if let Some(def) = renderer.deferred.as_ref() {
                     render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
                 }
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
@@ -435,6 +443,23 @@ pub(super) fn record_studio_main_pass(
                     render_pass.set_bind_group(5, &def.irradiance.bind_group, &[]);
                 }
                 batch.record_draw(&mut render_pass, batch.start_instance..safe_end);
+            }
+
+            // 3a. Wireframes asked for per entity or by `WireframeConfig::global`, over the solids.
+            for batch in flat_batches {
+                let Some(wire) = batch.wire.as_ref().filter(|_| {
+                    !batch.is_skybox && !batch.is_backdrop && !batch.is_grid && batch.visible_in_camera
+                }) else {
+                    continue;
+                };
+                render_pass.set_pipeline(&renderer.scene.wireframe_pipeline);
+                render_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
+                render_pass.set_bind_group(1, &*batch.bind_group, &[]);
+                render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+                render_pass.set_bind_group(3, &*batch.skeleton_bg, &[]);
+                render_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+                render_pass.set_bind_group(5, &**wire, &[]);
+                batch.record_draw(&mut render_pass, batch.start_instance..batch.end_instance.min(renderer.scene.instance_capacity as u32));
             }
 
             // 3b. Glass reads the frame behind it, so with glass in view this pass ends here, the

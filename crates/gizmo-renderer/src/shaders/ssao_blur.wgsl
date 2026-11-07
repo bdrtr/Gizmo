@@ -12,10 +12,13 @@ fn vs_main(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4<f32> {
 @fragment
 fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let iuv = vec2<i32>(i32(frag_coord.x), i32(frag_coord.y));
+    // A load past the edge reads zero, and zero is full occlusion: unclamped, every frame had a dark
+    // band along its top and left, 15 levels deep.
+    let last = vec2<i32>(textureDimensions(t_ao)) - vec2<i32>(1);
     var sum = 0.0;
     for (var x = -2; x <= 2; x++) {
         for (var y = -2; y <= 2; y++) {
-            sum += textureLoad(t_ao, iuv + vec2(x, y), 0).r;
+            sum += textureLoad(t_ao, clamp(iuv + vec2(x, y), vec2<i32>(0), last), 0).r;
         }
     }
     let ao = sum / 25.0;

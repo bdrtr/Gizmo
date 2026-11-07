@@ -44,6 +44,13 @@ var<storage, read> cluster_table: array<vec2<u32>>;
 @group(0) @binding(2)
 var<storage, read> cluster_light_indices: array<u32>;
 
+#ifdef WIREFRAME
+// This draw's `WireframeColor`; alpha 0 means it has none. Group 5 because the wireframe pipeline
+// has no reflection probes. Native only: the web has no line mode, and no group to spare.
+@group(5) @binding(0)
+var<uniform> wire_color: vec4<f32>;
+#endif
+
 #ifdef TRANSMISSION
 // The frame as it stood before any glass was drawn, with its mip chain (`transmission.rs`).
 @group(0) @binding(3)
@@ -215,32 +222,35 @@ const FOG_MULTIPLY: u32 = 2u;
 const FOG_PREMULTIPLIED: u32 = 3u;
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(in, FOG_MIX);
+fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return shade(in, front, FOG_MIX);
 }
 
 @fragment
-fn fs_additive(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(in, FOG_ADDITIVE);
+fn fs_additive(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return shade(in, front, FOG_ADDITIVE);
 }
 
 @fragment
-fn fs_multiply(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(in, FOG_MULTIPLY);
+fn fs_multiply(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return shade(in, front, FOG_MULTIPLY);
 }
 
 @fragment
-fn fs_premultiplied(in: VertexOutput) -> @location(0) vec4<f32> {
-    return shade(in, FOG_PREMULTIPLIED);
+fn fs_premultiplied(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    return shade(in, front, FOG_PREMULTIPLIED);
 }
 
-fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
+fn shade(in: VertexOutput, front: bool, fog_kind: u32) -> vec4<f32> {
     let surface = evaluate_surface(
         in.tex_coords, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
     );
 #ifdef WIREFRAME
     // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0
     // means none was asked for, and the lines keep the lit colour below.
+    if (wire_color.a > 0.0) {
+        return vec4<f32>(wire_color.rgb, 1.0);
+    }
     if ((scene.wireframe_color >> 24u) != 0u) {
         return unpack4x8unorm(scene.wireframe_color);
     }
@@ -265,7 +275,9 @@ fn shade(in: VertexOutput, fog_kind: u32) -> vec4<f32> {
         discard;
     }
 
-    let N = surface.N;
+    // A back face, which a double-sided or transparent draw shows, is lit as what it is: the normal
+    // points at the viewer. The G-buffer does the same.
+    let N = select(-surface.N, surface.N, front);
     let base_color = surface.base_color;
     let metallic = surface.metallic;
 #ifdef TRANSMISSION

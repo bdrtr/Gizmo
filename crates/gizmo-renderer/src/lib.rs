@@ -259,7 +259,7 @@ pub use hot_reload::AssetWatcher;
 pub use pipeline::SceneState;
 pub use post_process::PostProcessState;
 pub use renderer::{RenderContext, Renderer};
-pub use ssao::{SsaoParams, SsaoState};
+pub use ssao::{SsaoParams, SsaoQuality, SsaoState};
 pub use ssgi::SsgiState;
 pub use taa::TaaState;
 pub use fxaa::{FxaaQuality, FxaaState};

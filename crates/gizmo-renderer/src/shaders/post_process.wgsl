@@ -38,11 +38,30 @@ struct PostProcessParams {
     // Tone mapping: eğri seçimi ve beyaz noktası. Ayrı bir vec4, çünkü `fog`'dan sonra blok
     // 16-hizalı bir sınırda ve tek bir f32 eklemek onu bozardı.
     tonemap: vec4<f32>,    // x = eğri (0..5, `TonemapCurve`), y = beyaz nokta, z = deband dither (0/1), w = pad
+    // z, w: depth of field, the lens factor (0 = focus band) and the farthest distance (0 = no limit).
     // Camera motion blur: x = shutter fraction (0 = off), y = longest smear in screen fractions.
     motion: vec4<f32>,
     // This frame's clip space → the last frame's (both unjittered).
     reproject: mat4x4<f32>,
 };
+
+const DOF_TAPS: i32 = 24;
+
+// Depth of field at this distance: x = blur radius in texels, y = its share of the largest. From the
+// focus band, or through a lens (`PostProcess::with_lens`). `params.motion.w` is the farthest a
+// distance may count as, for a sky that has none of its own.
+fn dof_radius_at(distance: f32) -> vec2<f32> {
+    if (params.dof_blur_size <= 0.0) {
+        return vec2<f32>(0.0);
+    }
+    let d = select(distance, min(distance, params.motion.w), params.motion.w > 0.0);
+    if (params.motion.z > 0.0) {
+        let radius = min(params.motion.z * abs(d - params.dof_focus_dist) / max(d, 0.001), params.dof_blur_size);
+        return vec2<f32>(radius, radius / params.dof_blur_size);
+    }
+    let coc = clamp(abs(d - params.dof_focus_dist) / params.dof_focus_range, 0.0, 1.0);
+    return vec2<f32>(coc * params.dof_blur_size, coc);
+}
 
 // Camera motion blur. A pixel's depth puts it back in clip space; `reproject` says where that
 // point was on screen last frame, and the difference is how far the CAMERA moved it. The HDR frame
@@ -304,32 +323,34 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let view_dist = (n * f) / (f - depth_val * (f - n));
     let hdr_color = camera_motion_blur(in.uv, hdr_color_raw, depth_val);
     
-    let coc = clamp(abs(view_dist - params.dof_focus_dist) / params.dof_focus_range, 0.0, 1.0);
-    
+    let dof = dof_radius_at(view_dist);
     var dof_color = hdr_color;
-    if (coc > 0.01 && params.dof_blur_size > 0.0) {
+    if (dof.y > 0.01) {
+        // A disc of taps on the golden angle, so a wide blur does not show as eight copies of the
+        // picture. In texels of this frame: these were fractions of a 1920x1080 one, so the blur
+        // was narrower the smaller the frame, and wider across than tall on any other shape.
+        let texel = 1.0 / vec2<f32>(textureDimensions(t_source));
+        let tap_scale = vec2<f32>(depth_dims);
         var blurred = vec3<f32>(0.0);
-        var total_weight = 0.0;
-        let radius = coc * params.dof_blur_size;
-        
-        // Simple Poisson-like disk samples
-        
-        let aspect = vec2<f32>(1.0, 1.0); // Aspect correction might be needed for perfect circles
-        let step_size = vec2<f32>(1.0 / 1920.0, 1.0 / 1080.0) * radius;
-        
-        // Unrolled Poisson disk
-        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.000,  1.000) * step_size, 0.0).rgb;
-        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.866,  0.500) * step_size, 0.0).rgb;
-        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.866, -0.500) * step_size, 0.0).rgb;
-        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.000, -1.000) * step_size, 0.0).rgb;
-        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(-0.866, -0.500) * step_size, 0.0).rgb;
-        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(-0.866,  0.500) * step_size, 0.0).rgb;
-        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>( 0.433,  0.750) * step_size, 0.0).rgb;
-        blurred += textureSampleLevel(t_source, s_source, in.uv + vec2<f32>(-0.433, -0.750) * step_size, 0.0).rgb;
-        
-        total_weight = 8.0;
-        blurred = blurred / total_weight;
-        dof_color = mix(hdr_color, blurred, coc);
+        var kept = 0.0;
+        for (var i = 0; i < DOF_TAPS; i++) {
+            let t = (f32(i) + 0.5) / f32(DOF_TAPS);
+            let angle = f32(i) * 2.399963;
+            let reach = sqrt(t) * dof.x;
+            let uv = clamp(in.uv + vec2<f32>(cos(angle), sin(angle)) * reach * texel, vec2<f32>(0.0), vec2<f32>(1.0));
+            // Something sharper in front stays out unless its own blur reaches this far: a sharp
+            // object does not glow onto the blurred background behind it.
+            let tap_at = min(vec2<i32>(uv * tap_scale), vec2<i32>(depth_dims) - vec2<i32>(1));
+            let tap_dist = (n * f) / (f - textureLoad(t_depth, tap_at, 0) * (f - n));
+            if (tap_dist < view_dist && dof_radius_at(tap_dist).x < reach) {
+                continue;
+            }
+            blurred += textureSampleLevel(t_source, s_source, uv, 0.0).rgb;
+            kept += 1.0;
+        }
+        if (kept > 0.0) {
+            dof_color = mix(hdr_color, blurred / kept, min(dof.y * 4.0, 1.0));
+        }
     }
 
     // 3. Bloom Addition

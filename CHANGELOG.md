@@ -50,6 +50,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Depth of field through a lens: `PostProcess::with_lens(focus, f_stops, max_blur)`.** A thin lens, with the focal length from
+  the sensor (`dof_sensor_height`) and the camera's field of view, so a long lens is shallower, as is a wide aperture.
+  `dof_max_depth` limits what a sky counts as. The focus band stays. **Looks change** for any camera with a blur: the radius is
+  now in texels of the frame rather than fractions of a 1920×1080 one, 24 taps replace 8, and a sharp thing no longer glows on
+  the blurred background behind it.
+
+- **`SsaoState::set_quality`.** 8, 16 (the default), 32 or 64 samples a pixel.
+
+- **`DespawnOnEnter(S::X)`.** The other half of `DespawnOnExit`: the entity goes, with its children, when `X` is entered, ahead
+  of `X`'s `on_enter` hooks. A loading screen, whichever state it was spawned in.
+
+- **Wireframes per entity: `Wireframe`, `NoWireframe`, `WireframeColor`.** The marker draws one entity's lines with
+  `WireframeConfig::global` off, the opt-out keeps one out with it on, and the colour is that entity's, over
+  `WireframeConfig::color`. The studio viewport draws them too, and honours `global`, which it had not. A line in the lit colour no
+  longer carries reflection-probe light: the pipeline's group 5 is the colour now.
+
 - **Glass: `Material::with_transmission` and `with_thickness`.** A surface lets light through instead of scattering it: tinted
   by its albedo, blurred by its roughness, bent by its index of refraction over its thickness, with the highlight and the
   reflection still on top. It works on both render paths and in the studio viewport. With glass in view the frame is drawn in
@@ -83,6 +99,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Immutable components.** `impl_component!(T; immutable)`, and `&mut T` in a query does not compile.
 
 ### Fixed
+
+- **The back of a double-sided or transparent surface was lit with the front's normal**, on both render paths, so it read as turned
+  away from a light shining straight on it (a pale panel: 195 from the front, far less from behind; 195 from both now). Found
+  because SSAO's own fix let a test stop passing by accident: it had been seeing the inside of a cube as different only because AO
+  had blackened it. **Looks change:** cloth, leaves and panes seen from behind are lit correctly.
+
+- **SSAO darkened flat floors and marked the frame's edges.** A floor with nothing on it lost up to four levels over a quarter of
+  a frame, and the frame had bands: dark along the top and left, where the blur read past the edge and got zero, and bright where
+  samples fell off the screen and counted as unoccluded. All gone, and a flat floor is now untouched. **Looks change**: every
+  scene with SSAO is a little brighter on open ground.
+
+- **TAA let black into its neighbourhood along the frame's edge**, so what appeared there came in over many frames (186 against
+  223, the frame after a white wall appears). The same read past the edge.
 
 - **The studio viewport ignored `Renderer::sky` and `Renderer::fog`**, and its Game panel ignored the environment preset as
   well: both built their frame from defaults. A scene that set a sky by hand was lit one way in the game and another in the

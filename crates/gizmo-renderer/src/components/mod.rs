@@ -13,6 +13,8 @@ pub mod decal;
 pub mod light;
 /// Materials and the shading route each one takes.
 pub mod material;
+/// Wireframes one entity at a time.
+pub mod wireframe;
 /// Meshes and their per-entity render settings.
 pub mod mesh;
 /// A colour eased to a target — [`ColorTween`].
@@ -49,6 +51,7 @@ pub use mesh_data::MeshData;
 pub use color_tween::{color_tween_system, ColorTween};
 pub use camera_shake::CameraShake;
 pub use occluder::Occluder;
+pub use wireframe::{draws_wireframe, NoWireframe, Wireframe, WireframeColor};
 pub use planar_reflection::PlanarReflection;
 pub use misc::*;
 pub use post_process::*;

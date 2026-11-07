@@ -87,6 +87,10 @@ pub struct SceneState {
     pub blend_lit_pipelines: [wgpu::RenderPipeline; 3],
     /// The unlit pipeline under each of them, not writing depth.
     pub blend_unlit_pipelines: [wgpu::RenderPipeline; 3],
+    /// The wireframe pipeline's group 5, one bind group per line colour asked for.
+    pub wire_color_layout: wgpu::BindGroupLayout,
+    /// Those bind groups, by colour. `None` is the one that says "no colour of its own".
+    pub wire_colors: std::collections::HashMap<Option<[u8; 3]>, std::sync::Arc<wgpu::BindGroup>>,
     /// The lit pipeline that also reads the frame behind it — see
     /// [`transmissive_pipeline`](Self::transmissive_pipeline).
     pub transmissive: [wgpu::RenderPipeline; 2],
@@ -353,6 +357,29 @@ impl SceneState {
     pub fn blend_variant(&self, unlit: bool, mode: crate::components::BlendMode) -> Option<&wgpu::RenderPipeline> {
         let i = crate::components::BlendMode::VARIANTS.iter().position(|m| *m == mode)?;
         Some(if unlit { &self.blend_unlit_pipelines[i] } else { &self.blend_lit_pipelines[i] })
+    }
+
+    /// The wireframe pipeline's group 5 for this colour (`None`: the frame's, or the lit colour).
+    pub fn wire_color_group(&mut self, device: &wgpu::Device, color: Option<[f32; 3]>) -> std::sync::Arc<wgpu::BindGroup> {
+        let key = color.map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8));
+        let layout = &self.wire_color_layout;
+        self.wire_colors
+            .entry(key)
+            .or_insert_with(|| {
+                let [r, g, b] = color.unwrap_or([0.0; 3]);
+                let alpha = if color.is_some() { 1.0f32 } else { 0.0 };
+                let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("wire colour"),
+                    contents: bytemuck::cast_slice(&[r, g, b, alpha]),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
+                std::sync::Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("wire colour"),
+                    layout,
+                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+                }))
+            })
+            .clone()
     }
 
     /// The lit pipeline that also reads the frame behind it, for a draw that
@@ -792,6 +819,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         label: Some("instance_bind_group"),
     });
 
+    let wire_color_layout = layouts::wire_color_layout(device);
     let indirect = crate::irradiance::IrradianceState::layout(device);
     let layout_refs = LayoutRefs {
         global: &layouts.global,
@@ -801,6 +829,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         skeleton: &layouts.skeleton,
         instance: &layouts.instance,
         indirect: &indirect,
+        wire_color: &wire_color_layout,
     };
     let core_pipelines = build_core_pipelines(device, &layout_refs);
     let shadow_pipeline = build_shadow_pipeline(device, &layout_refs);
@@ -828,6 +857,8 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         blend_lit_pipelines: core_pipelines.blend_lit,
         blend_unlit_pipelines: core_pipelines.blend_unlit,
         lit_lobes: core_pipelines.lobes,
+        wire_color_layout,
+        wire_colors: std::collections::HashMap::new(),
         transmissive: core_pipelines.transmissive,
         behind_view: behind_fallback.clone(),
         behind_fallback,
@@ -887,6 +918,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
         skeleton: &renderer.scene.skeleton_bind_group_layout,
         instance: &renderer.scene.instance_bind_group_layout,
         indirect: &indirect,
+        wire_color: &renderer.scene.wire_color_layout,
     };
 
     let core_pipelines = build_core_pipelines(device, &layouts);

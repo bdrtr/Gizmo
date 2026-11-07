@@ -118,6 +118,14 @@ pub struct DespawnOnExit<S>(pub S);
 
 impl<S: Clone + PartialEq + Eq + Send + Sync + 'static> crate::Component for DespawnOnExit<S> {}
 
+/// Marks an entity that belongs to the time before a state: when that state is entered,
+/// [`run_state_drivers`] despawns it, with its children, ahead of the state's `on_enter` hooks. A
+/// loading screen that goes when the level starts, whichever state it was spawned in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DespawnOnEnter<S>(pub S);
+
+impl<S: Clone + PartialEq + Eq + Send + Sync + 'static> crate::Component for DespawnOnEnter<S> {}
+
 /// The per-type drivers [`add_state`] registered: one function per state type, kept as a world
 /// resource so the loop that calls them needs to know no state type.
 #[derive(Default)]
@@ -196,13 +204,15 @@ fn drive_state<S: Clone + PartialEq + Eq + Send + Sync + 'static>(world: &mut Wo
     };
     if !hooks.entered_initial {
         hooks.entered_initial = true;
+        despawn_scoped::<S, DespawnOnEnter<S>>(world, &current, |d| &d.0);
         run_hooks(&mut hooks.enter, &current, world);
     } else {
         let switched = world.get_resource_mut::<State<S>>().map(|mut s| s.apply_transitions()).unwrap_or(false);
         if switched {
             let next = world.get_resource::<State<S>>().map(|s| s.get().clone()).expect("checked above");
             run_hooks(&mut hooks.exit, &current, world);
-            despawn_scoped(world, &current);
+            despawn_scoped::<S, DespawnOnExit<S>>(world, &current, |d| &d.0);
+            despawn_scoped::<S, DespawnOnEnter<S>>(world, &next, |d| &d.0);
             run_hooks(&mut hooks.enter, &next, world);
         }
     }
@@ -223,17 +233,17 @@ fn run_hooks<S: PartialEq>(hooks: &mut [(S, StateHook)], state: &S, world: &mut 
     }
 }
 
-fn despawn_scoped<S: Clone + PartialEq + Eq + Send + Sync + 'static>(world: &mut World, left: &S) {
+fn despawn_scoped<S: PartialEq, M: crate::Component>(world: &mut World, state: &S, of: fn(&M) -> &S) {
     use crate::hierarchy::HierarchyExt;
-    let ids: Vec<u32> = world
-        .query::<(Entity, &DespawnOnExit<S>)>()
+    let scoped: Vec<Entity> = world
+        .query::<(Entity, &M)>()
         .iter()
-        .filter(|(_, d)| d.0 == *left)
-        .map(|(entity, _)| entity.id())
+        .filter(|(_, marker)| of(marker) == state)
+        .map(|(entity, _)| entity)
         .collect();
-    for id in ids {
+    for entity in scoped {
         // A child despawned with its parent above is already gone.
-        if let Some(entity) = world.entity(id) {
+        if world.is_alive(entity) {
             world.despawn_recursive(entity);
         }
     }
@@ -403,6 +413,35 @@ mod tests {
         assert!(world.live(label).is_none(), "and its child with it");
         assert!(world.live(hud).is_some(), "the playing HUD stays");
         assert!(world.live(level).is_some(), "an unscoped entity stays");
+    }
+
+    /// The state being entered takes its `DespawnOnEnter` entities with it, children included and
+    /// before its `on_enter` hooks; a marker naming another state stays. The initial state counts.
+    #[test]
+    fn entering_a_state_despawns_what_was_marked_for_it() {
+        use crate::hierarchy::HierarchyExt;
+        let mut world = driven();
+        let at_start = world.spawn();
+        world.add_component(at_start, DespawnOnEnter(Screen::Menu));
+        run_state_drivers(&mut world);
+        assert!(world.live(at_start).is_none(), "the initial state is entered too");
+
+        let loading = world.spawn();
+        world.add_component(loading, DespawnOnEnter(Screen::Playing));
+        let bar = world.spawn();
+        world.add_child(loading, bar);
+        let elsewhere = world.spawn();
+        world.add_component(elsewhere, DespawnOnEnter(Screen::Paused));
+        on_enter(&mut world, Screen::Playing, move |w| {
+            assert!(!w.is_alive(loading), "gone before the state's own hooks run");
+        });
+        run_state_drivers(&mut world);
+        assert!(world.live(loading).is_some(), "nothing until the switch");
+        world.get_resource_mut::<State<Screen>>().unwrap().set(Screen::Playing);
+        run_state_drivers(&mut world);
+        assert!(world.live(loading).is_none());
+        assert!(world.live(bar).is_none(), "and its child with it");
+        assert!(world.live(elsewhere).is_some(), "a marker for another state stays");
     }
 
     /// A `set` made inside a hook is the next frame's switch, not this one's; and a hook added

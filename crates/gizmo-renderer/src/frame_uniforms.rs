@@ -434,7 +434,8 @@ impl Default for PostProcessUniforms {
             // Off: a still frame is the picture every scene was authored against.
             motion_blur: 0.0,
             motion_blur_max: 0.05,
-            _motion_pad: [0.0; 2],
+            dof_lens: 0.0,
+            dof_max_depth: 0.0,
             reproject: gizmo_math::Mat4::IDENTITY.to_cols_array_2d(),
         }
     }

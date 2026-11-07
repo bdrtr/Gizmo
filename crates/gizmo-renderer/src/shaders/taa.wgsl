@@ -57,11 +57,13 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     var history = textureSample(t_history, s_linear, history_uv).rgb;
 
     // ── Neighbourhood AABB clamp (prevents ghosting from disoccluded regions) ─
+    let last = vec2<i32>(textureDimensions(t_current)) - vec2<i32>(1);
     var c_min = current;
     var c_max = current;
     for (var dx = -1; dx <= 1; dx++) {
         for (var dy = -1; dy <= 1; dy++) {
-            let n = textureLoad(t_current, iuv + vec2(dx, dy), 0).rgb;
+            // Clamped: a load past the edge reads zero, which would keep black in range here.
+            let n = textureLoad(t_current, clamp(iuv + vec2(dx, dy), vec2<i32>(0), last), 0).rgb;
             c_min = min(c_min, n);
             c_max = max(c_max, n);
         }

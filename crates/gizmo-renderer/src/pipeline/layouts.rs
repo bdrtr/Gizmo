@@ -223,6 +223,23 @@ pub(super) fn build_layouts(device: &wgpu::Device) -> Layouts {
     }
 }
 
+/// The wireframe pipeline's group 5: one colour.
+pub(super) fn wire_color_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("wire_color_bind_group_layout"),
+        entries: &[wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        }],
+    })
+}
+
 pub(super) struct LayoutRefs<'a> {
     pub(super) global: &'a wgpu::BindGroupLayout,
     // WASM pipeline layout'u shadow grubunu kullanmaz (4-grup şeması).
@@ -236,4 +253,7 @@ pub(super) struct LayoutRefs<'a> {
     /// pass.
     #[cfg_attr(gizmo_forward_only, allow(dead_code))]
     pub(super) indirect: &'a wgpu::BindGroupLayout,
+    /// The wireframe pipeline's group 5: this draw's line colour.
+    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
+    pub(super) wire_color: &'a wgpu::BindGroupLayout,
 }

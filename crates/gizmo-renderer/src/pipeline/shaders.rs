@@ -225,7 +225,12 @@ pub fn load_shader_composed_with(
     let source = std::fs::read_to_string(file_path).unwrap_or_else(|_| fallback_src.to_string());
     let mut defs = native_render_defs();
     for (name, value) in overrides {
-        defs.insert((*name).to_string(), *value);
+        // `#ifdef` asks whether a name is there, so `false` has to take it away.
+        if *value == ShaderDefValue::Bool(false) {
+            defs.remove(*name);
+        } else {
+            defs.insert((*name).to_string(), *value);
+        }
     }
     let composed = compose_wgsl(&source, label, defs);
     device.create_shader_module(wgpu::ShaderModuleDescriptor {

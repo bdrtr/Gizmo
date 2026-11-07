@@ -27,6 +27,8 @@ pub(super) struct BatchKey {
     pub(super) is_water: bool,
     // Glass: its own pipeline and its own pass.
     pub(super) is_transmissive: bool,
+    // Its wireframe's colour group, if its lines are drawn.
+    pub(super) wire: Option<*const wgpu::BindGroup>,
     // Editor furniture (`EditorOnly`) is keyed apart for the same reason as the routing flags,
     // and one more: the game view skips these batches, so a light icon sharing a batch with a
     // scene mesh would drag the scene mesh out of the game picture with it.
@@ -64,6 +66,8 @@ pub(super) struct BatchData {
     pub(super) is_unlit: bool,
     /// [`Material::is_transmissive`](gizmo::renderer::components::Material::is_transmissive).
     pub(super) is_transmissive: bool,
+    /// See [`FlatBatchData::wire`].
+    pub(super) wire: Option<std::sync::Arc<wgpu::BindGroup>>,
     /// A painted backdrop (`gizmo_renderer::backdrop`): drawn FIRST, from the mesh's own
     /// texture and vertex colour, locked to the camera and writing no depth.
     pub(super) is_backdrop: bool,
@@ -105,6 +109,8 @@ pub(super) struct FlatBatchData {
     /// `start..shadow_end_instance`). Equals `end_instance` when there are none.
     pub(super) shadow_end_instance: u32,
     pub(super) is_transparent: bool,
+    /// The wireframe overlay's group 5, if this batch's lines are drawn.
+    pub(super) wire: Option<std::sync::Arc<wgpu::BindGroup>>,
     /// Glass: in the transparent list for the sort, drawn after the copy of the frame by its own
     /// pipeline. See [`BatchData::is_transmissive`].
     pub(super) is_transmissive: bool,

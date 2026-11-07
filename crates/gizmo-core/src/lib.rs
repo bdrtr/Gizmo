@@ -82,7 +82,7 @@ pub use query::{
     WorldQuery,
 };
 pub use registry::{ComponentRegistry, RegistryError};
-pub use state::{in_state, DespawnOnExit, State};
+pub use state::{in_state, DespawnOnEnter, DespawnOnExit, State};
 
 pub use system::{
     IntoSystem, IntoSystemConfig, Local, Phase, Res, ResMut, Schedule, System, SystemConfig,

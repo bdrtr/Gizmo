@@ -50,6 +50,17 @@ pub struct PostProcess {
     /// Depth of field: the maximum blur radius outside that range. **0 switches DoF off**, which
     /// is what the renderer's `dof_enabled = false` does and therefore what the default is.
     pub dof_blur_size: f32,
+    /// Depth of field through a lens: the aperture as an f-number, so 1.4 is shallow and 16 nearly
+    /// all sharp. **0 uses the focus band** ([`dof_focus_range`](Self::dof_focus_range)) instead, and
+    /// `dof_blur_size` is then the largest blur a lens may give. Set with
+    /// [`with_lens`](Self::with_lens).
+    pub dof_f_stops: f32,
+    /// The sensor's height in metres, which with the camera's field of view makes the focal length.
+    /// Super 35, 18.66 mm, unless set.
+    pub dof_sensor_height: f32,
+    /// Farther than this counts as this far, in metres. 0 = no limit. A sky has no real distance, and
+    /// without a limit it takes the largest blur there is.
+    pub dof_max_depth: f32,
     /// Strength of the animated grain. 0 = none.
     pub film_grain: f32,
     /// Camera motion blur: the fraction of the frame the shutter stays open — **0 switches it
@@ -71,6 +82,9 @@ impl Default for PostProcess {
             // Not the renderer's 4.0: `dof_enabled` is false by default and zeroes this, so 0.0 is
             // what a camera without the component actually gets.
             dof_blur_size: 0.0,
+            dof_f_stops: 0.0,
+            dof_sensor_height: 0.018_66,
+            dof_max_depth: 0.0,
             film_grain: 0.012,
             motion_blur: 0.0,
         }
@@ -99,6 +113,29 @@ impl PostProcess {
         self.dof_focus_range = focus_range.max(0.001);
         self.dof_blur_size = blur_size.max(0.0);
         self
+    }
+
+    /// Builder: depth of field through a lens. Focused at `focus_dist`, at this f-number, no blur larger
+    /// than `max_blur` texels. How fast things leave focus follows the camera's field of view: a long
+    /// lens is shallower, and so is a wider aperture, as on a real camera.
+    pub fn with_lens(mut self, focus_dist: f32, f_stops: f32, max_blur: f32) -> Self {
+        self.dof_focus_dist = focus_dist.max(0.0);
+        self.dof_f_stops = f_stops.max(0.0);
+        self.dof_blur_size = max_blur.max(0.0);
+        self
+    }
+
+    /// The blur radius at infinity, in texels, for a frame this tall seen through this field of view: half
+    /// the thin lens's circle of confusion, `f² |d − s| / (N d (s − f))`, without the part that depends on
+    /// the distance `d`, which the shader has. 0 when this grade is not using a lens.
+    #[must_use]
+    pub fn dof_lens_factor(&self, fov: f32, frame_height: u32) -> f32 {
+        if self.dof_f_stops <= 0.0 || self.dof_blur_size <= 0.0 {
+            return 0.0;
+        }
+        let focal = 0.5 * self.dof_sensor_height / (fov * 0.5).tan();
+        let focus = self.dof_focus_dist.max(focal * 1.01);
+        0.5 * focal * focal / (self.dof_f_stops * (focus - focal)) / self.dof_sensor_height * frame_height as f32
     }
 
     /// Builder: the lens artefacts — corner darkening, channel separation, grain.
@@ -215,5 +252,27 @@ mod tests {
     fn a_graded_camera_is_not_neutral() {
         assert!(!PostProcess::new().with_grade(0.4, 0.0, 0.012).is_neutral());
         assert!(!PostProcess::new().with_depth_of_field(4.5, 2.0, 3.0).is_neutral());
+    }
+}
+
+#[cfg(test)]
+mod lens_tests {
+    use super::PostProcess;
+
+    /// A 50 mm lens on Super 35, f/2, focused at 5 m: a point at 10 m has a circle of confusion 126 µm
+    /// across, which on a 1080-line frame of an 18.66 mm sensor is a radius of 3.65 texels. Worked by hand.
+    #[test]
+    fn the_lens_factor_is_the_thin_lens() {
+        let sensor = 0.018_66f32;
+        let fov = 2.0 * (0.5 * sensor / 0.05).atan();
+        let grade = PostProcess::new().with_lens(5.0, 2.0, 64.0);
+        let k = grade.dof_lens_factor(fov, 1080);
+        let at_ten = k * (10.0 - 5.0) / 10.0;
+        assert!((at_ten - 3.65).abs() < 0.01, "{at_ten}");
+        let stopped_down = PostProcess::new().with_lens(5.0, 8.0, 64.0).dof_lens_factor(fov, 1080);
+        assert!((stopped_down - k / 4.0).abs() < 1e-3, "two stops are a quarter of the blur");
+        let long = PostProcess::new().with_lens(5.0, 2.0, 64.0).dof_lens_factor(fov / 2.0, 1080);
+        assert!(long > k * 3.5, "twice the focal length, four times the blur: {k} and {long}");
+        assert_eq!(PostProcess::new().dof_lens_factor(fov, 1080), 0.0, "no lens asked for");
     }
 }

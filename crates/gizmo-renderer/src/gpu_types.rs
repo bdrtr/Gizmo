@@ -255,8 +255,13 @@ pub struct PostProcessUniforms {
     /// The longest smear, as a fraction of the screen — a teleport or a cut would otherwise blur
     /// the whole frame into one streak.
     pub motion_blur_max: f32,
-    /// Padding to the next 16-byte boundary. Not a knob.
-    pub _motion_pad: [f32; 2],
+    /// Depth of field through a lens: the blur radius in texels at infinity with this focus, from
+    /// [`PostProcess::dof_lens_factor`](crate::components::PostProcess::dof_lens_factor). 0 uses the
+    /// focus band instead.
+    pub dof_lens: f32,
+    /// Depth of field: farther than this counts as this far, in metres, so a sky stays as blurred as
+    /// the distance a scene ends at. 0 = no limit.
+    pub dof_max_depth: f32,
     /// Maps this frame's clip space to the last frame's: `previous_view_proj · inverse(view_proj)`,
     /// both unjittered. Identity — no motion — when there is no last frame.
     pub reproject: [[f32; 4]; 4],

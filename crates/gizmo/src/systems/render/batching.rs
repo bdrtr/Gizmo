@@ -202,6 +202,8 @@ pub struct DrawItem {
     /// Per-object visibility (`ShadowCasting::Only` casts without being drawn).
     pub(super) visible_in_camera: bool,
     pub(super) skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
+    /// The wireframe overlay's group 5, if this item's lines are drawn.
+    pub(super) wire: Option<std::sync::Arc<wgpu::BindGroup>>,
     pub(super) is_transparent: bool,
     /// Glass: drawn in the forward pass after the frame was copied, by its own pipeline. Also
     /// `is_transparent`, which keeps it out of the G-buffer and the shadow maps.
@@ -306,6 +308,8 @@ pub(crate) struct BatchKey {
     is_transparent: bool,
     /// A different pipeline and a different layer, like every flag here.
     is_transmissive: bool,
+    /// Which line colour's bind group, if its wireframe is drawn at all: another draw.
+    wire: Option<usize>,
     /// The blend is baked into the pipeline, so — like every flag here — two materials that
     /// differ only in it must not share a batch.
     blend_mode: crate::renderer::components::BlendMode,
@@ -360,6 +364,7 @@ pub(crate) struct BatchData {
     mirror: Option<Entity>,
     is_grid: bool,
     skeleton_bind_group: Option<std::sync::Arc<wgpu::BindGroup>>,
+    wire: Option<std::sync::Arc<wgpu::BindGroup>>,
     is_transparent: bool,
     is_transmissive: bool,
     blend_mode: crate::renderer::components::BlendMode,
@@ -468,6 +473,12 @@ pub(super) fn collect_draw_items(
     // for a scene with no `Occluder`, which then tests nothing.
     let occlusion = build_occlusion(world, &unjittered_view_proj, renderer.size, &hidden);
     let occluders = world.query::<&crate::renderer::components::Occluder>();
+    // Who has lines. Asked per entity only when some entity or the frame's flag wants them.
+    let wire_on = world.query::<&crate::renderer::components::Wireframe>();
+    let wire_off = world.query::<&crate::renderer::components::NoWireframe>();
+    let wire_colors = world.query::<&crate::renderer::components::WireframeColor>();
+    let wire_global = world.get_resource::<super::WireframeConfig>().is_some_and(|c| c.global);
+    let wire_any = wire_global || wire_on.iter().next().is_some();
     let occluded_objects = std::cell::Cell::new(0u32);
     let reflections = world.query::<&crate::renderer::components::PlanarReflection>();
     let skip_mirrors = renderer.skip_mirrors;
@@ -725,12 +736,20 @@ pub(super) fn collect_draw_items(
                 let casts_shadows = shadows.casts();
                 let visible_in_camera = shadows.visible();
 
+                let wire = (wire_any
+                    && crate::renderer::components::draws_wireframe(wire_global, wire_on.get($e).is_some(), wire_off.get($e).is_some()))
+                .then(|| {
+                    let color = wire_colors.get($e).map(|c| c.0);
+                    renderer.scene.wire_color_group(&renderer.device, color)
+                });
+
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(active_vbuf) as usize,
                     mat_id: std::sync::Arc::as_ptr(&$mat.bind_group) as usize,
                     skeleton_id: skel_bg.map(|bg| std::sync::Arc::as_ptr(bg) as usize),
                     is_transparent,
                     is_transmissive,
+                    wire: wire.as_ref().map(|w| std::sync::Arc::as_ptr(w) as usize),
                     blend_mode,
                     unlit,
                     baked_lit,
@@ -766,6 +785,7 @@ pub(super) fn collect_draw_items(
                     mirror,
                     is_grid,
                     skeleton_bind_group: skel_bg.cloned(),
+                    wire,
                     is_transparent,
                     is_transmissive,
                     blend_mode,
@@ -949,6 +969,7 @@ pub(super) fn collect_draw_items(
                 casts_shadows: batch.casts_shadows,
                 visible_in_camera: batch.visible_in_camera,
                 skeleton_bind_group: batch.skeleton_bind_group.clone(),
+                wire: batch.wire.clone(),
                 is_transparent: batch.is_transparent,
                 is_transmissive: batch.is_transmissive,
                 blend_mode: batch.blend_mode,
@@ -1052,6 +1073,7 @@ mod batch_key_tests {
             skeleton_id: None,
             is_transparent: false,
             is_transmissive: false,
+            wire: None,
             blend_mode: Default::default(),
             unlit: false,
             baked_lit: false,
@@ -1081,6 +1103,7 @@ mod batch_key_tests {
             skeleton_id: None,
             is_transparent: false,
             is_transmissive: false,
+            wire: None,
             blend_mode: Default::default(),
             unlit: false,
             baked_lit: false,
