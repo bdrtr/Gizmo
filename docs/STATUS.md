@@ -17,7 +17,7 @@ hash replays bit-for-bit, which is what rollback netcode and the regression soak
 
 | Area | State | Read |
 |---|---|---|
-| ECS (`gizmo-core`) | Archetype + sparse-set storage, borrow-checked queries, commands, events (`EventMutator` too), observers, hierarchy. Driven state machines (`App::add_state` / `on_enter` / `on_exit`, `DespawnOnExit`), system chains (`(a, b).chain()`), systems returning `Result`. Under an ongoing soundness sweep; each round has come back smaller. | ENGINE.md §3 (Phase 6), CAPABILITY_GAPS §C1 |
+| ECS (`gizmo-core`) | Archetype + sparse-set storage, borrow-checked queries, commands, events (`EventMutator` too), observers, hierarchy. Bevy's shape: `Query<D, F>`, `query_data!`, `add_systems(Startup, ..)`, `Changed` per system; `Stepping` and a sequential executor for debugging. Driven state machines (`App::add_state` / `on_enter` / `on_exit`, `DespawnOnExit`), system chains (`(a, b).chain()`), systems returning `Result`. Under an ongoing soundness sweep; each round has come back smaller. | ENGINE.md §3 (Phase 6), CAPABILITY_GAPS §C1 |
 | Rigid physics | GJK/EPA + box SAT, TGS-Soft solver, CCD, joints, vehicles, character (pushes dynamic bodies, walks through triggers and lists the ones it is in), axis locks. Deterministic on one platform. A game with its own update hook steps it at a fixed rate with `gizmo::simple::FixedPhysics`; a steady push is an `ExternalForce`. Water (`FluidZone`) floats a body at its density's depth and rights a tipped hull. 2D: `RigidBody::planar_xy` + `Collider::{polygon_2d, polyline_2d, circle_2d, rect_2d}`; tile levels: `tilemap_collider`. | ENGINE.md §5, §7 |
 | Soft physics | FEM soft bodies (`SoftBodyMesh::block`; sub-stepped to the material's stable step; they rest on the floor, stack on each other and are drawn), XPBD cloth and rope, Voronoi fracture (a `Breakable` breaks in the physics step; its debris is drawn in its material and expires). Cloth is drawn and two-way — it pushes rigid bodies back, and `Cloth::damping` brings what it holds to rest. | ENGINE.md §1 |
 | 3D rendering | Deferred PBR, CSM shadows, SSAO, SSGI, SSR, bloom, volumetrics, TAA/FXAA, decals, irradiance volumes, user materials (forward); glass (`Material::with_transmission`, screen-space), a non-metal's reflectance (`with_ior`), an HDR panorama as the sky (`Renderer::set_environment_map`, desktop); hand-set fog (`Renderer::fog`) and the sky that lights the scene (`Renderer::sky`) beside the four presets. | CAPABILITY_GAPS §A, §F |
@@ -51,7 +51,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   split-screen game through its primary camera. Transparent materials blend by
   `Material::blend_mode` — alpha, additive, multiply, premultiplied (§B).
 - **Text:** vertical text stands upright, Latin included; `Renderer::load_system_font` finds the machine's font (`GIZMO_FONT`, then the platform's usual faces); the one font the engine carries is Noto Sans (OFL 1.1) behind the default-off `bundled-font` feature, for the browser, which lends none; and `add_font_fallback` chains faces per character (§A2).
-- **Extensibility:** several extension points are sealed (§C0).
+- **Extensibility:** composites and named query terms go through `system_param!` and `query_data!`; a primitive parameter or query term cannot be written downstream (§C0).
 - **Editor:** `gizmo-studio` is a separate binary and cannot see a game's types; the in-engine
   editor can.
 

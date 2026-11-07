@@ -12,8 +12,7 @@
 //! | nesne bazında hariç tutma (bunu hariç tut) | `NoWireframe` |
 //! | nesne başına tel kafes rengi | `WireframeColor` |
 //!
-//! Bu demo `WireframeConfig`'in hepsini-birden yolunu gösteriyor; nesne başına olanlar yukarıda. `WireframeConfig` iki alanlı:
-//! kaynak.
+//! Bu demo `WireframeConfig`'in hepsini-birden yolunu gösteriyor; nesne başına olanlar yukarıda. `WireframeConfig` ise tek kaynak.
 //!
 //! ## İki şey kodun kendisinden okunuyor
 //!
