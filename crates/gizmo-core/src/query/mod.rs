@@ -414,6 +414,9 @@ impl<T1: ReadOnlyQuery, T2: ReadOnlyQuery> QueryFilter for Or<T1, T2> {}
 /// get renumbered when empty archetypes are collected. Never treat the order as a sort.
 pub struct Query<'w, D: QueryData, F: QueryFilter = ()> {
     world: &'w World,
+    /// What `Changed` and `Added` compare against: for a system's parameter, the tick that system last
+    /// ran at, so each system sees each write once. Otherwise the world's [`change_ref_tick`](World::change_ref_tick).
+    ref_tick: u32,
     matching_archetypes: Vec<usize>,
     _marker: PhantomData<(D, F)>,
 }

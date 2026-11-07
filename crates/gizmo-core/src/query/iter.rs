@@ -51,6 +51,7 @@ where
 /// keeps one per row) and which nothing outside this module sees.
 pub(super) struct QueryRows<'a, 'w, Q: WorldQuery> {
     pub(super) world: &'a World,
+    pub(super) ref_tick: u32,
     pub(super) archetype_indices: &'a [usize],
     pub(super) current_arch_idx: usize,
     pub(super) current_row: usize,
@@ -103,7 +104,7 @@ where
                 let id = arch.entities()[row].id();
                 // SAFETY: `row < arch.len()` was just checked, and `fetch` came from this same
                 // archetype — so both calls address a live row of the columns it points at.
-                if unsafe { Q::filter_row(fetch, row, id, self.world.change_ref_tick) } {
+                if unsafe { Q::filter_row(fetch, row, id, self.ref_tick) } {
                     // SAFETY: as above, and the row passed the filter, so the item exists.
                     let item = unsafe { Q::get_item(fetch, row, id) };
                     return Some((id, item));
@@ -140,7 +141,7 @@ where
                     let id = unsafe { entities.get_unchecked(row) }.id();
                     // SAFETY: `take(len)` keeps `row` inside the archetype, and `fetch` is this
                     // archetype's.
-                    if unsafe { Q::filter_row(fetch, row, id, self.world.change_ref_tick) } {
+                    if unsafe { Q::filter_row(fetch, row, id, self.ref_tick) } {
                         // SAFETY: as above; the row passed the filter.
                         let item = unsafe { Q::get_item(fetch, row, id) };
                         f((id, item));

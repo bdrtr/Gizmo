@@ -211,6 +211,15 @@ impl World {
         self.sort_archetype_hierarchy();
     }
 
+    /// Moves the change tick on by one and nothing else: between a schedule's batches, so that what a
+    /// later batch writes, and what a batch's commands do, are newer than what a system ran at.
+    pub(crate) fn advance_change_tick(&mut self) {
+        self.tick = self.tick.wrapping_add(1);
+        if self.tick == 0 {
+            self.tick = 1;
+        }
+    }
+
     /// Opens the change-detection window at the start of a frame: sets this frame's
     /// comparison reference to `ref_tick` (the previous run's tick) and advances the world
     /// tick for this frame. The `Changed<T>`/`Added<T>` filters compare with

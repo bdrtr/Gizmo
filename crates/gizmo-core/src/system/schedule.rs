@@ -252,6 +252,86 @@ pub struct Schedule {
     /// The world tick on which this schedule most recently ran — the reference for change
     /// detection. On every `run` the comparison is made against the previous value.
     last_run_tick: u32,
+    /// How the systems of one batch run. See [`ExecutorKind`].
+    executor: ExecutorKind,
+    /// Which of [`Stepping`]'s grants this schedule has used, and where a step through it stands.
+    stepped: SteppedThrough,
+}
+
+/// How a [`Schedule`] runs the systems of one batch. Set with [`Schedule::set_executor`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum ExecutorKind {
+    /// At once, on the thread pool, in an order nothing promises. The default.
+    #[default]
+    Parallel,
+    /// One after another, in the order they were added, on this thread. For a frame that must repeat
+    /// exactly whatever the threads do, or a bug that only shows when two systems overlap; it costs the
+    /// parallelism. Batches stay as they are, so what is ordered against what does not change.
+    Sequential,
+}
+
+/// Holds every [`Schedule`] in a world still until told to go on: a debugger's pause, for a frame or for
+/// one system at a time. Insert it as a resource; removing it lets them all run again.
+///
+/// While a schedule waits it does not open a change-detection window, so a `Changed<T>` query sees what
+/// it would have seen. A step goes to each schedule once: [`step_frame`](Self::step_frame) lets each run
+/// through, and [`step_system`](Self::step_system) lets each run its next system, then flush that
+/// system's commands. Startup systems are not held.
+///
+/// ```
+/// # use gizmo_core::prelude::*;
+/// # use gizmo_core::system::{Schedule, Stepping};
+/// struct Count(u32);
+/// fn tick(mut count: ResMut<Count>) {
+///     count.0 += 1;
+/// }
+/// let mut world = World::new();
+/// world.insert_resource(Count(0));
+/// let mut schedule = Schedule::new();
+/// schedule.add_di_system(tick);
+///
+/// world.insert_resource(Stepping::new());
+/// schedule.run(&mut world, 0.016);
+/// assert_eq!(world.get_resource::<Count>().unwrap().0, 0, "held");
+///
+/// world.get_resource_mut::<Stepping>().unwrap().step_frame();
+/// schedule.run(&mut world, 0.016);
+/// schedule.run(&mut world, 0.016);
+/// assert_eq!(world.get_resource::<Count>().unwrap().0, 1, "one step, one run");
+/// ```
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Stepping {
+    frames: u64,
+    systems: u64,
+}
+
+impl Stepping {
+    /// Everything held.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Lets each schedule run once more, through to its end.
+    pub fn step_frame(&mut self) {
+        self.frames += 1;
+    }
+
+    /// Lets each schedule run its next system. After its last, the next step starts it over.
+    pub fn step_system(&mut self) {
+        self.systems += 1;
+    }
+}
+
+/// See [`Schedule::stepped`](Schedule).
+#[derive(Clone, Copy, Debug, Default)]
+struct SteppedThrough {
+    frames: u64,
+    systems: u64,
+    /// The next system to run, counting through the phases and batches in order. 0 is the start of a
+    /// frame, which is when a change-detection window opens.
+    cursor: usize,
 }
 
 impl Schedule {
@@ -269,6 +349,8 @@ impl Schedule {
             legacy_batches: Vec::new(),
             uses_phases: false,
             last_run_tick: 0,
+            executor: ExecutorKind::Parallel,
+            stepped: SteppedThrough { frames: 0, systems: 0, cursor: 0 },
         }
     }
 
@@ -691,26 +773,80 @@ impl Schedule {
     }
 
     /// Runs the batch list (within-phase or legacy).
-    fn run_batches(batches: &mut [SystemBatch], world: &mut World, dt: f32) {
+    fn run_batches(batches: &mut [SystemBatch], world: &mut World, dt: f32, executor: ExecutorKind) {
         #[cfg(not(target_arch = "wasm32"))]
         use rayon::prelude::*;
         #[cfg(target_arch = "wasm32")]
         use crate::parallel_compat::*;
 
         for batch in batches.iter_mut() {
-            batch.systems.par_iter_mut().for_each(|system| {
-                system.run(world, dt);
-            });
-
-            // Flush deferred entity mutations between batches.
-            let queue_clone = world
-                .get_resource::<crate::commands::CommandQueue>()
-                .filter(|q| !q.is_empty())
-                .map(|q| (*q).clone());
-            if let Some(queue) = queue_clone {
-                queue.apply(world);
+            match executor {
+                ExecutorKind::Parallel => batch.systems.par_iter_mut().for_each(|system| {
+                    system.run(world, dt);
+                }),
+                ExecutorKind::Sequential => {
+                    for system in &mut batch.systems {
+                        system.run(world, dt);
+                    }
+                }
             }
+            // Ahead of the flush, so what these commands do is newer than what this batch ran at, and
+            // its systems see it on their next run.
+            world.advance_change_tick();
+            Self::flush_commands(world);
         }
+    }
+
+    /// Flushes deferred entity mutations.
+    fn flush_commands(world: &mut World) {
+        let queue_clone = world
+            .get_resource::<crate::commands::CommandQueue>()
+            .filter(|q| !q.is_empty())
+            .map(|q| (*q).clone());
+        if let Some(queue) = queue_clone {
+            queue.apply(world);
+        }
+    }
+
+    /// How [`run`](Self::run) runs the systems of one batch. [`ExecutorKind::Parallel`] unless set.
+    pub fn set_executor(&mut self, executor: ExecutorKind) {
+        self.executor = executor;
+    }
+
+    /// Runs the system at `index`, counting through the phases and batches in order, and flushes its
+    /// commands. Returns how many systems there are.
+    fn run_one_system(&mut self, world: &mut World, dt: f32, index: usize) -> usize {
+        let batches: Vec<&mut SystemBatch> = if self.uses_phases {
+            self.phase_batches.iter_mut().flat_map(|(_, b)| b.iter_mut()).collect()
+        } else {
+            self.legacy_batches.iter_mut().collect()
+        };
+        let total = batches.iter().map(|b| b.systems.len()).sum();
+        let mut left = index;
+        for batch in batches {
+            if left < batch.systems.len() {
+                batch.systems[left].run(world, dt);
+                break;
+            }
+            left -= batch.systems.len();
+        }
+        world.advance_change_tick();
+        Self::flush_commands(world);
+        total
+    }
+
+    /// Whether [`Stepping`] lets this run go ahead, and how far. `None` means no stepping is in force.
+    fn step_decision(&mut self, world: &World) -> Option<StepDecision> {
+        let stepping = *world.get_resource::<Stepping>()?;
+        if self.stepped.systems < stepping.systems {
+            self.stepped.systems += 1;
+            return Some(StepDecision::OneSystem);
+        }
+        if self.stepped.frames < stepping.frames {
+            self.stepped.frames = stepping.frames;
+            return Some(StepDecision::Frame);
+        }
+        Some(StepDecision::Wait)
     }
 
     /// Runs every system once, building the schedule first if that has not happened yet.
@@ -730,14 +866,13 @@ impl Schedule {
     /// `dt` is forwarded unchanged to every system; nothing here sub-steps or rescales it,
     /// so a fixed-timestep caller passes its own fixed step.
     ///
-    /// Change detection: the call opens a window by pointing the world's reference tick at
-    /// the tick of this schedule's *previous* run and advancing the world tick by one, so
-    /// `Changed<T>`/`Added<T>` mean "since this schedule last ran". The reference is set
-    /// once, before any batch starts, so parallel systems cannot race on it. It is stored
-    /// per schedule, not per world: two schedules sharing a world each keep their own
-    /// window, and a schedule alternated between two worlds compares against a tick from
-    /// the wrong one. The window is opened even when the schedule holds no systems, so an
-    /// empty `run` still advances the world tick.
+    /// Change detection: a [`Query`](crate::query::Query) parameter's `Changed<T>` and `Added<T>` mean
+    /// "since this system last ran": it sees every write once, whether made earlier in this run, later
+    /// in the last one, by a batch's commands or between runs, and the tick moves on between batches
+    /// to make that so. A query built from the world instead (an `impl System`, a hook) compares
+    /// against the world's reference, set here to what this schedule's last run ended on: it sees what
+    /// came after that run, and not what a later system of that run wrote. A schedule alternated between
+    /// two worlds compares against a tick from the wrong one. An empty `run` still advances the tick.
     ///
     /// Finally, if a `FrameProfiler` resource is present its current frame is closed — which
     /// is itself a no-op while the profiler is disabled.
@@ -754,17 +889,38 @@ impl Schedule {
             self.build();
         }
 
-        // ── Değişiklik tespiti (change detection) penceresi ───────────────
-        // Bu frame'in karşılaştırma referansını bir önceki çalıştırmanın tick'ine
-        // ayarla ve dünya tick'ini ilerlet. Böylece `Changed<T>`/`Added<T>` "son
-        // çalıştırmadan beri değişenleri" raporlar. Referans tek seferde (paralel
-        // batch'lerden ÖNCE) ayarlandığından paralel sistemler arasında yarış yok.
+        // A debugger's hold. Nothing has been opened yet, so a schedule that waits changes nothing.
+        match self.step_decision(world) {
+            Some(StepDecision::Wait) => return,
+            Some(StepDecision::OneSystem) => {
+                if self.stepped.cursor == 0 {
+                    world.begin_change_frame(self.last_run_tick);
+                }
+                let total = self.run_one_system(world, dt, self.stepped.cursor);
+                self.stepped.cursor += 1;
+                if self.stepped.cursor >= total {
+                    self.stepped.cursor = 0;
+                    self.last_run_tick = world.tick.wrapping_sub(1);
+                }
+                return;
+            }
+            Some(StepDecision::Frame) | None => {}
+        }
+        self.run_unheld(world, dt);
+    }
+
+    /// A whole run, whatever [`Stepping`] says.
+    pub(crate) fn run_unheld(&mut self, world: &mut World, dt: f32) {
+        if !self.is_built() && !self.unbuilt_configs.is_empty() {
+            self.build();
+        }
         world.begin_change_frame(self.last_run_tick);
 
         self.run_systems(world, dt);
 
-        // Bir sonraki frame'in referansı: bu frame'in tick'i.
-        self.last_run_tick = world.tick;
+        // The next window, for what reads the world's reference rather than its own last run: one short
+        // of where the tick now stands, so that what is written between here and the next run is news.
+        self.last_run_tick = world.tick.wrapping_sub(1);
 
         // **No `FrameProfiler::end_frame()` here, deliberately: a schedule run is not a frame.**
         //
@@ -788,11 +944,11 @@ impl Schedule {
             // Fazları sırasıyla çalıştır: PreUpdate → Update → Physics → PostUpdate → Render
             for (_phase, batches) in &mut self.phase_batches {
                 let _span = tracing::info_span!("phase", name = _phase.name()).entered();
-                Self::run_batches(batches, world, dt);
+                Self::run_batches(batches, world, dt, self.executor);
             }
         } else {
             // Legacy mod: düz batch listesi
-            Self::run_batches(&mut self.legacy_batches, world, dt);
+            Self::run_batches(&mut self.legacy_batches, world, dt, self.executor);
         }
     }
 
@@ -805,6 +961,13 @@ impl Schedule {
             self.legacy_batches.len()
         }
     }
+}
+
+/// What [`Stepping`] says to a run of a schedule.
+enum StepDecision {
+    Wait,
+    OneSystem,
+    Frame,
 }
 
 impl Default for Schedule {
@@ -888,10 +1051,10 @@ mod run_system {
         world.begin_change_frame(settled);
         let added = |w: &World| w.query_filtered::<(), crate::query::Added<Marker>>().iter().count();
         assert_eq!(added(&world), 0, "the setup: nothing is new in this frame");
-        let tick = world.tick;
+        let reference = world.change_ref_tick;
         world.run_system(nothing);
         assert_eq!(added(&world), 0, "the call reopened the window: the old component reads as new");
-        assert_eq!(world.tick, tick, "the call advanced the frame");
+        assert_eq!(world.change_ref_tick, reference, "the call moved the frame's reference");
     }
 }
 
@@ -1150,7 +1313,7 @@ pub fn add_startup_system<Params, S: IntoSystemConfig<Params>>(world: &mut World
 /// Every app loop calls it at the head of each frame. A startup system added later runs on the next.
 pub fn run_startup_systems(world: &mut World) {
     if let Some(mut startup) = world.remove_resource::<StartupSystems>() {
-        startup.0.run(world, 0.0);
+        startup.0.run_unheld(world, 0.0);
     }
 }
 
@@ -1190,5 +1353,235 @@ impl ScheduleLabel for Update {
 impl ScheduleLabel for FixedUpdate {
     fn with_schedule(self, _: &mut World, fixed: &mut Schedule, _: &mut Schedule, add: impl FnOnce(&mut Schedule)) {
         add(fixed);
+    }
+}
+
+#[cfg(test)]
+mod stepping_and_order {
+    use super::*;
+    use crate::prelude::*;
+    use crate::query::Changed;
+    use crate::system::Local;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct Log(Vec<&'static str>);
+
+    fn a(mut log: ResMut<Log>) {
+        log.0.push("a");
+    }
+    fn b(mut log: ResMut<Log>) {
+        log.0.push("b");
+    }
+    fn c(mut log: ResMut<Log>) {
+        log.0.push("c");
+    }
+
+    fn world() -> World {
+        let mut w = World::new();
+        w.insert_resource(Log::default());
+        w
+    }
+
+    fn log(w: &World) -> Vec<&'static str> {
+        w.get_resource::<Log>().unwrap().0.clone()
+    }
+
+    /// Sharing a batch, sequential systems run in the order they were added, every time. Parallel ones
+    /// are the reason this exists: eight writers there gave 78 orderings over 600 frames.
+    #[test]
+    fn sequential_systems_run_in_the_order_they_were_added() {
+        #[derive(Default)]
+        struct Order(Mutex<Vec<u32>>);
+        fn push<const N: u32>(order: Res<Order>) {
+            order.0.lock().unwrap().push(N);
+        }
+        let mut schedule = Schedule::new();
+        schedule.add_systems((push::<0>, push::<1>, push::<2>, push::<3>, push::<4>, push::<5>, push::<6>, push::<7>));
+        schedule.set_executor(ExecutorKind::Sequential);
+        let mut w = World::new();
+        w.insert_resource(Order::default());
+        for _ in 0..200 {
+            w.get_resource::<Order>().unwrap().0.lock().unwrap().clear();
+            schedule.run(&mut w, 0.0);
+            assert_eq!(*w.get_resource::<Order>().unwrap().0.lock().unwrap(), (0..8).collect::<Vec<u32>>());
+        }
+        assert_eq!(schedule.total_batch_count(), 1, "they did share a batch");
+    }
+
+    #[test]
+    fn stepping_holds_a_schedule_and_lets_it_run_a_frame_at_a_time() {
+        let mut w = world();
+        let mut s = Schedule::new();
+        s.add_systems((a, b, c).chain());
+        w.insert_resource(Stepping::new());
+        s.run(&mut w, 0.0);
+        assert_eq!(log(&w), Vec::<&str>::new());
+        w.get_resource_mut::<Stepping>().unwrap().step_frame();
+        s.run(&mut w, 0.0);
+        s.run(&mut w, 0.0);
+        assert_eq!(log(&w), ["a", "b", "c"], "one step, one run");
+        w.remove_resource::<Stepping>();
+        s.run(&mut w, 0.0);
+        assert_eq!(log(&w), ["a", "b", "c", "a", "b", "c"], "removing it lets go");
+    }
+
+    #[test]
+    fn a_step_goes_one_system_at_a_time_and_starts_over() {
+        let mut w = world();
+        let mut s = Schedule::new();
+        s.add_systems((a, b, c).chain());
+        w.insert_resource(Stepping::new());
+        for expected in [vec!["a"], vec!["a", "b"], vec!["a", "b", "c"], vec!["a", "b", "c", "a"]] {
+            w.get_resource_mut::<Stepping>().unwrap().step_system();
+            s.run(&mut w, 0.0);
+            s.run(&mut w, 0.0);
+            assert_eq!(log(&w), expected);
+        }
+    }
+
+    /// A stepped system's commands are applied before the next step, as between batches.
+    #[test]
+    fn a_stepped_system_s_commands_are_applied_at_once() {
+        #[derive(Clone)]
+        struct Made;
+        crate::impl_component!(Made);
+        fn make(mut commands: Commands) {
+            commands.spawn().insert(Made);
+        }
+        let mut w = world();
+        let mut s = Schedule::new();
+        s.add_di_system(make);
+        w.insert_resource(Stepping::new());
+        w.get_resource_mut::<Stepping>().unwrap().step_system();
+        s.run(&mut w, 0.0);
+        assert_eq!(w.query::<&Made>().iter().count(), 1);
+    }
+
+    /// **Every system sees every write exactly once**: one made before it in the run, after it in the last
+    /// run, between runs, or by commands. A single tick per run lost all but the first.
+    #[test]
+    fn a_reader_sees_each_write_once_wherever_it_was_made() {
+        #[derive(Clone)]
+        struct Hp(u32);
+        crate::impl_component!(Hp);
+        #[derive(Default)]
+        struct Reads(Vec<usize>);
+        fn early_reader(q: Query<&Hp, Changed<Hp>>, mut reads: ResMut<Reads>) {
+            reads.0.push(q.iter().count());
+        }
+        #[derive(Default)]
+        struct Armed(bool);
+        fn writer(mut q: Query<&mut Hp>, armed: Res<Armed>) {
+            if armed.0 {
+                for mut hp in &mut q {
+                    hp.0 += 1;
+                }
+            }
+        }
+        #[derive(Default)]
+        struct LateReads(Vec<usize>);
+        fn late_reader(q: Query<&Hp, Changed<Hp>>, mut reads: ResMut<LateReads>) {
+            reads.0.push(q.iter().count());
+        }
+        let mut w = World::new();
+        w.insert_resource(Reads::default());
+        w.insert_resource(LateReads::default());
+        w.insert_resource(Armed::default());
+        let e = w.spawn();
+        w.add_component(e, Hp(1));
+        let mut s = Schedule::new();
+        s.add_systems((early_reader, writer, late_reader).chain());
+
+        s.run(&mut w, 0.0); // the first run sees the new component, once
+        s.run(&mut w, 0.0); // nothing
+        w.get_resource_mut::<Armed>().unwrap().0 = true;
+        s.run(&mut w, 0.0); // the writer writes: late sees it now, early on the next run
+        w.get_resource_mut::<Armed>().unwrap().0 = false;
+        s.run(&mut w, 0.0);
+        s.run(&mut w, 0.0); // nothing
+        if let Some(mut hp) = w.query_mut::<&mut Hp>().get_mut(e) {
+            hp.0 = 9; // between runs
+        }
+        s.run(&mut w, 0.0); // both see it
+        s.run(&mut w, 0.0); // nothing
+        assert_eq!(w.get_resource::<Reads>().unwrap().0, [1, 0, 0, 1, 0, 1, 0], "the reader before the writer");
+        assert_eq!(w.get_resource::<LateReads>().unwrap().0, [1, 0, 1, 0, 0, 1, 0], "the reader after it");
+    }
+
+    /// An entity spawned by a command is `Added` once for a system before the flush and once for one after.
+    #[test]
+    fn a_command_s_insert_is_added_once_for_every_reader() {
+        #[derive(Clone)]
+        struct Fresh;
+        crate::impl_component!(Fresh);
+        #[derive(Default)]
+        struct A(Vec<usize>);
+        #[derive(Default)]
+        struct B(Vec<usize>);
+        fn before(q: Query<&Fresh, crate::query::Added<Fresh>>, mut a: ResMut<A>) {
+            a.0.push(q.iter().count());
+        }
+        fn spawn_one(mut commands: Commands, mut done: Local<bool>) {
+            if !*done {
+                *done = true;
+                commands.spawn().insert(Fresh);
+            }
+        }
+        fn after(q: Query<&Fresh, crate::query::Added<Fresh>>, mut b: ResMut<B>) {
+            b.0.push(q.iter().count());
+        }
+        let mut w = World::new();
+        w.insert_resource(A::default());
+        w.insert_resource(B::default());
+        let mut s = Schedule::new();
+        s.add_systems((before, spawn_one, after).chain());
+        for _ in 0..3 {
+            s.run(&mut w, 0.0);
+        }
+        assert_eq!(w.get_resource::<A>().unwrap().0, [0, 1, 0]);
+        assert_eq!(w.get_resource::<B>().unwrap().0, [1, 0, 0]);
+    }
+
+    /// While held no window opens, so a change made during the hold is still news when it lets go.
+    #[test]
+    fn a_held_schedule_does_not_lose_a_change() {
+        #[derive(Clone)]
+        struct Hp(u32);
+        crate::impl_component!(Hp);
+        struct Seen(usize);
+        fn see(q: Query<&Hp, Changed<Hp>>, mut seen: ResMut<Seen>) {
+            seen.0 += q.iter().count();
+        }
+        let mut w = World::new();
+        w.insert_resource(Seen(0));
+        let e = w.spawn();
+        w.add_component(e, Hp(1));
+        let mut s = Schedule::new();
+        s.add_di_system(see);
+        s.run(&mut w, 0.0);
+        assert_eq!(w.get_resource::<Seen>().unwrap().0, 1);
+
+        w.insert_resource(Stepping::new());
+        let tick = w.tick;
+        s.run(&mut w, 0.0);
+        assert_eq!(w.tick, tick, "the hold does not advance the world");
+        if let Some(mut hp) = w.query_mut::<&mut Hp>().get_mut(e) {
+            hp.0 = 2;
+        }
+        s.run(&mut w, 0.0);
+        w.get_resource_mut::<Stepping>().unwrap().step_frame();
+        s.run(&mut w, 0.0);
+        assert_eq!(w.get_resource::<Seen>().unwrap().0, 2, "the write during the hold is seen");
+    }
+
+    /// Startup is not held: it is forgotten once run, and would otherwise never run.
+    #[test]
+    fn startup_is_not_held() {
+        let mut w = world();
+        w.insert_resource(Stepping::new());
+        add_startup_system(&mut w, a);
+        run_startup_systems(&mut w);
+        assert_eq!(log(&w), ["a"]);
     }
 }

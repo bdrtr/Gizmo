@@ -396,11 +396,12 @@ impl<D: crate::query::QueryData + 'static, F: crate::query::QueryFilter + 'stati
     for crate::query::Query<'static, D, F>
 {
     type Item<'w> = crate::query::Query<'w, D, F>;
-    type State = ();
+    // The tick this system last ran at.
+    type State = u32;
     fn fetch<'w>(
         world: &'w World,
         _dt: f32,
-        _state: &'w mut (),
+        state: &'w mut u32,
     ) -> Result<Self::Item<'w>, SystemParamFetchError> {
         // SAFETY: the scheduler validates that co-batched systems have disjoint component
         // access (`AccessInfo`/`is_compatible_with`) before running them in parallel, and
@@ -415,7 +416,12 @@ impl<D: crate::query::QueryData + 'static, F: crate::query::QueryFilter + 'stati
         // too, which blanked the inspector, froze transform subtrees and made `sync_bodies`
         // *destroy* a disabled rigid body. This function is the one place a query is built as a
         // PARAMETER, so it is the one place the filter belongs.
-        Ok(crate::query::Query::<D, F>::new_for_system(world))
+        // `Changed` and `Added` mean "since this system last ran", so every system sees every write
+        // exactly once, wherever in the frame it was made. Tick 0 is one no world uses: this system has
+        // not run, and takes the window the schedule opened.
+        let reference = if *state == 0 { world.change_ref_tick } else { *state };
+        *state = world.tick;
+        Ok(crate::query::Query::<D, F>::new_for_system(world, reference))
     }
     fn get_access_info(info: &mut AccessInfo) {
         let mut types = Vec::new();

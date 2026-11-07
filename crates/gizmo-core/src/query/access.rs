@@ -15,6 +15,7 @@ impl<'w, D: QueryData, F: QueryFilter> Query<'w, D, F> {
             .matching_archetypes_readonly(<(D, F)>::matches_archetype);
         Self {
             world,
+            ref_tick: world.change_ref_tick,
             matching_archetypes: matching,
             _marker: PhantomData,
         }
@@ -33,8 +34,9 @@ impl<'w, D: QueryData, F: QueryFilter> Query<'w, D, F> {
     /// construction and nothing per row, and `has_row_filter` is untouched — a query carrying no
     /// row filter can still be chunk-iterated after being filtered. That is possible only because
     /// a filter type must be `Table`-stored, which `DefaultQueryFilters::add` enforces.
-    pub(crate) fn new_for_system(world: &'w World) -> Self {
+    pub(crate) fn new_for_system(world: &'w World, ref_tick: u32) -> Self {
         let mut query = Self::new(world);
+        query.ref_tick = ref_tick;
         // Two early outs, in the order that makes the common case free: no filters registered at
         // all (every world that never asked for the feature), then this query opting out.
         if world.default_query_filters.is_empty() || <(D, F)>::ignores_default_filters() {
@@ -56,6 +58,7 @@ impl<'w, D: QueryData, F: QueryFilter> Query<'w, D, F> {
             .matching_archetypes(TypeId::of::<<(D, F) as WorldQuery>::StaticType>(), <(D, F)>::matches_archetype)
             .to_vec();
         Self {
+            ref_tick: world.change_ref_tick,
             world,
             matching_archetypes: matching,
             _marker: PhantomData,
@@ -72,6 +75,7 @@ impl<'w, D: QueryData, F: QueryFilter> Query<'w, D, F> {
     fn iter_inner<'a>(&'a self) -> QueryRows<'a, 'w, (D, F)> {
         QueryRows {
             world: self.world,
+            ref_tick: self.ref_tick,
             archetype_indices: &self.matching_archetypes,
             current_arch_idx: 0,
             current_row: 0,
@@ -133,7 +137,7 @@ impl<'w, D: QueryData, F: QueryFilter> Query<'w, D, F> {
         // settled at construction by `check_aliasing`.
         unsafe {
             let fetch = <(D, F)>::fetch_raw(self.world, arch, self.world.tick)?;
-            if !<(D, F)>::filter_row(fetch, loc.row as usize, entity_id, self.world.change_ref_tick) {
+            if !<(D, F)>::filter_row(fetch, loc.row as usize, entity_id, self.ref_tick) {
                 return None;
             }
             Some(<(D, F)>::get_item(fetch, loc.row as usize, entity_id).0)
@@ -169,7 +173,7 @@ impl<'w, D: QueryData, F: QueryFilter> Query<'w, D, F> {
         }
 
         let tick = self.world.tick;
-        let ref_tick = self.world.change_ref_tick;
+        let ref_tick = self.ref_tick;
         self.matching_archetypes.par_iter().for_each(|&arch_idx| {
             let arch = &self.world.archetype_index.archetypes[arch_idx];
             // SAFETY: `arch_idx` is from `matching_archetypes` and the archetype is borrowed from

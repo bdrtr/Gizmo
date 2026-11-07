@@ -77,16 +77,9 @@ pub fn derived_box_half_extents(scale: Vec3, base: Vec3) -> Vec3 {
 /// NOTE(translation): the original says "non-zero scale" here; the intended sense is most likely
 /// "non-unit scale" (a scale other than 1). Translated literally rather than corrected.
 ///
-/// ⚠️ TIMING TRAP: this marker is resolved through the `Added<T>` gate by
-/// [`AutoBoxColliderSystem`], which runs BEFORE the physics step. In the windowed app loop the
-/// `update` hook runs AFTER the physics `schedule.run` → the `added_tick` of a marker
-/// **spawned in the update hook** ends up equal to the next frame's `change_ref_tick`, and
-/// `Added`, which is a strict `>`, MISSES it → the marker is NEVER resolved (the collider stays
-/// at the placeholder). Therefore the marker path is safe ONLY for entities spawned in setup or
-/// inside a SYSTEM that runs before `physics_step`. For runtime (update-hook) spawns use the
-/// SYNCHRONOUS path: [`Prefab::auto_box_collider`](crate::bundles::Prefab::auto_box_collider) or
-/// an explicit `Collider::box_collider(scale)`. Regression test:
-/// `marker_spawned_after_schedule_run_is_missed_by_added_gate`.
+/// Resolved once by [`AutoBoxColliderSystem`] through the `Added<T>` gate, wherever the marker was
+/// spawned: in setup, in a system, or in the update hook, which runs after the physics schedule. The last
+/// was missed until 2026-11-07, and `marker_spawned_after_schedule_run_is_resolved` is why it no longer is.
 #[derive(Debug, Clone, Copy)]
 pub struct AutoBoxCollider {
     /// Per-axis base factor multiplied by the scale (usually `Vec3::ONE`).
@@ -267,14 +260,10 @@ mod tests {
         fn run(&mut self, _w: &World, _dt: f32) {}
     }
 
-    /// TRAP DOCUMENT: if a marker is spawned AFTER the physics `schedule.run` (e.g. in the update
-    /// hook), its `added_tick` becomes EQUAL to the next frame's `change_ref_tick` →
-    /// `Added`, which is a strict `>`, MISSES it → the marker is NEVER resolved. Therefore
-    /// load-bearing statics spawned in the update hook must be sized NOT via the marker path but
-    /// via the synchronous path (Prefab or an explicit collider). (This is why the yikim_ustasi
-    /// level transition spawns its statics with an explicit collider.)
+    /// A marker spawned after the physics `schedule.run`, in the update hook, is resolved on the next run.
+    /// Its `added_tick` used to equal the next frame's reference, and `Added`, a strict `>`, missed it.
     #[test]
-    fn marker_spawned_after_schedule_run_is_missed_by_added_gate() {
+    fn marker_spawned_after_schedule_run_is_resolved() {
         use gizmo_core::system::{Schedule, SystemConfig};
 
         let mut world = world_with_commands();
@@ -301,14 +290,9 @@ mod tests {
         schedule.run(&mut world, 0.016);
         schedule.run(&mut world, 0.016);
 
-        // Marker çözülmedi → collider hâlâ yer-tutucu birim kutu (senkron yol şart).
         let col = world.query::<&Collider>().get(e).cloned().unwrap();
         match col.shape {
-            ColliderShape::Box(b) => assert_eq!(
-                b.half_extents,
-                Vec3::ONE,
-                "update-hook marker'ı Added ile çözülmez — tuzak belgelendi"
-            ),
+            ColliderShape::Box(b) => assert_eq!(b.half_extents, Vec3::new(12.0, 0.6, 10.0)),
             _ => panic!("kutu olmalı"),
         }
     }

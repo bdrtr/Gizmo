@@ -911,6 +911,13 @@ Anything that needs one — despawning what a query found, running a stored clos
 app-level `set_update` / `set_render` hook. The
 engine's own `LifetimeSystem` takes the same route (`query_unchecked` + `world.entity(id)`).
 
+### C2b. `Changed` and `Added` lost writes — **closed 2026-11-07**
+
+One tick per schedule run with a strict `>` meant a system saw nothing written after it in that run, by commands after it, or between
+runs. `auto_collider` had written this down as a trap to work around. A `Query` parameter now keeps the tick its system last ran at and
+the tick moves between batches, so every system sees every write once: tested with readers on both sides of a writer, with commands,
+and with a write between runs. A query built from the world (`impl System`, hooks) still reads the schedule's window.
+
 ### C3. Component hooks reach every write — **closed 2026-11-07**
 
 `register_on_add` / `on_set` / `on_replace` / `on_remove`, plus a global despawn hook. Every path now fires them:
@@ -937,7 +944,9 @@ error, and `relationship!` is the index, kept by the engine.
 
 ### C4. No custom executor or stepping — but phases of your own now exist
 
-Measured in `schedule_internals`. `run_batches` is private and there is no stepping API. There is
+Measured in `schedule_internals`. **Closed 2026-11-07:** `Schedule::set_executor(ExecutorKind::Sequential)` runs a batch one
+system at a time in added order, and a `Stepping` resource holds every schedule for a frame or a system at a time, keeping its
+change-detection window. A wholly custom executor is still not a thing a game can write. There is
 ~~also **no `Startup` phase**~~ **closed 2026-11-07:** `add_startup_system` runs an ordinary system once, after the initial state's
 `on_enter` and before the first fixed step, on every app loop.
 

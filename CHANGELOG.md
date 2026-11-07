@@ -50,6 +50,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Schedule::set_executor(ExecutorKind::Sequential)` and `Stepping`.** A batch's systems one at a time in the order they were
+  added, for a frame that must repeat exactly; and a resource that holds every schedule until told to go on, a frame or a system at
+  a time, without losing a change made during the hold.
+
 - **Plurals by CLDR's rules.** `Locale::format_count` and `LocalizedText::with_count` pick `zero`, `one`, `two`, `few`, `many` or
   `other` as the language asks: Russian's 1, 21 and 2, 22 and 5, 11, Arabic's six, Polish's three. A table need only write the
   forms it uses. The browser build grows by what the rules weigh; see the commit.
@@ -134,6 +138,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Immutable components.** `impl_component!(T; immutable)`, and `&mut T` in a query does not compile.
 
 ### Fixed
+
+- **`Changed<T>` and `Added<T>` lost writes.** One tick per schedule run and a strict comparison meant a system saw nothing written
+  after it in the same run, by a batch's commands after it, or between runs: a game's update hook, a physics step's hook. A query
+  parameter now compares against the tick its own system last ran at, and the tick moves on between batches, so every system sees
+  every write exactly once. **Behaviour changes:** a system that was missing changes now gets them. A marker spawned in the update
+  hook now resolves (`AutoBoxCollider`, which documented the trap). The physics hash is unchanged. A query built from the world, in
+  an `impl System` or a hook, still reads the world's window: it sees what came after the schedule's last run, and not what a later
+  system of that run wrote.
 
 - **The studio viewport ignored `Renderer::tonemap_curve`, its white point and `deband_dither`**, always drawing ACES.
 
