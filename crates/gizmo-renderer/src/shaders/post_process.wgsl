@@ -48,6 +48,7 @@ struct PostProcessParams {
 };
 
 const DOF_TAPS: i32 = 24;
+const DOF_SEARCH_TAPS: i32 = 12;
 
 // Depth of field at this distance: x = blur radius in texels, y = its share of the largest. From the
 // focus band, or through a lens (`PostProcess::with_lens`). `params.motion.w` is the farthest a
@@ -334,31 +335,61 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     
     let dof = dof_radius_at(view_dist);
     var dof_color = hdr_color;
-    if (dof.y > 0.01) {
-        // A disc of taps on the golden angle, so a wide blur does not show as eight copies of the
-        // picture. In texels of this frame: these were fractions of a 1920x1080 one, so the blur
-        // was narrower the smaller the frame, and wider across than tall on any other shape.
+    if (params.dof_blur_size > 0.0) {
         let texel = 1.0 / vec2<f32>(textureDimensions(t_source));
+        let last_depth = vec2<i32>(depth_dims) - vec2<i32>(1);
         let tap_scale = vec2<f32>(depth_dims);
-        var blurred = vec3<f32>(0.0);
-        var kept = 0.0;
-        for (var i = 0; i < DOF_TAPS; i++) {
-            let t = (f32(i) + 0.5) / f32(DOF_TAPS);
+
+        // Something blurred in front of this pixel spreads over it, however sharp this pixel is, so a
+        // sharp pixel has to go looking. How far it gathers is the most any such neighbour reaches.
+        var gather = dof.x;
+        for (var i = 0; i < DOF_SEARCH_TAPS; i++) {
+            let t = (f32(i) + 0.5) / f32(DOF_SEARCH_TAPS);
             let angle = f32(i) * 2.399963;
-            let reach = sqrt(t) * dof.x;
+            let reach = sqrt(t) * params.dof_blur_size;
             let uv = clamp(in.uv + vec2<f32>(cos(angle), sin(angle)) * reach * texel, vec2<f32>(0.0), vec2<f32>(1.0));
-            // Something sharper in front stays out unless its own blur reaches this far: a sharp
-            // object does not glow onto the blurred background behind it.
-            let tap_at = min(vec2<i32>(uv * tap_scale), vec2<i32>(depth_dims) - vec2<i32>(1));
-            let tap_dist = (n * f) / (f - textureLoad(t_depth, tap_at, 0) * (f - n));
-            if (tap_dist < view_dist && dof_radius_at(tap_dist).x < reach) {
-                continue;
+            let tap_dist = (n * f) / (f - textureLoad(t_depth, min(vec2<i32>(uv * tap_scale), last_depth), 0) * (f - n));
+            if (tap_dist < view_dist) {
+                let tap_radius = dof_radius_at(tap_dist).x;
+                if (tap_radius >= reach) {
+                    gather = max(gather, tap_radius);
+                }
             }
-            blurred += textureSampleLevel(t_source, s_source, uv, 0.0).rgb;
-            kept += 1.0;
         }
-        if (kept > 0.0) {
-            dof_color = mix(hdr_color, blurred / kept, min(dof.y * 4.0, 1.0));
+
+        if (gather > 0.01 * params.dof_blur_size) {
+            // A disc of taps on the golden angle, so a wide blur does not show as eight copies of the
+            // picture. In texels of this frame: these were fractions of a 1920x1080 one, so the blur
+            // was narrower the smaller the frame, and wider across than tall on any other shape.
+            var blurred = vec3<f32>(0.0);
+            var kept = 0.0;
+            for (var i = 0; i < DOF_TAPS; i++) {
+                let t = (f32(i) + 0.5) / f32(DOF_TAPS);
+                let angle = f32(i) * 2.399963;
+                let reach = sqrt(t) * gather;
+                let uv = clamp(in.uv + vec2<f32>(cos(angle), sin(angle)) * reach * texel, vec2<f32>(0.0), vec2<f32>(1.0));
+                let tap_dist = (n * f) / (f - textureLoad(t_depth, min(vec2<i32>(uv * tap_scale), last_depth), 0) * (f - n));
+                let tap_reaches = dof_radius_at(tap_dist).x >= reach;
+                if (tap_dist < view_dist) {
+                    // Something sharper in front stays out unless its own blur reaches this far: a
+                    // sharp object does not glow onto the blurred background behind it.
+                    if (!tap_reaches) {
+                        continue;
+                    }
+                    blurred += textureSampleLevel(t_source, s_source, uv, 0.0).rgb;
+                } else if (reach <= dof.x) {
+                    blurred += textureSampleLevel(t_source, s_source, uv, 0.0).rgb;
+                } else {
+                    // Further than this pixel's own blur, and only here for the sake of what is in
+                    // front: what is behind stays as sharp as this pixel is.
+                    blurred += hdr_color;
+                }
+                kept += 1.0;
+            }
+            if (kept > 0.0) {
+                let amount = max(dof.y, gather / params.dof_blur_size);
+                dof_color = mix(hdr_color, blurred / kept, min(amount * 4.0, 1.0));
+            }
         }
     }
 

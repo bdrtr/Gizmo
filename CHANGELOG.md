@@ -96,8 +96,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **Depth of field through a lens: `PostProcess::with_lens(focus, f_stops, max_blur)`.** A thin lens, with the focal length from
   the sensor (`dof_sensor_height`) and the camera's field of view, so a long lens is shallower, as is a wide aperture.
   `dof_max_depth` limits what a sky counts as. The focus band stays. **Looks change** for any camera with a blur: the radius is
-  now in texels of the frame rather than fractions of a 1920×1080 one, 24 taps replace 8, and a sharp thing no longer glows on
-  the blurred background behind it.
+  now in texels of the frame rather than fractions of a 1920×1080 one, 24 taps replace 8, a sharp thing no longer glows on
+  the blurred background behind it, and a blurred foreground has a soft edge over what is in focus behind it.
 
 - **`SsaoState::set_quality`.** 8, 16 (the default), 32 or 64 samples a pixel.
 

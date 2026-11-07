@@ -7928,6 +7928,88 @@ mod golden_render_tests {
         });
     }
 
+    /// **A blurred foreground has a soft edge over what is in focus behind it, and what is behind stays
+    /// sharp.** A dark cube close to the camera in front of a green wall in focus, with a blue bar on the wall.
+    /// Outside the cube's sharp silhouette the wall darkens near it, where a sharp pixel used to gather
+    /// nothing; far from the cube it is untouched; and the wall's green does not smear onto the bar.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_blurred_foreground_spreads_over_a_sharp_background() {
+        use crate::renderer::components::PostProcess;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(grade: PostProcess) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
+            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let up = std::f32::consts::FRAC_PI_2;
+            // A bright wall in focus, ending in a hard edge across the frame's top.
+            let wall = world.spawn();
+            world.add_component(wall, Transform::new(Vec3::new(0.0, -6.0, -12.0)).with_rotation(gizmo_math::Quat::from_rotation_x(up)));
+            world.add_component(wall, GlobalTransform::default());
+            world.add_component(wall, AssetManager::create_plane(&renderer.device, 20.0));
+            // Dim enough to stay off the tone curve's shoulder, where a real drop reads as nothing.
+            world.add_component(wall, Material::new(tex.clone()).with_unlit(Vec4::new(0.0, 0.35, 0.0, 1.0)).with_double_sided(true));
+            world.add_component(wall, MeshRenderer::new());
+            // A blue bar on the wall, in focus with it, beside where the cube's blur falls.
+            let bar = world.spawn();
+            world.add_component(bar, Transform::new(Vec3::new(-0.95, -4.0, -11.99)).with_scale(Vec3::new(0.3, 2.0, 0.001)));
+            world.add_component(bar, GlobalTransform::default());
+            world.add_component(bar, AssetManager::create_cube(&renderer.device));
+            world.add_component(bar, Material::new(tex.clone()).with_unlit(Vec4::new(0.0, 0.0, 0.5, 1.0)));
+            world.add_component(bar, MeshRenderer::new());
+            // Dark, and close: its blur is large.
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(-1.0, -1.0, -3.0)).with_scale(Vec3::splat(0.5)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex).with_unlit(Vec4::new(0.0, 0.0, 0.0, 1.0)));
+            world.add_component(cube, MeshRenderer::new());
+            let camera = world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -up, primary: true, ..Default::default() });
+            world.add_component(camera, grade);
+            render_world(&mut renderer, &mut world).await
+        }
+        let no_bloom = || PostProcess::new().with_bloom(0.0, 100.0);
+        pollster::block_on(async {
+            let sharp = frame(no_bloom().with_lens(12.0, 0.0, 0.0)).await;
+            // A band focus, so that the wall is exactly sharp and the cube at the largest blur.
+            let soft = frame(no_bloom().with_depth_of_field(12.0, 2.0, 10.0)).await;
+            let at = |f: &[u8], x: usize, y: usize| i32::from(f[(y * 128 + x) * 4 + 1]);
+            let bright = at(&sharp, 120, 100);
+            // Along the middle of the cube's height: the first wall pixel past its sharp right edge.
+            let dark: Vec<usize> = (0..128).filter(|&y| at(&sharp, 40, y) < bright / 2).collect();
+            let y = dark[dark.len() / 2];
+            let edge = (40..128).find(|&x| at(&sharp, x, y) >= bright / 2).expect("the cube's right edge") - 1;
+            let near = at(&soft, edge + 3, y);
+            let far = at(&soft, 124, 110);
+            eprintln!("the wall {bright}; just past the cube's edge {near} (sharp {}); far from it {far} (sharp {})", at(&sharp, edge + 3, y), at(&sharp, 124, 110));
+            assert!(near < at(&sharp, edge + 3, y) - 10, "the cube's blur reaches over the wall: {near}");
+            assert_eq!(far, at(&sharp, 124, 110), "far from the cube the wall is as it was");
+
+            // What is behind stays sharp. On the bar, inside the cube's blur, there is no green at all in the
+            // sharp frame, and the wall's green right beside it must not come in. The cube's own colour may.
+            let blue = |f: &[u8], x: usize, y: usize| i32::from(f[(y * 128 + x) * 4 + 2]);
+            let on_bar = (edge + 1..128).find(|&x| blue(&sharp, x, y) > 60 && at(&sharp, x, y) < 8).expect("the bar is right of the cube");
+            let inside = on_bar;
+            eprintln!("on the bar at {inside}: green {} (sharp {}), blue {} (sharp {})", at(&soft, inside, y), at(&sharp, inside, y), blue(&soft, inside, y), blue(&sharp, inside, y));
+            assert!(blue(&soft, inside, y) < blue(&sharp, inside, y) - 2, "the cube's blur reaches the bar here, or this measures nothing");
+            assert!(at(&soft, inside, y) <= at(&sharp, inside, y) + 8, "the wall behind has come in over the bar: green {}", at(&soft, inside, y));
+        });
+    }
+
     /// **A flat floor is not occluded by anything**, and the frame's edges are not lit by the samples
     /// that fell off them. Both were in this pass until 2026-11-07: with nothing on it a floor darkened by
     /// more than four levels over a quarter of a frame, with bright bands along its edges. And the
