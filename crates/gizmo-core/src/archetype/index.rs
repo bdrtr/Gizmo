@@ -106,12 +106,10 @@ impl ArchetypeIndex {
             // Yeni archetype oluşturmak için ComponentInfo gerekir
             let mut infos = Vec::new();
             for &t in &new_types {
-                infos.push(
-                    component_infos
-                        .get(&t)
-                        .cloned()
-                        .unwrap_or_else(|| ComponentInfo::of_type_id(t)),
-                );
+                // Every key reaching an archetype was registered first — by its type's insert or by
+                // `World::register_component` — and an info made up here would be a column of the
+                // wrong size.
+                infos.push(*component_infos.get(&t).expect("a component is registered before it is stored"));
             }
             let id = self.push_archetype(&infos);
             self.set_to_id.insert(new_types, id);
@@ -151,12 +149,10 @@ impl ArchetypeIndex {
         } else {
             let mut infos = Vec::new();
             for &t in &new_types {
-                infos.push(
-                    component_infos
-                        .get(&t)
-                        .cloned()
-                        .unwrap_or_else(|| ComponentInfo::of_type_id(t)),
-                );
+                // Every key reaching an archetype was registered first — by its type's insert or by
+                // `World::register_component` — and an info made up here would be a column of the
+                // wrong size.
+                infos.push(*component_infos.get(&t).expect("a component is registered before it is stored"));
             }
             let id = self.push_archetype(&infos);
             self.set_to_id.insert(new_types, id);

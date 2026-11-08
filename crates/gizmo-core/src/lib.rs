@@ -48,6 +48,7 @@ pub mod commands;
 pub mod component;
 pub mod component_key;
 pub mod cvar;
+pub mod dynamic;
 pub mod entity;
 pub mod event;
 pub mod hierarchy;

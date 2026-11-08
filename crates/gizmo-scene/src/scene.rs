@@ -718,8 +718,13 @@ impl SceneData {
             // etkilenmez.
             if let Some(entity) = world.live(id) {
                 let types = world.entity_component_types(entity);
-                // A component defined at runtime has no Rust type, so no registration to serialise it with.
-                for type_id in types.into_iter().filter_map(|key| key.type_id()) {
+                for key in types {
+                    // A component defined at runtime has no Rust type, so no registration to serialise
+                    // it with: it is not saved, and the warning below counts it.
+                    let Some(type_id) = key.type_id() else {
+                        dropped_components += 1;
+                        continue;
+                    };
                     if let Some(reg) = registry.get_registration(type_id) {
                         if let Some(ptr) = world.get_component_ptr(entity, type_id) {
                             match crate::serde_bridge::serialize_component(

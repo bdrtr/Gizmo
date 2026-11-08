@@ -32,8 +32,9 @@ pub struct ComponentTicks {
     ///
     /// Starts equal to [`added`](Self::added) (see [`ComponentTicks::new`]) and is bumped
     /// on its own afterwards, so `changed >= added` holds for any row that has not been
-    /// reinitialised. This is the field the `Changed<T>` filter reads. Writes made through
-    /// a raw pointer do *not* bump it — only the change-tracking access paths do.
+    /// reinitialised. This is the field the `Changed<T>` filter reads. Every write path
+    /// bumps it — `Mut<T>`, `World::get_component_mut_ptr` and an insert over an existing
+    /// value; a write through a pointer kept from before the bump is invisible to it.
     pub changed: u32,
 }
 
@@ -248,13 +249,38 @@ impl Column {
     /// - `T` must be this column's component type (`self.type_id() == TypeId::of::<T>()`).
     #[inline]
     pub unsafe fn replace_typed<T: 'static>(&mut self, row: usize, value: T, tick: u32) -> T {
-        debug_assert!(row < self.len());
         debug_assert_eq!(self.type_id, ComponentKey::of::<T>());
-        let ptr = self.get_mut_ptr(row) as *mut T;
-        let old = ptr::read(ptr);
-        ptr::write(ptr, value);
-        self.ticks_ptr_mut().add(row).write(ComponentTicks::new(tick));
-        old
+        let mut value = std::mem::ManuallyDrop::new(value);
+        // SAFETY: forwarded — `T` is this column's type, so `value` is a value of it, aligned and
+        // outside the column; after the swap it holds the old value, which is handed back.
+        unsafe { self.replace_raw(row, (&raw mut *value).cast(), tick) };
+        std::mem::ManuallyDrop::into_inner(value)
+    }
+
+    /// [`replace_typed`](Self::replace_typed) for a component named by key: swaps the value at
+    /// `value` into `row` and the row's old value out into `value`, and stamps the row changed.
+    /// The caller drops what comes back.
+    ///
+    /// An overwrite is a **change, not an add**: only `changed` is stamped, so `Added<T>` does
+    /// not report a value replaced in place — as it never did for a sparse component. Until
+    /// 2026-11-08 a table overwrite reset both ticks and was reported as an add.
+    ///
+    /// # Safety
+    /// - `row < self.len()` must hold and the slot must hold a live value.
+    /// - `value` points to a valid value of this column's component, aligned, writable, and not
+    ///   inside this column.
+    #[inline]
+    pub unsafe fn replace_raw(&mut self, row: usize, value: *mut u8, tick: u32) {
+        debug_assert!(row < self.len());
+        let size = self.data.item_layout().size();
+        // SAFETY: the slot is a live value of `size` bytes and `value` another one that does not
+        // overlap it, by this function's contract. Swapping is two memcpys and the tick a `Copy`
+        // store, so nothing here can unwind: the row is whole and stamped before the caller runs
+        // the old value's drop glue.
+        unsafe {
+            ptr::swap_nonoverlapping(value, self.get_mut_ptr(row), size);
+            (*self.ticks_ptr_mut().add(row)).changed = tick;
+        }
     }
 
     /// Swap-removes `row` **without dropping it**, leaving the value at the column's new length.
@@ -363,12 +389,10 @@ use crate::component::StorageType;
 /// Used when creating a Column and during archetype migration.
 #[derive(Clone, Copy)]
 pub struct ComponentInfo {
-    /// Identity of the component type, and the key everything else is looked up by:
-    /// archetype column indices, sparse-set registration and the world's component
-    /// registry all hash on it.
-    ///
-    /// It is the one field [`ComponentInfo::of_type_id`] can fill in honestly — an info
-    /// built that way has a real `type_id` and placeholders everywhere else.
+    /// Identity of the component, and the key everything else is looked up by: archetype
+    /// column indices, sparse-set registration and the world's component registry all hash
+    /// on it. A Rust type's `TypeId`, or the id `World::register_component` gave a component
+    /// defined at runtime.
     pub key: ComponentKey,
     /// Size and alignment of one instance.
     ///
@@ -388,9 +412,10 @@ pub struct ComponentInfo {
     /// for `count * layout.size()` bytes.
     ///
     /// Always `Some` for infos built by [`ComponentInfo::of`], because `Component` requires
-    /// `Clone`; only [`ComponentInfo::of_type_id`] leaves it `None`. When it is `None`,
-    /// `BlobVec::push_cloned_batch` degrades to a raw byte copy (wrong for any type owning
-    /// a heap allocation) and `ComponentSparseSet::clone_entry` refuses and returns `false`.
+    /// `Clone`. A component defined at runtime may have none: then a copy of its bytes is its
+    /// clone if it has no [`drop_fn`](Self::drop_fn), and it cannot be cloned at all if it
+    /// has one — see [`is_cloneable`](Self::is_cloneable), which `World::clone_entity` asks
+    /// before it copies anything.
     pub clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>,
     /// Which backing store holds this component: `Table` (an archetype [`Column`], laid out
     /// contiguously and iterated per archetype) or `SparseSet` (a `ComponentSparseSet` that
@@ -400,10 +425,15 @@ pub struct ComponentInfo {
     /// entity. The two stores are disjoint: a component is in one or the other, never both,
     /// and the code paths that read them are separate.
     pub storage_type: StorageType,
-    /// Human-readable type name (`std::any::type_name`). Captured at registration time so
-    /// that the analysis/introspection layer (gizmo-analysis) can report archetype tables
-    /// with component names. It CANNOT be recovered from a TypeId afterwards, hence it is here.
+    /// Human-readable name: `std::any::type_name` for a type, the registered name for a
+    /// component defined at runtime. Captured at registration time so that the
+    /// analysis/introspection layer (gizmo-analysis) can report archetype tables with
+    /// component names. It CANNOT be recovered from a key afterwards, hence it is here.
     pub type_name: &'static str,
+    /// Whether a query may write it in place. `false` for a type declared with
+    /// `impl_component!(T; immutable)` and a runtime component declared immutable: such a
+    /// value changes only by inserting another, which hooks hear about.
+    pub mutable: bool,
 }
 
 impl ComponentInfo {
@@ -433,18 +463,15 @@ impl ComponentInfo {
                 }
             }),
             storage_type: T::storage_type(),
+            mutable: T::MUTABLE,
         }
     }
 
-    /// If only the TypeId is known (registry situations), creates a restricted ComponentInfo.
-    pub fn of_type_id(type_id: ComponentKey) -> Self {
-        Self {
-            key: type_id,
-            type_name: "<unknown>",
-            layout: Layout::from_size_align(0, 1).unwrap(), // Geçici, gerçek layout registry'den gelmeli
-            drop_fn: None,
-            clone_fn: None,
-            storage_type: StorageType::Table, // Varsayılan olarak Table (Registry tam bilgi bilmediğinde riskli olabilir ama şimdilik Table)
-        }
+    /// Whether a value can be cloned: it has clone glue, or it has nothing to drop, in which
+    /// case a copy of its bytes is a clone. A component defined at runtime with drop glue and
+    /// none to clone with cannot be, and `World::clone_entity` refuses an entity carrying one.
+    #[must_use]
+    pub fn is_cloneable(&self) -> bool {
+        self.clone_fn.is_some() || self.drop_fn.is_none()
     }
 }

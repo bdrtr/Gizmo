@@ -133,6 +133,12 @@ impl BlobVec {
         }
     }
 
+    /// The size and alignment of one element.
+    #[inline]
+    pub fn item_layout(&self) -> Layout {
+        self.item_layout
+    }
+
     /// The current element count
     #[inline]
     pub fn len(&self) -> usize {
@@ -213,7 +219,9 @@ impl BlobVec {
         if let Some(c_fn) = clone_fn {
             c_fn(src, dst_start, count);
         } else {
-            // fallback (copy türler için vb.)
+            // No clone glue: plain bytes, whose copy is their clone. A component with drop glue
+            // and no clone glue never gets here — `World::clone_entity` refuses it first
+            // (`ComponentInfo::is_cloneable`).
             let size = self.item_layout.size();
             let mut current_dst = dst_start;
             for _ in 0..count {
@@ -250,7 +258,7 @@ impl BlobVec {
         if let Some(c_fn) = clone_fn {
             c_fn(src, dst_start, count);
         } else {
-            // fallback
+            // Plain bytes, as in `push_cloned_batch`.
             let size = self.item_layout.size();
             let mut current_dst = dst_start;
             for _ in 0..count {

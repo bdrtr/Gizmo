@@ -50,9 +50,13 @@ pub enum StorageType {
 /// [`impl_component!`](crate::impl_component). Implementing it is the only registration a type
 /// needs — the world records a component's runtime metadata the first time it sees the type.
 ///
-/// The supertraits are load-bearing rather than decorative. `'static` because a component's
-/// identity everywhere in the ECS is its `TypeId`, so two distinct components can never share
-/// a type and a component can never borrow. `Send + Sync` because component storage is shared
+/// A component with no Rust type — one a script or a mod defines while the program runs — does not
+/// implement this trait; it is described by a [`ComponentDescriptor`](crate::dynamic::ComponentDescriptor)
+/// and stored, queried and scheduled alongside the types that do (see [`crate::dynamic`]).
+///
+/// The supertraits are load-bearing rather than decorative. `'static` because a type's identity
+/// everywhere in the ECS is its `TypeId` (inside a [`ComponentKey`](crate::component_key::ComponentKey)),
+/// so two distinct components can never share a type and a component can never borrow. `Send + Sync` because component storage is shared
 /// across worker threads by parallel query iteration. `Clone` because the storage layer records
 /// a clone thunk for every component type at registration; that thunk is what entity cloning
 /// (prefab splicing) uses, and a type that cannot clone cannot be a component.

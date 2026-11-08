@@ -80,6 +80,33 @@ fn test_query_new_with_valid_types() {
     let _q = world.query_mut::<(&mut Position, &mut Velocity)>();
 }
 
+/// **An overwrite is a change, not an add — in both storages.** Inserting over a value an entity
+/// already has fires `on_set` and `on_replace` and never `on_add`, and `Added<T>` has to agree; a
+/// table overwrite stamped `added` too until 2026-11-08, while a sparse one did not, so whether a
+/// re-insert counted as an add depended on where the component was stored.
+#[test]
+fn an_overwrite_is_changed_and_not_added_in_both_storages() {
+    #[derive(Clone)]
+    struct Sparse;
+    impl crate::component::Component for Sparse {
+        fn storage_type() -> crate::component::StorageType {
+            crate::component::StorageType::SparseSet
+        }
+    }
+    let mut world = crate::World::new();
+    let e = world.spawn();
+    world.add_component(e, Position { x: 1.0, y: 0.0 });
+    world.add_component(e, Sparse);
+    let prev = world.tick;
+    world.begin_change_frame(prev);
+    world.add_component(e, Position { x: 2.0, y: 0.0 });
+    world.add_component(e, Sparse);
+    assert_eq!(world.query_filtered::<(), Changed<Position>>().iter().count(), 1);
+    assert_eq!(world.query_filtered::<(), Changed<Sparse>>().iter().count(), 1);
+    assert_eq!(world.query_filtered::<(), Added<Position>>().iter().count(), 0, "table");
+    assert_eq!(world.query_filtered::<(), Added<Sparse>>().iter().count(), 0, "sparse");
+}
+
 /// `Changed<T>`/`Added<T>` now work relative to the reference tick (the last run),
 /// not `== current_tick`. Correct reporting across frames is verified.
 #[test]

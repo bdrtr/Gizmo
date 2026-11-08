@@ -391,17 +391,28 @@ impl ComponentSparseSet {
     }
 
     /// Deep-clone the component stored for `src` into `dst` (both entity ids),
-    /// using the component's `clone_fn`. Returns `false` if `src` has no entry or
-    /// the component is not `Clone`. Used by `World::clone_entity` (prefab splice),
+    /// using the component's `clone_fn`, or a copy of its bytes when it has none and nothing to
+    /// drop. Returns `false` if `src` has no entry or the component cannot be cloned
+    /// ([`ComponentInfo::is_cloneable`]). Used by `World::clone_entity` (prefab splice),
     /// which otherwise only clones archetype (table) columns.
     pub fn clone_entry(&mut self, src: u32, dst: u32, tick: u32) -> bool {
-        let Some(clone_fn) = self.info.clone_fn else {
+        if !self.info.is_cloneable() {
             return false;
-        };
+        }
         let Some(src_ptr) = self.get_ptr(src) else {
             return false;
         };
         let layout = self.info.layout;
+        let clone_fn = self.info.clone_fn;
+        // SAFETY: called below with `src_ptr`, a live value of this component, and a destination
+        // with room for one. With no clone glue the component has no drop glue either
+        // (`is_cloneable`), so its bytes are all there is to it and a copy is a clone.
+        let clone_one = |src: *const u8, dst: *mut u8| unsafe {
+            match clone_fn {
+                Some(clone) => clone(src, dst, 1),
+                None => std::ptr::copy_nonoverlapping(src, dst, layout.size()),
+            }
+        };
         // Clone src into a temp buffer, then hand it to `insert`, which memcpys
         // the bytes and takes ownership — so the buffer is freed WITHOUT dropping
         // the moved-out value (mirrors the mem::forget-after-raw-insert pattern).
@@ -427,14 +438,14 @@ impl ComponentSparseSet {
                 // undefined behaviour on the ordinary `clone_entry` path (pools and prefab
                 // instantiation reach it). Same root as `BlobVec`'s base pointer; see there.
                 let z = crate::archetype::blob::dangling_for(layout).as_ptr();
-                clone_fn(src_ptr, z, 1);
+                clone_one(src_ptr, z);
                 self.insert(dst, z, tick);
             } else {
                 let tmp = std::alloc::alloc(layout);
                 if tmp.is_null() {
                     std::alloc::handle_alloc_error(layout);
                 }
-                clone_fn(src_ptr, tmp, 1);
+                clone_one(src_ptr, tmp);
                 self.insert(dst, tmp, tick);
                 std::alloc::dealloc(tmp, layout);
             }

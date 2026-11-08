@@ -21,6 +21,7 @@ mod query;
 mod registration;
 pub mod resources;
 
+pub use self::entity_lifecycle::CloneEntityError;
 pub use self::hooks::*;
 pub use self::introspect::{short_type_name, ArchetypeSummary, ComponentSummary, WorldStats};
 pub use self::resources::*;
@@ -56,6 +57,9 @@ pub struct World {
 
     /// The runtime component metadata cache. It is required in order to create archetype columns.
     component_infos: HashMap<ComponentKey, ComponentInfo>,
+    /// The components defined at runtime, by name: `World::register_component` adds to it,
+    /// `World::component_key_by_name` reads it, and its length is the next one's id.
+    dynamic_components: HashMap<&'static str, ComponentKey>,
 
     pub(crate) component_hooks: HashMap<ComponentKey, ComponentHooks>,
     pub(crate) sparse_sets: HashMap<ComponentKey, crate::archetype::sparse_set::ComponentSparseSet>,
@@ -145,6 +149,7 @@ impl World {
             entity_locations: Vec::new(),
             archetype_index: ArchetypeIndex::new(),
             component_infos: HashMap::new(),
+            dynamic_components: HashMap::new(),
             component_hooks: HashMap::new(),
             sparse_sets: HashMap::new(),
             despawn_hooks: Vec::new(),

@@ -26,7 +26,8 @@ capabilities in section A.
 **Section A as of 2026-11-02:** sprites (A1), text (A2), extrusion (A4), reflection probes (A5),
 split screen (A5b), area lights / cookies / soft and contact shadows (A7) and motion blur (A7c) are
 closed, occlusion culling (A7b) since 2026-11-05. Open: user shaders stay forward-only (A3), MSAA is
-declined by decision (A6), and the ECS items of A8. Planar reflections (A7d) closed 2026-11-06. The
+declined by decision (A6), and two of A8's three (a render world, system hot-patching; runtime
+component definition closed 2026-11-08). Planar reflections (A7d) closed 2026-11-06. The
 2026-08-22 counts above are that day's inventory and were not re-run.
 
 ---
@@ -829,16 +830,21 @@ bound back onto a material (same `pub(crate)` wall as C1). What remains is SSR, 
 contributes +7.91 of red−blue to it while on screen and **exactly nothing** once it moves behind
 the camera. Showing what the camera cannot see is the case a mirror exists for.
 
-### A8. No render-world extraction, no runtime component definition, no system hot-patching
+### A8. No render-world extraction, no system hot-patching (runtime components closed 2026-11-08)
 
 Measured in `ecs_absent_apis`:
 
 - **No second world.** Rendering reads game components directly (measured: `set_render` sees 4
   live components with no extraction step). Cheaper and simpler; the cost is that render cannot
   run in parallel with game logic.
-- **Component registration is typed.** `register_component_type::<T>()` only — the registered-type
-  count moves `0 → 1 → 2` through typed registration alone. Raw access exists
-  (`get_component_ptr` + `TypeId` read `Some(100)`), so *access* is dynamic but *definition* is not.
+- ~~**Component registration is typed.**~~ **Closed 2026-11-08:** `World::register_component(ComponentDescriptor::new(name,
+  layout))` defines a component with no Rust type — drop and clone glue optional (`unsafe` `with_drop` / `with_clone`), table or
+  sparse, mutable or not — and returns a `ComponentKey`, which is what storage, queries, hooks and the scheduler are keyed by for
+  types too. `insert_by_key` / `remove_by_key` are `add_component` / `remove_component`'s own path; `DynamicQuery` reads and
+  writes by key with `with`, `without`, `changed` and `added`; `DynamicSystem` runs one in a schedule with its access declared, so a
+  dynamic write of `T` and a typed `Query<&mut T>` never share a batch (`tests/dynamic_components.rs`). `clone_entity` refuses an
+  entity carrying a component with drop glue and no clone glue, and says which. A scene or snapshot saves what a type registration
+  can serialise, so a runtime component is not saved; the snapshot counts it as dropped and says so.
 - ~~**No immutable components.**~~ **Closed 2026-11-07:** `impl_component!(T; immutable)`, and `&mut T` in a query is
   a compile error.
 - **No system hot-patching.** Shaders *are* hot-reloadable (`demo/assets/shaders/*.wgsl`); Rust

@@ -18,6 +18,49 @@ impl World {
             .or_insert_with(ComponentInfo::of::<T>);
     }
 
+    /// Defines a component that has no Rust type, and returns the key it is stored, queried and
+    /// scheduled by. See [`crate::dynamic`] for what follows.
+    ///
+    /// The key belongs to this world: another world that registers the same name gets its own.
+    ///
+    /// # Errors
+    /// [`NameTaken`](crate::dynamic::DynamicComponentError::NameTaken), with the existing key, if a
+    /// component defined at runtime already has `descriptor`'s name in this world.
+    pub fn register_component(
+        &mut self,
+        descriptor: crate::dynamic::ComponentDescriptor,
+    ) -> Result<ComponentKey, crate::dynamic::DynamicComponentError> {
+        if let Some(&existing) = self.dynamic_components.get(descriptor.name()) {
+            return Err(crate::dynamic::DynamicComponentError::NameTaken(existing));
+        }
+        let index = u32::try_from(self.dynamic_components.len()).expect("fewer than 2^32 runtime components");
+        let key = ComponentKey::from_dynamic(crate::component_key::DynamicComponentId(index));
+        let info = descriptor.into_info(key);
+        self.dynamic_components.insert(info.type_name, key);
+        self.component_infos.insert(key, info);
+        Ok(key)
+    }
+
+    /// The key of the component defined at runtime under `name`, if this world has one. Types are not
+    /// found by name — their key is `ComponentKey::of::<T>()`.
+    #[must_use]
+    pub fn component_key_by_name(&self, name: &str) -> Option<ComponentKey> {
+        self.dynamic_components.get(name).copied()
+    }
+
+    /// What this world knows about the component `key`: its layout, storage, glue and name. `None` for
+    /// one it has not registered.
+    #[must_use]
+    pub fn component_info(&self, key: impl Into<ComponentKey>) -> Option<&ComponentInfo> {
+        self.component_infos.get(&key.into())
+    }
+
+    /// The hook lists of the component `key`, to push onto: what `register_on_add::<T>` and its siblings
+    /// do, for a component named by key — one defined at runtime has no `T` to name.
+    pub fn component_hooks_mut(&mut self, key: impl Into<ComponentKey>) -> &mut crate::world::ComponentHooks {
+        self.component_hooks.entry(key.into()).or_default()
+    }
+
     /// Registers a lifecycle observer for `T`, on the phase named by the closure's own
     /// `On<E, T>` — [`Insert`](crate::observer::Insert),
     /// [`Replace`](crate::observer::Replace) or [`Remove`](crate::observer::Remove).

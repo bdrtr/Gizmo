@@ -627,35 +627,89 @@ impl World {
     /// If the target archetype turns out to lack `T`'s column, which would mean the
     /// archetype index and the component metadata registry have diverged.
     pub fn add_component<T: Component>(&mut self, entity: Entity, component: T) {
-        if !self.is_alive(entity) { return; }
-        let eid = entity.id();
-        self.register_component_type::<T>();
-        let type_id = ComponentKey::of::<T>();
+        if !self.is_alive(entity) {
+            return;
+        }
+        let info = *self.component_infos.entry(ComponentKey::of::<T>()).or_insert_with(ComponentInfo::of::<T>);
+        // OWNERSHIP IS RELINQUISHED BEFORE THE CALL, not after it. `insert_raw` may run a `Drop`
+        // of the value this one replaces, and a panic out of it unwinds straight out of this
+        // function — a `mem::forget` on the line after the call would never run, leaving this
+        // frame to drop a value the world already owns. `ManuallyDrop` cannot get that wrong:
+        // nothing here drops `component` on any path.
+        let mut component = std::mem::ManuallyDrop::new(component);
+        // SAFETY: `entity` is alive and `info` is `T`'s own, registered just above; `component` is a
+        // live, aligned `T` in this frame, given up by the `ManuallyDrop`, and nothing reads it after
+        // the call — on an overwrite it comes back holding the replaced value, already dropped.
+        unsafe { self.insert_raw(entity, info, (&raw mut *component).cast()) };
+    }
 
-        if T::storage_type() == crate::component::StorageType::SparseSet {
-            let info = self.component_infos.get(&type_id).copied().unwrap_or_else(|| ComponentInfo::of::<T>());
-            let set = self.sparse_sets.entry(type_id).or_insert_with(|| {
-                crate::archetype::sparse_set::ComponentSparseSet::new(info)
-            });
+    /// Inserts the value at `src` as `entity`'s component `key`: [`add_component`](Self::add_component)
+    /// for a component named by key, which is the only way to give an entity a component defined at
+    /// runtime (see [`crate::dynamic`]).
+    ///
+    /// Everything `add_component` documents holds — a value already there is replaced and dropped,
+    /// the same hooks fire, and an entity reserved but not yet flushed drops a table component — and
+    /// it is one path: `add_component` is this with the key of `T`.
+    ///
+    /// # Errors
+    /// [`NoSuchEntity`](crate::dynamic::DynamicComponentError::NoSuchEntity) if `entity` is not alive,
+    /// [`NotRegistered`](crate::dynamic::DynamicComponentError::NotRegistered) if this world does not
+    /// know `key`. Nothing has been read then, and the value is still the caller's.
+    ///
+    /// # Safety
+    /// - `src` points to a valid value of `key`'s component, aligned to its layout: a `T` for the key
+    ///   of `T`; for a component defined at runtime, a value its drop and clone glue accept — any
+    ///   bytes, for one with neither.
+    /// - On `Ok` the value is the world's. The caller must not use or drop it again and must treat
+    ///   `src` as uninitialised: an overwrite hands the replaced value back through it, already
+    ///   dropped. So `src` must be writable, and must not point into the world's own storage.
+    pub unsafe fn insert_by_key(
+        &mut self,
+        entity: Entity,
+        key: impl Into<ComponentKey>,
+        src: *mut u8,
+    ) -> Result<(), crate::dynamic::DynamicComponentError> {
+        let key = key.into();
+        if !self.is_alive(entity) {
+            return Err(crate::dynamic::DynamicComponentError::NoSuchEntity(entity));
+        }
+        let info = *self
+            .component_infos
+            .get(&key)
+            .ok_or(crate::dynamic::DynamicComponentError::NotRegistered(key))?;
+        // SAFETY: alive and registered, checked above; `src` is the caller's contract.
+        unsafe { self.insert_raw(entity, info, src) };
+        Ok(())
+    }
+
+    /// The one single-component insert, typed or not.
+    ///
+    /// # Safety
+    /// - `entity` is alive, and `info` is registered in this world under `info.key`.
+    /// - `src` points to a valid, aligned value of `info`'s component, writable and outside the world's
+    ///   storage, which this function owns from entry on every path, an unwind included: the caller
+    ///   has already given it up. On an overwrite the replaced value is swapped into `src` and dropped
+    ///   there.
+    unsafe fn insert_raw(&mut self, entity: Entity, info: ComponentInfo, src: *mut u8) {
+        let eid = entity.id();
+        let key = info.key;
+
+        if info.storage_type == crate::component::StorageType::SparseSet {
+            let set = self
+                .sparse_sets
+                .entry(key)
+                .or_insert_with(|| crate::archetype::sparse_set::ComponentSparseSet::new(info));
             // Overwrite vs. new insert: fire on_add ONLY when the entity did not already
             // have the component, matching the Table-storage path below (overwrite → on_set
             // only). Previously SparseSet unconditionally fired on_add, so re-adding a
             // SparseSet component double-fired Insert observers — storage-dependent behavior.
             let existed = set.contains(eid);
-            // OWNERSHIP IS RELINQUISHED BEFORE THE CALL, not after it. `insert`'s overwrite
-            // branch copies these bytes into the set before it drops the value they replace, so
-            // a panic out of that `Drop` unwinds straight out of `add_component` — and a
-            // `mem::forget` sitting on the line after the call would never run, leaving this
-            // frame to drop a value the set already owns. `ManuallyDrop` is the form that cannot
-            // get that wrong: nothing here drops `component` on any path.
-            let component = std::mem::ManuallyDrop::new(component);
-            let ptr = &*component as *const T as *const u8;
-            // SAFETY: `ptr` points at a live `T`, whose layout is exactly the set's `info.layout`
-            // (the set was created from `T`'s own `ComponentInfo`), and it is a stack local
-            // rather than a pointer into `dense`. Ownership passes to the set here.
-            unsafe { set.insert(eid, ptr, self.tick); }
+            // SAFETY: `src` is a value of the set's component — the set was created from this same
+            // registered `info` — and the caller's, not a pointer into `dense`. Ownership passes to
+            // the set on entry, which `insert` requires and this function's contract gives.
+            unsafe { set.insert(eid, src, self.tick) };
 
-            self.run_hooks(type_id, |h, w| {
+            self.run_hooks(key, |h, w| {
                 if !existed {
                     for hook in &mut h.on_add { hook(w, entity); }
                 }
@@ -670,49 +724,44 @@ impl World {
             return;
         }
 
-        // Original logic follows but skip register and eid assignments
-
-
-
         // 1. Hedef archetype'ı belirle
-        let target_arch_id =
-            match self
-                .archetype_index
-                .get_add_component_target(eid, type_id, &self.component_infos)
-            {
-                Some(id) => id,
-                None => return,
-            };
+        let Some(target_arch_id) = self.archetype_index.get_add_component_target(eid, key, &self.component_infos)
+        else {
+            // Reserved but never flushed: no row to put it in. The value is ours, so it is dropped
+            // — what `add_component` did when this was a typed local going out of scope.
+            if let Some(drop) = info.drop_fn {
+                // SAFETY: a live value of this component, owned here and never used again.
+                unsafe { drop(src) };
+            }
+            return;
+        };
         let old_loc = self.entity_locations[eid as usize];
 
         if old_loc.archetype_id == target_arch_id as u32 {
             // Zaten bu archetype'ta (aynı tip tekrar eklenmiş olabilir) — sadece üzerine yaz
-            let old = {
+            {
                 let arch = &self.archetype_index.archetypes[target_arch_id];
-                // SAFETY: query/scheduler bu archetype sütununa ayrık erişimi garanti eder.
-                let col = unsafe { arch.get_column_mut(type_id) }
+                // SAFETY: `&mut self`; the only view of this column for the two calls below.
+                let col = unsafe { arch.get_column_mut(key) }
                     .expect("component column missing in current archetype");
-                // The old value comes back UNDROPPED and is dropped below, after the slot holds
-                // the new value AND the tick is stamped. `*ptr = component` was already safe in
-                // the first respect — rustc lowers an assignment to move-out/write/drop, which
-                // was measured rather than assumed — but the stamp was the statement after it,
-                // so a component whose `Drop` panicked left the row holding the new value under
-                // the old timestamp, which no tick filter would ever report again.
+                // The old value comes back UNDROPPED, in `src`, and is dropped below, after the slot
+                // holds the new value AND the tick is stamped — so a component whose `Drop` panics
+                // leaves the row whole and reported. See `Column::replace_raw`.
                 //
-                // SAFETY: `type_id` is `T`'s, so the column's component type is `T`, and
-                // `old_loc.row` is the entity's live row in it.
-                unsafe { col.replace_typed::<T>(old_loc.row as usize, component, self.tick) }
-            };
+                // SAFETY: `old_loc.row` is the entity's live row in this column, and `src` a value of
+                // its component outside it.
+                unsafe { col.replace_raw(old_loc.row as usize, src, self.tick) };
+            }
             // Before `run_hooks`, deliberately: `ReplaceHook` documents the old value as already
             // dropped by the time a hook sees the entity.
-            drop(old);
+            if let Some(drop) = info.drop_fn {
+                // SAFETY: `src` holds the replaced value, live, and nothing else owns it now.
+                unsafe { drop(src) };
+            }
             // An overwrite: `on_set` for every write, then `on_replace` for the half of
             // them that had something to replace. `on_add` is deliberately absent — that is
             // what makes the two lists a partition rather than an overlap.
-            //
-            // This used to hand-roll `run_hooks`'s take-and-merge-back, which is how a
-            // fourth hook list becomes a silent bug: the copy would have kept merging three.
-            self.run_hooks(type_id, |h, w| {
+            self.run_hooks(key, |h, w| {
                 for hook in &mut h.on_set {
                     hook(w, entity);
                 }
@@ -724,11 +773,7 @@ impl World {
         }
 
         // 2. Migration: Verileri eski archetype'tan hedef archetype'a taşı
-        let (eid, old_arch_id, old_row) = (
-            entity.id(),
-            old_loc.archetype_id as usize,
-            old_loc.row as usize,
-        );
+        let (old_arch_id, old_row) = (old_loc.archetype_id as usize, old_loc.row as usize);
         tracing::trace!(
             entity = eid,
             from = old_arch_id,
@@ -765,14 +810,13 @@ impl World {
         {
             let arch = &self.archetype_index.archetypes[target_arch_id];
             // SAFETY: yeni satır bu archetype'a az önce ayrıldı; sütuna tekil erişim.
-            let col = unsafe { arch.get_column_mut(type_id) }
+            let col = unsafe { arch.get_column_mut(key) }
                 .expect("Mandatory component column missing");
-            // SAFETY: `type_id` is `T`'s and `new_row` was just allocated in this archetype, so
-            // the slot is uninitialised — `ptr::write` (not assignment) is the right one here,
-            // because there is no old value to drop.
+            // SAFETY: `new_row` was just allocated in this archetype, so the slot is uninitialised —
+            // a copy (not a swap) is the right one here, because there is no old value to drop. The
+            // column's items are `info.layout.size()` bytes, and `src` is one of them.
             unsafe {
-                let ptr = col.get_ptr(new_row as usize) as *mut T;
-                std::ptr::write(ptr, component);
+                std::ptr::copy_nonoverlapping(src, col.get_mut_ptr(new_row as usize), info.layout.size());
                 col.ticks_ptr_mut()
                     .add(new_row as usize)
                     .write(crate::archetype::ComponentTicks::new(self.tick));
@@ -789,9 +833,8 @@ impl World {
             .insert(eid, target_arch_id);
 
         // A genuinely new insert — the entity migrated to a different archetype to get here,
-        // so there was no old value and `on_replace` must stay silent. The other
-        // hand-rolled copy of `run_hooks` in this file, for the same reason as the first.
-        self.run_hooks(type_id, |h, w| {
+        // so there was no old value and `on_replace` must stay silent.
+        self.run_hooks(key, |h, w| {
             for hook in &mut h.on_add {
                 hook(w, entity);
             }
@@ -879,21 +922,33 @@ impl World {
         Some(unsafe { col.get_mut_ptr(loc.row as usize) })
     }
 
-    /// Deleting a component from the system
+    /// Removes `entity`'s `T` and drops it, running `T`'s `on_remove` hooks. Nothing happens if the
+    /// entity is dead or has no `T`.
     pub fn remove_component<T: Component>(&mut self, entity: Entity) {
-        if !self.is_alive(entity) { return; }
-        let eid = entity.id();
-        let type_id = ComponentKey::of::<T>();
+        self.remove_by_key(entity, ComponentKey::of::<T>());
+    }
 
-        if T::storage_type() == crate::component::StorageType::SparseSet {
-            if let Some(set) = self.sparse_sets.get_mut(&type_id) {
-                if set.remove(eid) {
-                    self.run_hooks(type_id, |h, w| {
-                        for hook in &mut h.on_remove { hook(w, entity); }
-                    });
-                }
+    /// Removes `entity`'s component `key` and drops it: [`remove_component`](Self::remove_component)
+    /// for a component named by key, and the same path. `true` if there was one to remove.
+    pub fn remove_by_key(&mut self, entity: Entity, key: impl Into<ComponentKey>) -> bool {
+        let type_id = key.into();
+        if !self.is_alive(entity) {
+            return false;
+        }
+        let eid = entity.id();
+        // Never registered, never stored.
+        let Some(info) = self.component_infos.get(&type_id) else {
+            return false;
+        };
+
+        if info.storage_type == crate::component::StorageType::SparseSet {
+            let removed = self.sparse_sets.get_mut(&type_id).is_some_and(|set| set.remove(eid));
+            if removed {
+                self.run_hooks(type_id, |h, w| {
+                    for hook in &mut h.on_remove { hook(w, entity); }
+                });
             }
-            return;
+            return removed;
         }
 
 
@@ -912,11 +967,11 @@ impl World {
                 .get_remove_component_target(eid, type_id, &self.component_infos);
         let target_arch_id = match target_arch_id_opt {
             Some(id) => id,
-            None => return, // Zaten yok, ya da entity'nin hiç satırı yok
+            None => return false, // Zaten yok, ya da entity'nin hiç satırı yok
         };
 
         if old_loc.archetype_id == target_arch_id as u32 {
-            return; // Zaten yok
+            return false; // Zaten yok
         }
 
         tracing::trace!(
@@ -986,6 +1041,7 @@ impl World {
                 hook(w, entity);
             }
         });
+        true
     }
 
     /// Batch component insertion. It reduces the O(N) archetype lookup cost to O(1).
@@ -2051,9 +2107,10 @@ mod tests {
         );
         // THE HALF THAT WAS ACTUALLY BROKEN. The stamp used to be the statement after the
         // assignment, so the panic skipped it and the row kept tick 3 while holding "new".
+        // `added` stays 3: an overwrite is a change, not an add (`Column::replace_raw`).
         assert_eq!(
             tick_of::<Loud>(&world, e),
-            (7, 7),
+            (3, 7),
             "the row must be stamped before the old value's `Drop` can unwind past the stamp"
         );
 
@@ -2130,8 +2187,9 @@ mod tests {
         assert_eq!(read(&world, c).as_deref(), Some("c"), "never reached");
         assert_eq!(
             tick_of::<Batched>(&world, b),
-            (7, 7),
-            "the victim's row is stamped before its old value's `Drop` can unwind past the stamp"
+            (3, 7),
+            "the victim's row is stamped changed (not added — it was an overwrite) before its old \
+             value's `Drop` can unwind past the stamp"
         );
         assert_eq!(tick_of::<Batched>(&world, c), (3, 3), "never reached, so never restamped");
 

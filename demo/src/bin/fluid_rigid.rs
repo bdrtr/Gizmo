@@ -97,7 +97,7 @@ fn main() {
                 gizmo::renderer::components::FluidHandle { gpu_index: 0 },
             );
 
-            if let Some(clones) = world.clone_entity(template.id(), 100_000 - 1) {
+            if let Ok(clones) = world.clone_entity(template.id(), 100_000 - 1) {
                 let mut handles = world.query_mut::<&mut gizmo::renderer::components::FluidHandle>();
                 for (i, clone_ent) in clones.into_iter().enumerate() {
                     if let Some(mut h) = handles.get_mut(clone_ent) {

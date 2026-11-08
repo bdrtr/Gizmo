@@ -193,8 +193,13 @@ impl SceneSnapshot {
             // RigidBody, Collider…) sessizce kaybolurdu.
             let entity = ent;
             let types = world.entity_component_types(entity);
-            // A component defined at runtime has no Rust type, so no registration to serialise it with.
-            for type_id in types.into_iter().filter_map(|key| key.type_id()) {
+            for key in types {
+                // A component defined at runtime has no Rust type, so no registration to serialise it
+                // with: Play → Stop does not restore it, and the warning below counts it.
+                let Some(type_id) = key.type_id() else {
+                    dropped_components += 1;
+                    continue;
+                };
                 if let Some(reg) = registry.get_registration(type_id) {
                     if let Some(ptr) = world.get_component_ptr(entity, type_id) {
                         match crate::serde_bridge::serialize_component(registry, reg, type_id, ptr) {

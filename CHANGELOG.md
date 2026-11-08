@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Components defined while the program runs.** `World::register_component(ComponentDescriptor::new("Health", layout))` returns a
+  `ComponentKey`; `insert_by_key` / `remove_by_key` put a value on an entity and take it off, through the same path
+  `add_component` / `remove_component` take; `DynamicQuery::builder().read(a).write(b).without(c).changed(d)` iterates by key, types
+  and runtime components mixed; `DynamicSystem` runs queries in a schedule with their access declared. Drop and clone glue, sparse
+  storage and immutability are the descriptor's to choose, and hooks reach one through `World::component_hooks_mut(key)`.
+  **Breaking:** `World::clone_entity` returns `Result<Vec<Entity>, CloneEntityError>` — it refuses an entity carrying a component
+  that owns something and cannot be cloned, and says which; `ComponentInfo::of_type_id`, which made up a zero-sized info for a
+  type it did not know, is gone, and `ComponentInfo` has a `mutable` field.
+
 - **Latin lies on its side in a column.** `Text::in_columns` sets Han, kana and Hangul standing and everything else a quarter turn
   clockwise, as CSS's `text-orientation: mixed` does, on the screen and in the world. `.upright()` stands everything, which is what
   columns did until now. **Looks change** for Latin in a column.
@@ -146,6 +155,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the crate, since nobody could implement it; `system_param!` still needs no `unsafe`.
 
 ### Fixed
+
+- **Inserting over a table component counted as adding it.** An overwrite fires `on_set` and `on_replace` and never `on_add`, but a
+  table column stamped both ticks, so `Added<T>` reported the entity again — a sparse component's overwrite did not, so a re-insert
+  was an add or not depending on where the component lived. Only `changed` is stamped now, in both.
 
 - **`Changed<Children>` missed a second child, and a dead entity's handle read its successor.** `World::get_component_mut_ptr`
   stamped no change tick, so a write through it (the hierarchy, relationships, the inspector, scenes) was invisible to `Changed<T>`;

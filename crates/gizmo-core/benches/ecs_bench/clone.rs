@@ -43,12 +43,12 @@ fn bench_clone(
     let eid = id.id();
 
     b.iter(|| {
-        world.clone_entity(eid, 1);
+        world.clone_entity(eid, 1).expect("the source is alive and cloneable");
     });
 }
 
 fn clone_hierarchy_recursive(world: &mut World, source_id: u32) -> Option<gizmo_core::entity::Entity> {
-    let cloned_entities = world.clone_entity(source_id, 1)?;
+    let cloned_entities = world.clone_entity(source_id, 1).ok()?;
     let cloned_parent = cloned_entities[0];
 
     let mut children_to_clone = Vec::new();

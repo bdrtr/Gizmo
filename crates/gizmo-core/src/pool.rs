@@ -188,7 +188,13 @@ impl PoolManager {
             return None;
         }
         // `clone_entity` fonksiyonumuz O(1) prefab kopyalama desteği sunuyor
-        let new_entities = world.clone_entity(pool.prefab.id(), 1)?;
+        let new_entities = match world.clone_entity(pool.prefab.id(), 1) {
+            Ok(entities) => entities,
+            Err(error) => {
+                tracing::warn!(pool = name, %error, "PoolManager::instantiate: the prefab cannot be cloned");
+                return None;
+            }
+        };
         let new_ent = new_entities[0];
         // Prefab Pooled olarak işaretlenmiş olabilir (register_pool_hidden),
         // klonlanan entity'den Pooled tag'ını kaldır ki aktif olarak doğsun.

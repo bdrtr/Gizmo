@@ -4,6 +4,28 @@ use crate::archetype::EntityLocation;
 use crate::entity::Entity;
 
 
+/// Why [`World::clone_entity`] made nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CloneEntityError {
+    /// The source id has no row: despawned, never spawned, or reserved and not yet flushed.
+    NoSuchEntity(u32),
+    /// The source carries this component, defined at runtime with drop glue and no clone glue — a
+    /// copy of its bytes would be a second owner of what it owns.
+    NotCloneable(ComponentKey),
+}
+
+impl std::fmt::Display for CloneEntityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoSuchEntity(id) => write!(f, "entity {id} has no row to clone"),
+            Self::NotCloneable(key) => write!(f, "{key:?} has drop glue and no clone glue, so it cannot be cloned"),
+        }
+    }
+}
+
+impl std::error::Error for CloneEntityError {}
+
 impl World {
     /// Allocates an entity id and materialises it immediately, so the returned handle is
     /// usable for `add_component` on the very next line.
@@ -135,27 +157,34 @@ impl World {
 
     /// The deep-copy (O(1) Prefab Splicing) operation.
     /// Produces N new copies of an existing Entity, fully contiguous, in the archetype table it is in.
+    ///
+    /// # Errors
+    /// [`CloneEntityError::NoSuchEntity`] if `source_id` has no row (despawned, never spawned, or
+    /// reserved and not yet flushed); [`CloneEntityError::NotCloneable`] if it carries a component
+    /// defined at runtime with drop glue and none to clone with. Nothing is made in either case.
     #[tracing::instrument(skip_all, name = "clone_entity")]
-    pub fn clone_entity(&mut self, source_id: u32, count: usize) -> Option<Vec<Entity>> {
-        if count == 0 {
-            return Some(Vec::new());
-        }
-
-        // Kaynak entity'nin geçerli bir konumu yoksa (silinmiş/hiç var olmamış) klonlama
-        // sessizce None döndürürdü; artık neden başarısız olduğu loglanıyor.
+    pub fn clone_entity(&mut self, source_id: u32, count: usize) -> Result<Vec<Entity>, CloneEntityError> {
         let loc = match self.entity_locations.get(source_id as usize).copied() {
             Some(l) if l.is_valid() => l,
-            _ => {
-                tracing::debug!(
-                    source = source_id,
-                    "clone_entity: source has no valid location; nothing cloned"
-                );
-                return None;
-            }
+            _ => return Err(CloneEntityError::NoSuchEntity(source_id)),
         };
 
         let arch_id = loc.archetype_id as usize;
         let row = loc.row as usize;
+
+        // Before anything is reserved: a copy of the bytes of a value that owns something would be
+        // two owners, so an uncloneable component refuses the whole clone.
+        let uncloneable = self.archetype_index.archetypes[arch_id]
+            .component_types()
+            .into_iter()
+            .chain(self.sparse_sets.iter().filter(|(_, set)| set.contains(source_id)).map(|(&key, _)| key))
+            .find(|key| self.component_infos.get(key).is_some_and(|info| !info.is_cloneable()));
+        if let Some(key) = uncloneable {
+            return Err(CloneEntityError::NotCloneable(key));
+        }
+        if count == 0 {
+            return Ok(Vec::new());
+        }
 
         // Kilitlenmeleri engellemek için önce ID'leri üretelim
         let mut new_entities = Vec::with_capacity(count);
@@ -217,7 +246,7 @@ impl World {
         );
         // A clone is a first write of everything it carries, and an index kept by hooks has to hear of it.
         if !self.component_hooks.is_empty() {
-            let mut heard: Vec<ComponentKey> = self.archetype_index.archetypes[arch_id as usize]
+            let mut heard: Vec<ComponentKey> = self.archetype_index.archetypes[arch_id]
                 .sorted_component_types()
                 .iter()
                 .copied()
@@ -235,7 +264,7 @@ impl World {
                 }
             }
         }
-        Some(new_entities)
+        Ok(new_entities)
     }
 
     /// Spawns one entity per bundle and yields their handles in input order.

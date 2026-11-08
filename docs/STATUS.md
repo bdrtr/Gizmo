@@ -42,7 +42,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
 - **Rendering:** planar mirrors and reflecting water are `PlanarReflection`, one extra scene draw each
   and sharp apart from the waves (§A7d); reflection probes — up to four, box parallax, blended, transparent surfaces
   included on native (§A5) — no MSAA — by decision, TAA +
-  FXAA (four quality presets) + CAS sharpening instead (§A6) — no SMAA, area lights
+  FXAA (four quality presets) or SMAA 1x, + CAS sharpening instead (§A6), area lights
   are sphere, tube and rectangle, and spot lights take cookies (§A7: `source_radius` /
   `source_length` / `RectLight` / `SpotLight::cookie`, cookies native-only. Soft sun shadows and
   contact shadows are `DirectionalLight::angular_radius` / `contact_shadow_length`), occlusion culling is opt-in (`Occluder`, §A7b), motion blur
@@ -51,7 +51,9 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   split-screen game through its primary camera. Transparent materials blend by
   `Material::blend_mode` — alpha, additive, multiply, premultiplied (§B).
 - **Text:** in vertical text Latin lies on its side (`.upright()` stands it); `Renderer::load_system_font` finds the machine's font (`GIZMO_FONT`, then the platform's usual faces); the one font the engine carries is Noto Sans (OFL 1.1) behind the default-off `bundled-font` feature, for the browser, which lends none; and `add_font_fallback` chains faces per character (§A2).
-- **Extensibility:** composites and named query terms go through `system_param!` and `query_data!`; a primitive parameter or query term cannot be written downstream (§C0).
+- **Extensibility:** composites and named query terms go through `system_param!` and `query_data!`; a primitive parameter is an
+  `unsafe impl SystemParam`, a primitive query term cannot be written downstream yet (§C0). Components can be defined at runtime
+  (`World::register_component`, `DynamicQuery`, `DynamicSystem` — §A8); there is no render world and no system hot-patching.
 - **Editor:** `gizmo-studio` is a separate binary and cannot see a game's types; the in-engine
   editor can.
 
