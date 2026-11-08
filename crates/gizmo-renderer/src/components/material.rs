@@ -230,6 +230,13 @@ pub struct Material {
     /// How far light travels inside the surface, in metres, which is how far the picture behind
     /// it is displaced. 0 = a thin pane, which bends nothing.
     pub thickness: f32,
+    /// The colour white light becomes after [`attenuation_distance`](Self::attenuation_distance) inside
+    /// the material: what a bottle's green or a pool's blue is. Through
+    /// [`thickness`](Self::thickness) the light behind keeps `color ^ (thickness / distance)` of
+    /// itself, a channel at a time. glTF's `KHR_materials_volume`. White by default.
+    pub attenuation_color: gizmo_math::Vec3,
+    /// See [`attenuation_color`](Self::attenuation_color), in metres. 0 = no attenuation, the default.
+    pub attenuation_distance: f32,
 }
 
 /// The smoothest a clear coat gets, and what one that says nothing is. Any smoother and the highlight is
@@ -307,6 +314,16 @@ pub struct MaterialDesc {
     /// See [`Material::thickness`].
     #[serde(default)]
     pub thickness: f32,
+    /// See [`Material::attenuation_color`].
+    #[serde(default = "default_attenuation_color")]
+    pub attenuation_color: gizmo_math::Vec3,
+    /// See [`Material::attenuation_distance`].
+    #[serde(default)]
+    pub attenuation_distance: f32,
+}
+
+fn default_attenuation_color() -> gizmo_math::Vec3 {
+    gizmo_math::Vec3::ONE
 }
 
 fn default_coat_roughness() -> f32 {
@@ -344,6 +361,8 @@ impl From<&Material> for MaterialDesc {
             reflectance,
             transmission,
             thickness,
+            attenuation_color,
+            attenuation_distance,
         } = m;
         Self {
             albedo: *albedo,
@@ -364,6 +383,8 @@ impl From<&Material> for MaterialDesc {
             reflectance: *reflectance,
             transmission: *transmission,
             thickness: *thickness,
+            attenuation_color: *attenuation_color,
+            attenuation_distance: *attenuation_distance,
         }
     }
 }
@@ -392,6 +413,8 @@ impl MaterialDesc {
             reflectance: self.reflectance,
             transmission: self.transmission,
             thickness: self.thickness,
+            attenuation_color: self.attenuation_color,
+            attenuation_distance: self.attenuation_distance,
         }
     }
 }
@@ -421,6 +444,8 @@ impl Default for MaterialDesc {
             reflectance: DIELECTRIC_REFLECTANCE,
             transmission: 0.0,
             thickness: 0.0,
+            attenuation_color: gizmo_math::Vec3::ONE,
+            attenuation_distance: 0.0,
         }
     }
 }
@@ -496,6 +521,28 @@ macro_rules! material_builders {
     pub fn with_thickness(mut self, thickness: f32) -> Self {
         self.thickness = thickness.max(0.0);
         self
+    }
+
+    /// Sets [`Material::attenuation_color`] and [`Material::attenuation_distance`]: the colour white
+    /// light becomes after `distance` metres inside. Each channel clamped into `[0, 1]`, the distance
+    /// floored at zero, where it means none.
+    pub fn with_attenuation(mut self, color: gizmo_math::Vec3, distance: f32) -> Self {
+        self.attenuation_color = color.clamp(gizmo_math::Vec3::ZERO, gizmo_math::Vec3::ONE);
+        self.attenuation_distance = distance.max(0.0);
+        self
+    }
+
+    /// How much of the light behind comes through [`Material::thickness`] of this material, a channel
+    /// at a time: `attenuation_color ^ (thickness / attenuation_distance)`, white with no attenuation or
+    /// no thickness.
+    #[must_use]
+    pub fn volume_transmittance(&self) -> gizmo_math::Vec3 {
+        if self.attenuation_distance <= 0.0 || self.thickness <= 0.0 {
+            return gizmo_math::Vec3::ONE;
+        }
+        let k = self.thickness / self.attenuation_distance;
+        let c = self.attenuation_color;
+        gizmo_math::Vec3::new(c.x.powf(k), c.y.powf(k), c.z.powf(k))
     }
 
     /// Whether the draw loops send this to the glass pass.

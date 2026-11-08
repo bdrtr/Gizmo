@@ -315,6 +315,11 @@ pub(super) fn build_gltf_materials(
             }
             if let Some(v) = material.volume() {
                 mat = mat.with_thickness(v.thickness_factor());
+                // glTF's default distance is infinite: no attenuation, which is this engine's 0.
+                let distance = v.attenuation_distance();
+                if distance.is_finite() {
+                    mat = mat.with_attenuation(gizmo_math::Vec3::from(v.attenuation_color()), distance);
+                }
             }
 
             mat

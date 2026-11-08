@@ -213,6 +213,8 @@ mod tests {
             reflectance: 0.16,
             transmission: 0.5,
             thickness: 0.25,
+            attenuation_color: gizmo_math::Vec3::new(0.2, 0.6, 0.9),
+            attenuation_distance: 0.75,
         };
 
         let text = ron::to_string(&desc).expect("serialize");
@@ -243,6 +245,8 @@ mod tests {
             reflectance: 0.04,
             transmission: 0.0,
             thickness: 0.0,
+            attenuation_color: gizmo_math::Vec3::ONE,
+            attenuation_distance: 0.0,
         };
         let back: MaterialDesc =
             ron::from_str(&ron::to_string(&desc).expect("serialize")).expect("deserialize");

@@ -140,6 +140,9 @@ struct VertexOutput {
     @location(9) bitangent: vec3<f32>,
 #ifdef TRANSMISSION
     @location(10) inst_glass: vec2<f32>,  // Material::transmission, Material::thickness
+    // `Material::volume_transmittance`, packed in `pbr.z` (`InstanceRaw::unlit`): flat, because an
+    // interpolated float that large would not hold its low bits.
+    @location(12) @interpolate(flat) inst_volume: u32,
 #endif
 #ifdef LOBES
     @location(11) inst_coat_roughness: f32,  // Material::clear_coat_roughness
@@ -206,6 +209,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_emissive = inst.emissive;
 #ifdef TRANSMISSION
     out.inst_glass = inst.ambient.xy;
+    out.inst_volume = select(0xFFFFFFu, u32(-inst.pbr.z - 1.0), inst.pbr.z < -0.5);
 #endif
 #ifdef LOBES
     out.inst_coat_roughness = inst.ambient.z;
@@ -636,7 +640,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
 
 #ifdef TRANSMISSION
     // After the fog: the frame behind has its own up to that surface.
-    final_color += transmitted_light(in.world_position, N, view_dir, NdV, surface.albedo, f0, surface.roughness, dielectric_f0(in.inst_emissive.w), in.inst_glass.y) * glass;
+    final_color += transmitted_light(in.world_position, N, view_dir, NdV, surface.albedo, f0, surface.roughness, dielectric_f0(in.inst_emissive.w), in.inst_glass.y) * glass * volume_transmittance(in.inst_volume);
 #endif
 
 #ifdef DETAILS
@@ -649,6 +653,12 @@ fn shade(in: VertexOutput) -> vec4<f32> {
 #ifdef TRANSMISSION
 // What comes through: the frame behind, where the bent ray leaves the surface, as blurred as the
 // surface is rough, tinted by it, less what the surface reflected on the way in.
+// How much of the light behind comes through the glass's thickness, a channel at a time
+// (`Material::volume_transmittance`), from its 8 bits a channel.
+fn volume_transmittance(packed: u32) -> vec3<f32> {
+    return vec3<f32>(f32((packed >> 16u) & 255u), f32((packed >> 8u) & 255u), f32(packed & 255u)) / 255.0;
+}
+
 fn transmitted_light(
     world_position: vec3<f32>,
     N: vec3<f32>,

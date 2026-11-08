@@ -166,6 +166,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   in its place fed `x / (1 + x)` or `log2` between two exposures: how Tony McMapface, SBDT and Blender's Filmic and AgX looks are
   made. On every path. `PostProcessUniforms::_bloom_pad` is `color_lut` now.
 
+- **Glass absorbs over its thickness: `Material::with_attenuation(color, distance)`.** The light behind keeps
+  `color ^ (thickness / distance)` a channel at a time, as glTF's `KHR_materials_volume` says, which the loader now reads.
+  `Material::volume_transmittance` is the number. A glass instance carries it in its route flag, below -0.5.
+
 - **A vignette of 0 is no vignette.** `PostProcess::vignette` said so, and the shader still took the corners to 73 %. **Looks change:**
   at the renderer's default 0.25 the corners are lighter, about 75 % where they were 52 %.
 

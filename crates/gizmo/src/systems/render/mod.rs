@@ -10781,6 +10781,22 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
             assert!((thick - thin).abs() > 3.0, "a thick pane bends it: {thin} and {thick}");
             assert!((air - thin).abs() < 2.0, "air bends nothing: {thin} and {air}");
 
+            // A volume: through its thickness the light keeps `colour ^ (thickness / distance)`. A colour
+            // that keeps a quarter of the red over half a metre, through half a metre and through one; none
+            // at a distance of 0.
+            let none = |m: Material| m.with_transmission(1.0).with_thickness(0.5).with_attenuation(Vec3::new(0.25, 1.0, 1.0), 0.0);
+            let half = |m: Material| m.with_transmission(1.0).with_thickness(0.5).with_attenuation(Vec3::new(0.25, 1.0, 1.0), 0.5);
+            let one = |m: Material| m.with_transmission(1.0).with_thickness(1.0).with_attenuation(Vec3::new(0.25, 1.0, 1.0), 0.5);
+            let thick_clear = red_through_pane(&frame_through_pane(&mut renderer, none, 0.0).await).0;
+            let quarter = red_through_pane(&frame_through_pane(&mut renderer, half, 0.0).await).0;
+            let sixteenth = red_through_pane(&frame_through_pane(&mut renderer, one, 0.0).await).0;
+            eprintln!("red through a volume: none {thick_clear:.1}, a quarter {quarter:.1}, a sixteenth {sixteenth:.1}");
+            assert!((thick_clear - clear_red).abs() < 3.0, "a distance of 0 attenuates nothing: {thick_clear}, {clear_red}");
+            // Measured: 243.5, 215.7, 137.4. A bright red cube sits high on the tone curve, so a quarter of
+            // its light reads far more than a quarter of its value.
+            assert!(quarter < thick_clear - 15.0, "the volume takes red out: {quarter} against {thick_clear}");
+            assert!(sixteenth < quarter - 40.0, "twice as deep takes more: {sixteenth} against {quarter}");
+
             // Rough: the cube's edge smears, so pixels between red and black are many.
             let smeared = |frame: &[u8]| {
                 frame.as_chunks::<4>().0.iter().filter(|p| (30..190).contains(&(i32::from(p[0]) - i32::from(p[1])))).count()

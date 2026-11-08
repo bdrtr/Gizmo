@@ -203,6 +203,8 @@ fn a_material_description_survives_the_file() {
             reflectance: 0.16,
             transmission: 0.0,
             thickness: 0.0,
+            attenuation_color: gizmo::math::Vec3::new(0.3, 0.5, 0.7),
+            attenuation_distance: 2.0,
         },
     );
 

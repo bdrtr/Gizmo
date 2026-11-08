@@ -454,7 +454,10 @@ pub struct InstanceRaw {
     /// Metalness, 0 = dielectric, 1 = metal.
     pub metallic: f32,
     /// Which shading route this instance takes: 0 = deferred PBR, 1 = unlit / baked-lit,
-    /// 2 = skybox.
+    /// 2 = skybox. Below -0.5 it is a glass instance's volume instead, which takes the PBR route:
+    /// [`Material::volume_transmittance`](crate::components::Material::volume_transmittance) at 8 bits
+    /// a channel, `-(1 + r·65536 + g·256 + b)`, exact in an f32. Every reader of the route asks
+    /// `> 0.5`, which a negative value never is. See [`InstanceRaw::with_lit_extras_of`].
     pub unlit: f32,
     /// The anisotropy/clear-coat/subsurface triple, packed into one f32 — the `.w` of the
     /// shader's `pbr` vec4. Called `_padding` until 2026-08-15, which is part of how two render
@@ -585,6 +588,10 @@ impl InstanceRaw {
         if material.is_transmissive() {
             self.ambient[0] = material.transmission;
             self.ambient[1] = material.thickness;
+            let t = material.volume_transmittance();
+            if t != gizmo_math::Vec3::ONE {
+                self.unlit = -(1.0 + pack_volume(t) as f32);
+            }
         }
         if material.material_type == crate::components::MaterialType::Pbr && material.clear_coat > 0.0 {
             self.ambient[2] = material.clear_coat_roughness;
@@ -605,6 +612,12 @@ impl InstanceRaw {
         self.emissive[3] = if self.emissive[3] < 0.0 { -r } else { r };
         self
     }
+}
+
+/// A colour at 8 bits a channel, red highest: what `shader.wgsl`'s `volume_transmittance` unpacks.
+fn pack_volume(t: gizmo_math::Vec3) -> u32 {
+    let byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (byte(t.x) << 16) | (byte(t.y) << 8) | byte(t.z)
 }
 
 /// Per-material scalar parameters that accompany the textured-PBR bind group
@@ -692,6 +705,32 @@ impl UvTransform {
 
 #[cfg(test)]
 mod tonemap_default_tests {
+    /// **A glass's volume reaches the shader as a colour at 8 bits a channel.** Light through its
+    /// thickness keeps `color ^ (thickness / distance)`; packed below -0.5 in the route flag, which every
+    /// reader of the route takes as PBR, and unpacked as `shader.wgsl`'s `volume_transmittance` does.
+    #[test]
+    fn a_glass_volume_packs_into_the_route_flag_and_back() {
+        use crate::components::MaterialDesc;
+        use gizmo_math::Vec3;
+        let once = MaterialDesc::new().with_thickness(0.5).with_attenuation(Vec3::new(0.25, 1.0, 0.5), 0.5);
+        assert_eq!(once.volume_transmittance(), Vec3::new(0.25, 1.0, 0.5), "through its own distance, the colour");
+        let twice = once.clone().with_thickness(1.0).volume_transmittance();
+        assert!((twice - Vec3::new(0.0625, 1.0, 0.25)).abs().max_element() < 1e-6, "twice as far, squared: {twice}");
+        assert_eq!(once.clone().with_attenuation(Vec3::new(0.25, 1.0, 0.5), 0.0).volume_transmittance(), Vec3::ONE);
+        assert_eq!(once.clone().with_thickness(0.0).volume_transmittance(), Vec3::ONE, "a thin pane has no volume");
+
+        let packed = super::pack_volume(Vec3::new(0.25, 1.0, 0.5));
+        let flag = -(1.0 + packed as f32);
+        assert!(flag <= -1.0, "never read as unlit or sky");
+        let back = (-flag - 1.0) as u32;
+        assert_eq!(back, packed, "exact in an f32");
+        let unpacked = [(back >> 16) & 255, (back >> 8) & 255, back & 255].map(|v| v as f32 / 255.0);
+        for (got, want) in unpacked.iter().zip([0.25, 1.0, 0.5]) {
+            assert!((got - want).abs() <= 0.5 / 255.0 + 1e-6, "{unpacked:?}");
+        }
+        assert_eq!(super::pack_volume(Vec3::ONE), 0xFF_FFFF);
+    }
+
     use super::*;
 
     /// **Upgrading must not restyle a game.** ACES was hard-coded in `post_process.wgsl`; making
