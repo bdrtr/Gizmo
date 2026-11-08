@@ -1621,6 +1621,15 @@ its precision, and a section that silently rewrites itself cannot be checked.
   wasm gate checks. No type of theirs is on a `pub` signature: the result is still
   `PositionedGlyph`. On no Stage A surface and not reachable from one.
 
+- **`subsecond` (gizmo-core) and `dioxus-devtools` (gizmo-app) — added 2026-11-09, both behind the
+  default-off `hotpatching` feature, sealed on arrival.** Subsecond is the jump table every system call
+  goes through when the feature is on (`gizmo_core::hotpatch`, a crate-private `hot_call!`); the
+  devtools crate is the connection to the Dioxus CLI that fills the table, native only. No type of
+  either is on a `pub` signature: the feature adds no public item at all, it changes what existing calls
+  go through. Both are pinned to the 0.7 line, which `dioxus-cli` 0.7 speaks, and Cargo resolves one
+  `subsecond` for both — which is required, since the table is a static of that crate. The devtools tree
+  is large (dioxus-core, tungstenite, ~90 crates), which is why it is a feature and not a default.
+
 - **`web-time` — removed from gizmo-scene's public API 2026-08-09; it was MISSING from this
   contract entirely** and nobody had noticed it before the audit. `SceneSnapshot::timestamp` was
   `pub`, and on `wasm32` the type of that field is `web_time::Instant`, not `std::time::Instant`.

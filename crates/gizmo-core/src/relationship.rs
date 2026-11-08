@@ -169,21 +169,21 @@ impl World {
         let links: Arc<Mutex<HashMap<Entity, Entity>>> = Arc::default();
 
         let set = links.clone();
-        self.register_on_add::<R>(Box::new(move |world, source| {
+        self.register_on_add::<R>(move |world, source| {
             let target = world.query::<&R>().get(source).map(R::target);
             relink::<R>(world, &set, source, target);
-        }));
+        });
         let set = links.clone();
-        self.register_on_replace::<R>(Box::new(move |world, source| {
+        self.register_on_replace::<R>(move |world, source| {
             let target = world.query::<&R>().get(source).map(R::target);
             relink::<R>(world, &set, source, target);
-        }));
+        });
         let set = links.clone();
-        self.register_on_remove::<R>(Box::new(move |world, source| {
+        self.register_on_remove::<R>(move |world, source| {
             relink::<R>(world, &set, source, None);
-        }));
+        });
         // A cloned target comes with its original's list, and nobody points at the clone.
-        self.register_on_add::<R::Target>(Box::new(|world, entity| {
+        self.register_on_add::<R::Target>(|world, entity| {
             let Some(list) = world.query::<&R::Target>().get(entity).map(|t| t.sources().to_vec()) else {
                 return;
             };
@@ -192,8 +192,8 @@ impl World {
                 list.into_iter().filter(|&s| links.get(s).map(R::target) == Some(entity)).collect()
             };
             with_list::<R>(world, entity, false, |own| *own = real);
-        }));
-        self.register_despawn_hook(Box::new(move |world, entity| {
+        });
+        self.register_despawn_hook(move |world, entity| {
             let Some(list) = world.query::<&R::Target>().get(entity).map(|t| t.sources().to_vec()) else {
                 return;
             };
@@ -203,7 +203,7 @@ impl World {
                     OnTargetDespawn::Despawn => world.despawn(source),
                 }
             }
-        }));
+        });
     }
 }
 

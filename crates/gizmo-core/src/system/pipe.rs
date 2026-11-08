@@ -151,7 +151,14 @@ macro_rules! impl_stage {
             fn run_with(&mut self, _input: (), world: &World, dt: f32) -> O {
                 let Self { func, state, .. } = self;
                 let ($($s,)*) = state;
-                (func)($(fetch::<$P>(world, dt, $s)),*)
+                fn body<F, O, $($P: SystemParam),*>(func: &mut F, params: ($($P::Item<'_>,)*)) -> O
+                where
+                    F: FnMut($($P::Item<'_>),*) -> O,
+                {
+                    let ($($P,)*) = params;
+                    func($($P),*)
+                }
+                crate::hotpatch::hot_call!(body::<F, O, $($P),*>, func, ($(fetch::<$P>(world, dt, $s),)*))
             }
             fn access_info(&self) -> AccessInfo {
                 let mut info = AccessInfo::new();
@@ -184,7 +191,14 @@ macro_rules! impl_stage {
             fn run_with(&mut self, input: I, world: &World, dt: f32) -> O {
                 let Self { func, state, .. } = self;
                 let ($($s,)*) = state;
-                (func)(In(input), $(fetch::<$P>(world, dt, $s)),*)
+                fn body<F, I, O, $($P: SystemParam),*>(func: &mut F, input: In<I>, params: ($($P::Item<'_>,)*)) -> O
+                where
+                    F: FnMut(In<I>, $($P::Item<'_>),*) -> O,
+                {
+                    let ($($P,)*) = params;
+                    func(input, $($P),*)
+                }
+                crate::hotpatch::hot_call!(body::<F, I, O, $($P),*>, func, In(input), ($(fetch::<$P>(world, dt, $s),)*))
             }
             fn access_info(&self) -> AccessInfo {
                 let mut info = AccessInfo::new();

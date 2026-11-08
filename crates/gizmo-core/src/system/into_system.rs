@@ -76,7 +76,10 @@ where
         struct ZeroParamSystem<F, Out>(F, std::marker::PhantomData<fn() -> Out>);
         impl<F: FnMut() -> Out + Send + Sync + 'static, Out: SystemOutput + 'static> System for ZeroParamSystem<F, Out> {
             fn run(&mut self, world: &World, _dt: f32) {
-                (self.0)().handle(world, std::any::type_name::<F>());
+                fn body<F: FnMut() -> Out, Out>(func: &mut F) -> Out {
+                    func()
+                }
+                crate::hotpatch::hot_call!(body::<F, Out>, &mut self.0).handle(world, std::any::type_name::<F>());
             }
             fn access_info(&self) -> AccessInfo {
                 AccessInfo::new()
@@ -199,7 +202,17 @@ macro_rules! impl_into_system {
                                 }
                             };
                         )+
-                        (func)($($P),+).handle(world, std::any::type_name::<F>());
+                        // One argument for all the parameters: subsecond calls up to nine, systems
+                        // take up to twelve.
+                        fn body<F, Out, $($P: SystemParam),+>(func: &mut F, params: ($($P::Item<'_>,)+)) -> Out
+                        where
+                            F: FnMut($($P::Item<'_>),+) -> Out,
+                        {
+                            let ($($P,)+) = params;
+                            func($($P),+)
+                        }
+                        crate::hotpatch::hot_call!(body::<F, Out, $($P),+>, func, ($($P,)+))
+                            .handle(world, std::any::type_name::<F>());
                     }
                     fn access_info(&self) -> AccessInfo {
                         let mut info = AccessInfo::new();
@@ -243,7 +256,10 @@ where
     F: FnMut(&World, f32) + Send + Sync + 'static,
 {
     fn run(&mut self, world: &World, dt: f32) {
-        (self)(world, dt);
+        fn body<F: FnMut(&World, f32)>(func: &mut F, world: &World, dt: f32) {
+            func(world, dt)
+        }
+        crate::hotpatch::hot_call!(body::<F>, self, world, dt);
     }
     // Opaque functions act as a full barrier to prevent unsafe overlaps
     fn access_info(&self) -> AccessInfo {

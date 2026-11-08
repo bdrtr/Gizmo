@@ -1,5 +1,5 @@
 use crate::component_key::ComponentKey;
-use super::{AddHook, DespawnHook, RemoveHook, SetHook, World};
+use super::World;
 use crate::archetype::ComponentInfo;
 use crate::component::Component;
 use crate::entity::Entity;
@@ -113,7 +113,7 @@ impl World {
                 entity,
                 _marker: std::marker::PhantomData,
             };
-            system(event);
+            crate::hotpatch::hot_call!(observer_body::<E, T, F>, &mut system, event);
         }));
 
         self
@@ -140,14 +140,11 @@ impl World {
         let hooks = self.component_hooks.entry(type_id).or_default();
 
         E::list(hooks).push(Box::new(move |world, entity| {
-            if !condition(world) {
+            if !crate::hotpatch::hot_call!(condition_body::<C>, &mut condition, &*world) {
                 return;
             }
-            system(crate::observer::On {
-                event: E::witness(),
-                entity,
-                _marker: std::marker::PhantomData,
-            });
+            let event = crate::observer::On { event: E::witness(), entity, _marker: std::marker::PhantomData };
+            crate::hotpatch::hot_call!(observer_body::<E, T, F>, &mut system, event);
         }));
 
         self
@@ -213,7 +210,17 @@ impl World {
             .as_any_mut()
             .downcast_mut::<HashMap<Entity, Vec<crate::observer::EntityListener<E>>>>()
             .unwrap();
-        map.entry(entity).or_default().push(Box::new(listener));
+        let mut listener = listener;
+        fn body<E: crate::observer::EntityEvent, F: FnMut(&mut World, crate::observer::On<E>)>(
+            listener: &mut F,
+            world: &mut World,
+            event: crate::observer::On<E>,
+        ) {
+            listener(world, event)
+        }
+        map.entry(entity)
+            .or_default()
+            .push(Box::new(move |world, event| crate::hotpatch::hot_call!(body::<E, F>, &mut listener, world, event)));
         self
     }
 
@@ -390,7 +397,11 @@ impl World {
         let list = list_any
             .downcast_mut::<Vec<crate::observer::GlobalListener<E>>>()
             .expect("global observer list is keyed by the event's own TypeId");
-        list.push(Box::new(listener));
+        let mut listener = listener;
+        fn body<E, F: FnMut(&mut World, &E)>(listener: &mut F, world: &mut World, event: &E) {
+            listener(world, event)
+        }
+        list.push(Box::new(move |world, event| crate::hotpatch::hot_call!(body::<E, F>, &mut listener, world, event)));
         self
     }
 
@@ -486,7 +497,7 @@ impl World {
     }
 
     /// Appends a hook fired when `T` becomes newly present on an entity — not when an
-    /// existing value is overwritten. See [`AddHook`] for exactly when in the insert it
+    /// existing value is overwritten. See [`AddHook`](crate::world::AddHook) for exactly when in the insert it
     /// runs.
     ///
     /// Hooks accumulate: registering the same closure twice makes it fire twice, and there
@@ -494,26 +505,26 @@ impl World {
     /// registered from inside that same type's dispatch, whose position afterwards is not
     /// guaranteed (see [`ComponentHooks`](crate::world::ComponentHooks)) — and all `on_add`
     /// hooks precede that insert's `on_set` hooks.
-    pub fn register_on_add<T: Component>(&mut self, hook: AddHook) {
+    pub fn register_on_add<T: Component>(&mut self, hook: impl FnMut(&mut World, Entity) + Send + Sync + 'static) {
         self.component_hooks
             .entry(ComponentKey::of::<T>())
             .or_default()
             .on_add
-            .push(hook);
+            .push(hot_hook(hook));
     }
 
     /// Appends a hook fired when `T` is detached from an entity, whether explicitly or
     /// because the entity was despawned. Same accumulate-and-never-unregister rules as
     /// [`World::register_on_add`].
     ///
-    /// Read [`RemoveHook`] before relying on it: whether the component is still readable
+    /// Read [`RemoveHook`](crate::world::RemoveHook) before relying on it: whether the component is still readable
     /// when the hook runs depends on the removal path and on `T`'s storage type.
-    pub fn register_on_remove<T: Component>(&mut self, hook: RemoveHook) {
+    pub fn register_on_remove<T: Component>(&mut self, hook: impl FnMut(&mut World, Entity) + Send + Sync + 'static) {
         self.component_hooks
             .entry(ComponentKey::of::<T>())
             .or_default()
             .on_remove
-            .push(hook);
+            .push(hot_hook(hook));
     }
 
     /// Appends a hook fired on every write of `T`: the initial insert (right after the
@@ -523,12 +534,12 @@ impl World {
     /// It is a *write* notification, not a change notification — the hook fires even when
     /// the new value equals the old one, and it cannot see either value except by reading
     /// the entity out of the `&mut World` it is handed.
-    pub fn register_on_set<T: Component>(&mut self, hook: SetHook) {
+    pub fn register_on_set<T: Component>(&mut self, hook: impl FnMut(&mut World, Entity) + Send + Sync + 'static) {
         self.component_hooks
             .entry(ComponentKey::of::<T>())
             .or_default()
             .on_set
-            .push(hook);
+            .push(hot_hook(hook));
     }
 
     /// Appends a hook fired only when a write **overwrote a value the entity already had** —
@@ -548,12 +559,12 @@ impl World {
     /// dispatch is running inside, which is the only way a replace notification can read the
     /// new value, look at the rest of the entity, or queue work. The observer is the shorter
     /// spelling of the same list — not a different mechanism.
-    pub fn register_on_replace<T: Component>(&mut self, hook: crate::world::ReplaceHook) {
+    pub fn register_on_replace<T: Component>(&mut self, hook: impl FnMut(&mut World, Entity) + Send + Sync + 'static) {
         self.component_hooks
             .entry(ComponentKey::of::<T>())
             .or_default()
             .on_replace
-            .push(hook);
+            .push(hot_hook(hook));
     }
 
     /// Appends a hook fired once for every entity [`World::despawn`] actually destroys,
@@ -565,7 +576,29 @@ impl World {
     /// before any `on_remove` hook and before the id is freed, so the entity is still alive
     /// and fully readable. Hooks accumulate and cannot be unregistered; one registered from
     /// inside a despawn hook does not run for the entity currently being despawned.
-    pub fn register_despawn_hook(&mut self, hook: DespawnHook) {
-        self.despawn_hooks.push(hook);
+    pub fn register_despawn_hook(&mut self, hook: impl FnMut(&mut World, Entity) + Send + Sync + 'static) {
+        self.despawn_hooks.push(hot_hook(hook));
     }
+}
+
+/// What an observer's closure is called through, so `hot_call!` has a function item to look up.
+fn observer_body<E: crate::observer::Lifecycle, T: Component, F: FnMut(crate::observer::On<E, T>)>(
+    system: &mut F,
+    event: crate::observer::On<E, T>,
+) {
+    system(event)
+}
+
+/// What an observer's run condition is called through, for the same reason.
+fn condition_body<C: FnMut(&World) -> bool>(condition: &mut C, world: &World) -> bool {
+    condition(world)
+}
+
+/// A hook, boxed for its list, with its call going through `hot_call!` while the closure's type is still
+/// known — after the box it would not be (`crate::hotpatch`).
+fn hot_hook<F: FnMut(&mut World, Entity) + Send + Sync + 'static>(mut hook: F) -> Box<dyn FnMut(&mut World, Entity) + Send + Sync> {
+    fn body<F: FnMut(&mut World, Entity)>(hook: &mut F, world: &mut World, entity: Entity) {
+        hook(world, entity)
+    }
+    Box::new(move |world, entity| crate::hotpatch::hot_call!(body::<F>, &mut hook, world, entity))
 }

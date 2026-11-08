@@ -246,11 +246,11 @@ fn main() {
             // Burada tür başına birer tane yetiyor.
             for _ in 0..1 {
                 let t = tally.clone();
-                scene.world.register_on_add::<Tracked>(Box::new(move |_, _| {
+                scene.world.register_on_add::<Tracked>(move |_, _| {
                     t.add.fetch_add(1, Ordering::Relaxed);
-                }));
+                });
                 let t = tally.clone();
-                scene.world.register_on_set::<Tracked>(Box::new(move |world, entity| {
+                scene.world.register_on_set::<Tracked>(move |world, entity| {
                     t.set.fetch_add(1, Ordering::Relaxed);
                     // Kancaya YALNIZ varlık geliyor — ne eski ne yeni değer. Görmek istiyorsan
                     // dünyadan geri okuyacaksın. Ve motorda tipli tek-varlık okuyucusu yok:
@@ -262,35 +262,35 @@ fn main() {
                     if let Some(v) = read_back {
                         t.last_value.store(v as usize, Ordering::Relaxed);
                     }
-                }));
+                });
                 let t = tally.clone();
-                scene.world.register_on_replace::<Tracked>(Box::new(move |_, _| {
+                scene.world.register_on_replace::<Tracked>(move |_, _| {
                     t.replace.fetch_add(1, Ordering::Relaxed);
-                }));
+                });
                 let t = tally.clone();
-                scene.world.register_on_remove::<Tracked>(Box::new(move |_, _| {
+                scene.world.register_on_remove::<Tracked>(move |_, _| {
                     t.remove.fetch_add(1, Ordering::Relaxed);
-                }));
+                });
                 let t = tally.clone();
-                scene.world.register_on_add::<TrackedSparse>(Box::new(move |_, _| {
+                scene.world.register_on_add::<TrackedSparse>(move |_, _| {
                     t.add.fetch_add(1, Ordering::Relaxed);
-                }));
+                });
                 let t = tally.clone();
-                scene.world.register_on_set::<TrackedSparse>(Box::new(move |_, _| {
+                scene.world.register_on_set::<TrackedSparse>(move |_, _| {
                     t.set.fetch_add(1, Ordering::Relaxed);
-                }));
+                });
                 let t = tally.clone();
-                scene.world.register_on_replace::<TrackedSparse>(Box::new(move |_, _| {
+                scene.world.register_on_replace::<TrackedSparse>(move |_, _| {
                     t.replace.fetch_add(1, Ordering::Relaxed);
-                }));
+                });
                 let t = tally.clone();
-                scene.world.register_on_remove::<TrackedSparse>(Box::new(move |_, _| {
+                scene.world.register_on_remove::<TrackedSparse>(move |_, _| {
                     t.remove.fetch_add(1, Ordering::Relaxed);
-                }));
+                });
                 let t = tally.clone();
-                scene.world.register_despawn_hook(Box::new(move |_, _| {
+                scene.world.register_despawn_hook(move |_, _| {
                     t.despawn.fetch_add(1, Ordering::Relaxed);
-                }));
+                });
             }
 
             let rows = probe(scene.world, &tally);

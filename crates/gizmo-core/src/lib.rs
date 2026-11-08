@@ -52,6 +52,7 @@ pub mod dynamic;
 pub mod entity;
 pub mod event;
 pub mod hierarchy;
+pub mod hotpatch;
 pub mod input;
 pub mod observer;
 pub mod logger;

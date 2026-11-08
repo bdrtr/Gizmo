@@ -129,10 +129,10 @@ fn main() {
             // aldığı için hem boyayabiliyor hem deftere yazabiliyor.
             scene
                 .world
-                .register_on_remove::<MyComponent>(Box::new(react_on_removal));
+                .register_on_remove::<MyComponent>(react_on_removal);
             scene
                 .world
-                .register_on_remove::<MySparseComponent>(Box::new(react_on_removal));
+                .register_on_remove::<MySparseComponent>(react_on_removal);
 
             scene.world.insert_resource(RemovalAudit::default());
             let template = Material::new(white).with_pbr(RESTING, 0.5, 0.0);

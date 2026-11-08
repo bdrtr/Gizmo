@@ -717,8 +717,21 @@ pub struct DynamicSystem {
 
 impl DynamicSystem {
     /// A system that runs `body` with `queries`, and with the time step the schedule was run with.
-    pub fn new(queries: Vec<DynamicQuery>, body: impl FnMut(&mut DynamicQueries<'_>, f32) + Send + Sync + 'static) -> Self {
-        Self { queries, last_run: 0, body: Box::new(body) }
+    pub fn new<F>(queries: Vec<DynamicQuery>, body: F) -> Self
+    where
+        F: FnMut(&mut DynamicQueries<'_>, f32) + Send + Sync + 'static,
+    {
+        // The body is boxed, and a boxed closure's type is gone by the time it runs; calling it through
+        // a function item generic over `F` keeps it reachable by a hot patch (`crate::hotpatch`).
+        fn call<F: FnMut(&mut DynamicQueries<'_>, f32)>(body: &mut F, queries: &mut DynamicQueries<'_>, dt: f32) {
+            body(queries, dt)
+        }
+        let mut body = body;
+        Self {
+            queries,
+            last_run: 0,
+            body: Box::new(move |queries: &mut DynamicQueries<'_>, dt| crate::hotpatch::hot_call!(call::<F>, &mut body, queries, dt)),
+        }
     }
 }
 

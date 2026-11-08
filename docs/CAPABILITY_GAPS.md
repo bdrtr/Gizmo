@@ -26,8 +26,8 @@ capabilities in section A.
 **Section A as of 2026-11-02:** sprites (A1), text (A2), extrusion (A4), reflection probes (A5),
 split screen (A5b), area lights / cookies / soft and contact shadows (A7) and motion blur (A7c) are
 closed, occlusion culling (A7b) since 2026-11-05. Open: user shaders stay forward-only (A3), MSAA is
-declined by decision (A6), and two of A8's three (a render world, system hot-patching; runtime
-component definition closed 2026-11-08). Planar reflections (A7d) closed 2026-11-06. The
+declined by decision (A6), and one of A8's three, a render world (runtime component definition closed
+2026-11-08, system hot-patching 2026-11-09). Planar reflections (A7d) closed 2026-11-06. The
 2026-08-22 counts above are that day's inventory and were not re-run.
 
 ---
@@ -830,7 +830,7 @@ bound back onto a material (same `pub(crate)` wall as C1). What remains is SSR, 
 contributes +7.91 of red−blue to it while on screen and **exactly nothing** once it moves behind
 the camera. Showing what the camera cannot see is the case a mirror exists for.
 
-### A8. No render-world extraction, no system hot-patching (runtime components closed 2026-11-08)
+### A8. No render-world extraction (runtime components closed 2026-11-08, hot-patching 2026-11-09)
 
 Measured in `ecs_absent_apis`:
 
@@ -847,8 +847,13 @@ Measured in `ecs_absent_apis`:
   can serialise, so a runtime component is not saved; the snapshot counts it as dropped and says so.
 - ~~**No immutable components.**~~ **Closed 2026-11-07:** `impl_component!(T; immutable)`, and `&mut T` in a query is
   a compile error.
-- **No system hot-patching.** Shaders *are* hot-reloadable (`demo/assets/shaders/*.wgsl`); Rust
-  system bodies are not.
+- ~~**No system hot-patching.**~~ **Closed 2026-11-09:** the default-off `hotpatching` feature calls every
+  system, run condition, `pipe` stage, observer, hook and `DynamicSystem` body through subsecond's jump
+  table (`gizmo_core::hotpatch`), and the app layer connects to the Dioxus CLI. Verified end to end with
+  `dx serve --hot-patch -p demo --bin hot_systems --features hotpatching` and `dioxus-cli` 0.7.10: a system's
+  returned line was edited while it ran, the patch took 1.7 s, the next line was the new text and the counter
+  carried on from 5 to 6. Subsecond's own limits hold: debug builds, the binary's own crate, bodies but not
+  parameter lists or component layouts. Shaders were already hot-reloadable (`demo/assets/shaders/*.wgsl`).
 
 ---
 

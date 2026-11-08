@@ -1570,12 +1570,12 @@ mod tests {
         *VICTIMS.lock().unwrap() = vec![a2, b2];
 
         world.register_component_type::<Tag>();
-        world.register_on_add::<Tag>(Box::new(|w, _e| {
+        world.register_on_add::<Tag>(|w, _e| {
             let victims: Vec<Entity> = std::mem::take(&mut *VICTIMS.lock().unwrap());
             for v in victims {
                 w.despawn(v);
             }
-        }));
+        });
 
         world.insert_batch(&[a1, a2, b1, b2], Tag(7));
 
@@ -1641,8 +1641,8 @@ mod tests {
                 w.despawn(v);
             }
         };
-        world.register_on_add::<Mark>(Box::new(despawn_victims));
-        world.register_on_set::<Mark>(Box::new(despawn_victims));
+        world.register_on_add::<Mark>(despawn_victims);
+        world.register_on_set::<Mark>(despawn_victims);
 
         world.insert_batch(&[a1, a2, b1, b2], Mark(9));
 
@@ -1698,12 +1698,12 @@ mod tests {
         // One victim per group, so whichever group runs first strands a member of the other.
         *VICTIMS.lock().unwrap() = vec![a2, b2];
 
-        world.register_on_remove::<Doomed>(Box::new(|w, _e| {
+        world.register_on_remove::<Doomed>(|w, _e| {
             let victims: Vec<Entity> = std::mem::take(&mut *VICTIMS.lock().unwrap());
             for v in victims {
                 w.despawn(v);
             }
-        }));
+        });
 
         world.remove_batch::<Doomed>(&[a1, a2, b1, b2]);
 
@@ -2808,9 +2808,9 @@ mod tests {
         use std::sync::atomic::{AtomicI32, Ordering};
         static SEEN: AtomicI32 = AtomicI32::new(0);
         let mut world = World::new();
-        world.register_on_add::<Pos>(Box::new(|w: &mut World, e: Entity| {
+        world.register_on_add::<Pos>(|w: &mut World, e: Entity| {
             SEEN.store(w.get::<Pos>(e).map_or(-1, |p| p.0), Ordering::SeqCst);
-        }));
+        });
         let e = world.spawn();
         world.add_component(e, Pos(11));
         assert_eq!(SEEN.load(Ordering::SeqCst), 11);

@@ -48,7 +48,10 @@ where
     F: FnMut() -> bool + Send + Sync + 'static,
 {
     fn into_condition(mut self) -> Box<dyn FnMut(&World) -> bool + Send + Sync> {
-        Box::new(move |_world| self())
+        fn body<F: FnMut() -> bool>(func: &mut F) -> bool {
+            func()
+        }
+        Box::new(move |_world| crate::hotpatch::hot_call!(body::<F>, &mut self))
     }
     fn condition_access() -> AccessInfo {
         // A parameter-less condition touches no world state.
@@ -79,10 +82,17 @@ macro_rules! impl_into_condition {
                 // and the closure is the condition's "instance" — so the tuple lives here, one per
                 // `into_condition`, and a `Local` in a condition counts per condition.
                 let mut state = <($($P::State,)+)>::default();
+                fn body<F, $($P: SystemParam),+>(func: &mut F, params: ($($P::Item<'_>,)+)) -> bool
+                where
+                    F: FnMut($($P::Item<'_>),+) -> bool,
+                {
+                    let ($($P,)+) = params;
+                    func($($P),+)
+                }
                 Box::new(move |world| {
                     let ($($s,)+) = &mut state;
                     $(let $P = $P::fetch(world, 0.0, $s).unwrap();)+
-                    (self)($($P),+)
+                    crate::hotpatch::hot_call!(body::<F, $($P),+>, &mut self, ($($P,)+))
                 })
             }
             fn condition_access() -> AccessInfo {

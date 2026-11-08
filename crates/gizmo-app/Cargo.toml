@@ -73,10 +73,17 @@ scene = ["dep:gizmo-scene", "dep:gizmo-scripting"]
 # feature flag is indistinguishable from one that is broken. Off, the engine builds without
 # gilrs and without its libudev link on Linux, which is what a headless server wants.
 gamepad = ["dep:gilrs"]
+# System bodies swapped while the game runs, by `dx serve --hot-patch`: gizmo-core's calls through
+# subsecond's jump table, plus the connection to the CLI that delivers the table (dioxus-devtools,
+# native only — it does nothing when the game was not started by `dx`). See `gizmo_core::hotpatch`.
+# Default-OFF: a development tool, and no type of its dependencies is in a signature of ours.
+hotpatching = ["gizmo-core/hotpatching", "dep:dioxus-devtools"]
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # Where `SaveData` keeps a game's save on the desktop.
 dirs = "6.0.0"
+# The `hotpatching` feature's connection to the Dioxus CLI. The 0.7 line, as gizmo-core's subsecond.
+dioxus-devtools = { version = "0.7.10", optional = true, default-features = false }
 backtrace = "0.3.76"
 # Default features on purpose: gilrs's default is `wgi` (Windows.Gaming.Input), and with BOTH
 # `wgi` and `xinput` off its platform module raises a `compile_error!` — one that is not gated on

@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A system's body changed while the game runs.** The default-off `hotpatching` feature (`gizmo-engine`, `gizmo-app`,
+  `gizmo-core`) calls every system, run condition, `pipe` stage, observer, hook and `DynamicSystem` body through subsecond's jump
+  table, and connects the app to the Dioxus CLI; `dx serve --hot-patch` then swaps a body without a restart. Verified with
+  `demo/src/bin/hot_systems.rs` and `dioxus-cli` 0.7.10: the patch took 1.7 s and the world kept its state. Debug builds, the
+  game's own crate, bodies but not signatures — subsecond's limits, in `gizmo::core::hotpatch`. **Breaking, mildly:**
+  `World::register_on_add`, `register_on_remove`, `register_on_set`, `register_on_replace` and `register_despawn_hook` take the
+  closure (`impl FnMut(&mut World, Entity)`) instead of a `Box<dyn …>`, so the closure keeps the type a patch needs; a
+  `Box::new(|w, e| …)` written out still compiles only where its parameters are annotated — drop the `Box::new`.
+
 - **A query term can be written outside `gizmo-core`.** `WorldQuery` and `ReadOnlyQuery` were sealed; they are `unsafe trait`s
   now, as in Bevy, with the contract on them, `query::declare_access` for a term's `check_aliasing`, and `World::sparse_set(key)`
   for one that reads a sparse component. `tests/downstream_query.rs` writes Bevy's `Has<T>`. `FetchComponent` stays sealed: it is

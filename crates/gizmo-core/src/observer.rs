@@ -538,7 +538,7 @@ mod tests {
         let mut world = World::new();
         let hits = Arc::new(Mutex::new(0));
         let counter = hits.clone();
-        world.register_on_replace::<Health>(Box::new(move |_w, _e| *counter.lock().unwrap() += 1));
+        world.register_on_replace::<Health>(move |_w, _e| *counter.lock().unwrap() += 1);
 
         let e = world.spawn_bundle((Health(1.0),));
         assert_eq!(*hits.lock().unwrap(), 0, "the insert is not a replace");

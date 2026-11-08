@@ -9,6 +9,7 @@ impl<State: 'static> App<State> {
     /// window cannot be created, a required setup hook is missing, or the
     /// event loop terminates with an error.
     pub fn run(mut self) -> Result<(), crate::AppError> {
+        crate::hotpatch::connect();
         if let Some(runner) = self.runner.take() {
             tracing::info!("[App::run] delegating to custom runner");
             runner(self);

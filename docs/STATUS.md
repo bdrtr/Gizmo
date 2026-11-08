@@ -53,7 +53,8 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
 - **Text:** in vertical text Latin lies on its side (`.upright()` stands it); `Renderer::load_system_font` finds the machine's font (`GIZMO_FONT`, then the platform's usual faces); the one font the engine carries is Noto Sans (OFL 1.1) behind the default-off `bundled-font` feature, for the browser, which lends none; and `add_font_fallback` chains faces per character (§A2).
 - **Extensibility:** composites and named query terms go through `system_param!` and `query_data!`; a primitive parameter is an
   `unsafe impl SystemParam` and a primitive query term an `unsafe impl WorldQuery`, both written downstream as in Bevy (§C0). Components can be defined at runtime
-  (`World::register_component`, `DynamicQuery`, `DynamicSystem` — §A8); there is no render world and no system hot-patching.
+  (`World::register_component`, `DynamicQuery`, `DynamicSystem` — §A8), and system bodies hot-patched while the game runs
+  (`hotpatching` + `dx serve --hot-patch`, §A8); there is no render world.
 - **Editor:** `gizmo-studio` is a separate binary and cannot see a game's types; the in-engine
   editor can.
 

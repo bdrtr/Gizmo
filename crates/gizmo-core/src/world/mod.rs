@@ -751,9 +751,9 @@ mod tests {
 
         let mut world = World::new();
         world.register_component_type::<Doomed>();
-        world.register_on_remove::<Doomed>(Box::new(|w: &mut World, _e: Entity| {
+        world.register_on_remove::<Doomed>(|w: &mut World, _e: Entity| {
             w.clear_entities();
-        }));
+        });
 
         let e = world.spawn_bundle(Doomed(1));
         // Reaching the line after this is the assertion.
@@ -781,9 +781,9 @@ mod tests {
 
         let mut world = World::new();
         world.register_component_type::<Suicidal>();
-        world.register_on_add::<Suicidal>(Box::new(|w: &mut World, e: Entity| {
+        world.register_on_add::<Suicidal>(|w: &mut World, e: Entity| {
             w.despawn(e);
-        }));
+        });
 
         // Three bundles, so the append loop below the first spawn really runs.
         let spawned: Vec<Entity> = world
@@ -901,9 +901,9 @@ mod tests {
         world.register_component_type::<Tag>();
         // The hook takes the component straight back off, which migrates the entity out of the
         // archetype `spawn_bundle` had just put it in.
-        world.register_on_add::<Tag>(Box::new(|w: &mut World, e: Entity| {
+        world.register_on_add::<Tag>(|w: &mut World, e: Entity| {
             w.remove_component::<Tag>(e);
-        }));
+        });
 
         let spawned: Vec<Entity> = world.spawn_batch((0..3).map(Tag)).collect();
         assert_eq!(spawned.len(), 3);
@@ -1047,11 +1047,11 @@ mod tests {
         let mut world = World::new();
         world.register_component_type::<SparseTag>();
         world.register_component_type::<Late>();
-        world.register_on_remove::<SparseTag>(Box::new(|w: &mut World, e: Entity| {
+        world.register_on_remove::<SparseTag>(|w: &mut World, e: Entity| {
             // The entity is mid-despawn: no row, no location. This must be a no-op rather than
             // an action on the row that used to be its.
             w.add_component(e, Late(1));
-        }));
+        });
 
         // Several entities in one archetype so the victim's row is NOT the last one — that is
         // what makes the swap-remove move a different entity into it.
@@ -1093,9 +1093,9 @@ mod tests {
 
         let mut world = World::new();
         world.register_component_type::<SparseBack>();
-        world.register_on_remove::<SparseBack>(Box::new(|w: &mut World, e: Entity| {
+        world.register_on_remove::<SparseBack>(|w: &mut World, e: Entity| {
             w.flush_spawn(e);
-        }));
+        });
 
         let e = world.spawn();
         world.add_component(e, SparseBack(1));
@@ -1617,9 +1617,9 @@ mod tests {
 
         let mut world = World::new();
         world.register_component_type::<SparseC>();
-        world.register_on_add::<SparseC>(Box::new(|_, _| {
+        world.register_on_add::<SparseC>(|_, _| {
             ADDS.fetch_add(1, Ordering::SeqCst);
-        }));
+        });
 
         let e = world.spawn();
         world.add_component(e, SparseC(5));

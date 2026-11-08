@@ -1,8 +1,9 @@
-//! # Dört ECS yeteneği: ikisi var, ikisi yok
+//! # Dört ECS yeteneği: üçü var, biri yok
 //!
 //! Bu demo dört ayrı yeteneği birden ele alıyor — değişmez bileşen, çalışma anında bileşen
-//! tanımı, render dünyasına çıkarma, sistem sıcak yaması. İlk ikisi artık Gizmo'da **var**
-//! (2026-11-07 ve 2026-11-08); son ikisi hâlâ **yok**.
+//! tanımı, render dünyasına çıkarma, sistem sıcak yaması. Değişmez bileşen (2026-11-07),
+//! çalışma anında tanım (2026-11-08) ve sıcak yama (2026-11-09) artık Gizmo'da **var**;
+//! render dünyasına çıkarma hâlâ **yok**.
 //!
 //! Ama "yok" tek başına bir bilgi değil, "var" da değil. Demo her biri için neyin olduğunu,
 //! yerine ne konabileceğini ve ne kaybedildiğini ölçüyor.
@@ -38,15 +39,17 @@
 //!
 //! Demo bunu gösteriyor: `set_render` içinden oyun bileşenleri okunuyor, hiçbir çıkarma adımı yok.
 //!
-//! ## 4. Çalışırken kod değiştirmek
+//! ## 4. Çalışırken kod değiştirmek — VAR
 //!
-//! Sistem gövdelerini çalışırken değiştirmek. Gizmo'da bunun karşılığı **yok** — ve depoda
-//! `subsecond`/`hotpatch` diye bir bağımlılık da yok.
+//! Sistem gövdelerini çalışırken değiştirmek. `hotpatching` özelliğiyle sistemler, koşullar,
+//! `pipe` aşamaları, gözlemciler ve kancalar subsecond'ın atlama tablosundan çağrılıyor;
+//! `dx serve --hot-patch` değişeni derleyip çalışan programa bağlıyor (`gizmo::core::hotpatch`).
+//! Bu demo pencereli ve sürekli koşmadığı için onu `hot_systems` gösteriyor: bir sistemin
+//! döndürdüğü cümle değiştirildi, 1,7 saniyede yeni cümle basıldı ve sayaç kaldığı yerden sürdü.
 //!
-//! Ama motorun bir sıcak yeniden yükleme yolu **var**, ve başka bir katmanda: **shader'lar**.
-//! Her renderer shader'ı önce diskten bir üstünü arıyor, bulamazsa gömülü kopyaya düşüyor, ve
-//! stüdyo `demo/assets` altındaki `.wgsl` değişimlerinde boru hatlarını yeniden kuruyor. Yani
-//! "çalışırken değiştirilebilen" şey Rust kodu değil, shader.
+//! Shader'lar ayrıca, kendi yollarıyla sıcak yükleniyor: her renderer shader'ı önce diskten bir
+//! üstünü arıyor, ve stüdyo `demo/assets` altındaki `.wgsl` değişimlerinde boru hatlarını yeniden
+//! kuruyor.
 //!
 //! ## Ölçüldü
 //!
@@ -60,6 +63,7 @@
 //! | çalışma anında tanımlanan bileşen | `Slot`, kayıt sayısı **+1** | tanım dinamik |
 //! | `DynamicQuery` ile +1 sonrası toplam | 406 -> **410** | erişim de dinamik |
 //! | `set_render`'ın gördüğü oyun bileşeni | **4** | çıkarma adımı yok, tek dünya |
+//! | `hot_systems`'de gövdesi değişen sistem | 1,7 s sonra yeni cümle, sayaç 5 → **6** | kod değişti, dünya yerinde |
 //!
 //! Kalan iki eksik de *bir katman*: çıkarmada ikinci dünya, sıcak yamada çalışma-anı kod
 //! değiştirme.
@@ -131,9 +135,9 @@ fn main() {
                 .expect("bu dünyada Slot adında başka bileşen yok");
             report.registered_after = scene.world.registered_component_count();
 
-            scene.world.register_on_set::<Frozen>(Box::new(|_, _| {
+            scene.world.register_on_set::<Frozen>(|_, _| {
                 FROZEN_SETS.fetch_add(1, Ordering::Relaxed);
-            }));
+            });
             let mut cubes = Vec::new();
             for i in 0..4 {
                 let entity = scene.world.spawn_bundle((
@@ -245,8 +249,8 @@ fn main() {
                             r.seen_from_render
                         ));
                         ui.separator();
-                        ui.label("4. sistem sıcak yaması — YOK");
-                        ui.label("   ama shader'lar sıcak yükleniyor (demo/assets/shaders).");
+                        ui.label("4. sistem sıcak yaması — VAR (hotpatching + dx serve --hot-patch)");
+                        ui.label("   gösterimi: hot_systems. Shader'lar da sıcak yükleniyor.");
                     });
                 });
         })

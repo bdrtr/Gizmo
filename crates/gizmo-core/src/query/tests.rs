@@ -1100,12 +1100,12 @@ fn every_bulk_write_path_fires_the_hooks() {
     let added = Arc::new(AtomicUsize::new(0));
     let set = Arc::new(AtomicUsize::new(0));
     let (a, s) = (added.clone(), set.clone());
-    world.register_on_add::<Tracked>(Box::new(move |_, _| {
+    world.register_on_add::<Tracked>(move |_, _| {
         a.fetch_add(1, Ordering::SeqCst);
-    }));
-    world.register_on_set::<Tracked>(Box::new(move |_, _| {
+    });
+    world.register_on_set::<Tracked>(move |_, _| {
         s.fetch_add(1, Ordering::SeqCst);
-    }));
+    });
     let take = |c: &AtomicUsize| c.swap(0, Ordering::SeqCst);
 
     let e = world.spawn();

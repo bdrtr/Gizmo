@@ -29,6 +29,12 @@ reflect = ["dep:bevy_reflect"]
 # 2.0. Gating the subscriber and not the facade is the whole distinction.
 tracing-layer = ["dep:tracing-subscriber"]
 
+# Systems, run conditions, pipe stages, observers and dynamic systems called through subsecond's
+# jump table, so the Dioxus CLI (`dx serve --hot-patch`) can swap their bodies while the game runs.
+# See `gizmo_core::hotpatch`. Default-OFF: a development tool, and no subsecond type reaches any
+# signature of ours. The connection to the CLI is the app layer's (`gizmo-app/hotpatching`).
+hotpatching = ["dep:subsecond"]
+
 [dependencies]
 # `glam` feature provides the `Reflect`/`FromReflect`/`Typed` impls for the glam
 # math types (Vec3/Quat/...) that our reflected components embed. It was
@@ -39,6 +45,8 @@ crossbeam-queue = "0.3.12"
 ron = "0.8"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+# The 0.7 line, which `dioxus-cli` 0.7 speaks; the app layer's `dioxus-devtools` 0.7 shares this copy.
+subsecond = { version = "0.7.10", optional = true }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"], optional = true }
 uuid = { version = "1.23.0", features = ["v4", "serde"] }

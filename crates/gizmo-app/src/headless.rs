@@ -214,6 +214,7 @@ impl<State: 'static> App<State> {
         // The engine's `tracing` warnings to stderr, unless a subscriber is already set.
         #[cfg(not(target_arch = "wasm32"))]
         gizmo_core::logger::install_console_subscriber();
+        crate::hotpatch::connect();
         if let Some(runner) = self.runner.take() {
             tracing::info!("[App:headless] delegating to custom runner");
             runner(self);

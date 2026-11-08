@@ -79,6 +79,8 @@ pub mod plugin;
 
 pub use plugin::{AppLike, Plugin};
 
+mod hotpatch;
+
 /// Errors that can occur while building and running an [`App`].
 ///
 /// This is the concrete error surface for the application entry points

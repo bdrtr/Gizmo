@@ -86,20 +86,20 @@ fn main() {
             // ayakta tutan iki kanca.
             {
                 let idx = index.clone();
-                scene.world.register_on_add::<Targeting>(Box::new(move |world, entity| {
+                scene.world.register_on_add::<Targeting>(move |world, entity| {
                     let target = world
                         .query::<(Entity, &Targeting)>().iter().find(|(e, _)| (*e).id() == entity.id()).map(|(_, t)| t.0);
                     if let Some(target) = target {
                         idx.lock().unwrap().entry(target).or_default().push(entity.id());
                     }
-                }));
+                });
                 let idx = index.clone();
-                scene.world.register_on_remove::<Targeting>(Box::new(move |_world, entity| {
+                scene.world.register_on_remove::<Targeting>(move |_world, entity| {
                     let id = entity.id();
                     for list in idx.lock().unwrap().values_mut() {
                         list.retain(|e| *e != id);
                     }
-                }));
+                });
             }
 
             let white = scene.asset_manager.create_white_texture(
