@@ -1,3 +1,4 @@
+use crate::component_key::ComponentKey;
 use super::{Archetype, EntityLocation};
 use crate::archetype::ComponentInfo;
 use std::any::TypeId;
@@ -5,7 +6,7 @@ use std::collections::HashMap;
 
 pub(crate) struct ArchetypeIndex {
     /// Sorted component set → archetype index
-    pub(crate) set_to_id: HashMap<Vec<TypeId>, usize>,
+    pub(crate) set_to_id: HashMap<Vec<ComponentKey>, usize>,
     /// Archetype storage tables (the actual data is here)
     pub(crate) archetypes: Vec<Archetype>,
     /// Entity ID → current archetype index
@@ -63,7 +64,7 @@ impl ArchetypeIndex {
     /// NOTE: The data move is performed by the World, this method only tracks the structural transition.
     #[allow(dead_code)]
     pub(crate) fn get_or_create_archetype(&mut self, infos: &[ComponentInfo]) -> usize {
-        let mut new_types: Vec<TypeId> = infos.iter().map(|i| i.type_id).collect();
+        let mut new_types: Vec<ComponentKey> = infos.iter().map(|i| i.key).collect();
         new_types.sort();
         
         if let Some(&id) = self.set_to_id.get(&new_types) {
@@ -78,8 +79,8 @@ impl ArchetypeIndex {
     pub(crate) fn get_add_component_target(
         &mut self,
         entity_id: u32,
-        type_id: TypeId,
-        component_infos: &HashMap<TypeId, ComponentInfo>,
+        type_id: ComponentKey,
+        component_infos: &HashMap<ComponentKey, ComponentInfo>,
     ) -> Option<usize> {
         let old_arch_id = *self.entity_archetype.get(&entity_id)?;
 
@@ -127,8 +128,8 @@ impl ArchetypeIndex {
     pub(crate) fn get_remove_component_target(
         &mut self,
         entity_id: u32,
-        type_id: TypeId,
-        component_infos: &HashMap<TypeId, ComponentInfo>,
+        type_id: ComponentKey,
+        component_infos: &HashMap<ComponentKey, ComponentInfo>,
     ) -> Option<usize> {
         let old_arch_id = *self.entity_archetype.get(&entity_id)?;
 

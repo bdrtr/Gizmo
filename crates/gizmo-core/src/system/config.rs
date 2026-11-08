@@ -1,3 +1,4 @@
+use crate::component_key::ComponentKey;
 use super::*;
 use crate::world::World;
 use std::any::TypeId;
@@ -220,7 +221,7 @@ impl SystemConfig {
     /// batcher. When the relative order matters, state it with
     /// [`label`](Self::label) + [`before`](Self::before)/[`after`](Self::after).
     pub fn reads<T: 'static>(mut self) -> Self {
-        self.added_info.component_reads.push(TypeId::of::<T>());
+        self.added_info.component_reads.push(ComponentKey::of::<T>());
         self
     }
     /// Declares that this system writes component type `T`, on top of whatever its parameters
@@ -231,7 +232,7 @@ impl SystemConfig {
     /// [`exclusive`](Self::exclusive). Same caveats as [`reads`](Self::reads): additive only,
     /// and it constrains batching, not order.
     pub fn writes<T: 'static>(mut self) -> Self {
-        self.added_info.component_writes.push(TypeId::of::<T>());
+        self.added_info.component_writes.push(ComponentKey::of::<T>());
         self
     }
     /// Declares a read of resource type `T`.

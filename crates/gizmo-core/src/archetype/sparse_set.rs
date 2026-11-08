@@ -18,7 +18,7 @@ pub struct ComponentSparseSet {
     ///
     /// `info.layout` and `info.drop_fn` are the ones `dense` was built with, so replacing
     /// this field after construction would desynchronise the storage from its own drop and
-    /// copy glue. Every raw pointer the set hands out refers to a value of `info.type_id`.
+    /// copy glue. Every raw pointer the set hands out refers to a value of `info.key`.
     pub info: ComponentInfo,
     /// Packed component storage — one entry per entity in the set, no holes.
     ///
@@ -347,7 +347,7 @@ impl ComponentSparseSet {
 
     /// Raw pointer to `entity`'s component, or `None` if the entity is not in this set.
     ///
-    /// The pointer is untyped: dereferencing it requires casting to `info.type_id`'s type,
+    /// The pointer is untyped: dereferencing it requires casting to `info.key`'s type,
     /// which nothing here verifies. It is invalidated by the next mutation of the set —
     /// `insert` may reallocate `dense`, and `remove` swaps a different component into this
     /// address — so it must be consumed before any `&mut self` method runs.

@@ -102,7 +102,7 @@ impl HierarchyExt for World {
         }
 
         // Remove from old parent first
-        if let Some(parent_ptr) = self.get_component_ptr(child, std::any::TypeId::of::<Parent>()) {
+        if let Some(parent_ptr) = self.get_component_ptr(child, crate::component_key::ComponentKey::of::<Parent>()) {
             // SAFETY: the pointer was keyed by `TypeId::of::<Parent>()`, so it addresses a live
             // `Parent`; the id is copied out immediately, before anything can move the row.
             let old_parent = unsafe { (*(parent_ptr as *const Parent)).0 };
@@ -115,7 +115,7 @@ impl HierarchyExt for World {
         self.add_component(child, Parent(parent));
 
         // Add to new parent's Children list
-        if let Some(children_ptr) = self.get_component_mut_ptr(parent, std::any::TypeId::of::<Children>()) {
+        if let Some(children_ptr) = self.get_component_mut_ptr(parent, crate::component_key::ComponentKey::of::<Children>()) {
             // SAFETY: keyed by `TypeId::of::<Children>()` and obtained from `&mut self`, so this
             // is the only live reference to that component; it is used and dropped inside this
             // block, with no structural change in between.
@@ -131,7 +131,7 @@ impl HierarchyExt for World {
     fn remove_child(&mut self, parent: Entity, child: Entity) {
         self.remove_component::<Parent>(child);
 
-        if let Some(children_ptr) = self.get_component_mut_ptr(parent, std::any::TypeId::of::<Children>()) {
+        if let Some(children_ptr) = self.get_component_mut_ptr(parent, crate::component_key::ComponentKey::of::<Children>()) {
             // SAFETY: as in `add_child` — right type by construction, exclusive by `&mut self`,
             // consumed before any structural change.
             let children = unsafe { &mut *(children_ptr as *mut Children) };
@@ -191,7 +191,7 @@ fn despawn_recursive_inner(
     }
 
     let mut children_to_despawn = Vec::new();
-    if let Some(children_ptr) = world.get_component_ptr(entity, std::any::TypeId::of::<Children>()) {
+    if let Some(children_ptr) = world.get_component_ptr(entity, crate::component_key::ComponentKey::of::<Children>()) {
         // SAFETY: keyed by `TypeId::of::<Children>()`, so the type is right. The list is only
         // READ here (the ids are copied into `children_to_despawn`) and the despawns happen
         // after this borrow ends — reading it while despawning would be the dangling case.
@@ -204,7 +204,7 @@ fn despawn_recursive_inner(
     }
 
     // Detach from the (surviving) parent's Children list.
-    if let Some(parent_ptr) = world.get_component_ptr(entity, std::any::TypeId::of::<Parent>()) {
+    if let Some(parent_ptr) = world.get_component_ptr(entity, crate::component_key::ComponentKey::of::<Parent>()) {
         // SAFETY: right type by construction; the id is copied out before anything moves the row.
         let parent = unsafe { (*(parent_ptr as *const Parent)).0 };
         if world.is_alive(parent) {
@@ -269,7 +269,7 @@ mod tests {
         world.add_child(parent, child);
 
         // Check if Parent component is added to child
-        if let Some(parent_ptr) = world.get_component_ptr(child, std::any::TypeId::of::<Parent>()) {
+        if let Some(parent_ptr) = world.get_component_ptr(child, crate::component_key::ComponentKey::of::<Parent>()) {
             // SAFETY: test-local — the pointer was looked up by `TypeId::of::<Parent>()`, so the cast matches
             // the bytes, and the world outlives this read.
             let linked = unsafe { (*(parent_ptr as *const Parent)).0 };
@@ -279,7 +279,7 @@ mod tests {
         }
 
         // Check if Children component is updated
-        if let Some(children_ptr) = world.get_component_ptr(parent, std::any::TypeId::of::<Children>()) {
+        if let Some(children_ptr) = world.get_component_ptr(parent, crate::component_key::ComponentKey::of::<Children>()) {
             // SAFETY: test-local — the pointer was looked up by `TypeId::of::<Children>()`, so the cast matches
             // the bytes, and the world outlives this read.
             let children = unsafe { &*(children_ptr as *const Children) };
@@ -293,10 +293,10 @@ mod tests {
         world.remove_child(parent, child);
 
         // Child should not have Parent component anymore
-        assert!(world.get_component_ptr(child, std::any::TypeId::of::<Parent>()).is_none());
+        assert!(world.get_component_ptr(child, crate::component_key::ComponentKey::of::<Parent>()).is_none());
 
         // Parent should have empty Children list
-        if let Some(children_ptr) = world.get_component_ptr(parent, std::any::TypeId::of::<Children>()) {
+        if let Some(children_ptr) = world.get_component_ptr(parent, crate::component_key::ComponentKey::of::<Children>()) {
             // SAFETY: test-local — the pointer was looked up by `TypeId::of::<Children>()`, so the cast matches
             // the bytes, and the world outlives this read.
             let children = unsafe { &*(children_ptr as *const Children) };
@@ -359,13 +359,13 @@ mod tests {
         // Dragging a under its own descendant c would create a cycle → refused.
         world.add_child(c, a);
         assert!(
-            world.get_component_ptr(a, std::any::TypeId::of::<Parent>()).is_none(),
+            world.get_component_ptr(a, crate::component_key::ComponentKey::of::<Parent>()).is_none(),
             "cyclic reparent must be refused: a stays a root"
         );
         // Self-parenting is also refused.
         world.add_child(a, a);
         assert!(
-            world.get_component_ptr(a, std::any::TypeId::of::<Parent>()).is_none(),
+            world.get_component_ptr(a, crate::component_key::ComponentKey::of::<Parent>()).is_none(),
             "self-parent must be refused"
         );
 

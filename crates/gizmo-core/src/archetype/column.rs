@@ -6,9 +6,9 @@
 //! The two are always the same length and row `i` of one always describes row `i` of the
 //! other; every mutating method here updates both together.
 
+use crate::component_key::ComponentKey;
 use super::blob::BlobVec;
 use std::alloc::Layout;
-use std::any::TypeId;
 use std::ptr;
 
 /// Change-detection timestamps for a single component instance, stored beside the
@@ -55,14 +55,14 @@ impl ComponentTicks {
 pub struct Column {
     pub(crate) data: BlobVec,
     pub(crate) ticks: Vec<ComponentTicks>,
-    type_id: TypeId,
+    type_id: ComponentKey,
     clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>,
 }
 
 impl Column {
     /// Creates a new empty column.
     pub fn new(
-        type_id: TypeId,
+        type_id: ComponentKey,
         item_layout: Layout,
         drop_fn: Option<unsafe fn(*mut u8)>,
         clone_fn: Option<unsafe fn(*const u8, *mut u8, usize)>,
@@ -81,7 +81,7 @@ impl Column {
     /// information the column carries. Every pointer accessor below is type-erased and
     /// trusts the caller to cast to this type; nothing here checks.
     #[inline]
-    pub fn type_id(&self) -> TypeId {
+    pub fn type_id(&self) -> ComponentKey {
         self.type_id
     }
 
@@ -249,7 +249,7 @@ impl Column {
     #[inline]
     pub unsafe fn replace_typed<T: 'static>(&mut self, row: usize, value: T, tick: u32) -> T {
         debug_assert!(row < self.len());
-        debug_assert_eq!(self.type_id, TypeId::of::<T>());
+        debug_assert_eq!(self.type_id, ComponentKey::of::<T>());
         let ptr = self.get_mut_ptr(row) as *mut T;
         let old = ptr::read(ptr);
         ptr::write(ptr, value);
@@ -369,7 +369,7 @@ pub struct ComponentInfo {
     ///
     /// It is the one field [`ComponentInfo::of_type_id`] can fill in honestly — an info
     /// built that way has a real `type_id` and placeholders everywhere else.
-    pub type_id: TypeId,
+    pub key: ComponentKey,
     /// Size and alignment of one instance.
     ///
     /// Every raw copy in the storage layer moves exactly `layout.size()` bytes, so an info
@@ -410,7 +410,7 @@ impl ComponentInfo {
     /// Creates a ComponentInfo for the specified Rust type.
     pub fn of<T: crate::component::Component>() -> Self {
         Self {
-            type_id: TypeId::of::<T>(),
+            key: ComponentKey::of::<T>(),
             type_name: std::any::type_name::<T>(),
             layout: Layout::new::<T>(),
             drop_fn: if std::mem::needs_drop::<T>() {
@@ -437,9 +437,9 @@ impl ComponentInfo {
     }
 
     /// If only the TypeId is known (registry situations), creates a restricted ComponentInfo.
-    pub fn of_type_id(type_id: TypeId) -> Self {
+    pub fn of_type_id(type_id: ComponentKey) -> Self {
         Self {
-            type_id,
+            key: type_id,
             type_name: "<unknown>",
             layout: Layout::from_size_align(0, 1).unwrap(), // Geçici, gerçek layout registry'den gelmeli
             drop_fn: None,

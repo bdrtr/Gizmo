@@ -1,8 +1,8 @@
+use crate::component_key::ComponentKey;
 use super::{Entities, World};
 use crate::archetype::EntityLocation;
 use crate::entity::Entity;
 
-use std::any::TypeId;
 
 impl World {
     /// Allocates an entity id and materialises it immediately, so the returned handle is
@@ -198,7 +198,7 @@ impl World {
         // batch_clone_row only cloned archetype (table) columns. Deep-clone the
         // source's SparseSet components into every clone too, otherwise clones
         // silently lack them.
-        let sparse_types: Vec<std::any::TypeId> = self.sparse_sets.keys().copied().collect();
+        let sparse_types: Vec<crate::component_key::ComponentKey> = self.sparse_sets.keys().copied().collect();
         for tid in sparse_types {
             if let Some(set) = self.sparse_sets.get_mut(&tid) {
                 if set.contains(source_id) {
@@ -217,7 +217,7 @@ impl World {
         );
         // A clone is a first write of everything it carries, and an index kept by hooks has to hear of it.
         if !self.component_hooks.is_empty() {
-            let mut heard: Vec<TypeId> = self.archetype_index.archetypes[arch_id as usize]
+            let mut heard: Vec<ComponentKey> = self.archetype_index.archetypes[arch_id as usize]
                 .sorted_component_types()
                 .iter()
                 .copied()
@@ -266,7 +266,7 @@ impl World {
         // A component with hooks takes the same route, or they would hear about the first entity only.
         let per_entity = <I::Item as crate::component::Bundle>::get_infos()
             .iter()
-            .any(|info| info.storage_type == crate::component::StorageType::SparseSet || self.has_hooks(info.type_id));
+            .any(|info| info.storage_type == crate::component::StorageType::SparseSet || self.has_hooks(info.key));
         if per_entity {
             let entities: Vec<Entity> = iter.into_iter().map(|b| self.spawn_bundle(b)).collect();
             tracing::debug!(count = entities.len(), "spawn_batch: per-entity (sparse component or hooks)");
@@ -311,10 +311,10 @@ impl World {
         // Falling back to the per-entity path is what this function already does when it cannot
         // use its fast path, and it is correct for both shapes.
         let loc = self.entity_location(first_entity.id());
-        let mut bundle_types: Vec<std::any::TypeId> =
+        let mut bundle_types: Vec<crate::component_key::ComponentKey> =
             <I::Item as crate::component::Bundle>::get_infos()
                 .iter()
-                .map(|info| info.type_id)
+                .map(|info| info.key)
                 .collect();
         bundle_types.sort();
         let usable = loc.is_valid()
@@ -731,7 +731,7 @@ impl World {
             // (firing on_remove) BEFORE the id is freed — otherwise the component
             // leaks and, since sets are keyed by raw id, a reused id inherits the
             // dead entity's stale value.
-            let sparse_types: Vec<std::any::TypeId> =
+            let sparse_types: Vec<crate::component_key::ComponentKey> =
                 self.sparse_sets.keys().copied().collect();
             for tid in sparse_types {
                 let removed = self
@@ -1002,8 +1002,8 @@ impl World {
             .is_alive(entity)
     }
 
-    /// Returns the TypeIds of all the components on the Entity.
-    pub fn entity_component_types(&self, entity: Entity) -> Vec<TypeId> {
+    /// Returns the keys of all the components on the Entity.
+    pub fn entity_component_types(&self, entity: Entity) -> Vec<ComponentKey> {
         if !self.is_alive(entity) {
             return Vec::new();
         }

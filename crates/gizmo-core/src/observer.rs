@@ -1161,7 +1161,7 @@ mod tests {
         let removed_counter = Arc::new(Mutex::new(0));
         let rc_clone = removed_counter.clone();
 
-        world.component_hooks.entry(std::any::TypeId::of::<Poison>()).or_default().on_remove.push(Box::new(move |_w, _e| {
+        world.component_hooks.entry(crate::component_key::ComponentKey::of::<Poison>()).or_default().on_remove.push(Box::new(move |_w, _e| {
             *rc_clone.lock().unwrap() += 1;
         }));
 

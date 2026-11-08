@@ -536,7 +536,7 @@ impl<B: Bundle, C: Component> Bundle for DynamicBundle<B, C> {
 
     unsafe fn write_to_archetype(self, arch: &mut crate::archetype::Archetype, row: usize, tick: u32) {
         self.bundle.write_to_archetype(arch, row, tick);
-        let col = arch.get_column_mut(std::any::TypeId::of::<C>()).unwrap();
+        let col = arch.get_column_mut(crate::component_key::ComponentKey::of::<C>()).unwrap();
         if col.len() <= row {
             col.push_raw(&self.component as *const _ as *const u8, tick);
             std::mem::forget(self.component);
@@ -592,7 +592,7 @@ impl<T: Component> Bundle for T {
     }
 
     unsafe fn write_to_archetype(self, arch: &mut crate::archetype::Archetype, row: usize, tick: u32) {
-        let col = arch.get_column_mut(std::any::TypeId::of::<T>()).unwrap_or_else(|| {
+        let col = arch.get_column_mut(crate::component_key::ComponentKey::of::<T>()).unwrap_or_else(|| {
             panic!(
                 "Component column for `{}` missing in Archetype. Two ways to get here, and \
                  the first version of this message named only one. (1) STORAGE: the bundle \

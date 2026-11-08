@@ -1,3 +1,4 @@
+use crate::component_key::ComponentKey;
 use super::{AddHook, DespawnHook, RemoveHook, SetHook, World};
 use crate::archetype::ComponentInfo;
 use crate::component::Component;
@@ -11,7 +12,7 @@ impl World {
     /// It is used to create columns during the archetype storage migration stages.
     #[inline]
     pub fn register_component_type<T: Component>(&mut self) {
-        let type_id = TypeId::of::<T>();
+        let type_id = ComponentKey::of::<T>();
         self.component_infos
             .entry(type_id)
             .or_insert_with(ComponentInfo::of::<T>);
@@ -51,7 +52,7 @@ impl World {
     where
         F: FnMut(crate::observer::On<E, T>) + Send + Sync + 'static,
     {
-        let type_id = TypeId::of::<T>();
+        let type_id = ComponentKey::of::<T>();
         let hooks = self.component_hooks.entry(type_id).or_default();
 
         E::list(hooks).push(Box::new(move |_world, entity| {
@@ -83,7 +84,7 @@ impl World {
         C: FnMut(&World) -> bool + Send + Sync + 'static,
         F: FnMut(crate::observer::On<E, T>) + Send + Sync + 'static,
     {
-        let type_id = TypeId::of::<T>();
+        let type_id = ComponentKey::of::<T>();
         let hooks = self.component_hooks.entry(type_id).or_default();
 
         E::list(hooks).push(Box::new(move |world, entity| {
@@ -273,7 +274,7 @@ impl World {
             }
 
             // Propagate to parent
-            if let Some(parent_ptr) = self.get_component_ptr(current_entity, TypeId::of::<Parent>()) {
+            if let Some(parent_ptr) = self.get_component_ptr(current_entity, ComponentKey::of::<Parent>()) {
                 // A `Parent` written directly can name a dead entity, and that stops propagation.
                 // SAFETY: keyed by `TypeId::of::<Parent>()`, so the cast matches the bytes; the
                 // value is copied out immediately.
@@ -423,7 +424,7 @@ impl World {
     /// Is a given component type registered?
     #[inline]
     pub fn is_component_registered<T: Component>(&self) -> bool {
-        self.component_infos.contains_key(&TypeId::of::<T>())
+        self.component_infos.contains_key(&ComponentKey::of::<T>())
     }
 
     /// The number of registered component metadata entries.
@@ -443,7 +444,7 @@ impl World {
     /// hooks precede that insert's `on_set` hooks.
     pub fn register_on_add<T: Component>(&mut self, hook: AddHook) {
         self.component_hooks
-            .entry(TypeId::of::<T>())
+            .entry(ComponentKey::of::<T>())
             .or_default()
             .on_add
             .push(hook);
@@ -457,7 +458,7 @@ impl World {
     /// when the hook runs depends on the removal path and on `T`'s storage type.
     pub fn register_on_remove<T: Component>(&mut self, hook: RemoveHook) {
         self.component_hooks
-            .entry(TypeId::of::<T>())
+            .entry(ComponentKey::of::<T>())
             .or_default()
             .on_remove
             .push(hook);
@@ -472,7 +473,7 @@ impl World {
     /// the entity out of the `&mut World` it is handed.
     pub fn register_on_set<T: Component>(&mut self, hook: SetHook) {
         self.component_hooks
-            .entry(TypeId::of::<T>())
+            .entry(ComponentKey::of::<T>())
             .or_default()
             .on_set
             .push(hook);
@@ -497,7 +498,7 @@ impl World {
     /// spelling of the same list — not a different mechanism.
     pub fn register_on_replace<T: Component>(&mut self, hook: crate::world::ReplaceHook) {
         self.component_hooks
-            .entry(TypeId::of::<T>())
+            .entry(ComponentKey::of::<T>())
             .or_default()
             .on_replace
             .push(hook);

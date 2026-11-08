@@ -3,6 +3,7 @@
 //! Everything the simulation owns lives here. Structural changes — spawning, despawning,
 //! adding or removing a component — move entities between archetypes and invalidate row
 //! indices, which is why systems that need them defer through `Commands` instead.
+use crate::component_key::ComponentKey;
 use crate::archetype::index::ArchetypeIndex;
 use crate::archetype::{ComponentInfo, EntityLocation};
 use crate::entity::Entity;
@@ -54,10 +55,10 @@ pub struct World {
     pub(crate) archetype_index: ArchetypeIndex,
 
     /// The runtime component metadata cache. It is required in order to create archetype columns.
-    component_infos: HashMap<TypeId, ComponentInfo>,
+    component_infos: HashMap<ComponentKey, ComponentInfo>,
 
-    pub(crate) component_hooks: HashMap<TypeId, ComponentHooks>,
-    pub(crate) sparse_sets: HashMap<TypeId, crate::archetype::sparse_set::ComponentSparseSet>,
+    pub(crate) component_hooks: HashMap<ComponentKey, ComponentHooks>,
+    pub(crate) sparse_sets: HashMap<ComponentKey, crate::archetype::sparse_set::ComponentSparseSet>,
 
     despawn_hooks: Vec<DespawnHook>,
     entities_to_despawn: Vec<Entity>,
@@ -164,14 +165,14 @@ impl World {
 
     /// Whether anything is listening to `type_id`. The bulk write paths ask, and take the per-component
     /// route for a type with hooks: a hook is only worth having if every path reaches it.
-    pub(crate) fn has_hooks(&self, type_id: TypeId) -> bool {
+    pub(crate) fn has_hooks(&self, type_id: ComponentKey) -> bool {
         self.component_hooks.get(&type_id).is_some_and(|h| {
             !h.on_add.is_empty() || !h.on_set.is_empty() || !h.on_replace.is_empty() || !h.on_remove.is_empty()
         })
     }
 
     /// What a first write of `type_id` on `entity` fires, for a path that wrote it some other way.
-    pub(crate) fn fire_inserted(&mut self, type_id: TypeId, entity: crate::entity::Entity) {
+    pub(crate) fn fire_inserted(&mut self, type_id: ComponentKey, entity: crate::entity::Entity) {
         self.run_hooks(type_id, |hooks, world| {
             for hook in hooks.on_add.iter_mut().chain(hooks.on_set.iter_mut()) {
                 hook(world, entity);
@@ -179,7 +180,7 @@ impl World {
         });
     }
 
-    fn run_hooks<F>(&mut self, type_id: TypeId, mut f: F)
+    fn run_hooks<F>(&mut self, type_id: ComponentKey, mut f: F)
     where
         F: FnMut(&mut ComponentHooks, &mut World),
     {
@@ -532,7 +533,7 @@ mod tests {
         world.compact();
 
         {
-            let set = &world.sparse_sets[&std::any::TypeId::of::<SparseE>()];
+            let set = &world.sparse_sets[&crate::component_key::ComponentKey::of::<SparseE>()];
             assert_eq!(set.sparse.len(), 0, "an emptied index truncates to nothing");
             assert_eq!(set.dense.len(), 0);
             assert_eq!(set.dense.capacity, 0, "and the blob gave its allocation back");
@@ -1313,7 +1314,7 @@ mod tests {
             world.despawn(e);
         }
 
-        let set_id = std::any::TypeId::of::<SparseC>();
+        let set_id = crate::component_key::ComponentKey::of::<SparseC>();
         let before = world.sparse_sets[&set_id].sparse.len();
         assert_eq!(before, N, "the index is sized by the largest id inserted");
 
@@ -1378,7 +1379,7 @@ mod tests {
         world.compact();
 
         assert_eq!(
-            world.sparse_sets[&std::any::TypeId::of::<SparseP>()].sparse.len(),
+            world.sparse_sets[&crate::component_key::ComponentKey::of::<SparseP>()].sparse.len(),
             1,
             "the index is now SHORTER than the live id range — the state under test"
         );
@@ -1430,7 +1431,7 @@ mod tests {
 
         world.compact();
 
-        let set = &world.sparse_sets[&std::any::TypeId::of::<SparseH>()];
+        let set = &world.sparse_sets[&crate::component_key::ComponentKey::of::<SparseH>()];
         assert_eq!(
             set.sparse.len(),
             N,
@@ -1638,7 +1639,7 @@ mod tests {
         assert!(
             !world
                 .entity_component_types(e2)
-                .contains(&std::any::TypeId::of::<SparseC>()),
+                .contains(&crate::component_key::ComponentKey::of::<SparseC>()),
             "entity_component_types reports a stale sparse component after clear_entities"
         );
 
@@ -1715,16 +1716,16 @@ mod tests {
 
         let types = world.entity_component_types(e);
         assert!(
-            types.contains(&std::any::TypeId::of::<TableC>()),
+            types.contains(&crate::component_key::ComponentKey::of::<TableC>()),
             "entity_component_types missed the table component"
         );
         assert!(
-            types.contains(&std::any::TypeId::of::<SparseC>()),
+            types.contains(&crate::component_key::ComponentKey::of::<SparseC>()),
             "entity_component_types missed the sparse component"
         );
 
         let ptr = world
-            .get_component_ptr(e, std::any::TypeId::of::<SparseC>())
+            .get_component_ptr(e, crate::component_key::ComponentKey::of::<SparseC>())
             .expect("get_component_ptr returned None for a sparse component");
         // SAFETY: test-local — the pointer was looked up by `TypeId::of::<SparseC>()`, so the cast matches
         // the bytes, and the world outlives this read.

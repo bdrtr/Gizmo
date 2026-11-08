@@ -29,7 +29,7 @@ impl World {
 
     /// Clusters parent and child nodes that are in the same archetype so that they sit back to back in memory. O(N) cache swap.
     pub fn sort_archetype_hierarchy(&mut self) {
-        let type_id = std::any::TypeId::of::<crate::component::Children>();
+        let type_id = crate::component_key::ComponentKey::of::<crate::component::Children>();
         let mut arches_to_sort: Vec<usize> = Vec::new();
 
         for (idx, arch) in self.archetype_index.archetypes.iter().enumerate() {

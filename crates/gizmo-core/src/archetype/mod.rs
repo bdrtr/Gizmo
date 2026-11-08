@@ -27,7 +27,7 @@ pub use self::blob::*;
 pub use self::column::*;
 pub use self::sparse_set::*;
 
-use std::any::TypeId;
+use crate::component_key::ComponentKey;
 use std::collections::HashMap;
 use std::cell::UnsafeCell;
 
@@ -95,7 +95,7 @@ pub struct Archetype {
     /// This archetype's global index number
     pub id: u32,
     /// Component type → column index (in the columns vector)
-    column_indices: HashMap<TypeId, usize>,
+    column_indices: HashMap<ComponentKey, usize>,
     /// The vector of columns — each one the data of a single component type.
     /// Wrapped in UnsafeCell because the engine's Scheduler (DAG) guarantees parallel access
     /// safety at compile/planning time, not at run time (RwLock).
@@ -104,7 +104,7 @@ pub struct Archetype {
     entities: Vec<crate::entity::Entity>,
     /// Component add/remove transition cache
     /// TypeId → ArchetypeEdge
-    pub(crate) edges: HashMap<TypeId, ArchetypeEdge>,
+    pub(crate) edges: HashMap<ComponentKey, ArchetypeEdge>,
 }
 
 // SAFETY: an archetype's columns hold component values only, and `Component: Send + Sync`, so
@@ -203,9 +203,9 @@ impl Archetype {
         let mut columns = Vec::with_capacity(component_infos.len());
 
         for (idx, info) in component_infos.iter().enumerate() {
-            column_indices.insert(info.type_id, idx);
+            column_indices.insert(info.key, idx);
             columns.push(UnsafeCell::new(Column::new(
-                info.type_id,
+                info.key,
                 info.layout,
                 info.drop_fn,
                 info.clone_fn,
@@ -273,17 +273,17 @@ impl Archetype {
 
     /// Does this archetype contain the specified component type?
     #[inline]
-    pub fn has_component(&self, type_id: TypeId) -> bool {
+    pub fn has_component(&self, type_id: ComponentKey) -> bool {
         self.column_indices.contains_key(&type_id)
     }
 
     /// The list of component types in this archetype
-    pub fn component_types(&self) -> Vec<TypeId> {
+    pub fn component_types(&self) -> Vec<ComponentKey> {
         self.column_indices.keys().cloned().collect()
     }
 
     /// Sorted component types (used as the archetype identity)
-    pub fn sorted_component_types(&self) -> Vec<TypeId> {
+    pub fn sorted_component_types(&self) -> Vec<ComponentKey> {
         let mut types = self.component_types();
         types.sort();
         types
@@ -291,7 +291,7 @@ impl Archetype {
 
     /// Raw pointer access to the column of the specified component type
     #[inline]
-    pub fn get_column(&self, type_id: TypeId) -> Option<&Column> {
+    pub fn get_column(&self, type_id: ComponentKey) -> Option<&Column> {
         self.column_indices
             .get(&type_id)
             // SAFETY: `column_indices` only ever holds indices this archetype created for its own
@@ -313,7 +313,7 @@ impl Archetype {
     // `unsafe` kontratıyla çağırana devredildiği için lint bastırılıyor.
     #[allow(clippy::mut_from_ref)]
     #[inline]
-    pub unsafe fn get_column_mut(&self, type_id: TypeId) -> Option<&mut Column> {
+    pub unsafe fn get_column_mut(&self, type_id: ComponentKey) -> Option<&mut Column> {
         self.column_indices
             .get(&type_id)
             // SAFETY: index validity as in `get_column`. The aliasing rule — no second live
@@ -675,13 +675,13 @@ impl Archetype {
 
     /// Get the transition target for the specified type from the edge cache
     #[inline]
-    pub fn get_edge(&self, type_id: TypeId) -> Option<&ArchetypeEdge> {
+    pub fn get_edge(&self, type_id: ComponentKey) -> Option<&ArchetypeEdge> {
         self.edges.get(&type_id)
     }
 
     /// Add a new transition target to the edge cache
     #[inline]
-    pub fn set_add_edge(&mut self, type_id: TypeId, target: u32) {
+    pub fn set_add_edge(&mut self, type_id: ComponentKey, target: u32) {
         let edge = self.edges.entry(type_id).or_insert(ArchetypeEdge {
             add: None,
             remove: None,
@@ -691,7 +691,7 @@ impl Archetype {
 
     /// Add a removal transition target to the edge cache
     #[inline]
-    pub fn set_remove_edge(&mut self, type_id: TypeId, target: u32) {
+    pub fn set_remove_edge(&mut self, type_id: ComponentKey, target: u32) {
         let edge = self.edges.entry(type_id).or_insert(ArchetypeEdge {
             add: None,
             remove: None,
@@ -923,7 +923,7 @@ mod tests {
     #[test]
     fn column_basic_ops() {
         let info = ComponentInfo::of::<F32Comp>();
-        let mut col = Column::new(info.type_id, info.layout, info.drop_fn, info.clone_fn);
+        let mut col = Column::new(info.key, info.layout, info.drop_fn, info.clone_fn);
 
         let vals: Vec<f32> = vec![1.0, 2.0, 3.0];
         for v in &vals {
@@ -935,7 +935,7 @@ mod tests {
         }
 
         assert_eq!(col.len(), 3);
-        assert_eq!(col.type_id(), TypeId::of::<F32Comp>());
+        assert_eq!(col.type_id(), ComponentKey::of::<F32Comp>());
 
         // SAFETY: test-local — the values were built here with the layout this storage was created
         // with, the rows used are the ones just pushed, and the test owns the storage outright.
@@ -953,9 +953,9 @@ mod tests {
         ];
 
         let mut arch = Archetype::new(0, &infos);
-        assert!(arch.has_component(TypeId::of::<F32Comp>()));
-        assert!(arch.has_component(TypeId::of::<U32Comp>()));
-        assert!(!arch.has_component(TypeId::of::<u64>()));
+        assert!(arch.has_component(ComponentKey::of::<F32Comp>()));
+        assert!(arch.has_component(ComponentKey::of::<U32Comp>()));
+        assert!(!arch.has_component(ComponentKey::of::<u64>()));
         assert_eq!(arch.len(), 0);
 
         // Entity 42 ekle
@@ -964,10 +964,10 @@ mod tests {
         // SAFETY: test-local — the values were built here with the layout this storage was created
         // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
-            arch.get_column_mut(TypeId::of::<F32Comp>())
+            arch.get_column_mut(ComponentKey::of::<F32Comp>())
                 .unwrap()
                 .push_raw(&pos as *const F32Comp as *const u8, 1);
-            arch.get_column_mut(TypeId::of::<U32Comp>())
+            arch.get_column_mut(ComponentKey::of::<U32Comp>())
                 .unwrap()
                 .push_raw(&hp as *const U32Comp as *const u8, 1);
         }
@@ -982,10 +982,10 @@ mod tests {
         // SAFETY: test-local — the values were built here with the layout this storage was created
         // with, the rows used are the ones just pushed, and the test owns the storage outright.
         unsafe {
-            arch.get_column_mut(TypeId::of::<F32Comp>())
+            arch.get_column_mut(ComponentKey::of::<F32Comp>())
                 .unwrap()
                 .push_raw(&pos2 as *const F32Comp as *const u8, 1);
-            arch.get_column_mut(TypeId::of::<U32Comp>())
+            arch.get_column_mut(ComponentKey::of::<U32Comp>())
                 .unwrap()
                 .push_raw(&hp2 as *const U32Comp as *const u8, 1);
         }
@@ -1012,14 +1012,14 @@ mod tests {
         let infos = vec![ComponentInfo::of::<F32Comp>()];
         let mut arch = Archetype::new(0, &infos);
 
-        arch.set_add_edge(TypeId::of::<u32>(), 1);
-        arch.set_remove_edge(TypeId::of::<f32>(), 2);
+        arch.set_add_edge(ComponentKey::of::<u32>(), 1);
+        arch.set_remove_edge(ComponentKey::of::<f32>(), 2);
 
-        let edge = arch.get_edge(TypeId::of::<u32>()).unwrap();
+        let edge = arch.get_edge(ComponentKey::of::<u32>()).unwrap();
         assert_eq!(edge.add, Some(1));
         assert_eq!(edge.remove, None);
 
-        let edge2 = arch.get_edge(TypeId::of::<f32>()).unwrap();
+        let edge2 = arch.get_edge(ComponentKey::of::<f32>()).unwrap();
         assert_eq!(edge2.remove, Some(2));
     }
 
@@ -1133,8 +1133,8 @@ mod tests {
             // SAFETY: test-local — the values match the layouts this archetype was built with,
             // and each is pushed exactly once into its own column.
             unsafe {
-                arch.get_column_mut(TypeId::of::<Fuse>()).unwrap().push_raw(&f as *const Fuse as *const u8, 1);
-                arch.get_column_mut(TypeId::of::<Payload>()).unwrap().push_raw(&p as *const Payload as *const u8, 1);
+                arch.get_column_mut(ComponentKey::of::<Fuse>()).unwrap().push_raw(&f as *const Fuse as *const u8, 1);
+                arch.get_column_mut(ComponentKey::of::<Payload>()).unwrap().push_raw(&p as *const Payload as *const u8, 1);
             }
             std::mem::forget(f);
             std::mem::forget(p);
@@ -1201,8 +1201,8 @@ mod tests {
             let t = std::mem::ManuallyDrop::new(Tail("t"));
             // SAFETY: test-local, as above.
             unsafe {
-                arch.get_column_mut(TypeId::of::<Fuse>()).unwrap().push_raw(&*f as *const Fuse as *const u8, 1);
-                arch.get_column_mut(TypeId::of::<Tail>()).unwrap().push_raw(&*t as *const Tail as *const u8, 1);
+                arch.get_column_mut(ComponentKey::of::<Fuse>()).unwrap().push_raw(&*f as *const Fuse as *const u8, 1);
+                arch.get_column_mut(ComponentKey::of::<Tail>()).unwrap().push_raw(&*t as *const Tail as *const u8, 1);
             }
             arch.push_entity(crate::entity::Entity::new(i as u32, 0));
         }
@@ -1263,8 +1263,8 @@ mod tests {
         let b = std::mem::ManuallyDrop::new(Other(2));
         // SAFETY: test-local, as above.
         unsafe {
-            arch.get_column_mut(TypeId::of::<Counted>()).unwrap().push_raw(&*a as *const Counted as *const u8, 1);
-            arch.get_column_mut(TypeId::of::<Other>()).unwrap().push_raw(&*b as *const Other as *const u8, 1);
+            arch.get_column_mut(ComponentKey::of::<Counted>()).unwrap().push_raw(&*a as *const Counted as *const u8, 1);
+            arch.get_column_mut(ComponentKey::of::<Other>()).unwrap().push_raw(&*b as *const Other as *const u8, 1);
         }
         arch.push_entity(crate::entity::Entity::new(0, 0));
         CLONES.store(0, SeqCst);

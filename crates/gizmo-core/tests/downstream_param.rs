@@ -6,6 +6,7 @@ use std::any::TypeId;
 use std::marker::PhantomData;
 
 use gizmo_core::prelude::*;
+use gizmo_core::component_key::ComponentKey;
 use gizmo_core::system::{AccessInfo, IntoSystem, SystemParamFetchError};
 
 #[derive(Clone, Default)]
@@ -29,7 +30,7 @@ unsafe impl<T: Component> SystemParam for Count<T> {
     }
 
     fn get_access_info(info: &mut AccessInfo) {
-        info.component_reads.push(TypeId::of::<T>());
+        info.component_reads.push(ComponentKey::of::<T>());
     }
 }
 
@@ -58,6 +59,6 @@ fn a_parameter_written_downstream_runs_in_a_schedule() {
 fn its_declaration_reaches_the_scheduler() {
     let system = count_positions.into_system();
     let access = system.access_info();
-    assert!(access.component_reads.contains(&TypeId::of::<Pos>()), "the read of Pos reached the system");
+    assert!(access.component_reads.contains(&ComponentKey::of::<Pos>()), "the read of Pos reached the system");
     assert!(access.resource_writes.contains(&TypeId::of::<Seen>()), "and the built-in parameter's write beside it");
 }

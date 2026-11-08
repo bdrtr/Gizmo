@@ -7,9 +7,9 @@
 //! Filters (`With`, `Without`, `Changed`, `Added`) narrow the match without contributing
 //! data. Note which ones are per-ROW rather than per-archetype: the chunked iterators cannot
 //! serve those and reject them up front.
+use crate::component_key::ComponentKey;
 use crate::archetype::Archetype;
 use crate::world::World;
-use std::any::TypeId;
 use std::marker::PhantomData;
 
 mod default_filters;
@@ -133,7 +133,7 @@ pub trait WorldQuery: sealed::SealedQuery {
     /// that `&mut T` writes), and `Or` forwards both operands. `With`/`Without` declare
     /// nothing — they touch no component memory. The same pairs are consumed by the system
     /// scheduler to classify a system as a reader or writer of each component.
-    fn check_aliasing(types: &mut Vec<(TypeId, bool)>);
+    fn check_aliasing(types: &mut Vec<(ComponentKey, bool)>);
 
     /// Coarse, per-archetype admission test. Evaluated once for every archetype when the query
     /// is built; only archetypes answering `true` are ever visited, and an archetype rejected
@@ -282,7 +282,7 @@ macro_rules! query_data {
                 // SAFETY: the same contract as this method's, passed on to the tuple of the fields.
                 unsafe { <($($term,)+ ()) as $crate::query::WorldQuery>::fetch_raw(world, arch, tick) }
             }
-            fn check_aliasing(types: &mut ::std::vec::Vec<(::std::any::TypeId, bool)>) {
+            fn check_aliasing(types: &mut ::std::vec::Vec<($crate::component_key::ComponentKey, bool)>) {
                 <($($term,)+ ()) as $crate::query::WorldQuery>::check_aliasing(types)
             }
             fn matches_archetype(arch: &$crate::archetype::Archetype) -> bool {
@@ -440,11 +440,11 @@ pub struct Query<'w, D: QueryData, F: QueryFilter = ()> {
 /// - `Query<(&mut Position, &mut Position)>` → ❌ PANIC!
 /// - `Query<(&Position, &Position)>` → ✅ (both immutable — aliasing safe)
 #[inline]
-fn check(tid: TypeId, is_mut: bool, types: &mut Vec<(TypeId, bool)>) {
+fn check(tid: ComponentKey, is_mut: bool, types: &mut Vec<(ComponentKey, bool)>) {
     for &(existing_tid, existing_mut) in types.iter() {
         if existing_tid == tid && (existing_mut || is_mut) {
             panic!(
-                "Query aliasing UB detected! Component TypeId {:?} is accessed mutably more than once \
+                "Query aliasing UB detected! Component {:?} is accessed mutably more than once \
                  in the same query. This would cause undefined behavior. \
                  Use separate queries for components of the same type that need independent mutable access.",
                 tid
@@ -465,7 +465,7 @@ fn arch_matches<T: crate::component::Component>(arch: &Archetype, want_present: 
     if T::storage_type() == crate::component::StorageType::SparseSet {
         true
     } else {
-        arch.has_component(TypeId::of::<T>()) == want_present
+        arch.has_component(ComponentKey::of::<T>()) == want_present
     }
 }
 
@@ -495,19 +495,19 @@ macro_rules! impl_tick_filter {
 
             unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
                 if T::storage_type() == crate::component::StorageType::SparseSet {
-                    let set = world.sparse_sets.get(&TypeId::of::<T>())?;
+                    let set = world.sparse_sets.get(&ComponentKey::of::<T>())?;
                     Some((std::ptr::null(), Some(set as *const _)))
                 } else {
-                    let col = arch.get_column(TypeId::of::<T>())?;
+                    let col = arch.get_column(ComponentKey::of::<T>())?;
                     Some((col.ticks_ptr(), None))
                 }
             }
 
-            fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
+            fn check_aliasing(types: &mut Vec<(ComponentKey, bool)>) {
                 // Tick filters READ T's ComponentTicks — the same memory `&mut T` writes in
                 // deref_mut. Declare a READ so the scheduler can't co-batch a `&mut T` writer
                 // (unsynchronized read+write = data race).
-                check(TypeId::of::<T>(), false, types);
+                check(ComponentKey::of::<T>(), false, types);
             }
 
             fn matches_archetype(arch: &Archetype) -> bool {
@@ -558,13 +558,13 @@ macro_rules! impl_presence_filter {
 
             unsafe fn fetch_raw<'w>(world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
                 if T::storage_type() == crate::component::StorageType::SparseSet {
-                    Some((true, world.sparse_sets.get(&TypeId::of::<T>()).map(|s| s as *const _)))
+                    Some((true, world.sparse_sets.get(&ComponentKey::of::<T>()).map(|s| s as *const _)))
                 } else {
                     Some((false, None))
                 }
             }
 
-            fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
+            fn check_aliasing(_types: &mut Vec<(ComponentKey, bool)>) {}
 
             fn matches_archetype(arch: &Archetype) -> bool {
                 arch_matches::<T>(arch, $present)
@@ -601,8 +601,8 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
     unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, tick: u32) -> Option<Self::Fetch<'w>> {
         T0::fetch_raw(world, arch, tick)
     }
-    fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
-        check(TypeId::of::<T0::Component>(), T0::IS_MUT, types);
+    fn check_aliasing(types: &mut Vec<(ComponentKey, bool)>) {
+        check(ComponentKey::of::<T0::Component>(), T0::IS_MUT, types);
     }
     fn matches_archetype(arch: &Archetype) -> bool {
         arch_matches::<T0::Component>(arch, true)
@@ -664,8 +664,8 @@ impl<F: FetchComponent> WorldQuery for Option<F> where F::Component: crate::comp
         // Always admitted; the inner `None` is "this archetype has no such column".
         Some(F::fetch_raw(world, arch, tick))
     }
-    fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
-        check(TypeId::of::<F::Component>(), F::IS_MUT, types);
+    fn check_aliasing(types: &mut Vec<(ComponentKey, bool)>) {
+        check(ComponentKey::of::<F::Component>(), F::IS_MUT, types);
     }
     fn matches_archetype(_arch: &Archetype) -> bool {
         true
@@ -727,7 +727,7 @@ impl WorldQuery for IgnoreDefaultFilters {
     unsafe fn fetch_raw<'w>(_world: &'w World, _arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
         Some(())
     }
-    fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
+    fn check_aliasing(_types: &mut Vec<(ComponentKey, bool)>) {}
     fn matches_archetype(_arch: &Archetype) -> bool {
         true
     }
@@ -761,7 +761,7 @@ impl WorldQuery for crate::entity::Entity {
     unsafe fn fetch_raw<'w>(_world: &'w World, arch: &Archetype, _tick: u32) -> Option<Self::Fetch<'w>> {
         Some(arch.entities().as_ptr())
     }
-    fn check_aliasing(_types: &mut Vec<(TypeId, bool)>) {}
+    fn check_aliasing(_types: &mut Vec<(ComponentKey, bool)>) {}
     fn matches_archetype(_arch: &Archetype) -> bool {
         true
     }
@@ -842,7 +842,7 @@ macro_rules! impl_query_tuple {
             unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, tick: u32) -> Option<Self::Fetch<'w>> {
                 Some(($($t::fetch_raw(world, arch, tick)?,)*))
             }
-            fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
+            fn check_aliasing(types: &mut Vec<(ComponentKey, bool)>) {
                 $($t::check_aliasing(types);)*
             }
             fn matches_archetype(arch: &Archetype) -> bool {
@@ -948,7 +948,7 @@ impl<T1: WorldQuery, T2: WorldQuery> WorldQuery for Or<T1, T2> {
         Some((f1, f2))
     }
 
-    fn check_aliasing(types: &mut Vec<(TypeId, bool)>) {
+    fn check_aliasing(types: &mut Vec<(ComponentKey, bool)>) {
         // Propagate operand access — otherwise `Or<Changed<A>, Changed<B>>` would declare
         // NOTHING and the scheduler could race a `Mut` writer (the round-1 bug class).
         T1::check_aliasing(types);

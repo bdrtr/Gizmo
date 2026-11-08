@@ -46,6 +46,7 @@ pub mod archetype;
 pub mod asset;
 pub mod commands;
 pub mod component;
+pub mod component_key;
 pub mod cvar;
 pub mod entity;
 pub mod event;

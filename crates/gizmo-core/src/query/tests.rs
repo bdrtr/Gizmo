@@ -33,9 +33,9 @@ impl_component!(Aligned16);
 fn test_same_type_mut_mut_panics() {
     let mut types = Vec::new();
     // İlk &mut Position — sorunsuz eklenir
-    check(TypeId::of::<Position>(), true, &mut types);
+    check(crate::component_key::ComponentKey::of::<Position>(), true, &mut types);
     // İkinci &mut Position — PANIC olmalı!
-    check(TypeId::of::<Position>(), true, &mut types);
+    check(crate::component_key::ComponentKey::of::<Position>(), true, &mut types);
 }
 
 /// `Query<(&Position, &mut Position)>` — one immutable, one mutable access to the same type:
@@ -44,16 +44,16 @@ fn test_same_type_mut_mut_panics() {
 #[should_panic(expected = "Query aliasing UB detected")]
 fn test_same_type_ref_mut_panics() {
     let mut types = Vec::new();
-    check(TypeId::of::<Position>(), false, &mut types); // &Position
-    check(TypeId::of::<Position>(), true, &mut types); // Mut<Position> — PANIC!
+    check(crate::component_key::ComponentKey::of::<Position>(), false, &mut types); // &Position
+    check(crate::component_key::ComponentKey::of::<Position>(), true, &mut types); // Mut<Position> — PANIC!
 }
 
 /// `Query<(&mut Position, &mut Velocity)>` — different types, must work without problems.
 #[test]
 fn test_different_types_mut_mut_ok() {
     let mut types = Vec::new();
-    check(TypeId::of::<Position>(), true, &mut types);
-    check(TypeId::of::<Velocity>(), true, &mut types);
+    check(crate::component_key::ComponentKey::of::<Position>(), true, &mut types);
+    check(crate::component_key::ComponentKey::of::<Velocity>(), true, &mut types);
     assert_eq!(types.len(), 2);
 }
 
@@ -61,8 +61,8 @@ fn test_different_types_mut_mut_ok() {
 #[test]
 fn test_same_type_ref_ref_ok() {
     let mut types = Vec::new();
-    check(TypeId::of::<Position>(), false, &mut types);
-    check(TypeId::of::<Position>(), false, &mut types);
+    check(crate::component_key::ComponentKey::of::<Position>(), false, &mut types);
+    check(crate::component_key::ComponentKey::of::<Position>(), false, &mut types);
     assert_eq!(types.len(), 2);
 }
 
@@ -790,7 +790,7 @@ fn an_optional_read_beside_a_writer_of_the_same_type_is_rejected() {
 fn an_optional_mut_declares_a_write() {
     let mut types = Vec::new();
     <Option<&mut Velocity> as WorldQuery>::check_aliasing(&mut types);
-    assert_eq!(types, vec![(TypeId::of::<Velocity>(), true)]);
+    assert_eq!(types, vec![(crate::component_key::ComponentKey::of::<Velocity>(), true)]);
 }
 
 /// A table column is a whole-archetype slice or nothing; a sparse one is refused, like the sparse
@@ -1035,8 +1035,8 @@ fn a_filtered_query_writes_and_declares_what_it_filters_on() {
 
     let mut info = crate::system::AccessInfo::new();
     <Query<'static, &'static mut Position, Changed<Velocity>> as crate::system::SystemParam>::get_access_info(&mut info);
-    assert!(info.component_writes.contains(&std::any::TypeId::of::<Position>()));
-    assert!(info.component_reads.contains(&std::any::TypeId::of::<Velocity>()), "a tick filter reads its ticks");
+    assert!(info.component_writes.contains(&crate::component_key::ComponentKey::of::<Position>()));
+    assert!(info.component_reads.contains(&crate::component_key::ComponentKey::of::<Velocity>()), "a tick filter reads its ticks");
 }
 
 /// `for x in &q` and `for x in &mut q`, as anyone coming from a Rust collection writes them.

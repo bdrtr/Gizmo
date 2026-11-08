@@ -7,6 +7,7 @@
 //! Access declarations control BATCHING, not order. Two systems that conflict are merely kept
 //! out of the same batch; which of them runs first is the batcher's choice. The only ways a
 //! caller picks an order are `before`/`after` labels and [`Phase`].
+use crate::component_key::ComponentKey;
 use crate::world::World;
 use std::any::TypeId;
 
@@ -35,13 +36,13 @@ pub struct AccessInfo {
     /// This also covers components whose *change ticks* are merely inspected — a
     /// `Changed<T>`/`Added<T>` filter declares a read of `T` even though it yields no `&T`,
     /// because those ticks are the same memory a `&mut T` writer stamps.
-    pub component_reads: Vec<TypeId>,
+    pub component_reads: Vec<ComponentKey>,
     /// Components written through `&mut T`.
     ///
     /// The same `TypeId` may legitimately appear in `component_reads` as well — a merged
     /// batch info routinely holds both — because an `AccessInfo` is never checked against
     /// itself, only against another one.
-    pub component_writes: Vec<TypeId>,
+    pub component_writes: Vec<ComponentKey>,
     /// Resources read through `Res<T>`.
     ///
     /// Resource and component lists are compared separately, so a type used as a component
@@ -480,23 +481,23 @@ mod tests {
     #[test]
     fn test_schedule_access_info_compatibility() {
         let mut info1 = AccessInfo::new();
-        info1.component_reads.push(TypeId::of::<CompA>());
+        info1.component_reads.push(ComponentKey::of::<CompA>());
 
         let mut info2 = AccessInfo::new();
-        info2.component_reads.push(TypeId::of::<CompA>());
+        info2.component_reads.push(ComponentKey::of::<CompA>());
 
         // İki sistem de sadece OKUYOR, birbiriyle uyumlu (parallel çalışabilir)
         assert!(info1.is_compatible_with(&info2));
 
         let mut info3 = AccessInfo::new();
-        info3.component_writes.push(TypeId::of::<CompA>());
+        info3.component_writes.push(ComponentKey::of::<CompA>());
 
         // Biri okuyor diğeri YAZIYOR, uyumsuz (farklı batch'lerde olmalı)
         assert!(!info1.is_compatible_with(&info3));
 
         // İkisi de YAZIYOR, uyumsuz
         let mut info4 = AccessInfo::new();
-        info4.component_writes.push(TypeId::of::<CompA>());
+        info4.component_writes.push(ComponentKey::of::<CompA>());
         assert!(!info3.is_compatible_with(&info4));
     }
 
@@ -777,36 +778,36 @@ mod tests {
     #[test]
     fn write_write_conflict() {
         let mut a = AccessInfo::new();
-        a.component_writes.push(TypeId::of::<CompA>());
+        a.component_writes.push(ComponentKey::of::<CompA>());
         let mut b = AccessInfo::new();
-        b.component_writes.push(TypeId::of::<CompA>());
+        b.component_writes.push(ComponentKey::of::<CompA>());
         assert!(!a.is_compatible_with(&b));
     }
 
     #[test]
     fn read_write_conflict() {
         let mut a = AccessInfo::new();
-        a.component_reads.push(TypeId::of::<CompA>());
+        a.component_reads.push(ComponentKey::of::<CompA>());
         let mut b = AccessInfo::new();
-        b.component_writes.push(TypeId::of::<CompA>());
+        b.component_writes.push(ComponentKey::of::<CompA>());
         assert!(!a.is_compatible_with(&b));
     }
 
     #[test]
     fn read_read_no_conflict() {
         let mut a = AccessInfo::new();
-        a.component_reads.push(TypeId::of::<CompA>());
+        a.component_reads.push(ComponentKey::of::<CompA>());
         let mut b = AccessInfo::new();
-        b.component_reads.push(TypeId::of::<CompA>());
+        b.component_reads.push(ComponentKey::of::<CompA>());
         assert!(a.is_compatible_with(&b));
     }
 
     #[test]
     fn different_types_no_conflict() {
         let mut a = AccessInfo::new();
-        a.component_writes.push(TypeId::of::<CompA>());
+        a.component_writes.push(ComponentKey::of::<CompA>());
         let mut b = AccessInfo::new();
-        b.component_writes.push(TypeId::of::<CompB>());
+        b.component_writes.push(ComponentKey::of::<CompB>());
         assert!(a.is_compatible_with(&b));
     }
 
@@ -823,7 +824,7 @@ mod tests {
         struct Pos(#[allow(dead_code)] f32);
         impl crate::component::Component for Pos {}
 
-        let pos = TypeId::of::<Pos>();
+        let pos = ComponentKey::of::<Pos>();
 
         let mut changed_info = AccessInfo::new();
         <Query<'static, (), Changed<Pos>> as SystemParam>::get_access_info(&mut changed_info);
@@ -871,8 +872,8 @@ mod tests {
         let mut or_info = AccessInfo::new();
         <Query<'static, (), Or<Changed<A>, Changed<B>>> as SystemParam>::get_access_info(&mut or_info);
         assert!(
-            or_info.component_reads.contains(&TypeId::of::<A>())
-                && or_info.component_reads.contains(&TypeId::of::<B>()),
+            or_info.component_reads.contains(&ComponentKey::of::<A>())
+                && or_info.component_reads.contains(&ComponentKey::of::<B>()),
             "Or<Changed<A>,Changed<B>> hem A hem B'yi READ olarak bildirmeli"
         );
 

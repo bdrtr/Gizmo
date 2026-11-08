@@ -55,7 +55,7 @@ impl<'w, D: QueryData, F: QueryFilter> Query<'w, D, F> {
         <(D, F)>::check_aliasing(&mut used_types);
         let matching = world
             .archetype_index
-            .matching_archetypes(TypeId::of::<<(D, F) as WorldQuery>::StaticType>(), <(D, F)>::matches_archetype)
+            .matching_archetypes(std::any::TypeId::of::<<(D, F) as WorldQuery>::StaticType>(), <(D, F)>::matches_archetype)
             .to_vec();
         Self {
             ref_tick: world.change_ref_tick,

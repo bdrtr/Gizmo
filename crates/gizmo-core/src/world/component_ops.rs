@@ -1,9 +1,9 @@
+use crate::component_key::ComponentKey;
 use super::World;
 use crate::archetype::{ComponentInfo, EntityLocation};
 use crate::component::Component;
 use crate::entity::Entity;
 
-use std::any::TypeId;
 
 /// Drops the live value at `row` in each of `types`' columns, leaving every slot uninitialised
 /// for the bundle write that follows.
@@ -28,10 +28,10 @@ use std::any::TypeId;
 /// archetype.
 unsafe fn drop_live_bundle_rows(
     arch: &crate::archetype::Archetype,
-    types: &[TypeId],
+    types: &[ComponentKey],
     row: usize,
 ) {
-    let mut dropped: Vec<TypeId> = Vec::new();
+    let mut dropped: Vec<ComponentKey> = Vec::new();
     for &type_id in types {
         if dropped.contains(&type_id) {
             continue;
@@ -91,14 +91,14 @@ impl World {
         // A component with hooks takes that route too, or they would not hear about it.
         if infos
             .iter()
-            .any(|i| i.storage_type == crate::component::StorageType::SparseSet || self.has_hooks(i.type_id))
+            .any(|i| i.storage_type == crate::component::StorageType::SparseSet || self.has_hooks(i.key))
         {
             bundle.apply(self, entity);
             return;
         }
 
         for info in &infos {
-            self.component_infos.entry(info.type_id).or_insert_with(|| *info);
+            self.component_infos.entry(info.key).or_insert_with(|| *info);
         }
 
         // An id RESERVED from the allocator but never flushed (`Commands::spawn` hands one
@@ -134,8 +134,8 @@ impl World {
 
         let mut new_types = self.archetype_index.archetypes[old_arch_id].sorted_component_types();
         for info in &infos {
-            if let Err(pos) = new_types.binary_search(&info.type_id) {
-                new_types.insert(pos, info.type_id);
+            if let Err(pos) = new_types.binary_search(&info.key) {
+                new_types.insert(pos, info.key);
             }
         }
 
@@ -143,7 +143,7 @@ impl World {
         // may legitimately name one type twice, since `BundleExt::with` appends rather than
         // substitutes. `drop_live_bundle_rows` is what deduplicates them, because dropping one
         // slot twice is a double free.
-        let bundle_types: Vec<TypeId> = infos.iter().map(|i| i.type_id).collect();
+        let bundle_types: Vec<ComponentKey> = infos.iter().map(|i| i.key).collect();
 
         let target_arch_id = if let Some(&id) = self.archetype_index.set_to_id.get(&new_types) {
             id
@@ -215,7 +215,7 @@ impl World {
             // uses, and load-bearing for the same reason: one column must be duplicated once and
             // dropped once. A bundle may legitimately name a type twice (`BundleExt::with`
             // appends rather than substitutes).
-            let mut dedup: Vec<TypeId> = Vec::with_capacity(bundle_types.len());
+            let mut dedup: Vec<ComponentKey> = Vec::with_capacity(bundle_types.len());
             for &t in &bundle_types {
                 if !dedup.contains(&t) {
                     dedup.push(t);
@@ -333,7 +333,7 @@ impl World {
         // one of the holes it allocates and leaves uninitialised for this write to fill, and
         // dropping a hole frees a garbage pointer. Computed BEFORE the move, because the move
         // is what makes the distinction unrecoverable.
-        let live_after_move: Vec<TypeId> = {
+        let live_after_move: Vec<ComponentKey> = {
             let old_arch = &self.archetype_index.archetypes[old_arch_id];
             bundle_types.iter().copied().filter(|t| old_arch.has_component(*t)).collect()
         };
@@ -483,10 +483,10 @@ impl World {
             if info.storage_type == crate::component::StorageType::SparseSet {
                 let removed = self
                     .sparse_sets
-                    .get_mut(&info.type_id)
+                    .get_mut(&info.key)
                     .is_some_and(|set| set.remove(eid));
                 if removed {
-                    let tid = info.type_id;
+                    let tid = info.key;
                     self.run_hooks(tid, |h, w| {
                         for hook in &mut h.on_remove {
                             hook(w, entity);
@@ -513,10 +513,10 @@ impl World {
         // public promise rather than an internal quirk.
         let mut detached_table_types = Vec::new();
         for info in &infos {
-            if let Ok(pos) = new_types.binary_search(&info.type_id) {
+            if let Ok(pos) = new_types.binary_search(&info.key) {
                 new_types.remove(pos);
                 if info.storage_type == crate::component::StorageType::Table {
-                    detached_table_types.push(info.type_id);
+                    detached_table_types.push(info.key);
                 }
             }
         }
@@ -630,7 +630,7 @@ impl World {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();
         self.register_component_type::<T>();
-        let type_id = TypeId::of::<T>();
+        let type_id = ComponentKey::of::<T>();
 
         if T::storage_type() == crate::component::StorageType::SparseSet {
             let info = self.component_infos.get(&type_id).copied().unwrap_or_else(|| ComponentInfo::of::<T>());
@@ -812,7 +812,7 @@ impl World {
         if !self.is_alive(entity) {
             return None;
         }
-        let ptr = self.get_component_ptr(entity, TypeId::of::<T>())?;
+        let ptr = self.get_component_ptr(entity, ComponentKey::of::<T>())?;
         // SAFETY: the pointer was looked up by `TypeId::of::<T>()`, so it addresses a live `T` in
         // a column or sparse set this world owns. The returned reference borrows `self`, so no
         // structural change (which needs `&mut self`) can move or drop it while it lives — the
@@ -821,7 +821,8 @@ impl World {
     }
 
     /// Getting a raw Component Pointer (for Reflection/Editor)
-    pub fn get_component_ptr(&self, entity: Entity, type_id: TypeId) -> Option<*const u8> {
+    pub fn get_component_ptr(&self, entity: Entity, key: impl Into<ComponentKey>) -> Option<*const u8> {
+        let type_id = key.into();
         // A dead entity's id is reused with a new generation; without this a stale handle read the new
         // entity's component (`tests/raw_access.rs`).
         if !self.is_alive(entity) {
@@ -854,7 +855,8 @@ impl World {
     /// 2026-11-08 it stamped nothing, and `Changed<Children>` missed a second child pushed into an
     /// existing list (`tests/raw_access.rs`). To look without writing, use
     /// [`get_component_ptr`](Self::get_component_ptr).
-    pub fn get_component_mut_ptr(&mut self, entity: Entity, type_id: TypeId) -> Option<*mut u8> {
+    pub fn get_component_mut_ptr(&mut self, entity: Entity, key: impl Into<ComponentKey>) -> Option<*mut u8> {
+        let type_id = key.into();
         if !self.is_alive(entity) {
             return None;
         }
@@ -881,7 +883,7 @@ impl World {
     pub fn remove_component<T: Component>(&mut self, entity: Entity) {
         if !self.is_alive(entity) { return; }
         let eid = entity.id();
-        let type_id = TypeId::of::<T>();
+        let type_id = ComponentKey::of::<T>();
 
         if T::storage_type() == crate::component::StorageType::SparseSet {
             if let Some(set) = self.sparse_sets.get_mut(&type_id) {
@@ -1021,7 +1023,7 @@ impl World {
         }
 
         self.register_component_type::<T>();
-        let type_id = TypeId::of::<T>();
+        let type_id = ComponentKey::of::<T>();
 
         // 1. Gruplama: source_arch_id -> Vec<Entity>
         let mut groups: std::collections::HashMap<u32, Vec<Entity>> = std::collections::HashMap::new();
@@ -1223,7 +1225,7 @@ impl World {
             return;
         }
 
-        let type_id = TypeId::of::<T>();
+        let type_id = ComponentKey::of::<T>();
         let mut groups: std::collections::HashMap<u32, Vec<Entity>> = std::collections::HashMap::new();
         // Ids already placed in a group — see the note at the `insert` below.
         let mut seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
@@ -2068,7 +2070,7 @@ mod tests {
         let loc = world.entity_location(entity.id());
         let arch = &world.archetype_index.archetypes[loc.archetype_id as usize];
         let col = arch
-            .get_column(std::any::TypeId::of::<T>())
+            .get_column(crate::component_key::ComponentKey::of::<T>())
             .expect("component column missing");
         let t = col.ticks[loc.row as usize];
         (t.added, t.changed)
@@ -2192,7 +2194,7 @@ mod tests {
         // The set's four arrays must still describe each other. `dense` grew by one for the
         // incoming value and the swap-remove put it back; a panic between the two would have
         // left them disagreeing.
-        let set = &world.sparse_sets[&std::any::TypeId::of::<SparseLoud>()];
+        let set = &world.sparse_sets[&crate::component_key::ComponentKey::of::<SparseLoud>()];
         assert_eq!(set.dense.len(), set.ticks.len());
         assert_eq!(set.dense.len(), set.entities.len());
         for (id, &row) in set.sparse.iter().enumerate() {
@@ -2349,7 +2351,7 @@ mod tests {
         // had not: `sparse[victim]` still named a row now holding `tail`'s value, and
         // `sparse[tail]` named `dense.len()` — one past the end, indexed with no bounds check by
         // `get_ptr` and by `query::fetch`'s sparse branch.
-        let set = &world.sparse_sets[&std::any::TypeId::of::<SparseFuse>()];
+        let set = &world.sparse_sets[&crate::component_key::ComponentKey::of::<SparseFuse>()];
         assert_eq!(set.dense.len(), set.ticks.len(), "dense/ticks desync");
         assert_eq!(set.dense.len(), set.entities.len(), "dense/entities desync");
         for (id, &row) in set.sparse.iter().enumerate() {

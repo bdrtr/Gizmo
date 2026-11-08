@@ -8,8 +8,8 @@
 //! fields (archetype_index, component_infos, sparse_sets, resources); it changes none of them,
 //! it only reads.
 
+use crate::component_key::ComponentKey;
 use super::World;
-use std::any::TypeId;
 
 /// Summary of a single component type inside an archetype.
 #[derive(Debug, Clone)]
@@ -18,7 +18,7 @@ pub struct ComponentSummary {
     /// (archetype signatures, hook registration, sparse sets). Meaningful inside this
     /// process only: `TypeId` values are not stable across compilations, so never
     /// serialise one. [`Self::name`] carries the already-resolved human-readable name.
-    pub type_id: TypeId,
+    pub type_id: ComponentKey,
     /// `std::any::type_name` (the full path captured at registration time).
     pub name: &'static str,
     /// The byte size of a single instance (`Layout::size`).
@@ -128,7 +128,7 @@ impl World {
 
     /// The human-readable name of a component type (if it is registered).
     #[inline]
-    pub fn component_type_name(&self, type_id: TypeId) -> Option<&'static str> {
+    pub fn component_type_name(&self, type_id: ComponentKey) -> Option<&'static str> {
         self.component_infos.get(&type_id).map(|i| i.type_name)
     }
 

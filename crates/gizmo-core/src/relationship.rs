@@ -114,7 +114,7 @@ fn with_list<R: Relationship>(world: &mut World, entity: Entity, create: bool, f
     if !world.is_alive(entity) {
         return;
     }
-    let type_id = std::any::TypeId::of::<R::Target>();
+    let type_id = crate::component_key::ComponentKey::of::<R::Target>();
     // Looked at, not written: the mutable pointer would stamp a change.
     if world.get_component_ptr(entity, type_id).is_none() {
         if !create {

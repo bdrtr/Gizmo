@@ -1,7 +1,7 @@
+use crate::component_key::ComponentKey;
 use super::sealed;
 use crate::archetype::Archetype;
 use crate::world::World;
-use std::any::TypeId;
 
 // =========================================================================
 // FETCH COMPONENT TRAIT
@@ -102,10 +102,10 @@ impl<T: crate::component::Component> FetchComponent for &T {
 
     unsafe fn fetch_raw<'w>(world: &'w World, arch: &Archetype, _system_tick: u32) -> Option<Self::Fetch<'w>> {
         if T::storage_type() == crate::component::StorageType::SparseSet {
-            let set = world.sparse_sets.get(&TypeId::of::<T>())?;
+            let set = world.sparse_sets.get(&ComponentKey::of::<T>())?;
             Some((std::ptr::null(), Some(set as *const _)))
         } else {
-            let col = arch.get_column(TypeId::of::<T>())?;
+            let col = arch.get_column(ComponentKey::of::<T>())?;
             Some((col.data_ptr(), None))
         }
     }
@@ -201,10 +201,10 @@ impl<T: crate::component::Component> FetchComponent for &mut T {
             // interior mutability (BlobVec / `UnsafeCell<ComponentTicks>`), so no
             // `&mut ComponentSparseSet` is ever formed (that would race under
             // `par_for_each_mut`).
-            let set = world.sparse_sets.get(&TypeId::of::<T>())?;
+            let set = world.sparse_sets.get(&ComponentKey::of::<T>())?;
             Some((std::ptr::null_mut(), std::ptr::null_mut(), system_tick, Some(set as *const _ as *mut _)))
         } else {
-            let col = arch.get_column_mut(TypeId::of::<T>())?;
+            let col = arch.get_column_mut(ComponentKey::of::<T>())?;
             Some((col.data_ptr_mut(), col.ticks_ptr_mut(), system_tick, None))
         }
     }

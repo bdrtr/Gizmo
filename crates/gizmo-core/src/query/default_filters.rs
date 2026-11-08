@@ -82,7 +82,7 @@
 //! is all-or-nothing for one query, because "ignore the second of three default filters" is a
 //! question no caller has yet had.
 
-use std::any::TypeId;
+use crate::component_key::ComponentKey;
 
 /// The component types whose presence hides an entity from every **system** query.
 ///
@@ -94,7 +94,7 @@ pub struct DefaultQueryFilters {
     /// Excluded types, in registration order. A `Vec` rather than a set because it holds a handful
     /// of entries and is walked once per archetype per query construction — a hash lookup would
     /// cost more than the scan it replaced.
-    excluded: Vec<TypeId>,
+    excluded: Vec<ComponentKey>,
 }
 
 impl DefaultQueryFilters {
@@ -121,7 +121,7 @@ impl DefaultQueryFilters {
              this would have filtered nothing — silently.",
             std::any::type_name::<T>(),
         );
-        let tid = TypeId::of::<T>();
+        let tid = ComponentKey::of::<T>();
         if !self.excluded.contains(&tid) {
             self.excluded.push(tid);
         }
@@ -129,7 +129,7 @@ impl DefaultQueryFilters {
 
     /// Removes `T`. Returns whether it was there.
     pub fn remove<T: crate::component::Component>(&mut self) -> bool {
-        let tid = TypeId::of::<T>();
+        let tid = ComponentKey::of::<T>();
         let before = self.excluded.len();
         self.excluded.retain(|&t| t != tid);
         self.excluded.len() != before
@@ -150,7 +150,7 @@ impl DefaultQueryFilters {
     /// Whether `T` is registered.
     #[must_use]
     pub fn contains<T: crate::component::Component>(&self) -> bool {
-        self.excluded.contains(&TypeId::of::<T>())
+        self.excluded.contains(&ComponentKey::of::<T>())
     }
 
     /// Whether this archetype holds any filtered component — i.e. whether a system query should

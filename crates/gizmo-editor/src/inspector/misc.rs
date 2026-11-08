@@ -472,7 +472,8 @@ pub fn draw_reflection_section(
     if let Some(registry) = world.get_resource::<gizmo_core::ComponentRegistry>() {
         let types = world.entity_component_types(entity_id);
 
-        for tid in types {
+        // A component defined at runtime has no Rust type, so no registration to edit it through.
+        for tid in types.into_iter().filter_map(|key| key.type_id()) {
             if let Some(reg) = registry.get_registration(tid) {
                 if skip_names.contains(&reg.name.as_str()) {
                     continue;
