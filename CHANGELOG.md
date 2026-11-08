@@ -141,6 +141,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **Immutable components.** `impl_component!(T; immutable)`, and `&mut T` in a query does not compile.
 
+- **A system parameter can be written outside `gizmo-core`.** `SystemParam` was sealed; it is `unsafe trait SystemParam` now, as
+  in Bevy, with the contract on the trait: `get_access_info` declares everything `fetch` touches. **Breaking** for nobody outside
+  the crate, since nobody could implement it; `system_param!` still needs no `unsafe`.
+
 ### Fixed
 
 - **A phone lost 13 % of its frame rate to features nothing in the game used.** The lit shader has three tiers on the forward-only

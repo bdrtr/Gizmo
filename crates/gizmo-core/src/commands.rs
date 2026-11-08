@@ -147,8 +147,8 @@ pub struct Commands<'w> {
     pub entities: Res<'w, crate::entity::allocator::Entities>,
 }
 
-impl crate::system::sealed::Sealed for Commands<'static> {}
-impl SystemParam for Commands<'static> {
+// SAFETY: it reads the `CommandQueue` and `Entities` resources, and declares both reads.
+unsafe impl SystemParam for Commands<'static> {
     type Item<'w> = Commands<'w>;
 
     type State = ();

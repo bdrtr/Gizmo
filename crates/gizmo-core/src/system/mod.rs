@@ -288,8 +288,8 @@ mod condition;
 mod config;
 mod into_system;
 mod pipe;
-/// System parameters — [`Res`], [`ResMut`], [`Query`](crate::Query), `Option<P>`, and the seal
-/// that decides who may add to that list.
+/// System parameters — [`Res`], [`ResMut`], [`Query`](crate::Query), `Option<P>`, and the contract
+/// a parameter written elsewhere has to keep (`unsafe impl SystemParam`).
 ///
 /// Public because [`system_param!`](crate::system_param) expands to a path into it; the contents
 /// are also re-exported at [`crate::system`], which is where they should be named from.

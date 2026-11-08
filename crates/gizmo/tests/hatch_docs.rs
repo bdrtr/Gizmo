@@ -74,7 +74,7 @@ const HATCH_DECLS: &[(&str, &str)] = &[
     ("system_param", "macro_rules! system_param"),
     (
         "impl<P: SystemParam> SystemParam for Option<P>",
-        "impl<P: SystemParam> SystemParam for Option<P>",
+        "unsafe impl<P: SystemParam> SystemParam for Option<P>",
     ),
     ("IgnoreDefaultFilters", "pub struct IgnoreDefaultFilters"),
     ("register_on_replace", "pub fn register_on_replace"),
@@ -245,10 +245,12 @@ fn doc_block_above<'a>(text: &'a str, decl: &str) -> Option<String> {
     let mut block = Vec::new();
     for l in lines[..at].iter().rev() {
         let t = l.trim_start();
-        // Attributes sit between the docs and the item; step over them.
+        // Attributes sit between the docs and the item, and so can a plain comment, which rustdoc
+        // does not see either: an `unsafe impl`'s `// SAFETY:` line, say. Step over both.
+        let plain_comment = t.starts_with("//") && !t.starts_with("///") && !t.starts_with("//!");
         if t.starts_with("///") {
             block.push(t.trim_start_matches("///").trim());
-        } else if t.starts_with("#[") || t.is_empty() && !block.is_empty() {
+        } else if t.starts_with("#[") || plain_comment || t.is_empty() && !block.is_empty() {
             continue;
         } else {
             break;

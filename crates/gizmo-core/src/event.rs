@@ -189,8 +189,8 @@ impl<'w, T: 'static> EventReader<'w, T> {
     }
 }
 
-impl<T: 'static> crate::system::sealed::Sealed for EventReader<'static, T> {}
-impl<T: 'static> SystemParam for EventReader<'static, T> {
+// SAFETY: it is a `Res<Events<T>>` and declares exactly that.
+unsafe impl<T: 'static> SystemParam for EventReader<'static, T> {
     type Item<'w> = EventReader<'w, T>;
     type State = ();
     fn fetch<'w>(
@@ -242,8 +242,8 @@ impl<'w, T: 'static> EventWriter<'w, T> {
     }
 }
 
-impl<T: 'static> crate::system::sealed::Sealed for EventWriter<'static, T> {}
-impl<T: 'static> SystemParam for EventWriter<'static, T> {
+// SAFETY: it is a `ResMut<Events<T>>` and declares exactly that.
+unsafe impl<T: 'static> SystemParam for EventWriter<'static, T> {
     type Item<'w> = EventWriter<'w, T>;
     type State = ();
     fn fetch<'w>(
@@ -300,8 +300,8 @@ impl<'w, T: 'static> EventMutator<'w, T> {
     }
 }
 
-impl<T: 'static> crate::system::sealed::Sealed for EventMutator<'static, T> {}
-impl<T: 'static> SystemParam for EventMutator<'static, T> {
+// SAFETY: it is a `ResMut<Events<T>>` and declares exactly that.
+unsafe impl<T: 'static> SystemParam for EventMutator<'static, T> {
     type Item<'w> = EventMutator<'w, T>;
     type State = ();
     fn fetch<'w>(

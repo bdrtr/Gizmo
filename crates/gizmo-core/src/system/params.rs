@@ -69,34 +69,29 @@ impl std::error::Error for SystemParamFetchError {
     }
 }
 
-// SystemParam tamamen içsel bir DI trait'idir; yanlış bir impl scheduler'ın
-// aliasing garantilerini bozar. Tüm impl'ler bu crate içindedir (Res/ResMut/
-// f32/Query) ve cross-crate impl yoktur, bu yüzden sealed yapılır.
-// `pub(crate)` çünkü SystemParam'ı implemente eden tipler bu crate'in başka
-// modüllerinde de var (EventReader/EventWriter @ event.rs, Commands @ commands.rs);
-// Sealed'a yalnızca crate içinden erişilebilir, dolayısıyla dış crate'ler hâlâ
-// SystemParam impl edemez.
-/// The seal on [`SystemParam`], and the one documented way through it.
-///
-/// `pub` and `#[doc(hidden)]` rather than `pub(crate)`, because
-/// [`system_param!`](crate::system_param) has to name it from the calling crate. That is the
-/// *only* intended use: implementing `Sealed` by hand still compiles, and still means writing
-/// `get_access_info` by hand, which is the thing the seal exists to prevent — an access
-/// declaration that under-reports is a data race the scheduler cannot see.
-#[doc(hidden)]
-pub mod sealed {
-    /// See the module docs. Implement it through [`system_param!`](crate::system_param), not
-    /// directly.
-    pub trait Sealed {}
-}
-
 /// A value that a system can request as a parameter (e.g. [`Query`](crate::Query),
 /// [`Res`], [`ResMut`]).
 ///
 /// Implementors describe how to fetch their value from the [`World`] and which
 /// component/resource accesses they require, allowing the scheduler to run
 /// non-conflicting systems in parallel.
-pub trait SystemParam: sealed::Sealed {
+///
+/// # Writing one
+///
+/// A parameter made of others is [`system_param!`](crate::system_param), which needs no `unsafe`. A
+/// *primitive* one, which reaches into the world itself, implements this trait by hand, and that is
+/// `unsafe impl`, as in Bevy.
+///
+/// # Safety
+///
+/// [`get_access_info`](Self::get_access_info) must declare every component and resource that
+/// [`fetch`](Self::fetch), and the value it returns, can read or write, writes as writes. The scheduler
+/// runs systems in parallel on nothing but those declarations: a read it was not told about can be put
+/// next to a system that writes the same column through
+/// [`World::query_unchecked`](crate::world::World::query_unchecked), and that is a data race, even
+/// though the read itself went through the safe [`World::query`](crate::world::World::query). That is
+/// the whole of the contract; `fetch` failing, or panicking, is not unsound.
+pub unsafe trait SystemParam {
     /// The value actually handed to the system body, borrowed from the world for `'w`.
     ///
     /// The implementing type is the `'static` spelling of the parameter (`Res<'static, T>`,
@@ -188,8 +183,8 @@ impl<'w, T: 'static> std::ops::Deref for Res<'w, T> {
     }
 }
 
-impl<T: 'static> sealed::Sealed for Res<'static, T> {}
-impl<T: 'static> SystemParam for Res<'static, T> {
+// SAFETY: `fetch` takes a read lock on `T`'s resource slot and nothing else, and declares that read.
+unsafe impl<T: 'static> SystemParam for Res<'static, T> {
     type Item<'w> = Res<'w, T>;
     type State = ();
     fn fetch<'w>(
@@ -233,8 +228,8 @@ impl<'w, T: 'static> std::ops::DerefMut for ResMut<'w, T> {
     }
 }
 
-impl<T: 'static> sealed::Sealed for ResMut<'static, T> {}
-impl<T: 'static> SystemParam for ResMut<'static, T> {
+// SAFETY: `fetch` takes the write lock on `T`'s resource slot and nothing else, and declares that write.
+unsafe impl<T: 'static> SystemParam for ResMut<'static, T> {
     type Item<'w> = ResMut<'w, T>;
     type State = ();
     fn fetch<'w>(
@@ -250,12 +245,11 @@ impl<T: 'static> SystemParam for ResMut<'static, T> {
     }
 }
 
-impl<P: SystemParam> sealed::Sealed for Option<P> {}
 
-// The block above documents THIS impl. It used to sit over the `Sealed` one, where rustdoc never
-// renders it: `sealed::Sealed` is private, so forty lines explaining the only optional parameter
-// in the engine were invisible on docs.rs. Found by `hatch_docs.rs`, which reads the doc block
-// above each hatch's own declaration and could not find `run_if` in this one.
+// The block below documents THIS impl. It used to sit over a seal impl, where rustdoc never
+// renders it, so forty lines explaining the only optional parameter in the engine were invisible on
+// docs.rs. Found by `hatch_docs.rs`, which reads the doc block above each hatch's own declaration and
+// could not find `run_if` in this one.
 /// An optional parameter: `None` when the underlying one is not there yet.
 ///
 /// # Why this exists
@@ -294,7 +288,8 @@ impl<P: SystemParam> sealed::Sealed for Option<P> {}
 /// present the system really does touch it, so the scheduler has to know — an `Option` that
 /// declared nothing would be co-scheduled with a conflicting writer and race the moment the
 /// resource appeared.
-impl<P: SystemParam> SystemParam for Option<P> {
+// SAFETY: it fetches `P` or nothing, and declares exactly `P`'s access, which `P`'s own impl vouches for.
+unsafe impl<P: SystemParam> SystemParam for Option<P> {
     type Item<'w> = Option<P::Item<'w>>;
     /// The inner parameter's, forwarded: `Option<Local<u32>>` is still one `u32` per system, and
     /// absence is about the *world*, not about the state.
@@ -360,8 +355,8 @@ impl<T: std::fmt::Debug + 'static> std::fmt::Debug for Local<'_, T> {
     }
 }
 
-impl<T: Default + Send + Sync + 'static> sealed::Sealed for Local<'static, T> {}
-impl<T: Default + Send + Sync + 'static> SystemParam for Local<'static, T> {
+// SAFETY: the value lives in the system's own state, not in the world, so there is nothing to declare.
+unsafe impl<T: Default + Send + Sync + 'static> SystemParam for Local<'static, T> {
     type Item<'w> = Local<'w, T>;
     type State = T;
     fn fetch<'w>(
@@ -377,8 +372,8 @@ impl<T: Default + Send + Sync + 'static> SystemParam for Local<'static, T> {
     fn get_access_info(_info: &mut AccessInfo) {}
 }
 
-impl sealed::Sealed for f32 {}
-impl SystemParam for f32 {
+// SAFETY: it is the `dt` the schedule was stepped with; the world is not touched.
+unsafe impl SystemParam for f32 {
     type Item<'w> = f32;
     type State = ();
     fn fetch<'w>(
@@ -391,8 +386,9 @@ impl SystemParam for f32 {
     fn get_access_info(_info: &mut AccessInfo) {}
 }
 
-impl<D: crate::query::QueryData + 'static, F: crate::query::QueryFilter + 'static> sealed::Sealed for crate::query::Query<'static, D, F> {}
-impl<D: crate::query::QueryData + 'static, F: crate::query::QueryFilter + 'static> SystemParam
+// SAFETY: every column the query and its filter can touch is reported by `check_aliasing`, writes as
+// writes, and all of it is declared below; see the `SAFETY` note in `fetch` for the unchecked access.
+unsafe impl<D: crate::query::QueryData + 'static, F: crate::query::QueryFilter + 'static> SystemParam
     for crate::query::Query<'static, D, F>
 {
     type Item<'w> = crate::query::Query<'w, D, F>;
@@ -677,7 +673,7 @@ mod optional_param_tests {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// system_param! — a composite parameter, without opening the seal by hand
+// system_param! — a composite parameter, with no `unsafe impl` to write
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Declares a struct that a system can take as a single parameter.
@@ -685,15 +681,15 @@ mod optional_param_tests {
 /// # What this is for
 ///
 /// A system that needs six resources takes six parameters, and every system needing the same six
-/// repeats them. Grouping them in a struct is the obvious move, and it was not possible:
-/// [`SystemParam`] is sealed, so a game could not implement it, and implementing it is not the
-/// hard part — [`get_access_info`](SystemParam::get_access_info) is. An access declaration that
-/// under-reports does not fail; it lets the scheduler co-run two systems that write the same
-/// resource, and the corruption depends on which one rayon reached first.
+/// repeats them. Grouping them in a struct is the obvious move, and implementing [`SystemParam`] is
+/// not the hard part: [`get_access_info`](SystemParam::get_access_info) is, which is why
+/// implementing it by hand is `unsafe`. An access declaration that under-reports does not fail; it
+/// lets the scheduler co-run two systems that touch the same column, and the corruption depends on
+/// which one rayon reached first.
 ///
 /// So the macro writes it. Each field's declaration is forwarded to that field's own type, which
-/// is mechanical and cannot drift from what the struct actually fetches — which is exactly the
-/// information the seal exists to protect, produced by construction rather than by care.
+/// is mechanical and cannot drift from what the struct actually fetches: the trait's safety
+/// contract, kept by construction rather than by care.
 ///
 /// # Use
 ///
@@ -729,8 +725,9 @@ mod optional_param_tests {
 ///
 /// # What it does not do
 ///
-/// It does not make [`SystemParam`] safe to implement by hand — the seal is still there and still
-/// means what it meant. It also does not check that two fields do not conflict with *each other*:
+/// It does not write a *primitive* parameter, one that reaches into the world itself: that is an
+/// `unsafe impl SystemParam`, whose contract is on the trait. It also does not check that two fields
+/// do not conflict with *each other*:
 /// a struct holding `ResMut<T>` twice declares two writes of `T` and panics on fetch, exactly as
 /// two `ResMut<T>` parameters would.
 #[macro_export]
@@ -752,9 +749,10 @@ macro_rules! system_param {
             )+
         }
 
-        impl<'w> $crate::system::params::sealed::Sealed for $name<'w> {}
 
-        impl<'a> $crate::system::SystemParam for $name<'a> {
+        // SAFETY: the struct fetches its fields and nothing else, and `get_access_info` forwards to
+        // every field's own declaration, each vouched for by that field's impl.
+        unsafe impl<'a> $crate::system::SystemParam for $name<'a> {
             type Item<'w> = $name<'w>;
 
             // The tuple of the fields' own states, in declaration order — so a composite may hold
@@ -782,8 +780,8 @@ macro_rules! system_param {
             }
 
             fn get_access_info(info: &mut $crate::system::AccessInfo) {
-                // Forwarded field by field. This is the line that makes the macro the honest way
-                // through the seal: it cannot report less than the struct fetches.
+                // Forwarded field by field. This is the line that keeps the trait's contract, and
+                // so makes the `unsafe impl` above sound: it cannot report less than the struct fetches.
                 $(
                     <$outer<'static, $($arg),+> as $crate::system::SystemParam>
                         ::get_access_info(info);
@@ -811,8 +809,8 @@ macro_rules! system_param {
 /// less than it fetches.
 macro_rules! impl_tuple_system_param {
     ($($P:ident $s:ident),+) => {
-        impl<$($P: SystemParam),+> sealed::Sealed for ($($P,)+) {}
-        impl<$($P: SystemParam),+> SystemParam for ($($P,)+) {
+        // SAFETY: a tuple fetches its members and nothing else, and declares each member's access.
+        unsafe impl<$($P: SystemParam),+> SystemParam for ($($P,)+) {
             type Item<'w> = ($($P::Item<'w>,)+);
             type State = ($($P::State,)+);
             fn fetch<'w>(
