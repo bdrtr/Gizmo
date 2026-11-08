@@ -161,6 +161,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A reflection probe cost a phone 29 % of its frame rate.** The forward-only lit shader asked the probe uniform on every pixel
+  which kinds of probe the scene had, and worked out the sky that a background probe then replaced. Which kinds there are is the
+  same for a whole frame, so the pipelines are now built for it (`ProbeShape`: `PROBE_BACKGROUND`, `PROBE_BOXES`), and a scene with
+  a background probe never samples the sky. Nişancı with a mirror floor on an Adreno 618, upright, one sitting: no probe 106.4 fps,
+  a probe before 75.3, after 106.2; the reflection is unchanged. The desktop decides per pixel as before.
+
 - **Inserting over a table component counted as adding it.** An overwrite fires `on_set` and `on_replace` and never `on_add`, but a
   table column stamped both ticks, so `Added<T>` reported the entity again — a sparse component's overwrite did not, so a re-insert
   was an add or not depending on where the component lived. Only `changed` is stamped now, in both.

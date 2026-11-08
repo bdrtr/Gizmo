@@ -415,9 +415,10 @@ impl SceneState {
     }
 
     /// Points the forward-only path's lit shader at a set of captured reflection probes, or at none. True
-    /// when whether there are any changed: the caller builds the pipelines again then
-    /// ([`rebuild_pipelines`]), with `PROBES` on or off, so a scene without probes pays nothing for them.
-    /// The desktop path reads its probes through the irradiance group instead.
+    /// when their shape changed — whether there is a background probe, whether there are boxed
+    /// ones: the caller builds the pipelines again then ([`rebuild_pipelines`]), so a scene pays only for
+    /// the probes it has, and nothing without any. The desktop path reads its probes through the
+    /// irradiance group instead, and decides per pixel.
     pub fn set_forward_reflections(
         &mut self,
         device: &wgpu::Device,
@@ -426,13 +427,13 @@ impl SceneState {
     ) -> bool {
         let data = crate::irradiance::reflection_uniform(set.as_ref());
         queue.write_buffer(&self.forward_probes.uniform, 0, bytemuck::cast_slice(&data));
-        let enabled = set.as_ref().is_some_and(|s| !s.probes.is_empty());
+        let shape = set.as_ref().map_or(ProbeShape::default(), |s| ProbeShape::of(&s.probes));
         // Called when the probes change, which is rare, so every view's group 0 is simply built again.
         self.forward_probes.view = set.map(|s| s.view.clone());
         let behind = self.behind_view.clone();
         self.set_behind_view(device, Some(&behind));
-        let changed = enabled != self.forward_probes.enabled;
-        self.forward_probes.enabled = enabled;
+        let changed = shape != self.forward_probes.shape;
+        self.forward_probes.shape = shape;
         changed
     }
 
@@ -522,8 +523,41 @@ pub(crate) struct ForwardProbes {
     view: Option<wgpu::TextureView>,
     sampler: wgpu::Sampler,
     uniform: wgpu::Buffer,
-    /// Whether the lit pipelines are built with `PROBES`.
-    pub(crate) enabled: bool,
+    /// What the lit pipelines are built to read.
+    pub(crate) shape: ProbeShape,
+}
+
+/// Which kinds of reflection probe a scene has, which is what the forward-only path's lit shader is
+/// compiled for: `PROBE_BACKGROUND` reads the background probe where the sky would be, and `PROBE_BOXES`
+/// blends the boxed ones over that. Neither, and the shader has no probe code at all.
+///
+/// Frame-constant, so decided when the pipelines are built rather than per fragment: on an Adreno 618 a
+/// mirror floor read 107 fps without a probe and 77 with one when the shader asked the uniform every
+/// pixel and worked out the sky it then replaced (2026-11-08).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct ProbeShape {
+    pub(crate) background: bool,
+    pub(crate) boxes: bool,
+}
+
+impl ProbeShape {
+    /// The shape of `probes`, as many of them as the shader reads.
+    pub(crate) fn of(probes: &[crate::irradiance::ReflectionSource]) -> Self {
+        let probes = &probes[..probes.len().min(crate::reflection::MAX_PROBES)];
+        Self {
+            background: probes.iter().any(|p| p.box_half_extents.is_none()),
+            boxes: probes.iter().any(|p| p.box_half_extents.is_some()),
+        }
+    }
+
+    /// The shader defs that build a lit shader for it.
+    #[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
+    pub(crate) fn defs(self) -> [(&'static str, naga_oil::compose::ShaderDefValue); 2] {
+        [
+            ("PROBE_BACKGROUND", naga_oil::compose::ShaderDefValue::Bool(self.background)),
+            ("PROBE_BOXES", naga_oil::compose::ShaderDefValue::Bool(self.boxes)),
+        ]
+    }
 }
 
 impl ForwardProbes {
@@ -558,7 +592,7 @@ impl ForwardProbes {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             },
         );
-        Self { placeholder, view: None, sampler, uniform, enabled: false }
+        Self { placeholder, view: None, sampler, uniform, shape: ProbeShape::default() }
     }
 
     fn view(&self) -> &wgpu::TextureView {
@@ -973,7 +1007,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         indirect: &indirect,
         wire_color: &wire_color_layout,
     };
-    let core_pipelines = build_core_pipelines(device, &layout_refs, false);
+    let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default());
     let shadow_pipeline = build_shadow_pipeline(device, &layout_refs);
 
     tracing::info!(
@@ -1062,7 +1096,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
         wire_color: &renderer.scene.wire_color_layout,
     };
 
-    let core_pipelines = build_core_pipelines(device, &layouts, renderer.scene.forward_probes.enabled);
+    let core_pipelines = build_core_pipelines(device, &layouts, renderer.scene.forward_probes.shape);
     let shadow_pipeline = build_shadow_pipeline(device, &layouts);
 
     renderer.scene.lit_lobes = core_pipelines.lobes;
@@ -1307,13 +1341,22 @@ mod tests {
                         variants.push(("web keeps", shaders::compose_wgsl(src, name, defs)));
                     }
                     if *name == "shader.wgsl" {
-                        let mut probes = shaders::web_render_defs();
-                        probes.insert("PROBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
-                        variants.push(("web with probes", shaders::compose_wgsl(src, name, probes.clone())));
-                        for tier in ["DETAILS", "LOBES", "TRANSMISSION"] {
-                            probes.insert(tier.to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        // Every `ProbeShape` a scene can have, plain and with every tier.
+                        for (label, shape) in [
+                            ("background probe", ["PROBE_BACKGROUND"].as_slice()),
+                            ("boxed probes", ["PROBE_BOXES"].as_slice()),
+                            ("both kinds of probe", ["PROBE_BACKGROUND", "PROBE_BOXES"].as_slice()),
+                        ] {
+                            let mut probes = shaders::web_render_defs();
+                            for def in shape {
+                                probes.insert(def.to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                            }
+                            variants.push((label, shaders::compose_wgsl(src, name, probes.clone())));
+                            for tier in ["DETAILS", "LOBES", "TRANSMISSION"] {
+                                probes.insert(tier.to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                            }
+                            variants.push((label, shaders::compose_wgsl(src, name, probes)));
                         }
-                        variants.push(("web glass with probes", shaders::compose_wgsl(src, name, probes)));
                         let mut defs = shaders::web_render_defs();
                         defs.insert("DETAILS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         variants.push(("web with details", shaders::compose_wgsl(src, name, defs.clone())));

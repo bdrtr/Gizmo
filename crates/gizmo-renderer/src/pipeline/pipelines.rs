@@ -79,12 +79,13 @@ pub(super) struct CorePipelines {
     pub(super) blend_unlit: [wgpu::RenderPipeline; 3],
 }
 
-/// `probes`: whether the forward-only path's lit shaders read reflection probes (`PROBES`), which they
-/// do only while a scene has some (`SceneState::set_forward_reflections`). The desktop's always do.
+/// `probes`: which reflection probes the forward-only path's lit shaders read, which is what a scene has
+/// ([`ProbeShape`](super::ProbeShape), `SceneState::set_forward_reflections`). The desktop's read any,
+/// deciding per pixel.
 pub(super) fn build_core_pipelines(
     device: &wgpu::Device,
     layouts: &LayoutRefs,
-    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] probes: bool,
+    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] probes: super::ProbeShape,
 ) -> CorePipelines {
     // WASM: max 4 bind groups (Chrome WebGPU), shadow kaldırıldı
     // Native: 5 bind groups (shadow dahil)
@@ -136,12 +137,15 @@ pub(super) fn build_core_pipelines(
         include_str!("../shaders/shader.wgsl"),
         "Shader",
     );
+    // The two probe defs every forward-only lit shader below is built with.
+    #[cfg(gizmo_forward_only)]
+    let [probe_background, probe_boxes] = probes.defs();
     #[cfg(gizmo_forward_only)]
     let shader = super::shaders::load_shader_composed_web_with(
         device,
         include_str!("../shaders/shader.wgsl"),
         "Shader",
-        &[("PROBES", naga_oil::compose::ShaderDefValue::Bool(probes))],
+        &[probe_background, probe_boxes],
     );
     // The wireframe draws the same shader with `WIREFRAME` on, which lets a frame's
     // `wireframe_color` replace the lit colour. Native only: the web has no line mode, so its
@@ -348,7 +352,8 @@ pub(super) fn build_core_pipelines(
             include_str!("../shaders/shader.wgsl"),
             "Lit Shader With Lobes",
             &[
-                ("PROBES", naga_oil::compose::ShaderDefValue::Bool(probes)),
+                probe_background,
+                probe_boxes,
                 ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
                 ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
             ],
@@ -374,7 +379,8 @@ pub(super) fn build_core_pipelines(
         include_str!("../shaders/shader.wgsl"),
         "Lit Shader With Details",
         &[
-            ("PROBES", naga_oil::compose::ShaderDefValue::Bool(probes)),
+            probe_background,
+                probe_boxes,
             ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
         ],
     );
@@ -441,7 +447,8 @@ pub(super) fn build_core_pipelines(
         include_str!("../shaders/shader.wgsl"),
         "Glass Shader",
         &[
-            ("PROBES", naga_oil::compose::ShaderDefValue::Bool(probes)),
+            probe_background,
+                probe_boxes,
             ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
             ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
             ("TRANSMISSION", naga_oil::compose::ShaderDefValue::Bool(true)),

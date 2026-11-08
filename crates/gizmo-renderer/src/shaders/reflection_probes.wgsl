@@ -41,11 +41,33 @@ fn box_projected(i: u32, r: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
 // past 1 (a doorway between two rooms is a blend of both). Whatever weight the boxes leave over
 // is filled by the BACKGROUND — the first probe without a box, looked up by direction, or the
 // procedural `sky` if there is none.
+//
+// Which of those a scene has is the same for a whole frame, and the forward-only path decides it when
+// it builds its pipelines instead: `PROBE_BACKGROUND` reads `probe_background` in place of the sky, so
+// the sky is never worked out, and `PROBE_BOXES` adds `probe_boxes`, so a scene without boxes runs no
+// loop (`SceneState::set_forward_reflections`). A phone pays per fragment for a branch it never takes.
 fn probe_environment(r: vec3<f32>, world_pos: vec3<f32>, roughness: f32, sky: vec3<f32>) -> vec3<f32> {
     let count = u32(reflections.header.x);
     if (count == 0u) {
         return sky;
     }
+    var background = sky;
+    if (i32(reflections.header.z) >= 0) {
+        background = probe_background(r, roughness);
+    }
+    return probe_boxes(r, world_pos, roughness, background);
+}
+
+// The background probe along `r`. Only for a scene that has one (`header.z` ≥ 0).
+fn probe_background(r: vec3<f32>, roughness: f32) -> vec3<f32> {
+    let bg = i32(reflections.header.z);
+    return textureSampleLevel(t_reflection, s_reflection, r, bg, roughness * reflections.header.y).rgb
+        * reflections.probes[bg].box_max.w;
+}
+
+// The boxed probes along `r` at `world_pos`, over `under` where they leave weight.
+fn probe_boxes(r: vec3<f32>, world_pos: vec3<f32>, roughness: f32, under: vec3<f32>) -> vec3<f32> {
+    let count = u32(reflections.header.x);
     let lod = roughness * reflections.header.y;
     var local = vec3<f32>(0.0);
     var weight = 0.0;
@@ -66,13 +88,7 @@ fn probe_environment(r: vec3<f32>, world_pos: vec3<f32>, roughness: f32, sky: ve
         local = local / weight;
         weight = 1.0;
     }
-    var background = sky;
-    let bg = i32(reflections.header.z);
-    if (bg >= 0) {
-        background = textureSampleLevel(t_reflection, s_reflection, r, bg, lod).rgb
-            * reflections.probes[bg].box_max.w;
-    }
-    return local + background * (1.0 - weight);
+    return local + under * (1.0 - weight);
 }
 
 // The diffuse from an `EnvironmentMap`, along the normal: the blurriest mip of its slot. Otherwise the

@@ -28,6 +28,12 @@
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment, environment_irradiance}
 #endif
+#ifdef PROBE_BACKGROUND
+#import gizmo::reflection_probes::{probe_background}
+#endif
+#ifdef PROBE_BOXES
+#import gizmo::reflection_probes::{probe_boxes}
+#endif
 #ifdef IRRADIANCE
 #import gizmo::irradiance::{gi_sample}
 #endif
@@ -484,11 +490,19 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         R = anisotropic_reflection(R, N, T, anisotropy, min_roughness);
     }
 #endif
+    // With reflection probes in the scene the environment is theirs (native: group 5, the irradiance
+    // volume's, decided per pixel by `probe_environment`; forward-only: group 0, decided when the
+    // pipelines are built, so a background probe stands in for the sky without the sky being sampled).
+#ifdef PROBE_BACKGROUND
+    var env_color = probe_background(R, min_roughness);
+#else
     var env_color = get_procedural_environment(normalize(mix(R, N, min_roughness)), min_roughness);
-    // With reflection probes in the scene the environment is theirs (native: group 5, the
-    // irradiance volume's); with none, `probe_environment` hands back the environment it was given.
+#endif
 #ifdef PROBES
     env_color = probe_environment(R, in.world_position, min_roughness, env_color);
+#endif
+#ifdef PROBE_BOXES
+    env_color = probe_boxes(R, in.world_position, min_roughness, env_color);
 #endif
     let env_brdf = approximate_env_brdf(NdV, min_roughness);
     var specular_ibl = env_color * (f0 * env_brdf.x + env_brdf.y);
@@ -498,9 +512,16 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         let coat_atten_env = coat_env_attenuation(NdV, clear_coat);
         ambient *= coat_atten_env;
         specular_ibl *= coat_atten_env;
+#ifdef PROBE_BACKGROUND
+        var coat_env = probe_background(reflect(-view_dir, N), coat_roughness);
+#else
         var coat_env = get_procedural_environment(normalize(mix(reflect(-view_dir, N), N, coat_roughness)), coat_roughness);
+#endif
 #ifdef PROBES
         coat_env = probe_environment(reflect(-view_dir, N), in.world_position, coat_roughness, coat_env);
+#endif
+#ifdef PROBE_BOXES
+        coat_env = probe_boxes(reflect(-view_dir, N), in.world_position, coat_roughness, coat_env);
 #endif
         specular_ibl += coat_env_specular(coat_env, NdV, coat_roughness) * clear_coat;
     }

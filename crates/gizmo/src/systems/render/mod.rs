@@ -5227,7 +5227,7 @@ mod golden_render_tests {
 
     /// **A mirror shows what the probe captured**, on whichever path this build draws with: the desktop's
     /// deferred and forward ones read probes through the irradiance group, the browser's and a phone's
-    /// through group 0, with pipelines built with `PROBES` only while a scene has one. A plate facing the
+    /// through group 0, with pipelines built for the kinds of probe a scene has (`ProbeShape`). A plate facing the
     /// camera reflects +Z, the magenta wall behind the camera; with no probe it reflects the sky.
     #[test]
     #[ignore = "requires a GPU adapter"]
