@@ -897,16 +897,18 @@ Two measured caveats worth keeping:
 
 Small individually; together they are what makes an idiomatic ECS snippet fail to compile.
 
-### C0. The extension points are sealed
+### C0. The extension points were sealed — open since 2026-11-08
 
-Measured in `ecs_extension_points`. Four traits are sealed and cannot be implemented downstream:
+Measured in `ecs_extension_points`, which since 2026-11-08 writes a parameter and a query term of its
+own, pipes two systems and runs one outside the schedule. Four traits were sealed and could not be
+implemented downstream; three are `unsafe trait`s now, and the fourth is internal:
 
 | Trait | Consequence |
 |---|---|
 | `SystemParam` | **A primitive parameter can be written downstream since 2026-11-08**: the seal is gone and the trait is `unsafe trait SystemParam`, as in Bevy, with the contract on it. `get_access_info` has to declare everything `fetch` and its value can touch, because an undeclared read can be co-scheduled with a `query_unchecked` writer, and that is a data race even through the safe `World::query`. `crates/gizmo-core/tests/downstream_param.rs`, a separate crate, counts entities through a parameter of its own in a schedule, and its declared read reaches the system. Before: a *primitive* parameter could not be written **downstream**. **Nine** impls (2026-08-24; this line said six and omitted `Commands`, `EventReader` and `EventWriter`, then gained `Local`): `Res<T>`, `ResMut<T>`, `f32` (dt), `Query<Q>`, `Option<P>`, `Commands`, `EventReader<T>`, `EventWriter<T>`, `Local<T>` — plus anything `system_param!` declares, which is a **composite**, so grouping existing parameters no longer needs the seal opened. `Local` is the first primitive added since the seal was written, and it needed the trait to grow a `type State`: `fetch` had no per-system identity, so there was nowhere for a value to live |
-| `WorldQuery` | ~~No derived query operand~~ **Closed 2026-11-07:** `query_data!` declares a named one, forwarding every method to the tuple of its fields, as `system_param!` does for parameters. A *primitive* operand still cannot be written downstream, and that is separate work: `WorldQuery`'s methods index an archetype's raw columns, so opening it means making the storage layout public API, not removing a seal |
-| `ReadOnlyQuery` | — |
-| `FetchComponent` | No custom fetch |
+| `WorldQuery` | ~~No derived query operand~~ **Closed 2026-11-07:** `query_data!` declares a named one, forwarding every method to the tuple of its fields, as `system_param!` does for parameters. ~~A *primitive* operand cannot be written downstream~~ **Closed 2026-11-08:** `unsafe trait WorldQuery`, as in Bevy, with a five-point contract on it — declare everything touched (through `query::declare_access`), touch nothing else and only in the mode declared, serve every row a fetch is offered, keep `StaticType` your own, never alias two rows' items. `tests/downstream_query.rs`, a separate crate, writes Bevy's `Has<T>` for both storages and runs it in a system. This line said opening it meant making the storage layout public API; it already was — `Archetype::get_column`, `Column`'s pointers and `ComponentSparseSet` were public — and `World::sparse_set(key)` was the one missing door |
+| `ReadOnlyQuery` | **Open 2026-11-08**, `unsafe trait`: the promise that no item or slice is mutable |
+| `FetchComponent` | Stays sealed, and it is no gap: it is how this crate writes `&T`, `&mut T` and `Option<..>`, and a term of one's own implements `WorldQuery` directly |
 
 ~~`run_system`~~ **closed 2026-11-05:** `World::run_system(system)` runs a system once, now, inside
 the frame's change window, its `Commands` applied before it returns. ~~`pipe`~~ **closed 2026-11-07:**

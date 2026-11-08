@@ -23,8 +23,8 @@ The instability is not there. It is one layer down, where the doors are locked:
 
 | what a game wants | what stops it | measured in |
 |---|---|---|
-| its own system parameter | `SystemParam` is sealed — **4 impls exist**: `Res`, `ResMut`, `f32`, `Query` | `ecs_extension_points` |
-| ~~a derived query operand~~ | **opened 2026-11-07** — `query_data!`, through the tuple of its fields; a primitive one stays sealed | `ecs_extension_points` |
+| ~~its own system parameter~~ | **opened 2026-11-08** — `unsafe impl SystemParam`; `system_param!` for a composite since 2026-08-23 | `ecs_extension_points` |
+| ~~a derived query operand~~ | **opened 2026-11-07** — `query_data!`, through the tuple of its fields; a primitive one is an `unsafe impl WorldQuery` since 2026-11-08 | `ecs_extension_points` |
 | ~~a schedule phase of its own~~ | **opened 2026-08-23** — `Phase::User(u16)`, positioned | `schedule_internals` |
 | ~~its own material or shader~~ | **opened 2026-08-23** — `MaterialType::Custom(MaterialId)` | `custom_material` |
 | ~~a normal map on a hand-built material~~ | **opened 2026-08-23** — `AssetManager::material()` | `parallax_mapping` |
@@ -97,12 +97,15 @@ Not every seal is the same, and treating them alike would be the wrong fix. Thre
 **incidental** (closed with no invariant behind it — open it), **architectural** (opening it is a
 real design, not a visibility change).
 
-### Load-bearing — keep sealed, widen instead
+### Load-bearing — opened as `unsafe trait`s (2026-11-08)
 
-**`WorldQuery` / `ReadOnlyQuery` / `FetchComponent`.** The seal *is* the soundness argument: a
-wrong impl re-opens dual-`&mut` aliasing, and `World::query`'s `Q: ReadOnlyQuery` bound is what
-makes building a mutable query from `&World` impossible in safe code. Opening this trades a
-compile error for undefined behaviour.
+**`WorldQuery` / `ReadOnlyQuery`.** This said the seal *was* the soundness argument: a wrong impl
+re-opens dual-`&mut` aliasing, and `World::query`'s `Q: ReadOnlyQuery` bound is what makes building
+a mutable query from `&World` impossible in safe code. Both halves are true, and neither needs a
+seal: an `unsafe trait` keeps every safe line safe and puts a wrong impl where `unsafe` is written,
+which is the argument made for `SystemParam` below and the way Bevy holds the same invariant. The
+contract is on the traits; `tests/downstream_query.rs` writes `Has<T>`. **`FetchComponent`** stays
+sealed — the shared half of `&T`, `&mut T` and `Option<..>`, not something a term needs.
 
 What people actually reach for, and can be given without opening it:
 
@@ -142,7 +145,7 @@ What people actually reach for, and can be given without opening it:
   intermediate: the hand-rolled path collects positions into a `Vec` and runs two index loops, and
   index arithmetic is where a pair gets counted twice.
 
-### `SystemParam` — load-bearing, but openable with the invariant made explicit
+### `SystemParam` — load-bearing, opened with the invariant made explicit (2026-11-08)
 
 The scheduler must know statically what a parameter touches, or parallel batching is unsound.
 That is real. But the seal is not the only way to hold it: the invariant can be **stated by the

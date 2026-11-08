@@ -47,19 +47,15 @@ impl std::fmt::Display for QuerySingleError {
 impl std::error::Error for QuerySingleError {}
 
 // =========================================================================
-// SEALED PATTERN
+// SEALED FETCH
 // =========================================================================
 //
-// `FetchComponent` ve `WorldQuery` motorun içsel, tamamı `unsafe` metodlardan
-// oluşan DSL trait'leridir. Kullanıcının manuel impl etmesi İSTENMEZ (yanlış
-// bir impl aliasing/UB ihlali doğurur) ve cross-crate hiçbir impl yoktur.
-// Sealed supertrait deseni hem kaçak manuel impl'leri engeller hem de gelecekte
-// metod eklemeyi non-breaking yapar.
+// `FetchComponent` is the shared half of `&T`, `&mut T` and `Option<..>` and stays sealed: it is how
+// this crate writes those three, not something a term written elsewhere needs. That term implements
+// `WorldQuery` itself, an `unsafe trait` whose contract is the one that keeps a query sound.
 #[doc(hidden)]
 pub mod sealed {
     pub trait SealedFetch {}
-    pub trait SealedQuery {}
-    pub trait SealedReadOnly {}
 }
 
 // =========================================================================
@@ -68,11 +64,12 @@ pub mod sealed {
 
 /// One operand — or a tuple of operands — of a [`Query`].
 ///
-/// Implemented for `&T`, `&mut T`, the filters ([`With`], [`Without`], [`Changed`],
-/// [`Added`], [`Or`]) and for tuples of 2 to 12 of those. It is *sealed*: nothing outside this
-/// crate can implement it, and every accessor is `unsafe` and speaks in raw pointers, so it is
-/// an internal DSL rather than an extension point. Being sealed also means methods may be added
-/// in a point release without that counting as a breaking change.
+/// Implemented for `&T`, `&mut T`, `Option<..>`, [`Entity`](crate::entity::Entity), the filters
+/// ([`With`], [`Without`], [`Changed`], [`Added`], [`Or`]) and for tuples of 2 to 12 of those, and by
+/// [`query_data!`](crate::query_data) for a named struct of terms. A term this crate does not ship —
+/// Bevy's `Has<T>`, a fetch over a storage of your own — is an `unsafe impl` of it; `tests/downstream_query.rs`
+/// writes `Has<T>`. Its accessors are `unsafe` and speak in raw pointers: the trait is the query
+/// machinery's own interface, opened as Bevy opens its `WorldQuery`, with the contract below.
 ///
 /// Matching happens in two stages, and the split is the thing to understand before touching an
 /// impl:
@@ -86,7 +83,32 @@ pub mod sealed {
 /// real test happens in stage 2. [`has_row_filter`](WorldQuery::has_row_filter) reports whether
 /// stage 2 carries any meaning for this query, which is what lets chunk iteration reject the
 /// queries it cannot honour.
-pub trait WorldQuery: sealed::SealedQuery {
+///
+/// # Safety
+///
+/// A query is sound because of what an impl promises here, and the scheduler, the aliasing check and
+/// every iterator take it at its word:
+///
+/// 1. **[`check_aliasing`](WorldQuery::check_aliasing) declares everything the term touches**: every
+///    component whose value or ticks it reads, as a read, and every one it writes or hands out
+///    mutably, as a write — through [`declare_access`], which panics on a combination that would alias.
+///    The scheduler batches systems by this list; anything missing can be written by another system
+///    while this one reads it.
+/// 2. **`fetch_raw`, `get_item`, `filter_row` and `get_slice` touch nothing else**, and only in the mode
+///    declared: no write to what was declared a read, no `&mut` to what was not declared a write. A
+///    fetch addresses only `world` and `arch` as they are while the query borrows them (`'w`), and an
+///    item or slice lives no longer than `'w`.
+/// 3. **A fetch serves every row it is offered.** When `fetch_raw` returns `Some` for an archetype,
+///    `get_item` and `filter_row` must be sound for every row below the archetype's length — rows of
+///    one archetype may be visited in any order, and on different threads at once — and `get_slice`
+///    for the whole length. `matches_archetype` may admit more archetypes than the term matches, never
+///    fewer; the rows of a wrongly admitted one must still be safe to visit.
+/// 4. **`StaticType` belongs to this term.** Queries with the same `StaticType` share one cached
+///    archetype list, so two terms naming it must answer `matches_archetype` alike: name `Self`, or a
+///    type of your own, never a component another term keys on.
+/// 5. **Two items of one query for different rows never alias.** Whatever `get_item` hands out for one
+///    row must be disjoint from what it hands out for another, since a query yields them together.
+pub unsafe trait WorldQuery {
     /// A `'static` stand-in used as the cache key for this query's archetype-match list
     /// (see `World::query_cached`). The query machinery never constructs a value of it — only
     /// `TypeId::of::<Self::StaticType>()` is ever taken — so it is free to name an ordinary
@@ -228,8 +250,8 @@ pub trait WorldQuery: sealed::SealedQuery {
 /// ```
 ///
 /// Everything goes through the tuple of its fields: which rows match, what aliases, what the scheduler
-/// is told. So it is as safe as writing the tuple, which is why this may implement a sealed trait and a
-/// hand-written impl may not. It takes up to eleven terms.
+/// is told. So it is as safe as writing the tuple, which is why the macro's `unsafe impl` needs no
+/// promise from its caller. It takes up to eleven terms.
 #[macro_export]
 macro_rules! query_data {
     (
@@ -239,8 +261,9 @@ macro_rules! query_data {
         }
     ) => {
         $crate::query_data!(@common [$(#[$meta])*] $vis $name $item { $( [$(#[$fmeta])*] $fvis $field : $term ),+ });
-        impl $crate::query::sealed::SealedReadOnly for $name {}
-        impl $crate::query::ReadOnlyQuery for $name {}
+        // SAFETY: every term is `ReadOnlyQuery` — the `const` below fails to compile otherwise — and
+        // the struct is the tuple of them.
+        unsafe impl $crate::query::ReadOnlyQuery for $name {}
         const _: fn() = || {
             fn every_term_is_read_only<T: $crate::query::ReadOnlyQuery>() {}
             $( every_term_is_read_only::<$term>(); )+
@@ -265,10 +288,11 @@ macro_rules! query_data {
             $( $($fmeta)* $fvis $field: <$term as $crate::query::WorldQuery>::Item<'w>, )+
         }
 
-        impl $crate::query::sealed::SealedQuery for $name {}
         impl $crate::query::QueryData for $name {}
 
-        impl $crate::query::WorldQuery for $name {
+        // SAFETY: every method is the tuple of the fields' own, so the struct keeps exactly the
+        // promises its terms keep; the item only renames the tuple's.
+        unsafe impl $crate::query::WorldQuery for $name {
             type StaticType = <($($term,)+ ()) as $crate::query::WorldQuery>::StaticType;
             type Fetch<'w> = <($($term,)+ ()) as $crate::query::WorldQuery>::Fetch<'w>;
             type Item<'w> = $item<'w>;
@@ -326,8 +350,7 @@ macro_rules! query_data {
 //   behind `ReadOnlyQuery`; mutable access goes through the `&mut self` variants, so
 //   two live `&mut T` to the same storage are impossible without `unsafe`.
 //
-// Sealed: only this crate implements it (a wrong impl on a `Mut`-bearing query would
-// reopen the hole), and the supertrait `WorldQuery` keeps it inside the sealed DSL.
+// `unsafe`: an impl on a `Mut`-bearing query would reopen the hole.
 /// Marker for queries that yield **only** shared access — `&T` and the data-less filters,
 /// never `&mut T`.
 ///
@@ -342,15 +365,18 @@ macro_rules! query_data {
 /// `&mut T` is pointedly *not* an implementor. A tuple implements it only when every element
 /// does, and `Or<A, B>` only when both operands do.
 ///
-/// Sealed — implementing it for a `Mut`-bearing query would reopen exactly the aliasing hole it
-/// exists to close.
-pub trait ReadOnlyQuery: WorldQuery + sealed::SealedReadOnly {}
+/// # Safety
+///
+/// The impl promises that no item and no slice of the term gives mutable access to anything, and that
+/// its [`check_aliasing`](WorldQuery::check_aliasing) declares no write: implementing it for a
+/// `Mut`-bearing term would reopen exactly the aliasing hole it exists to close.
+pub unsafe trait ReadOnlyQuery: WorldQuery {}
 
 /// What a [`Query`] hands out per row, its first parameter: `&T`, `&mut T`, `Option<&T>`,
 /// [`Entity`](crate::entity::Entity), `()` for nothing, and tuples of those.
 ///
 /// A filter is not one of these, which is what keeps the item free of `()`: `Query<&T, With<U>>` yields
-/// `&T`. Sealed through [`WorldQuery`].
+/// `&T`. A term written elsewhere implements it beside [`WorldQuery`].
 ///
 /// ```compile_fail,E0277
 /// # use gizmo_core::prelude::*;
@@ -366,7 +392,7 @@ pub trait QueryData: WorldQuery {}
 /// What narrows a [`Query`] without handing anything out, its second parameter: [`With`], [`Without`],
 /// [`Changed`], [`Added`], [`Or`], `()` for nothing, and tuples of those, which must all hold.
 ///
-/// Sealed through [`WorldQuery`].
+/// A term written elsewhere implements it beside [`ReadOnlyQuery`].
 pub trait QueryFilter: ReadOnlyQuery {}
 
 impl<T0: FetchComponent> QueryData for T0 where T0::Component: crate::component::Component {}
@@ -439,8 +465,14 @@ pub struct Query<'w, D: QueryData, F: QueryFilter = ()> {
 /// - `Query<(&mut Position, &mut Velocity)>` → ✅ (different types)
 /// - `Query<(&mut Position, &mut Position)>` → ❌ PANIC!
 /// - `Query<(&Position, &Position)>` → ✅ (both immutable — aliasing safe)
+///
+/// This is what a [`WorldQuery::check_aliasing`] calls for each component it touches, and what one
+/// written outside this crate calls too.
+///
+/// # Panics
+/// If `types` already holds `key` and either access is mutable.
 #[inline]
-fn check(tid: ComponentKey, is_mut: bool, types: &mut Vec<(ComponentKey, bool)>) {
+pub fn declare_access(tid: ComponentKey, is_mut: bool, types: &mut Vec<(ComponentKey, bool)>) {
     for &(existing_tid, existing_mut) in types.iter() {
         if existing_tid == tid && (existing_mut || is_mut) {
             panic!(
@@ -478,12 +510,13 @@ macro_rules! impl_tick_filter {
         $(#[$meta])*
         pub struct $name<T>(PhantomData<T>);
 
-        impl<T: crate::component::Component> sealed::SealedQuery for $name<T> {}
         // Tick filters carry no data (`Item = ()`) → read-only.
-        impl<T: crate::component::Component> sealed::SealedReadOnly for $name<T> {}
-        impl<T: crate::component::Component> ReadOnlyQuery for $name<T> {}
+        // SAFETY: the item is `()`, and `check_aliasing` declares a read.
+        unsafe impl<T: crate::component::Component> ReadOnlyQuery for $name<T> {}
         impl<T: crate::component::Component> QueryFilter for $name<T> {}
-        impl<T: crate::component::Component> WorldQuery for $name<T> {
+        // SAFETY: reads `T`'s ticks — a column's for this archetype or the world's sparse set — and
+        // declares that read; matches where `T` can be; `StaticType` is the filter itself.
+        unsafe impl<T: crate::component::Component> WorldQuery for $name<T> {
             type StaticType = $name<T>;
             // (table ticks ptr, or the sparse set ptr for SparseSet storage)
             type Fetch<'w> = (
@@ -507,7 +540,7 @@ macro_rules! impl_tick_filter {
                 // Tick filters READ T's ComponentTicks — the same memory `&mut T` writes in
                 // deref_mut. Declare a READ so the scheduler can't co-batch a `&mut T` writer
                 // (unsynchronized read+write = data race).
-                check(ComponentKey::of::<T>(), false, types);
+                declare_access(ComponentKey::of::<T>(), false, types);
             }
 
             fn matches_archetype(arch: &Archetype) -> bool {
@@ -541,12 +574,12 @@ macro_rules! impl_presence_filter {
         $(#[$meta])*
         pub struct $name<T>(PhantomData<T>);
 
-        impl<T: crate::component::Component> sealed::SealedQuery for $name<T> {}
-        // Presence filters carry no data (`Item = ()`) → read-only.
-        impl<T: crate::component::Component> sealed::SealedReadOnly for $name<T> {}
-        impl<T: crate::component::Component> ReadOnlyQuery for $name<T> {}
+        // SAFETY: presence filters carry no data (`Item = ()`) and declare nothing.
+        unsafe impl<T: crate::component::Component> ReadOnlyQuery for $name<T> {}
         impl<T: crate::component::Component> QueryFilter for $name<T> {}
-        impl<T: crate::component::Component> WorldQuery for $name<T> {
+        // SAFETY: reads only whether an archetype has `T`'s column or the sparse set holds the
+        // entity — no component memory, so nothing to declare; `StaticType` is the filter itself.
+        unsafe impl<T: crate::component::Component> WorldQuery for $name<T> {
             type StaticType = $name<T>;
             // (is_sparse, sparse set ptr). Table storage is always `(false, None)`.
             type Fetch<'w> = (
@@ -591,8 +624,9 @@ macro_rules! impl_presence_filter {
     };
 }
 
-impl<T0: FetchComponent> sealed::SealedQuery for T0 where T0::Component: crate::component::Component {}
-impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component::Component {
+// SAFETY: `&T`/`&mut T` read or write `T`'s column (or sparse set) at the row asked and nothing else,
+// and declare it with the mutability `FetchComponent::IS_MUT` gives; one row's item is that row's slot.
+unsafe impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component::Component {
     type StaticType = T0::Component;
     type Fetch<'w> = T0::Fetch<'w>;
     type Item<'w> = T0::Item<'w>;
@@ -602,7 +636,7 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
         T0::fetch_raw(world, arch, tick)
     }
     fn check_aliasing(types: &mut Vec<(ComponentKey, bool)>) {
-        check(ComponentKey::of::<T0::Component>(), T0::IS_MUT, types);
+        declare_access(ComponentKey::of::<T0::Component>(), T0::IS_MUT, types);
     }
     fn matches_archetype(arch: &Archetype) -> bool {
         arch_matches::<T0::Component>(arch, true)
@@ -651,8 +685,9 @@ impl<T0: FetchComponent> WorldQuery for T0 where T0::Component: crate::component
 /// and the aliasing check rejects `(&mut T, Option<&T>)` like `(&mut T, &T)`. Over `SparseSet`
 /// storage the column is not contiguous per archetype, so chunk iteration refuses it (as it
 /// refuses the sparse filters); over `Table` storage a chunk is the whole column or `None`.
-impl<F: FetchComponent> sealed::SealedQuery for Option<F> where F::Component: crate::component::Component {}
-impl<F: FetchComponent> WorldQuery for Option<F> where F::Component: crate::component::Component {
+// SAFETY: as `F`, declared the same, over the archetypes where `F` may be absent; `StaticType` is
+// `Option<..>`, distinct from `F`'s because the predicate is.
+unsafe impl<F: FetchComponent> WorldQuery for Option<F> where F::Component: crate::component::Component {
     // Not `F::Component`: that key belongs to `&T`, whose archetype predicate is narrower, and
     // two queries sharing a cache key must share the predicate.
     type StaticType = Option<F::Component>;
@@ -665,7 +700,7 @@ impl<F: FetchComponent> WorldQuery for Option<F> where F::Component: crate::comp
         Some(F::fetch_raw(world, arch, tick))
     }
     fn check_aliasing(types: &mut Vec<(ComponentKey, bool)>) {
-        check(ComponentKey::of::<F::Component>(), F::IS_MUT, types);
+        declare_access(ComponentKey::of::<F::Component>(), F::IS_MUT, types);
     }
     fn matches_archetype(_arch: &Archetype) -> bool {
         true
@@ -689,13 +724,12 @@ impl<F: FetchComponent> WorldQuery for Option<F> where F::Component: crate::comp
         <F::Component as crate::component::Component>::storage_type() == crate::component::StorageType::SparseSet
     }
 }
-impl<T: crate::component::Component> sealed::SealedReadOnly for Option<&T> {}
-impl<T: crate::component::Component> ReadOnlyQuery for Option<&T> {}
+// SAFETY: yields `Option<&T>` and declares a read.
+unsafe impl<T: crate::component::Component> ReadOnlyQuery for Option<&T> {}
 
-// `&T` yields shared access only → read-only. `&mut T` (also a `FetchComponent`) is
-// pointedly excluded: no `SealedReadOnly`/`ReadOnlyQuery` impl exists for it.
-impl<T: crate::component::Component> sealed::SealedReadOnly for &T {}
-impl<T: crate::component::Component> ReadOnlyQuery for &T {}
+// SAFETY: `&T` yields shared access only and declares a read. `&mut T` (also a `FetchComponent`) is
+// pointedly excluded: no `ReadOnlyQuery` impl exists for it.
+unsafe impl<T: crate::component::Component> ReadOnlyQuery for &T {}
 
 /// Query operand that switches the world's [`DefaultQueryFilters`] **off** for this query.
 ///
@@ -715,10 +749,11 @@ impl<T: crate::component::Component> ReadOnlyQuery for &T {}
 /// [`DefaultQueryFilters`] for why.
 pub struct IgnoreDefaultFilters(PhantomData<()>);
 
-impl sealed::SealedQuery for IgnoreDefaultFilters {}
-impl sealed::SealedReadOnly for IgnoreDefaultFilters {}
-impl ReadOnlyQuery for IgnoreDefaultFilters {}
-impl WorldQuery for IgnoreDefaultFilters {
+// SAFETY: yields nothing and declares nothing.
+unsafe impl ReadOnlyQuery for IgnoreDefaultFilters {}
+// SAFETY: touches nothing at all; it changes which archetypes a system's query is offered, through
+// `ignores_default_filters`, not what any row reads.
+unsafe impl WorldQuery for IgnoreDefaultFilters {
     type StaticType = IgnoreDefaultFilters;
     type Fetch<'w> = ();
     type Item<'w> = ();
@@ -749,10 +784,11 @@ impl WorldQuery for IgnoreDefaultFilters {
 // `Entity` as a query term: `Query<(Entity, &Health)>` hands out each row's whole handle, generation
 // included. It reads the archetype's own list of rows, so it takes no lock and declares no access:
 // which entity a row holds is not a component, and nothing a parallel writer can be changing.
-impl sealed::SealedQuery for crate::entity::Entity {}
-impl sealed::SealedReadOnly for crate::entity::Entity {}
-impl ReadOnlyQuery for crate::entity::Entity {}
-impl WorldQuery for crate::entity::Entity {
+// SAFETY: yields an `Entity` by value.
+unsafe impl ReadOnlyQuery for crate::entity::Entity {}
+// SAFETY: reads the archetype's entity list, which is no component and which no system writes while
+// a query borrows the world; `StaticType` is `Entity`, which no component is.
+unsafe impl WorldQuery for crate::entity::Entity {
     type StaticType = crate::entity::Entity;
     type Fetch<'w> = *const crate::entity::Entity;
     type Item<'w> = crate::entity::Entity;
@@ -826,14 +862,14 @@ impl_tick_filter!(
 
 macro_rules! impl_query_tuple {
     ($($t:ident),*) => {
-        impl<$($t: WorldQuery),*> sealed::SealedQuery for ($($t,)*) {}
-        // A tuple is read-only iff EVERY element is read-only.
-        impl<$($t: ReadOnlyQuery),*> sealed::SealedReadOnly for ($($t,)*) {}
-        impl<$($t: ReadOnlyQuery),*> ReadOnlyQuery for ($($t,)*) {}
+        // SAFETY: a tuple is read-only iff EVERY element is read-only, and this asks each.
+        unsafe impl<$($t: ReadOnlyQuery),*> ReadOnlyQuery for ($($t,)*) {}
         impl<$($t: QueryData),*> QueryData for ($($t,)*) {}
         impl<$($t: QueryFilter),*> QueryFilter for ($($t,)*) {}
+        // SAFETY: every method is its elements' in turn, and `check_aliasing` hands every element the
+        // same list, so a component two elements reach is caught by `declare_access`.
         #[allow(non_snake_case, unused_variables, clippy::unused_unit)]
-        impl<$($t: WorldQuery),*> WorldQuery for ($($t,)*) {
+        unsafe impl<$($t: WorldQuery),*> WorldQuery for ($($t,)*) {
             type StaticType = ($($t::StaticType,)*);
             type Fetch<'w> = ($($t::Fetch<'w>,)*);
             type Item<'w> = ($($t::Item<'w>,)*);
@@ -919,11 +955,10 @@ impl_presence_filter!(
 /// Binary only — nest for more operands: `Or<A, Or<B, C>>`.
 pub struct Or<T1, T2>(PhantomData<(T1, T2)>);
 
-impl<T1: WorldQuery, T2: WorldQuery> sealed::SealedQuery for Or<T1, T2> {}
-// `Or` is itself a no-data filter; it's read-only when both operands are.
-impl<T1: ReadOnlyQuery, T2: ReadOnlyQuery> sealed::SealedReadOnly for Or<T1, T2> {}
-impl<T1: ReadOnlyQuery, T2: ReadOnlyQuery> ReadOnlyQuery for Or<T1, T2> {}
-impl<T1: WorldQuery, T2: WorldQuery> WorldQuery for Or<T1, T2> {
+// SAFETY: `Or` is itself a no-data filter; it's read-only when both operands are.
+unsafe impl<T1: ReadOnlyQuery, T2: ReadOnlyQuery> ReadOnlyQuery for Or<T1, T2> {}
+// SAFETY: forwards both operands' fetches, filters and access; it yields no data of its own.
+unsafe impl<T1: WorldQuery, T2: WorldQuery> WorldQuery for Or<T1, T2> {
     type StaticType = Or<T1::StaticType, T2::StaticType>;
     // Each operand's fetch (or `None` when that operand doesn't apply to this archetype).
     // `Or` is a FILTER, so it carries no data — but it must keep the operand fetches so

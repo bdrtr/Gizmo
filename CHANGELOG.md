@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A query term can be written outside `gizmo-core`.** `WorldQuery` and `ReadOnlyQuery` were sealed; they are `unsafe trait`s
+  now, as in Bevy, with the contract on them, `query::declare_access` for a term's `check_aliasing`, and `World::sparse_set(key)`
+  for one that reads a sparse component. `tests/downstream_query.rs` writes Bevy's `Has<T>`. `FetchComponent` stays sealed: it is
+  the shared half of `&T`, `&mut T` and `Option<..>`. **Breaking** for nothing outside the crate, which could not implement them.
+
 - **Components defined while the program runs.** `World::register_component(ComponentDescriptor::new("Health", layout))` returns a
   `ComponentKey`; `insert_by_key` / `remove_by_key` put a value on an entity and take it off, through the same path
   `add_component` / `remove_component` take; `DynamicQuery::builder().read(a).write(b).without(c).changed(d)` iterates by key, types

@@ -55,6 +55,15 @@ impl World {
         self.component_infos.get(&key.into())
     }
 
+    /// The sparse set holding the component `key`, if it is stored in one and any entity has had it:
+    /// what a query term written outside this crate reads a sparse component through (see
+    /// [`WorldQuery`](crate::query::WorldQuery)). A table component is read through its archetype's
+    /// column, [`Archetype::get_column`](crate::archetype::Archetype::get_column).
+    #[must_use]
+    pub fn sparse_set(&self, key: impl Into<ComponentKey>) -> Option<&crate::archetype::sparse_set::ComponentSparseSet> {
+        self.sparse_sets.get(&key.into())
+    }
+
     /// The hook lists of the component `key`, to push onto: what `register_on_add::<T>` and its siblings
     /// do, for a component named by key — one defined at runtime has no `T` to name.
     pub fn component_hooks_mut(&mut self, key: impl Into<ComponentKey>) -> &mut crate::world::ComponentHooks {

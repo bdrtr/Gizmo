@@ -33,9 +33,9 @@ impl_component!(Aligned16);
 fn test_same_type_mut_mut_panics() {
     let mut types = Vec::new();
     // İlk &mut Position — sorunsuz eklenir
-    check(crate::component_key::ComponentKey::of::<Position>(), true, &mut types);
+    declare_access(crate::component_key::ComponentKey::of::<Position>(), true, &mut types);
     // İkinci &mut Position — PANIC olmalı!
-    check(crate::component_key::ComponentKey::of::<Position>(), true, &mut types);
+    declare_access(crate::component_key::ComponentKey::of::<Position>(), true, &mut types);
 }
 
 /// `Query<(&Position, &mut Position)>` — one immutable, one mutable access to the same type:
@@ -44,16 +44,16 @@ fn test_same_type_mut_mut_panics() {
 #[should_panic(expected = "Query aliasing UB detected")]
 fn test_same_type_ref_mut_panics() {
     let mut types = Vec::new();
-    check(crate::component_key::ComponentKey::of::<Position>(), false, &mut types); // &Position
-    check(crate::component_key::ComponentKey::of::<Position>(), true, &mut types); // Mut<Position> — PANIC!
+    declare_access(crate::component_key::ComponentKey::of::<Position>(), false, &mut types); // &Position
+    declare_access(crate::component_key::ComponentKey::of::<Position>(), true, &mut types); // Mut<Position> — PANIC!
 }
 
 /// `Query<(&mut Position, &mut Velocity)>` — different types, must work without problems.
 #[test]
 fn test_different_types_mut_mut_ok() {
     let mut types = Vec::new();
-    check(crate::component_key::ComponentKey::of::<Position>(), true, &mut types);
-    check(crate::component_key::ComponentKey::of::<Velocity>(), true, &mut types);
+    declare_access(crate::component_key::ComponentKey::of::<Position>(), true, &mut types);
+    declare_access(crate::component_key::ComponentKey::of::<Velocity>(), true, &mut types);
     assert_eq!(types.len(), 2);
 }
 
@@ -61,8 +61,8 @@ fn test_different_types_mut_mut_ok() {
 #[test]
 fn test_same_type_ref_ref_ok() {
     let mut types = Vec::new();
-    check(crate::component_key::ComponentKey::of::<Position>(), false, &mut types);
-    check(crate::component_key::ComponentKey::of::<Position>(), false, &mut types);
+    declare_access(crate::component_key::ComponentKey::of::<Position>(), false, &mut types);
+    declare_access(crate::component_key::ComponentKey::of::<Position>(), false, &mut types);
     assert_eq!(types.len(), 2);
 }
 
