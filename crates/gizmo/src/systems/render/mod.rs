@@ -1091,6 +1091,9 @@ fn draw_camera_view(
         bloom_energy_conserving: if renderer.bloom_energy_conserving { 1.0 } else { 0.0 },
         ..post
     };
+    // The forward-only composite takes the curve, the dither and whether there is a vignette or grain as
+    // pipeline constants.
+    crate::renderer::post_process::sync_composite(renderer, &post);
     // **Camera motion blur's one input**: where this frame's clip space was last frame. Both
     // matrices unjittered — TAA's sub-pixel jitter is not motion. The history is per view
     // (`Renderer::with_view_history` swaps it), and kept whether or not the blur is on, so turning

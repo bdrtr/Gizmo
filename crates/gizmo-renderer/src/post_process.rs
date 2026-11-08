@@ -22,6 +22,11 @@ pub struct PostProcessState {
     pub bloom_blur_pipeline: wgpu::RenderPipeline,
     /// The composite pass: tone map, add bloom, and apply DoF, grain, vignette and aberration.
     pub composite_pipeline: wgpu::RenderPipeline,
+    /// The module the three pipelines were built from, kept to build them again for another
+    /// [`CompositeVariant`].
+    pub(crate) shader: wgpu::ShaderModule,
+    /// What the composite was last built for. See [`sync_composite`].
+    pub(crate) composite_variant: CompositeVariant,
     /// The HDR target the world is rendered into, ahead of tone mapping.
     pub hdr_texture: wgpu::Texture,
     /// Its view.
@@ -68,19 +73,7 @@ pub fn build_post_process_resources(
     height: u32,
     depth_view: &wgpu::TextureView,
 ) -> PostProcessState {
-    let post_shader = {
-        #[cfg(not(gizmo_forward_only))]
-        let source = std::fs::read_to_string("demo/assets/shaders/post_process.wgsl")
-            .unwrap_or_else(|_| include_str!("shaders/post_process.wgsl").to_string());
-
-        #[cfg(gizmo_forward_only)]
-        let source = include_str!("shaders/post_process_wasm.wgsl").to_string();
-
-        device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Post-Processing Shader"),
-            source: wgpu::ShaderSource::Wgsl(source.into()),
-        })
-    };
+    let post_shader = post_shader_module(device);
 
     let post_bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -220,6 +213,7 @@ pub fn build_post_process_resources(
     #[cfg(gizmo_forward_only)]
     let velocity: Option<VelocityBinding> = None;
 
+    let composite_variant = CompositeVariant::default();
     let (bloom_extract_pipeline, bloom_blur_pipeline, composite_pipeline) = build_post_pipelines(
         device,
         &post_shader,
@@ -230,6 +224,7 @@ pub fn build_post_process_resources(
         exposure.as_ref().map(|e| &e.layout),
         velocity.as_ref().map(|v| &v.layout),
         surface_format,
+        composite_variant,
     );
 
     let post_sampler = create_post_sampler(device);
@@ -265,6 +260,8 @@ pub fn build_post_process_resources(
         bloom_extract_pipeline,
         bloom_blur_pipeline,
         composite_pipeline,
+        shader: post_shader,
+        composite_variant,
         hdr_texture,
         hdr_texture_view,
         hdr_bind_group,
@@ -399,6 +396,7 @@ fn build_post_pipelines(
     exposure_bgl: Option<&wgpu::BindGroupLayout>,
     velocity_bgl: Option<&wgpu::BindGroupLayout>,
     surface_format: wgpu::TextureFormat,
+    variant: CompositeVariant,
 ) -> (
     wgpu::RenderPipeline,
     wgpu::RenderPipeline,
@@ -500,7 +498,10 @@ fn build_post_pipelines(
         fragment: Some(wgpu::FragmentState {
             module: post_shader,
             entry_point: Some("fs_composite"),
-            compilation_options: composite_options(surface_format),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: &composite_constants(surface_format, variant)[..],
+                ..Default::default()
+            },
             targets: &[Some(wgpu::ColorTargetState {
                 format: surface_format,
                 blend: Some(wgpu::BlendState::REPLACE),
@@ -527,6 +528,7 @@ fn build_post_pipelines(
 /// Recompiles just the three post-process pipelines against a new shader module, leaving every
 /// texture and bind group in place — what shader hot-reload calls.
 pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu::ShaderModule) {
+    let variant = renderer.post.composite_variant;
     let (e, b, c) = build_post_pipelines(
         &renderer.device,
         post_shader,
@@ -537,10 +539,90 @@ pub fn rebuild_post_pipelines(renderer: &mut crate::Renderer, post_shader: &wgpu
         renderer.post.exposure.as_ref().map(|e| &e.layout),
         renderer.post.velocity.as_ref().map(|v| &v.layout),
         renderer.config.format,
+        variant,
     );
     renderer.post.bloom_extract_pipeline = e;
     renderer.post.bloom_blur_pipeline = b;
     renderer.post.composite_pipeline = c;
+    renderer.post.shader = post_shader.clone();
+    renderer.post.composite_variant = variant;
+}
+
+/// What the reduced composite (`post_process_wasm.wgsl`) is built for: its pipeline constants, which a
+/// phone compiles as constants and so pays for no curve or dither it is not using. The desktop composite
+/// reads the same choices from its parameters every frame and has no such constants.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct CompositeVariant {
+    /// `TonemapCurve::as_f32`.
+    pub(crate) tonemap_curve: f32,
+    pub(crate) deband_dither: bool,
+    /// Whether there is a vignette at all; how strong stays a parameter.
+    pub(crate) vignette: bool,
+    /// Whether there is film grain at all.
+    pub(crate) film_grain: bool,
+}
+
+impl Default for CompositeVariant {
+    fn default() -> Self {
+        Self {
+            tonemap_curve: crate::gpu_types::TonemapCurve::default().as_f32(),
+            deband_dither: false,
+            vignette: false,
+            film_grain: false,
+        }
+    }
+}
+
+impl CompositeVariant {
+    /// What a frame's parameters ask for: the renderer's, or a camera's `PostProcess` grade on top.
+    pub(crate) fn of(uniforms: &PostProcessUniforms) -> Self {
+        Self {
+            tonemap_curve: uniforms.tonemap_curve,
+            deband_dither: uniforms.deband_dither > 0.5,
+            vignette: uniforms.vignette_intensity > 0.0,
+            film_grain: uniforms.film_grain_intensity > 0.0,
+        }
+    }
+}
+
+/// Builds the post pipelines again when this frame's `uniforms` ask for another tone curve, dither,
+/// vignette or grain than they were built for, on the forward-only path, whose composite takes those as
+/// pipeline constants. Call it once a frame with what is about to be written; it does nothing when nothing
+/// changed, and nothing on the desktop.
+pub fn sync_composite(renderer: &mut crate::Renderer, uniforms: &PostProcessUniforms) {
+    let wanted = CompositeVariant::of(uniforms);
+    if !cfg!(gizmo_forward_only) || wanted == renderer.post.composite_variant {
+        return;
+    }
+    renderer.post.composite_variant = wanted;
+    let shader = renderer.post.shader.clone();
+    rebuild_post_pipelines(renderer, &shader);
+}
+
+/// The source of the post shader: `post_common.wgsl` (the parameters, the tone curves, the vignette and the
+/// dither, which both composites share) and then `main`, the composite itself.
+pub(crate) fn post_shader_source(common: &str, main: &str) -> String {
+    format!("{common}\n{main}")
+}
+
+/// The post shader this path draws with: the desktop's composite, read from disk first so it hot-reloads,
+/// or the reduced one in the browser and on a phone, each behind `post_common.wgsl`.
+pub(crate) fn post_shader_module(device: &wgpu::Device) -> wgpu::ShaderModule {
+    #[cfg(not(gizmo_forward_only))]
+    let source = {
+        let read = |path: &str, fallback: &str| std::fs::read_to_string(path).unwrap_or_else(|_| fallback.to_string());
+        post_shader_source(
+            &read("demo/assets/shaders/post_common.wgsl", include_str!("shaders/post_common.wgsl")),
+            &read("demo/assets/shaders/post_process.wgsl", include_str!("shaders/post_process.wgsl")),
+        )
+    };
+    #[cfg(gizmo_forward_only)]
+    let source =
+        post_shader_source(include_str!("shaders/post_common.wgsl"), include_str!("shaders/post_process_wasm.wgsl"));
+    device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("Post-Processing Shader"),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    })
 }
 
 fn create_post_sampler(device: &wgpu::Device) -> wgpu::Sampler {
@@ -848,17 +930,18 @@ pub fn run_post_processing(
     tracing::trace!(passes, "[PostProcess] recorded post-processing chain");
 }
 
-/// The reduced path's composite encodes sRGB itself when the surface will not
-/// (`post_process_wasm.wgsl`'s `ENCODE_SRGB`); the desktop composite has no such constant, and wgpu
+/// The reduced path's composite constants: the sRGB encode when the surface will not do it
+/// (`ENCODE_SRGB`), the tone curve and the dither. The desktop composite declares none of them, and wgpu
 /// rejects a constant a shader does not declare.
 #[cfg(gizmo_forward_only)]
-fn composite_options(surface_format: wgpu::TextureFormat) -> wgpu::PipelineCompilationOptions<'static> {
-    const ENCODE: &[(&str, f64)] = &[("ENCODE_SRGB", 1.0)];
-    const LEAVE: &[(&str, f64)] = &[("ENCODE_SRGB", 0.0)];
-    wgpu::PipelineCompilationOptions {
-        constants: if composite_encodes_srgb(surface_format) { ENCODE } else { LEAVE },
-        ..Default::default()
-    }
+fn composite_constants(surface_format: wgpu::TextureFormat, variant: CompositeVariant) -> Vec<(&'static str, f64)> {
+    vec![
+        ("ENCODE_SRGB", f64::from(u8::from(composite_encodes_srgb(surface_format)))),
+        ("TONEMAP_CURVE", f64::from(variant.tonemap_curve)),
+        ("DEBAND_DITHER", f64::from(u8::from(variant.deband_dither))),
+        ("VIGNETTE", f64::from(u8::from(variant.vignette))),
+        ("FILM_GRAIN", f64::from(u8::from(variant.film_grain))),
+    ]
 }
 
 /// Whether the reduced path's composite has to encode sRGB for a surface of `format`: when the
@@ -870,8 +953,8 @@ fn composite_encodes_srgb(format: wgpu::TextureFormat) -> bool {
 
 
 #[cfg(not(gizmo_forward_only))]
-fn composite_options(_surface_format: wgpu::TextureFormat) -> wgpu::PipelineCompilationOptions<'static> {
-    wgpu::PipelineCompilationOptions::default()
+fn composite_constants(_surface_format: wgpu::TextureFormat, _variant: CompositeVariant) -> Vec<(&'static str, f64)> {
+    Vec::new()
 }
 
 #[cfg(test)]
@@ -890,14 +973,253 @@ mod srgb_tests {
     /// compiled by a browser or a phone, never by a desktop test.
     #[test]
     fn the_reduced_composite_declares_its_srgb_constant() {
-        let src = include_str!("shaders/post_process_wasm.wgsl");
-        let module = naga::front::wgsl::parse_str(src).expect("post_process_wasm.wgsl parses");
+        let src = super::post_shader_source(
+            include_str!("shaders/post_common.wgsl"),
+            include_str!("shaders/post_process_wasm.wgsl"),
+        );
+        let module = naga::front::wgsl::parse_str(&src).expect("post_process_wasm.wgsl parses");
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .expect("post_process_wasm.wgsl validates");
-        assert!(
-            module.overrides.iter().any(|(_, o)| o.name.as_deref() == Some("ENCODE_SRGB")),
-            "the pipeline sets ENCODE_SRGB; the shader must declare it"
-        );
+        for name in ["ENCODE_SRGB", "TONEMAP_CURVE", "DEBAND_DITHER", "VIGNETTE", "FILM_GRAIN"] {
+            assert!(
+                module.overrides.iter().any(|(_, o)| o.name.as_deref() == Some(name)),
+                "the pipeline sets {name}; the shader must declare it"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod reduced_composite_tests {
+    use crate::gpu_types::PostProcessUniforms;
+
+    /// Draws `post_process_wasm.wgsl`'s composite, as the browser and a phone build it, over one row of
+    /// HDR values on this machine's GPU, and reads back what it wrote.
+    fn run(curve: f32, dither: bool, params: PostProcessUniforms, input: &[f32]) -> Option<Vec<[f32; 3]>> {
+        let (vignette, grain) = (params.vignette_intensity > 0.0, params.film_grain_intensity > 0.0);
+        let _gpu = crate::test_gpu::gpu_lock();
+        pollster::block_on(async {
+            let (device, queue) = crate::test_gpu::headless_device().await?;
+            let width = input.len() as u32;
+            let format = wgpu::TextureFormat::Rgba16Float;
+            let texels: Vec<u16> =
+                input.iter().flat_map(|&v| [v, v, v, 1.0]).map(|v| half::f16::from_f32(v).to_bits()).collect();
+            let source = device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d { width, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            queue.write_texture(
+                source.as_image_copy(),
+                bytemuck::cast_slice(&texels),
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(width * 8), rows_per_image: Some(1) },
+                wgpu::Extent3d { width, height: 1, depth_or_array_layers: 1 },
+            );
+            let target = device.create_texture(&wgpu::TextureDescriptor {
+                label: None,
+                size: wgpu::Extent3d { width, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+            let group0 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+            let empty = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+            let group2 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+            let buffer = wgpu::util::DeviceExt::create_buffer_init(
+                &device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::bytes_of(&params),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                },
+            );
+            let view = source.create_view(&Default::default());
+            let bind0 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &group0,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+                ],
+            });
+            let bind1 = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &empty, entries: &[] });
+            let bind2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &group2,
+                entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+            });
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: None,
+                source: wgpu::ShaderSource::Wgsl(
+                    super::post_shader_source(
+                        include_str!("shaders/post_common.wgsl"),
+                        include_str!("shaders/post_process_wasm.wgsl"),
+                    )
+                    .into(),
+                ),
+            });
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: None,
+                bind_group_layouts: &[Some(&group0), Some(&empty), Some(&group2)],
+                immediate_size: 0,
+            });
+            let flag = |on: bool| f64::from(u8::from(on));
+            let constants = [
+                ("ENCODE_SRGB", 0.0),
+                ("TONEMAP_CURVE", f64::from(curve)),
+                ("DEBAND_DITHER", flag(dither)),
+                ("VIGNETTE", flag(vignette)),
+                ("FILM_GRAIN", flag(grain)),
+            ];
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: None,
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_fullscreen"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_composite"),
+                    compilation_options: wgpu::PipelineCompilationOptions { constants: &constants, ..Default::default() },
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                }),
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview_mask: None,
+                cache: None,
+            });
+            let staging = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 256.max(u64::from(width) * 8),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let out_view = target.create_view(&Default::default());
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &out_view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
+                    })],
+                    depth_stencil_attachment: None,
+                    ..Default::default()
+                });
+                pass.set_pipeline(&pipeline);
+                pass.set_bind_group(0, &bind0, &[]);
+                pass.set_bind_group(1, &bind1, &[]);
+                pass.set_bind_group(2, &bind2, &[]);
+                pass.draw(0..3, 0..1);
+            }
+            encoder.copy_texture_to_buffer(
+                target.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &staging,
+                    layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(256.max(width * 8)), rows_per_image: Some(1) },
+                },
+                wgpu::Extent3d { width, height: 1, depth_or_array_layers: 1 },
+            );
+            queue.submit(Some(encoder.finish()));
+            let slice = staging.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |_| {});
+            let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+            let bytes = slice.get_mapped_range().expect("mapped").to_vec();
+            let half = |i: usize| half::f16::from_bits(u16::from_le_bytes([bytes[i * 2], bytes[i * 2 + 1]])).to_f32();
+            Some((0..width as usize).map(|p| [half(p * 4), half(p * 4 + 1), half(p * 4 + 2)]).collect())
+        })
+    }
+
+    fn plain(exposure: f32) -> PostProcessUniforms {
+        PostProcessUniforms { exposure, vignette_intensity: 0.0, film_grain_intensity: 0.0, ..Default::default() }
+    }
+
+    fn aces(x: f32) -> f32 {
+        ((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14)).clamp(0.0, 1.0)
+    }
+
+    /// **The browser's and a phone's composite honour the curve, the exposure, the vignette and the
+    /// dither.** It applied fixed ACES to the frame as it came and nothing else, so `Renderer::tonemap_curve`,
+    /// `Camera::exposure`, `deband_dither` and the vignette did nothing there. Each is checked against the
+    /// formula over one row of values, at the precision of a half float.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_reduced_composite_honours_curve_exposure_vignette_and_dither() {
+        let input = [0.0, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+        let close = |got: &[[f32; 3]], want: &dyn Fn(f32) -> f32, what: &str| {
+            for (pixel, &x) in got.iter().zip(&input) {
+                let w = want(x);
+                assert!((pixel[0] - w).abs() <= 2e-3 + w * 2e-3, "{what}: {x} gave {}, wanted {w}", pixel[0]);
+            }
+        };
+        let Some(reinhard) = run(1.0, false, plain(2.0), &input) else {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        };
+        close(&reinhard, &|x| 2.0 * x / (1.0 + 2.0 * x), "Reinhard at exposure 2");
+        close(&run(3.0, false, plain(1.0), &input).unwrap(), &aces, "ACES, the default");
+        close(&run(0.0, false, plain(0.5), &input).unwrap(), &|x| (0.5 * x).clamp(0.0, 1.0), "none: clamped");
+
+        // The vignette: none at 0, as documented; at 1 the edge of the row is darker than its middle.
+        let flat = [1.0; 8];
+        let none = run(0.0, false, plain(1.0), &flat).unwrap();
+        assert!(none.iter().all(|p| (p[0] - 1.0).abs() < 2e-3), "vignette 0 is no vignette: {none:?}");
+        let strong = run(0.0, false, PostProcessUniforms { vignette_intensity: 1.0, ..plain(1.0) }, &flat).unwrap();
+        assert!(strong[0][0] < strong[3][0] && strong[3][0] <= 1.0, "vignette 1 darkens the edge: {strong:?}");
+
+        // The dither moves a dark row's values by up to half an 8-bit step, and the curve alone does not.
+        let dark = [0.02; 8];
+        let still = run(0.0, false, plain(1.0), &dark).unwrap();
+        let dithered = run(0.0, true, plain(1.0), &dark).unwrap();
+        assert!(still.iter().all(|p| (p[0] - 0.02).abs() < 1e-4), "{still:?}");
+        assert!(dithered.iter().any(|p| (p[0] - 0.02).abs() > 1e-4), "the dither moved nothing: {dithered:?}");
     }
 }

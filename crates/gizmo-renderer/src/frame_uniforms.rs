@@ -803,10 +803,14 @@ mod tests {
                     }
                     // Partial literals are the sanctioned form: `..Default::default()` fills
                     // whatever this site does not name, including fields added tomorrow.
-                    let partial = lines[i..]
-                        .iter()
-                        .take_while(|l| !l.trim_start().starts_with('}'))
-                        .any(|l| l.trim_start().starts_with(".."));
+                    // On one line, `Uniforms { a, ..base }`, the same thing.
+                    let rest = &line[line.find(block).unwrap_or(0)..];
+                    let one_line = rest.contains(", ..") || rest.contains("{ ..");
+                    let partial = one_line
+                        || lines[i..]
+                            .iter()
+                            .take_while(|l| !l.trim_start().starts_with('}'))
+                            .any(|l| l.trim_start().starts_with(".."));
                     if !partial {
                         offenders.push(format!(
                             "{}:{} — exhaustive `{block}` literal",

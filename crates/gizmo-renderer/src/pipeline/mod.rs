@@ -961,12 +961,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
 /// calls on a hot reload.
 pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let device = &renderer.device;
-    let post_shader = load_shader(
-        device,
-        "demo/assets/shaders/post_process.wgsl",
-        include_str!("../shaders/post_process.wgsl"),
-        "Post-Processing Shader",
-    );
+    let post_shader = crate::post_process::post_shader_module(device);
 
     // Geçici LayoutRefs tutucusu, render pipeline'ı için mevcut layoutları referans alır
     let indirect = crate::irradiance::IrradianceState::layout(device);
@@ -1131,13 +1126,22 @@ mod tests {
 
             // Motorun standalone modül olarak yüklediği render/post-process shader'ları.
             // (fluid_*/kernels/fluid_bindings concatenate edilen fragmanlar — hariç.)
+            let post = crate::post_process::post_shader_source(
+                include_str!("../shaders/post_common.wgsl"),
+                include_str!("../shaders/post_process.wgsl"),
+            );
+            let post_reduced = crate::post_process::post_shader_source(
+                include_str!("../shaders/post_common.wgsl"),
+                include_str!("../shaders/post_process_wasm.wgsl"),
+            );
             let shaders: &[(&str, &str)] = &[
                 ("shader.wgsl", include_str!("../shaders/shader.wgsl")),
                 ("gbuffer.wgsl", include_str!("../shaders/gbuffer.wgsl")),
                 ("deferred_lighting.wgsl", include_str!("../shaders/deferred_lighting.wgsl")),
                 ("env_bake.wgsl", include_str!("../shaders/env_bake.wgsl")),
                 ("environment_sky.wgsl", include_str!("../shaders/environment_sky.wgsl")),
-                ("post_process.wgsl", include_str!("../shaders/post_process.wgsl")),
+                ("post_process.wgsl", post.as_str()),
+                ("post_process_wasm.wgsl", post_reduced.as_str()),
                 ("ssao.wgsl", include_str!("../shaders/ssao.wgsl")),
                 ("ssao_blur.wgsl", include_str!("../shaders/ssao_blur.wgsl")),
                 ("ssao_apply.wgsl", include_str!("../shaders/ssao_apply.wgsl")),

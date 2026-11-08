@@ -667,6 +667,8 @@ impl Renderer {
             bloom_extract_pipeline: post_res.bloom_extract_pipeline,
             bloom_blur_pipeline: post_res.bloom_blur_pipeline,
             composite_pipeline: post_res.composite_pipeline,
+            shader: post_res.shader,
+            composite_variant: post_res.composite_variant,
             blur_params_buffer: post_res.blur_params_buffer,
             blur_v_params_buffer: post_res.blur_v_params_buffer,
             blur_params_bind_group_layout: post_res.blur_params_bind_group_layout,

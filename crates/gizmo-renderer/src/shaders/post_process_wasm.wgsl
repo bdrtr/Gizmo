@@ -1,5 +1,5 @@
 // ============================================================
-// Yelbegen Engine — Post-Processing Shader (FAST FOR WASM)
+// Gizmo Engine — the reduced post composite, for the browser and a phone
 // ============================================================
 
 struct FullscreenVertexOutput {
@@ -30,9 +30,20 @@ fn fs_blur(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(0.0, 0.0, 0.0, 1.0);
 }
 
-@group(2) @binding(0) var t_bloom: texture_2d<f32>;
-@group(2) @binding(1) var s_bloom: sampler;
-@group(2) @binding(2) var t_depth: texture_depth_2d;
+// `PostProcessParams`, `params` (group 2), the tone curves, the vignette and the dither are in
+// `post_common.wgsl`, which `post_process::post_shader_source` puts in front of this file, so this
+// composite gives a pixel the colour the desktop's does. What it leaves out needs a pass or a texture
+// this path does not have: bloom, depth of field, motion blur, chromatic aberration, the underwater fog,
+// auto exposure.
+
+/// `Renderer::tonemap_curve`, `Renderer::deband_dither`, and whether there is any vignette or film grain
+/// at all, set when the pipeline is built and built again when they change
+/// (`post_process::sync_composite`): constants, so a phone compiles one curve and nothing it is not using.
+/// How strong a vignette or a grain is stays in `params`.
+override TONEMAP_CURVE: f32 = 3.0;
+override DEBAND_DITHER: bool = false;
+override VIGNETTE: bool = false;
+override FILM_GRAIN: bool = false;
 
 /// Whether the image has to be sRGB-encoded here, set when the pipeline is built from the surface's
 /// format. A browser's canvas offers no `*-srgb` format, so on the web the surface is `bgra8unorm`
@@ -51,16 +62,20 @@ fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
 @fragment
 fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let hdr_color = textureSample(t_source, s_source, in.uv).rgb;
-    // VERY FAST ACES Tone Mapping + Gamma (NO DoF, NO Chromatic Aberration, NO Film Grain)
-    let a = 2.51;
-    let b = 0.03;
-    let c = 2.43;
-    let d = 0.59;
-    let e = 0.14;
-    let mapped = clamp((hdr_color * (a * hdr_color + b)) / (hdr_color * (c * hdr_color + d) + e), vec3<f32>(0.0), vec3<f32>(1.0));
+    var color = tonemap_curve(hdr_color * params.exposure, TONEMAP_CURVE, params.tonemap.y);
+    if (VIGNETTE) {
+        color *= vignette(in.uv, params.vignette_intensity);
+    }
+    if (FILM_GRAIN) {
+        let noise = hash12(in.position.xy) - 0.5;
+        color += color * noise * params.film_grain_intensity;
+    }
+    if (DEBAND_DITHER) {
+        color = deband(color, in.position.xy);
+    }
     // An sRGB surface encodes on write; any other gets it done here.
     if (ENCODE_SRGB) {
-        return vec4<f32>(linear_to_srgb(mapped), 1.0);
+        return vec4<f32>(linear_to_srgb(color), 1.0);
     }
-    return vec4<f32>(mapped, 1.0);
+    return vec4<f32>(color, 1.0);
 }

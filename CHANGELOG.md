@@ -157,6 +157,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before, 92.9 after, in one sitting; the floor's colour within 1 of 255. `scene_environment` in `common.wgsl` is the one function
   every path calls. The desktop path is unchanged.
 
+- **The browser and a phone honour the tone curve, the exposure, the dither, the vignette and the grain.** Their composite applied
+  fixed ACES and nothing else. `post_common.wgsl` holds the curves, the vignette and the dither for both composites; the reduced one
+  takes the curve and which of the rest are on as pipeline constants (`post_process::sync_composite`). Bloom, depth of field, motion
+  blur and chromatic aberration are still desktop only.
+
+- **A vignette of 0 is no vignette.** `PostProcess::vignette` said so, and the shader still took the corners to 73 %. **Looks change:**
+  at the renderer's default 0.25 the corners are lighter, about 75 % where they were 52 %.
+
 - **`Renderer::set_environment_map` works on the browser and on a phone.** The map goes through the reflection probes' prefilter
   into the cube those paths read their sky from, at its own resolution, and stands behind the scene. A `ReflectionProbe` is still
   desktop only, and those paths no longer capture one for nothing. `ReflectionProbeGpu::write_environment` takes a scale.
