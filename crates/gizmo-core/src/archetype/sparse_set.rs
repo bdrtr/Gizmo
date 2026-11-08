@@ -381,6 +381,15 @@ impl ComponentSparseSet {
         unsafe { Some(self.dense.get_unchecked_mut(self.sparse[e] as usize)) }
     }
 
+    /// Stamps `entity`'s change tick with `tick`, if it is in this set: what a write through
+    /// [`get_ptr_mut`](Self::get_ptr_mut) needs, since the pointer cannot.
+    pub fn mark_changed(&mut self, entity: u32, tick: u32) {
+        let e = entity as usize;
+        if e < self.sparse.len() && self.sparse[e] != u32::MAX {
+            self.ticks[self.sparse[e] as usize].get_mut().changed = tick;
+        }
+    }
+
     /// Deep-clone the component stored for `src` into `dst` (both entity ids),
     /// using the component's `clone_fn`. Returns `false` if `src` has no entry or
     /// the component is not `Clone`. Used by `World::clone_entity` (prefab splice),

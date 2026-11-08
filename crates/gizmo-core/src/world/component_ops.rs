@@ -822,6 +822,11 @@ impl World {
 
     /// Getting a raw Component Pointer (for Reflection/Editor)
     pub fn get_component_ptr(&self, entity: Entity, type_id: TypeId) -> Option<*const u8> {
+        // A dead entity's id is reused with a new generation; without this a stale handle read the new
+        // entity's component (`tests/raw_access.rs`).
+        if !self.is_alive(entity) {
+            return None;
+        }
         // SparseSet components live outside the archetype — otherwise type-erased
         // access (reflection, scene serialization) can't see them.
         if let Some(set) = self.sparse_sets.get(&type_id) {
@@ -841,10 +846,22 @@ impl World {
         Some(unsafe { col.get_ptr(loc.row as usize) })
     }
 
-    /// Getting a Mut mutable Component pointer (for HierarchyExt etc.)
+    /// A mutable pointer to `entity`'s component of `type_id`, for the hierarchy, relationships,
+    /// reflection and the editor.
+    ///
+    /// **Asking for it is a write**: the row's change tick is stamped with the world's, as `Mut<T>`'s
+    /// `DerefMut` does, because what the caller does through a raw pointer cannot be seen. Before
+    /// 2026-11-08 it stamped nothing, and `Changed<Children>` missed a second child pushed into an
+    /// existing list (`tests/raw_access.rs`). To look without writing, use
+    /// [`get_component_ptr`](Self::get_component_ptr).
     pub fn get_component_mut_ptr(&mut self, entity: Entity, type_id: TypeId) -> Option<*mut u8> {
+        if !self.is_alive(entity) {
+            return None;
+        }
+        let tick = self.tick;
         if let Some(set) = self.sparse_sets.get_mut(&type_id) {
             if let Some(p) = set.get_ptr_mut(entity.id()) {
+                set.mark_changed(entity.id(), tick);
                 return Some(p);
             }
         }
@@ -855,6 +872,7 @@ impl World {
         let arch = &mut self.archetype_index.archetypes[loc.archetype_id as usize];
         // SAFETY: &mut self ile tekil archetype erişimi; sütuna tekil &mut.
         let col = unsafe { arch.get_column_mut(type_id) }?;
+        col.ticks[loc.row as usize].changed = tick;
         // SAFETY: as in `get_component_ptr`, and `&mut self` makes this the only live view.
         Some(unsafe { col.get_mut_ptr(loc.row as usize) })
     }

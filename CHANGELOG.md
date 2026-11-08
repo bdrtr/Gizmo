@@ -147,6 +147,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **`Changed<Children>` missed a second child, and a dead entity's handle read its successor.** `World::get_component_mut_ptr`
+  stamped no change tick, so a write through it (the hierarchy, relationships, the inspector, scenes) was invisible to `Changed<T>`;
+  asking for it now counts as a write, as `Mut<T>` does. And neither raw pointer checked the entity's generation, so a handle kept
+  past a despawn read, or wrote, whatever entity reused the id. Both found while planning dynamic components.
+
 - **A phone lost 13 % of its frame rate to features nothing in the game used.** The lit shader has three tiers on the forward-only
   path now: plain, `DETAILS` (back faces, cut-outs, crossfades, a material's own reflectance, blend modes, debug views) and `LOBES`.
   Batching picks one per draw (`routing::needs_details`, `SceneState::lit_pipeline`), `unlit.wgsl` splits the same way with `KEEPS`,

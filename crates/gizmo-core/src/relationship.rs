@@ -115,7 +115,8 @@ fn with_list<R: Relationship>(world: &mut World, entity: Entity, create: bool, f
         return;
     }
     let type_id = std::any::TypeId::of::<R::Target>();
-    if world.get_component_mut_ptr(entity, type_id).is_none() {
+    // Looked at, not written: the mutable pointer would stamp a change.
+    if world.get_component_ptr(entity, type_id).is_none() {
         if !create {
             return;
         }
