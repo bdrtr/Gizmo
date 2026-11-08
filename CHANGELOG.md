@@ -177,6 +177,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A vignette of 0 is no vignette.** `PostProcess::vignette` said so, and the shader still took the corners to 73 %. **Looks change:**
   at the renderer's default 0.25 the corners are lighter, about 75 % where they were 52 %.
 
+- **Reflection probes on the browser and on a phone.** Group 0's bindings 6–8 carry them, and the lit pipelines are built with
+  `PROBES` only while a scene has one (`SceneState::set_forward_reflections`). `reflection_probes.wgsl` takes its binding numbers as
+  defs, and the irradiance grid's import has its own def, `IRRADIANCE`.
+
 - **`Renderer::set_environment_map` works on the browser and on a phone.** The map goes through the reflection probes' prefilter
   into the cube those paths read their sky from, at its own resolution, and stands behind the scene. A `ReflectionProbe` is still
   desktop only, and those paths no longer capture one for nothing. `ReflectionProbeGpu::write_environment` takes a scale.

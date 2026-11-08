@@ -38,6 +38,11 @@ pub(crate) fn native_render_defs() -> HashMap<String, ShaderDefValue> {
         // volume's group, for its reflection probes. The web has no group left, so no `PROBES`.
         ("PROBES".to_string(), ShaderDefValue::Bool(true)),
         ("REFLECTION_GROUP".to_string(), ShaderDefValue::UInt(5)),
+        ("REFLECTION_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(2)),
+        ("REFLECTION_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(3)),
+        ("REFLECTION_UNIFORM_BINDING".to_string(), ShaderDefValue::UInt(4)),
+        // The baked irradiance grid, bindings 0–1 of that same group.
+        ("IRRADIANCE".to_string(), ShaderDefValue::Bool(true)),
         // Back faces, cut-outs, LOD crossfades and a material's own reflectance, then anisotropy, clear
         // coat and subsurface, in `shader.wgsl`. Always on here; the forward-only path builds its lit
         // pipelines in tiers, so a plain surface does not pay for them. See `SceneState::lit_pipeline`.
@@ -65,6 +70,12 @@ pub(crate) fn web_render_defs() -> HashMap<String, ShaderDefValue> {
         ("INSTANCE_GROUP".to_string(), ShaderDefValue::UInt(3)),
         // The environment from a cube drawn when it changes (`env_cube`), not worked out per pixel.
         ("ENV_CUBE".to_string(), ShaderDefValue::Bool(true)),
+        // Reflection probes, for the lit pipelines built with `PROBES` while a scene has some: group 0's
+        // bindings 6–8, since this path has no group of its own to give them.
+        ("REFLECTION_GROUP".to_string(), ShaderDefValue::UInt(0)),
+        ("REFLECTION_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(6)),
+        ("REFLECTION_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(7)),
+        ("REFLECTION_UNIFORM_BINDING".to_string(), ShaderDefValue::UInt(8)),
     ])
 }
 
@@ -270,7 +281,12 @@ pub fn load_shader_composed_web_with(
 ) -> wgpu::ShaderModule {
     let mut defs = web_render_defs();
     for (name, value) in overrides {
-        defs.insert((*name).to_string(), *value);
+        // As on the desktop: `#ifdef` asks whether a name is there, so `false` has to take it away.
+        if *value == ShaderDefValue::Bool(false) {
+            defs.remove(*name);
+        } else {
+            defs.insert((*name).to_string(), *value);
+        }
     }
     let composed = compose_wgsl(fallback_src, label, defs);
     device.create_shader_module(wgpu::ShaderModuleDescriptor {

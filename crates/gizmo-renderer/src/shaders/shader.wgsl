@@ -27,6 +27,8 @@
 #endif
 #ifdef PROBES
 #import gizmo::reflection_probes::{probe_environment, environment_irradiance}
+#endif
+#ifdef IRRADIANCE
 #import gizmo::irradiance::{gi_sample}
 #endif
 
@@ -608,7 +610,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     }
     
     var indirect = vec3<f32>(0.0);
-#ifdef PROBES
+#ifdef IRRADIANCE
     // The baked probe grid, as the deferred shader adds it.
     indirect = gi_sample(in.world_position, N) * albedo;
 #endif

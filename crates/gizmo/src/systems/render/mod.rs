@@ -383,25 +383,28 @@ fn render_viewports_unshaken(
 /// **`gizmo-studio` calls it too**, before its own passes: the capture draws the world through this
 /// path, which skips `EditorOnly` furniture, so the editor's probes match the game's.
 pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
-    // Nothing on the forward-only path reads a probe: its lit shader has no group for them, and it takes
-    // an environment map through its own cube (`SceneState::set_environment_map`). Capturing one there
-    // drew the world six times for nothing.
-    if cfg!(gizmo_forward_only) {
-        return;
-    }
     use crate::renderer::components::ReflectionProbe;
+    // The forward-only path reads its probes on group 0 (`SceneState::set_forward_reflections`) and takes
+    // an environment map through its own cube (`SceneState::set_environment_map`), so a map takes no slot
+    // here, and its dirty flag is left for that cube.
+    let forward_only = cfg!(gizmo_forward_only);
     use crate::renderer::reflection::{ReflectionProbeGpu, FACES, MAX_PROBES};
     let mut probes: Vec<(Entity, ReflectionProbe)> =
         world.query::<(Entity, &ReflectionProbe)>().iter().map(|(entity, p)| (entity, *p)).collect();
     probes.sort_by_key(|&(id, _)| id);
     // An environment map takes the last slot.
-    let environment = renderer.environment_map.is_some();
+    let environment = renderer.environment_map.is_some() && !forward_only;
     probes.truncate(MAX_PROBES - usize::from(environment));
     if probes.is_empty() && !environment {
-        renderer.environment_map_dirty = false;
+        if !forward_only {
+            renderer.environment_map_dirty = false;
+        }
         if renderer.reflection_probe.take().is_some() {
             if let Some(def) = renderer.deferred.as_mut() {
                 def.irradiance.set_reflection(&renderer.device, &renderer.queue, None);
+            }
+            if forward_only && renderer.scene.set_forward_reflections(&renderer.device, &renderer.queue, None) {
+                crate::renderer::pipeline::rebuild_pipelines(renderer);
             }
         }
         return;
@@ -445,7 +448,9 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
             renderer.queue.submit(std::iter::once(encoder.finish()));
         }
     }
-    renderer.environment_map_dirty = false;
+    if !forward_only {
+        renderer.environment_map_dirty = false;
+    }
 
     let taa = if pending.is_empty() { None } else { renderer.taa.take() };
     let ssgi = if pending.is_empty() { None } else { renderer.ssgi.take() };
@@ -494,6 +499,7 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     // The parameters go up whenever they change, not only on a capture: an `intensity`,
     // `influence` or `blend_distance` edited later takes effect on the next frame. Positions are
     // where each slot was captured, not where the entity is now (see `captured_at`).
+    let mut probes_toggled = false;
     if let Some(gpu) = renderer.reflection_probe.as_mut() {
         let sources: Vec<_> = probes
             .iter()
@@ -512,8 +518,15 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
             set.environment = environment.then_some(slots - 1);
             if let Some(def) = renderer.deferred.as_mut() {
                 def.irradiance.set_reflection(&renderer.device, &renderer.queue, Some(set));
+            } else if forward_only {
+                probes_toggled = renderer.scene.set_forward_reflections(&renderer.device, &renderer.queue, Some(set));
             }
         }
+    }
+    // Probes appearing or going on the forward-only path build its lit pipelines again with `PROBES` on
+    // or off, so a scene without them pays nothing.
+    if probes_toggled {
+        crate::renderer::pipeline::rebuild_pipelines(renderer);
     }
     if pending.is_empty() {
         return;
@@ -5118,6 +5131,66 @@ mod golden_render_tests {
     /// quarters land where they are — on the +X wall (a side face) and on the ceiling (+Y, whose
     /// "up" is a different axis) — and not in the mirrored or flipped quarter. A face rendered the
     /// wrong way round fails here even when its centre is right.
+    /// A mirror plate facing the camera in the probe room, with or without a probe above it.
+    async fn mirror_in_probe_room(renderer: &mut Renderer, probe: bool) -> [u8; 3] {
+        use crate::renderer::components::ReflectionProbe;
+        let mut world = World::new();
+        probe_room(renderer, &mut world, Vec3::ZERO);
+        let tex = AssetManager::new().create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let plate = world.spawn();
+        world.add_component(plate, Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.8, 0.8, 0.05)));
+        world.add_component(plate, GlobalTransform::default());
+        world.add_component(plate, AssetManager::create_cube(&renderer.device));
+        world.add_component(plate, Material::new(tex).with_pbr(Vec4::ONE, 0.05, 1.0));
+        world.add_component(plate, MeshRenderer::new());
+        if probe {
+            world.spawn_bundle((Transform::new(Vec3::new(0.0, 2.0, 0.0)), GlobalTransform::default(), ReflectionProbe::new()));
+        }
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 3.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            primary: true,
+            ..Default::default()
+        });
+        // Two frames: a probe that appears on the forward-only path builds that path's pipelines again.
+        render_world(renderer, &mut world).await;
+        let frame = render_world(renderer, &mut world).await;
+        let i = (64 * 128 + 64) * 4;
+        [frame[i], frame[i + 1], frame[i + 2]]
+    }
+
+    /// **A mirror shows what the probe captured**, on whichever path this build draws with: the desktop's
+    /// deferred and forward ones read probes through the irradiance group, the browser's and a phone's
+    /// through group 0, with pipelines built with `PROBES` only while a scene has one. A plate facing the
+    /// camera reflects +Z, the magenta wall behind the camera; with no probe it reflects the sky.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_mirror_shows_what_a_probe_captured() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let sky = mirror_in_probe_room(&mut renderer, false).await;
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let magenta = mirror_in_probe_room(&mut renderer, true).await;
+            eprintln!("the plate's centre: sky {sky:?}, probe {magenta:?}");
+            let (r, g, b) = (i32::from(magenta[0]), i32::from(magenta[1]), i32::from(magenta[2]));
+            assert!(r > g + 40 && b > g + 40, "the plate reflects the magenta wall: {magenta:?}");
+            assert!(sky.iter().zip(magenta).any(|(a, b)| a.abs_diff(b) > 40), "a probe changed nothing: {sky:?}");
+        });
+    }
+
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn a_reflection_probe_captures_each_direction_the_right_way_round() {

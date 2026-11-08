@@ -277,6 +277,17 @@ is roughness `k / 5`; the floor's colour moved by 2 to 3 of 255 with it. `captur
 returns at once on that path now, since nothing there reads a probe: a probe in a web or phone scene drew
 the world six times for nothing.
 
+**And reflection probes, the same day.** That path has no group for them, so they are group 0's
+bindings 6–8: the captured cube array, a sampler and the uniform that places them, packed by the same
+`irradiance::reflection_uniform` the desktop's irradiance group uses. `reflection_probes.wgsl` takes its
+binding numbers as defs for that. The lit pipelines are built with `PROBES` only while a scene has a
+probe: `SceneState::set_forward_reflections` says when that changes and the frame builds the pipelines
+again, so a scene without one pays nothing. `a_mirror_shows_what_a_probe_captured` runs on whichever path
+a build draws with: a mirror plate reads the sky without a probe and the magenta wall behind the camera
+with one, (156, 158, 160) and (232, 188, 231) on the desktop, (94, 97, 102) and (217, 64, 217) with
+`--cfg gizmo_forward_only`, the browser's and a phone's path built for the desktop. **Not yet seen on a
+phone:** the one attempt drew no frame of the game and the phone disconnected before its log could be read.
+
 Unlit and baked-lit surfaces do not fill the G-buffer, so those effects still see through them, and a
 moving one gets no motion blur. Baked-lit exists to skip that cost, so changing this is its own
 decision.

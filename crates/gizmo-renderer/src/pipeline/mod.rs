@@ -103,6 +103,8 @@ pub struct SceneState {
     pub behind_sampler: wgpu::Sampler,
     /// The environment drawn into a cube, which the forward-only path's lit shader reads (`env_cube`).
     pub(crate) env_cube: crate::env_cube::EnvironmentCube,
+    /// Reflection probes as the forward-only path's lit shader reads them, on group 0.
+    pub(crate) forward_probes: ForwardProbes,
     /// [`unlit_pipeline`](Self::unlit_pipeline) with `KEEPS`, on the forward-only path, whose plain one
     /// cannot discard: a cut-out, a LOD crossfade. `None` on the desktop path, whose unlit pipeline can.
     pub unlit_keeps_pipeline: Option<wgpu::RenderPipeline>,
@@ -295,6 +297,7 @@ impl SceneView {
             &scene.behind_view,
             &scene.behind_sampler,
             scene.env_cube.view(),
+            &scene.forward_probes,
         );
 
         let mk_shadow_uniform = |i: usize, kind: &str| {
@@ -396,6 +399,7 @@ impl SceneState {
                 view,
                 &self.behind_sampler,
                 self.env_cube.view(),
+                &self.forward_probes,
             )
         };
         let global = build(&self.global_uniform_buffer, &self.cluster_table_buffer, &self.cluster_index_buffer);
@@ -408,6 +412,28 @@ impl SceneState {
         for (v, group) in self.views.iter_mut().zip(views) {
             v.bind_group = group;
         }
+    }
+
+    /// Points the forward-only path's lit shader at a set of captured reflection probes, or at none. True
+    /// when whether there are any changed: the caller builds the pipelines again then
+    /// ([`rebuild_pipelines`]), with `PROBES` on or off, so a scene without probes pays nothing for them.
+    /// The desktop path reads its probes through the irradiance group instead.
+    pub fn set_forward_reflections(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        set: Option<crate::irradiance::ReflectionSet<'_>>,
+    ) -> bool {
+        let data = crate::irradiance::reflection_uniform(set.as_ref());
+        queue.write_buffer(&self.forward_probes.uniform, 0, bytemuck::cast_slice(&data));
+        let enabled = set.as_ref().is_some_and(|s| !s.probes.is_empty());
+        // Called when the probes change, which is rare, so every view's group 0 is simply built again.
+        self.forward_probes.view = set.map(|s| s.view.clone());
+        let behind = self.behind_view.clone();
+        self.set_behind_view(device, Some(&behind));
+        let changed = enabled != self.forward_probes.enabled;
+        self.forward_probes.enabled = enabled;
+        changed
     }
 
     /// Draws the environment cube again if this frame's sky, presets or sun changed what it shows; true if
@@ -488,8 +514,61 @@ impl SceneState {
     }
 }
 
-/// Group 0 for one view: its uniforms and light lists, the frame behind glass, and the environment cube.
-/// Every place that builds one goes through here, so a binding cannot be left out of one of them.
+/// Reflection probes as the forward-only path reads them, on group 0: the captured cube array (a
+/// placeholder while there is none), a sampler and the uniform that places them. See
+/// [`SceneState::set_forward_reflections`].
+pub(crate) struct ForwardProbes {
+    placeholder: wgpu::TextureView,
+    view: Option<wgpu::TextureView>,
+    sampler: wgpu::Sampler,
+    uniform: wgpu::Buffer,
+    /// Whether the lit pipelines are built with `PROBES`.
+    pub(crate) enabled: bool,
+}
+
+impl ForwardProbes {
+    fn new(device: &wgpu::Device) -> Self {
+        let placeholder = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("no reflection probes"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 6 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba16Float,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&wgpu::TextureViewDescriptor {
+                dimension: Some(wgpu::TextureViewDimension::CubeArray),
+                ..Default::default()
+            });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("reflection probes"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let uniform = wgpu::util::DeviceExt::create_buffer_init(
+            device,
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("reflection probes"),
+                contents: bytemuck::cast_slice(&crate::irradiance::reflection_uniform(None)),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            },
+        );
+        Self { placeholder, view: None, sampler, uniform, enabled: false }
+    }
+
+    fn view(&self) -> &wgpu::TextureView {
+        self.view.as_ref().unwrap_or(&self.placeholder)
+    }
+}
+
+/// Group 0 for one view: its uniforms and light lists, the frame behind glass, the environment cube and
+/// the forward-only path's reflection probes. Every place that builds one goes through here, so a binding
+/// cannot be left out of one of them.
 fn global_group(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
@@ -498,6 +577,7 @@ fn global_group(
     behind: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
     environment: &wgpu::TextureView,
+    probes: &ForwardProbes,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some(label),
@@ -509,6 +589,9 @@ fn global_group(
             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(behind) },
             wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(sampler) },
             wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(environment) },
+            wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(probes.view()) },
+            wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&probes.sampler) },
+            wgpu::BindGroupEntry { binding: 8, resource: probes.uniform.as_entire_binding() },
         ],
     })
 }
@@ -754,6 +837,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         ..Default::default()
     });
     let env_cube = crate::env_cube::EnvironmentCube::new(device);
+    let forward_probes = ForwardProbes::new(device);
     let global_bind_group = global_group(
         device,
         &layouts.global,
@@ -762,6 +846,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         &behind_fallback,
         &behind_sampler,
         env_cube.view(),
+        &forward_probes,
     );
 
     let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -888,7 +973,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         indirect: &indirect,
         wire_color: &wire_color_layout,
     };
-    let core_pipelines = build_core_pipelines(device, &layout_refs);
+    let core_pipelines = build_core_pipelines(device, &layout_refs, false);
     let shadow_pipeline = build_shadow_pipeline(device, &layout_refs);
 
     tracing::info!(
@@ -921,6 +1006,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         transmissive: core_pipelines.transmissive,
         behind_view: behind_fallback.clone(),
         env_cube,
+        forward_probes,
         behind_fallback,
         behind_sampler,
         shadow_pipeline,
@@ -976,7 +1062,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
         wire_color: &renderer.scene.wire_color_layout,
     };
 
-    let core_pipelines = build_core_pipelines(device, &layouts);
+    let core_pipelines = build_core_pipelines(device, &layouts, renderer.scene.forward_probes.enabled);
     let shadow_pipeline = build_shadow_pipeline(device, &layouts);
 
     renderer.scene.lit_lobes = core_pipelines.lobes;
@@ -1221,6 +1307,13 @@ mod tests {
                         variants.push(("web keeps", shaders::compose_wgsl(src, name, defs)));
                     }
                     if *name == "shader.wgsl" {
+                        let mut probes = shaders::web_render_defs();
+                        probes.insert("PROBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        variants.push(("web with probes", shaders::compose_wgsl(src, name, probes.clone())));
+                        for tier in ["DETAILS", "LOBES", "TRANSMISSION"] {
+                            probes.insert(tier.to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        }
+                        variants.push(("web glass with probes", shaders::compose_wgsl(src, name, probes)));
                         let mut defs = shaders::web_render_defs();
                         defs.insert("DETAILS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         variants.push(("web with details", shaders::compose_wgsl(src, name, defs.clone())));

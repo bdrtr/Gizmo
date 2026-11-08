@@ -59,7 +59,47 @@ struct GridMeta {
 }
 
 /// Floats in the reflection uniform: a header vec4, then three vec4s per probe slot.
-const REFLECTION_FLOATS: usize = 4 + 12 * crate::reflection::MAX_PROBES;
+pub(crate) const REFLECTION_FLOATS: usize = 4 + 12 * crate::reflection::MAX_PROBES;
+
+/// The reflection uniform `reflection_probes.wgsl` reads for `set`, or for no probes at all: a header
+/// `[count, max_mip, background slot or −1, environment slot + 1 or 0]`, then per slot
+/// `[origin, has box] · [box min, blend distance] · [box max, intensity]`. One packing for the desktop's
+/// irradiance group and the forward-only path's group 0.
+pub(crate) fn reflection_uniform(set: Option<&ReflectionSet<'_>>) -> [f32; REFLECTION_FLOATS] {
+    match set {
+        Some(set) => pack_reflections(set.mip_count, &set.probes, set.environment),
+        None => pack_reflections(0, &[], None),
+    }
+}
+
+/// [`reflection_uniform`] from the values alone.
+fn pack_reflections(mip_count: u32, probes: &[ReflectionSource], environment: Option<usize>) -> [f32; REFLECTION_FLOATS] {
+    let mut data = [0.0f32; REFLECTION_FLOATS];
+    data[2] = -1.0;
+    {
+        let probes = &probes[..probes.len().min(crate::reflection::MAX_PROBES)];
+        data[0] = probes.len() as f32;
+        data[1] = mip_count.saturating_sub(1) as f32;
+        if let Some(background) = probes.iter().position(|p| p.box_half_extents.is_none()) {
+            data[2] = background as f32;
+        }
+        data[3] = environment.map_or(0.0, |slot| slot as f32 + 1.0);
+        for (slot, p) in probes.iter().enumerate() {
+            let at = 4 + 12 * slot;
+            data[at..at + 3].copy_from_slice(&p.position);
+            data[at + 11] = p.intensity;
+            if let Some(half) = p.box_half_extents {
+                data[at + 3] = 1.0;
+                data[at + 7] = p.blend_distance.max(1e-3);
+                for axis in 0..3 {
+                    data[at + 4 + axis] = p.position[axis] - half[axis].abs();
+                    data[at + 8 + axis] = p.position[axis] + half[axis].abs();
+                }
+            }
+        }
+    }
+    data
+}
 
 /// One captured probe, as [`ReflectionSet`] carries it.
 #[non_exhaustive]
@@ -344,32 +384,7 @@ impl IrradianceState {
     /// Points the specular term at a set of reflection probes, or back at the procedural sky with
     /// `None`. See `deferred_lighting.wgsl`'s `probe_environment` for how they combine.
     pub fn set_reflection(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, set: Option<ReflectionSet<'_>>) {
-        // Header [count, max_mip, background slot or −1, environment slot + 1 or 0], then per slot
-        // [origin, has box] · [box min, blend distance] · [box max, intensity].
-        let mut data = [0.0f32; REFLECTION_FLOATS];
-        data[2] = -1.0;
-        if let Some(set) = &set {
-            let probes = &set.probes[..set.probes.len().min(crate::reflection::MAX_PROBES)];
-            data[0] = probes.len() as f32;
-            data[1] = set.mip_count.saturating_sub(1) as f32;
-            if let Some(background) = probes.iter().position(|p| p.box_half_extents.is_none()) {
-                data[2] = background as f32;
-            }
-            data[3] = set.environment.map_or(0.0, |slot| slot as f32 + 1.0);
-            for (slot, p) in probes.iter().enumerate() {
-                let at = 4 + 12 * slot;
-                data[at..at + 3].copy_from_slice(&p.position);
-                data[at + 11] = p.intensity;
-                if let Some(half) = p.box_half_extents {
-                    data[at + 3] = 1.0;
-                    data[at + 7] = p.blend_distance.max(1e-3);
-                    for axis in 0..3 {
-                        data[at + 4 + axis] = p.position[axis] - half[axis].abs();
-                        data[at + 8 + axis] = p.position[axis] + half[axis].abs();
-                    }
-                }
-            }
-        }
+        let data = reflection_uniform(set.as_ref());
         queue.write_buffer(&self.reflection_params, 0, bytemuck::cast_slice(&data));
         self.reflection_view = set.map(|s| s.view.clone());
         self.rebind(device);
@@ -432,6 +447,20 @@ impl IrradianceState {
 
 #[cfg(test)]
 mod tests {
+    /// One packing for both paths: no probes is a count of 0 and no background; a boxed probe carries its
+    /// box and blend distance, an unboxed one is the background, and the environment's slot is one up.
+    #[test]
+    fn the_reflection_uniform_packs_what_the_shader_reads() {
+        assert_eq!(&super::reflection_uniform(None)[..4], &[0.0, 0.0, -1.0, 0.0]);
+        let boxed = super::ReflectionSource::new(2.0, [1.0, 2.0, 3.0]).with_box(Some([1.0, 0.5, 2.0]), 0.25);
+        let open = super::ReflectionSource::new(0.5, [0.0, 4.0, 0.0]);
+        let data = super::pack_reflections(6, &[boxed, open], Some(1));
+        assert_eq!(&data[..4], &[2.0, 5.0, 1.0, 2.0], "two probes, mip 5 the roughest, slot 1 the background, the environment one up");
+        assert_eq!(&data[4..16], &[1.0, 2.0, 3.0, 1.0, 0.0, 1.5, 1.0, 0.25, 2.0, 2.5, 5.0, 2.0], "the boxed probe");
+        assert_eq!(&data[16..20], &[0.0, 4.0, 0.0, 0.0], "the open one has no box");
+        assert_eq!(data[27], 0.5, "and its intensity");
+    }
+
     use super::*;
     use crate::gi::{LightProbe, ProbeGrid, SHCoeffs};
     use gizmo_math::Vec3;

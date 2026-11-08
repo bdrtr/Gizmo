@@ -1,8 +1,9 @@
 #define_import_path gizmo::reflection_probes
 
-// Reflection probes, shared by the deferred lighting pass and the forward (transparent) pass. The
-// bind group is the irradiance volume's (bindings 0–1 are its grid; 2–4 are these), bound at
-// `REFLECTION_GROUP`: 3 in the deferred pass, 5 in the forward one.
+// Reflection probes, shared by the deferred lighting pass and the forward (transparent) pass. On the
+// desktop the bind group is the irradiance volume's (bindings 0–1 are its grid; 2–4 are these), bound
+// at `REFLECTION_GROUP`: 3 in the deferred pass, 5 in the forward one. On the forward-only path, which
+// has no group to spare, they are group 0's bindings 6–8 (`pipeline::shaders::web_render_defs`).
 // Up to four captures of
 // the scene in one prefiltered cube array, slot i = probe i. Header = [count, max_mip, background
 // slot or −1, environment map's slot + 1 or 0]; per slot: origin = [position, has box], box_min = [min, blend distance],
@@ -17,9 +18,9 @@ struct Reflections {
     header: vec4<f32>,
     probes: array<ProbeSlot, 4>,
 };
-@group(#{REFLECTION_GROUP}) @binding(2) var t_reflection: texture_cube_array<f32>;
-@group(#{REFLECTION_GROUP}) @binding(3) var s_reflection: sampler;
-@group(#{REFLECTION_GROUP}) @binding(4) var<uniform> reflections: Reflections;
+@group(#{REFLECTION_GROUP}) @binding(#{REFLECTION_TEXTURE_BINDING}) var t_reflection: texture_cube_array<f32>;
+@group(#{REFLECTION_GROUP}) @binding(#{REFLECTION_SAMPLER_BINDING}) var s_reflection: sampler;
+@group(#{REFLECTION_GROUP}) @binding(#{REFLECTION_UNIFORM_BINDING}) var<uniform> reflections: Reflections;
 
 // Box-projected parallax for slot `i`: trace the reflected ray from the surface to the box's far
 // wall, and look the cube up toward where it lands as seen from the probe.
