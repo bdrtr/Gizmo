@@ -706,6 +706,9 @@ impl Renderer {
 
         // Built, not enabled: sharpening changes every frame's look, so it is opt-in.
         let cas = Some(crate::cas::CasState::new(&device, config.format, size.width, size.height));
+        // Not built until asked for (`Renderer::set_smaa`): its shader is long, and a phone that never turns it
+        // on should not compile it three times at every start.
+        let smaa = None;
 
         Self {
             instance: None,
@@ -733,6 +736,7 @@ impl Renderer {
             taa,
             view_history: Vec::new(),
             fxaa,
+            smaa,
             cas,
             auto_exposure,
             previous_view_proj: None,

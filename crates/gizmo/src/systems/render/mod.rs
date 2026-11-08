@@ -5131,6 +5131,72 @@ mod golden_render_tests {
     /// quarters land where they are — on the +X wall (a side face) and on the ceiling (+Y, whose
     /// "up" is a different axis) — and not in the mirrored or flipped quarter. A face rendered the
     /// wrong way round fails here even when its centre is right.
+    /// A dark cube, turned, against a bright sky, through the anti-aliasing `setup` chooses.
+    async fn turned_cube(setup: fn(&mut Renderer)) -> Vec<u8> {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([4.0, 4.0, 4.0]));
+        setup(&mut renderer);
+        let mut world = World::new();
+        let tex = AssetManager::new().create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let cube = world.spawn();
+        world.add_component(
+            cube,
+            Transform::new(Vec3::new(0.0, 0.0, -4.0)).with_rotation(gizmo_math::Quat::from_rotation_z(0.3)),
+        );
+        world.add_component(cube, GlobalTransform::default());
+        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(cube, Material::new(tex).with_unlit(Vec4::new(0.0, 0.0, 0.0, 1.0)));
+        world.add_component(cube, MeshRenderer::new());
+        world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// **SMAA runs in the post chain, in FXAA's place.** A turned dark cube against a bright sky: with no
+    /// edge filter its edges are stair steps, with SMAA they take in-between values, and with FXAA on as
+    /// well the frame is SMAA's to the byte, because the chain runs one or the other.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn smaa_runs_in_the_post_chain_in_fxaa_s_place() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // Between the cube (black) and the sky, whatever the curve made of it: the corner pixel says.
+        let between = |frame: &[u8]| {
+            let sky = frame[1];
+            frame.as_chunks::<4>().0.iter().filter(|p| p[1] > 8 && p[1] + 8 < sky).count()
+        };
+        pollster::block_on(async {
+            let hard = turned_cube(|r| {
+                if let Some(f) = r.fxaa.as_mut() {
+                    f.enabled = false;
+                }
+            })
+            .await;
+            let smaa = turned_cube(|r| {
+                if let Some(f) = r.fxaa.as_mut() {
+                    f.enabled = false;
+                }
+                r.set_smaa(Some(gizmo_renderer::smaa::SmaaQuality::High));
+            })
+            .await;
+            let both = turned_cube(|r| {
+                if let Some(f) = r.fxaa.as_mut() {
+                    f.enabled = true;
+                }
+                r.set_smaa(Some(gizmo_renderer::smaa::SmaaQuality::High));
+            })
+            .await;
+            eprintln!("in-between pixels: none {}, SMAA {}", between(&hard), between(&smaa));
+            assert!(between(&smaa) > between(&hard) + 20, "SMAA smoothed nothing: {} against {}", between(&smaa), between(&hard));
+            assert_eq!(both, smaa, "with FXAA on too, the frame is still SMAA's alone");
+        });
+    }
+
     /// A mirror plate facing the camera in the probe room, with or without a probe above it.
     async fn mirror_in_probe_room(renderer: &mut Renderer, probe: bool) -> [u8; 3] {
         use crate::renderer::components::ReflectionProbe;

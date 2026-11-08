@@ -214,6 +214,9 @@ pub struct Renderer {
     /// FXAA, the last pass in the chain. When present and enabled, post-processing writes into
     /// its input texture rather than straight to the swapchain.
     pub fxaa: Option<crate::fxaa::FxaaState>,
+    /// SMAA 1x, which takes FXAA's place in the chain while it is there. `None` until
+    /// [`Self::set_smaa`] asks for it; see [`crate::smaa`].
+    pub smaa: Option<crate::smaa::SmaaState>,
     /// Contrast-adaptive sharpening, after FXAA — the very last pass. Present but **disabled** by
     /// default; see [`crate::cas`].
     pub cas: Option<crate::cas::CasState>,
@@ -685,6 +688,26 @@ impl Renderer {
         }
     }
 
+    /// SMAA at `quality` in FXAA's place, from the next frame, or back to FXAA with `None`. Built the first
+    /// time it is asked for and dropped with `None`, so a game that never uses it pays nothing.
+    pub fn set_smaa(&mut self, quality: Option<crate::smaa::SmaaQuality>) {
+        match (quality, self.smaa.as_mut()) {
+            (None, _) => self.smaa = None,
+            (Some(quality), Some(smaa)) => smaa.set_quality(&self.device, quality),
+            (Some(quality), None) => {
+                let mut smaa = crate::smaa::SmaaState::new(
+                    &self.device,
+                    &self.queue,
+                    self.config.format,
+                    self.size.width,
+                    self.size.height,
+                );
+                smaa.set_quality(&self.device, quality);
+                self.smaa = Some(smaa);
+            }
+        }
+    }
+
     /// A colour look-up table for every frame from the next on, or none. A [`LutDomain::Grade`] is applied
     /// after the tone curve; the other domains take its place. See [`crate::color_lut`].
     ///
@@ -853,6 +876,9 @@ impl Renderer {
             if let Some(ref mut fxaa) = self.fxaa {
                 fxaa.resize(&self.device, &self.queue, self.config.format, new_size.width, new_size.height);
             }
+            if let Some(ref mut smaa) = self.smaa {
+                smaa.resize(&self.device, &self.queue, self.config.format, new_size.width, new_size.height);
+            }
             if let Some(ref mut cas) = self.cas {
                 cas.resize(&self.device, self.config.format, new_size.width, new_size.height);
             }
@@ -904,17 +930,20 @@ impl Renderer {
         region: Option<[f32; 4]>,
         overlay: bool,
     ) {
-        // composite → [FXAA] → [CAS] → output_view. Each enabled stage renders into the next
+        // composite → [SMAA or FXAA] → [CAS] → output_view. Each enabled stage renders into the next
         // one's input texture at full size; only the LAST stage writes the output, and only it
-        // takes the region.
+        // takes the region. SMAA, when enabled, takes FXAA's place: two edge filters in a row would
+        // blur what the first had already smoothed.
         // Auto exposure measures the finished HDR frame and adapts before the composite reads it.
         if let Some(ae) = self.auto_exposure.as_ref().filter(|a| a.enabled) {
             ae.record(encoder);
         }
-        let fxaa = self.fxaa.as_ref().filter(|f| f.enabled);
+        let smaa = self.smaa.as_ref();
+        let fxaa = self.fxaa.as_ref().filter(|f| f.enabled && smaa.is_none());
         let cas = self.cas.as_ref().filter(|c| c.enabled);
-        let after_composite = fxaa
-            .map(|f| &f.input_texture_view)
+        let after_composite = smaa
+            .map(|s| &s.input_texture_view)
+            .or(fxaa.map(|f| &f.input_texture_view))
             .or(cas.map(|c| &c.input_texture_view));
         crate::post_process::run_post_processing(
             self,
@@ -922,6 +951,12 @@ impl Renderer {
             after_composite.unwrap_or(output_view),
             if after_composite.is_some() { None } else { region },
         );
+        if let Some(smaa) = smaa {
+            match cas {
+                Some(cas) => crate::smaa::run_smaa_pass(smaa, encoder, &cas.input_texture_view, None),
+                None => crate::smaa::run_smaa_pass(smaa, encoder, output_view, region),
+            }
+        }
         if let Some(fxaa) = fxaa {
             match cas {
                 Some(cas) => crate::fxaa::run_fxaa_pass(fxaa, encoder, &cas.input_texture_view, None),

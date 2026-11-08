@@ -177,6 +177,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A vignette of 0 is no vignette.** `PostProcess::vignette` said so, and the shader still took the corners to 73 %. **Looks change:**
   at the renderer's default 0.25 the corners are lighter, about 75 % where they were 52 %.
 
+- **SMAA 1x: `Renderer::set_smaa(Some(SmaaQuality::High))`.** Edges, blending weights and neighbourhood blending, in FXAA's
+  place in the chain, at the reference's four presets. Bevy's WGSL port of the reference, with its area and search tables under
+  their MIT licence (`crates/gizmo-renderer/src/smaa/LICENSE`). Built the first time it is asked for.
+
 - **A coloured specular: `Material::with_specular_tint`.** A non-metal's F0 a channel at a time, glTF's `specularColorFactor`, on
   both paths and in SSR. **Breaking for custom shaders:** `InstanceRaw` grew a `optics` vec4 (144 bytes), which also carries the
   glass volume that sat in the route flag; a custom shader declaring the instance struct must declare it, and

@@ -182,6 +182,8 @@ pub mod color_lut;
 pub(crate) mod env_cube;
 /// Temporal anti-aliasing.
 pub mod taa;
+/// SMAA 1x, which takes FXAA's place in the post chain when it is on.
+pub mod smaa;
 /// The frame copied under glass, for [`Material::transmission`](crate::components::Material::transmission).
 pub mod transmission;
 /// Fonts, glyph rasterisation and text layout.
