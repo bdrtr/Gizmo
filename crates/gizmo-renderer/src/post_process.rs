@@ -27,6 +27,9 @@ pub struct PostProcessState {
     pub(crate) shader: wgpu::ShaderModule,
     /// What the composite was last built for. See [`sync_composite`].
     pub(crate) composite_variant: CompositeVariant,
+    /// The colour look-up table the composite reads; an empty one of two texels while none is set, which
+    /// mode 0 never reads.
+    pub(crate) lut_view: wgpu::TextureView,
     /// The HDR target the world is rendered into, ahead of tone mapping.
     pub hdr_texture: wgpu::Texture,
     /// Its view.
@@ -146,6 +149,17 @@ pub fn build_post_process_resources(
                     },
                     count: None,
                 },
+                // The colour look-up table (`crate::color_lut`), read through binding 1's sampler.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
             ],
         });
     #[cfg(gizmo_forward_only)]
@@ -167,6 +181,17 @@ pub fn build_post_process_resources(
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // The colour look-up table (`crate::color_lut`), read through binding 1's sampler.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D3,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
                     count: None,
                 },
             ],
@@ -228,6 +253,7 @@ pub fn build_post_process_resources(
     );
 
     let post_sampler = create_post_sampler(device);
+    let lut_view = crate::color_lut::unset_view(device);
     let (
         hdr_texture,
         hdr_texture_view,
@@ -245,6 +271,7 @@ pub fn build_post_process_resources(
         width,
         height,
         depth_view,
+        &lut_view,
     );
 
     let (blur_params_buffer, blur_v_params_buffer, blur_h_bind_group, blur_v_bind_group) =
@@ -262,6 +289,7 @@ pub fn build_post_process_resources(
         composite_pipeline,
         shader: post_shader,
         composite_variant,
+        lut_view,
         hdr_texture,
         hdr_texture_view,
         hdr_bind_group,
@@ -560,6 +588,8 @@ pub(crate) struct CompositeVariant {
     pub(crate) vignette: bool,
     /// Whether there is film grain at all.
     pub(crate) film_grain: bool,
+    /// The colour look-up table's mode, 0 for none.
+    pub(crate) color_lut: f32,
 }
 
 impl Default for CompositeVariant {
@@ -569,6 +599,7 @@ impl Default for CompositeVariant {
             deband_dither: false,
             vignette: false,
             film_grain: false,
+            color_lut: 0.0,
         }
     }
 }
@@ -581,6 +612,7 @@ impl CompositeVariant {
             deband_dither: uniforms.deband_dither > 0.5,
             vignette: uniforms.vignette_intensity > 0.0,
             film_grain: uniforms.film_grain_intensity > 0.0,
+            color_lut: uniforms.color_lut[0],
         }
     }
 }
@@ -649,6 +681,7 @@ pub fn create_post_textures(
     width: u32,
     height: u32,
     depth_view: &wgpu::TextureView,
+    lut_view: &wgpu::TextureView,
 ) -> (
     wgpu::Texture,
     wgpu::TextureView,
@@ -698,42 +731,36 @@ pub fn create_post_textures(
     let (_be_t, be_v, be_bg) = make("Bloom Extract Texture");
     let (_bb_t, bb_v, bb_bg) = make("Bloom Blur Texture");
 
-    #[cfg(not(gizmo_forward_only))]
-    let cb_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: composite_bloom_bgl,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&be_v),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(depth_view),
-            },
-        ],
-        label: Some("composite_bloom_bind_group"),
-    });
-    #[cfg(gizmo_forward_only)]
-    let cb_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: composite_bloom_bgl,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&be_v),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(sampler),
-            },
-        ],
-        label: Some("composite_bloom_bind_group"),
-    });
+    let cb_bg = composite_bloom_group(device, composite_bloom_bgl, &be_v, sampler, depth_view, lut_view);
 
     (hdr_t, hdr_v, hdr_bg, be_v, be_bg, bb_v, bb_bg, cb_bg)
+}
+
+/// The composite's group 1: the bloom, its sampler, the depth (the desktop's, for depth of field) and the
+/// colour look-up table. Built on a resize and when a table is set.
+pub(crate) fn composite_bloom_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    bloom: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    #[cfg_attr(gizmo_forward_only, allow(unused_variables))] depth: &wgpu::TextureView,
+    lut: &wgpu::TextureView,
+) -> wgpu::BindGroup {
+    let shared = [
+        wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(bloom) },
+        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(lut) },
+    ];
+    #[cfg(not(gizmo_forward_only))]
+    let entries =
+        [&shared[..], &[wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(depth) }]].concat();
+    #[cfg(gizmo_forward_only)]
+    let entries = shared.to_vec();
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("composite_bloom_bind_group"),
+        layout,
+        entries: &entries,
+    })
 }
 
 /// Builds the blur direction buffer and its two bind groups — one stepping a texel along X, one
@@ -941,6 +968,7 @@ fn composite_constants(surface_format: wgpu::TextureFormat, variant: CompositeVa
         ("DEBAND_DITHER", f64::from(u8::from(variant.deband_dither))),
         ("VIGNETTE", f64::from(u8::from(variant.vignette))),
         ("FILM_GRAIN", f64::from(u8::from(variant.film_grain))),
+        ("COLOR_LUT", f64::from(variant.color_lut)),
     ]
 }
 
@@ -981,7 +1009,7 @@ mod srgb_tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .expect("post_process_wasm.wgsl validates");
-        for name in ["ENCODE_SRGB", "TONEMAP_CURVE", "DEBAND_DITHER", "VIGNETTE", "FILM_GRAIN"] {
+        for name in ["ENCODE_SRGB", "TONEMAP_CURVE", "DEBAND_DITHER", "VIGNETTE", "FILM_GRAIN", "COLOR_LUT"] {
             assert!(
                 module.overrides.iter().any(|(_, o)| o.name.as_deref() == Some(name)),
                 "the pipeline sets {name}; the shader must declare it"
@@ -997,6 +1025,16 @@ mod reduced_composite_tests {
     /// Draws `post_process_wasm.wgsl`'s composite, as the browser and a phone build it, over one row of
     /// HDR values on this machine's GPU, and reads back what it wrote.
     fn run(curve: f32, dither: bool, params: PostProcessUniforms, input: &[f32]) -> Option<Vec<[f32; 3]>> {
+        run_with(curve, dither, params, input, None)
+    }
+
+    fn run_with(
+        curve: f32,
+        dither: bool,
+        params: PostProcessUniforms,
+        input: &[f32],
+        lut: Option<&crate::color_lut::ColorLut>,
+    ) -> Option<Vec<[f32; 3]>> {
         let (vignette, grain) = (params.vignette_intensity > 0.0, params.film_grain_intensity > 0.0);
         let _gpu = crate::test_gpu::gpu_lock();
         pollster::block_on(async {
@@ -1053,7 +1091,36 @@ mod reduced_composite_tests {
                     },
                 ],
             });
-            let empty = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+            let empty = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D3,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                ],
+            });
+            let lut_view = match lut {
+                Some(lut) => lut.upload(&device, &queue),
+                None => crate::color_lut::unset_view(&device),
+            };
+            let linear = device.create_sampler(&wgpu::SamplerDescriptor {
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Linear,
+                ..Default::default()
+            });
             let group2 = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: None,
                 entries: &[wgpu::BindGroupLayoutEntry {
@@ -1084,7 +1151,14 @@ mod reduced_composite_tests {
                     wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
                 ],
             });
-            let bind1 = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &empty, entries: &[] });
+            let bind1 = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &empty,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&linear) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&lut_view) },
+                ],
+            });
             let bind2 = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
                 layout: &group2,
@@ -1112,6 +1186,7 @@ mod reduced_composite_tests {
                 ("DEBAND_DITHER", flag(dither)),
                 ("VIGNETTE", flag(vignette)),
                 ("FILM_GRAIN", flag(grain)),
+                ("COLOR_LUT", f64::from(params.color_lut[0])),
             ];
             let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: None,
@@ -1221,5 +1296,49 @@ mod reduced_composite_tests {
         let dithered = run(0.0, true, plain(1.0), &dark).unwrap();
         assert!(still.iter().all(|p| (p[0] - 0.02).abs() < 1e-4), "{still:?}");
         assert!(dithered.iter().any(|p| (p[0] - 0.02).abs() > 1e-4), "the dither moved nothing: {dithered:?}");
+    }
+
+    /// **The reduced composite reads a colour table as a grade and in the curve's place**, as the desktop's
+    /// does: one shared function. An identity grade leaves a row as the curve made it; an identity table fed
+    /// `x / (1 + x)` gives Reinhard; fed `log2` over -8..8 stops it gives that ramp, display-decoded; and a
+    /// table that halves every channel halves the result.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_reduced_composite_reads_a_colour_table() {
+        use crate::color_lut::{ColorLut, LutDomain};
+        let input = [0.0, 0.1, 0.25, 0.5, 1.0, 2.0, 4.0];
+        let with = |domain: LutDomain| PostProcessUniforms { color_lut: domain.params(), ..plain(1.0) };
+        let identity = ColorLut::identity(33);
+        let Some(graded) = run_with(1.0, false, with(LutDomain::Grade), &input, Some(&identity)) else {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        };
+        let check = |got: &[[f32; 3]], want: &dyn Fn(f32) -> f32, what: &str| {
+            for (pixel, &x) in got.iter().zip(&input) {
+                let w = want(x);
+                assert!((pixel[0] - w).abs() <= 4e-3 + w * 4e-3, "{what}: {x} gave {}, wanted {w}", pixel[0]);
+            }
+        };
+        check(&graded, &|x| x / (1.0 + x), "an identity grade after Reinhard");
+        let shaped = run_with(3.0, false, with(LutDomain::Reinhard), &input, Some(&identity)).unwrap();
+        check(&shaped, &|x| x / (1.0 + x), "an identity table in the curve's place, fed x / (1 + x)");
+        let log = LutDomain::Log2 { min_ev: -8.0, max_ev: 8.0 };
+        let logged = run_with(3.0, false, with(log), &input, Some(&identity.clone().with_domain(log))).unwrap();
+        let decode = |c: f32| if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) };
+        check(&logged, &|x| decode(((x.max(1e-10).log2() + 8.0) / 16.0).clamp(0.0, 1.0)), "log2 over 16 stops");
+        let half_text = {
+            let mut t = String::from("LUT_3D_SIZE 2\n");
+            for b in [0.0, 0.5] {
+                for g in [0.0, 0.5] {
+                    for r in [0.0, 0.5] {
+                        t.push_str(&format!("{r} {g} {b}\n"));
+                    }
+                }
+            }
+            t
+        };
+        let halving = ColorLut::from_cube(&half_text).unwrap().with_domain(LutDomain::Reinhard);
+        let halved = run_with(3.0, false, with(LutDomain::Reinhard), &input, Some(&halving)).unwrap();
+        check(&halved, &|x| 0.5 * x / (1.0 + x), "a table that halves");
     }
 }

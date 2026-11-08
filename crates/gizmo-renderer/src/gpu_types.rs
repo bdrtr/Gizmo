@@ -267,8 +267,9 @@ pub struct PostProcessUniforms {
     pub reproject: [[f32; 4]; 4],
     /// 1 = bloom replaces light rather than adding it (`Renderer::bloom_energy_conserving`).
     pub bloom_energy_conserving: f32,
-    /// Padding to the next 16-byte boundary. Not a knob.
-    pub _bloom_pad: [f32; 3],
+    /// The colour look-up table's `[mode, min_ev, max_ev]` (`LutDomain::params`); mode 0 is none. See
+    /// [`crate::color_lut`].
+    pub color_lut: [f32; 3],
 }
 
 /// Which curve maps HDR to the display range.

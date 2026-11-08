@@ -514,7 +514,7 @@ impl Default for PostProcessUniforms {
             dof_max_depth: 0.0,
             reproject: gizmo_math::Mat4::IDENTITY.to_cols_array_2d(),
             bloom_energy_conserving: 0.0,
-            _bloom_pad: [0.0; 3],
+            color_lut: [0.0; 3],
         }
     }
 }

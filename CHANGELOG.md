@@ -162,6 +162,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   takes the curve and which of the rest are on as pipeline constants (`post_process::sync_composite`). Bloom, depth of field, motion
   blur and chromatic aberration are still desktop only.
 
+- **Colour look-up tables: `color_lut::ColorLut` and `Renderer::set_color_lut`.** A `.cube` file as a grade after the tone curve, or
+  in its place fed `x / (1 + x)` or `log2` between two exposures: how Tony McMapface, SBDT and Blender's Filmic and AgX looks are
+  made. On every path. `PostProcessUniforms::_bloom_pad` is `color_lut` now.
+
 - **A vignette of 0 is no vignette.** `PostProcess::vignette` said so, and the shader still took the corners to 73 %. **Looks change:**
   at the renderer's default 0.25 the corners are lighter, about 75 % where they were 52 %.
 

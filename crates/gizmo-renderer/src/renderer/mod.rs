@@ -185,6 +185,8 @@ pub struct Renderer {
     pub environment_map: Option<crate::environment::EnvironmentMap>,
     /// Whether [`Self::environment_map`] has yet to reach the cube array.
     pub environment_map_dirty: bool,
+    /// See [`Self::color_lut_params`].
+    color_lut_params: [f32; 3],
 
     /// The frame under the glass. `None` until a frame draws glass, and again after a resize: see
     /// [`crate::transmission`].
@@ -683,6 +685,40 @@ impl Renderer {
         }
     }
 
+    /// A colour look-up table for every frame from the next on, or none. A [`LutDomain::Grade`] is applied
+    /// after the tone curve; the other domains take its place. See [`crate::color_lut`].
+    ///
+    /// [`LutDomain::Grade`]: crate::color_lut::LutDomain::Grade
+    pub fn set_color_lut(&mut self, lut: Option<&crate::color_lut::ColorLut>) {
+        self.post.lut_view = match lut {
+            Some(lut) => lut.upload(&self.device, &self.queue),
+            None => crate::color_lut::unset_view(&self.device),
+        };
+        self.color_lut_params = lut.map_or([0.0; 3], |l| l.domain.params());
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        self.post.composite_bloom_bind_group = crate::post_process::composite_bloom_group(
+            &self.device,
+            &self.post.composite_bloom_bind_group_layout,
+            &self.post.bloom_extract_texture_view,
+            &sampler,
+            &self.depth_texture_view,
+            &self.post.lut_view,
+        );
+    }
+
+    /// What the post parameters carry for the table [`Self::set_color_lut`] set: `[mode, min_ev, max_ev]`,
+    /// mode 0 for none.
+    pub fn color_lut_params(&self) -> [f32; 3] {
+        self.color_lut_params
+    }
+
     /// Lights the scene from this image and puts it behind the scene, or goes back to the sky with
     /// `None`. Takes effect on the next frame. See [`crate::environment`].
     pub fn set_environment_map(&mut self, map: Option<crate::environment::EnvironmentMap>) {
@@ -753,6 +789,7 @@ impl Renderer {
                     new_size.width,
                     new_size.height,
                     &self.depth_texture_view,
+                    &self.post.lut_view,
                 );
             self.post.hdr_texture = hdr_t;
             self.post.hdr_texture_view = hdr_tv;

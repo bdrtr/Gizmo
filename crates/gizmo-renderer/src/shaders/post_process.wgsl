@@ -180,13 +180,7 @@ fn fs_blur(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
 // Pass 3: Composite + Tone Mapping
 // ============================
 @group(1) @binding(0) var t_bloom: texture_2d<f32>;
-@group(1) @binding(1) var s_bloom: sampler;
 @group(1) @binding(2) var t_depth: texture_depth_2d;
-
-// The curve `params.tonemap.x` selects (`tonemap_curve` in `post_common.wgsl`).
-fn apply_tonemap(x: vec3<f32>) -> vec3<f32> {
-    return tonemap_curve(x, params.tonemap.x, params.tonemap.y);
-}
 
 @fragment
 fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
@@ -277,13 +271,16 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     // Added, the default, a bloom can only brighten. Conserving, the glow comes out of the light that
     // made it: what spreads is taken from where it was, and the total stays what it was.
     var with_bloom = dof_color + bloom_color * params.bloom_intensity;
-    if (params.bloom_mode.x > 0.5) {
+    if (params.bloom_and_lut.x > 0.5) {
         with_bloom = dof_color + (bloom_color - bright_part(dof_color)) * min(params.bloom_intensity, 1.0);
     }
     let combined = with_bloom * params.exposure * auto_exposure[0];
     
     // 3. Tone mapping — ACES by default, `TonemapCurve` chooses.
-    let mapped = apply_tonemap(combined);
+    let mapped = display_mapping(
+        combined, params.bloom_and_lut.y, params.bloom_and_lut.z, params.bloom_and_lut.w, params.tonemap.x,
+        params.tonemap.y,
+    );
     
     // Swapchain is configured as an sRGB format (Bgra8UnormSrgb/Rgba8UnormSrgb)
     // Hardware automatically applies gamma correction upon writing.

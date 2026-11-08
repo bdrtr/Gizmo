@@ -44,6 +44,9 @@ override TONEMAP_CURVE: f32 = 3.0;
 override DEBAND_DITHER: bool = false;
 override VIGNETTE: bool = false;
 override FILM_GRAIN: bool = false;
+/// The colour look-up table's mode (`LutDomain::params`), 0 for none: what it is, its range stays a
+/// parameter.
+override COLOR_LUT: f32 = 0.0;
 
 /// Whether the image has to be sRGB-encoded here, set when the pipeline is built from the surface's
 /// format. A browser's canvas offers no `*-srgb` format, so on the web the surface is `bgra8unorm`
@@ -53,16 +56,14 @@ override FILM_GRAIN: bool = false;
 /// Android APK, whose Vulkan surface is sRGB and leaves this off.
 override ENCODE_SRGB: bool = false;
 
-fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
-    let lo = c * 12.92;
-    let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
-    return select(hi, lo, c <= vec3<f32>(0.0031308));
-}
 
 @fragment
 fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let hdr_color = textureSample(t_source, s_source, in.uv).rgb;
-    var color = tonemap_curve(hdr_color * params.exposure, TONEMAP_CURVE, params.tonemap.y);
+    var color = display_mapping(
+        hdr_color * params.exposure, COLOR_LUT, params.bloom_and_lut.z, params.bloom_and_lut.w, TONEMAP_CURVE,
+        params.tonemap.y,
+    );
     if (VIGNETTE) {
         color *= vignette(in.uv, params.vignette_intensity);
     }

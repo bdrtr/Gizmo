@@ -176,6 +176,8 @@ pub mod ssgi;
 pub mod ssr;
 /// An image as the sky: [`EnvironmentMap`](environment::EnvironmentMap).
 pub mod environment;
+/// Colour look-up tables: a grade, or a view transform defined by a table.
+pub mod color_lut;
 /// The environment drawn into a cube for the forward-only path.
 pub(crate) mod env_cube;
 /// Temporal anti-aliasing.

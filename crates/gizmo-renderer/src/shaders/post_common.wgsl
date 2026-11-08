@@ -26,11 +26,18 @@ struct PostProcessParams {
     // This frame's clip space → the last frame's (both unjittered).
     reproject: mat4x4<f32>,
     // x: 1 = bloom replaces light rather than adding it.
-    bloom_mode: vec4<f32>,
+    // x: 1 = bloom replaces light rather than adding it. y: the colour look-up table's mode (0 none, 1 a
+    // grade, 2 Reinhard, 3 log2), z and w: its log2 range (`crate::color_lut`).
+    bloom_and_lut: vec4<f32>,
 };
 
 @group(2) @binding(0)
 var<uniform> params: PostProcessParams;
+
+// The composite's group 1: its linear sampler, and the colour look-up table (`crate::color_lut`), which
+// is not read while none is set.
+@group(1) @binding(1) var s_bloom: sampler;
+@group(1) @binding(3) var t_lut: texture_3d<f32>;
 
 // Düzgün 2B hash (Dave Hoskins). Eski film-grain `fract(sin(dot(uv,K))*M)` düz UV'de
 // sin'in ekstremumlarında donup STATİK DİAGONAL BANTLAR üretiyordu; bu, piksel
@@ -150,4 +157,40 @@ fn deband(color: vec3<f32>, pixel: vec2<f32>) -> vec3<f32> {
     let step_noise = hash12(pixel + vec2<f32>(37.0, 113.0)) - 0.5;
     let encoded = pow(max(color, vec3<f32>(0.0)), vec3<f32>(1.0 / 2.2));
     return pow(max(encoded + vec3<f32>(step_noise / 255.0), vec3<f32>(0.0)), vec3<f32>(2.2));
+}
+
+fn linear_to_srgb(c: vec3<f32>) -> vec3<f32> {
+    let lo = c * 12.92;
+    let hi = 1.055 * pow(c, vec3<f32>(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, c <= vec3<f32>(0.0031308));
+}
+
+fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
+    let lo = c / 12.92;
+    let hi = pow((c + 0.055) / 1.055, vec3<f32>(2.4));
+    return select(hi, lo, c <= vec3<f32>(0.04045));
+}
+
+// The table at `c`, each channel in 0..1, between texel centres as `ColorLut::sample` is.
+fn lut_lookup(c: vec3<f32>) -> vec3<f32> {
+    let size = f32(textureDimensions(t_lut).x);
+    let uvw = clamp(c, vec3<f32>(0.0), vec3<f32>(1.0)) * ((size - 1.0) / size) + 0.5 / size;
+    return textureSampleLevel(t_lut, s_bloom, uvw, 0.0).rgb;
+}
+
+// The scene's light, after exposure, as display light: the tone curve, then a grade if the table is one;
+// or the table in the curve's place, fed the light as it was shaped for (`LutDomain`).
+fn display_mapping(hdr: vec3<f32>, lut_mode: f32, min_ev: f32, max_ev: f32, curve: f32, white: f32) -> vec3<f32> {
+    if (lut_mode > 2.5) {
+        let ev = (log2(max(hdr, vec3<f32>(1e-10))) - min_ev) / max(max_ev - min_ev, 1e-4);
+        return srgb_to_linear(lut_lookup(ev));
+    }
+    if (lut_mode > 1.5) {
+        return lut_lookup(hdr / (1.0 + max(hdr, vec3<f32>(0.0))));
+    }
+    let mapped = tonemap_curve(hdr, curve, white);
+    if (lut_mode > 0.5) {
+        return srgb_to_linear(lut_lookup(linear_to_srgb(clamp(mapped, vec3<f32>(0.0), vec3<f32>(1.0)))));
+    }
+    return mapped;
 }

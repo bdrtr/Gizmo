@@ -1089,6 +1089,7 @@ fn draw_camera_view(
         deband_dither: if renderer.deband_dither { 1.0 } else { 0.0 },
         bloom_softness: renderer.bloom_softness.clamp(0.0, 1.0),
         bloom_energy_conserving: if renderer.bloom_energy_conserving { 1.0 } else { 0.0 },
+        color_lut: renderer.color_lut_params(),
         ..post
     };
     // The forward-only composite takes the curve, the dither and whether there is a vignette or grain as
@@ -3952,6 +3953,80 @@ mod golden_render_tests {
 
     /// A brightly lit white floor — bright enough that the curve's shoulder is what decides the
     /// output. A dim scene would sit on the linear part of every curve and they would all agree.
+    /// A red unlit wall filling the frame, through `lut` and `curve`; with `unset`, the table is set and
+    /// then taken away again.
+    async fn render_red_wall(
+        lut: Option<&gizmo_renderer::color_lut::ColorLut>,
+        curve: gizmo_renderer::gpu_types::TonemapCurve,
+        unset: bool,
+    ) -> Vec<u8> {
+        const W: u32 = 64;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        renderer.taa = None;
+        renderer.tonemap_curve = curve;
+        renderer.vignette_intensity = 0.0;
+        renderer.film_grain_intensity = 0.0;
+        renderer.set_color_lut(lut);
+        if unset {
+            renderer.set_color_lut(None);
+        }
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let wall = world.spawn();
+        world.add_component(wall, Transform::new(Vec3::new(0.0, 0.0, -3.0)).with_scale(Vec3::new(20.0, 20.0, 0.2)));
+        world.add_component(wall, GlobalTransform::default());
+        world.add_component(wall, AssetManager::create_cube(&renderer.device));
+        world.add_component(wall, Material::new(tex).with_unlit(Vec4::new(0.8, 0.1, 0.05, 1.0)));
+        world.add_component(wall, MeshRenderer::new());
+        world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+        render_world(&mut renderer, &mut world).await
+    }
+
+    /// **A colour look-up table reaches the frame, as a grade and in the curve's place.** A table that swaps
+    /// red and blue turns a red wall blue; an identity grade leaves the frame as it was, to a step; an
+    /// identity table fed `x / (1 + x)` gives what the Reinhard curve gives; and `None` takes it away again.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_colour_table_grades_the_frame_or_replaces_the_curve() {
+        use gizmo_renderer::color_lut::{ColorLut, LutDomain};
+        use gizmo_renderer::gpu_types::TonemapCurve;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let swap = ColorLut::from_cube(
+            "LUT_3D_SIZE 2\n0 0 0\n0 0 1\n0 1 0\n0 1 1\n1 0 0\n1 0 1\n1 1 0\n1 1 1\n",
+        )
+        .expect("a valid table");
+        let centre = |f: &[u8]| {
+            let i = (32 * 64 + 32) * 4;
+            [f[i], f[i + 1], f[i + 2]]
+        };
+        pollster::block_on(async {
+            let plain = render_red_wall(None, TonemapCurve::Aces, false).await;
+            let swapped = render_red_wall(Some(&swap), TonemapCurve::Aces, false).await;
+            let identity = render_red_wall(Some(&ColorLut::identity(33)), TonemapCurve::Aces, false).await;
+            let (p, s, i) = (centre(&plain), centre(&swapped), centre(&identity));
+            // Measured: (225, 99, 59) without a table.
+            assert!(p[0] > p[2] + 100, "the wall is red: {p:?}");
+            assert!(s[2] > s[0] + 100, "the table swapped red and blue: {s:?}");
+            assert!(s[2].abs_diff(p[0]) <= 2 && s[0].abs_diff(p[2]) <= 2, "{p:?} swapped is {s:?}");
+            assert!(i.iter().zip(p).all(|(a, b)| a.abs_diff(b) <= 2), "an identity grade moved {p:?} to {i:?}");
+
+            let reinhard = render_red_wall(None, TonemapCurve::Reinhard, false).await;
+            let by_table = render_red_wall(Some(&ColorLut::identity(33).with_domain(LutDomain::Reinhard)), TonemapCurve::Aces, false).await;
+            let (r, t) = (centre(&reinhard), centre(&by_table));
+            assert!(r.iter().zip(t).all(|(a, b)| a.abs_diff(b) <= 2), "Reinhard by curve {r:?}, by table {t:?}");
+
+            let gone = centre(&render_red_wall(Some(&swap), TonemapCurve::Aces, true).await);
+            assert_eq!(gone, p, "taken away, the table leaves the frame as it was");
+        });
+    }
+
     async fn render_bright_scene(curve: gizmo_renderer::gpu_types::TonemapCurve) -> Vec<u8> {
         const W: u32 = 128;
         let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
