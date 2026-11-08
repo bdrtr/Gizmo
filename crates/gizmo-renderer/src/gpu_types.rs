@@ -454,10 +454,7 @@ pub struct InstanceRaw {
     /// Metalness, 0 = dielectric, 1 = metal.
     pub metallic: f32,
     /// Which shading route this instance takes: 0 = deferred PBR, 1 = unlit / baked-lit,
-    /// 2 = skybox. Below -0.5 it is a glass instance's volume instead, which takes the PBR route:
-    /// [`Material::volume_transmittance`](crate::components::Material::volume_transmittance) at 8 bits
-    /// a channel, `-(1 + r·65536 + g·256 + b)`, exact in an f32. Every reader of the route asks
-    /// `> 0.5`, which a negative value never is. See [`InstanceRaw::with_lit_extras_of`].
+    /// 2 = skybox.
     pub unlit: f32,
     /// The anisotropy/clear-coat/subsurface triple, packed into one f32 — the `.w` of the
     /// shader's `pbr` vec4. Called `_padding` until 2026-08-15, which is part of how two render
@@ -476,6 +473,17 @@ pub struct InstanceRaw {
     /// surface can still glow — the same relationship glTF's `emissiveFactor` has to base
     /// colour. w unused. Zero by default.
     pub emissive: [f32; 4],
+    /// How the surface treats light passing it, stored as what it takes away so that zero bytes are
+    /// none, as every knob in this record is: xyz = `1 −`
+    /// [`Material::specular_tint`](crate::components::Material::specular_tint), a non-metal's F0
+    /// colour; w = `0xFFFFFF −` a glass's
+    /// [`Material::volume_transmittance`](crate::components::Material::volume_transmittance) at 8 bits a
+    /// channel, `r·65536 + g·256 + b`, exact in an f32. See [`InstanceRaw::with_lit_extras_of`].
+    ///
+    /// Its own slot since 2026-11-08: every other one a lit instance has was taken, and the glass
+    /// volume had been packed into the route flag. A custom shader that declares the instance struct
+    /// has to declare this too; `CustomMaterial::from_wgsl` says so if it does not.
+    pub optics: [f32; 4],
 }
 
 impl InstanceRaw {
@@ -526,6 +534,7 @@ impl InstanceRaw {
             packed_pbr_params: pack_pbr_params(anisotropy, clear_coat, subsurface),
             ambient: [ambient[0].max(0.0), ambient[1].max(0.0), ambient[2].max(0.0), 0.0],
             emissive: [emissive[0].max(0.0), emissive[1].max(0.0), emissive[2].max(0.0), 0.0],
+            optics: [0.0; 4],
         }
     }
 
@@ -588,10 +597,13 @@ impl InstanceRaw {
         if material.is_transmissive() {
             self.ambient[0] = material.transmission;
             self.ambient[1] = material.thickness;
-            let t = material.volume_transmittance();
-            if t != gizmo_math::Vec3::ONE {
-                self.unlit = -(1.0 + pack_volume(t) as f32);
-            }
+            self.optics[3] = (0xFF_FFFF - pack_volume(material.volume_transmittance())) as f32;
+        }
+        if material.material_type == crate::components::MaterialType::Pbr {
+            let t = material.specular_tint;
+            self.optics[0] = 1.0 - t.x;
+            self.optics[1] = 1.0 - t.y;
+            self.optics[2] = 1.0 - t.z;
         }
         if material.material_type == crate::components::MaterialType::Pbr && material.clear_coat > 0.0 {
             self.ambient[2] = material.clear_coat_roughness;
@@ -706,8 +718,8 @@ impl UvTransform {
 #[cfg(test)]
 mod tonemap_default_tests {
     /// **A glass's volume reaches the shader as a colour at 8 bits a channel.** Light through its
-    /// thickness keeps `color ^ (thickness / distance)`; packed below -0.5 in the route flag, which every
-    /// reader of the route takes as PBR, and unpacked as `shader.wgsl`'s `volume_transmittance` does.
+    /// thickness keeps `color ^ (thickness / distance)`; packed into `optics.w` and unpacked as
+    /// `shader.wgsl`'s `volume_transmittance` does.
     #[test]
     fn a_glass_volume_packs_into_the_route_flag_and_back() {
         use crate::components::MaterialDesc;
@@ -720,15 +732,13 @@ mod tonemap_default_tests {
         assert_eq!(once.clone().with_thickness(0.0).volume_transmittance(), Vec3::ONE, "a thin pane has no volume");
 
         let packed = super::pack_volume(Vec3::new(0.25, 1.0, 0.5));
-        let flag = -(1.0 + packed as f32);
-        assert!(flag <= -1.0, "never read as unlit or sky");
-        let back = (-flag - 1.0) as u32;
+        let back = (packed as f32) as u32;
         assert_eq!(back, packed, "exact in an f32");
         let unpacked = [(back >> 16) & 255, (back >> 8) & 255, back & 255].map(|v| v as f32 / 255.0);
         for (got, want) in unpacked.iter().zip([0.25, 1.0, 0.5]) {
             assert!((got - want).abs() <= 0.5 / 255.0 + 1e-6, "{unpacked:?}");
         }
-        assert_eq!(super::pack_volume(Vec3::ONE), 0xFF_FFFF);
+        assert_eq!(super::pack_volume(Vec3::ONE), 0xFF_FFFF, "white, so `optics.w` stores 0 for no volume");
     }
 
     use super::*;
@@ -789,7 +799,7 @@ mod tests {
         // 128 (was 96) since `ambient` + `emissive` joined it. EVERY shader that indexes
         // `array<InstanceRaw>` must declare the same 8 vec4s or `instances[i]` reads the
         // wrong offsets for i > 0 — see `every_instance_shader_declares_the_full_struct`.
-        assert_eq!(std::mem::size_of::<InstanceRaw>(), 128, "InstanceRaw");
+        assert_eq!(std::mem::size_of::<InstanceRaw>(), 144, "InstanceRaw");
         assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
         // The fixed part is 656 bytes (560 until `fog` / `fog_shape` and `shadow_bias` were appended, 2026-11-02;
         // 608 until the three `sky_*` rows, 2026-11-03);
@@ -895,9 +905,9 @@ mod tests {
     #[test]
     fn instance_with_zero_knobs_is_byte_identical_to_the_pre_knob_record() {
         // The bit-identical-defaults promise, checked rather than hoped: a material that sets
-        // neither knob produces the same first 96 bytes it always did, and the 32 new ones are
-        // all zero — which is what makes the shader's `(lit + ambient) * base + emissive`
-        // collapse back to `lit * base`.
+        // no knob produces the same first 96 bytes it always did, and the 48 after them are all
+        // zero — which is what makes the shader's `(lit + ambient) * base + emissive` collapse back
+        // to `lit * base`, and `optics` read as a white tint and no volume.
         let i = InstanceRaw::new(
             [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]],
             [1.0, 1.0, 1.0, 1.0],
@@ -911,7 +921,7 @@ mod tests {
             [0.0; 3],
         );
         let bytes = bytemuck::bytes_of(&i);
-        assert_eq!(&bytes[96..], &[0u8; 32], "unset knobs must be all-zero bytes");
+        assert_eq!(&bytes[96..], &[0u8; 48], "unset knobs must be all-zero bytes");
         assert_eq!(std::mem::offset_of!(InstanceRaw, ambient), 96);
         assert_eq!(std::mem::offset_of!(InstanceRaw, emissive), 112);
     }

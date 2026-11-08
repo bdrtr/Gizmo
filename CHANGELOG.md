@@ -177,6 +177,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A vignette of 0 is no vignette.** `PostProcess::vignette` said so, and the shader still took the corners to 73 %. **Looks change:**
   at the renderer's default 0.25 the corners are lighter, about 75 % where they were 52 %.
 
+- **A coloured specular: `Material::with_specular_tint`.** A non-metal's F0 a channel at a time, glTF's `specularColorFactor`, on
+  both paths and in SSR. **Breaking for custom shaders:** `InstanceRaw` grew a `optics` vec4 (144 bytes), which also carries the
+  glass volume that sat in the route flag; a custom shader declaring the instance struct must declare it, and
+  `CustomMaterial::from_wgsl` panics with both sizes if it does not. The G-buffer's RT4 is `Rgba16Float` (48 bytes a sample).
+
 - **Reflection probes on the browser and on a phone.** Group 0's bindings 6–8 carry them, and the lit pipelines are built with
   `PROBES` only while a scene has one (`SceneState::set_forward_reflections`). `reflection_probes.wgsl` takes its binding numbers as
   defs, and the irradiance grid's import has its own def, `IRRADIANCE`.

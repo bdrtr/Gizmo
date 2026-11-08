@@ -237,6 +237,11 @@ pub struct Material {
     pub attenuation_color: gizmo_math::Vec3,
     /// See [`attenuation_color`](Self::attenuation_color), in metres. 0 = no attenuation, the default.
     pub attenuation_distance: f32,
+    /// The colour of a non-metal's reflection: its F0, [`reflectance`](Self::reflectance)'s number, a
+    /// channel at a time. White by default, which is no tint. glTF's `KHR_materials_specular`
+    /// `specularColorFactor`. A metal's F0 is its albedo, so this fades out with
+    /// [`metallic`](Self::metallic) as `reflectance` does.
+    pub specular_tint: gizmo_math::Vec3,
 }
 
 /// The smoothest a clear coat gets, and what one that says nothing is. Any smoother and the highlight is
@@ -320,6 +325,9 @@ pub struct MaterialDesc {
     /// See [`Material::attenuation_distance`].
     #[serde(default)]
     pub attenuation_distance: f32,
+    /// See [`Material::specular_tint`].
+    #[serde(default = "default_attenuation_color")]
+    pub specular_tint: gizmo_math::Vec3,
 }
 
 fn default_attenuation_color() -> gizmo_math::Vec3 {
@@ -363,6 +371,7 @@ impl From<&Material> for MaterialDesc {
             thickness,
             attenuation_color,
             attenuation_distance,
+            specular_tint,
         } = m;
         Self {
             albedo: *albedo,
@@ -385,6 +394,7 @@ impl From<&Material> for MaterialDesc {
             thickness: *thickness,
             attenuation_color: *attenuation_color,
             attenuation_distance: *attenuation_distance,
+            specular_tint: *specular_tint,
         }
     }
 }
@@ -415,6 +425,7 @@ impl MaterialDesc {
             thickness: self.thickness,
             attenuation_color: self.attenuation_color,
             attenuation_distance: self.attenuation_distance,
+            specular_tint: self.specular_tint,
         }
     }
 }
@@ -446,6 +457,7 @@ impl Default for MaterialDesc {
             thickness: 0.0,
             attenuation_color: gizmo_math::Vec3::ONE,
             attenuation_distance: 0.0,
+            specular_tint: gizmo_math::Vec3::ONE,
         }
     }
 }
@@ -520,6 +532,12 @@ macro_rules! material_builders {
     /// Sets [`Material::thickness`], in metres, floored at zero.
     pub fn with_thickness(mut self, thickness: f32) -> Self {
         self.thickness = thickness.max(0.0);
+        self
+    }
+
+    /// Sets [`Material::specular_tint`], each channel floored at zero.
+    pub fn with_specular_tint(mut self, tint: gizmo_math::Vec3) -> Self {
+        self.specular_tint = tint.max(gizmo_math::Vec3::ZERO);
         self
     }
 

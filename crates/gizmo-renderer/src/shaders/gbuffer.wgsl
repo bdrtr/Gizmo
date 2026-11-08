@@ -2,7 +2,7 @@
 // Writes opaque PBR surfaces to three MRTs; unlit/skybox objects are discarded here
 // and drawn in a subsequent forward pass.
 
-#import gizmo::common::{instance_keeps}
+#import gizmo::common::{instance_keeps, dielectric_f0}
 #import gizmo::surface::{evaluate_surface, surface_uv, tangent_frame, surface_lobes}
 
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
@@ -43,6 +43,8 @@ struct InstanceData {
     // stride is wrong.
     ambient: vec4<f32>,
     emissive: vec4<f32>,
+    // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
+    optics: vec4<f32>,
 };
 
 struct VertexInput {
@@ -73,6 +75,8 @@ struct VertexOutput {
     @location(11) inst_coat_roughness: f32,
     // The instance's cut-out and LOD crossfade, `instance_keeps`.
     @location(12) inst_keep: f32,
+    // `Material::specular_tint`, from `1 − optics.xyz`.
+    @location(13) inst_tint: vec3<f32>,
 };
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
@@ -138,6 +142,7 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_emissive = inst.emissive;
     out.inst_coat_roughness = inst.ambient.z;
     out.inst_keep = inst.ambient.w;
+    out.inst_tint = vec3<f32>(1.0) - inst.optics.xyz;
     out.clip_position = scene.view_proj * world_pos;
     out.motion_now    = motion.view_proj * world_pos;
     out.motion_before = motion.prev_view_proj * (previous_models[instance_idx] * vec4<f32>(skinned_pos.xyz, 1.0));
@@ -151,8 +156,10 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 //   RT1  normal_roughness Rgba16Float  — rgb=normal,  a=roughness
 //   RT2  world_position   Rgba16Float  — rgb=pos,     a=written-flag + packed subsurface/anisotropy
 //   RT3  world_tangent    Rgba16Float  — rgb=tangent, a=handedness + packed clear-coat
-//   RT4  velocity         Rg16Float    — screen-UV motion since last frame (`crate::motion`)
-//   RT5  emissive         Rgba16Float  — emitted light, added unlit after lighting (44 bytes in all)
+//   RT4  velocity         Rgba16Float  — xy = screen-UV motion since last frame (`crate::motion`),
+//                                        zw = the specular tint's hue, `1 −` red and blue over luminance
+//   RT5  emissive         Rgba16Float  — emitted light, added unlit after lighting; a = F0 × the tint's
+//                                        luminance, negative for no shadows (48 bytes in all)
 struct GBufferOut {
     @location(0) albedo_metallic:  vec4<f32>,
     @location(1) normal_roughness: vec4<f32>,
@@ -237,9 +244,16 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     out.world_tangent    = vec4<f32>(T, packed_tangent_w);
     let now_ndc    = in.motion_now.xy / in.motion_now.w;
     let before_ndc = in.motion_before.xy / in.motion_before.w;
-    out.velocity   = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
-    // .w: `Material::reflectance`, negative when `MeshRenderer::receives_shadows == false`. The
-    // lighting pass reads both; see `dielectric_f0`.
-    out.emissive   = vec4<f32>(max(emissive, vec3<f32>(0.0)), in.inst_emissive.w);
+    // `Material::specular_tint` has three numbers and the G-buffer two free channels: its luminance goes
+    // into the F0 below and its hue into RT4's `zw`, red and blue over the luminance, as `1 −` that so
+    // that a target nothing wrote reads white. The lighting pass puts green back from the luminance.
+    let tint = max(in.inst_tint, vec3<f32>(0.0));
+    let tint_luminance = max(dot(tint, vec3<f32>(0.2126, 0.7152, 0.0722)), 1e-4);
+    let hue = tint / tint_luminance;
+    out.velocity   = vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 1.0 - hue.r, 1.0 - hue.b);
+    // .w: the F0 (`Material::reflectance`) times the tint's luminance, negative when
+    // `MeshRenderer::receives_shadows == false`. The lighting pass reads both; see `dielectric_f0`.
+    let f0 = dielectric_f0(in.inst_emissive.w) * tint_luminance;
+    out.emissive   = vec4<f32>(max(emissive, vec3<f32>(0.0)), select(f0, -f0, in.inst_emissive.w < 0.0));
     return out;
 }

@@ -1129,7 +1129,8 @@ mod tests {
         // 160 since 2026-11-01: camera motion blur, a vec4 (shutter, max, pad) and the reprojection
         // matrix. 176 since 2026-11-07: bloom's composite mode.
         assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 176, "PostProcessUniforms size shifted from target 160 bytes (motion blur eklendi)!");
-        assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 128, "InstanceRaw size shifted from target 128 bytes!");
+        // 144 since 2026-11-08: `optics`, the specular tint and the glass volume.
+        assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 144, "InstanceRaw size shifted from target 144 bytes!");
         // Textured-PBR per-material params: three std140 vec4 slots.
         assert_eq!(std::mem::size_of::<crate::gpu_types::MaterialParams>(), 48, "MaterialParams size shifted from target 48 bytes!");
         assert_eq!(std::mem::align_of::<crate::gpu_types::MaterialParams>(), 4, "MaterialParams alignment unexpected!");

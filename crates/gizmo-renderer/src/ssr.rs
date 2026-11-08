@@ -147,6 +147,7 @@ impl SsrState {
             &deferred.world_position_view,
             &deferred.emissive_view,
             &deferred.albedo_metallic_view,
+            &deferred.velocity_view,
             &linear_sampler,
             &params_buffer,
         );
@@ -195,6 +196,7 @@ impl SsrState {
             &deferred.world_position_view,
             &deferred.emissive_view,
             &deferred.albedo_metallic_view,
+            &deferred.velocity_view,
             &self.nearest_sampler,
             &self.params_buffer,
         );
@@ -303,6 +305,17 @@ impl SsrState {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    // RT4: the specular tint's hue in `zw` (`gbuffer.wgsl`)
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -339,6 +352,7 @@ impl SsrState {
         pos_view: &wgpu::TextureView,
         emissive_view: &wgpu::TextureView,
         albedo_metallic_view: &wgpu::TextureView,
+        velocity_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         params: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
@@ -373,6 +387,10 @@ impl SsrState {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(albedo_metallic_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(velocity_view),
                 },
             ],
         })

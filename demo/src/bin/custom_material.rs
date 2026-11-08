@@ -124,6 +124,8 @@ struct InstanceRaw {
     pbr: vec4<f32>,
     ambient: vec4<f32>,
     emissive: vec4<f32>,
+    // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
+    optics: vec4<f32>,
 };
 @group(#{INSTANCE_GROUP}) @binding(0) var<storage, read> instances: array<InstanceRaw>;
 

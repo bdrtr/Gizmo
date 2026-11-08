@@ -757,7 +757,13 @@ pub(super) fn collect_draw_items(
 
                 let discards = $mat.alpha_cutoff > 0.0 || $fade.is_some();
                 let details = cfg!(gizmo_forward_only)
-                    && crate::renderer::routing::needs_details($mat.alpha_cutoff, $fade.is_some(), $mat.reflectance, renderer.shading_mode);
+                    && crate::renderer::routing::needs_details(
+                        $mat.alpha_cutoff,
+                        $fade.is_some(),
+                        $mat.reflectance,
+                        $mat.specular_tint.to_array(),
+                        renderer.shading_mode,
+                    );
 
                 let key = BatchKey {
                     vbuf_id: std::sync::Arc::as_ptr(active_vbuf) as usize,

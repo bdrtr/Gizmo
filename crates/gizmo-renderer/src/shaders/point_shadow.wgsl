@@ -17,6 +17,8 @@ struct InstanceData {
     // shader indexing this buffer must declare them or its element stride is wrong.
     ambient: vec4<f32>,
     emissive: vec4<f32>,
+    // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
+    optics: vec4<f32>,
 };
 
 @group(1) @binding(0) var<storage, read> instances: array<InstanceData>;

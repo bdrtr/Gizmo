@@ -167,6 +167,7 @@ impl DeferredState {
 
         let gbuffer_bind_group_layout = Self::create_gbuffer_layout(device);
         let (emissive_tex, emissive_view) = Self::create_emissive_texture(device, width, height);
+        let (velocity_tex, velocity_view) = Self::create_velocity_texture(device, width, height);
 
         let gbuffer_bind_group = Self::create_gbuffer_bind_group(
             device,
@@ -177,6 +178,7 @@ impl DeferredState {
             &world_tangent_view,
             &gbuf_sampler,
             &emissive_view,
+            &velocity_view,
         );
 
         let motion = crate::motion::MotionGpu::new(device, 1024);
@@ -203,7 +205,6 @@ impl DeferredState {
         );
         let gbuffer_double_sided_pipeline =
             Self::create_gbuffer_pipeline(device, scene, &motion.layout, None, "GBuffer TwoSided Pipeline");
-        let (velocity_tex, velocity_view) = Self::create_velocity_texture(device, width, height);
         let irradiance = crate::irradiance::IrradianceState::new(device);
         let environment_sky_pipeline = Self::create_environment_sky_pipeline(device, scene, &irradiance.bind_group_layout);
         let lighting_pipeline = Self::create_lighting_pipeline(
@@ -261,6 +262,7 @@ impl DeferredState {
         ) = Self::create_gbuffer_textures(device, width, height);
 
         let (emissive_tex, emissive_view) = Self::create_emissive_texture(device, width, height);
+        let (velocity_tex, velocity_view) = Self::create_velocity_texture(device, width, height);
         self.gbuffer_bind_group = Self::create_gbuffer_bind_group(
             device,
             &self.gbuffer_bind_group_layout,
@@ -270,10 +272,10 @@ impl DeferredState {
             &world_tangent_view,
             &gbuf_sampler,
             &emissive_view,
+            &velocity_view,
         );
         self.emissive_tex = emissive_tex;
         self.emissive_view = emissive_view;
-        let (velocity_tex, velocity_view) = Self::create_velocity_texture(device, width, height);
         self.velocity_tex = velocity_tex;
         self.velocity_view = velocity_view;
 
@@ -409,6 +411,17 @@ impl DeferredState {
                     },
                     count: None,
                 },
+                // RT4: the motion, and the specular tint's hue in `zw`.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -422,6 +435,7 @@ impl DeferredState {
         tangent_v: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         emissive_v: &wgpu::TextureView,
+        velocity_v: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("gbuffer_bind_group"),
@@ -450,6 +464,10 @@ impl DeferredState {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: wgpu::BindingResource::TextureView(emissive_v),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::TextureView(velocity_v),
                 },
             ],
         })

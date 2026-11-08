@@ -35,6 +35,8 @@ var<storage, read> cluster_light_indices: array<u32>;
 @group(2) @binding(3) var s_gbuf: sampler;
 @group(2) @binding(4) var t_world_tangent:    texture_2d<f32>;
 @group(2) @binding(5) var t_emissive_gbuf:    texture_2d<f32>;
+// RT4: the motion vector in `xy`, and in `zw` the specular tint's hue (see `gbuffer.wgsl`).
+@group(2) @binding(6) var t_velocity_gbuf:    texture_2d<f32>;
 
 // Reflection probes: `gizmo::reflection_probes` (group 3 here, after the irradiance volume's two
 // bindings — `REFLECTION_GROUP` is set to 3 for this shader).
@@ -267,7 +269,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
 
     let min_roughness = max(roughness, 0.05);
     let dielectric    = textureLoad(t_emissive_gbuf, iuv, 0).w;
-    let f0            = mix(vec3<f32>(dielectric_f0(dielectric)), albedo, metallic);
+    // `Material::specular_tint`: the hue from RT4, green put back from a luminance of 1; RT5's F0
+    // carries the luminance.
+    let hue_rb        = vec2<f32>(1.0) - textureLoad(t_velocity_gbuf, iuv, 0).zw;
+    let tint          = vec3<f32>(hue_rb.x, max((1.0 - 0.2126 * hue_rb.x - 0.0722 * hue_rb.y) / 0.7152, 0.0), hue_rb.y);
+    let f0            = mix(min(vec3<f32>(dielectric_f0(dielectric)) * tint, vec3<f32>(1.0)), albedo, metallic);
 
     var raw_tangent = tangent_sample.xyz;
     if (length(raw_tangent) < 0.001) {

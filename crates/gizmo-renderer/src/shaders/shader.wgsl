@@ -108,6 +108,8 @@ struct InstanceData {
     // shader indexing this buffer must declare them or its element stride is wrong.
     ambient: vec4<f32>,
     emissive: vec4<f32>,
+    // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
+    optics: vec4<f32>,
 };
 
 @group(#{INSTANCE_GROUP}) @binding(0)
@@ -135,6 +137,8 @@ struct VertexOutput {
     // The cut-out threshold and a LOD crossfade, carried in the instance's `ambient.w` — the same
     // slot `baked_lit.wgsl` reads it from. See `instance_keeps`.
     @location(6) inst_cutoff: f32,
+    // `Material::specular_tint`, from `1 − optics.xyz`.
+    @location(13) inst_tint: vec3<f32>,
 #endif
     // `Material::emissive` — added unlit, as the deferred path adds RT5.
     @location(7) inst_emissive: vec4<f32>,  // w = F0, < 0: receives no shadows
@@ -142,8 +146,8 @@ struct VertexOutput {
     @location(9) bitangent: vec3<f32>,
 #ifdef TRANSMISSION
     @location(10) inst_glass: vec2<f32>,  // Material::transmission, Material::thickness
-    // `Material::volume_transmittance`, packed in `pbr.z` (`InstanceRaw::unlit`): flat, because an
-    // interpolated float that large would not hold its low bits.
+    // `Material::volume_transmittance`, packed in `optics.w`: flat, because an interpolated float that
+    // large would not hold its low bits.
     @location(12) @interpolate(flat) inst_volume: u32,
 #endif
 #ifdef LOBES
@@ -207,11 +211,12 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.inst_pbr = inst.pbr;
 #ifdef DETAILS
     out.inst_cutoff = inst.ambient.w;
+    out.inst_tint = vec3<f32>(1.0) - inst.optics.xyz;
 #endif
     out.inst_emissive = inst.emissive;
 #ifdef TRANSMISSION
     out.inst_glass = inst.ambient.xy;
-    out.inst_volume = select(0xFFFFFFu, u32(-inst.pbr.z - 1.0), inst.pbr.z < -0.5);
+    out.inst_volume = 0xFFFFFFu - u32(inst.optics.w);
 #endif
 #ifdef LOBES
     out.inst_coat_roughness = inst.ambient.z;
@@ -454,7 +459,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
     let view_dir = normalize(scene.camera_pos.xyz - in.world_position);
 #ifdef DETAILS
-    let f0 = mix(vec3<f32>(dielectric_f0(in.inst_emissive.w)), surface.albedo, metallic);
+    let f0 = mix(min(vec3<f32>(dielectric_f0(in.inst_emissive.w)) * in.inst_tint, vec3<f32>(1.0)), surface.albedo, metallic);
 #else
     let f0 = mix(vec3<f32>(0.04), surface.albedo, metallic);
 #endif

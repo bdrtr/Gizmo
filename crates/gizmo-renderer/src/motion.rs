@@ -7,7 +7,7 @@
 //! - [`MotionHistory`](crate::motion::MotionHistory) remembers the model matrix every entity was drawn with, frame to frame.
 //! - [`MotionGpu`](crate::motion::MotionGpu) uploads the previous matrices in step with the instance buffer, plus this and
 //!   last frame's unjittered view-projections, for the G-buffer pass (group 5).
-//! - The G-buffer pass writes `velocity` (`Rg16Float`, screen-UV units) = where the surface is
+//! - The G-buffer pass writes `velocity` (`xy` of an `Rgba16Float`, screen-UV units; `zw` is the specular tint's hue) = where the surface is
 //!   now minus where it was, camera and object motion together. A still object under a still
 //!   camera writes exactly zero.
 
@@ -15,7 +15,9 @@ use wgpu::util::DeviceExt;
 
 /// The format of the G-buffer's velocity target. Four bytes: the G-buffer already spends 28 of the
 /// 32 bytes per sample a colour pass may.
-pub const VELOCITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg16Float;
+/// Four channels: `xy` the motion, and `zw` the specular tint's hue, which the G-buffer had no other
+/// channel for (`gbuffer.wgsl`).
+pub const VELOCITY_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
 type Cols = [[f32; 4]; 4];
 

@@ -28,6 +28,8 @@ struct SsrParams {
 @group(1) @binding(5) var t_emissive: texture_2d<f32>;
 // RT0: albedo, and metallic in its alpha. A metal's reflection is coloured by its albedo.
 @group(1) @binding(6) var t_albedo_metallic: texture_2d<f32>;
+// RT4: the specular tint's hue in `zw`, as `deferred_lighting.wgsl` reads it.
+@group(1) @binding(7) var t_velocity_gbuf: texture_2d<f32>;
 
 // The environment the lighting pass reflected, which this pass takes back wherever it finds what is
 // really there. The same expression as `deferred_lighting.wgsl`'s.
@@ -73,7 +75,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // shows nearly all of it in its own colour.
     let cos_theta = max(dot(-view_dir, normal), 0.001);
     let albedo_metallic = textureLoad(t_albedo_metallic, iuv, 0);
-    let f0 = mix(vec3<f32>(dielectric_f0(textureLoad(t_emissive, iuv, 0).w)), albedo_metallic.rgb, albedo_metallic.a);
+    let hue_rb = vec2<f32>(1.0) - textureLoad(t_velocity_gbuf, iuv, 0).zw;
+    let tint = vec3<f32>(hue_rb.x, max((1.0 - 0.2126 * hue_rb.x - 0.0722 * hue_rb.y) / 0.7152, 0.0), hue_rb.y);
+    let f0 = mix(min(vec3<f32>(dielectric_f0(textureLoad(t_emissive, iuv, 0).w)) * tint, vec3<f32>(1.0)), albedo_metallic.rgb, albedo_metallic.a);
     let brdf = approximate_env_brdf(cos_theta, normal_roughness.w);
     let weight = f0 * brdf.x + brdf.y;
     let fade_roughness = 1.0 - smoothstep(params.fade_start, params.fade_end, normal_roughness.w);

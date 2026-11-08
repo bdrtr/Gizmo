@@ -6029,7 +6029,13 @@ mod golden_render_tests {
             {
                 let tex = &renderer.deferred.as_ref().expect("the deferred path").velocity_tex;
                 let first = read_target(&renderer, tex, 128).await;
-                let moved = first.as_chunks::<2>().0.iter().filter(|h| half(u16::from_le_bytes(**h)) != 0.0).count();
+                let moved = first
+                    .as_chunks::<8>()
+                    .0
+                    .iter()
+                    .flat_map(|t| [[t[0], t[1]], [t[2], t[3]]])
+                    .filter(|h| half(u16::from_le_bytes(*h)) != 0.0)
+                    .count();
                 assert_eq!(moved, 0, "the first frame has {moved} non-zero velocity components");
             }
             if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(moving) {
@@ -6038,8 +6044,9 @@ mod golden_render_tests {
             render_world(&mut renderer, &mut world).await;
             let tex = &renderer.deferred.as_ref().expect("the deferred path").velocity_tex;
             let bytes = read_target(&renderer, tex, 128).await;
+            // Four half floats a texel: the motion in `xy`, the specular tint's hue in `zw`.
             let velocity = |x: usize, y: usize| {
-                let i = (y * 128 + x) * 4;
+                let i = (y * 128 + x) * 8;
                 (half(u16::from_le_bytes([bytes[i], bytes[i + 1]])), half(u16::from_le_bytes([bytes[i + 2], bytes[i + 3]])))
             };
             // Measured placement: the 1 m moving cube spans pixels 78–98 of the 128 (20 px a metre
@@ -7469,12 +7476,13 @@ mod golden_render_tests {
             let with_ao = AssetManager::material().occlusion(&occluded).build(&mut assets, &renderer.device, &renderer.queue, &layout);
 
             let nothing: fn(Material) -> Material = |m| m;
-            let cases: [(&str, Arc<wgpu::BindGroup>, fn(Material) -> Material); 10] = [
+            let cases: [(&str, Arc<wgpu::BindGroup>, fn(Material) -> Material); 11] = [
                 ("anisotropy", plain.clone(), |m| m.with_anisotropy(0.9)),
                 ("clear coat", plain.clone(), |m| m.with_clear_coat(1.0)),
                 ("coat roughness", plain.clone(), |m| m.with_clear_coat(1.0).with_clear_coat_roughness(0.5)),
                 ("subsurface", plain.clone(), |m| m.with_subsurface(1.0)),
                 ("reflectance", plain.clone(), |m| m.with_reflectance(0.3)),
+                ("specular tint", plain.clone(), |m| m.with_specular_tint(Vec3::new(1.0, 0.2, 0.2))),
                 ("instance emissive", plain.clone(), |m| m.with_emissive(Vec3::new(0.0, 2.0, 0.0))),
                 ("normal map", with_normal, nothing),
                 ("metallic-roughness map", with_mr, nothing),
@@ -7511,6 +7519,19 @@ mod golden_render_tests {
                 );
                 eprintln!("reflectance, forward {forward}: none {n:.1}, default {d:.1}, diamond {g:.1}");
                 assert!(n + 2.0 < d && d + 2.0 < g, "forward {forward}: none {n}, default {d}, diamond {g}");
+            }
+
+            // A specular tint colours the reflection and leaves its strength to the reflectance: on a dark
+            // non-metal under the sky, a red tint keeps the red the untinted reflection has and takes green
+            // and blue away, on both paths.
+            let red: fn(Material) -> Material =
+                |m| m.with_pbr(Vec4::new(0.02, 0.02, 0.02, 1.0), 0.3, 0.0).with_ior(2.42).with_specular_tint(Vec3::new(1.0, 0.1, 0.1));
+            for forward in [true, false] {
+                let white = centre(&mut renderer, plain.clone(), gem, forward, false).await;
+                let tinted = centre(&mut renderer, plain.clone(), red, forward, false).await;
+                eprintln!("specular tint, forward {forward}: white {white:?}, red {tinted:?}");
+                assert!((tinted[0] - white[0]).abs() < 4.0, "forward {forward}: red kept: {white:?} -> {tinted:?}");
+                assert!(tinted[1] + 3.0 < white[1] && tinted[2] + 3.0 < white[2], "forward {forward}: {white:?} -> {tinted:?}");
             }
 
             // A coat is not an on/off switch: the row that called it near-binary measured a highlight
@@ -9077,11 +9098,13 @@ mod golden_render_tests {
         (t, v)
     }
 
-    /// Copies a target back as RGBA8 bytes. `w * 4` is 512 here, already 256-aligned.
+    /// Copies a square target back as its own texels' bytes: 4 a texel for RGBA8, 8 for `Rgba16Float`.
+    /// A row of 128 is already 256-aligned at either size.
     async fn read_target(renderer: &Renderer, tex: &wgpu::Texture, w: u32) -> Vec<u8> {
+        let texel = tex.format().block_copy_size(None).expect("a colour target");
         let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("two_cameras_readback"),
-            size: (w * w * 4) as u64,
+            size: u64::from(w * w * texel),
             usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
@@ -9099,7 +9122,7 @@ mod golden_render_tests {
                 buffer: &staging,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(w * 4),
+                    bytes_per_row: Some(w * texel),
                     rows_per_image: Some(w),
                 },
             },
@@ -9446,6 +9469,8 @@ mod golden_render_tests {
 struct InstanceRaw {
     m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, m3: vec4<f32>,
     albedo_color: vec4<f32>, pbr: vec4<f32>, ambient: vec4<f32>, emissive: vec4<f32>,
+    // `InstanceRaw::optics`: xyz = 1 − specular tint, w = 0xFFFFFF − a glass's volume (8 bits a channel).
+    optics: vec4<f32>,
 };
 @group(#{INSTANCE_GROUP}) @binding(0) var<storage, read> instances: array<InstanceRaw>;
 struct VIn {

@@ -615,6 +615,13 @@ fn every_render_capability_is_known_to_both_draw_paths() {
              split when run.",
         ),
         (
+            "specular_tint",
+            Path::GameOnly,
+            "known to both: `InstanceRaw::with_lit_extras_of` reads it, and both paths build their instances \
+             through it. The game path names it besides only to send a tinted surface to the forward-only \
+             path's `DETAILS` tier (`routing::needs_details`), which the studio's desktop pipelines do not have.",
+        ),
+        (
             "EditorRenderTarget",
             Path::EditorOnly,
             "the editor's own viewport texture; a game has no second viewport to render into.",

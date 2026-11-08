@@ -170,8 +170,12 @@ impl CustomMaterial {
     ///
     /// # Panics
     ///
-    /// Never directly, but `wgpu` will report a shader that fails to compile through the device's
-    /// error scope, as it does for every pipeline in the engine.
+    /// If the shader declares the instance buffer with another element size than
+    /// [`InstanceRaw`](crate::gpu_types::InstanceRaw)'s: it would read the wrong instance for every
+    /// index above 0, with nothing to say so, and the record grows when the engine needs a field (it
+    /// gained `optics` on 2026-11-08). The message names both sizes. Otherwise never directly, but `wgpu`
+    /// will report a shader that fails to compile through the device's error scope, as it does for
+    /// every pipeline in the engine.
     #[must_use]
     pub fn from_wgsl(
         device: &wgpu::Device,
@@ -197,6 +201,9 @@ impl CustomMaterial {
             label,
             crate::pipeline::shaders::web_render_defs(),
         );
+        if let Err(problem) = check_instance_stride(&composed) {
+            panic!("custom material `{label}`: {problem}");
+        }
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(label),
             source: wgpu::ShaderSource::Wgsl(composed.into()),
@@ -329,8 +336,54 @@ impl MaterialRegistry {
     }
 }
 
+/// Whether a composed custom shader's instance buffer, if it declares one, has the engine's element size.
+/// The group is the platform's `INSTANCE_GROUP`, binding 0.
+fn check_instance_stride(composed: &str) -> Result<(), String> {
+    let group = if cfg!(gizmo_forward_only) { 3 } else { 4 };
+    let module = naga::front::wgsl::parse_str(composed).map_err(|e| e.to_string())?;
+    let want = std::mem::size_of::<crate::gpu_types::InstanceRaw>() as u32;
+    for (_, var) in module.global_variables.iter() {
+        let Some(binding) = &var.binding else { continue };
+        if binding.group != group || binding.binding != 0 {
+            continue;
+        }
+        if let naga::TypeInner::Array { stride, .. } = module.types[var.ty].inner {
+            if stride != want {
+                return Err(format!(
+                    "its instance struct is {stride} bytes and the engine's `InstanceRaw` is {want}: declare every \
+                     field `gpu_types::InstanceRaw` has, in order (`model_matrix_0`..`3`, `albedo_color`, `pbr`, \
+                     `ambient`, `emissive`, `optics`), or `instances[i]` reads the wrong instance for every i > 0"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    /// A custom shader declaring the instance struct as it was before `optics` (eight vec4s) is told
+    /// so, with both sizes, rather than reading the wrong instance for every index above 0; the
+    /// struct as it is now, and a shader with no instance buffer at all, pass.
+    #[test]
+    fn a_custom_shader_with_the_old_instance_struct_is_told_so() {
+        let group = if cfg!(gizmo_forward_only) { 3 } else { 4 };
+        let shader = |fields: &str| {
+            format!(
+                "struct InstanceRaw {{ {fields} }};\n\
+                 @group({group}) @binding(0) var<storage, read> instances: array<InstanceRaw>;\n\
+                 @vertex fn vs_main(@builtin(instance_index) i: u32) -> @builtin(position) vec4<f32> {{ return instances[i].m0; }}"
+            )
+        };
+        let old = "m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, m3: vec4<f32>, a: vec4<f32>, p: vec4<f32>, b: vec4<f32>, e: vec4<f32>,";
+        let err = super::check_instance_stride(&shader(old)).expect_err("eight vec4s are the old record");
+        assert!(err.contains("128") && err.contains("144") && err.contains("optics"), "{err}");
+        let now = format!("{old} o: vec4<f32>,");
+        assert_eq!(super::check_instance_stride(&shader(&now)), Ok(()));
+        let none = "@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }";
+        assert_eq!(super::check_instance_stride(none), Ok(()), "a shader that reads no instances");
+    }
+
     use super::*;
 
     #[test]
