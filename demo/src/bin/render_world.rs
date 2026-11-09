@@ -10,10 +10,14 @@
 //!   picture freezes on the last copy; press again and it jumps to where the game is.
 //! - Each cube also carries `Brain`, a component the extractor was not told about: the HUD shows
 //!   it on every cube in the game world and on none in the copy.
+//! - The cubes are drawn through handles: their mesh and material live in `Assets<Mesh>` /
+//!   `Assets<Material>`, which the extractor keeps in the copy entry by entry (`assets::<T>()`).
+//!   Every two seconds the game recolours one material in its map (`Assets::get_mut`); the copy
+//!   clones that one entry and no other, and the cubes using it change colour in the picture.
 //!
-//! This is stage 2 of CAPABILITY_GAPS A8: the copy works and the draw only reads; the app does not
-//! yet own a render world, which is why the hook wires the three steps itself and this scene keeps
-//! to the component types it tells the extractor about.
+//! Stages 2 and 3 of CAPABILITY_GAPS A8: the draw only reads, and reads nothing a copy cannot hold
+//! (asset maps, the visibility index, the water for underwater fog). The app does not yet own a
+//! render world, which is why the hook wires the three steps itself.
 
 use gizmo::core::extract::Extractor;
 use gizmo::core::system::{IntoSystemConfig, Phase, ResMut};
@@ -39,8 +43,10 @@ gizmo::core::impl_component!(Brain);
 
 #[derive(Clone)]
 struct Game {
-    cube: Mesh,
-    materials: Vec<Material>,
+    cube: Handle<Mesh>,
+    materials: Vec<Handle<Material>>,
+    next_recolour: f32,
+    recoloured: u32,
     clock: f32,
     next_spawn: f32,
     born: u32,
@@ -54,6 +60,8 @@ struct Report {
     game_brains: usize,
     copy_entities: usize,
     copy_brains: usize,
+    game_materials: usize,
+    copy_materials: usize,
     extract_ms: f64,
     copying: bool,
 }
@@ -72,6 +80,10 @@ fn main() {
         .component::<gizmo::core::component::IsHidden>()
         .component::<Children>()
         .component::<Parent>()
+        .component::<Handle<Mesh>>()
+        .component::<Handle<Material>>()
+        .assets::<Mesh>()
+        .assets::<Material>()
         .resource::<gizmo::core::time::Time>();
 
     App::<SimpleSceneState>::new("Gizmo Engine - Render World", 1280, 720)
@@ -88,10 +100,14 @@ fn main() {
                 Vec4::new(0.95, 0.80, 0.25, 1.0),
                 Vec4::new(0.45, 0.90, 0.45, 1.0),
             ];
-            let materials = colours
-                .iter()
-                .map(|c| Material::new(white.clone()).with_pbr(*c, 0.45, 0.0))
-                .collect();
+            let materials = {
+                let mut assets = scene.world.get_resource_mut_or_default::<Assets<Material>>();
+                colours
+                    .iter()
+                    .map(|c| assets.add(Material::new(white.clone()).with_pbr(*c, 0.45, 0.0)))
+                    .collect()
+            };
+            let cube = scene.world.get_resource_mut_or_default::<Assets<Mesh>>().add(AssetManager::create_cube(device));
             scene.world.spawn_bundle((
                 Transform::new(Vec3::new(0.0, -1.5, 0.0)).with_scale(Vec3::new(12.0, 0.1, 12.0)),
                 GlobalTransform::default(),
@@ -105,8 +121,10 @@ fn main() {
                 ..Default::default()
             });
             scene.world.insert_resource(Game {
-                cube: AssetManager::create_cube(device),
+                cube,
                 materials,
+                next_recolour: 2.0,
+                recoloured: 0,
                 clock: 0.0,
                 next_spawn: 0.0,
                 born: 0,
@@ -133,11 +151,14 @@ fn main() {
             }
             let extract_ms = started.elapsed().as_secs_f64() * 1e3;
 
+            let materials = |w: &World| w.get_resource::<Assets<Material>>().map_or(0, |a| a.len());
             let report = Report {
-                game_entities: world.query::<&Mesh>().iter().count(),
+                game_entities: world.query::<&MeshRenderer>().iter().count(),
                 game_brains: world.query::<&Brain>().iter().count(),
-                copy_entities: render_world.query::<&Mesh>().iter().count(),
+                copy_entities: render_world.query::<&MeshRenderer>().iter().count(),
                 copy_brains: render_world.query::<&Brain>().iter().count(),
+                game_materials: materials(world),
+                copy_materials: materials(&render_world),
                 extract_ms,
                 copying,
             };
@@ -161,6 +182,10 @@ fn main() {
                         ui.separator();
                         ui.monospace(format!("oyun dünyası : {:>3} mesh · Brain {:>3}", r.game_entities, r.game_brains));
                         ui.monospace(format!("kopya        : {:>3} mesh · Brain {:>3}", r.copy_entities, r.copy_brains));
+                        ui.monospace(format!(
+                            "materyal     : oyun {} · kopya {} (handle ile)",
+                            r.game_materials, r.copy_materials
+                        ));
                         ui.monospace(format!("kopyalama    : {:.3} ms", r.extract_ms));
                         ui.separator();
                         if r.copying {
@@ -182,6 +207,7 @@ fn main() {
 /// The game: spawn, keep the newest `KEEP`, move everything. Knows nothing about the copy.
 fn play(
     mut game: ResMut<Game>,
+    mut materials: ResMut<Assets<Material>>,
     time: Res<gizmo::core::time::Time>,
     input: Res<Input>,
     mut cubes: Query<(&Spin, &mut Transform)>,
@@ -192,6 +218,17 @@ fn play(
     }
     game.clock += time.dt();
     let now = game.clock;
+
+    // One material changes in the game's asset map; the copy clones that entry alone.
+    if now >= game.next_recolour {
+        game.next_recolour += 2.0;
+        game.recoloured += 1;
+        let which = game.materials[game.recoloured as usize % game.materials.len()].clone();
+        let hue = (game.recoloured as f32 * 0.37).fract();
+        if let Some(material) = materials.get_mut(&which) {
+            material.albedo = Vec4::new(0.3 + 0.7 * hue, 0.9 - 0.6 * hue, 0.4 + 0.5 * (1.0 - hue), 1.0);
+        }
+    }
 
     while game.next_spawn <= now {
         game.next_spawn += 0.1;

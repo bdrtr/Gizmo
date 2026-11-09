@@ -864,12 +864,23 @@ Measured in `ecs_absent_apis`:
   row, with the same pictures. Tested by `systems/render/frame_split_tests.rs`. `render_world` now prepares
   the game world, extracts, and hands the copy to `draw_frame`. Not yet wired: no app owns a render
   world (the demo's render hook makes the three calls itself), and `gizmo-studio`'s pipeline still
-  does its own per-frame work rather than calling `prepare_frame`. **What the draw still reads that a
-  copy cannot carry**, found in review and the next stage's work: `Handle<Mesh>`/`Handle<Material>`
-  are resolved through `Assets<Mesh>`/`Assets<Material>`, which are not `Clone` (they own a drop
-  queue); underwater fog asks `PhysicsWorld::water_at` (not `Clone`, and a whole physics world for
-  one point query); `VisibilityIndex` is consulted and its `Clone` is `unreachable!`. Each needs a
-  form the preparation hands over before an app can draw from a copy. One behaviour change, deliberate: an entity
+  does its own per-frame work rather than calling `prepare_frame`. **Stage 3, 2026-11-09: the draw reads nothing a
+  copy cannot carry.** Three things it read could not be copied, and each now has a form that can:
+  `Assets<T>` numbers its changes (an entry added, inserted or taken with `get_mut` takes the next
+  revision; its storage is private now, read through `get`/`iter`/`len`), and `Extractor::assets::<T>()`
+  keeps the copy's map under the same ids, cloning only the entries that changed, so a `Handle<Mesh>`
+  copied onto an entity resolves in the copy; underwater fog asks `WaterVolumes`, the physics world's
+  fluid zones handed over by `prepare_frame` and rewritten only when they change (`water_at` is now a
+  function over a slice of zones, which `PhysicsWorld::water_at` calls too); `VisibilityIndex` is
+  `Clone`. Under it, a core change the copy needed: **a resource keeps the tick of its last write**
+  (an insertion, or a mutable dereference of `ResMut<T>` / a write guard; reading through a write guard
+  is not a write), read with `World::resource_change_tick`, `World::is_resource_changed` or
+  `Res::is_changed` / `ResMut::is_changed`, and the extractor copies a resource only when it was written
+  since its last run — it used to clone every resource every run, which for an index is a tree a
+  frame. Tested by `frame_split_tests::a_frame_drawn_from_an_extracted_copy_is_the_frame_drawn_from_the_original`
+  (a handle-drawn cube, an index culling a cube it does not hold, the camera under water: the copy's
+  picture equals the original's to the pixel, and taking any one of the three out of the copy changes
+  it), `extract::tests` and `tests/resource_changes.rs`. `render_world` draws its cubes through handles. One behaviour change, deliberate: an entity
   parented to a shaking camera is no longer shaken with it (it was moved by the camera's shaken
   `Transform` and left with that `GlobalTransform` after the undo; the camera's yaw and pitch shake
   never reached it).

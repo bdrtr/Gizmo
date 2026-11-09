@@ -10,7 +10,6 @@ use crate::entity::Entity;
 
 use std::any::TypeId;
 use std::collections::HashMap;
-use std::sync::RwLock;
 
 mod component_ops;
 mod entity_lifecycle;
@@ -46,7 +45,7 @@ pub use crate::entity::allocator::Entities;
 /// [`World::compact`] renumbers archetypes outright.
 pub struct World {
     // Entity'den bağımsız global veriler (Time, WindowSize, Input vs.)
-    resources: HashMap<TypeId, RwLock<Box<dyn std::any::Any + Send + Sync>>>,
+    resources: HashMap<TypeId, resources::ResourceCell>,
 
     /// Entity ID → archetype location. Provides a fast O(1) lookup.
     /// entity_id is used as the index.

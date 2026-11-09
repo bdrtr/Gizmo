@@ -745,7 +745,8 @@ pub fn advance_frame_clocks(world: &mut World) {
 /// frame writes that the game can see**: meshes for terrains, cloth and soft bodies, the frame
 /// clocks ([`advance_frame_clocks`]: tweens, typewriters, camera shakes, the screen fade),
 /// transforms, materials, animation, bone attachments, the CPU side of GPU physics, particle
-/// emitters ([`ParticleSpawns`]) and the end of the debug-line frame ([`GizmoFrame`](crate::renderer::GizmoFrame)).
+/// emitters ([`ParticleSpawns`]), the water the underwater fog asks about (`WaterVolumes`, with the
+/// `physics` feature) and the end of the debug-line frame ([`GizmoFrame`](crate::renderer::GizmoFrame)).
 ///
 /// After it, [`draw_frame`] needs the world only to read — so it can be given a copy of this one.
 pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
@@ -850,6 +851,11 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     } else {
         world.remove_resource::<ParticleSpawns>();
     }
+
+    // **The water**, for the draw's underwater fog: the physics world's zones, handed over as a
+    // resource a render world can hold (see `WaterVolumes`).
+    #[cfg(feature = "physics")]
+    water::publish_water_volumes(world);
 
     // **The debug-line frame ends here**, before the draw — see `end_debug_line_frame`.
     end_debug_line_frame(world);
@@ -1073,10 +1079,12 @@ fn draw_camera_view(
     // Underwater fog comes from the FluidZone the camera sits in, which lives in the physics
     // world; without the `physics` feature there are no fluid volumes, so the scene simply
     // never renders as submerged.
+    // The zones are the preparation's copy (`WaterVolumes`), not the physics world's: the draw
+    // reads nothing a render world cannot hold.
     #[cfg(feature = "physics")]
     let underwater = world
-        .get_resource::<crate::physics::world::PhysicsWorld>()
-        .and_then(|pw| pw.water_at(cam_pos))
+        .get_resource::<WaterVolumes>()
+        .and_then(|w| w.water_at(cam_pos))
         .map(|s| crate::renderer::UnderwaterFog { color: s.fog_color, density: s.fog_density });
     #[cfg(not(feature = "physics"))]
     let underwater: Option<crate::renderer::UnderwaterFog> = None;
@@ -1470,6 +1478,10 @@ pub use sprite::record_sprites;
 
 mod shake;
 pub use shake::{advance_camera_shakes, shake_view};
+#[cfg(feature = "physics")]
+pub mod water;
+#[cfg(feature = "physics")]
+pub use water::WaterVolumes;
 
 mod text;
 pub use text::{record_text, typewriter_system, Typewriter};

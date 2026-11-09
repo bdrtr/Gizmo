@@ -6,12 +6,41 @@
 //! request that conflicts with a guard you are still holding returns `None` /
 //! [`ResourceFetchError::BorrowConflict`] rather than deadlocking. The single exception is
 //! [`World::get_resource_mut_or_default`], which takes `&mut World` and does block.
+//!
+//! # Change detection
+//!
+//! Each resource carries the world [`tick`](World::tick) of its last write, as a component does:
+//! inserting it stamps it, and so does every mutable dereference of a [`ResourceWriteGuard`] (a
+//! `ResMut<T>`). Taking a write guard and only reading through it stamps nothing. Read it with
+//! [`World::resource_change_tick`], [`World::is_resource_changed`], or `Res::is_changed` /
+//! `ResMut::is_changed` in a system; the [extractor](crate::extract) copies a resource only when it
+//! was written since its last run.
 
 use super::World;
 use std::any::TypeId;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::RwLock;
 use std::sync::{RwLockReadGuard, RwLockWriteGuard};
+
+/// One resource and the tick of its last write.
+pub(crate) struct ResourceCell {
+    value: RwLock<Box<dyn std::any::Any + Send + Sync>>,
+    /// The world tick stamped by the last write — an insertion or a mutable dereference of a write
+    /// guard. Atomic because a write guard is handed out from `&World`, and several guards for
+    /// different resources are live at once in a parallel schedule.
+    changed: AtomicU32,
+}
+
+impl ResourceCell {
+    fn new(value: Box<dyn std::any::Any + Send + Sync>, tick: u32) -> Self {
+        Self { value: RwLock::new(value), changed: AtomicU32::new(tick) }
+    }
+
+    fn changed(&self) -> u32 {
+        self.changed.load(Ordering::Relaxed)
+    }
+}
 
 /// Why a typed resource lookup failed.
 ///
@@ -53,7 +82,17 @@ impl std::error::Error for ResourceFetchError {}
 /// the `World` immutably, so no `&mut World` method can run until it is dropped.
 pub struct ResourceReadGuard<'a, T> {
     pub(crate) guard: RwLockReadGuard<'a, Box<dyn std::any::Any + Send + Sync>>,
+    /// The resource's change tick when the guard was taken; nothing can write it while it lives.
+    pub(crate) changed: u32,
     pub(crate) _marker: PhantomData<T>,
+}
+
+impl<'a, T> ResourceReadGuard<'a, T> {
+    /// The world tick of the resource's last write — see [`World::resource_change_tick`].
+    #[must_use]
+    pub fn change_tick(&self) -> u32 {
+        self.changed
+    }
 }
 
 impl<'a, T: 'static> std::ops::Deref for ResourceReadGuard<'a, T> {
@@ -72,9 +111,22 @@ impl<'a, T: 'static> std::ops::Deref for ResourceReadGuard<'a, T> {
 ///
 /// Dropping it is the only thing that releases the lock: leak one (`std::mem::forget`) and
 /// every later fetch of that type keeps failing with [`ResourceFetchError::BorrowConflict`].
+///
+/// Every mutable dereference stamps the resource with the world tick the guard was taken at, so
+/// change detection sees the write; a guard only read through stamps nothing.
 pub struct ResourceWriteGuard<'a, T> {
     pub(crate) guard: RwLockWriteGuard<'a, Box<dyn std::any::Any + Send + Sync>>,
+    changed: &'a AtomicU32,
+    tick: u32,
     pub(crate) _marker: PhantomData<T>,
+}
+
+impl<'a, T> ResourceWriteGuard<'a, T> {
+    /// The world tick of the resource's last write, this guard's own writes included.
+    #[must_use]
+    pub fn change_tick(&self) -> u32 {
+        self.changed.load(Ordering::Relaxed)
+    }
 }
 
 impl<'a, T: 'static> std::ops::Deref for ResourceWriteGuard<'a, T> {
@@ -86,6 +138,7 @@ impl<'a, T: 'static> std::ops::Deref for ResourceWriteGuard<'a, T> {
 
 impl<'a, T: 'static> std::ops::DerefMut for ResourceWriteGuard<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
+        self.changed.store(self.tick, Ordering::Relaxed);
         self.guard.downcast_mut::<T>().unwrap()
     }
 }
@@ -100,7 +153,7 @@ impl World {
         let type_id = TypeId::of::<T>();
         let replaced = self
             .resources
-            .insert(type_id, RwLock::new(Box::new(resource)))
+            .insert(type_id, ResourceCell::new(Box::new(resource), self.tick))
             .is_some();
         tracing::debug!(
             resource = std::any::type_name::<T>(),
@@ -129,10 +182,12 @@ impl World {
             .get(&type_id)
             .ok_or(ResourceFetchError::NotFound(type_id))?;
         let guard = storage
+            .value
             .try_read()
             .map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
         Ok(ResourceReadGuard {
             guard,
+            changed: storage.changed(),
             _marker: PhantomData,
         })
     }
@@ -147,10 +202,13 @@ impl World {
             .get(&type_id)
             .ok_or(ResourceFetchError::NotFound(type_id))?;
         let guard = storage
+            .value
             .try_write()
             .map_err(|_| ResourceFetchError::BorrowConflict(type_id))?;
         Ok(ResourceWriteGuard {
             guard,
+            changed: &storage.changed,
+            tick: self.tick,
             _marker: PhantomData,
         })
     }
@@ -161,9 +219,10 @@ impl World {
         &mut self,
     ) -> ResourceWriteGuard<'_, T> {
         let type_id = TypeId::of::<T>();
+        let tick = self.tick;
         self.resources
             .entry(type_id)
-            .or_insert_with(|| RwLock::new(Box::new(T::default())));
+            .or_insert_with(|| ResourceCell::new(Box::new(T::default()), tick));
 
         let storage = self
             .resources
@@ -173,7 +232,7 @@ impl World {
         // zehirlese bile motor çalışmaya devam etsin (imza değişmez). Sessiz
         // kurtarma bir paniği gizlerdi; artık önce uyarı basılır (yalnız poison
         // yolunda çalışır, mutlu yolda maliyeti sıfırdır).
-        let guard = storage.write().unwrap_or_else(|e| {
+        let guard = storage.value.write().unwrap_or_else(|e| {
             tracing::warn!(
                 resource = std::any::type_name::<T>(),
                 "resource lock poisoned by an earlier panic; recovering"
@@ -182,8 +241,29 @@ impl World {
         });
         ResourceWriteGuard {
             guard,
+            changed: &storage.changed,
+            tick: self.tick,
             _marker: PhantomData,
         }
+    }
+
+    /// The world [`tick`](World::tick) of the last write to resource `T` — its insertion, or a
+    /// mutable dereference of a write guard (`ResMut<T>`) — or `None` when there is no `T`.
+    ///
+    /// Compare it with a tick of your own to ask "written since then?", the way the
+    /// [extractor](crate::extract) does; [`World::is_resource_changed`] asks it against this
+    /// frame's reference tick, as `Changed<T>` does for components.
+    #[must_use]
+    pub fn resource_change_tick<T: 'static>(&self) -> Option<u32> {
+        self.resources.get(&TypeId::of::<T>()).map(ResourceCell::changed)
+    }
+
+    /// Whether resource `T` was written since this frame's reference tick
+    /// ([`change_ref_tick`](World::change_ref_tick)) — the resource counterpart of `Changed<T>`.
+    /// `false` when there is no `T`.
+    #[must_use]
+    pub fn is_resource_changed<T: 'static>(&self) -> bool {
+        self.resource_change_tick::<T>().is_some_and(|tick| tick > self.change_ref_tick)
     }
 
     /// Removes a global Resource from the ECS entirely and returns its ownership
@@ -196,7 +276,7 @@ impl World {
         // Poisoned RwLock: a previous holder panicked. The original code swallowed this
         // via `.ok()?`, silently returning None (and dropping the resource) with no trace
         // of the earlier panic. Keep that behavior but surface it as a warning first.
-        let boxed_any = match cell.into_inner() {
+        let boxed_any = match cell.value.into_inner() {
             Ok(b) => b,
             Err(_) => {
                 tracing::warn!(

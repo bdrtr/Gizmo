@@ -174,6 +174,17 @@ pub unsafe trait SystemParam {
 /// Read-only by construction: there is no `DerefMut`.
 pub struct Res<'w, T: 'static> {
     value: ResourceReadGuard<'w, T>,
+    changed: bool,
+}
+
+impl<'w, T: 'static> Res<'w, T> {
+    /// Whether the resource was written since this frame's reference tick — inserted, or
+    /// mutably dereferenced through a `ResMut<T>` or a write guard. The resource counterpart of a
+    /// `Changed<T>` filter; see [`World::is_resource_changed`].
+    #[must_use]
+    pub fn is_changed(&self) -> bool {
+        self.changed
+    }
 }
 
 impl<'w, T: 'static> std::ops::Deref for Res<'w, T> {
@@ -193,7 +204,8 @@ unsafe impl<T: 'static> SystemParam for Res<'static, T> {
         _state: &'w mut (),
     ) -> Result<Self::Item<'w>, SystemParamFetchError> {
         let value = world.try_get_resource::<T>()?;
-        Ok(Res::<T> { value })
+        let changed = value.change_tick() > world.change_ref_tick;
+        Ok(Res::<T> { value, changed })
     }
     fn get_access_info(info: &mut AccessInfo) {
         info.resource_reads.push(TypeId::of::<T>());
@@ -208,11 +220,21 @@ unsafe impl<T: 'static> SystemParam for Res<'static, T> {
 /// list, and not a `world.get_resource::<T>()` call made from inside this very system, which
 /// comes back empty instead of blocking.
 ///
-/// Mutation through this guard is invisible to change detection: resources carry no change
-/// ticks, so nothing observes a resource write the way `Changed<T>` observes a component
-/// write.
+/// A mutable dereference stamps the resource with the world's tick, as writing a component does,
+/// so [`Res::is_changed`] and [`World::is_resource_changed`] see it; taking a `ResMut<T>` and only
+/// reading through it is not a write.
 pub struct ResMut<'w, T: 'static> {
     value: ResourceWriteGuard<'w, T>,
+    ref_tick: u32,
+}
+
+impl<'w, T: 'static> ResMut<'w, T> {
+    /// Whether the resource was written since this frame's reference tick, this system's own
+    /// writes included — see [`Res::is_changed`].
+    #[must_use]
+    pub fn is_changed(&self) -> bool {
+        self.value.change_tick() > self.ref_tick
+    }
 }
 
 impl<'w, T: 'static> std::ops::Deref for ResMut<'w, T> {
@@ -238,7 +260,7 @@ unsafe impl<T: 'static> SystemParam for ResMut<'static, T> {
         _state: &'w mut (),
     ) -> Result<Self::Item<'w>, SystemParamFetchError> {
         let value = world.try_get_resource_mut::<T>()?;
-        Ok(ResMut::<T> { value })
+        Ok(ResMut::<T> { value, ref_tick: world.change_ref_tick })
     }
     fn get_access_info(info: &mut AccessInfo) {
         info.resource_writes.push(TypeId::of::<T>());

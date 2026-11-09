@@ -1,12 +1,13 @@
 //! Handle-based asset storage: `Assets<T>` plus the typed [`Handle`] that indexes it.
 //!
-//! Handles are cheap `Copy` indices, not smart pointers — nothing is reference-counted and
-//! nothing is freed when the last handle goes away. A handle outliving its asset dangles in
-//! the sense that lookups return `None`, never in the sense of unsafety.
-use std::collections::HashMap;
+//! A handle is an id, cheap to clone; a *strong* one (what [`Assets::add`] returns) also reports
+//! when its last clone goes away, and [`Assets::process_drops`] then frees the asset — nothing is
+//! freed until that call. A handle outliving its asset dangles in the sense that lookups return
+//! `None`, never in the sense of unsafety.
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Arc;
 use crossbeam_queue::SegQueue;
 
@@ -325,7 +326,7 @@ impl<T> std::fmt::Debug for Handle<T> {
 
 /// Generic resource to store assets by their handle ID.
 ///
-/// A plain `HandleId → T` map plus a concurrent queue of ids whose strong handles have all
+/// A `HandleId → T` map plus a concurrent queue of ids whose strong handles have all
 /// died. Collection is deliberately two-step and never automatic: dropping a handle only
 /// *reports* the id, and the entry survives until someone calls [`Assets::process_drops`].
 /// Nothing inside this type schedules that call, so a map that is never polled never frees
@@ -334,27 +335,52 @@ impl<T> std::fmt::Debug for Handle<T> {
 /// Each `Assets` instance owns its own queue, so a strong handle's collection binding is
 /// fixed when it is minted: a handle minted by map A reports its death to A's queue, whichever
 /// map actually holds the entry. Resolution is a different matter — [`Assets::get`] and
-/// friends key on the id alone, so any map holding that id will answer.
+/// friends key on the id alone, so any map holding that id will answer. That is what lets the
+/// [extractor](crate::extract) keep a second map in a second world, under the same ids, for the
+/// handles it copies there.
 ///
 /// Every mutation goes through `&mut self`; only the drop *reporting* is concurrent, so
 /// handles may be dropped on any thread while the map itself is untouched.
+///
+/// The map numbers its changes: an entry added, inserted or handed out mutably
+/// ([`Assets::get_mut`]) takes the next revision, and a removal moves the count on too. The
+/// extractor reads that to copy only the entries that changed since its last run. Iteration
+/// ([`Assets::iter`]) is over a `std` `HashMap` with the default randomly seeded hasher, so its
+/// order is arbitrary and not reproducible from run to run: never let it decide the order of
+/// anything the simulation hashes or replays.
 pub struct Assets<T> {
-    /// The live entries, keyed by the id of the handle that names them.
-    ///
-    /// Public so callers can iterate in bulk or insert under an id minted elsewhere; both are
-    /// supported, with two caveats. Entries put here by hand are collected only if a strong
-    /// handle for that id exists somewhere — otherwise they are permanent. And this is a `std`
-    /// `HashMap` with the default randomly seeded hasher, so iteration order is arbitrary and
-    /// not reproducible from run to run: never let an iteration over `data` decide the order
-    /// of anything the simulation hashes or replays.
-    pub data: HashMap<HandleId, T>,
+    /// The live entries, keyed by the id of the handle that names them, each with the revision
+    /// of its last change.
+    data: HashMap<HandleId, Entry<T>>,
+    /// One key per live entry: its revision, naming it. In order, so "changed since `r`" is a
+    /// range rather than a walk over the whole map.
+    by_revision: BTreeMap<u64, HandleId>,
+    /// The last revision handed out — to a change or a removal. 0 for a map nothing touched.
+    revision: u64,
+    /// The revision of the last removal, so a reader that has seen up to `r` knows whether
+    /// anything it holds may have gone.
+    last_removal: u64,
+    /// Which map this is, process-wide: a reader that kept a revision of one map must not read
+    /// it against another that replaced it.
+    identity: u64,
     drop_queue: AssetDropQueue,
 }
+
+struct Entry<T> {
+    asset: T,
+    revision: u64,
+}
+
+static NEXT_ASSETS_IDENTITY: AtomicU64 = AtomicU64::new(1);
 
 impl<T> Default for Assets<T> {
     fn default() -> Self {
         Self {
             data: HashMap::new(),
+            by_revision: BTreeMap::new(),
+            revision: 0,
+            last_removal: 0,
+            identity: NEXT_ASSETS_IDENTITY.fetch_add(1, Ordering::Relaxed),
             drop_queue: AssetDropQueue::new(),
         }
     }
@@ -381,7 +407,7 @@ impl<T> Assets<T> {
     /// id is queued and the entry is erased by the next [`Assets::process_drops`].
     pub fn add(&mut self, asset: T) -> Handle<T> {
         let id = HandleId::new();
-        self.data.insert(id, asset);
+        self.put(id, asset);
         Handle::new(id, self.drop_queue.clone())
     }
 
@@ -393,16 +419,25 @@ impl<T> Assets<T> {
     /// [`Assets::remove`] and an early collection (see [`Handle::tracker`]) both erase the
     /// entry regardless.
     pub fn get(&self, handle: &Handle<T>) -> Option<&T> {
-        self.data.get(&handle.id)
+        self.data.get(&handle.id).map(|e| &e.asset)
     }
 
     /// Same lookup as [`Assets::get`], borrowing the asset exclusively.
     ///
-    /// There is no change detection or version counter on this map, so an in-place edit is
-    /// invisible to anything caching data derived from the asset — such a consumer has to be
-    /// told about the edit some other way.
+    /// Counts as a change whether or not the caller writes anything: the entry takes the next
+    /// revision, so a copy of this map kept by the [extractor](crate::extract) clones it again.
+    /// Use [`Assets::get`] to read.
     pub fn get_mut(&mut self, handle: &Handle<T>) -> Option<&mut T> {
-        self.data.get_mut(&handle.id)
+        let id = handle.id;
+        if !self.data.contains_key(&id) {
+            return None;
+        }
+        let revision = self.next_revision();
+        let entry = self.data.get_mut(&id)?;
+        self.by_revision.remove(&entry.revision);
+        self.by_revision.insert(revision, id);
+        entry.revision = revision;
+        Some(&mut entry.asset)
     }
 
     /// Stores `asset` under `handle.id`, dropping whatever was there before.
@@ -412,7 +447,7 @@ impl<T> Assets<T> {
     /// and is the common case, but then the entry has no owner and nothing will ever queue it
     /// for collection — it lives until [`Assets::remove`].
     pub fn insert(&mut self, handle: &Handle<T>, asset: T) {
-        self.data.insert(handle.id, asset);
+        self.put(handle.id, asset);
     }
 
     /// Takes the entry out of the map and returns it, or `None` if there was none.
@@ -422,7 +457,30 @@ impl<T> Assets<T> {
     /// still queued, and [`Assets::process_drops`] then finds nothing to erase — harmless,
     /// because ids are never reused, so the stale notice cannot hit a newer asset.
     pub fn remove(&mut self, handle: &Handle<T>) -> Option<T> {
-        self.data.remove(&handle.id)
+        self.take(handle.id)
+    }
+
+    /// Whether an entry is stored under `handle`'s id.
+    #[must_use]
+    pub fn contains(&self, handle: &Handle<T>) -> bool {
+        self.data.contains_key(&handle.id)
+    }
+
+    /// The number of stored entries.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Whether nothing is stored.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Every entry with its id, in no particular order — see the type's notes on iteration.
+    pub fn iter(&self) -> impl Iterator<Item = (HandleId, &T)> {
+        self.data.iter().map(|(id, e)| (*id, &e.asset))
     }
 
     /// Collects dropped handles and removes their corresponding assets.
@@ -440,8 +498,68 @@ impl<T> Assets<T> {
     /// [`Handle::tracker`]) can pull an asset out from under a live handle.
     pub fn process_drops(&mut self) {
         while let Some(dropped_id) = self.drop_queue.pop() {
-            self.data.remove(&HandleId(dropped_id));
+            self.take(HandleId(dropped_id));
         }
+    }
+
+    fn next_revision(&mut self) -> u64 {
+        self.revision += 1;
+        self.revision
+    }
+
+    fn put(&mut self, id: HandleId, asset: T) {
+        let revision = self.next_revision();
+        if let Some(old) = self.data.insert(id, Entry { asset, revision }) {
+            self.by_revision.remove(&old.revision);
+        }
+        self.by_revision.insert(revision, id);
+    }
+
+    fn take(&mut self, id: HandleId) -> Option<T> {
+        let entry = self.data.remove(&id)?;
+        self.by_revision.remove(&entry.revision);
+        self.last_removal = self.next_revision();
+        Some(entry.asset)
+    }
+
+    /// Which map this is, for a reader that keeps a revision of it.
+    pub(crate) fn identity(&self) -> u64 {
+        self.identity
+    }
+
+    /// The last revision handed out.
+    pub(crate) fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// The revision of the last removal.
+    pub(crate) fn last_removal(&self) -> u64 {
+        self.last_removal
+    }
+
+    /// The entries changed after revision `since`, oldest change first.
+    pub(crate) fn changed_since(&self, since: u64) -> impl Iterator<Item = (HandleId, &T)> {
+        self.by_revision
+            .range(since + 1..)
+            .filter_map(|(_, id)| self.data.get(id).map(|e| (*id, &e.asset)))
+    }
+
+    /// Stores `asset` under `id` — the extractor's way to fill a copy under the original's ids.
+    pub(crate) fn insert_id(&mut self, id: HandleId, asset: T) {
+        self.put(id, asset);
+    }
+
+    /// Keeps only the entries `keep` accepts.
+    pub(crate) fn retain_ids(&mut self, mut keep: impl FnMut(HandleId) -> bool) {
+        let gone: Vec<HandleId> = self.data.keys().copied().filter(|id| !keep(*id)).collect();
+        for id in gone {
+            self.take(id);
+        }
+    }
+
+    /// Whether an entry is stored under `id`.
+    pub(crate) fn contains_id(&self, id: HandleId) -> bool {
+        self.data.contains_key(&id)
     }
 }
 
@@ -472,11 +590,11 @@ mod tests {
         let id = handle.id;
 
         assets.process_drops();
-        assert_eq!(assets.data.get(&id), Some(&7), "a live handle collects nothing");
+        assert_eq!(assets.data.get(&id).map(|e| &e.asset), Some(&7), "a live handle collects nothing");
 
         drop(handle);
         assert_eq!(
-            assets.data.get(&id),
+            assets.data.get(&id).map(|e| &e.asset),
             Some(&7),
             "dropping only reports the id — the entry survives until it is processed"
         );
@@ -496,7 +614,7 @@ mod tests {
 
         drop(handle);
         assets.process_drops();
-        assert_eq!(assets.data.get(&id), Some(&1), "one clone is still alive");
+        assert_eq!(assets.data.get(&id).map(|e| &e.asset), Some(&1), "one clone is still alive");
 
         drop(clone);
         assets.process_drops();
@@ -513,7 +631,7 @@ mod tests {
 
         drop(handle);
         assets.process_drops();
-        assert_eq!(assets.data.get(&id), Some(&3));
+        assert_eq!(assets.data.get(&id).map(|e| &e.asset), Some(&3));
     }
 
     /// Guard: `make_strong` still binds an upgraded handle to the map's own queue, which is

@@ -76,22 +76,17 @@ use gizmo_renderer::components::Mesh;
 use gizmo_renderer::visibility::RenderAabbTree;
 
 /// A spatial index over the scene's renderable bounds, consulted by the batcher when present.
-#[derive(Default)]
+///
+/// `Clone` copies the tree — a few `Vec`s, one 64-byte node per leaf and branch. The
+/// [extractor](gizmo_core::extract) copies the resource only on a run after it was written (a
+/// rebuild, an `insert`), so a static index reaches a render world once.
+#[derive(Default, Clone)]
 pub struct VisibilityIndex {
     /// The tree itself. Public so a game can `insert`/`remove` incrementally rather than rebuild.
     pub tree: RenderAabbTree,
 }
 
 crate::core::impl_component!(VisibilityIndex);
-
-impl Clone for VisibilityIndex {
-    fn clone(&self) -> Self {
-        // `Component` requires `Clone` and a BVH is not cheap to copy. Nothing clones this — it is
-        // inserted once and mutated in place — so the honest implementation is the one that says
-        // so rather than one that silently costs a rebuild.
-        unreachable!("VisibilityIndex is a resource and is never cloned")
-    }
-}
 
 impl VisibilityIndex {
     /// Rebuilds the index from every entity that currently has a `Mesh` and a `GlobalTransform`.

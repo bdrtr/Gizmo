@@ -347,3 +347,123 @@ fn a_frame_drawn_twice_spawns_its_particles_once_and_draws_its_lines() {
         assert_eq!(head(&renderer).wrapping_sub(once), 5, "a new frame's spawns were taken for the old batch");
     });
 }
+
+// ------------------------------------------------- GPU: drawing from a copy (A8, stage 3)
+
+/// **A frame drawn from an extracted copy is the frame drawn from the original**, for each thing the
+/// draw used to read that a copy could not carry:
+///
+/// - a cube whose mesh and material are `Handle`s, resolved through `Assets<Mesh>` /
+///   `Assets<Material>` — the copy's maps are kept by `Extractor::assets`;
+/// - a `VisibilityIndex` that leaves out a cube spawned after it was built — copied as a resource,
+///   so the copy culls the cube the original culls;
+/// - the camera under water — the fog asks `WaterVolumes`, which the preparation took from the
+///   physics world, where the draw used to ask the physics world itself.
+///
+/// Each one is then taken out of the copy and the picture must change, so an equality reached
+/// because the feature drew nothing in either world cannot pass.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_frame_drawn_from_an_extracted_copy_is_the_frame_drawn_from_the_original() {
+    use super::visibility_index::VisibilityIndex;
+    use super::WaterVolumes;
+    use crate::physics::world::{FluidZone, PhysicsWorld, ZoneShape};
+    use crate::renderer::components::{DirectionalLight, Material, Mesh, MeshRenderer};
+    use gizmo_core::asset::{Assets, Handle};
+    use gizmo_core::extract::Extractor;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        cube_scene(&renderer, &mut game);
+
+        // A cube drawn through handles.
+        let mut textures = crate::renderer::asset::AssetManager::new();
+        let tex = textures.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let mut meshes = Assets::<Mesh>::new();
+        let mut materials = Assets::<Material>::new();
+        let mesh: Handle<Mesh> = meshes.add(crate::renderer::asset::AssetManager::create_cube(&renderer.device));
+        let material: Handle<Material> =
+            materials.add(Material::new(tex.clone()).with_pbr(Vec4::new(0.1, 0.8, 0.2, 1.0), 0.0, 1.0));
+        game.insert_resource(meshes);
+        game.insert_resource(materials);
+        game.spawn_bundle((Transform::new(Vec3::new(0.0, 0.0, 2.2)), GlobalTransform::default(), mesh, material, MeshRenderer::new()));
+
+        // An index built now, then a cube it does not hold: culled, by the index, in the original.
+        super::ensure_global_transforms(&mut game);
+        let mut index = VisibilityIndex::default();
+        index.rebuild_from(&game);
+        game.insert_resource(index);
+        game.spawn_bundle((
+            Transform::new(Vec3::new(0.0, 0.0, -2.2)),
+            GlobalTransform::default(),
+            crate::renderer::asset::AssetManager::create_cube(&renderer.device),
+            Material::new(tex).with_pbr(Vec4::new(0.2, 0.2, 0.9, 1.0), 0.0, 1.0),
+            MeshRenderer::new(),
+        ));
+
+        // Water around everything, with a fog of its own.
+        let mut physics = PhysicsWorld::new();
+        physics.fluid_zones.push(FluidZone {
+            shape: ZoneShape::Box { min: Vec3::splat(-30.0), max: Vec3::splat(30.0) },
+            fog_color: [0.0, 0.35, 0.7],
+            fog_density: 0.12,
+            ..Default::default()
+        });
+        game.insert_resource(physics);
+
+        prepare_frame(&mut game, &mut renderer);
+        assert!(game.get_resource::<WaterVolumes>().is_some(), "the preparation did not hand the water over");
+        let original = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+
+        let extractor = || {
+            let mut extractor = Extractor::new();
+            extractor
+            .component::<Transform>()
+            .component::<GlobalTransform>()
+            .component::<Camera>()
+            .component::<DirectionalLight>()
+            .component::<Mesh>()
+            .component::<Material>()
+            .component::<MeshRenderer>()
+            .component::<Handle<Mesh>>()
+            .component::<Handle<Material>>()
+            .assets::<Mesh>()
+            .assets::<Material>()
+            .resource::<VisibilityIndex>()
+            .resource::<WaterVolumes>()
+            .resource::<gizmo_core::time::Time>();
+            extractor
+        };
+        let mut copy = World::new();
+        extractor().run(&mut game, &mut copy);
+        assert!(copy.get_resource::<PhysicsWorld>().is_none(), "the copy must draw without the physics world");
+
+        let drawn = frame_bytes(&mut renderer, |e, v, r| draw_frame(&copy, e, v, r));
+        let differ = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+        assert_eq!(differ(&original, &drawn), 0, "the copy drew a different picture");
+
+        // Each part of the copy is in the picture.
+        for (what, take) in [
+            ("the handle-drawn cube", Box::new(|w: &mut World| drop(w.remove_resource::<Assets<Mesh>>())) as Box<dyn Fn(&mut World)>),
+            ("the visibility index", Box::new(|w: &mut World| drop(w.remove_resource::<VisibilityIndex>()))),
+            ("the underwater fog", Box::new(|w: &mut World| drop(w.remove_resource::<WaterVolumes>()))),
+        ] {
+            // A copy of its own, by an extractor of its own: an extractor copies what changed since
+            // its last run, so one that already ran would leave a new world nearly empty.
+            let mut without = World::new();
+            extractor().run(&mut game, &mut without);
+            assert_eq!(differ(&original, &frame_bytes(&mut renderer, |e, v, r| draw_frame(&without, e, v, r))), 0);
+            take(&mut without);
+            let changed = differ(&original, &frame_bytes(&mut renderer, |e, v, r| draw_frame(&without, e, v, r)));
+            assert!(changed > 50, "{what} made no difference to the picture ({changed} pixels)");
+        }
+    });
+}

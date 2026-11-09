@@ -545,26 +545,56 @@ fn renderer_component_types(workspace: &std::path::Path) -> Vec<String> {
     components
 }
 
-/// One draw path's source, with `shared.rs` left out and each file cut at its `#[cfg(test)]`.
+/// One draw path's source, with `shared.rs` left out, each file cut at its `#[cfg(test)]`, and
+/// every file that is a test module as a whole left out.
 ///
 /// `shared.rs` is excluded because what lives there is *neither* path in particular; the cut is
 /// because a test naming a component is not the path handling it (a GPU guard spawning a
-/// `PointLight` reported it as game-only, in this repo, on 2026-08-17).
+/// `PointLight` reported it as game-only, in this repo, on 2026-08-17). A test module can also be
+/// a file of its own, declared `#[cfg(test)] mod name;` by its parent and carrying no
+/// `#[cfg(test)]` of its own to cut at: `frame_split_tests.rs` spawned a `DirectionalLight` in
+/// a GPU test on 2026-11-09 and the scan reported it as game-only. Such a file is found by its
+/// declaration, wherever in the directory that is.
 fn draw_path_source(dir: std::path::PathBuf) -> String {
     let mut files = Vec::new();
     collect_rs(&dir, &mut files);
-    files
-        .iter()
-        .filter(|f| f.file_name().is_some_and(|n| n != "shared.rs"))
+    let sources: Vec<(std::path::PathBuf, String)> = files
+        .into_iter()
         .map(|f| {
-            let src = std::fs::read_to_string(f).unwrap_or_default();
-            match src.find("#[cfg(test)]") {
-                Some(i) => src[..i].to_string(),
-                None => src,
-            }
+            let src = std::fs::read_to_string(&f).unwrap_or_default();
+            (f, src)
+        })
+        .collect();
+    let test_modules: std::collections::HashSet<String> = sources
+        .iter()
+        .flat_map(|(_, src)| test_module_declarations(src))
+        .collect();
+    sources
+        .iter()
+        .filter(|(f, _)| f.file_name().is_some_and(|n| n != "shared.rs"))
+        .filter(|(f, _)| {
+            f.file_stem()
+                .and_then(|s| s.to_str())
+                .is_none_or(|stem| !test_modules.contains(stem))
+        })
+        .map(|(_, src)| match src.find("#[cfg(test)]") {
+            Some(i) => src[..i].to_string(),
+            None => src.clone(),
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The names of the modules `src` declares as `#[cfg(test)]` with no body — `mod name;`, a file.
+fn test_module_declarations(src: &str) -> Vec<String> {
+    src.match_indices("#[cfg(test)]")
+        .filter_map(|(i, attr)| {
+            let rest = src[i + attr.len()..].trim_start();
+            let rest = rest.strip_prefix("pub(crate) ").or_else(|| rest.strip_prefix("pub ")).unwrap_or(rest);
+            let name = rest.strip_prefix("mod ")?.split(';').next()?.trim();
+            (!name.is_empty() && name.chars().all(|c| c.is_alphanumeric() || c == '_')).then(|| name.to_string())
+        })
+        .collect()
 }
 
 /// Whole-word: `Mesh` must not match `MeshRenderer`.

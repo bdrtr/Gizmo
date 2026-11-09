@@ -76,7 +76,7 @@ impl From<serde_json::Error> for SnapshotError {
 /// coincides with the centre of mass only when `RigidBody::center_of_mass` is zero.
 /// The body's collider extents play no part in the test, so a large body is either
 /// wholly in or wholly out depending on where its origin sits.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum ZoneShape {
     /// Axis-aligned box. It carries no rotation, so a tilted region cannot be expressed
@@ -199,7 +199,7 @@ impl Default for GravityField {
 /// The cells are an estimate, not an intersected volume: a sphere's or capsule's volume is spread
 /// over its bounding box's cells, and the surface is a flat plane. `PhysicsWorld::fluid_zones`
 /// is part of the rollback snapshot.
-#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct FluidZone {
     /// Region of liquid, in world metres. It fixes both membership (see [`ZoneShape`])
     /// and the height of the surface plane described above, so moving or resizing the
@@ -274,32 +274,39 @@ pub struct WaterSample {
     pub fog_density: f32,
 }
 
+/// Returns a water sample if `p` is inside any of `zones` (when several overlap, the one with the
+/// HIGHEST surface wins); `None` outside every zone. [`PhysicsWorld::water_at`] asks it of the
+/// world's own zones; a renderer drawing from a copy of the world asks it of the zones it was handed.
+pub fn water_at(zones: &[FluidZone], p: gizmo_math::Vec3) -> Option<WaterSample> {
+    let mut best: Option<WaterSample> = None;
+    for zone in zones {
+        if !zone.shape.contains(p) {
+            continue;
+        }
+        let surface_y = match zone.shape {
+            ZoneShape::Box { max, .. } => max.y,
+            ZoneShape::Sphere { center, radius } => center.y + radius,
+        };
+        let sample = WaterSample {
+            surface_y,
+            depth: (surface_y - p.y).max(0.0),
+            density: zone.density,
+            fog_color: zone.fog_color,
+            fog_density: zone.fog_density,
+        };
+        if best.is_none_or(|b| surface_y > b.surface_y) {
+            best = Some(sample);
+        }
+    }
+    best
+}
+
 impl PhysicsWorld {
     /// Returns a water sample if `p` is inside any fluid zone (when several zones overlap, the
     /// one with the HIGHEST surface wins); `None` outside every zone. The shared query behind
-    /// swimming and camera-submersion detection.
+    /// swimming and camera-submersion detection — [`water_at`] over this world's zones.
     pub fn water_at(&self, p: gizmo_math::Vec3) -> Option<WaterSample> {
-        let mut best: Option<WaterSample> = None;
-        for zone in &self.fluid_zones {
-            if !zone.shape.contains(p) {
-                continue;
-            }
-            let surface_y = match zone.shape {
-                ZoneShape::Box { max, .. } => max.y,
-                ZoneShape::Sphere { center, radius } => center.y + radius,
-            };
-            let sample = WaterSample {
-                surface_y,
-                depth: (surface_y - p.y).max(0.0),
-                density: zone.density,
-                fog_color: zone.fog_color,
-                fog_density: zone.fog_density,
-            };
-            if best.is_none_or(|b| surface_y > b.surface_y) {
-                best = Some(sample);
-            }
-        }
-        best
+        water_at(&self.fluid_zones, p)
     }
 
     /// Is `p` inside a body of water (i.e. submerged)?

@@ -14,8 +14,12 @@
 //!   entity despawned is despawned in the copy, and an id recycled in the same frame arrives as
 //!   the new generation with the old one gone. A [`World::clear_entities`] on the original clears
 //!   the copy and copies everything again.
-//! - **Resources are copied whole** on every run, and removed from the copy when the original has
-//!   none.
+//! - **Resources are copied whole** when they were written since the last run (a resource keeps
+//!   the tick of its last write, see [`World::resource_change_tick`]), and removed from the copy
+//!   when the original has none.
+//! - **Asset maps** ([`Assets<T>`](crate::asset::Assets)) are copied entry by entry: an asset
+//!   added or handed out mutably since the last run is cloned, one removed or collected is removed,
+//!   so a `Handle<T>` copied onto an entity resolves in the copy as it does in the original.
 //! - **Anything else** is a step of your own, `FnMut(&World, &mut World)`, run in order after the
 //!   copies.
 //!
@@ -49,6 +53,7 @@
 //! assert!(!render.is_alive(ball));
 //! ```
 
+use crate::asset::Assets;
 use crate::component::Component;
 use crate::entity::Entity;
 use crate::query::{Changed, Query};
@@ -121,17 +126,75 @@ impl<T: Component> Step for ComponentStep<T> {
     }
 }
 
-struct ResourceStep<T>(std::marker::PhantomData<fn() -> T>);
+struct ResourceStep<T> {
+    /// The original's tick at the last run: a resource written after it is copied again.
+    last: u32,
+    _marker: std::marker::PhantomData<fn() -> T>,
+}
 
 impl<T: Clone + Send + Sync + 'static> Step for ResourceStep<T> {
+    fn reset(&mut self) {
+        self.last = 0;
+    }
+
     fn run(&mut self, main: &World, render: &mut World) {
-        let value = main.get_resource::<T>().map(|r| (*r).clone());
+        let value = main.get_resource::<T>().and_then(|r| {
+            let stale = r.change_tick() > self.last || render.resource_change_tick::<T>().is_none();
+            stale.then(|| (*r).clone())
+        });
         match value {
             Some(value) => render.insert_resource(value),
-            None => {
+            None if main.resource_change_tick::<T>().is_none() => {
                 render.remove_resource::<T>();
             }
+            None => {}
         }
+        self.last = main.tick;
+    }
+}
+
+struct AssetsStep<T> {
+    /// The original map's identity and revision at the last run; `None` copies everything.
+    seen: Option<(u64, u64)>,
+    _marker: std::marker::PhantomData<fn() -> T>,
+}
+
+impl<T: Clone + Send + Sync + 'static> Step for AssetsStep<T> {
+    fn reset(&mut self) {
+        self.seen = None;
+    }
+
+    fn run(&mut self, main: &World, render: &mut World) {
+        let Some(original) = main.get_resource::<Assets<T>>() else {
+            render.remove_resource::<Assets<T>>();
+            self.seen = None;
+            return;
+        };
+        if render.resource_change_tick::<Assets<T>>().is_none() {
+            render.insert_resource(Assets::<T>::new());
+            self.seen = None;
+        }
+        let Some(mut copy) = render.get_resource_mut::<Assets<T>>() else {
+            // Only a guard held on the copy's map stops this; the next run catches up.
+            return;
+        };
+        let since = match self.seen {
+            Some((identity, revision)) if identity == original.identity() => {
+                if original.last_removal() > revision {
+                    copy.retain_ids(|id| original.contains_id(id));
+                }
+                revision
+            }
+            // A first run, or the original's map was replaced by another: start over.
+            _ => {
+                copy.retain_ids(|_| false);
+                0
+            }
+        };
+        for (id, asset) in original.changed_since(since) {
+            copy.insert_id(id, asset.clone());
+        }
+        self.seen = Some((original.identity(), original.revision()));
     }
 }
 
@@ -182,10 +245,26 @@ impl Extractor {
         self
     }
 
-    /// Copies the resource `T` whole on every run, and removes it from the copy while the original
-    /// has none.
+    /// Copies the resource `T` whole when it was written since the last run (or the copy has none),
+    /// and removes it from the copy while the original has none.
+    ///
+    /// A write is an insertion or a mutable dereference of `ResMut<T>` / a write guard, so a
+    /// resource the game only reads is cloned once; one it touches every frame is cloned every
+    /// frame.
     pub fn resource<T: Clone + Send + Sync + 'static>(&mut self) -> &mut Self {
-        self.steps.push(Box::new(ResourceStep::<T>(std::marker::PhantomData)));
+        self.steps.push(Box::new(ResourceStep::<T> { last: 0, _marker: std::marker::PhantomData }));
+        self
+    }
+
+    /// Keeps the copy's [`Assets<T>`] holding what the original's holds, under the same ids, so a
+    /// `Handle<T>` copied onto an entity (`component::<Handle<T>>()`) resolves in the copy.
+    ///
+    /// Incremental: an entry added, inserted or taken with [`Assets::get_mut`] since the last run is
+    /// cloned; one removed or collected is removed. A map that replaced the original's is copied
+    /// whole. The copy's map mirrors the original's: an entry the reading side stores in it itself
+    /// is removed the next time the original loses one.
+    pub fn assets<T: Clone + Send + Sync + 'static>(&mut self) -> &mut Self {
+        self.steps.push(Box::new(AssetsStep::<T> { seen: None, _marker: std::marker::PhantomData }));
         self
     }
 
@@ -399,5 +478,166 @@ mod tests {
         let next = world.spawn();
         assert!(next.id() < 10, "a skipped id was not put on the free list");
         assert!(world.is_alive(far));
+    }
+
+    /// Counts its clones, so a test can tell a copy that happened from one that did not.
+    #[derive(Debug, PartialEq)]
+    struct Counted(u32);
+    static CLONES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    impl Clone for Counted {
+        fn clone(&self) -> Self {
+            CLONES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Counted(self.0)
+        }
+    }
+
+    #[test]
+    fn a_resource_is_copied_when_written_and_not_otherwise() {
+        let clones = || CLONES.load(std::sync::atomic::Ordering::Relaxed);
+        let mut ex = Extractor::new();
+        ex.resource::<Counted>();
+        let (mut game, mut render) = (World::new(), World::new());
+        game.insert_resource(Counted(1));
+
+        ex.run(&mut game, &mut render);
+        let after_first = clones();
+        for _ in 0..3 {
+            // Read, and take a write guard only to read through it: neither is a write.
+            assert_eq!(game.get_resource::<Counted>().unwrap().0, 1);
+            assert_eq!(game.get_resource_mut::<Counted>().unwrap().0, 1);
+            ex.run(&mut game, &mut render);
+        }
+        assert_eq!(clones(), after_first, "an untouched resource was cloned again");
+
+        game.get_resource_mut::<Counted>().unwrap().0 = 2;
+        ex.run(&mut game, &mut render);
+        assert_eq!(render.get_resource::<Counted>().map(|c| c.0), Some(2));
+        assert_eq!(clones(), after_first + 1);
+
+        // The copy lost it (the reading side removed it): copied again though the original is unchanged.
+        render.remove_resource::<Counted>();
+        ex.run(&mut game, &mut render);
+        assert_eq!(render.get_resource::<Counted>().map(|c| c.0), Some(2));
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Shape(&'static str);
+
+    fn shapes(world: &World) -> Vec<(usize, &'static str)> {
+        let assets = world.get_resource::<Assets<Shape>>().expect("the copy has the map");
+        let mut all: Vec<_> = assets.iter().map(|(id, s)| (id.0, s.0)).collect();
+        all.sort();
+        all
+    }
+
+    #[test]
+    fn asset_maps_follow_entry_by_entry_and_handles_resolve_in_the_copy() {
+        use crate::asset::Handle;
+        let mut ex = Extractor::new();
+        ex.component::<Handle<Shape>>().assets::<Shape>();
+        let (mut game, mut render) = (World::new(), World::new());
+        game.insert_resource(Assets::<Shape>::new());
+        let (cube, ball) = {
+            let mut assets = game.get_resource_mut::<Assets<Shape>>().unwrap();
+            (assets.add(Shape("cube")), assets.add(Shape("ball")))
+        };
+        let holder = game.spawn_bundle((cube.clone(),));
+        ex.run(&mut game, &mut render);
+
+        let copied = render.get::<Handle<Shape>>(holder).expect("the handle came across").clone();
+        assert_eq!(render.get_resource::<Assets<Shape>>().unwrap().get(&copied), Some(&Shape("cube")));
+        assert_eq!(shapes(&render), shapes(&game));
+
+        // Only the entry taken mutably is cloned again; the rest of the copy is the same values.
+        game.get_resource_mut::<Assets<Shape>>().unwrap().get_mut(&ball).unwrap().0 = "sphere";
+        ex.run(&mut game, &mut render);
+        assert_eq!(render.get_resource::<Assets<Shape>>().unwrap().get(&ball), Some(&Shape("sphere")));
+
+        // A removal and a collection both reach the copy.
+        game.get_resource_mut::<Assets<Shape>>().unwrap().remove(&ball);
+        game.despawn(holder);
+        drop((cube, copied));
+        ex.run(&mut game, &mut render); // the copy's handle goes with its entity...
+        game.get_resource_mut::<Assets<Shape>>().unwrap().process_drops(); // ...so the asset is collected
+        ex.run(&mut game, &mut render);
+        assert_eq!(shapes(&game), vec![]);
+        assert_eq!(shapes(&render), vec![]);
+    }
+
+    #[test]
+    fn a_replaced_asset_map_is_copied_whole_and_a_removed_one_goes() {
+        let mut ex = Extractor::new();
+        ex.assets::<Shape>();
+        let (mut game, mut render) = (World::new(), World::new());
+        let mut first = Assets::<Shape>::new();
+        let _a = first.add(Shape("a"));
+        game.insert_resource(first);
+        ex.run(&mut game, &mut render);
+
+        // A new map, with fewer changes behind it than the old one had: nothing in it is older
+        // than what the copy has seen, and all of it must still arrive.
+        let mut second = Assets::<Shape>::new();
+        let _b = second.add(Shape("b"));
+        game.insert_resource(second);
+        ex.run(&mut game, &mut render);
+        assert_eq!(shapes(&render), shapes(&game));
+        assert_eq!(shapes(&render).len(), 1);
+
+        game.remove_resource::<Assets<Shape>>();
+        ex.run(&mut game, &mut render);
+        assert!(render.get_resource::<Assets<Shape>>().is_none());
+    }
+
+    #[test]
+    fn a_cleared_original_copies_its_assets_again() {
+        let mut ex = Extractor::new();
+        ex.assets::<Shape>();
+        let (mut game, mut render) = (World::new(), World::new());
+        game.insert_resource(Assets::<Shape>::new());
+        let _a = game.get_resource_mut::<Assets<Shape>>().unwrap().add(Shape("a"));
+        ex.run(&mut game, &mut render);
+
+        // The reading side lost its map's contents; a cleared original resets the extractor.
+        render.insert_resource(Assets::<Shape>::new());
+        game.clear_entities();
+        ex.run(&mut game, &mut render);
+        assert_eq!(shapes(&render), shapes(&game));
+    }
+
+    /// Its own counter: tests run in parallel, and a shared one would count another test's clones.
+    #[derive(Debug, PartialEq)]
+    struct Mesh(u32);
+    static MESH_CLONES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    impl Clone for Mesh {
+        fn clone(&self) -> Self {
+            MESH_CLONES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Mesh(self.0)
+        }
+    }
+
+    #[test]
+    fn an_asset_map_clones_only_the_entries_that_changed() {
+        let clones = || MESH_CLONES.load(std::sync::atomic::Ordering::Relaxed);
+        let mut ex = Extractor::new();
+        ex.assets::<Mesh>();
+        let (mut game, mut render) = (World::new(), World::new());
+        let mut assets = Assets::<Mesh>::new();
+        let handles: Vec<_> = (0..10).map(|n| assets.add(Mesh(n))).collect();
+        game.insert_resource(assets);
+        ex.run(&mut game, &mut render);
+        assert_eq!(clones(), 10);
+
+        ex.run(&mut game, &mut render);
+        // The map is written every frame by a collection pass, which changes no entry.
+        game.get_resource_mut::<Assets<Mesh>>().unwrap().process_drops();
+        ex.run(&mut game, &mut render);
+        assert_eq!(clones(), 10, "an unchanged entry was cloned again");
+
+        game.get_resource_mut::<Assets<Mesh>>().unwrap().get_mut(&handles[3]).unwrap().0 = 30;
+        ex.run(&mut game, &mut render);
+        assert_eq!(clones(), 11);
+        let copy = render.get_resource::<Assets<Mesh>>().unwrap();
+        assert_eq!(copy.get(&handles[3]), Some(&Mesh(30)));
+        assert_eq!(copy.len(), 10);
     }
 }
