@@ -157,7 +157,6 @@ pub mod gi;
 pub mod gpu_fluid;
 /// The GPU particle system — simulated and drawn from the same buffer.
 pub mod gpu_particles;
-/// What the game side may do with the GPU while a frame is drawn — see [`GpuContext`](gpu_context::GpuContext).
 pub mod gpu_context;
 pub mod gpu_smoke;
 /// The renderer's own GPU rigid-body solver, separate from `gizmo-physics-rigid`.
