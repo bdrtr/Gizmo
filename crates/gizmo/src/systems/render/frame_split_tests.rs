@@ -1,0 +1,349 @@
+//! **The frame's two halves** (`docs/CAPABILITY_GAPS.md` A8, stage 2): [`prepare_frame`] writes
+//! everything the game can see, [`draw_frame`] reads the world and writes only the renderer. The
+//! signature makes the draw read-only for ordinary access; these tests hold the parts a signature
+//! cannot — that the work moved into the preparation still happens there exactly once a frame, and
+//! that the draw neither repeats it nor writes back through interior mutability (a resource's
+//! write guard is reachable from `&World`).
+
+use super::{
+    advance_frame_clocks, default_render_pass, draw_frame, end_debug_line_frame, prepare_frame,
+    step_particle_emitters, ParticleSpawns,
+};
+use crate::core::World;
+use crate::math::{Vec3, Vec4};
+use crate::physics::components::{GlobalTransform, Transform};
+use crate::renderer::components::{Camera, CameraShake, ParticleEmitter, ReflectionProbe};
+use crate::renderer::{GizmoFrame, Gizmos, Renderer};
+use gizmo_core::Entity;
+
+fn clock(dt: f32) -> gizmo_core::time::Time {
+    let mut time = gizmo_core::time::Time::new();
+    time.update(dt);
+    time
+}
+
+/// A shake wears off once a frame, in the frame's clocks: the same trauma and noise phase as one
+/// `advance` per frame — not none (the draw no longer advances it) and not two.
+#[test]
+fn the_frame_clocks_advance_a_camera_shake_once_a_frame() {
+    let dt = 1.0 / 60.0;
+    let mut world = World::new();
+    world.insert_resource(clock(dt));
+    let mut shake = CameraShake::default();
+    shake.add(1.0);
+    let id = world.spawn_bundle((shake,));
+    let mut expected = shake;
+    for frame in 1..=10 {
+        advance_frame_clocks(&mut world);
+        expected.advance(dt);
+        let now = *world.query::<&CameraShake>().get(id).unwrap();
+        assert_eq!(now, expected, "frame {frame}: the shake did not advance exactly once");
+    }
+    assert!(expected.trauma() < 1.0, "the test advanced nothing");
+}
+
+/// This frame's debug lines reach the draw once: the frame's end moves them into the `GizmoFrame`
+/// the draw reads and leaves the game's `Gizmos` empty for the next frame, while the last fixed
+/// step's lines are drawn on every frame until the next step replaces them.
+#[test]
+fn a_frames_debug_lines_are_handed_to_the_draw_once() {
+    let mut world = World::new();
+    world.insert_resource(Gizmos::default());
+    let line = |world: &World, x: f32| {
+        world.get_resource_mut::<Gizmos>().unwrap().draw_line(Vec3::new(x, 0.0, 0.0), Vec3::new(x, 1.0, 0.0), [1.0; 4]);
+    };
+    let drawn = |world: &World| world.get_resource::<GizmoFrame>().map(|f| f.gizmos().vertex_count());
+
+    // A fixed step drew one line, the frame another.
+    line(&world, 1.0);
+    world.get_resource_mut::<Gizmos>().unwrap().end_fixed_step();
+    line(&world, 2.0);
+    end_debug_line_frame(&mut world);
+    assert_eq!(drawn(&world), Some(4), "the step's line and the frame's");
+    assert!(world.get_resource::<Gizmos>().unwrap().lines.is_empty(), "the game's frame lines were not ended");
+
+    // A frame that drew nothing still shows the step's line — once, not the frame's again.
+    end_debug_line_frame(&mut world);
+    assert_eq!(drawn(&world), Some(2), "last frame's line drawn again, or the step's lost");
+
+    // With no `Gizmos` there is nothing to draw, and last frame's lines are not drawn either.
+    world.remove_resource::<Gizmos>();
+    end_debug_line_frame(&mut world);
+    assert_eq!(drawn(&world), None);
+}
+
+/// Emitter spawns come from the frame's preparation and are replaced every frame: a burst is in
+/// one frame's spawns, the next frame's hold only what that frame emitted.
+#[test]
+fn emitter_spawns_are_the_frames_and_replaced_every_frame() {
+    let dt = 1.0 / 60.0;
+    let mut world = World::new();
+    world.insert_resource(clock(dt));
+    world.spawn_bundle((Transform::new(Vec3::new(1.0, 2.0, 3.0)), ParticleEmitter::one_shot(250)));
+    world.spawn_bundle((ParticleEmitter::with_rate(60.0),));
+    let spawns = |world: &World| world.get_resource::<ParticleSpawns>().map(|s| s.particles().len());
+
+    step_particle_emitters(&mut world, dt);
+    assert_eq!(spawns(&world), Some(251), "the burst and one from a frame at 60 a second");
+    step_particle_emitters(&mut world, dt);
+    assert_eq!(spawns(&world), Some(1), "last frame's spawns were kept, or the burst came twice");
+    step_particle_emitters(&mut world, 0.0);
+    assert_eq!(spawns(&world), Some(0), "a frame that emitted nothing still replaces the spawns");
+}
+
+// ---------------------------------------------------------------- GPU: the draw half itself
+
+fn usable_gpu() -> bool {
+    pollster::block_on(Renderer::headless_adapter_available())
+        && !pollster::block_on(Renderer::headless_adapter_is_software())
+}
+
+/// Draws one frame into a 128×128 target with `draw` and reads it back as RGBA8.
+fn frame_bytes(
+    renderer: &mut Renderer,
+    draw: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer),
+) -> Vec<u8> {
+    const W: u32 = 128;
+    const H: u32 = 128;
+    let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("frame-split-target"),
+        size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: renderer.config.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    draw(&mut encoder, &view, renderer);
+    let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("frame-split-readback"),
+        size: u64::from(W * H * 4),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(W * 4), rows_per_image: Some(H) },
+        },
+        wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+    );
+    renderer.queue.submit(Some(encoder.finish()));
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+    let _ = renderer.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    rx.recv().unwrap().unwrap();
+    let bytes = slice.get_mapped_range().expect("a just-mapped buffer's full range is always valid").to_vec();
+    staging.unmap();
+    bytes
+}
+
+/// A lit cube in front of a primary camera on −X looking at it; returns the camera.
+fn cube_scene(renderer: &Renderer, world: &mut World) -> Entity {
+    let mut assets = crate::renderer::asset::AssetManager::new();
+    let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+    world.spawn_bundle((
+        Transform::new(Vec3::ZERO),
+        GlobalTransform::default(),
+        crate::renderer::asset::AssetManager::create_cube(&renderer.device),
+        crate::renderer::components::Material::new(tex).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 1.0),
+        crate::renderer::components::MeshRenderer::new(),
+    ));
+    world.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
+    world.spawn_bundle(crate::bundles::CameraBundle {
+        position: Vec3::new(-6.0, 0.0, 0.0),
+        primary: true,
+        ..Default::default()
+    })
+}
+
+fn quiet(renderer: &mut Renderer) {
+    renderer.taa = None;
+    renderer.ssgi = None;
+    renderer.ssr = None;
+}
+
+/// **The shake is in the picture and nowhere else**, with the clock on the preparation side: one
+/// `prepare_frame` advances the shake once; `draw_frame` run twice on the same world draws the same
+/// shaken picture twice and advances nothing; the camera's `Camera`, `Transform` and
+/// `GlobalTransform` are bit-identical to what the game left; and the picture is not the unshaken
+/// one.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_shake_moves_the_picture_and_never_the_camera() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        let dt = 1.0 / 60.0;
+        let mut world = World::new();
+        world.insert_resource(clock(dt));
+        let camera = cube_scene(&renderer, &mut world);
+
+        // The unshaken picture, after a frame that gave every entity its world matrix.
+        let still = frame_bytes(&mut renderer, |e, v, r| default_render_pass(&mut world, e, v, r));
+        let mut shake = CameraShake::default();
+        shake.add(1.0);
+        shake.max_offset = 1.5;
+        world.add_component(camera, shake);
+        let owned = |world: &World| {
+            (
+                *world.query::<&Camera>().get(camera).unwrap(),
+                *world.query::<&Transform>().get(camera).unwrap(),
+                *world.query::<&GlobalTransform>().get(camera).unwrap(),
+            )
+        };
+        let mut expected = shake;
+        for frame in 1..=3 {
+            let before = owned(&world);
+            prepare_frame(&mut world, &mut renderer);
+            expected.advance(dt);
+            assert_eq!(*world.query::<&CameraShake>().get(camera).unwrap(), expected, "frame {frame}: not one advance");
+            let prepared = owned(&world);
+            let first = frame_bytes(&mut renderer, |e, v, r| draw_frame(&world, e, v, r));
+            let second = frame_bytes(&mut renderer, |e, v, r| draw_frame(&world, e, v, r));
+            assert_eq!(*world.query::<&CameraShake>().get(camera).unwrap(), expected, "frame {frame}: the draw advanced the shake");
+            assert_eq!(owned(&world), prepared, "frame {frame}: the draw moved the camera");
+            assert_eq!(prepared, before, "frame {frame}: the shake was written into the camera");
+            assert!(first == second, "frame {frame}: two draws of one prepared frame differ");
+            let moved = first.chunks(4).zip(still.chunks(4)).filter(|(a, b)| a != b).count();
+            assert!(moved > 100, "frame {frame}: the shake did not reach the picture ({moved} pixels differ)");
+        }
+    });
+}
+
+/// **A probe's capture request is honoured once, and the draw never writes the probe.** Captured
+/// on its first frame; moved, it keeps the picture it holds (no recapture without a request);
+/// `request_capture` recaptures it once, from where it is now; the component the game owns is
+/// exactly what the game left after every frame.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_probe_capture_request_is_honoured_once_without_writing_the_probe() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        let mut world = World::new();
+        world.insert_resource(clock(1.0 / 60.0));
+        cube_scene(&renderer, &mut world);
+        let probe = world.spawn_bundle((Transform::new(Vec3::new(0.0, 2.0, 0.0)), GlobalTransform::default(), ReflectionProbe::new()));
+        let held = |renderer: &Renderer| {
+            let gpu = renderer.reflection_probe.as_ref().expect("a probe array");
+            (gpu.captured[0], gpu.captured_at[0])
+        };
+        let frame = |world: &mut World, renderer: &mut Renderer| {
+            let left = world.query::<&ReflectionProbe>().iter().map(|p| (*p, p.capture_request())).next();
+            frame_bytes(renderer, |e, v, r| default_render_pass(world, e, v, r));
+            let now = world.query::<&ReflectionProbe>().iter().map(|p| (*p, p.capture_request())).next();
+            assert_eq!(now, left, "the draw wrote the probe");
+        };
+        let move_to = |world: &mut World, probe: Entity, y: f32| {
+            world.query_mut::<&mut Transform>().get_mut(probe).unwrap().position = Vec3::new(0.0, y, 0.0);
+        };
+        let asked = |world: &World, probe: Entity| world.query::<&ReflectionProbe>().get(probe).unwrap().capture_request();
+
+        frame(&mut world, &mut renderer);
+        let first = asked(&world, probe);
+        assert_eq!(held(&renderer), (Some((probe, first)), [0.0, 2.0, 0.0]), "not captured on its first frame");
+
+        move_to(&mut world, probe, 3.0);
+        frame(&mut world, &mut renderer);
+        assert_eq!(held(&renderer), (Some((probe, first)), [0.0, 2.0, 0.0]), "recaptured without a request");
+
+        world.query_mut::<&mut ReflectionProbe>().get_mut(probe).unwrap().request_capture();
+        let second = asked(&world, probe);
+        frame(&mut world, &mut renderer);
+        assert_eq!(held(&renderer), (Some((probe, second)), [0.0, 3.0, 0.0]), "the request was not honoured");
+
+        move_to(&mut world, probe, 4.0);
+        frame(&mut world, &mut renderer);
+        assert_eq!(held(&renderer), (Some((probe, second)), [0.0, 3.0, 0.0]), "one request captured twice");
+
+        // **A level restarted in place.** `clear_entities` hands the same handles out again, bit for
+        // bit, so the same level rebuilt gives its probe the old probe's exact `Entity` — and a probe
+        // nobody asked anything of holds its first request, as the old one did. It is a new probe all
+        // the same, and the renderer must capture it rather than keep the old level's cube.
+        let restart = |world: &mut World, renderer: &Renderer, y: f32| {
+            world.clear_entities();
+            cube_scene(renderer, world);
+            world.spawn_bundle((Transform::new(Vec3::new(0.0, y, 0.0)), GlobalTransform::default(), ReflectionProbe::new()))
+        };
+        let level = restart(&mut world, &renderer, 5.0);
+        frame(&mut world, &mut renderer);
+        assert_eq!(held(&renderer), (Some((level, asked(&world, level))), [0.0, 5.0, 0.0]), "a new level's probe was not captured");
+        let again = restart(&mut world, &renderer, 6.0);
+        assert_eq!(again, level, "the test needs the restarted level to reuse the probe's handle");
+        frame(&mut world, &mut renderer);
+        assert_eq!(
+            held(&renderer),
+            (Some((again, asked(&world, again))), [0.0, 6.0, 0.0]),
+            "the restarted level's probe was taken for the old one and never captured"
+        );
+    });
+}
+
+/// **A frame's particles are put out once, however many times it is drawn.** The draw reads
+/// `ParticleSpawns` and cannot clear it, so a frame drawn twice — or a copy of the world drawn again
+/// without being refreshed — would put the same burst out every time; the particle system keeps the
+/// batch it last uploaded and skips it. And `prepare_frame` hands the game's debug lines to the draw.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_frame_drawn_twice_spawns_its_particles_once_and_draws_its_lines() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        assert!(renderer.gpu_particles.is_some(), "the test needs the GPU particle system");
+        let mut world = World::new();
+        world.insert_resource(clock(1.0 / 60.0));
+        world.insert_resource(Gizmos::default());
+        cube_scene(&renderer, &mut world);
+        world.spawn_bundle((Transform::new(Vec3::ZERO), ParticleEmitter::one_shot(40)));
+        world.get_resource_mut::<Gizmos>().unwrap().draw_line(Vec3::ZERO, Vec3::Y, [1.0; 4]);
+        let head = |renderer: &Renderer| {
+            renderer.gpu_particles.as_ref().unwrap().ring_head.load(std::sync::atomic::Ordering::Relaxed)
+        };
+
+        let before = head(&renderer);
+        prepare_frame(&mut world, &mut renderer);
+        assert_eq!(
+            world.get_resource::<GizmoFrame>().map(|f| f.gizmos().vertex_count()),
+            Some(2),
+            "prepare_frame did not hand the frame's debug lines to the draw"
+        );
+        assert!(world.get_resource::<Gizmos>().unwrap().lines.is_empty(), "prepare_frame left the game's lines for the next frame");
+        frame_bytes(&mut renderer, |e, v, r| draw_frame(&world, e, v, r));
+        let once = head(&renderer);
+        assert_eq!(once.wrapping_sub(before), 40, "the burst was not put out");
+        frame_bytes(&mut renderer, |e, v, r| draw_frame(&world, e, v, r));
+        assert_eq!(head(&renderer), once, "drawing the same frame again put the burst out again");
+
+        // The next prepared frame is a new batch: its own spawns go out (none, the burst is spent).
+        world.spawn_bundle((Transform::new(Vec3::ZERO), ParticleEmitter::one_shot(5)));
+        prepare_frame(&mut world, &mut renderer);
+        frame_bytes(&mut renderer, |e, v, r| draw_frame(&world, e, v, r));
+        assert_eq!(head(&renderer).wrapping_sub(once), 5, "a new frame's spawns were taken for the old batch");
+    });
+}

@@ -2155,7 +2155,8 @@ nondeterministic sparks is a small lie. Neither version ever touched simulation 
 never a contract violation — only an avoidable inconsistency.
 
 `gizmo-studio` still carries its own copy of the loop and **that is deliberate, not an oversight**:
-`spawn_from_emitters` takes `&mut World`, which is a signature with no borrowing precondition,
+`spawn_from_emitters` (since 2026-11-09 `step_particle_emitters`, run by `prepare_frame` before the
+draw rather than by the draw) takes `&mut World`, which is a signature with no borrowing precondition,
 while studio's pipeline holds a live read borrow across the whole block. A `&World` variant would
 serve both, but its soundness would depend on what borrows the caller happens to hold — a
 conditionally-safe public API is a worse trade than one duplicated loop. The duplication is

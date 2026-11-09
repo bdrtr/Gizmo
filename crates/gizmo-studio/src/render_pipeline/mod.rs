@@ -51,9 +51,10 @@ pub fn execute_render_pipeline(
     // On the real frame time, as the game path does: a fade must not stop with a paused game.
     let real_dt = world.get_resource::<gizmo::core::time::Time>().map(|t| t.raw_dt()).unwrap_or(0.0);
     gizmo::renderer::screen_fade::screen_fade_system(world, real_dt);
-    // A `CameraShake` moves its camera for this picture and is undone at the end of this function,
-    // exactly as the game path does — the shake is in the frame and nowhere else.
-    let shaken = gizmo::systems::render::apply_camera_shake(world, tween_dt);
+    // A `CameraShake`'s clock runs here, on the animation clock, as the game path's frame clocks
+    // run it; the shaken view is built in `viewpoint` by the game path's `shake_view`, which reads
+    // the camera and never moves it — the shake is in the frame and nowhere else.
+    gizmo::systems::render::advance_camera_shakes(world, tween_dt);
     gizmo::systems::render::ensure_global_transforms(world);
 
     // `MaterialDesc` → `Material` and back, the same pair the game path runs and for the same
@@ -599,9 +600,10 @@ pub fn execute_render_pipeline(
             //
             // Bu blok yıllarca YALNIZCA burada durdu, yani motorun kendi geçidini kullanan bir
             // oyunda `ParticleEmitter` hiçbir şey yaymıyordu. Motor tarafı artık kendi yolunu
-            // taşıyor: `gizmo::systems::render::spawn_from_emitters` (2026-08-14).
+            // taşıyor: `gizmo::systems::render::step_particle_emitters` (2026-08-14; 2026-11-09'dan
+            // beri çizimden önce, `prepare_frame` içinde — çizim dünyaya yazmıyor).
             //
-            // `spawn_from_emitters`'ı buradan çağıramıyoruz (`&mut World` alıyor, bu boru hattı ise
+            // `step_particle_emitters`'ı buradan çağıramıyoruz (`&mut World` alıyor, bu boru hattı ise
             // blok boyunca canlı bir okuma ödünçlemesi tutuyor), ama yayıcı başına kuralı — patlama
             // ve oran — artık paylaşıyoruz: `gizmo::systems::render::emit` (2026-11-02). Önceden
             // döngünün bir kopyasıydı.
@@ -833,7 +835,6 @@ pub fn execute_render_pipeline(
             renderer.run_post_processing(encoder, &game_view);
         }
     }
-    gizmo::systems::render::undo_camera_shake(world, shaken);
 }
 
 /// Draws the game camera's view of the scene into `output`, returning false if there is no game

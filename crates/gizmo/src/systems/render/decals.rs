@@ -14,7 +14,7 @@
 //!
 //! # Why it is in the facade
 //!
-//! Same reason as [`super::particles::spawn_from_emitters`]: it needs both halves and they live
+//! Same reason as [`super::particles::step_particle_emitters`]: it needs both halves and they live
 //! in different crates. `DecalState` is in `gizmo-renderer`, and `Transform` — which is where a
 //! decal *is* — is in `gizmo-physics-core`, which the renderer does not depend on. This is the
 //! lowest crate that can see both, and being `pub` is the point: the studio calls it rather than

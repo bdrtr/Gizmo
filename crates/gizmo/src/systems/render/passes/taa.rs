@@ -1,9 +1,17 @@
 use super::super::*;
 
+/// The TAA resolve, then the frame's debug lines over it when `debug_lines`.
+///
+/// A capture — a reflection probe's face, a mirror's view — passes `false`: debug lines are an
+/// overlay on the camera's picture, not something in the scene, and drawn into a capture they would
+/// stay baked into the probe's cube until its next recapture. (Before the draw read the lines
+/// without clearing them, the first draw of a frame consumed them, so a capture took the lines and
+/// the main view lost them; neither was meant.)
 pub fn record_taa_and_overlays(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &mut Renderer,
-    world: &mut World,
+    world: &World,
+    debug_lines: bool,
 ) {
     // ── TAA resolve: blend jittered HDR with clamped history ─────────────────
     if let Some(ref taa) = renderer.taa {
@@ -58,10 +66,13 @@ pub fn record_taa_and_overlays(
         }
     }
 
-    // Render Gizmos AFTER TAA to avoid ghosting/washing out dynamic overlays
-    if let Some(gizmos) = world.get_resource::<crate::renderer::Gizmos>() {
+    // Render Gizmos AFTER TAA to avoid ghosting/washing out dynamic overlays. What the frame's
+    // preparation took from the game's `Gizmos` (`GizmoFrame`): the draw reads it and leaves the
+    // game's lines alone — ending their frame is `prepare_frame`'s.
+    if let Some(frame) = world.get_resource::<crate::renderer::GizmoFrame>().filter(|_| debug_lines) {
+        let gizmos = frame.gizmos();
         if let Some(debug_renderer) = &mut renderer.debug_renderer {
-            debug_renderer.update(&renderer.queue, &gizmos);
+            debug_renderer.update(&renderer.queue, gizmos);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Gizmo Render Pass (Post-TAA)"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -93,40 +104,10 @@ pub fn record_taa_and_overlays(
         }
     }
 
-    end_gizmo_frame(world);
-
     // Advance TAA ping-pong and frame counter
     if let Some(ref mut taa) = renderer.taa {
         if taa.enabled {
             taa.advance_frame();
         }
-    }
-}
-
-/// This frame's debug lines are drawn; the last physics step's stay (`Gizmos::fixed_lines`)
-/// until the next step. This cleared everything, and only on frames that had stepped physics —
-/// so a line drawn every frame was drawn twice on every frame that had not.
-fn end_gizmo_frame(world: &crate::core::World) {
-    if let Some(mut gizmos) = world.get_resource_mut::<crate::renderer::Gizmos>() {
-        gizmos.clear();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    /// A frame that stepped no physics still ends its own lines.
-    #[test]
-    fn a_frame_without_a_physics_step_still_ends_its_lines() {
-        let mut world = crate::core::World::new();
-        world.insert_resource(gizmo_core::time::PhysicsTime::new(60));
-        world.insert_resource(crate::renderer::Gizmos::default());
-        for _ in 0..3 {
-            world
-                .get_resource_mut::<crate::renderer::Gizmos>()
-                .unwrap()
-                .draw_line(crate::math::Vec3::ZERO, crate::math::Vec3::X, [1.0; 4]);
-            super::end_gizmo_frame(&world);
-        }
-        assert_eq!(world.get_resource::<crate::renderer::Gizmos>().unwrap().vertex_count(), 0);
     }
 }

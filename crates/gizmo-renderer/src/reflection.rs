@@ -53,6 +53,11 @@ pub struct ReflectionProbeGpu {
     /// Where each slot was captured. A probe moved without a recapture keeps reflecting from here,
     /// so its parallax stays consistent with the picture it holds.
     pub captured_at: Vec<[f32; 3]>,
+    /// Which probe, and which of its [`capture_request`](crate::components::ReflectionProbe::capture_request)s,
+    /// each slot holds — `None` until the slot is first captured. A slot whose probe asks for a
+    /// different request is captured again. This is the renderer's own record: the draw path
+    /// never writes the probe component, so it can draw from a copy of the game world.
+    pub captured: Vec<Option<(gizmo_core::Entity, u64)>>,
     /// The parameters last uploaded to the lighting pass, so they are re-sent only when they change.
     pub uploaded: Vec<crate::irradiance::ReflectionSource>,
     /// Edge length of mip 0, in texels.
@@ -217,6 +222,7 @@ impl ReflectionProbeGpu {
             slots,
             owners: Vec::new(),
             captured_at: vec![[0.0; 3]; slots as usize],
+            captured: vec![None; slots as usize],
             uploaded: Vec::new(),
             size,
             mip_count,

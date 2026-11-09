@@ -715,8 +715,10 @@ mod tests {
             let ran = run_fixed_and_update(&mut world, &mut fixed, &mut update, dt, dt, |_| {});
             assert_eq!(ran.fixed_steps, steps);
             let mut g = world.get_resource_mut::<Gizmos>().unwrap();
-            assert_eq!(g.vertex_count(), 4, "{steps} steps: not one line per schedule");
-            g.clear(); // what the renderer does after drawing
+            // What the frame's preparation does before the draw: the draw gets this frame's lines
+            // and the game's `Gizmos` starts the next frame without them.
+            let drawn = g.take_frame();
+            assert_eq!(drawn.gizmos().vertex_count(), 4, "{steps} steps: not one line per schedule");
         }
     }
 }

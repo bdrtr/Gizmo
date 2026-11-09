@@ -15,7 +15,7 @@
 /// **without** a box is the background: it fills whatever the boxed probes leave uncovered, looked
 /// up by direction; with no such probe, that is the procedural sky. Particles and fluid are not
 /// captured.
-#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
 pub struct ReflectionProbe {
@@ -34,15 +34,51 @@ pub struct ReflectionProbe {
     /// How far inside its box, in metres, the probe fades in from nothing to full weight — the
     /// width of the blend at a doorway. 0.5 by default.
     pub blend_distance: f32,
-    /// Whether the current cube is up to date. Cleared by [`request_capture`](Self::request_capture);
-    /// not saved, so a loaded scene captures on its first frame.
-    #[serde(skip)]
-    pub captured: bool,
+    /// Which capture this probe asks for — bumped by [`request_capture`](Self::request_capture).
+    ///
+    /// **Every new probe starts at a value no other probe in the process has had** (`fresh_request`),
+    /// not at 0. The renderer keys what it captured by entity and request, and an entity handle can
+    /// come back bit-identical: after `World::clear_entities` the first spawn is `Entity(0, gen 0)`
+    /// again, so a level restarted in place would have its probes taken for the ones it replaced and
+    /// keep the old level's cubes. A component put on in place of another, on the same entity, is
+    /// new the same way. A copy (`Clone`, a render world's extraction) keeps the value, as it should.
+    /// Not saved: a loaded probe is a new one.
+    #[serde(skip, default = "fresh_request")]
+    capture_request: u64,
+}
+
+/// A request value no probe in this process has held: the start of a new probe.
+fn fresh_request() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    // Requests advance by one per `request_capture`, so new probes are spaced far apart.
+    static NEXT: AtomicU64 = AtomicU64::new(1 << 32);
+    NEXT.fetch_add(1 << 32, Ordering::Relaxed)
 }
 
 impl Default for ReflectionProbe {
     fn default() -> Self {
-        Self { resolution: 128, intensity: 1.0, near: 0.05, far: 500.0, influence: None, blend_distance: 0.5, captured: false }
+        Self {
+            resolution: 128,
+            intensity: 1.0,
+            near: 0.05,
+            far: 500.0,
+            influence: None,
+            blend_distance: 0.5,
+            capture_request: fresh_request(),
+        }
+    }
+}
+
+/// What the game authors, compared: the capture request is the renderer's business, so two probes
+/// built alike are equal whatever has been asked of either.
+impl PartialEq for ReflectionProbe {
+    fn eq(&self, other: &Self) -> bool {
+        self.resolution == other.resolution
+            && self.intensity == other.intensity
+            && self.near == other.near
+            && self.far == other.far
+            && self.influence == other.influence
+            && self.blend_distance == other.blend_distance
     }
 }
 
@@ -60,6 +96,41 @@ impl ReflectionProbe {
 
     /// Recaptures on the next frame.
     pub fn request_capture(&mut self) {
-        self.captured = false;
+        self.capture_request = self.capture_request.wrapping_add(1);
+    }
+
+    /// Which capture this probe asks for. The renderer keeps the request each probe was last
+    /// captured at (`ReflectionProbeGpu::captured`) and captures again when this differs — so a
+    /// request is seen and honoured once without the draw writing anything back into the
+    /// component, which is what lets it draw from a copy of the game world.
+    #[must_use]
+    pub fn capture_request(&self) -> u64 {
+        self.capture_request
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReflectionProbe;
+
+    /// A request is a new value the renderer has not captured at — each one distinct from the
+    /// last — and a new probe holds a value no earlier probe had, so it is captured on sight even
+    /// where it takes an earlier probe's exact entity handle.
+    #[test]
+    fn a_request_is_a_new_capture_request() {
+        let mut probe = ReflectionProbe::new();
+        let first = probe.capture_request();
+        probe.request_capture();
+        assert_ne!(probe.capture_request(), first);
+        let asked = probe.capture_request();
+        probe.request_capture();
+        assert_ne!(probe.capture_request(), asked);
+
+        let replacement = ReflectionProbe::new();
+        for seen in [first, asked, probe.capture_request()] {
+            assert_ne!(replacement.capture_request(), seen, "a new probe looks like an old one to the renderer");
+        }
+        assert_eq!(probe.clone().capture_request(), probe.capture_request(), "a copy is the same probe");
+        assert_eq!(replacement, ReflectionProbe::new(), "probes built alike compare equal");
     }
 }

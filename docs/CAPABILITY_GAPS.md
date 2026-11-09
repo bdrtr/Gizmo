@@ -841,12 +841,38 @@ Measured in `ecs_absent_apis`:
   types, entities arriving with the original's exact handle (`World::spawn_at`), only what changed
   since the last run copied, removals, despawns, recycled ids and a cleared original followed. Seen in
   `render_world`: the picture is drawn from the copy alone, and stopping the copy (Space) freezes it
-  while the game goes on. Not
-  yet wired: the render path still does simulation work (`prepare_frame`: clocks, tweens, cloth and
-  terrain meshes, material sync, skeletal and sprite animation, GPU physics readback; particle
-  emitters, `CameraShake`, `Typewriter`, `ReflectionProbe::captured`, `RenderStats`, `Gizmos`),
-  all of which writes state the game reads, so it has to move to the game's side before the render
-  path can read a copy.
+  while the game goes on. **Stage 2, 2026-11-09: the draw no longer writes the world.** The game
+  path is two public halves: `prepare_frame(&mut World, &mut Renderer)` does everything a frame
+  writes that the game can see (clocks — tweens, typewriters, the screen fade and now the
+  `CameraShake` clock —, terrain/cloth/soft-body meshes, transforms, material sync, skeletal and
+  sprite animation, bone attachments, GPU physics submit/readback, particle emitters, the
+  lifetime warning, the end of the debug-line frame), and `draw_frame(&World, …)` /
+  `draw_viewports(&World, …)` draw, writing only the `Renderer`, so the compiler holds them to it.
+  What the draw used to write moved: the shake is applied to a copy of the camera (`shake_view`)
+  instead of moving `Camera`/`Transform` and undoing it; emitters are stepped in the preparation
+  and this frame's spawns are the `ParticleSpawns` resource, replaced every frame, which the draw
+  uploads; the game's `Gizmos` lines are moved into a `GizmoFrame` resource the draw reads, where
+  the draw used to clear them; a probe's `captured` flag became a `capture_request` counter the
+  renderer compares with the request it last captured (`ReflectionProbeGpu::captured`);
+  `RenderStats` is kept in `Renderer::render_stats` and published by the caller
+  (`publish_render_stats`). The draw cannot clear what it reads, so it must not act twice on it:
+  `ParticleSpawns` is numbered and the particle system uploads a batch once (`spawn_batch`), and a
+  new `ReflectionProbe` starts at a request no earlier probe had, so a level restarted in place,
+  whose probe gets the old one's exact handle back after `clear_entities`, is still captured. Debug
+  lines are an overlay: probe faces and mirror views no longer draw them (the first draw of a frame
+  used to consume them, so a capture took them and the main view lost them). `default_render_pass` and `render_viewports` are the three calls in a
+  row, with the same pictures. Tested by `systems/render/frame_split_tests.rs`. `render_world` now prepares
+  the game world, extracts, and hands the copy to `draw_frame`. Not yet wired: no app owns a render
+  world (the demo's render hook makes the three calls itself), and `gizmo-studio`'s pipeline still
+  does its own per-frame work rather than calling `prepare_frame`. **What the draw still reads that a
+  copy cannot carry**, found in review and the next stage's work: `Handle<Mesh>`/`Handle<Material>`
+  are resolved through `Assets<Mesh>`/`Assets<Material>`, which are not `Clone` (they own a drop
+  queue); underwater fog asks `PhysicsWorld::water_at` (not `Clone`, and a whole physics world for
+  one point query); `VisibilityIndex` is consulted and its `Clone` is `unreachable!`. Each needs a
+  form the preparation hands over before an app can draw from a copy. One behaviour change, deliberate: an entity
+  parented to a shaking camera is no longer shaken with it (it was moved by the camera's shaken
+  `Transform` and left with that `GlobalTransform` after the undo; the camera's yaw and pitch shake
+  never reached it).
 - ~~**Component registration is typed.**~~ **Closed 2026-11-08:** `World::register_component(ComponentDescriptor::new(name,
   layout))` defines a component with no Rust type — drop and clone glue optional (`unsafe` `with_drop` / `with_clone`), table or
   sparse, mutable or not — and returns a `ComponentKey`, which is what storage, queries, hooks and the scheduler are keyed by for
@@ -1266,11 +1292,12 @@ their pedestals. What it found:
   and its look angles with it, and had to undo the offset itself — exactly, or the camera drifted.
   `CameraShake` (on the camera; in the prelude): `add(trauma)`, a smooth noise scaled by trauma²
   across the view (right/up offset, yaw, pitch), worn off at `decay` per second on the animation
-  clock. Both draw paths call `apply_camera_shake` before the transform pass and
-  `undo_camera_shake` after drawing, restoring the remembered `Transform`, angles and
-  `GlobalTransform` bit for bit rather than subtracting. Tested: capped trauma and wear-off,
-  trauma² bounded and continuous, the camera exactly back after fifty shaken frames, no motion
-  along the look axis; `render_parity` requires both calls in both paths. `poligon` kicks on every
+  clock. Since 2026-11-09 (A8 stage 2) the camera is never moved at all: `advance_camera_shakes`
+  runs with the frame clocks, and both draw paths build their view through `shake_view`, which
+  returns a shaken copy of the camera and its position and writes nothing (it used to apply the
+  shake to `Transform`/`Camera` and undo it after the draw). Tested: capped trauma and wear-off,
+  trauma² bounded and continuous, the camera bit-identical through fifty shaken frames, no motion
+  along the look axis; `render_parity` requires the clock and the view in both paths. `poligon` kicks on every
   shot and hit.
 
 ### C14. The sixth game: things that move smoothly (2026-11-02, `kaydirmaca`)

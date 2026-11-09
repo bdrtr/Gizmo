@@ -316,6 +316,12 @@ pub struct Renderer {
     /// How many objects the last view's occluders hid from the camera
     /// ([`Occluder`](crate::components::Occluder)); they drew nothing, or shadows only.
     pub occluded_objects: u32,
+    /// What the last view drawn cost — draw calls, instances, triangles, sampled GPU memory.
+    /// `None` until a view has been drawn. The draw writes it here rather than into the world it
+    /// draws from, which it only reads; whoever owns that world publishes it as the
+    /// [`RenderStats`](crate::components::RenderStats) resource (the engine's
+    /// `default_render_pass` does).
+    pub render_stats: Option<crate::components::RenderStats>,
     /// Every [`PlanarReflection`](crate::components::PlanarReflection)'s capture.
     pub planar: crate::planar::PlanarReflections,
     /// This view is itself a capture: mirrors are left out of it.

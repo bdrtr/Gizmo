@@ -54,7 +54,8 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
 - **Extensibility:** composites and named query terms go through `system_param!` and `query_data!`; a primitive parameter is an
   `unsafe impl SystemParam` and a primitive query term an `unsafe impl WorldQuery`, both written downstream as in Bevy (§C0). Components can be defined at runtime
   (`World::register_component`, `DynamicQuery`, `DynamicSystem` — §A8), and system bodies hot-patched while the game runs
-  (`hotpatching` + `dx serve --hot-patch`, §A8); there is no render world.
+  (`hotpatching` + `dx serve --hot-patch`, §A8); there is no render world yet — the game path's draw (`draw_frame`) reads the
+  world and writes only the renderer, after `prepare_frame` has done the frame's game-visible work, and `Extractor` keeps a copy (§A8).
 - **Editor:** `gizmo-studio` is a separate binary and cannot see a game's types; the in-engine
   editor can.
 

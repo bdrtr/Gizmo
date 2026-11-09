@@ -251,7 +251,7 @@ pub use csm::{
     compute_directional_cascades_with, shadow_distance_fade, ShadowCascades, ShadowSettings, CASCADE_COUNT, CASCADE_LAMBDA, SHADOW_DISTANCE,
     SHADOW_FADE_FRACTION, SHADOW_MAP_RES,
 };
-pub use debug_renderer::{GizmoRendererSystem, Gizmos};
+pub use debug_renderer::{GizmoFrame, GizmoRendererSystem, Gizmos};
 pub use decal::DecalState;
 pub use draw_order::{batch_depth, sort_back_to_front};
 pub use deferred::{

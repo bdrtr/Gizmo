@@ -26,6 +26,8 @@ pub struct GpuParticleSystem {
     pub ring_head: std::sync::atomic::AtomicU32,
     /// When the last particle spawned so far dies — see [`is_idle`](Self::is_idle).
     clock: std::sync::Mutex<ParticleClock>,
+    /// The last batch [`spawn_batch`](Self::spawn_batch) uploaded; 0 is none.
+    uploaded_batch: std::sync::atomic::AtomicU64,
     /// Simulation gravity (m/s²), subtracted from each particle's `velocity.y` every frame.
     /// Defaults to 9.81 (sparks and smoke fall). For horizontal flow or streamlines set it to
     /// `0.0`, so particles run straight instead of sagging (a wind tunnel, say). Changeable at
@@ -156,6 +158,7 @@ impl GpuParticleSystem {
             active_particles: max_particles,
             ring_head: std::sync::atomic::AtomicU32::new(0),
             clock: std::sync::Mutex::new(ParticleClock::default()),
+            uploaded_batch: std::sync::atomic::AtomicU64::new(0),
             gravity: 9.81,
             drag: 0.8,
             obstacles: Vec::new(),
@@ -322,6 +325,23 @@ impl GpuParticleSystem {
             0.0,
         ];
         queue.write_buffer(&self.flipbook_params_buffer, 0, bytemuck::cast_slice(&fb));
+    }
+
+    /// [`spawn_particles`](Self::spawn_particles) for a numbered batch, **once**: a batch already
+    /// uploaded is skipped, and the return says whether this call uploaded it.
+    ///
+    /// Spawning is not idempotent — every call advances the ring head and writes new particles — and
+    /// the batch is read from a world the draw does not write: a frame drawn twice (a split screen,
+    /// a test drawing the same prepared frame again) or drawn from a copy that was not refreshed
+    /// would otherwise put the same particles out every time. `batch` must be new per frame of
+    /// spawns and never 0.
+    pub fn spawn_batch(&self, queue: &wgpu::Queue, batch: u64, new_particles: &[GpuParticle]) -> bool {
+        use std::sync::atomic::Ordering;
+        if self.uploaded_batch.swap(batch, Ordering::Relaxed) == batch {
+            return false;
+        }
+        self.spawn_particles(queue, new_particles);
+        true
     }
 
     /// Writes new particles at the ring head, wrapping — a spawn larger than the remaining tail

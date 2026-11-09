@@ -779,7 +779,8 @@ impl Default for FixedPhysics {
 /// Plugins the game adds go in with [`add_plugin`](Self::add_plugin): their fixed-step systems
 /// run as many times as the frame's time owes and their per-frame systems once, before the hook —
 /// the windowed loop's order. After the hook it advances the clocks the draw path would (tweens,
-/// typewriters, the screen fade). What it does **not** do: fire the event double-buffer swap,
+/// typewriters, camera shakes, the screen fade) and ends the frame's debug lines, as
+/// [`prepare_frame`](crate::systems::render::prepare_frame) does. What it does **not** do: fire the event double-buffer swap,
 /// load assets or draw.
 #[non_exhaustive]
 pub struct HeadlessFrames {
@@ -846,6 +847,9 @@ impl HeadlessFrames {
         // What the draw path advances once a frame and game logic waits on: tweens, typewriters,
         // the screen fade (`zindan` takes the stairs when its fade has gone dark).
         crate::systems::render::advance_frame_clocks(&mut self.world);
+        // And the frame's debug lines end, as `prepare_frame` ends them before a draw: a line drawn
+        // every frame is one line, not one more per frame for the whole run.
+        crate::systems::render::end_debug_line_frame(&mut self.world);
         // The windowed loop ends a frame by turning this frame's edges into history: a key pressed
         // between two frames is "just pressed" for one frame, then only held.
         self.input.begin_frame();

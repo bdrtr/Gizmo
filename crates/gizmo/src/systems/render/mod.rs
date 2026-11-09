@@ -189,12 +189,13 @@ fn jitter_projection(mut proj: crate::math::Mat4, jx: f32, jy: f32) -> crate::ma
 }
 
 /// What this view costs, as the editor counts it (`gizmo-studio`'s render pipeline): one draw call
-/// per batch with camera-visible instances, triangles counted with their instances. Published as
-/// the world's [`RenderStats`](crate::renderer::components::RenderStats) resource, so a game can
-/// read its own draw-call count — before, only the editor filled it. Under split screen it holds
-/// the last view drawn. GPU memory is sampled about once a second, as the editor does, since the
-/// allocator report walks every live allocation.
-fn publish_render_stats(world: &mut World, renderer: &Renderer, items: &[batching::DrawItem], elapsed: f32) {
+/// per batch with camera-visible instances, triangles counted with their instances. Kept in
+/// [`Renderer::render_stats`] — the draw only reads the world — and published to the world as the
+/// [`RenderStats`](crate::renderer::components::RenderStats) resource by [`publish_render_stats`],
+/// so a game can read its own draw-call count — before, only the editor filled it. Under split
+/// screen it holds the last view drawn. GPU memory is sampled about once a second, as the editor
+/// does, since the allocator report walks every live allocation.
+fn record_render_stats(renderer: &mut Renderer, items: &[batching::DrawItem], elapsed: f32) {
     use crate::renderer::components::RenderStats;
     let mut stats = RenderStats::default();
     for item in items.iter().filter(|i| i.visible_in_camera && i.camera_count > 0) {
@@ -203,8 +204,8 @@ fn publish_render_stats(world: &mut World, renderer: &Renderer, items: &[batchin
         let indices = if item.ibuf.is_some() { item.index_count } else { item.vertex_count };
         stats.triangles += (indices / 3) * item.camera_count;
     }
-    let previous = world
-        .get_resource::<RenderStats>()
+    let previous = renderer
+        .render_stats
         .map(|r| (r.gpu_allocated_bytes, r.gpu_sampled_at))
         .unwrap_or((None, f32::NEG_INFINITY));
     if elapsed - previous.1 >= 1.0 {
@@ -214,13 +215,31 @@ fn publish_render_stats(world: &mut World, renderer: &Renderer, items: &[batchin
         stats.gpu_allocated_bytes = previous.0;
         stats.gpu_sampled_at = previous.1;
     }
-    world.insert_resource(stats);
+    renderer.render_stats = Some(stats);
+}
+
+/// Publishes what the last view drawn cost ([`Renderer::render_stats`]) as `world`'s
+/// [`RenderStats`](crate::renderer::components::RenderStats) resource. The draw cannot do it — it
+/// takes the world it draws read-only — so the caller that owns the world does, after the draw:
+/// [`default_render_pass`] and [`render_viewports`] call it. Nothing is published before a view
+/// has been drawn.
+pub fn publish_render_stats(world: &mut World, renderer: &Renderer) {
+    if let Some(stats) = renderer.render_stats {
+        world.insert_resource(stats);
+    }
 }
 
 /// A batteries-included render path, serving only to light the models and put them on screen
 /// quickly.
 /// It is used to avoid writing hundreds of lines of code in freshly opened, empty projects
 /// like `tut`.
+///
+/// **Two halves and a hand-over**: [`prepare_frame`] does everything a frame does once that
+/// writes what the game can see (clocks, transforms, materials, animation, particle emitters, the
+/// debug-line frame); [`draw_frame`] draws, reading the world and writing only the renderer; and
+/// [`publish_render_stats`] puts what the draw cost back into the world. A host that draws from a
+/// copy of its world (`gizmo_core::extract::Extractor`) calls the three itself, preparing the
+/// original and drawing the copy.
 #[tracing::instrument(skip_all, name = "render_system")]
 pub fn default_render_pass(
     world: &mut World,
@@ -228,29 +247,36 @@ pub fn default_render_pass(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
-    // A `DespawnAfter` with no `LifetimePlugin` used to pile entities up in silence; say so, once.
-    crate::systems::lifetime::warn_if_inert(world);
-    // **Split screen is this same call.** A scene with any camera that has a `viewport` is drawn
-    // by `render_viewports`, one view per such camera; every host that already calls this —
-    // `SimpleApp`, the editor's game view, a hand-written render loop — gets it without a second
-    // entry point to know about.
-    //
-    // A `CameraShake` moves the camera for this frame's picture only: applied before the transform
-    // pass, undone after the draw, on the animation clock.
-    let shake_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
-    let shaken = apply_camera_shake(world, shake_dt);
+    prepare_frame(world, renderer);
+    draw_frame(world, encoder, view, renderer);
+    publish_render_stats(world, renderer);
+}
+
+/// Draws one frame of `world` into `view`, reading the world and writing only the renderer — the
+/// half of [`default_render_pass`] after [`prepare_frame`].
+///
+/// **Split screen is this same call.** A scene with any camera that has a `viewport` is drawn by
+/// [`draw_viewports`], one view per such camera; every host that already calls this —
+/// `SimpleApp`, the editor's game view, a hand-written render loop — gets it without a second
+/// entry point to know about.
+///
+/// A `CameraShake` is in the picture and nowhere else: the draw shakes its view of the camera
+/// ([`shake_view`]) and never moves the camera the game owns.
+pub fn draw_frame(
+    world: &World,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    renderer: &mut Renderer,
+) {
     if any_camera_has_a_viewport(world) {
-        render_viewports_unshaken(world, encoder, view, renderer);
-    } else {
-        prepare_frame(world, renderer);
-        capture_reflection_probes(world, renderer);
-        let camera = crate::renderer::components::active_camera(world);
-        let lods =
-            step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
-        capture_planar_reflections(world, renderer, camera, lods);
-        draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
+        draw_viewports(world, encoder, view, renderer);
+        return;
     }
-    undo_camera_shake(world, shaken);
+    capture_reflection_probes(world, renderer);
+    let camera = crate::renderer::components::active_camera(world);
+    let lods = step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
+    capture_planar_reflections(world, renderer, camera, lods);
+    draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
 }
 
 /// Whether any camera in `world` asks for a [`Viewport`](crate::renderer::components::Viewport).
@@ -262,7 +288,8 @@ fn any_camera_has_a_viewport(world: &World) -> bool {
 /// **Split screen:** every camera with a [`viewport`](crate::renderer::components::Camera::viewport)
 /// drawn into its own rectangle of `view`, in [`order`](crate::renderer::components::Camera::order),
 /// then this frame's HUD once over the whole target. With no such camera this is
-/// [`default_render_pass`] (which also comes here by itself when one exists).
+/// [`default_render_pass`] (which also comes here by itself when one exists): [`prepare_frame`],
+/// [`draw_viewports`], [`publish_render_stats`].
 ///
 /// What a view gets of its own, and why each one is needed:
 /// - **its camera, at its rectangle's aspect** — the scene is rendered at the renderer's full
@@ -287,15 +314,15 @@ pub fn render_viewports(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
-    let shake_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
-    let shaken = apply_camera_shake(world, shake_dt);
-    render_viewports_unshaken(world, encoder, view, renderer);
-    undo_camera_shake(world, shaken);
+    prepare_frame(world, renderer);
+    draw_viewports(world, encoder, view, renderer);
+    publish_render_stats(world, renderer);
 }
 
-/// [`render_viewports`] without the camera shake, which its callers have already applied.
-fn render_viewports_unshaken(
-    world: &mut World,
+/// The draw half of [`render_viewports`]: reads `world`, writes only the renderer. A frame with no
+/// camera rectangle is drawn whole, through the active camera.
+pub fn draw_viewports(
+    world: &World,
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
@@ -314,7 +341,6 @@ fn render_viewports_unshaken(
         }
     }
     if views.is_empty() {
-        prepare_frame(world, renderer);
         capture_reflection_probes(world, renderer);
         let camera = crate::renderer::components::active_camera(world);
         let lods =
@@ -325,7 +351,6 @@ fn render_viewports_unshaken(
     views.sort_by_key(|&(order, id, _)| (order, id));
     let size = view.texture().size();
 
-    prepare_frame(world, renderer);
     capture_reflection_probes(world, renderer);
     let positions: Vec<Vec3> =
         views.iter().map(|&(_, id, _)| camera_world_position(world, Some(id))).collect();
@@ -382,7 +407,12 @@ fn render_viewports_unshaken(
 /// `default_render_pass` calls it every frame (it returns at once when nothing needs capturing).
 /// **`gizmo-studio` calls it too**, before its own passes: the capture draws the world through this
 /// path, which skips `EditorOnly` furniture, so the editor's probes match the game's.
-pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
+///
+/// Draw-side: it reads the world and writes only the renderer. Which request each slot was captured
+/// at is the renderer's record ([`ReflectionProbeGpu::captured`](crate::renderer::reflection::ReflectionProbeGpu::captured)),
+/// compared with the probe's [`capture_request`](crate::renderer::components::ReflectionProbe::capture_request) —
+/// the probe component is never written back, so a copy of the world draws its probes the same way.
+pub fn capture_reflection_probes(world: &World, renderer: &mut Renderer) {
     use crate::renderer::components::ReflectionProbe;
     // The forward-only path reads its probes on group 0 (`SceneState::set_forward_reflections`) and takes
     // an environment map through its own cube (`SceneState::set_environment_map`), so a map takes no slot
@@ -432,7 +462,12 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
         gpu.owners = owner_ids;
         renderer.reflection_probe = Some(gpu);
     }
-    let pending: Vec<usize> = (0..probes.len()).filter(|&slot| rebuild || !probes[slot].1.captured).collect();
+    // A slot is captured when it holds nothing yet, another probe, or an older request of this one.
+    let asked = |slot: usize| Some((probes[slot].0, probes[slot].1.capture_request()));
+    let pending: Vec<usize> = {
+        let held = renderer.reflection_probe.as_ref().map_or(&[][..], |g| g.captured.as_slice());
+        (0..probes.len()).filter(|&slot| rebuild || held.get(slot).copied().flatten() != asked(slot)).collect()
+    };
     let positions: Vec<Vec3> = owners.iter().map(|&id| camera_world_position(world, Some(id))).collect();
 
     // The image goes in ahead of any probe, whose capture will show it behind the scene.
@@ -459,6 +494,7 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
         let probe = probes[slot].1;
         if let Some(gpu) = renderer.reflection_probe.as_mut() {
             gpu.captured_at[slot] = positions[slot].to_array();
+            gpu.captured[slot] = asked(slot);
         }
         for face in 0..FACES {
             let (forward, up) = crate::renderer::reflection::face_basis(face);
@@ -531,21 +567,13 @@ pub fn capture_reflection_probes(world: &mut World, renderer: &mut Renderer) {
     if pending.is_empty() {
         return;
     }
-    {
-        let mut stored = world.query_mut::<&mut ReflectionProbe>();
-        for &slot in &pending {
-            if let Some(mut p) = stored.get_mut(owners[slot]) {
-                p.captured = true;
-            }
-        }
-    }
     tracing::debug!(captured = pending.len(), probes = owners.len(), size, "[Render] reflection probes captured");
 }
 
 /// Draws the scene again for each [`PlanarReflection`] the camera can see from the front, into that
 /// mirror's texture, before the frame's own draw. A mirror out of view or seen from behind costs
 /// nothing and draws plain this frame. See [`crate::renderer::planar`].
-fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera: Option<Entity>, lods: (f32, f32)) {
+fn capture_planar_reflections(world: &World, renderer: &mut Renderer, camera: Option<Entity>, lods: (f32, f32)) {
     use crate::renderer::components::PlanarReflection;
     use crate::renderer::planar::{oblique_projection, reflect_direction, reflect_point};
     renderer.planar.begin_frame();
@@ -554,16 +582,15 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
     let owners: Vec<Entity> = mirrors.iter().map(|m| m.0).collect();
     renderer.planar.retain(&owners.iter().map(|e| e.id()).collect::<Vec<_>>());
     let Some(camera) = camera.filter(|_| !mirrors.is_empty()) else { return };
-    let Some(cam) = world.query::<&Camera>().get(camera).copied() else { return };
-
-    let eye = camera_world_position(world, Some(camera));
+    // The camera as this frame draws it — shaken, if it shakes — so the mirror shakes with the view.
+    let Some((cam, eye)) = drawn_camera(world, camera) else { return };
     let aspect = renderer.size.width as f32 / renderer.size.height.max(1) as f32;
     let projection = cam.get_projection(aspect);
     let forward = cam.get_front();
     let up = cam.get_right().cross(forward);
     let frustum = crate::math::Frustum::from_matrix(&(projection * cam.get_view(eye)));
 
-    // Which mirrors, decided before anything is drawn: a capture takes `world` mutably.
+    // Which mirrors, decided before anything is drawn.
     let visible: Vec<(Entity, gizmo_math::Vec4)> = {
         let transforms = world.query::<&gizmo_physics_core::components::GlobalTransform>();
         let meshes = world.query::<&crate::renderer::components::Mesh>();
@@ -655,29 +682,48 @@ fn capture_planar_reflections(world: &mut World, renderer: &mut Renderer, camera
     renderer.previous_view_proj = history;
 }
 
-/// Where `camera` is in the world: its synced `GlobalTransform`, else its own `Transform`, else the
-/// origin — the same fallback the camera's view matrix is built with, so the level of detail and
-/// the picture never disagree about where the camera stands.
+/// Where `camera` is in the world, as this frame draws it: [`drawn_camera`]'s position for a
+/// camera, [`placed_at`] for anything else (a reflection probe) — so the level of detail and the
+/// picture never disagree about where the camera stands.
 fn camera_world_position(world: &World, camera: Option<Entity>) -> Vec3 {
     let Some(camera) = camera else {
         return Vec3::ZERO;
     };
+    drawn_camera(world, camera).map_or_else(|| placed_at(world, camera), |(_, at)| at)
+}
+
+/// The camera `id` as this frame draws it — its `Camera` and where it stands, with this instant's
+/// [`CameraShake`](crate::renderer::components::CameraShake) applied to both ([`shake_view`]).
+/// `None` when `id` is not a camera. Every view of a camera is built from this, and it writes
+/// nothing: the camera the game owns stays where the game put it.
+fn drawn_camera(world: &World, id: Entity) -> Option<(Camera, Vec3)> {
+    let camera = world.query::<&Camera>().get(id).copied()?;
+    Some(shake_view(world, id, &camera, placed_at(world, id)))
+}
+
+/// Where entity `id` is: its synced `GlobalTransform`, else its own `Transform`, else the origin.
+///
+/// The `Transform` fallback matters: a hand-built camera that only got a Transform + Camera (no
+/// GlobalTransform) was silently skipped and the view stuck at the origin — nothing read the
+/// Transform that gameplay/WASD moved. A custom App may not register the transform systems at all,
+/// so a camera's GlobalTransform is easily missing or a frame stale.
+fn placed_at(world: &World, id: Entity) -> Vec3 {
     world
         .query::<&gizmo_physics_core::components::GlobalTransform>()
-        .get(camera)
+        .get(id)
         .map(|g| g.matrix.to_scale_rotation_translation().2)
         .or_else(|| {
             world
                 .query::<&gizmo_physics_core::components::Transform>()
-                .get(camera)
+                .get(id)
                 .map(|t| t.position)
         })
         .unwrap_or(Vec3::ZERO)
 }
 
-/// The per-frame clocks a game can see, advanced once a frame: tweens, colour tweens and
-/// typewriters on the animation clock (so time scale and pause apply), the screen fade on the
-/// real frame time (a fade into a pause menu must not stop with the game it is covering).
+/// The per-frame clocks a game can see, advanced once a frame: tweens, colour tweens, typewriters
+/// and camera shakes on the animation clock (so time scale and pause apply), the screen fade on
+/// the real frame time (a fade into a pause menu must not stop with the game it is covering).
 ///
 /// They live with drawing because they are what moves on screen, but game logic waits on them —
 /// a level that changes when the fade has gone dark, a door that opens when its tween ends — so a
@@ -689,13 +735,22 @@ pub fn advance_frame_clocks(world: &mut World) {
     crate::renderer::tween::tween_system(world, tween_dt);
     crate::renderer::components::color_tween_system(world, tween_dt);
     typewriter_system(world, tween_dt);
+    // The trauma wearing off is game state (`CameraShake::trauma`); the shaken view is the draw's.
+    advance_camera_shakes(world, tween_dt);
     let real_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.raw_dt()).unwrap_or(0.0);
     crate::renderer::screen_fade::screen_fade_system(world, real_dt);
 }
 
-/// The part of a frame that happens **once**, however many cameras then draw it: meshes for
-/// terrains, transforms, materials, animation, bone attachments, the CPU side of GPU physics.
-fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
+/// The part of a frame that happens **once**, however many cameras then draw it, and **everything a
+/// frame writes that the game can see**: meshes for terrains, cloth and soft bodies, the frame
+/// clocks ([`advance_frame_clocks`]: tweens, typewriters, camera shakes, the screen fade),
+/// transforms, materials, animation, bone attachments, the CPU side of GPU physics, particle
+/// emitters ([`ParticleSpawns`]) and the end of the debug-line frame ([`GizmoFrame`](crate::renderer::GizmoFrame)).
+///
+/// After it, [`draw_frame`] needs the world only to read — so it can be given a copy of this one.
+pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
+    // A `DespawnAfter` with no `LifetimePlugin` used to pile entities up in silence; say so, once.
+    crate::systems::lifetime::warn_if_inert(world);
     // One step of object-motion history per frame, however many views then draw it.
     renderer.motion_history.begin_frame();
     // **A terrain is a recipe, and the mesh built from it is what gets drawn.** A loaded scene
@@ -785,13 +840,44 @@ fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
         gpu_physics_readback_system(world, renderer);
     }
 
+    // **Particle emitters**, stepped here and not in the draw: an emitter's burst is taken and its
+    // timer runs, which is the game's state. What they put out this frame is `ParticleSpawns`, which
+    // the draw uploads. Only with a GPU particle system to receive it — without one an emitter
+    // keeps its burst, as it always has.
+    if renderer.gpu_particles.is_some() {
+        let dt = world.get_resource::<gizmo_core::time::Time>().map_or(0.016, |t| t.dt());
+        step_particle_emitters(world, dt);
+    } else {
+        world.remove_resource::<ParticleSpawns>();
+    }
+
+    // **The debug-line frame ends here**, before the draw — see `end_debug_line_frame`.
+    end_debug_line_frame(world);
+}
+
+/// Ends the frame's debug lines: what the game drew into [`Gizmos`](crate::renderer::Gizmos) this
+/// frame is moved into the [`GizmoFrame`](crate::renderer::GizmoFrame) resource the draw reads, and
+/// the game's `Gizmos` starts the next frame empty — the last fixed step's lines stay until the next
+/// step (see `Gizmos`). With no `Gizmos` there is no frame to draw.
+///
+/// The draw used to clear the game's lines after drawing them, which is a write into the game's
+/// world. [`prepare_frame`] calls this, and so does [`HeadlessFrames`](crate::simple::HeadlessFrames):
+/// a frame played without drawing still ends its lines, where they used to pile up for the whole run.
+pub(crate) fn end_debug_line_frame(world: &mut World) {
+    let lines = world.get_resource_mut::<crate::renderer::Gizmos>().map(|mut g| g.take_frame());
+    match lines {
+        Some(frame) => world.insert_resource(frame),
+        None => {
+            world.remove_resource::<crate::renderer::GizmoFrame>();
+        }
+    }
 }
 
 /// GPU simulation for the frame — physics, fluid, particles — recorded into `encoder` once.
 /// `cam_positions` are the cameras about to draw; the nearest sets the level of detail.
 /// Returns `(particle_lod, fluid_lod)` for the draws.
 fn step_gpu_simulations(
-    world: &mut World,
+    world: &World,
     encoder: &mut wgpu::CommandEncoder,
     renderer: &mut Renderer,
     cam_positions: &[Vec3],
@@ -864,11 +950,15 @@ fn step_gpu_simulations(
             .map(|t| (t.dt(), t.elapsed() as f32))
             .unwrap_or((0.016, 0.0));
         particles.update_params(&renderer.queue, dt, time); // time → curl-noise evrimi
-        // Fill it from the scene. Without this the engine steps and draws a particle set that
-        // nothing ever puts anything into: the emitter-to-GPU bridge existed only inside
-        // `gizmo-studio`, so a `ParticleEmitter` on an entity emitted nothing for anyone using
-        // this pass. See `particles.rs`.
-        spawn_from_emitters(world, particles, &renderer.queue, dt);
+        // Fill it from the scene: what `prepare_frame` stepped out of the emitters this frame.
+        // Without this the engine steps and draws a particle set that nothing ever puts anything
+        // into: the emitter-to-GPU bridge existed only inside `gizmo-studio`, so a
+        // `ParticleEmitter` on an entity emitted nothing for anyone using this pass. See
+        // `particles.rs`.
+        if let Some(spawns) = world.get_resource::<ParticleSpawns>() {
+            // Once per batch: the draw reads this, it does not clear it (see `ParticleSpawns`).
+            particles.spawn_batch(&renderer.queue, spawns.batch(), spawns.particles());
+        }
         // Nothing alive: no dispatch over the whole ring (see `GpuParticleSystem::is_idle`).
         if !particles.is_idle() {
             particles.compute_pass(encoder, active_parts);
@@ -898,7 +988,7 @@ struct FixedView {
 /// With `capture`, that fixed view replaces the camera and the frame ends in the HDR target.
 #[allow(clippy::too_many_arguments)]
 fn draw_camera_view(
-    world: &mut World,
+    world: &World,
     encoder: &mut wgpu::CommandEncoder,
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
@@ -945,47 +1035,22 @@ fn draw_camera_view(
     let grade = camera.and_then(|c| shared::camera_grade(world, c));
 
     // KAMERALARI BUL VE MATRIX YARAT
-    let cameras = world.query::<&Camera>();
-    let global_transforms = world.query::<&gizmo_physics_core::components::GlobalTransform>();
-    let local_transforms = world.query::<&gizmo_physics_core::components::Transform>();
-    {
-        // Pick the camera flagged `primary` — the convention maintained by
-        // `spawn_camera`/`CameraBundle` (which keep a single primary) and used by
-        // the audio listener. Fall back to the first camera if none is marked.
-        // This makes selection deterministic instead of depending on the
-        // (unstable) ECS iteration order.
-        //
-        // Through `components::active_camera` rather than written out here, because the editor's
-        // environment panel and `shared::active_camera_grade` need the same answer and the panel
-        // sits below this crate. A second copy of the rule is a second answer to "which camera is
-        // the scene's", and this file has the history to show what that costs.
-        let active_cam = camera;
-        if let Some(active_cam) = active_cam {
-            if let Some(cam) = cameras.get(active_cam) {
-                // Camera world position: prefer a synced GlobalTransform (needed when the
-                // camera is parented), but fall back to the camera's own Transform.position
-                // when it has none. Without the fallback a hand-built camera that only got
-                // a Transform + Camera (no GlobalTransform) was silently skipped and the
-                // view stuck at the origin — nothing read the Transform that gameplay/WASD
-                // moved. The transform-propagate system runs in the fixed-step schedule
-                // BEFORE the user update, and a custom App may not register it at all, so
-                // a camera's GlobalTransform is easily missing or a frame stale; the
-                // Transform is written right before render and is always current.
-                let pos = global_transforms
-                    .get(active_cam)
-                    .map(|g| g.matrix.to_scale_rotation_translation().2)
-                    .or_else(|| local_transforms.get(active_cam).map(|t| t.position))
-                    .unwrap_or(Vec3::ZERO);
-                proj = cam.get_projection(aspect);
-                view_mat = cam.get_view(pos);
-                cam_pos = pos;
-                cam_forward = cam.get_front();
-                cam_exposure = cam.exposure;
-                cam_near = cam.near;
-                cam_far = cam.far;
-                cam_fov = cam.fov;
-            }
-        }
+    //
+    // `camera` is the one the caller resolved through `components::active_camera` (the camera
+    // flagged `primary`, else the first) or a split-screen view's own. A second copy of the rule is
+    // a second answer to "which camera is the scene's", and this file has the history to show what
+    // that costs. Where it stands and how it looks come from `drawn_camera`: its synced
+    // `GlobalTransform`, else its `Transform` (a camera with no `GlobalTransform` was silently
+    // stuck at the origin), with this instant's shake — read, never written into the camera.
+    if let Some((cam, pos)) = camera.and_then(|id| drawn_camera(world, id)) {
+        proj = cam.get_projection(aspect);
+        view_mat = cam.get_view(pos);
+        cam_pos = pos;
+        cam_forward = cam.get_front();
+        cam_exposure = cam.exposure;
+        cam_near = cam.near;
+        cam_far = cam.far;
+        cam_fov = cam.fov;
     }
     if let Some(fixed) = capture {
         cam_near = fixed.near;
@@ -1253,7 +1318,7 @@ fn draw_camera_view(
     // instanced batches and upload the instance buffer. Lives in `batching.rs`.
     let (draw_items, uploaded_instances) =
         batching::collect_draw_items(world, renderer, unjittered_view_proj, setup.cascade_view_projs, cam_pos);
-    publish_render_stats(world, renderer, &draw_items, elapsed_time);
+    record_render_stats(renderer, &draw_items, elapsed_time);
 
     // The GPU-physics cull reads the view's camera, so it is per view; its simulation is not.
     if let Some(physics) = &renderer.gpu_physics {
@@ -1337,7 +1402,7 @@ fn draw_camera_view(
     if let Some(ref mut ssgi) = renderer.ssgi {
         ssgi.advance_frame();
     }
-    passes::record_taa_and_overlays(encoder, renderer, world);
+    passes::record_taa_and_overlays(encoder, renderer, world, capture.is_none());
     // After the overlays and before post-processing: sprites and text are overlays too, and the
     // ones whose smear a temporal resolve makes most obvious. Sprites first, so a HUD label lands
     // on its HUD image; with the UNJITTERED matrix, so a sprite drawn past TAA does not shimmer.
@@ -1398,13 +1463,13 @@ mod decals;
 pub use decals::{collect_decals, record_forward_decals};
 
 mod particles;
-pub use particles::{emit, spawn_from_emitters};
+pub use particles::{emit, step_particle_emitters, ParticleSpawns};
 
 mod sprite;
 pub use sprite::record_sprites;
 
 mod shake;
-pub use shake::{apply_camera_shake, undo_camera_shake, ShakeUndo};
+pub use shake::{advance_camera_shakes, shake_view};
 
 mod text;
 pub use text::{record_text, typewriter_system, Typewriter};
@@ -1417,6 +1482,9 @@ pub use shared::{
     active_camera_grade, collect_scene_lights, collect_scene_setup, sync_irradiance_volume, SceneLights,
     SceneSetup, SceneSetupInputs, ShadowCaster,
 };
+
+#[cfg(test)]
+mod frame_split_tests;
 
 #[cfg(test)]
 mod taa_jitter_tests {
@@ -5277,8 +5345,10 @@ mod golden_render_tests {
             world.spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), ReflectionProbe::new()));
             world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 3.0), primary: true, ..Default::default() });
             render_world(&mut renderer, &mut world).await;
-            assert!(
-                world.query::<(Entity, &ReflectionProbe)>().iter().all(|(_, p)| p.captured),
+            let probe = world.query::<(Entity, &ReflectionProbe)>().iter().map(|(e, p)| (e, p.capture_request())).next();
+            assert_eq!(
+                renderer.reflection_probe.as_ref().and_then(|g| g.captured[0]),
+                probe,
                 "the probe did not capture on its first frame"
             );
             // Slot 0 of the cube array, as a plain cube.
@@ -9816,7 +9886,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     /// **A `ParticleEmitter` has to produce particles anyone can see.**
     ///
     /// The emitter-to-GPU bridge is young and was missing for everyone outside the studio once
-    /// already (see `spawn_from_emitters`), and the particle system is one of two GPU subsystems
+    /// already (see `step_particle_emitters`), and the particle system is one of two GPU subsystems
     /// this path builds for *every* renderer whether the scene wants them or not. Measured on the
     /// way in: with no emitter in the world, switching the particle system off changes 0 of 65536
     /// bytes — it is idle, not idling loudly — and with one, it paints 197 pixels of 16384 after

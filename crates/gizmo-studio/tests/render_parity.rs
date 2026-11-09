@@ -885,10 +885,9 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             "sync_material_descriptions(",
             "tween_system(",
             "color_tween_system(",
-            "apply_camera_shake(",
+            "advance_camera_shakes(",
             "screen_fade_system(",
             "typewriter_system(",
-            "undo_camera_shake(",
         ] {
             assert!(
                 code.contains(driver),
@@ -913,6 +912,21 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         assert!(
             code.contains(clock),
             "the {path_name} path must derive `animation_dt` from the clock ({clock})"
+        );
+    }
+
+    // The shaken view: both paths build the camera they draw from through `shake_view`, which
+    // writes nothing. The editor does it where it builds its camera matrices (`viewpoint.rs`).
+    for (path_name, file) in [
+        ("editor", "crates/gizmo-studio/src/render_pipeline/viewpoint.rs"),
+        ("game", "crates/gizmo/src/systems/render/mod.rs"),
+    ] {
+        let src = std::fs::read_to_string(workspace.join(file)).expect("draw path source");
+        let code: String = code_only(&src).chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(
+            code.contains("shake_view("),
+            "the {path_name} path does not build its view through shake_view — a CameraShake would \
+             shake one picture and not the other"
         );
     }
 }

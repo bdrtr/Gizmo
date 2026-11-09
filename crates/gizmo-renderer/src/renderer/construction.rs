@@ -771,6 +771,7 @@ impl Renderer {
             bloom_energy_conserving: false,
             bloom_iterations: 1,
             occluded_objects: 0,
+            render_stats: None,
             planar: Default::default(),
             skip_mirrors: false,
             exposure: 1.15,

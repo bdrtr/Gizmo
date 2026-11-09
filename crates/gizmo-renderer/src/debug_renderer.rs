@@ -34,6 +34,21 @@ impl Gizmos {
         self.lines.clear();
     }
 
+    /// Ends a rendered frame and hands over what it draws: this frame's lines, moved out (so this
+    /// buffer starts the next frame empty, as [`clear`](Self::clear) leaves it), and a copy of the
+    /// last fixed step's, which stay here until the next step replaces them.
+    ///
+    /// The engine's frame preparation calls this once a frame and keeps the result as the
+    /// [`GizmoFrame`] resource; the draw reads that and never writes the game's `Gizmos`.
+    #[must_use = "the frame's lines are moved out: dropping them draws nothing"]
+    pub fn take_frame(&mut self) -> GizmoFrame {
+        GizmoFrame(Gizmos {
+            lines: std::mem::take(&mut self.lines),
+            fixed_lines: self.fixed_lines.clone(),
+            depth_test: self.depth_test,
+        })
+    }
+
     /// Ends a fixed step: what was drawn since the last frame or step becomes the step's lines,
     /// replacing the previous step's. Called by the frame loop after each step.
     pub fn end_fixed_step(&mut self) {
@@ -151,6 +166,24 @@ impl Gizmos {
         self.draw_line(corners_world[1], corners_world[5], color);
         self.draw_line(corners_world[2], corners_world[6], color);
         self.draw_line(corners_world[3], corners_world[7], color);
+    }
+}
+
+/// The debug lines one rendered frame draws, taken from the game's [`Gizmos`] by
+/// [`Gizmos::take_frame`] before the frame is drawn.
+///
+/// A resource of its own so the draw only reads: it used to clear the game's `Gizmos` after
+/// drawing them, which is a write into the world the game owns — and a draw that writes there
+/// cannot draw from a copy of that world. Replaced whole every frame, so nothing has to clear it.
+#[derive(Clone, Default)]
+pub struct GizmoFrame(Gizmos);
+
+impl GizmoFrame {
+    /// The lines to draw: the last fixed step's and this frame's, with the game's depth-test
+    /// setting.
+    #[must_use]
+    pub fn gizmos(&self) -> &Gizmos {
+        &self.0
     }
 }
 

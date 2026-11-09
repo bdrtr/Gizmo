@@ -1,18 +1,19 @@
 //! **Render world** — the picture is drawn from a copy of the game world, not from the game world.
 //!
 //! The game world spawns a cube every tenth of a second, keeps the newest 80, spins and orbits
-//! them. Every frame the render hook brings a second world up to date with
-//! `gizmo_core::extract::Extractor` and draws *that* with `default_render_pass`; the game world is
-//! never handed to the draw.
+//! them. Every frame the render hook prepares the game world (`prepare_frame`: clocks, transforms,
+//! materials — everything a frame writes that the game can see), brings a second world up to date
+//! with `gizmo_core::extract::Extractor`, and draws *that* with `draw_frame`, which takes the world
+//! read-only; the game world is never handed to the draw.
 //!
 //! - **Space** stops the copying. The game carries on (the left-hand counters keep moving), the
 //!   picture freezes on the last copy; press again and it jumps to where the game is.
 //! - Each cube also carries `Brain`, a component the extractor was not told about: the HUD shows
 //!   it on every cube in the game world and on none in the copy.
 //!
-//! This is stage 1 of CAPABILITY_GAPS A8: the copy works; the app does not yet own a render world,
-//! and the render path still does simulation work, which is why this scene keeps to meshes, lights
-//! and a camera.
+//! This is stage 2 of CAPABILITY_GAPS A8: the copy works and the draw only reads; the app does not
+//! yet own a render world, which is why the hook wires the three steps itself and this scene keeps
+//! to the component types it tells the extractor about.
 
 use gizmo::core::extract::Extractor;
 use gizmo::core::system::{IntoSystemConfig, Phase, ResMut};
@@ -123,6 +124,8 @@ fn main() {
             renderer.ssr = None;
             renderer.ssgi = None;
 
+            // The frame's game-visible work happens in the game world, before the copy is taken.
+            gizmo::systems::render::prepare_frame(world, renderer);
             let copying = world.get_resource::<Game>().is_some_and(|g| g.copying);
             let started = Instant::now();
             if copying {
@@ -140,8 +143,9 @@ fn main() {
             };
             world.insert_resource(report);
 
-            // The only world the draw sees.
-            gizmo::systems::default_render_pass(&mut render_world, encoder, view, renderer);
+            // The only world the draw sees — and only to read it.
+            gizmo::systems::render::draw_frame(&render_world, encoder, view, renderer);
+            gizmo::systems::render::publish_render_stats(world, renderer);
         })
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<Report>().map(|r| *r) else {

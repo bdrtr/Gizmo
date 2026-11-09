@@ -2,23 +2,31 @@
 //!
 //! # Why this file exists
 //!
-//! Everything else on the particle path was already here. `default_render_pass` calls
-//! `update_params` and `compute_pass` on `renderer.gpu_particles` every frame, and `passes/forward`
-//! draws the result. What nothing did was **put anything in it**: the engine simulated and drew a
-//! particle set that no scene ever populated, because the step that reads `ParticleEmitter`
-//! entities and spawns from them lived only inside `gizmo-studio`'s own render pipeline.
+//! Everything else on the particle path was already here. The draw path calls `update_params` and
+//! `compute_pass` on `renderer.gpu_particles` every frame, and `passes/forward` draws the result.
+//! What nothing did was **put anything in it**: the engine simulated and drew a particle set that
+//! no scene ever populated, because the step that reads `ParticleEmitter` entities and spawns from
+//! them lived only inside `gizmo-studio`'s own render pipeline.
 //!
 //! So an entity carrying a `ParticleEmitter` emitted nothing, for anyone using the engine's
 //! out-of-the-box pass. Same shape as `LodGroup` (visible only to studio) and as skeletal
 //! animation (systems written, exported, never scheduled) — see `docs/ENGINE.md`.
+//!
+//! # Two halves
+//!
+//! Stepping an emitter writes it — its burst is taken, its timer runs — so that is frame
+//! preparation's ([`step_particle_emitters`], from `prepare_frame`), and what it emits is kept as
+//! the [`ParticleSpawns`] resource, replaced every frame. The draw uploads what that resource
+//! holds and writes nothing back: it used to step the emitters itself, which made it a writer of
+//! the world it draws.
 //!
 //! # Why it is in the facade and not in `gizmo-renderer`
 //!
 //! It needs both halves and they live in different crates: `GpuParticleSystem` is in
 //! `gizmo-renderer`, and `Transform` — which is where an emitter *is* — is in
 //! `gizmo-physics-core`, which `gizmo-renderer` does not depend on. This is the lowest crate that
-//! can see both. Being `pub` is deliberate: studio calls this instead of keeping its own copy, so
-//! the two paths cannot drift.
+//! can see both. [`emit`] is `pub` because studio calls it instead of keeping its own copy of the
+//! rule, so the two paths cannot drift.
 //!
 //! # Randomness
 //!
@@ -33,7 +41,7 @@
 
 use gizmo_core::Entity;
 use crate::renderer::components::ParticleEmitter;
-use crate::renderer::gpu_particles::{GpuParticle, GpuParticleSystem};
+use crate::renderer::gpu_particles::GpuParticle;
 use gizmo_core::World;
 use gizmo_math::Vec3;
 use gizmo_physics_core::components::Transform;
@@ -50,67 +58,85 @@ const MAX_SPAWNS_PER_FRAME: u32 = 100;
 /// mistyped count does not stall a frame on a giant upload.
 const MAX_BURST: u32 = 4096;
 
-/// Advance every active emitter and spawn what it owes into the GPU particle system.
+/// The particles this frame's emitters put out, for the draw to upload into the GPU particle
+/// system. Written whole by [`step_particle_emitters`] every frame, never appended to, and numbered:
+/// the draw cannot clear it (it reads the world, it does not write it), so the GPU particle system
+/// remembers the last batch it uploaded and skips it when it comes round again — a frame drawn
+/// twice, or drawn from a copy of the world that was not refreshed, spawns nothing twice.
+#[derive(Clone, Debug)]
+pub struct ParticleSpawns {
+    batch: u64,
+    particles: Vec<GpuParticle>,
+}
+
+impl ParticleSpawns {
+    fn new(particles: Vec<GpuParticle>) -> Self {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        Self { batch: NEXT.fetch_add(1, Ordering::Relaxed), particles }
+    }
+
+    /// This frame's new particles, in emitter order.
+    #[must_use]
+    pub fn particles(&self) -> &[GpuParticle] {
+        &self.particles
+    }
+
+    /// Which batch this is: new every [`step_particle_emitters`], never 0, unique in the process.
+    #[must_use]
+    pub fn batch(&self) -> u64 {
+        self.batch
+    }
+}
+
+/// Advance every active emitter by `dt` and keep what it owes as this frame's [`ParticleSpawns`],
+/// replacing last frame's.
 ///
-/// Call once per frame, before the particle compute pass — the particles spawned here are stepped
-/// by that pass in the same frame.
-pub fn spawn_from_emitters(
-    world: &mut World,
-    particles: &GpuParticleSystem,
-    queue: &wgpu::Queue,
-    dt: f32,
-) {
-    // Collected through a read borrow that ends with this statement, so the mutable borrow below
-    // never coexists with a read borrow of the same storage.
-    let emitter_entities: Vec<Entity> = world.query::<(Entity, &ParticleEmitter)>().iter().map(|(entity, _)| entity).collect();
-    if emitter_entities.is_empty() {
-        return;
-    }
-
-    // SAFETY: exclusive `&mut World`; `ParticleEmitter` is a distinct component type from the
-    // read-only `Transform` borrow below, and the read borrow above is already dropped, so this
-    // mutable view never aliases another live access to the same storage.
-    let mut emitters = unsafe { world.query_unchecked::<&mut ParticleEmitter>() };
-    let transforms = world.query::<&Transform>();
-
-    // Seeded from the frame so successive frames differ, and mixed with the entity below so two
-    // emitters in the same frame do not emit in lockstep.
-    let frame = world
-        .get_resource::<gizmo_core::time::Time>()
-        .map_or(0, |t| t.frame());
+/// Call once per frame, before the draw — `prepare_frame` does. The draw uploads the spawns before
+/// its particle compute pass, so they are stepped in the same frame.
+pub fn step_particle_emitters(world: &mut World, dt: f32) {
+    // Where each emitter is, read before the emitters are borrowed for writing.
+    let placed: Vec<(Entity, Option<(Vec3, gizmo_math::Quat)>)> = {
+        let transforms = world.query::<&Transform>();
+        world
+            .query::<(Entity, &ParticleEmitter)>()
+            .iter()
+            .map(|(entity, _)| (entity, transforms.get(entity).map(|t| (t.position, t.rotation))))
+            .collect()
+    };
     let mut spawned = Vec::new();
-
-    for id in emitter_entities {
-        let Some(mut emitter) = emitters.get_mut(id) else {
-            continue;
-        };
-        if !emitter.is_active {
-            continue;
+    if !placed.is_empty() {
+        // Seeded from the frame so successive frames differ, and mixed with the entity below so
+        // two emitters in the same frame do not emit in lockstep.
+        let frame = world.get_resource::<gizmo_core::time::Time>().map_or(0, |t| t.frame());
+        let mut emitters = world.query_mut::<&mut ParticleEmitter>();
+        for (id, place) in placed {
+            let Some(mut emitter) = emitters.get_mut(id) else {
+                continue;
+            };
+            if !emitter.is_active {
+                continue;
+            }
+            // An emitter with no transform still emits, at its own local offset. It is a worse
+            // answer than a position but a much better one than silence, and it is what a caller
+            // who spawned a bare emitter almost certainly meant.
+            let origin = match place {
+                Some((position, rotation)) => position + rotation.mul_vec3(emitter.local_offset),
+                None => emitter.local_offset,
+            };
+            // One stream per (frame, emitter): the same frame replays the same sparks, and
+            // neighbouring emitters do not emit in lockstep.
+            let mut rng = gizmo_math::Rng::with_stream(frame, u64::from(id.id()));
+            emit(&mut emitter, origin, dt, &mut rng, &mut spawned);
         }
-
-        // An emitter with no transform still emits, at its own local offset. It is a worse answer
-        // than a position but a much better one than silence, and it is what a caller who spawned
-        // a bare emitter almost certainly meant.
-        let origin = match transforms.get(id) {
-            Some(t) => t.position + t.rotation.mul_vec3(emitter.local_offset),
-            None => emitter.local_offset,
-        };
-
-        // One stream per (frame, emitter): the same frame replays the same sparks, and neighbouring
-        // emitters do not emit in lockstep.
-        let mut rng = gizmo_math::Rng::with_stream(frame, u64::from(id.id()));
-        emit(&mut emitter, origin, dt, &mut rng, &mut spawned);
     }
-
-    if !spawned.is_empty() {
-        particles.spawn_particles(queue, &spawned);
-    }
+    world.insert_resource(ParticleSpawns::new(spawned));
 }
 
 /// What one emitter puts out this frame, appended to `out`: its pending
 /// [`burst`](ParticleEmitter::burst) all at once, then what its `spawn_rate` owes for `dt`.
 ///
-/// The one place the emission rule lives, so the game's draw path ([`spawn_from_emitters`]) and the
+/// The one place the emission rule lives, so the game's frame ([`step_particle_emitters`]) and the
 /// studio's agree. They used to be two copies of the loop — the studio's comment said "the two
 /// must change together" — and a burst added to one would have been a burst in one picture only.
 pub fn emit(
