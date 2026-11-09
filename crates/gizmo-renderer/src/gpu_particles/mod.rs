@@ -5,5 +5,5 @@ pub mod system;
 /// The structs the particle shaders read.
 pub mod types;
 
-pub use system::GpuParticleSystem;
+pub use system::{explosion_particles, GpuParticleSystem};
 pub use types::*;

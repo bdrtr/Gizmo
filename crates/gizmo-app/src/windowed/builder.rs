@@ -39,6 +39,7 @@ impl<State: 'static> App<State> {
             embedded_assets: std::collections::HashMap::new(),
             window_attributes: None,
             window: None,
+            renderer: None,
             applied_cursor: gizmo_core::window::CursorOptions::free(),
             applied_mode: gizmo_core::window::WindowMode::Windowed,
             #[cfg(feature = "egui")]

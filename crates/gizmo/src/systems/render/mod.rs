@@ -854,6 +854,8 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     if renderer.gpu_particles.is_some() {
         let dt = world.get_resource::<gizmo_core::time::Time>().map_or(0.016, |t| t.dt());
         step_particle_emitters(world, dt);
+        #[cfg(feature = "physics")]
+        particles::add_fracture_dust(world);
     } else {
         world.remove_resource::<ParticleSpawns>();
     }
@@ -1481,6 +1483,8 @@ pub use decals::{collect_decals, record_forward_decals};
 
 mod particles;
 pub use particles::{emit, step_particle_emitters, ParticleSpawns};
+#[cfg(feature = "physics")]
+pub use particles::fracture_dust;
 
 mod sprite;
 pub use sprite::record_sprites;

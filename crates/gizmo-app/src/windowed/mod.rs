@@ -139,6 +139,10 @@ pub struct App<State: 'static = ()> {
     // until the first `resumed`.
     window_attributes: Option<WindowAttributes>,
     window: Option<Arc<winit::window::Window>>,
+    /// The renderer, once the window exists. **Not a resource of the game world**: it belongs to
+    /// the frame's draw, and the game side reaches the GPU only through the `GpuContext` resource,
+    /// which creates and never writes what the draw reads.
+    renderer: Option<Renderer>,
     /// The cursor behaviour last applied to `window` — see `apply_cursor_options`.
     applied_cursor: gizmo_core::window::CursorOptions,
     /// The window mode last applied — see `apply_window_mode`.

@@ -93,7 +93,7 @@ impl AssetServer {
 /// and reloaded textures — reporting the failures instead of swallowing them.
 pub fn asset_server_update_system(
     mut server: crate::core::system::ResMut<AssetServer>,
-    renderer: crate::core::system::ResMut<crate::renderer::Renderer>,
+    gpu: crate::core::system::Res<crate::renderer::GpuContext>,
     mut meshes: crate::core::system::ResMut<crate::core::asset::Assets<Mesh>>,
 ) {
     // Process Hot Reloading
@@ -159,15 +159,15 @@ pub fn asset_server_update_system(
             "OBJ mesh için GPU vertex buffer'ı oluşturuluyor"
         );
         // Create wgpu buffer
-        let vbuf = renderer
-            .device
+        let vbuf = gpu
+            .device()
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("Obj VBuf: {}", obj.path)),
                 contents: bytemuck::cast_slice(&obj.vertices),
                 usage: wgpu::BufferUsages::VERTEX,
             });
         let mesh = Mesh::new(
-            &renderer.device,
+            gpu.device(),
             std::sync::Arc::new(vbuf),
             &obj.vertices,
             gizmo_math::Vec3::ZERO,

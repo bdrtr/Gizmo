@@ -147,7 +147,7 @@ impl<State: 'static> App<State> {
     fn finish_initialize(
         &mut self,
         window: Arc<winit::window::Window>,
-        renderer: Renderer,
+        mut renderer: Renderer,
     ) -> Result<(), crate::AppError> {
         // Initialize Core Dev Console Systems BEFORE setup so setup can register cvars
         self.world
@@ -158,25 +158,21 @@ impl<State: 'static> App<State> {
             height: self.window_size.1 as f32,
         });
 
-        // Renderer Resource oluştur ve World'e ekle
+        // The game world gets the GPU's creation side (`GpuContext`); the renderer itself stays
+        // with the app, for the frame's draw.
         let embedded_count = self.embedded_assets.len();
         renderer.asset_manager.write().unwrap().embedded_assets =
             std::mem::take(&mut self.embedded_assets);
-        self.world.insert_resource(renderer);
+        self.world.insert_resource(renderer.gpu_context());
         tracing::debug!(
             width = self.window_size.0,
             height = self.window_size.1,
             embedded_assets = embedded_count,
-            "[App] core resources + renderer inserted"
+            "[App] core resources + GPU context inserted"
         );
 
         let state = if let Some(setup) = self.setup_fn.take() {
-            let mut r = self
-                .world
-                .remove_resource::<Renderer>()
-                .ok_or(crate::AppError::MissingResource("Renderer"))?;
-            let state = setup(&mut self.world, &mut r);
-            self.world.insert_resource(r);
+            let state = setup(&mut self.world, &mut renderer);
             tracing::info!("[App] user setup hook complete");
             state
         } else {
@@ -190,10 +186,6 @@ impl<State: 'static> App<State> {
                 .world
                 .remove_resource::<gizmo_renderer::asset::AssetManager>()
             {
-                let dummy_rgba = [255, 255, 255, 255];
-                let r = self.world.remove_resource::<Renderer>().unwrap();
-                let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
-
                 {
                     // wasm32: gizmo-scripting (mlua) web'de derlenmez — sahneler
                     // Script bileşeni kaydı olmadan yüklenir (web scripting ertelendi).
@@ -221,7 +213,6 @@ impl<State: 'static> App<State> {
                     }
                 }
 
-                self.world.insert_resource(r);
                 self.world.insert_resource(asset_manager);
             } else {
                 tracing::error!("[App::run] AssetManager bulunamadı, sahne yüklenemiyor!");
@@ -230,16 +221,14 @@ impl<State: 'static> App<State> {
 
         #[cfg(feature = "egui")]
         {
-            let editor = {
-                let r = self.world.get_resource::<Renderer>().unwrap();
-                EguiContext::new(&r.device, r.config.format, &window, 1)
-            };
+            let editor = EguiContext::new(&renderer.device, renderer.config.format, &window, 1);
             self.editor = Some(editor);
             tracing::debug!("[App] egui overlay context initialized");
         }
 
         self.app_state = Some(state);
         self.window = Some(window);
+        self.renderer = Some(renderer);
         self.last_frame_time = Some(super::FrameInstant::now());
         self.light_time = 0.0;
         tracing::info!("[App] initialization complete");
@@ -277,7 +266,7 @@ impl<State: 'static> App<State> {
         // stayed at 640 × 360, stretched over an upright screen, and the camera kept a landscape
         // aspect. Apply it now, as that `Resized` would have.
         let size = window.inner_size();
-        let effective = self.world.get_resource_mut::<Renderer>().map(|mut r| {
+        let effective = self.renderer.as_mut().map(|r| {
             if r.size != size {
                 r.resize(size);
             }
@@ -301,7 +290,7 @@ impl<State: 'static> ApplicationHandler for App<State> {
         if let Some(window) = self.window.clone() {
             // Back on the screen (Android brings an app back with a new native window): draw to
             // it again. Everything else lived through the pause.
-            if let Some(mut renderer) = self.world.get_resource_mut::<Renderer>() {
+            if let Some(renderer) = self.renderer.as_mut() {
                 if renderer.surface.is_none() {
                     tracing::info!("[App] resumed: making the surface again");
                     renderer.resume_surface(window.clone());
@@ -367,7 +356,7 @@ impl<State: 'static> ApplicationHandler for App<State> {
     /// Off the screen: Android is about to destroy the native window, and the surface must not
     /// outlive it. Nothing is drawn until `resumed` makes another.
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(mut renderer) = self.world.get_resource_mut::<Renderer>() {
+        if let Some(renderer) = self.renderer.as_mut() {
             tracing::info!("[App] suspended: letting the surface go");
             renderer.suspend_surface();
         }

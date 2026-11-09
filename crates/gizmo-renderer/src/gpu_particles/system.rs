@@ -447,37 +447,7 @@ impl GpuParticleSystem {
         base_color: [f32; 4],
         force: f32,
     ) {
-        let mut new_particles = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            let u: f32 = rand::random();
-            let v: f32 = rand::random();
-            let theta = u * 2.0 * std::f32::consts::PI;
-            let phi = (2.0 * v - 1.0).acos();
-            let r = force * (0.5 + 0.5 * rand::random::<f32>());
-
-            let vx = r * phi.sin() * theta.cos();
-            let vy = r * phi.sin() * theta.sin() + force * 0.5; // Upward bias
-            let vz = r * phi.cos();
-
-            let life = 0.5 + rand::random::<f32>() * 1.5;
-
-            new_particles.push(GpuParticle {
-                position: center,
-                // `life` is an AGE that starts at 0 and grows toward `max_life`;
-                // the compute/render shaders treat `life >= max_life` as dead.
-                // Spawning with `life == max_life` makes every particle born dead
-                // (never integrated, never drawn), so explosion/dust bursts were
-                // completely invisible. Start the age at 0.
-                life: 0.0,
-                velocity: [vx, vy, vz],
-                max_life: life,
-                color: base_color,
-                size_start: 0.1 + rand::random::<f32>() * 0.2,
-                size_end: 0.0,
-                _padding: [0.0; 2],
-            });
-        }
-        self.spawn_particles(queue, &new_particles);
+        self.spawn_particles(queue, &explosion_particles(center, count, base_color, force));
     }
 }
 
@@ -555,6 +525,44 @@ pub fn generate_smoke_atlas(tiles: u32, tile_px: u32) -> (Vec<u8>, u32) {
         }
     }
     (data, size)
+}
+
+/// `count` particles bursting from `center` with up to `force` m/s and an upward bias, in
+/// `base_color` — what [`GpuParticleSystem::spawn_explosion`] puts out, made on the CPU so a frame
+/// can hand them to the draw (the facade's `ParticleSpawns`) instead of writing the GPU ring itself.
+#[must_use]
+pub fn explosion_particles(center: [f32; 3], count: u32, base_color: [f32; 4], force: f32) -> Vec<GpuParticle> {
+    let mut new_particles = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let u: f32 = rand::random();
+        let v: f32 = rand::random();
+        let theta = u * 2.0 * std::f32::consts::PI;
+        let phi = (2.0 * v - 1.0).acos();
+        let r = force * (0.5 + 0.5 * rand::random::<f32>());
+
+        let vx = r * phi.sin() * theta.cos();
+        let vy = r * phi.sin() * theta.sin() + force * 0.5; // Upward bias
+        let vz = r * phi.cos();
+
+        let life = 0.5 + rand::random::<f32>() * 1.5;
+
+        new_particles.push(GpuParticle {
+            position: center,
+            // `life` is an AGE that starts at 0 and grows toward `max_life`;
+            // the compute/render shaders treat `life >= max_life` as dead.
+            // Spawning with `life == max_life` makes every particle born dead
+            // (never integrated, never drawn), so explosion/dust bursts were
+            // completely invisible. Start the age at 0.
+            life: 0.0,
+            velocity: [vx, vy, vz],
+            max_life: life,
+            color: base_color,
+            size_start: 0.1 + rand::random::<f32>() * 0.2,
+            size_end: 0.0,
+            _padding: [0.0; 2],
+        });
+    }
+    new_particles
 }
 
 #[cfg(test)]

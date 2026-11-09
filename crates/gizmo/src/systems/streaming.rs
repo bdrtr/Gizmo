@@ -29,7 +29,7 @@ const STREAM_IN_DISTANCE: f32 = 50.0;
 
 /// The system that drives texture streaming every frame (apply + request). Added to the
 /// schedule by [`AssetServerPlugin`](crate::asset_server::AssetServerPlugin). **exclusive**, because it uses the materials (mut) and
-/// the `AssetServer`/`Renderer` resources.
+/// the `AssetServer`/`GpuContext` resources.
 pub struct TextureStreamingSystem;
 
 impl System for TextureStreamingSystem {
@@ -60,28 +60,17 @@ fn apply_completed_textures(world: &World) {
         std::mem::take(&mut server.completed_textures)
     };
 
-    // 2) Her birini GPU'ya yükle → (entity_ids, bind_group). Renderer borrow'u burada biter.
+    // 2) Her birini GPU'ya yükle → (entity_ids, bind_group), through the game side's
+    // `GpuContext`: a streamed texture is a new texture, which is what that context makes.
     let installed: Vec<(Vec<usize>, String, std::sync::Arc<wgpu::BindGroup>)> = {
-        let Some(renderer) = world.get_resource::<gizmo_renderer::Renderer>() else {
-            // Renderer yoksa (headless-no-render) uygulanamaz; sessizce bırak.
+        let Some(gpu) = world.get_resource::<gizmo_renderer::GpuContext>().map(|g| g.clone()) else {
+            // GPU yoksa (headless-no-render) uygulanamaz; sessizce bırak.
             return;
-        };
-        let mut am = match renderer.asset_manager.write() {
-            Ok(am) => am,
-            Err(poisoned) => poisoned.into_inner(),
         };
         completions
             .into_iter()
             .filter_map(|c| {
-                match am.install_decoded_material_texture(
-                    &renderer.device,
-                    &renderer.queue,
-                    &renderer.scene.texture_bind_group_layout,
-                    &c.cache_key,
-                    &c.rgba,
-                    c.width,
-                    c.height,
-                ) {
+                match gpu.install_material_texture(&c.cache_key, &c.rgba, c.width, c.height) {
                     Ok(bg) => Some((c.entity_ids, c.request_path, bg)),
                     Err(e) => {
                         tracing::warn!(
@@ -275,7 +264,7 @@ mod tests {
         world.add_component(ent, mat);
         world.add_component(ent, Transform::new(Vec3::new(1.0, 0.0, 0.0)));
 
-        world.insert_resource(renderer);
+        world.insert_resource(renderer.gpu_context());
         world.insert_resource(AssetServer::new());
         (world, ent)
     }

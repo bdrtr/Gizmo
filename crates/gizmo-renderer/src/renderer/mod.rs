@@ -268,8 +268,9 @@ pub struct Renderer {
 
     // === DAHİLİ ASSET YÖNETİCİSİ (Kolaylık metodları için cache) ===
     /// The texture/mesh cache behind the convenience loaders. Behind a lock because the
-    /// convenience methods take `&self`, and loading mutates the cache.
-    pub asset_manager: std::sync::RwLock<crate::asset::AssetManager>,
+    /// convenience methods take `&self`, and loading mutates the cache; shared with the game
+    /// side's [`GpuContext`](crate::gpu_context::GpuContext), which installs streamed textures into it.
+    pub asset_manager: std::sync::Arc<std::sync::RwLock<crate::asset::AssetManager>>,
 
     // === WEB PROFİLİ — Platform bazlı GPU kaynak yönetimi ===
     /// Which resource budget this renderer was built for — it is what decides whether the heavy

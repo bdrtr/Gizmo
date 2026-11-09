@@ -157,6 +157,8 @@ pub mod gi;
 pub mod gpu_fluid;
 /// The GPU particle system — simulated and drawn from the same buffer.
 pub mod gpu_particles;
+/// What the game side may do with the GPU while a frame is drawn — see [`GpuContext`](gpu_context::GpuContext).
+pub mod gpu_context;
 pub mod gpu_smoke;
 /// The renderer's own GPU rigid-body solver, separate from `gizmo-physics-rigid`.
 pub mod gpu_physics;
@@ -267,6 +269,7 @@ pub use hot_reload::AssetWatcher;
 pub use pipeline::SceneState;
 pub use post_process::PostProcessState;
 pub use renderer::{RenderContext, Renderer};
+pub use gpu_context::GpuContext;
 pub use ssao::{SsaoParams, SsaoQuality, SsaoState};
 pub use ssgi::SsgiState;
 pub use taa::TaaState;

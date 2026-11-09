@@ -84,7 +84,7 @@ fn create_viewport_target(
 /// panels can sample them, and publishes the matching `EditorRenderTarget` /
 /// `GameRenderTarget` resources the engine renders into.
 #[tracing::instrument(skip_all, name = "editor_sync_render_targets")]
-pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
+pub fn sync_render_targets(world: &mut World, renderer: &Renderer, editor: &mut EguiContext) {
     // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
     if world
         .get_resource::<gizmo_editor::EditorState>()
@@ -93,10 +93,7 @@ pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
         let mut ed_state_ref = world
             .get_resource_mut::<gizmo_editor::EditorState>()
             .unwrap();
-        let (rw, rh) = {
-            let r = world.get_resource::<Renderer>().unwrap();
-            (r.size.width, r.size.height)
-        };
+        let (rw, rh) = (renderer.size.width, renderer.size.height);
         let scene_w = ed_state_ref.scene_view_size.map(|s| s.x as u32).unwrap_or(rw);
         let scene_h = ed_state_ref.scene_view_size.map(|s| s.y as u32).unwrap_or(rh);
         let game_w = ed_state_ref.game_view_size.map(|s| s.x as u32).unwrap_or(rw);
@@ -123,12 +120,11 @@ pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
             }
             let tex_id;
             {
-                let r = world.get_resource::<Renderer>().unwrap();
                 let (view, id) = create_viewport_target(
-                    &r.device,
+                    &renderer.device,
                     &mut editor.renderer,
                     "Editor RTT",
-                    r.config.format,
+                    renderer.config.format,
                     scene_w,
                     scene_h,
                 );
@@ -161,12 +157,11 @@ pub fn sync_render_targets(world: &mut World, editor: &mut EguiContext) {
             }
             let tex_id;
             {
-                let r = world.get_resource::<Renderer>().unwrap();
                 let (view, id) = create_viewport_target(
-                    &r.device,
+                    &renderer.device,
                     &mut editor.renderer,
                     "Game RTT",
-                    r.config.format,
+                    renderer.config.format,
                     game_w,
                     game_h,
                 );
@@ -342,9 +337,6 @@ pub fn process_scene_requests(world: &mut World) {
         if let Some(asset_manager) =
             world.remove_resource::<gizmo_renderer::asset::AssetManager>()
         {
-            let r = world.remove_resource::<Renderer>().unwrap();
-            let dummy_rgba = [255u8, 255, 255, 255];
-            let _dummy_bg = r.create_texture(&dummy_rgba, 1, 1);
             let registry = crate::scene_registry::scene_registry_for_world(world);
             let load_result = gizmo_scene::scene::SceneData::load_into(path, world, &registry);
             let ok = load_result.is_ok();
@@ -354,7 +346,6 @@ pub fn process_scene_requests(world: &mut World) {
                     tracing::warn!(scene = %path, error = %e, "[Editor] scene load failed")
                 }
             }
-            world.insert_resource(r);
             world.insert_resource(asset_manager);
             if let Some(mut ed) = world.get_resource_mut::<gizmo_editor::EditorState>() {
                 ed.status_message = if ok {

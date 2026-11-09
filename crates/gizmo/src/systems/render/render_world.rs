@@ -294,6 +294,18 @@ mod render_world_tests {
             .filter(|w| w.starts_with(|c: char| c.is_ascii_uppercase()))
     }
 
+    /// What a render thread will carry across and back: the copy, the renderer that draws it and
+    /// the game side's GPU handle. A static assertion — a field that stops one being `Send` fails
+    /// to compile here, not in the threaded loop that would first need it.
+    #[test]
+    fn the_copy_and_the_renderer_can_go_to_another_thread() {
+        fn send<T: Send>() {}
+        send::<World>();
+        send::<RenderWorld>();
+        send::<Renderer>();
+        send::<crate::renderer::GpuContext>();
+    }
+
     /// **The copy holds every type the draw reads.** The draw path's source (`systems/render`,
     /// tests left out) is read for the types named in its `query` / `get` / `get_resource` calls;
     /// each must be copied by [`render_extractor`] or be one the preparation hands over in another

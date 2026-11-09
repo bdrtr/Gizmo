@@ -645,6 +645,8 @@ pub fn execute_render_pipeline(
                         }
                     }
 
+                    // And the frame's fracture dust, by the game path's own rule.
+                    all_new_particles.extend(gizmo::systems::render::fracture_dust(world));
                     gpu_particles.spawn_particles(&renderer.queue, &all_new_particles);
                 }
             }

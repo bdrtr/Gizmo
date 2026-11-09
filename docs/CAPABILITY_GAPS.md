@@ -895,13 +895,28 @@ Measured in `ecs_absent_apis`:
   recorded a missing key in the `Locale` (a lock behind `&self`), so drawn from a copy the game
   would never have heard of it. The preparation resolves labels now (`resolve_localized_texts`,
   into a `LocalizedLabel` written only when the string changes; the editor's pipeline runs it too)
-  and the draw reads the label. `Extractor::copies` says what an extractor copies. **Still open:**
-  a render thread — the copy makes it possible, and it has one known race to solve first: `Mesh`,
-  `Material`, `Skeleton`, `Decal` and `LodGroup` share their GPU buffers with the copy through `Arc`,
-  and the preparation rewrites a skeleton's bone buffer every frame (`queue.write_buffer`), which a
-  draw overlapping the next preparation would see half-written; the hooks of individual demos that
-  call `default_render_pass` themselves (the audit counted 28 that would move for free); and the
-  editor (`gizmo-studio`'s pipeline does its own per-frame work rather than `prepare_frame`). One behaviour change, deliberate: an entity
+  and the draw reads the label. `Extractor::copies` says what an extractor copies. **Stage 5, 2026-11-09: the `Renderer` is not a
+  resource of the game world.** The app keeps it (a field of `App`, taken for the frame's draw and
+  given back), and the game world holds a `GpuContext` instead: the `Device`, the texture layout,
+  the shared asset cache, and uploads only into what it has just made — there is no queue to write
+  an existing buffer with (a `compile_fail` doctest holds that). The lazy asset loader, the asset
+  server's mesh uploads and texture streaming go through it; the editor's viewport targets are given
+  the renderer explicitly; fracture dust, which the app loop wrote into the GPU particle ring during
+  the update, is made on the CPU (`explosion_particles`) and added to the frame's `ParticleSpawns`
+  by the preparation (`fracture_dust`, which the editor's pipeline uses too); the two demos that
+  reached the renderer from a system or the UI (`anisotropy`, `decal`) set it from their render
+  hook. `World`, `RenderWorld`, `Renderer` and `GpuContext` are asserted `Send`. **On the race the
+  previous stage recorded:** there is none of the kind it named. A bone buffer the preparation
+  rewrites cannot be seen half-written — `queue.write_buffer` stages the bytes and applies them whole
+  at the next `submit` — and the preparation needs `&mut Renderer`, so it cannot run while a draw
+  holds it. What could go wrong is a write from the game's side *during the update*, landing in the
+  middle of a draw that submits per view: that is what this stage closed, by taking the queue out of
+  the game's reach. **Still open:** the render thread itself — the frame becomes three phases (the
+  game's update; the sync point, where the renderer comes back, the frame is prepared and copied;
+  the draw, on the render thread, with the egui paint), opt-in for apps whose render hook writes the
+  game world, and single-threaded on wasm; the hooks of individual demos that call
+  `default_render_pass` themselves (28 move for free); and the editor (`gizmo-studio`'s pipeline does
+  its own per-frame work rather than `prepare_frame`). One behaviour change, deliberate: an entity
   parented to a shaking camera is no longer shaken with it (it was moved by the camera's shaken
   `Transform` and left with that `GlobalTransform` after the undo; the camera's yaw and pitch shake
   never reached it).

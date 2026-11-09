@@ -128,11 +128,7 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 2.6, 7.4), Vec3::new(0.0, -0.4, 0.0));
             gizmo::gizmo_log!(Info, "çıkartma: {} · adet {}", on, count);
         })
-        .set_ui(move |world, _state, ctx| {
-            let has_state = world
-                .get_resource::<gizmo::renderer::Renderer>()
-                .is_some();
-            let _ = has_state;
+        .set_ui(move |_world, _state, ctx| {
             gizmo::egui::Area::new("dc".into())
                 .anchor(gizmo::egui::Align2::RIGHT_TOP, [-12.0, 12.0])
                 .show(ctx, |ui| {

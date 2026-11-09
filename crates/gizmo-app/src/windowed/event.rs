@@ -161,48 +161,6 @@ impl<State: 'static> App<State> {
         }
     }
 
-    /// Turn this frame's fracture events into dust bursts on the GPU particle system.
-    ///
-    /// Self-contained: reads the physics world's event list and the renderer, writes neither. Its
-    /// only tie to the frame loop was sitting in the middle of it.
-    #[cfg(feature = "physics")]
-    fn spawn_fracture_particles(&mut self) {
-        if let Some(physics_world) =
-            self.world
-                .get_resource::<gizmo_physics_rigid::world::PhysicsWorld>()
-        {
-            if !physics_world.fracture_events.is_empty() {
-                tracing::debug!(
-                    fracture_count = physics_world.fracture_events.len(),
-                    "[frame] fracture events -> dust particles"
-                );
-                let renderer = self.world.get_resource::<Renderer>().unwrap();
-                if let Some(gpu_particles) = &renderer.gpu_particles {
-                    for event in &physics_world.fracture_events {
-                        let center = [
-                            event.impact_point.x,
-                            event.impact_point.y,
-                            event.impact_point.z,
-                        ];
-                        let dust_color = [0.6, 0.55, 0.5, 0.8]; // Dust color
-                        let force =
-                            (event.impact_force * 0.01).clamp(2.0, 15.0);
-                        let particle_count = (event.impact_force * 0.1)
-                            .clamp(50.0, 500.0)
-                            as u32;
-                        gpu_particles.spawn_explosion(
-                            &renderer.queue,
-                            center,
-                            particle_count,
-                            dust_color,
-                            force,
-                        );
-                    }
-                }
-            }
-        }
-    }
-
     /// Leaves the application the one graceful way: write the input recording if one is being
     /// kept, then signal the event loop to exit, so `run_app` returns and the app, world and
     /// renderer drop in order (the wgpu device and surface close cleanly). Closing the window and
@@ -269,16 +227,13 @@ impl<State: 'static> App<State> {
     /// it reads as a block rather than a call — the borrow checker, not the logic, chose that
     /// shape.
     fn run_asset_loading(&mut self) {
+        // Through the game side's `GpuContext`: the loader makes meshes and textures, which is
+        // what that context is for, and runs with the game's update, not the draw.
+        let Some(gpu) = self.world.get_resource::<gizmo_renderer::GpuContext>().map(|g| g.clone()) else {
+            return;
+        };
         if let Some(mut asset_manager) = self.world.remove_resource::<gizmo_renderer::asset::AssetManager>() {
-            let r = self.world.remove_resource::<Renderer>().unwrap();
-            gizmo_renderer::asset_loading::run_asset_loading_system(
-                &mut self.world,
-                &r.device,
-                &r.queue,
-                &r.scene.texture_bind_group_layout,
-                &mut asset_manager,
-            );
-            self.world.insert_resource(r);
+            gpu.run_asset_loading(&mut self.world, &mut asset_manager);
             self.world.insert_resource(asset_manager);
         }
     }
@@ -287,7 +242,7 @@ impl<State: 'static> App<State> {
     ///
     /// Lifted out of `handle_event` for one reason: its four arms each ended with the same
     /// eight-line "put everything back into `self` and return" epilogue — the editor, the app
-    /// state, both frame timers, the renderer resource and the profiler scope. Three copies, and
+    /// state, both frame timers, the renderer and the profiler scope. Three copies, and
     /// the function's own header already had to warn that those locals are "restored at every
     /// exit — including the two early `return`s in the redraw path". A restore list every new
     /// early return has to remember is exactly the defect shape this engine keeps finding; it is
@@ -495,7 +450,7 @@ impl<State: 'static> App<State> {
                                 // boyutundan besle ki kamera aspect'i / picking math'i
                                 // surface'le tutarlı kalsın.
                                 let effective = {
-                                    let mut r = self.world.get_resource_mut::<Renderer>().unwrap();
+                                    let r = self.renderer.as_mut().expect("a window event comes after initialization");
                                     r.resize(*physical_size);
                                     r.size
                                 };
@@ -679,10 +634,13 @@ impl<State: 'static> App<State> {
                             // requests (reads/mutates EditorState).
                             #[cfg(feature = "editor")]
                             {
-                                crate::editor_runtime::sync_render_targets(
-                                    &mut self.world,
-                                    &mut editor,
-                                );
+                                if let Some(renderer) = self.renderer.as_ref() {
+                                    crate::editor_runtime::sync_render_targets(
+                                        &mut self.world,
+                                        renderer,
+                                        &mut editor,
+                                    );
+                                }
                                 crate::editor_runtime::process_component_requests(&mut self.world);
                                 crate::editor_runtime::process_scene_requests(&mut self.world);
                             }
@@ -779,9 +737,6 @@ impl<State: 'static> App<State> {
                                 profiler.end_scope("update");
                             }
 
-                            #[cfg(feature = "physics")]
-                            self.spawn_fracture_particles();
-
                             // Olayları Güncelle (Çift-buffer temizliği)
                             for updater in &mut self.event_updaters {
                                 updater(&mut self.world);
@@ -791,7 +746,7 @@ impl<State: 'static> App<State> {
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                 profiler.begin_scope("render");
                             }
-                            let mut renderer = self.world.remove_resource::<Renderer>().unwrap();
+                            let mut renderer = self.renderer.take().expect("a frame comes after initialization");
 
                             let Some(output) = self.acquire_backbuffer(&mut renderer) else {
                                 // The one epilogue: every skip path in the acquire lands here.
@@ -809,7 +764,7 @@ impl<State: 'static> App<State> {
                                         full_output,
                                     );
                                 }
-                                self.world.insert_resource(renderer);
+                                self.renderer = Some(renderer);
                                 if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                     profiler.end_scope("render");
                                 }
@@ -891,7 +846,7 @@ impl<State: 'static> App<State> {
                             // `SurfaceTexture::present(self)` became `Queue::present(texture)`.
                             renderer.queue.present(output);
 
-                            self.world.insert_resource(renderer);
+                            self.renderer = Some(renderer);
 
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                 profiler.end_scope("render");

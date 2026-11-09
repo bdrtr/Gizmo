@@ -56,7 +56,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   (`World::register_component`, `DynamicQuery`, `DynamicSystem` — §A8), and system bodies hot-patched while the game runs
   (`hotpatching` + `dx serve --hot-patch`, §A8). `SimpleApp` and `with_scene_render` draw from a render world (`RenderWorld`): the game path's
   draw (`draw_frame`) reads only a copy, after `prepare_frame` has done the frame's game-visible work, kept by `render_extractor` — components,
-  resources (copied when written; resources carry change ticks) and asset maps; no render thread yet (§A8).
+  resources (copied when written; resources carry change ticks) and asset maps. The `Renderer` is not a game-world resource — the game side has a `GpuContext` that creates and never writes what the draw reads; no render thread yet (§A8).
 - **Editor:** `gizmo-studio` is a separate binary and cannot see a game's types; the in-engine
   editor can.
 

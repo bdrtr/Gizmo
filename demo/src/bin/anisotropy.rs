@@ -31,6 +31,73 @@ pub struct DemoState {
     pub exposure: f32,
 }
 
+/// The renderer settings this demo's panel and light animation change. The `Renderer` is not a
+/// resource of the game world — it belongs to the draw — so the panel edits this, and the render
+/// hook, which holds the renderer, applies it every frame.
+#[derive(Clone)]
+struct RendererPanel {
+    shading_mode: u32,
+    environment_preset: u32,
+    environment_preset_2: u32,
+    environment_blend_t: f32,
+    bloom_intensity: f32,
+    bloom_threshold: f32,
+    dof_enabled: bool,
+    dof_focus_dist: f32,
+    dof_focus_range: f32,
+    dof_blur_size: f32,
+    chromatic_aberration: f32,
+    film_grain_intensity: f32,
+    point_shadows_enabled: bool,
+    /// The TAA switch, when the renderer has TAA.
+    taa: Option<TaaPanel>,
+}
+
+#[derive(Clone, Copy)]
+struct TaaPanel {
+    enabled: bool,
+}
+
+impl RendererPanel {
+    fn read(r: &gizmo::renderer::Renderer) -> Self {
+        Self {
+            shading_mode: r.shading_mode,
+            environment_preset: r.environment_preset,
+            environment_preset_2: r.environment_preset_2,
+            environment_blend_t: r.environment_blend_t,
+            bloom_intensity: r.bloom_intensity,
+            bloom_threshold: r.bloom_threshold,
+            dof_enabled: r.dof_enabled,
+            dof_focus_dist: r.dof_focus_dist,
+            dof_focus_range: r.dof_focus_range,
+            dof_blur_size: r.dof_blur_size,
+            chromatic_aberration: r.chromatic_aberration,
+            film_grain_intensity: r.film_grain_intensity,
+            point_shadows_enabled: r.point_shadows_enabled,
+            taa: r.taa.as_ref().map(|t| TaaPanel { enabled: t.enabled }),
+        }
+    }
+
+    fn apply(&self, r: &mut gizmo::renderer::Renderer) {
+        r.shading_mode = self.shading_mode;
+        r.environment_preset = self.environment_preset;
+        r.environment_preset_2 = self.environment_preset_2;
+        r.environment_blend_t = self.environment_blend_t;
+        r.bloom_intensity = self.bloom_intensity;
+        r.bloom_threshold = self.bloom_threshold;
+        r.dof_enabled = self.dof_enabled;
+        r.dof_focus_dist = self.dof_focus_dist;
+        r.dof_focus_range = self.dof_focus_range;
+        r.dof_blur_size = self.dof_blur_size;
+        r.chromatic_aberration = self.chromatic_aberration;
+        r.film_grain_intensity = self.film_grain_intensity;
+        r.point_shadows_enabled = self.point_shadows_enabled;
+        if let (Some(taa), Some(panel)) = (r.taa.as_mut(), self.taa) {
+            taa.enabled = panel.enabled;
+        }
+    }
+}
+
 fn main() {
     let mut app = App::new("Gizmo Engine - Anisotropy Barn Lamp Demo", 1280, 720);
 
@@ -180,6 +247,7 @@ fn main() {
             world.insert_resource(asset_manager);
             world.insert_resource(camera_settings);
             world.insert_resource(lighting_settings);
+            world.insert_resource(RendererPanel::read(renderer));
             world.insert_resource(DemoState {
                 camera_state: CameraState::Orbiting,
                 editor_state: EditorState::PlayMode,
@@ -216,6 +284,9 @@ fn main() {
         .set_render(|world, _state, encoder, view, renderer, _light_time| {
             renderer.gpu_fluid = None;
             renderer.gpu_particles = None;
+            if let Some(panel) = world.get_resource::<RendererPanel>().map(|p| p.clone()) {
+                panel.apply(renderer);
+            }
 
             // Get current DemoState booleans in a separate scope to release the borrow on world
             let (ssr_enabled, ssgi_enabled, volumetric_enabled) = {
@@ -287,9 +358,7 @@ fn main() {
             let mut demo_state = world.get_resource_mut::<DemoState>().unwrap();
             let mut camera_settings = world.get_resource_mut::<CameraSettings>().unwrap();
             let mut lighting_settings = world.get_resource_mut::<LightingSettings>().unwrap();
-            let mut renderer = world
-                .get_resource_mut::<gizmo::renderer::Renderer>()
-                .unwrap();
+            let mut renderer = world.get_resource_mut::<RendererPanel>().unwrap();
 
             gizmo::egui::Window::new("Gizmo Engine Panel")
                 .default_width(320.0)
@@ -837,7 +906,7 @@ fn camera_orbit(
 fn animate_lights(
     state: Res<DemoState>,
     lighting_settings: Res<LightingSettings>,
-    mut renderer: ResMut<gizmo::renderer::Renderer>,
+    mut renderer: ResMut<RendererPanel>,
     mut q_dir: Query<(&mut Transform, &mut DirectionalLight)>,
     mut q_point: Query<(&mut Transform, &mut PointLight)>,
     time: Res<Time>,

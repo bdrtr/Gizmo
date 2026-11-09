@@ -58,8 +58,9 @@ const MAX_SPAWNS_PER_FRAME: u32 = 100;
 /// mistyped count does not stall a frame on a giant upload.
 const MAX_BURST: u32 = 4096;
 
-/// The particles this frame's emitters put out, for the draw to upload into the GPU particle
-/// system. Written whole by [`step_particle_emitters`] every frame, never appended to, and numbered:
+/// The particles this frame's emitters put out — and its fracture dust ([`fracture_dust`]) — for the
+/// draw to upload into the GPU particle system. Written whole by the frame's preparation every
+/// frame, never carried over, and numbered:
 /// the draw cannot clear it (it reads the world, it does not write it), so the GPU particle system
 /// remembers the last batch it uploaded and skips it when it comes round again — a frame drawn
 /// twice, or drawn from a copy of the world that was not refreshed, spawns nothing twice.
@@ -133,6 +134,44 @@ pub fn step_particle_emitters(world: &mut World, dt: f32) {
     world.insert_resource(ParticleSpawns::new(spawned));
 }
 
+/// The dust of this frame's fractures: one burst per [`FractureEvent`](gizmo_physics_core::FractureEvent)
+/// the physics world reported, as many particles and as fast as the impact was hard.
+///
+/// The frame's preparation adds it to [`ParticleSpawns`], which the draw uploads. It used to be
+/// written straight into the GPU particle ring by the app loop, during the game's update — a write
+/// into what the draw reads, made from the game's side.
+#[cfg(feature = "physics")]
+pub fn fracture_dust(world: &World) -> Vec<GpuParticle> {
+    let Some(physics) = world.get_resource::<crate::physics::world::PhysicsWorld>() else {
+        return Vec::new();
+    };
+    let dust_colour = [0.6, 0.55, 0.5, 0.8];
+    physics
+        .fracture_events
+        .iter()
+        .flat_map(|event| {
+            let centre = event.impact_point.to_array();
+            let force = (event.impact_force * 0.01).clamp(2.0, 15.0);
+            let count = (event.impact_force * 0.1).clamp(50.0, 500.0) as u32;
+            crate::renderer::gpu_particles::explosion_particles(centre, count, dust_colour, force)
+        })
+        .collect()
+}
+
+/// Adds this frame's [`fracture_dust`] to its [`ParticleSpawns`] — after
+/// [`step_particle_emitters`], in the same batch.
+#[cfg(feature = "physics")]
+pub(crate) fn add_fracture_dust(world: &mut World) {
+    let dust = fracture_dust(world);
+    if dust.is_empty() {
+        return;
+    }
+    let spawns = world.get_resource_mut::<ParticleSpawns>().map(|mut s| s.particles.extend_from_slice(&dust));
+    if spawns.is_none() {
+        world.insert_resource(ParticleSpawns::new(dust));
+    }
+}
+
 /// What one emitter puts out this frame, appended to `out`: its pending
 /// [`burst`](ParticleEmitter::burst) all at once, then what its `spawn_rate` owes for `dt`.
 ///
@@ -186,6 +225,37 @@ fn particle(emitter: &ParticleEmitter, origin: Vec3, rng: &mut gizmo_math::Rng) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A fracture's dust reaches the draw through the frame's `ParticleSpawns`, in the batch the
+    /// emitters' particles are in — as many particles as its impact asks for, at its impact point —
+    /// and a frame without fractures adds nothing. It used to be written into the GPU ring by the
+    /// app loop, from the game's side.
+    #[cfg(feature = "physics")]
+    #[test]
+    fn a_fractures_dust_joins_the_frames_spawns() {
+        use crate::physics::world::PhysicsWorld;
+        let mut world = World::new();
+        world.spawn_bundle((Transform::new(Vec3::ZERO), ParticleEmitter::one_shot(7)));
+        world.insert_resource(PhysicsWorld::new());
+        step_particle_emitters(&mut world, 1.0 / 60.0);
+        add_fracture_dust(&mut world);
+        let quiet = world.get_resource::<ParticleSpawns>().map(|s| (s.batch(), s.particles().len()));
+        assert_eq!(quiet.map(|q| q.1), Some(7), "a frame with no fracture added dust");
+
+        world.get_resource_mut::<PhysicsWorld>().unwrap().fracture_events.push(gizmo_physics_core::FractureEvent {
+            entity: gizmo_physics_core::BodyHandle::INVALID,
+            impact_point: Vec3::new(1.0, 2.0, 3.0),
+            impact_force: 1500.0,
+        });
+        step_particle_emitters(&mut world, 1.0 / 60.0);
+        let batch = world.get_resource::<ParticleSpawns>().map(|s| s.batch());
+        add_fracture_dust(&mut world);
+        let spawns = world.get_resource::<ParticleSpawns>().unwrap();
+        assert_eq!(Some(spawns.batch()), batch, "the dust started a batch of its own");
+        // The one-shot is spent; 1500 × 0.1 = 150 particles of dust, all at the impact point.
+        assert_eq!(spawns.particles().len(), 150);
+        assert!(spawns.particles().iter().all(|p| p.position == [1.0, 2.0, 3.0]));
+    }
 
     /// A one-shot emitter puts its whole burst out on its first frame and nothing after; a rate
     /// emitter's burst comes on top of its rate.
