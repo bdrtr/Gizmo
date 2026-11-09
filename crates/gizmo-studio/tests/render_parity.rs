@@ -462,15 +462,17 @@ fn both_hosts_build_the_mesh_a_terrain_recipe_names() {
         .and_then(|p| p.parent())
         .expect("workspace root")
         .to_path_buf();
+    // The game builds it in its frame's preparation; the editor prepares its frame with that
+    // same function.
     let hosts = [
-        ("game", workspace.join("crates/gizmo/src/systems/render/mod.rs")),
-        ("editor", workspace.join("crates/gizmo-studio/src/render.rs")),
+        ("game", workspace.join("crates/gizmo/src/systems/render/mod.rs"), "terrain_mesh_system("),
+        ("editor", workspace.join("crates/gizmo-studio/src/render_pipeline/mod.rs"), "prepare_frame(world, renderer)"),
     ];
-    for (host, file) in hosts {
+    for (host, file, call) in hosts {
         let src = std::fs::read_to_string(&file)
             .unwrap_or_else(|e| panic!("{}: {e}", file.display()));
         assert!(
-            code_only(&src).contains("terrain_mesh_system("),
+            code_only(&src).contains(call),
             "the {host} host never builds the mesh a `Terrain` names, so a scene that loads with \
              one shows an entity that draws nothing"
         );
@@ -612,7 +614,10 @@ fn names_type(haystack: &str, needle: &str) -> bool {
 /// The capabilities **neither** draw path names — the box the inventory below cannot judge.
 fn silent_capabilities(workspace: &std::path::Path) -> Vec<String> {
     let game = draw_path_source(workspace.join("crates/gizmo/src/systems/render"));
-    let editor = draw_path_source(workspace.join("crates/gizmo-studio/src/render_pipeline"));
+    let editor = with_its_preparation(
+        draw_path_source(workspace.join("crates/gizmo-studio/src/render_pipeline")),
+        workspace,
+    );
     renderer_component_types(workspace)
         .into_iter()
         .filter(|c| !names_type(&game, c) && !names_type(&editor, c))
@@ -730,7 +735,10 @@ fn every_render_capability_is_known_to_both_draw_paths() {
     // this repo on 2026-08-17; every one of these files keeps its tests as the tail, which the
     // assertion below holds true.
     let game = draw_path_source(workspace.join("crates/gizmo/src/systems/render"));
-    let editor = draw_path_source(workspace.join("crates/gizmo-studio/src/render_pipeline"));
+    let editor = with_its_preparation(
+        draw_path_source(workspace.join("crates/gizmo-studio/src/render_pipeline")),
+        &workspace,
+    );
     // If a file ever puts production code *after* its tests, the cut above would silently stop
     // scanning it — so require that the cut removed every test module rather than assuming it.
     for (label, src) in [("game", &game), ("editor", &editor)] {
@@ -827,6 +835,29 @@ fn code_only(src: &str) -> String {
         .join("\n")
 }
 
+/// The editor's draw-path source **with the preparation it runs**: when the studio's pipeline
+/// prepares its frame with the game's `prepare_frame`, the bodies of that function and of the frame
+/// clocks it calls are code the editor runs, and count as what the editor path knows. Without the
+/// call they are not added — a pipeline that stopped calling it would show up as the gaps it
+/// leaves.
+fn with_its_preparation(editor: String, workspace: &std::path::Path) -> String {
+    if !code_only(&editor).contains("prepare_frame(world, renderer)") {
+        return editor;
+    }
+    let game = std::fs::read_to_string(workspace.join("crates/gizmo/src/systems/render/mod.rs"))
+        .expect("the game's frame source");
+    let body = |signature: &str| -> String {
+        let start = game.find(signature).unwrap_or_else(|| panic!("`{signature}` is gone"));
+        let end = game[start..].find("\n}\n").map(|e| start + e + 3).expect("its body ends");
+        game[start..end].to_string()
+    };
+    format!(
+        "{editor}\n{}\n{}",
+        body("pub fn prepare_frame("),
+        body("pub fn advance_frame_clocks(")
+    )
+}
+
 fn draw_path_sources() -> (String, String) {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -846,7 +877,7 @@ fn draw_path_sources() -> (String, String) {
     };
     (
         read_all(workspace.join("crates/gizmo/src/systems/render")),
-        read_all(workspace.join("crates/gizmo-studio/src/render_pipeline")),
+        with_its_preparation(read_all(workspace.join("crates/gizmo-studio/src/render_pipeline")), &workspace),
     )
 }
 
@@ -883,6 +914,12 @@ fn collect_rs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
 /// The inventory could not see any of them: two of the three components are named in neither
 /// path's source (they are reached through systems), and it only reports a capability known to
 /// exactly ONE path — a capability known to neither is silence.
+///
+/// **Since 2026-11-09 the editor prepares its frame with the game's own `prepare_frame`**, so the
+/// preparation's drivers are the game's by construction, and what is asserted of the editor is
+/// that call — and that it does not run any of them a second time itself. A second copy driven by
+/// its own delta is how the two drifted: the editor's `animation_delta`, and particle emitters
+/// stepped inside its draw by the raw frame delta, which kept emitting under ⏸.
 #[test]
 fn both_draw_paths_run_the_same_per_frame_drivers() {
     let workspace = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -890,60 +927,65 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         .and_then(|p| p.parent())
         .expect("workspace root")
         .to_path_buf();
-
-    for (path_name, file, clock) in [
-        (
-            "editor",
-            "crates/gizmo-studio/src/render_pipeline/mod.rs",
-            "animation_delta(world)",
-        ),
-        ("game", "crates/gizmo/src/systems/render/mod.rs", ".dt()"),
-    ] {
+    let code_of = |file: &str| -> String {
         let src = std::fs::read_to_string(workspace.join(file)).expect("draw path source");
-        let code: String = code_only(&src).chars().filter(|c| !c.is_whitespace()).collect();
-        // Every per-frame driver either path runs. A capability driven by one picture and not
-        // the other is the editor's oldest failure mode, and the list is short enough to state.
-        for driver in [
-            "ensure_global_transforms(",
-            "animation_update_system(",
-            "animation_state_machine_update_system(",
-            "sprite_animation_system(",
-            "BoneAttachmentSystem",
-            "gpu_physics_submit_system(",
-            "gpu_physics_readback_system(",
-            "step_gpu_fluid(",
-            "record_fluid_surface(",
-            "resolve_material_descriptions(",
-            "sync_material_descriptions(",
-            "tween_system(",
-            "color_tween_system(",
-            "advance_camera_shakes(",
-            "screen_fade_system(",
-            "typewriter_system(",
-        ] {
-            assert!(
-                code.contains(driver),
-                "the {path_name} path does not run {driver} — whatever it drives moves in one \
-                 picture and is frozen in the other"
-            );
-        }
+        code_only(&src).chars().filter(|c| !c.is_whitespace()).collect()
+    };
+    // Everything a frame does to the world before it is drawn. A capability driven by one picture
+    // and not the other is the editor's oldest failure mode, and the list is short enough to state.
+    let preparation = [
+        "ensure_global_transforms(",
+        "animation_update_system(",
+        "animation_state_machine_update_system(",
+        "sprite_animation_system(",
+        "BoneAttachmentSystem",
+        "gpu_physics_submit_system(",
+        "gpu_physics_readback_system(",
+        "resolve_material_descriptions(",
+        "sync_material_descriptions(",
+        "tween_system(",
+        "color_tween_system(",
+        "advance_camera_shakes(",
+        "screen_fade_system(",
+        "typewriter_system(",
+        "step_particle_emitters(",
+        "terrain_mesh_system(",
+    ];
+    // What both draws do themselves.
+    let draw = ["step_gpu_fluid(", "record_fluid_surface(", "capture_reflection_probes("];
 
-        for driver in [
-            "animation_update_system(",
-            "animation_state_machine_update_system(",
-            "sprite_animation_system(",
-        ] {
-            assert!(
-                code.contains(&format!("{driver}world,animation_dt,"))
-                    || code.contains(&format!("{driver}world,animation_dt)")),
-                "the {path_name} path must advance animation by `animation_dt`, the delta both \
-                 paths take from the clock — a raw frame delta here is a viewport that ignores \
-                 `set_time_scale` and keeps walking through ⏸"
-            );
-        }
+    let game = code_of("crates/gizmo/src/systems/render/mod.rs");
+    for driver in preparation.iter().chain(draw.iter()) {
         assert!(
-            code.contains(clock),
-            "the {path_name} path must derive `animation_dt` from the clock ({clock})"
+            game.contains(driver),
+            "the game path does not run {driver} — whatever it drives is frozen in the game"
+        );
+    }
+    for driver in ["animation_update_system(", "animation_state_machine_update_system(", "sprite_animation_system("] {
+        assert!(
+            game.contains(&format!("{driver}world,animation_dt,")) || game.contains(&format!("{driver}world,animation_dt)")),
+            "the game path must advance animation by `animation_dt`, the clock's delta — a raw \
+             frame delta here is a picture that ignores `set_time_scale` and walks through ⏸"
+        );
+    }
+    assert!(game.contains(".dt()"), "the game path must derive `animation_dt` from the clock");
+
+    let editor = code_of("crates/gizmo-studio/src/render_pipeline/mod.rs");
+    assert!(
+        editor.contains("prepare_frame(world,renderer)"),
+        "the editor no longer prepares its frame with the game's `prepare_frame`"
+    );
+    for driver in preparation {
+        assert!(
+            !editor.contains(driver),
+            "the editor runs {driver} itself as well as through `prepare_frame` — a second copy \
+             of the frame's preparation, which is how the two paths drifted apart"
+        );
+    }
+    for driver in draw {
+        assert!(
+            editor.contains(driver),
+            "the editor's draw does not run {driver} — whatever it drives is missing from the viewport"
         );
     }
 

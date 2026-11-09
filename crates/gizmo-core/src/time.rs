@@ -80,6 +80,9 @@ pub struct Time {
     time_scale: f32,
     /// Maximum dt cap (seconds). Default: 1/20 = 50ms.
     max_dt: f32,
+    /// Held still from outside the game — an editor's ⏸. See [`Time::set_paused`].
+    #[serde(default)]
+    paused: bool,
 }
 
 /// Default max dt: 50ms (20 FPS minimum).
@@ -101,6 +104,7 @@ impl Time {
             frame_count: 0,
             time_scale: 1.0,
             max_dt: DEFAULT_MAX_DT,
+            paused: false,
         }
     }
 
@@ -108,7 +112,8 @@ impl Time {
     /// Must be called once at the start of every frame.
     pub fn update(&mut self, raw_dt: f32) {
         self.raw_dt = raw_dt.max(0.0); // Negatif dt'yi engelle
-        self.dt = (self.raw_dt * self.time_scale).min(self.max_dt);
+        let scale = if self.paused { 0.0 } else { self.time_scale };
+        self.dt = (self.raw_dt * scale).min(self.max_dt);
         self.elapsed += self.dt as f64;
         self.frame_count += 1;
     }
@@ -163,6 +168,26 @@ impl Time {
     /// Sets the time scale. 0.0 = stop, 0.5 = slow motion, 1.0 = normal, 2.0 = fast.
     pub fn set_time_scale(&mut self, scale: f32) {
         self.time_scale = scale.max(0.0);
+    }
+
+    /// Holds the clock still, or lets it go: while paused `dt` is zero and `elapsed` stands, and
+    /// `raw_dt` and the frame counter go on, as with a zero [`time_scale`](Self::set_time_scale).
+    ///
+    /// A pause separate from the time scale, because it is held from outside the game — an
+    /// editor's ⏸ — and the game's own scale must come back as the game left it. Takes effect at
+    /// once: the frame it is set in reads a zero `dt` from then on, so nothing that runs after the
+    /// pause button advances by the frame it was pressed in.
+    pub fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+        if paused {
+            self.dt = 0.0;
+        }
+    }
+
+    /// Whether [`set_paused`](Self::set_paused) is holding the clock still.
+    #[inline]
+    pub fn is_paused(&self) -> bool {
+        self.paused
     }
 
     /// Sets the maximum dt cap (seconds).
@@ -384,6 +409,27 @@ impl Default for PhysicsTime {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A pause held from outside the game stops the clock without touching the game's own scale,
+    /// takes effect in the frame it is set, and lets go to the scale the game left.
+    #[test]
+    fn a_pause_stops_the_clock_and_keeps_the_games_scale() {
+        let mut time = Time::new();
+        time.set_time_scale(0.5);
+        time.update(0.02);
+        assert!((time.dt() - 0.01).abs() < 1e-6);
+        time.set_paused(true);
+        assert_eq!(time.dt(), 0.0, "the frame the pause is pressed in still advanced");
+        let elapsed = time.elapsed();
+        time.update(0.02);
+        assert_eq!(time.dt(), 0.0);
+        assert_eq!(time.elapsed(), elapsed, "elapsed time moved while paused");
+        assert!((time.raw_dt() - 0.02).abs() < 1e-6, "the wall clock stops with it");
+        assert_eq!(time.time_scale(), 0.5);
+        time.set_paused(false);
+        time.update(0.02);
+        assert!((time.dt() - 0.01).abs() < 1e-6, "the game's own scale did not come back");
+    }
 
     #[test]
     fn test_basic_update() {

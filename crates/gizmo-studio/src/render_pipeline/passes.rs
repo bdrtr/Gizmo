@@ -595,7 +595,13 @@ pub(super) fn record_studio_main_pass(
             // validation error that takes the editor down on its first frame.
             // --- 5. GIZMOS VE DEBUG LINES ÇİZİMİ (Play modunda gizle) ---
             if !is_playing_mode {
-                if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
+                // The frame's lines as the preparation ended them (`GizmoFrame`: the game's, and the
+                // editor's own from its update), with this view's added to a copy. The draw used
+                // to add them to the game's `Gizmos` and clear it afterwards — writes into the
+                // world from the draw, and a clear that dropped the last fixed step's lines, which
+                // the game's frame keeps until the next step.
+                if let Some(frame) = world.get_resource::<gizmo::renderer::GizmoFrame>() {
+                    let mut gizmos = frame.gizmos().clone();
                     // Game Camera Frustum'unu Yeşil çiz
                     if let Some(vp) = game_view_proj {
                         gizmos.draw_frustum(vp, [0.0, 1.0, 0.0, 1.0]); // Yeşil

@@ -37,70 +37,35 @@ pub fn execute_render_pipeline(
     renderer: &mut gizmo::renderer::Renderer,
     _light_time: f32,
 ) {
-    // Meshes with a `Transform` but no `GlobalTransform` get one, and every world matrix is
-    // refreshed — the same call the game path makes, for the same reason. Studio's update loop
-    // runs the sync and propagate systems, but neither *adds* the component, so an entity spawned
-    // as `Transform + Mesh + Material` drew in the game and silently vanished in the editor.
-    //
-    // Tweens are advanced first, on the animation clock — the game path does the same — so the
-    // transform pass picks up where they put things this frame.
-    let tween_dt = crate::systems::simulation::animation_delta(world);
-    gizmo::renderer::tween::tween_system(world, tween_dt);
-    gizmo::renderer::components::color_tween_system(world, tween_dt);
-    // Labels before the typewriter, as the game path's frame clocks do: it types what a
-    // `LocalizedText` resolves to, and the text draw reads the resolved `LocalizedLabel`.
-    gizmo::systems::render::resolve_localized_texts(world);
-    gizmo::systems::render::typewriter_system(world, tween_dt);
-    // On the real frame time, as the game path does: a fade must not stop with a paused game.
-    let real_dt = world.get_resource::<gizmo::core::time::Time>().map(|t| t.raw_dt()).unwrap_or(0.0);
-    gizmo::renderer::screen_fade::screen_fade_system(world, real_dt);
-    // A `CameraShake`'s clock runs here, on the animation clock, as the game path's frame clocks
-    // run it; the shaken view is built in `viewpoint` by the game path's `shake_view`, which reads
-    // the camera and never moves it — the shake is in the frame and nowhere else.
-    gizmo::systems::render::advance_camera_shakes(world, tween_dt);
-    gizmo::systems::render::ensure_global_transforms(world);
+    // **The frame's preparation is the game's own.** `prepare_frame` is everything a frame writes
+    // that the game can see — terrain and cloth meshes, the frame clocks (tweens, typewriters,
+    // camera shakes, the screen fade), transforms, materials both ways, skeletal and sprite
+    // animation, bone attachments, the CPU side of GPU physics, particle emitters, the water, the
+    // end of the debug-line frame — and this pipeline used to do a hand-kept copy of most of it,
+    // each piece added the day it was found missing (the state machine, bone attachments, GPU
+    // physics, terrains on load: all four were one path's and not the other's at some point). ⏸
+    // reaches it through the clock (`hold_clock`). What the last draw cost goes to the world first,
+    // as the engine's render stage does.
+    gizmo::systems::render::publish_render_stats(world, renderer);
+    gizmo::systems::render::prepare_frame(world, renderer);
+    // From here on the world is only read.
+    draw_studio_frame(world, state, encoder, view, renderer);
+}
 
-    // `MaterialDesc` → `Material` and back, the same pair the game path runs and for the same
-    // reason: a just-loaded scene carries descriptions and no materials, and a scene about to be
-    // saved needs its descriptions written back. The editor is where materials are authored, so it
-    // is the path that loses most when this is missing.
-    gizmo::renderer::material_sync::resolve_material_descriptions(world, renderer);
-    gizmo::renderer::material_sync::sync_material_descriptions(world);
-
+/// The editor's draw: the viewport, the game view, the furniture — from a prepared world, which it
+/// only reads.
+fn draw_studio_frame(
+    world: &World,
+    state: &StudioState,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    renderer: &mut gizmo::renderer::Renderer,
+) {
     // **Reflection probes** (`ReflectionProbe`): captured by the game path's own function, so the
     // editor's probes are the game's — six draws of the world from the probe, furniture excluded
     // there. It submits its own work, ahead of this frame's, and returns at once when nothing
     // needs capturing.
     gizmo::systems::render::capture_reflection_probes(world, renderer);
-
-    // --- SKELETAL ANIMATION UPDATE (Done before any ECS borrows!) ---
-    //
-    // BOTH drivers, because there are two: `AnimationPlayer` (a clip and a playhead) and
-    // `AnimationStateMachine` (states and transitions). The editor ran only the first, so an
-    // entity animated by a state machine played in an exported game and stood perfectly still in
-    // the viewport — the editor's oldest failure mode, one draw path knowing a capability the
-    // other does not. The parity inventory could not see it either: it scans components *defined*
-    // in `gizmo-renderer/src/components`, and the whole skeletal family is re-exported there from
-    // `gizmo-animation`. Both halves are fixed together.
-    // The delta is the CLOCK's, not this frame's — see `animation_delta`. Passing the raw frame
-    // delta let `set_time_scale(0.5)` halve a game's animation while the viewport ran at full
-    // speed, and left ⏸ with walking skeletons.
-    let animation_dt = crate::systems::simulation::animation_delta(world);
-    gizmo::renderer::animation_update_system(world, animation_dt, &renderer.queue);
-    gizmo::renderer::animation_state_machine_update_system(world, animation_dt, &renderer.queue);
-    gizmo::renderer::components::sprite_animation_system(world, animation_dt);
-    let delta_time = state.actual_dt;
-    
-    let mut bone_att = gizmo::systems::transform::BoneAttachmentSystem;
-    gizmo::core::system::System::run(&mut bone_att, world, delta_time);
-
-    // GPU physics, the other way round from the bone attachment above: the game path ran these
-    // two and the editor did not, so a scene using GPU rigid bodies simulated in an exported game
-    // and sat still in the viewport — while the viewport's own passes were already drawing from
-    // `renderer.gpu_physics`. Both are no-ops unless the renderer has a GPU physics world, so a
-    // scene that never asked for one pays nothing.
-    gizmo::systems::physics::gpu_physics_submit_system(world, renderer);
-    gizmo::systems::physics::gpu_physics_readback_system(world, renderer);
 
     // GPU fluid: stepped here, drawn twice below (particles inside the main pass, surface after
     // it). The editor did not step or draw it at all until 2026-08-19 — a fluid scene flowed in a
@@ -215,7 +180,7 @@ pub fn execute_render_pipeline(
 
     // Set inside the block below: false means the Game panel still needs the fallback copy.
     let mut game_view_rendered = false;
-    // Filled inside the block below, published to the world after it.
+    // Filled inside the block below, kept with the renderer after it.
     let mut render_stats = gizmo::renderer::components::RenderStats::default();
 
     CACHE.with(|cache_ref| {
@@ -597,58 +562,20 @@ pub fn execute_render_pipeline(
 
         // --- 0. COMPUTE PASSES ---
         if let Some(gpu_particles) = &renderer.gpu_particles {
-            gpu_particles.update_params(&renderer.queue, delta_time, 0.0); // time (curl-noise) studio'da kullanılmıyor
+            // On the clock, as the game's draw does: ⏸ holds it, and the curl noise evolves
+            // with the game's time rather than standing at zero.
+            let (dt, time) = world
+                .get_resource::<gizmo::core::time::Time>()
+                .map_or((0.0, 0.0), |t| (t.dt(), t.elapsed() as f32));
+            gpu_particles.update_params(&renderer.queue, dt, time);
 
-            // --- YENİ PARTİCÜL SPAWNLAMA (CPU -> GPU) ---
-            //
-            // Bu blok yıllarca YALNIZCA burada durdu, yani motorun kendi geçidini kullanan bir
-            // oyunda `ParticleEmitter` hiçbir şey yaymıyordu. Motor tarafı artık kendi yolunu
-            // taşıyor: `gizmo::systems::render::step_particle_emitters` (2026-08-14; 2026-11-09'dan
-            // beri çizimden önce, `prepare_frame` içinde — çizim dünyaya yazmıyor).
-            //
-            // `step_particle_emitters`'ı buradan çağıramıyoruz (`&mut World` alıyor, bu boru hattı ise
-            // blok boyunca canlı bir okuma ödünçlemesi tutuyor), ama yayıcı başına kuralı — patlama
-            // ve oran — artık paylaşıyoruz: `gizmo::systems::render::emit` (2026-11-02). Önceden
-            // döngünün bir kopyasıydı.
-            // Collect emitter entities up front through a read borrow that is dropped at the
-            // end of this statement, so the mutable ParticleEmitter query below never coexists
-            // with a same-type read borrow.
-            let emitter_entities: Vec<Entity> = world
-                .query::<(gizmo::core::Entity, &gizmo::renderer::components::ParticleEmitter)>()
-                .iter()
-                .map(|(entity, _)| entity)
-                .collect();
-            // SAFETY: exclusive `&mut World`; ParticleEmitter is a distinct component type from
-            // the read-only Transform query below, and the read borrow above is already dropped,
-            // so this mutable query never aliases another live access to the same storage.
-            let mut emitters =
-                unsafe { world.query_unchecked::<&mut gizmo::renderer::components::ParticleEmitter>() };
-            {
-                let transforms = world.query::<&Transform>();
-                {
-                    // The emission rule is the game path's own function (`emit`): a burst and a
-                    // rate, the same stream per (frame, emitter). This was a copy of the loop.
-                    let frame = world.get_resource::<gizmo::core::time::Time>().map_or(0, |t| t.frame());
-                    let mut all_new_particles = Vec::new();
-                    for e_id in emitter_entities {
-                        if let Some(mut emitter) = emitters.get_mut(e_id) {
-                            if !emitter.is_active {
-                                continue;
-                            }
-                            let base_pos = if let Some(t) = transforms.get(e_id) {
-                                t.position + t.rotation.mul_vec3(emitter.local_offset)
-                            } else {
-                                emitter.local_offset
-                            };
-                            let mut rng = gizmo::math::Rng::with_stream(frame, u64::from(e_id.id()));
-                            gizmo::systems::render::emit(&mut emitter, base_pos, delta_time, &mut rng, &mut all_new_particles);
-                        }
-                    }
-
-                    // And the frame's fracture dust, by the game path's own rule.
-                    all_new_particles.extend(gizmo::systems::render::fracture_dust(world));
-                    gpu_particles.spawn_particles(&renderer.queue, &all_new_particles);
-                }
+            // The frame's new particles are the preparation's (`ParticleSpawns`: the emitters
+            // `prepare_frame` stepped, and the frame's fracture dust), uploaded once per batch —
+            // the game's draw does exactly this. The emitters used to be stepped here, inside the
+            // draw, by the frame's raw delta: they went on emitting under ⏸, and the draw wrote
+            // the game world (`query_unchecked` on `ParticleEmitter`).
+            if let Some(spawns) = world.get_resource::<gizmo::systems::render::ParticleSpawns>() {
+                gpu_particles.spawn_batch(&renderer.queue, spawns.batch(), spawns.particles());
             }
 
             gpu_particles.compute_pass(encoder, gpu_particles.active_particles);
@@ -785,12 +712,9 @@ pub fn execute_render_pipeline(
 
     }); // Cikis: CACHE.with bloğu
 
-    world.insert_resource(render_stats);
-
-    // Çizilen Gizmo'ları sonraki frame için temizle
-    if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
-        gizmos.clear();
-    }
+    // Kept with the renderer, and published to the world at the next frame's preparation, as the
+    // game's draw does: the draw reads the world, it does not write it.
+    renderer.render_stats = Some(render_stats);
 
     // --- 3. POST-PROCESSING (Bloom + Tone Mapping → Ekrana Yaz) ---
     // Scoped so the resource borrow ends before the game view needs the world again.

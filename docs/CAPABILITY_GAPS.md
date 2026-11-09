@@ -939,11 +939,25 @@ Measured in `ecs_absent_apis`:
   next sync. The swapchain image is acquired inside the draw, so the acquire, the paint, the submit
   and the present all go with it. One fix on the way: a frame whose image could not be acquired
   returned early from the loop, before `Input::begin_frame` — so that frame's key edges and mouse
-  delta were seen again by the next update. **Still open:** whether the engine's own paths
-  (`SimpleApp`, `with_scene_render`) should turn the thread on by default — that wants a measurement
-  in a window; the hooks of individual demos that call
-  `default_render_pass` themselves (28 move for free); and the editor (`gizmo-studio`'s pipeline does
-  its own per-frame work rather than `prepare_frame`). One behaviour change, deliberate: an entity
+  delta were seen again by the next update. **Stage 8, 2026-11-09: the editor prepares its frame
+  with the game's `prepare_frame`.** `gizmo-studio`'s pipeline kept a hand-made copy of most of
+  the preparation (each piece added the day it was found missing), on a delta of its own
+  (`animation_delta`, zero on ⏸). Its pause is on the clock now — `Time::set_paused`, held from the
+  editor's mode every frame, separate from the game's `time_scale` and leaving it as the game set
+  it — so the editor calls `publish_render_stats` and `prepare_frame` and then draws from a world it
+  only reads (`draw_studio_frame(&World, …)`). Three writes left the editor's draw with it: particle
+  emitters stepped there by the raw frame delta (they emitted under ⏸; the draw uploads the
+  prepared `ParticleSpawns` now), the editor's frustum and AABB lines added to the game's `Gizmos`
+  and the clear after them (they go into a copy of the `GizmoFrame`, and the last fixed step's lines
+  are no longer cleared), and the `RenderStats` resource (kept on the renderer and published at the
+  next preparation). `render_parity` counts `prepare_frame`'s body as the editor's code when the
+  editor calls it, and asserts that the editor runs none of the preparation's drivers a second time.
+  Found on the way, a regression of stage 5: the editor's shader hot-reload asked the game world for
+  the `Renderer`, which is no longer there, and logged a rebuild that never happened. The update
+  asks for one now and the render hook, which holds the renderer, does it. **Still open:** whether
+  the engine's own paths (`SimpleApp`, `with_scene_render`) should turn the thread on by default —
+  that wants a measurement in a window; and the hooks of individual demos that call
+  `default_render_pass` themselves (28 move for free). One behaviour change, deliberate: an entity
   parented to a shaking camera is no longer shaken with it (it was moved by the camera's shaken
   `Transform` and left with that `GlobalTransform` after the undo; the camera's yaw and pitch shake
   never reached it).

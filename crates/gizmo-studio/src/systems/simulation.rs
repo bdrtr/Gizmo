@@ -67,12 +67,12 @@ pub fn handle_simulation(
                     // the only demo that hot-reloads shaders (`rpg_demo`) calls it directly. So
                     // does this now, and the dead event type went with it.
                     //
-                    // The renderer IS a live resource here: the app loop removes it just before
-                    // drawing and puts it back after, and the update hook runs before that.
-                    world.resource_scope(|_world, renderer: &mut gizmo::renderer::Renderer| {
-                        renderer.rebuild_shaders();
-                    });
-                    editor_state.log_info(&format!("🔥 Shader hot-reload: {} yeniden derlendi", path_str));
+                    // The rebuild itself is the render hook's: the renderer is not in the game
+                    // world (the app keeps it for the draw), so asking the world for it found
+                    // nothing, and from 2026-11-09 until this line this logged a rebuild that never
+                    // happened. The update asks; the render hook, which holds the renderer, does.
+                    request_shader_rebuild(world);
+                    editor_state.log_info(&format!("🔥 Shader hot-reload: {} yeniden derleniyor", path_str));
                 }
             }
         }
@@ -138,6 +138,8 @@ pub fn handle_simulation(
     if let Some(mut audio) = world.get_resource_mut::<gizmo::audio::AudioManager>() {
         audio.set_all_paused(editor_state.is_paused());
     }
+    // …and the clock: see `hold_clock`.
+    hold_clock(world, editor_state);
 
     // --- FIGHT HUD SYNC: FighterController → EditorState.fight_hud ---
     //
@@ -304,35 +306,37 @@ pub fn editor_owns_the_physics_step(world: &World) -> bool {
         .unwrap_or(true)
 }
 
-/// How much time skeletal animation should advance by in the **editor's** picture this frame.
+/// ⏸ holds the engine's clock still: `Time::set_paused`, every frame, from the editor's mode.
 ///
-/// The engine's draw path takes this from [`Time::dt`](gizmo::core::time::Time::dt) — the frame
-/// delta scaled by `time_scale` and clamped — and skips the update entirely at zero. The studio
-/// passed its own raw frame delta instead, and the two disagreed in exactly the cases a clock
-/// exists for: a script calling `set_time_scale(0.5)` in Play mode halved the game's animation and
-/// left the viewport's running at full speed, and `set_time_scale(0.0)` — pause — stopped physics
-/// while the skeletons kept walking. `current_time += dt * speed` is the whole of the animation
-/// clock, so the delta *is* the playback rate.
-///
-/// Three cases, and the middle one is the reason this is a function rather than one expression:
-/// **⏸ returns zero.** Pausing stops `PlayLoop`, and `Time` keeps advancing regardless (the
-/// windowed loop updates it every frame, paused or not), so reading `Time::dt` alone would leave a
-/// paused editor animating. Editing returns the clock too — a designer previewing a clip wants it
-/// to play, and `Time::dt` is that, only clamped, so a two-second hitch no longer jumps the pose
-/// two seconds forward.
-pub fn animation_delta(world: &World) -> f32 {
-    let paused = world
-        .try_get_resource::<EditorState>()
-        .map(|editor| editor.is_paused())
-        .unwrap_or(false);
-    if paused {
-        return 0.0;
+/// Pausing stops `PlayLoop`, and the windowed loop updates `Time` every frame, paused or not — so
+/// everything else that reads the clock (the frame's tweens, skeletal and sprite animation,
+/// typewriters, camera shakes, particle emitters, all in the engine's `prepare_frame`) kept going
+/// over a frozen game. The editor's render pipeline used to read a delta of its own that was zero
+/// on pause (`animation_delta`); with the pause on the clock itself it prepares its frame with the
+/// game's own `prepare_frame`, and a script's `set_time_scale` is still the game's, untouched by
+/// the pause and back as it was on ▶.
+pub(crate) fn hold_clock(world: &mut World, editor: &EditorState) {
+    if let Some(mut time) = world.get_resource_mut::<gizmo::core::time::Time>() {
+        if time.is_paused() != editor.is_paused() {
+            time.set_paused(editor.is_paused());
+        }
     }
-    world
-        .get_resource::<gizmo::core::time::Time>()
-        .map(|time| time.dt())
-        .unwrap_or(0.0)
 }
+
+/// The shaders changed on disk: rebuild the pipelines at the next draw — see
+/// [`take_shader_rebuild`].
+pub(crate) fn request_shader_rebuild(world: &mut World) {
+    world.insert_resource(ShaderRebuild);
+}
+
+/// Whether a shader rebuild was asked for since the last call, cleared. The render hook calls it,
+/// holding the renderer the update does not have.
+pub(crate) fn take_shader_rebuild(world: &mut World) -> bool {
+    world.remove_resource::<ShaderRebuild>().is_some()
+}
+
+/// A shader file changed; the pipelines are rebuilt at the next draw.
+struct ShaderRebuild;
 
 #[cfg(test)]
 mod tests {
@@ -512,63 +516,59 @@ mod tests {
         assert!(!ed.fight_hud.active, "stopping ends the round and clears the HUD");
     }
 
-    /// **The editor's animation runs on the clock, and ⏸ stops it.**
+    /// **⏸ holds the engine's clock, and only the pause is the editor's.**
     ///
-    /// The engine's draw path advances skeletons by `Time::dt()`; the studio used its own raw
-    /// frame delta, so the two disagreed exactly where a clock matters — `set_time_scale(0.5)`
-    /// halved a game's animation and left the viewport at full speed, and pause stopped physics
-    /// while the skeletons kept walking.
+    /// The engine's frame (`prepare_frame`, which the editor's render pipeline prepares with)
+    /// advances skeletons, tweens, sprites and emitters by `Time::dt()`. The windowed loop updates
+    /// `Time` every frame, paused or not, so unless ⏸ reaches the clock everything but physics kept
+    /// moving under the pause overlay. And the pause is not the game's time scale: a script's
+    /// `set_time_scale(0.5)` slows the viewport with the game, and comes back as it was on ▶.
     #[test]
-    fn the_editors_animation_delta_follows_the_clock_and_stops_on_pause() {
-        use super::animation_delta;
+    fn the_editors_pause_holds_the_clock_and_keeps_the_games_scale() {
         use gizmo::core::time::Time;
 
         let mut world = World::new();
-        assert_eq!(
-            animation_delta(&world),
-            0.0,
-            "no clock in the world means no animation, the same answer the game path gives"
-        );
-
         let mut time = Time::new();
-        time.update(1.0 / 60.0);
+        time.set_time_scale(0.5);
         world.insert_resource(time);
-        world.insert_resource(EditorState::default());
-        assert!(
-            (animation_delta(&world) - 1.0 / 60.0).abs() < 1e-6,
-            "editing: the clock's delta, so a designer can preview a clip"
-        );
+        let mut ed = EditorState::default();
+        let mut st = studio_state();
+        let input = Input::new();
+        let tick = |world: &mut World| world.get_resource_mut::<Time>().expect("clock").update(1.0 / 60.0);
+        let dt = |world: &World| world.get_resource::<Time>().expect("clock").dt();
 
-        // A script slowing time down must slow the viewport with it.
-        {
-            let mut time = world.get_resource_mut::<Time>().expect("clock");
-            time.set_time_scale(0.5);
-            time.update(1.0 / 60.0);
-        }
-        assert!(
-            (animation_delta(&world) - 1.0 / 120.0).abs() < 1e-6,
-            "half speed halves the animation too — this is the number that used to be full speed"
-        );
+        tick(&mut world);
+        handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
+        assert!((dt(&world) - 1.0 / 120.0).abs() < 1e-6, "editing: the clock runs, at the game's scale");
 
-        world
-            .get_resource_mut::<EditorState>()
-            .expect("editor")
-            .toggle_play();
-        assert!(
-            (animation_delta(&world) - 1.0 / 120.0).abs() < 1e-6,
-            "playing: still the clock"
-        );
+        ed.toggle_play();
+        tick(&mut world);
+        handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
+        assert!((dt(&world) - 1.0 / 120.0).abs() < 1e-6, "playing: the clock runs");
 
-        world
-            .get_resource_mut::<EditorState>()
-            .expect("editor")
-            .toggle_pause();
-        assert_eq!(
-            animation_delta(&world),
-            0.0,
-            "⏸ freezes the picture — `Time` keeps advancing while paused, so reading it alone \
-             would leave the skeletons walking under the pause overlay"
-        );
+        ed.toggle_pause();
+        handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
+        assert_eq!(dt(&world), 0.0, "the frame ⏸ is pressed in still advances what reads the clock after it");
+        tick(&mut world);
+        handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
+        assert_eq!(dt(&world), 0.0, "⏸ does not hold the clock");
+
+        ed.toggle_pause();
+        handle_simulation(&mut world, &mut ed, &mut st, 1.0 / 60.0, &input);
+        tick(&mut world);
+        assert!((dt(&world) - 1.0 / 120.0).abs() < 1e-6, "▶ again: the game's own scale is back");
+    }
+
+    /// A shader change asks for a rebuild; the render hook — which holds the renderer the update
+    /// does not — takes the request once.
+    #[test]
+    fn a_shader_change_is_rebuilt_by_the_render_hook_once() {
+        let mut world = World::new();
+        assert!(!super::take_shader_rebuild(&mut world));
+        super::request_shader_rebuild(&mut world);
+        super::request_shader_rebuild(&mut world);
+        assert!(super::take_shader_rebuild(&mut world));
+        assert!(!super::take_shader_rebuild(&mut world), "one rebuild for the changes since the last draw");
     }
 
     /// **The editor steps physics only when it owns the frame.**
