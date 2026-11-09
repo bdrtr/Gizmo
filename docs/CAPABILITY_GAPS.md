@@ -839,7 +839,9 @@ Measured in `ecs_absent_apis`:
   run in parallel with game logic. **Under way since 2026-11-09.** The mechanism exists in
   `gizmo_core::extract::Extractor`: a second world kept a copy of chosen component and resource
   types, entities arriving with the original's exact handle (`World::spawn_at`), only what changed
-  since the last run copied, removals, despawns, recycled ids and a cleared original followed. Not
+  since the last run copied, removals, despawns, recycled ids and a cleared original followed. Seen in
+  `render_world`: the picture is drawn from the copy alone, and stopping the copy (Space) freezes it
+  while the game goes on. Not
   yet wired: the render path still does simulation work (`prepare_frame`: clocks, tweens, cloth and
   terrain meshes, material sync, skeletal and sprite animation, GPU physics readback; particle
   emitters, `CameraShake`, `Typewriter`, `ReflectionProbe::captured`, `RenderStats`, `Gizmos`),
