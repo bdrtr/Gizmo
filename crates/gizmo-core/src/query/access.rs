@@ -50,6 +50,15 @@ impl<'w, D: QueryData, F: QueryFilter> Query<'w, D, F> {
         query
     }
 
+    /// [`new`](Self::new) with `Changed` and `Added` comparing against `ref_tick`, and no default
+    /// filters: what [`crate::extract`] reads with, which has its own "since last time" per type
+    /// and copies disabled entities too, since nothing on the render side filters them out.
+    pub(crate) fn new_since(world: &'w World, ref_tick: u32) -> Self {
+        let mut query = Self::new(world);
+        query.ref_tick = ref_tick;
+        query
+    }
+
     pub(crate) fn new_cached(world: &'w mut World) -> Self {
         let mut used_types = Vec::new();
         <(D, F)>::check_aliasing(&mut used_types);

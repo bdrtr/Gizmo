@@ -836,7 +836,15 @@ Measured in `ecs_absent_apis`:
 
 - **No second world.** Rendering reads game components directly (measured: `set_render` sees 4
   live components with no extraction step). Cheaper and simpler; the cost is that render cannot
-  run in parallel with game logic.
+  run in parallel with game logic. **Under way since 2026-11-09.** The mechanism exists in
+  `gizmo_core::extract::Extractor`: a second world kept a copy of chosen component and resource
+  types, entities arriving with the original's exact handle (`World::spawn_at`), only what changed
+  since the last run copied, removals, despawns, recycled ids and a cleared original followed. Not
+  yet wired: the render path still does simulation work (`prepare_frame`: clocks, tweens, cloth and
+  terrain meshes, material sync, skeletal and sprite animation, GPU physics readback; particle
+  emitters, `CameraShake`, `Typewriter`, `ReflectionProbe::captured`, `RenderStats`, `Gizmos`),
+  all of which writes state the game reads, so it has to move to the game's side before the render
+  path can read a copy.
 - ~~**Component registration is typed.**~~ **Closed 2026-11-08:** `World::register_component(ComponentDescriptor::new(name,
   layout))` defines a component with no Rust type — drop and clone glue optional (`unsafe` `with_drop` / `with_clone`), table or
   sparse, mutable or not — and returns a `ComponentKey`, which is what storage, queries, hooks and the scheduler are keyed by for

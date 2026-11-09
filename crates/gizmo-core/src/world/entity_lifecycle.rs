@@ -50,6 +50,39 @@ impl World {
         entity
     }
 
+    /// Spawns an entity with exactly this handle — id and generation — for a world that mirrors
+    /// another world's entities ([`crate::extract::Extractor`]). Whatever else holds the id here,
+    /// a stale generation of it or an entity this world spawned for itself, is despawned first:
+    /// in a mirror the id belongs to the world being mirrored. Does nothing when `entity` is
+    /// already alive here.
+    ///
+    /// A world that is mirrored into should not also [`spawn`](Self::spawn) its own entities:
+    /// its allocator hands out the ids the original has not used yet, and the original's next
+    /// spawn takes them back through this function.
+    ///
+    /// # Panics
+    /// For [`Entity::INVALID`], or if the [`Entities`] resource has been removed from the world.
+    pub fn spawn_at(&mut self, entity: Entity) {
+        if self.is_alive(entity) && self.entity_location(entity.id()).is_valid() {
+            return;
+        }
+        let reserve = |world: &World| {
+            world.get_resource::<Entities>().expect("Entities resource not initialized").reserve_exact(entity)
+        };
+        if let Err(occupant) = reserve(self) {
+            assert!(occupant.id() != u32::MAX, "spawn_at: Entity::INVALID cannot be spawned");
+            if self.is_alive(occupant) {
+                self.despawn(occupant);
+            }
+            if let Err(occupant) = reserve(self) {
+                // Reserved but never flushed (a `Commands::spawn` still in its queue): free it.
+                self.get_resource::<Entities>().expect("Entities resource not initialized").free(occupant);
+                reserve(self).expect("spawn_at: the id is free after its occupant was released");
+            }
+        }
+        self.flush_spawn(entity);
+    }
+
     /// Spawns a `Bundle` in one go — creates the entity and adds all of its
     /// components.
     ///

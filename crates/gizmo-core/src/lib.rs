@@ -51,6 +51,7 @@ pub mod cvar;
 pub mod dynamic;
 pub mod entity;
 pub mod event;
+pub mod extract;
 pub mod hierarchy;
 pub mod hotpatch;
 pub mod input;

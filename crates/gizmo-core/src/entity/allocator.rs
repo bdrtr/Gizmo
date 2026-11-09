@@ -146,6 +146,39 @@ impl Entities {
         }
     }
 
+    /// Marks exactly `entity` — its id **and** its generation — as allocated, for a world that
+    /// mirrors another one's entities (a render world, [`crate::extract`]): the copy must carry the
+    /// same handle as the original, or every cache keyed by `Entity` reads the wrong thing.
+    ///
+    /// An id past the high-water mark grows the id space up to it, and the ids skipped on the way
+    /// go on the free list at generation 0. A free id is taken off the free list and given
+    /// `entity`'s generation. Returns `Err` with the occupant when the id is already allocated —
+    /// to `entity` itself or to another generation — and changes nothing then.
+    pub fn reserve_exact(&self, entity: Entity) -> Result<(), Entity> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let id = entity.id();
+        if id == u32::MAX {
+            // `Entity::INVALID`'s id; reserving it would also leave no high-water mark past it.
+            return Err(entity);
+        }
+        if id >= state.next_entity_id {
+            for skipped in state.next_entity_id..id {
+                state.generations.push(0);
+                state.free_set.insert(skipped);
+                state.free_ids.push_back(skipped);
+            }
+            state.generations.push(entity.generation());
+            state.next_entity_id = id + 1;
+            return Ok(());
+        }
+        if state.free_set.remove(&id) {
+            state.free_ids.retain(|&free| free != id);
+            state.generations[id as usize] = entity.generation();
+            return Ok(());
+        }
+        Err(Entity::new(id, state.generations[id as usize]))
+    }
+
     /// Retires `entity`'s id: bumps its slot's generation — which kills every outstanding
     /// handle to that slot, not just this one — and queues the id for reuse.
     ///
