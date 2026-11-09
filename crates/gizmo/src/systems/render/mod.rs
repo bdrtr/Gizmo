@@ -138,20 +138,22 @@ pub fn ensure_global_transforms(world: &mut World) {
 ///     .expect("the application failed to run");
 /// ```
 pub trait AppSceneRenderExt {
-    /// Sets `set_render` up so that the scene is drawn with [`default_render_pass`].
+    /// Sets `set_render` up so that the scene is drawn as [`default_render_pass`] draws it, from a
+    /// copy of the game world ([`RenderWorld`]).
     fn with_scene_render(self) -> Self;
 }
 
 impl<State: 'static> AppSceneRenderExt for gizmo_app::App<State> {
     fn with_scene_render(self) -> Self {
-        self.set_render(|world, _state, encoder, view, renderer, _light_time| {
+        let mut copy = RenderWorld::new();
+        self.set_render(move |world, _state, encoder, view, renderer, _light_time| {
             renderer.gpu_fluid = None;
             renderer.gpu_physics = None;
             renderer.ssr = None;
             renderer.ssgi = None;
             renderer.volumetric = None;
             renderer.taa = None;
-            default_render_pass(world, encoder, view, renderer);
+            copy.frame(world, encoder, view, renderer);
         })
     }
 }
@@ -723,7 +725,9 @@ fn placed_at(world: &World, id: Entity) -> Vec3 {
 
 /// The per-frame clocks a game can see, advanced once a frame: tweens, colour tweens, typewriters
 /// and camera shakes on the animation clock (so time scale and pause apply), the screen fade on
-/// the real frame time (a fade into a pause menu must not stop with the game it is covering).
+/// the real frame time (a fade into a pause menu must not stop with the game it is covering) —
+/// and, before them, each `LocalizedText`'s label ([`resolve_localized_texts`]), which a
+/// typewriter types and a missing key is recorded from.
 ///
 /// They live with drawing because they are what moves on screen, but game logic waits on them —
 /// a level that changes when the fade has gone dark, a door that opens when its tween ends — so a
@@ -731,6 +735,8 @@ fn placed_at(world: &World, id: Entity) -> Vec3 {
 /// [`HeadlessFrames`](crate::simple::HeadlessFrames) both call this one function, so the two
 /// cannot drift apart.
 pub fn advance_frame_clocks(world: &mut World) {
+    // Labels first: a typewriter types what its `LocalizedText` resolves to this frame.
+    resolve_localized_texts(world);
     let tween_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
     crate::renderer::tween::tween_system(world, tween_dt);
     crate::renderer::components::color_tween_system(world, tween_dt);
@@ -1467,6 +1473,9 @@ pub use batching::{clear_render_cache, draws_blended, DrawItem, RenderCache};
 pub mod visibility_index;
 mod passes;
 
+mod render_world;
+pub use render_world::{render_extractor, RenderWorld};
+
 mod decals;
 pub use decals::{collect_decals, record_forward_decals};
 
@@ -1484,7 +1493,7 @@ pub mod water;
 pub use water::WaterVolumes;
 
 mod text;
-pub use text::{record_text, typewriter_system, Typewriter};
+pub use text::{record_text, resolve_localized_texts, typewriter_system, LocalizedLabel, Typewriter};
 
 mod hidden;
 pub use hidden::collect_hidden;

@@ -545,8 +545,8 @@ fn renderer_component_types(workspace: &std::path::Path) -> Vec<String> {
     components
 }
 
-/// One draw path's source, with `shared.rs` left out, each file cut at its `#[cfg(test)]`, and
-/// every file that is a test module as a whole left out.
+/// One draw path's source, with `shared.rs` and `render_world.rs` left out, each file cut at its
+/// `#[cfg(test)]`, and every file that is a test module as a whole left out.
 ///
 /// `shared.rs` is excluded because what lives there is *neither* path in particular; the cut is
 /// because a test naming a component is not the path handling it (a GPU guard spawning a
@@ -571,7 +571,9 @@ fn draw_path_source(dir: std::path::PathBuf) -> String {
         .collect();
     sources
         .iter()
-        .filter(|(f, _)| f.file_name().is_some_and(|n| n != "shared.rs"))
+        // `render_world.rs` names the types a render world copies (`render_extractor`), which is a
+        // list, not a path handling any of them: read as a path, it made every light "game only".
+        .filter(|(f, _)| f.file_name().is_some_and(|n| n != "shared.rs" && n != "render_world.rs"))
         .filter(|(f, _)| {
             f.file_stem()
                 .and_then(|s| s.to_str())

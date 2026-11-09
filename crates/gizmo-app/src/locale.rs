@@ -50,7 +50,8 @@ pub struct Locale {
     fallback: Option<String>,
     tables: HashMap<String, HashMap<String, String>>,
     /// Keys asked for and found in no table, for [`missing`](Self::missing). Behind a lock because
-    /// lookups take `&self` — they happen at draw time, from a shared borrow.
+    /// lookups take `&self`, from a shared borrow (the frame's preparation resolves every
+    /// `LocalizedText` that way, in the game's world).
     missing: Mutex<BTreeSet<String>>,
 }
 

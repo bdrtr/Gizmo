@@ -83,6 +83,22 @@ trait Step: Send {
     fn reset(&mut self) {}
     /// Brings `render` up to date with `main`.
     fn run(&mut self, main: &World, render: &mut World);
+    /// What this step copies, as [`Extractor::copies`] reports it; `None` for a step of your own.
+    fn copies(&self) -> Option<Copied> {
+        None
+    }
+}
+
+/// One thing an [`Extractor`] copies, named by [`std::any::type_name`] — see [`Extractor::copies`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Copied {
+    /// A component type, `component::<T>()`.
+    Component(&'static str),
+    /// A resource type, `resource::<T>()`.
+    Resource(&'static str),
+    /// The asset type of an `Assets<T>` map, `assets::<T>()`.
+    Assets(&'static str),
 }
 
 struct ComponentStep<T: Component> {
@@ -93,6 +109,10 @@ struct ComponentStep<T: Component> {
 }
 
 impl<T: Component> Step for ComponentStep<T> {
+    fn copies(&self) -> Option<Copied> {
+        Some(Copied::Component(std::any::type_name::<T>()))
+    }
+
     fn attach(&mut self, main: &mut World) {
         let log = Arc::downgrade(&self.removed);
         main.register_on_remove::<T>(move |_, entity| push(&log, entity));
@@ -133,6 +153,10 @@ struct ResourceStep<T> {
 }
 
 impl<T: Clone + Send + Sync + 'static> Step for ResourceStep<T> {
+    fn copies(&self) -> Option<Copied> {
+        Some(Copied::Resource(std::any::type_name::<T>()))
+    }
+
     fn reset(&mut self) {
         self.last = 0;
     }
@@ -160,6 +184,10 @@ struct AssetsStep<T> {
 }
 
 impl<T: Clone + Send + Sync + 'static> Step for AssetsStep<T> {
+    fn copies(&self) -> Option<Copied> {
+        Some(Copied::Assets(std::any::type_name::<T>()))
+    }
+
     fn reset(&mut self) {
         self.seen = None;
     }
@@ -266,6 +294,12 @@ impl Extractor {
     pub fn assets<T: Clone + Send + Sync + 'static>(&mut self) -> &mut Self {
         self.steps.push(Box::new(AssetsStep::<T> { seen: None, _marker: std::marker::PhantomData }));
         self
+    }
+
+    /// What this extractor copies, in the order it was told — the component, resource and asset
+    /// types, not the steps of your own. For a check that a copy holds what its reader needs.
+    pub fn copies(&self) -> Vec<Copied> {
+        self.steps.iter().filter_map(|step| step.copies()).collect()
     }
 
     /// A step of your own, run on every run after the steps added before it.
@@ -639,5 +673,16 @@ mod tests {
         let copy = render.get_resource::<Assets<Mesh>>().unwrap();
         assert_eq!(copy.get(&handles[3]), Some(&Mesh(30)));
         assert_eq!(copy.len(), 10);
+    }
+
+    #[test]
+    fn an_extractor_says_what_it_copies() {
+        let mut ex = Extractor::new();
+        ex.component::<Pos>().resource::<Fog>().assets::<Shape>().step(|_, _| {});
+        let names: Vec<Copied> = ex.copies();
+        assert_eq!(names.len(), 3, "a step of your own is not a copied type");
+        assert!(matches!(names[0], Copied::Component(n) if n.ends_with("::Pos")));
+        assert!(matches!(names[1], Copied::Resource(n) if n.ends_with("::Fog")));
+        assert!(matches!(names[2], Copied::Assets(n) if n.ends_with("::Shape")));
     }
 }

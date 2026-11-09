@@ -2,9 +2,11 @@
 //!
 //! The game world spawns a cube every tenth of a second, keeps the newest 80, spins and orbits
 //! them. Every frame the render hook prepares the game world (`prepare_frame`: clocks, transforms,
-//! materials — everything a frame writes that the game can see), brings a second world up to date
-//! with `gizmo_core::extract::Extractor`, and draws *that* with `draw_frame`, which takes the world
-//! read-only; the game world is never handed to the draw.
+//! materials — everything a frame writes that the game can see), brings a `RenderWorld` — a second
+//! world kept by `render_extractor`, which copies every type the draw reads — up to date, and draws
+//! *that* with `draw_frame`, which takes the world read-only; the game world is never handed to the
+//! draw. `RenderWorld::frame` is those steps in one call, and what `SimpleApp` and
+//! `with_scene_render` draw with; this hook spells them out to be able to stop the copy.
 //!
 //! - **Space** stops the copying. The game carries on (the left-hand counters keep moving), the
 //!   picture freezes on the last copy; press again and it jumps to where the game is.
@@ -15,11 +17,11 @@
 //!   Every two seconds the game recolours one material in its map (`Assets::get_mut`); the copy
 //!   clones that one entry and no other, and the cubes using it change colour in the picture.
 //!
-//! Stages 2 and 3 of CAPABILITY_GAPS A8: the draw only reads, and reads nothing a copy cannot hold
-//! (asset maps, the visibility index, the water for underwater fog). The app does not yet own a
-//! render world, which is why the hook wires the three steps itself.
+//! CAPABILITY_GAPS A8: the draw only reads, reads nothing a copy cannot hold (asset maps, the
+//! visibility index, the water for underwater fog, resolved localized labels), and every game
+//! drawn by the engine's own render hooks is drawn from a copy.
 
-use gizmo::core::extract::Extractor;
+use gizmo::systems::render::RenderWorld;
 use gizmo::core::system::{IntoSystemConfig, Phase, ResMut};
 use gizmo::core::World;
 use gizmo::prelude::*;
@@ -67,24 +69,7 @@ struct Report {
 }
 
 fn main() {
-    let mut render_world = World::new();
-    let mut extractor = Extractor::new();
-    extractor
-        .component::<Transform>()
-        .component::<GlobalTransform>()
-        .component::<Mesh>()
-        .component::<Material>()
-        .component::<MeshRenderer>()
-        .component::<Camera>()
-        .component::<DirectionalLight>()
-        .component::<gizmo::core::component::IsHidden>()
-        .component::<Children>()
-        .component::<Parent>()
-        .component::<Handle<Mesh>>()
-        .component::<Handle<Material>>()
-        .assets::<Mesh>()
-        .assets::<Material>()
-        .resource::<gizmo::core::time::Time>();
+    let mut copy = RenderWorld::new();
 
     App::<SimpleSceneState>::new("Gizmo Engine - Render World", 1280, 720)
         .with_simple_scene(|scene, state| {
@@ -147,8 +132,9 @@ fn main() {
             let copying = world.get_resource::<Game>().is_some_and(|g| g.copying);
             let started = Instant::now();
             if copying {
-                extractor.run(world, &mut render_world);
+                copy.extract(world);
             }
+            let render_world = copy.world();
             let extract_ms = started.elapsed().as_secs_f64() * 1e3;
 
             let materials = |w: &World| w.get_resource::<Assets<Material>>().map_or(0, |a| a.len());
@@ -158,14 +144,14 @@ fn main() {
                 copy_entities: render_world.query::<&MeshRenderer>().iter().count(),
                 copy_brains: render_world.query::<&Brain>().iter().count(),
                 game_materials: materials(world),
-                copy_materials: materials(&render_world),
+                copy_materials: materials(render_world),
                 extract_ms,
                 copying,
             };
             world.insert_resource(report);
 
             // The only world the draw sees — and only to read it.
-            gizmo::systems::render::draw_frame(&render_world, encoder, view, renderer);
+            gizmo::systems::render::draw_frame(render_world, encoder, view, renderer);
             gizmo::systems::render::publish_render_stats(world, renderer);
         })
         .set_ui(|world, _state, ctx| {

@@ -929,8 +929,12 @@ impl SimpleAppExt for App<SimpleSceneState> {
             state
         })
         .set_update(simple_scene_update)
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            systems::default_render_pass(world, encoder, view, renderer);
+        // Drawn from a copy of the game world (`RenderWorld`): the draw is handed only the copy.
+        .set_render({
+            let mut copy = systems::render::RenderWorld::new();
+            move |world, _state, encoder, view, renderer, _light_time| {
+                copy.frame(world, encoder, view, renderer);
+            }
         })
     }
 }

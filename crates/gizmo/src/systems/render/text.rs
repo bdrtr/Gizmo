@@ -377,13 +377,66 @@ fn typed_display(world: &World, entity: Entity, full: &str) -> Option<String> {
     Some(full.chars().take(t.visible()).collect())
 }
 
-/// What a [`LocalizedText`](crate::app::locale::LocalizedText) on `entity` shows in the world's
-/// [`Locale`](crate::app::locale::Locale) — or `None` (no label, or no locale) to draw the `Text`
-/// as authored. Resolved at draw time, so a language switch relabels every one on the next frame.
+/// The string a [`LocalizedText`](crate::app::locale::LocalizedText) shows this frame, in the
+/// game's [`Locale`](crate::app::locale::Locale) — written by [`resolve_localized_texts`] in the
+/// frame's preparation, and what the draw reads.
+///
+/// The draw used to resolve labels itself, which made it a writer: a lookup that misses records
+/// the key in the locale (`Locale::missing`, behind a lock, from a shared borrow). Drawn from a
+/// copy of the world, those keys would have gone into the copy's locale and never reached the game.
+/// Resolved in the preparation they are recorded where the game reads them, and the draw needs no
+/// `Locale` at all. Written only when the string changes, so a copy of the world takes it again on
+/// those frames and no others.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct LocalizedLabel(pub String);
+
+gizmo_core::impl_component!(LocalizedLabel);
+
+/// Resolves every [`LocalizedText`](crate::app::locale::LocalizedText) against the world's
+/// [`Locale`](crate::app::locale::Locale) into its [`LocalizedLabel`]: written where the string
+/// changed, removed where the label or the locale is gone (the `Text` then shows as authored).
+/// The frame's clocks run it first ([`advance_frame_clocks`](super::advance_frame_clocks)) — a
+/// typewriter types what the label resolves to — and the editor's pipeline runs it too.
+pub fn resolve_localized_texts(world: &mut World) {
+    use crate::app::locale::{Locale, LocalizedText};
+    use crate::core::query::Without;
+    let mut written = Vec::new();
+    let mut gone = Vec::new();
+    {
+        let locale = world.get_resource::<Locale>();
+        let shown = world.query::<&LocalizedLabel>();
+        for (entity, text) in world.query::<(Entity, &LocalizedText)>().iter() {
+            match locale.as_deref() {
+                Some(locale) => {
+                    let line = text.resolve(locale);
+                    if shown.get(entity).is_none_or(|l| l.0 != line) {
+                        written.push((entity, line));
+                    }
+                }
+                None if shown.get(entity).is_some() => gone.push(entity),
+                None => {}
+            }
+        }
+        gone.extend(
+            world
+                .query_filtered::<(Entity, &LocalizedLabel), Without<LocalizedText>>()
+                .iter()
+                .map(|(entity, _)| entity),
+        );
+    }
+    for (entity, line) in written {
+        world.add_component(entity, LocalizedLabel(line));
+    }
+    for entity in gone {
+        world.remove_component::<LocalizedLabel>(entity);
+    }
+}
+
+/// What a [`LocalizedText`](crate::app::locale::LocalizedText) on `entity` shows — its
+/// [`LocalizedLabel`] — or `None` (no label, or no locale) to draw the `Text` as authored. The
+/// preparation resolves it each frame, so a language switch relabels every one on the next frame.
 fn localized_display(world: &World, entity: Entity) -> Option<String> {
-    let label = world.query::<&crate::app::locale::LocalizedText>().get(entity).cloned()?;
-    let locale = world.get_resource::<crate::app::locale::Locale>()?;
-    Some(label.resolve(&locale))
+    world.query::<&LocalizedLabel>().get(entity).map(|l| l.0.clone())
 }
 
 /// What a [`Dropdown`](crate::ui::Dropdown) on `entity` shows on its button: the selected option
@@ -821,16 +874,40 @@ mod clip_tests {
         use crate::app::locale::{Locale, LocalizedText};
         let mut world = World::new();
         let label = world.spawn_bundle((LocalizedText::new("menu.score").with_arg("n", 3),));
+        resolve_localized_texts(&mut world);
         assert_eq!(localized_display(&world, label), None, "no locale: the Text as authored");
         let mut locale = Locale::new("tr");
         locale.insert("tr", "menu.score", "Skor: {n}");
         locale.insert("en", "menu.score", "Score: {n}");
         world.insert_resource(locale);
+        resolve_localized_texts(&mut world);
         assert_eq!(localized_display(&world, label).as_deref(), Some("Skor: 3"));
         world.get_resource_mut::<Locale>().unwrap().set_language("en");
+        resolve_localized_texts(&mut world);
         assert_eq!(localized_display(&world, label).as_deref(), Some("Score: 3"));
         let plain = world.spawn();
         assert_eq!(localized_display(&world, plain), None);
+
+        // A label written only when its string changes: a frame with nothing new leaves it alone.
+        world.begin_change_frame(world.tick);
+        resolve_localized_texts(&mut world);
+        assert_eq!(
+            world.query_filtered::<(Entity, &LocalizedLabel), gizmo_core::query::Changed<LocalizedLabel>>().iter().count(),
+            0,
+            "an unchanged label was written again"
+        );
+
+        // A missing key is recorded in the game's locale — by the preparation, which has it — and
+        // the label goes with its `LocalizedText`, and with the locale.
+        let lost = world.spawn_bundle((LocalizedText::new("menu.lost"),));
+        resolve_localized_texts(&mut world);
+        assert!(world.get_resource::<Locale>().unwrap().missing().iter().any(|k| k == "menu.lost"));
+        world.remove_component::<LocalizedText>(lost);
+        resolve_localized_texts(&mut world);
+        assert_eq!(localized_display(&world, lost), None);
+        world.remove_resource::<Locale>();
+        resolve_localized_texts(&mut world);
+        assert_eq!(localized_display(&world, label), None, "the locale went: the Text as authored");
 
         let code: String = include_str!("text.rs")
             .split(concat!("mod ", "clip_tests"))

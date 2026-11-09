@@ -862,8 +862,8 @@ Measured in `ecs_absent_apis`:
   lines are an overlay: probe faces and mirror views no longer draw them (the first draw of a frame
   used to consume them, so a capture took them and the main view lost them). `default_render_pass` and `render_viewports` are the three calls in a
   row, with the same pictures. Tested by `systems/render/frame_split_tests.rs`. `render_world` now prepares
-  the game world, extracts, and hands the copy to `draw_frame`. Not yet wired: no app owns a render
-  world (the demo's render hook makes the three calls itself), and `gizmo-studio`'s pipeline still
+  the game world, extracts, and hands the copy to `draw_frame`. Not yet wired at stage 2: no app owned a render
+  world (the demo's render hook made the three calls itself), and `gizmo-studio`'s pipeline still
   does its own per-frame work rather than calling `prepare_frame`. **Stage 3, 2026-11-09: the draw reads nothing a
   copy cannot carry.** Three things it read could not be copied, and each now has a form that can:
   `Assets<T>` numbers its changes (an entry added, inserted or taken with `get_mut` takes the next
@@ -880,7 +880,28 @@ Measured in `ecs_absent_apis`:
   frame. Tested by `frame_split_tests::a_frame_drawn_from_an_extracted_copy_is_the_frame_drawn_from_the_original`
   (a handle-drawn cube, an index culling a cube it does not hold, the camera under water: the copy's
   picture equals the original's to the pixel, and taking any one of the three out of the copy changes
-  it), `extract::tests` and `tests/resource_changes.rs`. `render_world` draws its cubes through handles. One behaviour change, deliberate: an entity
+  it), `extract::tests` and `tests/resource_changes.rs`. `render_world` draws its cubes through handles. **Stage 4, 2026-11-09: the engine's own render hooks
+  draw from a copy.** `RenderWorld` (facade, `systems::render`) owns the copy and `render_extractor()`,
+  which copies every component and resource the draw reads — 47 component types (13 of them behind
+  `ui`), 9 resources (one behind `physics`, one behind `ui`), the mesh and material maps; `RenderWorld::frame` is `prepare_frame` on the game,
+  extraction, `draw_frame` on the copy, `publish_render_stats` on the game. `SimpleApp` and
+  `with_scene_render` draw with it. The list is held to the draw by
+  `render_world_tests::the_copy_holds_every_type_the_draw_reads`, which reads the draw path's source
+  for the types its `query`/`get`/`get_resource` calls name and fails on one that is neither copied nor
+  handed over by the preparation in another form, and by
+  `a_render_world_draws_every_frame_of_a_changing_game_as_the_game_itself` (moved, spawned, hidden,
+  despawned, recoloured, a light dimmed: the copy's picture equals the game world's on every frame).
+  One more write the draw made, found by the inventory: a `LocalizedText` resolved at draw time
+  recorded a missing key in the `Locale` (a lock behind `&self`), so drawn from a copy the game
+  would never have heard of it. The preparation resolves labels now (`resolve_localized_texts`,
+  into a `LocalizedLabel` written only when the string changes; the editor's pipeline runs it too)
+  and the draw reads the label. `Extractor::copies` says what an extractor copies. **Still open:**
+  a render thread — the copy makes it possible, and it has one known race to solve first: `Mesh`,
+  `Material`, `Skeleton`, `Decal` and `LodGroup` share their GPU buffers with the copy through `Arc`,
+  and the preparation rewrites a skeleton's bone buffer every frame (`queue.write_buffer`), which a
+  draw overlapping the next preparation would see half-written; the hooks of individual demos that
+  call `default_render_pass` themselves (the audit counted 28 that would move for free); and the
+  editor (`gizmo-studio`'s pipeline does its own per-frame work rather than `prepare_frame`). One behaviour change, deliberate: an entity
   parented to a shaking camera is no longer shaken with it (it was moved by the camera's shaken
   `Transform` and left with that `GlobalTransform` after the undo; the camera's yaw and pitch shake
   never reached it).

@@ -467,3 +467,97 @@ fn a_frame_drawn_from_an_extracted_copy_is_the_frame_drawn_from_the_original() {
         }
     });
 }
+
+/// **A `RenderWorld` draws every frame of a changing game as the game world itself would.** Four
+/// frames, each changing the game — a cube moved, a cube spawned and another hidden, the spawned
+/// one despawned and a UI box recoloured, a point light dimmed — and each frame drawn twice from one
+/// preparation: from the game world, and from the `RenderWorld`'s copy brought up to date by
+/// `render_extractor`. Equal to the pixel on every frame, and the frames differ from each other, so
+/// the copy is following the changes rather than agreeing on a still picture. `frame` then does the
+/// whole of it and publishes the draw's cost to the game.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_render_world_draws_every_frame_of_a_changing_game_as_the_game_itself() {
+    use super::{publish_render_stats, RenderWorld};
+    use crate::renderer::components::{Material, MeshRenderer, PointLight};
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        cube_scene(&renderer, &mut game);
+        let light = game.spawn_bundle(crate::bundles::PointLightBundle {
+            position: Vec3::new(-2.0, 2.0, 1.0),
+            color: Vec3::new(1.0, 0.6, 0.2),
+            intensity: 30.0,
+            ..Default::default()
+        });
+        let mut textures = crate::renderer::asset::AssetManager::new();
+        let tex = textures.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let cube_mesh = crate::renderer::asset::AssetManager::create_cube(&renderer.device);
+        let cube = |y: f32, colour: Vec4| {
+            (
+                Transform::new(Vec3::new(0.0, y, 2.0)),
+                GlobalTransform::default(),
+                cube_mesh.clone(),
+                Material::new(tex.clone()).with_pbr(colour, 0.0, 1.0),
+                MeshRenderer::new(),
+            )
+        };
+        let mover = game.spawn_bundle(cube(1.5, Vec4::new(0.2, 0.9, 0.2, 1.0)));
+        let to_hide = game.spawn_bundle(cube(-1.5, Vec4::new(0.9, 0.9, 0.1, 1.0)));
+        #[cfg(feature = "ui")]
+        let panel = game.spawn_bundle((
+            crate::ui::Node { position: gizmo_math::Vec2::new(4.0, 4.0), size: gizmo_math::Vec2::new(30.0, 12.0) },
+            crate::ui::BackgroundColor(Vec4::new(0.1, 0.2, 0.9, 1.0)),
+        ));
+
+        let mut copy = RenderWorld::new();
+        let mut spawned = None;
+        let mut pictures = Vec::new();
+        for frame in 0..4 {
+            match frame {
+                1 => game.query_mut::<&mut Transform>().get_mut(mover).unwrap().position.z = -2.0,
+                2 => {
+                    spawned = Some(game.spawn_bundle(cube(0.0, Vec4::new(0.9, 0.2, 0.9, 1.0))));
+                    game.add_component(to_hide, crate::core::component::IsHidden);
+                }
+                3 => {
+                    game.despawn(spawned.take().unwrap());
+                    #[cfg(feature = "ui")]
+                    {
+                        game.query_mut::<&mut crate::ui::BackgroundColor>().get_mut(panel).unwrap().0 =
+                            Vec4::new(0.9, 0.9, 0.9, 1.0);
+                    }
+                    game.query_mut::<&mut PointLight>().get_mut(light).unwrap().intensity = 2.0;
+                }
+                _ => {}
+            }
+            prepare_frame(&mut game, &mut renderer);
+            let original = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+            copy.extract(&mut game);
+            let drawn = frame_bytes(&mut renderer, |e, v, r| draw_frame(copy.world(), e, v, r));
+            let differ = original.chunks(4).zip(drawn.chunks(4)).filter(|(a, b)| a != b).count();
+            assert_eq!(differ, 0, "frame {frame}: the copy drew a different picture");
+            publish_render_stats(&mut game, &renderer);
+            pictures.push(original);
+        }
+        for pair in pictures.windows(2) {
+            let changed = pair[0].chunks(4).zip(pair[1].chunks(4)).filter(|(a, b)| a != b).count();
+            assert!(changed > 20, "a frame's change did not reach the picture ({changed} pixels)");
+        }
+
+        game.remove_resource::<crate::renderer::components::RenderStats>();
+        frame_bytes(&mut renderer, |e, v, r| copy.frame(&mut game, e, v, r));
+        assert!(
+            game.get_resource::<crate::renderer::components::RenderStats>().is_some_and(|s| s.draw_calls > 0),
+            "`frame` did not publish the draw's cost to the game"
+        );
+    });
+}
