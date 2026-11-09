@@ -183,7 +183,8 @@ pub use headless::*;
 /// Installs the Gizmo engine panic hook.
 ///
 /// On native targets this logs the panic location and message, captures a
-/// backtrace and (with the `window` feature) shows an error dialog. On
+/// backtrace and (with the `window` feature) shows an error dialog — for a panic on the main
+/// thread, the only one a dialog can be opened from everywhere. On
 /// `wasm32` it wires up `console_error_panic_hook` and console/tracing
 /// logging. Safe to call more than once.
 pub fn setup_panic_hook() {
@@ -232,12 +233,37 @@ pub fn setup_panic_hook() {
                 let backtrace = backtrace::Backtrace::new();
                 tracing::info!("--- BACKTRACE ---\n{:?}", backtrace);
                 #[cfg(not(target_os = "android"))]
-                rfd::MessageDialog::new()
-                    .set_title("Gizmo Engine Fatal Error")
-                    .set_description(&error_msg)
-                    .set_level(rfd::MessageLevel::Error)
-                    .show();
+                if shows_panic_dialog(std::thread::current().name()) {
+                    rfd::MessageDialog::new()
+                        .set_title("Gizmo Engine Fatal Error")
+                        .set_description(&error_msg)
+                        .set_level(rfd::MessageLevel::Error)
+                        .show();
+                }
             }
         }));
+    }
+}
+
+/// Whether a panic on the thread named `thread` opens the crash dialog: only on the main thread.
+///
+/// On macOS a dialog cannot be opened from any other thread — `rfd` panics inside the hook, and a
+/// panic while panicking aborts the process, which is what a draw that panicked on the render
+/// thread did (seen on CI's macOS runner, 2026-11-09). And a panic elsewhere is not the app's end
+/// in any case: the render thread's reaches the loop at its next sync point, which panics again on
+/// the main thread with the draw's message — that one opens the dialog — and a worker's is the
+/// business of whoever joins it.
+#[cfg(all(not(target_arch = "wasm32"), not(target_os = "android"), feature = "window"))]
+fn shows_panic_dialog(thread: Option<&str>) -> bool {
+    thread == Some("main")
+}
+
+#[cfg(all(test, not(target_arch = "wasm32"), not(target_os = "android"), feature = "window"))]
+mod panic_dialog_tests {
+    #[test]
+    fn only_the_main_thread_opens_the_crash_dialog() {
+        assert!(super::shows_panic_dialog(Some("main")));
+        assert!(!super::shows_panic_dialog(Some("gizmo-render")));
+        assert!(!super::shows_panic_dialog(None));
     }
 }

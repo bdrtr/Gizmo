@@ -100,8 +100,10 @@ impl<G: ConditionalSend + 'static> FramePipeline<G> {
 
     /// The sync point: waits for a draw in flight, then hands the draw's side back.
     ///
-    /// A draw that panicked on the render thread panics here, with its own payload — the loop must
-    /// not go on as though the frame had been drawn, nor wait for a draw that will never return.
+    /// A draw that panicked on the render thread panics here, with its message — the loop must not
+    /// go on as though the frame had been drawn, nor wait for a draw that will never return. A new
+    /// panic rather than `resume_unwind`, which skips the panic hook: the app's hook opens the
+    /// crash dialog only on the main thread, and this is where the panic reaches it.
     pub(crate) fn sync(&mut self) -> &mut G {
         #[cfg(not(target_arch = "wasm32"))]
         if self.home.is_none() {
@@ -114,7 +116,14 @@ impl<G: ConditionalSend + 'static> FramePipeline<G> {
                 Err(_) => {
                     let handle = thread.handle.take().expect("the render thread is joined once");
                     match handle.join() {
-                        Err(payload) => std::panic::resume_unwind(payload),
+                        Err(payload) => {
+                            let message = payload
+                                .downcast_ref::<&str>()
+                                .copied()
+                                .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
+                                .unwrap_or("a panic with no message");
+                            panic!("the draw panicked on the render thread: {message}")
+                        }
                         Ok(()) => panic!("the render thread ended with a frame in flight"),
                     }
                 }
@@ -235,8 +244,8 @@ mod tests {
         }
     }
 
-    /// A draw that panics on the render thread panics the loop at the next sync point, with its own
-    /// message — not a hang, and not a frame taken as drawn.
+    /// A draw that panics on the render thread panics the loop at the next sync point, with the
+    /// draw's message — not a hang, and not a frame taken as drawn.
     #[test]
     fn a_panic_in_the_draw_reaches_the_sync_point() {
         let mut pipe = FramePipeline::threaded(Side::new());
@@ -246,7 +255,10 @@ mod tests {
             pipe.sync();
         }))
         .expect_err("the sync point went on as though the frame had been drawn");
-        assert_eq!(caught.downcast_ref::<&str>(), Some(&"the draw failed"));
+        assert_eq!(
+            caught.downcast_ref::<String>().map(String::as_str),
+            Some("the draw panicked on the render thread: the draw failed")
+        );
     }
 
     /// Dropping the pipeline with a frame in flight waits for that frame: the renderer it holds is
