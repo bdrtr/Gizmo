@@ -1,4 +1,5 @@
 use super::*;
+use super::pipeline::DrawReport;
 
 /// Consecutive `get_current_texture()` failures (Outdated/Lost/Validation) since the last good
 /// frame — drives rate-limited logging + backoff so a persistently unrecoverable surface (a true
@@ -238,141 +239,6 @@ impl<State: 'static> App<State> {
         }
     }
 
-    /// Acquire this frame's backbuffer, or `None` when the frame must be skipped.
-    ///
-    /// Lifted out of `handle_event` for one reason: its four arms each ended with the same
-    /// eight-line "put everything back into `self` and return" epilogue — the editor, the app
-    /// state, both frame timers, the renderer and the profiler scope. Three copies, and
-    /// the function's own header already had to warn that those locals are "restored at every
-    /// exit — including the two early `return`s in the redraw path". A restore list every new
-    /// early return has to remember is exactly the defect shape this engine keeps finding; it is
-    /// one caller-side epilogue and a `None` now.
-    ///
-    /// The recovery behaviour is unchanged: transient states skip quietly, `Outdated`/`Lost`
-    /// reconfigure the swapchain and back off, a validation error is logged and skipped, and the
-    /// failure streak drives the rate-limited logging.
-    /// Write the presented frame to a PNG when `GIZMO_SCREENSHOT` asks for it.
-    ///
-    /// Called from the one point in the loop where the finished frame is still readable — after
-    /// `submit`, before `present`. Does nothing at all without the env var, which is why it can sit
-    /// unconditionally in the hot path.
-    ///
-    /// The request lives in statics rather than in `App`: it comes from the process environment, so
-    /// it is process-wide by nature, and threading a diagnostic through the builder, the struct,
-    /// its `Debug` impl and every constructor would cost more than it explains.
-    fn service_screenshot(
-        renderer: &Renderer,
-        output: &wgpu::SurfaceTexture,
-        current_window: &ActiveEventLoop,
-    ) {
-        use gizmo_renderer::capture::CaptureRequest;
-        use std::sync::atomic::{AtomicU64, Ordering};
-        use std::sync::OnceLock;
-
-        static REQUEST: OnceLock<Option<CaptureRequest>> = OnceLock::new();
-        static FRAME: AtomicU64 = AtomicU64::new(0);
-
-        let Some(req) = REQUEST.get_or_init(CaptureRequest::from_env) else {
-            return;
-        };
-        // `fetch_add` returns the previous value, so the first presented frame is 0.
-        if FRAME.fetch_add(1, Ordering::Relaxed) != req.frame {
-            return;
-        }
-
-        match gizmo_renderer::capture::texture_to_png(
-            &renderer.device,
-            &renderer.queue,
-            &output.texture,
-            &req.path,
-        ) {
-            Ok(()) => tracing::info!(path = %req.path.display(), frame = req.frame, "screenshot written"),
-            Err(e) => tracing::error!("{e}"),
-        }
-        if req.exit_after {
-            current_window.exit();
-        }
-    }
-
-    fn acquire_backbuffer(&mut self, renderer: &mut Renderer) -> Option<wgpu::SurfaceTexture> {
-        // No surface: the app is off the screen (`suspended`) and there is nowhere to draw.
-        let surface = renderer.surface.as_ref()?;
-        match surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
-                // A good frame: clear the failure streak.
-                SURFACE_FAIL_STREAK.store(0, std::sync::atomic::Ordering::Relaxed);
-                Some(texture)
-            }
-            // Transient, non-error states — the window is minimized/behind
-            // another window, or the acquire timed out. The surface config is
-            // still valid; just skip this frame and try again.
-            wgpu::CurrentSurfaceTexture::Occluded
-            | wgpu::CurrentSurfaceTexture::Timeout => {
-                tracing::trace!(
-                    "[frame] surface transient (occluded/timeout); frame skipped"
-                );
-                None
-            }
-            // RECOVERABLE surface loss. `Outdated` = the surface config is
-            // stale (display/DPI/format change); `Lost` = the surface (or the
-            // whole GPU context) dropped, e.g. suspend↔resume, a driver TDR,
-            // an external-monitor unplug, or GPU stress. wgpu's first-line fix
-            // for both is to `configure()` again — so reconfigure the swapchain
-            // and retry next frame instead of FREEZING on a black screen (the
-            // old code lumped `Outdated` into the transient skip and never
-            // reconfigured, and treated `Lost` as a dead-end error). This is
-            // the "demos don't crash under stress" hardening.
-            wgpu::CurrentSurfaceTexture::Outdated
-            | wgpu::CurrentSurfaceTexture::Lost => {
-                use std::sync::atomic::Ordering;
-                let streak = SURFACE_FAIL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
-                // `Outdated` (stale DPI/format/resize) genuinely recovers via
-                // configure(). `Lost` is BEST-EFFORT here: a true surface/device
-                // loss needs surface (or device+resource) RECREATION, which the
-                // renderer can't yet do (it retains no Instance/Window) — a known
-                // limitation. configure() still recovers the common recoverable
-                // cases (suspend/resume, transient context loss).
-                renderer.reconfigure_surface();
-                // Rate-limit: warn once up front, then ~once/5s, so a persistent
-                // loss never floods the log.
-                if streak == 1 || streak.is_multiple_of(300) {
-                    tracing::warn!(
-                        streak,
-                        "[frame] surface Outdated/Lost — reconfigured swapchain; if this persists the surface/device may be unrecoverable"
-                    );
-                }
-                // Backoff: after a short grace, throttle the retry so an
-                // unrecoverable loss degrades to a quiet ~60Hz retry instead of a
-                // 100%-CPU busy-spin. (Skipped on wasm — the browser throttles rAF.)
-                #[cfg(not(target_arch = "wasm32"))]
-                if streak > 4 {
-                    std::thread::sleep(std::time::Duration::from_millis(16));
-                }
-                None
-            }
-            // A validation error was raised inside `get_current_texture` and
-            // caught by an error scope — a real bug, not recoverable by
-            // reconfiguring. Log it and skip the frame so we neither crash nor
-            // busy-spin on a reconfigure that can't help.
-            wgpu::CurrentSurfaceTexture::Validation => {
-                use std::sync::atomic::Ordering;
-                let streak = SURFACE_FAIL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
-                if streak == 1 || streak.is_multiple_of(300) {
-                    tracing::error!(
-                        streak,
-                        "[frame] surface acquire raised a validation error; frame skipped"
-                    );
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                if streak > 4 {
-                    std::thread::sleep(std::time::Duration::from_millis(16));
-                }
-                None
-            }
-        }
-    }
-
     /// The unified per-event handler — the old `EventLoop::run` closure body,
     /// reconstructed as a method so `ApplicationHandler` can drive it. Each event
     /// type reconstructs a `winit::Event<()>` and dispatches here, so the original
@@ -450,7 +316,7 @@ impl<State: 'static> App<State> {
                                 // boyutundan besle ki kamera aspect'i / picking math'i
                                 // surface'le tutarlı kalsın.
                                 let effective = {
-                                    let r = self.renderer.as_mut().expect("a window event comes after initialization");
+                                    let r = self.renderer_mut().expect("a window event comes after initialization");
                                     r.resize(*physical_size);
                                     r.size
                                 };
@@ -741,122 +607,94 @@ impl<State: 'static> App<State> {
                             }
 
                             // ═══ The sync point ═══
-                            // The game's update is done and the renderer is in hand: everything the
-                            // frame does with both happens here, before the draw, and before the
-                            // swapchain is asked for an image — so it happens on a frame that turns
-                            // out not to be drawn, too.
-                            let mut renderer = self.renderer.take().expect("a frame comes after initialization");
-                            #[cfg(feature = "egui")]
-                            let mut painter = self.painter.take().expect("the painter is made with the renderer");
+                            // The game's update is done, and the draw's side comes back — at once
+                            // on the loop's thread, or when the render thread has finished the last
+                            // frame. Everything the frame does with the world and the renderer
+                            // happens here, before the swapchain is asked for an image, so it
+                            // happens on a frame that turns out not to be drawn, too.
+                            // What the last frame's draw said — a screenshot asking to exit after
+                            // it — is acted on here, where the loop is.
+                            let report = {
+                                let gpu = self.gpu.as_mut().expect("a frame comes after initialization");
+                                gpu.sync();
+                                gpu.take_report()
+                            };
+                            if report.exit {
+                                self.shut_down(current_window);
+                            }
+                            let gpu = self.gpu.as_mut().expect("a frame comes after initialization");
+                            let side = gpu.sync();
                             #[cfg(feature = "editor")]
-                            crate::editor_runtime::sync_render_targets(&mut self.world, &renderer, &mut painter);
-                            if let RenderHook::Stage(stage) = &mut self.render {
-                                stage.prepare(&mut self.world, &mut renderer);
+                            crate::editor_runtime::sync_render_targets(&mut self.world, &side.renderer, &mut side.painter);
+                            if let Some(stage) = side.stage.as_mut() {
+                                stage.prepare(&mut self.world, &mut side.renderer);
                             }
                             #[cfg(feature = "egui")]
                             let ui_frame = editor.end_frame(&window, full_output);
 
                             // ═══ The draw ═══
-                            let Some(output) = self.acquire_backbuffer(&mut renderer) else {
-                                // The one epilogue: every skip path in the acquire lands here.
-                                // The egui frame above already ran, and its texture deltas are
-                                // handed over exactly once. Skipping the *pixels* is what this
-                                // path is for; skipping the *uploads* dropped the font atlas
-                                // for the rest of the run — and killed every debug build on
-                                // epaint's assert, which is why no windowed demo could start.
-                                #[cfg(feature = "egui")]
-                                painter.absorb(&renderer.device, &renderer.queue, ui_frame);
-                                #[cfg(feature = "egui")]
-                                {
-                                    self.painter = Some(painter);
-                                }
-                                self.renderer = Some(renderer);
-                                if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
-                                    profiler.end_scope("render");
-                                }
-                                #[cfg(feature = "egui")]
-                                {
-                                    self.editor = Some(editor);
-                                }
-                                self.app_state = Some(state);
-                                self.last_frame_time = Some(last_frame_time);
-                                self.light_time = light_time;
-                                return;
-                            };
-
-                            let view = output
-                                .texture
-                                .create_view(&wgpu::TextureViewDescriptor::default());
-
-                            let mut encoder = renderer.device.create_command_encoder(
-                                &wgpu::CommandEncoderDescriptor {
-                                    label: Some("Render Encoder"),
-                                },
-                            );
-
-                            match &mut self.render {
-                                RenderHook::Stage(stage) => stage.draw(&mut encoder, &view, &mut renderer),
-                                // Kullaniciya CommandEncoder verip cizdiriyoruz!
-                                RenderHook::Raw(render_hk) => render_hk(
-                                    &mut self.world,
-                                    &state,
-                                    &mut encoder,
-                                    &view,
-                                    &mut renderer,
-                                    light_time,
-                                ),
-                                RenderHook::Simple(s_render) => {
-                                    let mut ctx = RenderContext::new(
-                                        &mut encoder,
-                                        &view,
-                                        &mut renderer,
-                                        light_time,
-                                    );
-                                    s_render(&mut self.world, &state, &mut ctx);
-                                }
-                                RenderHook::None => {
-                                    // Hiçbir render hook yok → 3B sahne çizilmez (klasik "siyah
-                                    // ekran" tuzağı: egui HUD görünür ama sahne siyah). Bir kez uyar.
-                                    use std::sync::atomic::{AtomicBool, Ordering};
-                                    static WARNED: AtomicBool = AtomicBool::new(false);
-                                    if !WARNED.swap(true, Ordering::Relaxed) {
-                                        tracing::warn!(
-                                            "Render hook ayarlı DEĞİL — 3B sahne çizilmeyecek (ekran \
-                                             siyah kalır). `.with_scene_render()` (manuel App), \
-                                             `.set_render(..)` veya `.with_simple_scene(..)` kullan."
-                                        );
-                                    }
+                            if side.stage.is_some() {
+                                // From what the stage kept, with no world: on the render thread
+                                // when there is one, while the loop goes on to the next update.
+                                gpu.draw(Box::new(move |side: &mut DrawSide| {
+                                    let DrawSide {
+                                        renderer,
+                                        stage,
+                                        #[cfg(feature = "egui")]
+                                        painter,
+                                    } = side;
+                                    let stage = stage.as_mut().expect("a stage frame is drawn by the stage");
+                                    draw_and_present(
+                                        renderer,
+                                        #[cfg(feature = "egui")]
+                                        painter,
+                                        #[cfg(feature = "egui")]
+                                        ui_frame,
+                                        |encoder, view, renderer| stage.draw(encoder, view, renderer),
+                                    )
+                                }));
+                            } else {
+                                // A hook handed the game world in the middle of the draw: drawn
+                                // here, at the sync point.
+                                let render = &mut self.render;
+                                let world = &mut self.world;
+                                let report = draw_and_present(
+                                    &mut side.renderer,
+                                    #[cfg(feature = "egui")]
+                                    &mut side.painter,
+                                    #[cfg(feature = "egui")]
+                                    ui_frame,
+                                    |encoder, view, renderer| match render {
+                                        // Kullaniciya CommandEncoder verip cizdiriyoruz!
+                                        RenderHook::Raw(render_hk) => {
+                                            render_hk(world, &state, encoder, view, renderer, light_time)
+                                        }
+                                        RenderHook::Simple(s_render) => {
+                                            let mut ctx = RenderContext::new(encoder, view, renderer, light_time);
+                                            s_render(world, &state, &mut ctx);
+                                        }
+                                        RenderHook::Stage(_) => unreachable!("a stage moves to the draw's side at start"),
+                                        RenderHook::None => {
+                                            // Hiçbir render hook yok → 3B sahne çizilmez (klasik
+                                            // "siyah ekran" tuzağı: egui HUD görünür ama sahne
+                                            // siyah). Bir kez uyar.
+                                            use std::sync::atomic::{AtomicBool, Ordering};
+                                            static WARNED: AtomicBool = AtomicBool::new(false);
+                                            if !WARNED.swap(true, Ordering::Relaxed) {
+                                                tracing::warn!(
+                                                    "Render hook ayarlı DEĞİL — 3B sahne çizilmeyecek \
+                                                     (ekran siyah kalır). `.with_scene_render()` (manuel \
+                                                     App), `.set_render(..)` veya `.with_simple_scene(..)` \
+                                                     kullan."
+                                                );
+                                            }
+                                        }
+                                    },
+                                );
+                                if report.exit {
+                                    self.shut_down(current_window);
                                 }
                             }
-
-                            #[cfg(feature = "egui")]
-                            painter.paint(
-                                &renderer.device,
-                                &renderer.queue,
-                                &mut encoder,
-                                &view,
-                                // The acquired backbuffer, not the window: the two disagree
-                                // for one frame on every resize.
-                                [output.texture.width(), output.texture.height()],
-                                ui_frame,
-                            );
-
-                            renderer.queue.submit(std::iter::once(encoder.finish()));
-
-                            // Between submit and present: the surface texture is still alive and
-                            // now holds the finished frame, egui included. This is the only moment
-                            // in the loop where the engine can see what the user sees.
-                            Self::service_screenshot(&renderer, &output, current_window);
-
-                            // wgpu 30 moved presentation off the texture and onto the queue:
-                            // `SurfaceTexture::present(self)` became `Queue::present(texture)`.
-                            renderer.queue.present(output);
-
-                            #[cfg(feature = "egui")]
-                            {
-                                self.painter = Some(painter);
-                            }
-                            self.renderer = Some(renderer);
 
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                 profiler.end_scope("render");
@@ -901,6 +739,185 @@ impl<State: 'static> App<State> {
             self.last_frame_time = Some(last_frame_time);
             self.light_time = light_time;
     }
+}
+
+/// One frame's draw, from the swapchain image to the present: `draw` records the scene, the
+/// overlay UI is painted over it, and the frame is submitted, captured if a screenshot asked for
+/// it, and presented. Runs on the loop's thread or on the render thread, and needs nothing from
+/// either but what it is given.
+///
+/// A frame whose image cannot be acquired is not drawn — and the UI frame is still absorbed: egui
+/// hands its texture deltas over once.
+fn draw_and_present(
+    renderer: &mut Renderer,
+    #[cfg(feature = "egui")] painter: &mut crate::egui_ctx::EguiPainter,
+    #[cfg(feature = "egui")] ui_frame: crate::egui_ctx::EguiFrame,
+    draw: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer),
+) -> DrawReport {
+    let Some(output) = acquire_backbuffer(renderer) else {
+        // The one epilogue: every skip path in the acquire lands here. The egui frame already
+        // ran, and its texture deltas are handed over exactly once. Skipping the *pixels* is what
+        // this path is for; skipping the *uploads* dropped the font atlas for the rest of the run
+        // — and killed every debug build on epaint's assert, which is why no windowed demo could
+        // start.
+        #[cfg(feature = "egui")]
+        painter.absorb(&renderer.device, &renderer.queue, ui_frame);
+        return DrawReport::default();
+    };
+
+    let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut encoder =
+        renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Render Encoder") });
+
+    draw(&mut encoder, &view, renderer);
+
+    #[cfg(feature = "egui")]
+    painter.paint(
+        &renderer.device,
+        &renderer.queue,
+        &mut encoder,
+        &view,
+        // The acquired backbuffer, not the window: the two disagree for one frame on every resize.
+        [output.texture.width(), output.texture.height()],
+        ui_frame,
+    );
+
+    renderer.queue.submit(std::iter::once(encoder.finish()));
+
+    // Between submit and present: the surface texture is still alive and now holds the finished
+    // frame, egui included. This is the only moment in the frame where the engine can see what the
+    // user sees.
+    let report = service_screenshot(renderer, &output);
+
+    // wgpu 30 moved presentation off the texture and onto the queue:
+    // `SurfaceTexture::present(self)` became `Queue::present(texture)`.
+    renderer.queue.present(output);
+    report
+}
+
+/// Acquire this frame's backbuffer, or `None` when the frame must be skipped.
+///
+/// A free function of the renderer, because it runs in the draw — on a render thread, when there is
+/// one — where the app is not.
+///
+/// The recovery behaviour is unchanged: transient states skip quietly, `Outdated`/`Lost`
+/// reconfigure the swapchain and back off, a validation error is logged and skipped, and the
+/// failure streak drives the rate-limited logging.
+fn acquire_backbuffer(renderer: &mut Renderer) -> Option<wgpu::SurfaceTexture> {
+    // No surface: the app is off the screen (`suspended`) and there is nowhere to draw.
+    let surface = renderer.surface.as_ref()?;
+    match surface.get_current_texture() {
+        wgpu::CurrentSurfaceTexture::Success(texture)
+        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+            // A good frame: clear the failure streak.
+            SURFACE_FAIL_STREAK.store(0, std::sync::atomic::Ordering::Relaxed);
+            Some(texture)
+        }
+        // Transient, non-error states — the window is minimized/behind
+        // another window, or the acquire timed out. The surface config is
+        // still valid; just skip this frame and try again.
+        wgpu::CurrentSurfaceTexture::Occluded
+        | wgpu::CurrentSurfaceTexture::Timeout => {
+            tracing::trace!(
+                "[frame] surface transient (occluded/timeout); frame skipped"
+            );
+            None
+        }
+        // RECOVERABLE surface loss. `Outdated` = the surface config is
+        // stale (display/DPI/format change); `Lost` = the surface (or the
+        // whole GPU context) dropped, e.g. suspend↔resume, a driver TDR,
+        // an external-monitor unplug, or GPU stress. wgpu's first-line fix
+        // for both is to `configure()` again — so reconfigure the swapchain
+        // and retry next frame instead of FREEZING on a black screen (the
+        // old code lumped `Outdated` into the transient skip and never
+        // reconfigured, and treated `Lost` as a dead-end error). This is
+        // the "demos don't crash under stress" hardening.
+        wgpu::CurrentSurfaceTexture::Outdated
+        | wgpu::CurrentSurfaceTexture::Lost => {
+            use std::sync::atomic::Ordering;
+            let streak = SURFACE_FAIL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
+            // `Outdated` (stale DPI/format/resize) genuinely recovers via
+            // configure(). `Lost` is BEST-EFFORT here: a true surface/device
+            // loss needs surface (or device+resource) RECREATION, which the
+            // renderer can't yet do (it retains no Instance/Window) — a known
+            // limitation. configure() still recovers the common recoverable
+            // cases (suspend/resume, transient context loss).
+            renderer.reconfigure_surface();
+            // Rate-limit: warn once up front, then ~once/5s, so a persistent
+            // loss never floods the log.
+            if streak == 1 || streak.is_multiple_of(300) {
+                tracing::warn!(
+                    streak,
+                    "[frame] surface Outdated/Lost — reconfigured swapchain; if this persists the surface/device may be unrecoverable"
+                );
+            }
+            // Backoff: after a short grace, throttle the retry so an
+            // unrecoverable loss degrades to a quiet ~60Hz retry instead of a
+            // 100%-CPU busy-spin. (Skipped on wasm — the browser throttles rAF.)
+            #[cfg(not(target_arch = "wasm32"))]
+            if streak > 4 {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+            None
+        }
+        // A validation error was raised inside `get_current_texture` and
+        // caught by an error scope — a real bug, not recoverable by
+        // reconfiguring. Log it and skip the frame so we neither crash nor
+        // busy-spin on a reconfigure that can't help.
+        wgpu::CurrentSurfaceTexture::Validation => {
+            use std::sync::atomic::Ordering;
+            let streak = SURFACE_FAIL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
+            if streak == 1 || streak.is_multiple_of(300) {
+                tracing::error!(
+                    streak,
+                    "[frame] surface acquire raised a validation error; frame skipped"
+                );
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            if streak > 4 {
+                std::thread::sleep(std::time::Duration::from_millis(16));
+            }
+            None
+        }
+    }
+}
+
+/// Write the presented frame to a PNG when `GIZMO_SCREENSHOT` asks for it.
+///
+/// Called from the one point in the draw where the finished frame is still readable — after
+/// `submit`, before `present`. Does nothing at all without the env var, which is why it can sit
+/// unconditionally in the hot path.
+///
+/// The request lives in statics rather than in `App`: it comes from the process environment, so
+/// it is process-wide by nature, and threading a diagnostic through the builder, the struct,
+/// its `Debug` impl and every constructor would cost more than it explains.
+fn service_screenshot(renderer: &Renderer, output: &wgpu::SurfaceTexture) -> DrawReport {
+    use gizmo_renderer::capture::CaptureRequest;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::OnceLock;
+
+    static REQUEST: OnceLock<Option<CaptureRequest>> = OnceLock::new();
+    static FRAME: AtomicU64 = AtomicU64::new(0);
+
+    let Some(req) = REQUEST.get_or_init(CaptureRequest::from_env) else {
+        return DrawReport::default();
+    };
+    // `fetch_add` returns the previous value, so the first presented frame is 0.
+    if FRAME.fetch_add(1, Ordering::Relaxed) != req.frame {
+        return DrawReport::default();
+    }
+
+    match gizmo_renderer::capture::texture_to_png(
+        &renderer.device,
+        &renderer.queue,
+        &output.texture,
+        &req.path,
+    ) {
+        Ok(()) => tracing::info!(path = %req.path.display(), frame = req.frame, "screenshot written"),
+        Err(e) => tracing::error!("{e}"),
+    }
+    // The exit is the loop's to make, at its next sync point: the draw may be on a render thread.
+    DrawReport { exit: req.exit_after }
 }
 
 /// Keeps `DisplayScale` and `SafeArea` true to the window, the frame and the platform. Called every

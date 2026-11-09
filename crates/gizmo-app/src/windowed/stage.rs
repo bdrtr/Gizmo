@@ -23,14 +23,42 @@ use gizmo_renderer::RenderContext;
 /// acquired and so is never drawn: what it does to the game world is part of the game's frame, not
 /// of the picture.
 ///
+/// With [`App::with_render_thread`](crate::App::with_render_thread) the draw runs on a render
+/// thread, overlapping the next frame's update; otherwise both halves run on the loop's thread, one
+/// after the other. A stage is the same either way, which is why it must be [`ConditionalSend`].
+///
 /// The engine's own stage is the facade's `RenderWorld`, which copies the world the draw reads.
-pub trait RenderStage: Send + 'static {
+pub trait RenderStage: ConditionalSend + 'static {
     /// At the sync point: everything the frame does with the game world and the renderer before
     /// the draw — including keeping what the draw will need.
     fn prepare(&mut self, game: &mut World, renderer: &mut Renderer);
 
     /// The draw, from what [`prepare`](Self::prepare) kept, into `view`.
     fn draw(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer);
+}
+
+/// `Send` where a render thread can exist, and nothing at all on `wasm32`, where the app has one
+/// thread and GPU objects cannot cross threads anyway. Implemented for every type that qualifies.
+#[cfg(not(target_arch = "wasm32"))]
+pub trait ConditionalSend: Send {}
+#[cfg(not(target_arch = "wasm32"))]
+impl<T: Send> ConditionalSend for T {}
+/// `Send` where a render thread can exist, and nothing at all on `wasm32`, where the app has one
+/// thread and GPU objects cannot cross threads anyway. Implemented for every type that qualifies.
+#[cfg(target_arch = "wasm32")]
+pub trait ConditionalSend {}
+#[cfg(target_arch = "wasm32")]
+impl<T> ConditionalSend for T {}
+
+/// The draw's side of the app: what a frame's draw owns, and what a render thread holds while it
+/// draws. The game's side reaches none of it but through the sync point.
+pub(crate) struct DrawSide {
+    pub(crate) renderer: Renderer,
+    /// The overlay UI's painter: it holds GPU textures and paints in the draw.
+    #[cfg(feature = "egui")]
+    pub(crate) painter: crate::egui_ctx::EguiPainter,
+    /// The app's [`RenderStage`], when its render hook is one.
+    pub(crate) stage: Option<Box<dyn RenderStage>>,
 }
 
 /// The low-level render hook's signature — see [`App::set_render`](crate::App::set_render).
@@ -93,7 +121,9 @@ mod tests {
     /// whose image cannot be acquired (occluded, resized, timed out — and the first frame of a
     /// freshly mapped window) is still a frame of the game, and skipping `prepare` with the
     /// picture dropped what it does to the game world — the render clocks, the particle spawns,
-    /// the draw's published cost. The acquire needs a real swapchain, so this pins the order.
+    /// the draw's published cost. The acquire needs a real swapchain, so this pins the shape: the
+    /// image is acquired only inside the draw (`draw_and_present`), and the loop prepares the stage
+    /// before it hands any frame to a draw.
     #[test]
     fn the_stage_is_prepared_before_the_backbuffer_is_acquired() {
         let code: String = include_str!("event.rs")
@@ -101,10 +131,36 @@ mod tests {
             .filter(|l| !l.trim_start().starts_with("//"))
             .collect::<Vec<_>>()
             .join("\n");
-        let prepare = code.find("stage.prepare(&mut self.world, &mut renderer)").expect("the loop prepares the stage");
-        let acquire = code.find("self.acquire_backbuffer(&mut renderer)").expect("the loop acquires a backbuffer");
-        let draw = code.find("stage.draw(&mut encoder, &view, &mut renderer)").expect("the loop draws the stage");
-        assert!(prepare < acquire, "the stage is prepared only on a frame that got a backbuffer");
-        assert!(acquire < draw);
+        let draw_fn = code.find("fn draw_and_present(").expect("the draw is one function");
+        let draw_body = &code[draw_fn..code[draw_fn..].find("\n}").map(|e| draw_fn + e).expect("its body ends")];
+        assert_eq!(code.matches("acquire_backbuffer(renderer)").count(), 1, "the image is acquired somewhere else too");
+        assert!(draw_body.contains("acquire_backbuffer(renderer)"), "the image is acquired outside the draw");
+
+        let prepare = code.find("stage.prepare(&mut self.world, &mut side.renderer)").expect("the loop prepares the stage");
+        let first_draw = [code.find("gpu.draw("), code.find("draw_and_present(\n")]
+            .into_iter()
+            .flatten()
+            .min()
+            .expect("the loop draws");
+        assert!(prepare < first_draw, "a frame is handed to the draw before the stage is prepared");
+        assert!(code.contains("stage.draw(encoder, view, renderer)"), "the stage's draw is not what the draw runs");
+    }
+
+    /// A frame that is not drawn still ends: the rumble its systems asked for goes to the pads, and
+    /// `Input::begin_frame` clears its key edges and mouse delta. The skipped frame used to return
+    /// from the loop straight out of the acquire, before either — and the next update saw the same
+    /// key presses and the same mouse motion a second time. Nothing between the sync point and the
+    /// end of the frame leaves the loop now; the skip is the draw's business (`draw_and_present`).
+    #[test]
+    fn a_frame_that_is_not_drawn_still_ends() {
+        let code: String = include_str!("event.rs")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sync = code.find("let side = gpu.sync();").expect("the frame has a sync point");
+        let end = code.find("self.input.begin_frame();").expect("the frame clears its input");
+        assert!(sync < end);
+        assert!(!code[sync..end].contains("return"), "the frame can leave the loop before its input is cleared");
     }
 }

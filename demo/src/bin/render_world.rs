@@ -1,12 +1,14 @@
-//! **Render world** — the picture is drawn from a copy of the game world, not from the game world.
+//! **Render world** — the picture is drawn from a copy of the game world, on a thread of its own.
 //!
 //! The game world spawns a cube every tenth of a second, keeps the newest 80, spins and orbits
-//! them. Every frame the render hook prepares the game world (`prepare_frame`: clocks, transforms,
-//! materials — everything a frame writes that the game can see), brings a `RenderWorld` — a second
-//! world kept by `render_extractor`, which copies every type the draw reads — up to date, and draws
-//! *that* with `draw_frame`, which takes the world read-only; the game world is never handed to the
-//! draw. `RenderWorld::frame` is those steps in one call, and what `SimpleApp` and
-//! `with_scene_render` draw with; this hook spells them out to be able to stop the copy.
+//! them. The app's render stage (`Shown`, a `RenderStage`) has the frame's two halves. At the sync
+//! point, with the game world, `prepare` prepares it (`prepare_frame`: clocks, transforms,
+//! materials — everything a frame writes that the game can see) and brings a `RenderWorld` — a
+//! second world kept by `render_extractor`, which copies every type the draw reads — up to date.
+//! Then `draw` draws *that* with `draw_frame`, which takes the world read-only, and is handed no
+//! game world at all. `App::with_render_thread` runs `draw` on a render thread, while the game
+//! goes on with the next frame's update. `RenderWorld` is itself such a stage, and what `SimpleApp`
+//! and `with_scene_render` draw with; this one spells the steps out to be able to stop the copy.
 //!
 //! - **Space** stops the copying. The game carries on (the left-hand counters keep moving), the
 //!   picture freezes on the last copy; press again and it jumps to where the game is.
@@ -16,11 +18,14 @@
 //!   `Assets<Material>`, which the extractor keeps in the copy entry by entry (`assets::<T>()`).
 //!   Every two seconds the game recolours one material in its map (`Assets::get_mut`); the copy
 //!   clones that one entry and no other, and the cubes using it change colour in the picture.
+//! - The draw's time is measured on the render thread and reaches the HUD a frame later, at the
+//!   next sync point — the first moment the game world is in reach after the draw.
 //!
 //! CAPABILITY_GAPS A8: the draw only reads, reads nothing a copy cannot hold (asset maps, the
 //! visibility index, the water for underwater fog, resolved localized labels), and every game
 //! drawn by the engine's own render hooks is drawn from a copy.
 
+use gizmo::app::RenderStage;
 use gizmo::systems::render::RenderWorld;
 use gizmo::core::system::{IntoSystemConfig, Phase, ResMut};
 use gizmo::core::World;
@@ -65,12 +70,61 @@ struct Report {
     game_materials: usize,
     copy_materials: usize,
     extract_ms: f64,
+    /// The last draw's time, measured on the render thread.
+    draw_ms: f64,
     copying: bool,
 }
 
-fn main() {
-    let mut copy = RenderWorld::new();
+/// The app's render stage: the copy, and what the last draw took.
+struct Shown {
+    copy: RenderWorld,
+    draw_ms: f64,
+}
 
+impl RenderStage for Shown {
+    fn prepare(&mut self, world: &mut World, renderer: &mut Renderer) {
+        renderer.gpu_physics = None;
+        renderer.gpu_fluid = None;
+        renderer.gpu_particles = None;
+        renderer.ssr = None;
+        renderer.ssgi = None;
+
+        // What the last draw cost: the game world is in reach again for the first time since.
+        gizmo::systems::render::publish_render_stats(world, renderer);
+        // The frame's game-visible work happens in the game world, before the copy is taken.
+        gizmo::systems::render::prepare_frame(world, renderer);
+        let copying = world.get_resource::<Game>().is_some_and(|g| g.copying);
+        let started = Instant::now();
+        if copying {
+            self.copy.extract(world);
+        }
+        let extract_ms = started.elapsed().as_secs_f64() * 1e3;
+
+        let copy = self.copy.world();
+        let materials = |w: &World| w.get_resource::<Assets<Material>>().map_or(0, |a| a.len());
+        let report = Report {
+            game_entities: world.query::<&MeshRenderer>().iter().count(),
+            game_brains: world.query::<&Brain>().iter().count(),
+            copy_entities: copy.query::<&MeshRenderer>().iter().count(),
+            copy_brains: copy.query::<&Brain>().iter().count(),
+            game_materials: materials(world),
+            copy_materials: materials(copy),
+            extract_ms,
+            draw_ms: self.draw_ms,
+            copying,
+        };
+        world.insert_resource(report);
+    }
+
+    fn draw(&mut self, encoder: &mut gizmo::wgpu::CommandEncoder, view: &gizmo::wgpu::TextureView, renderer: &mut Renderer) {
+        // The only world the draw sees — and only to read it.
+        let started = Instant::now();
+        gizmo::systems::render::draw_frame(self.copy.world(), encoder, view, renderer);
+        self.draw_ms = started.elapsed().as_secs_f64() * 1e3;
+    }
+}
+
+fn main() {
     App::<SimpleSceneState>::new("Gizmo Engine - Render World", 1280, 720)
         .with_simple_scene(|scene, state| {
             let white = scene.asset_manager.create_white_texture(
@@ -120,40 +174,8 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 6.0, 14.0), Vec3::ZERO);
         })
         .add_update_system(play.in_phase(Phase::Update))
-        .set_render(move |world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            // The frame's game-visible work happens in the game world, before the copy is taken.
-            gizmo::systems::render::prepare_frame(world, renderer);
-            let copying = world.get_resource::<Game>().is_some_and(|g| g.copying);
-            let started = Instant::now();
-            if copying {
-                copy.extract(world);
-            }
-            let render_world = copy.world();
-            let extract_ms = started.elapsed().as_secs_f64() * 1e3;
-
-            let materials = |w: &World| w.get_resource::<Assets<Material>>().map_or(0, |a| a.len());
-            let report = Report {
-                game_entities: world.query::<&MeshRenderer>().iter().count(),
-                game_brains: world.query::<&Brain>().iter().count(),
-                copy_entities: render_world.query::<&MeshRenderer>().iter().count(),
-                copy_brains: render_world.query::<&Brain>().iter().count(),
-                game_materials: materials(world),
-                copy_materials: materials(render_world),
-                extract_ms,
-                copying,
-            };
-            world.insert_resource(report);
-
-            // The only world the draw sees — and only to read it.
-            gizmo::systems::render::draw_frame(render_world, encoder, view, renderer);
-            gizmo::systems::render::publish_render_stats(world, renderer);
-        })
+        .set_render_stage(Shown { copy: RenderWorld::new(), draw_ms: 0.0 })
+        .with_render_thread()
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<Report>().map(|r| *r) else {
                 return;
@@ -173,6 +195,7 @@ fn main() {
                             r.game_materials, r.copy_materials
                         ));
                         ui.monospace(format!("kopyalama    : {:.3} ms", r.extract_ms));
+                        ui.monospace(format!("çizim        : {:.3} ms (render thread'de)", r.draw_ms));
                         ui.separator();
                         if r.copying {
                             ui.label("Space: kopyalamayı durdur");

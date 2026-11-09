@@ -220,16 +220,46 @@ impl<State: 'static> App<State> {
         }
 
         #[cfg(feature = "egui")]
-        {
+        let painter = {
             let (editor, painter) = EguiContext::new(&renderer.device, renderer.config.format, &window, 1);
             self.editor = Some(editor);
-            self.painter = Some(painter);
             tracing::debug!("[App] egui overlay context initialized");
+            painter
+        };
+
+        // A render stage's draw belongs to the draw's side, and goes wherever it goes; the other
+        // hooks need the game world and the app state, and stay with the app.
+        let stage = match std::mem::replace(&mut self.render, RenderHook::None) {
+            RenderHook::Stage(stage) => Some(stage),
+            other => {
+                self.render = other;
+                None
+            }
+        };
+        let threaded = self.render_thread && stage.is_some() && cfg!(not(target_arch = "wasm32"));
+        if self.render_thread && !threaded {
+            tracing::warn!(
+                hook = self.render.name(),
+                "[App] a render thread was asked for, and every frame is drawn on the loop's thread: \
+                 only a render stage can be (another hook writes the game world in the middle of the \
+                 draw), and wasm32 has one thread"
+            );
         }
+        let side = DrawSide {
+            renderer,
+            #[cfg(feature = "egui")]
+            painter,
+            stage,
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        let gpu = if threaded { FramePipeline::threaded(side) } else { FramePipeline::inline(side) };
+        #[cfg(target_arch = "wasm32")]
+        let gpu = FramePipeline::inline(side);
+        tracing::info!(render_thread = gpu.is_threaded(), "[App] draw side ready");
 
         self.app_state = Some(state);
         self.window = Some(window);
-        self.renderer = Some(renderer);
+        self.gpu = Some(gpu);
         self.last_frame_time = Some(super::FrameInstant::now());
         self.light_time = 0.0;
         tracing::info!("[App] initialization complete");
@@ -267,7 +297,7 @@ impl<State: 'static> App<State> {
         // stayed at 640 × 360, stretched over an upright screen, and the camera kept a landscape
         // aspect. Apply it now, as that `Resized` would have.
         let size = window.inner_size();
-        let effective = self.renderer.as_mut().map(|r| {
+        let effective = self.renderer_mut().map(|r| {
             if r.size != size {
                 r.resize(size);
             }
@@ -291,7 +321,7 @@ impl<State: 'static> ApplicationHandler for App<State> {
         if let Some(window) = self.window.clone() {
             // Back on the screen (Android brings an app back with a new native window): draw to
             // it again. Everything else lived through the pause.
-            if let Some(renderer) = self.renderer.as_mut() {
+            if let Some(renderer) = self.renderer_mut() {
                 if renderer.surface.is_none() {
                     tracing::info!("[App] resumed: making the surface again");
                     renderer.resume_surface(window.clone());
@@ -357,7 +387,7 @@ impl<State: 'static> ApplicationHandler for App<State> {
     /// Off the screen: Android is about to destroy the native window, and the surface must not
     /// outlive it. Nothing is drawn until `resumed` makes another.
     fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
-        if let Some(renderer) = self.renderer.as_mut() {
+        if let Some(renderer) = self.renderer_mut() {
             tracing::info!("[App] suspended: letting the surface go");
             renderer.suspend_surface();
         }

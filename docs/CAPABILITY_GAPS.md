@@ -925,10 +925,23 @@ Measured in `ecs_absent_apis`:
   `EguiFrame` in the draw; the editor's viewport targets are synced at the sync point with the
   painter. The app holds one render hook (an enum), so a second one replaces the first rather than
   being silently outranked. `RenderWorld::frame_viewports` is gone — `draw_frame` already draws
-  the viewports when a camera has one, and the variant skipped planar reflections. **Still open:**
-  the render thread itself — `prepare` and the egui hand-over on the game's thread, the draw and the
-  paint on a render thread, overlapping the next update; for stage apps only (a `set_render` hook
-  writes the game world in the middle of the draw), and single-threaded on wasm; the hooks of individual demos that call
+  the viewports when a camera has one, and the variant skipped planar reflections. **Stage 7, 2026-11-09: the render thread.**
+  `App::with_render_thread()` runs the draw and the overlay paint on a thread of their own
+  (`gizmo-render`), overlapping the next frame's update; the sync point waits for the frame in flight
+  and gets the draw's side back — the renderer, the egui painter and the stage, one value, in one
+  place at a time (`FramePipeline`, generic over that value so the hand-over is tested without a
+  GPU: the overlap, the order, the report, a panic in the draw reaching the sync point, a drop
+  finishing the frame in flight). Opt-in, because the overlap is a frame of latency between the
+  game and the picture; only for a render stage (a `set_render` hook is handed the game world in the
+  middle of the draw — such an app draws at the sync point and says so once at start); and on
+  wasm32 there is one thread. Window events that need the renderer (a resize, the surface going or
+  coming back) sync first. A draw's report (the screenshot request's exit) reaches the loop at the
+  next sync. The swapchain image is acquired inside the draw, so the acquire, the paint, the submit
+  and the present all go with it. One fix on the way: a frame whose image could not be acquired
+  returned early from the loop, before `Input::begin_frame` — so that frame's key edges and mouse
+  delta were seen again by the next update. **Still open:** whether the engine's own paths
+  (`SimpleApp`, `with_scene_render`) should turn the thread on by default — that wants a measurement
+  in a window; the hooks of individual demos that call
   `default_render_pass` themselves (28 move for free); and the editor (`gizmo-studio`'s pipeline does
   its own per-frame work rather than `prepare_frame`). One behaviour change, deliberate: an entity
   parented to a shaking camera is no longer shaken with it (it was moved by the camera's shaken

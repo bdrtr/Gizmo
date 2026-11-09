@@ -38,13 +38,12 @@ impl<State: 'static> App<State> {
             embedded_assets: std::collections::HashMap::new(),
             window_attributes: None,
             window: None,
-            renderer: None,
+            gpu: None,
+            render_thread: false,
             applied_cursor: gizmo_core::window::CursorOptions::free(),
             applied_mode: gizmo_core::window::WindowMode::Windowed,
             #[cfg(feature = "egui")]
             editor: None,
-            #[cfg(feature = "egui")]
-            painter: None,
             app_state: None,
             #[cfg(target_arch = "wasm32")]
             pending_web_init: None,
@@ -358,6 +357,23 @@ impl<State: 'static> App<State> {
     /// window could be drawn to.
     pub fn set_render_stage(mut self, stage: impl RenderStage) -> Self {
         self.render = RenderHook::Stage(Box::new(stage));
+        self
+    }
+
+    /// Draws on a render thread: the frame's draw and overlay paint run there, while the loop goes
+    /// on to the next frame's update, and the next frame's sync point waits for them.
+    ///
+    /// What it buys is the overlap — a frame costs the longer of the update and the draw rather
+    /// than their sum. What it costs is a frame of latency between the game and the picture, which
+    /// is what the overlap is.
+    ///
+    /// Only a [`RenderStage`](Self::set_render_stage) can be drawn this way: a
+    /// [`set_render`](Self::set_render) or [`set_simple_render`](Self::set_simple_render) hook is
+    /// handed the game world in the middle of the draw, so with one of those every frame is drawn
+    /// on the loop's thread, and the app says so once at start. On `wasm32` there is one thread, and
+    /// this does nothing.
+    pub fn with_render_thread(mut self) -> Self {
+        self.render_thread = true;
         self
     }
 

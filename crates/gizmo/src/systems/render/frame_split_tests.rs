@@ -578,6 +578,15 @@ fn a_render_world_draws_every_frame_of_a_changing_game_as_the_game_itself() {
             pictures.last().is_some_and(|last| last != &staged),
             "the stage drew the last frame again, not the moved cube"
         );
+        // And the same draw on another thread — where `App::with_render_thread` runs it — draws
+        // the same picture: the stage and the renderer are all it is given, and both can go there.
+        let elsewhere = std::thread::scope(|s| {
+            s.spawn(|| frame_bytes(&mut renderer, |e, v, r| copy.draw(e, v, r)))
+                .join()
+                .expect("the draw panicked on its thread")
+        });
+        let differ = staged.chunks(4).zip(elsewhere.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "the stage drew a different picture on a render thread");
         copy.prepare(&mut game, &mut renderer);
         assert!(
             game.get_resource::<RenderStats>().is_some_and(|s| s.draw_calls > 0),

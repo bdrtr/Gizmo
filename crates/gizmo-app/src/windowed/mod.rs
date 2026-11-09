@@ -1,7 +1,7 @@
 #[cfg(feature = "egui")]
 use crate::dev_console;
 #[cfg(feature = "egui")]
-use crate::egui_ctx::{EguiContext, EguiPainter};
+use crate::egui_ctx::EguiContext;
 use gizmo_core::system::Schedule;
 use gizmo_core::world::World;
 use gizmo_renderer::renderer::Renderer;
@@ -128,20 +128,20 @@ pub struct App<State: 'static = ()> {
     // until the first `resumed`.
     window_attributes: Option<WindowAttributes>,
     window: Option<Arc<winit::window::Window>>,
-    /// The renderer, once the window exists. **Not a resource of the game world**: it belongs to
-    /// the frame's draw, and the game side reaches the GPU only through the `GpuContext` resource,
-    /// which creates and never writes what the draw reads.
-    renderer: Option<Renderer>,
+    /// The draw's side — the renderer, the overlay painter, the render stage — once the window
+    /// exists, and where its draws run. **The renderer is not a resource of the game world**: it
+    /// belongs to the frame's draw, and the game side reaches the GPU only through the `GpuContext`
+    /// resource, which creates and never writes what the draw reads.
+    gpu: Option<FramePipeline<DrawSide>>,
+    /// Whether [`with_render_thread`](App::with_render_thread) asked for the draw to run on a
+    /// render thread.
+    render_thread: bool,
     /// The cursor behaviour last applied to `window` — see `apply_cursor_options`.
     applied_cursor: gizmo_core::window::CursorOptions,
     /// The window mode last applied — see `apply_window_mode`.
     applied_mode: gizmo_core::window::WindowMode,
     #[cfg(feature = "egui")]
     editor: Option<EguiContext>,
-    /// The overlay UI's painter. It belongs with the renderer — it holds GPU textures and paints
-    /// in the draw — and not with `editor`, which runs the UI on the game's side.
-    #[cfg(feature = "egui")]
-    painter: Option<EguiPainter>,
     app_state: Option<State>,
     /// WASM: `resumed` cannot block — `Renderer::new` (async WebGPU init)
     /// runs in `spawn_local`, and its result is handed over to `finish_initialize`
@@ -182,10 +182,20 @@ impl<State: 'static> std::fmt::Debug for App<State> {
 mod builder;
 mod lifecycle;
 mod event;
+mod pipeline;
 mod stage;
 
-pub use stage::RenderStage;
-use stage::RenderHook;
+use pipeline::FramePipeline;
+pub use stage::{ConditionalSend, RenderStage};
+use stage::{DrawSide, RenderHook};
+
+impl<State: 'static> App<State> {
+    /// The renderer, back from a draw in flight if there is one — for a window event that changes
+    /// what the next frame draws to (a resize, the surface going or coming back).
+    fn renderer_mut(&mut self) -> Option<&mut Renderer> {
+        self.gpu.as_mut().map(|gpu| &mut gpu.sync().renderer)
+    }
+}
 
 impl<State: 'static> crate::plugin::AppLike for App<State> {
     fn parts_mut(&mut self) -> crate::plugin::AppParts<'_> {

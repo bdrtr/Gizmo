@@ -334,7 +334,7 @@ mod egui_frame_ownership_tests {
     fn the_skipped_frame_still_absorbs_its_egui_output() {
         let src = include_str!("windowed/event.rs");
         let skip = src
-            .find("acquire_backbuffer(&mut renderer) else {")
+            .find("acquire_backbuffer(renderer) else {")
             .expect("the frame loop still skips through acquire_backbuffer");
         let epilogue_end = src[skip..]
             .find("};")
