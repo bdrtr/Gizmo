@@ -630,17 +630,11 @@ impl<State: 'static> App<State> {
                                 dev_console::ui_dev_console(&mut self.world, ctx, &self.input);
                             });
 
-                            // Editor viewport render targets + scene save/load
-                            // requests (reads/mutates EditorState).
+                            // Editor component and scene save/load requests (reads/mutates
+                            // EditorState). The viewport render targets are the sync point's: they
+                            // need the renderer and the painter.
                             #[cfg(feature = "editor")]
                             {
-                                if let Some(renderer) = self.renderer.as_ref() {
-                                    crate::editor_runtime::sync_render_targets(
-                                        &mut self.world,
-                                        renderer,
-                                        &mut editor,
-                                    );
-                                }
                                 crate::editor_runtime::process_component_requests(&mut self.world);
                                 crate::editor_runtime::process_scene_requests(&mut self.world);
                             }
@@ -742,27 +736,39 @@ impl<State: 'static> App<State> {
                                 updater(&mut self.world);
                             }
 
-                            // --- DRAW KISMI ---
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                 profiler.begin_scope("render");
                             }
-                            let mut renderer = self.renderer.take().expect("a frame comes after initialization");
 
+                            // ═══ The sync point ═══
+                            // The game's update is done and the renderer is in hand: everything the
+                            // frame does with both happens here, before the draw, and before the
+                            // swapchain is asked for an image — so it happens on a frame that turns
+                            // out not to be drawn, too.
+                            let mut renderer = self.renderer.take().expect("a frame comes after initialization");
+                            #[cfg(feature = "egui")]
+                            let mut painter = self.painter.take().expect("the painter is made with the renderer");
+                            #[cfg(feature = "editor")]
+                            crate::editor_runtime::sync_render_targets(&mut self.world, &renderer, &mut painter);
+                            if let RenderHook::Stage(stage) = &mut self.render {
+                                stage.prepare(&mut self.world, &mut renderer);
+                            }
+                            #[cfg(feature = "egui")]
+                            let ui_frame = editor.end_frame(&window, full_output);
+
+                            // ═══ The draw ═══
                             let Some(output) = self.acquire_backbuffer(&mut renderer) else {
                                 // The one epilogue: every skip path in the acquire lands here.
+                                // The egui frame above already ran, and its texture deltas are
+                                // handed over exactly once. Skipping the *pixels* is what this
+                                // path is for; skipping the *uploads* dropped the font atlas
+                                // for the rest of the run — and killed every debug build on
+                                // epaint's assert, which is why no windowed demo could start.
+                                #[cfg(feature = "egui")]
+                                painter.absorb(&renderer.device, &renderer.queue, ui_frame);
                                 #[cfg(feature = "egui")]
                                 {
-                                    // The egui frame above already ran, and its texture deltas are
-                                    // handed over exactly once. Skipping the *pixels* is what this
-                                    // path is for; skipping the *uploads* dropped the font atlas
-                                    // for the rest of the run — and killed every debug build on
-                                    // epaint's assert, which is why no windowed demo could start.
-                                    editor.absorb_unpainted_frame(
-                                        &window,
-                                        &renderer.device,
-                                        &renderer.queue,
-                                        full_output,
-                                    );
+                                    self.painter = Some(painter);
                                 }
                                 self.renderer = Some(renderer);
                                 if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
@@ -788,52 +794,52 @@ impl<State: 'static> App<State> {
                                 },
                             );
 
-                            // Kullaniciya CommandEncoder verip cizdiriyoruz!
-                            if let Some(render_hk) = self.render_fn.as_mut() {
-                                render_hk(
+                            match &mut self.render {
+                                RenderHook::Stage(stage) => stage.draw(&mut encoder, &view, &mut renderer),
+                                // Kullaniciya CommandEncoder verip cizdiriyoruz!
+                                RenderHook::Raw(render_hk) => render_hk(
                                     &mut self.world,
                                     &state,
                                     &mut encoder,
                                     &view,
                                     &mut renderer,
                                     light_time,
-                                );
-                            } else if let Some(s_render) = self.simple_render_fn.as_mut() {
-                                let mut ctx = RenderContext::new(
-                                    &mut encoder,
-                                    &view,
-                                    &mut renderer,
-                                    light_time,
-                                );
-                                s_render(&mut self.world, &state, &mut ctx);
-                            } else {
-                                // Hiçbir render hook yok → 3B sahne çizilmez (klasik "siyah
-                                // ekran" tuzağı: egui HUD görünür ama sahne siyah). Bir kez uyar.
-                                use std::sync::atomic::{AtomicBool, Ordering};
-                                static WARNED: AtomicBool = AtomicBool::new(false);
-                                if !WARNED.swap(true, Ordering::Relaxed) {
-                                    tracing::warn!(
-                                        "Render hook ayarlı DEĞİL — 3B sahne çizilmeyecek (ekran \
-                                         siyah kalır). `.with_scene_render()` (manuel App), \
-                                         `.set_render(..)` veya `.with_simple_scene(..)` kullan."
+                                ),
+                                RenderHook::Simple(s_render) => {
+                                    let mut ctx = RenderContext::new(
+                                        &mut encoder,
+                                        &view,
+                                        &mut renderer,
+                                        light_time,
                                     );
+                                    s_render(&mut self.world, &state, &mut ctx);
+                                }
+                                RenderHook::None => {
+                                    // Hiçbir render hook yok → 3B sahne çizilmez (klasik "siyah
+                                    // ekran" tuzağı: egui HUD görünür ama sahne siyah). Bir kez uyar.
+                                    use std::sync::atomic::{AtomicBool, Ordering};
+                                    static WARNED: AtomicBool = AtomicBool::new(false);
+                                    if !WARNED.swap(true, Ordering::Relaxed) {
+                                        tracing::warn!(
+                                            "Render hook ayarlı DEĞİL — 3B sahne çizilmeyecek (ekran \
+                                             siyah kalır). `.with_scene_render()` (manuel App), \
+                                             `.set_render(..)` veya `.with_simple_scene(..)` kullan."
+                                        );
+                                    }
                                 }
                             }
 
                             #[cfg(feature = "egui")]
-                            {
-                                editor.render(
-                                    &window,
-                                    &renderer.device,
-                                    &renderer.queue,
-                                    &mut encoder,
-                                    &view,
-                                    // The acquired backbuffer, not the window: the two disagree
-                                    // for one frame on every resize.
-                                    [output.texture.width(), output.texture.height()],
-                                    full_output,
-                                );
-                            }
+                            painter.paint(
+                                &renderer.device,
+                                &renderer.queue,
+                                &mut encoder,
+                                &view,
+                                // The acquired backbuffer, not the window: the two disagree
+                                // for one frame on every resize.
+                                [output.texture.width(), output.texture.height()],
+                                ui_frame,
+                            );
 
                             renderer.queue.submit(std::iter::once(encoder.finish()));
 
@@ -846,6 +852,10 @@ impl<State: 'static> App<State> {
                             // `SurfaceTexture::present(self)` became `Queue::present(texture)`.
                             renderer.queue.present(output);
 
+                            #[cfg(feature = "egui")]
+                            {
+                                self.painter = Some(painter);
+                            }
                             self.renderer = Some(renderer);
 
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {

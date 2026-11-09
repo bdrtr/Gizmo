@@ -221,8 +221,9 @@ impl<State: 'static> App<State> {
 
         #[cfg(feature = "egui")]
         {
-            let editor = EguiContext::new(&renderer.device, renderer.config.format, &window, 1);
+            let (editor, painter) = EguiContext::new(&renderer.device, renderer.config.format, &window, 1);
             self.editor = Some(editor);
+            self.painter = Some(painter);
             tracing::debug!("[App] egui overlay context initialized");
         }
 

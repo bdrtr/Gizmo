@@ -559,5 +559,29 @@ fn a_render_world_draws_every_frame_of_a_changing_game_as_the_game_itself() {
             game.get_resource::<crate::renderer::components::RenderStats>().is_some_and(|s| s.draw_calls > 0),
             "`frame` did not publish the draw's cost to the game"
         );
+
+        // As the app's render stage: `prepare` with the game world, `draw` without it. The picture
+        // is the original's, and what the draw cost reaches the game at the next `prepare` — the
+        // first moment the game world is in reach after the draw, wherever the draw ran.
+        use gizmo_app::RenderStage;
+        use crate::renderer::components::RenderStats;
+        game.query_mut::<&mut Transform>().get_mut(mover).unwrap().position.z = -4.0;
+        renderer.render_stats = None;
+        game.remove_resource::<RenderStats>();
+        copy.prepare(&mut game, &mut renderer);
+        assert!(game.get_resource::<RenderStats>().is_none(), "a cost was published before anything was drawn");
+        let staged = frame_bytes(&mut renderer, |e, v, r| copy.draw(e, v, r));
+        let original = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+        let differ = original.chunks(4).zip(staged.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "the stage drew a different picture from the game's own");
+        assert!(
+            pictures.last().is_some_and(|last| last != &staged),
+            "the stage drew the last frame again, not the moved cube"
+        );
+        copy.prepare(&mut game, &mut renderer);
+        assert!(
+            game.get_resource::<RenderStats>().is_some_and(|s| s.draw_calls > 0),
+            "the stage's draw cost never reached the game"
+        );
     });
 }

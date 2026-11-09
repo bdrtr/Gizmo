@@ -930,12 +930,7 @@ impl SimpleAppExt for App<SimpleSceneState> {
         })
         .set_update(simple_scene_update)
         // Drawn from a copy of the game world (`RenderWorld`): the draw is handed only the copy.
-        .set_render({
-            let mut copy = systems::render::RenderWorld::new();
-            move |world, _state, encoder, view, renderer, _light_time| {
-                copy.frame(world, encoder, view, renderer);
-            }
-        })
+        .set_render_stage(systems::render::RenderWorld::new())
     }
 }
 
@@ -1283,14 +1278,15 @@ mod fixed_physics_tests {
         assert_eq!(FixedPhysics::new(0).step(), 1.0);
     }
 
-    /// The render closure draws and does nothing else: renderer settings forced there every frame
-    /// overrode the game's own (and switched particles off for every game). Source guard — the
-    /// closure needs a window to run.
+    /// The render stage draws and does nothing else: renderer settings forced there every frame
+    /// overrode the game's own (and switched particles off for every game). The simple scene's
+    /// stage is a bare `RenderWorld` — not `with_scene_render`'s, which switches the heavy passes
+    /// off. Source guard — the stage needs a window to run.
     #[test]
     fn the_simple_scene_does_not_override_the_renderer_every_frame() {
         let src = include_str!("simple.rs");
-        let render = src.split(".set_render(").nth(1).and_then(|r| r.split("})").next()).unwrap_or("");
-        assert!(!render.contains("= None"), "the render closure switches something off every frame again:\n{render}");
+        let stage = src.split(".set_render_stage(").nth(1).and_then(|r| r.split('\n').next()).expect("the simple scene sets a render stage");
+        assert_eq!(stage.trim(), "systems::render::RenderWorld::new())", "the simple scene's stage is no longer a bare copy of the world");
         assert!(!src.contains(concat!("renderer.gpu_particles", " = None")), "particles are switched off for every simple scene again");
     }
 

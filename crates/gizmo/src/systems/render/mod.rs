@@ -138,23 +138,34 @@ pub fn ensure_global_transforms(world: &mut World) {
 ///     .expect("the application failed to run");
 /// ```
 pub trait AppSceneRenderExt {
-    /// Sets `set_render` up so that the scene is drawn as [`default_render_pass`] draws it, from a
-    /// copy of the game world ([`RenderWorld`]).
+    /// Sets the render stage up so that the scene is drawn as [`default_render_pass`] draws it,
+    /// from a copy of the game world ([`RenderWorld`]).
     fn with_scene_render(self) -> Self;
 }
 
 impl<State: 'static> AppSceneRenderExt for gizmo_app::App<State> {
     fn with_scene_render(self) -> Self {
-        let mut copy = RenderWorld::new();
-        self.set_render(move |world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_fluid = None;
-            renderer.gpu_physics = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            renderer.volumetric = None;
-            renderer.taa = None;
-            copy.frame(world, encoder, view, renderer);
-        })
+        self.set_render_stage(SceneStage(RenderWorld::new()))
+    }
+}
+
+/// [`with_scene_render`](AppSceneRenderExt::with_scene_render)'s stage: a [`RenderWorld`] with the
+/// heavy passes off.
+struct SceneStage(RenderWorld);
+
+impl gizmo_app::RenderStage for SceneStage {
+    fn prepare(&mut self, game: &mut World, renderer: &mut Renderer) {
+        renderer.gpu_fluid = None;
+        renderer.gpu_physics = None;
+        renderer.ssr = None;
+        renderer.ssgi = None;
+        renderer.volumetric = None;
+        renderer.taa = None;
+        self.0.prepare(game, renderer);
+    }
+
+    fn draw(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer) {
+        self.0.draw(encoder, view, renderer);
     }
 }
 

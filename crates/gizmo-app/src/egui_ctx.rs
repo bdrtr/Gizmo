@@ -1,10 +1,15 @@
 //! Immediate-mode overlay UI runtime for the windowed app.
 //!
-//! [`EguiContext`](crate::egui_ctx::EguiContext) owns the `egui` runtime, the `egui_winit` platform-input
-//! integration and the `egui_wgpu` renderer used to paint an overlay on top of
-//! the engine's frame. It is a generic egui integration with no editor-specific
-//! knowledge, so it backs both lightweight in-game HUDs (the `set_ui` hook) and
-//! the full in-engine editor (the `editor` feature, layered on top).
+//! Two halves, because a frame has two: [`EguiContext`](crate::egui_ctx::EguiContext) runs the UI on the game's side of the frame
+//! — the `egui` runtime and the `egui_winit` platform integration, both of which need the window —
+//! and [`EguiPainter`](crate::egui_ctx::EguiPainter) paints what it produced, holding the `egui_wgpu` renderer and nothing of the
+//! window. [`EguiContext::end_frame`](crate::egui_ctx::EguiContext::end_frame) is the hand-over: it applies the frame's platform output
+//! (cursor, clipboard, IME) and tessellates, and the [`EguiFrame`](crate::egui_ctx::EguiFrame) it returns is everything the
+//! painter needs. So the paint can run wherever the draw runs.
+//!
+//! It is a generic egui integration with no editor-specific knowledge, so it backs both lightweight
+//! in-game HUDs (the `set_ui` hook) and the full in-engine editor (the `editor` feature, layered on
+//! top).
 //!
 //! This module is only compiled with the `egui` feature.
 
@@ -14,28 +19,43 @@ use egui_winit::State;
 use winit::event::WindowEvent;
 use winit::window::Window;
 
-/// Owns the `egui` runtime, window-input integration and `wgpu` renderer
-/// used to draw the overlay UI on top of the engine's frame.
+/// The game's side of the overlay UI: the `egui` runtime and the window-input integration.
 pub struct EguiContext {
     /// The shared `egui` context driving the immediate-mode UI.
     pub context: Context,
     /// `egui_winit` platform state translating window events into egui input.
     pub state: State,
+}
+
+/// The draw's side of the overlay UI: the `egui_wgpu` renderer that paints an [`EguiFrame`] over
+/// the engine's frame, and the textures it holds — the font atlas, and the editor's viewports.
+pub struct EguiPainter {
     /// `egui_wgpu` renderer that paints the tessellated UI into a wgpu pass.
     pub renderer: Renderer,
-    /// Number of frames rendered so far (used for debug labels).
+    /// Number of frames painted so far (used for debug labels).
     pub frame_count: usize,
 }
 
+/// One UI frame, ready to paint: what [`EguiContext::end_frame`] hands to [`EguiPainter`].
+///
+/// It owns the frame's texture deltas, and egui hands each of those over **once**: a frame that is
+/// not painted must still go through [`EguiPainter::absorb`], or the font atlas it carries never
+/// reaches the GPU.
+pub struct EguiFrame {
+    paint_jobs: Vec<egui::ClippedPrimitive>,
+    textures_delta: egui::TexturesDelta,
+    pixels_per_point: f32,
+}
+
 impl EguiContext {
-    /// Creates a new egui context for the given `wgpu` device, surface
-    /// format and window, applying the default dark theme.
+    /// Creates a new egui context for the given `wgpu` device, surface format and window, applying
+    /// the default dark theme, with the painter that draws it.
     pub fn new(
         device: &wgpu::Device,
         output_format: wgpu::TextureFormat,
         window: &Window,
         sample_count: u32,
-    ) -> Self {
+    ) -> (Self, EguiPainter) {
         let context = Context::default();
 
         let fonts = egui::FontDefinitions::default();
@@ -64,14 +84,9 @@ impl EguiContext {
             },
         );
 
-        let ctx = Self {
-            context,
-            state,
-            renderer,
-            frame_count: 0,
-        };
+        let ctx = Self { context, state };
         ctx.apply_theme();
-        ctx
+        (ctx, EguiPainter { renderer, frame_count: 0 })
     }
 
     /// Applies the editor's visual design.
@@ -100,7 +115,7 @@ impl EguiContext {
     }
 
     /// Runs one egui frame, invoking `ui_fn` to build the UI, and returns the
-    /// resulting [`egui::FullOutput`] to be passed to [`Self::render`].
+    /// resulting [`egui::FullOutput`] to be closed by [`Self::end_frame`].
     pub fn run<F>(&mut self, window: &Window, ui_fn: F) -> egui::FullOutput
     where
         F: FnOnce(&Context),
@@ -111,37 +126,41 @@ impl EguiContext {
         self.context.end_pass()
     }
 
-    /// Paints the overlay UI on top of the already-rendered engine frame, using
-    /// the output produced by [`Self::run`].
+    /// Closes a UI frame from [`Self::run`]: applies its platform output (cursor shape, clipboard,
+    /// IME — as true for a frame that is never painted as for one that is) and tessellates it.
+    pub fn end_frame(&mut self, window: &Window, mut full_output: egui::FullOutput) -> EguiFrame {
+        self.state.handle_platform_output(window, std::mem::take(&mut full_output.platform_output));
+        let pixels_per_point = window.scale_factor() as f32;
+        let paint_jobs = self.context.tessellate(std::mem::take(&mut full_output.shapes), pixels_per_point);
+        // The deltas move into the frame, which owns them from here on.
+        let textures_delta = std::mem::take(&mut full_output.textures_delta);
+        EguiFrame { paint_jobs, textures_delta, pixels_per_point }
+    }
+}
+
+impl EguiPainter {
+    /// Paints the overlay UI on top of the already-rendered engine frame.
     // Oyun Çizildikten SONRA bu fonksiyon ekrana Overlay UI çizdirecek!
-    pub fn render(
+    pub fn paint(
         &mut self,
-        window: &Window,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         // Width and height of `view` in physical pixels — see the note on the screen descriptor.
         target_size: [u32; 2],
-        mut full_output: egui::FullOutput,
+        mut frame: EguiFrame,
     ) {
-        self.state
-            .handle_platform_output(window, full_output.platform_output);
         self.frame_count += 1;
-
-        let paint_jobs = self
-            .context
-            .tessellate(full_output.shapes, window.scale_factor() as f32);
 
         // Dokuları Yükle (Fontlar, Pencereler vs)
         // egui 0.36 turned each entry into a LIST of deltas for one texture: a font atlas that
         // grows in several regions in one frame now arrives as several partial updates instead of
         // one. Uploading only the first would leave the rest of the atlas stale — glyphs that
         // render as blank boxes a frame later.
-        for (id, image_deltas) in &full_output.textures_delta.set {
+        for (id, image_deltas) in &frame.textures_delta.set {
             for image_delta in image_deltas {
-                self.renderer
-                    .update_texture(device, queue, *id, image_delta);
+                self.renderer.update_texture(device, queue, *id, image_delta);
             }
         }
 
@@ -159,11 +178,11 @@ impl EguiContext {
         // from that surface.
         let screen_descriptor = ScreenDescriptor {
             size_in_pixels: target_size,
-            pixels_per_point: window.scale_factor() as f32,
+            pixels_per_point: frame.pixels_per_point,
         };
 
         self.renderer
-            .update_buffers(device, queue, encoder, &paint_jobs, &screen_descriptor);
+            .update_buffers(device, queue, encoder, &frame.paint_jobs, &screen_descriptor);
 
         // -- EGUI ÇİZİCİSİNİ AKTİFLEŞTİR: Motorun Pass'inin Üzerine Ek Çizim Yapar --
         {
@@ -187,12 +206,11 @@ impl EguiContext {
                 // egui-wgpu 0.34's `render` wants a `RenderPass<'static>`.
                 .forget_lifetime();
 
-            self.renderer
-                .render(&mut render_pass, &paint_jobs, &screen_descriptor);
+            self.renderer.render(&mut render_pass, &frame.paint_jobs, &screen_descriptor);
         }
 
         // Eski dokuları sil — çizimden SONRA: bu karenin paint job'ları hâlâ o dokulara bakıyor.
-        for id in &full_output.textures_delta.free {
+        for id in &frame.textures_delta.free {
             self.renderer.free_texture(id);
         }
 
@@ -201,8 +219,8 @@ impl EguiContext {
         // so every debug frame that carried one died here with "Dropped TexturesDelta with 1
         // unapplied deltas". Release builds did not panic and did not need to: the assert is the
         // only thing that fires. That is the worse half of it, because egui emits each delta
-        // exactly ONCE — see `absorb_unpainted_frame`, which exists for the same reason.
-        full_output.textures_delta.clear();
+        // exactly ONCE — see `absorb`, which exists for the same reason.
+        frame.textures_delta.clear();
     }
 
     /// Take a frame that will never be painted: apply its texture deltas, drop the rest.
@@ -215,30 +233,18 @@ impl EguiContext {
     /// then paint as blank boxes) and, in a debug build, kills the process on epaint's assert.
     ///
     /// So the pixels are what a skipped frame skips — not the uploads.
-    pub fn absorb_unpainted_frame(
-        &mut self,
-        window: &Window,
-        device: &wgpu::Device,
-        queue: &wgpu::Queue,
-        mut full_output: egui::FullOutput,
-    ) {
-        // The UI ran; its platform side effects (cursor shape, clipboard, IME) are as true for an
-        // unpainted frame as for a painted one.
-        self.state
-            .handle_platform_output(window, full_output.platform_output);
-
-        for (id, image_deltas) in &full_output.textures_delta.set {
+    pub fn absorb(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mut frame: EguiFrame) {
+        for (id, image_deltas) in &frame.textures_delta.set {
             for image_delta in image_deltas {
-                self.renderer
-                    .update_texture(device, queue, *id, image_delta);
+                self.renderer.update_texture(device, queue, *id, image_delta);
             }
         }
-        // Nothing was painted this frame, so unlike `render` there is no paint job left holding a
+        // Nothing was painted this frame, so unlike `paint` there is no paint job left holding a
         // reference and the free list can go immediately.
-        for id in &full_output.textures_delta.free {
+        for id in &frame.textures_delta.free {
             self.renderer.free_texture(id);
         }
-        full_output.textures_delta.clear();
+        frame.textures_delta.clear();
     }
 }
 
@@ -311,7 +317,7 @@ mod screen_descriptor_tests {
 #[cfg(test)]
 mod egui_frame_ownership_tests {
     /// Every egui frame the loop starts has to reach something that applies its texture deltas:
-    /// [`super::EguiContext::render`] when the frame is painted, `absorb_unpainted_frame` when the
+    /// [`super::EguiPainter::paint`] when the frame is painted, [`super::EguiPainter::absorb`] when the
     /// swapchain image could not be acquired and it is not.
     ///
     /// egui hands each delta over exactly **once**, so a dropped `FullOutput` is not a dropped
@@ -337,22 +343,22 @@ mod egui_frame_ownership_tests {
         let epilogue = &src[skip..epilogue_end];
 
         assert!(
-            epilogue.contains("absorb_unpainted_frame("),
+            epilogue.contains(".absorb("),
             "the frame that is not painted still owns this frame's texture deltas — hand them \
              over before returning, or the atlas is gone and debug builds die on the assert"
         );
     }
 
     #[test]
-    fn a_full_output_taken_by_value_is_cleared_before_it_drops() {
+    fn an_egui_frame_taken_by_value_is_cleared_before_it_drops() {
         let src = include_str!("egui_ctx.rs");
         let code = src.split("#[cfg(test)]").next().unwrap_or("");
 
-        let takes_by_value = code.matches("mut full_output: egui::FullOutput").count();
-        let clears = code.matches("full_output.textures_delta.clear();").count();
+        let takes_by_value = code.matches("mut frame: EguiFrame").count();
+        let clears = code.matches("frame.textures_delta.clear();").count();
         assert_eq!(
             takes_by_value, clears,
-            "every function that takes a FullOutput by value ends up dropping it, and dropping an \
+            "every function that takes an EguiFrame by value ends up dropping it, and dropping an \
              unhandled TexturesDelta is the assert that killed the demos: clear it once its \
              contents have been applied"
         );

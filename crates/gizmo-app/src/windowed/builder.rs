@@ -19,8 +19,7 @@ impl<State: 'static> App<State> {
             window_size: (width, height),
             setup_fn: None,
             update_fns: Vec::new(),
-            render_fn: None,
-            simple_render_fn: None,
+            render: RenderHook::None,
             input_fn: None,
             #[cfg(feature = "egui")]
             ui_fn: None,
@@ -44,6 +43,8 @@ impl<State: 'static> App<State> {
             applied_mode: gizmo_core::window::WindowMode::Windowed,
             #[cfg(feature = "egui")]
             editor: None,
+            #[cfg(feature = "egui")]
+            painter: None,
             app_state: None,
             #[cfg(target_arch = "wasm32")]
             pending_web_init: None,
@@ -318,6 +319,10 @@ impl<State: 'static> App<State> {
     /// Everything is handed over as wgpu types, so this is the hook for a pass the engine does
     /// not have. Most games want [`set_simple_render`](Self::set_simple_render) instead, which
     /// wraps the same call in a [`RenderContext`] and keeps `wgpu` out of the signature.
+    ///
+    /// The hook is handed the game world in the middle of the draw, so it runs whole at the
+    /// frame's sync point; a draw that only reads what it kept is a
+    /// [`set_render_stage`](Self::set_render_stage). Replaces any render hook set before.
     pub fn set_render<F>(mut self, f: F) -> Self
     where
         F: FnMut(
@@ -329,16 +334,30 @@ impl<State: 'static> App<State> {
                 f32,
             ) + 'static,
     {
-        self.render_fn = Some(Box::new(f));
+        self.render = RenderHook::Raw(Box::new(f));
         self
     }
 
-    /// Adds the new, simple Render function (RenderContext)
+    /// The render hook through a [`RenderContext`], which keeps `wgpu` out of the signature.
+    ///
+    /// Like [`set_render`](Self::set_render) it is handed the game world in the middle of the
+    /// draw, so it runs whole at the frame's sync point. Replaces any render hook set before.
     pub fn set_simple_render<F>(mut self, f: F) -> Self
     where
         F: for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>) + 'static,
     {
-        self.simple_render_fn = Some(Box::new(f));
+        self.render = RenderHook::Simple(Box::new(f));
+        self
+    }
+
+    /// Draws the frame through a [`RenderStage`]: its `prepare` at the frame's sync point, with
+    /// the game world, and its `draw` after it, without. Replaces any render hook set before.
+    ///
+    /// Unlike [`set_render`](Self::set_render), `prepare` runs on a frame whose swapchain image
+    /// could not be acquired, too — what it does to the game world does not depend on whether the
+    /// window could be drawn to.
+    pub fn set_render_stage(mut self, stage: impl RenderStage) -> Self {
+        self.render = RenderHook::Stage(Box::new(stage));
         self
     }
 

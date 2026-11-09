@@ -10,7 +10,7 @@
 //! This module is only compiled with the `editor` feature.
 
 use gizmo_core::Entity;
-use crate::egui_ctx::EguiContext;
+use crate::egui_ctx::EguiPainter;
 use gizmo_core::world::World;
 use gizmo_renderer::renderer::Renderer;
 
@@ -84,7 +84,7 @@ fn create_viewport_target(
 /// panels can sample them, and publishes the matching `EditorRenderTarget` /
 /// `GameRenderTarget` resources the engine renders into.
 #[tracing::instrument(skip_all, name = "editor_sync_render_targets")]
-pub fn sync_render_targets(world: &mut World, renderer: &Renderer, editor: &mut EguiContext) {
+pub fn sync_render_targets(world: &mut World, renderer: &Renderer, painter: &mut EguiPainter) {
     // --- Scene View RTT (Render To Texture) YÖNETİMİ ---
     if world
         .get_resource::<gizmo_editor::EditorState>()
@@ -116,13 +116,13 @@ pub fn sync_render_targets(world: &mut World, renderer: &Renderer, editor: &mut 
 
         if needs_recreate_scene && scene_w > 0 && scene_h > 0 {
             if let Some(old_id) = ed_state_ref.scene_texture_id {
-                editor.renderer.free_texture(&old_id);
+                painter.renderer.free_texture(&old_id);
             }
             let tex_id;
             {
                 let (view, id) = create_viewport_target(
                     &renderer.device,
-                    &mut editor.renderer,
+                    &mut painter.renderer,
                     "Editor RTT",
                     renderer.config.format,
                     scene_w,
@@ -153,13 +153,13 @@ pub fn sync_render_targets(world: &mut World, renderer: &Renderer, editor: &mut 
 
         if needs_recreate_game && game_w > 0 && game_h > 0 {
             if let Some(old_id) = ed_state_ref.game_texture_id {
-                editor.renderer.free_texture(&old_id);
+                painter.renderer.free_texture(&old_id);
             }
             let tex_id;
             {
                 let (view, id) = create_viewport_target(
                     &renderer.device,
-                    &mut editor.renderer,
+                    &mut painter.renderer,
                     "Game RTT",
                     renderer.config.format,
                     game_w,

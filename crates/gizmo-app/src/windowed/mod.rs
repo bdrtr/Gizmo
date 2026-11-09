@@ -1,7 +1,7 @@
 #[cfg(feature = "egui")]
 use crate::dev_console;
 #[cfg(feature = "egui")]
-use crate::egui_ctx::EguiContext;
+use crate::egui_ctx::{EguiContext, EguiPainter};
 use gizmo_core::system::Schedule;
 use gizmo_core::world::World;
 use gizmo_renderer::renderer::Renderer;
@@ -93,19 +93,8 @@ pub struct App<State: 'static = ()> {
     /// already there. [`set_update`](App::set_update) still clears the list first, which
     /// is what makes its documented "the last caller wins" true.
     update_fns: Vec<Box<dyn FnMut(&mut World, &mut State, f32, &gizmo_core::input::Input)>>, // dt, input
-    render_fn: Option<
-        Box<
-            dyn FnMut(
-                &mut World,
-                &State,
-                &mut wgpu::CommandEncoder,
-                &wgpu::TextureView,
-                &mut Renderer,
-                f32,
-            ),
-        >,
-    >, // light_time
-    simple_render_fn: Option<Box<dyn for<'a> FnMut(&mut World, &State, &mut RenderContext<'a>)>>,
+    /// How the frame is drawn — see [`RenderHook`].
+    render: RenderHook<State>,
     input_fn: Option<Box<dyn FnMut(&mut World, &mut State, &winit::event::Event<()>) -> bool>>, // Input handler
     #[cfg(feature = "egui")]
     ui_fn: Option<Box<dyn FnMut(&mut World, &mut State, &egui::Context)>>, // Overlay UI handler
@@ -149,6 +138,10 @@ pub struct App<State: 'static = ()> {
     applied_mode: gizmo_core::window::WindowMode,
     #[cfg(feature = "egui")]
     editor: Option<EguiContext>,
+    /// The overlay UI's painter. It belongs with the renderer — it holds GPU textures and paints
+    /// in the draw — and not with `editor`, which runs the UI on the game's side.
+    #[cfg(feature = "egui")]
+    painter: Option<EguiPainter>,
     app_state: Option<State>,
     /// WASM: `resumed` cannot block — `Renderer::new` (async WebGPU init)
     /// runs in `spawn_local`, and its result is handed over to `finish_initialize`
@@ -170,11 +163,7 @@ impl<State: 'static> std::fmt::Debug for App<State> {
             .field("window_size", &self.window_size)
             .field("setup_fn", &self.setup_fn.as_ref().map(|_| "<closure>"))
             .field("update_fns", &format!("<{} closures>", self.update_fns.len()))
-            .field("render_fn", &self.render_fn.as_ref().map(|_| "<closure>"))
-            .field(
-                "simple_render_fn",
-                &self.simple_render_fn.as_ref().map(|_| "<closure>"),
-            )
+            .field("render", &self.render.name())
             .field("input_fn", &self.input_fn.as_ref().map(|_| "<closure>"));
         #[cfg(feature = "egui")]
         ds.field("ui_fn", &self.ui_fn.as_ref().map(|_| "<closure>"));
@@ -193,6 +182,10 @@ impl<State: 'static> std::fmt::Debug for App<State> {
 mod builder;
 mod lifecycle;
 mod event;
+mod stage;
+
+pub use stage::RenderStage;
+use stage::RenderHook;
 
 impl<State: 'static> crate::plugin::AppLike for App<State> {
     fn parts_mut(&mut self) -> crate::plugin::AppParts<'_> {

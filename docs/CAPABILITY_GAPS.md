@@ -911,10 +911,24 @@ Measured in `ecs_absent_apis`:
   at the next `submit` — and the preparation needs `&mut Renderer`, so it cannot run while a draw
   holds it. What could go wrong is a write from the game's side *during the update*, landing in the
   middle of a draw that submits per view: that is what this stage closed, by taking the queue out of
-  the game's reach. **Still open:** the render thread itself — the frame becomes three phases (the
-  game's update; the sync point, where the renderer comes back, the frame is prepared and copied;
-  the draw, on the render thread, with the egui paint), opt-in for apps whose render hook writes the
-  game world, and single-threaded on wasm; the hooks of individual demos that call
+  the game's reach. **Stage 6, 2026-11-09: the frame is a sync point and a draw** (still inline,
+  still one thread). `gizmo_app::RenderStage` is a render hook in the two halves a render thread
+  splits it into: `prepare(&mut World, &mut Renderer)` at the sync point, `draw(encoder, view,
+  &mut Renderer)` with no world; `App::set_render_stage` installs one, and `RenderWorld` is one
+  (`prepare` publishes the last draw's cost, prepares and copies; `draw` draws the copy).
+  `with_scene_render` and `SimpleApp` use it. The loop prepares the stage *before* asking the
+  swapchain for an image, so a frame that is never drawn (occluded, resized, timed out, the first
+  frame of a new window) still does what the frame does to the game world — before, the whole hook
+  was skipped with the picture. The overlay UI is split the same way: `EguiContext` runs the UI and
+  closes the frame (`end_frame`: platform output, tessellation) on the game's side, and an
+  `EguiPainter`, which holds the `egui_wgpu` renderer and none of the window, paints the
+  `EguiFrame` in the draw; the editor's viewport targets are synced at the sync point with the
+  painter. The app holds one render hook (an enum), so a second one replaces the first rather than
+  being silently outranked. `RenderWorld::frame_viewports` is gone — `draw_frame` already draws
+  the viewports when a camera has one, and the variant skipped planar reflections. **Still open:**
+  the render thread itself — `prepare` and the egui hand-over on the game's thread, the draw and the
+  paint on a render thread, overlapping the next update; for stage apps only (a `set_render` hook
+  writes the game world in the middle of the draw), and single-threaded on wasm; the hooks of individual demos that call
   `default_render_pass` themselves (28 move for free); and the editor (`gizmo-studio`'s pipeline does
   its own per-frame work rather than `prepare_frame`). One behaviour change, deliberate: an entity
   parented to a shaking camera is no longer shaken with it (it was moved by the camera's shaken

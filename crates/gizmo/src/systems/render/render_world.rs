@@ -5,14 +5,14 @@
 //! middle: [`prepare_frame`](super::prepare_frame) on the game world — everything a frame writes
 //! that the game can see —, the extractor bringing the copy up to date, [`draw_frame`](super::draw_frame)
 //! on the copy, and the draw's cost published back to the game world. The draw is handed only the
-//! copy, so whatever it does, the game world is not in reach — which is what lets it later run while
-//! the game goes on.
+//! copy, so whatever it does, the game world is not in reach — which is what lets it run while the
+//! game goes on. As a [`RenderStage`](gizmo_app::RenderStage) it is split exactly there.
 //!
 //! What the copy holds is decided in one place, [`render_extractor`], and held to the draw by a test
 //! that reads the draw path's source: every component and resource the draw names is copied, or is
 //! listed with the reason it need not be.
 
-use super::{draw_frame, draw_viewports, prepare_frame, publish_render_stats};
+use super::{draw_frame, prepare_frame, publish_render_stats};
 use crate::core::World;
 use crate::renderer::Renderer;
 use gizmo_core::extract::Extractor;
@@ -24,20 +24,24 @@ use gizmo_core::extract::Extractor;
 /// the middle: [`prepare_frame`](super::prepare_frame) on the game world, the extractor bringing
 /// the copy up to date, [`draw_frame`](super::draw_frame) on the copy, and the draw's cost published
 /// back to the game world. The draw is handed only the copy, so the game world is out of its reach
-/// — which is what lets it later run while the game goes on.
+/// — which is what lets it run while the game goes on.
+///
+/// It is a [`RenderStage`](gizmo_app::RenderStage): `prepare` is the first two steps, `draw` the
+/// third, and what the draw cost is published at the next `prepare`, the first moment the game
+/// world is in reach again after it.
 ///
 /// ```no_run
 /// use gizmo::prelude::*;
 /// use gizmo::systems::render::RenderWorld;
 ///
-/// let mut copy = RenderWorld::new();
 /// App::<()>::new("Demo", 1280, 720)
-///     .set_render(move |world, _state, encoder, view, renderer, _light_time| {
-///         copy.frame(world, encoder, view, renderer);
-///     })
+///     .set_render_stage(RenderWorld::new())
 ///     .run()
 ///     .expect("the application failed to run");
 /// ```
+///
+/// A raw render hook with passes of its own draws the copy itself: [`frame`](Self::frame), or
+/// [`extract`](Self::extract) and a draw of [`world`](Self::world).
 pub struct RenderWorld {
     world: World,
     extractor: Extractor,
@@ -93,20 +97,19 @@ impl RenderWorld {
         draw_frame(&self.world, encoder, view, renderer);
         publish_render_stats(game, renderer);
     }
+}
 
-    /// [`frame`](Self::frame) through [`draw_viewports`](super::draw_viewports) — the copy's
-    /// counterpart of [`render_viewports`](super::render_viewports).
-    pub fn frame_viewports(
-        &mut self,
-        game: &mut World,
-        encoder: &mut wgpu::CommandEncoder,
-        view: &wgpu::TextureView,
-        renderer: &mut Renderer,
-    ) {
+impl gizmo_app::RenderStage for RenderWorld {
+    /// What the last draw cost goes to the game world first — this is the first moment it is in
+    /// reach since that draw — then the game world is prepared and copied.
+    fn prepare(&mut self, game: &mut World, renderer: &mut Renderer) {
+        publish_render_stats(game, renderer);
         prepare_frame(game, renderer);
         self.extract(game);
-        draw_viewports(&self.world, encoder, view, renderer);
-        publish_render_stats(game, renderer);
+    }
+
+    fn draw(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer) {
+        draw_frame(&self.world, encoder, view, renderer);
     }
 }
 
