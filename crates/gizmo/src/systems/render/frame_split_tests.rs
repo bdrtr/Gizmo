@@ -1922,15 +1922,16 @@ fn a_body_in_a_left_slot_starts_with_none_of_its_contacts() {
     });
 }
 
-/// **A contact warm-starts only from the contact of the step before.** A box rests on a box on the
-/// floor for ten seconds; the top one is taken out, and a box put in its slot is thrown up off the
-/// lower one. The lower box stays where it rests. Its manifold kept an entry for the slot, with the
-/// impulse it had accumulated holding the old top box up, and the next body found at that index
-/// revived it: pushing the new box away then pulled the lower box after it.
+/// **A contact pushes, and never pulls.** A box that has rested on the floor for a second, thrown
+/// up, rises; and when a box resting on a box is thrown off it, the lower box stays where it rests.
+/// A contact's accumulated impulse was carried from step to step and never applied as a warm start,
+/// so it grew by the weight it held every step and the solve's clamp — all that keeps a contact
+/// from pulling — never bit: the thrown box was pulled back down (it did not rise at all after a
+/// second's rest), and a lower box was pulled 0.3 m up after the one thrown off it.
 #[cfg(feature = "physics")]
 #[test]
 #[ignore = "requires a GPU adapter"]
-fn a_contact_warm_starts_only_from_the_step_before() {
+fn a_contact_pushes_and_never_pulls() {
     use gizmo_physics_core::components::GpuPhysicsLink;
     use gizmo_physics_core::Collider;
     use gizmo_physics_rigid::components::{RigidBody, Velocity};
@@ -1954,6 +1955,28 @@ fn a_contact_warm_starts_only_from_the_step_before() {
         let cube = |game: &mut World, y: f32| {
             game.spawn_bundle((Transform::new(Vec3::new(0.0, y, 0.0)), RigidBody::new(1.0, true), Collider::box_collider(Vec3::splat(0.3))))
         };
+
+        // A box rested a second on the floor, then thrown up at 3 m/s, as a game writes it.
+        let alone = cube(&mut game, 0.4);
+        for _ in 0..60 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let alone_slot = game.get::<GpuPhysicsLink>(alone).expect("linked").id;
+        let mut thrown_up = gpu_boxes(&renderer)[alone_slot as usize];
+        thrown_up.velocity = [0.0, 3.0, 0.0];
+        (thrown_up.state, thrown_up.sleep_counter) = (0, 0);
+        let queue = renderer.queue.clone();
+        renderer.gpu_physics.as_ref().expect("GPU bodies").update_box(&queue, alone_slot, &thrown_up);
+        for _ in 0..10 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let risen = gpu_boxes(&renderer)[alone_slot as usize].position[1];
+        assert!(risen > 0.65, "a box thrown up at 3 m/s off the floor it rested on is at {risen} m a sixth of a second later");
+        game.despawn(alone);
+        for _ in 0..3 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+
         let lower = cube(&mut game, 0.4);
         let top = cube(&mut game, 1.0);
         for _ in 0..600 {

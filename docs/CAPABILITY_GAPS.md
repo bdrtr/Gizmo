@@ -552,14 +552,16 @@ Found testing it, all in the solver, all fixed with it:
 - **A body on the ground never slept.** Each step's gravity, bounced back at the restitution, kept it
   hopping a few centimetres a second, above the energy it must fall under to sleep. A body meeting a static
   collider slower than `RESTITUTION_THRESHOLD` (0.5 m/s) rests.
-- **A contact warm-started from whatever entry had its index**, however long ago it had touched: only a
-  contact that was one in the last step keeps its accumulated impulse now. Without it, a box thrown off
-  the top of a two-box stack pulled the lower box 0.3 m up after it.
+- **A contact pulled.** Its accumulated impulse was carried from step to step and never applied as a warm
+  start, so it grew by the weight it held every step and the solve's clamp — all that keeps a contact from
+  pulling — never bit: a box that had rested a second on the floor could not be thrown up off it (it did
+  not move), friction scaled by it held bodies from sliding apart, and a box thrown off a two-box stack
+  pulled the lower one 0.3 m up after it. The impulse is the step's own now, from nothing.
 
 Tests: `a_gpu_body_leaves_with_its_entity_and_its_slot_is_nobody_elses`,
 `a_gpu_body_rests_on_the_ground_the_game_gave_it`, `a_body_taken_out_wakes_the_sleeping_bodies_round_it`,
 `a_body_put_in_is_not_moved_by_a_readback_copied_before_it`, `a_body_in_a_left_slot_starts_with_none_of_its_contacts`,
-`a_contact_warm_starts_only_from_the_step_before`.
+`a_contact_pushes_and_never_pulls`.
 
 **A heap of GPU bodies falls asleep — 2026-11-10.** A body resting on another body never slept, so a heap
 was simulated in full for as long as it lay there. The step added gravity *after* the contacts were

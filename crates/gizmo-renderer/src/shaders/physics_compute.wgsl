@@ -247,15 +247,15 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (me.state == 1u || me.state >= BOX_FREE) { return; }
 
     let old_count = min(box_contacts[idx].count, 8u);
-    // Which entries were contacts in the last step: only those warm-start below. An entry for a
-    // body touched long ago — or for a slot whose body has gone and been replaced — keeps its index
-    // and its accumulated impulse, and reviving those handed a new contact an old body's push.
-    var was_active = 0u;
+    // A contact's accumulated impulse is this step's, from nothing: the solve's clamp keeps the
+    // step's total push out non-negative, and that is all that stops a contact from pulling. It was
+    // carried from step to step and never applied as a warm start, so it only grew — by the weight it
+    // held, every step — and the clamp never bit: a box that had rested a second on another could
+    // not be thrown off it (the contact pulled it back), friction scaled by it held bodies from
+    // sliding apart, and a body put in a slot another had left took over that body's push.
     for (var i = 0u; i < old_count; i++) {
-        if (box_contacts[idx].is_active[i] == 1u) {
-            was_active = was_active | (1u << i);
-        }
         box_contacts[idx].is_active[i] = 0u;
+        box_contacts[idx].accum_impulse[i] = vec4<f32>(0.0);
     }
 
     let grid_p = vec3<i32>(floor(me.position / CELL_SIZE));
@@ -378,9 +378,6 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         if (box_contacts[idx].neighbors[c] == n_idx) {
                             box_contacts[idx].is_active[c] = 1u;
                             box_contacts[idx].normals[c] = vec4<f32>(active_normal, penetration);
-                            if ((was_active & (1u << c)) == 0u) {
-                                box_contacts[idx].accum_impulse[c] = vec4<f32>(0.0);
-                            }
                             found = true;
                             break;
                         }
@@ -491,7 +488,7 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
         
         let vel_along_normal = dot(rel_vel, n_b2a);
         
-        // Persistent Impulse (Warm Start)
+        // This step's impulse so far (reset by the narrowphase).
         var old_accum = box_contacts[idx].accum_impulse[i];
         
         let invMassA = select(1.0 / me.mass, 0.0, me.mass <= 0.00001);
