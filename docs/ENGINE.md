@@ -1431,6 +1431,21 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   way it refuses a plane, and the narrowphase arms sit below the plane arms and above the GJK
   fallback for the same two reasons the mesh arms do.
 
+  **The speculative path did not, until 2026-11-10.** A CCD body a step from a surface and not yet
+  touching it gets a speculative contact (`Gjk::speculative_contact`), and that function split only
+  compounds: a heightfield or a plane went to `support_point` whole — an error logged and a zero
+  support on every such step in release, a debug panic — and a triangle mesh was taken by its hull,
+  so a CCD body inside a concave mesh's hull (a ball above a trough's floor) overlapped the hull and
+  got no speculative contact at all: a tunnelling risk. Found as `golf`'s log of one
+  "Heightfield reached GJK support_point" per physics step; the game's headless test hit it too and
+  showed nothing, because nothing installs a log subscriber there. Now a plane is measured
+  analytically and a field or a mesh is its triangles within the convex shape's swept reach this
+  step, each tested as a convex piece, the closest kept — the touching path's dispatch, by bounds.
+  Regression: `gjk::tests::a_heightfield_gives_a_speculative_contact_from_its_triangles`,
+  `a_concave_mesh_gives_speculative_contacts_from_its_triangles_only`,
+  `a_plane_gives_a_speculative_contact`, and `heightfield_collider.rs::a_ccd_ball_falling_onto_terrain_lands_on_it`
+  (all four fail on the old code — the field and plane ones by the very panic).
+
   Raycasting walks the lattice cell by cell (a 2-D DDA in XZ) and stops as soon as the nearest hit
   is closer than the next cell boundary, so a ray at the ground under a character tests one or two
   cells whatever the terrain's size — with a hard step bound, because a raycast that never returns

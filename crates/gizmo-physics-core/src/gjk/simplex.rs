@@ -531,9 +531,52 @@ impl Gjk {
             });
         }
 
-        /// Resting standoff: the body stops this far short of the surface so the
-        /// next frame still has a measurable, GJK-reliable separation.
-        const SKIN: f32 = 0.01;
+        // **A surface is its pieces too.** A plane has no support function, and a heightfield or a
+        // triangle mesh has one that describes its convex hull — a lid over every valley — rather
+        // than the surface. The touching path never hands them to GJK whole (planes analytically,
+        // fields and meshes a triangle at a time), and neither may this: a heightfield reached
+        // `support_point`, logged an error and returned a zero support on every step a CCD body
+        // was within a step of the ground without touching it (a golf ball rolling on its course:
+        // about once a physics step, unseen in the game's headless test only because nothing logs
+        // there), and in a debug build it is a panic.
+        let is_surface = |s: &ColliderShape| {
+            matches!(s, ColliderShape::Plane(_) | ColliderShape::Heightfield(_) | ColliderShape::TriMesh(_))
+        };
+        if is_surface(shape_a) && is_surface(shape_b) {
+            // Two surfaces are two pieces of static world; nothing here moves one onto the other.
+            return None;
+        }
+        match (shape_a, shape_b) {
+            (_, ColliderShape::Plane(p)) => {
+                // A's deepest point towards the plane, and the gap from it to the plane.
+                let deepest = Self::support_point(shape_a, pos_a, rot_a, -p.normal);
+                let gap = (deepest.dot(p.normal) - p.distance).max(0.0);
+                return Self::speculative_emit(gap, -p.normal, vel_a - vel_b, dt, pos_a, inv_mass_a, pos_b, inv_mass_b);
+            }
+            (ColliderShape::Plane(p), _) => {
+                let deepest = Self::support_point(shape_b, pos_b, rot_b, -p.normal);
+                let gap = (deepest.dot(p.normal) - p.distance).max(0.0);
+                return Self::speculative_emit(gap, p.normal, vel_a - vel_b, dt, pos_a, inv_mass_a, pos_b, inv_mass_b);
+            }
+            (_, ColliderShape::Heightfield(_) | ColliderShape::TriMesh(_)) => {
+                return Self::speculative_against_surface(
+                    (shape_a, pos_a, rot_a, vel_a, inv_mass_a),
+                    (shape_b, pos_b, rot_b, vel_b, inv_mass_b),
+                    false,
+                    dt,
+                );
+            }
+            (ColliderShape::Heightfield(_) | ColliderShape::TriMesh(_), _) => {
+                return Self::speculative_against_surface(
+                    (shape_b, pos_b, rot_b, vel_b, inv_mass_b),
+                    (shape_a, pos_a, rot_a, vel_a, inv_mass_a),
+                    true,
+                    dt,
+                );
+            }
+            _ => {}
+        }
+
         /// Below this gap the GJK separating axis is unreliable (it degenerates to
         /// a `Vec3::X` fallback), so we orient the normal from the approach instead.
         const AXIS_RELIABLE_GAP: f32 = 1e-3;
@@ -567,6 +610,30 @@ impl Gjk {
             let probe = pos_a + approach * (gap + 2.0 * AXIS_RELIABLE_GAP);
             Self::get_contact(shape_a, probe, rot_a, shape_b, pos_b, rot_b)?.normal
         };
+
+        Self::speculative_emit(gap, normal, rel_vel, dt, pos_a, inv_mass_a, pos_b, inv_mass_b)
+    }
+
+    /// The speculative contact for a separation `gap` along `normal` (A→B), or `None` when the
+    /// bodies are not closing on each other fast enough to meet this step.
+    #[allow(clippy::too_many_arguments)]
+    fn speculative_emit(
+        gap: f32,
+        normal: Vec3,
+        rel_vel: Vec3,
+        dt: f32,
+        pos_a: Vec3,
+        inv_mass_a: f32,
+        pos_b: Vec3,
+        inv_mass_b: f32,
+    ) -> Option<ContactPoint> {
+        /// Resting standoff: the body stops this far short of the surface so the
+        /// next frame still has a measurable, GJK-reliable separation.
+        const SKIN: f32 = 0.01;
+
+        if dt <= 0.0 {
+            return None;
+        }
 
         // Closing speed of A onto B along the normal. Not approaching ⇒ no contact.
         let closing = rel_vel.dot(normal);
@@ -606,6 +673,96 @@ impl Gjk {
             normal_impulse: 0.0,
             tangent_impulse: Vec3::ZERO,
         })
+    }
+
+    /// The speculative contact between a convex shape and a heightfield or triangle mesh: each
+    /// triangle the convex shape can reach this step, tested as the convex piece it is, and the
+    /// closest kept. `surface_is_a` says which side of the pair the surface was on, so the normal
+    /// keeps the caller's A→B orientation.
+    ///
+    /// The reach is the convex shape's bounds in the surface's own frame — exact along each of its
+    /// axes, from two support queries per axis — swept by how far the two move relative to each
+    /// other this step, plus the touching path's skin.
+    fn speculative_against_surface(
+        convex: (&ColliderShape, Vec3, gizmo_math::Quat, Vec3, f32),
+        surface: (&ColliderShape, Vec3, gizmo_math::Quat, Vec3, f32),
+        surface_is_a: bool,
+        dt: f32,
+    ) -> Option<ContactPoint> {
+        let (c_shape, c_pos, c_rot, c_vel, c_inv) = convex;
+        let (s_shape, s_pos, s_rot, s_vel, s_inv) = surface;
+        if dt <= 0.0 {
+            return None;
+        }
+        let mut lo = Vec3::ZERO;
+        let mut hi = Vec3::ZERO;
+        for (i, axis) in [Vec3::X, Vec3::Y, Vec3::Z].into_iter().enumerate() {
+            let w = s_rot.mul_vec3(axis);
+            lo[i] = (Self::support_point(c_shape, c_pos, c_rot, -w) - s_pos).dot(w);
+            hi[i] = (Self::support_point(c_shape, c_pos, c_rot, w) - s_pos).dot(w);
+        }
+        let swept = s_rot.inverse().mul_vec3((c_vel - s_vel) * dt);
+        let skin = Vec3::splat(0.01);
+        let (lo, hi) = (lo.min(lo + swept) - skin, hi.max(hi + swept) + skin);
+        if !lo.is_finite() || !hi.is_finite() {
+            return None;
+        }
+
+        // One triangle wrapper, refilled per triangle, as the touching path does.
+        let mut face = ColliderShape::ConvexHull(crate::components::ConvexHullShape {
+            vertices: std::sync::Arc::new(Vec::with_capacity(3)),
+            faces: std::sync::Arc::new(Vec::new()),
+        });
+        let mut closest: Option<ContactPoint> = None;
+        let mut test = |tri: [Vec3; 3], face: &mut ColliderShape| {
+            let ColliderShape::ConvexHull(hull) = face else {
+                unreachable!("`face` is constructed as a ConvexHull above")
+            };
+            let verts = std::sync::Arc::make_mut(&mut hull.vertices);
+            verts.clear();
+            verts.extend_from_slice(&tri);
+            let c = if surface_is_a {
+                Self::speculative_contact(face, s_pos, s_rot, s_vel, s_inv, c_shape, c_pos, c_rot, c_vel, c_inv, dt)
+            } else {
+                Self::speculative_contact(c_shape, c_pos, c_rot, c_vel, c_inv, face, s_pos, s_rot, s_vel, s_inv, dt)
+            };
+            if let Some(c) = c {
+                if closest.is_none_or(|f| c.penetration > f.penetration) {
+                    closest = Some(c);
+                }
+            }
+        };
+
+        match s_shape {
+            ColliderShape::Heightfield(hf) => {
+                let (cells_x, cells_z) = hf.cell_counts();
+                if cells_x == 0 || cells_z == 0 || lo.y > hf.local_aabb.max.y || hi.y < hf.local_aabb.min.y {
+                    return None;
+                }
+                let (col0, col1, row0, row1) = hf.cell_range(lo, hi);
+                for row in row0..row1 {
+                    for col in col0..col1 {
+                        for tri in hf.cell_triangles(row, col) {
+                            test(tri, &mut face);
+                        }
+                    }
+                }
+            }
+            ColliderShape::TriMesh(mesh) => {
+                let mut tris = Vec::new();
+                mesh.bvh.query_aabb(gizmo_math::Aabb::new(lo, hi), &mut tris);
+                for t in tris {
+                    let base = t as usize * 3;
+                    let corner = |k: usize| mesh.indices.get(base + k).and_then(|i| mesh.vertices.get(*i as usize)).copied();
+                    // A corrupt index is skipped, as the touching path skips it.
+                    if let (Some(a), Some(b), Some(c)) = (corner(0), corner(1), corner(2)) {
+                        test([a, b, c], &mut face);
+                    }
+                }
+            }
+            _ => unreachable!("only heightfields and triangle meshes are passed here"),
+        }
+        closest
     }
 
     fn handle_simplex(simplex: &mut Vec<SupportPoint>, direction: &mut Vec3) -> bool {

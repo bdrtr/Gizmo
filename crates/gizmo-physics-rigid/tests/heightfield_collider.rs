@@ -160,3 +160,33 @@ fn a_malformed_field_is_inert_rather_than_fatal() {
     let y = y_of(&w, id);
     assert!(y < 0.0, "nothing stopped it, so it is still falling: {y}");
 }
+
+/// **A CCD body falling onto terrain lands on it.** A CCD body a step above the ground and not yet
+/// touching it gets a speculative contact, and that path handed the whole heightfield to GJK's
+/// `support_point` — which a heightfield does not have: an error logged and a zero support used
+/// on every such step (a golf ball rolling on its course: about once a physics step), and in a
+/// debug build a panic on the first one. It now tests the field's triangles within reach, as the
+/// touching path does. Measured where it was found: `golf`, 2026-11-10.
+#[test]
+fn a_ccd_ball_falling_onto_terrain_lands_on_it() {
+    let mut w = scene();
+    terrain(&mut w, vec![0.0; 49], 7, 7, Vec3::ONE);
+    let e = w.spawn();
+    let mut collider = Collider::sphere(0.3);
+    collider.material = grippy();
+    let mut rb = RigidBody::new(1.0, true);
+    rb.calculate_sphere_inertia(0.3);
+    rb.ccd_enabled = true;
+    w.add_component(e, Transform::new(Vec3::new(0.4, 6.0, -0.3)));
+    w.add_component(e, rb);
+    w.add_component(e, Velocity::new(Vec3::new(0.0, -20.0, 0.0)));
+    w.add_component(e, collider);
+    let mut lowest = f32::MAX;
+    for _ in 0..480 {
+        step(&w, 1);
+        lowest = lowest.min(y_of(&w, e));
+    }
+    assert!(lowest > 0.2, "the ball went {:.3} m deep into the ground (its centre reached {lowest:.3})", 0.3 - lowest);
+    let y = y_of(&w, e);
+    assert!((y - 0.3).abs() < 0.03, "the ball is not resting on the ground: centre at {y:.3}");
+}

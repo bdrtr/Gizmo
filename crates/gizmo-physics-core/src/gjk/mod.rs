@@ -208,6 +208,71 @@ mod tests {
         );
     }
 
+    /// A step of a ball falling at `speed` towards whatever is below it, `gap` above it, in both pair
+    /// orders: the contact (ball first) and the contact (surface first).
+    fn falling_ball(surface: &ColliderShape, surface_at: Vec3, ball_at: Vec3, velocity: Vec3) -> (Option<ContactPoint>, Option<ContactPoint>) {
+        let ball = ColliderShape::Sphere(SphereShape { radius: 0.3 });
+        let dt = 1.0 / 60.0;
+        let ball_first = Gjk::speculative_contact(&ball, ball_at, Quat::IDENTITY, velocity, 1.0, surface, surface_at, Quat::IDENTITY, Vec3::ZERO, 0.0, dt);
+        let surface_first = Gjk::speculative_contact(surface, surface_at, Quat::IDENTITY, Vec3::ZERO, 0.0, &ball, ball_at, Quat::IDENTITY, velocity, 1.0, dt);
+        (ball_first, surface_first)
+    }
+
+    /// **A heightfield's speculative contact comes from its triangles.** A CCD body a step above
+    /// the ground and not yet touching it used to hand the whole field to `support_point`, which a
+    /// heightfield does not have — an error logged and a zero support returned every such step in
+    /// release (a golf ball rolling on its course: about once a physics step), a panic in debug.
+    #[test]
+    fn a_heightfield_gives_a_speculative_contact_from_its_triangles() {
+        let field = crate::components::Collider::heightfield(vec![0.0; 25], 5, 5, Vec3::ONE).shape;
+        // 5 cm above the flat field, falling 10 cm this step.
+        let (ball_first, surface_first) = falling_ball(&field, Vec3::ZERO, Vec3::new(0.3, 0.35, 0.2), Vec3::new(0.0, -6.0, 0.0));
+        let c = ball_first.expect("the ball reaches the ground this step");
+        assert!(c.normal.dot(-Vec3::Y) > 0.99, "ball → ground points down: {:?}", c.normal);
+        assert!((c.penetration + 0.04).abs() < 2e-3, "it may close the 5 cm gap less the 1 cm skin: {}", c.penetration);
+        let c = surface_first.expect("the same contact, the other way round");
+        assert!(c.normal.dot(Vec3::Y) > 0.99, "ground → ball points up: {:?}", c.normal);
+        // Moving along the ground, not onto it: nothing to stop.
+        let (sideways, _) = falling_ball(&field, Vec3::ZERO, Vec3::new(0.3, 0.35, 0.2), Vec3::new(6.0, 0.0, 0.0));
+        assert!(sideways.is_none(), "a ball moving along the ground got a contact: {sideways:?}");
+    }
+
+    /// **A triangle mesh's speculative contact comes from its triangles, not from its hull.** A
+    /// trough — a floor between two walls — is concave: a ball in the middle of it is inside the
+    /// hull and near no surface. Taken whole, the mesh's support function is the hull's, so the
+    /// ball overlapped it and got a contact against a surface that is not there.
+    #[test]
+    fn a_concave_mesh_gives_speculative_contacts_from_its_triangles_only() {
+        // Floor at y = 0 (x, z in ±2), walls at x = ±2 up to y = 3.
+        let v = vec![
+            Vec3::new(-2.0, 0.0, -2.0), Vec3::new(2.0, 0.0, -2.0), Vec3::new(2.0, 0.0, 2.0), Vec3::new(-2.0, 0.0, 2.0),
+            Vec3::new(-2.0, 3.0, -2.0), Vec3::new(-2.0, 3.0, 2.0), Vec3::new(2.0, 3.0, -2.0), Vec3::new(2.0, 3.0, 2.0),
+        ];
+        let i = vec![0, 2, 1, 0, 3, 2, 0, 4, 5, 0, 5, 3, 1, 2, 7, 1, 7, 6];
+        let trough = crate::components::Collider::trimesh(v, i).shape;
+        // In the middle, 1.5 m above the floor, moving across: nothing within reach.
+        let (middle, _) = falling_ball(&trough, Vec3::ZERO, Vec3::new(0.0, 1.5, 0.0), Vec3::new(6.0, 0.0, 0.0));
+        assert!(middle.is_none(), "a contact in the middle of the trough, against its hull: {middle:?}");
+        // 5 cm above the floor, falling onto it.
+        let (ball_first, surface_first) = falling_ball(&trough, Vec3::ZERO, Vec3::new(0.0, 0.35, 0.0), Vec3::new(0.0, -6.0, 0.0));
+        let c = ball_first.expect("the ball reaches the floor this step");
+        assert!(c.normal.dot(-Vec3::Y) > 0.99, "ball → floor points down: {:?}", c.normal);
+        assert!(surface_first.is_some_and(|c| c.normal.dot(Vec3::Y) > 0.99), "the other way round: {surface_first:?}");
+    }
+
+    /// **A plane's speculative contact is measured, not taken from a support function** — a plane
+    /// has none.
+    #[test]
+    fn a_plane_gives_a_speculative_contact() {
+        let plane = crate::components::Collider::plane(Vec3::Y, 0.0).shape;
+        let (ball_first, surface_first) = falling_ball(&plane, Vec3::ZERO, Vec3::new(4.0, 0.35, -3.0), Vec3::new(0.0, -6.0, 0.0));
+        let c = ball_first.expect("the ball reaches the plane this step");
+        assert!(c.normal.dot(-Vec3::Y) > 0.99 && (c.penetration + 0.04).abs() < 2e-3, "{c:?}");
+        assert!(surface_first.is_some_and(|c| c.normal.dot(Vec3::Y) > 0.99), "the other way round: {surface_first:?}");
+        let (away, _) = falling_ball(&plane, Vec3::ZERO, Vec3::new(4.0, 0.35, -3.0), Vec3::new(0.0, 6.0, 0.0));
+        assert!(away.is_none(), "a ball leaving the plane got a contact: {away:?}");
+    }
+
     #[test]
     fn test_speculative_contact_approaching() {
         // Two spheres approaching each other — should produce a contact
