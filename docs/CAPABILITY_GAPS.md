@@ -584,16 +584,22 @@ sleeping stack taken out, the upper one falls to the floor.
 (`a_gpu_ground_plane_stands_where_its_distance_says`: the box rested at −1.7). A ground at y = 0 — every
 plane the demos use — reads the same either way, which is how it went unseen.
 
-Still open there, each its own piece of work:
-- **Bodies do not bounce off each other, and a fast one stops short.** Measured: a box dropped 2 m onto a
-  massless box comes to a stop 5 cm above it and creeps down, with no rebound at the restitution of 0.4 (onto
-  a ground plane it rebounds 0.22 m). The solve applies the restitution to the current relative velocity in
-  every iteration, so the iterations take the bounce back out; and a contact the swept test finds ahead of
-  time is solved as a touching one — its approach stopped outright — rather than allowed to close the gap
-  it has. Both want what the manifold does not keep per contact (the approach speed at the step's start, the
-  gap), so the fix is a change of the contact's layout and the solve, not of a line.
-- The editor draws GPU bodies with no culling pass of its own, so its viewport would show none; nothing in
-  the editor turns GPU bodies on.
+**GPU bodies bounce off each other — 2026-11-11.** They did not: a box dropped 2 m onto a massless box
+came to a stop 5 cm above it and crept down, with no rebound at the restitution of 0.4. The solve applied the
+restitution to the relative velocity of the moment in every iteration, so the iterations took the bounce back
+out; and a contact the swept test found ahead of time was written as a touching one and its approach stopped
+outright. The contact keeps two things more now (`GpuBoxContacts::approach`, 384 bytes a manifold): the
+closing speed at the step's start, and — for a contact not yet touching — the gap, as a negative depth, which
+the solve lets the two close this step and no more. The bounce is a pass of its own after the solve
+(`apply_restitution`), as Box2D does it: once per contact that closed faster than `RESTITUTION_THRESHOLD` and
+did push, from that starting speed. `gpu_bodies_bounce_off_each_other`: the 2 m drop rebounds 0.29 m (e²·2 m
+is 0.32; the rest is damping). `a_gpu_body_comes_all_the_way_up_to_what_it_meets`: with no gravity, a box
+drifting into a wall too slowly to bounce ends up touching it — it hung 1.8 mm short before. The price is
+Box2D's: a fast body bounces off a contact found a step ahead, so it turns up to its step's travel short of the
+surface (the 2 m drop turned 5 cm above the floor).
+
+Still open there: the editor draws GPU bodies with no culling pass of its own, so its viewport would show
+none; nothing in the editor turns GPU bodies on.
 
 **History of this section, kept for the measurements:**
 

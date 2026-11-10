@@ -22,6 +22,8 @@ pub struct PhysicsPipelines {
     pub pipeline_narrowphase: wgpu::ComputePipeline,
     /// Stage 4: the contact solver, run for several iterations.
     pub pipeline_solve: wgpu::ComputePipeline,
+    /// Stage 4b: the bounce, once per contact, after the solve.
+    pub pipeline_restitution: wgpu::ComputePipeline,
     /// Stage 6: integrate velocities into positions, and update the sleep state.
     pub pipeline_integrate: wgpu::ComputePipeline,
     /// Stage 5: the joint solver.
@@ -233,6 +235,14 @@ pub fn create_physics_pipelines(
         compilation_options: Default::default(),
         cache: None,
     });
+    let pipeline_restitution = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Physics Restitution"),
+        layout: Some(&compute_pipeline_layout),
+        module: &compute_shader,
+        entry_point: Some("apply_restitution"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
     let pipeline_integrate = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Physics Integrate"),
         layout: Some(&compute_pipeline_layout),
@@ -402,6 +412,7 @@ pub fn create_physics_pipelines(
         pipeline_build,
         pipeline_narrowphase,
         pipeline_solve,
+        pipeline_restitution,
         pipeline_integrate,
         pipeline_solve_joints,
         render_pipeline,

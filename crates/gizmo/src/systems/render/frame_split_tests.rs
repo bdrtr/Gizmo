@@ -2044,3 +2044,96 @@ fn a_gpu_ground_plane_stands_where_its_distance_says() {
         assert!((y - 2.3).abs() < 0.05, "a box dropped onto the ground at y = 2 rests at y = {y}; on it, it rests at 2.3");
     });
 }
+
+/// **GPU bodies bounce off each other.** A box dropped 2 m onto a box floor rebounds, at the
+/// restitution of 0.4, about e²·2 m = 0.32 m (less what each step's damping takes). It did not
+/// bounce at all: the solve applied the restitution to the velocity of the moment in every iteration,
+/// so the iterations took the bounce back out; and the contact the swept test found ahead of time
+/// was solved as a touching one, so the box stopped a few centimetres above the floor and crept down
+/// onto it. The bounce is added once now, after the solve, from the approach at the step's start, and
+/// a contact not yet touching lets the two close the gap they have.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn gpu_bodies_bounce_off_each_other() {
+    use gizmo_physics_core::components::GpuPhysicsLink;
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::RigidBody;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        game.spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new(0.0, false), Collider::box_collider(Vec3::new(2.5, 0.1, 2.5))));
+        let dropped = game.spawn_bundle((Transform::new(Vec3::new(0.0, 2.4, 0.0)), RigidBody::new(1.0, true), Collider::box_collider(Vec3::splat(0.3))));
+        let mut heights = Vec::new();
+        for _ in 0..90 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+            let slot = game.get::<GpuPhysicsLink>(dropped).expect("linked").id;
+            heights.push(gpu_boxes(&renderer)[slot as usize].position[1]);
+        }
+        // The first landing: the first frame after which the box rises.
+        let landed = heights.windows(2).position(|w| w[1] > w[0]).expect("the box never turned");
+        let lowest = heights[landed];
+        let rebound = heights[landed..(landed + 30).min(heights.len())].iter().copied().fold(f32::MIN, f32::max) - 0.4;
+        assert!(lowest < 0.5, "the box turned before it came down to the floor: at {lowest}");
+        assert!(rebound > 0.15, "the box dropped 2 m rebounded {rebound} m off the box under it; at e = 0.4 it rebounds about 0.3 m");
+    });
+}
+
+/// **A body comes all the way up to what it slows against.** With no gravity, a box drifting at
+/// 0.45 m/s — too slow to bounce — into a box wall ends up touching it. The contact the swept test
+/// found a step ahead was solved as a touching one: the approach was stopped outright and the box
+/// hung in front of the wall by whatever gap was left that step, for good.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_gpu_body_comes_all_the_way_up_to_what_it_meets() {
+    use gizmo_physics_core::components::GpuPhysicsLink;
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::{RigidBody, Velocity};
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let queue = renderer.queue.clone();
+        renderer.gpu_physics.as_mut().expect("GPU bodies").update_params(&queue, 1.0 / 60.0, [0.0; 3]);
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        // The wall's face at x = 0.5; the box's face starts 0.3 m short of it.
+        game.spawn_bundle((Transform::new(Vec3::new(0.6, 0.0, 0.0)), RigidBody::new(0.0, false), Collider::box_collider(Vec3::new(0.1, 1.0, 1.0))));
+        let drifting = game.spawn_bundle((
+            Transform::new(Vec3::new(-0.1, 0.0, 0.0)),
+            RigidBody::new(1.0, false),
+            Collider::box_collider(Vec3::splat(0.3)),
+            Velocity { linear: Vec3::new(0.45, 0.0, 0.0), ..Default::default() },
+        ));
+        for _ in 0..240 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let slot = game.get::<GpuPhysicsLink>(drifting).expect("linked").id;
+        let face = gpu_boxes(&renderer)[slot as usize].position[0] + 0.3;
+        assert!((face - 0.5).abs() < 0.0005, "the drifting box's face stopped at x = {face}; the wall's face is at 0.5");
+    });
+}

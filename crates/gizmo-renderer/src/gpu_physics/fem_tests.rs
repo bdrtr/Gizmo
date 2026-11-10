@@ -341,9 +341,10 @@ mod tests {
     fn test_box_contacts_std430_size() {
         assert_eq!(
             std::mem::size_of::<crate::gpu_physics::types::GpuBoxContacts>(),
-            352,
-            "BoxContacts std430 stride must be 352 bytes (16-byte alignment for the \
-             vec4 arrays); a smaller value under-allocates box_contacts_buffer"
+            384,
+            "BoxContacts std430 stride must be 384 bytes (16-byte alignment for the \
+             vec4 arrays, and `approach` after `is_active`); a smaller value under-allocates \
+             box_contacts_buffer"
         );
     }
 

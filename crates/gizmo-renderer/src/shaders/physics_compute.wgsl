@@ -65,6 +65,9 @@ struct BoxContacts {
     normals: array<vec4<f32>, 8>,
     accum_impulse: array<vec4<f32>, 8>,
     is_active: array<u32, 8>,
+    // How fast the two closed along the normal at the step's start (negative: closing) — what the
+    // bounce is reckoned from, once, after the solve (`apply_restitution`).
+    approach: array<f32, 8>,
 }
 
 @group(0) @binding(0) var<uniform> params: SimParams;
@@ -361,7 +364,11 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     var penetration = min_overlap;
                     if (!is_intersecting) {
                         active_normal = swept_hit_normal;
-                        penetration = 0.001;
+                        // Not touching yet: the gap the swept test found, as a negative depth. The
+                        // solve lets the two close it this step and no more. It was written as a
+                        // touching contact, and the solve stopped the approach outright: a falling box
+                        // halted a few centimetres above what it was about to land on and crept down.
+                        penetration = -global_t_first * abs(dot(rel_vel_dt, swept_hit_normal));
                     }
                     let toi = select(0.0, global_t_first, !is_intersecting);
                     let me_pos_toi = me.position + me.velocity * params.dt * toi;
@@ -371,6 +378,8 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     if (dot(active_normal, distVec) < 0.0) {
                         active_normal = -active_normal;
                     }
+                    // Closing speed along the normal now, before anything is solved (negative: closing).
+                    let approach = dot(me.velocity - other.velocity, -active_normal);
 
                     // Persistent Manifold Update
                     var found = false;
@@ -378,6 +387,7 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         if (box_contacts[idx].neighbors[c] == n_idx) {
                             box_contacts[idx].is_active[c] = 1u;
                             box_contacts[idx].normals[c] = vec4<f32>(active_normal, penetration);
+                            box_contacts[idx].approach[c] = approach;
                             found = true;
                             break;
                         }
@@ -394,6 +404,7 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         if (slot < 8u) {
                             box_contacts[idx].neighbors[slot] = n_idx;
                             box_contacts[idx].normals[slot] = vec4<f32>(active_normal, penetration);
+                            box_contacts[idx].approach[slot] = approach;
                             box_contacts[idx].accum_impulse[slot] = vec4<f32>(0.0);
                             box_contacts[idx].is_active[slot] = 1u;
                             if (slot >= old_count) {
@@ -420,7 +431,6 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let num_c = min(box_contacts[idx].count, 8u);
     if (num_c == 0u) { return; }
 
-    let restitution = 0.4;
     let friction = 0.5;
     
     var acc_vel_correction = vec3<f32>(0.0);
@@ -500,10 +510,15 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let K = invMassA + invMassB + dot(crossA, ptA) + dot(crossB, ptB);
         
         // Calculate new normal impulse
-        // The Baumgarte bias adds separating speed in proportion to the overlap. It was subtracted:
-        // the deeper two bodies sank into each other the less the contact pushed them apart, and at
-        // rest it pulled them together — a stack sank into its floor and rocked there.
-        let j_normal = -(1.0 + restitution) * vel_along_normal + bias_vel;
+        // Touching: stop the approach, and push out the overlap past the slop — the Baumgarte bias,
+        // which adds separating speed in proportion to the overlap (it was subtracted: the deeper two
+        // bodies sank into each other the less the contact pushed them apart). Not touching yet (a
+        // negative depth, the gap the swept test found): let the two close the gap this step and no
+        // more. The bounce is not solved here: `apply_restitution` adds it once, from the approach at
+        // the step's start. Applied in every iteration to the velocity of the moment, as it was, the
+        // iterations took it back out, and bodies did not bounce off each other at all.
+        let target_speed = select(penetration / params.dt, bias_vel, penetration >= 0.0);
+        let j_normal = -vel_along_normal + target_speed;
         let unprojected_new_accum = old_accum.x + (j_normal / K);
         let new_accum_n = max(unprojected_new_accum, 0.0); // Clamp to positive
         let applied_j_n = new_accum_n - old_accum.x; // Delta impulse
@@ -563,6 +578,66 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
         me.position += (acc_pos_correction / active_count);
     }
     boxes[idx] = me;
+}
+
+// Pass 3.6: the bounce — once per contact, after the solve, as Box2D does it. A contact that closed
+// faster than `RESTITUTION_THRESHOLD` at the step's start and did push this step leaves the solve
+// with its approach stopped; this sends the two apart at the restitution times that approach. Each
+// body adds its own share, from its own copy of the contact, as in the solve.
+@compute @workgroup_size(256)
+fn apply_restitution(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx >= params.num_boxes) { return; }
+    var me = boxes[idx];
+    if (me.state != 0u || me.mass <= 0.00001) { return; }
+    let restitution = 0.4;
+    let num_c = min(box_contacts[idx].count, 8u);
+    let invMassA = 1.0 / me.mass;
+    let sA = me.half_extents * 2.0;
+    let invInertiaA = vec3<f32>(
+        12.0 / (me.mass * (sA.y * sA.y + sA.z * sA.z)),
+        12.0 / (me.mass * (sA.x * sA.x + sA.z * sA.z)),
+        12.0 / (me.mass * (sA.x * sA.x + sA.y * sA.y))
+    );
+    var bounced = false;
+    for (var i = 0u; i < num_c; i++) {
+        if (box_contacts[idx].is_active[i] == 0u) { continue; }
+        let approach = box_contacts[idx].approach[i];
+        if (approach > -RESTITUTION_THRESHOLD || box_contacts[idx].accum_impulse[i].x <= 0.0) { continue; }
+        let other = boxes[box_contacts[idx].neighbors[i]];
+        let n_b2a = -box_contacts[idx].normals[i].xyz;
+        let contact_point = me.position - n_b2a * (length(other.position - me.position) * 0.5);
+        let r1 = contact_point - me.position;
+        let r2 = contact_point - other.position;
+        let v1 = me.velocity + cross(me.angular_velocity, r1);
+        let v2 = other.velocity + cross(other.angular_velocity, r2);
+        let closing = dot(v1 - v2, n_b2a);
+        let wanted = -restitution * approach;
+        if (closing >= wanted) { continue; }
+        let sB = other.half_extents * 2.0;
+        var invInertiaB = vec3<f32>(0.0);
+        var invMassB = 0.0;
+        if (other.mass > 0.00001) {
+            invMassB = 1.0 / other.mass;
+            invInertiaB = vec3<f32>(
+                12.0 / (other.mass * (sB.y * sB.y + sB.z * sB.z)),
+                12.0 / (other.mass * (sB.x * sB.x + sB.z * sB.z)),
+                12.0 / (other.mass * (sB.x * sB.x + sB.y * sB.y))
+            );
+        }
+        let crossA = cross(r1, n_b2a);
+        let crossB = cross(r2, n_b2a);
+        let K = invMassA + invMassB
+            + dot(crossA, apply_inv_inertia(crossA, invInertiaA, me.rotation))
+            + dot(crossB, apply_inv_inertia(crossB, invInertiaB, other.rotation));
+        let j = (wanted - closing) / K;
+        me.velocity += j * n_b2a * invMassA;
+        me.angular_velocity += apply_inv_inertia(cross(r1, j * n_b2a), invInertiaA, me.rotation);
+        bounced = true;
+    }
+    if (bounced) {
+        boxes[idx] = me;
+    }
 }
 
 // Pass 4

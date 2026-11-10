@@ -413,6 +413,7 @@ fn every_gpu_body_declaration_matches_the_bytes_rust_uploads() {
                 ("normals", offset_of!(GpuBoxContacts, normals) as u32),
                 ("accum_impulse", offset_of!(GpuBoxContacts, accum_impulse) as u32),
                 ("is_active", offset_of!(GpuBoxContacts, is_active) as u32),
+                ("approach", offset_of!(GpuBoxContacts, approach) as u32),
             ],
             size_of::<GpuBoxContacts>(),
         ),

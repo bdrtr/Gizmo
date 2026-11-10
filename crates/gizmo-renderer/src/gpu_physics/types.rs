@@ -371,9 +371,10 @@ pub struct DebugParams {
 ///   normals          array<vec4<f32>,8> @64..192
 ///   accum_impulse    array<vec4<f32>,8> @192..320
 ///   is_active        array<u32,8>       @320..352
+///   approach         array<f32,8>       @352..384
 /// ```
 ///
-/// → stride **352 bytes**, NOT 336. The old hand-computed `336` literal omitted
+/// → stride **384 bytes** (352 before `approach`; it was once hand-computed as 336.) The old hand-computed `336` literal omitted
 /// both alignment gaps, under-allocating the buffer by 16 B/box; boxes past
 /// `floor(size / 352)` then indexed out of bounds and silently received no
 /// contact manifold (they interpenetrated / tunnelled).
@@ -392,9 +393,12 @@ pub struct GpuBoxContacts {
     pub _pad_align: u32, // @60
     /// Contact normal per neighbour slot.
     pub normals: [[f32; 4]; 8], // @64
-    /// Accumulated impulse per slot, carried between solver iterations (and between frames, which
-    /// is what makes the stack warm-start instead of sinking).
+    /// This step's accumulated impulse per slot — normal in `x`, friction in `yzw` — summed over
+    /// the solver's iterations and started from nothing each step.
     pub accum_impulse: [[f32; 4]; 8], // @192
     /// Whether each slot holds a live contact.
     pub is_active: [u32; 8], // @320 .. 352
+    /// How fast the two closed along the normal at the step's start, per slot (negative: closing) —
+    /// what the bounce after the solve is reckoned from.
+    pub approach: [f32; 8], // @352 .. 384
 }

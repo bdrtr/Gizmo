@@ -970,8 +970,8 @@ impl GpuPhysicsSystem {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
-    /// Records one whole simulation step: forces, clear, build, narrowphase, solve, integrate,
-    /// joints — each its own dispatch, in that order.
+    /// Records one whole simulation step: forces, clear, build, narrowphase, solve, restitution,
+    /// integrate, joints — each its own dispatch, in that order.
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
         tracing::trace!(
             boxes = self.box_high_water,
@@ -1008,6 +1008,10 @@ impl GpuPhysicsSystem {
             cpass.set_pipeline(&self.pipelines.pipeline_solve);
             cpass.dispatch_workgroups(self.box_high_water.div_ceil(256), 1, 1);
         }
+
+        // Faz 3b: the bounce, once per contact, from the approach at the step's start.
+        cpass.set_pipeline(&self.pipelines.pipeline_restitution);
+        cpass.dispatch_workgroups(self.box_high_water.div_ceil(256), 1, 1);
 
         // Faz 4: Hız ve pozisyon entegrasyonu (tek seferde)
         cpass.set_pipeline(&self.pipelines.pipeline_integrate);
