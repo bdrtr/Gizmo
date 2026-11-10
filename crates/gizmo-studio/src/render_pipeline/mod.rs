@@ -640,6 +640,13 @@ fn draw_studio_frame(
 
             // --- 1. CSM GÖLGE PASS + 2. ANA RENDER PASS (Tier 3: geçişler ayrı fn) ---
             record_studio_shadow_passes(encoder, renderer, flat_batches.as_slice(), &light_view_proj_cascades);
+            // The GPU bodies this viewport sees, culled against its camera as the game path culls each
+            // of its views. The main pass draws them from the count this writes; with no cull of its
+            // own it drew whatever count the last view's cull had left — none, in an editor that had
+            // drawn no other view.
+            if let Some(physics) = &renderer.gpu_physics {
+                physics.cull_pass(encoder, renderer.scene.view_bind_group());
+            }
             record_studio_main_pass(
                 encoder, renderer, world, flat_batches.as_slice(), game_view_proj, &debug_aabbs,
                 show_colliders, true, ed_shading_mode, None,
@@ -825,11 +832,17 @@ fn record_game_view(
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Game View") });
     record_studio_shadow_passes(&mut enc, renderer, batches, &cascades);
+    // The GPU bodies the game camera sees, culled against it (see the viewport's cull).
+    if let Some(physics) = &renderer.gpu_physics {
+        physics.cull_pass(&mut enc, renderer.scene.view_bind_group());
+    }
     // The game view never takes the editor's debug shading: it is the picture the game shows.
     record_studio_main_pass(&mut enc, renderer, world, batches, None, &[], false, false, 0, clear_color);
-    // No particle pass: the GPU particle compute for this frame is recorded into the caller's
-    // encoder, which runs after this one, so drawing them here would show the previous frame's
-    // positions. A preview panel is not worth a second compute dispatch.
+    // The particles and the fluid's surface, as the game draws them. They were left out because the
+    // frame's particle step was recorded into the caller's encoder, after this one, so this view
+    // would have drawn last frame's; the step runs ahead of every view now (`draw_ahead_of_views`).
+    gizmo::systems::render::record_gpu_particles(&mut enc, renderer);
+    gizmo::systems::render::record_fluid_surface(&mut enc, renderer);
     renderer.run_post_processing(&mut enc, &output);
     renderer.queue.submit(std::iter::once(enc.finish()));
     true

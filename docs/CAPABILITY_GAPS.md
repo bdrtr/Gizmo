@@ -598,8 +598,12 @@ drifting into a wall too slowly to bounce ends up touching it — it hung 1.8 mm
 Box2D's: a fast body bounces off a contact found a step ahead, so it turns up to its step's travel short of the
 surface (the 2 m drop turned 5 cm above the floor).
 
-Still open there: the editor draws GPU bodies with no culling pass of its own, so its viewport would show
-none; nothing in the editor turns GPU bodies on.
+**The editor draws GPU bodies — 2026-11-11.** Its viewport and Game panel drew GPU bodies from the count a
+culling pass leaves and ran none of their own, so in an editor that had drawn no other view no GPU body ever
+showed (nothing in the editor turns them on, which is how it stayed unseen). Each culls against its own camera
+now, as each view of the game path does (`a_gpu_body_shows_in_the_editor_viewport`: 0 pixels without it). The
+Game panel draws the particles and the fluid's surface too: it left them out because the frame's particle step
+was recorded after it, and the step runs ahead of every view now.
 
 **History of this section, kept for the measurements:**
 

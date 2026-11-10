@@ -2317,3 +2317,103 @@ fn blend_scene(mode: Option<gizmo::renderer::components::BlendMode>) -> Option<V
         px
     }))
 }
+
+/// One editor frame of a scene with GPU bodies turned on: a sun and the editor camera on −X looking
+/// at the origin, with — when `with_body` — a massless GPU body (it does not fall) at the origin.
+fn render_gpu_body_frame(with_body: bool) -> Option<Vec<u8>> {
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return None;
+    }
+    pollster::block_on(async {
+        let mut renderer = shared_device_renderer(W, H).await;
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return None;
+        }
+        let mut world = World::new();
+        if with_body {
+            world.spawn_bundle((
+                Transform::new(Vec3::ZERO),
+                gizmo::physics::RigidBody::new(0.0, false),
+                gizmo::physics::Collider::box_collider(Vec3::splat(1.0)),
+            ));
+        }
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
+        world.add_component(cam, GlobalTransform::default());
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, 0.0, 0.0, true),
+        );
+        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam,
+            game_camera: Entity::new(4242, 0),
+            do_raycast: false,
+            play: gizmo::systems::PlayLoop::new(),
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("studio-gpu-body-target"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: renderer.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut encoder, &view, &mut renderer, 0.0);
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("studio-gpu-body-readback"),
+            size: u64::from(W * H * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(W * BPP), rows_per_image: Some(H) },
+            },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = renderer.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("readback channel").expect("readback");
+        let pixels = slice.get_mapped_range().expect("a just-mapped buffer's full range is always valid").to_vec();
+        staging.unmap();
+        Some(pixels)
+    })
+}
+
+/// **A GPU body is drawn in the editor's viewport.** The viewport drew GPU bodies from the count a
+/// culling pass leaves — and ran none of its own, so in an editor that had drawn no other view the
+/// count was nothing and no GPU body ever showed. The viewport culls against its own camera now, and
+/// the game view against the game's.
+#[test]
+fn a_gpu_body_shows_in_the_editor_viewport() {
+    let _gpu = gpu_lock();
+    let Some(empty) = render_gpu_body_frame(false) else { return };
+    let Some(with_body) = render_gpu_body_frame(true) else { return };
+    let changed = empty.chunks(4).zip(with_body.chunks(4)).filter(|(a, b)| a != b).count();
+    assert!(changed > 200, "a GPU body in front of the editor camera changed {changed} pixels of the viewport");
+}
