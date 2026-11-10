@@ -1278,6 +1278,8 @@ mod cross_phase_constraints {
     /// reported; a label nowhere still is.
     #[test]
     fn a_label_in_another_phase_is_told_apart() {
+        // The warnings are read back from the process-wide buffer, which other tests clear and fill.
+        let _logs = crate::logger::lock_logs_for_test();
         let mut schedule = Schedule::new();
         schedule.add_di_system(SystemConfig::new(Box::new(noop)).in_phase(Phase::PreUpdate).label("xp_early"));
         schedule.add_di_system(SystemConfig::new(Box::new(noop)).in_phase(Phase::PostUpdate).label("xp_late"));

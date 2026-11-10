@@ -456,16 +456,27 @@ pub fn init_tracing() {
     let _ = tracing::subscriber::set_global_default(subscriber);
 }
 
+/// Held by every test in this crate that clears, fills or reads the global buffer, for as long as
+/// it does: the buffer is one for the whole process, and Rust runs a binary's tests in parallel.
+///
+/// It was this module's own, so the logger's tests kept off each other and nothing else: the
+/// scheduler's test that reads its warnings back raced them, and now and then found its warning
+/// cleared by a test's `clear_logs`, or pushed out by the capacity test's 2 500 entries.
+#[cfg(test)]
+pub(crate) fn lock_logs_for_test() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    // A test that panicked while holding it poisoned it; that says nothing about the buffer.
+    LOCK.lock().unwrap_or_else(|e| e.into_inner())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, MutexGuard};
-
-    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    use std::sync::MutexGuard;
 
     /// Clear the logs before every test
     fn setup() -> MutexGuard<'static, ()> {
-        let guard = TEST_LOCK.lock().expect("logger test lock poisoned");
+        let guard = lock_logs_for_test();
         clear_logs();
         set_min_log_level(LogLevel::Info);
         guard
