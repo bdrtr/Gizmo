@@ -4980,6 +4980,57 @@ mod golden_render_tests {
         });
     }
 
+    /// **A `MeshData` taken off an entity and another put on it is uploaded**, however its memory
+    /// falls. The loader remembered what it had uploaded by address: the first data, freed once
+    /// nothing drew it, left an address the next allocation of its size was handed, and a new shape
+    /// put there was taken for the one already uploaded — the entity drew the old shape. Same size
+    /// on purpose (a cylinder of another radius, the same vertices), so the allocator has every
+    /// chance to hand the address on.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn mesh_data_put_where_removed_data_was_is_uploaded() {
+        use crate::renderer::components::{Mesh, MeshData};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut assets = AssetManager::new();
+            let mut world = World::new();
+            let e = world.spawn();
+            let load = |world: &mut World, assets: &mut AssetManager| {
+                crate::renderer::asset_loading::run_asset_loading_system(
+                    world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    assets,
+                );
+            };
+            let mut previous: Option<std::sync::Arc<wgpu::Buffer>> = None;
+            for round in 0..8 {
+                world.add_component(e, MeshData::cylinder(1.0 + round as f32, 2.0, 12));
+                load(&mut world, &mut assets);
+                let drawn = world.query::<&Mesh>().get(e).map(|m| m.vbuf.clone()).expect("uploaded");
+                if let Some(previous) = &previous {
+                    assert!(
+                        !std::sync::Arc::ptr_eq(&drawn, previous),
+                        "round {round}: the new data was taken for the removed one and never uploaded"
+                    );
+                }
+                previous = Some(drawn);
+                world.remove_component::<MeshData>(e);
+                load(&mut world, &mut assets);
+                // Nothing names it any more: the loader lets its upload go.
+                assert_eq!(assets.data_mesh_count(), 0, "round {round}: an upload nobody's data names was kept");
+            }
+        });
+    }
+
     /// **Picture in picture:** the primary camera with no viewport is the whole frame, and a
     /// second camera with a viewport and a higher order draws over its corner — a minimap. The
     /// main view used to be skipped (black) as soon as any camera had a viewport.

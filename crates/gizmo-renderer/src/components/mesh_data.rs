@@ -57,7 +57,9 @@ impl MeshData {
         &self.vertices
     }
 
-    /// The address the loader keys its shared upload on — the same for every clone.
+    /// The address the loader keys its shared upload on — the same for every clone. An address is a
+    /// key only while its allocation lives, so whatever keeps one keeps a clone beside it: the
+    /// upload cache does, and so does the loader's record of what an entity was uploaded from.
     pub(crate) fn key(&self) -> usize {
         Arc::as_ptr(&self.vertices) as *const Vertex as usize
     }

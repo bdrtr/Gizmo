@@ -8,10 +8,16 @@ use wgpu::Device;
 use wgpu::Queue;
 use wgpu::BindGroupLayout;
 
-/// Which [`MeshData`](crate::components::MeshData) allocation an entity's mesh was uploaded from,
-/// so a replaced `MeshData` is uploaded again. Internal bookkeeping of the asset loader.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct UploadedFrom(usize);
+/// The [`MeshData`](crate::components::MeshData) an entity's mesh was uploaded from, so a replaced
+/// `MeshData` is uploaded again. Internal bookkeeping of the asset loader.
+///
+/// It holds the data, not the data's address. It held the address, and an address outlives its
+/// allocation: a `MeshData` taken off an entity was freed once nothing else drew it, a new one of
+/// the same size could be given the same address, and added to that entity it was taken for the
+/// one already uploaded — the entity drew the old shape. Held here, the allocation lives as long as
+/// the entity remembers it, so its address is never another's while it does.
+#[derive(Clone, Debug)]
+pub(crate) struct UploadedFrom(crate::components::MeshData);
 gizmo_core::impl_component!(UploadedFrom);
 
 /// Continuously scans the scene for newly added `MeshSource` and `MaterialSource` components and
@@ -59,12 +65,11 @@ pub fn run_asset_loading_system(
         // is the more specific of the two.
         for (id, data) in world.query::<(Entity, &crate::components::MeshData)>().iter() {
             live_data.insert(data.key());
-            let from = uploaded.get(id).map(|u| u.0);
             // Not uploaded yet, or uploaded from another allocation: the game replaced the data (a
             // vision cone rebuilt each frame). It used to be read once — the first frame the
             // entity had no `Mesh` — so every later change drew nothing new.
-            let stale = match from {
-                Some(key) => key != data.key(),
+            let stale = match uploaded.get(id) {
+                Some(from) => !from.0.same_allocation(data),
                 None => meshes.get(id).is_none(),
             };
             if stale {
@@ -108,7 +113,7 @@ pub fn run_asset_loading_system(
             // Emptied: nothing to draw, so no mesh — not the last shape it had.
             None => world.remove_component::<Mesh>(entity),
         }
-        world.add_component(entity, UploadedFrom(data.key()));
+        world.add_component(entity, UploadedFrom(data));
     }
     // The uploads no entity's data names any more — replaced (a vision cone, a cloth rebuilt
     // every frame) or despawned. The game path never runs `garbage_collect`, so without this each
