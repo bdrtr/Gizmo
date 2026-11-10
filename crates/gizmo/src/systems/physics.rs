@@ -324,28 +324,62 @@ pub fn physics_debug_system(world: &crate::core::World) {
     }
 }
 
-/// The static collider a plane-collider entity became in the GPU bodies' table — the slot, or
-/// `None` when the table was full. Internal bookkeeping of [`gpu_physics_submit_system`]: an entity
-/// carries it once submitted, as a body carries its [`GpuPhysicsLink`].
+/// The static-collider slot a plane-collider entity holds in the GPU bodies' table. Internal
+/// bookkeeping of [`gpu_physics_submit_system`]: an entity carries it once uploaded, as a body
+/// carries its [`GpuPhysicsLink`], and the slot is freed once the entity no longer carries it.
 #[cfg(feature = "render")]
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct GpuStaticCollider(#[allow(dead_code)] Option<u32>);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct GpuStaticCollider(pub(crate) u32);
 #[cfg(feature = "render")]
 gizmo_core::impl_component!(GpuStaticCollider);
 
 #[cfg(feature = "render")]
-/// Uploads the entities with a rigid body to the renderer's GPU bodies, each once: a plane collider
-/// as a static collider, anything else as a box it is linked to ([`GpuPhysicsLink`]).
+/// Keeps the renderer's GPU bodies the entities with a rigid body: each uploaded once — a plane
+/// collider as a static collider, anything else as a box it is linked to ([`GpuPhysicsLink`]) — and
+/// its slot freed once the entity is gone or no longer carries the link.
 ///
-/// **A plane is uploaded once.** It took a slot from a counter shared by the whole process and was
-/// never marked as uploaded — planes take no link — so it was uploaded again into the next slot
-/// every frame, and some ninety frames in the table was full of copies of it and every frame logged
-/// an error. The slot is the GPU table's to give now ([`add_collider`](gizmo_renderer::gpu_physics::GpuPhysicsSystem::add_collider)),
-/// and the entity keeps which one it got.
+/// **A slot is the table's to give** ([`add_box`](gizmo_renderer::gpu_physics::GpuPhysicsSystem::add_box),
+/// [`add_collider`](gizmo_renderer::gpu_physics::GpuPhysicsSystem::add_collider)). A body's used to be
+/// the count of linked entities, so a body despawned and another spawned shared a slot with one
+/// still alive, and nothing ever took a body out. A plane took the next number of a counter shared
+/// by the whole process, and was never marked as uploaded — planes take no link — so it was
+/// uploaded again into the next slot every frame, filling the table with copies of itself.
+///
+/// A body the table has no room for is not linked, and asked about again next frame: room is made
+/// as other bodies go.
 pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &mut Renderer) {
     use gizmo_physics_rigid::components::Velocity;
 
     if let Some(physics) = renderer.gpu_physics.as_mut() {
+        // First the way out: a slot whose entity is gone, or no longer claims it, is freed — the body
+        // in it stops being simulated and drawn, and the slot goes to the next body in.
+        physics.retain_owned_boxes(&renderer.queue, |entity, slot| {
+            world.get::<GpuPhysicsLink>(entity).is_some_and(|link| link.id == slot)
+        });
+        physics.retain_owned_colliders(&renderer.queue, |entity, slot| {
+            world.get::<GpuStaticCollider>(entity) == Some(&GpuStaticCollider(slot))
+        });
+        // And the other way: a link the table does not back — copied onto another entity, loaded
+        // with a scene, its slot freed through `remove_box` — is dropped, and the entity uploaded
+        // again below. Kept, it made the entity mirror whichever body the slot held next.
+        let unbacked: Vec<(gizmo_core::Entity, bool)> = {
+            let links = world.query::<(gizmo_core::Entity, &GpuPhysicsLink)>();
+            let statics = world.query::<(gizmo_core::Entity, &GpuStaticCollider)>();
+            links
+                .iter()
+                .filter(|(e, link)| !physics.holds_box(link.id, *e))
+                .map(|(e, _)| (e, true))
+                .chain(statics.iter().filter(|(e, c)| !physics.holds_collider(c.0, *e)).map(|(e, _)| (e, false)))
+                .collect()
+        };
+        for (entity, is_box) in unbacked {
+            if is_box {
+                world.remove_component::<GpuPhysicsLink>(entity);
+            } else {
+                world.remove_component::<GpuStaticCollider>(entity);
+            }
+        }
+
         let mut unlinked_entities = Vec::new();
         {
             let q = world.query::<(gizmo_core::Entity, &RigidBody, &Transform, &Collider)>();
@@ -359,9 +393,6 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &mut 
                 }
             }
         }
-
-        let mut next_dynamic_id = world
-            .query::<&GpuPhysicsLink>().iter().count() as u32;
 
         for (e, rb, trans, col, vel) in unlinked_entities {
             if matches!(col.shape, ColliderShape::Plane(_)) {
@@ -388,21 +419,12 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &mut 
                         _ => [0.0; 4],
                     },
                 };
-                let slot = physics.add_collider(&renderer.queue, &gpu_col);
-                if slot.is_none() {
-                    tracing::error!(
-                        max = gizmo_renderer::gpu_physics::system::MAX_STATIC_COLLIDERS,
-                        "[GpuPhysics] the static collider table is full; this plane is left out"
-                    );
-                }
-                // Marked either way: a plane the table had no room for is not asked about again.
-                if let Some(entity) = world.live(e) {
-                    world.add_component(entity, GpuStaticCollider(slot));
+                // A full table is logged by the table, once; the plane is asked about again later.
+                if let Some(slot) = physics.add_collider(&renderer.queue, &gpu_col, Some(e)) {
+                    world.add_component(e, GpuStaticCollider(slot));
                 }
             } else {
                 // Dinamik Kutu (AABB)
-                let id = next_dynamic_id;
-                next_dynamic_id += 1;
 
                 let (extents, offset) = match &col.shape {
                     ColliderShape::Box(b) => ([b.half_extents.x, b.half_extents.y, b.half_extents.z], Vec3::ZERO),
@@ -439,9 +461,9 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &mut 
                     half_extents: extents,
                     _pad: 0,
                 };
-                physics.update_box(&renderer.queue, id, &gpu_box);
-
-                world.add_component(world.live(e).unwrap(), GpuPhysicsLink { id });
+                if let Some(id) = physics.add_box(&renderer.queue, &gpu_box, Some(e)) {
+                    world.add_component(e, GpuPhysicsLink { id });
+                }
             }
         }
     }
@@ -457,6 +479,11 @@ pub fn gpu_physics_readback_system(world: &mut crate::core::World, renderer: &Re
                 let mut q = world.query_mut::<(&mut Transform, &GpuPhysicsLink, &gizmo_physics_core::Collider)>();
                 for (mut trans, link, col) in q.iter_mut() {
                     let idx = link.id as usize;
+                    // Copied before this body was put in: the slot there holds nothing yet, or the
+                    // body that left it. The next readback has it.
+                    if !physics.readback_holds(link.id) {
+                        continue;
+                    }
                     if idx < gpu_data.len() {
                         let box_data = &gpu_data[idx];
                         

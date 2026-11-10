@@ -526,10 +526,45 @@ itself in ninety-seven frames, after which every frame logged an error; the slot
 the old stepping a frame of 1/30 s was one step; with the old upload the plane was nine colliders after six
 frames).
 
-Still open there, as its own piece of work: a GPU body has no way out. Its slot is the count of linked
-entities, so a body despawned and another spawned share a slot, and nothing deactivates a despawned
-body's box, which goes on being simulated and drawn. Freeing slots needs a removal path through the
-solver's buffers, not a change to the counting.
+**A GPU body has a way in and a way out — 2026-11-10.** The table starts empty. It started with every
+one of its 50 000 slots live — a field of one-kilo cubes falling from 30 m — and three static colliders
+(a ground plane, an 80 × 20 × 80 m platform round the origin, a wall): the `1_milyon_kup` demo's scene,
+simulated and drawn in every game that turned GPU bodies on (`kumas` hung its cloth inside the falling
+field). The two demos that want it put it in (`demo::gpu_box_field`). A slot is the table's to give
+(`add_box`, `add_boxes`, `add_collider`, each with an owner) and to take back (`remove_box`,
+`remove_collider`, and `retain_owned_*`, which the engine's submit path runs every frame for entities
+that are gone or no longer linked). A body's slot used to be the count of linked bodies, so the third body
+in, after the first had gone, was handed the second's slot, and nothing ever took a body out. A body taken
+out is `BOX_LEAVING` for one step — gone to every pass — in which it wakes the sleeping bodies round it and
+forgets its contacts, and only then is its slot given out again; a table emptied from the top gives that
+room back. A link the table does not back (copied onto another entity, loaded with a scene) is dropped and
+the entity uploaded again, and a readback copied before a body was put in is not read back into it (it
+put a new body at the origin, or where the slot's last body was, for a frame).
+
+Found testing it, all in the solver, all fixed with it:
+- **The static colliders never worked.** `StaticCollider` padded its type with a `vec3<u32>`, which WGSL
+  aligns to 16 bytes: the shader saw a 64-byte collider with its shape at byte 32 where Rust uploads 48
+  bytes with the shape at 16, so a plane's normal came out (0, 0, 0) and bodies fell through it. The GPU
+  bodies' five structs are in `shader_contract` now (`every_gpu_body_declaration_matches_the_bytes_rust_uploads`).
+- **A massless box — immovable, by `GpuBox::mass` — fell.** Gravity was added to every awake box, and the
+  push out of a contact was shared by mass, which made a massless body the lightest of all: a floor sank
+  under what landed on it, and `kumas`'s pins (massless) never held its cloth.
+- **A body on the ground never slept.** Each step's gravity, bounced back at the restitution, kept it
+  hopping a few centimetres a second, above the energy it must fall under to sleep. A body meeting a static
+  collider slower than `RESTITUTION_THRESHOLD` (0.5 m/s) rests.
+- **A contact warm-started from whatever entry had its index**, however long ago it had touched: only a
+  contact that was one in the last step keeps its accumulated impulse now. Without it, a box thrown off
+  the top of a two-box stack pulled the lower box 0.3 m up after it.
+
+Tests: `a_gpu_body_leaves_with_its_entity_and_its_slot_is_nobody_elses`,
+`a_gpu_body_rests_on_the_ground_the_game_gave_it`, `a_body_taken_out_wakes_the_sleeping_bodies_round_it`,
+`a_body_put_in_is_not_moved_by_a_readback_copied_before_it`, `a_body_in_a_left_slot_starts_with_none_of_its_contacts`,
+`a_contact_warm_starts_only_from_the_step_before`.
+
+Still open there: a box resting on another body never sleeps — that contact is resolved in the solve,
+before `integrate` adds the step's gravity and judges whether the box has stopped, so it never has; only a
+body on a static collider sleeps. And the editor draws GPU bodies with no culling pass of its own, so its
+viewport would show none; nothing in the editor turns GPU bodies on.
 
 **History of this section, kept for the measurements:**
 

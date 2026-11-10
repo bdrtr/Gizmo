@@ -126,7 +126,8 @@ fn generate_debug_lines(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     
     // Her thread bir kutu işler
-    if (idx < debug_params.num_boxes) {
+    // A free slot (`state` 2) or a body taken out (3) has no wireframe and no velocity.
+    if (idx < debug_params.num_boxes && boxes[idx].state < 2u) {
         let box_item = boxes[idx];
         
         // Box wireframe
@@ -155,6 +156,8 @@ fn generate_debug_lines(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if ((joint.flags & 1u) == 0u) { return; } // Inactive
         
         let body_a = boxes[joint.body_a];
+        // A joint whose body is gone (its slot freed) holds nothing and draws nothing.
+        if (body_a.state >= 2u || (joint.body_b != 0xFFFFFFFFu && boxes[joint.body_b].state >= 2u)) { return; }
         let world_a = body_a.position + rotate_vec(joint.anchor_a, body_a.rotation);
 
         // body_b == u32::MAX is the documented world/static sentinel (types.rs);

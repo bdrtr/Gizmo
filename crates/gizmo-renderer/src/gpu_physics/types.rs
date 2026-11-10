@@ -18,8 +18,10 @@ pub struct GpuBox {
     pub mass: f32,
     /// Linear velocity, m/s.
     pub velocity: [f32; 3],
-    /// 0 = awake and integrating, 1 = asleep. A sleeping box is skipped by the integrator and by
-    /// the solver, and is woken by a neighbour's contact.
+    /// 0 = awake and integrating, 1 = asleep, [`BOX_FREE`] = no body in this slot,
+    /// [`BOX_LEAVING`] = a body taken out since the last step. A sleeping box is skipped by the
+    /// integrator and by the solver, and is woken by a neighbour's contact; a free slot is skipped by
+    /// every pass, is in no grid cell for a neighbour to find, and is not drawn.
     pub state: u32,
     /// Orientation as a quaternion, `xyzw`.
     pub rotation: [f32; 4],
@@ -37,7 +39,29 @@ pub struct GpuBox {
     pub _pad: u32,
 }
 
+/// [`GpuBox::state`] of a slot that holds no body — see
+/// [`GpuPhysicsSystem::remove_box`](crate::gpu_physics::GpuPhysicsSystem::remove_box).
+pub const BOX_FREE: u32 = 2;
+
+/// [`GpuBox::state`] of a body taken out since the last step: every pass already treats it as gone,
+/// and the next step wakes the sleeping bodies round it, forgets its contacts and frees the slot.
+pub const BOX_LEAVING: u32 = 3;
+
 impl GpuBox {
+    /// An empty slot: [`BOX_FREE`], no mass, no size.
+    pub const FREE: GpuBox = GpuBox {
+        position: [0.0; 3],
+        mass: 0.0,
+        velocity: [0.0; 3],
+        state: BOX_FREE,
+        rotation: [0.0, 0.0, 0.0, 1.0],
+        angular_velocity: [0.0; 3],
+        sleep_counter: 0,
+        color: [0.0; 4],
+        half_extents: [0.0; 3],
+        _pad: 0,
+    };
+
     /// This struct as a per-instance vertex layout, so the simulation buffer can be bound
     /// directly as instance data with no copy: six `vec4` slots at locations 8..=13, covering the
     /// whole 96-byte record.
@@ -89,7 +113,8 @@ impl GpuBox {
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuCollider {
-    /// Which shape this is: 0 = AABB, 1 = plane.
+    /// Which shape this is: 0 = AABB, 1 = plane, anything else = an empty slot the solver skips
+    /// ([`GpuCollider::NONE`]).
     pub shape_type: u32,
     /// Padding to the 16-byte alignment the `vec4`s below require.
     pub _pad1: [u32; 3],
@@ -97,6 +122,13 @@ pub struct GpuCollider {
     pub data1: [f32; 4],
     /// AABB: the maximum corner. Plane: `[d, _, _, _]`, the plane's offset along its normal.
     pub data2: [f32; 4],
+}
+
+impl GpuCollider {
+    /// An empty slot: a shape type the solver has no case for, so it collides with nothing. An
+    /// empty slot used to be an AABB with both corners at the origin — a box the size of whatever
+    /// touched it, there.
+    pub const NONE: GpuCollider = GpuCollider { shape_type: 0xFF, _pad1: [0; 3], data1: [0.0; 4], data2: [0.0; 4] };
 }
 
 // ═══ Joint / Constraint Sistemi ═══

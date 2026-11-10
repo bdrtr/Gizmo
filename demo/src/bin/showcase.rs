@@ -42,7 +42,13 @@ struct ShowcaseDemo {
     time_of_day: f32,
     cam_velocity_y: f32,
     fly_mode: bool,
+    /// The bullets in flight, oldest first; past `MAX_BULLETS` the oldest is despawned, which takes
+    /// its body out of the GPU table and its light out of the scene.
+    bullets: std::collections::VecDeque<Entity>,
 }
+
+/// How many bullets stay in the world at once.
+const MAX_BULLETS: usize = 200;
 
 impl ShowcaseDemo {
     fn new() -> Self {
@@ -85,6 +91,7 @@ impl ShowcaseDemo {
             time_of_day: 17.5,
             cam_velocity_y: 0.0,
             fly_mode: false, // Varsayılan olarak yürüme modu
+            bullets: std::collections::VecDeque::new(),
         }
     }
 }
@@ -92,8 +99,15 @@ impl ShowcaseDemo {
 fn main() {
     App::<ShowcaseDemo>::new("Gizmo — AAA Showcase (IBL, SSR, God Rays)", 1600, 900)
         .set_setup(|world, renderer| {
-            // GPU fiziği varsayılan kapalı: bu vitrin onunla koşuyor. Bir kez, kurulumda.
+            // GPU fiziği varsayılan kapalı: bu vitrin onunla koşuyor. Bir kez, kurulumda. The table
+            // starts empty: the field of cubes it pushes, pulls and grabs is put in here.
             renderer.enable_gpu_physics();
+            if let Some(physics) = renderer.gpu_physics.as_mut() {
+                // Room kept for this demo's own GPU bodies — the pillar, the ground, the 500 stones
+                // and the last `MAX_BULLETS` bullets — which the engine puts in from their entities.
+                let room = physics.max_boxes - 1_000;
+                demo::gpu_box_field::add(physics, &renderer.queue, room);
+            }
             println!("##################################################");
             println!("    AAA Showcase Başlıyor...");
             println!("##################################################");
@@ -489,6 +503,12 @@ fn main() {
                         15.0,                     // Yarıçap (15 metre aydınlatır)
                     ),
                 );
+                state.bullets.push_back(bullet);
+                if state.bullets.len() > MAX_BULLETS {
+                    if let Some(oldest) = state.bullets.pop_front() {
+                        world.despawn(oldest);
+                    }
+                }
             }
 
             // Güç İtişi Mekaniği (Sağ Tık / Jedi Push) - Sadece Flag ayarla

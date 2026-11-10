@@ -8,6 +8,34 @@ use super::types::*;
 /// How many static colliders the collider buffer holds.
 pub const MAX_STATIC_COLLIDERS: u32 = 100;
 
+/// Who holds a slot of the box or the static-collider table.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Slot {
+    /// Nobody: free to give out.
+    Free,
+    /// Put in by the game directly; freed only when it asks.
+    Live,
+    /// Put in for this entity; freed as well once the entity no longer claims it.
+    Owned(gizmo_core::Entity),
+    /// Its body was taken out and has not yet been through a step (`BOX_LEAVING`): held by nobody,
+    /// not given out yet.
+    Leaving,
+}
+
+/// `body` as a live one: a body put in or written is never free or leaving — that is
+/// `remove_box`'s.
+fn live(mut body: GpuBox) -> GpuBox {
+    if body.state >= BOX_FREE {
+        body.state = 0;
+    }
+    body
+}
+
+/// A full table, logged once until a slot of it is freed.
+fn report_full(table: &str, capacity: u32) {
+    tracing::error!(table, capacity, "[GpuPhysics] the table is full; what does not fit is left out until a slot is freed");
+}
+
 /// The solver's parameters, from the step, gravity and the live counts.
 fn sim_params(dt: f32, gravity: [f32; 3], num_boxes: u32, num_colliders: u32, num_joints: u32) -> PhysicsSimParams {
     PhysicsSimParams {
@@ -66,9 +94,40 @@ pub struct GpuPhysicsSystem {
     clock: gizmo_core::time::PhysicsTime,
     /// Gravity, m/s², as [`update_params`](Self::update_params) last set it.
     gravity: [f32; 3],
-    /// How many static colliders are live; the solver checks these and no more. The buffer holds
-    /// [`MAX_STATIC_COLLIDERS`], and the slots past this are empty.
+    /// One past the highest static-collider slot in use: the solver checks this many, and skips
+    /// the free ones among them ([`GpuCollider::NONE`]). The buffer holds [`MAX_STATIC_COLLIDERS`].
     collider_count: u32,
+    /// Who holds each static-collider slot.
+    collider_slots: Vec<Slot>,
+    /// Freed collider slots below `collider_count`, reused first.
+    free_colliders: Vec<u32>,
+    /// One past the highest box slot in use: every pass runs over this many and skips the free
+    /// ones among them ([`BOX_FREE`]).
+    box_high_water: u32,
+    /// Who holds each box slot.
+    box_slots: Vec<Slot>,
+    /// Freed box slots below `box_high_water`, reused first.
+    free_boxes: Vec<u32>,
+    /// Box slots whose body was taken out and has not been through a step yet: not given out until
+    /// one has run, because that step is what wakes the bodies round it and forgets its contacts
+    /// (`BOX_LEAVING`).
+    leaving: Vec<u32>,
+    /// Box slots whose leaving body is in the steps last recorded: free from the next `advance` on.
+    left: Vec<u32>,
+    /// Whether a full box table has been reported since a box slot was last freed, so a game that
+    /// keeps asking is told once.
+    boxes_full_reported: bool,
+    /// The same for the static-collider table.
+    colliders_full_reported: bool,
+    /// How many readback copies have been recorded ([`request_readback`](Self::request_readback)).
+    copies_recorded: std::sync::atomic::AtomicU64,
+    /// Which copy the readback in flight is of.
+    copy_in_flight: std::sync::atomic::AtomicU64,
+    /// Which copy the data [`poll_readback_data`](Self::poll_readback_data) last returned is of.
+    copy_returned: std::sync::atomic::AtomicU64,
+    /// For each box slot, the first copy that holds the body in it now — see
+    /// [`readback_holds`](Self::readback_holds).
+    first_copy: Vec<u64>,
     /// What the solver was last given — see [`params`](Self::params).
     params: PhysicsSimParams,
 
@@ -129,38 +188,14 @@ impl GpuPhysicsSystem {
         output_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> Self {
-        let mut initial_boxes = Vec::with_capacity(max_boxes as usize);
-        let grid_dim = (max_boxes as f32).powf(1.0 / 3.0).ceil() as u32;
-        let spacing = 2.1f32;
-        let offset = (grid_dim as f32 * spacing) / 2.0;
-
-        for i in 0..max_boxes {
-            let ix = i % grid_dim;
-            let iy = (i / grid_dim) % grid_dim;
-            let iz = i / (grid_dim * grid_dim);
-
-            let x = (ix as f32 * spacing) - offset;
-            let y = 30.0 + (iy as f32 * spacing); // Y=30'dan yukarı doğru diz
-            let z = (iz as f32 * spacing) - offset;
-
-            // Görselliği arttırmak için Y koordinatına göre renk gradyanı:
-            let color_r = ix as f32 / grid_dim as f32;
-            let color_g = iy as f32 / grid_dim as f32;
-            let color_b = iz as f32 / grid_dim as f32;
-
-            initial_boxes.push(GpuBox {
-                position: [x, y, z],
-                mass: 1.0,
-                velocity: [0.0, 0.0, 0.0],
-                state: 0,
-                rotation: [0.0, 0.0, 0.0, 1.0],
-                angular_velocity: [0.0, 0.0, 0.0],
-                sleep_counter: 0,
-                color: [color_r, color_g, color_b, 1.0],
-                half_extents: [1.0, 1.0, 1.0],
-                _pad: 0,
-            });
-        }
+        // **Empty: every slot free.** The system is capacity, not a scene. It used to start with all
+        // `max_boxes` slots live — a grid of 50 000 one-kilo cubes falling from 30 m — and three
+        // static colliders (the ground plane, an 80 × 20 × 80 m platform round the origin and a wall
+        // beside it): the `1_milyon_kup` demo's scene, simulated and drawn in every game that turned
+        // GPU bodies on, whatever it put in itself (`kumas` hung its cloth inside the falling field).
+        // A game puts in what it wants (`add_box`, `add_boxes`, `add_collider`, or entities with a
+        // rigid body through the engine's submit path).
+        let initial_boxes = vec![GpuBox::FREE; max_boxes as usize];
 
         let boxes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Physics Buffer"),
@@ -171,42 +206,7 @@ impl GpuPhysicsSystem {
                 | wgpu::BufferUsages::COPY_SRC,
         });
 
-        let mut initial_colliders = Vec::new();
-        // 1. Zemin (Sonsuz Plane) -> Y = 0
-        initial_colliders.push(GpuCollider {
-            shape_type: 1,
-            _pad1: [0; 3],
-            data1: [0.0, 1.0, 0.0, 0.0], // Normal vec
-            data2: [0.0, 0.0, 0.0, 0.0], // distance = 0
-        });
-
-        // 2. Ortadaki Devasa Zemin Platformu (AABB)
-        initial_colliders.push(GpuCollider {
-            shape_type: 0,
-            _pad1: [0; 3],
-            data1: [-40.0, 0.0, -40.0, 0.0], // aabb_min
-            data2: [40.0, 20.0, 40.0, 0.0],  // aabb_max
-        });
-
-        // 3. Eğik bir rampa veya duvar
-        initial_colliders.push(GpuCollider {
-            shape_type: 0,
-            _pad1: [0; 3],
-            data1: [45.0, 0.0, -40.0, 0.0], // aabb_min
-            data2: [55.0, 40.0, 40.0, 0.0], // aabb_max (Sağ Duvar)
-        });
-
-        let max_static_colliders = MAX_STATIC_COLLIDERS as usize;
-        let num_initial = initial_colliders.len();
-        if num_initial < max_static_colliders {
-            let empty_col = GpuCollider {
-                shape_type: 0,
-                _pad1: [0; 3],
-                data1: [0.0; 4],
-                data2: [0.0; 4],
-            };
-            initial_colliders.resize(max_static_colliders, empty_col);
-        }
+        let initial_colliders = vec![GpuCollider::NONE; MAX_STATIC_COLLIDERS as usize];
 
         let colliders_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Static Colliders Buffer"),
@@ -225,7 +225,7 @@ impl GpuPhysicsSystem {
         // otherwise; `advance` turns the game's time into whole steps of it.
         let clock = gizmo_core::time::PhysicsTime::new(60);
         let gravity = [0.0, -9.81, 0.0];
-        let params = sim_params(clock.fixed_dt(), gravity, max_boxes, num_initial as u32, 0);
+        let params = sim_params(clock.fixed_dt(), gravity, 0, 0, 0);
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Physics Params Buffer"),
@@ -339,7 +339,20 @@ impl GpuPhysicsSystem {
             max_joints,
             clock,
             gravity,
-            collider_count: num_initial as u32,
+            collider_count: 0,
+            collider_slots: vec![Slot::Free; MAX_STATIC_COLLIDERS as usize],
+            free_colliders: Vec::new(),
+            box_high_water: 0,
+            box_slots: vec![Slot::Free; max_boxes as usize],
+            free_boxes: Vec::new(),
+            leaving: Vec::new(),
+            left: Vec::new(),
+            boxes_full_reported: false,
+            colliders_full_reported: false,
+            copies_recorded: std::sync::atomic::AtomicU64::new(0),
+            copy_in_flight: std::sync::atomic::AtomicU64::new(0),
+            copy_returned: std::sync::atomic::AtomicU64::new(0),
+            first_copy: vec![0; max_boxes as usize],
             params,
             pipelines,
             box_vertex_buffer,
@@ -525,47 +538,239 @@ impl GpuPhysicsSystem {
         }
     }
 
-    /// Overwrites one body. Seeding the simulation, or teleporting a body from the CPU.
+    /// Overwrites the body in slot `index` — teleporting it, or pushing it, from the CPU. Only a slot
+    /// that holds a body: a body is put in with [`add_box`](Self::add_box).
     pub fn update_box(&self, queue: &wgpu::Queue, index: u32, box_struct: &GpuBox) {
-        if index < self.max_boxes {
-            let offset = (index as wgpu::BufferAddress)
-                * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
-            queue.write_buffer(
-                &self.boxes_buffer,
-                offset,
-                bytemuck::cast_slice(&[*box_struct]),
-            );
+        // A free slot stays free: a body written into it would be simulated with nothing in the
+        // table knowing it is there (that is `add_box`'s job). A body is not freed by writing
+        // `BOX_FREE` into it either — that is `remove_box`'s.
+        if self.box_slots.get(index as usize).is_some_and(|held| matches!(held, Slot::Live | Slot::Owned(_))) {
+            self.write_box(queue, index, &live(*box_struct));
         }
+    }
+
+    fn write_box(&self, queue: &wgpu::Queue, slot: u32, body: &GpuBox) {
+        let offset = (slot as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
+        queue.write_buffer(&self.boxes_buffer, offset, bytemuck::cast_slice(&[*body]));
+    }
+
+    /// Puts `body` in a free slot and returns the slot, or `None` when all
+    /// [`max_boxes`](Self::max_boxes) are taken (logged once, until a slot is freed). With an
+    /// `owner` the slot is that entity's: [`retain_owned_boxes`](Self::retain_owned_boxes) frees it
+    /// once the entity no longer claims it. A slot freed before is given out first.
+    pub fn add_box(
+        &mut self,
+        queue: &wgpu::Queue,
+        body: &GpuBox,
+        owner: Option<gizmo_core::Entity>,
+    ) -> Option<u32> {
+        let slot = match self.free_boxes.pop() {
+            Some(slot) => slot,
+            None if self.box_high_water < self.max_boxes => {
+                self.box_high_water += 1;
+                self.write_params(queue);
+                self.box_high_water - 1
+            }
+            None => {
+                if !std::mem::replace(&mut self.boxes_full_reported, true) {
+                    report_full("box", self.max_boxes);
+                }
+                return None;
+            }
+        };
+        self.box_slots[slot as usize] = owner.map_or(Slot::Live, Slot::Owned);
+        self.first_copy[slot as usize] = self.copies_recorded.load(Ordering::SeqCst);
+        self.write_box(queue, slot, &live(*body));
+        Some(slot)
+    }
+
+    /// As many of `bodies` as fit in consecutive slots past the highest in use, in one upload — a
+    /// field of thousands put in at once — and the slots they took (empty when none fit). The run is
+    /// contiguous, so a slot freed below is not used; a table emptied from the top gives its room
+    /// back (see [`remove_box`](Self::remove_box)).
+    pub fn add_boxes(&mut self, queue: &wgpu::Queue, bodies: &[GpuBox]) -> std::ops::Range<u32> {
+        let start = self.box_high_water;
+        let room = (self.max_boxes - start) as usize;
+        if bodies.len() > room && !std::mem::replace(&mut self.boxes_full_reported, true) {
+            report_full("box", self.max_boxes);
+        }
+        let bodies: Vec<GpuBox> = bodies.iter().take(room).map(|b| live(*b)).collect();
+        let end = start + bodies.len() as u32;
+        if bodies.is_empty() {
+            return start..end;
+        }
+        let offset = (start as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
+        queue.write_buffer(&self.boxes_buffer, offset, bytemuck::cast_slice(&bodies));
+        self.box_slots[start as usize..end as usize].fill(Slot::Live);
+        let next_copy = self.copies_recorded.load(Ordering::SeqCst);
+        self.first_copy[start as usize..end as usize].fill(next_copy);
+        self.box_high_water = end;
+        self.write_params(queue);
+        start..end
+    }
+
+    /// Frees `slot`: the body in it is no longer simulated, found by its neighbours or drawn, and a
+    /// joint to it holds nothing. The next [`add_box`](Self::add_box) reuses it. A free slot is left
+    /// as it is.
+    ///
+    /// There was no way out: a body stayed in the simulation until the renderer was dropped, and
+    /// the engine numbered its bodies by counting them, so a body despawned and another spawned
+    /// shared a slot with one still alive.
+    pub fn remove_box(&mut self, queue: &wgpu::Queue, slot: u32) {
+        let Some(held) = self.box_slots.get_mut(slot as usize) else { return };
+        if !matches!(held, Slot::Live | Slot::Owned(_)) {
+            return;
+        }
+        *held = Slot::Leaving;
+        // Only the state, so the next step knows where the body was: it wakes what rested on it
+        // there, forgets its contacts and frees the slot (`BOX_LEAVING`). Not given out until then.
+        let offset = (slot as wgpu::BufferAddress) * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress
+            + std::mem::offset_of!(GpuBox, state) as wgpu::BufferAddress;
+        queue.write_buffer(&self.boxes_buffer, offset, bytemuck::bytes_of(&BOX_LEAVING));
+        self.leaving.push(slot);
+    }
+
+    /// The slots whose leaving body has been through a step are free to give out; and a table whose
+    /// top slots are free gives that room back, so its passes run over fewer slots and a run of
+    /// [`add_boxes`](Self::add_boxes) fits again. A slot still leaving is never given back: its body
+    /// has yet to be taken out by a step, which runs over the slots below the high-water mark only.
+    fn release_left_slots(&mut self, queue: &wgpu::Queue) {
+        if self.left.is_empty() {
+            return;
+        }
+        for &slot in &self.left {
+            self.box_slots[slot as usize] = Slot::Free;
+        }
+        self.free_boxes.append(&mut self.left);
+        self.boxes_full_reported = false;
+        let high_water = self.box_high_water;
+        while self.box_high_water > 0 && self.box_slots[self.box_high_water as usize - 1] == Slot::Free {
+            self.box_high_water -= 1;
+        }
+        if self.box_high_water != high_water {
+            let top = self.box_high_water;
+            self.free_boxes.retain(|&slot| slot < top);
+            self.write_params(queue);
+        }
+    }
+
+    /// Frees every box slot held for an entity that `keep` — asked with the entity and its slot —
+    /// says no longer claims it. The engine's submit path calls it every frame with "is still
+    /// linked to that slot".
+    pub fn retain_owned_boxes(&mut self, queue: &wgpu::Queue, mut keep: impl FnMut(gizmo_core::Entity, u32) -> bool) {
+        let gone: Vec<u32> = self.box_slots[..self.box_high_water as usize]
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, held)| match *held {
+                Slot::Owned(owner) if !keep(owner, slot as u32) => Some(slot as u32),
+                _ => None,
+            })
+            .collect();
+        for slot in gone {
+            self.remove_box(queue, slot);
+        }
+    }
+
+    /// How many box slots hold a body.
+    pub fn live_boxes(&self) -> u32 {
+        self.box_slots[..self.box_high_water as usize]
+            .iter()
+            .filter(|held| matches!(held, Slot::Live | Slot::Owned(_)))
+            .count() as u32
+    }
+
+    /// Whether box slot `slot` holds the body put in for `owner` — the engine's check that an
+    /// entity's `GpuPhysicsLink` is backed.
+    pub fn holds_box(&self, slot: u32, owner: gizmo_core::Entity) -> bool {
+        self.box_slots.get(slot as usize) == Some(&Slot::Owned(owner))
+    }
+
+    /// Whether static-collider slot `slot` holds the collider put in for `owner`.
+    pub fn holds_collider(&self, slot: u32, owner: gizmo_core::Entity) -> bool {
+        self.collider_slots.get(slot as usize) == Some(&Slot::Owned(owner))
+    }
+
+    /// Whether the data [`poll_readback_data`](Self::poll_readback_data) last returned was copied
+    /// after the body now in `slot` was put in. A readback is copied a frame or more before it
+    /// arrives, so a body put in meanwhile — into a fresh slot, or one a body left — is not in it:
+    /// its slot there still holds nothing, or the body that left. Reading that back put a new body at
+    /// the origin, or where the old one was, for a frame.
+    pub fn readback_holds(&self, slot: u32) -> bool {
+        self.first_copy
+            .get(slot as usize)
+            .is_some_and(|&first| first <= self.copy_returned.load(Ordering::SeqCst))
     }
 
     /// Overwrites one static collider.
-    /// Overwrites the static collider in slot `index`; a slot past the live ones makes every slot up
-    /// to it live.
-    pub fn update_collider(&mut self, queue: &wgpu::Queue, index: u32, collider: &GpuCollider) {
-        if index < MAX_STATIC_COLLIDERS {
-            let offset = (index as wgpu::BufferAddress)
-                * std::mem::size_of::<GpuCollider>() as wgpu::BufferAddress;
-            queue.write_buffer(
-                &self.colliders_buffer,
-                offset,
-                bytemuck::cast_slice(&[*collider]),
-            );
-            if index >= self.collider_count {
-                self.collider_count = index + 1;
-                self.write_params(queue);
-            }
+    /// Overwrites the static collider in slot `index`. A free slot stays free — that is
+    /// [`add_collider`](Self::add_collider)'s.
+    pub fn update_collider(&self, queue: &wgpu::Queue, index: u32, collider: &GpuCollider) {
+        if self.collider_slots.get(index as usize).is_some_and(|held| matches!(held, Slot::Live | Slot::Owned(_))) {
+            self.write_collider(queue, index, collider);
         }
     }
 
-    /// Adds a static collider in the next free slot and returns the slot, or `None` when all
-    /// [`MAX_STATIC_COLLIDERS`] are taken.
-    pub fn add_collider(&mut self, queue: &wgpu::Queue, collider: &GpuCollider) -> Option<u32> {
-        if self.collider_count >= MAX_STATIC_COLLIDERS {
-            return None;
-        }
-        let slot = self.collider_count;
-        self.update_collider(queue, slot, collider);
+    fn write_collider(&self, queue: &wgpu::Queue, slot: u32, collider: &GpuCollider) {
+        let offset = (slot as wgpu::BufferAddress) * std::mem::size_of::<GpuCollider>() as wgpu::BufferAddress;
+        queue.write_buffer(&self.colliders_buffer, offset, bytemuck::cast_slice(&[*collider]));
+    }
+
+    /// Adds a static collider in a free slot and returns the slot, or `None` when all
+    /// [`MAX_STATIC_COLLIDERS`] are taken (logged once, until a slot is freed). With an `owner`,
+    /// [`retain_owned_colliders`](Self::retain_owned_colliders) frees it once that entity no longer
+    /// claims it.
+    pub fn add_collider(
+        &mut self,
+        queue: &wgpu::Queue,
+        collider: &GpuCollider,
+        owner: Option<gizmo_core::Entity>,
+    ) -> Option<u32> {
+        let slot = match self.free_colliders.pop() {
+            Some(slot) => slot,
+            None if self.collider_count < MAX_STATIC_COLLIDERS => {
+                self.collider_count += 1;
+                self.write_params(queue);
+                self.collider_count - 1
+            }
+            None => {
+                if !std::mem::replace(&mut self.colliders_full_reported, true) {
+                    report_full("static collider", MAX_STATIC_COLLIDERS);
+                }
+                return None;
+            }
+        };
+        self.collider_slots[slot as usize] = owner.map_or(Slot::Live, Slot::Owned);
+        self.write_collider(queue, slot, collider);
         Some(slot)
+    }
+
+    /// Frees static-collider slot `slot`: the solver skips it ([`GpuCollider::NONE`]) and the next
+    /// [`add_collider`](Self::add_collider) reuses it.
+    pub fn remove_collider(&mut self, queue: &wgpu::Queue, slot: u32) {
+        let Some(held) = self.collider_slots.get_mut(slot as usize) else { return };
+        if *held == Slot::Free {
+            return;
+        }
+        *held = Slot::Free;
+        self.write_collider(queue, slot, &GpuCollider::NONE);
+        self.free_colliders.push(slot);
+        self.colliders_full_reported = false;
+    }
+
+    /// Frees every static-collider slot held for an entity that `keep` — asked with the entity and
+    /// its slot — says no longer claims it.
+    pub fn retain_owned_colliders(&mut self, queue: &wgpu::Queue, mut keep: impl FnMut(gizmo_core::Entity, u32) -> bool) {
+        let gone: Vec<u32> = self.collider_slots[..self.collider_count as usize]
+            .iter()
+            .enumerate()
+            .filter_map(|(slot, held)| match *held {
+                Slot::Owned(owner) if !keep(owner, slot as u32) => Some(slot as u32),
+                _ => None,
+            })
+            .collect();
+        for slot in gone {
+            self.remove_collider(queue, slot);
+        }
     }
 
     /// Adds a joint and returns its index.
@@ -610,7 +815,7 @@ impl GpuPhysicsSystem {
         self.params = sim_params(
             self.clock.fixed_dt(),
             self.gravity,
-            self.max_boxes,
+            self.box_high_water,
             self.collider_count,
             self.joint_count,
         );
@@ -631,13 +836,25 @@ impl GpuPhysicsSystem {
     ///
     /// It stepped once for every frame drawn, whatever the frame's length: the bodies fell twice as
     /// fast at 120 Hz as at 60, went on falling under ⏸, and took no notice of a time scale.
-    pub fn advance(&mut self, encoder: &mut wgpu::CommandEncoder, elapsed: f32) -> u32 {
+    pub fn advance(&mut self, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, elapsed: f32) -> u32 {
+        // The bodies taken out before the steps last recorded have been through them: their slots
+        // are free now, and given back from the top. Before recording, so the parameters this
+        // writes (`queue.write_buffer`, applied at the next submission) are the ones these steps run on.
+        self.release_left_slots(queue);
         self.clock.accumulate(elapsed);
         let mut steps = 0;
         while self.clock.should_step() {
             self.clock.consume_step();
-            self.compute_pass(encoder);
+            // With no body in the table a step has nothing to move; the time is still spent, so
+            // the first body put in does not inherit a backlog.
+            if self.box_high_water > 0 {
+                self.compute_pass(encoder);
+            }
             steps += 1;
+        }
+        if steps > 0 && self.box_high_water > 0 {
+            // These steps take the leaving bodies out; their slots are free from the next advance.
+            self.left.append(&mut self.leaving);
         }
         steps
     }
@@ -757,7 +974,7 @@ impl GpuPhysicsSystem {
     /// each its own dispatch, in that order.
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
         tracing::trace!(
-            boxes = self.max_boxes,
+            boxes = self.box_high_water,
             joints = self.joint_count,
             si_iterations = 6,
             "[GpuPhysics] recording sequential-impulse solver passes"
@@ -774,30 +991,30 @@ impl GpuPhysicsSystem {
         cpass.dispatch_workgroups(self.grid_size.div_ceil(256), 1, 1);
 
         cpass.set_pipeline(&self.pipelines.pipeline_build);
-        cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+        cpass.dispatch_workgroups(self.box_high_water.div_ceil(256), 1, 1);
 
         // Faz 2: Narrowphase (Çarpışma Tespiti ve Contact Caching)
         cpass.set_pipeline(&self.pipelines.pipeline_narrowphase);
-        cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+        cpass.dispatch_workgroups(self.box_high_water.div_ceil(256), 1, 1);
 
         // Faz 3: Çarpışma çözümünü N kez tekrarla (SI iterasyon)
         // Artık grid üzerinden değil, doğrudan contact cache üzerinden hesaplama yapıyor!
         let si_iterations = 6;
         for _ in 0..si_iterations {
             cpass.set_pipeline(&self.pipelines.pipeline_solve);
-            cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+            cpass.dispatch_workgroups(self.box_high_water.div_ceil(256), 1, 1);
         }
 
         // Faz 4: Hız ve pozisyon entegrasyonu (tek seferde)
         cpass.set_pipeline(&self.pipelines.pipeline_integrate);
-        cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+        cpass.dispatch_workgroups(self.box_high_water.div_ceil(256), 1, 1);
 
         // Faz 4: Joint constraint çözümü (entegrasyondan sonra)
         if self.joint_count > 0 {
             let joint_iterations = 4;
             for _ in 0..joint_iterations {
                 cpass.set_pipeline(&self.pipelines.pipeline_solve_joints);
-                cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+                cpass.dispatch_workgroups(self.box_high_water.div_ceil(256), 1, 1);
             }
         }
     }
@@ -819,7 +1036,7 @@ impl GpuPhysicsSystem {
         cpass.set_pipeline(&self.pipelines.pipeline_culling);
         cpass.set_bind_group(0, global_bind_group, &[]);
         cpass.set_bind_group(1, &self.pipelines.culling_bind_group, &[]);
-        cpass.dispatch_workgroups(self.max_boxes.div_ceil(256), 1, 1);
+        cpass.dispatch_workgroups(self.box_high_water.div_ceil(256), 1, 1);
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
@@ -853,9 +1070,9 @@ impl GpuPhysicsSystem {
 
         cpass.set_pipeline(&self.debug_compute_pipeline);
         cpass.set_bind_group(0, &self.debug_compute_bind_group, &[]);
-        // Dispatch enough workgroups for all boxes
+        // Enough workgroups for every slot in use and every joint; free slots draw no lines.
         cpass.dispatch_workgroups(
-            self.max_boxes
+            self.box_high_water
                 .div_ceil(256)
                 .max(self.max_joints.div_ceil(256)),
             1,
@@ -893,6 +1110,9 @@ impl GpuPhysicsSystem {
             let size = (self.max_boxes as wgpu::BufferAddress)
                 * std::mem::size_of::<GpuBox>() as wgpu::BufferAddress;
             encoder.copy_buffer_to_buffer(&self.boxes_buffer, 0, &self.readback_buffer, 0, size);
+            // Which copy this is, for `readback_holds`.
+            let copy = self.copies_recorded.fetch_add(1, Ordering::SeqCst);
+            self.copy_in_flight.store(copy, Ordering::SeqCst);
         }
     }
 
@@ -932,6 +1152,7 @@ impl GpuPhysicsSystem {
             drop(view);
             self.readback_buffer.unmap();
 
+            self.copy_returned.store(self.copy_in_flight.load(Ordering::SeqCst), Ordering::SeqCst);
             self.readback_state.store(0, Ordering::SeqCst);
 
             return Some(vec_data);

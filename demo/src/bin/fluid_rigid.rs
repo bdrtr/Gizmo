@@ -111,6 +111,13 @@ fn main() {
             }
 
             // --- RIGID BODY KURULUMU ---
+            // The ground plane the GPU bodies land on beyond the tank's floor — the table starts empty
+            // (it used to hold this plane, and 50 000 falling cubes besides, in every game).
+            world.spawn_bundle((
+                Transform::new(Vec3::ZERO),
+                RigidBody::new(0.0, false),
+                Collider::plane(Vec3::Y, 0.0),
+            ));
             // Yere bir AABB koyalım (Zemin)
             let ground = world.spawn();
             world.add_component(ground, Transform::new(Vec3::new(0.0, 0.0, 0.0)));

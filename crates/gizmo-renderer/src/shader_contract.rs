@@ -366,3 +366,113 @@ fn every_light_declaration_matches_the_bytes_rust_uploads() {
     assert!(checked >= 2, "only {checked} shaders declare LightData");
     assert!(problems.is_empty(), "light layout disagreements:\n  {}", problems.join("\n  "));
 }
+
+/// **The GPU bodies' structs**, as the solver, the culling pass and the debug lines declare them —
+/// by exact name, since `fem_compute.wgsl` declares a `GpuCollider` of its own for another system.
+///
+/// None of them was checked, and one was wrong from the day it was written: the solver's
+/// `StaticCollider` padded its type with a `vec3<u32>`, which WGSL aligns to 16 bytes, so the shader
+/// saw a 64-byte collider with its shape at byte 32 where Rust uploads 48 bytes with the shape at 16.
+/// Every static collider read the next one's bytes: a plane's normal came out (0, 0, 0), and bodies
+/// fell through the ground they were given.
+#[test]
+fn every_gpu_body_declaration_matches_the_bytes_rust_uploads() {
+    use crate::gpu_physics::{GpuBox, GpuBoxContacts, GpuCollider, GpuJoint, PhysicsSimParams};
+    use std::mem::size_of;
+
+    let subjects: Vec<(&str, Vec<(&str, u32)>, usize)> = vec![
+        (
+            "StaticCollider",
+            vec![
+                ("shape_type", offset_of!(GpuCollider, shape_type) as u32),
+                ("data1", offset_of!(GpuCollider, data1) as u32),
+                ("data2", offset_of!(GpuCollider, data2) as u32),
+            ],
+            size_of::<GpuCollider>(),
+        ),
+        (
+            "BoxItem",
+            vec![
+                ("position", offset_of!(GpuBox, position) as u32),
+                ("mass", offset_of!(GpuBox, mass) as u32),
+                ("velocity", offset_of!(GpuBox, velocity) as u32),
+                ("state", offset_of!(GpuBox, state) as u32),
+                ("rotation", offset_of!(GpuBox, rotation) as u32),
+                ("angular_velocity", offset_of!(GpuBox, angular_velocity) as u32),
+                ("sleep_counter", offset_of!(GpuBox, sleep_counter) as u32),
+                ("color", offset_of!(GpuBox, color) as u32),
+                ("half_extents", offset_of!(GpuBox, half_extents) as u32),
+            ],
+            size_of::<GpuBox>(),
+        ),
+        (
+            "BoxContacts",
+            vec![
+                ("count", offset_of!(GpuBoxContacts, count) as u32),
+                ("neighbors", offset_of!(GpuBoxContacts, neighbors) as u32),
+                ("normals", offset_of!(GpuBoxContacts, normals) as u32),
+                ("accum_impulse", offset_of!(GpuBoxContacts, accum_impulse) as u32),
+                ("is_active", offset_of!(GpuBoxContacts, is_active) as u32),
+            ],
+            size_of::<GpuBoxContacts>(),
+        ),
+        (
+            "Joint",
+            vec![
+                ("body_a", offset_of!(GpuJoint, body_a) as u32),
+                ("body_b", offset_of!(GpuJoint, body_b) as u32),
+                ("joint_type", offset_of!(GpuJoint, joint_type) as u32),
+                ("flags", offset_of!(GpuJoint, flags) as u32),
+                ("anchor_a", offset_of!(GpuJoint, anchor_a) as u32),
+                ("compliance", offset_of!(GpuJoint, compliance) as u32),
+                ("anchor_b", offset_of!(GpuJoint, anchor_b) as u32),
+                ("damping_coeff", offset_of!(GpuJoint, damping) as u32),
+                ("axis", offset_of!(GpuJoint, axis) as u32),
+                ("max_force", offset_of!(GpuJoint, max_force) as u32),
+            ],
+            size_of::<GpuJoint>(),
+        ),
+        (
+            "SimParams",
+            vec![
+                ("dt", offset_of!(PhysicsSimParams, dt) as u32),
+                ("gravity", offset_of!(PhysicsSimParams, gravity) as u32),
+                ("damping", offset_of!(PhysicsSimParams, damping) as u32),
+                ("num_boxes", offset_of!(PhysicsSimParams, num_boxes) as u32),
+                ("num_colliders", offset_of!(PhysicsSimParams, num_colliders) as u32),
+                ("num_joints", offset_of!(PhysicsSimParams, num_joints) as u32),
+            ],
+            size_of::<PhysicsSimParams>(),
+        ),
+    ];
+
+    let mut problems = Vec::new();
+    let mut checked = Vec::new();
+    for (shader, src) in all_shaders() {
+        // Only the GPU bodies' shaders: other systems have their own `SimParams` and `Joint`.
+        if !shader.starts_with("physics_") {
+            continue;
+        }
+        for (name, truth, rust_size) in &subjects {
+            for (struct_name, fields, span) in struct_members(&shader, &src, name) {
+                if struct_name != *name {
+                    continue;
+                }
+                check(&shader, &struct_name, &fields, span, truth, *rust_size, &mut problems);
+                // An array element's stride is its span rounded up to its alignment; a span that
+                // differs at all is a stride that differs once the element is in an array.
+                if span as usize != *rust_size {
+                    problems.push(format!(
+                        "{shader}: `{struct_name}` is {span} bytes, the Rust struct is {rust_size} — \
+                         in an array every element after the first is read from the wrong place"
+                    ));
+                }
+                checked.push(format!("{shader}:{struct_name}"));
+            }
+        }
+    }
+    for name in ["StaticCollider", "BoxItem", "BoxContacts", "Joint", "SimParams"] {
+        assert!(checked.iter().any(|c| c.ends_with(&format!(":{name}"))), "no shader declares `{name}` any more: {checked:?}");
+    }
+    assert!(problems.is_empty(), "GPU body layout disagreements:\n  {}", problems.join("\n  "));
+}

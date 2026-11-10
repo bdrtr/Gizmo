@@ -17,11 +17,11 @@ pub struct GpuPhysicsLink {
     /// Index of this body's slot in the GPU box buffer — the same index its state is read
     /// back from into [`Transform`](crate::components::Transform).
     ///
-    /// The submit path derives the next id from how many bodies are already linked, so ids
-    /// stay dense as long as bodies are only added. Nothing reserves a slot for a body that
-    /// goes away, which is what makes this a buffer index for the current upload rather than
-    /// a lasting identity. It is neither the ECS entity id nor a
-    /// [`BodyHandle`](crate::BodyHandle).
+    /// The GPU table gives the slot, and frees it once the entity is despawned or no longer
+    /// carries this link (the body leaves the simulation then); the next body in may get it. So
+    /// it is a buffer index for as long as the link lasts, not a lasting identity — neither the
+    /// ECS entity id nor a [`BodyHandle`](crate::BodyHandle). It used to be the count of linked
+    /// bodies, which two bodies could share once one had gone.
     pub id: u32,
 }
 #[cfg(feature = "ecs")]

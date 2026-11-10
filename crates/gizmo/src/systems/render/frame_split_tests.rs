@@ -1521,3 +1521,419 @@ fn the_gpu_bodies_step_on_the_games_clock() {
         assert_eq!(physics(&renderer).params().num_joints, 1, "the joint never reached the solver's parameters");
     });
 }
+
+/// Every box slot of the renderer's GPU bodies, read back.
+#[cfg(feature = "physics")]
+fn gpu_boxes(renderer: &Renderer) -> Vec<crate::renderer::gpu_physics::GpuBox> {
+    let physics = renderer.gpu_physics.as_ref().expect("GPU bodies");
+    let size = physics.boxes_buffer.size();
+    let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("gpu-boxes-readback"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    encoder.copy_buffer_to_buffer(&physics.boxes_buffer, 0, &staging, 0, size);
+    renderer.queue.submit(Some(encoder.finish()));
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+    let _ = renderer.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    rx.recv().unwrap().unwrap();
+    let boxes = bytemuck::cast_slice(&slice.get_mapped_range().expect("a just-mapped range")).to_vec();
+    staging.unmap();
+    boxes
+}
+
+/// A frame of `dt` seconds for the GPU bodies: the preparation (which uploads and frees them) and
+/// everything before the frame's own view (which steps them).
+#[cfg(feature = "physics")]
+fn gpu_body_frame(game: &mut World, renderer: &mut Renderer, dt: f32) {
+    game.get_resource_mut::<gizmo_core::time::Time>().expect("a clock").update(dt);
+    prepare_frame(game, renderer);
+    super::draw_ahead_of_views(game, renderer, super::SimulationDetail::Full);
+}
+
+/// **A GPU body leaves when its entity does, and its slot is nobody else's while it is alive.** The
+/// table starts empty. A body despawned is out of the simulation by the next frame — its slot reads
+/// free, and stays so however long the bodies step — and the next body in takes that slot, not the
+/// one of a body still alive. A plane despawned frees its static-collider slot for the next.
+///
+/// There was no way out: slots were numbered by counting the linked bodies, so the third body in,
+/// after the first had gone, was handed the second's slot, and a despawned body went on falling and
+/// being drawn. And every game began with 50 000 falling cubes and three static colliders in it.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_gpu_body_leaves_with_its_entity_and_its_slot_is_nobody_elses() {
+    use crate::renderer::gpu_physics::{GpuBox, BOX_FREE};
+    use gizmo_physics_core::components::GpuPhysicsLink;
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::RigidBody;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        fn physics(r: &Renderer) -> &crate::renderer::gpu_physics::GpuPhysicsSystem {
+            r.gpu_physics.as_ref().expect("GPU bodies")
+        }
+        let params = physics(&renderer).params();
+        assert_eq!((physics(&renderer).live_boxes(), params.num_boxes, params.num_colliders), (0, 0, 0), "the table starts empty");
+
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        let body = |game: &mut World, x: f32| {
+            game.spawn_bundle((
+                Transform::new(Vec3::new(x, 50.0, 0.0)),
+                RigidBody::new(1.0, true),
+                Collider::box_collider(Vec3::splat(0.5)),
+            ))
+        };
+        let slot = |game: &World, e: Entity| game.get::<GpuPhysicsLink>(e).map(|l| l.id);
+        let first = body(&mut game, 0.0);
+        let second = body(&mut game, 10.0);
+        gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        let (first_slot, second_slot) = (slot(&game, first).expect("linked"), slot(&game, second).expect("linked"));
+        assert_ne!(first_slot, second_slot);
+        assert_eq!(physics(&renderer).live_boxes(), 2);
+
+        game.despawn(first);
+        for _ in 0..10 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        assert_eq!(physics(&renderer).live_boxes(), 1, "the despawned body is still in the table");
+        let freed = gpu_boxes(&renderer)[first_slot as usize];
+        assert_eq!(freed.state, BOX_FREE, "the despawned body's slot is still simulated");
+        assert_eq!(bytemuck::bytes_of(&freed), bytemuck::bytes_of(&GpuBox::FREE), "a freed slot was moved by the steps after it");
+
+        let third = body(&mut game, -10.0);
+        gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        let third_slot = slot(&game, third).expect("linked");
+        assert_ne!(third_slot, second_slot, "the new body was handed a living body's slot");
+        assert_eq!(third_slot, first_slot, "a freed slot is given out first");
+
+        let floor = game.spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new(0.0, false), Collider::plane(Vec3::Y, 0.0)));
+        gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        let plane_slot = game.get::<crate::systems::physics::GpuStaticCollider>(floor).expect("uploaded").0;
+        game.despawn(floor);
+        gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        let again = game.spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new(0.0, false), Collider::plane(Vec3::Y, 0.0)));
+        gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        assert_eq!(game.get::<crate::systems::physics::GpuStaticCollider>(again).map(|c| c.0), Some(plane_slot), "a plane's freed slot is given out again");
+        assert_eq!(physics(&renderer).params().num_colliders, 1, "two planes, one after the other, took two slots");
+
+        // A link the table does not back — copied from the living body — is dropped and the entity
+        // uploaded again, into a slot of its own.
+        let copied = body(&mut game, 20.0);
+        game.add_component(copied, GpuPhysicsLink { id: second_slot });
+        gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        let own = slot(&game, copied).expect("linked again");
+        assert_ne!(own, second_slot, "an entity carrying another body's link was left mirroring it");
+        assert!(physics(&renderer).holds_box(own, copied) && physics(&renderer).holds_box(second_slot, second));
+
+        // A run of bodies goes in past the highest slot in use, as many as fit; and a table emptied
+        // from the top gives that room back.
+        let queue = renderer.queue.clone();
+        let before = physics(&renderer).params().num_boxes;
+        let run = renderer.gpu_physics.as_mut().expect("GPU bodies").add_boxes(&queue, &[GpuBox { state: 0, mass: 1.0, ..GpuBox::FREE }; 4]);
+        assert_eq!(run, before..before + 4);
+        assert_eq!(physics(&renderer).params().num_boxes, before + 4);
+        for slot in run.clone() {
+            renderer.gpu_physics.as_mut().expect("GPU bodies").remove_box(&queue, slot);
+        }
+        for _ in 0..3 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        assert_eq!(physics(&renderer).params().num_boxes, before, "the freed top of the table was not given back");
+        let max = physics(&renderer).max_boxes;
+        let all = vec![GpuBox { state: 0, mass: 1.0, ..GpuBox::FREE }; max as usize];
+        let fitted = renderer.gpu_physics.as_mut().expect("GPU bodies").add_boxes(&queue, &all);
+        assert_eq!(fitted, before..max, "a run that does not all fit puts in what does");
+    });
+}
+
+/// **A GPU body comes to rest on the ground the game gave it, and the ground stays.** A massless box
+/// for a floor and a box dropped onto it: two seconds later the box sits on the floor and the floor
+/// has not moved. A massless box — immovable, by `GpuBox::mass` — had gravity added like any other
+/// (it fell 6.5 m in those two seconds; `kumas`'s pins, massless, never held its cloth), and the push
+/// out of a contact was shared by mass, which made a massless body the lightest of all: the floor
+/// was pushed down out from under the box (0.49 m) and the box not at all.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_gpu_body_rests_on_the_ground_the_game_gave_it() {
+    use gizmo_physics_core::components::GpuPhysicsLink;
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::RigidBody;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        let floor = game.spawn_bundle((
+            Transform::new(Vec3::ZERO),
+            RigidBody::new(0.0, false),
+            Collider::box_collider(Vec3::new(2.5, 0.1, 2.5)),
+        ));
+        let dropped = game.spawn_bundle((
+            Transform::new(Vec3::new(0.0, 2.0, 0.0)),
+            RigidBody::new(1.0, true),
+            Collider::box_collider(Vec3::splat(0.3)),
+        ));
+        for _ in 0..120 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let boxes = gpu_boxes(&renderer);
+        let at = |e: Entity| boxes[game.get::<GpuPhysicsLink>(e).expect("linked").id as usize].position;
+        let (floor_at, dropped_at) = (at(floor), at(dropped));
+        assert!(floor_at.iter().all(|c| c.abs() < 1e-4), "the massless floor moved to {floor_at:?}");
+        assert!(
+            (dropped_at[1] - 0.4).abs() < 0.1 && dropped_at[0].abs() < 0.5 && dropped_at[2].abs() < 0.5,
+            "the box is at {dropped_at:?}, not resting on the floor (its centre would be at y = 0.4)"
+        );
+    });
+}
+
+/// **A body taken out wakes the sleeping bodies round it.** Two boxes asleep side by side on the
+/// floor: take one out and the other is awake the next step, to find what its support has become. A
+/// body asleep against one that went stayed asleep, leaning on nothing.
+///
+/// It needed two more things found on the way to be seen at all. The floor is a static collider,
+/// and the solver read every static collider from the wrong bytes (`StaticCollider`'s padding was a
+/// `vec3`, which WGSL aligns to 16): these boxes fell through it. And a box resting on a static
+/// collider bounced back each step's gravity at the restitution, a few centimetres a second for
+/// ever, above the energy a body must fall under to sleep; below `RESTITUTION_THRESHOLD` it rests.
+/// (A box asleep *on* a box cannot be had: that contact is resolved in the solve, before
+/// `integrate` adds the step's gravity and judges whether the box has stopped.)
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_body_taken_out_wakes_the_sleeping_bodies_round_it() {
+    use gizmo_physics_core::components::GpuPhysicsLink;
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::RigidBody;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        game.spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new(0.0, false), Collider::plane(Vec3::Y, 0.0)));
+        let cube = |game: &mut World, x: f32| {
+            game.spawn_bundle((Transform::new(Vec3::new(x, 0.3, 0.0)), RigidBody::new(1.0, true), Collider::box_collider(Vec3::splat(0.3))))
+        };
+        let taken = cube(&mut game, 0.0);
+        let beside = cube(&mut game, 0.65);
+        for _ in 0..300 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let slot = |game: &World, e: Entity| game.get::<GpuPhysicsLink>(e).expect("linked").id as usize;
+        let beside_slot = slot(&game, beside);
+        let boxes = gpu_boxes(&renderer);
+        assert_eq!((boxes[slot(&game, taken)].state, boxes[beside_slot].state), (1, 1), "the boxes did not fall asleep, so this proves nothing");
+
+        game.despawn(taken);
+        for _ in 0..3 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        assert_eq!(gpu_boxes(&renderer)[beside_slot].state, 0, "the box beside the one taken out was left asleep");
+    });
+}
+
+/// **A body put in is not moved by a readback copied before it.** A readback arrives a frame or more
+/// after it is copied; a body put in meanwhile was given that copy's slot — empty, at the origin —
+/// and its entity jumped there for a frame. Every frame of a body's first fall keeps it near where
+/// it was put.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_body_put_in_is_not_moved_by_a_readback_copied_before_it() {
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::RigidBody;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        let mut falling = Vec::new();
+        for round in 0..6 {
+            // A readback is in flight from the frames before; a body goes in now.
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+            let x = round as f32 * 3.0;
+            falling.push((x, game.spawn_bundle((
+                Transform::new(Vec3::new(x, 50.0, 0.0)),
+                RigidBody::new(1.0, true),
+                Collider::box_collider(Vec3::splat(0.5)),
+            ))));
+            for frame in 0..4 {
+                gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+                for &(x, e) in &falling {
+                    let at = game.get::<Transform>(e).expect("a transform").position;
+                    assert!(
+                        at.y > 45.0 && (at.x - x).abs() < 0.5,
+                        "round {round}, frame {frame}: a body put in at ({x}, 50) was read back at {at:?}"
+                    );
+                }
+            }
+        }
+    });
+}
+
+/// **A body given a slot another body left starts with none of that body's contacts.** A box rests on
+/// a floor for ten seconds and is taken out; a box put in its place, in its slot, and thrown upwards
+/// rises. The contact manifold is kept per slot and nothing cleared it, so the new box took over the
+/// old one's contact with the floor — and the impulse it had accumulated holding the old box up,
+/// which held the new one down.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_body_in_a_left_slot_starts_with_none_of_its_contacts() {
+    use gizmo_physics_core::components::GpuPhysicsLink;
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::{RigidBody, Velocity};
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        game.spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new(0.0, false), Collider::box_collider(Vec3::new(2.5, 0.1, 2.5))));
+        let first = game.spawn_bundle((Transform::new(Vec3::new(0.0, 0.4, 0.0)), RigidBody::new(1.0, true), Collider::box_collider(Vec3::splat(0.3))));
+        for _ in 0..600 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let first_slot = game.get::<GpuPhysicsLink>(first).expect("linked").id;
+        game.despawn(first);
+        for _ in 0..3 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let thrown = game.spawn_bundle((
+            Transform::new(Vec3::new(0.0, 0.4, 0.0)),
+            RigidBody::new(1.0, true),
+            Collider::box_collider(Vec3::splat(0.3)),
+            Velocity { linear: Vec3::new(0.0, 3.0, 0.0), ..Default::default() },
+        ));
+        for _ in 0..10 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let slot = game.get::<GpuPhysicsLink>(thrown).expect("linked").id;
+        assert_eq!(slot, first_slot, "the thrown box was not given the left slot, so this proves nothing");
+        let height = gpu_boxes(&renderer)[slot as usize].position[1];
+        assert!(height > 0.6, "the box thrown up at 3 m/s from 0.4 m is at {height} m a sixth of a second later");
+    });
+}
+
+/// **A contact warm-starts only from the contact of the step before.** A box rests on a box on the
+/// floor for ten seconds; the top one is taken out, and a box put in its slot is thrown up off the
+/// lower one. The lower box stays where it rests. Its manifold kept an entry for the slot, with the
+/// impulse it had accumulated holding the old top box up, and the next body found at that index
+/// revived it: pushing the new box away then pulled the lower box after it.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_contact_warm_starts_only_from_the_step_before() {
+    use gizmo_physics_core::components::GpuPhysicsLink;
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::{RigidBody, Velocity};
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        game.spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new(0.0, false), Collider::box_collider(Vec3::new(2.5, 0.1, 2.5))));
+        let cube = |game: &mut World, y: f32| {
+            game.spawn_bundle((Transform::new(Vec3::new(0.0, y, 0.0)), RigidBody::new(1.0, true), Collider::box_collider(Vec3::splat(0.3))))
+        };
+        let lower = cube(&mut game, 0.4);
+        let top = cube(&mut game, 1.0);
+        for _ in 0..600 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let slot = |game: &World, e: Entity| game.get::<GpuPhysicsLink>(e).expect("linked").id as usize;
+        let (lower_slot, top_slot) = (slot(&game, lower), slot(&game, top));
+        let resting = gpu_boxes(&renderer)[lower_slot].position[1];
+        game.despawn(top);
+        for _ in 0..3 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let thrown = game.spawn_bundle((
+            Transform::new(Vec3::new(0.0, 1.0, 0.0)),
+            RigidBody::new(1.0, true),
+            Collider::box_collider(Vec3::splat(0.3)),
+            Velocity { linear: Vec3::new(0.0, 3.0, 0.0), ..Default::default() },
+        ));
+        for _ in 0..10 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        assert_eq!(slot(&game, thrown), top_slot, "the thrown box was not given the left slot, so this proves nothing");
+        let lower_now = gpu_boxes(&renderer)[lower_slot].position[1];
+        assert!(
+            (lower_now - resting).abs() < 0.05,
+            "the lower box moved from {resting} to {lower_now} when the box above it was thrown off"
+        );
+    });
+}

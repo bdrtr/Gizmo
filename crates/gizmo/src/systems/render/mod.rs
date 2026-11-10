@@ -1097,7 +1097,7 @@ fn step_gpu_simulations(
         let elapsed = world
             .get_resource::<gizmo_core::time::Time>()
             .map_or(physics.clock().fixed_dt(), |t| t.dt());
-        physics.advance(encoder, elapsed);
+        physics.advance(encoder, &renderer.queue, elapsed);
         physics.debug_compute_pass(encoder);
     }
 

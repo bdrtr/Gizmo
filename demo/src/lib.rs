@@ -112,6 +112,53 @@ pub mod assets {
 /// cannot drift.
 pub use gizmo::simple::simple_scene_update;
 
+/// **The field of falling cubes** the GPU-body demos (`1_milyon_kup`, `showcase`) start from.
+///
+/// It was not theirs until 2026-11-10: `GpuPhysicsSystem::new` put it in every game that turned GPU
+/// bodies on — every slot a cube, and three static colliders — so `kumas` hung its cloth inside the
+/// falling field and `fluid_rigid` simulated fifty thousand cubes above its small tank. The system
+/// starts empty now, and a demo that wants the field asks for it here.
+pub mod gpu_box_field {
+    use gizmo::renderer::gpu_physics::{GpuBox, GpuCollider, GpuPhysicsSystem};
+
+    /// `count` one-kilo cubes (half-extent 1 m) in a cube-shaped grid 2.1 m apart, from 30 m up and
+    /// coloured by their place in it, over the ground plane (y = 0), an 80 × 20 × 80 m platform round
+    /// the origin and a 10 m-thick wall beside it. Returns how many cubes went in — fewer than asked
+    /// when the table has not the room past its highest slot in use.
+    pub fn add(physics: &mut GpuPhysicsSystem, queue: &gizmo::wgpu::Queue, count: u32) -> u32 {
+        let count = count.min(physics.max_boxes);
+        let side = (count.max(1) as f32).cbrt().ceil() as u32;
+        let spacing = 2.1f32;
+        let offset = side as f32 * spacing / 2.0;
+        let cubes: Vec<GpuBox> = (0..count)
+            .map(|i| {
+                let (ix, iy, iz) = (i % side, (i / side) % side, i / (side * side));
+                GpuBox {
+                    position: [ix as f32 * spacing - offset, 30.0 + iy as f32 * spacing, iz as f32 * spacing - offset],
+                    mass: 1.0,
+                    velocity: [0.0; 3],
+                    state: 0,
+                    rotation: [0.0, 0.0, 0.0, 1.0],
+                    angular_velocity: [0.0; 3],
+                    sleep_counter: 0,
+                    color: [ix as f32 / side as f32, iy as f32 / side as f32, iz as f32 / side as f32, 1.0],
+                    half_extents: [1.0; 3],
+                    _pad: 0,
+                }
+            })
+            .collect();
+        let added = physics.add_boxes(queue, &cubes).len() as u32;
+
+        let ground = GpuCollider { shape_type: 1, _pad1: [0; 3], data1: [0.0, 1.0, 0.0, 0.0], data2: [0.0; 4] };
+        let platform = GpuCollider { shape_type: 0, _pad1: [0; 3], data1: [-40.0, 0.0, -40.0, 0.0], data2: [40.0, 20.0, 40.0, 0.0] };
+        let wall = GpuCollider { shape_type: 0, _pad1: [0; 3], data1: [45.0, 0.0, -40.0, 0.0], data2: [55.0, 40.0, 40.0, 0.0] };
+        for collider in [ground, platform, wall] {
+            physics.add_collider(queue, &collider, None);
+        }
+        added
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::assets;

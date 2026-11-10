@@ -11,6 +11,15 @@ struct BoxItem {
     _pad: u32,
 }
 
+// `BoxItem::state` of a slot that holds no body (`GpuBox::state`, `BOX_FREE` in types.rs): in no
+// grid cell, so no body finds it; never integrated, solved or woken; never drawn.
+const BOX_FREE: u32 = 2u;
+// `BoxItem::state` of a body taken out since the last step (`BOX_LEAVING` in types.rs): already
+// treated as gone by every pass, and turned into a free slot by `integrate`, which first wakes the
+// sleeping bodies round it — they may have been resting on it — and forgets its contacts, so the
+// next body given the slot starts with none of them.
+const BOX_LEAVING: u32 = 3u;
+
 struct SimParams {
     dt: f32,
     _pad1: vec3<f32>,
@@ -37,9 +46,14 @@ struct Joint {
     max_force: f32,
 }
 
+// 48 bytes, as `GpuCollider` uploads them. The padding is three `u32`s, not a `vec3<u32>`: WGSL
+// aligns a `vec3` to 16 bytes, which put `data1` at byte 32 and made the element 64 bytes, so every
+// static collider was read from the wrong bytes (`shader_contract`).
 struct StaticCollider {
     shape_type: u32,
-    _pad1: vec3<u32>,
+    _pad1a: u32,
+    _pad1b: u32,
+    _pad1c: u32,
     data1: vec4<f32>,
     data2: vec4<f32>,
 }
@@ -64,6 +78,11 @@ struct BoxContacts {
 
 const GRID_SIZE: u32 = 262144u; // 2^18
 const CELL_SIZE: f32 = 2.0;
+// A body meeting a static collider slower than this (m/s) does not bounce: it rests. Each step's
+// gravity brings a resting body in at g·dt (0.16 m/s at 60 Hz), and bouncing that back at the
+// restitution kept it hopping a few centimetres a second forever — above the energy it must fall
+// under to sleep, so a body on the ground never slept.
+const RESTITUTION_THRESHOLD: f32 = 0.5;
 
 fn quat_mul(q1: vec4<f32>, q2: vec4<f32>) -> vec4<f32> {
     return vec4<f32>(
@@ -189,6 +208,10 @@ fn clear_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
 fn build_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let idx = global_id.x;
     if (idx >= params.num_boxes) { return; }
+    if (boxes[idx].state >= BOX_FREE) {
+        linked_nodes[idx] = -1;
+        return;
+    }
 
     let hash = hash_pos(boxes[idx].position);
     let prev = atomicExchange(&grid_heads[hash], i32(idx));
@@ -204,10 +227,17 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (idx >= params.num_boxes) { return; }
 
     var me = boxes[idx];
-    if (me.state == 1u) { return; }
+    if (me.state == 1u || me.state >= BOX_FREE) { return; }
 
     let old_count = min(box_contacts[idx].count, 8u);
+    // Which entries were contacts in the last step: only those warm-start below. An entry for a
+    // body touched long ago — or for a slot whose body has gone and been replaced — keeps its index
+    // and its accumulated impulse, and reviving those handed a new contact an old body's push.
+    var was_active = 0u;
     for (var i = 0u; i < old_count; i++) {
+        if (box_contacts[idx].is_active[i] == 1u) {
+            was_active = was_active | (1u << i);
+        }
         box_contacts[idx].is_active[i] = 0u;
     }
 
@@ -327,6 +357,9 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
                         if (box_contacts[idx].neighbors[c] == n_idx) {
                             box_contacts[idx].is_active[c] = 1u;
                             box_contacts[idx].normals[c] = vec4<f32>(active_normal, penetration);
+                            if ((was_active & (1u << c)) == 0u) {
+                                box_contacts[idx].accum_impulse[c] = vec4<f32>(0.0);
+                            }
                             found = true;
                             break;
                         }
@@ -364,7 +397,7 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (idx >= params.num_boxes) { return; }
 
     var me = boxes[idx];
-    if (me.state == 1u) { return; }
+    if (me.state == 1u || me.state >= BOX_FREE) { return; }
 
     let num_c = min(box_contacts[idx].count, 8u);
     if (num_c == 0u) { return; }
@@ -403,9 +436,16 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
 
         let bias_vel = (BAUMGARTE_BETA / params.dt) * max(penetration - SLOP, 0.0);
         if (penetration > 0.05) {
-            let total_mass = me.mass + other.mass;
-            let m_ratio_me = other.mass / total_mass;
-            acc_pos_correction += active_normal * (-penetration * m_ratio_me * 0.3);
+            // Each body's share of the push out is its inverse mass's: a massless body is immovable
+            // and takes none of it, the other all. It was weighted by mass, which made a massless
+            // body the lightest of all — a floor moved out from under whatever landed on it, and the
+            // body on it was not pushed at all. Between two moving bodies the shares are the same.
+            let inv_me = select(1.0 / me.mass, 0.0, me.mass <= 0.00001);
+            let inv_other = select(1.0 / other.mass, 0.0, other.mass <= 0.00001);
+            let inv_sum = inv_me + inv_other;
+            if (inv_sum > 0.0) {
+                acc_pos_correction += active_normal * (-penetration * (inv_me / inv_sum) * 0.3);
+            }
         }
 
         let contactPoint = me.position + active_normal * (length(other.position - me.position) * 0.5);
@@ -511,6 +551,38 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (idx >= params.num_boxes) { return; }
 
     var box_struct = boxes[idx];
+    // A body taken out: wake what may have rested on it, forget its contacts, free the slot.
+    if (box_struct.state == BOX_LEAVING) {
+        let home = vec3<i32>(floor(box_struct.position / CELL_SIZE));
+        let reach = length(box_struct.half_extents) + 2.0 * CELL_SIZE;
+        for (var x = -1; x <= 1; x++) {
+        for (var y = -1; y <= 1; y++) {
+        for (var z = -1; z <= 1; z++) {
+            let cell = vec3<f32>(home + vec3<i32>(x, y, z)) * CELL_SIZE + vec3<f32>(0.5 * CELL_SIZE);
+            var curr = atomicLoad(&grid_heads[hash_pos(cell)]);
+            while (curr != -1) {
+                let n = u32(curr);
+                if (n != idx && boxes[n].state == 1u && length(boxes[n].position - box_struct.position) < reach + length(boxes[n].half_extents)) {
+                    atomicStore(&awake_flags[n], 1u);
+                }
+                curr = linked_nodes[curr];
+            }
+        }}}
+        box_contacts[idx].count = 0u;
+        for (var i = 0u; i < 8u; i++) {
+            box_contacts[idx].is_active[i] = 0u;
+        }
+        box_struct = BoxItem(vec3<f32>(0.0), 0.0, vec3<f32>(0.0), BOX_FREE, vec4<f32>(0.0, 0.0, 0.0, 1.0), vec3<f32>(0.0), 0u, vec4<f32>(0.0), vec3<f32>(0.0), 0u);
+        boxes[idx] = box_struct;
+        atomicStore(&awake_flags[idx], 0u);
+        return;
+    }
+    // A free slot: nothing to integrate and nothing to wake. Its flag is cleared so a body put
+    // in the slot later does not start with a wake-up meant for nothing.
+    if (box_struct.state == BOX_FREE) {
+        atomicStore(&awake_flags[idx], 0u);
+        return;
+    }
     
     // Wake Up Tetikleyicisi — cascade wake-up dahil
     if (atomicExchange(&awake_flags[idx], 0u) == 1u) {
@@ -539,6 +611,15 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (box_struct.state == 1u) {
         boxes[idx] = box_struct;
         return; // Uyuyorsan fizik uygulanmaz!
+    }
+
+    // Zero mass is immovable (`GpuBox::mass`): no gravity, no motion. Gravity was added to every
+    // awake box, so a ground a game gave the bodies — a massless box — fell away from under them.
+    if (box_struct.mass <= 0.00001) {
+        box_struct.velocity = vec3<f32>(0.0);
+        box_struct.angular_velocity = vec3<f32>(0.0);
+        boxes[idx] = box_struct;
+        return;
     }
     
     box_struct.velocity += params.gravity * params.dt;
@@ -662,7 +743,8 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let ptA = apply_inv_inertia(crossA, invInertia, rot);
                     let denom = invMass + dot(crossA, ptA);
                     
-                    let j = -(1.0 + restitution) * vel_along_normal / denom;
+                    let bounce = select(0.0, restitution, -vel_along_normal > RESTITUTION_THRESHOLD);
+                    let j = -(1.0 + bounce) * vel_along_normal / denom;
                     let impulse = j * n;
                     
                     var tangent = v1 - n * vel_along_normal;
@@ -712,7 +794,8 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
                     let ptA = apply_inv_inertia(crossA, invInertia, rot);
                     let denom = invMass + dot(crossA, ptA);
                     
-                    let j = -(1.0 + restitution) * vel_along_normal / denom;
+                    let bounce = select(0.0, restitution, -vel_along_normal > RESTITUTION_THRESHOLD);
+                    let j = -(1.0 + bounce) * vel_along_normal / denom;
                     let impulse = j * normal;
                     
                     var tangent = v1 - normal * vel_along_normal;
@@ -877,7 +960,7 @@ fn solve_joints(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (params.num_joints == 0u) { return; }
     
     var body = boxes[body_idx];
-    if (body.state == 1u) { return; } // Uyuyan gövde
+    if (body.state == 1u || body.state >= BOX_FREE) { return; } // Uyuyan gövde, ya da gövde yok
     
     var acc_vel = vec3<f32>(0.0);
     var acc_ang = vec3<f32>(0.0);
@@ -902,6 +985,9 @@ fn solve_joints(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (is_b) { other_idx = joint.body_a; }
         
         let other = boxes[other_idx];
+        // The other body is gone (its slot freed or leaving): the joint holds nothing, so it does
+        // nothing.
+        if (other.state >= BOX_FREE) { continue; }
         let inv_inertia_other = compute_inv_inertia_diag(other);
         
         // Uyuyan diğer gövdeyi uyandır

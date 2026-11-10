@@ -39,6 +39,9 @@ fn cull_main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (idx >= params.num_boxes) { return; }
 
     let box = boxes[idx];
+    // `state` (the w of `vel_state`, a u32): a free slot (2), or a body taken out since the last
+    // step (3), is not drawn.
+    if (bitcast<u32>(box.vel_state.w) >= 2u) { return; }
     
     // Extents and Position
     let extents = box.extents_pad.xyz;
