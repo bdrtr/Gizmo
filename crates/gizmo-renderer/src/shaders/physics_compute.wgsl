@@ -801,7 +801,9 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
             let normal = col.data1.xyz; // points outward
             let d = col.data2.x;
             
-            let dist = dot(box_struct.position, normal) + d;
+            // The plane is `dot(x, normal) == d`, as `PlaneShape::distance` and `GpuCollider::data2`
+            // say. It was read as `dot(x, normal) + d == 0`: a ground raised to y = 2 stood at y = -2.
+            let dist = dot(box_struct.position, normal) - d;
             let proj_r = box_struct.half_extents.x * abs(dot(axes0, normal)) + 
                          box_struct.half_extents.y * abs(dot(axes1, normal)) + 
                          box_struct.half_extents.z * abs(dot(axes2, normal));

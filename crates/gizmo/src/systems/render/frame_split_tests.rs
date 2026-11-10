@@ -2006,3 +2006,41 @@ fn a_contact_pushes_and_never_pulls() {
         );
     });
 }
+
+/// **A ground plane stands where its distance says.** A plane is `dot(x, normal) == distance`, as
+/// `PlaneShape` has it — a ground raised to y = 2 is `distance = 2.0`. The GPU solver read it as
+/// `dot(x, normal) + distance == 0`, so a raised ground stood as far below the origin as it should
+/// have stood above, and a body fell past where it should have landed.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_gpu_ground_plane_stands_where_its_distance_says() {
+    use gizmo_physics_core::components::GpuPhysicsLink;
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::RigidBody;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        game.spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new(0.0, false), Collider::plane(Vec3::Y, 2.0)));
+        let dropped = game.spawn_bundle((Transform::new(Vec3::new(0.0, 4.0, 0.0)), RigidBody::new(1.0, true), Collider::box_collider(Vec3::splat(0.3))));
+        for _ in 0..180 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let slot = game.get::<GpuPhysicsLink>(dropped).expect("linked").id;
+        let y = gpu_boxes(&renderer)[slot as usize].position[1];
+        assert!((y - 2.3).abs() < 0.05, "a box dropped onto the ground at y = 2 rests at y = {y}; on it, it rests at 2.3");
+    });
+}

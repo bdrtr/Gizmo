@@ -579,8 +579,21 @@ within eight seconds, 8 mm deep in its supports (it sank 2 cm before). And
 `a_body_taken_out_wakes_the_sleeping_bodies_round_it` is the case it was written for: the lower box of a
 sleeping stack taken out, the upper one falls to the floor.
 
-Still open there: the editor draws GPU bodies with no culling pass of its own, so its viewport would show
-none; nothing in the editor turns GPU bodies on.
+**A raised ground plane stands where it says — 2026-11-11.** A plane is `dot(x, normal) == distance`
+(`PlaneShape`); the GPU solver read `dot(x, normal) + distance == 0`, so a ground at y = 2 stood at y = −2
+(`a_gpu_ground_plane_stands_where_its_distance_says`: the box rested at −1.7). A ground at y = 0 — every
+plane the demos use — reads the same either way, which is how it went unseen.
+
+Still open there, each its own piece of work:
+- **Bodies do not bounce off each other, and a fast one stops short.** Measured: a box dropped 2 m onto a
+  massless box comes to a stop 5 cm above it and creeps down, with no rebound at the restitution of 0.4 (onto
+  a ground plane it rebounds 0.22 m). The solve applies the restitution to the current relative velocity in
+  every iteration, so the iterations take the bounce back out; and a contact the swept test finds ahead of
+  time is solved as a touching one — its approach stopped outright — rather than allowed to close the gap
+  it has. Both want what the manifold does not keep per contact (the approach speed at the step's start, the
+  gap), so the fix is a change of the contact's layout and the solve, not of a line.
+- The editor draws GPU bodies with no culling pass of its own, so its viewport would show none; nothing in
+  the editor turns GPU bodies on.
 
 **History of this section, kept for the measurements:**
 
