@@ -415,6 +415,64 @@ impl Renderer {
         self.gpu_physics = Some(physics);
     }
 
+    /// Builds screen-space reflections, at the renderer's size, unless they are there: **the way
+    /// back from `ssr = None`.** `= None` frees the pass (the simple scene does it before a game's
+    /// setup), and until there was this a game that wanted it back repeated the constructor's
+    /// arguments by hand — the device, the scene, the G-buffer, the HDR target and a size that had
+    /// to be the renderer's own. The renderer's construction builds it through here too, so there is
+    /// one way to build it. A pass switched off to be switched on again later keeps its state with
+    /// [`SsrState::enabled`](crate::ssr::SsrState::enabled) instead. Nothing without the deferred
+    /// path, which SSR reads (the forward-only renderer has none).
+    pub fn enable_ssr(&mut self) {
+        if self.ssr.is_some() {
+            return;
+        }
+        let Some(def) = self.deferred.as_ref() else { return };
+        self.ssr = Some(crate::ssr::SsrState::new(
+            &self.device,
+            &self.scene,
+            def,
+            &self.post.hdr_texture_view,
+            self.size.width,
+            self.size.height,
+        ));
+    }
+
+    /// Builds screen-space global illumination, at the renderer's size, unless it is there — as
+    /// [`enable_ssr`](Self::enable_ssr) does for reflections, and for the same reason. Nothing
+    /// without the deferred path.
+    pub fn enable_ssgi(&mut self) {
+        if self.ssgi.is_some() {
+            return;
+        }
+        let Some(def) = self.deferred.as_ref() else { return };
+        self.ssgi = Some(crate::ssgi::SsgiState::new(
+            &self.device,
+            &self.scene,
+            def,
+            &self.post.hdr_texture_view,
+            self.size.width,
+            self.size.height,
+        ));
+    }
+
+    /// Builds volumetric lighting (the god rays), at the renderer's size, unless it is there — as
+    /// [`enable_ssr`](Self::enable_ssr) does for reflections, and for the same reason. Nothing
+    /// without the deferred path.
+    pub fn enable_volumetric(&mut self) {
+        if self.volumetric.is_some() {
+            return;
+        }
+        let Some(def) = self.deferred.as_ref() else { return };
+        self.volumetric = Some(crate::volumetric::VolumetricState::new(
+            &self.device,
+            &self.scene,
+            def,
+            self.size.width,
+            self.size.height,
+        ));
+    }
+
     /// Loads a font from `ttf`/`otf` bytes and returns the handle a [`Text`](crate::components::Text)
     /// carries.
     ///

@@ -1028,7 +1028,11 @@ Measured in `ecs_absent_apis`:
   `primary` between two `default_render_pass` calls — preparing the frame twice — and waits for a
   camera that draws into a texture. Found on the way: `ssr` and `mirror` had drawn no reflections
   since 2026-11-02, when the simple scene's setup began switching SSR off and nothing turned it back
-  on, so their switches and knobs moved nothing (each rebuilds it in its setup); `showcase`'s
+  on, so their switches and knobs moved nothing. Each turns it back on in its setup with
+  `Renderer::enable_ssr` — with `enable_ssgi` and `enable_volumetric`, the way back from `= None`,
+  which the renderer's construction builds the three through too: three demos (`ssr`, `mirror`,
+  `anisotropy`) had rebuilt a pass by hand, repeating the constructor's arguments and a size that had
+  to be the renderer's own (`golden_render_tests::a_pass_freed_and_enabled_again_draws_the_frame_the_construction_draws`); `showcase`'s
   post-process sliders went to `update_post_process` from the hook and the frame's own grade
   overwrote them before the draw (they write the camera's `PostProcess` now); `water_demo` carried a
   screenshot path of its own, which `GIZMO_SCREENSHOT` does; `fluid_rigid` and `showcase` ran

@@ -608,38 +608,6 @@ impl Renderer {
             crate::ssao::SsaoState::new(&device, &queue, &scene_state, def, size.width, size.height)
         });
 
-        let ssr = deferred.as_ref().map(|def| {
-            crate::ssr::SsrState::new(
-                &device,
-                &scene_state,
-                def,
-                &post_res.hdr_texture_view,
-                size.width,
-                size.height,
-            )
-        });
-
-        let ssgi = deferred.as_ref().map(|def| {
-            crate::ssgi::SsgiState::new(
-                &device,
-                &scene_state,
-                def,
-                &post_res.hdr_texture_view,
-                size.width,
-                size.height,
-            )
-        });
-
-        let volumetric = deferred.as_ref().map(|def| {
-            crate::volumetric::VolumetricState::new(
-                &device,
-                &scene_state,
-                def,
-                size.width,
-                size.height,
-            )
-        });
-
         let decal = deferred
             .as_ref()
             .map(|def| crate::decal::DecalState::new(&device, &scene_state, def));
@@ -710,7 +678,7 @@ impl Renderer {
         // on should not compile it three times at every start.
         let smaa = None;
 
-        Self {
+        let mut renderer = Self {
             instance: None,
             tonemap_curve: crate::gpu_types::TonemapCurve::Aces,
             tonemap_white_point: 4.0,
@@ -725,13 +693,14 @@ impl Renderer {
             post: post_state,
             deferred,
             ssao,
-            ssr,
+            // Built below by `enable_ssr`, the one way to build it.
+            ssr: None,
             environment_map: None,
             environment_map_dirty: false,
             color_lut_params: [0.0; 3],
             behind: None,
-            ssgi,
-            volumetric,
+            ssgi: None,
+            volumetric: None,
             decal,
             taa,
             view_history: Vec::new(),
@@ -798,7 +767,13 @@ impl Renderer {
             // water surface only composites when a scene opts in. Otherwise every
             // non-fluid scene got a stray mottled ocean drawn over it.
             fluid_enabled: false,
-        }
+        };
+        // The deferred passes that are built at start, through the one way to build each: a game
+        // that switched one off with `= None` gets it back through the same call.
+        renderer.enable_ssr();
+        renderer.enable_ssgi();
+        renderer.enable_volumetric();
+        renderer
     }
 }
 

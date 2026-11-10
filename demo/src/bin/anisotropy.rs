@@ -300,56 +300,21 @@ fn main() {
                 )
             };
 
-            // Recreate or destroy Screen Space Reflections (SSR) State
+            // Build or free the three passes. `enable_*` builds one as the renderer's construction
+            // does, at the renderer's size, and does nothing when it is already there; `= None`
+            // frees it.
             if ssr_enabled {
-                if renderer.ssr.is_none() {
-                    if let Some(ref def) = renderer.deferred {
-                        renderer.ssr = Some(gizmo::renderer::ssr::SsrState::new(
-                            &renderer.device,
-                            &renderer.scene,
-                            def,
-                            &renderer.post.hdr_texture_view,
-                            renderer.config.width,
-                            renderer.config.height,
-                        ));
-                    }
-                }
+                renderer.enable_ssr();
             } else {
                 renderer.ssr = None;
             }
-
-            // Recreate or destroy Screen Space Global Illumination (SSGI) State
             if ssgi_enabled {
-                if renderer.ssgi.is_none() {
-                    if let Some(ref def) = renderer.deferred {
-                        renderer.ssgi = Some(gizmo::renderer::ssgi::SsgiState::new(
-                            &renderer.device,
-                            &renderer.scene,
-                            def,
-                            &renderer.post.hdr_texture_view,
-                            renderer.config.width,
-                            renderer.config.height,
-                        ));
-                    }
-                }
+                renderer.enable_ssgi();
             } else {
                 renderer.ssgi = None;
             }
-
-            // Recreate or destroy Volumetric Lighting State dynamically
             if volumetric_enabled {
-                if renderer.volumetric.is_none() {
-                    if let Some(ref def) = renderer.deferred {
-                        renderer.volumetric =
-                            Some(gizmo::renderer::volumetric::VolumetricState::new(
-                                &renderer.device,
-                                &renderer.scene,
-                                def,
-                                renderer.config.width,
-                                renderer.config.height,
-                            ));
-                    }
-                }
+                renderer.enable_volumetric();
             } else {
                 renderer.volumetric = None;
             }

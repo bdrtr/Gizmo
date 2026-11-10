@@ -85,7 +85,9 @@
 //!
 //! Serideki öteki demolarda SSR'yi `with_simple_scene` kapatıyor — oyunun kurulumundan önce, bir
 //! kez, `renderer.ssr = None` ile. Bu artık bir zorunluluk değil, varsayılan: o demoların SSR'yi
-//! geri açma ihtiyacı yok. Bu demonun konusu SSR, o yüzden kendi kurulumunda onu yeniden kuruyor.
+//! geri açma ihtiyacı yok. Bu demonun konusu SSR, o yüzden kendi kurulumunda onu `Renderer::enable_ssr`
+//! ile geri açıyor (2026-11-10'dan beri; `= None`'ın dönüş yolu bu, kurucunun argümanlarını elle
+//! tekrarlamak değil).
 //!
 //! ## Ölçülen: yansıma bir sayıdır
 //!
@@ -161,17 +163,10 @@ fn main() {
     App::<SimpleSceneState>::new("Gizmo Engine - SSR", 1280, 720)
         .with_simple_scene(move |scene, state| {
             // `with_simple_scene` SSR'yi oyunun kurulumundan önce kapatıyor (2026-11-02'den beri);
-            // bu demonun konusu SSR, o yüzden burada bir kez yeniden kuruluyor. Bu kurulum yokken
-            // demo yansımasız çiziyordu ve anahtar boşuna çevriliyordu.
-            if let Some(def) = scene.renderer.deferred.as_ref() {
-                let mut ssr = gizmo::renderer::ssr::SsrState::new(
-                    &scene.renderer.device,
-                    &scene.renderer.scene,
-                    def,
-                    &scene.renderer.post.hdr_texture_view,
-                    scene.renderer.config.width,
-                    scene.renderer.config.height,
-                );
+            // bu demonun konusu SSR, o yüzden burada bir kez geri açılıyor — `enable_ssr`, motorun
+            // kendi kurduğu gibi. Bu yokken demo yansımasız çiziyordu ve anahtar boşuna çevriliyordu.
+            scene.renderer.enable_ssr();
+            if let Some(ssr) = scene.renderer.ssr.as_mut() {
                 // `GIZMO_SSR_KNOB=<0..5>` bir ayarı sabitliyor. Ölçüm bunu kullanmak zorunda:
                 // anahtar 60 karede bir çevrildiği için iki farklı karenin farkı ayarın değil
                 // anahtarın farkı olurdu. Koşu boyunca sabit, o yüzden kurulumda bir kez yazılıyor.
@@ -183,7 +178,6 @@ fn main() {
                 let mut p = gizmo::renderer::ssr::SsrParams::default();
                 KNOBS[k].1(&mut p);
                 ssr.params = p;
-                scene.renderer.ssr = Some(ssr);
             }
 
             let white = scene.asset_manager.create_white_texture(

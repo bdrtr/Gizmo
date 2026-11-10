@@ -3558,6 +3558,13 @@ mod golden_render_tests {
         SsrNoRough,
         /// SSR whose surfaces are assumed 1 mm thick, so no depth difference counts as a hit.
         SsrThin,
+        /// Volumetric lighting freed (`= None`).
+        Volumetric,
+        /// The three freed and built again with `Renderer::enable_*` — the way back from `= None`.
+        /// A frame from these must be identical to one from the renderer as constructed.
+        SsrRebuilt,
+        SsgiRebuilt,
+        VolumetricRebuilt,
     }
 
     /// A lit cube standing on a wide mirror floor, seen from a raised camera — a scene where a
@@ -3601,6 +3608,19 @@ mod golden_render_tests {
             Effect::SsrThin => {
                 let p = &mut renderer.ssr.as_mut().expect("ssr built").params;
                 p.thickness = 0.001;
+            }
+            Effect::Volumetric => renderer.volumetric = None,
+            Effect::SsrRebuilt => {
+                renderer.ssr = None;
+                renderer.enable_ssr();
+            }
+            Effect::SsgiRebuilt => {
+                renderer.ssgi = None;
+                renderer.enable_ssgi();
+            }
+            Effect::VolumetricRebuilt => {
+                renderer.volumetric = None;
+                renderer.enable_volumetric();
             }
         }
         let mut asset_manager = AssetManager::new();
@@ -3829,6 +3849,43 @@ mod golden_render_tests {
                     differ, 0,
                     "{name}: `enabled = false` and `= None` disagree on {differ}/{total} pixels — \
                      the reversible switch is not the same switch",
+                );
+            }
+        });
+    }
+
+    /// **The way back from `= None` is the renderer's own build.** SSR, SSGI and volumetric lighting
+    /// freed and built again with `Renderer::enable_ssr` / `enable_ssgi` / `enable_volumetric` draw
+    /// the frame the renderer as constructed draws, to the pixel — the construction builds them
+    /// through the same calls. Freeing each must change the frame, or the comparison would pass for
+    /// a pass the scene never shows. Before these existed a game rebuilt a pass by hand, repeating
+    /// the constructor's arguments and a size that had to be the renderer's (`ssr`, `mirror` and
+    /// `anisotropy` did).
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_pass_freed_and_enabled_again_draws_the_frame_the_construction_draws() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let constructed = render_mirror_scene(Effect::None).await;
+            for (name, freed, rebuilt) in [
+                ("SSR", Effect::Ssr, Effect::SsrRebuilt),
+                ("SSGI", Effect::Ssgi, Effect::SsgiRebuilt),
+                ("volumetric", Effect::Volumetric, Effect::VolumetricRebuilt),
+            ] {
+                let gone = render_mirror_scene(freed).await;
+                let (seen, _) = changed_pixels(&constructed, &gone, 128);
+                assert!(seen > 0, "{name}: freeing it changed nothing — the scene does not show it");
+                let back = render_mirror_scene(rebuilt).await;
+                let (differ, total) = changed_pixels(&constructed, &back, 128);
+                assert_eq!(
+                    differ, 0,
+                    "{name}: built again by `enable_*` it draws {differ}/{total} pixels differently from the constructed one",
                 );
             }
         });
