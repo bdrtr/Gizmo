@@ -594,3 +594,59 @@ fn a_render_world_draws_every_frame_of_a_changing_game_as_the_game_itself() {
         );
     });
 }
+
+/// **Geometry rebuilt every frame does not pile up.** A cloth, a rope or a vision cone gets a new
+/// `MeshData` each frame; the loader uploads it and the frame is drawn from a copy of the world.
+/// The upload the entity no longer names used to be released only if the loader's cache held its
+/// last handle — which nothing that had been drawn ever satisfied (the copy held it until its next
+/// extract, the batcher's cache for good) — so both the loader's cache and the batcher's kept one
+/// upload per frame for the rest of the run. Both are bounded here over 40 frames.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn geometry_rebuilt_every_frame_and_drawn_from_a_copy_does_not_pile_up() {
+    use super::RenderWorld;
+    use crate::renderer::components::{Material, MeshData, MeshRenderer};
+    use gizmo_app::RenderStage;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        cube_scene(&renderer, &mut game);
+        let mut assets = crate::renderer::asset::AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let cone = game.spawn_bundle((
+            Transform::new(Vec3::new(0.0, 0.0, 2.0)),
+            GlobalTransform::default(),
+            Material::new(tex).with_pbr(Vec4::new(0.9, 0.3, 0.2, 1.0), 0.5, 0.0),
+            MeshRenderer::new(),
+        ));
+        let mut copy = RenderWorld::new();
+        super::batching::clear_render_cache();
+        let mut drawn = 0;
+        for frame in 0..40u32 {
+            // A new allocation every frame, as a rebuilt cloth or cone has.
+            game.add_component(cone, MeshData::cylinder(0.5 + frame as f32 * 0.01, 1.0, 12));
+            crate::renderer::asset_loading::run_asset_loading_system(
+                &mut game,
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+                &mut assets,
+            );
+            copy.prepare(&mut game, &mut renderer);
+            let picture = frame_bytes(&mut renderer, |e, v, r| copy.draw(e, v, r));
+            drawn += usize::from(picture.chunks(4).any(|p| p[0] > 120 && p[1] < 100));
+        }
+        assert!(drawn > 30, "the rebuilt geometry was drawn in only {drawn} of 40 frames");
+        assert!(assets.data_mesh_count() <= 1, "the loader keeps {} uploads for one entity", assets.data_mesh_count());
+        let batches = super::batching::render_cache_batch_count();
+        assert!(batches <= 12, "the batcher keeps {batches} batches for a scene of two meshes");
+    });
+}

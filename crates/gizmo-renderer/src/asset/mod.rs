@@ -576,13 +576,18 @@ impl AssetManager {
         }
     }
 
-    /// Drops the cached upload of the `MeshData` allocation `key` if nothing draws it any more (the
-    /// cache's own handle is the only one left) — what the loader calls when an entity's data was
-    /// replaced, since the game path never runs [`garbage_collect`](Self::garbage_collect).
-    pub fn release_data_mesh(&mut self, key: usize) {
-        if self.data_meshes.get(&key).is_some_and(|(_, mesh)| std::sync::Arc::strong_count(&mesh.vbuf) == 1) {
-            self.data_meshes.remove(&key);
-        }
+    /// Keeps the cached uploads of the `MeshData` allocations in `live` and drops the rest — what
+    /// the loader calls each pass with the keys of every `MeshData` an entity still carries, since
+    /// the game path never runs [`garbage_collect`](Self::garbage_collect).
+    ///
+    /// Liveness is the game world's answer, not a reference count. The upload's buffers are also
+    /// held by whatever drew it last — the render world's copy of the entity until its next
+    /// extract, the batcher's cache, a frame in flight on a render thread — so "the cache holds
+    /// the only handle" was never true of anything that had been drawn, and data rebuilt every
+    /// frame (a cloth, a vision cone) kept one upload per frame for good. Dropping the cache's
+    /// entry leaves those other holders theirs: the buffers go when the last of them lets go.
+    pub fn retain_data_meshes(&mut self, live: &std::collections::HashSet<usize>) {
+        self.data_meshes.retain(|key, _| live.contains(key));
     }
 
     /// How many `MeshData` uploads the cache holds.

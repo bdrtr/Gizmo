@@ -35,12 +35,14 @@ pub fn run_asset_loading_system(
 ) {
     let mut missing_meshes = Vec::new();
     // Geometry made in code (`MeshData`) waiting for its upload — first time, or because the
-    // entity's `MeshData` was replaced since (with the allocation its current mesh came from).
-    let mut missing_data: Vec<(u32, crate::components::MeshData, Option<usize>)> = Vec::new();
+    // entity's `MeshData` was replaced since.
+    let mut missing_data: Vec<(u32, crate::components::MeshData)> = Vec::new();
     let mut missing_materials = Vec::new();
     // Entities whose material a DESCRIPTION will build (see this function's docs) but whose
     // `MeshRenderer` is still this system's to add.
     let mut renderer_only = Vec::new();
+    // Every `MeshData` allocation an entity carries: the cached uploads worth keeping.
+    let mut live_data = std::collections::HashSet::new();
 
     // Hangi Entity'lerin Mesh/Material'ı eksik bul
     {
@@ -60,6 +62,7 @@ pub fn run_asset_loading_system(
             // data is the more specific of the two.
             let data = mesh_data.get(id);
             if let Some(data) = data {
+                live_data.insert(data.key());
                 let from = uploaded.get(id).map(|u| u.0);
                 // Not uploaded yet, or uploaded from another allocation: the game replaced the
                 // data (a vision cone rebuilt each frame). It used to be read once — the first
@@ -69,7 +72,7 @@ pub fn run_asset_loading_system(
                     None => meshes.get(id).is_none(),
                 };
                 if stale {
-                    missing_data.push((id.id(), data.clone(), from));
+                    missing_data.push((id.id(), data.clone()));
                 }
             }
 
@@ -103,7 +106,7 @@ pub fn run_asset_loading_system(
         );
     }
 
-    for (id, data, from) in missing_data {
+    for (id, data) in missing_data {
         let Some(entity) = world.get_entity(id) else { continue };
         match asset_manager.mesh_from_data(device, &data) {
             Some(mesh) => world.add_component(entity, mesh),
@@ -111,13 +114,11 @@ pub fn run_asset_loading_system(
             None => world.remove_component::<Mesh>(entity),
         }
         world.add_component(entity, UploadedFrom(data.key()));
-        // The upload this entity no longer draws, unless another entity shares it: the game path
-        // never runs `garbage_collect`, so data replaced every frame would otherwise keep every
-        // frame's vertices and GPU buffer.
-        if let Some(old) = from.filter(|&old| old != data.key()) {
-            asset_manager.release_data_mesh(old);
-        }
     }
+    // The uploads no entity's data names any more — replaced (a vision cone, a cloth rebuilt
+    // every frame) or despawned. The game path never runs `garbage_collect`, so without this each
+    // replaced frame's vertices and GPU buffers were kept for the rest of the run.
+    asset_manager.retain_data_meshes(&live_data);
 
     // Default beyaz doku oluştur (Texture yüklenemezse veya yoksa kullanılır)
     let default_texture_bind_group = asset_manager.create_white_texture(device, queue, texture_bind_group_layout);

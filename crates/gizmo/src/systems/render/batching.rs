@@ -30,8 +30,11 @@ thread_local! {
     static RENDER_CACHE: std::cell::RefCell<RenderCache> = std::cell::RefCell::new(RenderCache::default());
 }
 
-/// Empties the thread-local render cache — for a test that wants a clean frame, or a host that
-/// has torn its renderer down.
+/// Empties the render cache of the calling thread — for a test that wants a clean frame, or a host
+/// that has torn its renderer down. The cache belongs to the thread that draws: with a render
+/// thread, that is the render thread (call it from a stage's `draw`), and a call from anywhere
+/// else empties a cache nothing uses. A batch nothing has drawn for a few collections leaves it on
+/// its own (`IDLE_COLLECTIONS`), so this is not needed to keep it from growing.
 pub fn clear_render_cache() {
     RENDER_CACHE.with(|rc| {
         let mut cache = rc.borrow_mut();
@@ -388,7 +391,20 @@ pub(crate) struct BatchData {
     previous: Vec<[[f32; 4]; 4]>,
     /// The same for `shadow_instances`; never read by the G-buffer, kept so indices line up.
     shadow_previous: Vec<[[f32; 4]; 4]>,
+    /// How many collections in a row gave this batch nothing to draw — see `IDLE_COLLECTIONS`.
+    idle: u32,
 }
+
+/// Collections a batch may go without an instance before the cache lets it go.
+///
+/// A batch holds its mesh's buffers and its material's bind group, and its key is the mesh's
+/// buffer: a mesh that is rebuilt every frame (a cloth, a vision cone) makes a new batch every
+/// frame. The map used to be emptied of instances each frame and never of entries, so each of
+/// those batches kept its buffers for the rest of the run — the GPU half of a leak whose CPU half
+/// was the asset loader's (`AssetManager::retain_data_meshes`). Not one collection, because a
+/// frame can collect several times — a reflection probe's faces, a mirror, split-screen views —
+/// and a batch one of them skips is drawn by the next.
+const IDLE_COLLECTIONS: u32 = 8;
 
 /// This view's occlusion buffer: every solid [`Occluder`](crate::renderer::components::Occluder)'s
 /// box, rasterised. `None` when none draws, which is every scene that never asked for this.
@@ -511,6 +527,13 @@ pub(super) fn collect_draw_items(
         // the tail, so batches past the cap silently stopped drawing — meshes vanished
         // one by one as more frames accumulated ("araç giderek kayboluyor"). Which mesh
         // dropped first depended on nondeterministic HashMap batch order.
+        // Batches the last collection gave nothing count another idle collection, and go once
+        // they have had `IDLE_COLLECTIONS` of them; the rest are emptied for this one.
+        cache.batches.retain(|_, batch| {
+            let drew = !(batch.instances.is_empty() && batch.shadow_instances.is_empty());
+            batch.idle = if drew { 0 } else { batch.idle + 1 };
+            batch.idle <= IDLE_COLLECTIONS
+        });
         for batch in cache.batches.values_mut() {
             batch.instances.clear();
             batch.shadow_instances.clear();
@@ -819,6 +842,7 @@ pub(super) fn collect_draw_items(
                     shadow_instances: Vec::new(),
                     previous: Vec::new(),
                     shadow_previous: Vec::new(),
+                    idle: 0,
                 });
                 if camera_visible {
                     batch.instances.push(instance_data);
@@ -1386,4 +1410,12 @@ mod cutout_routing_tests {
     fn an_explicit_request_still_moves_a_cutout() {
         assert!(draws_blended(true, 1.0, 0.5));
     }
+}
+
+/// How many batches the calling thread's render cache holds — for tests of what it keeps. At the
+/// tail with the file's other test code: `render_parity` reads this file up to its first
+/// `#[cfg(test)]` as the game path.
+#[cfg(test)]
+pub(crate) fn render_cache_batch_count() -> usize {
+    RENDER_CACHE.with(|rc| rc.borrow().batches.len())
 }
