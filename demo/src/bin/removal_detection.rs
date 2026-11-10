@@ -140,18 +140,9 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 4.0, 12.5), Vec3::new(0.0, 0.0, 0.0));
         })
         .add_update_system(watch_restart.in_phase(Phase::Update))
-        // Kaldırma yolları `&mut World` istiyor; sistemler onu almadığı için burada.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            apply_removals(world);
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Kaldırma yolları `&mut World` istiyor; sistemler onu almadığı için burada: sistemlerden
+        // sonra, basit sahnenin update'inin yanında.
+        .add_update_hook(|world, _state, _dt, _input| apply_removals(world))
         .set_ui(|world, _state, ctx| {
             let Some(audit) = world.get_resource::<RemovalAudit>().map(|a| a.clone()) else {
                 return;

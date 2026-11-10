@@ -13,15 +13,17 @@
 //!     (nişan/ileri-sağ matematiği elle yeniden yazılmaz; pitch her zaman clamp'li → davranış
 //!     birebir aynı).
 //!   * **`is_key_just_pressed`** — R (reset) için kenar-tespiti motordan (elle prev_* takibi yok).
-//!   * **Render = `default_render_pass` + ÖZEL FEM geçişleri KORUNUR** — motorun tek-satır
-//!     `with_scene_render()` kısayolu VAR ama onu kullanamayız: bu demo render-hook içinde GERÇEK
-//!     özel iş yapar (FEM compute substep'leri + kendi render pipeline'ı ile yumuşak gövdeyi çizme).
-//!     Bu mantık aynen korunur.
+//!   * **Render = kendi `RenderStage`'i (`FemStage`)** — motorun tek-satır `with_scene_render()`
+//!     kısayolu VAR ama yetmiyor: bu demo GERÇEK özel iş yapıyor (FEM compute substep'leri + kendi
+//!     render pipeline'ı ile yumuşak gövdeyi çizme). FEM'in GPU nesneleri kurulumda yapılıp oyun
+//!     dünyasına bırakılıyor; ilk senkron noktasında aşama onları alıyor ve sahneyle birlikte
+//!     render thread'inde çiziyor. Sahne, oyun dünyasının kopyasından (`RenderWorld`).
 //!
 //! ## Kontroller
 //!   * **Sağ-tık + fare** — kamera orbit · **WASD / QE** — kamera hareket · **Shift** — hızlı
 //!   * **R** — yumuşak gövdeyi başlangıç durumuna sıfırla
 
+use gizmo::app::RenderStage;
 use gizmo::prelude::*;
 use gizmo::renderer::gpu_physics::fem::{
     GpuFemCollider, GpuFemParams, GpuFemSystem, GpuSoftBodyNode, GpuTetrahedron,
@@ -36,19 +38,100 @@ struct BeamNGState {
     camera_yaw: f32,
     camera_pos: Vec3,
 
-    fem_system: GpuFemSystem,
-    fem_render_pipeline: wgpu::RenderPipeline,
-    fem_bind_group: wgpu::BindGroup,
-    fem_index_buffer: wgpu::Buffer,
-    fem_index_count: u32,
-
     // FPS-bağımsız sim: gerçek dt biriktirilir, substep sayısı ondan türetilir (update'te
-    // hesaplanır, render'da tüketilir). ESKİDEN her frame SABİT 40 substep vardı → sim hızı = FPS.
+    // hesaplanır, `FemFrame` ile render tarafına geçer). ESKİDEN her frame SABİT 40 substep
+    // vardı → sim hızı = FPS.
     sim_accum: f32,
-    pending_substeps: u32,
-    // R ile başlangıç durumuna sıfırlama (bir-frame bayrağı: update'te set, render'da tüketilir).
-    reset_requested: bool,
+}
+
+/// FEM'in GPU nesneleri: kurulumda yapılıp oyun dünyasına bırakılıyor, ilk senkron noktasında
+/// render tarafına (`FemStage`) geçiyor.
+struct FemGpu {
+    system: GpuFemSystem,
+    render_pipeline: wgpu::RenderPipeline,
+    bind_group: wgpu::BindGroup,
+    index_buffer: wgpu::Buffer,
+    index_count: u32,
     initial_nodes: Vec<GpuSoftBodyNode>,
+}
+
+/// Bu karenin FEM işi: update gerçek dt'den hesaplıyor, senkron noktası okuyor.
+#[derive(Clone, Copy)]
+struct FemFrame {
+    substeps: u32,
+    /// R ile başlangıç durumuna sıfırlama — bir karelik bayrak.
+    reset: bool,
+}
+
+/// Sahne ve FEM gövdesi. Senkron noktasında oyun dünyası hazırlanıp kopyalanıyor ve bu karenin
+/// FEM işi okunuyor; çizimde FEM compute substep'leri, kopyadan sahne, ardından FEM gövdesi kendi
+/// boru hattıyla — hepsi render thread'inde.
+struct FemStage {
+    copy: RenderWorld,
+    fem: Option<FemGpu>,
+    substeps: u32,
+}
+
+impl RenderStage for FemStage {
+    fn prepare(&mut self, game: &mut World, renderer: &mut Renderer) {
+        if self.fem.is_none() {
+            self.fem = game.remove_resource::<FemGpu>();
+        }
+        let frame = game.get_resource::<FemFrame>().map(|f| *f);
+        self.substeps = frame.map_or(0, |f| f.substeps);
+        // R ile sıfırlama: başlangıç düğüm-tamponunu GPU'ya geri yaz (pozisyon+hız+kuvvet
+        // sıfırlanır). Senkron noktasında, yani bu karenin compute'undan önce.
+        if let (Some(fem), Some(FemFrame { reset: true, .. })) = (&self.fem, frame) {
+            renderer.queue.write_buffer(&fem.system.nodes_buffer, 0, bytemuck::cast_slice(&fem.initial_nodes));
+        }
+        self.copy.prepare(game, renderer);
+    }
+
+    fn draw(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer) {
+        // 1. FEM compute — substep sayısı update'te GERÇEK dt'den hesaplandı (FPS-bağımsız).
+        if let Some(fem) = &self.fem {
+            for _ in 0..self.substeps {
+                fem.system.compute_pass(encoder);
+            }
+        }
+
+        // 2. Standart varlıkları çiz (skybox, zemin) — oyun dünyasının kopyasından.
+        self.copy.draw(encoder, view, renderer);
+
+        // 3. FEM nesnesini çiz, sahnenin derinlik tamponuna karşı.
+        let Some(fem) = &self.fem else { return };
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("FEM Render Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: &renderer.depth_texture_view,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+
+        rpass.set_pipeline(&fem.render_pipeline);
+        rpass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
+        rpass.set_bind_group(1, &fem.bind_group, &[]);
+
+        rpass.set_index_buffer(fem.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+        // Not: index buffer'ı kullanarak pozisyonu Vertex Shader içinde storage buffer'dan çekiyoruz
+        rpass.draw_indexed(0..fem.index_count, 0, 0..1);
+    }
 }
 
 /// Kutu şeklinde tetrahedral FEM ağı üretir (düğümler + elemanlar + yüzey index tamponu).
@@ -469,6 +552,16 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> BeamNGState {
             });
 
     world.insert_resource(asset_manager);
+    // FEM'in GPU nesneleri oyun dünyasında bekliyor; ilk senkron noktasında render tarafı alıyor.
+    world.insert_resource(FemGpu {
+        system: fem_system,
+        render_pipeline: fem_render_pipeline,
+        bind_group: fem_bind_group,
+        index_buffer,
+        index_count,
+        initial_nodes: nodes,
+    });
+    world.insert_resource(FemFrame { substeps: 40, reset: false });
 
     println!(
         "BeamNG FEM demo hazır. Kontroller: R = yumuşak gövdeyi sıfırla, sağ-tık = kamera orbit, \
@@ -480,33 +573,23 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> BeamNGState {
         camera_pitch: 0.0,
         camera_yaw: -PI / 2.0,
         camera_pos: Vec3::new(0.0, 5.0, 15.0),
-        fem_system,
-        fem_render_pipeline,
-        fem_bind_group,
-        fem_index_buffer: index_buffer,
-        fem_index_count: index_count,
         sim_accum: 0.0,
-        pending_substeps: 40,
-        reset_requested: false,
-        initial_nodes: nodes,
     }
 }
 
 fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &Input) {
-    // Önceki frame'de set edilen reset bayrağı render'da tüketildi → temizle.
-    state.reset_requested = false;
     // R: yumuşak gövdeyi başlangıç durumuna sıfırla (kenar-tespiti motorun is_key_just_* API'sinden).
-    if input.is_key_just_pressed(KeyCode::KeyR as u32) {
-        state.reset_requested = true;
-    }
+    let reset = input.is_key_just_pressed(KeyCode::KeyR as u32);
 
     // FEM substep sayısını GERÇEK dt'den türet (FPS-bağımsız). ESKİDEN her frame sabit 40 substep
     // × dt=0.0005 = 0.02 s/frame işleniyordu, gerçek frame süresinden bağımsız → sim hızı = FPS.
     const SUB_DT: f32 = 0.0005; // params.dt ile aynı fiziksel substep
     state.sim_accum += dt.min(0.1);
     let n = (state.sim_accum / SUB_DT).floor();
-    state.pending_substeps = (n as u32).min(80); // spiral-of-death guard
+    let substeps = (n as u32).min(80); // spiral-of-death guard
     state.sim_accum -= n * SUB_DT;
+    // Bu karenin FEM işi, senkron noktasında render tarafına.
+    world.insert_resource(FemFrame { substeps, reset });
 
     // Sağ-tık: kamera orbit (fare-look).
     if input.is_mouse_button_pressed(1) {
@@ -562,78 +645,11 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &Input) {
     }
 }
 
-// Render-hook GERÇEK özel iş yapar (FEM compute substep'leri + kendi pipeline'ıyla yumuşak gövdeyi
-// çizme). Bu yüzden `with_scene_render()` tek-satır kısayoluna ÇEVRİLMEZ; standart sahne için
-// `default_render_pass`, ardından özel FEM geçişi elle sürülür.
-fn render(
-    world: &mut World,
-    state: &BeamNGState,
-    encoder: &mut wgpu::CommandEncoder,
-    view: &wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    // R ile sıfırlama: başlangıç düğüm-tamponunu GPU'ya geri yaz (pozisyon+hız+kuvvet sıfırlanır).
-    if state.reset_requested {
-        renderer.queue.write_buffer(
-            &state.fem_system.nodes_buffer,
-            0,
-            bytemuck::cast_slice(&state.initial_nodes),
-        );
-    }
-
-    // 1. FEM compute — substep sayısı update'te GERÇEK dt'den hesaplandı (FPS-bağımsız).
-    for _ in 0..state.pending_substeps {
-        state.fem_system.compute_pass(encoder);
-    }
-
-    // 2. Standart varlıkları çiz (skybox, zemin)
-    default_render_pass(world, encoder, view, renderer);
-
-    // 3. FEM geçişi için derinlik tamponunu hazırla
-    let depth_view = &renderer.depth_texture_view;
-
-    // 4. FEM nesnesini çiz
-    {
-        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("FEM Render Pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth_view,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-
-        rpass.set_pipeline(&state.fem_render_pipeline);
-        rpass.set_bind_group(0, &renderer.scene.global_bind_group, &[]);
-        rpass.set_bind_group(1, &state.fem_bind_group, &[]);
-
-        rpass.set_index_buffer(state.fem_index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-        // Not: index buffer'ı kullanarak pozisyonu Vertex Shader içinde storage buffer'dan çekiyoruz
-        rpass.draw_indexed(0..state.fem_index_count, 0, 0..1);
-    }
-}
-
 fn main() {
     App::<BeamNGState>::new("Gizmo Engine - BeamNG Style FEM Soft Body", 1280, 720)
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(FemStage { copy: RenderWorld::new(), fem: None, substeps: 0 })
         .run()
         .expect("uygulama çalıştırılamadı");
 }

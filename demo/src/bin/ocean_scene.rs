@@ -11,9 +11,11 @@
 //!     splat(1.0) → gerçek kutu ataleti), bu da devrilme dinamiğini görünür biçimde
 //!     değiştirirdi. `spawn_bundle` yalnız `spawn()+add_component` yığınını sadeleştirir,
 //!     davranışı bit-bit korur. Mafsallar entity id'ye kilitli → spawn SIRASI sabit kalır.
-//!   * **Render = özel iş** — `renderer.fluid_enabled = true` (GPU sıvı okyanus, varsayılan
-//!     kapalı) + X-tuşuyla Voronoi parçalama (dinamik wgpu buffer'lı chunk mesh'leri). Bu
-//!     yüzden `with_scene_render()` KISAYOLU KULLANILMAZ; çıplak `default_render_pass`.
+//!   * **Render = çıplak `RenderWorld`** — `renderer.fluid_enabled = true` (GPU sıvı okyanus,
+//!     varsayılan kapalı) setup'ta bir kez açılır; X-tuşuyla Voronoi parçalama fizik adımından
+//!     sonraki `fracture` update kancasında yapılır, parça mesh'leri veri olarak (`MeshData`,
+//!     GPU'ya motorun yükleyicisi koyuyor). Kare oyun dünyasının kopyasından render thread'inde
+//!     çiziliyor. `with_scene_render()` KISAYOLU KULLANILMAZ: o GPU sıvıyı (`gpu_fluid`) kapatır.
 //!   * **`Camera::forward_from`** — nişan/hareket yönü paylaşılan yardımcıdan.
 //!
 //! ## Kontroller
@@ -48,12 +50,15 @@ struct DemoState {
 pub struct Destructible;
 impl gizmo::prelude::Component for Destructible {}
 
-// Parçalanacak objeleri render fn'e taşıyan kuyruk (Resource).
+// Parçalanacak objeleri fizik adımından sonraki `fracture` kancasına taşıyan kuyruk (Resource).
 pub struct FractureQueue {
     pub entities: Vec<u32>,
 }
 
 fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
+    // Bu sahne AKICI okyanusun kendisi → GPU sıvı render'ını aç (varsayılan kapalı).
+    renderer.fluid_enabled = true;
+
     let mut asset_manager = AssetManager::new();
 
     // Işık (Güneş benzeri bir tepe ışığı)
@@ -390,7 +395,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
         }
     }
 
-    // X Tuşu: Cam Gibi Parçalama (Fracture) — kırılabilir tahtaları render fn'e kuyrukla.
+    // X Tuşu: Cam Gibi Parçalama (Fracture) — kırılabilir tahtaları `fracture` kancasına
+    // kuyrukla (fizik adımından sonra parçalanıyorlar).
     if input.is_key_just_pressed(KeyCode::KeyX as u32) {
         let mut queue = world.get_resource_mut::<FractureQueue>().unwrap();
         {
@@ -405,14 +411,10 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     gizmo::systems::cpu_physics_step_system(world, dt);
 }
 
-fn render(
-    world: &mut World,
-    _state: &DemoState,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
+/// Kuyruktaki kırılabilir objeleri Voronoi parçalarına böler — `update`'in fizik adımından
+/// sonra, ayrı bir update kancası olarak. Parçaların geometrisi veri (`MeshData`): GPU'ya aynı
+/// kare motorun yükleyicisi koyuyor (setup'ın dünyaya bıraktığı `AssetManager` ile).
+fn fracture(world: &mut World, _state: &mut DemoState, _dt: f32, _input: &Input) {
     // Kırılacak objeleri (Fracture Queue) işle
     let mut to_fracture = Vec::new();
     {
@@ -456,24 +458,7 @@ fn render(
                     });
                 }
 
-                // Dinamik wgpu Buffer oluştur
-                use gizmo::wgpu::util::DeviceExt;
-                let vbuf =
-                    renderer
-                        .device
-                        .create_buffer_init(&gizmo::wgpu::util::BufferInitDescriptor {
-                            label: Some("Chunk VBuf"),
-                            contents: gizmo::bytemuck::cast_slice(&gpu_vertices),
-                            usage: gizmo::wgpu::BufferUsages::VERTEX,
-                        });
-
-                let mesh = Mesh::new(
-                    &renderer.device,
-                    std::sync::Arc::new(vbuf),
-                    &gpu_vertices,
-                    Vec3::ZERO,
-                    format!("chunk_{}", ent_id),
-                );
+                let mesh = MeshData::new(gpu_vertices);
 
                 // Hacme göre yaklaşık bir çarpışma küresi hesapla
                 let approx_radius = (chunk.volume / 4.188).cbrt().max(0.15);
@@ -498,18 +483,17 @@ fn render(
             }
         }
     }
-
-    // Bu sahne AKICI okyanusun kendisi → GPU sıvı render'ını aç (varsayılan kapalı).
-    renderer.fluid_enabled = true;
-    // CPU objelerini (zemin, köprü, atılan cisimler, parçalar) çiz.
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {
     App::<DemoState>::new("Gizmo Engine - Ocean Scene", 1280, 720)
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        // Parçalama `update`'ten (yani fizik adımından) sonra, kare çizilmeden önce.
+        .add_update_hook(fracture)
+        // CPU objeleri (zemin, köprü, atılan cisimler, parçalar) oyun dünyasının kopyasından,
+        // render thread'inde çiziliyor.
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

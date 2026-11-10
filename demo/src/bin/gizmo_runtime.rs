@@ -11,8 +11,9 @@
 //! kept this unwritten, and answering it by taste would have produced a second, slightly
 //! different engine. So it is not answered here at all: the frame is
 //! [`gizmo::systems::PlayLoop`], the same function the editor's ▶ drives. Scripts (shared pass →
-//! queued commands → per-entity update), then a 1/60 s fixed-step physics accumulator, then
-//! `default_render_pass` with SSR/SSGI/volumetric/TAA left on.
+//! queued commands → per-entity update), then a 1/60 s fixed-step physics accumulator, then the
+//! engine's render stage, a bare [`RenderWorld`] — the frame drawn from a copy of the game world,
+//! on the render thread — with SSR/SSGI/volumetric/TAA left on.
 //!
 //! That is what makes "the exported game does what the editor showed you" a fact instead of a
 //! promise: there is nothing here to drift *from*. Only the reporting differs — the editor writes
@@ -140,17 +141,6 @@ fn update(world: &mut World, state: &mut RuntimeState, dt: f32, input: &Input) {
     state.play.step(world, dt, input, &mut print_report);
 }
 
-fn render(
-    world: &mut World,
-    _state: &RuntimeState,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    gizmo::systems::render::default_render_pass(world, encoder, view, renderer);
-}
-
 fn main() {
     // Not decoration: the engine's panic hook reports through `tracing::error!`, so a runtime
     // without a subscriber dies with exit code 101 and an empty terminal. Measured — the first
@@ -188,7 +178,7 @@ fn main() {
     App::<RuntimeState>::new(&title, 1280, 720)
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(RenderWorld::new())
         .load_scene(&scene)
         .run()
         .expect("çalışma zamanı başlatılamadı");

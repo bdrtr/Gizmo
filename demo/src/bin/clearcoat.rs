@@ -83,6 +83,9 @@ const SPACING: f32 = 2.6;
 fn main() {
     App::<SimpleSceneState>::new("Gizmo Engine - Clearcoat", 1280, 720)
         .with_simple_scene(|scene, state| {
+            // Bloom kapalı: ölçülen şey parlama lobu, lob + hale değil.
+            scene.renderer.bloom_intensity = 0.0;
+
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -125,17 +128,6 @@ fn main() {
             });
 
             scene.spawn_camera(state, Vec3::new(0.0, 1.4, 16.0), Vec3::new(0.0, 0.0, 0.0));
-        })
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            // Bloom kapalı: ölçülen şey parlama lobu, lob + hale değil.
-            renderer.bloom_intensity = 0.0;
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(|_world, _state, ctx| {
             gizmo::egui::Area::new("coat".into())

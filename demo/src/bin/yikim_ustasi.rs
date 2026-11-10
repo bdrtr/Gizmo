@@ -850,18 +850,7 @@ fn ui(_world: &mut World, g: &mut Game, ctx: &egui::Context) {
     }
 }
 
-// --------------------------------------------------------------- render
-fn render(
-    world: &mut World,
-    _g: &Game,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    gizmo::systems::render::default_render_pass(world, encoder, view, renderer);
-}
-
+// --------------------------------------------------------------- main
 fn main() {
     // gizmo-app'in panik hook'u mesajı tracing::error'a yazar; subscriber olmadan
     // SESSİZ kalır. ERROR-seviye subscriber → olası çökmeler terminale basılır.
@@ -874,7 +863,9 @@ fn main() {
         .set_setup(setup)
         .set_update(update)
         .set_ui(ui)
-        .set_render(render)
+        // Motorun tam deferred boru hattı, ayarsız: kare oyun dünyasının kopyasından, render
+        // thread'inde çiziliyor.
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

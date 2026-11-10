@@ -870,19 +870,9 @@ fn main() {
                         });
                 });
         })
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            // Bu sahnede sıvı/parçacık/GPU fizik yok — kapat.
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-
-            // Ağır post-processing pass'lerini kapat.
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            renderer.volumetric = None;
-            renderer.taa = None;
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Kare oyun dünyasının kopyasından, render thread'inde çiziliyor; kapatılan pass'ler
+        // `setup_scene`'de.
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }
@@ -977,6 +967,17 @@ fn wheel_mesh_radius(world: &World, wheel_id: Entity, scale_y: f32) -> f32 {
 
 fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> CarDemoState {
     println!("Araba Demo Yükleniyor...");
+
+    // Bu sahnede sıvı/parçacık/GPU fizik yok — sıvıyı kapat (GPU fizik zaten kapalı başlıyor,
+    // GPU parçacık sistemi boştayken hiçbir iş yapmıyor). Bir kez, burada: kapatılan bir pass
+    // yeniden kurulmuyor.
+    renderer.gpu_fluid = None;
+
+    // Ağır post-processing pass'lerini kapat.
+    renderer.ssr = None;
+    renderer.ssgi = None;
+    renderer.volumetric = None;
+    renderer.taa = None;
 
     let config = CarConfig::default();
 

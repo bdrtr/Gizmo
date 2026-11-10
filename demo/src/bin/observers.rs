@@ -293,31 +293,17 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 14.0, 15.0), Vec3::ZERO);
         })
         .add_update_system(aim_at_ground.in_phase(Phase::Update))
-        // Zinciri yürüten yer: gözlemci dünyayı göremediği için kuyruğu burada boşaltıyoruz.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            let (clicked, toggled) = world
-                .get_resource::<gizmo::core::input::Input>()
-                .map(|i| {
-                    (
-                        i.is_mouse_button_just_pressed(0),
-                        i.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyM as u32),
-                    )
-                })
-                .unwrap_or((false, false));
+        // Zinciri yürüten yer: kuyruk kipinde dinleyici yalnız kuyruğa yazıyor, kuyruğu burada
+        // boşaltıyoruz — sistemlerden sonra, basit sahnenin update'inin yanında.
+        .add_update_hook(|world, _state, _dt, input| {
+            let clicked = input.is_mouse_button_just_pressed(0);
+            let toggled = input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::KeyM as u32);
             if toggled {
                 if let Some(mut mode) = world.get_resource_mut::<ChainMode>() {
                     mode.immediate = !mode.immediate;
                 }
             }
             drive_chain(world, clicked);
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(|world, _state, ctx| {
             let Some(report) = world.get_resource::<Report>().map(|r| r.clone()) else {

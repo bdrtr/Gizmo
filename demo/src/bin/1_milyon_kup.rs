@@ -32,10 +32,18 @@ fn main() {
 
 fn run(cube_count: u32) {
     App::<MillionKupGame>::new("Gizmo — 50 Bin Küp Simülasyonu", 1600, 900)
-        .set_setup(move |world, _renderer| {
+        .set_setup(move |world, renderer| {
             println!("##################################################");
             println!("    {} GPU Küp Simülasyonu Başlıyor...", cube_count);
             println!("##################################################");
+
+            // GPU-fizik OPT-IN (varsayılan None): bir kez, ilk kareden önce.
+            renderer.enable_gpu_physics();
+            if let Some(physics) = &mut renderer.gpu_physics {
+                if !physics.debug_enabled {
+                    physics.enable_debug(&renderer.device, 0);
+                }
+            }
 
             let mut game = MillionKupGame::new();
 
@@ -150,15 +158,8 @@ fn run(cube_count: u32) {
                     );
                 });
         })
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.enable_gpu_physics(); // GPU-fizik OPT-IN (varsayılan None)
-            if let Some(physics) = &mut renderer.gpu_physics {
-                if !physics.debug_enabled {
-                    physics.enable_debug(&renderer.device, 0);
-                }
-            }
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Kare oyun dünyasının kopyasından, render thread'inde çiziliyor.
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

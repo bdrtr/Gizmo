@@ -97,6 +97,11 @@ fn main() {
 
     App::<SimpleSceneState>::new("Gizmo Engine - Atmosphere", 1280, 720)
         .with_simple_scene(move |scene, state| {
+            // Preset yalnız ertelenmiş aydınlatmaya ulaşıyor; gökyüzü onu görmüyor.
+            scene.renderer.environment_preset = p;
+            scene.renderer.environment_preset_2 = p;
+            scene.renderer.environment_blend_t = 0.0;
+
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -164,18 +169,6 @@ fn main() {
             let _ = white;
             scene.spawn_camera(state, Vec3::new(0.0, 1.6, 8.0), Vec3::new(0.0, 0.6, 0.0));
             gizmo::gizmo_log!(Info, "çevre preset: {}", p);
-        })
-        .set_render(move |world, _state, encoder, view, renderer, _lt| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            // Preset yalnız ertelenmiş aydınlatmaya ulaşıyor; gökyüzü onu görmüyor.
-            renderer.environment_preset = p;
-            renderer.environment_preset_2 = p;
-            renderer.environment_blend_t = 0.0;
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(move |_world, _state, ctx| {
             gizmo::egui::Area::new("at".into())

@@ -40,11 +40,54 @@ use gizmo_core::extract::Extractor;
 ///     .expect("the application failed to run");
 /// ```
 ///
-/// A raw render hook with passes of its own draws the copy itself: [`frame`](Self::frame), or
-/// [`extract`](Self::extract) and a draw of [`world`](Self::world).
+/// **What a game adds to the frame** goes on the stage, in the half of the frame it belongs to:
+/// [`with_settings`](Self::with_settings) sets the renderer from the game's state at the sync point
+/// (a bloom strength the game keeps in a resource, a pass switched off), and
+/// [`with_pass`](Self::with_pass) draws a pass of the game's own over the finished frame, on the
+/// draw's side. Neither needs a render hook of its own, so the frame still draws on the render
+/// thread:
+///
+/// ```no_run
+/// use gizmo::prelude::*;
+/// use gizmo::systems::render::RenderWorld;
+///
+/// #[derive(Clone, Copy)]
+/// struct Glow(f32);
+///
+/// App::<()>::new("Demo", 1280, 720)
+///     .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+///         renderer.ssr = None;
+///         if let Some(glow) = game.get_resource::<Glow>() {
+///             renderer.bloom_intensity = glow.0;
+///         }
+///     }))
+///     .run()
+///     .expect("the application failed to run");
+/// ```
+///
+/// A host that draws the copy itself calls [`frame`](Self::frame), or [`extract`](Self::extract)
+/// and a draw of [`world`](Self::world).
 pub struct RenderWorld {
     world: World,
     extractor: Extractor,
+    /// What the game sets on the renderer at each sync point, in the order added.
+    settings: Vec<Box<dyn Settings>>,
+    /// The game's own passes, drawn over the frame in the order added.
+    passes: Vec<Box<dyn Pass>>,
+}
+
+/// A [`RenderWorld::with_settings`] closure: the game world to read, the renderer to set.
+trait Settings: FnMut(&World, &mut Renderer) + gizmo_app::ConditionalSend {}
+impl<F: FnMut(&World, &mut Renderer) + gizmo_app::ConditionalSend> Settings for F {}
+
+/// A [`RenderWorld::with_pass`] closure: the copy, and what the frame was drawn with.
+trait Pass:
+    FnMut(&World, &mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer) + gizmo_app::ConditionalSend
+{
+}
+impl<F> Pass for F where
+    F: FnMut(&World, &mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer) + gizmo_app::ConditionalSend
+{
 }
 
 impl Default for RenderWorld {
@@ -55,14 +98,59 @@ impl Default for RenderWorld {
 
 impl std::fmt::Debug for RenderWorld {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RenderWorld").field("extractor", &self.extractor).finish_non_exhaustive()
+        f.debug_struct("RenderWorld")
+            .field("extractor", &self.extractor)
+            .field("settings", &self.settings.len())
+            .field("passes", &self.passes.len())
+            .finish_non_exhaustive()
     }
 }
 
 impl RenderWorld {
     /// An empty copy, kept by [`render_extractor`].
     pub fn new() -> Self {
-        Self { world: World::new(), extractor: render_extractor() }
+        Self { world: World::new(), extractor: render_extractor(), settings: Vec::new(), passes: Vec::new() }
+    }
+
+    /// Runs `settings` at every sync point, with the game world to read and the renderer to set:
+    /// **where a game sets the renderer from its own state** — a bloom strength or a fog preset it
+    /// keeps in a resource, a pass it switches off, a buffer of its own it fills from the game.
+    ///
+    /// It runs before the frame is prepared and copied, so what it sets is what this frame is
+    /// prepared and drawn with; after what the last draw cost is published, so it can read that
+    /// ([`RenderStats`](crate::renderer::components::RenderStats)). Several run in the order added.
+    ///
+    /// The game world is handed over read-only: the sync point is where neither the update nor the
+    /// draw runs, so what the game does belongs in its update, and what the renderer needs of it
+    /// is read here. A setting that keeps state of its own (the last value it uploaded, say) keeps
+    /// it in the closure.
+    #[must_use]
+    pub fn with_settings(
+        mut self,
+        settings: impl FnMut(&World, &mut Renderer) + gizmo_app::ConditionalSend + 'static,
+    ) -> Self {
+        self.settings.push(Box::new(settings));
+        self
+    }
+
+    /// Draws `pass` after the frame, into the same encoder and target: **a pass of the game's own
+    /// over the finished picture**, HUD included — scan lines, a debug view, geometry the engine
+    /// does not draw. It runs on the draw's side (the render thread, by default) and is handed the
+    /// copy the frame was drawn from, not the game world; a type of the game's own it reads is
+    /// copied by adding it to [`extractor_mut`](Self::extractor_mut). Several run in the order
+    /// added.
+    ///
+    /// Under split screen the views are submitted inside the draw and `encoder` holds the HUD, so
+    /// a pass recorded here still lands over all of them.
+    #[must_use]
+    pub fn with_pass(
+        mut self,
+        pass: impl FnMut(&World, &mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer)
+            + gizmo_app::ConditionalSend
+            + 'static,
+    ) -> Self {
+        self.passes.push(Box::new(pass));
+        self
     }
 
     /// The extractor, to copy a type of the game's own that a pass of its own reads — a component
@@ -82,9 +170,10 @@ impl RenderWorld {
         self.extractor.run(game, &mut self.world);
     }
 
-    /// One frame: prepare `game`, copy it, draw the copy into `view`, publish what the draw cost
-    /// to `game`. The copy's counterpart of [`default_render_pass`](super::default_render_pass);
-    /// split screen included, as there.
+    /// One frame: set the renderer up ([`with_settings`](Self::with_settings)), prepare `game`, copy
+    /// it, draw the copy into `view` with the game's passes ([`with_pass`](Self::with_pass)),
+    /// publish what the draw cost to `game`. The copy's counterpart of
+    /// [`default_render_pass`](super::default_render_pass); split screen included, as there.
     pub fn frame(
         &mut self,
         game: &mut World,
@@ -92,24 +181,41 @@ impl RenderWorld {
         view: &wgpu::TextureView,
         renderer: &mut Renderer,
     ) {
+        self.set_up(game, renderer);
+        self.draw_copy(encoder, view, renderer);
+        publish_render_stats(game, renderer);
+    }
+
+    /// The sync point's part after the last draw's cost is published: the game's settings, the
+    /// preparation, the copy.
+    fn set_up(&mut self, game: &mut World, renderer: &mut Renderer) {
+        for settings in &mut self.settings {
+            settings(game, renderer);
+        }
         prepare_frame(game, renderer);
         self.extract(game);
+    }
+
+    /// The draw: the frame from the copy, then the game's passes over it.
+    fn draw_copy(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer) {
         draw_frame(&self.world, encoder, view, renderer);
-        publish_render_stats(game, renderer);
+        for pass in &mut self.passes {
+            pass(&self.world, encoder, view, renderer);
+        }
     }
 }
 
 impl gizmo_app::RenderStage for RenderWorld {
     /// What the last draw cost goes to the game world first — this is the first moment it is in
-    /// reach since that draw — then the game world is prepared and copied.
+    /// reach since that draw — then the game's settings run, and the game world is prepared and
+    /// copied.
     fn prepare(&mut self, game: &mut World, renderer: &mut Renderer) {
         publish_render_stats(game, renderer);
-        prepare_frame(game, renderer);
-        self.extract(game);
+        self.set_up(game, renderer);
     }
 
     fn draw(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer) {
-        draw_frame(&self.world, encoder, view, renderer);
+        self.draw_copy(encoder, view, renderer);
     }
 }
 
@@ -225,8 +331,9 @@ mod render_world_tests {
         ("Locale", "read by `resolve_localized_texts`, which records missing keys in the game's locale"),
     ];
 
-    /// Every `.rs` file under `dir`, the files that are test modules as a whole left out and each
-    /// other one cut at its `#[cfg(test)]`.
+    /// Every `.rs` file under `dir`, the files that are test modules as a whole left out, each other
+    /// one cut at its `#[cfg(test)]`, and comment lines dropped: a doc example names what a game
+    /// reads, not what the draw path does (`RenderWorld`'s own did, and failed this test).
     fn draw_path_source(dir: &std::path::Path) -> String {
         fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
             for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -256,6 +363,7 @@ mod render_world_tests {
             .iter()
             .filter(|(f, _)| f.file_stem().and_then(|s| s.to_str()).is_none_or(|s| !test_files.contains(s)))
             .map(|(_, src)| src.find("#[cfg(test)]").map_or(src.as_str(), |i| &src[..i]))
+            .flat_map(|code| code.lines().filter(|line| !line.trim_start().starts_with("//")))
             .collect::<Vec<_>>()
             .join("\n")
     }

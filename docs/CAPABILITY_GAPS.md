@@ -954,10 +954,9 @@ Measured in `ecs_absent_apis`:
   editor calls it, and asserts that the editor runs none of the preparation's drivers a second time.
   Found on the way, a regression of stage 5: the editor's shader hot-reload asked the game world for
   the `Renderer`, which is no longer there, and logged a rebuild that never happened. The update
-  asks for one now and the render hook, which holds the renderer, does it. **Still open:** whether
-  the engine's own paths (`SimpleApp`, `with_scene_render`) should turn the thread on by default —
-  that wants a measurement in a window; and the hooks of individual demos that call
-  `default_render_pass` themselves (28 move for free). **Stage 9, 2026-11-10: the render thread is
+  asks for one now and the render hook, which holds the renderer, does it. **Left open at this stage**, and closed by the next two: whether the engine's own paths should turn
+  the thread on by default (stage 9), and the hooks of individual demos that call
+  `default_render_pass` themselves (stage 10). **Stage 9, 2026-11-10: the render thread is
   the default, and the loop paces itself.** Measured in a window first (`demo/src/bin/render_thread.rs`:
   a grid of turning cubes, `--work MS` of game work, frame period and the time from the start of a
   frame's update to the end of its draw). On the loop's thread against a render thread: no frame
@@ -1007,7 +1006,35 @@ Measured in `ecs_absent_apis`:
   possibly a protocol error. Neither is reproducible on this machine. One behaviour change, deliberate: an entity
   parented to a shaking camera is no longer shaken with it (it was moved by the camera's shaken
   `Transform` and left with that `GlobalTransform` after the undo; the camera's yaw and pitch shake
-  never reached it).
+  never reached it). **Stage 10, 2026-11-10: what a game adds to the frame goes on the stage, and
+  the demos draw this way.** 57 demos drew through a `set_render` hook of their own that ended in
+  `default_render_pass`, so every one drew on the loop's thread, and each hook did whatever had been
+  convenient there. Sorted by what the hooks did, a game adds three things to a frame, and each has
+  a place now: renderer settings from the game's state (a bloom strength kept in a resource, a pass
+  switched off, a buffer of the game's own filled from it) go in `RenderWorld::with_settings(|game,
+  renderer| ..)`, run at the sync point before the frame is prepared, with the game world
+  read-only; a pass of the game's own over the finished frame goes in `RenderWorld::with_pass(|copy,
+  encoder, view, renderer| ..)`, run on the draw's side with the copy; and what writes the game world
+  goes in the update (`add_update_hook` runs where the hook did, after the systems). A demo with GPU
+  state of its own (`beamng`'s FEM, `auto_exposure`'s sensor, whose reading comes back to the game) is
+  a `RenderStage` of its own around a `RenderWorld`. Constant settings moved to the setup, once
+  (`resize` rebuilds only what exists, so a pass switched off stays off); geometry a hook rebuilt with
+  the device is `MeshData` built in the update. `with_scene_render`'s stage is a `RenderWorld` with
+  settings, and `RenderWorld` is in the prelude. Tested by
+  `frame_split_tests::a_stages_settings_reach_its_frame_and_its_pass_draws_over_it`: a setting read
+  from a resource the copy does not carry reaches the frame it is set in, and a pass is handed the
+  copy and draws over the finished frame, on another thread. Two demos keep a raw hook: `fluid`, a
+  renderer of its own, and `render_to_texture`, which draws a second camera into a texture by flipping
+  `primary` between two `default_render_pass` calls — preparing the frame twice — and waits for a
+  camera that draws into a texture. Found on the way: `ssr` and `mirror` had drawn no reflections
+  since 2026-11-02, when the simple scene's setup began switching SSR off and nothing turned it back
+  on, so their switches and knobs moved nothing (each rebuilds it in its setup); `showcase`'s
+  post-process sliders went to `update_post_process` from the hook and the frame's own grade
+  overwrote them before the draw (they write the camera's `PostProcess` now); `water_demo` carried a
+  screenshot path of its own, which `GIZMO_SCREENSHOT` does; `fluid_rigid` and `showcase` ran
+  `gpu_physics_submit_system` a second time each frame (the preparation runs it); and the asset
+  loader runs only when the game world holds an `AssetManager`, so a plain `App` that spawns
+  `MeshData` draws nothing and is not told (`destruction` inserts one).
 - ~~**Component registration is typed.**~~ **Closed 2026-11-08:** `World::register_component(ComponentDescriptor::new(name,
   layout))` defines a component with no Rust type — drop and clone glue optional (`unsafe` `with_drop` / `with_clone`), table or
   sparse, mutable or not — and returns a `ComponentKey`, which is what storage, queries, hooks and the scheduler are keyed by for

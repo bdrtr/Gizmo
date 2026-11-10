@@ -32,7 +32,6 @@ struct ShowcaseDemo {
     request_force_push: bool,
     request_force_pull: bool,
     request_grab: bool,
-    grabbed_object_id: std::cell::Cell<Option<usize>>,
     particle_spawn_rate: usize,
     particle_color_r: f32,
     particle_color_g: f32,
@@ -76,7 +75,6 @@ impl ShowcaseDemo {
             request_force_push: false,
             request_force_pull: false,
             request_grab: false,
-            grabbed_object_id: std::cell::Cell::new(None),
             particle_spawn_rate: 100,
             particle_color_r: 1.0,
             particle_color_g: 0.4,
@@ -94,6 +92,8 @@ impl ShowcaseDemo {
 fn main() {
     App::<ShowcaseDemo>::new("Gizmo — AAA Showcase (IBL, SSR, God Rays)", 1600, 900)
         .set_setup(|world, renderer| {
+            // GPU fiziği varsayılan kapalı: bu vitrin onunla koşuyor. Bir kez, kurulumda.
+            renderer.enable_gpu_physics();
             println!("##################################################");
             println!("    AAA Showcase Başlıyor...");
             println!("##################################################");
@@ -505,11 +505,34 @@ fn main() {
             // Gravity Gun / Kavrama Mekaniği (E Tuşu)
             state.request_grab = input.is_key_pressed(KeyCode::KeyE as u32);
 
-            let mut cams = world.query_mut::<&mut Camera>();
-            if let Some(mut c) = cams.get_mut(state.cam_id) {
-                c.yaw = state.cam_yaw;
-                c.pitch = state.cam_pitch;
+            {
+                let mut cams = world.query_mut::<&mut Camera>();
+                if let Some(mut c) = cams.get_mut(state.cam_id) {
+                    c.yaw = state.cam_yaw;
+                    c.pitch = state.cam_pitch;
+                    c.exposure = state.exposure;
+                }
             }
+            // Panelin görünümü kamerada: kare, kameranın `PostProcess`'iyle renkleniyor. (Bu
+            // kaydırıcılar eskiden render kancasından `update_post_process`'e yazılıyordu; karenin
+            // kendi renklendirmesi çizimden önce üstüne yazdığı için hiçbir şeyi değiştirmiyordu.)
+            let mut look = gizmo::renderer::components::PostProcess::default();
+            look.bloom_intensity = state.bloom_intensity;
+            look.bloom_threshold = 1.0;
+            look.chromatic_aberration = state.chromatic_aberration;
+            look.vignette = state.vignette_intensity;
+            look.film_grain = state.film_grain_intensity;
+            look.dof_focus_dist = state.dof_focus_dist;
+            look.dof_focus_range = state.dof_focus_range;
+            look.dof_blur_size = state.dof_blur_size;
+            let current = world.query::<&gizmo::renderer::components::PostProcess>().get(state.cam_id).copied();
+            if current != Some(look) {
+                if let Some(cam) = world.live(state.cam_id) {
+                    world.add_component(cam, look);
+                }
+            }
+            // GPU tarafının senkron noktasında okuduğu.
+            world.insert_resource(GpuControls::of(state));
         })
         .set_ui(|_world, state, ctx| {
             gizmo::egui::Window::new("Gizmo AAA Engine")
@@ -681,276 +704,306 @@ fn main() {
                 stroke,
             );
         })
-        .set_render(|world, state, encoder, view, renderer, _light_time| {
-            renderer.enable_gpu_physics(); // GPU-fizik OPT-IN (varsayılan None)
-            // Post Processing Parametrelerini Güncelle
-            renderer.update_post_process(
-                &renderer.queue,
-                gizmo::renderer::PostProcessUniforms {
-                    bloom_intensity: state.bloom_intensity,
-                    bloom_threshold: 1.0,
-                    exposure: state.exposure,
-                    chromatic_aberration: state.chromatic_aberration,
-                    vignette_intensity: state.vignette_intensity,
-                    film_grain_intensity: state.film_grain_intensity,
-                    dof_focus_dist: state.dof_focus_dist,
-                    dof_focus_range: state.dof_focus_range,
-                    dof_blur_size: state.dof_blur_size,
-                    ..Default::default()
-                },
-            );
-
-            // GPU Sistemlerini Gönder ve Oku (Fizik motoru çalışsın)
-            if let Some(physics) = &renderer.gpu_physics {
-                physics.update_params(
-                    &renderer.queue,
-                    0.016 * state.time_scale,
-                    [0.0, state.gravity_y, 0.0],
-                );
-
-                // Force Push (Jedi Itişi) Uygula
-                if state.request_force_push {
-                    let push_radius = 20.0; // 20 metre çapındaki objeler etkilensin
-                    let push_force = 60.0;
-
-                    if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
-                        for (idx, mut box_data) in gpu_data.into_iter().enumerate() {
-                            let pos = Vec3::new(
-                                box_data.position[0],
-                                box_data.position[1],
-                                box_data.position[2],
-                            );
-                            let dir = pos - state.cam_pos;
-                            let dist = dir.length();
-                            if dist > 0.1 && dist < push_radius {
-                                let strength = (1.0 - (dist / push_radius)).powi(2);
-                                let force = dir.normalize() * push_force * strength;
-                                box_data.velocity[0] += force.x;
-                                box_data.velocity[1] += force.y;
-                                box_data.velocity[2] += force.z;
-
-                                box_data.angular_velocity[0] += push_force * strength * 0.1;
-                                box_data.angular_velocity[1] += push_force * strength * 0.1;
-                                box_data.angular_velocity[2] += push_force * strength * 0.1;
-
-                                // Uyandır
-                                box_data.sleep_counter = 0;
-                                box_data.state = 0;
-
-                                physics.update_box(&renderer.queue, idx as u32, &box_data);
-                            }
-                        }
-                    }
-                }
-
-                // Force Pull (Jedi Çekişi) Uygula
-                if state.request_force_pull {
-                    let pull_force = 120.0; // Güçlü çekim
-
-                    let fx = state.cam_yaw.cos() * state.cam_pitch.cos();
-                    let fy = state.cam_pitch.sin();
-                    let fz = state.cam_yaw.sin() * state.cam_pitch.cos();
-                    let fwd = Vec3::new(fx, fy, fz).normalize();
-
-                    // Kameranın 4 birim önü
-                    let target_pos = state.cam_pos + fwd * 4.0;
-
-                    if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
-                        for (idx, mut box_data) in gpu_data.into_iter().enumerate() {
-                            let pos = Vec3::new(
-                                box_data.position[0],
-                                box_data.position[1],
-                                box_data.position[2],
-                            );
-                            let to_obj_dir = pos - state.cam_pos;
-                            let dist_to_cam = to_obj_dir.length();
-
-                            // Sadece kameranın önündeki objeleri çek (yaklaşık 60 derece görüş açısı)
-                            let is_in_front =
-                                dist_to_cam > 0.1 && (to_obj_dir.normalize().dot(fwd) > 0.7);
-
-                            if is_in_front && dist_to_cam < 50.0 {
-                                let dir_to_target = target_pos - pos;
-                                let dist_to_target = dir_to_target.length();
-
-                                // Hedef noktaya (kameranın önüne) uzaksa sert çek
-                                let force_mag = if dist_to_target > 3.0 {
-                                    pull_force
-                                } else {
-                                    pull_force * 0.1
-                                };
-                                let force = dir_to_target.normalize() * force_mag;
-
-                                // Yerdeyse, sürtünmeden kurtulması için havaya fırlatma etkisi (Lift)
-                                let lift = if box_data.velocity[1].abs() < 1.0 {
-                                    30.0
-                                } else {
-                                    0.0
-                                };
-
-                                // Hızlarına doğrudan ekleme yapıyoruz
-                                box_data.velocity[0] += force.x * 0.016;
-                                box_data.velocity[1] += (force.y + lift) * 0.016;
-                                box_data.velocity[2] += force.z * 0.016;
-
-                                // SADECE hedefe ulaştıklarında fren ve yerçekimi sıfırlaması uygula ki orada havada asılı kalsınlar
-                                if dist_to_target < 4.0 {
-                                    box_data.velocity[0] *= 0.8;
-                                    box_data.velocity[1] =
-                                        box_data.velocity[1] * 0.8 + (9.81 * 0.016); // Yerçekimine karşı gelip havada tutar
-                                    box_data.velocity[2] *= 0.8;
-                                }
-
-                                // Biraz dönme efekti ekleyelim
-                                box_data.angular_velocity[0] += 0.1;
-                                box_data.angular_velocity[1] += 0.1;
-
-                                // Uyandır
-                                box_data.sleep_counter = 0;
-                                box_data.state = 0;
-
-                                physics.update_box(&renderer.queue, idx as u32, &box_data);
-                            }
-                        }
-                    }
-                }
-
-                // Kavrama (Grabbing / Gravity Gun) Uygula
-                let mut new_grabbed_id = state.grabbed_object_id.get();
-
-                if state.request_grab {
-                    let fx = state.cam_yaw.cos() * state.cam_pitch.cos();
-                    let fy = state.cam_pitch.sin();
-                    let fz = state.cam_yaw.sin() * state.cam_pitch.cos();
-                    let fwd = Vec3::new(fx, fy, fz).normalize();
-                    let target_pos = state.cam_pos + fwd * 4.0; // Tutulan obje kameranın önünde duracak
-
-                    if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
-                        // Henüz bir şey tutulmuyorsa, nişangahtaki (çok dar bir koni) en yakın objeyi bul
-                        if state.grabbed_object_id.get().is_none() {
-                            let mut closest_idx = None;
-                            let mut min_dist = 25.0; // Maksimum tutma mesafesi (25 metre)
-
-                            for (idx, box_data) in gpu_data.iter().enumerate() {
-                                let pos = Vec3::new(
-                                    box_data.position[0],
-                                    box_data.position[1],
-                                    box_data.position[2],
-                                );
-                                let to_obj_dir = pos - state.cam_pos;
-                                let dist = to_obj_dir.length();
-
-                                if dist > 0.1 && dist < min_dist {
-                                    // Çok dar bir açı, sadece crosshair'in tam üzerinde olanlar (0.98 çok keskin bir açıdır)
-                                    if to_obj_dir.normalize().dot(fwd) > 0.98 {
-                                        min_dist = dist;
-                                        closest_idx = Some(idx);
-                                    }
-                                }
-                            }
-                            new_grabbed_id = closest_idx;
-                        }
-
-                        // Eğer elimizde bir obje varsa, onu target_pos'a kilitle
-                        if let Some(idx) = new_grabbed_id {
-                            if idx < gpu_data.len() {
-                                let mut box_data = gpu_data[idx];
-                                let pos = Vec3::new(
-                                    box_data.position[0],
-                                    box_data.position[1],
-                                    box_data.position[2],
-                                );
-
-                                let dir_to_target = target_pos - pos;
-                                let dist = dir_to_target.length();
-
-                                // Çok uzaktaysa (duvar arkasına sıkıştıysa vs) bağlantıyı kopar
-                                if dist > 15.0 {
-                                    new_grabbed_id = None;
-                                } else {
-                                    // Hedefe sıkıca çek
-                                    box_data.velocity[0] = dir_to_target.x * 12.0;
-                                    box_data.velocity[1] = dir_to_target.y * 12.0 + 9.81; // Yerçekimini kesinlikle nötrle
-                                    box_data.velocity[2] = dir_to_target.z * 12.0;
-
-                                    // Dönmesini sönümleyerek elde stabil tut
-                                    box_data.angular_velocity[0] *= 0.8;
-                                    box_data.angular_velocity[1] *= 0.8;
-                                    box_data.angular_velocity[2] *= 0.8;
-
-                                    box_data.sleep_counter = 0;
-                                    box_data.state = 0; // Uyandır
-
-                                    physics.update_box(&renderer.queue, idx as u32, &box_data);
-                                }
-                            } else {
-                                new_grabbed_id = None;
-                            }
-                        }
-                    }
-                } else {
-                    // E tuşu bırakıldığında objeyi düşür
-                    new_grabbed_id = None;
-                }
-
-                state.grabbed_object_id.set(new_grabbed_id);
-            }
-            gizmo::systems::gpu_physics_submit_system(world, renderer);
-            gizmo::systems::gpu_physics_readback_system(world, renderer);
-
-            // SPH Sıvı Simülasyonu
-            if let Some(fluid) = &mut renderer.gpu_fluid {
-                fluid.update_parameters(
-                    &renderer.queue,
-                    [0.0, 0.0, 0.0], // mouse_pos
-                    [0.0, 0.0, 0.0], // mouse_dir
-                    false,           // mouse_active
-                    &[],             // colliders (will be updated by gpu_fluid_coupling_system)
-                    state.time,
-                    fluid.num_particles,
-                );
-            }
-            gizmo::systems::gpu_fluid_coupling_system(world, renderer);
-
-            // --- GPU Particle Spawner (Ateş / Sihir Şelalesi) ---
-            if let Some(particles) = &renderer.gpu_particles {
-                use rand::RngExt;
-                let mut rng = rand::rng();
-                let mut new_particles = Vec::new();
-                for _ in 0..state.particle_spawn_rate {
-                    let p_x = rng.random_range(-1.0..1.0);
-                    let p_z = rng.random_range(-1.0..1.0);
-                    let v_x = rng.random_range(-3.0..3.0);
-                    let v_y = rng.random_range(
-                        (state.particle_velocity_y - 5.0).max(0.0)
-                            ..(state.particle_velocity_y + 5.0),
-                    ); // Yukarı doğru fışkırma
-                    let v_z = rng.random_range(-3.0..3.0);
-                    let life = rng.random_range(1.0..3.0);
-
-                    new_particles.push(gizmo::renderer::gpu_particles::GpuParticle {
-                        position: [p_x, 5.0, -20.0 + p_z], // Sütunun içinden çıksın
-                        life: 0.0,                         // Yeni doğmuş
-                        velocity: [v_x, v_y, v_z],
-                        max_life: life,
-                        color: [
-                            state.particle_color_r,
-                            state.particle_color_g,
-                            state.particle_color_b,
-                            1.0,
-                        ], // Parlak renkli
-                        size_start: 0.5,
-                        size_end: 0.01,
-                        _padding: [0.0; 2],
-                    });
-                }
-                particles.spawn_particles(&renderer.queue, &new_particles);
-            }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        .set_render_stage(RenderWorld::new().with_settings(showcase_gpu()))
         .run()
         .expect("uygulama çalıştırılamadı");
+}
+
+/// Renderer tarafının her kare oyundan istediği, update'in sonunda teslim ediliyor: kuvvetlerin
+/// nişan aldığı kamera, oyuncunun istekleri, simülasyonun düğmeleri ve parçacık fıskiyesinin
+/// ayarları. App'in durumu oyunun; render aşaması dünyayı okuyor.
+#[derive(Clone, Copy)]
+struct GpuControls {
+    cam_pos: Vec3,
+    cam_yaw: f32,
+    cam_pitch: f32,
+    request_force_push: bool,
+    request_force_pull: bool,
+    request_grab: bool,
+    time_scale: f32,
+    gravity_y: f32,
+    time: f32,
+    particle_spawn_rate: usize,
+    particle_color_r: f32,
+    particle_color_g: f32,
+    particle_color_b: f32,
+    particle_velocity_y: f32,
+}
+
+impl GpuControls {
+    fn of(state: &ShowcaseDemo) -> Self {
+        Self {
+            cam_pos: state.cam_pos,
+            cam_yaw: state.cam_yaw,
+            cam_pitch: state.cam_pitch,
+            request_force_push: state.request_force_push,
+            request_force_pull: state.request_force_pull,
+            request_grab: state.request_grab,
+            time_scale: state.time_scale,
+            gravity_y: state.gravity_y,
+            time: state.time,
+            particle_spawn_rate: state.particle_spawn_rate,
+            particle_color_r: state.particle_color_r,
+            particle_color_g: state.particle_color_g,
+            particle_color_b: state.particle_color_b,
+            particle_velocity_y: state.particle_velocity_y,
+        }
+    }
+}
+
+/// Vitrinin GPU tarafı, her senkron noktasında: GPU fizik adımının parametreleri, oyuncunun
+/// itişi, çekişi ve kavrayışı (GPU cisimlerinden geri okunup onlara yazılıyor), sıvının
+/// parametreleri ve çarpıştırıcıları, ve parçacık fıskiyesi. Tutulan cisim GPU'nun indisi, bu
+/// yüzden burada, cisimlerin yanında tutuluyor — oyunda değil.
+fn showcase_gpu() -> impl FnMut(&World, &mut Renderer) + Send + 'static {
+    let mut grabbed: Option<usize> = None;
+    move |game, renderer| {
+        let Some(controls) = game.get_resource::<GpuControls>().map(|c| *c) else { return };
+        // GPU fiziğinin adımı ve oyuncunun kuvvetleri (gönderim ve geri okuma karenin hazırlığında)
+        if let Some(physics) = &renderer.gpu_physics {
+            physics.update_params(
+                &renderer.queue,
+                0.016 * controls.time_scale,
+                [0.0, controls.gravity_y, 0.0],
+            );
+
+            // Force Push (Jedi Itişi) Uygula
+            if controls.request_force_push {
+                let push_radius = 20.0; // 20 metre çapındaki objeler etkilensin
+                let push_force = 60.0;
+
+                if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
+                    for (idx, mut box_data) in gpu_data.into_iter().enumerate() {
+                        let pos = Vec3::new(
+                            box_data.position[0],
+                            box_data.position[1],
+                            box_data.position[2],
+                        );
+                        let dir = pos - controls.cam_pos;
+                        let dist = dir.length();
+                        if dist > 0.1 && dist < push_radius {
+                            let strength = (1.0 - (dist / push_radius)).powi(2);
+                            let force = dir.normalize() * push_force * strength;
+                            box_data.velocity[0] += force.x;
+                            box_data.velocity[1] += force.y;
+                            box_data.velocity[2] += force.z;
+
+                            box_data.angular_velocity[0] += push_force * strength * 0.1;
+                            box_data.angular_velocity[1] += push_force * strength * 0.1;
+                            box_data.angular_velocity[2] += push_force * strength * 0.1;
+
+                            // Uyandır
+                            box_data.sleep_counter = 0;
+                            box_data.state = 0;
+
+                            physics.update_box(&renderer.queue, idx as u32, &box_data);
+                        }
+                    }
+                }
+            }
+
+            // Force Pull (Jedi Çekişi) Uygula
+            if controls.request_force_pull {
+                let pull_force = 120.0; // Güçlü çekim
+
+                let fx = controls.cam_yaw.cos() * controls.cam_pitch.cos();
+                let fy = controls.cam_pitch.sin();
+                let fz = controls.cam_yaw.sin() * controls.cam_pitch.cos();
+                let fwd = Vec3::new(fx, fy, fz).normalize();
+
+                // Kameranın 4 birim önü
+                let target_pos = controls.cam_pos + fwd * 4.0;
+
+                if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
+                    for (idx, mut box_data) in gpu_data.into_iter().enumerate() {
+                        let pos = Vec3::new(
+                            box_data.position[0],
+                            box_data.position[1],
+                            box_data.position[2],
+                        );
+                        let to_obj_dir = pos - controls.cam_pos;
+                        let dist_to_cam = to_obj_dir.length();
+
+                        // Sadece kameranın önündeki objeleri çek (yaklaşık 60 derece görüş açısı)
+                        let is_in_front =
+                            dist_to_cam > 0.1 && (to_obj_dir.normalize().dot(fwd) > 0.7);
+
+                        if is_in_front && dist_to_cam < 50.0 {
+                            let dir_to_target = target_pos - pos;
+                            let dist_to_target = dir_to_target.length();
+
+                            // Hedef noktaya (kameranın önüne) uzaksa sert çek
+                            let force_mag = if dist_to_target > 3.0 {
+                                pull_force
+                            } else {
+                                pull_force * 0.1
+                            };
+                            let force = dir_to_target.normalize() * force_mag;
+
+                            // Yerdeyse, sürtünmeden kurtulması için havaya fırlatma etkisi (Lift)
+                            let lift = if box_data.velocity[1].abs() < 1.0 {
+                                30.0
+                            } else {
+                                0.0
+                            };
+
+                            // Hızlarına doğrudan ekleme yapıyoruz
+                            box_data.velocity[0] += force.x * 0.016;
+                            box_data.velocity[1] += (force.y + lift) * 0.016;
+                            box_data.velocity[2] += force.z * 0.016;
+
+                            // SADECE hedefe ulaştıklarında fren ve yerçekimi sıfırlaması uygula ki orada havada asılı kalsınlar
+                            if dist_to_target < 4.0 {
+                                box_data.velocity[0] *= 0.8;
+                                box_data.velocity[1] =
+                                    box_data.velocity[1] * 0.8 + (9.81 * 0.016); // Yerçekimine karşı gelip havada tutar
+                                box_data.velocity[2] *= 0.8;
+                            }
+
+                            // Biraz dönme efekti ekleyelim
+                            box_data.angular_velocity[0] += 0.1;
+                            box_data.angular_velocity[1] += 0.1;
+
+                            // Uyandır
+                            box_data.sleep_counter = 0;
+                            box_data.state = 0;
+
+                            physics.update_box(&renderer.queue, idx as u32, &box_data);
+                        }
+                    }
+                }
+            }
+
+            // Kavrama (Grabbing / Gravity Gun) Uygula
+            let mut new_grabbed_id = grabbed;
+
+            if controls.request_grab {
+                let fx = controls.cam_yaw.cos() * controls.cam_pitch.cos();
+                let fy = controls.cam_pitch.sin();
+                let fz = controls.cam_yaw.sin() * controls.cam_pitch.cos();
+                let fwd = Vec3::new(fx, fy, fz).normalize();
+                let target_pos = controls.cam_pos + fwd * 4.0; // Tutulan obje kameranın önünde duracak
+
+                if let Some(gpu_data) = physics.poll_readback_data(&renderer.device) {
+                    // Henüz bir şey tutulmuyorsa, nişangahtaki (çok dar bir koni) en yakın objeyi bul
+                    if grabbed.is_none() {
+                        let mut closest_idx = None;
+                        let mut min_dist = 25.0; // Maksimum tutma mesafesi (25 metre)
+
+                        for (idx, box_data) in gpu_data.iter().enumerate() {
+                            let pos = Vec3::new(
+                                box_data.position[0],
+                                box_data.position[1],
+                                box_data.position[2],
+                            );
+                            let to_obj_dir = pos - controls.cam_pos;
+                            let dist = to_obj_dir.length();
+
+                            if dist > 0.1 && dist < min_dist {
+                                // Çok dar bir açı, sadece crosshair'in tam üzerinde olanlar (0.98 çok keskin bir açıdır)
+                                if to_obj_dir.normalize().dot(fwd) > 0.98 {
+                                    min_dist = dist;
+                                    closest_idx = Some(idx);
+                                }
+                            }
+                        }
+                        new_grabbed_id = closest_idx;
+                    }
+
+                    // Eğer elimizde bir obje varsa, onu target_pos'a kilitle
+                    if let Some(idx) = new_grabbed_id {
+                        if idx < gpu_data.len() {
+                            let mut box_data = gpu_data[idx];
+                            let pos = Vec3::new(
+                                box_data.position[0],
+                                box_data.position[1],
+                                box_data.position[2],
+                            );
+
+                            let dir_to_target = target_pos - pos;
+                            let dist = dir_to_target.length();
+
+                            // Çok uzaktaysa (duvar arkasına sıkıştıysa vs) bağlantıyı kopar
+                            if dist > 15.0 {
+                                new_grabbed_id = None;
+                            } else {
+                                // Hedefe sıkıca çek
+                                box_data.velocity[0] = dir_to_target.x * 12.0;
+                                box_data.velocity[1] = dir_to_target.y * 12.0 + 9.81; // Yerçekimini kesinlikle nötrle
+                                box_data.velocity[2] = dir_to_target.z * 12.0;
+
+                                // Dönmesini sönümleyerek elde stabil tut
+                                box_data.angular_velocity[0] *= 0.8;
+                                box_data.angular_velocity[1] *= 0.8;
+                                box_data.angular_velocity[2] *= 0.8;
+
+                                box_data.sleep_counter = 0;
+                                box_data.state = 0; // Uyandır
+
+                                physics.update_box(&renderer.queue, idx as u32, &box_data);
+                            }
+                        } else {
+                            new_grabbed_id = None;
+                        }
+                    }
+                }
+            } else {
+                // E tuşu bırakıldığında objeyi düşür
+                new_grabbed_id = None;
+            }
+
+            grabbed = new_grabbed_id;
+        }
+
+        // SPH Sıvı Simülasyonu
+        if let Some(fluid) = &mut renderer.gpu_fluid {
+            fluid.update_parameters(
+                &renderer.queue,
+                [0.0, 0.0, 0.0], // mouse_pos
+                [0.0, 0.0, 0.0], // mouse_dir
+                false,           // mouse_active
+                &[],             // colliders (will be updated by gpu_fluid_coupling_system)
+                controls.time,
+                fluid.num_particles,
+            );
+        }
+        gizmo::systems::gpu_fluid_coupling_system(game, renderer);
+
+        // --- GPU Particle Spawner (Ateş / Sihir Şelalesi) ---
+        if let Some(particles) = &renderer.gpu_particles {
+            use rand::RngExt;
+            let mut rng = rand::rng();
+            let mut new_particles = Vec::new();
+            for _ in 0..controls.particle_spawn_rate {
+                let p_x = rng.random_range(-1.0..1.0);
+                let p_z = rng.random_range(-1.0..1.0);
+                let v_x = rng.random_range(-3.0..3.0);
+                let v_y = rng.random_range(
+                    (controls.particle_velocity_y - 5.0).max(0.0)
+                        ..(controls.particle_velocity_y + 5.0),
+                ); // Yukarı doğru fışkırma
+                let v_z = rng.random_range(-3.0..3.0);
+                let life = rng.random_range(1.0..3.0);
+
+                new_particles.push(gizmo::renderer::gpu_particles::GpuParticle {
+                    position: [p_x, 5.0, -20.0 + p_z], // Sütunun içinden çıksın
+                    life: 0.0,                         // Yeni doğmuş
+                    velocity: [v_x, v_y, v_z],
+                    max_life: life,
+                    color: [
+                        controls.particle_color_r,
+                        controls.particle_color_g,
+                        controls.particle_color_b,
+                        1.0,
+                    ], // Parlak renkli
+                    size_start: 0.5,
+                    size_end: 0.01,
+                    _padding: [0.0; 2],
+                });
+            }
+            particles.spawn_particles(&renderer.queue, &new_particles);
+        }
+    }
 }
 
 fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {

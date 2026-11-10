@@ -12,10 +12,17 @@
 //! yazmak demek.
 //!
 //! **Ve yazmanın YERİ motorun modelinin bir parçası.** Sistemler `wgpu::Queue`'ya erişemez —
-//! `RenderContext` render kapanışında var, güncelleme fazında yok. Dolayısıyla demo ikiye
-//! ayrılıyor: girdi sistemi yalnız bir "UV değişti" bayrağı koyuyor, köşe tamponu ise
-//! `set_render` içinde, kuyruğun elde olduğu yerde yazılıyor. Depodaki `wind_tunnel` de
-//! prosedürel şeridini aynı yerde güncelliyor.
+//! oyun dünyasındaki `GpuContext` yeni şey yapmak için cihazı veriyor, var olan bir tamponu
+//! yazacak kuyruğu vermiyor; kuyruk `Renderer`'da. Dolayısıyla demo ikiye ayrılıyor: girdi
+//! sistemi yalnız hangi UV setinin istendiğini bir kaynağa yazıyor, köşe tamponu ise render
+//! aşamasının ayarında (`RenderWorld::with_settings`), senkron noktasında, kuyruğun elde olduğu
+//! yerde yazılıyor. Ayara oyun dünyası yalnız okunmak üzere veriliyor: en son hangi seti
+//! yazdığını bu yüzden kendisi tutuyor. Kare oyun dünyasının kopyasından render thread'inde
+//! çiziliyor; kopyadaki küp de aynı tamponu çiziyor.
+//!
+//! Her kare baştan kurulan geometrinin tampona yerinde yazılması gerekmiyor: depodaki
+//! `wind_tunnel` şeridini update'te `MeshData` olarak yeniden kuruyor, GPU'ya motorun
+//! yükleyicisi koyuyor.
 //!
 //! **Bir sınır saklanmıyor: motorun prosedürel yolu indeks tamponu almıyor.** Küp bu yüzden
 //! **36 köşeye açılıyor** (`from_vertices` üçgen listesi bekliyor); 24 köşe + 36 indeksle
@@ -47,12 +54,11 @@ use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 struct CustomUv;
 gizmo::core::impl_component!(CustomUv);
 
-/// Space'in hangi UV setinde olduğumuzu ve tamponun yeniden yazılması gerekip gerekmediğini
-/// tutan kaynak.
+/// Space'in hangi UV setini seçtiğini tutan kaynak. Tamponun yeniden yazılması gerekip
+/// gerekmediğini tamponu yazan ayar biliyor: en son hangi seti yazdığını kendisi tutuyor.
 #[derive(Default, Clone, Copy)]
 struct UvToggle {
     zoomed: bool,
-    dirty: bool,
 }
 gizmo::core::impl_component!(UvToggle);
 
@@ -95,38 +101,30 @@ fn main() {
             scene.spawn_camera(state, Vec3::splat(1.8), Vec3::ZERO);
         })
         .add_update_system(input_handler.in_phase(Phase::Update))
-        // Köşe tamponunun yazıldığı yer: kuyruk yalnız burada var.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            // Basit sahnenin kapattığı geçişler — aynı görüntü için aynen kapatılıyor.
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            let pending = world
-                .get_resource::<UvToggle>()
-                .filter(|t| t.dirty)
-                .map(|t| t.zoomed);
-            if let Some(zoomed) = pending {
+        // Köşe tamponunun yazıldığı yer: senkron noktası — kuyruk burada var, oyun dünyası
+        // yalnız okunuyor.
+        .set_render_stage(RenderWorld::new().with_settings({
+            // Tampona en son yazılan UV seti: küp kurulumda `cube_vertices(false)` ile kuruldu.
+            let mut written = false;
+            move |game, renderer| {
+                let Some(zoomed) = game.get_resource::<UvToggle>().map(|t| t.zoomed) else {
+                    return;
+                };
+                if zoomed == written {
+                    return;
+                }
                 let vertices = cube_vertices(zoomed);
-                let meshes = world.query::<&Mesh>();
-                for mesh in meshes.iter() {
+                for mesh in game.query_filtered::<&Mesh, With<CustomUv>>().iter() {
                     mesh.update_vertices(&renderer.queue, &vertices);
                 }
-                drop(meshes);
-                if let Some(mut toggle) = world.get_resource_mut::<UvToggle>() {
-                    toggle.dirty = false;
-                }
+                written = zoomed;
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        }))
         .run()
         .expect("uygulama çalıştırılamadı");
 }
 
-/// Space UV setini değiştirir (bayrağı koyar), X/Y/Z döndürür, R sıfırlar.
+/// Space UV setini değiştirir, X/Y/Z döndürür, R sıfırlar.
 fn input_handler(
     mut cubes: Query<&mut Transform, With<CustomUv>>,
     mut toggle: ResMut<UvToggle>,
@@ -138,9 +136,9 @@ fn input_handler(
     let dt = time.dt();
 
     if input.is_key_just_pressed(KeyCode::Space as u32) {
+        // Mesh'i buradan yazamayız (kuyruk yok): render aşamasının ayarı bu seçimi okuyup
+        // tampona senkron noktasında yazıyor.
         toggle.zoomed = !toggle.zoomed;
-        // Mesh'i buradan yazamayız (kuyruk yok) — render kapanışına haber bırakılıyor.
-        toggle.dirty = true;
     }
 
     for mut transform in cubes.iter_mut() {

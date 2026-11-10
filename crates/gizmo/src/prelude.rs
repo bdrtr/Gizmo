@@ -86,6 +86,10 @@ pub use crate::renderer::{GizmoRendererSystem, Gizmos};
 // === Hazır Sistemler ===
 #[cfg(feature = "render")]
 pub use crate::systems::render::default_render_pass;
+// The frame drawn from a copy of the game world, on the render thread: `set_render_stage(RenderWorld::new())`,
+// with the game's renderer settings (`with_settings`) and passes (`with_pass`) on it.
+#[cfg(feature = "render")]
+pub use crate::systems::render::RenderWorld;
 #[cfg(feature = "render")]
 pub use crate::systems::render::RenderContextExt;
 // "Bir komponent ekle, plugin çalıştır, motor halletsin" ergonomik sistemleri —

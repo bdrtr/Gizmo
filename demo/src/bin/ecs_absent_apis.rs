@@ -1,9 +1,9 @@
-//! # Dört ECS yeteneği: üçü var, biri yok
+//! # Dört ECS yeteneği: dördü de var
 //!
 //! Bu demo dört ayrı yeteneği birden ele alıyor — değişmez bileşen, çalışma anında bileşen
 //! tanımı, render dünyasına çıkarma, sistem sıcak yaması. Değişmez bileşen (2026-11-07),
-//! çalışma anında tanım (2026-11-08) ve sıcak yama (2026-11-09) artık Gizmo'da **var**;
-//! render dünyasına çıkarma hâlâ **yok**.
+//! çalışma anında tanım (2026-11-08), sıcak yama (2026-11-09) ve render dünyasına çıkarma
+//! (2026-11-09, render thread'i 2026-11-10) artık Gizmo'da **var**.
 //!
 //! Ama "yok" tek başına bir bilgi değil, "var" da değil. Demo her biri için neyin olduğunu,
 //! yerine ne konabileceğini ve ne kaybedildiğini ölçüyor.
@@ -28,16 +28,19 @@
 //! ile takıyor, bir `DynamicQuery` ile her birine 1 ekliyor ve toplamı okuyor. Bir zamanlayıcıda
 //! koşacak hâli `DynamicSystem`.
 //!
-//! ## 3. Render dünyasına çıkarma
+//! ## 3. Render dünyasına çıkarma — VAR
 //!
-//! Çıkarma iki dünya demek: oyun dünyası ve render dünyası, ve aradaki çıkarma çizelgesi her kare
-//! gerekli veriyi kopyalar. Bu, render'ın oyun mantığıyla **paralel** koşabilmesini sağlar.
+//! Çıkarma iki dünya demek: oyun dünyası ve render dünyası, ve aradaki çıkarma adımı her kare
+//! çizimin okuduğu veriyi kopyalar. Bu, render'ın oyun mantığıyla **paralel** koşabilmesini
+//! sağlar.
 //!
-//! Gizmo'da **tek dünya** var. Render sistemleri oyun bileşenlerini doğrudan okuyor; çıkarma
-//! aşaması yok, çünkü kopyalanacak bir yer yok. Kazanç: bir kare gecikme yok, kod daha az.
-//! Kayıp: render, oyun mantığıyla aynı dünyayı ödünç aldığı için ikisi gerçekten paralel koşamıyor.
+//! `RenderWorld` ikinci dünya: `render_extractor()`'ın saydığı bileşen ve kaynak türlerini, senkron
+//! noktasında yalnız değişeni kopyalayarak tutuyor, ve çizim yalnız o kopyayı görüyor — render
+//! thread'inde, bir sonraki karenin güncellemesiyle aynı anda. Oyunun kendi türü kopyada yok;
+//! bir geçişin okuması gerekiyorsa `extractor_mut()` ile eklenir.
 //!
-//! Demo bunu gösteriyor: `set_render` içinden oyun bileşenleri okunuyor, hiçbir çıkarma adımı yok.
+//! Demo bunu kendi aşamasıyla (`Watched`) gösteriyor: senkron noktasında oyundaki ve kopyadaki
+//! `Frozen` sayılıyor. Oyunda dört tane var; kopyada hiç yok, çünkü çizim `Frozen` okumuyor.
 //!
 //! ## 4. Çalışırken kod değiştirmek — VAR
 //!
@@ -62,11 +65,10 @@
 //! | yeniden takmanın `on_set` sayısı | **4** | her değişim kapıdan geçiyor |
 //! | çalışma anında tanımlanan bileşen | `Slot`, kayıt sayısı **+1** | tanım dinamik |
 //! | `DynamicQuery` ile +1 sonrası toplam | 406 -> **410** | erişim de dinamik |
-//! | `set_render`'ın gördüğü oyun bileşeni | **4** | çıkarma adımı yok, tek dünya |
+//! | çizimin gördüğü `Frozen` (kopyada) | **0** (oyunda 4) | çizim kopyayı görüyor, kopya çizimin okuduğunu taşıyor |
 //! | `hot_systems`'de gövdesi değişen sistem | 1,7 s sonra yeni cümle, sayaç 5 → **6** | kod değişti, dünya yerinde |
 //!
-//! Kalan iki eksik de *bir katman*: çıkarmada ikinci dünya, sıcak yamada çalışma-anı kod
-//! değiştirme.
+//! Son ikisi birer *katman*: çıkarmada ikinci dünya, sıcak yamada çalışma-anı kod değiştirme.
 //!
 //! ## Kontroller
 //!   * **Sağ-tık + fare / WASDQE** — kamera
@@ -74,6 +76,7 @@
 use std::alloc::Layout;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use gizmo::app::RenderStage;
 use gizmo::core::dynamic::{ComponentDescriptor, DynamicQuery};
 use gizmo::core::system::{IntoSystemConfig, Phase, ResMut};
 use gizmo::core::World;
@@ -100,8 +103,35 @@ struct AbsentReport {
     /// `Slot`'ların toplamı, `DynamicQuery` ile +1'den önce ve sonra.
     slot_sum_before: u32,
     slot_sum_after: u32,
-    /// Render kancasının oyun dünyasından okuyabildiği varlık sayısı — çıkarma adımı yok.
-    seen_from_render: usize,
+    /// Senkron noktasında sayılan `Frozen`'lar: oyun dünyasında ve çizimin gördüğü kopyada.
+    frozen_in_game: usize,
+    frozen_in_copy: usize,
+    /// Kopyanın taşıdığı tür sayısı (bileşen, kaynak ve varlık haritası).
+    copied_types: usize,
+}
+
+/// Çizim oyun dünyasının kopyasından; senkron noktasında oyundaki ve kopyadaki `Frozen` sayılıp
+/// rapora yazılıyor.
+struct Watched {
+    copy: RenderWorld,
+}
+
+impl RenderStage for Watched {
+    fn prepare(&mut self, game: &mut World, renderer: &mut Renderer) {
+        self.copy.prepare(game, renderer);
+        let in_game = game.query::<&Frozen>().iter().count();
+        let in_copy = self.copy.world().query::<&Frozen>().iter().count();
+        let copied = self.copy.extractor_mut().copies().len();
+        if let Some(mut report) = game.get_resource_mut::<AbsentReport>() {
+            report.frozen_in_game = in_game;
+            report.frozen_in_copy = in_copy;
+            report.copied_types = copied;
+        }
+    }
+
+    fn draw(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer) {
+        self.copy.draw(encoder, view, renderer);
+    }
 }
 gizmo::core::impl_component!(AbsentReport);
 
@@ -207,15 +237,8 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 2.5, 8.0), Vec3::ZERO);
         })
         .add_update_system(noop.in_phase(Phase::Update))
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            // 3. `extraction`: çıkarma adımı YOK. Render kancası oyun bileşenlerini doğrudan
-            //    okuyor, çünkü tek dünya var.
-            let seen = world.query::<&Frozen>().iter().count();
-            if let Some(mut report) = world.get_resource_mut::<AbsentReport>() {
-                report.seen_from_render = seen;
-            }
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // 3. Çıkarma: çizim oyun dünyasının kopyasından, render thread'inde.
+        .set_render_stage(Watched { copy: RenderWorld::new() })
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<AbsentReport>().map(|r| r.clone()) else {
                 return;
@@ -225,7 +248,7 @@ fn main() {
                 .show(ctx, |ui| {
                     gizmo::egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(500.0);
-                        ui.heading("Dört ECS yeteneği: ikisi var, ikisi yok");
+                        ui.heading("Dört ECS yeteneği: dördü de var");
                         ui.separator();
                         ui.label("1. değişmez bileşen — VAR");
                         ui.monospace(format!(
@@ -243,10 +266,10 @@ fn main() {
                             r.slot_sum_before, r.slot_sum_after
                         ));
                         ui.separator();
-                        ui.label("3. render dünyasına çıkarma — YOK (tek dünya)");
+                        ui.label("3. render dünyasına çıkarma — VAR (RenderWorld)");
                         ui.monospace(format!(
-                            "   set_render oyun bileşenlerini gördü: {}",
-                            r.seen_from_render
+                            "   Frozen: oyunda {} · çizimin kopyasında {} · kopya {} tür taşıyor",
+                            r.frozen_in_game, r.frozen_in_copy, r.copied_types
                         ));
                         ui.separator();
                         ui.label("4. sistem sıcak yaması — VAR (hotpatching + dx serve --hot-patch)");
@@ -258,7 +281,7 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-/// Çizelgenin boş kalmaması için — ölçümler kurulumda ve render kancasında yapılıyor.
+/// Çizelgenin boş kalmaması için — ölçümler kurulumda ve senkron noktasında yapılıyor.
 fn noop(mut report: ResMut<AbsentReport>) {
     let _ = &mut *report;
 }
@@ -266,3 +289,23 @@ fn noop(mut report: ResMut<AbsentReport>) {
 /// `World`'ün bu demoda kullanılan yüzeyi tek yerde dursun diye.
 #[allow(dead_code)]
 fn _world_surface_note(_: &World) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **The draw sees the copy, and the copy carries what the draw reads.** The game's four
+    /// `Frozen`s are not copied — the draw reads no `Frozen` — while the transforms beside them are.
+    #[test]
+    fn the_copy_the_draw_sees_does_not_carry_the_games_own_component() {
+        let mut game = World::new();
+        for i in 0..4 {
+            game.spawn_bundle((Transform::new(Vec3::new(i as f32, 0.0, 0.0)), Frozen(i as f32)));
+        }
+        let mut copy = RenderWorld::new();
+        copy.extract(&mut game);
+        assert_eq!(game.query::<&Frozen>().iter().count(), 4);
+        assert_eq!(copy.world().query::<&Frozen>().iter().count(), 0, "the copy carries the game's own Frozen");
+        assert_eq!(copy.world().query::<&Transform>().iter().count(), 4, "the copy lost the transforms the draw reads");
+    }
+}

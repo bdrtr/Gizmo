@@ -22,8 +22,9 @@
 //!   * **Sıfırlama = YERİNDE restore + `Joint::reset_warm_start`** — despawn/respawn DEĞİL:
 //!     ip eklemleri entity-id tutar, varlıkları yeniden yaratmak eklemleri koparırdı.
 //!     Kenar-tespiti motorun `is_key_just_pressed` API'sinden (elle `prev_r` takibi yok).
-//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` kısayolu
-//!     SSR/SSGI/volumetric/TAA'yı kapatırdı; bu sahne yansımaları/keskinliği ister.
+//!   * **Sahne render = çıplak `RenderWorld`** — `with_scene_render()` kısayolu
+//!     SSR/SSGI/volumetric/TAA'yı kapatırdı; bu sahne yansımaları/keskinliği ister. Kare oyun
+//!     dünyasının kopyasından, render thread'inde çiziliyor.
 //!
 //! Bu demoda geçici/uçan varlık (mermi/konfeti) yok ve sıfırlama yerinde yapılır →
 //! dolayısıyla `DespawnAfter`/`despawn_all_with` idiomları uygulanmaz.
@@ -480,27 +481,16 @@ fn reset(world: &mut World, state: &mut Cradle) {
 }
 
 
-// --------------------------------------------------------------- render + main
-// `default_render_pass` DOĞRUDAN: SSR/SSGI/volumetric/TAA'yı AÇIK tutar
-// (`with_scene_render()` kısayolu bunları kapatırdı). gpu_physics motor-varsayılanı
-// zaten None olduğundan render'da state-mutasyonu gerekmez.
-fn render(
-    world: &mut World,
-    _s: &Cradle,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    default_render_pass(world, encoder, view, renderer);
-}
-
+// --------------------------------------------------------------- main
 fn main() {
     App::<Cradle>::new("Gizmo — Newton Sarkacı", 1280, 720)
         .add_plugin(PhysicsPlugin::new())
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        // Çıplak `RenderWorld`: SSR/SSGI/volumetric/TAA'yı AÇIK tutar (`with_scene_render()`
+        // kısayolu bunları kapatırdı). gpu_physics motor-varsayılanı zaten None olduğundan
+        // aşamaya ayar (`with_settings`) gerekmez.
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

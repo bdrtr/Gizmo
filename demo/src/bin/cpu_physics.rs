@@ -14,9 +14,10 @@
 //!     Bu demonun sarkaç/zincir dinamiği o ham ataletle ayarlı → davranışı KORUMAK için gövdeler
 //!     ham bileşenlerle spawn'lanır (yalnız tekrar `spawn_bundle`'a sarılır).
 //!   * **`Camera::forward_from`** — nişan/hareket yönü paylaşılan kamera yardımcısından (elle trig yok).
-//!   * **Sahne render = `default_render_pass`** — motorun tam deferred boru hattı (debug gizmo
-//!     çizgileri + efektler açık). Bu demo GPU-fizik kullanmaz; `gpu_physics` zaten motor-varsayılanı
-//!     `None` olduğundan render'da state-mutasyonu GEREKMEZ.
+//!   * **Sahne render = çıplak `RenderWorld`** — motorun tam deferred boru hattı (debug gizmo
+//!     çizgileri + efektler açık); kare oyun dünyasının kopyasından, render thread'inde çiziliyor.
+//!     Bu demo GPU-fizik kullanmaz; `gpu_physics` zaten motor-varsayılanı `None` olduğundan render
+//!     aşamasına ayar (`with_settings`) GEREKMEZ.
 //!
 //! ## Kontroller
 //!   * **Sağ tık + fare** — kamerayı döndür · **WASD / Space** — hareket · **Shift** — hızlı
@@ -328,23 +329,12 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     gizmo::systems::physics_debug_system(world);
 }
 
-fn render(
-    world: &mut World,
-    _state: &DemoState,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    default_render_pass(world, encoder, view, renderer);
-}
-
 fn main() {
     App::<DemoState>::new("Gizmo Engine - CPU Physics", 1280, 720)
         .set_setup(setup)
         .add_plugin(FpsLookPlugin)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

@@ -18,11 +18,12 @@
 //!     ANINDA silinir (ömür-temizliğini beklemeden). İki tamamlayıcı yol: ömür + toplu-sil.
 //!   * **`is_key_just_*`** — kenar-tespiti motordan (elle prev_* takibi yok).
 //!   * **`Camera::forward_from`** — nişan yönü paylaşılan yardımcıdan.
-//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — motor `with_scene_render()` tek-satır
+//!   * **Sahne render = çıplak `RenderWorld`** — motor `with_scene_render()` tek-satır
 //!     kısayolunu SUNAR ama onu BİLEREK kullanmıyoruz: o kısayol SSR/SSGI/volumetric/TAA'yı da
 //!     kapatır; bu showcase o efektleri (altın hedeflerde yansıma, fireball volumetric parıltısı,
 //!     TAA keskinliği) İSTER. `gpu_physics` zaten motor-varsayılanı `None` (opt-in) olduğundan
-//!     render'da state-mutasyonu YOK — çıplak `default_render_pass` doğru ve dürüst kurulum.
+//!     aşamaya ayar (`with_settings`) YOK — çıplak `RenderWorld` doğru ve dürüst kurulum; kare
+//!     oyun dünyasının kopyasından, render thread'inde çiziliyor.
 //!
 //! ## Kontroller
 //!   * **Fare / W A S D / Ok tuşları** — nişan al
@@ -540,30 +541,21 @@ fn ui(_world: &mut World, g: &mut Game, ctx: &egui::Context) {
     }
 }
 
-// --------------------------------------------------------------- render + main
-// Render'ı motorun TAM deferred boru hattına (`default_render_pass`) devrediyoruz.
-// Bilinçli seçim: motorun `with_scene_render()` tek-satır kısayolu VAR ama onu KULLANMIYORUZ —
-// o kısayol SSR/SSGI/volumetric/TAA'yı da kapatır; bu showcase bu efektleri AÇIK ister
-// (deferred=Some varsayılanı zaten hepsini aktif eder). `gpu_physics` motor-varsayılanı `None`
-// (opt-in; yikim `enable_gpu_physics` çağırmaz) olduğundan burada state-mutasyonu GEREKMEZ.
-fn render(
-    world: &mut World,
-    _g: &Game,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _t: f32,
-) {
-    gizmo::systems::render::default_render_pass(world, encoder, view, renderer);
-}
-
+// --------------------------------------------------------------- main
 fn main() {
     App::<Game>::new("Gizmo — YIKIM USTASI", 1360, 768)
         .add_plugin(PhysicsPlugin::new())
         .set_setup(setup)
         .set_update(update)
         .set_ui(ui)
-        .set_render(render)
+        // Render'ı motorun TAM deferred boru hattına, çıplak `RenderWorld`'e devrediyoruz: kare
+        // oyun dünyasının kopyasından, render thread'inde çiziliyor. Bilinçli seçim: motorun
+        // `with_scene_render()` tek-satır kısayolu VAR ama onu KULLANMIYORUZ — o kısayol
+        // SSR/SSGI/volumetric/TAA'yı da kapatır; bu showcase bu efektleri AÇIK ister
+        // (deferred=Some varsayılanı zaten hepsini aktif eder). `gpu_physics` motor-varsayılanı
+        // `None` (opt-in; yikim `enable_gpu_physics` çağırmaz) olduğundan aşamaya ayar
+        // (`with_settings`) GEREKMEZ.
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

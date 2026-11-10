@@ -83,8 +83,9 @@
 //! (`switching_an_effect_off_reversibly_renders_the_same_frame_as_destroying_it`). Yani bayrak
 //! kapatmanın *başka* bir yolu değil, **aynı** yolu — tersine çevrilebilir olanı.
 //!
-//! Serideki bütün demoların `set_render` kapanışında hâlâ `renderer.ssr = None` yazması artık bir
-//! zorunluluk değil, alışkanlık: onların SSR'yi geri açma ihtiyacı yok.
+//! Serideki öteki demolarda SSR'yi `with_simple_scene` kapatıyor — oyunun kurulumundan önce, bir
+//! kez, `renderer.ssr = None` ile. Bu artık bir zorunluluk değil, varsayılan: o demoların SSR'yi
+//! geri açma ihtiyacı yok. Bu demonun konusu SSR, o yüzden kendi kurulumunda onu yeniden kuruyor.
 //!
 //! ## Ölçülen: yansıma bir sayıdır
 //!
@@ -159,6 +160,32 @@ fn main() {
 
     App::<SimpleSceneState>::new("Gizmo Engine - SSR", 1280, 720)
         .with_simple_scene(move |scene, state| {
+            // `with_simple_scene` SSR'yi oyunun kurulumundan önce kapatıyor (2026-11-02'den beri);
+            // bu demonun konusu SSR, o yüzden burada bir kez yeniden kuruluyor. Bu kurulum yokken
+            // demo yansımasız çiziyordu ve anahtar boşuna çevriliyordu.
+            if let Some(def) = scene.renderer.deferred.as_ref() {
+                let mut ssr = gizmo::renderer::ssr::SsrState::new(
+                    &scene.renderer.device,
+                    &scene.renderer.scene,
+                    def,
+                    &scene.renderer.post.hdr_texture_view,
+                    scene.renderer.config.width,
+                    scene.renderer.config.height,
+                );
+                // `GIZMO_SSR_KNOB=<0..5>` bir ayarı sabitliyor. Ölçüm bunu kullanmak zorunda:
+                // anahtar 60 karede bir çevrildiği için iki farklı karenin farkı ayarın değil
+                // anahtarın farkı olurdu. Koşu boyunca sabit, o yüzden kurulumda bir kez yazılıyor.
+                let k = std::env::var("GIZMO_SSR_KNOB")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .unwrap_or(0)
+                    .min(KNOBS.len() - 1);
+                let mut p = gizmo::renderer::ssr::SsrParams::default();
+                KNOBS[k].1(&mut p);
+                ssr.params = p;
+                scene.renderer.ssr = Some(ssr);
+            }
+
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -198,15 +225,11 @@ fn main() {
             });
             scene.spawn_camera(state, Vec3::new(0.0, 2.2, 8.5), Vec3::new(0.0, 0.6, 0.0));
         })
-        .set_render(move |world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssgi = None;
-
-            // SSR artık bir bayrakla kapanıyor: durum ayakta kalıyor, dokular ve boru hattı
-            // yerinde. `= None` hâlâ mümkün ama geri dönüşü yok — aradaki fark tam olarak
-            // aşağıdaki sayaç.
+        // SSR artık bir bayrakla kapanıyor: durum ayakta kalıyor, dokular ve boru hattı
+        // yerinde. `= None` hâlâ mümkün ama geri dönüşü yok — aradaki fark tam olarak
+        // aşağıdaki sayaç. Sayaç ve anahtar oyunun defterinde, update'te ilerliyor; bayrağı
+        // `Renderer`'a senkron noktası yazıyor.
+        .add_update_hook(|world, _state, _dt, _input| {
             if let Some(mut report) = world.get_resource::<SsrToggleReport>().map(|r| r.clone()) {
                 report.frame += 1;
                 if report.frame.is_multiple_of(TOGGLE_EVERY) {
@@ -227,25 +250,17 @@ fn main() {
                         );
                     }
                 }
-                if let Some(ssr) = renderer.ssr.as_mut() {
-                    ssr.enabled = report.on;
-                    // `GIZMO_SSR_KNOB=<0..5>` bir ayarı sabitliyor. Ölçüm bunu kullanmak zorunda:
-                    // anahtar 60 karede bir çevrildiği için iki farklı karenin farkı ayarın değil
-                    // anahtarın farkı olurdu.
-                    let k = std::env::var("GIZMO_SSR_KNOB")
-                        .ok()
-                        .and_then(|v| v.parse::<usize>().ok())
-                        .unwrap_or(0)
-                        .min(KNOBS.len() - 1);
-                    let mut p = gizmo::renderer::ssr::SsrParams::default();
-                    KNOBS[k].1(&mut p);
-                    ssr.params = p;
-                }
                 world.insert_resource(report);
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            if let (Some(report), Some(ssr)) = (
+                game.get_resource::<SsrToggleReport>(),
+                renderer.ssr.as_mut(),
+            ) {
+                ssr.enabled = report.on;
+            }
+        }))
         .set_ui(move |world, _state, ctx| {
             let report = world
                 .get_resource::<SsrToggleReport>()

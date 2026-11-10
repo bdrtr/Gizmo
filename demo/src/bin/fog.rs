@@ -160,22 +160,15 @@ fn main() {
         })
         .add_update_system(fog_input.in_phase(Phase::Update).label("fog_input"))
         .add_update_system(tint_sky.in_phase(Phase::Update).after("fog_input"))
-        // Sisin üç sayısı `Renderer`'ın alanı; sistemler oraya erişemiyor.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            if let Some(fog) = world.get_resource::<FogState>().map(|f| *f) {
+        // Sisin üç sayısı `Renderer`'ın alanı; sistemler oraya erişemiyor: senkron noktasında
+        // oyunun kaynağından yazılıyor.
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            if let Some(fog) = game.get_resource::<FogState>() {
                 renderer.environment_preset = fog.preset_a;
                 renderer.environment_preset_2 = fog.preset_b;
                 renderer.environment_blend_t = fog.blend;
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        }))
         .set_ui(|world, _state, ctx| {
             let Some(fog) = world.get_resource::<FogState>().map(|f| *f) else {
                 return;

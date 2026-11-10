@@ -38,7 +38,11 @@ impl FluidRigidDemo {
 
 fn main() {
     App::<FluidRigidDemo>::new("Gizmo — Faz 7.1 Fluid-Rigid Coupling", 1600, 900)
-        .set_setup(|world, _renderer| {
+        .set_setup(|world, renderer| {
+            // GPU fiziği ve GPU sıvısı varsayılan kapalı: bu demo ikisini de istiyor. Bir kez,
+            // kurulumda — `resize` var olanı yeniden boyutluyor, kapalıyı açmıyor ya da tersi.
+            renderer.enable_gpu_physics();
+            renderer.fluid_enabled = true;
             println!("══════════════════════════════════════════");
             println!("   🌊 SPH Sıvı ve Katı Cisim Etkileşimi");
             println!("══════════════════════════════════════════");
@@ -207,29 +211,10 @@ fn main() {
 
             gizmo::systems::physics_debug_system(world);
         })
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.enable_gpu_physics(); // GPU-fizik OPT-IN (varsayılan None)
-            // 1. Fizik Gönderimi (Broadphase, Narrowphase)
-            gizmo::systems::gpu_physics_submit_system(world, renderer);
-
-            // 2. Fluid-Rigid Coupling Senkronizasyonu (Fizikten gelenleri FluidCollider'a yazar)
-            gizmo::systems::gpu_fluid_coupling_system(world, renderer);
-
-            // 3. Fluid Parametrelerini güncelle
-            // (update_parameters bizim kendi FluidCollider array'imizi ezmesin diye bos liste veriyoruz)
-            // Aslında gpu_fluid_coupling_system hallettiği için buradaki bos liste sorun olmayabilir!
-            // Wait, update_parameters colliders listesini alır.
-            // Eger bos verirsek num_colliders'i sifirlar mi?
-            // "let num_colliders = (colliders.len().min(MAX_FLUID_COLLIDERS)) as u32;" -> Evet!
-            // O zaman bos liste versek update_parameters içindeki write_buffer pas geçilir, AMA!
-            // fluid.update_parameters içinde DynamicFluidParams struct'i num_colliders'i sifir olarak gonderir.
-            // Bunu engellemek icin FluidDemo'daki update_parameters cagrisini kaldirabiliriz.
-            // Veya gizmo_renderer içindeki num_colliders'ı okuyup yazarız.
-            // En temizi update_parameters cagrisini modify etmek.
-
-            renderer.fluid_enabled = true; // fluid demo → opt into GPU fluid (off by default)
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Sıvı–cisim bağlantısı: sahnenin çarpıştırıcıları her senkron noktasında GPU sıvısının
+        // çarpıştırıcı tamponuna yazılıyor (oyun dünyası okunuyor, renderer yazılıyor). GPU fiziğinin
+        // gönderimi ve geri okuması karenin hazırlığında (`prepare_frame`) zaten koşuyor.
+        .set_render_stage(RenderWorld::new().with_settings(gizmo::systems::gpu_fluid_coupling_system))
         .run()
         .expect("uygulama çalıştırılamadı");
 }

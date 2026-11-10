@@ -5,9 +5,10 @@
 //!
 //! ## Motorda kapı **var**
 //!
-//! [`App::set_render`] tam bunun için: `&mut wgpu::CommandEncoder`, hedef `&wgpu::TextureView` ve
-//! `&mut Renderer` ham hâlleriyle veriliyor. Kendi belgesi de öyle diyor — *"the hook for a pass
-//! the engine does not have"*.
+//! [`RenderWorld::with_pass`] tam bunun için: kare çizildikten sonra aynı `&mut wgpu::CommandEncoder`,
+//! aynı hedef `&wgpu::TextureView` ve `&mut Renderer` ham hâlleriyle veriliyor — render thread'inde,
+//! oyun dünyası yerine karenin çizildiği kopyayla. Kendi belgesi de öyle diyor — *"a pass of the
+//! game's own over the finished picture"*.
 //!
 //! Bu demo o kapıyı kullanıyor: kendi WGSL'ini derliyor, kendi boru hattını kuruyor, ve motorun
 //! karesinin üstüne alfa karışımlı tarama çizgileri çiziyor. Yaklaşık altmış satır.
@@ -87,14 +88,88 @@ fn fs_main(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// Kendi geçişimizin GPU nesneleri. `set_render` kapatmasının içinde yaşıyor.
+/// Kendi geçişimizin GPU nesneleri. `with_pass` kapanışının içinde yaşıyor, ilk karede kuruluyor.
 struct Scanlines {
     pipeline: wgpu::RenderPipeline,
 }
 
+/// Motorun bitirdiği karenin ÜSTÜNE kendi geçişimiz: boru hattı ilk karede kuruluyor ve kapanışta
+/// yaşıyor.
+fn scanlines() -> impl FnMut(&World, &mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer) + Send + 'static {
+    let mut pass: Option<Scanlines> = None;
+    move |_copy, encoder, view, renderer| {
+        let sl = pass.get_or_insert_with(|| {
+            let shader = renderer
+                .device
+                .create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("post_processing::scanlines"),
+                    source: wgpu::ShaderSource::Wgsl(SCANLINES_WGSL.into()),
+                });
+            let layout = renderer
+                .device
+                .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("post_processing::layout"),
+                    // Bağlama grubu YOK — bağlayacak bir şey de yok: kareyi okuyamıyoruz.
+                    bind_group_layouts: &[],
+                    immediate_size: 0,
+                });
+            let pipeline =
+                renderer
+                    .device
+                    .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                        label: Some("post_processing::scanlines"),
+                        layout: Some(&layout),
+                        vertex: wgpu::VertexState {
+                            module: &shader,
+                            entry_point: Some("vs_main"),
+                            compilation_options: Default::default(),
+                            buffers: &[],
+                        },
+                        fragment: Some(wgpu::FragmentState {
+                            module: &shader,
+                            entry_point: Some("fs_main"),
+                            compilation_options: Default::default(),
+                            targets: &[Some(wgpu::ColorTargetState {
+                                format: renderer.config.format,
+                                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                                write_mask: wgpu::ColorWrites::ALL,
+                            })],
+                        }),
+                        primitive: wgpu::PrimitiveState::default(),
+                        depth_stencil: None,
+                        multisample: wgpu::MultisampleState::default(),
+                        multiview_mask: None,
+                        cache: None,
+                    });
+            Scanlines { pipeline }
+        });
+
+        let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("post_processing::pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    // Load: motorun çizdiğini koruyup üstüne karıştırıyoruz.
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        rp.set_pipeline(&sl.pipeline);
+        rp.draw(0..3, 0..1);
+    }
+}
+
 fn main() {
     let on = !matches!(std::env::var("GIZMO_PP").as_deref(), Ok("0"));
-    let mut pass: Option<Scanlines> = None;
+    // Kapalıyken geçiş hiç eklenmiyor: kare, motorun karesi.
+    let stage = if on { RenderWorld::new().with_pass(scanlines()) } else { RenderWorld::new() };
 
     App::<SimpleSceneState>::new("Gizmo Engine - Post Processing", 1280, 720)
         .with_simple_scene(|scene, state| {
@@ -133,85 +208,7 @@ fn main() {
             });
             scene.spawn_camera(state, Vec3::new(0.0, 1.2, 8.0), Vec3::new(0.0, 0.2, 0.0));
         })
-        .set_render(move |world, _state, encoder, view, renderer, _lt| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-
-            if !on {
-                return;
-            }
-
-            // --- Motorun bitirdiği karenin ÜSTÜNE kendi geçişimiz ---
-            let sl = pass.get_or_insert_with(|| {
-                let shader = renderer
-                    .device
-                    .create_shader_module(wgpu::ShaderModuleDescriptor {
-                        label: Some("post_processing::scanlines"),
-                        source: wgpu::ShaderSource::Wgsl(SCANLINES_WGSL.into()),
-                    });
-                let layout = renderer
-                    .device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("post_processing::layout"),
-                        // Bağlama grubu YOK — bağlayacak bir şey de yok: kareyi okuyamıyoruz.
-                        bind_group_layouts: &[],
-                        immediate_size: 0,
-                    });
-                let pipeline =
-                    renderer
-                        .device
-                        .create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                            label: Some("post_processing::scanlines"),
-                            layout: Some(&layout),
-                            vertex: wgpu::VertexState {
-                                module: &shader,
-                                entry_point: Some("vs_main"),
-                                compilation_options: Default::default(),
-                                buffers: &[],
-                            },
-                            fragment: Some(wgpu::FragmentState {
-                                module: &shader,
-                                entry_point: Some("fs_main"),
-                                compilation_options: Default::default(),
-                                targets: &[Some(wgpu::ColorTargetState {
-                                    format: renderer.config.format,
-                                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                                    write_mask: wgpu::ColorWrites::ALL,
-                                })],
-                            }),
-                            primitive: wgpu::PrimitiveState::default(),
-                            depth_stencil: None,
-                            multisample: wgpu::MultisampleState::default(),
-                            multiview_mask: None,
-                            cache: None,
-                        });
-                Scanlines { pipeline }
-            });
-
-            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("post_processing::pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        // Load: motorun çizdiğini koruyup üstüne karıştırıyoruz.
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            rp.set_pipeline(&sl.pipeline);
-            rp.draw(0..3, 0..1);
-        })
+        .set_render_stage(stage)
         .set_ui(move |_world, _state, ctx| {
             gizmo::egui::Area::new("pp".into())
                 .anchor(gizmo::egui::Align2::RIGHT_TOP, [-12.0, 12.0])
@@ -221,7 +218,7 @@ fn main() {
                         ui.heading("Kendi son-işlem geçişin");
                         ui.label(format!("kendi geçişimiz: {}", if on { "açık" } else { "kapalı" }));
                         ui.separator();
-                        ui.label("set_render ham encoder + hedef view veriyor —");
+                        ui.label("with_pass ham encoder + hedef view veriyor —");
                         ui.label("kendi boru hattını kurup üstüne çizebiliyorsun.");
                         ui.separator();
                         ui.colored_label(

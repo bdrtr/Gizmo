@@ -21,7 +21,7 @@
 //! almadığı için bu demo kendi süresini elle ölçüp `span.demo_measure` serisine yazıyor — aynı
 //! deftere düşen, elle tutulmuş bir span. (`Analyzer::to_chrome_trace()` gerçek span'leri
 //! Perfetto'ya açar; onun için `profile_scope!`'un dünyayı gördüğü bir yer gerekir, örneğin
-//! `set_render` kapanışı.)
+//! `&mut World` alan bir update kancası, `add_update_hook`.)
 //!
 //! Ölçümler iki yerden okunuyor: HUD (canlı istatistikler) ve **F3** — `Analyzer::report_text()`'i
 //! günlüğe basar.

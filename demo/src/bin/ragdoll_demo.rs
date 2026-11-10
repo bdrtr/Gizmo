@@ -11,9 +11,10 @@
 //!   * **Yeniden başlat = poz/hız RESET** (despawn+respawn DEĞİL): eklem topolojisini bozmadan
 //!     kemikleri kayıtlı ilk poz + başlangıç hızlarına döndürür ve gövdeleri uyandırır. Kimlik
 //!     tabanlı per-kemik reset gerektiğinden `despawn_all_with` yerine `borrow_mut`+`get_mut`.
-//!   * **Render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` tek-satır kısayolu
-//!     VAR ama SSR/SSGI/volumetric/TAA'yı kapatırdı; çıplak pass deferred efektleri AÇIK tutar.
-//!     `gpu_physics` zaten motor-varsayılanı `None` (opt-in) → render'da state-mutasyonu YOK.
+//!   * **Render = çıplak `RenderWorld`** — `with_scene_render()` tek-satır kısayolu VAR ama
+//!     SSR/SSGI/volumetric/TAA'yı kapatırdı; çıplak aşama deferred efektleri AÇIK tutar, kareyi
+//!     oyun dünyasının kopyasından render thread'inde çizer. `gpu_physics` zaten motor-varsayılanı
+//!     `None` (opt-in) → aşamaya ayar (`with_settings`) YOK.
 //!
 //! **R** = yeniden başlat (kemikleri ilk pozlarına + başlangıç hızlarına sıfırlar).
 
@@ -165,23 +166,12 @@ fn update(world: &mut World, state: &mut RagdollDemo, _dt: f32, input: &Input) {
     }
 }
 
-fn render(
-    world: &mut World,
-    _s: &RagdollDemo,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    default_render_pass(world, encoder, view, renderer);
-}
-
 fn main() {
     App::<RagdollDemo>::new("Gizmo — Ragdoll (R = yeniden başlat)", 1280, 720)
         .add_plugin(PhysicsPlugin::new())
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

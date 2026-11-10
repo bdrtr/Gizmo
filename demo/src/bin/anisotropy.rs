@@ -5,7 +5,6 @@ use gizmo::math::{Quat, Vec3, Vec4};
 use gizmo::prelude::*;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{DirectionalLight, Material, MeshRenderer, PointLight};
-use gizmo::systems;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum LightMode {
@@ -33,7 +32,7 @@ pub struct DemoState {
 
 /// The renderer settings this demo's panel and light animation change. The `Renderer` is not a
 /// resource of the game world — it belongs to the draw — so the panel edits this, and the render
-/// hook, which holds the renderer, applies it every frame.
+/// stage's settings (`RenderWorld::with_settings`) apply it to the renderer at every sync point.
 #[derive(Clone)]
 struct RendererPanel {
     shading_mode: u32,
@@ -104,6 +103,9 @@ fn main() {
     app = app
         .add_plugin(gizmo::plugins::TransformPlugin)
         .set_setup(|world, renderer| {
+            // Bu sahnede GPU sıvısı yok: bir kez, kurulumda kapatılıyor.
+            renderer.gpu_fluid = None;
+
             let mut asset_manager = AssetManager::new();
             // Yer-çekimsiz fizik dünyası: render pass kameranın bir su hacminde olup
             // olmadığına buradan bakar (bu sahnede su yok → etkisiz, ama kaynak beklenir).
@@ -281,16 +283,16 @@ fn main() {
                 .after("camera_orbit")
                 .in_phase(Phase::Update),
         )
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            if let Some(panel) = world.get_resource::<RendererPanel>().map(|p| p.clone()) {
+        // Panelin ayarları ve üç efektin anahtarı `Renderer`'ın işi: senkron noktasında oyunun
+        // kaynaklarından yazılıyor.
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            if let Some(panel) = game.get_resource::<RendererPanel>() {
                 panel.apply(renderer);
             }
 
-            // Get current DemoState booleans in a separate scope to release the borrow on world
+            // Get current DemoState booleans in a separate scope to release the borrow on `game`
             let (ssr_enabled, ssgi_enabled, volumetric_enabled) = {
-                let demo_state = world.get_resource::<DemoState>().unwrap();
+                let demo_state = game.get_resource::<DemoState>().unwrap();
                 (
                     demo_state.ssr_enabled,
                     demo_state.ssgi_enabled,
@@ -351,9 +353,7 @@ fn main() {
             } else {
                 renderer.volumetric = None;
             }
-
-            systems::default_render_pass(world, encoder, view, renderer);
-        })
+        }))
         .set_ui(|world, _state, ctx| {
             let mut demo_state = world.get_resource_mut::<DemoState>().unwrap();
             let mut camera_settings = world.get_resource_mut::<CameraSettings>().unwrap();
@@ -767,7 +767,7 @@ fn main() {
                                       Thread 3: animation_system (1.2ms) [Parallel Batch]\n\
                                       Thread 4: particle_update (0.9ms) [Parallel Batch]\n\
                                       Main Thrd: animate_lights (0.3ms) ➔ UI Render (1.5ms)\n\
-                                      Render   : default_render_pass (4.6ms)",
+                                      Render   : RenderWorld, render thread (4.6ms)",
                         );
 
                         ui.separator();

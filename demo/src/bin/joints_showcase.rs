@@ -18,8 +18,9 @@
 //!     gömemez ve yalnız kutu verir → bunlar açık `Collider` ile spawn_bundle.
 //!   * **Eklemler elle kurulan bir `PhysicsWorld` kaynağına** yığılır — demonun ASIL konusu bu.
 //!     Fizik Transform'u sürer, render `ensure_global_transforms` ile otomatik senkron eder.
-//!   * **Render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` kısayolu SSR/SSGI/
-//!     volumetric/TAA'yı kapatırdı; bu vitrin efektleri AÇIK ister.
+//!   * **Render = çıplak `RenderWorld`** — `with_scene_render()` kısayolu SSR/SSGI/volumetric/
+//!     TAA'yı kapatırdı; bu vitrin efektleri AÇIK ister. Kare oyun dünyasının kopyasından, render
+//!     thread'inde çiziliyor.
 //!
 //! Geçici/uçan varlık, sahne-sıfırlama ve kullanıcı girdisi olmadığından `DespawnAfter` /
 //! `despawn_all_with` / `is_key_just_*` idiomları burada geçerli değil (kasıtlı olarak yok).
@@ -247,17 +248,6 @@ fn update(world: &mut World, state: &mut Showcase, dt: f32, _input: &Input) {
     }
 }
 
-fn render(
-    world: &mut World,
-    _s: &Showcase,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    default_render_pass(world, encoder, view, renderer);
-}
-
 fn main() {
     App::<Showcase>::new(
         "Gizmo — Eklem Vitrini (rope / torsional / D6 servo / süspansiyon)",
@@ -267,7 +257,7 @@ fn main() {
     .add_plugin(PhysicsPlugin::new())
     .set_setup(setup)
     .set_update(update)
-    .set_render(render)
+    .set_render_stage(RenderWorld::new())
     .run()
     .expect("uygulama çalıştırılamadı");
 }

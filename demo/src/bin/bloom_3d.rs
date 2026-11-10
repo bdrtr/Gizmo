@@ -18,8 +18,9 @@
 //! Yani "ne kadar" ve "hangi parlaklıktan sonra" söylenebiliyor; halenin biçimi, yumuşaklığı ve
 //! kareye nasıl karıştığı söylenemiyor.
 //!
-//! İkisi de `Renderer`'ın düz alanı, yani `set_render` kapanışından yazılıyor — sistemlerin
-//! erişimi yok.
+//! İkisi de `Renderer`'ın düz alanı. Sistemlerin `Renderer`'a erişimi yok: oyun değeri bir kaynakta
+//! tutuyor (`Bloom`), ve kare her senkron noktasında onu `RenderWorld::with_settings`'ten
+//! `Renderer`'a yazıyor.
 //!
 //! ## Bu demonun bulduğu şey: `Material::emissive` ertelenmiş yolda hiçbir şey yapmıyor
 //!
@@ -146,21 +147,13 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 11.0), Vec3::ZERO);
         })
         .add_update_system(bloom_input.in_phase(Phase::Update))
-        // İki düğme de `Renderer`'ın alanı.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            if let Some(bloom) = world.get_resource::<Bloom>().map(|b| *b) {
+        // İki düğme de `Renderer`'ın alanı: senkron noktasında oyunun kaynağından yazılıyor.
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            if let Some(bloom) = game.get_resource::<Bloom>() {
                 renderer.bloom_intensity = bloom.intensity;
                 renderer.bloom_threshold = bloom.threshold;
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        }))
         .set_ui(|world, _state, ctx| {
             let Some(bloom) = world.get_resource::<Bloom>().map(|b| *b) else {
                 return;

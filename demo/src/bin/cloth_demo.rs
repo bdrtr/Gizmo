@@ -16,11 +16,12 @@
 //!     `auto_box_collider` (tekrar eden rijit kutu nesneler için) BURAYA UYMAZ; sahne birer
 //!     tek görsel mesh'ten (zemin + üstüne serilen cisim) oluşur.
 //!   * **`is_key_just_pressed`** — kenar-tespiti motordan (elle `prev_*` bool takibi kaldırıldı).
-//!   * **Render = `default_render_pass` DOĞRUDAN** — her kare kumaş mesh'i düğümlerden YENİDEN
-//!     kurulur (gerçek özel iş), bu yüzden `with_scene_render` tek-satır kısayoluna çevrilemez.
+//!   * **Render = çıplak `RenderWorld`** — kumaş mesh'i her kare düğümlerden YENİDEN kuruluyor,
+//!     ama update'te ve veri olarak (`MeshData`): GPU'ya motorun yükleyicisi koyuyor, kare oyun
+//!     dünyasının kopyasından render thread'inde çiziliyor. `with_scene_render` kullanılmıyor,
+//!     çünkü o efektleri kapatıyor.
 
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_3};
-use std::sync::Arc;
 
 use gizmo::physics::cloth::Cloth;
 use gizmo::physics::BodyHandle;
@@ -107,9 +108,9 @@ fn push_tri(verts: &mut Vec<Vertex>, a: Vec3, b: Vec3, c: Vec3, col: [f32; 4]) {
     verts.push(mk(b, -n));
 }
 
-/// Kumaş düğümlerinden katı, çift-yüzlü, dama-desenli üçgen mesh kurar.
-fn build_cloth_mesh(device: &gizmo::wgpu::Device, cloth: &Cloth, grid: usize) -> Mesh {
-    use gizmo::wgpu::util::DeviceExt;
+/// Kumaş düğümlerinden katı, çift-yüzlü, dama-desenli üçgen mesh kurar — veri olarak: GPU'ya
+/// motorun yükleyicisi koyuyor, her yeni ayırmayı bir kez.
+fn cloth_mesh_data(cloth: &Cloth, grid: usize) -> MeshData {
     let node = |x: usize, z: usize| cloth.nodes[z * grid + x].position;
     let mut verts: Vec<Vertex> = Vec::with_capacity((grid - 1) * (grid - 1) * 12);
     for z in 0..grid - 1 {
@@ -129,18 +130,7 @@ fn build_cloth_mesh(device: &gizmo::wgpu::Device, cloth: &Cloth, grid: usize) ->
             push_tri(&mut verts, p00, p01, p11, col);
         }
     }
-    let vbuf = device.create_buffer_init(&gizmo::wgpu::util::BufferInitDescriptor {
-        label: Some("Cloth VBuf"),
-        contents: gizmo::bytemuck::cast_slice(&verts),
-        usage: gizmo::wgpu::BufferUsages::VERTEX,
-    });
-    Mesh::new(
-        device,
-        Arc::new(vbuf),
-        &verts,
-        Vec3::ZERO,
-        "cloth".to_string(),
-    )
+    MeshData::new(verts)
 }
 
 fn setup(world: &mut World, renderer: &mut Renderer) -> ClothDemo {
@@ -205,7 +195,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> ClothDemo {
     let cloth_entity = world
         .spawn_bundle((
             Transform::new(Vec3::ZERO),
-            build_cloth_mesh(&renderer.device, &cloth, grid),
+            cloth_mesh_data(&cloth, grid),
             Material::new(tex.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.7, 0.15),
             MeshRenderer::new(),
         ))
@@ -298,26 +288,8 @@ fn update(world: &mut World, state: &mut ClothDemo, dt: f32, input: &Input) {
         state.accum -= FIXED;
         n += 1;
     }
-}
-
-// Render kumaş mesh'ini her kare düğümlerden YENİDEN kurar (gerçek özel iş) — bu yüzden
-// `with_scene_render` kısayoluna çevrilmez; `default_render_pass` doğrudan çağrılır.
-fn render(
-    world: &mut World,
-    s: &ClothDemo,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    let mesh = build_cloth_mesh(&renderer.device, &s.cloth, s.grid);
-    {
-        let mut ms = world.query_mut::<&mut Mesh>();
-        if let Some(mut m) = ms.get_mut(s.cloth_entity) {
-            *m = mesh;
-        }
-    }
-    default_render_pass(world, encoder, view, renderer);
+    // Kumaşın bu kareki biçimi: yeni bir ayırma, yükleyici bu kare GPU'ya koyuyor.
+    world.add_component(state.cloth_entity, cloth_mesh_data(&state.cloth, state.grid));
 }
 
 fn main() {
@@ -328,7 +300,7 @@ fn main() {
     )
     .set_setup(setup)
     .set_update(update)
-    .set_render(render)
+    .set_render_stage(RenderWorld::new())
     .run()
     .expect("uygulama çalıştırılamadı");
 }

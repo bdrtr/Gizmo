@@ -57,7 +57,7 @@ use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use gizmo::systems::render::WireframeConfig;
 
-/// Demonun kendi bayrağı — kaynağa `set_render`'da yazılıyor.
+/// Demonun kendi bayrağı — `WireframeConfig` kaynağına update kancasında yazılıyor.
 #[derive(Clone, Copy)]
 struct Wire(bool);
 
@@ -118,20 +118,14 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 1.5, 7.5), Vec3::ZERO);
         })
         .add_update_system(toggle.in_phase(Phase::Update))
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
+        // `WireframeConfig` oyun dünyasının kaynağı: sistemlerden sonra, basit sahnenin kancasının
+        // ardından yazılıyor; kare onu dünyanın kopyasından okuyor.
+        .add_update_hook(|world, _state, _dt, _input| {
             // Tek kaynak, bu demoda nesne başına seçim kullanılmıyor. Renk, açık malzemede görünmez kalan çizgiyi
             // okunur yapıyor; `GIZMO_WIRE_LIT=1` eski hâli (aydınlatılmış renk) gösterir.
             let on = world.get_resource::<Wire>().map(|w| w.0).unwrap_or(false);
             let color = std::env::var("GIZMO_WIRE_LIT").is_err().then_some([0.05, 1.0, 0.3]);
             world.insert_resource(WireframeConfig { global: on, color });
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(|world, _state, ctx| {
             let on = world.get_resource::<Wire>().map(|w| w.0).unwrap_or(false);

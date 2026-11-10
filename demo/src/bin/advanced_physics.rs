@@ -18,9 +18,10 @@
 //!     bu demo `PhysicsPlugin` KULLANMAZ; joint/raycast için kendi `PhysicsWorld` kaynağını tutar.
 //!     Bu yüzden `DespawnAfter`/`DespawnBelowY` EKLENMEZ: onları işleyecek `LifetimePlugin`
 //!     schedule'da yok → sessizce hiçbir şey yapmazlardı.
-//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — motor `with_scene_render()` tek-satır
-//!     kısayolunu sunar ama onu KULLANMIYORUZ: o kısayol SSR/SSGI/volumetric'i (ve gizmo debug
-//!     çizgilerini) kapatır; bu vitrin hız/iz gizmo'larını ve efektleri AÇIK ister.
+//!   * **Sahne render = çıplak `RenderWorld`** — motor `with_scene_render()` tek-satır
+//!     kısayolunu sunar ama onu KULLANMIYORUZ: o kısayol SSR/SSGI/volumetric'i kapatır; bu vitrin
+//!     hız/iz gizmo'larını ve efektleri AÇIK ister. Kare oyun dünyasının kopyasından, render
+//!     thread'inde çiziliyor.
 //!
 //! ## Kontroller
 //!   * **Sağ-tık + fare / WASD** — kamerayı gez · **Space** — yüksel · **Shift** — hızlan
@@ -426,18 +427,6 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     }
 }
 
-fn render(
-    world: &mut World,
-    _state: &DemoState,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    // Tam deferred boru hattı + gizmo çizgileri açık — with_scene_render KULLANMA (efektleri kapatır).
-    default_render_pass(world, encoder, view, renderer);
-}
-
 fn main() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::WARN)
@@ -445,7 +434,7 @@ fn main() {
     App::<DemoState>::new("Gizmo Engine - Advanced Physics Demo", 1280, 720)
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

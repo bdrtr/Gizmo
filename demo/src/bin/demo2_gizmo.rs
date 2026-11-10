@@ -70,6 +70,12 @@ fn main() {
 
     app = app
         .set_setup(|world, renderer| {
+            // Bu vitrin ekran-uzayı efektlerini (SSR/SSGI) ve GPU akışkanı istemez → bir kez,
+            // burada kapat. GPU parçacık sistemi açık kalıyor: boştayken hiçbir iş yapmıyor.
+            renderer.gpu_fluid = None;
+            renderer.ssr = None;
+            renderer.ssgi = None;
+
             world.register_component_type::<Shape>();
             world.register_component_type::<Row>();
 
@@ -347,14 +353,8 @@ fn main() {
             (Box::new(TransformUpdateSystem) as Box<dyn gizmo::core::system::System>)
                 .in_phase(Phase::PostUpdate),
         )
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            // Bu vitrin ekran-uzayı efektlerini (SSR/SSGI) ve GPU parçacık/akışkanı istemez → kapat.
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Kare oyun dünyasının kopyasından, render thread'inde çiziliyor.
+        .set_render_stage(RenderWorld::new())
         .set_ui(|_world, _state, ctx| {
             gizmo::egui::Area::new("demo2_ui".into())
                 .fixed_pos(gizmo::egui::pos2(12.0, 12.0))

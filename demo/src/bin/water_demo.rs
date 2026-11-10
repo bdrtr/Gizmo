@@ -12,8 +12,10 @@
 // Idiom notu: varlıklar `world.spawn_bundle((...))` ile tek çağrıda kurulur (spawn+add_component
 // zinciri yok); bakış yönleri `Camera::forward_from`/`right_from` paylaşılan yardımcılarından.
 // Fizik ELLE, sabit-adımla sürülür (PhysicsPlugin YOK) → ömür komponentleri/otomatik schedule
-// yok. Render, gerçek özel iş yaptığından KORUNUR: `gpu_fluid=None` (su yüzeyi ayrı bir yol)
-// ve `--shot` headless GPU-readback ekran görüntüsü.
+// yok. Render `RenderWorld`: `gpu_fluid=None` (su yüzeyi ayrı bir yol) kurulumda bir kez.
+// `--shot` su üstünden sinematik bir kamera ve HUD'suz bir kare veriyor; ekran görüntüsünü motor
+// alıyor (`GIZMO_SCREENSHOT=/tmp/water_demo.png GIZMO_SCREENSHOT_FRAME=140 GIZMO_SCREENSHOT_EXIT=1
+// cargo run --release -p demo --bin water_demo -- --shot`).
 //
 // 2026-08-24'e kadar bu dosyanın yukarıdaki satırı "su shader'ı deferred'da" diyordu ve yanlıştı:
 // `MaterialType::Water` sıradan ertelenmiş PBR'ye düşüyordu, `water.wgsl` hiç bağlanmıyordu.
@@ -42,16 +44,17 @@ struct WaterState {
     underwater: bool, // HUD
     oxygen_frac: f32, // HUD: kalan hava oranı 0..1
     oxygen_secs: f32, // HUD: kalan hava (saniye)
-    // --shot modu: N kare sonra offscreen render'ı okuyup raw RGBA'ya yazar, çıkar (headless PNG).
-    frame: u32,
+    // --shot modu: su üstünden sinematik kamera, HUD yok (ekran görüntüsü motorun
+    // `GIZMO_SCREENSHOT`'ı).
     shot: bool,
-    shot_done: bool,
     // Ambient ses + su-altı boğma (kamera batınca AudioManager::set_underwater ile kısılır/boğuklaşır).
     audio: Option<gizmo::prelude::AudioManager>,
 }
 
 fn setup(world: &mut World, renderer: &mut Renderer) -> WaterState {
     println!("Su demosu yükleniyor... (sağ-tık+fare=bak, WASD=yüz, Space=yüksel, Ctrl=dal)");
+    // GPU sıvısı kapalı: su yüzeyi kendi yolundan (Gerstner malzemesi) çiziliyor.
+    renderer.gpu_fluid = None;
 
     let mut asset = AssetManager::new();
     let white = asset.create_white_texture(
@@ -222,15 +225,12 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> WaterState {
         underwater: false,
         oxygen_frac: 1.0,
         oxygen_secs: 45.0,
-        frame: 0,
         shot: std::env::args().any(|a| a == "--shot"),
-        shot_done: false,
         audio,
     }
 }
 
 fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::core::input::Input) {
-    state.frame += 1;
     // ── Fare ile bakış ───────────────────────────────────────────────────────
     if input.is_mouse_button_pressed(gizmo::core::input::mouse::RIGHT) {
         let d = input.mouse_delta();
@@ -344,128 +344,11 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
     }
 }
 
-fn render(
-    world: &mut World,
-    state: &WaterState,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    renderer.gpu_fluid = None;
-
-    // --shot modu: sahne yerleşsin diye ~90 kare bekle, sonra offscreen bir frame'i GPU'dan okuyup
-    // raw RGBA olarak diske yaz ve çık (headless ekran görüntüsü — X/Wayland yakalama gerekmez).
-    if state.shot && !state.shot_done && state.frame >= 140 {
-        capture_and_save(world, renderer, "/tmp/water_demo_shot.rgba");
-        std::process::exit(0);
-    }
-
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
-}
-
-/// Sahneyi offscreen bir dokuya render edip GPU'dan okur, BGRA→RGBA çevirip `raw_path`'e yazar.
-/// (Golden-readback deseninin demo-yerel kopyası; ImageMagick ile PNG'ye çevrilir.)
-fn capture_and_save(world: &mut World, renderer: &mut Renderer, raw_path: &str) {
-    use gizmo::wgpu;
-    let (w, h) = (renderer.config.width, renderer.config.height);
-    let fmt = renderer.config.format;
-
-    let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("shot-target"),
-        size: wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: fmt,
-        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-        view_formats: &[],
-    });
-    let tview = target.create_view(&wgpu::TextureViewDescriptor::default());
-    let mut enc = renderer
-        .device
-        .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("shot-enc"),
-        });
-    gizmo::systems::default_render_pass(world, &mut enc, &tview, renderer);
-
-    let bpp = 4u32;
-    let unpadded = w * bpp;
-    let padded = unpadded.div_ceil(256) * 256; // bytes_per_row 256-hizalı olmalı
-    let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("shot-buf"),
-        size: (padded * h) as u64,
-        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    enc.copy_texture_to_buffer(
-        wgpu::TexelCopyTextureInfo {
-            texture: &target,
-            mip_level: 0,
-            origin: wgpu::Origin3d::ZERO,
-            aspect: wgpu::TextureAspect::All,
-        },
-        wgpu::TexelCopyBufferInfo {
-            buffer: &staging,
-            layout: wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(padded),
-                rows_per_image: Some(h),
-            },
-        },
-        wgpu::Extent3d {
-            width: w,
-            height: h,
-            depth_or_array_layers: 1,
-        },
-    );
-    renderer.queue.submit(Some(enc.finish()));
-
-    let slice = staging.slice(..);
-    let (tx, rx) = std::sync::mpsc::channel();
-    slice.map_async(wgpu::MapMode::Read, move |v| {
-        let _ = tx.send(v);
-    });
-    let _ = renderer.device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: None,
-    });
-    rx.recv().unwrap().unwrap();
-    let data = slice.get_mapped_range()
-        // wgpu 30 made this fallible; the range is the whole buffer just mapped.
-        .expect("a just-mapped buffer's full range is always valid");
-
-    let is_bgra = matches!(
-        fmt,
-        wgpu::TextureFormat::Bgra8UnormSrgb | wgpu::TextureFormat::Bgra8Unorm
-    );
-    let mut out = Vec::with_capacity((w * h * 4) as usize);
-    for row in 0..h as usize {
-        let s = row * padded as usize;
-        let line = &data[s..s + unpadded as usize];
-        for px in line.as_chunks::<4>().0 {
-            if is_bgra {
-                out.extend_from_slice(&[px[2], px[1], px[0], px[3]]); // BGRA→RGBA
-            } else {
-                out.extend_from_slice(px);
-            }
-        }
-    }
-    drop(data);
-    staging.unmap();
-    std::fs::write(raw_path, &out).unwrap();
-    println!(
-        "SHOT_WRITTEN path={raw_path} {w}x{h} bytes={} fmt={fmt:?}",
-        out.len()
-    );
-}
-
 fn ui(_world: &mut World, state: &mut WaterState, ctx: &gizmo::egui::Context) {
     use gizmo::egui;
+    if state.shot {
+        return; // sinematik kare: HUD yok
+    }
     egui::Window::new("🌊 Su Sistemi Demosu")
         .default_pos([10.0, 10.0])
         .show(ctx, |ui| {
@@ -506,7 +389,7 @@ fn main() {
     App::<WaterState>::new("Gizmo — Su Sistemi Demosu", 1280, 720)
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(RenderWorld::new())
         .set_ui(ui)
         .run()
         .expect("uygulama çalıştırılamadı");

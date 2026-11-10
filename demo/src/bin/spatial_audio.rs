@@ -22,7 +22,8 @@
 //!
 //! **3. Uzamsal ses sistemi kendiliğinden koşmuyor.** Motorun kendi belgesi *"`DefaultPlugins` bunu
 //! otomatik kaydetmez"* diyor: [`audio_frame`] oyunun kendi çizelgesine elle eklenmeli. Bu demo
-//! onu `set_render` kapanışında çağırıyor, çünkü `&mut World` isteyen tek kanca orası.
+//! onu `&mut World` istediği için bir update kancasında (`add_update_hook`) çağırıyor —
+//! sistemlerden sonra, basit sahnenin update'inin yanında.
 //!
 //! Buna karşılık motorun fazladan bir yeteneği var: **Doppler**. Uzamsal sistem
 //! kaynağın ve dinleyicinin `Velocity`'sini okuyup perdeyi kaydırıyor.
@@ -199,18 +200,11 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 4.0, 10.0), Vec3::ZERO);
         })
         .add_update_system(orbit_emitter.in_phase(Phase::Update))
-        // Uzamsal ses sistemi elle kaydedilmeli, ve `&mut World` istiyor.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
+        // Uzamsal ses sistemi elle kaydedilmeli, ve `&mut World` istiyor: sistemlerden sonra,
+        // basit sahnenin update'inin yanında.
+        .add_update_hook(|world, _state, _dt, _input| {
             measure_listener(world);
             gizmo::systems::audio::audio_frame(world, 1.0 / 60.0);
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(|world, _state, ctx| {
             let Some(demo) = world.get_resource::<AudioDemo>().map(|d| d.clone()) else {

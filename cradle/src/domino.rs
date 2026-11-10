@@ -113,9 +113,8 @@ fn main() {
                     );
                 });
         })
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Motorun tam boru hattı: kare oyun dünyasının kopyasından, render thread'inde çiziliyor.
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

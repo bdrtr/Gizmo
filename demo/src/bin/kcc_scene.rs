@@ -14,8 +14,9 @@
 //!   * **`spawn_bundle` + explicit `Collider`** — karakter tek-tük kapsül gövde: kinematik
 //!     `RigidBodyBundle` + `Collider::capsule`, mesh/materyal/`CharacterController` tek çağrıda.
 //!   * **`Camera::forward_from`** — bakış yönü paylaşılan yardımcıdan (elle trig yok).
-//!   * **Render = `default_render_pass` DOĞRUDAN** — motorun tüm deferred efektlerini (gölge,
-//!     GI) açık tutan çıplak kurulum; `with_scene_render()` kısayolu bilerek kullanılmaz.
+//!   * **Render = çıplak `RenderWorld`** — motorun tüm deferred efektlerini (gölge, GI) açık
+//!     tutan ayarsız kurulum; kare oyun dünyasının kopyasından, render thread'inde çiziliyor.
+//!     `with_scene_render()` kısayolu bilerek kullanılmaz.
 //!
 //! ## Kontroller
 //!   * **SAĞ-tık + Fare** — etrafa bak · **W A S D** — kameraya göre yürü · **SPACE** — zıpla
@@ -203,23 +204,13 @@ fn update(world: &mut World, state: &mut KccState, dt: f32, input: &Input) {
     }
 }
 
-fn render(
-    world: &mut World,
-    _state: &KccState,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    // Render'ı motorun tam deferred boru hattına devret (efektler açık kalır).
-    default_render_pass(world, encoder, view, renderer);
-}
-
 fn main() {
     App::<KccState>::new("Gizmo Engine - KCC Sandbox", 1280, 720)
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        // Render motorun tam deferred boru hattında (efektler açık kalır); kare oyun dünyasının
+        // kopyasından çiziliyor.
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

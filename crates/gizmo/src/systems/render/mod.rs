@@ -145,27 +145,14 @@ pub trait AppSceneRenderExt {
 
 impl<State: 'static> AppSceneRenderExt for gizmo_app::App<State> {
     fn with_scene_render(self) -> Self {
-        self.set_render_stage(SceneStage(RenderWorld::new()))
-    }
-}
-
-/// [`with_scene_render`](AppSceneRenderExt::with_scene_render)'s stage: a [`RenderWorld`] with the
-/// heavy passes off.
-struct SceneStage(RenderWorld);
-
-impl gizmo_app::RenderStage for SceneStage {
-    fn prepare(&mut self, game: &mut World, renderer: &mut Renderer) {
-        renderer.gpu_fluid = None;
-        renderer.gpu_physics = None;
-        renderer.ssr = None;
-        renderer.ssgi = None;
-        renderer.volumetric = None;
-        renderer.taa = None;
-        self.0.prepare(game, renderer);
-    }
-
-    fn draw(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer) {
-        self.0.draw(encoder, view, renderer);
+        self.set_render_stage(RenderWorld::new().with_settings(|_, renderer| {
+            renderer.gpu_fluid = None;
+            renderer.gpu_physics = None;
+            renderer.ssr = None;
+            renderer.ssgi = None;
+            renderer.volumetric = None;
+            renderer.taa = None;
+        }))
     }
 }
 

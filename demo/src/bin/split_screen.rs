@@ -7,10 +7,11 @@
 //! camera.viewport = Some(Viewport::left_half());
 //! ```
 //!
-//! `default_render_pass` bir kamerada `viewport` görünce kareyi `render_viewports` ile çiziyor:
-//! `viewport`'u olan **her** kamera kendi dikdörtgenine, `order` sırasıyla (küçük önce, büyük
-//! üstte), sonra HUD bir kez bütün hedefin üstüne. Hiçbir kamerada `viewport` yoksa kare eskisi
-//! gibi tek `primary` kameradan çiziliyor.
+//! Kareyi çizen `draw_frame` — bu demoda basit sahnenin render aşaması (`RenderWorld`) onu oyun
+//! dünyasının kopyasında, render thread'inde çağırıyor — bir kamerada `viewport` görünce kareyi
+//! `draw_viewports` ile çiziyor: `viewport`'u olan **her** kamera kendi dikdörtgenine, `order`
+//! sırasıyla (küçük önce, büyük üstte), sonra HUD bir kez bütün hedefin üstüne. Hiçbir kamerada
+//! `viewport` yoksa kare eskisi gibi tek `primary` kameradan çiziliyor.
 //!
 //! Her görüşün kendine ait olanlar — ve her birinin neden gerektiği `render_viewports`'un
 //! belgesinde ölçümüyle:
@@ -124,15 +125,10 @@ fn main() {
             scene.world.insert_resource(Layout(start));
         })
         .add_update_system(watch.in_phase(Phase::Update))
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            apply_layout(world);
-            // Bölünmüş ekran için ayrı bir çağrı yok: viewport'u olan bir kamera varsa bu çağrı
-            // kareyi kendisi böler.
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Düzen kameralara update'te, basit sahnenin kancasından (uçan kameradan) sonra yazılıyor.
+        // Bölünmüş ekran için ayrı bir çağrı yok: viewport'u olan bir kamera varsa basit sahnenin
+        // render aşaması kareyi kendisi böler.
+        .add_update_hook(|world, _state, _dt, _input| apply_layout(world))
         .set_ui(|world, _state, ctx| {
             let index = world.get_resource::<Layout>().map(|l| l.0).unwrap_or(0);
             gizmo::egui::Area::new("split".into())

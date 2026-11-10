@@ -149,23 +149,16 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 4.2, 8.5), Vec3::new(0.0, 1.0, 0.0));
         })
         .add_update_system(ssao_input.in_phase(Phase::Update))
-        // SSAO `Renderer`'ın `Option` alanı; sistemler oraya erişemiyor.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            if let Some(ssao) = world.get_resource::<Ssao>().map(|s| *s) {
+        // SSAO `Renderer`'ın `Option` alanı; sistemler oraya erişemiyor: şiddet senkron
+        // noktasında oyunun kaynağından yazılıyor.
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            if let Some(ssao) = game.get_resource::<Ssao>() {
                 let queue = renderer.queue.clone();
                 if let Some(state) = renderer.ssao.as_ref() {
                     state.set_strength(&queue, ssao.strength);
                 }
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        }))
         .set_ui(|world, _state, ctx| {
             let Some(ssao) = world.get_resource::<Ssao>().map(|s| *s) else {
                 return;

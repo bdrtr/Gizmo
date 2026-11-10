@@ -67,7 +67,7 @@ struct Bench {
     parallel_us: f32,
     /// O anki küp sayısı.
     cubes: usize,
-    /// Sayı değişimi istendi mi (mesh gerektiği için render kapanışında yapılır).
+    /// Sayı değişimi istendi mi (varlık doğurup sildiği için update kancasında yapılır).
     resize: i32,
     /// Kaç kare koştu — kendi kendine ölçüm kipinin sayacı.
     frame: u32,
@@ -144,20 +144,14 @@ fn main() {
         })
         .add_update_system(move_and_bounce.in_phase(Phase::Update))
         .add_update_system(bench_input.in_phase(Phase::Update))
-        // Küp eklemek mesh ister, mesh cihaz ister — bu yüzden sayı değişimi burada.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
+        // Sayı değişimi varlık doğurup siliyor, yani `&mut World` ile yapılıyor: sistemlerden
+        // sonra, basit sahnenin update'inin yanında. Cihaz gerekmiyor — mesh ve doku
+        // `Prototype`'tan kopyalanıyor.
+        .add_update_hook(|world, _state, _dt, _input| {
             let resize = world.get_resource::<Bench>().map(|b| b.resize).unwrap_or(0);
             if resize != 0 {
                 apply_resize(world, resize);
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(|world, _state, ctx| {
             let Some(bench) = world.get_resource::<Bench>().map(|b| *b) else {

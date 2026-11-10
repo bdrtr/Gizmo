@@ -13,7 +13,8 @@
 //!   * **Ömür komponenti (`DespawnAfter`) YOK — bilinçli.** Bu demo `PhysicsPlugin` EKLEMEZ;
 //!     ömür/fizik schedule'ı çalışmaz ve uçan/geçici nesne yoktur. Kinematik platform+oyuncu
 //!     hareketi elle entegre edilir. Bu yüzden lifetime/fizik-bağımlı idiomlar eklenmedi.
-//!   * Sahne render = `default_render_pass` doğrudan (SSR/SSGI/volumetric/TAA açık kalsın).
+//!   * Sahne render = çıplak `RenderWorld` (SSR/SSGI/volumetric/TAA açık kalsın); kare oyun
+//!     dünyasının kopyasından, render thread'inde çiziliyor.
 //!
 //! ## Kontroller
 //!   * **W A S D** — hareket · **SPACE** — zıpla · **S + SPACE** — tek yönlü çıkıntıdan aşağı in
@@ -281,22 +282,11 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
     }
 }
 
-fn render(
-    world: &mut World,
-    _state: &PlatformerState,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    gizmo::systems::render::default_render_pass(world, encoder, view, renderer);
-}
-
 fn main() {
     App::<PlatformerState>::new("Gizmo Engine - 3D Platformer", 1280, 720)
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

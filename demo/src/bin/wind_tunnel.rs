@@ -3,7 +3,8 @@
 //! Araba sabit durur; havanın akışı, gövdenin etrafından sapan bir akış alanında CPU'da
 //! entegre edilmiş SÜREKLİ ŞERİTLER (streamribbon) olarak çizilir — ayrı parçacıklar değil,
 //! birbirine bağlı pürüzsüz kurdeleler (gerçek rüzgar-tüneli/CFD tekniği). Bespoke render
-//! yolu YOK: şeritler motorun standart Mesh/Material yoluyla (`Mesh::from_vertices`) çizilir.
+//! yolu YOK: şeritler motorun standart Mesh/Material yoluyla çizilir — geometri veri olarak
+//! (`MeshData`), GPU'ya motorun yükleyicisi koyuyor.
 //!   • Akış çizgileri → nominal +Z akış + engel kürelerinden TEĞETSEL sapma (gövdeye sarılır).
 //!   • Araba → herhangi bir GLB (model-bağımsız oto-ölçek/ortala/yere-otur).
 //!   • Metalik boya → "Studio Neutral" ortam preset'i (IBL) + TAA.
@@ -12,9 +13,11 @@
 //! `TransformPlugin` kullanır (fizik YOK → tüm gövdeler statik/görsel), bu yüzden ömür
 //! komponentleri (DespawnAfter/BelowY) ya da Prefab-collider'ı YOK; `GlobalTransform` bundle'a
 //! ELLE eklenir (PhysicsPlugin demoları bunu otomatik alır, TransformPlugin propagate'i yalnız
-//! MEVCUT GlobalTransform'ları günceller). Render kancası BİLE-İSTEYE el-yazımı: her frame
-//! şeritleri yeniden entegre eder ve gpu_particles/gpu_fluid/SSR/SSGI/volumetric'i kapatıp yalnız
-//! IBL+TAA bırakır → `with_scene_render()` tek-satır kısayoluna çevrilMEZ.
+//! MEVCUT GlobalTransform'ları günceller). Render kancası YOK: şeritler her frame update'te
+//! yeniden entegre edilip `MeshData` olarak veriliyor; gpu_fluid/SSR/SSGI/volumetric setup'ta bir
+//! kez kapatılıp yalnız IBL+TAA bırakılıyor; kare oyun dünyasının kopyasından render thread'inde
+//! çiziliyor (çıplak `RenderWorld`). `with_scene_render()` tek-satır kısayolu KULLANILMAZ: o
+//! TAA'yı da kapatır.
 //!
 //! Kontrol: ↑/↓ (veya HUD slider) rüzgar hızı (HUD drag okuması). Çalıştır:
 //! `cargo run -p demo --bin wind_tunnel`
@@ -29,7 +32,7 @@ use gizmo::physics::Transform;
 use gizmo::plugins::TransformPlugin;
 use gizmo::renderer::asset::AssetManager;
 use gizmo::renderer::components::{
-    Camera, DirectionalLight, LightRole, Material, Mesh, MeshRenderer,
+    Camera, DirectionalLight, LightRole, Material, Mesh, MeshData, MeshRenderer,
 };
 use gizmo::renderer::gpu_types::Vertex;
 
@@ -75,45 +78,32 @@ fn main() {
         .set_setup(setup)
         .set_update(update)
         .set_ui(ui)
-        .set_render(|world, state, encoder, view, renderer, _light_time| {
-            renderer.gpu_particles = None; // akış artık şerit mesh'i (parçacık yok)
-                                           // Metalik boya için stüdyo ortamı (IBL) → yansıma/görünürlük.
-            renderer.environment_preset = 1; // Studio Neutral
-            renderer.environment_preset_2 = 1;
-            // Kullanılmayan ağır pass'leri kapat; TAA AÇIK (spekular parıltıyı temizler).
-            renderer.gpu_fluid = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            renderer.volumetric = None;
-            // GERÇEK DİNAMİK AKIŞ: şeritleri HER FRAME zaman-değişen akış alanından yeniden
-            // entegre et → geometri gerçekten dalgalanır/değişir (renk kaydırma değil). Hız
-            // (wind_speed) türbülans faz-hızını ve bant hızını sürer; wind=0 → donuk (rüzgar yok).
-            {
-                let verts = build_ribbon_verts(
-                    &state.seeds,
-                    &state.obstacles,
-                    state.view_dir,
-                    RIBBON_WIDTH,
-                    state.t,
-                    state.wind_speed,
-                );
-                if let Some(m) = world.query::<&Mesh>().get(state.ribbon_id) {
-                    m.update_vertices(&renderer.queue, &verts);
-                }
-            }
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        .set_render_stage(gizmo::prelude::RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }
 
 fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTunnel {
+    // Metalik boya için stüdyo ortamı (IBL) → yansıma/görünürlük.
+    renderer.environment_preset = 1; // Studio Neutral
+    renderer.environment_preset_2 = 1;
+    // Kullanılmayan ağır pass'leri kapat — bir kez: kapatılan pass yeniden kurulmuyor. TAA AÇIK
+    // (spekular parıltıyı temizler).
+    renderer.gpu_fluid = None;
+    renderer.ssr = None;
+    renderer.ssgi = None;
+    renderer.volumetric = None;
+
     let mut assets = AssetManager::new();
     let white = assets.create_white_texture(
         &renderer.device,
         &renderer.queue,
         &renderer.scene.texture_bind_group_layout,
     );
+    // Dünyanın `AssetManager`'ı: şeridin `MeshData`'sını motorun yükleyicisi onunla GPU'ya
+    // koyuyor — kaynak yoksa yükleyici hiç çalışmıyor. Aşağıdaki `SpawnCommands` da GLB'yi onunla
+    // yükleyip yerine bırakıyor.
+    world.insert_resource(assets);
 
     // Zemin (koyu tünel tabanı) — tek spawn_bundle (GlobalTransform elle: TransformPlugin).
     {
@@ -197,10 +187,10 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
             ))
     };
 
-    // AKIŞ-ÇİZGİSİ ŞERİTLERİ: ön kesiti kaplayan tohum ızgarası. Şeritler HER FRAME (render'da)
+    // AKIŞ-ÇİZGİSİ ŞERİTLERİ: ön kesiti kaplayan tohum ızgarası. Şeritler HER FRAME (update'te)
     // zaman-değişen akış alanından yeniden entegre edilir → gerçek dinamik dalgalanma; hız bunu
-    // sürer. Mesh <20000 vertex (48 tohum × 60 × 6) → per-frame güncelleme meshopt'suz ucuz.
-    // Tek-yüz (cull=None → her açıdan görünür).
+    // sürer. Mesh <20000 vertex (48 tohum × 60 × 6) → her karenin yüklemesinde LOD (meshopt
+    // sadeleştirmesi) kurulmuyor. Tek-yüz (cull=None → her açıdan görünür).
     let seeds: Vec<Vec3> = {
         let cx = center.x;
         let half_w = (car_max.x - car_min.x) * 0.5;
@@ -233,7 +223,7 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
                 GlobalTransform {
                     matrix: t.local_matrix,
                 },
-                Mesh::from_vertices(&renderer.device, &verts, "streamlines"),
+                MeshData::new(verts),
                 // Yarı-saydam unlit → araba aralardan görünür; vertex renkleri her frame animasyonlanır.
                 Material::new(white.clone()).with_unlit(Vec4::new(0.95, 0.97, 1.0, 0.30)),
                 MeshRenderer::new(),
@@ -342,7 +332,7 @@ fn flow_noise(p: Vec3, phase: f32) -> Vec3 {
 /// adımla entegre eder → arabaya sarılan pürüzsüz bir polyline döndürür.
 fn integrate_streamline(seed: Vec3, obstacles: &[[f32; 4]], phase: f32) -> Vec<Vec3> {
     const STEP: f32 = 0.6;
-    // SABİT adım sayısı (erken çıkış YOK) → her frame aynı vertex sayısı (update_vertices şart).
+    // SABİT adım sayısı (erken çıkış YOK) → her frame aynı vertex sayısı.
     const MAX_STEPS: usize = 60; // 48 tohum × 60 × 6 = 17280 < 20000
     const TURB: f32 = 0.25;
     let mut pts = Vec::with_capacity(MAX_STEPS + 1);
@@ -610,7 +600,7 @@ fn rasterize_tri_xy(
     }
 }
 
-fn update(_world: &mut World, state: &mut WindTunnel, dt: f32, input: &gizmo::core::input::Input) {
+fn update(world: &mut World, state: &mut WindTunnel, dt: f32, input: &gizmo::core::input::Input) {
     state.t += dt;
     if input.is_key_pressed(gizmo::prelude::KeyCode::ArrowUp as u32) {
         state.wind_speed = (state.wind_speed + 20.0 * dt).min(60.0);
@@ -619,6 +609,20 @@ fn update(_world: &mut World, state: &mut WindTunnel, dt: f32, input: &gizmo::co
         state.wind_speed = (state.wind_speed - 20.0 * dt).max(0.0);
     }
     let _ = state.cam_id;
+
+    // GERÇEK DİNAMİK AKIŞ: şeritleri HER FRAME zaman-değişen akış alanından yeniden
+    // entegre et → geometri gerçekten dalgalanır/değişir (renk kaydırma değil). Hız
+    // (wind_speed) türbülans faz-hızını ve bant hızını sürer; wind=0 → donuk (rüzgar yok).
+    // Her kare yeni bir `MeshData` ayırması: motorun yükleyicisi onu bu kare GPU'ya koyuyor.
+    let verts = build_ribbon_verts(
+        &state.seeds,
+        &state.obstacles,
+        state.view_dir,
+        RIBBON_WIDTH,
+        state.t,
+        state.wind_speed,
+    );
+    world.add_component(state.ribbon_id, MeshData::new(verts));
 }
 
 fn ui(_world: &mut World, state: &mut WindTunnel, ctx: &egui::Context) {

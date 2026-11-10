@@ -62,6 +62,23 @@ fn main() {
 
     App::<SimpleSceneState>::new("Gizmo Engine - Mirror", 1280, 720)
         .with_simple_scene(move |scene, state| {
+            // SSR'ı GERİ kuruyoruz: basit sahne onu oyunun kurulumundan önce kapatıyor
+            // (`ssr = None`, durumu yok ederek), ama ölçülecek tek yansıma o. Kurucu ve boyut
+            // motorun kendi kurduğuyla aynı. Basit sahne bunu kurulumda yapmaya başladığından
+            // (2026-11-02) beri eski render kancası SSR'ı kapatmıyordu ama geri de kurmuyordu —
+            // demo o günden beri SSR'sız çiziliyordu (kod okunarak bulundu, ölçülmedi).
+            let r = &mut *scene.renderer;
+            r.ssr = r.deferred.as_ref().map(|def| {
+                gizmo::renderer::ssr::SsrState::new(
+                    &r.device,
+                    &r.scene,
+                    def,
+                    &r.post.hdr_texture_view,
+                    r.size.width,
+                    r.size.height,
+                )
+            });
+
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -97,14 +114,6 @@ fn main() {
             let _ = white;
             scene.spawn_camera(state, Vec3::new(0.0, 0.6, 5.0), Vec3::new(0.0, -0.4, -2.0));
             gizmo::gizmo_log!(Info, "nesne kameranın arkasında: {}", behind);
-        })
-        // SSR'ı BIRAKIYORUZ: basit sahne onu varsayılan olarak kapatıyor, ama ölçülecek tek
-        // yansıma o.
-        .set_render(|world, _state, encoder, view, renderer, _lt| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(move |_world, _state, ctx| {
             gizmo::egui::Area::new("mr".into())

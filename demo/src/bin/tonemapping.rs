@@ -115,6 +115,18 @@ const STEPS: [f32; 10] = [0.03, 0.06, 0.12, 0.25, 0.5, 1.0, 1.5, 2.5, 4.0, 8.0];
 fn main() {
     App::<SimpleSceneState>::new("Gizmo Engine - Tonemapping", 1280, 720)
         .with_simple_scene(|scene, state| {
+            // Bloom bilerek kapalı: parlak yamalar aralarındaki boşluklara taşıyıp kamayı
+            // okunamaz hâle getiriyordu. Ölçülmek istenen şey ton eğrisi, ton eğrisi + hale değil.
+            scene.renderer.bloom_intensity = 0.0;
+
+            // `GIZMO_TM_CURVE=none|reinhard|reinhard-ext|aces` eğriyi seçiyor (2026-08-24).
+            scene.renderer.tonemap_curve = match std::env::var("GIZMO_TM_CURVE").as_deref() {
+                Ok("none") => gizmo::renderer::gpu_types::TonemapCurve::None,
+                Ok("reinhard") => gizmo::renderer::gpu_types::TonemapCurve::Reinhard,
+                Ok("reinhard-ext") => gizmo::renderer::gpu_types::TonemapCurve::ReinhardExtended,
+                _ => gizmo::renderer::gpu_types::TonemapCurve::Aces,
+            };
+
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -141,28 +153,6 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 19.0), Vec3::ZERO);
         })
         .add_update_system(exposure_input.in_phase(Phase::Update))
-        // Pozlama `Renderer`'ın alanı; sistemler oraya erişemiyor.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            // Bloom bilerek kapalı: parlak yamalar aralarındaki boşluklara taşıyıp kamayı
-            // okunamaz hâle getiriyordu. Ölçülmek istenen şey ton eğrisi, ton eğrisi + hale değil.
-            renderer.bloom_intensity = 0.0;
-
-            // `GIZMO_TM_CURVE=none|reinhard|reinhard-ext|aces` eğriyi seçiyor (2026-08-24).
-            renderer.tonemap_curve = match std::env::var("GIZMO_TM_CURVE").as_deref() {
-                Ok("none") => gizmo::renderer::gpu_types::TonemapCurve::None,
-                Ok("reinhard") => gizmo::renderer::gpu_types::TonemapCurve::Reinhard,
-                Ok("reinhard-ext") => gizmo::renderer::gpu_types::TonemapCurve::ReinhardExtended,
-                _ => gizmo::renderer::gpu_types::TonemapCurve::Aces,
-            };
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
         .set_ui(|world, _state, ctx| {
             let exposure = world.get_resource::<Exposure>().map(|e| e.0).unwrap_or(1.15);
             gizmo::egui::Area::new("tone".into())

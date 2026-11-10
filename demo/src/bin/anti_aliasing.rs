@@ -154,15 +154,10 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 0.9, 4.0), Vec3::new(0.0, 0.7, -40.0));
         })
         .add_update_system(aa_input.in_phase(Phase::Update))
-        // İki pas da `Renderer`'ın alanı; sistemler oraya erişemiyor.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            if let Some(mode) = world.get_resource::<AaMode>().map(|m| *m) {
+        // Üç pas da `Renderer`'ın alanı; sistemler oraya erişemiyor: senkron noktasında oyunun
+        // kaynağından yazılıyor.
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            if let Some(mode) = game.get_resource::<AaMode>() {
                 if let Some(taa) = renderer.taa.as_mut() {
                     taa.enabled = mode.taa;
                 }
@@ -176,9 +171,7 @@ fn main() {
                     cas.enabled = mode.cas;
                 }
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        }))
         .set_ui(|world, _state, ctx| {
             let Some(mode) = world.get_resource::<AaMode>().map(|m| *m) else {
                 return;

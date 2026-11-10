@@ -11,17 +11,14 @@
 //!   * Fizik YOK — App yalnız `TransformPlugin` kaydeder. Bu yüzden rigid body / collider /
 //!     `DespawnAfter` gibi ömür idiomları BU demoya UYGULANMAZ; nesneler statik görsel mesh'tir
 //!     ve `update` boştur (girdi yok → `is_*_just_*` de yok).
-//!   * Render GERÇEK özel iş yapar: `SmokeVolume` kurulumu + kullanılmayan ağır pass'lerin
-//!     (gpu_fluid/SSR/SSGI/volumetric) kapatılması. Bu yüzden `default_render_pass` DOĞRUDAN
-//!     çağrılır — `with_scene_render()` kısayoluna ÇEVRİLMEZ (o kısayol bu efekt kontrolünü
-//!     elden alırdı).
+//!   * Render = çıplak `RenderWorld`: GERÇEK özel iş — `SmokeVolume` kurulumu + kullanılmayan
+//!     ağır pass'lerin (gpu_fluid/SSR/SSGI/volumetric) kapatılması — `setup`'ta, bir kez
+//!     yapılır; kare oyun dünyasının kopyasından, render thread'inde çizilir.
+//!     `with_scene_render()` kısayoluna ÇEVRİLMEZ (o kısayol TAA'yı da kapatır, yani bu efekt
+//!     kontrolünü elden alırdı).
 
 use gizmo::prelude::*;
 use gizmo::renderer::gpu_smoke::SmokeVolume;
-
-struct S {
-    cam_id: u32,
-}
 
 // Merkezdeki direğin dünya-uzayı AABB'si. Duman bu hacmi DELMEZ (obstacle field) —
 // hem görünür mesh hem SmokeVolume::set_obstacle_boxes AYNI kutuyu kullanır ki duman
@@ -44,59 +41,16 @@ fn placed(t: Transform) -> (Transform, GlobalTransform) {
 fn main() {
     gizmo::app::setup_panic_hook();
     println!("Volumetrik duman (T6) — raymarch katılımcı ortam.");
-    App::<S>::new("Gizmo — Volumetrik Duman (Raymarch)", 1600, 900)
+    App::<()>::new("Gizmo — Volumetrik Duman (Raymarch)", 1600, 900)
         .add_plugin(TransformPlugin)
         .set_setup(setup)
         .set_update(|_w, _s, _dt, _i| {})
-        .set_render(|world, state, encoder, view, renderer, _lt| {
-            // İlk frame: volumetrik duman hacmini oluştur + ayarla.
-            if renderer.smoke.is_none() {
-                let mut sm = SmokeVolume::new(
-                    &renderer.device,
-                    &renderer.scene.global_bind_group_layout,
-                    wgpu::TextureFormat::Rgba16Float,
-                );
-                // Sim kutusu + kaynak (grid-tabanlı advekte edilen yoğunluk). Kutu yüksekliği
-                // dumanın gerçekten DOLDURDUĞU hacme göre (4m) — çok yüksek kutu (6m) dumanı
-                // kadraj içinde minik bir dilim gibi gösteriyordu.
-                sm.bounds_min = [-1.8, 0.02, -1.8];
-                sm.bounds_max = [1.8, 4.0, 1.8];
-                sm.source = [0.0, 0.8, 0.0]; // taban yakınında kaynak
-                sm.source_radius = 0.6;
-                sm.inject = 9.0; // güçlü enjeksiyon → görünür yoğunluk (headless profille ayarlı)
-                sm.dissipation = 0.985; // frame başına yoğunluk çarpanı (dağılma)
-                sm.buoyancy = 1.7; // yükselir + kutuyu doldurur (0.55 ince disk yapıyordu)
-                sm.curl_strength = 2.0; // kıvrılma/türbülans
-                sm.curl_scale = 0.7;
-                sm.absorption = 2.8;
-                sm.density_scale = 1.6;
-                sm.steps = 64;
-                sm.color = [0.95, 0.96, 1.0];
-                sm.ambient = 0.4;
-                // CS2-tarzı: kaynaktan DIŞA doğru dolar (fill), sınırlı yarıçapta durur.
-                sm.fill_strength = 2.5;
-                sm.fill_radius = 2.0;
-                // ENGELE-CONFORM: merkezdeki direği DELMEZ, etrafını sarar. Obstacle AABB'si
-                // sahnedeki direk mesh'iyle BİREBİR aynı (bkz. setup: PILLAR_MIN/MAX).
-                sm.set_obstacle_boxes(&renderer.queue, &[(PILLAR_MIN, PILLAR_MAX)]);
-                renderer.smoke = Some(sm);
-            }
-            // Stüdyo ortamı; bu showcase'in KULLANMADIĞI ağır pass'ler kapalı (SmokeVolume
-            // kendi raymarch'ını yapar; SSR/SSGI/volumetric/fluid gereksiz maliyet olurdu).
-            renderer.environment_preset = 1;
-            renderer.environment_preset_2 = 1;
-            renderer.gpu_fluid = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            renderer.volumetric = None;
-            let _ = state.cam_id;
-            default_render_pass(world, encoder, view, renderer);
-        })
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("çalıştırılamadı");
 }
 
-fn setup(world: &mut World, renderer: &mut Renderer) -> S {
+fn setup(world: &mut World, renderer: &mut Renderer) {
     let mut assets = AssetManager::new();
     let white = assets.create_white_texture(
         &renderer.device,
@@ -142,19 +96,55 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> S {
     ));
 
     // Kamera — konumdan hedefe bakacak şekilde yaw/pitch türetilir.
-    let cam_id = {
+    {
         let pos = Vec3::new(6.0, 3.0, 7.0);
         let target = Vec3::new(0.0, 2.2, 0.0);
         let dir = (target - pos).normalize();
         let yaw = dir.z.atan2(dir.x);
         let pitch = dir.y.clamp(-1.0, 1.0).asin();
-        world
-            .spawn_bundle((
-                placed(Transform::new(pos)),
-                Camera::new(1.0, 0.1, 500.0, yaw, pitch, true),
-            ))
-            .id()
-    };
+        world.spawn_bundle((
+            placed(Transform::new(pos)),
+            Camera::new(1.0, 0.1, 500.0, yaw, pitch, true),
+        ));
+    }
 
-    S { cam_id }
+    // Volumetrik duman hacmi: bir kez, burada oluşturulup ayarlanıyor.
+    let mut sm = SmokeVolume::new(
+        &renderer.device,
+        &renderer.scene.global_bind_group_layout,
+        wgpu::TextureFormat::Rgba16Float,
+    );
+    // Sim kutusu + kaynak (grid-tabanlı advekte edilen yoğunluk). Kutu yüksekliği
+    // dumanın gerçekten DOLDURDUĞU hacme göre (4m) — çok yüksek kutu (6m) dumanı
+    // kadraj içinde minik bir dilim gibi gösteriyordu.
+    sm.bounds_min = [-1.8, 0.02, -1.8];
+    sm.bounds_max = [1.8, 4.0, 1.8];
+    sm.source = [0.0, 0.8, 0.0]; // taban yakınında kaynak
+    sm.source_radius = 0.6;
+    sm.inject = 9.0; // güçlü enjeksiyon → görünür yoğunluk (headless profille ayarlı)
+    sm.dissipation = 0.985; // frame başına yoğunluk çarpanı (dağılma)
+    sm.buoyancy = 1.7; // yükselir + kutuyu doldurur (0.55 ince disk yapıyordu)
+    sm.curl_strength = 2.0; // kıvrılma/türbülans
+    sm.curl_scale = 0.7;
+    sm.absorption = 2.8;
+    sm.density_scale = 1.6;
+    sm.steps = 64;
+    sm.color = [0.95, 0.96, 1.0];
+    sm.ambient = 0.4;
+    // CS2-tarzı: kaynaktan DIŞA doğru dolar (fill), sınırlı yarıçapta durur.
+    sm.fill_strength = 2.5;
+    sm.fill_radius = 2.0;
+    // ENGELE-CONFORM: merkezdeki direği DELMEZ, etrafını sarar. Obstacle AABB'si
+    // sahnedeki direk mesh'iyle BİREBİR aynı (bkz. yukarıdaki direk: PILLAR_MIN/MAX).
+    sm.set_obstacle_boxes(&renderer.queue, &[(PILLAR_MIN, PILLAR_MAX)]);
+    renderer.smoke = Some(sm);
+
+    // Stüdyo ortamı; bu showcase'in KULLANMADIĞI ağır pass'ler kapalı (SmokeVolume
+    // kendi raymarch'ını yapar; SSR/SSGI/volumetric/fluid gereksiz maliyet olurdu).
+    renderer.environment_preset = 1;
+    renderer.environment_preset_2 = 1;
+    renderer.gpu_fluid = None;
+    renderer.ssr = None;
+    renderer.ssgi = None;
+    renderer.volumetric = None;
 }

@@ -10,7 +10,6 @@ struct KumasGame {
     fps_timer: f32,
     frames: u32,
     fps: f32,
-    joints_loaded: bool,
 }
 
 impl KumasGame {
@@ -24,7 +23,6 @@ impl KumasGame {
             fps_timer: 0.0,
             frames: 0,
             fps: 0.0,
-            joints_loaded: false,
         }
     }
 }
@@ -32,7 +30,9 @@ impl KumasGame {
 fn main() {
     // 30x30 grid = 900 node (küçük kutucuk)
     App::<KumasGame>::new("Gizmo — Faz 4.1 XPBD Kumaş Simülasyonu", 1600, 900)
-        .set_setup(|world, _renderer| {
+        .set_setup(|world, renderer| {
+            // GPU fiziği varsayılan kapalı: bu demo onunla koşuyor. Bir kez, kurulumda.
+            renderer.enable_gpu_physics();
             println!("##################################################");
             println!("    XPBD Kumaş Simülasyonu Başlıyor...");
             println!("##################################################");
@@ -163,37 +163,6 @@ fn main() {
                 state.cam_pitch = state.cam_pitch.clamp(-1.5, 1.5);
             }
 
-            if !state.joints_loaded && state.frames > 0 {
-                // Sadece GpuPhysicsLink oluşturulduktan SONRA (frame > 0)
-                let grid_x = 40;
-                let grid_z = 40;
-                let mut node_gpu_ids = vec![0; grid_x * grid_z];
-                let mut can_load = false;
-
-                {
-                    let mut q = world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>();
-                    for (link, trans) in q.iter_mut() {
-                        if (trans.position.y - 40.0).abs() < 1.0 {
-                            let x =
-                                ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0).round() as i32;
-                            let z =
-                                ((trans.position.z + (grid_z as f32 / 2.0)) / 1.0).round() as i32;
-                            if x >= 0 && x < grid_x as i32 && z >= 0 && z < grid_z as i32 {
-                                node_gpu_ids[(z * grid_x as i32 + x) as usize] = link.id;
-                                can_load = true;
-                            }
-                        }
-                    }
-                }
-
-                if can_load {
-                    // GPU Physics var mı kontrol edemiyoruz update'te,
-                    // Ama jointleri bir listeye ekleyip render pass'da submit edebiliriz.
-                    // Ya da state.joints_loaded = true yaparız, işi render'a bırakırız!
-                    state.joints_loaded = true;
-                }
-            }
-
             if let Some(mut tr) = world.query_mut::<&mut Transform>().get_mut(state.cam_id) {
                 let rot = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
                 tr.rotation = rot;
@@ -204,116 +173,113 @@ fn main() {
                 state.cam_pos = tr.position;
             }
         })
-        .set_render(|world, state, encoder, view, renderer, _light_time| {
-            renderer.enable_gpu_physics(); // GPU-fizik OPT-IN (varsayılan None)
-            // İlk frame render edildikten ve GpuPhysicsLink oluşturulduktan SONRA
-            // Joint'leri GPU'ya basmalıyız.
-            if state.joints_loaded {
-                // Eğer GPU'da henüz joint yoksa (physics.joint_count == 0) yükle
-                if let Some(physics) = &mut renderer.gpu_physics {
-                    if physics.joint_count == 0 {
-                        let grid_x = 40;
-                        let grid_z = 40;
-                        let mut node_gpu_ids = vec![0; grid_x * grid_z];
-
-                        {
-                            let mut q = world.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>();
-                            for (link, trans) in q.iter_mut() {
-                                if (trans.position.y - 40.0).abs() < 1.0 {
-                                    let x = ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0)
-                                        .round() as i32;
-                                    let z = ((trans.position.z + (grid_z as f32 / 2.0)) / 1.0)
-                                        .round() as i32;
-                                    if x >= 0 && x < grid_x as i32 && z >= 0 && z < grid_z as i32 {
-                                        node_gpu_ids[(z * grid_x as i32 + x) as usize] = link.id;
-                                    }
-                                }
-                            }
-                        }
-
-                        let stiffness = 300.0;
-                        let damping = 0.5;
-
-                        for z in 0..grid_z {
-                            for x in 0..grid_x {
-                                let idx = z * grid_x + x;
-                                let id_a = node_gpu_ids[idx];
-
-                                // Structural
-                                if x < grid_x - 1 {
-                                    let id_b = node_gpu_ids[idx + 1];
-                                    physics.add_joint(
-                                        &renderer.queue,
-                                        GpuJoint::spring(
-                                            id_a,
-                                            id_b,
-                                            [0.5, 0.0, 0.0],
-                                            [-0.5, 0.0, 0.0],
-                                            stiffness,
-                                            damping,
-                                        ),
-                                    );
-                                }
-                                if z < grid_z - 1 {
-                                    let id_b = node_gpu_ids[idx + grid_x];
-                                    physics.add_joint(
-                                        &renderer.queue,
-                                        GpuJoint::spring(
-                                            id_a,
-                                            id_b,
-                                            [0.0, 0.0, 0.5],
-                                            [0.0, 0.0, -0.5],
-                                            stiffness,
-                                            damping,
-                                        ),
-                                    );
-                                }
-
-                                // Shear
-                                if x < grid_x - 1 && z < grid_z - 1 {
-                                    let id_b = node_gpu_ids[idx + grid_x + 1];
-                                    physics.add_joint(
-                                        &renderer.queue,
-                                        GpuJoint::spring(
-                                            id_a,
-                                            id_b,
-                                            [0.5, 0.0, 0.5],
-                                            [-0.5, 0.0, -0.5],
-                                            stiffness * 0.5,
-                                            damping,
-                                        ),
-                                    );
-
-                                    let id_c = node_gpu_ids[idx + grid_x];
-                                    let id_d = node_gpu_ids[idx + 1];
-                                    physics.add_joint(
-                                        &renderer.queue,
-                                        GpuJoint::spring(
-                                            id_c,
-                                            id_d,
-                                            [0.5, 0.0, -0.5],
-                                            [-0.5, 0.0, 0.5],
-                                            stiffness * 0.5,
-                                            damping,
-                                        ),
-                                    );
-                                }
-                            }
-                        }
-
-                        println!(
-                            "{} Joint başarıyla GPU'ya yüklendi! XPBD aktif.",
-                            physics.joint_count
-                        );
-                        physics.update_params(&renderer.queue, 1.0 / 60.0, [0.0, -9.81, 0.0]);
-                    }
-                }
-            }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Kumaşın yayları senkron noktasında, oyun dünyasından okunarak yükleniyor.
+        .set_render_stage(RenderWorld::new().with_settings(load_cloth_joints))
         .run()
         .expect("uygulama çalıştırılamadı");
+}
+
+/// Kumaşın yaylarını GPU fiziğine bir kez yükler: düğümler kaydedildikten sonra — ilk karenin
+/// hazırlığı (`prepare_frame`) onlara `GpuPhysicsLink` veriyor — ve GPU'da henüz eklem yokken. Her
+/// senkron noktasında çağrılıyor; oyun dünyasını okuyor, renderer'a yazıyor.
+fn load_cloth_joints(game: &World, renderer: &mut Renderer) {
+    let Some(physics) = renderer.gpu_physics.as_mut() else { return };
+    if physics.joint_count != 0 {
+        return;
+    }
+    let grid_x = 40;
+    let grid_z = 40;
+    let mut node_gpu_ids = vec![0; grid_x * grid_z];
+    let mut found = false;
+    for (link, trans) in game.query::<(&gizmo::physics::GpuPhysicsLink, &Transform)>().iter() {
+        if (trans.position.y - 40.0).abs() < 1.0 {
+            let x = ((trans.position.x + (grid_x as f32 / 2.0)) / 1.0).round() as i32;
+            let z = ((trans.position.z + (grid_z as f32 / 2.0)) / 1.0).round() as i32;
+            if x >= 0 && x < grid_x as i32 && z >= 0 && z < grid_z as i32 {
+                node_gpu_ids[(z * grid_x as i32 + x) as usize] = link.id;
+                found = true;
+            }
+        }
+    }
+    if !found {
+        return;
+    }
+
+    let stiffness = 300.0;
+    let damping = 0.5;
+
+    for z in 0..grid_z {
+        for x in 0..grid_x {
+            let idx = z * grid_x + x;
+            let id_a = node_gpu_ids[idx];
+
+            // Structural
+            if x < grid_x - 1 {
+                let id_b = node_gpu_ids[idx + 1];
+                physics.add_joint(
+                    &renderer.queue,
+                    GpuJoint::spring(
+                        id_a,
+                        id_b,
+                        [0.5, 0.0, 0.0],
+                        [-0.5, 0.0, 0.0],
+                        stiffness,
+                        damping,
+                    ),
+                );
+            }
+            if z < grid_z - 1 {
+                let id_b = node_gpu_ids[idx + grid_x];
+                physics.add_joint(
+                    &renderer.queue,
+                    GpuJoint::spring(
+                        id_a,
+                        id_b,
+                        [0.0, 0.0, 0.5],
+                        [0.0, 0.0, -0.5],
+                        stiffness,
+                        damping,
+                    ),
+                );
+            }
+
+            // Shear
+            if x < grid_x - 1 && z < grid_z - 1 {
+                let id_b = node_gpu_ids[idx + grid_x + 1];
+                physics.add_joint(
+                    &renderer.queue,
+                    GpuJoint::spring(
+                        id_a,
+                        id_b,
+                        [0.5, 0.0, 0.5],
+                        [-0.5, 0.0, -0.5],
+                        stiffness * 0.5,
+                        damping,
+                    ),
+                );
+
+                let id_c = node_gpu_ids[idx + grid_x];
+                let id_d = node_gpu_ids[idx + 1];
+                physics.add_joint(
+                    &renderer.queue,
+                    GpuJoint::spring(
+                        id_c,
+                        id_d,
+                        [0.5, 0.0, -0.5],
+                        [-0.5, 0.0, 0.5],
+                        stiffness * 0.5,
+                        damping,
+                    ),
+                );
+            }
+        }
+    }
+
+    println!(
+        "{} Joint başarıyla GPU'ya yüklendi! XPBD aktif.",
+        physics.joint_count
+    );
+    physics.update_params(&renderer.queue, 1.0 / 60.0, [0.0, -9.81, 0.0]);
 }
 
 fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {

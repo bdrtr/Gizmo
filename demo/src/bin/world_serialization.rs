@@ -125,14 +125,9 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 2.5, 6.0), Vec3::new(0.0, 0.5, 0.0));
         })
         .add_update_system(scene_io_input.in_phase(Phase::Update))
-        // Kaydetme/yükleme dünyayı topluca değiştirir; render kapanışı bunun için uygun yer.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
+        // Kaydetme/yükleme dünyayı topluca değiştirir; bunun için uygun yer `&mut World` alan
+        // update kancası — sistemlerden sonra, basit sahnenin update'inin yanında.
+        .add_update_hook(|world, _state, _dt, _input| {
             let request = world.get_resource::<SceneIo>().map(|io| (io.save, io.load));
             if let Some((save, load)) = request {
                 if save || load {
@@ -161,8 +156,6 @@ fn main() {
                     }
                 }
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(|world, _state, ctx| {
             let Some(io) = world.get_resource::<SceneIo>().map(|io| io.clone()) else {
@@ -187,7 +180,7 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-/// F5/F9 yalnız bayrak koyar; işi render kapanışı yapar.
+/// F5/F9 yalnız bayrak koyar; işi update kancası yapar.
 fn scene_io_input(mut io: ResMut<SceneIo>, input: Res<Input>, time: Res<Time>) {
     use gizmo::winit::keyboard::KeyCode;
     // `GIZMO_SCENE_IO_SELFTEST=1`: çevrimi tuşa basmadan koşturur — 60. karede kaydeder,

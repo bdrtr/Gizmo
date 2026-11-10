@@ -118,7 +118,8 @@ use gizmo::prelude::*;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
 /// Bir ayarın canlı değiştirilmesi için tutulan defter. `VolumetricParams`'ın kendisini tutmak
-/// yerine bir kopya, çünkü `set_render` kapanışı `Renderer`'a ancak orada erişiyor.
+/// yerine bir kopya, çünkü asıl değer `Renderer`'da ve oyun dünyası ona erişemiyor: tur kopyayı
+/// update'te ilerletiyor, `RenderWorld::with_settings` senkron noktasında onu `Renderer`'a yazıyor.
 #[derive(Clone, Copy)]
 struct FogKnobs {
     params: gizmo::renderer::volumetric::VolumetricParams,
@@ -145,7 +146,13 @@ fn main() {
     let on = !matches!(std::env::var("GIZMO_VOL").as_deref(), Ok("0"));
 
     App::<SimpleSceneState>::new("Gizmo Engine - Volumetric Fog", 1280, 720)
-        .with_simple_scene(|scene, state| {
+        .with_simple_scene(move |scene, state| {
+            // Kapatmak artık durumu yok etmiyor: bir bayrak. Ortam değişkeninden gelen, koşu
+            // boyunca sabit bir ayar: kurulumda bir kez yazılıyor.
+            if let Some(vol) = scene.renderer.volumetric.as_mut() {
+                vol.enabled = on;
+            }
+
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -186,64 +193,60 @@ fn main() {
             let _ = white;
             scene.spawn_camera(state, Vec3::new(0.0, 1.0, 7.0), Vec3::new(0.0, 1.2, -2.0));
         })
-        .set_render(move |world, _state, encoder, view, renderer, _lt| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
+        // Tur oyunun işi: sayaç ve adım oyun dünyasındaki defterde, update'te ilerliyor.
+        .add_update_hook(|world, _state, _dt, _input| {
+            let mut knobs = world
+                .get_resource::<FogKnobs>()
+                .map(|k| *k)
+                .unwrap_or(FogKnobs {
+                    params: Default::default(),
+                    frame: 0,
+                });
+            knobs.frame += 1;
 
-            // Kapatmak artık durumu yok etmiyor: bir bayrak.
-            if let Some(vol) = renderer.volumetric.as_mut() {
-                vol.enabled = on;
+            // Ayarı her SWEEP_EVERY karede bir değiştir. Her adım varsayılandan başlıyor,
+            // yani turdaki tek değişken adı yazan alan.
+            //
+            // `GIZMO_VOL_KNOB=<n>` turu durdurup tek adıma kilitliyor. Ölçüm bunu kullanmak
+            // ZORUNDA: sahnenin ışığı zamanla dönüyor, yani iki farklı karenin farkı ayarın
+            // değil zamanın farkı. Ölçüm notuna bakın.
+            let step = match std::env::var("GIZMO_VOL_KNOB").ok().and_then(|v| v.parse::<usize>().ok())
+            {
+                Some(n) => n.min(SWEEP.len() - 1),
+                None => (knobs.frame / SWEEP_EVERY) as usize % SWEEP.len(),
+            };
+            let mut p = gizmo::renderer::volumetric::VolumetricParams::default();
+            SWEEP[step].1(&mut p);
+            knobs.params = p;
 
-                let mut knobs = world
-                    .get_resource::<FogKnobs>()
-                    .map(|k| *k)
-                    .unwrap_or(FogKnobs {
-                        params: Default::default(),
-                        frame: 0,
-                    });
-                knobs.frame += 1;
-
-                // Ayarı her SWEEP_EVERY karede bir değiştir. Her adım varsayılandan başlıyor,
-                // yani turdaki tek değişken adı yazan alan.
-                //
-                // `GIZMO_VOL_KNOB=<n>` turu durdurup tek adıma kilitliyor. Ölçüm bunu kullanmak
-                // ZORUNDA: sahnenin ışığı zamanla dönüyor, yani iki farklı karenin farkı ayarın
-                // değil zamanın farkı. Ölçüm notuna bakın.
-                let step = match std::env::var("GIZMO_VOL_KNOB").ok().and_then(|v| v.parse::<usize>().ok())
-                {
-                    Some(n) => n.min(SWEEP.len() - 1),
-                    None => (knobs.frame / SWEEP_EVERY) as usize % SWEEP.len(),
-                };
-                let mut p = gizmo::renderer::volumetric::VolumetricParams::default();
-                SWEEP[step].1(&mut p);
-                knobs.params = p;
-                vol.params = p;
-
-                if std::env::var("GIZMO_VOL_SELFTEST").is_ok()
-                    && knobs.frame.is_multiple_of(SWEEP_EVERY)
-                {
-                    gizmo::gizmo_log!(
-                        Info,
-                        "kare {:>4} · ayar {:24} · g {:.2} adım {:.0} tavan {:.0} güneş {:.4} \
-                         ampul {:.4} sapma {:.2}",
-                        knobs.frame,
-                        SWEEP[step].0,
-                        p.phase_g,
-                        p.steps,
-                        p.max_distance,
-                        p.sun_scatter,
-                        p.bulb_scatter,
-                        p.shadow_bias
-                    );
-                }
-                world.insert_resource(knobs);
+            if std::env::var("GIZMO_VOL_SELFTEST").is_ok()
+                && knobs.frame.is_multiple_of(SWEEP_EVERY)
+            {
+                gizmo::gizmo_log!(
+                    Info,
+                    "kare {:>4} · ayar {:24} · g {:.2} adım {:.0} tavan {:.0} güneş {:.4} \
+                     ampul {:.4} sapma {:.2}",
+                    knobs.frame,
+                    SWEEP[step].0,
+                    p.phase_g,
+                    p.steps,
+                    p.max_distance,
+                    p.sun_scatter,
+                    p.bulb_scatter,
+                    p.shadow_bias
+                );
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
+            world.insert_resource(knobs);
         })
+        // Turun ayarı `Renderer`'ın alanı: senkron noktasında oyunun defterinden yazılıyor.
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            if let (Some(vol), Some(knobs)) = (
+                renderer.volumetric.as_mut(),
+                game.get_resource::<FogKnobs>(),
+            ) {
+                vol.params = knobs.params;
+            }
+        }))
         .set_ui(move |world, _state, ctx| {
             let knobs = world.get_resource::<FogKnobs>().map(|k| *k);
             gizmo::egui::Area::new("vf".into())

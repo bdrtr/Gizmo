@@ -12,54 +12,41 @@
 //!     `despawn_all_with` UYGULANMAZ: kutular dekoratif statik mesh'ler, duman ise ECS
 //!     varlığı değil GPU parçacığı (kendi `max_life`'ı var). Girdi de yalnız zamanı
 //!     ilerletir → kenar-tespiti (`is_*_just_*`) gerekmez.
-//!   * Elle `GlobalTransform` eklenmez: `default_render_pass` her renderlanabilir mesh'e
-//!     eksik `GlobalTransform`'u geri-doldurur ve local matrisleri senkronlar; kamera da
+//!   * Elle `GlobalTransform` eklenmez: karenin hazırlığı (`prepare_frame`) her renderlanabilir
+//!     mesh'e eksik `GlobalTransform`'u geri-doldurur ve local matrisleri senkronlar; kamera da
 //!     `GlobalTransform` yoksa `Transform` konumuna düşer.
-//!   * Render el-yazımı KALIR (with_scene_render'a çevrilmez): flipbook kurulumu, her kare
-//!     parçacık püskürtme ve `gpu_fluid/ssr/ssgi/volumetric = None` GERÇEK özel iştir.
+//!   * Render `RenderWorld` (with_scene_render'a çevrilmez, o TAA'yı da kapatıyor): flipbook
+//!     kurulumu ve `gpu_fluid/ssr/ssgi/volumetric = None` kurulumda bir kez; her kare parçacık
+//!     püskürtme `with_settings`'te, senkron noktasında — kaynağın saati (`SmokeClock`) oyunun
+//!     kaynağı, update ilerletiyor.
 
 use gizmo::prelude::*;
 use gizmo::renderer::gpu_particles::GpuParticle;
 use std::f32::consts::{FRAC_PI_4, TAU};
 
-struct Smoke {
-    t: f32,
-}
+/// Kaynağın saati: update ilerletiyor, duman püskürtmesi senkron noktasında okuyor.
+struct SmokeClock(f32);
 
 const SOURCE: Vec3 = Vec3::new(0.0, 0.2, 0.0);
 
 fn main() {
     gizmo::app::setup_panic_hook();
     println!("Duman demosu — soft particles + flipbook (prosedürel animasyonlu duman).");
-    App::<Smoke>::new("Gizmo — Duman (Soft + Flipbook)", 1600, 900)
+    App::<()>::new("Gizmo — Duman (Soft + Flipbook)", 1600, 900)
         .add_plugin(TransformPlugin)
         .set_setup(setup)
-        .set_update(|_w, s, dt, _i| s.t += dt)
-        .set_render(|world, state, encoder, view, renderer, _lt| {
-            // İlk frame: prosedürel duman flipbook'u + duman fiziği (buoyancy/drag) ayarla.
-            if let Some(p) = renderer.gpu_particles.as_mut() {
-                if !p.flipbook_on {
-                    p.set_procedural_smoke_flipbook(&renderer.device, &renderer.queue);
-                    p.gravity = -1.2; // negatif → yükselir (buoyancy)
-                    p.drag = 0.35;
-                    p.curl_strength = 2.2; // T3: diverjanssız curl-noise → gerçekçi kıvrılma
-                    p.lit = true; // T4: güneşe göre ışıklandır (aydınlık/gölge yüz)
-                }
+        .set_update(|world, _state, dt, _input| {
+            if let Some(mut clock) = world.get_resource_mut::<SmokeClock>() {
+                clock.0 += dt;
             }
-            // Her frame kaynaktan duman püskürt.
-            let parts = emit_smoke(state.t);
-            if let Some(p) = renderer.gpu_particles.as_ref() {
-                p.spawn_particles(&renderer.queue, &parts);
-            }
-            // Stüdyo ortamı; kullanılmayan ağır pass'ler kapalı.
-            renderer.environment_preset = 1;
-            renderer.environment_preset_2 = 1;
-            renderer.gpu_fluid = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            renderer.volumetric = None;
-            default_render_pass(world, encoder, view, renderer);
         })
+        // Her kare kaynaktan duman püskürt — renderer'ın işi, oyunun saatiyle.
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            let t = game.get_resource::<SmokeClock>().map_or(0.0, |clock| clock.0);
+            if let Some(p) = renderer.gpu_particles.as_ref() {
+                p.spawn_particles(&renderer.queue, &emit_smoke(t));
+            }
+        }))
         .run()
         .expect("çalıştırılamadı");
 }
@@ -90,7 +77,23 @@ fn emit_smoke(t: f32) -> Vec<GpuParticle> {
     v
 }
 
-fn setup(world: &mut World, renderer: &mut Renderer) -> Smoke {
+fn setup(world: &mut World, renderer: &mut Renderer) {
+    // Prosedürel duman flipbook'u + duman fiziği (buoyancy/drag), bir kez.
+    if let Some(p) = renderer.gpu_particles.as_mut() {
+        p.set_procedural_smoke_flipbook(&renderer.device, &renderer.queue);
+        p.gravity = -1.2; // negatif → yükselir (buoyancy)
+        p.drag = 0.35;
+        p.curl_strength = 2.2; // T3: diverjanssız curl-noise → gerçekçi kıvrılma
+        p.lit = true; // T4: güneşe göre ışıklandır (aydınlık/gölge yüz)
+    }
+    // Stüdyo ortamı; kullanılmayan ağır pass'ler kapalı.
+    renderer.environment_preset = 1;
+    renderer.environment_preset_2 = 1;
+    renderer.gpu_fluid = None;
+    renderer.ssr = None;
+    renderer.ssgi = None;
+    renderer.volumetric = None;
+
     let mut assets = AssetManager::new();
     let white = assets.create_white_texture(
         &renderer.device,
@@ -140,5 +143,5 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Smoke {
         Camera::new(1.0, 0.1, 500.0, yaw, pitch, true),
     ));
 
-    Smoke { t: 0.0 }
+    world.insert_resource(SmokeClock(0.0));
 }

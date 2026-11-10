@@ -15,10 +15,11 @@
 //!     döndürülür ama SİLİNMEZ: rope eklemi topun entity-id'sine bağlı; despawn/respawn
 //!     eklemi koparırdı. Bu yüzden bilinçli olarak gövdeleri yerinde sıfırlıyoruz (`resets`
 //!     = ev pozları) — sahne-reset idiomunun eklem-güvenli varyantı.
-//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — motorun `with_scene_render()`
-//!     tek-satır kısayolu VAR ama SSR/SSGI/volumetric/TAA'yı da kapatırdı; metalik topun
-//!     yansımaları için bu efektleri AÇIK tutuyoruz. `gpu_physics` zaten motor-varsayılanı
-//!     `None` (opt-in) olduğundan render'da state-mutasyonu GEREKMEZ.
+//!   * **Sahne render = çıplak `RenderWorld`** — motorun `with_scene_render()` tek-satır
+//!     kısayolu VAR ama SSR/SSGI/volumetric/TAA'yı da kapatırdı; metalik topun yansımaları için
+//!     bu efektleri AÇIK tutuyoruz. Kare oyun dünyasının kopyasından, render thread'inde
+//!     çiziliyor. `gpu_physics` zaten motor-varsayılanı `None` (opt-in) olduğundan aşamaya ayar
+//!     (`with_settings`) GEREKMEZ.
 //!
 //! **R** = yeniden başlat (top + tüm kutular ilk pozlarına döner).
 
@@ -223,23 +224,12 @@ fn update(world: &mut World, state: &mut Wrecking, _dt: f32, input: &Input) {
     }
 }
 
-fn render(
-    world: &mut World,
-    _s: &Wrecking,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    gizmo::systems::default_render_pass(world, encoder, view, renderer);
-}
-
 fn main() {
     App::<Wrecking>::new("Gizmo — Yıkım Topu (R = yeniden başlat)", 1280, 720)
         .add_plugin(PhysicsPlugin::new())
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

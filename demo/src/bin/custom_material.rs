@@ -298,21 +298,25 @@ fn main() {
             });
             scene.spawn_camera(state, Vec3::new(0.0, 1.6, 8.4), Vec3::new(0.0, 0.4, 0.0));
         })
-        .set_render(|world, _state, encoder, view, renderer, _lt| {
-            if let Some(mut r) = world.get_resource::<Report>().map(|r| *r) {
+        // Kare sayacı oyun mantığı: update'te, basit sahnenin kancasının ardından.
+        .add_update_hook(|world, _state, _dt, _input| {
+            if let Some(mut r) = world.get_resource_mut::<Report>() {
                 r.frame += 1;
-                if let Some(t) = world.get_resource::<Timed>() {
-                    let secs = r.frame as f32 / 60.0;
-                    let mut data = [0.0f32; 16];
-                    data[0] = secs;
-                    renderer
-                        .queue
-                        .write_buffer(&t.buffer, 0, bytemuck::cast_slice(&data));
-                }
-                world.insert_resource(r);
             }
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
+        // Zamanı `Timed` tamponuna yüklemek renderer'ın işi: her senkron noktasında, kare
+        // hazırlanmadan önce, sayaç oyunun kaynağından okunarak.
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            let (Some(r), Some(t)) = (game.get_resource::<Report>(), game.get_resource::<Timed>()) else {
+                return;
+            };
+            let secs = r.frame as f32 / 60.0;
+            let mut data = [0.0f32; 16];
+            data[0] = secs;
+            renderer
+                .queue
+                .write_buffer(&t.buffer, 0, bytemuck::cast_slice(&data));
+        }))
         .set_ui(move |world, _state, ctx| {
             let r = world.get_resource::<Report>().map(|r| *r).unwrap_or_default();
             gizmo::egui::Area::new("cm".into())

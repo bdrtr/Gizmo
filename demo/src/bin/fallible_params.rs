@@ -129,13 +129,9 @@ fn main() {
         app = app.add_update_system(unguarded.in_phase(Phase::Update).after("tick"));
     }
 
-    app.set_render(|world, _state, encoder, view, renderer, _light_time| {
-        renderer.gpu_physics = None;
-        renderer.gpu_fluid = None;
-        renderer.gpu_particles = None;
-        renderer.ssr = None;
-        renderer.ssgi = None;
-
+    // Sistemlerden sonra, basit sahnenin update'inin yanında: kaynak bu karenin sistemleri
+    // koştuktan sonra doğuyor, korumalı sistem onu bir sonraki karede görüyor.
+    app.add_update_hook(|world, _state, _dt, _input| {
         // Kaynağı doğurmak yapısal bir değişiklik.
         let born = world
             .get_resource::<Ledger>()
@@ -148,8 +144,6 @@ fn main() {
             }
             gizmo::gizmo_log!(Info, "kaynak {:.2} s'de doğdu", born.0);
         }
-
-        gizmo::systems::default_render_pass(world, encoder, view, renderer);
     })
     .set_ui(move |world, _state, ctx| {
         let Some(l) = world.get_resource::<Ledger>().map(|l| *l) else {

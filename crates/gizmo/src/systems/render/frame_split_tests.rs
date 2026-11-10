@@ -650,3 +650,85 @@ fn geometry_rebuilt_every_frame_and_drawn_from_a_copy_does_not_pile_up() {
         assert!(batches <= 12, "the batcher keeps {batches} batches for a scene of two meshes");
     });
 }
+
+/// **What a game adds to the frame goes on the stage.** `with_settings` runs at the sync point
+/// with the game world — a resource only the game has, which the copy does not carry — and what it
+/// sets is what this frame is drawn with, the same picture as the renderer set by hand. `with_pass`
+/// draws over the finished frame, on the draw's side: it is handed the copy, it runs after the frame
+/// (a full clear in it is the whole picture), and the stage with it still draws on another thread.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_stages_settings_reach_its_frame_and_its_pass_draws_over_it() {
+    use super::RenderWorld;
+    use crate::renderer::gpu_types::TonemapCurve;
+    use gizmo_app::RenderStage;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    /// The game's own setting, which the render extractor does not copy.
+    struct Curve(TonemapCurve);
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        cube_scene(&renderer, &mut game);
+        renderer.tonemap_curve = TonemapCurve::Aces;
+
+        let mut stage = RenderWorld::new().with_settings(|game, renderer| {
+            if let Some(curve) = game.get_resource::<Curve>() {
+                renderer.tonemap_curve = curve.0;
+            }
+        });
+        let mut pictures = Vec::new();
+        for curve in [TonemapCurve::None, TonemapCurve::Reinhard] {
+            game.insert_resource(Curve(curve));
+            stage.prepare(&mut game, &mut renderer);
+            assert_eq!(renderer.tonemap_curve, curve, "the setting did not reach the renderer at the sync point");
+            assert!(stage.world().get_resource::<Curve>().is_none(), "the copy carries the game's own setting");
+            let staged = frame_bytes(&mut renderer, |e, v, r| stage.draw(e, v, r));
+            let by_hand = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+            let differ = staged.chunks(4).zip(by_hand.chunks(4)).filter(|(a, b)| a != b).count();
+            assert_eq!(differ, 0, "{curve:?}: the frame was not drawn with the setting made at its sync point");
+            pictures.push(staged);
+        }
+        let changed = pictures[0].chunks(4).zip(pictures[1].chunks(4)).filter(|(a, b)| a != b).count();
+        assert!(changed > 100, "the two curves drew the same picture ({changed} pixels differ)");
+
+        // A pass: it sees the copy (the camera is there), and it runs after the frame — a clear to
+        // green over the whole target is the whole picture.
+        let cameras_seen = Arc::new(AtomicUsize::new(0));
+        let seen = Arc::clone(&cameras_seen);
+        let mut stage = RenderWorld::new().with_pass(move |copy, encoder, view, _renderer| {
+            seen.store(copy.query::<&Camera>().iter().count(), Ordering::Relaxed);
+            encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("a-game-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::GREEN), store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+        });
+        stage.prepare(&mut game, &mut renderer);
+        let picture = std::thread::scope(|s| {
+            s.spawn(|| frame_bytes(&mut renderer, |e, v, r| stage.draw(e, v, r)))
+                .join()
+                .expect("the draw panicked on its thread")
+        });
+        assert_eq!(cameras_seen.load(Ordering::Relaxed), 1, "the pass was not handed the copy");
+        let green = picture.chunks(4).filter(|p| p[0] < 10 && p[1] > 245 && p[2] < 10).count();
+        assert_eq!(green, 128 * 128, "the pass did not draw over the finished frame");
+    });
+}

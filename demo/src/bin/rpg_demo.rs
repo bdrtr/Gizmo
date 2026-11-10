@@ -16,10 +16,10 @@
 //!   * **Manuel `physics_step_system`** — `App` PhysicsPlugin EKLEMEZ (bu demo alt-adımı
 //!     kendi sürer); dolayısıyla `DespawnAfter`/`DespawnBelowY` de YOK: ömür-planlayıcı
 //!     kayıtlı değil ve zaten geçici/uçan varlık yok (chunk'lar havuzla temizlenir).
-//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` kısayolu
-//!     VAR ama KULLANMIYORUZ: render burada GERÇEK özel iş yapar (shader hot-reload
-//!     yoklaması + performans için `gpu_fluid`/`gpu_particles` kapatma). Bu işler kısayola
-//!     sığmaz, korunur.
+//!   * **Sahne render = `RenderWorld`** — `with_scene_render()` kısayolu VAR ama KULLANMIYORUZ:
+//!     o efektleri kapatıyor. Shader hot-reload yoklaması `with_settings`'te, her senkron
+//!     noktasında (dosya izleyicisi o kapanışın içinde yaşıyor); `gpu_fluid`/`gpu_particles`
+//!     performans için kurulumda bir kez kapatılıyor.
 //!
 //! ## Kontroller
 //!   * **W A S D** — kamera yönünde hareket · **SPACE** — zıpla · **Sağ-tık + fare** — bak
@@ -39,7 +39,6 @@ struct RpgState {
     character_entity: gizmo::core::Entity,
     camera_yaw: f32,
     camera_pitch: f32,
-    asset_watcher: std::sync::Mutex<Option<gizmo::renderer::AssetWatcher>>,
 }
 
 struct ChunkAssets {
@@ -197,14 +196,16 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RpgState {
         ),
     ));
 
+    // Gökyüzünden düşen su damlalarını kapatıyoruz (performans için) — bir kez: kapalı bir
+    // geçişi hiçbir şey geri açmıyor.
+    renderer.gpu_fluid = None;
+    renderer.gpu_particles = None;
+
     println!("✅ SETUP: Tamamlandı!");
-    let watcher =
-        gizmo::renderer::AssetWatcher::new(&["assets/shaders", "assets/textures", "assets/models"]);
     RpgState {
         character_entity: char_ent,
         camera_yaw: 0.0,
         camera_pitch: -PI / 8.0,
-        asset_watcher: std::sync::Mutex::new(watcher),
     }
 }
 
@@ -427,51 +428,36 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
     }
 }
 
-fn render(
-    world: &mut World,
-    state: &RpgState,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    if let Ok(mut watcher_guard) = state.asset_watcher.lock() {
-        if let Some(watcher) = watcher_guard.as_mut() {
-            let changed_files = watcher.poll_changes();
-            if !changed_files.is_empty() {
-                let mut rebuild_shaders = false;
-                for path in changed_files {
-                    let ext = path
-                        .extension()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_lowercase();
-                    if ext == "wgsl" {
-                        rebuild_shaders = true;
-                    }
-                }
-                if rebuild_shaders {
-                    println!("♻️ Hot-Reload: Shaderlar yeniden derleniyor...");
-                    renderer.rebuild_shaders();
-                    println!("✅ Hot-Reload: Shader derleme tamamlandı.");
-                }
-            }
+/// Shader hot-reload: değişen bir `.wgsl` görünce boru hatlarını yeniden kuruyor. Her senkron
+/// noktasında yoklanıyor — renderer orada elde, çizim yokken.
+fn shader_hot_reload(
+    watcher: Option<gizmo::renderer::AssetWatcher>,
+) -> impl FnMut(&World, &mut Renderer) + Send + 'static {
+    move |_game, renderer| {
+        let Some(watcher) = watcher.as_ref() else { return };
+        let rebuild_shaders = watcher.poll_changes().iter().any(|path| {
+            path.extension()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("wgsl")
+        });
+        if rebuild_shaders {
+            println!("♻️ Hot-Reload: Shaderlar yeniden derleniyor...");
+            renderer.rebuild_shaders();
+            println!("✅ Hot-Reload: Shader derleme tamamlandı.");
         }
     }
-
-    // Gökyüzünden düşen su damlalarını kapatıyoruz (performans için)
-    renderer.gpu_fluid = None;
-    renderer.gpu_particles = None;
-
-    // Default render pass (Kamera, Işıklar, Model, Skybox, SSGI, SSR, Bloom vs. her şeyi yapar)
-    gizmo::systems::render::default_render_pass(world, encoder, view, renderer);
 }
 
 fn main() {
     App::<RpgState>::new("Gizmo Engine - Open World RPG Demo", 1600, 900)
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(RenderWorld::new().with_settings(shader_hot_reload(gizmo::renderer::AssetWatcher::new(&[
+            "assets/shaders",
+            "assets/textures",
+            "assets/models",
+        ]))))
         .run()
         .expect("uygulama çalıştırılamadı");
 }

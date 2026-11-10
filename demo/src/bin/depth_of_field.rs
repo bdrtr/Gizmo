@@ -116,6 +116,10 @@ const DEPTHS: [f32; 6] = [4.0, 8.0, 12.0, 16.0, 20.0, 24.0];
 fn main() {
     App::<SimpleSceneState>::new("Gizmo Engine - Depth of Field", 1280, 720)
         .with_simple_scene(|scene, state| {
+            // Bloom kapalı: ölçülen şey keskinlik, keskinlik + hale değil. Eksen üstü sınamanın
+            // erken dönüşünden önce, ki iki sahnede de kapalı olsun.
+            scene.renderer.bloom_intensity = 0.0;
+
             let device = &scene.renderer.device;
             // Dama tahtası: bulanıklık ancak yüksek frekanslı bir doku üzerinde ölçülebilir.
             let checker = scene.asset_manager.create_checkerboard_texture(
@@ -175,25 +179,15 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 0.4, 0.0), Vec3::new(0.0, 0.0, -14.0));
         })
         .add_update_system(dof_input.in_phase(Phase::Update))
-        // Dört düğme de `Renderer`'ın alanı.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            // Bloom kapalı: ölçülen şey keskinlik, keskinlik + hale değil.
-            renderer.bloom_intensity = 0.0;
-
-            if let Some(dof) = world.get_resource::<Dof>().map(|d| *d) {
+        // Dört düğme de `Renderer`'ın alanı: senkron noktasında oyunun kaynağından yazılıyor.
+        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
+            if let Some(dof) = game.get_resource::<Dof>() {
                 renderer.dof_enabled = dof.enabled;
                 renderer.dof_focus_dist = dof.focus;
                 renderer.dof_focus_range = dof.range;
                 renderer.dof_blur_size = dof.blur;
             }
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        }))
         .set_ui(|world, _state, ctx| {
             let Some(dof) = world.get_resource::<Dof>().map(|d| *d) else {
                 return;

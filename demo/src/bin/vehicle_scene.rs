@@ -16,8 +16,9 @@
 //!     (Pacejka lastik + süspansiyon kuvvetlerini Velocity'ye yazar) SONRA `cpu_physics_step_system`
 //!     çalışmalı — bu SIRA plugin'e devredilemez, o yüzden accumulator döngüsü OLDUĞU GİBİ kaldı.
 //!     Ömür schedule'ı YOK + geçici/uçan varlık YOK → `DespawnAfter/BelowY` BURAYA UYGULANMAZ.
-//!   * **Sahne render = `default_render_pass` DOĞRUDAN** — `with_scene_render()` tek-satır kısayolu
-//!     SSR/SSGI/volumetric/TAA'yı kapatırdı; deferred boru hattını açık tutmak için çıplak çağrı.
+//!   * **Sahne render = çıplak `RenderWorld`** — `with_scene_render()` tek-satır kısayolu
+//!     SSR/SSGI/volumetric/TAA'yı kapatırdı; deferred boru hattını açık tutmak için ayarsız aşama.
+//!     Kare oyun dünyasının kopyasından, render thread'inde çiziliyor.
 //!
 //! ## Kontroller
 //!   * **I** — gaz · **K** — geri · **SPACE** — fren · **J / L** — direksiyon sol/sağ
@@ -28,7 +29,7 @@ use gizmo::physics::vehicle::{Axle, VehicleController, Wheel};
 use gizmo::physics::vehicle_controller_system;
 use gizmo::physics::world::PhysicsWorld;
 use gizmo::prelude::*;
-use gizmo::systems::{cpu_physics_step_system, default_render_pass};
+use gizmo::systems::cpu_physics_step_system;
 use std::f32::consts::{FRAC_PI_3, PI};
 
 struct VehicleState {
@@ -307,17 +308,6 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
     }
 }
 
-fn render(
-    world: &mut World,
-    _state: &VehicleState,
-    encoder: &mut gizmo::wgpu::CommandEncoder,
-    view: &gizmo::wgpu::TextureView,
-    renderer: &mut Renderer,
-    _light_time: f32,
-) {
-    default_render_pass(world, encoder, view, renderer);
-}
-
 fn ui(world: &mut World, state: &mut VehicleState, ctx: &egui::Context) {
     let mut speed_kmh = 0.0;
     let mut rpm = 0.0;
@@ -362,7 +352,7 @@ fn main() {
     App::<VehicleState>::new("Gizmo Engine - Raycast Vehicle Sandbox", 1280, 720)
         .set_setup(setup)
         .set_update(update)
-        .set_render(render)
+        .set_render_stage(RenderWorld::new())
         .set_ui(ui)
         .run()
         .expect("uygulama çalıştırılamadı");

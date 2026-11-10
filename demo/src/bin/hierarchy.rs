@@ -120,18 +120,9 @@ fn main() {
         })
         .add_update_system(rotate.in_phase(Phase::Update).label("rotate"))
         .add_update_system(tick.in_phase(Phase::Update).after("rotate"))
-        // Ağacı bozan/kuran her şey `&mut World` istiyor.
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-
-            advance_stages(world);
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Ağacı bozan/kuran her şey `&mut World` istiyor: sistemlerden sonra, basit sahnenin
+        // update'inin yanında.
+        .add_update_hook(|world, _state, _dt, _input| advance_stages(world))
         .set_ui(|world, _state, ctx| {
             let Some(tree) = world.get_resource::<Tree>().map(|t| t.clone()) else {
                 return;

@@ -117,6 +117,16 @@ impl Look {
 fn main() {
     App::<SimpleSceneState>::new("Gizmo Engine - Color Grading", 1280, 720)
         .with_simple_scene(|scene, state| {
+            // Yedek yolun karşılaştırılabilir olması için: bileşen yokken bloom da kapalı olsun.
+            scene.renderer.bloom_intensity = 0.0;
+            // Bileşensiz yolda köşe karartması artık ULAŞILABİLİR (2026-08-23'te eklendi).
+            // `GIZMO_VIGNETTE` verilmezse motorun kendi varsayılanı (0,25) korunuyor.
+            if let Ok(v) = std::env::var("GIZMO_VIGNETTE") {
+                if let Ok(v) = v.parse::<f32>() {
+                    scene.renderer.vignette_intensity = v;
+                }
+            }
+
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -149,26 +159,9 @@ fn main() {
             scene.spawn_camera(state, Vec3::new(0.0, 0.0, 2.0), Vec3::new(0.0, 0.0, -6.0));
         })
         .add_update_system(grade_input.in_phase(Phase::Update))
-        .set_render(|world, _state, encoder, view, renderer, _light_time| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            // Yedek yolun karşılaştırılabilir olması için: bileşen yokken bloom da kapalı olsun.
-            renderer.bloom_intensity = 0.0;
-            // Bileşensiz yolda köşe karartması artık ULAŞILABİLİR (2026-08-23'te eklendi).
-            // `GIZMO_VIGNETTE` verilmezse motorun kendi varsayılanı (0,25) korunuyor.
-            if let Ok(v) = std::env::var("GIZMO_VIGNETTE") {
-                if let Ok(v) = v.parse::<f32>() {
-                    renderer.vignette_intensity = v;
-                }
-            }
-
-            apply_look(world);
-
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-        })
+        // Bileşeni takıp çıkarmak `&mut World` istiyor: sistemlerden sonra, basit sahnenin
+        // kancasının ardından.
+        .add_update_hook(|world, _state, _dt, _input| apply_look(world))
         .set_ui(|world, _state, ctx| {
             let look = world.get_resource::<Look>().map(|l| *l).unwrap_or(Look::Neutral);
             gizmo::egui::Area::new("grade".into())
@@ -200,7 +193,8 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-/// Yalnız tuşları okur; bileşeni takıp çıkarmak yapısal bir değişiklik, o `set_render`'de.
+/// Yalnız tuşları okur; bileşeni takıp çıkarmak yapısal bir değişiklik, o update kancasında
+/// (`apply_look`).
 fn grade_input(mut look: ResMut<Look>, input: Res<Input>) {
     use gizmo::winit::keyboard::KeyCode;
     for (key, value) in [

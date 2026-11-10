@@ -20,7 +20,8 @@
 //! birincil kameranın üstüne yazıyordu. Aşağıdaki "on altı kat hız, bit bit aynı" ölçümü bu yüzden
 //! **duran bir kamerayı** ölçmüş — sonucu doğruydu (bulanıklık yoktu), sebebi yanlıştı. Yeni
 //! bulanıklık burada hiçbir şey yapmayınca bulundu: geçen karenin görüntü-izdüşümü her kare
-//! aynıydı. Kamera artık `set_render`'da, uçan kameradan sonra yerleştiriliyor.
+//! aynıydı. Kamera artık basit sahneden sonra eklenen update kancasında (`add_update_hook`), uçan
+//! kameradan sonra yerleştiriliyor.
 //!
 //! Ölçüldü (kare 1200, sol yarı, Sobel kenar enerjisi; aynı açı, üç hız):
 //!
@@ -149,6 +150,13 @@ fn main() {
 
     App::<SimpleSceneState>::new("Gizmo Engine - Motion Blur", 1280, 720)
         .with_simple_scene(move |scene, state| {
+            // TAA, boru hattında harekete tepki veren TEK bileşen — ve tepkisi geçmişi
+            // reddetmek, yani hızlı hareketi bulanıklaştırmak değil **keskinleştirmek**.
+            // Ölçümü ondan ayırabilmek için kapatılabiliyor.
+            if std::env::var("GIZMO_BLUR_NO_TAA").is_ok() {
+                scene.renderer.taa = None;
+            }
+
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,
@@ -211,40 +219,28 @@ fn main() {
                 spin_object
             );
             scene.spawn_camera(state, Vec3::new(0.0, 1.2, ORBIT_RADIUS), Vec3::ZERO);
-        })
-        .add_update_system(drive.in_phase(Phase::PreUpdate))
-        .set_render(|world, _state, encoder, view, renderer, _lt| {
-            renderer.gpu_physics = None;
-            renderer.gpu_fluid = None;
-            renderer.gpu_particles = None;
-            renderer.ssr = None;
-            renderer.ssgi = None;
-            // TAA, boru hattında harekete tepki veren TEK bileşen — ve tepkisi geçmişi
-            // reddetmek, yani hızlı hareketi bulanıklaştırmak değil **keskinleştirmek**.
-            // Ölçümü ondan ayırabilmek için kapatılabiliyor.
-            if std::env::var("GIZMO_BLUR_NO_TAA").is_ok() {
-                renderer.taa = None;
-            }
             // `GIZMO_BLUR_SHUTTER=0.5`: kameraya deklanşörü açık bir `PostProcess`. Bileşenin
-            // varsayılanı bileşensiz davranış, yani değişen tek şey bulanıklık.
+            // varsayılanı bileşensiz davranış, yani değişen tek şey bulanıklık. Kurulumda bir kez:
+            // demonun tek kamerası bir satır yukarıda doğuyor ve bileşeni kimse çıkarmıyor.
             if let Some(shutter) = std::env::var("GIZMO_BLUR_SHUTTER").ok().and_then(|v| v.parse::<f32>().ok()) {
-                let cams: Vec<Entity> = world.query::<(Entity, &Camera)>().iter().map(|(entity, _)| entity).collect();
-                for id in cams {
-                    if world.query::<&PostProcess>().get(id).is_none() {
-                        if let Some(e) = world.live(id) {
-                            let mut grade = PostProcess::default();
-                            grade.motion_blur = shutter;
-                            world.add_component(e, grade);
-                        }
-                    }
+                let cams: Vec<Entity> =
+                    scene.world.query::<(Entity, &Camera)>().iter().map(|(entity, _)| entity).collect();
+                for camera in cams {
+                    let mut grade = PostProcess::default();
+                    grade.motion_blur = shutter;
+                    scene.world.add_component(camera, grade);
                 }
             }
+        })
+        .add_update_system(drive.in_phase(Phase::PreUpdate))
+        .add_update_hook(|world, _state, _dt, _input| {
             // **The camera is placed HERE, not in `drive`.** `drive` runs in PreUpdate, and the
             // simple scene's fly camera then writes its own pose over the primary camera every
             // frame — so until 2026-11-01 this demo's camera never moved at all, and the "sixteen
             // times the speed, bit-identical pixels" measurement above was a still camera. Found
             // when the new motion blur did nothing here: the last frame's view-projection was the
-            // same on every frame. `set_render` runs after the fly camera, so this pose sticks.
+            // same on every frame. This hook is added after `with_simple_scene`, so it runs after
+            // the simple scene's own (the fly camera), and this pose sticks.
             if let Some(m) = world.get_resource::<Motion>().map(|m| *m) {
                 if !m.spin_object {
                     let pos = Vec3::new(m.angle.cos() * ORBIT_RADIUS, 1.2, m.angle.sin() * ORBIT_RADIUS);
@@ -259,7 +255,6 @@ fn main() {
                     }
                 }
             }
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
         })
         .set_ui(move |world, _state, ctx| {
             let Some(m) = world.get_resource::<Motion>().map(|m| *m) else {
@@ -331,8 +326,8 @@ fn drive(
             t.rotation = Quat::from_rotation_y(a);
         }
     } else {
-        // The camera's pose is written in `set_render` (see there): written here, the fly camera
-        // overwrote it before every frame.
+        // The camera's pose is written in the update hook added after `with_simple_scene` (see
+        // there): written here, the fly camera overwrote it before every frame.
         let _ = &mut cameras;
     }
 
