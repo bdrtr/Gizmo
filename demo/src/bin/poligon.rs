@@ -313,9 +313,14 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     if fire && game.shots < AMMO {
         if game.auto_shots > 0 {
             game.auto_shots -= 1;
-            // Otomatik atış: en yakın kaideye doğru biraz sağa sola.
+            // Otomatik atış: en yakın kaideye doğru biraz sağa sola, yığınların üst kasalarına.
+            // En alttaki kasa yanındakilere ve üstündekilerin yüküne sıkışık: bir atış onu
+            // birkaç santim kaydırır, devirmez. 2026-11-10'a kadar deviriyordu — kutu–kutu teması
+            // yığınları gerçekte olduğundan zayıf tutuyordu (`analytical.rs`,
+            // `t1_an_offset_box_stands_while_its_centre_is_over_the_one_below`) ve nişan da ona
+            // göre aşağıdaydı (-0.02).
             game.yaw = -std::f32::consts::FRAC_PI_2 + (game.auto_shots as f32 - 3.0) * 0.12;
-            game.pitch = -0.02;
+            game.pitch = 0.03;
         }
         game.shots += 1;
         play(world, "ates");

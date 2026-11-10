@@ -200,6 +200,51 @@ fn t1_sphere_rests_on_floor() {
     assert!(vy.abs() < 0.1, "vy={vy}: dinlenmede ≈0");
 }
 
+/// **A box on a box stands while its centre of mass is over the one below, and topples once it is
+/// past the edge** — statics, closed form: the support is the whole overlap of the two faces, so the
+/// line is the lower box's edge, half a width (0.24 here) from its centre.
+///
+/// The box–box clip used to test the upper box's corners against the lower box's face instead of
+/// clipping the face, so an offset box was held up only at the corners that happened to lie over
+/// the other box — one edge, inside the true support. Measured 2026-11-10: a 0.48 m box 0.10 m off
+/// centre fell off when the lower box was the reference, and hung 9 cm above it when it was not;
+/// the games built on such stacks (`poligon`'s crates, `vinc`'s building) had been tuned to stacks
+/// weaker than real. Both spawn orders, because which box is the reference follows the pair order.
+#[test]
+fn t1_an_offset_box_stands_while_its_centre_is_over_the_one_below() {
+    for upper_first in [false, true] {
+        for (offset, stands) in [(0.10f32, true), (0.18, true), (0.30, false)] {
+            let mut w = scene(Vec3::new(0.0, -G, 0.0));
+            floor(&mut w, 0.0);
+            let h = Vec3::splat(0.24);
+            let make = |w: &mut World, at: Vec3| {
+                let collider = Collider::box_collider(h);
+                let mut rb = RigidBody::new(2.0, true);
+                rb.update_inertia_from_collider(&collider);
+                spawn(w, Transform::new(at), rb, Velocity::default(), collider)
+            };
+            let (lower_at, upper_at) = (Vec3::new(0.0, 0.24, 0.0), Vec3::new(offset, 0.725, 0.0));
+            let (upper, lower) = if upper_first {
+                let u = make(&mut w, upper_at);
+                (u, make(&mut w, lower_at))
+            } else {
+                let l = make(&mut w, lower_at);
+                (make(&mut w, upper_at), l)
+            };
+            step(&w, 960);
+            let (u, l) = (pos(&w, upper), pos(&w, lower));
+            let label = format!("offset {offset} ({})", if upper_first { "upper first" } else { "lower first" });
+            if stands {
+                assert!((u.y - 0.72).abs() < 0.02, "{label}: the upper box left its place — at {u:?}");
+                assert!((u.x - offset).abs() < 0.02, "{label}: the upper box slid to {u:?}");
+            } else {
+                assert!(u.y < 0.3, "{label}: the upper box is past the edge and did not fall — at {u:?}");
+            }
+            assert!(l.x.abs() < 0.05 && (l.y - 0.24).abs() < 0.02, "{label}: the lower box moved to {l:?}");
+        }
+    }
+}
+
 #[test]
 fn t1_restitution_controls_bounce_height() {
     // Aynı yükseklikten iki küre; e=0.9 belirgin biçimde e=0.2'den yükseğe zıplamalı.

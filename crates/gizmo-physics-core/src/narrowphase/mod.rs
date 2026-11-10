@@ -307,9 +307,12 @@ impl NarrowPhase {
         // SAT sweep — find minimum penetration axis.
         let mut min_pen = f32::MAX;
         let mut best_axis = Vec3::Y;
+        // Where the best axis came from: `axes` is A's three face axes, then B's, then the edge
+        // crosses (`box_separating_axes`).
+        let mut best_index = 0usize;
         let mut flip = false;
 
-        for &axis in &axes[..n_axes] {
+        for (index, &axis) in axes[..n_axes].iter().enumerate() {
             let pen = sat_penetration(&axis, &ax, &ha_, &bx, &hb_, t);
             if pen < 0.0 {
                 return vec![]; // Separating axis found — no overlap.
@@ -317,6 +320,7 @@ impl NarrowPhase {
             if pen < min_pen {
                 min_pen = pen;
                 best_axis = axis;
+                best_index = index;
                 // Ensure normal points from A toward B.
                 flip = t.dot(axis) < 0.0;
             }
@@ -324,14 +328,16 @@ impl NarrowPhase {
 
         let normal = if flip { -best_axis } else { best_axis };
 
-        // Choose reference face (the box whose axis is most aligned with the
-        // contact normal gets to be the reference).  Threshold of 1/√2 ≈ 0.707
-        // correctly handles 45° diagonal contacts; the original 0.9 threshold
-        // misclassified many legitimate face contacts as edge-edge.
+        // The reference is the box whose FACE the separating axis is — the face the other box is
+        // pushed out of. It used to be whichever box had an axis within 45° of the normal, A asked
+        // first: with A turned 30° against an axis-aligned B whose face IS the separating axis, A
+        // was the reference, and the manifold measured B's flat face against A's corner — depths
+        // that did not describe the overlap. An edge–edge axis belongs to neither box, and there
+        // the better-aligned box is the reference, as before.
         let (ref_pos, ref_rot, ref_h, inc_pos, inc_rot, inc_h, ref_is_a) =
-            if is_face_axis(normal, &ax, 0.707) {
+            if best_index < 3 {
                 (pos_a, rot_a, ha, pos_b, rot_b, hb, true)
-            } else if is_face_axis(normal, &bx, 0.707) {
+            } else if best_index < 6 {
                 (pos_b, rot_b, hb, pos_a, rot_a, ha, false)
             } else {
                 // Edge–edge: choose the box whose local axis is better aligned.
@@ -997,7 +1003,7 @@ mod trimesh_tests {
 // The contact-generation helpers moved to `contacts`; import the ones the pair methods above
 // call so their bodies stay verbatim. The 377-line test suite moved to `tests`.
 mod contacts;
-use contacts::{box_corners, clip_box_box, is_face_axis, mk_contact, sat_penetration};
+use contacts::{box_corners, clip_box_box, mk_contact, sat_penetration};
 
 #[cfg(test)]
 mod tests;

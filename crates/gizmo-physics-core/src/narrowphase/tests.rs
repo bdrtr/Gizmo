@@ -235,40 +235,37 @@ fn box_box_contact_count_at_most_4() {
 }
 
 #[test]
-fn box_box_rotated_penetration_along_normal_equals_mtv() {
-    // Regression: contact depth must be measured along the CONTACT NORMAL, not the
-    // reference-face axis. Box A rotated 30° about Y (half 1,1,1) at origin; axis-aligned
-    // Box B (half 1,1,1) at (1.2,0,0). True MTV along X ≈ 1.16603. The old
-    // depth-along-face-axis code reported 1.327/1.327/0.327/0.327 — a +14% overshoot on
-    // two points and asymmetric depths across a symmetric flat contact (→ spurious torque).
+fn box_box_rotated_manifold_is_the_overlap_and_its_deepest_point_is_the_mtv() {
+    // Box A turned 30° about Y (half 1,1,1) at the origin, axis-aligned box B (half 1,1,1) at
+    // (1.2,0,0). The separating axis is B's X face (true MTV ≈ 1.16603: A reaches x = 0.866 + 0.5
+    // = 1.366, B's face is at 0.2), so B is the reference and A's +x' face the incident one.
+    //
+    // The overlap is a WEDGE, not a slab: A's face meets B's face at an angle. Its deep edge is A's
+    // corner edge at x = 1.366, z = 0.366 — depth 1.166, the MTV — and where A's face leaves B's
+    // z-slab (z = −1) it is at x = 0.577, depth 0.377. So the manifold is two points at the MTV and
+    // two shallower, the same in either pair order.
+    //
+    // This test used to demand four points at the MTV ("uniform across a flat contact"): A was then
+    // the reference (any axis within 45° counted as a face, A asked first) and B's flat face was
+    // scored against A's support plane — which gave B's far corner, 7 cm into A, a depth of 1.17 m.
+    // Uniform, and not the overlap (2026-11-10).
     let rot = Quat::from_rotation_y(std::f32::consts::FRAC_PI_6); // 30°
-    let contacts = NarrowPhase::box_box(
-        Vec3::ZERO,
-        rot,
-        Vec3::splat(1.0),
-        Vec3::new(1.2, 0.0, 0.0),
-        Quat::IDENTITY,
-        Vec3::splat(1.0),
-    );
-    assert!(!contacts.is_empty(), "rotated overlapping boxes must collide");
-    let expected_mtv = 1.166_f32;
-    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
-    for c in &contacts {
-        lo = lo.min(c.penetration);
-        hi = hi.max(c.penetration);
-        assert!(
-            (c.penetration - expected_mtv).abs() < 0.02,
-            "penetration {} must equal the true MTV {} (measured along the contact normal)",
-            c.penetration,
-            expected_mtv,
-        );
+    let a_first = NarrowPhase::box_box(Vec3::ZERO, rot, Vec3::splat(1.0), Vec3::new(1.2, 0.0, 0.0), Quat::IDENTITY, Vec3::splat(1.0));
+    let b_first = NarrowPhase::box_box(Vec3::new(1.2, 0.0, 0.0), Quat::IDENTITY, Vec3::splat(1.0), Vec3::ZERO, rot, Vec3::splat(1.0));
+    for (label, contacts, normal) in [("A first", &a_first, Vec3::X), ("B first", &b_first, -Vec3::X)] {
+        assert_eq!(contacts.len(), 4, "{label}: {contacts:?}");
+        let mut depths: Vec<f32> = contacts.iter().map(|c| c.penetration).collect();
+        depths.sort_by(f32::total_cmp);
+        for (depth, expected) in depths.iter().zip([0.3768, 0.3768, 1.166, 1.166]) {
+            assert!((depth - expected).abs() < 0.01, "{label}: depths {depths:?}, expected two at 0.377 and two at the MTV 1.166");
+        }
+        for c in contacts.iter() {
+            assert!(c.normal.dot(normal) > 0.999, "{label}: normal {:?}", c.normal);
+            if c.penetration > 1.0 {
+                assert!((c.point.x - 1.366).abs() < 0.01 && (c.point.z - 0.366).abs() < 0.01, "{label}: the deep points are A's corner edge, got {:?}", c.point);
+            }
+        }
     }
-    // Depths across a coplanar face-face manifold must be uniform (no phantom torque).
-    assert!(
-        hi - lo < 0.02,
-        "manifold depths must be uniform across a flat contact, spread was {}",
-        hi - lo
-    );
 }
 
 // ── Dispatcher ────────────────────────────────────────────────────────

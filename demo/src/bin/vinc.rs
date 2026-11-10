@@ -1,6 +1,6 @@
 //! # Vinç — gülleyle binayı yık
 //!
-//! Yandan bir şantiye: tepede bir vinç kancası, ona 6 m'lik bir iple asılı 300 kg'lık bir gülle,
+//! Yandan bir şantiye: tepede bir vinç kancası, ona 8 m'lik bir iple asılı 300 kg'lık bir gülle,
 //! sağda kırılabilir bloklardan bir bina. Kancayı sağa sola sürüp gülleyi sallandır; sert vuran
 //! gülle bloğu parçalara ayırır, sarsılan bloklar devrilir. 45 saniyede binanın beşte dördünü
 //! indir. Motorun yirmi birinci oyunu ve **kırılmayı** kullanan ilki.
@@ -22,6 +22,16 @@
 //!   dolunca siliniyor.
 //! - **İp görünmüyordu.** `Gizmos` basit sahnede yoktu; `draw_line` çağrıları sessizce boşa
 //!   gidiyordu. **Düzeltildi:** basit sahne boş bir `Gizmos` kuruyor.
+//!
+//! - **Bina gerçekte olduğundan zayıftı.** Kutu–kutu teması, bir bloğu yalnızca köşeleri alttakinin
+//!   üstüne düşen kısmından taşıyordu; yarı kaymış bloklar ağırlık merkezleri daha alttakinin
+//!   üstündeyken devriliyor, alt katlar üstten düşen enkazla yıkılıyordu. **Düzeltildi**
+//!   (2026-11-10, motorun temas kırpması; `analytical.rs`'de
+//!   `t1_an_offset_box_stands_while_its_centre_is_over_the_one_below`). Oyun bu zayıflığa göre
+//!   kurulmuştu: 6,5 m'lik ipte gülle hiçbir zaman 2,8 m'nin altına inmiyor, alt üç kata hiç
+//!   vurmuyordu, ve otomatik pilot yalnız ilk sütunu sallıyordu — bina eskiden kendiliğinden
+//!   çöktüğü için yetiyordu. Şimdi ip 8 m (gülle alt katlara iniyor) ve otomatik pilot ayakta kalan
+//!   en soldaki sütunu izliyor.
 //!
 //! Gerisi ilk denemede çalıştı: `Joint::rope` (kanca ile gülle), kanca `KinematicTarget` ile.
 //! Blokların kırılma eşiği 90 N·s: 300 kg'lık güllenin 30 kg'lık bloğa vuruşu ~160 N·s, 250'lik bir
@@ -45,7 +55,7 @@ use gizmo::simple::{HeadlessFrames, sync_transforms, FixedPhysics, SimpleAppExt,
 const HOOK_Y: f32 = 10.0;
 const HOOK_RANGE: (f32, f32) = (-9.0, 6.0);
 const HOOK_SPEED: f32 = 5.0;
-const ROPE: f32 = 6.5;
+const ROPE: f32 = 8.0;
 const BALL_R: f32 = 0.7;
 const BALL_MASS: f32 = 300.0;
 const COLUMNS: usize = 4;
@@ -76,6 +86,8 @@ struct Game {
     banner: Entity,
     over: Option<bool>,
     auto: bool,
+    /// Otomatik pilotun salınım merkezi — bkz. `autopilot`.
+    auto_centre: f32,
 }
 
 /// Sahneyi ve oyun durumunu kurar (pencere de GPU da gerekmez; `--test` aynısını kullanır).
@@ -130,6 +142,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
         banner,
         over: None,
         auto: std::env::var_os("VINC_OTO").is_some(),
+        auto_centre: HOOK_RANGE.0,
     };
     restart(world, &mut game);
     game
@@ -266,14 +279,12 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     if game.over.is_none() {
         game.clock += dt;
-        let drive = if game.auto {
-            // Salınımı besleyen bir ileri-geri: ipin kendi periyoduna yakın.
-            let period = std::f32::consts::TAU * (ROPE / 9.81).sqrt();
-            (game.clock * std::f32::consts::TAU / period).sin()
+        if game.auto {
+            autopilot(world, &mut game, dt);
         } else {
-            input.move_axis().0
-        };
-        game.hook_x = (game.hook_x + drive * HOOK_SPEED * dt).clamp(HOOK_RANGE.0, HOOK_RANGE.1);
+            let drive = input.move_axis().0;
+            game.hook_x = (game.hook_x + drive * HOOK_SPEED * dt).clamp(HOOK_RANGE.0, HOOK_RANGE.1);
+        }
         if let Some(mut k) = world.query_mut::<&mut KinematicTarget>().get_mut(game.hook) {
             *k = KinematicTarget::new(Vec3::new(game.hook_x, HOOK_Y, 0.0), Quat::IDENTITY);
         }
@@ -293,6 +304,26 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
 
 /// Yıkılmış sayılan bloklar: kırılmış (artık yok), yan yatmış ya da ilk yerinden bir kattan
 /// fazla aşağı düşmüş olanlar.
+/// Otomatik pilot, bir oyuncunun oynayacağı gibi: kanca ipin kendi periyoduyla sallanır (gülle her
+/// seferinde daha geniş sallanır), salınımın merkezi de ayakta kalan en soldaki bloğun 2 m gerisini
+/// saniyede en çok 1 m'lik bir hızla izler — bir sütun yıkılınca sıradakine geçer.
+fn autopilot(world: &World, game: &mut Game, dt: f32) {
+    const BACK: f32 = 2.0;
+    let standing_x = {
+        let ts = world.query::<&Transform>();
+        world.query::<(Entity, &Block)>().iter()
+            .filter_map(|(entity, b)| ts.get(entity).filter(|t| t.position.y > b.0 - BLOCK.y * 2.0).map(|t| t.position.x))
+            .fold(f32::INFINITY, f32::min)
+    };
+    if standing_x.is_finite() {
+        let target = standing_x - BACK;
+        game.auto_centre += (target - game.auto_centre).clamp(-dt, dt);
+    }
+    let period = std::f32::consts::TAU * (ROPE / 9.81).sqrt();
+    let swing = 2.5 * (game.clock * std::f32::consts::TAU / period).sin();
+    game.hook_x = (game.auto_centre + swing).clamp(HOOK_RANGE.0, HOOK_RANGE.1);
+}
+
 fn count_down(world: &World, game: &mut Game) {
     game.broken = COLUMNS * FLOORS - world.query::<&Block>().iter().count();
     let standing = {

@@ -32,15 +32,6 @@ pub(super) fn sat_penetration(
     proj_a + proj_b - dist
 }
 
-/// Returns `true` when `normal` is well-aligned with one of the box axes,
-/// indicating that a face (rather than an edge) is the contact feature.
-///
-/// `threshold` should be `1/√2 ≈ 0.707` to correctly handle 45° cases.
-#[inline]
-pub(super) fn is_face_axis(normal: Vec3, axes: &[Vec3; 3], threshold: f32) -> bool {
-    axes.iter().any(|a| a.dot(normal).abs() > threshold)
-}
-
 // ============================================================================
 //  Geometry helpers
 // ============================================================================
@@ -135,9 +126,20 @@ fn select_4_contacts(mut contacts: Vec<ContactPoint>) -> Vec<ContactPoint> {
 
 /// Sutherland–Hodgman box-vs-box clip.
 ///
-/// Tests all 8 corners of the incident box against the reference box's face
-/// and its 4 side slabs.  Returns up to 4 contacts selected for maximum
+/// The incident box's face that faces the reference box — the one whose outward normal points
+/// most against `normal` — is clipped against the four side planes of the reference face, and
+/// every vertex of what is left that lies on or behind the reference box's support plane is a
+/// contact, its depth measured along `normal`. Returns up to 4 contacts selected for maximum
 /// coverage.
+///
+/// **A clip, not a corner test.** This tested the incident box's eight corners against the
+/// reference face's slab and kept those inside it — which finds the contact patch only when its
+/// corners are the incident box's own corners. In a deep, rotated overlap the deep part of the
+/// patch is bounded by the slab's sides, not by corners: the incident corners inside the slab were
+/// only the ones barely touching, every contact came back at depth 0, and the solver had nothing
+/// to push apart. Found by `box_box_collision_is_symmetric` on CI (2026-11-10): two boxes 3.3
+/// deep into each other, depth 0 one way round and 3.3 the other. The clip puts vertices on the
+/// slab's sides where the incident face crosses them, so the deep part is in the manifold.
 ///
 /// `normal` must point **from reference toward incident** (A → B convention
 /// from the caller's perspective).
@@ -207,32 +209,79 @@ pub(super) fn clip_box_box(
     /// See `gizmo-physics-rigid/tests/solver_quality.rs::what_does_a_manifold_look_like_when_it_is_born`.
     const DEPTH_TOLERANCE: f32 = 1e-4;
 
-    let contacts: Vec<ContactPoint> = box_corners(inc_pos, inc_rot, inc_h)
+    // The incident face: the face of the incident box whose outward normal points most against
+    // `normal` (which points reference → incident), i.e. the one turned towards the reference box.
+    let inc_axes = [inc_rot.mul_vec3(Vec3::X), inc_rot.mul_vec3(Vec3::Y), inc_rot.mul_vec3(Vec3::Z)];
+    let inc_h_arr = [inc_h.x, inc_h.y, inc_h.z];
+    let (k, _) = inc_axes
         .iter()
-        .filter_map(|&corner| {
-            // 1. Corner must be on or behind the reference face (depth along `normal`).
-            let signed_depth = ref_face_d - corner.dot(normal);
-            if signed_depth < -DEPTH_TOLERANCE {
-                return None;
-            } // in front of reference face
+        .enumerate()
+        .map(|(i, a)| (i, a.dot(normal).abs()))
+        .fold((0, 0.0f32), |(bi, bv), (i, v)| if v > bv { (i, v) } else { (bi, bv) });
+    let outward = if inc_axes[k].dot(normal) > 0.0 { -inc_axes[k] } else { inc_axes[k] };
+    let centre = inc_pos + outward * inc_h_arr[k];
+    let u = inc_axes[(k + 1) % 3] * inc_h_arr[(k + 1) % 3];
+    let v = inc_axes[(k + 2) % 3] * inc_h_arr[(k + 2) % 3];
+    let mut polygon: arrayvec::ArrayVec<Vec3, 8> = arrayvec::ArrayVec::new();
+    polygon.extend([centre + u + v, centre - u + v, centre - u - v, centre + u - v]);
 
-            // 2. Corner must lie within the side slabs of the reference face.
-            let local = corner - ref_pos;
-            if local.dot(t0).abs() > e0 + SLAB_TOLERANCE {
+    // Clipped against the reference face's four side planes, each `p · axis <= offset`.
+    for (axis, extent) in [(t0, e0), (-t0, e0), (t1, e1), (-t1, e1)] {
+        polygon = clip_to_half_space(&polygon, axis, ref_pos.dot(axis) + extent + SLAB_TOLERANCE);
+        if polygon.is_empty() {
+            return Vec::new();
+        }
+    }
+
+    // The reference face itself, turned towards the incident box. A clipped point is a contact only
+    // if it is behind this plane — inside the reference box — and not merely behind its support
+    // plane along `normal`: when the reference box is tilted against the incident face (a crate
+    // pitching as it slides along a pedestal is the reference, the pedestal's top the incident
+    // face), the face clipped to the crate's footprint runs under the crate's RAISED edge too, and
+    // every such point sat behind the support plane at the depth of the lowest edge. Those
+    // contacts held the raised side up as if it were buried, and their friction stopped a crate
+    // knocked at 3 m/s in a tenth of a second (measured on `poligon`'s pedestals).
+    let face_axis = ref_axes[face_idx];
+    let face_normal = if face_axis.dot(normal) >= 0.0 { face_axis } else { -face_axis };
+    let face_d = ref_pos.dot(face_normal) + ref_h_arr[face_idx];
+    // The reference face's normal is within 45° of `normal` for a face contact and within ~55°
+    // for an edge one (the most aligned of three orthogonal axes), so this never divides by less
+    // than about 0.57.
+    let along = face_normal.dot(normal).max(0.5);
+
+    let contacts: Vec<ContactPoint> = polygon
+        .iter()
+        .filter_map(|&point| {
+            let support_depth = ref_face_d - point.dot(normal);
+            let face_depth = face_d - point.dot(face_normal);
+            // Inside the reference box (behind its face), and behind its support plane.
+            if support_depth < -DEPTH_TOLERANCE || face_depth < -DEPTH_TOLERANCE {
                 return None;
             }
-            if local.dot(t1).abs() > e1 + SLAB_TOLERANCE {
-                return None;
-            }
-
-            // Clamp penetration to be physically meaningful.
-            // We allow slightly less than `min_pen` to avoid silently clamping
-            // valid shallow contacts to an arbitrary fraction.
-            let depth = signed_depth.max(0.0);
-
-            Some(mk_contact(corner, normal, depth))
+            // The point's own depth: how far it travels along `normal` before it leaves the
+            // reference box through that face — never more than the support plane's depth. For
+            // boxes whose faces line up (every resting stack) the two are the same number.
+            let depth = (face_depth / along).min(support_depth).max(0.0);
+            Some(mk_contact(point, normal, depth))
         })
         .collect();
 
     select_4_contacts(contacts)
+}
+
+/// One Sutherland–Hodgman step: the part of the convex `polygon` with `p · axis <= offset`. A
+/// quadrilateral clipped by four half-spaces has at most eight vertices, so it stays on the stack.
+fn clip_to_half_space(polygon: &[Vec3], axis: Vec3, offset: f32) -> arrayvec::ArrayVec<Vec3, 8> {
+    let mut out = arrayvec::ArrayVec::new();
+    for (i, &a) in polygon.iter().enumerate() {
+        let b = polygon[(i + 1) % polygon.len()];
+        let (da, db) = (a.dot(axis) - offset, b.dot(axis) - offset);
+        if da <= 0.0 {
+            let _ = out.try_push(a);
+        }
+        if (da <= 0.0) != (db <= 0.0) {
+            let _ = out.try_push(a + (b - a) * (da / (da - db)));
+        }
+    }
+    out
 }

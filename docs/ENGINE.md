@@ -1890,6 +1890,43 @@ solver's effective lateral restoring stiffness was below the buckling-critical v
   (`direct_chain_solve` + `solve_island_normals`, normals only, O(n³)) is not needed for it and is
   not planned. See §7.
 
+**Box–box contacts tested the incident box's corners instead of clipping its face — SOLVED** *(2026-11-10)*.
+`clip_box_box` was documented as a Sutherland–Hodgman clip and was a corner test: it kept the
+incident box's eight corners that lay inside the reference face's slab. That finds the contact patch
+only where the patch's corners are the incident box's own corners. Two consequences, both measured:
+- **An offset stack was supported at one edge.** A 0.48 m box 0.10 m off the centre of another —
+  its centre of mass well over the lower box — kept only the corners over the lower box, a single
+  edge inside the true support, and **fell off** when the lower box was the reference; with the
+  pair the other way round it hung 9 cm above it. Stacks were weaker than real: `poligon`'s crate
+  columns fell when a base crate was nudged, `vinc`'s building collapsed on its own once a few
+  blocks broke.
+- **A deep, rotated overlap came back at depth 0.** The deep part of the patch is bounded by the
+  slab's sides, not by corners, so only the corners barely touching were inside: CI's proptest
+  (`box_box_collision_is_symmetric`) found two boxes 3.3 deep into each other at depth 0 one way
+  round and 3.3 the other.
+- **Fix:** the incident box's face that faces the reference is clipped against the reference face's
+  four side planes; a vertex of what is left is a contact if it lies inside the reference box
+  (behind its face plane), with its own depth — the distance along the normal to leave through that
+  face, capped by the support-plane depth. For boxes whose faces line up (every resting stack) that
+  is the number the old code produced. The face-plane test is not optional: without it, a tilted
+  small reference (a crate pitching as it slides on a pedestal) clipped the pedestal's face to its
+  footprint and every point took the lowest edge's depth, even under the raised edge — friction
+  from those points stopped a crate knocked at 3 m/s in a tenth of a second.
+- **And the reference box is the one whose face the separating axis is.** It used to be whichever
+  box had an axis within 45° of the normal, A asked first — so with A turned 30° against an
+  axis-aligned B whose X face IS the separating axis, A was the reference and B's flat face was
+  scored against A's support plane: four points "at the MTV", one of them 7 cm into A and reported
+  1.17 m deep. Edge–edge axes still take the better-aligned box. The manifold is now the same in
+  either pair order (two points at the MTV on A's corner edge, two at 0.377 where A's face leaves
+  B's slab), and `narrowphase::tests` holds that geometry instead of the old uniform depths.
+- **Regression:** `analytical.rs::t1_an_offset_box_stands_while_its_centre_is_over_the_one_below`
+  (offsets 0.10 and 0.18 stand, 0.30 topples, both pair orders; the old clip fails it at 0.10),
+  `proptest_collision.rs::box_box_deep_overlap_found_by_proptest`, and
+  `narrowphase::tests::box_box_rotated_manifold_is_the_overlap_and_its_deepest_point_is_the_mtv`.
+- **Games retuned to real stacks:** `poligon`'s autopilot aims at the upper crates (a base crate is
+  held by its neighbours and the load above it), and `vinc`'s rope is 8 m instead of 6.5 (the ball
+  never reached the lower three floors) with an autopilot that follows the standing column.
+
 **At exact contact the manifold collapsed to a SINGLE POINT — SOLVED** *(2026-08-06)*.
 The depth test in `narrowphase/contacts.rs::clip_box_box` had no tolerance (`signed_depth <= 0.0`).
 At exact contact the depth of all four corners is exactly zero → all of them are culled and the

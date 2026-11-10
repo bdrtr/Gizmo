@@ -158,3 +158,24 @@ proptest! {
         prop_assert!(is_finite_vec(c.normal) && (c.normal.length() - 1.0).abs() < 0.05);
     }
 }
+
+/// The counterexample CI's proptest run found on 2026-11-10 (`box_box_collision_is_symmetric`): two
+/// boxes overlapping deeply, whose contact one way round came back without a positive penetration.
+/// Kept as a plain test so it runs on every machine, whatever seeds proptest draws.
+#[test]
+fn box_box_deep_overlap_found_by_proptest() {
+    let pos_a = Vec3::new(0.19378246, 2.8377733, 1.0837457);
+    let rot_a = Quat::from_xyzw(0.07685717, 0.4427529, 0.38805622, -0.8046585);
+    let half_a = Vec3::new(1.7033052, 1.9996243, 2.5774977);
+    let pos_b = Vec3::new(1.0388844, 1.7975655, 0.59607244);
+    let rot_b = Quat::from_xyzw(0.27560723, 0.4572, 0.2550628, 0.8061959);
+    let half_b = Vec3::new(2.675617, 1.6040545, 0.73713976);
+    let shape_a = ColliderShape::Box(BoxShape { half_extents: half_a });
+    let shape_b = ColliderShape::Box(BoxShape { half_extents: half_b });
+    let ab = NarrowPhase::test_collision(&shape_a, pos_a, rot_a, &shape_b, pos_b, rot_b);
+    let ba = NarrowPhase::test_collision(&shape_b, pos_b, rot_b, &shape_a, pos_a, rot_a);
+    let (ca, cb) = (ab.expect("A against B touches"), ba.expect("B against A touches"));
+    assert!(ca.penetration.is_finite() && ca.penetration > 0.0, "A against B: penetration {}", ca.penetration);
+    assert!(cb.penetration.is_finite() && cb.penetration > 0.0, "B against A: penetration {}", cb.penetration);
+    assert!(ca.normal.dot(cb.normal) < 0.5, "the normals do not oppose: {}", ca.normal.dot(cb.normal));
+}
