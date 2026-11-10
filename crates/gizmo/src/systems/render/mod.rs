@@ -273,13 +273,21 @@ pub fn draw_frame(
         return;
     }
     capture_reflection_probes(world, renderer);
+    renderer.planar.begin_frame();
     let camera = crate::renderer::components::active_camera(world);
     let mut positions = vec![camera_world_position(world, camera)];
     positions.extend(target_camera_positions(world));
     let lods = step_gpu_simulations_ahead(world, renderer, &positions);
-    capture_planar_reflections(world, renderer, camera, lods);
+    // The texture cameras first, each with its mirrors; the frame's own mirrors last, so they are
+    // what the frame's view samples.
     draw_camera_targets(world, renderer, lods, 1);
+    capture_planar_reflections(world, renderer, camera, lods, renderer_aspect(renderer));
     draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
+}
+
+/// The renderer's own shape — the frame's, when its view is the whole target.
+fn renderer_aspect(renderer: &Renderer) -> f32 {
+    renderer.size.width as f32 / renderer.size.height.max(1) as f32
 }
 
 /// Whether any camera in `world` asks for a [`Viewport`](crate::renderer::components::Viewport).
@@ -315,6 +323,8 @@ pub fn draw_camera_targets(world: &World, renderer: &mut Renderer, lods: (f32, f
     targets.sort_by_key(|&(order, id, _)| (order, id));
     for (index, (_, camera, target)) in targets.into_iter().enumerate() {
         let (width, height) = target.size();
+        // Its mirrors, captured for it, just before it.
+        capture_planar_reflections(world, renderer, Some(camera), lods, width as f32 / height.max(1) as f32);
         let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("camera_target"),
         });
@@ -401,6 +411,7 @@ pub fn draw_viewports(
             views.push((order, id, crate::renderer::components::Viewport::new(0.0, 0.0, 1.0, 1.0)));
         }
     }
+    renderer.planar.begin_frame();
     if views.is_empty() {
         capture_reflection_probes(world, renderer);
         let camera = crate::renderer::components::active_camera(world);
@@ -408,6 +419,7 @@ pub fn draw_viewports(
         positions.extend(target_camera_positions(world));
         let lods = step_gpu_simulations_ahead(world, renderer, &positions);
         draw_camera_targets(world, renderer, lods, 1);
+        capture_planar_reflections(world, renderer, camera, lods, renderer_aspect(renderer));
         draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
         return;
     }
@@ -450,6 +462,9 @@ pub fn draw_viewports(
 
     for (index, &(_, camera, viewport)) in views.iter().enumerate() {
         let region = viewport.to_pixels(size.width, size.height);
+        // Its mirrors, captured for it at its rectangle's shape, just before it: the capture is
+        // submitted now and the view after it.
+        capture_planar_reflections(world, renderer, Some(camera), lods, region[2] / region[3].max(1.0));
         renderer.with_view_history(index, |renderer| {
             draw_camera_view(world, &mut frame, view, renderer, Some(camera), lods, Some(region), false, None);
         });
@@ -637,13 +652,25 @@ pub fn capture_reflection_probes(world: &World, renderer: &mut Renderer) {
     tracing::debug!(captured = pending.len(), probes = owners.len(), size, "[Render] reflection probes captured");
 }
 
-/// Draws the scene again for each [`PlanarReflection`] the camera can see from the front, into that
-/// mirror's texture, before the frame's own draw. A mirror out of view or seen from behind costs
-/// nothing and draws plain this frame. See [`crate::renderer::planar`].
-fn capture_planar_reflections(world: &World, renderer: &mut Renderer, camera: Option<Entity>, lods: (f32, f32)) {
+/// Draws the scene again for each [`PlanarReflection`] `camera` can see from the front, into that
+/// mirror's texture, before that camera's view is drawn — `aspect` is the view's shape. A mirror out
+/// of view or seen from behind costs nothing and draws plain in this view. See
+/// [`crate::renderer::planar`].
+///
+/// **Once per view, each just before its view.** A frame with several views (a texture camera, a
+/// split-screen view) captures for each in turn: every capture and every view is a submission of its
+/// own, so the GPU runs them as capture, view, capture, view, and each view samples the reflection
+/// made for its own camera. The frame's own view captures last.
+fn capture_planar_reflections(
+    world: &World,
+    renderer: &mut Renderer,
+    camera: Option<Entity>,
+    lods: (f32, f32),
+    aspect: f32,
+) {
     use crate::renderer::components::PlanarReflection;
     use crate::renderer::planar::{oblique_projection, reflect_direction, reflect_point};
-    renderer.planar.begin_frame();
+    renderer.planar.begin_view();
     let mirrors: Vec<(Entity, PlanarReflection)> =
         world.query::<(Entity, &PlanarReflection)>().iter().map(|(entity, r)| (entity, *r)).collect();
     let owners: Vec<Entity> = mirrors.iter().map(|m| m.0).collect();
@@ -651,7 +678,6 @@ fn capture_planar_reflections(world: &World, renderer: &mut Renderer, camera: Op
     let Some(camera) = camera.filter(|_| !mirrors.is_empty()) else { return };
     // The camera as this frame draws it — shaken, if it shakes — so the mirror shakes with the view.
     let Some((cam, eye)) = drawn_camera(world, camera) else { return };
-    let aspect = renderer.size.width as f32 / renderer.size.height.max(1) as f32;
     let projection = cam.get_projection(aspect);
     let forward = cam.get_front();
     let up = cam.get_right().cross(forward);

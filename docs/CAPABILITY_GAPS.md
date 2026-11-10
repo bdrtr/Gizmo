@@ -475,10 +475,12 @@ the same size); the frame's own view is unchanged by it, drawn from the game wor
 world's copy; a portrait target keeps a cube square; and with no camera marked primary, a target
 camera first in the world is still not the frame's. `render_to_texture` draws its top camera this
 way and writes it out from a pass; it used to flip `primary` between two `default_render_pass` calls
-in a raw hook, preparing the frame twice, and is what the history below records. As a split-screen
-view does not, a texture camera does not get mirrors of its own: a mirror it sees shows the
-reflection captured for the frame's camera (per-view planar captures are a mirror's cost times the
-cameras — work of their own). Found writing it, and fixed the same day: a texture camera and a
+in a raw hook, preparing the frame twice, and is what the history below records. Its mirrors are its own:
+each view's are captured for its camera just before it (`begin_view` per view, the frame's own last),
+so a texture camera standing apart from the frame's draws its own reflection
+(`a_mirror_a_texture_camera_sees_reflects_for_that_camera`: to the pixel what it draws as the frame's
+own camera; 13 084 pixels differed with the frame's camera's capture) — and split screen, which
+captured none and drew mirrors plain, does the same now. Found writing it, and fixed the same day: a texture camera and a
 mirror's capture are submitted before the frame's own encoder, and the frame's GPU simulations
 (particles, fluid, GPU physics) were recorded into that encoder, so both drew them one step behind
 the frame's view. The simulations are stepped in a submission of their own ahead of every view now,
@@ -845,9 +847,11 @@ water's own texture is not read while it reflects, and seen from underwater it h
 plain. The plane is the surface at rest: what touches the water sits slightly off a tall wave.
 
 **What it does not do:** no blur (every mirror is perfectly sharp, roughness is ignored); mirrors do
-not appear in each other or in a reflection probe, so no mirror-in-a-mirror; it draws plain in split
-screen and in the studio
-(`render_parity` records why). The reduced path has it and its shader is validated under the web
+not appear in each other or in a reflection probe, so no mirror-in-a-mirror; it draws plain in the
+studio (`render_parity` records why). Split screen drew it plain too until 2026-11-10: every view now
+captures its own just before it is drawn — a split-screen view and a camera that draws into a texture
+alike — one more scene draw per mirror per view that sees it
+(`a_mirror_in_a_split_screen_view_reflects_for_its_camera`). The reduced path has it and its shader is validated under the web
 schema, but **it has not been run in a browser or on a phone.**
 
 Before this entry, and what the demo `mirror` still records: no reflection-plane concept, no oblique frustum, no stencil buffer, and a render target cannot be

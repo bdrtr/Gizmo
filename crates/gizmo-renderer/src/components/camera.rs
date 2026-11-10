@@ -431,7 +431,8 @@ impl Camera {
 /// a split-screen view is; the camera's projection takes the texture's aspect. Clones share one
 /// texture.
 ///
-/// A mirror the camera sees shows the reflection captured for the frame's own camera.
+/// A mirror the camera sees reflects for it: its mirrors are captured for it, just before it is
+/// drawn — one more scene draw for each mirror it sees.
 #[derive(Clone, Debug)]
 pub struct CameraTarget {
     texture: std::sync::Arc<wgpu::Texture>,

@@ -930,3 +930,133 @@ fn a_texture_camera_where_the_frames_camera_stands_draws_the_frames_picture() {
         assert_eq!(differ, 0, "the twin drew a different picture from the frame's ({differ} pixels): not the same simulation step");
     });
 }
+
+/// A mirror 10 ahead of the origin facing +z, a red cube behind the origin to the left (seen only
+/// in the mirror from there), a green one between; all unlit, so a colour counted is that object.
+fn mirror_room(renderer: &Renderer, world: &mut World) {
+    use crate::renderer::components::{Material, MeshRenderer, PlanarReflection};
+    let mut assets = crate::renderer::asset::AssetManager::new();
+    let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+    let cube = crate::renderer::asset::AssetManager::create_cube(&renderer.device);
+    let mut spawn = |at: Vec3, scale: Vec3, colour: Vec4| {
+        world.spawn_bundle((
+            Transform::new(at).with_scale(scale),
+            GlobalTransform::default(),
+            cube.clone(),
+            Material::new(tex.clone()).with_unlit(colour),
+            MeshRenderer::new(),
+        ))
+    };
+    let mirror = spawn(Vec3::new(0.0, 0.0, -10.0), Vec3::new(9.0, 7.0, 0.05), Vec4::new(0.0, 0.0, 0.0, 1.0));
+    spawn(Vec3::new(-6.0, 0.0, 6.0), Vec3::splat(1.5), Vec4::new(1.0, 0.0, 0.0, 1.0));
+    spawn(Vec3::new(4.0, 2.0, -6.0), Vec3::splat(0.5), Vec4::new(0.0, 1.0, 0.0, 1.0));
+    world.add_component(mirror, PlanarReflection::new().facing(Vec3::Z, 1.0));
+}
+
+/// **A mirror a texture camera sees reflects for that camera.** Each view's mirrors are captured
+/// for its own camera, just before it: a texture camera standing apart from the frame's camera draws
+/// what it draws as the frame's own — the red cube it sees only in the mirror included — to the
+/// pixel; and the frame's own view, whose mirrors are captured last, is unchanged by it. The
+/// capture used to be the frame's camera's alone, so the texture camera's mirror showed the frame's
+/// camera's reflection.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_mirror_a_texture_camera_sees_reflects_for_that_camera() {
+    use crate::renderer::components::CameraTarget;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        let gpu = renderer.gpu_context();
+        let toward_mirror = -std::f32::consts::FRAC_PI_2;
+        let frame_camera = crate::bundles::CameraBundle { position: Vec3::ZERO, yaw: toward_mirror, primary: true, ..Default::default() };
+        let apart = crate::bundles::CameraBundle {
+            position: Vec3::new(3.0, 1.0, 3.0),
+            yaw: toward_mirror,
+            primary: false,
+            ..Default::default()
+        };
+
+        // The frame alone, and the camera apart as the frame's own camera.
+        let mut alone = World::new();
+        alone.insert_resource(clock(1.0 / 60.0));
+        mirror_room(&renderer, &mut alone);
+        alone.spawn_bundle(frame_camera);
+        prepare_frame(&mut alone, &mut renderer);
+        let frame_alone = frame_bytes(&mut renderer, |e, v, r| draw_frame(&alone, e, v, r));
+        let mut reference = World::new();
+        reference.insert_resource(clock(1.0 / 60.0));
+        mirror_room(&renderer, &mut reference);
+        reference.spawn_bundle(crate::bundles::CameraBundle { primary: true, ..apart });
+        prepare_frame(&mut reference, &mut renderer);
+        let as_frame = frame_bytes(&mut renderer, |e, v, r| draw_frame(&reference, e, v, r));
+        let red = |p: &[u8]| p[0] > 120 && p[1] < 60 && p[2] < 60;
+        assert!(as_frame.chunks(4).filter(|p| red(p)).count() > 30, "the camera apart does not see the red cube in the mirror");
+
+        // Both cameras in one world, the one apart drawing into a texture.
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        mirror_room(&renderer, &mut game);
+        game.spawn_bundle(frame_camera);
+        let watcher = game.spawn_bundle(apart);
+        let target = CameraTarget::new(&gpu, 128, 128);
+        game.add_component(watcher, target.clone());
+        prepare_frame(&mut game, &mut renderer);
+        let frame = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+        let through_target = texture_bytes(&renderer, target.texture());
+        let differ = as_frame.chunks(4).zip(through_target.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "the texture camera's mirror is not its own ({differ} pixels differ)");
+        let differ = frame_alone.chunks(4).zip(frame.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "the frame's own view changed with a texture camera in the room ({differ} pixels)");
+        assert_eq!(renderer.planar.captures, 2, "one capture for each camera that sees the mirror");
+    });
+}
+
+/// **A mirror in a split-screen view reflects for that view's camera.** Both halves see the mirror,
+/// and the red cube behind both cameras shows in each half — it can only come through the mirror.
+/// Split screen captured no mirror at all: they drew plain in every view.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_mirror_in_a_split_screen_view_reflects_for_its_camera() {
+    use crate::renderer::components::Viewport;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        let toward_mirror = -std::f32::consts::FRAC_PI_2;
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        mirror_room(&renderer, &mut game);
+        let left = game.spawn_bundle(crate::bundles::CameraBundle { position: Vec3::ZERO, yaw: toward_mirror, primary: true, ..Default::default() });
+        let right = game.spawn_bundle(crate::bundles::CameraBundle {
+            position: Vec3::new(3.0, 1.0, 3.0),
+            yaw: toward_mirror,
+            primary: false,
+            ..Default::default()
+        });
+        for (camera, x) in [(left, 0.0), (right, 0.5)] {
+            game.query_mut::<&mut Camera>().get_mut(camera).expect("a camera").viewport = Some(Viewport::new(x, 0.0, 0.5, 1.0));
+        }
+        prepare_frame(&mut game, &mut renderer);
+        let frame = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+        let red = |p: &[u8]| p[0] > 120 && p[1] < 60 && p[2] < 60;
+        let (mut in_left, mut in_right) = (0, 0);
+        for (i, p) in frame.chunks(4).enumerate() {
+            if red(p) {
+                if i % 128 < 64 { in_left += 1 } else { in_right += 1 }
+            }
+        }
+        assert!(in_left > 10 && in_right > 10, "the red cube through the mirror: left {in_left}, right {in_right}");
+        assert_eq!(renderer.planar.captures, 2, "one capture for each view");
+    });
+}

@@ -15,8 +15,9 @@ use gizmo_math::{Mat4, Vec3, Vec4};
 /// waves then break the reflection up, and Fresnel decides how much of it shows. (The water's own
 /// texture is not read while it reflects; its colour is.) Seen from underwater it has no capture and
 /// draws as plain water. Mirrors do not appear in each other, in their own reflection or in a reflection probe, and
-/// there is no blur: every mirror is perfectly sharp. On a split-screen view, and in the editor, the
-/// surface draws as its plain colour.
+/// there is no blur: every mirror is perfectly sharp. Every view captures its own — a split-screen
+/// view and a camera drawing into a texture reflect for their own camera, one more scene draw each —
+/// and in the editor the surface draws as its plain colour.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PlanarReflection {
     /// The surface's outward normal in the mesh's local space (default +Y, a floor or a pool).

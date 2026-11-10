@@ -84,6 +84,7 @@ fn draw_studio_frame(
     // too, so a monitor in the scene shows in the editor what it shows in the game — each a whole
     // view of the world, submitted on its own ahead of this frame, at full level of detail, as the
     // editor shows everything.
+    renderer.planar.begin_frame();
     gizmo::systems::render::draw_camera_targets(world, renderer, (1.0, 1.0), 1);
 
     let (aspect, ed_shading_mode, show_colliders, post_params, game_view_visible) =

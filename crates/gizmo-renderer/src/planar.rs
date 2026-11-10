@@ -62,9 +62,16 @@ pub struct PlanarReflections {
 }
 
 impl PlanarReflections {
-    /// Forgets this frame's captures; a mirror draws plain until it has a new one.
+    /// Starts a frame: forgets the last view's captures and counts this frame's from zero.
     pub fn begin_frame(&mut self) {
         self.captures = 0;
+        self.begin_view();
+    }
+
+    /// Starts one view's captures: forgets the last view's, so a mirror draws plain in this view
+    /// until it has a capture made for it. A frame with several views (a texture camera, split
+    /// screen) captures for each in turn, and [`captures`](Self::captures) counts all of them.
+    pub fn begin_view(&mut self) {
         for mirror in self.mirrors.values_mut() {
             mirror.captured = false;
         }
