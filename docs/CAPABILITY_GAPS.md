@@ -957,7 +957,54 @@ Measured in `ecs_absent_apis`:
   asks for one now and the render hook, which holds the renderer, does it. **Still open:** whether
   the engine's own paths (`SimpleApp`, `with_scene_render`) should turn the thread on by default —
   that wants a measurement in a window; and the hooks of individual demos that call
-  `default_render_pass` themselves (28 move for free). One behaviour change, deliberate: an entity
+  `default_render_pass` themselves (28 move for free). **Stage 9, 2026-11-10: the render thread is
+  the default, and the loop paces itself.** Measured in a window first (`demo/src/bin/render_thread.rs`:
+  a grid of turning cubes, `--work MS` of game work, frame period and the time from the start of a
+  frame's update to the end of its draw). On the loop's thread against a render thread: no frame
+  rate lost anywhere, and 20–36 % gained with 8 ms of game work — but with a light update the
+  thread added 3 ms (2 000 cubes) and 8 ms (20 000 cubes) of latency for no frame rate, because the
+  update started at once and then waited for the draw at the sync point holding old input. So the
+  loop now paces itself (`gizmo-app`'s `pacing`): the render thread reports how long each frame kept
+  it busy (`DrawReport::busy`), the loop measures its own busy time between handing a frame over
+  and coming back for it, and while the draw is the slower side the next update starts that much
+  later less a margin — the loop waits in the event loop (`ControlFlow::WaitUntil`), where window
+  input keeps arriving, instead of at the sync point. The delay falls fast and rises slowly (a delay
+  the draw no longer needs costs frame rate). Measured again on the final code: frame / latency,
+  inline against threaded — 2 000 cubes 3.9 / 2.6 against 4.2 / 3.9 ms (an earlier run: 4.3 / 2.7
+  against 3.4 / 3.4), with 8 ms of work 11.0 / 10.0 against 9.2 / 10.1; 20 000 cubes 20.8 / 19.7
+  against 19.5 / 20.5, with 8 ms of work 27.4 / 26.3 against 19.9 / 26.2; the same shape with
+  vsync. So: 19–37 % more frames with game work at the same latency, and with a light update the
+  same frame rate within the noise and up to 1.3 ms more latency. So a `RenderStage` draws on a render thread by default on
+  native targets, and `App::with_render_thread(false)` keeps the loop's thread; only an explicit
+  `true` with a hook that cannot be drawn there is warned about. Checked in a window on 19 demos
+  with a screenshot at frame 150 (egui overlays, text, picking, physics, decals, occlusion, an
+  orthographic camera): every one exited cleanly with its picture, 14 of them on the render thread
+  (the other five replace the stage with a `set_render` hook of their own). Before the flip, an
+  eight-agent review read the threaded path for what a default would break, each finding checked
+  by a second agent trying to refute it. What it found and what came of it: the swapchain was
+  configured again on the render thread, where configuring waits for the GPU to go idle and a
+  texture the game uploads during that wait fails the wait — wgpu raises it, and with no handler
+  that is a panic; the draw now only reports a stale swapchain (`DrawReport::reconfigure`) and the
+  loop configures it at the sync point, where it is the only submitter. The frame still in flight
+  at exit is finished on the main thread before anything else is dropped (a panic in it was
+  discarded by the join, and the surface — which holds the window — was dropped after the window,
+  on the render thread; on macOS the last window handle must go on the main thread). A draw that
+  panicked with an egui frame in hand aborted debug builds (epaint's "unapplied deltas" assert
+  during the unwind); the frame clears itself only while unwinding. The crash dialog for a draw's
+  panic named the pipeline's line; the hook now keeps the render thread's location and the sync
+  point's panic carries it. The draw's time is recorded in the `FrameProfiler` as `draw` at each
+  sync point (`record_scope`), since a render thread's draw runs outside every scope.
+  `occlusion_culling`, whose table splits a frame's cost by subtracting frame times, draws on the
+  loop's thread. And one defect older than the thread, high: geometry rebuilt every frame (cloth,
+  rope, soft bodies, a vision cone) leaked an upload per frame — see the commit before this one.
+  **Not done, and why:** two findings could not be confirmed from the code, and the second agent on
+  one of them refuted it. On macOS, wgpu-hal 30's Metal acquire reads `NSView.window` and
+  `NSWindow.occlusionState` on the thread that acquires — getters on live objects, off the main
+  thread, inside an API wgpu documents as thread-free; a Main Thread Checker would report it. On
+  Wayland, a present on the render thread can commit window state winit applied during its
+  dispatch, before the app saw the matching `Resized` — a one-frame geometry mismatch while
+  resizing, and with integer scaling (no fractional-scale protocol) and an odd window size,
+  possibly a protocol error. Neither is reproducible on this machine. One behaviour change, deliberate: an entity
   parented to a shaking camera is no longer shaken with it (it was moved by the camera's shaken
   `Transform` and left with that `GlobalTransform` after the undo; the camera's yaw and pitch shake
   never reached it).

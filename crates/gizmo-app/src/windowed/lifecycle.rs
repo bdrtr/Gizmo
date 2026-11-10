@@ -109,9 +109,16 @@ impl<State: 'static> App<State> {
 
         #[cfg(not(target_arch = "wasm32"))]
         {
-            event_loop
-                .run_app(&mut self)
-                .map_err(crate::AppError::EventLoop)?;
+            let ran = event_loop.run_app(&mut self).map_err(crate::AppError::EventLoop);
+            // The frame still on the render thread is finished here, on this thread, before
+            // anything else of the app is dropped: a panic in it is raised now, as any draw's
+            // panic is at a sync point — dropping the pipeline joins the thread and has to discard
+            // one — and the renderer, whose surface holds the window, goes before the window does.
+            // On macOS the last handle on a window must not be dropped off the main thread.
+            if let Some(mut gpu) = self.gpu.take() {
+                gpu.sync();
+            }
+            ran?;
             tracing::info!("[App::run] event loop exited");
             // `resumed` returns `()`, so a lazy-init failure can't propagate through
             // `run_app`. Surface it here so `run` honors its documented AppError
@@ -236,8 +243,8 @@ impl<State: 'static> App<State> {
                 None
             }
         };
-        let threaded = self.render_thread && stage.is_some() && cfg!(not(target_arch = "wasm32"));
-        if self.render_thread && !threaded {
+        let threaded = super::stage::draws_on_a_render_thread(self.render_thread, stage.is_some());
+        if self.render_thread == Some(true) && !threaded {
             tracing::warn!(
                 hook = self.render.name(),
                 "[App] a render thread was asked for, and every frame is drawn on the loop's thread: \

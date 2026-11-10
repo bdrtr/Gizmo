@@ -227,6 +227,14 @@ pub fn setup_panic_hook() {
 
             let error_msg = format!("Gizmo Engine Coktu!\n\nKonum: {}\nHata: {}\n", location, message);
             tracing::error!("{}", error_msg);
+            // The render thread's panic is raised again on the main thread at the next sync point,
+            // and that is where the dialog opens — with that line's location unless this one is
+            // kept for it (see `take_render_thread_panic_location`).
+            if std::thread::current().name() == Some(RENDER_THREAD_NAME) {
+                if let Ok(mut last) = RENDER_THREAD_PANIC.lock() {
+                    *last = Some(location.clone());
+                }
+            }
 
             #[cfg(feature = "window")]
             {
@@ -243,6 +251,22 @@ pub fn setup_panic_hook() {
             }
         }));
     }
+}
+
+/// The name of the thread a render stage's draw runs on (`windowed::pipeline`). `wasm32` has none.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+pub(crate) const RENDER_THREAD_NAME: &str = "gizmo-render";
+
+/// Where the last panic on the render thread happened, kept by the panic hook.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+static RENDER_THREAD_PANIC: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Where the last panic on the render thread happened (`file:line`), taken — what the loop adds to
+/// the panic it raises again at the sync point, so the crash dialog names the draw's line rather
+/// than the pipeline's. `None` without the engine's panic hook.
+#[cfg_attr(any(target_arch = "wasm32", not(all(feature = "window", feature = "render"))), allow(dead_code))]
+pub(crate) fn take_render_thread_panic_location() -> Option<String> {
+    RENDER_THREAD_PANIC.lock().ok().and_then(|mut last| last.take())
 }
 
 /// Whether a panic on the thread named `thread` opens the crash dialog: only on the main thread.

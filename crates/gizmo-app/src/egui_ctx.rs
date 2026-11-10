@@ -47,6 +47,19 @@ pub struct EguiFrame {
     pixels_per_point: f32,
 }
 
+impl Drop for EguiFrame {
+    /// Only while unwinding: a draw that panics drops the frame it was going to paint, and
+    /// `TexturesDelta`'s own drop is a `debug_assert!` that the deltas were applied — a second
+    /// panic during the first, which aborts the process on the render thread before the panic can
+    /// reach the loop's sync point (and its crash dialog). Outside a panic the assert stands: a
+    /// frame dropped unpainted and unabsorbed is the bug it exists for.
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            self.textures_delta.clear();
+        }
+    }
+}
+
 impl EguiContext {
     /// Creates a new egui context for the given `wgpu` device, surface format and window, applying
     /// the default dark theme, with the painter that draws it.
@@ -334,7 +347,7 @@ mod egui_frame_ownership_tests {
     fn the_skipped_frame_still_absorbs_its_egui_output() {
         let src = include_str!("windowed/event.rs");
         let skip = src
-            .find("acquire_backbuffer(renderer) else {")
+            .find("match acquire_backbuffer(renderer) {")
             .expect("the frame loop still skips through acquire_backbuffer");
         let epilogue_end = src[skip..]
             .find("};")
@@ -347,6 +360,21 @@ mod egui_frame_ownership_tests {
             "the frame that is not painted still owns this frame's texture deltas — hand them \
              over before returning, or the atlas is gone and debug builds die on the assert"
         );
+    }
+
+    /// A draw that panics drops the egui frame it was going to paint. Unwinding through it must not
+    /// panic a second time on epaint's "unapplied deltas" assert — that aborts the process, on the
+    /// render thread, before the panic reaches the sync point. Reaching the assertion below is the
+    /// test: an abort takes the whole test binary with it.
+    #[test]
+    fn a_frame_dropped_by_a_panic_is_not_a_second_panic() {
+        let caught = std::panic::catch_unwind(|| {
+            let mut textures_delta = egui::TexturesDelta::default();
+            textures_delta.free.insert(egui::TextureId::Managed(7));
+            let _frame = super::EguiFrame { paint_jobs: Vec::new(), textures_delta, pixels_per_point: 1.0 };
+            panic!("the draw failed");
+        });
+        assert!(caught.is_err());
     }
 
     #[test]

@@ -20,12 +20,29 @@ use super::stage::ConditionalSend;
 pub(crate) struct DrawReport {
     /// The frame the screenshot request asked to exit after has been written.
     pub(crate) exit: bool,
+    /// How long the draw's side was busy with the frame — the acquire, the draw, the paint, the
+    /// present. Measured by the pipeline around the job, whatever the job reports.
+    pub(crate) busy: std::time::Duration,
+    /// The swapchain is stale (`Outdated`/`Lost`) and has to be configured again — by the loop, at
+    /// the sync point, where nothing else submits (see `draw_and_present`).
+    pub(crate) reconfigure: bool,
 }
 
 impl DrawReport {
     fn merge(&mut self, other: DrawReport) {
         self.exit |= other.exit;
+        self.reconfigure |= other.reconfigure;
+        // The latest frame's: the reports between two syncs are of one frame at most.
+        self.busy = other.busy;
     }
+}
+
+/// Runs a frame's job and times it.
+fn timed<G>(job: DrawJob<G>, side: &mut G) -> DrawReport {
+    let started = super::FrameInstant::now();
+    let mut report = job(side);
+    report.busy = started.elapsed();
+    report
 }
 
 /// One frame's draw, given the draw's side.
@@ -73,10 +90,10 @@ impl<G: ConditionalSend + 'static> FramePipeline<G> {
         let (jobs, inbox) = mpsc::sync_channel::<(G, DrawJob<G>)>(1);
         let (outbox, done) = mpsc::sync_channel::<(G, DrawReport)>(1);
         let handle = thread::Builder::new()
-            .name("gizmo-render".into())
+            .name(crate::RENDER_THREAD_NAME.into())
             .spawn(move || {
                 while let Ok((mut side, job)) = inbox.recv() {
-                    let report = job(&mut side);
+                    let report = timed(job, &mut side);
                     if outbox.send((side, report)).is_err() {
                         break;
                     }
@@ -122,7 +139,10 @@ impl<G: ConditionalSend + 'static> FramePipeline<G> {
                                 .copied()
                                 .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
                                 .unwrap_or("a panic with no message");
-                            panic!("the draw panicked on the render thread: {message}")
+                            let at = crate::take_render_thread_panic_location()
+                                .map(|location| format!(" at {location}"))
+                                .unwrap_or_default();
+                            panic!("the draw panicked on the render thread{at}: {message}")
                         }
                         Ok(()) => panic!("the render thread ended with a frame in flight"),
                     }
@@ -144,7 +164,7 @@ impl<G: ConditionalSend + 'static> FramePipeline<G> {
             let _ = jobs.send((side, job));
             return;
         }
-        let report = job(&mut side);
+        let report = timed(job, &mut side);
         self.report.merge(report);
         self.home = Some(side);
     }
@@ -237,28 +257,51 @@ mod tests {
     fn a_draws_report_reaches_the_loop_once() {
         for mut pipe in [FramePipeline::inline(Side::new()), FramePipeline::threaded(Side::new())] {
             pipe.sync();
-            pipe.draw(Box::new(|_: &mut Side| DrawReport { exit: true }));
+            pipe.draw(Box::new(|_: &mut Side| DrawReport { exit: true, ..Default::default() }));
             pipe.sync();
             assert!(pipe.take_report().exit, "threaded: {}", pipe.is_threaded());
             assert!(!pipe.take_report().exit);
         }
     }
 
+    /// The report carries how long the draw's side was busy with the frame, measured around the
+    /// job — on the render thread or not.
+    #[test]
+    fn a_draws_report_says_how_long_it_was_busy() {
+        for mut pipe in [FramePipeline::inline(Side::new()), FramePipeline::threaded(Side::new())] {
+            pipe.sync();
+            pipe.draw(Box::new(|_: &mut Side| {
+                thread::sleep(Duration::from_millis(20));
+                DrawReport::default()
+            }));
+            pipe.sync();
+            let busy = pipe.take_report().busy;
+            assert!(busy >= Duration::from_millis(20), "threaded: {}, busy {busy:?}", pipe.is_threaded());
+            assert!(busy < Duration::from_secs(2));
+        }
+    }
+
     /// A draw that panics on the render thread panics the loop at the next sync point, with the
     /// draw's message — not a hang, and not a frame taken as drawn.
+    ///
+    /// With the engine's panic hook installed, the message names where the draw panicked: the
+    /// crash dialog opens for this second panic, on the main thread, and would otherwise point at
+    /// this file's `sync`.
     #[test]
     fn a_panic_in_the_draw_reaches_the_sync_point() {
+        crate::setup_panic_hook();
         let mut pipe = FramePipeline::threaded(Side::new());
         pipe.sync();
+        let line = line!() + 1;
         pipe.draw(Box::new(|_: &mut Side| panic!("the draw failed")));
         let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             pipe.sync();
         }))
         .expect_err("the sync point went on as though the frame had been drawn");
-        assert_eq!(
-            caught.downcast_ref::<String>().map(String::as_str),
-            Some("the draw panicked on the render thread: the draw failed")
-        );
+        let message = caught.downcast_ref::<String>().cloned().unwrap_or_default();
+        assert!(message.starts_with("the draw panicked on the render thread"), "{message}");
+        assert!(message.ends_with(": the draw failed"), "{message}");
+        assert!(message.contains(&format!("pipeline.rs:{line}")), "the draw's own line is not named: {message}");
     }
 
     /// Dropping the pipeline with a frame in flight waits for that frame: the renderer it holds is

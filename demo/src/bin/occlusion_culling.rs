@@ -433,6 +433,10 @@ fn main() {
                     });
                 });
         })
+        // Update and draw one after the other: the table above splits the frame's cost by
+        // subtracting frame times, which only adds up while they do not overlap — on a render
+        // thread a frame lasts the longer of the two, and the batcher's walk would vanish from it.
+        .with_render_thread(false)
         .run()
         .expect("uygulama çalıştırılamadı");
 }

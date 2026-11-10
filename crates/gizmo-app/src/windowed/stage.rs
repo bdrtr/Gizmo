@@ -23,9 +23,10 @@ use gizmo_renderer::RenderContext;
 /// acquired and so is never drawn: what it does to the game world is part of the game's frame, not
 /// of the picture.
 ///
-/// With [`App::with_render_thread`](crate::App::with_render_thread) the draw runs on a render
-/// thread, overlapping the next frame's update; otherwise both halves run on the loop's thread, one
-/// after the other. A stage is the same either way, which is why it must be [`ConditionalSend`].
+/// On native targets the draw runs on a render thread, overlapping the next frame's update, unless
+/// the app asks otherwise with [`App::with_render_thread`](crate::App::with_render_thread)`(false)`;
+/// then, and on `wasm32`, both halves run on the loop's thread, one after the other. A stage is the
+/// same either way, which is why it must be [`ConditionalSend`].
 ///
 /// The engine's own stage is the facade's `RenderWorld`, which copies the world the draw reads.
 pub trait RenderStage: ConditionalSend + 'static {
@@ -35,6 +36,13 @@ pub trait RenderStage: ConditionalSend + 'static {
 
     /// The draw, from what [`prepare`](Self::prepare) kept, into `view`.
     fn draw(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer);
+}
+
+/// Whether the app draws on a render thread: a render stage does, unless the app said `false` to
+/// [`App::with_render_thread`](crate::App::with_render_thread); another hook never can; and
+/// `wasm32` has one thread.
+pub(crate) fn draws_on_a_render_thread(asked: Option<bool>, has_stage: bool) -> bool {
+    has_stage && asked.unwrap_or(true) && cfg!(not(target_arch = "wasm32"))
 }
 
 /// `Send` where a render thread can exist, and nothing at all on `wasm32`, where the app has one
@@ -162,5 +170,38 @@ mod tests {
         let end = code.find("self.input.begin_frame();").expect("the frame clears its input");
         assert!(sync < end);
         assert!(!code[sync..end].contains("return"), "the frame can leave the loop before its input is cleared");
+    }
+
+    /// A render stage draws on a render thread unless the app says otherwise; a hook that is handed
+    /// the game world never does, whatever was asked for.
+    #[test]
+    fn a_stage_draws_on_a_render_thread_by_default() {
+        let native = cfg!(not(target_arch = "wasm32"));
+        assert_eq!(draws_on_a_render_thread(None, true), native, "the default for a stage");
+        assert_eq!(draws_on_a_render_thread(Some(true), true), native);
+        assert!(!draws_on_a_render_thread(Some(false), true), "the app asked for the loop's thread");
+        assert!(!draws_on_a_render_thread(None, false), "a raw hook writes the world mid-draw");
+        assert!(!draws_on_a_render_thread(Some(true), false));
+    }
+
+    /// The swapchain is configured again only at the sync point. Configuring waits for the GPU to
+    /// go idle, and on the render thread the game's texture uploads land in that wait: wgpu raises
+    /// the failed wait as an error, and with no handler installed that is a panic. So the draw only
+    /// reports a stale swapchain (`DrawReport::reconfigure`), and the loop configures it after the
+    /// sync, where it is the only submitter. The surface going stale needs a real swapchain, so this
+    /// pins the shape.
+    #[test]
+    fn the_swapchain_is_configured_only_at_the_sync_point() {
+        let code: String = include_str!("event.rs")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let draw_fn = code.find("fn draw_and_present(").expect("the draw is one function");
+        let draw_side = &code[draw_fn..code.find("/// Write the presented frame").unwrap_or(code.len())];
+        assert!(!draw_side.contains("reconfigure_surface("), "the draw configures the swapchain itself again");
+        let sync = code.find("let side = gpu.sync();").expect("the frame has a sync point");
+        let configure = code.find("side.renderer.reconfigure_surface()").expect("the loop configures a stale swapchain");
+        assert!(sync < configure && configure < code.find("stage.prepare(").expect("prepare"));
     }
 }

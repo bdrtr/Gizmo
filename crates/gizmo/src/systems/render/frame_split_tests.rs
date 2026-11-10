@@ -578,7 +578,7 @@ fn a_render_world_draws_every_frame_of_a_changing_game_as_the_game_itself() {
             pictures.last().is_some_and(|last| last != &staged),
             "the stage drew the last frame again, not the moved cube"
         );
-        // And the same draw on another thread — where `App::with_render_thread` runs it — draws
+        // And the same draw on another thread — where the app runs a stage's draw by default — draws
         // the same picture: the stage and the renderer are all it is given, and both can go there.
         let elsewhere = std::thread::scope(|s| {
             s.spawn(|| frame_bytes(&mut renderer, |e, v, r| copy.draw(e, v, r)))

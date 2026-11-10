@@ -133,9 +133,17 @@ pub struct App<State: 'static = ()> {
     /// belongs to the frame's draw, and the game side reaches the GPU only through the `GpuContext`
     /// resource, which creates and never writes what the draw reads.
     gpu: Option<FramePipeline<DrawSide>>,
-    /// Whether [`with_render_thread`](App::with_render_thread) asked for the draw to run on a
-    /// render thread.
-    render_thread: bool,
+    /// What [`with_render_thread`](App::with_render_thread) asked for; `None` is the default — a
+    /// render stage draws on a render thread. See `stage::draws_on_a_render_thread`.
+    render_thread: Option<bool>,
+    /// When the next frame's update starts, with a render thread — see `pacing`.
+    pacing: pacing::FramePacing,
+    /// When the last frame was handed to the render thread.
+    handed_at: Option<FrameInstant>,
+    /// When the last frame's handling ended.
+    frame_ended_at: Option<FrameInstant>,
+    /// The pacing delay's end: the next frame is not requested before it.
+    next_frame_at: Option<FrameInstant>,
     /// The cursor behaviour last applied to `window` — see `apply_cursor_options`.
     applied_cursor: gizmo_core::window::CursorOptions,
     /// The window mode last applied — see `apply_window_mode`.
@@ -182,6 +190,7 @@ impl<State: 'static> std::fmt::Debug for App<State> {
 mod builder;
 mod lifecycle;
 mod event;
+mod pacing;
 mod pipeline;
 mod stage;
 

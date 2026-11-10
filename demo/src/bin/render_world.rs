@@ -6,8 +6,8 @@
 //! materials — everything a frame writes that the game can see) and brings a `RenderWorld` — a
 //! second world kept by `render_extractor`, which copies every type the draw reads — up to date.
 //! Then `draw` draws *that* with `draw_frame`, which takes the world read-only, and is handed no
-//! game world at all. `App::with_render_thread` runs `draw` on a render thread, while the game
-//! goes on with the next frame's update. `RenderWorld` is itself such a stage, and what `SimpleApp`
+//! game world at all. A stage's `draw` runs on a render thread (the default on native targets),
+//! while the game goes on with the next frame's update. `RenderWorld` is itself such a stage, and what `SimpleApp`
 //! and `with_scene_render` draw with; this one spells the steps out to be able to stop the copy.
 //!
 //! - **Space** stops the copying. The game carries on (the left-hand counters keep moving), the
@@ -175,7 +175,6 @@ fn main() {
         })
         .add_update_system(play.in_phase(Phase::Update))
         .set_render_stage(Shown { copy: RenderWorld::new(), draw_ms: 0.0 })
-        .with_render_thread()
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<Report>().map(|r| *r) else {
                 return;

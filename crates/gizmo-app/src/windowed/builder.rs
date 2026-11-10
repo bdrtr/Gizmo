@@ -39,7 +39,11 @@ impl<State: 'static> App<State> {
             window_attributes: None,
             window: None,
             gpu: None,
-            render_thread: false,
+            render_thread: None,
+            pacing: Default::default(),
+            handed_at: None,
+            frame_ended_at: None,
+            next_frame_at: None,
             applied_cursor: gizmo_core::window::CursorOptions::free(),
             applied_mode: gizmo_core::window::WindowMode::Windowed,
             #[cfg(feature = "egui")]
@@ -360,20 +364,27 @@ impl<State: 'static> App<State> {
         self
     }
 
-    /// Draws on a render thread: the frame's draw and overlay paint run there, while the loop goes
-    /// on to the next frame's update, and the next frame's sync point waits for them.
+    /// Whether a [`RenderStage`](Self::set_render_stage) draws on a render thread. **It does by
+    /// default**, on every native target: the frame's draw and overlay paint run there while the
+    /// loop goes on to the next frame's update, and the next frame's sync point waits for them.
+    /// `false` draws on the loop's thread, the update and the draw one after the other.
     ///
-    /// What it buys is the overlap — a frame costs the longer of the update and the draw rather
-    /// than their sum. What it costs is a frame of latency between the game and the picture, which
-    /// is what the overlap is.
+    /// What the thread buys is the overlap: a frame costs the longer of the update and the draw
+    /// rather than their sum. The loop paces itself so the overlap does not cost the picture its
+    /// freshness either: while the draw is the slower side, the next update starts as late as it
+    /// can and still meet it, and window input keeps arriving until then. Measured in a window
+    /// (`demo/src/bin/render_thread.rs`, 2026-11-10): with 8 ms of game work per frame, 19–37 %
+    /// more frames than on the loop's thread at the same latency; with a light update, the same
+    /// frame rate within the noise and up to about 1.3 ms more between the start of a frame's
+    /// update and the end of its draw.
     ///
-    /// Only a [`RenderStage`](Self::set_render_stage) can be drawn this way: a
-    /// [`set_render`](Self::set_render) or [`set_simple_render`](Self::set_simple_render) hook is
-    /// handed the game world in the middle of the draw, so with one of those every frame is drawn
-    /// on the loop's thread, and the app says so once at start. On `wasm32` there is one thread, and
-    /// this does nothing.
-    pub fn with_render_thread(mut self) -> Self {
-        self.render_thread = true;
+    /// Only a stage can be drawn this way: a [`set_render`](Self::set_render) or
+    /// [`set_simple_render`](Self::set_simple_render) hook is handed the game world in the middle of
+    /// the draw, so with one of those every frame is drawn on the loop's thread — and if the app
+    /// asked for a render thread with `true`, it says so once at start. On `wasm32` there is one
+    /// thread.
+    pub fn with_render_thread(mut self, on: bool) -> Self {
+        self.render_thread = Some(on);
         self
     }
 

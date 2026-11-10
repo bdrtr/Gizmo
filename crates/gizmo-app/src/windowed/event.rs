@@ -456,6 +456,13 @@ impl<State: 'static> App<State> {
                             _ => {}
                         }
                         if let WindowEvent::RedrawRequested = event {
+                            // When this frame began, and how long the loop left before it since the
+                            // last one ended — the pacing delay, and whatever events ran in it.
+                            let frame_began = super::FrameInstant::now();
+                            let gap = self
+                                .frame_ended_at
+                                .map(|ended| frame_began.duration_since(ended))
+                                .unwrap_or_default();
                             sync_display(&mut self.world, &window);
                             // Per-frame root span; the physics/update/render sub-spans
                             // (from the ECS schedule and physics pipeline) nest under it.
@@ -614,16 +621,41 @@ impl<State: 'static> App<State> {
                             // happens on a frame that turns out not to be drawn, too.
                             // What the last frame's draw said — a screenshot asking to exit after
                             // it — is acted on here, where the loop is.
-                            let report = {
+                            let synced_at = super::FrameInstant::now();
+                            let (report, threaded) = {
                                 let gpu = self.gpu.as_mut().expect("a frame comes after initialization");
                                 gpu.sync();
-                                gpu.take_report()
+                                (gpu.take_report(), gpu.is_threaded())
                             };
                             if report.exit {
                                 self.shut_down(current_window);
                             }
+                            // The last frame's draw, timed on whichever thread ran it: with a render
+                            // thread it ran outside every scope of this one, and the `render` scope
+                            // is only this sync point.
+                            if !report.busy.is_zero() {
+                                if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+                                    profiler.record_scope("draw", report.busy);
+                                }
+                            }
+                            // Pacing (see `pacing`): the render thread was busy `report.busy` with
+                            // the last frame; the loop was busy for the time since it handed that
+                            // frame over, less the gap it left on purpose. What the draw has over
+                            // the loop is how much later the next update can start.
+                            let pace = match self.handed_at.take() {
+                                Some(handed) if threaded => {
+                                    let loop_busy = synced_at.duration_since(handed).saturating_sub(gap);
+                                    self.pacing.record(report.busy, loop_busy)
+                                }
+                                _ => std::time::Duration::ZERO,
+                            };
                             let gpu = self.gpu.as_mut().expect("a frame comes after initialization");
                             let side = gpu.sync();
+                            // A stale swapchain the last draw found: configured here, where nothing
+                            // else submits — see `acquire_backbuffer`.
+                            if report.reconfigure {
+                                side.renderer.reconfigure_surface();
+                            }
                             #[cfg(feature = "editor")]
                             crate::editor_runtime::sync_render_targets(&mut self.world, &side.renderer, &mut side.painter);
                             if let Some(stage) = side.stage.as_mut() {
@@ -653,6 +685,7 @@ impl<State: 'static> App<State> {
                                         |encoder, view, renderer| stage.draw(encoder, view, renderer),
                                     )
                                 }));
+                                self.handed_at = Some(super::FrameInstant::now());
                             } else {
                                 // A hook handed the game world in the middle of the draw: drawn
                                 // here, at the sync point.
@@ -715,10 +748,25 @@ impl<State: 'static> App<State> {
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                 profiler.end_frame();
                             }
+
+                            let ended = super::FrameInstant::now();
+                            self.frame_ended_at = Some(ended);
+                            self.next_frame_at = (!pace.is_zero()).then(|| ended + pace);
                         }
                     }
                     Event::AboutToWait => {
-                        window.request_redraw();
+                        // The next frame now — or, while a render thread draws the last one and
+                        // the loop would only wait for it at the sync point, once the pacing delay
+                        // is up. Window events keep arriving meanwhile, and the update that follows
+                        // takes them.
+                        match self.next_frame_at.filter(|at| super::FrameInstant::now() < *at) {
+                            #[cfg(not(target_arch = "wasm32"))]
+                            Some(at) => current_window.set_control_flow(ControlFlow::WaitUntil(at)),
+                            _ => {
+                                self.next_frame_at = None;
+                                window.request_redraw();
+                            }
+                        }
                     }
                     Event::DeviceEvent {
                         event: winit::event::DeviceEvent::MouseMotion { delta },
@@ -754,15 +802,18 @@ fn draw_and_present(
     #[cfg(feature = "egui")] ui_frame: crate::egui_ctx::EguiFrame,
     draw: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer),
 ) -> DrawReport {
-    let Some(output) = acquire_backbuffer(renderer) else {
-        // The one epilogue: every skip path in the acquire lands here. The egui frame already
-        // ran, and its texture deltas are handed over exactly once. Skipping the *pixels* is what
-        // this path is for; skipping the *uploads* dropped the font atlas for the rest of the run
-        // — and killed every debug build on epaint's assert, which is why no windowed demo could
-        // start.
-        #[cfg(feature = "egui")]
-        painter.absorb(&renderer.device, &renderer.queue, ui_frame);
-        return DrawReport::default();
+    let output = match acquire_backbuffer(renderer) {
+        Backbuffer::Ready(output) => output,
+        skipped => {
+            // The one epilogue: every skip path in the acquire lands here. The egui frame already
+            // ran, and its texture deltas are handed over exactly once. Skipping the *pixels* is
+            // what this path is for; skipping the *uploads* dropped the font atlas for the rest of
+            // the run — and killed every debug build on epaint's assert, which is why no windowed
+            // demo could start.
+            #[cfg(feature = "egui")]
+            painter.absorb(&renderer.device, &renderer.queue, ui_frame);
+            return DrawReport { reconfigure: matches!(skipped, Backbuffer::Reconfigure), ..DrawReport::default() };
+        }
     };
 
     let view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -803,83 +854,78 @@ fn draw_and_present(
 /// The recovery behaviour is unchanged: transient states skip quietly, `Outdated`/`Lost`
 /// reconfigure the swapchain and back off, a validation error is logged and skipped, and the
 /// failure streak drives the rate-limited logging.
-fn acquire_backbuffer(renderer: &mut Renderer) -> Option<wgpu::SurfaceTexture> {
+fn acquire_backbuffer(renderer: &Renderer) -> Backbuffer {
+    use std::sync::atomic::Ordering;
     // No surface: the app is off the screen (`suspended`) and there is nowhere to draw.
-    let surface = renderer.surface.as_ref()?;
+    let Some(surface) = renderer.surface.as_ref() else { return Backbuffer::Skip };
     match surface.get_current_texture() {
-        wgpu::CurrentSurfaceTexture::Success(texture)
-        | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
+        wgpu::CurrentSurfaceTexture::Success(texture) | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => {
             // A good frame: clear the failure streak.
-            SURFACE_FAIL_STREAK.store(0, std::sync::atomic::Ordering::Relaxed);
-            Some(texture)
+            SURFACE_FAIL_STREAK.store(0, Ordering::Relaxed);
+            Backbuffer::Ready(texture)
         }
-        // Transient, non-error states — the window is minimized/behind
-        // another window, or the acquire timed out. The surface config is
-        // still valid; just skip this frame and try again.
-        wgpu::CurrentSurfaceTexture::Occluded
-        | wgpu::CurrentSurfaceTexture::Timeout => {
-            tracing::trace!(
-                "[frame] surface transient (occluded/timeout); frame skipped"
-            );
-            None
+        // Transient, non-error states — the window is minimized/behind another window, or the
+        // acquire timed out. The surface config is still valid; just skip this frame and try again.
+        wgpu::CurrentSurfaceTexture::Occluded | wgpu::CurrentSurfaceTexture::Timeout => {
+            tracing::trace!("[frame] surface transient (occluded/timeout); frame skipped");
+            Backbuffer::Skip
         }
-        // RECOVERABLE surface loss. `Outdated` = the surface config is
-        // stale (display/DPI/format change); `Lost` = the surface (or the
-        // whole GPU context) dropped, e.g. suspend↔resume, a driver TDR,
-        // an external-monitor unplug, or GPU stress. wgpu's first-line fix
-        // for both is to `configure()` again — so reconfigure the swapchain
-        // and retry next frame instead of FREEZING on a black screen (the
-        // old code lumped `Outdated` into the transient skip and never
-        // reconfigured, and treated `Lost` as a dead-end error). This is
-        // the "demos don't crash under stress" hardening.
-        wgpu::CurrentSurfaceTexture::Outdated
-        | wgpu::CurrentSurfaceTexture::Lost => {
-            use std::sync::atomic::Ordering;
+        // RECOVERABLE surface loss. `Outdated` = the surface config is stale (display/DPI/format
+        // change); `Lost` = the surface (or the whole GPU context) dropped, e.g. suspend↔resume, a
+        // driver TDR, an external-monitor unplug, or GPU stress. wgpu's first-line fix for both is
+        // to `configure()` again — so the swapchain is reconfigured and the frame retried instead
+        // of FREEZING on a black screen. `Outdated` genuinely recovers that way; `Lost` is
+        // best-effort (a true device loss needs the device recreated, which the renderer cannot
+        // yet do).
+        //
+        // **Not here, though.** This may be the render thread, and configuring waits for the GPU
+        // to go idle: a texture the game submits during that wait (streaming, a mesh that finished
+        // loading) fails the wait, and wgpu raises that as an error. The loop configures at the
+        // sync point instead, where it is the only submitter (`DrawReport::reconfigure`).
+        wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
             let streak = SURFACE_FAIL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
-            // `Outdated` (stale DPI/format/resize) genuinely recovers via
-            // configure(). `Lost` is BEST-EFFORT here: a true surface/device
-            // loss needs surface (or device+resource) RECREATION, which the
-            // renderer can't yet do (it retains no Instance/Window) — a known
-            // limitation. configure() still recovers the common recoverable
-            // cases (suspend/resume, transient context loss).
-            renderer.reconfigure_surface();
-            // Rate-limit: warn once up front, then ~once/5s, so a persistent
-            // loss never floods the log.
+            // Rate-limit: warn once up front, then ~once/5s, so a persistent loss never floods the
+            // log.
             if streak == 1 || streak.is_multiple_of(300) {
                 tracing::warn!(
                     streak,
-                    "[frame] surface Outdated/Lost — reconfigured swapchain; if this persists the surface/device may be unrecoverable"
+                    "[frame] surface Outdated/Lost — reconfiguring the swapchain; if this persists the surface/device may be unrecoverable"
                 );
             }
-            // Backoff: after a short grace, throttle the retry so an
-            // unrecoverable loss degrades to a quiet ~60Hz retry instead of a
-            // 100%-CPU busy-spin. (Skipped on wasm — the browser throttles rAF.)
+            // Backoff: after a short grace, throttle the retry so an unrecoverable loss degrades to
+            // a quiet ~60Hz retry instead of a 100%-CPU busy-spin. (Skipped on wasm — the browser
+            // throttles rAF.)
             #[cfg(not(target_arch = "wasm32"))]
             if streak > 4 {
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
-            None
+            Backbuffer::Reconfigure
         }
-        // A validation error was raised inside `get_current_texture` and
-        // caught by an error scope — a real bug, not recoverable by
-        // reconfiguring. Log it and skip the frame so we neither crash nor
-        // busy-spin on a reconfigure that can't help.
+        // A validation error was raised inside `get_current_texture` and caught by an error scope
+        // — a real bug, not recoverable by reconfiguring. Log it and skip the frame so we neither
+        // crash nor busy-spin on a reconfigure that can't help.
         wgpu::CurrentSurfaceTexture::Validation => {
-            use std::sync::atomic::Ordering;
             let streak = SURFACE_FAIL_STREAK.fetch_add(1, Ordering::Relaxed) + 1;
             if streak == 1 || streak.is_multiple_of(300) {
-                tracing::error!(
-                    streak,
-                    "[frame] surface acquire raised a validation error; frame skipped"
-                );
+                tracing::error!(streak, "[frame] surface acquire raised a validation error; frame skipped");
             }
             #[cfg(not(target_arch = "wasm32"))]
             if streak > 4 {
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
-            None
+            Backbuffer::Skip
         }
     }
+}
+
+/// What the acquire got.
+enum Backbuffer {
+    /// An image to draw into.
+    Ready(wgpu::SurfaceTexture),
+    /// No image this frame; the next one tries again.
+    Skip,
+    /// No image, and the swapchain is stale: the loop configures it again at the next sync point.
+    Reconfigure,
 }
 
 /// Write the presented frame to a PNG when `GIZMO_SCREENSHOT` asks for it.
@@ -917,7 +963,7 @@ fn service_screenshot(renderer: &Renderer, output: &wgpu::SurfaceTexture) -> Dra
         Err(e) => tracing::error!("{e}"),
     }
     // The exit is the loop's to make, at its next sync point: the draw may be on a render thread.
-    DrawReport { exit: req.exit_after }
+    DrawReport { exit: req.exit_after, ..DrawReport::default() }
 }
 
 /// Keeps `DisplayScale` and `SafeArea` true to the window, the frame and the platform. Called every

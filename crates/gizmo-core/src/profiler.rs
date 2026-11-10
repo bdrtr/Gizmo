@@ -169,6 +169,28 @@ impl FrameProfiler {
         }
     }
 
+    /// Records a scope timed somewhere else — another thread's work, such as the draw a render
+    /// thread did — as `duration` ending now, at the current depth.
+    ///
+    /// The duration is the measurement; the placement is only where it was handed over. A render
+    /// thread's draw of the previous frame is recorded this way at the next sync point, as
+    /// `"draw"`: it ran outside every scope of the loop's thread.
+    pub fn record_scope(&mut self, name: &'static str, duration: std::time::Duration) {
+        if !self.enabled {
+            return;
+        }
+        // The duration is kept whole: a scope longer than the profiler has existed is placed
+        // as starting at its epoch rather than cut short there.
+        let duration_ns = duration.as_nanos() as u64;
+        let end_ns = (self.epoch.elapsed().as_nanos() as u64).max(duration_ns);
+        self.current_scopes.push(ProfileScope {
+            name,
+            start_ns: end_ns - duration_ns,
+            end_ns,
+            depth: self.current_depth,
+        });
+    }
+
     /// Ends the frame and writes the current data into the history ring buffer.
     pub fn end_frame(&mut self) {
         if !self.enabled {
@@ -325,6 +347,22 @@ impl FrameProfiler {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A scope timed elsewhere is recorded with its own duration, in the frame it is handed over,
+    /// and averages like any other.
+    #[test]
+    fn a_scope_timed_elsewhere_is_recorded_with_its_duration() {
+        let mut profiler = FrameProfiler::new();
+        profiler.record_scope("draw", std::time::Duration::from_micros(4_500));
+        profiler.end_frame();
+        let frame = profiler.last_frame().expect("a frame");
+        let draw = frame.scopes.iter().find(|s| s.name == "draw").expect("the draw scope");
+        assert!((draw.duration_ms() - 4.5).abs() < 1e-6, "{}", draw.duration_ms());
+        assert!((profiler.avg_scope_ms("draw", 1) - 4.5).abs() < 1e-6);
+        profiler.enabled = false;
+        profiler.record_scope("draw", std::time::Duration::from_millis(1));
+        assert!(profiler.current_scopes.is_empty(), "a disabled profiler recorded a scope");
+    }
 
     #[test]
     fn test_basic_profiling() {
