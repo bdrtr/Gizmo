@@ -24,9 +24,10 @@ pub fn record_shadow_passes(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
         shadow_pass.set_bind_group(0, renderer.scene.view_shadow_pass_bind_group(i), &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
+        // A closed mesh casts from its back faces and an open one from both (`Mesh::closed`).
+        let mut bound: Option<bool> = None;
         for item in draw_items {
             // Per-object opt-out, on top of the material rules: `MeshRenderer::shadows`. A flag
             // the editor obeys and the game ignores would make the viewport lie about the build.
@@ -58,6 +59,10 @@ pub fn record_shadow_passes(
                         continue;
             }
                 }
+            }
+            if bound != Some(item.closed) {
+                shadow_pass.set_pipeline(renderer.scene.shadow_pipeline_for(item.closed));
+                bound = Some(item.closed);
             }
             let skel_bg = item
                 .skeleton_bind_group
@@ -110,10 +115,11 @@ pub fn record_shadow_passes(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        // We reuse the directional shadow pipeline because it only does position transformation
-        shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
+        // We reuse the directional shadow pipelines because they only do position transformation,
+        // a closed mesh by its back faces and an open one by both, as above.
         shadow_pass.set_bind_group(0, renderer.scene.view_point_shadow_pass_bind_group(i), &[]);
         shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
+        let mut bound: Option<bool> = None;
         for item in draw_items {
             // Per-object opt-out (`MeshRenderer::shadows`), same as the cascade pass above.
             if !item.casts_shadows { continue; }
@@ -132,6 +138,10 @@ pub fn record_shadow_passes(
                         continue;
                     }
                 }
+            }
+            if bound != Some(item.closed) {
+                shadow_pass.set_pipeline(renderer.scene.shadow_pipeline_for(item.closed));
+                bound = Some(item.closed);
             }
             let skel_bg = item
                 .skeleton_bind_group

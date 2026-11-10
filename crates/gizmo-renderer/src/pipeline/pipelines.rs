@@ -692,7 +692,23 @@ pub(super) fn build_core_pipelines(
     }
 }
 
-pub(super) fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::RenderPipeline {
+/// The shadow pass's pipelines: one for a mesh that closes, which casts from its back faces, and one
+/// for a mesh that does not, which casts from both. See [`Mesh::closed`](crate::components::Mesh::closed).
+pub(super) fn build_shadow_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> [wgpu::RenderPipeline; 2] {
+    // FRONT-FACE CULLING for a closed mesh: gölge haritasına yalnız ARKA yüzler yazılır. Aydınlık ön
+    // yüzün derinliği hiç saklanmadığından kendini gölgeleyemez → self-shadow acne (yalayan
+    // yüzlerdeki dikey grenli bantlar) tamamen biter. Normal-offset grazing açıda etkisizdi
+    // (offset·L → 0); solid casterlar için kanonik çözüm budur. An open mesh has no back faces to
+    // cast with: drawn this way, a plane facing the sun cast nothing (0 shadow pixels against a
+    // cube's 236, measured 2026-11-11), so it is drawn by both faces, and the receiver's normal
+    // offset and slope bias keep its lit face off its own depth.
+    [
+        build_shadow_pipeline(device, layouts, Some(wgpu::Face::Front), "Shadow Pipeline"),
+        build_shadow_pipeline(device, layouts, None, "Shadow Pipeline (open meshes)"),
+    ]
+}
+
+fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs, cull_mode: Option<wgpu::Face>, label: &str) -> wgpu::RenderPipeline {
     let shadow_shader = load_shader(
         device,
         "demo/assets/shaders/shadow.wgsl",
@@ -706,7 +722,7 @@ pub(super) fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs)
     });
 
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some("Shadow Pipeline"),
+        label: Some(label),
         layout: Some(&shadow_layout),
         vertex: wgpu::VertexState {
             module: &shadow_shader,
@@ -718,12 +734,8 @@ pub(super) fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs)
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             front_face: wgpu::FrontFace::Ccw,
-            // FRONT-FACE CULLING: gölge haritasına yalnız ARKA yüzler yazılır. Aydınlık ön
-            // yüzün derinliği hiç saklanmadığından kendini gölgeleyemez → self-shadow acne
-            // (yalayan yüzlerdeki dikey grenli bantlar) tamamen biter. Normal-offset grazing
-            // açıda etkisizdi (offset·L → 0); solid casterlar için kanonik çözüm budur.
-            // (Katı geometri varsayar; tek-yüzlü ince mesh'ler gölge kaybedebilir.)
-            cull_mode: Some(wgpu::Face::Front),
+            // See `build_shadow_pipelines`.
+            cull_mode,
             polygon_mode: wgpu::PolygonMode::Fill,
             ..Default::default()
         },

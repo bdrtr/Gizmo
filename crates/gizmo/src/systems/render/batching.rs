@@ -181,6 +181,11 @@ pub struct DrawItem {
     /// A surface the game registered (`MaterialType::CustomSurface`): lit and routed as PBR, drawn
     /// with that surface's pipelines wherever the engine's material would use its own.
     pub(super) surface: Option<gizmo_renderer::custom_material::SurfaceId>,
+    /// The mesh closes over a volume (`Mesh::closed`): the shadow pass casts it from its back faces,
+    /// and an open one from both. Read only by `passes::shadow`, which the forward-only path does not
+    /// have — written there all the same, as `casts_shadows` is, since it is part of the key.
+    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
+    pub(super) closed: bool,
     /// The Gerstner water surface: `water.wgsl` and the water pipeline, chosen in
     /// `passes::forward`. Rides `unlit` out of the deferred and shadow passes like every other
     /// forward type, and this flag is what says *which* forward pipeline.
@@ -352,6 +357,9 @@ pub(crate) struct BatchKey {
     /// Which registered surface, if any, for the same reason: two surfaces sharing a mesh and a
     /// texture bind group differ only here, and a surface and a `Pbr` material only here.
     surface: Option<gizmo_renderer::custom_material::SurfaceId>,
+    /// Whether the mesh closes: the same buffer is the same mesh, but `Mesh::closed` is a field a
+    /// game may set, and a batch casts by one answer.
+    closed: bool,
     /// Water, for the same sharp reason. Water and unlit both set `unlit` (= `skips_deferred`),
     /// so a water material and an unlit one sharing a mesh and a cached texture bind group have
     /// an otherwise **identical** key — and the batch would inherit whichever the ECS iteration
@@ -380,6 +388,7 @@ pub(crate) struct BatchData {
     visible_in_camera: bool,
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
     surface: Option<gizmo_renderer::custom_material::SurfaceId>,
+    closed: bool,
     is_water: bool,
     mirror: Option<Entity>,
     is_grid: bool,
@@ -815,6 +824,7 @@ pub(super) fn collect_draw_items(
                     visible_in_camera,
                     custom: routing.custom,
                     surface: routing.surface,
+                    closed: $mesh.closed,
                     is_water,
                     mirror,
                     is_grid,
@@ -838,6 +848,7 @@ pub(super) fn collect_draw_items(
                     visible_in_camera,
                     custom: routing.custom,
                     surface: routing.surface,
+                    closed: $mesh.closed,
                     is_water,
                     mirror,
                     is_grid,
@@ -1009,6 +1020,7 @@ pub(super) fn collect_draw_items(
                 is_backdrop: batch.is_backdrop,
                 custom: batch.custom,
                 surface: batch.surface,
+                closed: batch.closed,
                 is_water: batch.is_water,
                 mirror: batch.mirror,
                 is_grid: batch.is_grid,
@@ -1137,6 +1149,7 @@ mod batch_key_tests {
             visible_in_camera: true,
             custom: None,
             surface: None,
+            closed: true,
             is_water: false,
             mirror: None,
             is_grid: false,
@@ -1170,6 +1183,7 @@ mod batch_key_tests {
             visible_in_camera: true,
             custom: None,
             surface: None,
+            closed: true,
             is_water: false,
             mirror: None,
             is_grid: false,

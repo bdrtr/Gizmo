@@ -297,7 +297,9 @@ impl crate::asset::AssetManager {
 
     /// A capsule's vertices (tube + two hemispheres), CCW-wound on the outside. Pure data.
     pub(crate) fn capsule_data(radius: f32, depth: f32, latitudes: u32, longitudes: u32) -> Vec<Vertex> {
-        let latitudes = latitudes.max(4);
+        // Even, so that there is an equator ring for the tube to meet: an odd count put the tube's rims
+        // between two rings, and the capsule had a gap round each end of it.
+        let latitudes = (latitudes.max(4) + 1) & !1;
         let longitudes = longitudes.max(4);
         let mut vertices = Vec::new();
         let pi = std::f32::consts::PI;
@@ -309,8 +311,13 @@ impl crate::asset::AssetManager {
             let theta1 = u1 * pi;
             let theta2 = u2 * pi;
 
-            let y_offset1 = if u1 < 0.5 { half_d } else if u1 > 0.5 { -half_d } else { 0.0 };
-            let y_offset2 = if u2 < 0.5 { half_d } else if u2 > 0.5 { -half_d } else { 0.0 };
+            // A band belongs to one hemisphere, and both of its rings move with it: up by half the
+            // depth above the equator, down below it. Offsetting each ring by where it lies put the
+            // equator ring, which both hemispheres end on, at 0 for both, so each one's last band
+            // slanted in to the middle of the tube and the tube's rims met nothing (2026-11-11, found
+            // by `triangles_close`).
+            let y_offset1 = if i < latitudes / 2 { half_d } else { -half_d };
+            let y_offset2 = y_offset1;
             
             // To properly insert a tube, we duplicate the equator loop
             let is_equator = i == latitudes / 2;

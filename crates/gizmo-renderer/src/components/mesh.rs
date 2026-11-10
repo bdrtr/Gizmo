@@ -54,6 +54,72 @@ pub struct Mesh {
     pub lod_vbufs: Vec<Arc<wgpu::Buffer>>,
     /// Vertex counts matching [`Self::lod_vbufs`].
     pub lod_vertex_counts: Vec<u32>,
+    /// Whether the triangles close over a volume ([`triangles_close`]), worked out once from
+    /// [`Self::cpu_vertices`] when the mesh is made.
+    ///
+    /// It is what the shadow pass culls by. A closed mesh is drawn into the shadow maps by its back
+    /// faces, so its lit front can never shadow itself; a mesh that does not close has no back to
+    /// cast from — a plane, a card, a sheet of cloth — and is drawn by both faces. Until 2026-11-11
+    /// everything was drawn as if closed, and a plane facing the sun cast no shadow at all.
+    pub closed: bool,
+}
+
+/// Whether a triangle list (every three positions one triangle) closes over a volume: every edge
+/// is met by exactly as many triangles running it the other way. Corners are matched by position,
+/// welded to a grid a millionth of the mesh's size, because a mesh's vertices are split wherever
+/// a normal or a UV changes — a cube's corners three ways — and an edge is shared by positions, not
+/// by indices. Degenerate triangles are left out. A list that is empty, or not a multiple of three,
+/// does not close.
+///
+/// When in doubt it answers `false`: drawing both faces into a shadow map is always a set of
+/// casters that blocks the right light, where drawing only the back faces of something open loses
+/// the shadow of every face turned to the light.
+pub fn triangles_close(positions: &[Vec3]) -> bool {
+    if positions.is_empty() || !positions.len().is_multiple_of(3) {
+        return false;
+    }
+    let (low, high) = positions
+        .iter()
+        .fold((Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)), |(lo, hi), p| (lo.min(*p), hi.max(*p)));
+    let size = (high - low).max_element();
+    if !size.is_finite() || size <= 0.0 {
+        return false;
+    }
+    let cell = size * 1e-6;
+    let mut ids: std::collections::HashMap<[i64; 3], u32> = std::collections::HashMap::new();
+    let mut id = |p: Vec3| {
+        let q = (p / cell).round();
+        let key = [q.x as i64, q.y as i64, q.z as i64];
+        let next = ids.len() as u32;
+        *ids.entry(key).or_insert(next)
+    };
+    let mut edges: Vec<u64> = Vec::with_capacity(positions.len());
+    for [p, q, r] in positions.as_chunks::<3>().0 {
+        let [a, b, c] = [id(*p), id(*q), id(*r)];
+        if a == b || b == c || c == a {
+            continue;
+        }
+        for (from, to) in [(a, b), (b, c), (c, a)] {
+            edges.push((u64::from(from) << 32) | u64::from(to));
+        }
+    }
+    if edges.is_empty() {
+        return false;
+    }
+    edges.sort_unstable();
+    // Each directed edge, as many times as it runs that way, against the same count of its reverse.
+    let count = |edge: u64| edges.partition_point(|&e| e <= edge) - edges.partition_point(|&e| e < edge);
+    let mut i = 0;
+    while i < edges.len() {
+        let edge = edges[i];
+        let run = count(edge);
+        let reverse = edge.rotate_left(32);
+        if count(reverse) != run {
+            return false;
+        }
+        i += run;
+    }
+    true
 }
 
 /// A mesh draws a simplified LOD1 far away once it has more than this many triangle corners
@@ -137,7 +203,10 @@ impl Mesh {
             vbuf.size() as usize
         );
         let bounds = gizmo_math::Aabb::from_points(vertices.iter().map(|v| v.position));
-        let cpu_vertices = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
+        let cpu_vertices: Arc<Vec<Vec3>> = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
+        // Only a triangle list has edges to match; `new_indexed` hands in its unique vertices with
+        // the LOD off and works this out from its own triangle list afterwards.
+        let closed = generate_lod && triangles_close(&cpu_vertices);
 
         let mut lod_vbufs = Vec::new();
         let mut lod_vertex_counts = Vec::new();
@@ -170,6 +239,7 @@ impl Mesh {
             cpu_vertices,
             lod_vbufs,
             lod_vertex_counts,
+            closed,
         }
     }
 
@@ -280,6 +350,7 @@ impl Mesh {
         // tekilleştirilmiş bir dizide ardışık üçlüler artık üçgen DEĞİL. Bellek açısından
         // bu bir gerileme de değil: bu alan zaten tam listeyi tutuyordu.
         mesh.cpu_vertices = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
+        mesh.closed = triangles_close(&mesh.cpu_vertices);
         mesh
         }
     }
@@ -299,6 +370,7 @@ impl Mesh {
             cpu_vertices: Arc::new(Vec::new()),
             lod_vbufs: Vec::new(),
             lod_vertex_counts: Vec::new(),
+            closed: false,
         }
     }
 
@@ -556,5 +628,104 @@ mod lod_tests {
         assert!((kept - full).abs() < 0.15 * full, "LOD1 covers the sphere: area {kept:.2} against {full:.2}");
         let nonsense = area(&unique[..unique.len() / 3 * 3]);
         assert!(nonsense < 0.2 * full, "the old reading of the unique array covers next to nothing: {nonsense:.2}");
+    }
+}
+
+#[cfg(test)]
+mod closed_tests {
+    use super::triangles_close;
+    use gizmo_math::Vec3;
+
+    fn positions(vertices: &[crate::gpu_types::Vertex]) -> Vec<Vec3> {
+        vertices.iter().map(|v| Vec3::from(v.position)).collect()
+    }
+
+    /// A unit cube as a triangle list, each face its own four corners as a mesh with normals has
+    /// them, wound outwards; `skip` leaves one face out.
+    fn cube(skip: Option<usize>) -> Vec<Vec3> {
+        let p = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
+        let faces = [
+            [p(1., -1., -1.), p(-1., -1., -1.), p(-1., 1., -1.), p(1., 1., -1.)],
+            [p(-1., -1., 1.), p(1., -1., 1.), p(1., 1., 1.), p(-1., 1., 1.)],
+            [p(-1., -1., -1.), p(1., -1., -1.), p(1., -1., 1.), p(-1., -1., 1.)],
+            [p(-1., 1., 1.), p(1., 1., 1.), p(1., 1., -1.), p(-1., 1., -1.)],
+            [p(-1., -1., -1.), p(-1., -1., 1.), p(-1., 1., 1.), p(-1., 1., -1.)],
+            [p(1., -1., 1.), p(1., -1., -1.), p(1., 1., -1.), p(1., 1., 1.)],
+        ];
+        faces
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| Some(*i) != skip)
+            .flat_map(|(_, [a, b, c, d])| [*a, *b, *c, *a, *c, *d])
+            .collect()
+    }
+
+    /// The engine's solids close and its flat shapes do not; a cube closes with its corners split
+    /// per face, and stops closing with a face gone.
+    #[test]
+    fn solids_close_and_sheets_do_not() {
+        use crate::asset::AssetManager;
+        assert!(triangles_close(&cube(None)), "a cube");
+        for face in 0..6 {
+            assert!(!triangles_close(&cube(Some(face))), "a cube without face {face}");
+        }
+        assert!(triangles_close(&positions(&AssetManager::sphere_data(1.0, 16, 24))), "a sphere");
+        for latitudes in [4, 7, 8] {
+            assert!(triangles_close(&positions(&AssetManager::capsule_data(0.5, 1.0, latitudes, 16))), "a capsule of {latitudes}");
+        }
+        assert!(triangles_close(&positions(&AssetManager::cylinder_data(0.5, 1.0, 12))), "a cylinder");
+        assert!(triangles_close(&positions(&AssetManager::cone_data(0.5, 1.0, 12))), "a cone");
+        assert!(!triangles_close(&positions(&AssetManager::plane_data(2.0))), "a plane");
+        assert!(!triangles_close(&positions(&AssetManager::plane_subdivided_data(2.0, 4))), "a subdivided plane");
+        assert!(!triangles_close(&positions(&AssetManager::circle_data(1.0, 12))), "a disc");
+    }
+
+    /// A sheet drawn as two layers wound opposite ways closes — and casting it from its back faces
+    /// is right, since the layer turned from the light is the one drawn. A sheet with one triangle
+    /// turned over does not, nor does anything empty, ragged or degenerate.
+    #[test]
+    fn two_layers_close_and_broken_lists_do_not() {
+        let sheet: Vec<Vec3> = positions(&crate::asset::AssetManager::plane_data(2.0));
+        let mut both = sheet.clone();
+        both.extend(sheet.chunks(3).flat_map(|t| [t[0], t[2], t[1]]));
+        assert!(triangles_close(&both), "a sheet and its reverse");
+        let mut flipped = cube(None);
+        flipped.swap(1, 2);
+        assert!(!triangles_close(&flipped), "a cube with one triangle wound the wrong way");
+        assert!(!triangles_close(&[]), "nothing");
+        assert!(!triangles_close(&cube(None)[..7]), "not a multiple of three");
+        assert!(!triangles_close(&[Vec3::ZERO; 6]), "only degenerate triangles");
+    }
+
+    /// Every way a mesh is made answers: the engine's solids close through `new_indexed` (which hands
+    /// its unique vertices to `Mesh::new` and works the answer out from its own triangle list) and
+    /// through the flat `Mesh::new`, and its sheets do not.
+    #[test]
+    fn a_mesh_knows_whether_it_closes() {
+        use crate::asset::AssetManager;
+        let _gpu = crate::test_gpu::gpu_lock();
+        let Some((device, _queue)) = pollster::block_on(crate::test_gpu::headless_device()) else {
+            eprintln!("skipping: no GPU adapter");
+            return;
+        };
+        assert!(AssetManager::create_cube(&device).closed, "a cube");
+        assert!(AssetManager::create_sphere(&device, 1.0, 12, 16).closed, "a sphere");
+        assert!(!AssetManager::create_plane(&device, 2.0).closed, "a plane");
+        let flat = super::Mesh::from_vertices(&device, &AssetManager::sphere_data(1.0, 12, 16), "flat sphere");
+        assert!(flat.closed, "a sphere made flat");
+        let sheet = super::Mesh::from_vertices(&device, &AssetManager::plane_data(2.0), "flat plane");
+        assert!(!sheet.closed, "a plane made flat");
+    }
+
+    /// Corners a float's rounding apart are one corner: a mesh whose shared corners came out of two
+    /// computations a few ulps apart still closes.
+    #[test]
+    fn corners_a_rounding_apart_are_one() {
+        let jittered: Vec<Vec3> = cube(None)
+            .into_iter()
+            .enumerate()
+            .map(|(i, p)| p + Vec3::splat(if i % 2 == 0 { 1e-7 } else { -1e-7 }))
+            .collect();
+        assert!(triangles_close(&jittered));
     }
 }

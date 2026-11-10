@@ -1016,9 +1016,38 @@ fn per_object_shadow_casting_controls_the_shadow_and_the_object() {
     );
 }
 
+/// **A plane casts a shadow in the editor viewport, as in the game.** The viewport's shadow pass drew
+/// every mesh by its back faces, as the game's did, and a plane facing the sun has none: it cast
+/// nothing. The same plane drawn casting and not casting differs now by its shadow on the ground.
+#[test]
+fn an_open_mesh_casts_a_shadow_in_the_viewport() {
+    use gizmo::renderer::components::ShadowCasting;
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    let casting = shadow_scene_of(ShadowCasting::On, true).expect("On");
+    let not_casting = shadow_scene_of(ShadowCasting::Off, true).expect("Off");
+    let luma = |p: &[u8]| (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3;
+    let shadowed = casting
+        .chunks(BPP as usize)
+        .zip(not_casting.chunks(BPP as usize))
+        .filter(|(a, b)| luma(a) + 20 < luma(b))
+        .count();
+    assert!(shadowed > 1000, "a plane facing the sun shadows {shadowed} pixels of the ground");
+}
+
 /// The shadow scenario from `the_editor_casts_a_shadow_onto_the_ground`, with the cube's casting
 /// mode as a parameter. Returns the frame as raw bytes.
 fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<u8>> {
+    shadow_scene_of(mode, false)
+}
+
+/// [`shadow_scene`], with a plane facing up in the cube's place when `plane`.
+fn shadow_scene_of(mode: gizmo::renderer::components::ShadowCasting, plane: bool) -> Option<Vec<u8>> {
     const S: u32 = 256;
     Some(pollster::block_on(async {
         let mut renderer = shared_device_renderer(S, S).await;
@@ -1041,7 +1070,10 @@ fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<
 
         let cube = world.spawn();
         world.add_component(cube, Transform::new(Vec3::ZERO));
-        world.add_component(cube, AssetManager::create_cube(&renderer.device));
+        world.add_component(
+            cube,
+            if plane { AssetManager::create_plane(&renderer.device, 2.0) } else { AssetManager::create_cube(&renderer.device) },
+        );
         world.add_component(
             cube,
             Material::new(tex).with_pbr(Vec4::new(0.9, 0.25, 0.25, 1.0), 0.6, 0.0),

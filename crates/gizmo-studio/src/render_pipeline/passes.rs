@@ -198,8 +198,9 @@ pub(super) fn record_studio_shadow_passes(
             multiview_mask: None,
             });
 
-            shadow_pass.set_pipeline(&renderer.scene.shadow_pipeline);
-
+            // A closed mesh casts from its back faces and an open one from both (`Mesh::closed`), as
+            // on the game path.
+            let mut bound: Option<bool> = None;
             for batch in flat_batches {
                 // Non-casters must not write the shadow maps — matches the game path
                 // (`passes.rs`: skip unlit/transparent) and the `classify_visibility`
@@ -241,6 +242,10 @@ pub(super) fn record_studio_shadow_passes(
                 }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
+                }
+                if bound != Some(batch.closed) {
+                    shadow_pass.set_pipeline(renderer.scene.shadow_pipeline_for(batch.closed));
+                    bound = Some(batch.closed);
                 }
                 // Shadow pass draws the FULL range (camera-visible + off-screen casters).
                 let safe_end = std::cmp::min(

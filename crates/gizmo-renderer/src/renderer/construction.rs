@@ -549,6 +549,7 @@ impl Renderer {
             mirror_pipeline: scene.mirror_pipeline,
             water_mirror_pipeline: scene.water_mirror_pipeline,
             shadow_pipeline: scene.shadow_pipeline,
+            shadow_open_pipeline: scene.shadow_open_pipeline,
             transparent_pipeline: scene.transparent_pipeline,
             grid_pipeline: scene.grid_pipeline,
             blend_lit_pipelines: scene.blend_lit_pipelines,

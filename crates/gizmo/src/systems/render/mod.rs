@@ -8357,6 +8357,146 @@ mod golden_render_tests {
         });
     }
 
+    /// Which caster stands over the floor in `thin_caster_shadow`.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum Caster {
+        /// Nothing: the floor alone.
+        None,
+        /// A cube, the solid the shadow pass was written for.
+        Cube,
+        /// A plane facing the sun, single-sided.
+        Plane,
+        /// The same plane, double-sided.
+        TwoSidedPlane,
+    }
+
+    /// How many floor pixels a caster darkens by 20 or more, under a high sun — or, with `point`,
+    /// under a point light above it casting through its cube map.
+    async fn thin_caster_shadow(caster: Caster, point: bool) -> usize {
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        let light = if point { None } else { Some(0.3) };
+        let empty = thin_caster_frame(Caster::None, false, true, light).await;
+        let with = thin_caster_frame(caster, false, true, light).await;
+        (0..128 * 128).filter(|&i| luma(&with, i) + 20 < luma(&empty, i)).count()
+    }
+
+    /// How many of a drawn caster's own pixels are darker by 20 or more when it receives shadows than
+    /// when it does not: what it shadows of itself. Its shadow on the floor is in both frames.
+    async fn thin_caster_self_shadow(caster: Caster, threshold: i32, sun_tilt: f32) -> usize {
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        let receiving = thin_caster_frame(caster, true, true, Some(sun_tilt)).await;
+        let refusing = thin_caster_frame(caster, true, false, Some(sun_tilt)).await;
+        (0..128 * 128).filter(|&i| luma(&receiving, i) + threshold < luma(&refusing, i)).count()
+    }
+
+    /// The floor and `caster` under a sun `sun_tilt` radians off overhead, or with `None` a point
+    /// light above them and point shadows on. `drawn`: the caster is in the picture as well as in the
+    /// shadow maps; `receives`: shadows fall on it.
+    async fn thin_caster_frame(caster: Caster, drawn: bool, receives: bool, sun_tilt: Option<f32>) -> Vec<u8> {
+        {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            if caster != Caster::None {
+                let e = world.spawn();
+                world.add_component(e, GlobalTransform::default());
+                let mat = Material::new(tex).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.9, 0.0);
+                match caster {
+                    Caster::Cube => {
+                        world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)).with_scale(Vec3::splat(0.6)));
+                        world.add_component(e, AssetManager::create_cube(&renderer.device));
+                        world.add_component(e, mat);
+                    }
+                    Caster::Plane | Caster::TwoSidedPlane => {
+                        world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+                        world.add_component(e, AssetManager::create_plane(&renderer.device, 1.2));
+                        world.add_component(e, mat.with_double_sided(caster == Caster::TwoSidedPlane));
+                    }
+                    Caster::None => unreachable!(),
+                }
+                // Casts and, unless `drawn`, is not drawn, so what darkens is its shadow and not the
+                // caster itself.
+                let shadows = if drawn { gizmo_renderer::components::ShadowCasting::On } else { gizmo_renderer::components::ShadowCasting::Only };
+                world.add_component(e, MeshRenderer::new().with_shadows(shadows).with_receives_shadows(receives));
+            }
+            match sun_tilt {
+                Some(tilt) => {
+                    world.spawn_bundle(crate::bundles::DirectionalLightBundle {
+                        rotation: gizmo_math::Quat::from_rotation_z(-tilt) * gizmo_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                        intensity: 3.0,
+                        ..Default::default()
+                    });
+                }
+                None => {
+                    renderer.point_shadows_enabled = true;
+                    world.spawn_bundle(crate::bundles::PointLightBundle {
+                        position: Vec3::new(0.4, 3.5, 0.3),
+                        intensity: 40.0,
+                        radius: 30.0,
+                        ..Default::default()
+                    });
+                }
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 6.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.8,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+    }
+
+    /// **A mesh that does not close casts a shadow, and does not shadow itself.** The shadow pass drew
+    /// every mesh by its back faces, which is what keeps a solid's lit front off its own depth — and a
+    /// plane, a card or a sheet of cloth has no back to cast from: a plane over a floor, facing the
+    /// sun, cast 0 shadow pixels against a cube's 236, single- or double-sided. A mesh that does not
+    /// close (`Mesh::closed`) is drawn by both faces now, and casts 184. Its lit face shadows none of
+    /// itself, by so much as 2 of 255, with the sun 17°, 52° or 72° off overhead: the receiver's normal
+    /// offset and slope bias keep it off its own depth. The cube is drawn as before, to the pixel. The
+    /// point light's cube map is drawn the same way, and nothing tested it at all: a point light over
+    /// the floor, the cube casts 554 pixels and the plane 233.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn an_open_mesh_casts_a_shadow_and_does_not_shadow_itself() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let cube = thin_caster_shadow(Caster::Cube, false).await;
+            assert!(cube > 150, "the cube casts {cube} shadow pixels");
+            let point_cube = thin_caster_shadow(Caster::Cube, true).await;
+            assert!(point_cube > 300, "the cube casts {point_cube} shadow pixels from a point light");
+            for plane in [Caster::Plane, Caster::TwoSidedPlane] {
+                let shadow = thin_caster_shadow(plane, false).await;
+                assert!(shadow > 120, "{plane:?}, facing the sun, casts {shadow} shadow pixels");
+                let point = thin_caster_shadow(plane, true).await;
+                assert!(point > 120, "{plane:?}, facing a point light, casts {point} shadow pixels");
+                for tilt in [0.3, 0.9, 1.25] {
+                    let own = thin_caster_self_shadow(plane, 1, tilt).await;
+                    assert_eq!(own, 0, "{plane:?} shadows {own} of its own pixels, the sun {tilt} rad off overhead");
+                }
+            }
+        });
+    }
+
     /// `SsaoState::set_shape` reshapes the occlusion. A cube on a floor, darkening measured against
     /// the same frame with SSAO off, summed over a band of floor just below the cube: the default
     /// 0.5 m radius keeps the occlusion in the crease, 2 m spreads a halo across the band. Setting

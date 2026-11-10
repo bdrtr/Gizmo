@@ -182,6 +182,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A plane cast no shadow.** The shadow pass drew every mesh by its back faces, which keeps a solid from shadowing
+  itself and leaves a plane, a card or a sheet of cloth facing the light with nothing to cast: 0 shadow pixels against a
+  cube's 236, single- or double-sided, from the sun and from a point light. `Mesh::closed` says whether a mesh closes over
+  a volume (from its own triangles), and one that does not is drawn into the shadow maps by both faces
+  (`SceneState::shadow_open_pipeline`, `shadow_pipeline_for`), in the game and in the editor. The plane casts 184, and does
+  not shadow its own lit face.
+- **The capsule mesh did not close.** Its equator ring was placed at 0 for both hemispheres, so each hemisphere's last band
+  slanted into the middle of the tube and the tube's rims met nothing; an odd latitude count left no equator ring. Each
+  band now moves with its hemisphere, and the count is rounded up to even.
 - **The editor viewport drew a game's own pipeline with the engine's lit shader.** Its draw loops never read
   `Routing::custom`, so a `MaterialType::Custom` material showed in `gizmo-studio` as the engine's material with the lights
   skipped. Both kinds of game material are drawn from the renderer's registry there now, and an unregistered id draws nothing,

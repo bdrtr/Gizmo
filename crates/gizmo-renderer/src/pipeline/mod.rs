@@ -16,7 +16,7 @@ pub use shaders::load_shader_composed;
 pub use shaders::{load_shader_composed_web, load_shader_composed_web_with};
 
 use layouts::{build_layouts, LayoutRefs};
-use pipelines::{build_core_pipelines, build_shadow_pipeline};
+use pipelines::{build_core_pipelines, build_shadow_pipelines};
 pub(crate) use pipelines::{forward_pipeline, lit_set};
 use uniforms::{build_global_uniforms, build_shadow_resources};
 
@@ -73,8 +73,12 @@ pub struct SceneState {
     pub mirror_pipeline: wgpu::RenderPipeline,
     /// Water with a [`PlanarReflection`](crate::components::PlanarReflection), once captured.
     pub water_mirror_pipeline: wgpu::RenderPipeline,
-    /// Depth-only, for rendering into the shadow cascades.
+    /// Depth-only, for rendering into the shadow cascades: a mesh that closes, by its back faces.
     pub shadow_pipeline: wgpu::RenderPipeline,
+    /// The same for a mesh that does not close (`Mesh::closed`), by both faces: a plane, a card, a
+    /// sheet of cloth has no back to cast from. [`shadow_pipeline_for`](Self::shadow_pipeline_for)
+    /// chooses.
+    pub shadow_open_pipeline: wgpu::RenderPipeline,
     /// Line-topology, for wireframe views.
     pub wireframe_pipeline: wgpu::RenderPipeline,
     /// Alpha-blended, no depth write, for the transparent bucket.
@@ -379,6 +383,12 @@ impl SceneState {
                 }))
             })
             .clone()
+    }
+
+    /// The shadow pass's pipeline for a mesh: [`shadow_pipeline`](Self::shadow_pipeline) if it closes,
+    /// [`shadow_open_pipeline`](Self::shadow_open_pipeline) if not.
+    pub fn shadow_pipeline_for(&self, closed: bool) -> &wgpu::RenderPipeline {
+        if closed { &self.shadow_pipeline } else { &self.shadow_open_pipeline }
     }
 
     /// The lit pipeline that also reads the frame behind it, for a draw that
@@ -1011,7 +1021,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         wire_color: &wire_color_layout,
     };
     let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default());
-    let shadow_pipeline = build_shadow_pipeline(device, &layout_refs);
+    let [shadow_pipeline, shadow_open_pipeline] = build_shadow_pipelines(device, &layout_refs);
 
     tracing::info!(
         initial_instance_capacity = initial_capacity,
@@ -1047,6 +1057,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         behind_fallback,
         behind_sampler,
         shadow_pipeline,
+        shadow_open_pipeline,
         global_uniform_buffer,
         global_bind_group_layout: layouts.global,
         global_bind_group,
@@ -1113,7 +1124,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let layouts = layout_refs(&renderer.scene, &indirect);
 
     let core_pipelines = build_core_pipelines(device, &layouts, renderer.scene.forward_probes.shape);
-    let shadow_pipeline = build_shadow_pipeline(device, &layouts);
+    let [shadow_pipeline, shadow_open_pipeline] = build_shadow_pipelines(device, &layouts);
 
     renderer.scene.lit_lobes = core_pipelines.lobes;
     renderer.scene.render_details_pipeline = core_pipelines.render_details;
@@ -1136,6 +1147,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.blend_lit_pipelines = core_pipelines.blend_lit;
     renderer.scene.blend_unlit_pipelines = core_pipelines.blend_unlit;
     renderer.scene.shadow_pipeline = shadow_pipeline;
+    renderer.scene.shadow_open_pipeline = shadow_open_pipeline;
 
     crate::post_process::rebuild_post_pipelines(renderer, &post_shader);
 

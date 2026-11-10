@@ -739,6 +739,23 @@ contact shadows. The `area_lights` demo shows all of it. What is left is narrowe
 ever was: no cube cookies for point lights, no cookies on web, and rectangle lights cast no
 shadows. Each item:
 
+- ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
+  faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or
+  a sheet of cloth has no back faces: a plane over a floor, facing the sun, cast **0** shadow pixels
+  against a cube's 236, single- or double-sided, and the same under a point light. A mesh knows now
+  whether it closes over a volume (`Mesh::closed`, worked out from its own triangles when it is made:
+  every edge met by one running the other way, corners welded by position), and one that does not is
+  drawn by both faces (`SceneState::shadow_open_pipeline`) in the sun's cascades, the point light's
+  cube and the editor's viewport. The plane casts 184, and 233 under a point light; its lit face
+  shadows none of itself, by so much as 2 of 255, with the sun 17°, 52° or 72° off overhead — the
+  receiver's normal offset and slope bias were enough once the plane had a depth to compare with.
+  Solids are drawn as before. Nothing had tested the point light's shadows at all; the cube casts 554
+  pixels there (`an_open_mesh_casts_a_shadow_and_does_not_shadow_itself`,
+  `an_open_mesh_casts_a_shadow_in_the_viewport`). The test of closedness found the engine's capsule
+  open: its equator ring sat at 0 for both hemispheres, so each one's last band slanted into the tube
+  and the tube's rims met nothing, and an odd latitude count left no equator ring at all. It closes
+  now. **Still open:** a cut-out casts its whole quad, since the shadow pass has no fragment stage.
+
 - **Spherical area lights: CLOSED 2026-11-01** — `PointLight::source_radius` / `SpotLight::source_radius`
   (metres, 0 = a point, the default), through `compute_sphere_lighting` in `common.wgsl`, both
   draw paths. Specular takes the representative point (the point on the sphere nearest the

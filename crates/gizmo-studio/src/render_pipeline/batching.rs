@@ -43,6 +43,9 @@ pub(super) struct BatchKey {
     // and a texture bind group — or one and the engine's material — differ only here.
     pub(super) custom: Option<gizmo::renderer::custom_material::MaterialId>,
     pub(super) surface: Option<gizmo::renderer::custom_material::SurfaceId>,
+    // Whether the mesh closes (`Mesh::closed`), which the shadow pass casts by: a field a game may
+    // set on a mesh sharing a buffer with another.
+    pub(super) closed: bool,
 }
 
 pub(super) struct BatchData {
@@ -94,6 +97,8 @@ pub(super) struct BatchData {
     pub(super) custom: Option<gizmo::renderer::custom_material::MaterialId>,
     /// A surface of the game's own (`MaterialType::CustomSurface`), lit by its own forward pipelines.
     pub(super) surface: Option<gizmo::renderer::custom_material::SurfaceId>,
+    /// The mesh closes over a volume (`Mesh::closed`): cast from its back faces, an open one from both.
+    pub(super) closed: bool,
 }
 
 #[derive(Clone)]
@@ -146,6 +151,8 @@ pub(super) struct FlatBatchData {
     pub(super) custom: Option<gizmo::renderer::custom_material::MaterialId>,
     /// See [`BatchData::surface`].
     pub(super) surface: Option<gizmo::renderer::custom_material::SurfaceId>,
+    /// See [`BatchData::closed`].
+    pub(super) closed: bool,
 }
 
 impl FlatBatchData {
