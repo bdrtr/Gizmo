@@ -398,6 +398,15 @@ impl PhysicsTime {
         self.fixed_dt = 1.0 / hz.max(1) as f32;
         self.max_accumulator = self.fixed_dt * 8.0;
     }
+
+    /// Changes the step itself, in seconds — for a step that is not a whole number of hertz (the GPU
+    /// bodies take theirs from `update_params`). Kept at a tenth of a millisecond or more, so the
+    /// accumulator always drains: a zero step would owe infinitely many. Caution: accumulated time is
+    /// not reset.
+    pub fn set_fixed_dt(&mut self, fixed_dt: f32) {
+        self.fixed_dt = fixed_dt.max(1e-4);
+        self.max_accumulator = self.fixed_dt * 8.0;
+    }
 }
 
 impl Default for PhysicsTime {
@@ -553,6 +562,31 @@ mod tests {
         }
         assert_eq!(steps, 3);
         assert_eq!(pt.step_count(), 3);
+    }
+
+    /// A step of any length, not only a whole number of hertz, and never one that cannot drain: the
+    /// GPU bodies take theirs from `update_params`, and a step of zero owed infinitely many.
+    #[test]
+    fn a_fixed_step_of_any_length_drains_and_a_zero_one_cannot_hang() {
+        let steps_in = |pt: &mut PhysicsTime, dt: f32| {
+            pt.accumulate(dt);
+            let mut n = 0;
+            while pt.should_step() {
+                pt.consume_step();
+                n += 1;
+            }
+            n
+        };
+        // Binary fractions, so the arithmetic is exact and the counts are the ones written.
+        let mut pt = PhysicsTime::new(60);
+        pt.set_fixed_dt(0.25);
+        assert_eq!(pt.fixed_dt(), 0.25);
+        assert_eq!(steps_in(&mut pt, 0.5), 2);
+        assert_eq!(steps_in(&mut pt, 0.125), 0, "less than a step stays owed");
+        assert_eq!(steps_in(&mut pt, 0.125), 1);
+        pt.set_fixed_dt(0.0);
+        assert!(pt.fixed_dt() > 0.0, "a zero step is raised to one that drains");
+        assert!(steps_in(&mut pt, 1.0) <= 8, "and a long frame still owes at most the eight the cap allows");
     }
 
     #[test]

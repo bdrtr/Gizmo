@@ -1445,3 +1445,79 @@ fn a_view_draws_what_the_frames_step_simulated() {
         assert_eq!(active, all, "full detail ran {active} of the particle ring's {all}");
     });
 }
+
+/// **The GPU bodies step on the game's clock**, in whole steps of their own fixed size: two frames of
+/// 1/60 s and one of 1/30 s are two steps each, a paused clock steps them none, and the rest of a
+/// short frame is carried to the next. They stepped once for every frame drawn, whatever its length
+/// — twice as fast at 120 Hz as at 60 — and went on falling under ⏸.
+///
+/// With them, what the solver is told: a plane is uploaded once (it took the next slot of a counter
+/// shared by the whole process every frame, and filled the table with copies of itself in some
+/// ninety frames); the solver checks the live static colliders, not all hundred slots; and a joint
+/// reaches it when it is added, not when the game next happens to call `update_params`.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn the_gpu_bodies_step_on_the_games_clock() {
+    use super::{draw_ahead_of_views, SimulationDetail};
+    use crate::renderer::gpu_physics::GpuJoint;
+    use gizmo_core::time::Time;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let mut game = World::new();
+        game.insert_resource(Time::new());
+        let floor = game.spawn_bundle((
+            Transform::new(Vec3::ZERO),
+            gizmo_physics_rigid::components::RigidBody::new(0.0, false),
+            gizmo_physics_core::Collider::plane(Vec3::Y, 0.0),
+        ));
+        let frame = |game: &mut World, renderer: &mut Renderer, dt: f32| {
+            game.get_resource_mut::<Time>().expect("a clock").update(dt);
+            prepare_frame(game, renderer);
+            draw_ahead_of_views(game, renderer, SimulationDetail::Full);
+        };
+        fn physics(r: &Renderer) -> &crate::renderer::gpu_physics::GpuPhysicsSystem {
+            r.gpu_physics.as_ref().expect("GPU bodies")
+        }
+        let initial_colliders = physics(&renderer).params().num_colliders;
+
+        frame(&mut game, &mut renderer, 1.0 / 60.0);
+        frame(&mut game, &mut renderer, 1.0 / 60.0);
+        assert_eq!(physics(&renderer).clock().step_count(), 2, "two frames of 1/60 s");
+        frame(&mut game, &mut renderer, 1.0 / 30.0);
+        assert_eq!(physics(&renderer).clock().step_count(), 4, "a frame of 1/30 s is two steps");
+        game.get_resource_mut::<Time>().expect("a clock").set_paused(true);
+        frame(&mut game, &mut renderer, 1.0 / 60.0);
+        assert_eq!(physics(&renderer).clock().step_count(), 4, "a paused clock steps the bodies");
+        game.get_resource_mut::<Time>().expect("a clock").set_paused(false);
+        frame(&mut game, &mut renderer, 1.0 / 120.0);
+        assert_eq!(physics(&renderer).clock().step_count(), 4, "half a step is owed, not run");
+        frame(&mut game, &mut renderer, 1.0 / 120.0);
+        assert_eq!(physics(&renderer).clock().step_count(), 5, "and runs once the next half arrives");
+
+        assert_eq!(
+            physics(&renderer).params().num_colliders,
+            initial_colliders + 1,
+            "the plane is one static collider however many frames it is in"
+        );
+        assert!(game.get::<crate::systems::physics::GpuStaticCollider>(floor).is_some(), "the plane is marked uploaded");
+        assert!(initial_colliders < 10, "the solver is told the live colliders ({initial_colliders}), not every slot");
+
+        let queue = renderer.queue.clone();
+        let joint = renderer.gpu_physics.as_mut().expect("GPU bodies").add_joint(&queue, GpuJoint::ball(0, 1, [0.0; 3], [0.0; 3]));
+        assert_eq!(joint, Some(0));
+        assert_eq!(physics(&renderer).params().num_joints, 1, "the joint never reached the solver's parameters");
+    });
+}

@@ -1087,11 +1087,17 @@ fn step_gpu_simulations(
         smoke.advect(encoder, &renderer.queue, time, dt);
     }
 
-    if let Some(physics) = &renderer.gpu_physics {
+    if let Some(physics) = renderer.gpu_physics.as_mut() {
         // Her frame başında sıradaki state'i çekmek için WGPU CommandEncoder'a asenkron mapping iste.
         physics.request_readback(encoder);
 
-        physics.compute_pass(encoder);
+        // On the game's clock, as the CPU bodies are: whole steps of the bodies' own fixed step for
+        // the time the frame holds — none under ⏸, the time scale applied (`GpuPhysicsSystem::advance`).
+        // A world with no clock gets one step a frame, as every frame used to.
+        let elapsed = world
+            .get_resource::<gizmo_core::time::Time>()
+            .map_or(physics.clock().fixed_dt(), |t| t.dt());
+        physics.advance(encoder, elapsed);
         physics.debug_compute_pass(encoder);
     }
 

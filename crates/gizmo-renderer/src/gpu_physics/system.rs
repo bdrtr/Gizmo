@@ -5,6 +5,25 @@ use wgpu::util::DeviceExt;
 use super::pipeline::{create_physics_pipelines, PhysicsPipelines};
 use super::types::*;
 
+/// How many static colliders the collider buffer holds.
+pub const MAX_STATIC_COLLIDERS: u32 = 100;
+
+/// The solver's parameters, from the step, gravity and the live counts.
+fn sim_params(dt: f32, gravity: [f32; 3], num_boxes: u32, num_colliders: u32, num_joints: u32) -> PhysicsSimParams {
+    PhysicsSimParams {
+        dt,
+        _pad0: [0; 3],
+        _pad1: [0.0; 3],
+        _pad1b: 0,
+        gravity,
+        damping: 0.99,
+        num_boxes,
+        num_colliders,
+        num_joints,
+        _pad2: 0,
+    }
+}
+
 /// The renderer's own GPU rigid-body solver: bodies that are simulated, culled and drawn without
 /// the CPU seeing them.
 ///
@@ -41,6 +60,17 @@ pub struct GpuPhysicsSystem {
     pub joint_count: u32,
     /// The joint buffer's capacity.
     pub max_joints: u32,
+
+    /// The simulation's own fixed-step clock: how many steps the game's time owes the bodies —
+    /// see [`advance`](Self::advance).
+    clock: gizmo_core::time::PhysicsTime,
+    /// Gravity, m/s², as [`update_params`](Self::update_params) last set it.
+    gravity: [f32; 3],
+    /// How many static colliders are live; the solver checks these and no more. The buffer holds
+    /// [`MAX_STATIC_COLLIDERS`], and the slots past this are empty.
+    collider_count: u32,
+    /// What the solver was last given — see [`params`](Self::params).
+    params: PhysicsSimParams,
 
     /// Every pipeline the solver runs.
     pub pipelines: PhysicsPipelines,
@@ -166,7 +196,7 @@ impl GpuPhysicsSystem {
             data2: [55.0, 40.0, 40.0, 0.0], // aabb_max (Sağ Duvar)
         });
 
-        let max_static_colliders = 100;
+        let max_static_colliders = MAX_STATIC_COLLIDERS as usize;
         let num_initial = initial_colliders.len();
         if num_initial < max_static_colliders {
             let empty_col = GpuCollider {
@@ -191,18 +221,11 @@ impl GpuPhysicsSystem {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
-        let params = PhysicsSimParams {
-            dt: 0.016,
-            _pad0: [0; 3],
-            _pad1: [0.0; 3],
-            _pad1b: 0,
-            gravity: [0.0, -9.81, 0.0],
-            damping: 0.99,
-            num_boxes: max_boxes,
-            num_colliders: initial_colliders.len() as u32,
-            num_joints: 0,
-            _pad2: 0,
-        };
+        // The simulation steps on its own fixed-step clock, at 60 Hz until `update_params` says
+        // otherwise; `advance` turns the game's time into whole steps of it.
+        let clock = gizmo_core::time::PhysicsTime::new(60);
+        let gravity = [0.0, -9.81, 0.0];
+        let params = sim_params(clock.fixed_dt(), gravity, max_boxes, num_initial as u32, 0);
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("GPU Physics Params Buffer"),
@@ -314,6 +337,10 @@ impl GpuPhysicsSystem {
             joints_buffer,
             joint_count: 0,
             max_joints,
+            clock,
+            gravity,
+            collider_count: num_initial as u32,
+            params,
             pipelines,
             box_vertex_buffer,
             box_index_buffer,
@@ -512,8 +539,10 @@ impl GpuPhysicsSystem {
     }
 
     /// Overwrites one static collider.
-    pub fn update_collider(&self, queue: &wgpu::Queue, index: u32, collider: &GpuCollider) {
-        if index < 100 {
+    /// Overwrites the static collider in slot `index`; a slot past the live ones makes every slot up
+    /// to it live.
+    pub fn update_collider(&mut self, queue: &wgpu::Queue, index: u32, collider: &GpuCollider) {
+        if index < MAX_STATIC_COLLIDERS {
             let offset = (index as wgpu::BufferAddress)
                 * std::mem::size_of::<GpuCollider>() as wgpu::BufferAddress;
             queue.write_buffer(
@@ -521,7 +550,22 @@ impl GpuPhysicsSystem {
                 offset,
                 bytemuck::cast_slice(&[*collider]),
             );
+            if index >= self.collider_count {
+                self.collider_count = index + 1;
+                self.write_params(queue);
+            }
         }
+    }
+
+    /// Adds a static collider in the next free slot and returns the slot, or `None` when all
+    /// [`MAX_STATIC_COLLIDERS`] are taken.
+    pub fn add_collider(&mut self, queue: &wgpu::Queue, collider: &GpuCollider) -> Option<u32> {
+        if self.collider_count >= MAX_STATIC_COLLIDERS {
+            return None;
+        }
+        let slot = self.collider_count;
+        self.update_collider(queue, slot, collider);
+        Some(slot)
     }
 
     /// Adds a joint and returns its index.
@@ -534,6 +578,9 @@ impl GpuPhysicsSystem {
             (idx as wgpu::BufferAddress) * std::mem::size_of::<GpuJoint>() as wgpu::BufferAddress;
         queue.write_buffer(&self.joints_buffer, offset, bytemuck::cast_slice(&[joint]));
         self.joint_count += 1;
+        // The solver reads how many joints there are from the parameters: a joint added without
+        // them was one it never looked at, until the game happened to call `update_params`.
+        self.write_params(queue);
         Some(idx)
     }
 
@@ -548,21 +595,56 @@ impl GpuPhysicsSystem {
         }
     }
 
-    /// Updates the simulation parameters (dt, num_joints and the rest).
-    pub fn update_params(&self, queue: &wgpu::Queue, dt: f32, gravity: [f32; 3]) {
-        let params = PhysicsSimParams {
-            dt,
-            _pad0: [0; 3],
-            _pad1: [0.0; 3],
-            _pad1b: 0,
-            gravity,
-            damping: 0.99,
-            num_boxes: self.max_boxes,
-            num_colliders: 100, // max static colliders
-            num_joints: self.joint_count,
-            _pad2: 0,
-        };
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
+    /// Sets the simulation's step — the fixed length of time each step advances, in seconds — and
+    /// its gravity. How many steps run is not this: [`advance`](Self::advance) turns the game's time
+    /// into steps of this length, so a longer step means fewer of them, not faster bodies.
+    pub fn update_params(&mut self, queue: &wgpu::Queue, dt: f32, gravity: [f32; 3]) {
+        self.clock.set_fixed_dt(dt);
+        self.gravity = gravity;
+        self.write_params(queue);
+    }
+
+    /// Writes the parameters the solver reads from what this system holds — the step, gravity and
+    /// how many colliders and joints are live — so no one of them can be written without the rest.
+    fn write_params(&mut self, queue: &wgpu::Queue) {
+        self.params = sim_params(
+            self.clock.fixed_dt(),
+            self.gravity,
+            self.max_boxes,
+            self.collider_count,
+            self.joint_count,
+        );
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[self.params]));
+    }
+
+    /// The parameters the solver was last given: its step, gravity, and how many bodies, static
+    /// colliders and joints it reads.
+    pub fn params(&self) -> PhysicsSimParams {
+        self.params
+    }
+
+    /// **Steps the bodies by `elapsed` seconds of the game's time**, in whole steps of the fixed
+    /// step ([`update_params`](Self::update_params), 1/60 s by default): none while the game is
+    /// paused, two in a frame of 1/30 s, and the remainder carried to the next frame. At most eight
+    /// in one frame — time past that is dropped and logged rather than owed, as the CPU bodies'
+    /// clock does ([`PhysicsTime`](gizmo_core::time::PhysicsTime)). Returns how many it recorded.
+    ///
+    /// It stepped once for every frame drawn, whatever the frame's length: the bodies fell twice as
+    /// fast at 120 Hz as at 60, went on falling under ⏸, and took no notice of a time scale.
+    pub fn advance(&mut self, encoder: &mut wgpu::CommandEncoder, elapsed: f32) -> u32 {
+        self.clock.accumulate(elapsed);
+        let mut steps = 0;
+        while self.clock.should_step() {
+            self.clock.consume_step();
+            self.compute_pass(encoder);
+            steps += 1;
+        }
+        steps
+    }
+
+    /// The simulation's clock: its step, how many steps it has run and the time it still owes.
+    pub fn clock(&self) -> &gizmo_core::time::PhysicsTime {
+        &self.clock
     }
 
     /// Enables the debug visualisation, building the bind group from the real buffer

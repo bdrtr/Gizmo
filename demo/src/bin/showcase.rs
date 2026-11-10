@@ -720,7 +720,6 @@ struct GpuControls {
     request_force_push: bool,
     request_force_pull: bool,
     request_grab: bool,
-    time_scale: f32,
     gravity_y: f32,
     time: f32,
     particle_spawn_rate: usize,
@@ -739,7 +738,6 @@ impl GpuControls {
             request_force_push: state.request_force_push,
             request_force_pull: state.request_force_pull,
             request_grab: state.request_grab,
-            time_scale: state.time_scale,
             gravity_y: state.gravity_y,
             time: state.time,
             particle_spawn_rate: state.particle_spawn_rate,
@@ -760,12 +758,11 @@ fn showcase_gpu() -> impl FnMut(&World, &mut Renderer) + Send + 'static {
     move |game, renderer| {
         let Some(controls) = game.get_resource::<GpuControls>().map(|c| *c) else { return };
         // GPU fiziğinin adımı ve oyuncunun kuvvetleri (gönderim ve geri okuma karenin hazırlığında)
-        if let Some(physics) = &renderer.gpu_physics {
-            physics.update_params(
-                &renderer.queue,
-                0.016 * controls.time_scale,
-                [0.0, controls.gravity_y, 0.0],
-            );
+        if let Some(physics) = renderer.gpu_physics.as_mut() {
+            // The step stays 1/60 s: the slider's slow motion reaches the bodies through the game's
+            // clock (`Time::set_time_scale`, set from the same slider), which decides how many steps
+            // run. Scaling the step as well used to be the only way it reached them.
+            physics.update_params(&renderer.queue, 1.0 / 60.0, [0.0, controls.gravity_y, 0.0]);
 
             // Force Push (Jedi Itişi) Uygula
             if controls.request_force_push {

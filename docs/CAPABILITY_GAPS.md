@@ -511,6 +511,26 @@ count of its own. `a_view_draws_what_the_frames_step_simulated` holds it at full
 drew the fluid's particles where they start when the draw counted for itself), and
 `render_parity` holds the editor to the shared function and to no GPU step of its own.
 
+**The GPU bodies step on the game's clock — 2026-11-10.** `GpuPhysicsSystem` stepped once for every
+frame drawn, with a step fixed at 0.016 s: twice as fast at 120 Hz as at 60, still falling under ⏸, and
+deaf to a time scale. It keeps a `PhysicsTime` of its own now, and `advance` turns the game's time into
+whole steps of its step (`update_params`'s `dt`, 1/60 s by default) — none while paused, the rest of a
+short frame carried, at most eight in a frame as on the CPU. Found beside it, in the parameters the solver
+reads, and fixed with it: they are written from what the system holds (step, gravity, live colliders and
+joints) in one place, so a joint reaches the solver when it is added — it waited for the game's next
+`update_params` — and the solver checks the live static colliders instead of all hundred slots, ninety-seven
+of them empty boxes at the origin. And a plane collider is uploaded once: it took the next slot of a counter
+shared by the whole process every frame, never marked as uploaded, and filled the table with copies of
+itself in ninety-seven frames, after which every frame logged an error; the slot is the table's to give
+(`add_collider`) and the entity keeps it. `the_gpu_bodies_step_on_the_games_clock` holds all of it (with
+the old stepping a frame of 1/30 s was one step; with the old upload the plane was nine colliders after six
+frames).
+
+Still open there, as its own piece of work: a GPU body has no way out. Its slot is the count of linked
+entities, so a body despawned and another spawned share a slot, and nothing deactivates a despawned
+body's box, which goes on being simulated and drawn. Freeing slots needs a removal path through the
+solver's buffers, not a change to the counting.
+
 **History of this section, kept for the measurements:**
 
 `Camera` has no viewport rectangle, and the render path picks exactly one camera:

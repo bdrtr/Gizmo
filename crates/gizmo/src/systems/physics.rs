@@ -324,27 +324,36 @@ pub fn physics_debug_system(world: &crate::core::World) {
     }
 }
 
-/// Registers the newly created Physical Objects in the ECS (RigidBody + Transform + Collider)
-/// onto the highway of the GPU Physics core (GpuPhysicsSystem::spheres_buffer).
-/// A separate counter for static colliders. The first 3 slots are reserved for the initial
-/// colliders. Only the GPU submit system reads it, and that system needs `render`.
+/// The static collider a plane-collider entity became in the GPU bodies' table — the slot, or
+/// `None` when the table was full. Internal bookkeeping of [`gpu_physics_submit_system`]: an entity
+/// carries it once submitted, as a body carries its [`GpuPhysicsLink`].
 #[cfg(feature = "render")]
-static NEXT_STATIC_COLLIDER_SLOT: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(3);
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct GpuStaticCollider(#[allow(dead_code)] Option<u32>);
+#[cfg(feature = "render")]
+gizmo_core::impl_component!(GpuStaticCollider);
 
 #[cfg(feature = "render")]
-/// Uploads the bodies marked for GPU physics and reads their results back into the ECS.
-pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Renderer) {
+/// Uploads the entities with a rigid body to the renderer's GPU bodies, each once: a plane collider
+/// as a static collider, anything else as a box it is linked to ([`GpuPhysicsLink`]).
+///
+/// **A plane is uploaded once.** It took a slot from a counter shared by the whole process and was
+/// never marked as uploaded — planes take no link — so it was uploaded again into the next slot
+/// every frame, and some ninety frames in the table was full of copies of it and every frame logged
+/// an error. The slot is the GPU table's to give now ([`add_collider`](gizmo_renderer::gpu_physics::GpuPhysicsSystem::add_collider)),
+/// and the entity keeps which one it got.
+pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &mut Renderer) {
     use gizmo_physics_rigid::components::Velocity;
 
-    if let Some(physics) = &renderer.gpu_physics {
+    if let Some(physics) = renderer.gpu_physics.as_mut() {
         let mut unlinked_entities = Vec::new();
         {
             let q = world.query::<(gizmo_core::Entity, &RigidBody, &Transform, &Collider)>();
             let links = world.query::<&GpuPhysicsLink>();
+            let statics = world.query::<&GpuStaticCollider>();
             let velocities = world.query::<&Velocity>();
             for (e, rb, trans, col) in q.iter() {
-                if links.get(e).is_none() {
+                if links.get(e).is_none() && statics.get(e).is_none() {
                     let vel = velocities.get(e).copied().unwrap_or_default();
                     unlinked_entities.push((e, *rb, *trans, col.clone(), vel));
                 }
@@ -356,15 +365,6 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
 
         for (e, rb, trans, col, vel) in unlinked_entities {
             if matches!(col.shape, ColliderShape::Plane(_)) {
-                // Statik engel — ayrı slot sayacı kullan
-                let slot =
-                    NEXT_STATIC_COLLIDER_SLOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                if slot >= 100 {
-                    tracing::error!("[GpuPhysics] Statik collider slot limiti (100) aşıldı, collider atlanıyor.");
-                    NEXT_STATIC_COLLIDER_SLOT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
-                    continue;
-                }
-
                 let gpu_col = gizmo_renderer::gpu_physics::GpuCollider {
                     shape_type: match col.shape {
                         ColliderShape::Plane(_) => 1,
@@ -388,7 +388,17 @@ pub fn gpu_physics_submit_system(world: &mut crate::core::World, renderer: &Rend
                         _ => [0.0; 4],
                     },
                 };
-                physics.update_collider(&renderer.queue, slot, &gpu_col);
+                let slot = physics.add_collider(&renderer.queue, &gpu_col);
+                if slot.is_none() {
+                    tracing::error!(
+                        max = gizmo_renderer::gpu_physics::system::MAX_STATIC_COLLIDERS,
+                        "[GpuPhysics] the static collider table is full; this plane is left out"
+                    );
+                }
+                // Marked either way: a plane the table had no room for is not asked about again.
+                if let Some(entity) = world.live(e) {
+                    world.add_component(entity, GpuStaticCollider(slot));
+                }
             } else {
                 // Dinamik Kutu (AABB)
                 let id = next_dynamic_id;
