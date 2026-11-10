@@ -98,15 +98,26 @@ impl LimiterControl {
 /// good: without the silent infinite input added here, the first moment with nothing playing
 /// would unplug the bus and every sound after it would go nowhere. Adding `0.0` to the sum
 /// changes no bit.
+///
+/// The sum goes through the equalizer, then the compressor, then the limiter: shape the tone,
+/// even the level, and only then hold the peaks under the ceiling. Each is bit-exact while off.
 pub(crate) fn master_bus(
     channels: ChannelCount,
     rate: SampleRate,
-    control: Arc<LimiterControl>,
-) -> (rodio::mixer::Mixer, LimiterStage<rodio::mixer::MixerSource>) {
+    equalizer: Arc<crate::equalizer::EqualizerControl>,
+    compressor: Arc<crate::compressor::CompressorControl>,
+    limiter: Arc<LimiterControl>,
+) -> (rodio::mixer::Mixer, MasterOut) {
     let (bus, out) = rodio::mixer::mixer(channels, rate);
     bus.add(rodio::source::Zero::new(channels, rate));
-    (bus, LimiterStage::new(out, control))
+    let shaped = crate::equalizer::EqualizerStage::new(out, equalizer);
+    let evened = crate::compressor::CompressorStage::new(shaped, compressor);
+    (bus, LimiterStage::new(evened, limiter))
 }
+
+/// What the master bus hands the device: the sum, equalized, compressed and limited.
+pub(crate) type MasterOut =
+    LimiterStage<crate::compressor::CompressorStage<crate::equalizer::EqualizerStage<rodio::mixer::MixerSource>>>;
 
 /// The most channels a frame is buffered for. A source with more passes through unlimited.
 const MAX_CHANNELS: usize = 16;
@@ -282,7 +293,13 @@ mod tests {
     fn the_bus_outlives_silence_and_passes_its_sum_through_unchanged() {
         let ch = NonZero::new(2).unwrap();
         let rate = NonZero::new(RATE).unwrap();
-        let (bus, mut master) = master_bus(ch, rate, LimiterControl::new());
+        let (bus, mut master) = master_bus(
+            ch,
+            rate,
+            crate::equalizer::EqualizerControl::new(),
+            crate::compressor::CompressorControl::new(),
+            LimiterControl::new(),
+        );
         // Nothing playing for a while: the bus keeps answering (with silence) rather than ending.
         for _ in 0..4800 {
             assert_eq!(master.next(), Some(0.0), "an idle bus must not read as finished");

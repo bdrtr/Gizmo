@@ -32,6 +32,11 @@
 //! contract internal.
 
 mod filter;
+/// The master compressor — [`Compressor`](compressor::Compressor), on the summed output between the
+/// equalizer and the limiter.
+pub mod compressor;
+/// The master equalizer — [`Equalizer`](equalizer::Equalizer), the first stage on the summed output.
+pub mod equalizer;
 /// The master limiter — [`Limiter`](limiter::Limiter), on the summed output.
 pub mod limiter;
 mod looping;
@@ -212,6 +217,8 @@ pub struct AudioManager {
     // limiter into the device's mixer. The device's mixer cannot be wrapped (it is the stream's
     // own), so the limiter needs a sum it owns to sit on.
     bus: rodio::mixer::Mixer,
+    equalizer: Arc<equalizer::EqualizerControl>,
+    compressor: Arc<compressor::CompressorControl>,
     limiter: Arc<limiter::LimiterControl>,
 
     // RAM'e (Memory) yüklenmiş ses dosyaları (Disk I/O darboğazını önler)
@@ -356,13 +363,23 @@ impl AudioManager {
                 device_sink.log_on_drop(false);
                 let config = device_sink.config();
                 let (channels, rate) = (config.channel_count(), config.sample_rate());
+                let equalizer = equalizer::EqualizerControl::new();
+                let compressor = compressor::CompressorControl::new();
                 let limiter = limiter::LimiterControl::new();
-                let (bus, master) = limiter::master_bus(channels, rate, Arc::clone(&limiter));
+                let (bus, master) = limiter::master_bus(
+                    channels,
+                    rate,
+                    Arc::clone(&equalizer),
+                    Arc::clone(&compressor),
+                    Arc::clone(&limiter),
+                );
                 device_sink.mixer().add(master);
                 log::info!("Gizmo Audio: Ses cihazı başlatıldı! 3D Uzamsal (Spatial) Motor Aktif.");
                 Ok(Self {
                     _device_sink: device_sink,
                     bus,
+                    equalizer,
+                    compressor,
                     limiter,
                     sound_buffers: HashMap::new(),
                     active_spatial_sinks: HashMap::new(),
@@ -582,6 +599,41 @@ impl AudioManager {
     #[must_use]
     pub fn reverb(&self) -> Option<reverb::Reverb> {
         Some(self.reverb.get()).filter(|r| r.wet > 0.0)
+    }
+
+    /// Puts an equalizer on the whole mix — [`Equalizer`](equalizer::Equalizer), up to four bands of
+    /// shelves and bells — or `None` to take it off (the default). It is the first stage on the
+    /// sum, before the compressor and the limiter; off, the mix comes through bit-exact. Heard from
+    /// the next frame of audio.
+    pub fn set_equalizer(&mut self, equalizer: Option<equalizer::Equalizer>) {
+        self.equalizer.set(equalizer.as_ref());
+    }
+
+    /// The equalizer set by [`set_equalizer`](Self::set_equalizer), `None` when off.
+    #[must_use]
+    pub fn equalizer(&self) -> Option<equalizer::Equalizer> {
+        self.equalizer.get()
+    }
+
+    /// Puts a compressor on the whole mix — [`Compressor::default`](compressor::Compressor::default)
+    /// is −18 dBFS at 4:1 — or `None` to take it off (the default). Above its threshold the mix is
+    /// turned down by its ratio, so loud and quiet sounds sit closer together; it comes after the
+    /// equalizer and before the limiter, and below the threshold, or off, the mix comes through
+    /// bit-exact. Heard from the next frame of audio.
+    pub fn set_compressor(&mut self, compressor: Option<compressor::Compressor>) {
+        self.compressor.set(compressor);
+    }
+
+    /// The compressor set by [`set_compressor`](Self::set_compressor), `None` when off.
+    #[must_use]
+    pub fn compressor(&self) -> Option<compressor::Compressor> {
+        self.compressor.get()
+    }
+
+    /// The deepest the compressor has turned the mix down since this was last called, in dB (`0`
+    /// = it has not acted). For a gain-reduction meter.
+    pub fn take_compressor_reduction(&mut self) -> f32 {
+        self.compressor.take_max_reduction()
     }
 
     /// Puts a limiter on the whole mix — [`Limiter::default`](limiter::Limiter::default) is a

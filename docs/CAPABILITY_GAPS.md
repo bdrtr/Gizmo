@@ -1762,8 +1762,21 @@ mouse, the keyboard and a gamepad. Three of its four buttons were impossible:
   (100 ms default), one gain per frame — bit-exact under the ceiling, off by default;
   `take_limiter_gain()` reports how far it went. The players connect to a bus the manager owns now,
   which needs a silent keep-alive input: without it the first silence unplugged the bus on a real
-  device (measured). `poligon` turns it on. **Still open:** an EQ and a general (ratio/threshold)
-  compressor.
+  device (measured). `poligon` turns it on.
+
+- ~~**No EQ and no compressor.**~~ **Closed 2026-11-11.** The mix could be capped but not shaped or
+  evened out. `AudioManager::set_equalizer(Option<Equalizer>)` — up to four bands, low shelf, bell and
+  high shelf (`Equalizer::new().low_shelf(120.0, 3.0).peak(900.0, -2.0, 1.2)`), biquads from the *Audio
+  EQ Cookbook* with their history per channel and in `f64` — and `set_compressor(Option<Compressor>)` —
+  threshold, ratio, attack, release, makeup; `take_compressor_reduction()` for a meter — sit on the sum
+  before the limiter: equalize, compress, limit. Both are bit-exact while off, the compressor below its
+  threshold too, and they reach the audio thread without a lock. Tested device-free, by the gain a sine
+  comes through with: a +12 dB shelf at 200 Hz moves 40 Hz by 12 ± 0.5 dB and 5 kHz by under 0.3, a bell
+  its centre by 6 ± 0.2 and the far ends by under 0.5, bands add, a silent channel stays silent (shared
+  history fails four of these); −6 dBFS into −18 dB at 4:1 settles at −15 ± 0.5 dBFS with one gain per
+  frame, makeup lifts it, the reduction is on after six attack times and gone after the release. The
+  compressor hears a peak envelope that holds a tone's peak between cycles: following the wave down to
+  each zero crossing, it settled 0.87 dB short.
 
 - ~~**A list could only be scrolled with a wheel.**~~ **Closed 2026-11-03.** A touchpad without a
   wheel, or a finger, could not reach the end of a `Scroll` list. Its thumb is drawn now (its
