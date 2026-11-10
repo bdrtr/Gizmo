@@ -224,9 +224,10 @@ impl<State: 'static> App<State> {
 
     /// Run one pass of the lazy asset loader.
     ///
-    /// Takes the asset manager and the renderer out of the world and puts them back, which is why
-    /// it reads as a block rather than a call — the borrow checker, not the logic, chose that
-    /// shape.
+    /// Takes the asset manager out of the world and puts it back — the loader takes the world
+    /// mutably beside it, so the borrow checker, not the logic, chose that shape. Every app has one
+    /// (`AssetPlugin`, or the game's own in its place); the renderer is not in the world, and the
+    /// loader goes through the game side's `GpuContext`.
     fn run_asset_loading(&mut self) {
         // Through the game side's `GpuContext`: the loader makes meshes and textures, which is
         // what that context is for, and runs with the game's update, not the draw.

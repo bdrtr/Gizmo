@@ -100,9 +100,9 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
         &renderer.queue,
         &renderer.scene.texture_bind_group_layout,
     );
-    // Dünyanın `AssetManager`'ı: şeridin `MeshData`'sını motorun yükleyicisi onunla GPU'ya
-    // koyuyor — kaynak yoksa yükleyici hiç çalışmıyor. Aşağıdaki `SpawnCommands` da GLB'yi onunla
-    // yükleyip yerine bırakıyor.
+    // Dünyanın `AssetManager`'ı setup'ın yüklediklerini tutuyor: şeridin `MeshData`'sını motorun
+    // yükleyicisi onunla GPU'ya koyuyor, aşağıdaki `SpawnCommands` da GLB'yi onunla yükleyip yerine
+    // bırakıyor.
     world.insert_resource(assets);
 
     // Zemin (koyu tünel tabanı) — tek spawn_bundle (GlobalTransform elle: TransformPlugin).

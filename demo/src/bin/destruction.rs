@@ -8,8 +8,7 @@
 //!   * **Voronoi parça meshleri = veri (`MeshData`).** `voronoi_shatter` her çağrıda benzersiz
 //!     konveks gövdeler üretir; parçalar update'te üretilip köşeleriyle birlikte doğrudan
 //!     `spawn_bundle` ile kurulur. GPU vertex-buffer'larını aynı kare motorun yükleyicisi kuruyor
-//!     (dünyanın `AssetManager`'ıyla — setup onu bu yüzden kaynak olarak bırakıyor); ne render
-//!     kancası ne bekleme tamponu var. Kare oyun dünyasının kopyasından render thread'inde
+//!     (dünyanın `AssetManager`'ıyla); ne render kancası ne bekleme tamponu var. Kare oyun dünyasının kopyasından render thread'inde
 //!     çiziliyor (çıplak `RenderWorld`).
 //!   * **Obüs = `spawn_bundle` + explicit `Collider::sphere`.** Mesh + materyal setup'ta BİR KEZ
 //!     kurulur (her atışta yeniden üretilmez), her atış doğrudan `update`'te spawn'lanır —
@@ -79,8 +78,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> DestructionGame {
     // Obüs: küre mesh + kırmızı unlit materyal, BİR KEZ; her atış bunu klonlar.
     let ball_mesh = AssetManager::create_sphere(&renderer.device, BALL_R, 16, 16);
     let ball_mat = Material::new(white).with_unlit(Color::RED.to_vec4());
-    // Dünyanın `AssetManager`'ı: parçaların `MeshData`'sını motorun yükleyicisi onunla GPU'ya
-    // koyuyor — kaynak yoksa yükleyici hiç çalışmıyor.
+    // Dünyanın `AssetManager`'ı setup'ın yüklediklerini tutuyor; parçaların `MeshData`'sını
+    // motorun yükleyicisi onunla GPU'ya koyuyor.
     world.insert_resource(assets);
 
     // Kamera (WASD ile uçan; görüş yönü Camera bileşeninin yaw/pitch'inden okunur).

@@ -539,6 +539,14 @@ mod update_hook_tests {
         App::<()>::new("test", 64, 64)
     }
 
+    /// **The loop's asset loader has a manager to load with in every app.** It runs only when the
+    /// world holds an `AssetManager`, and a plain `App` held none until its game put one there — so a
+    /// game that spawned `MeshData` without doing so drew nothing, silently.
+    #[test]
+    fn every_app_starts_with_an_asset_manager_for_the_loader() {
+        assert!(app().world.get_resource::<gizmo_renderer::asset::AssetManager>().is_some());
+    }
+
     #[test]
     fn add_update_hook_keeps_what_is_already_there() {
         let app = app()

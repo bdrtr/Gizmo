@@ -33,10 +33,17 @@ struct PendingWebInit {
     renderer_slot: std::rc::Rc<std::cell::RefCell<Option<Renderer>>>,
 }
 
-/// Plugin that registers the default renderer asset collections
-/// (`Assets<Mesh>` and `Assets<Material>`) into the [`App`]'s world.
+/// Plugin that registers the default renderer asset collections (`Assets<Mesh>` and
+/// `Assets<Material>`) and an [`AssetManager`](gizmo_renderer::asset::AssetManager) into the
+/// [`App`]'s world.
 ///
 /// Added automatically by [`App::new`].
+///
+/// **The `AssetManager` is what the loop's asset loader loads with**, every frame: geometry made in
+/// code (`MeshData`), `MeshSource`s and `MaterialSource`s. The loop ran the loader only when the
+/// game had put one in the world, so a game that had not — a plain `App`, unlike `with_simple_scene`
+/// — and spawned `MeshData` drew nothing and was not told. A game's own replaces this one (its
+/// setup inserting the manager it loaded its textures with is the usual shape).
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AssetPlugin;
 
@@ -48,7 +55,10 @@ impl super::Plugin for AssetPlugin {
         app.world.insert_resource(gizmo_core::asset::Assets::<
             gizmo_renderer::components::Material,
         >::new());
-        tracing::info!("[AssetPlugin] Assets<Mesh> + Assets<Material> kaynakları eklendi");
+        if app.world.get_resource::<gizmo_renderer::asset::AssetManager>().is_none() {
+            app.world.insert_resource(gizmo_renderer::asset::AssetManager::new());
+        }
+        tracing::info!("[AssetPlugin] Assets<Mesh> + Assets<Material> + AssetManager kaynakları eklendi");
     }
 }
 

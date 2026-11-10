@@ -1037,8 +1037,13 @@ Measured in `ecs_absent_apis`:
   overwrote them before the draw (they write the camera's `PostProcess` now); `water_demo` carried a
   screenshot path of its own, which `GIZMO_SCREENSHOT` does; `fluid_rigid` and `showcase` ran
   `gpu_physics_submit_system` a second time each frame (the preparation runs it); and the asset
-  loader runs only when the game world holds an `AssetManager`, so a plain `App` that spawns
-  `MeshData` draws nothing and is not told (`destruction` inserts one).
+  loader ran only when the game world held an `AssetManager`, so a plain `App` that spawned
+  `MeshData` drew nothing and was not told. The loop ran it only then because the loader walked
+  every live entity and asked each for seven components — its cost grew with the world, not with
+  the work. It visits only the entities carrying a source now (`MeshData`, a `MeshSource` without a
+  mesh, a `MaterialSource` without a material), makes its white fallback texture only when something
+  is missing, and every app starts with an `AssetManager` (`AssetPlugin`;
+  `update_hook_tests::every_app_starts_with_an_asset_manager_for_the_loader`).
 - ~~**Component registration is typed.**~~ **Closed 2026-11-08:** `World::register_component(ComponentDescriptor::new(name,
   layout))` defines a component with no Rust type — drop and clone glue optional (`unsafe` `with_drop` / `with_clone`), table or
   sparse, mutable or not — and returns a `ComponentKey`, which is what storage, queries, hooks and the scheduler are keyed by for

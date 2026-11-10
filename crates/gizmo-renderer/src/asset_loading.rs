@@ -1,3 +1,4 @@
+use gizmo_core::query::Without;
 use gizmo_core::Entity;
 use gizmo_core::World;
 use gizmo_core::component::{MeshSource, MaterialSource};
@@ -44,54 +45,48 @@ pub fn run_asset_loading_system(
     // Every `MeshData` allocation an entity carries: the cached uploads worth keeping.
     let mut live_data = std::collections::HashSet::new();
 
-    // Hangi Entity'lerin Mesh/Material'ı eksik bul
+    // Hangi Entity'lerin Mesh/Material'ı eksik bul — **only among the entities that carry what
+    // the loader loads from.** It used to walk every live entity and ask each for seven components,
+    // so its cost grew with the world, not with the work: an app with no source at all paid for
+    // the whole scan every frame, which is why the loop ran it only when the game had put an
+    // `AssetManager` in the world — and a game that had not, but spawned `MeshData`, drew nothing.
+    // Each query below visits only the archetypes holding its component, and the filters skip an
+    // entity whose mesh or material is already there.
     {
-        let mesh_sources = world.query::<&MeshSource>();
         let meshes = world.query::<&Mesh>();
-        let mesh_data = world.query::<&crate::components::MeshData>();
         let uploaded = world.query::<&UploadedFrom>();
+        // Data made in code, not uploaded yet. A `MeshSource` on the same entity loses: the data
+        // is the more specific of the two.
+        for (id, data) in world.query::<(Entity, &crate::components::MeshData)>().iter() {
+            live_data.insert(data.key());
+            let from = uploaded.get(id).map(|u| u.0);
+            // Not uploaded yet, or uploaded from another allocation: the game replaced the data (a
+            // vision cone rebuilt each frame). It used to be read once — the first frame the
+            // entity had no `Mesh` — so every later change drew nothing new.
+            let stale = match from {
+                Some(key) => key != data.key(),
+                None => meshes.get(id).is_none(),
+            };
+            if stale {
+                missing_data.push((id.id(), data.clone()));
+            }
+        }
 
-        let material_sources = world.query::<&MaterialSource>();
-        let materials = world.query::<&Material>();
+        // MeshSource var ama GPU Mesh yok mu? (Not when data is supplying the mesh.)
+        for (id, src) in world
+            .query_filtered::<(Entity, &MeshSource), (Without<Mesh>, Without<crate::components::MeshData>)>()
+            .iter()
+        {
+            missing_meshes.push((id, src.0.clone()));
+        }
+
+        // MaterialSource var ama GPU Material yok mu?
         let descs = world.query::<&crate::components::MaterialDesc>();
-
-        for e in world.iter_alive_entities() {
-            let id = e;
-
-            // Data made in code, not uploaded yet. A `MeshSource` on the same entity loses: the
-            // data is the more specific of the two.
-            let data = mesh_data.get(id);
-            if let Some(data) = data {
-                live_data.insert(data.key());
-                let from = uploaded.get(id).map(|u| u.0);
-                // Not uploaded yet, or uploaded from another allocation: the game replaced the
-                // data (a vision cone rebuilt each frame). It used to be read once — the first
-                // frame the entity had no `Mesh` — so every later change drew nothing new.
-                let stale = match from {
-                    Some(key) => key != data.key(),
-                    None => meshes.get(id).is_none(),
-                };
-                if stale {
-                    missing_data.push((id.id(), data.clone()));
-                }
-            }
-
-            // MeshSource var ama GPU Mesh yok mu? (Not when data is supplying the mesh.)
-            if let Some(src) = mesh_sources.get(id).filter(|_| data.is_none()) {
-                if meshes.get(id).is_none() {
-                    missing_meshes.push((id, src.0.clone()));
-                }
-            }
-
-            // MaterialSource var ama GPU Material yok mu?
-            if let Some(src) = material_sources.get(id) {
-                if materials.get(id).is_none() {
-                    if descs.get(id).is_some() {
-                        renderer_only.push(id);
-                    } else {
-                        missing_materials.push((id, src.clone()));
-                    }
-                }
+        for (id, src) in world.query_filtered::<(Entity, &MaterialSource), Without<Material>>().iter() {
+            if descs.get(id).is_some() {
+                renderer_only.push(id);
+            } else {
+                missing_materials.push((id, src.clone()));
             }
         }
     }
@@ -120,7 +115,13 @@ pub fn run_asset_loading_system(
     // replaced frame's vertices and GPU buffers were kept for the rest of the run.
     asset_manager.retain_data_meshes(&live_data);
 
-    // Default beyaz doku oluştur (Texture yüklenemezse veya yoksa kullanılır)
+    // Default beyaz doku (Texture yüklenemezse veya yoksa kullanılır) — only when something is
+    // missing: on a fresh `AssetManager` it is the first GPU work the loader does, and a frame with
+    // nothing to load does none.
+    if missing_meshes.is_empty() && missing_materials.is_empty() {
+        add_mesh_renderers(world, renderer_only);
+        return;
+    }
     let default_texture_bind_group = asset_manager.create_white_texture(device, queue, texture_bind_group_layout);
 
     // Eksik Mesh'leri yükle ve world'e ekle
@@ -216,21 +217,23 @@ pub fn run_asset_loading_system(
         }
     }
 
-    // The description-owned entities: their material arrives from `material_sync`, but the
-    // `MeshRenderer` that has to sit beside it is still this system's guarantee. Added only when
-    // missing, so an entity that already carries one keeps whatever flags it was given.
-    if !renderer_only.is_empty() {
-        let needed: Vec<Entity> = {
-            let renderers = world.query::<&MeshRenderer>();
-            renderer_only
-                .into_iter()
-                .filter(|id| renderers.get(*id).is_none())
-                .collect()
-        };
-        for id in needed {
-            if let Some(e) = world.live(id) {
-                world.add_component(e, MeshRenderer::new());
-            }
+    add_mesh_renderers(world, renderer_only);
+}
+
+/// The description-owned entities: their material arrives from `material_sync`, but the
+/// `MeshRenderer` that has to sit beside it is still the loader's guarantee. Added only when
+/// missing, so an entity that already carries one keeps whatever flags it was given.
+fn add_mesh_renderers(world: &mut World, renderer_only: Vec<Entity>) {
+    if renderer_only.is_empty() {
+        return;
+    }
+    let needed: Vec<Entity> = {
+        let renderers = world.query::<&MeshRenderer>();
+        renderer_only.into_iter().filter(|id| renderers.get(*id).is_none()).collect()
+    };
+    for id in needed {
+        if let Some(e) = world.live(id) {
+            world.add_component(e, MeshRenderer::new());
         }
     }
 }
