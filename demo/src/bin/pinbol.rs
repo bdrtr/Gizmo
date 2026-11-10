@@ -5,7 +5,7 @@
 
 fn main() {
     if std::env::args().any(|a| a == "--test") {
-        std::process::exit(if games::pinbol::self_test() { 0 } else { 1 });
+        gizmo::simple::run_self_test(games::pinbol::self_test);
     }
     games::pinbol::app().run().expect("uygulama çalıştırılamadı");
 }

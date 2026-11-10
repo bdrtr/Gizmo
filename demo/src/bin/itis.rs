@@ -274,7 +274,7 @@ fn parse_net() -> Result<Net, String> {
 
 fn main() {
     if std::env::args().any(|a| a == "--test") {
-        std::process::exit(if self_test() { 0 } else { 1 });
+        gizmo::simple::run_self_test(self_test);
     }
     let net = match parse_net() {
         Ok(n) => n,

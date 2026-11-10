@@ -15,6 +15,13 @@ instead, which is the right answer, since it has no headless mode to test. (The 
 written, a background loop handed `--test` to `kapi`, which has no such mode; it sat open on the
 user's screen for an hour and forty minutes.)
 
+A game runs its test through `gizmo::simple::run_self_test`, which prints the engine's warnings and
+errors while it plays and fails the run when the engine logged an error — however the game's own
+checks came out. Until 2026-11-10 nothing listened during a headless run: `golf --test` passed
+while the engine logged "Heightfield reached GJK support_point" on every physics step its ball
+rolled near the ground, and only a window showed it. So a game whose source has `"--test"` and no
+`run_self_test` is refused before anything runs: it would test without the engine's errors.
+
 Each also gets a fresh, empty `XDG_DATA_HOME` and `XDG_CONFIG_HOME`: games keep best times and
 settings through `SaveData` (`<data dir>/<game>/save.json`), and a test that wins must not write
 over the save of the person running it — nor read one that changes what it measures.
@@ -90,6 +97,16 @@ def main():
         games = [g for g in games if g[0] in args.names]
     if not games:
         sys.exit("found no binary with a --test mode — a scan that finds nothing must not pass")
+    unguarded = []
+    for name, path in games:
+        with open(path, encoding="utf-8") as f:
+            if "run_self_test" not in f.read():
+                unguarded.append(name)
+    if unguarded:
+        sys.exit(
+            "these games do not run their --test through gizmo::simple::run_self_test, so an engine "
+            f"error during their run would go unseen: {', '.join(unguarded)}"
+        )
 
     if not args.no_build:
         cmd = ["cargo", "build", "--release", "-p", "demo"]

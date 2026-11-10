@@ -3,7 +3,7 @@
 //! `logger::install_console_subscriber` when nothing else has. Its own binary, because a global
 //! subscriber is set once per process.
 
-use gizmo_core::logger::{get_logs, install_console_subscriber};
+use gizmo_core::logger::{errors_logged, get_logs, install_console_subscriber};
 
 #[test]
 fn engine_warnings_reach_the_log_and_info_does_not() {
@@ -11,8 +11,10 @@ fn engine_warnings_reach_the_log_and_info_does_not() {
         eprintln!("skipping: a log level is set in the environment, and this test is about the default");
         return;
     }
+    assert_eq!(errors_logged(), None, "nothing counts errors before the engine's subscriber is in place");
     assert!(install_console_subscriber(), "nothing was installed before");
     assert!(!install_console_subscriber(), "a second install leaves the first in place");
+    assert_eq!(errors_logged(), Some(0));
 
     tracing::warn!(cells = 12, "a grid clipped the level");
     tracing::error!("a texture would not load");
@@ -25,4 +27,7 @@ fn engine_warnings_reach_the_log_and_info_does_not() {
     assert!(warn, "a warning, with its fields, reaches the log");
     assert!(error, "an error reaches the log");
     assert!(!info, "info stays out at the default level");
+    // Errors are counted, warnings are not: what `gizmo::simple::run_self_test` fails a game's
+    // headless run on.
+    assert_eq!(errors_logged(), Some(1), "one error was logged");
 }

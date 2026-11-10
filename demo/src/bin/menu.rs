@@ -351,7 +351,7 @@ fn self_test() -> bool {
 
 fn main() {
     if std::env::args().any(|a| a == "--test") {
-        std::process::exit(if self_test() { 0 } else { 1 });
+        gizmo::simple::run_self_test(self_test);
     }
     App::<SimpleSceneState>::new("Gizmo Engine - Menu", 1280, 720)
         .add_plugin(UiPlugin)

@@ -6,7 +6,7 @@
 
 fn main() {
     if std::env::args().any(|a| a == "--test") {
-        std::process::exit(if games::nisanci::self_test() { 0 } else { 1 });
+        gizmo::simple::run_self_test(games::nisanci::self_test);
     }
     games::nisanci::app().run().expect("uygulama çalıştırılamadı");
 }

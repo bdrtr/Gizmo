@@ -551,6 +551,35 @@ pub fn simple_scene_update(
     sync_transforms(world);
 }
 
+/// A game's `--test`, run: the engine's warnings and errors are printed while it plays, and the
+/// process exits with the verdict — non-zero when `test` fails, **or when the engine logged an
+/// error while it ran**.
+///
+/// A windowed app installs the engine's console subscriber when it starts (`App::new`); a headless
+/// test starts before any app does, so nothing listened and an engine error went nowhere:
+/// `golf --test` hit "Heightfield reached GJK support_point" on every physics step its ball rolled
+/// near the ground, passed, and nobody saw it until the window logged it (2026-11-10). An error
+/// during an autopilot run is a defect whatever the run's own checks say, so it fails the run;
+/// warnings are printed and do not. `scripts/game-tests.py` runs every game this way.
+///
+/// ```no_run
+/// # fn self_test() -> bool { true }
+/// if std::env::args().any(|a| a == "--test") {
+///     gizmo::simple::run_self_test(self_test);
+/// }
+/// ```
+pub fn run_self_test(test: impl FnOnce() -> bool) -> ! {
+    crate::core::logger::install_console_subscriber();
+    let passed = test();
+    match crate::core::logger::errors_logged() {
+        Some(errors) if errors > 0 => {
+            eprintln!("{errors} engine error(s) logged during the test (above) — the test fails");
+            std::process::exit(1);
+        }
+        _ => std::process::exit(if passed { 0 } else { 1 }),
+    }
+}
+
 /// Sets the content of the [`Text`](crate::renderer::components::Text) on entity `id` —
 /// **only if it differs**, so a HUD written every frame is laid out again only when it changes.
 /// Returns whether it changed. Nothing happens to an entity without a `Text`.

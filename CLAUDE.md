@@ -64,7 +64,10 @@ cargo run --release -p demo --bin advanced_physics
 cargo run --release -p demo --bin headless_stress_test
 
 # Every demo with a headless `--test` mode plays itself — autopilot, fixed step, no window — and
-# exits non-zero on what it checks (a tower fell, a ball left the table). Builds them in release
+# exits non-zero on what it checks (a tower fell, a ball left the table) or when the engine logged
+# an error during the run: `--test` goes through `gizmo::simple::run_self_test`, which the script
+# requires (until 2026-11-10 nothing listened headless, and `golf` passed while the engine logged
+# an error every physics step). Builds them in release
 # and runs them 4 at a time with DISPLAY/WAYLAND_DISPLAY unset, so a binary that ignores the flag
 # fails instead of opening a window. CI runs it in the determinism job. All 36 games, 86 s
 # (2026-11-05). A game's `--test` runs on `gizmo::simple::HeadlessFrames` — its own setup and update,

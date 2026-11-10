@@ -283,7 +283,10 @@ where
     fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
         let meta = event.metadata();
         let level = match *meta.level() {
-            tracing::Level::ERROR => LogLevel::Error,
+            tracing::Level::ERROR => {
+                ERRORS_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                LogLevel::Error
+            }
             tracing::Level::WARN => LogLevel::Warning,
             _ => LogLevel::Info, // Map TRACE, DEBUG, INFO to Info
         };
@@ -339,7 +342,30 @@ pub fn install_console_subscriber() -> bool {
     if tracing::dispatcher::has_been_set() {
         return false;
     }
-    tracing::subscriber::set_global_default(ConsoleSubscriber { max, next_span: std::sync::atomic::AtomicU64::new(1) }).is_ok()
+    let installed =
+        tracing::subscriber::set_global_default(ConsoleSubscriber { max, next_span: std::sync::atomic::AtomicU64::new(1) })
+            .is_ok();
+    if installed {
+        CONSOLE_INSTALLED.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    installed
+}
+
+/// Whether [`install_console_subscriber`] put the engine's subscriber in place.
+static CONSOLE_INSTALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Error-level events the engine's console subscriber has seen.
+static ERRORS_LOGGED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many error-level `tracing` events the engine's console subscriber has received since the
+/// process started — `None` when that subscriber is not the one installed (another subscriber, or
+/// none at all), so there is nothing counting.
+///
+/// What a headless self-test asks at the end: an engine error during an autopilot run is a defect
+/// even when the run's own checks pass (`gizmo::simple::run_self_test`).
+pub fn errors_logged() -> Option<u64> {
+    CONSOLE_INSTALLED
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .then(|| ERRORS_LOGGED.load(std::sync::atomic::Ordering::Relaxed))
 }
 
 struct ConsoleSubscriber {
@@ -387,7 +413,10 @@ impl tracing::Subscriber for ConsoleSubscriber {
         let mut fields = Fields(String::new(), String::new());
         event.record(&mut fields);
         let level = match *meta.level() {
-            tracing::Level::ERROR => LogLevel::Error,
+            tracing::Level::ERROR => {
+                ERRORS_LOGGED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                LogLevel::Error
+            }
             tracing::Level::WARN => LogLevel::Warning,
             _ => LogLevel::Info,
         };

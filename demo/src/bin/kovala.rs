@@ -312,7 +312,7 @@ struct Game {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "--test") {
-        std::process::exit(if self_test() { 0 } else { 1 });
+        gizmo::simple::run_self_test(self_test);
     }
     let join = args.iter().position(|a| a == "--join").and_then(|i| args.get(i + 1)).cloned();
     let id = std::process::id() as u64;
