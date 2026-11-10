@@ -67,6 +67,12 @@ fn draw_studio_frame(
     // needs capturing.
     gizmo::systems::render::capture_reflection_probes(world, renderer);
 
+    // **Cameras that draw into a texture** (`CameraTarget`): drawn by the game path's own function
+    // too, so a monitor in the scene shows in the editor what it shows in the game — each a whole
+    // view of the world, submitted on its own ahead of this frame. The simulations are this frame's
+    // (stepped below, after them), at full level of detail, as the editor shows everything.
+    gizmo::systems::render::draw_camera_targets(world, renderer, (1.0, 1.0), 1);
+
     // GPU fluid: stepped here, drawn twice below (particles inside the main pass, surface after
     // it). The editor did not step or draw it at all until 2026-08-19 — a fluid scene flowed in a
     // shipped game and showed nothing in the viewport, while this pipeline was already drawing

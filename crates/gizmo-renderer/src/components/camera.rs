@@ -418,19 +418,82 @@ impl Camera {
     }
 }
 
+/// **A camera that draws into a texture of the game's own** instead of the window — a security
+/// monitor, a portal, a rear-view mirror shown in the HUD, a thumbnail. On an entity with a
+/// [`Camera`], it is drawn every frame into this texture before the frame's own view, in a
+/// submission of its own and with its own temporal history (TAA, SSGI, motion blur), through the
+/// game path's whole pipeline; several go in [`order`](Camera::order). It is never the frame's camera
+/// ([`active_camera`] passes it over) nor a split-screen view, and it draws no HUD.
+///
+/// The texture is made in the renderer's output format — the one its last pass writes, so the
+/// picture comes out graded and tone-mapped like the window's — and can be sampled (a material, the
+/// UI) and copied out. The scene is rendered at the renderer's own size and resampled into it, as
+/// a split-screen view is; the camera's projection takes the texture's aspect. Clones share one
+/// texture.
+///
+/// A mirror the camera sees shows the reflection captured for the frame's own camera.
+#[derive(Clone, Debug)]
+pub struct CameraTarget {
+    texture: std::sync::Arc<wgpu::Texture>,
+    view: std::sync::Arc<wgpu::TextureView>,
+}
+gizmo_core::impl_component!(CameraTarget);
+
+impl CameraTarget {
+    /// A `width` × `height` target in the renderer's output format, made with the game side's GPU
+    /// handle (the world's [`GpuContext`](crate::GpuContext) — `renderer.gpu_context()` in a setup).
+    /// A size of zero is one texel.
+    #[must_use]
+    pub fn new(gpu: &crate::GpuContext, width: u32, height: u32) -> Self {
+        let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("camera_target"),
+            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: gpu.output_format(),
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self { texture: std::sync::Arc::new(texture), view: std::sync::Arc::new(view) }
+    }
+
+    /// The texture the camera draws into.
+    #[must_use]
+    pub fn texture(&self) -> &wgpu::Texture {
+        &self.texture
+    }
+
+    /// A view of the whole texture — what a material or a pass samples.
+    #[must_use]
+    pub fn view(&self) -> &wgpu::TextureView {
+        &self.view
+    }
+
+    /// Width and height in texels.
+    #[must_use]
+    pub fn size(&self) -> (u32, u32) {
+        (self.texture.width(), self.texture.height())
+    }
+}
+
 /// **Which camera the scene is rendered from.** One function, because every layer needs the answer
 /// and three implementations of it would be three answers.
 ///
 /// The rule: the camera flagged [`primary`](Camera::primary) — the convention `spawn_camera` and
 /// `CameraBundle` maintain — falling back to the first camera in the world when none is marked, so
 /// the result never depends on the (unstable) ECS iteration order. The audio listener follows the
-/// same rule, and the render path picks its matrices with it.
+/// same rule, and the render path picks its matrices with it. A camera that draws into a texture
+/// ([`CameraTarget`]) is never the answer: it has a picture of its own.
 ///
 /// It lives here rather than in the facade because the editor needs it too and sits below the
 /// facade: an inspector panel editing "the scene's" camera has to mean the same camera the frame
 /// renders from, or the panel is editing something the player will never look through.
 pub fn active_camera(world: &gizmo_core::World) -> Option<gizmo_core::Entity> {
-    let cameras = world.query::<(gizmo_core::Entity, &Camera)>();
+    let cameras = world.query_filtered::<(gizmo_core::Entity, &Camera), gizmo_core::query::Without<CameraTarget>>();
     cameras
         .iter()
         .find(|(_, c)| c.primary)

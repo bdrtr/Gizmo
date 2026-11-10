@@ -732,3 +732,137 @@ fn a_stages_settings_reach_its_frame_and_its_pass_draws_over_it() {
         assert_eq!(green, 128 * 128, "the pass did not draw over the finished frame");
     });
 }
+
+/// Reads `texture` back as tightly packed RGBA8 rows.
+fn texture_bytes(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<u8> {
+    let (w, h) = (texture.width(), texture.height());
+    let row = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("camera-target-readback"),
+        size: u64::from(row * h),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: Some(h) },
+        },
+        wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+    );
+    renderer.queue.submit(Some(encoder.finish()));
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |v| tx.send(v).unwrap());
+    let _ = renderer.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    rx.recv().unwrap().unwrap();
+    let mapped = slice.get_mapped_range().expect("a just-mapped buffer's full range is always valid");
+    let bytes = mapped.chunks(row as usize).flat_map(|r| &r[..(w * 4) as usize]).copied().collect();
+    drop(mapped);
+    staging.unmap();
+    bytes
+}
+
+/// **A camera that draws into a texture** ([`CameraTarget`](crate::renderer::components::CameraTarget)).
+/// Its picture is the scene through it: the same picture, to the pixel, as that camera drawn as the
+/// frame's own into a texture of the same size. The frame's own view is untouched by it — the camera
+/// with a target is not the frame's, and its uploads, submitted before the frame's, do not leak into
+/// it. Its projection takes the texture's shape: in a portrait texture the cube is as wide as it is
+/// tall. And all of it holds drawn from a render world's copy, which carries the target.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_camera_with_a_target_draws_into_it_and_leaves_the_frame_alone() {
+    use super::RenderWorld;
+    use crate::renderer::components::CameraTarget;
+    use gizmo_app::RenderStage;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        let gpu = renderer.gpu_context();
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        let main_camera = cube_scene(&renderer, &mut game);
+        prepare_frame(&mut game, &mut renderer);
+        let alone = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+
+        // A second camera, in front of the cube on +Z looking back at it.
+        let side = crate::bundles::CameraBundle {
+            position: Vec3::new(0.0, 0.0, 6.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            primary: false,
+            ..Default::default()
+        };
+        let watcher = game.spawn_bundle(side);
+        let square = CameraTarget::new(&gpu, 128, 128);
+        game.add_component(watcher, square.clone());
+        prepare_frame(&mut game, &mut renderer);
+        let with_target = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+        let differ = alone.chunks(4).zip(with_target.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "a camera drawing into a texture changed the frame's own view ({differ} pixels)");
+        let through_target = texture_bytes(&renderer, square.texture());
+        // The cube's red, lit or in shade: red well over green and blue.
+        let red = |p: &[u8]| p[0] > 40 && u32::from(p[0]) > 2 * u32::from(p[1].max(p[2])) + 10;
+        assert!(through_target.chunks(4).filter(|p| red(p)).count() > 200, "the target holds no cube");
+
+        // The reference: the same camera as the frame's own, into a texture of the same size.
+        let mut reference_world = World::new();
+        reference_world.insert_resource(clock(1.0 / 60.0));
+        cube_scene(&renderer, &mut reference_world);
+        reference_world.query_mut::<&mut Camera>().iter_mut().for_each(|mut c| c.primary = false);
+        reference_world.spawn_bundle(crate::bundles::CameraBundle { primary: true, ..side });
+        prepare_frame(&mut reference_world, &mut renderer);
+        let as_frame = frame_bytes(&mut renderer, |e, v, r| draw_frame(&reference_world, e, v, r));
+        let differ = as_frame.chunks(4).zip(through_target.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "the target's picture is not the camera's own ({differ} pixels differ)");
+
+        // A portrait target: the projection takes its shape, so the cube stays square.
+        game.add_component(watcher, CameraTarget::new(&gpu, 64, 128));
+        let tall = game.query::<&CameraTarget>().get(watcher).cloned().expect("the target was replaced");
+        // Drawn from a render world's copy this time, which must carry the target.
+        let mut copy = RenderWorld::new();
+        copy.prepare(&mut game, &mut renderer);
+        let from_copy = frame_bytes(&mut renderer, |e, v, r| copy.draw(e, v, r));
+        let differ = alone.chunks(4).zip(from_copy.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "drawn from the copy, the frame's own view changed ({differ} pixels)");
+        let portrait = texture_bytes(&renderer, tall.texture());
+        let (mut min, mut max) = ((u32::MAX, u32::MAX), (0u32, 0u32));
+        for (i, p) in portrait.chunks(4).enumerate() {
+            if red(p) {
+                let (x, y) = (i as u32 % 64, i as u32 / 64);
+                min = (min.0.min(x), min.1.min(y));
+                max = (max.0.max(x), max.1.max(y));
+            }
+        }
+        assert!(max.0 >= min.0, "the portrait target holds no cube");
+        let (w, h) = ((max.0 - min.0 + 1) as f32, (max.1 - min.1 + 1) as f32);
+        assert!((w / h - 1.0).abs() < 0.15, "the cube is {w}×{h} in a 64×128 target — the projection did not take its shape");
+        assert!(game.query::<&Camera>().get(main_camera).is_some_and(|c| c.primary));
+
+        // Never the frame's camera, even first in the world with no camera marked primary — where
+        // the rule falls back to the first camera it finds.
+        let mut unmarked = World::new();
+        let first = unmarked.spawn_bundle(crate::bundles::CameraBundle { primary: false, ..side });
+        unmarked.add_component(first, CameraTarget::new(&gpu, 8, 8));
+        let second = unmarked.spawn_bundle(crate::bundles::CameraBundle { primary: false, ..Default::default() });
+        // Into a table made after the target camera's, so the first camera a query finds is the one
+        // with the target — queries walk tables in the order they were made.
+        #[derive(Clone)]
+        struct Later;
+        gizmo_core::impl_component!(Later);
+        unmarked.add_component(second, Later);
+        assert_eq!(crate::renderer::components::active_camera(&unmarked), Some(second));
+    });
+}

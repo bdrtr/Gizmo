@@ -460,6 +460,27 @@ Not covered: the studio's viewport and Game panel draw one camera (render_parity
 as game-only, with the reason); the scene is rendered at the renderer's full internal size per view,
 so a four-way split costs four full renders.
 
+**A camera that draws into a texture — 2026-11-10.** `CameraTarget` on an entity with a `Camera`:
+every frame draws that camera into the texture before its own view (`draw_camera_targets`), through
+the game path's whole pipeline at the texture's aspect, with a temporal history slot of its own, each
+in a submission of its own — the draw's uploads order against submission, so recorded into the
+frame's encoder it would have been the frame's view — and never as the frame's camera
+(`active_camera` passes it over) nor as a split-screen view. The studio calls the same function, so a
+monitor in a scene shows in the editor what it shows in the game. The texture is made in the
+renderer's output format (`GpuContext::output_format`), so it comes out graded and tone-mapped, and
+can be sampled and copied out; the render world copies the component. Tested by
+`frame_split_tests::a_camera_with_a_target_draws_into_it_and_leaves_the_frame_alone`: the target
+holds that camera's picture to the pixel (the same camera drawn as the frame's own into a texture of
+the same size); the frame's own view is unchanged by it, drawn from the game world or from a render
+world's copy; a portrait target keeps a cube square; and with no camera marked primary, a target
+camera first in the world is still not the frame's. `render_to_texture` draws its top camera this
+way and writes it out from a pass; it used to flip `primary` between two `default_render_pass` calls
+in a raw hook, preparing the frame twice, and is what the history below records. As a split-screen
+view does not, a texture camera does not get mirrors of its own: a mirror it sees shows the
+reflection captured for the frame's camera (per-view planar captures are a mirror's cost times the
+cameras — work of their own). And like a mirror's capture, it is submitted before the frame's encoder,
+so it draws the GPU simulations (particles, fluid, GPU physics) one step behind the frame's own view.
+
 **History of this section, kept for the measurements:**
 
 `Camera` has no viewport rectangle, and the render path picks exactly one camera:
@@ -1023,10 +1044,10 @@ Measured in `ecs_absent_apis`:
   settings, and `RenderWorld` is in the prelude. Tested by
   `frame_split_tests::a_stages_settings_reach_its_frame_and_its_pass_draws_over_it`: a setting read
   from a resource the copy does not carry reaches the frame it is set in, and a pass is handed the
-  copy and draws over the finished frame, on another thread. Two demos keep a raw hook: `fluid`, a
-  renderer of its own, and `render_to_texture`, which draws a second camera into a texture by flipping
-  `primary` between two `default_render_pass` calls — preparing the frame twice — and waits for a
-  camera that draws into a texture. Found on the way: `ssr` and `mirror` had drawn no reflections
+  copy and draws over the finished frame, on another thread. One demo keeps a raw hook, `fluid`, a
+  renderer of its own; `render_to_texture`, which drew a second camera into a texture by flipping
+  `primary` between two `default_render_pass` calls — preparing the frame twice — draws it through a
+  `CameraTarget` (§A5b). Found on the way: `ssr` and `mirror` had drawn no reflections
   since 2026-11-02, when the simple scene's setup began switching SSR off and nothing turned it back
   on, so their switches and knobs moved nothing. Each turns it back on in its setup with
   `Renderer::enable_ssr` — with `enable_ssgi` and `enable_volumetric`, the way back from `= None`,

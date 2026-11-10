@@ -1,18 +1,31 @@
 //! # Dokuya çizim ve iki geçiş
 //!
-//! Sahneyi pencereye değil bir **dokuya** çizmek, ve aynı kareyi birden fazla kez çizmek.
+//! Sahneyi pencereye değil bir **dokuya** çizmek, ve aynı kareyi birden fazla kameradan çizmek.
 //!
-//! ## Motorda hedef seçilebiliyor — ikinci kameraya giden üç engelin üçü de kapandı
+//! ## 2026-11-10: kamera kendi dokusuna çiziyor
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | çizim hedefini seçmek (pencere yerine doku) | **var** — [`default_render_pass`] bir `TextureView` alıyor |
-//! | aynı karede iki kameradan iki geçiş | **var** — `SceneView` ile tek encoder (2026-08-23) |
+//! | bir kamerayı pencere yerine bir dokuya çizmek | **var** — `CameraTarget`, kameranın bileşeni |
+//! | aynı karede iki kameradan iki görüntü | **var** — motor hedefli her kamerayı kendi gönderiminde çiziyor |
 //! | her kameranın kendi gölge kaskadları ve kümeleri | **var** (2026-08-24) |
-//! | her kameranın kendi TAA/SSGI geçmişi | **yok** — zamansal durum hâlâ paylaşımlı |
-//! | hedefin bir alt dikdörtgenine çizmek (alt-görüş) | **yok** — `Camera`'da bölge alanı yok |
+//! | her kameranın kendi TAA/SSGI geçmişi | **var** — hedefli kamera kendi geçmiş yuvasında |
+//! | hedefin bir alt dikdörtgenine çizmek (alt-görüş) | **var** — `Camera::viewport` (bölünmüş ekran, 2026-11-01) |
 //!
-//! Hedef seçimi çalışıyor, çünkü çizim işlevinin imzası hedefi dışarıdan alıyor:
+//! Tepedeki kameranın bir `CameraTarget`'i var: 512×288'lik, motorun çıkış biçiminde bir doku. Motor
+//! onu her kare, karenin kendi görüntüsünden önce, kendi kodlayıcısında çizip gönderiyor; kare de
+//! öndeki kameradan (`primary`) pencereye çiziliyor. Oyun kodunda kamera seçimi yok, ikinci bir
+//! çizim çağrısı yok, ve ikisi de oyun dünyasının kopyasından, render thread'inde çiziliyor. Doku
+//! örneklenebiliyor ve kopyalanabiliyor: demo onu 60. karede PNG olarak yazıyor (`GIZMO_RTT_DUMP`),
+//! karenin üstüne çizilen bir geçişten (`RenderWorld::with_pass`), kopyadaki kameranın hedefinden.
+//!
+//! Bu, aşağıdaki üç engelin varılan yeri. Önceki hâli bir render kancasıydı: `primary` bayrağını
+//! iki `default_render_pass` çağrısı arasında çeviriyordu — kareyi **iki kez hazırlayarak** (her
+//! animasyon ve parçacık iki kat hızlı) ve render thread'inden vazgeçerek. Aşağısı o yolun tarihi.
+//!
+//! ## Tarih: ikinci kameraya giden üç engel
+//!
+//! Hedef seçimi baştan çalışıyordu, çünkü çizim işlevinin imzası hedefi dışarıdan alıyor:
 //!
 //! ```text
 //! default_render_pass(world, encoder, view, renderer)
@@ -108,28 +121,26 @@
 //! dokuyu yeniden çiziyor. Kopyalanması gereken tek şey uniform'lardı. Görünüm başına maliyet
 //! **~460 KB**, ikinci bir 3072²×4 kaskad dizisinin gerektireceği **144 MB** değil.
 //!
-//! ## Sonuç
+//! ## Sonuç (2026-08-24)
 //!
-//! Dokuya çizim **çalışıyor**, iki geçiş **tek encoder'da mümkün**, ve `primary` çevirmek dışında
-//! bir geçici çözüm kalmadı.
-//!
-//! Kalan tek paylaşılan şey **zamansal** durum: TAA geçmişi ve SSGI birikimi görünüm başına değil.
-//! Motorun golden testi bu yüzden ikisini kapatıyor — açıkken tek kare bile 500'ü aşkın piksellik
-//! bir taban gürültüsü üretiyor ve kameradan gelen farkı örtüyor. Motorun `two_cameras_in_one_encoder_render_two_different_frames`
-//! testi ikisini birden kilitliyor: görünümsüz iki geçiş **birebir aynı** kareyi vermeli (tuzak
-//! hâlâ orada), görünümlü iki geçiş farklı kareler vermeli.
-//!
-//! Ve hedefin bir alt dikdörtgenine çizmek — alt-görüş — hâlâ hiç yok.
+//! Dokuya çizim **çalışıyordu**, iki geçiş **tek encoder'da mümkündü**, ve `primary` çevirmek dışında
+//! bir geçici çözüm kalmamıştı. Kalan paylaşılan şey **zamansal** durumdu: TAA geçmişi ve SSGI
+//! birikimi görünüm başına değildi. Motorun `two_cameras_in_one_encoder_render_two_different_frames`
+//! testi o yolu kilitliyor: görünümsüz iki geçiş **birebir aynı** kareyi vermeli (tuzak hâlâ orada),
+//! görünümlü iki geçiş farklı kareler vermeli. 2026-11-10'dan beri ne `primary` çevirmek ne ikinci
+//! geçiş gerekiyor: hedefli kamera kendi gönderiminde, kendi geçmişiyle çiziliyor
+//! (`a_camera_with_a_target_draws_into_it_and_leaves_the_frame_alone`: hedefteki resim, aynı kameranın
+//! karenin kendi kamerası olarak çizdiği resimle piksel piksel aynı; karenin kendi görüntüsü onun
+//! varlığından etkilenmiyor).
 //!
 //! ## Kontroller
-//!   * `GIZMO_RTT_DUMP=<dizin>` — iki geçişin çıktısını PNG olarak yaz
-//!   * `GIZMO_RTT_SCENE_VIEW=1` — `SceneView` ile tek encoder (2026-08-23'ün çözümü)
-//!   * `GIZMO_RTT_ONE_ENCODER=1` — 3. engeli geri getir, iki geçiş aynı kareyi versin
-//!   * `GIZMO_RTT_NO_SHADOW=1` — güneşi gölgesiz dolgu ışığına çevir (sınırı ölçmek için)
+//!   * `GIZMO_RTT_DUMP=<dizin>` — tepedeki kameranın dokusunu 60. karede PNG olarak yaz
+//!   * `GIZMO_RTT_NO_SHADOW=1` — güneşi gölgesiz dolgu ışığına çevir
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::core::World;
 use gizmo::prelude::*;
+use gizmo::renderer::components::CameraTarget;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
 /// Sahnedeki iki kameradan hangisi olduğunu işaretler.
@@ -137,21 +148,10 @@ use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 struct CameraTag(u8);
 gizmo::core::impl_component!(CameraTag);
 
-/// Çevrim dışı hedef ve ölçüm durumu.
-struct OffscreenTarget {
-    texture: wgpu::Texture,
-    view: std::sync::Arc<wgpu::TextureView>,
-    width: u32,
-    height: u32,
-}
-
+/// Arayüzün gösterdiği.
 #[derive(Default, Clone)]
 struct RttReport {
     frame: u32,
-    /// Çevrim dışı geçiş kaç kez koştu.
-    offscreen_passes: u32,
-    /// Yazılan dosyalar.
-    dumped: Vec<String>,
     size: (u32, u32),
 }
 gizmo::core::impl_component!(RttReport);
@@ -159,14 +159,17 @@ gizmo::core::impl_component!(RttReport);
 const OFF_W: u32 = 512;
 const OFF_H: u32 = 288;
 
-/// Tepedeki kameranın istenen duruşu — her karede geri yazılıyor, çünkü üstüne yazılıyor.
+/// Tepedeki kameranın duruşu. Basit sahnenin uçan kamerası yalnız karenin kamerasına yazıyor
+/// (`active_camera`), hedefli bir kamera hiçbir zaman o olmuyor.
 const TOP_POS: Vec3 = Vec3::new(0.0, 7.0, 0.2);
 const TOP_YAW: f32 = 0.0;
 const TOP_PITCH: f32 = -1.15;
 
+/// Dokunun PNG olarak yazıldığı kare.
+const DUMP_FRAME: u32 = 60;
+
 fn main() {
-    // Hedef, `set_render` kapatmasının içinde yaşıyor: `wgpu::Texture` `Component` değil.
-    let mut offscreen: Option<OffscreenTarget> = None;
+    let dump = std::env::var("GIZMO_RTT_DUMP").ok();
 
     App::<SimpleSceneState>::new("Gizmo Engine - Render To Texture", 1280, 720)
         .with_simple_scene(|scene, state| {
@@ -204,9 +207,8 @@ fn main() {
             scene.world.spawn_bundle(DirectionalLightBundle {
                 rotation: Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-0.6),
                 intensity: 2.6,
-                // `GIZMO_RTT_NO_SHADOW=1` güneşi gölgesiz bir dolgu ışığına çeviriyor. Ölçüm
-                // için: SceneView kamerayı ayırıyor, ama gölge kaskadları kameradan TÜRETİLEN
-                // ayrı bir uniform ailesi. Sorumluyu ayırmanın yolu bu.
+                // `GIZMO_RTT_NO_SHADOW=1` güneşi gölgesiz bir dolgu ışığına çeviriyor (aşağıdaki
+                // tarihteki ölçüm notu: gölge kaskadları kameradan TÜRETİLEN ayrı bir uniform ailesi).
                 role: if std::env::var("GIZMO_RTT_NO_SHADOW").is_ok() {
                     gizmo::renderer::components::LightRole::Generic
                 } else {
@@ -215,7 +217,7 @@ fn main() {
                 ..Default::default()
             });
 
-            // İki kamera: biri önden (ekran), biri tepeden (çevrim dışı hedef).
+            // İki kamera: biri önden (pencere, `primary`), biri tepeden (kendi dokusu).
             scene.spawn_camera(state, Vec3::new(0.0, 1.4, 6.5), Vec3::ZERO);
             let front = scene
                 .world
@@ -223,7 +225,6 @@ fn main() {
             if let Some(id) = front.and_then(|id| scene.world.live(id)) {
                 scene.world.add_component(id, CameraTag(0));
             }
-            // İkinci kamera — tepeden bakıyor, ve `primary` DEĞİL.
             let mut top = Camera::new(55_f32.to_radians(), 0.1, 300.0, TOP_YAW, TOP_PITCH, false);
             top.exposure = 1.0;
             scene.world.spawn_bundle((
@@ -231,6 +232,8 @@ fn main() {
                 GlobalTransform::default(),
                 top,
                 CameraTag(1),
+                // Kameranın dokusu: motor bu kamerayı her kare buraya çiziyor.
+                CameraTarget::new(&scene.renderer.gpu_context(), OFF_W, OFF_H),
             ));
 
             scene.world.insert_resource(RttReport {
@@ -238,117 +241,13 @@ fn main() {
                 ..Default::default()
             });
         })
-        .set_render(move |world, _state, encoder, view, renderer, _light_time| {
-            // Hedefi ilk karede kur.
-            let target = offscreen.get_or_insert_with(|| {
-                let texture = renderer.device.create_texture(&wgpu::TextureDescriptor {
-                    label: Some("render_to_texture::offscreen"),
-                    size: wgpu::Extent3d {
-                        width: OFF_W,
-                        height: OFF_H,
-                        depth_or_array_layers: 1,
-                    },
-                    mip_level_count: 1,
-                    sample_count: 1,
-                    dimension: wgpu::TextureDimension::D2,
-                    format: renderer.config.format,
-                    // COPY_SRC olmadan geri okunamaz — `texture_to_png` bunu şart koşuyor.
-                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                        | wgpu::TextureUsages::TEXTURE_BINDING
-                        | wgpu::TextureUsages::COPY_SRC,
-                    view_formats: &[],
-                });
-                let view = std::sync::Arc::new(
-                    texture.create_view(&wgpu::TextureViewDescriptor::default()),
-                );
-                OffscreenTarget {
-                    texture,
-                    view,
-                    width: OFF_W,
-                    height: OFF_H,
-                }
-            });
-
-            // --- 1. geçiş: TEPEDEKİ kamera, çevrim dışı dokuya ---
-            //
-            // Kamera seçimi kareye bir tane olduğu için `primary` bayrağını çeviriyoruz.
-            // `default_render_pass` kamera parametresi almıyor; seçimi `active_camera` yapıyor.
-            set_primary(world, 1);
-            log_active(world, "1. geçiş (çevrim dışı)");
-
-            // 1. geçiş KENDİ encoder'ında, ve hemen gönderiliyor.
-            //
-            // Sebebi ölçülmüş bir kısıt: kamera matrisleri TEK bir `global_uniform_buffer`'a
-            // `queue.write_buffer` ile yazılıyor. `write_buffer` yazımları encoder'a kaydetme
-            // anına göre değil GÖNDERİME göre sıralanıyor, yani iki geçiş aynı encoder'a
-            // kaydedilirse ikisi de SON yazılan kamerayı okur. `GIZMO_RTT_ONE_ENCODER=1` ile
-            // eski (yanlış) hâline dönülüp fark görülebiliyor.
-            if std::env::var("GIZMO_RTT_SCENE_VIEW").is_ok() {
-                // 2026-08-23: engel 3'ün gerçek çözümü. Ayrı bir `SceneView`, yani ayrı bir
-                // uniform tamponu — iki yazımın çarpışacağı bir yer kalmıyor, o yüzden TEK
-                // encoder ve TEK gönderim yetiyor.
-                if renderer.scene.views.is_empty() {
-                    let v = gizmo::renderer::pipeline::SceneView::new(
-                        &renderer.device,
-                        &renderer.scene,
-                        "render_to_texture::offscreen_view",
-                    );
-                    renderer.scene.views.push(v);
-                }
-                renderer.scene.active_view = Some(0);
-                gizmo::systems::default_render_pass(world, encoder, &target.view, renderer);
-                renderer.scene.active_view = None;
-            } else if std::env::var("GIZMO_RTT_ONE_ENCODER").is_ok() {
-                gizmo::systems::default_render_pass(world, encoder, &target.view, renderer);
-            } else {
-                let mut first = renderer
-                    .device
-                    .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                        label: Some("render_to_texture::pass1"),
-                    });
-                gizmo::systems::default_render_pass(world, &mut first, &target.view, renderer);
-                renderer.queue.submit(std::iter::once(first.finish()));
-            }
-
-            // --- 2. geçiş: ÖNDEKİ kamera, pencereye ---
-            set_primary(world, 0);
-            log_active(world, "2. geçiş (pencere)");
-            gizmo::systems::default_render_pass(world, encoder, view, renderer);
-
-            let mut dumped = Vec::new();
-            let frame = world
-                .get_resource::<RttReport>()
-                .map(|r| r.frame)
-                .unwrap_or(0);
-            if let (Ok(dir), 60) = (std::env::var("GIZMO_RTT_DUMP"), frame) {
-                let path = std::path::Path::new(&dir).join("rtt_offscreen.png");
-                match gizmo::renderer::capture::texture_to_png(
-                    &renderer.device,
-                    &renderer.queue,
-                    &target.texture,
-                    &path,
-                ) {
-                    Ok(()) => {
-                        gizmo::gizmo_log!(
-                            Info,
-                            "çevrim dışı hedef yazıldı: {} ({}x{})",
-                            path.display(),
-                            target.width,
-                            target.height
-                        );
-                        dumped.push(path.display().to_string());
-                    }
-                    Err(e) => gizmo::gizmo_log!(Warning, "çevrim dışı hedef yazılamadı: {e}"),
-                }
-            }
-
+        .add_update_hook(|world, _state, _dt, _input| {
             if let Some(mut report) = world.get_resource_mut::<RttReport>() {
                 report.frame += 1;
-                report.offscreen_passes += 1;
-                report.dumped.extend(dumped);
             }
         })
-        .set_ui(|world, _state, ctx| {
+        .set_render_stage(RenderWorld::new().with_pass(dump_target(dump.clone())))
+        .set_ui(move |world, _state, ctx| {
             let Some(r) = world.get_resource::<RttReport>().map(|r| r.clone()) else {
                 return;
             };
@@ -358,20 +257,19 @@ fn main() {
                     gizmo::egui::Frame::popup(ui.style()).show(ui, |ui| {
                         ui.set_min_width(440.0);
                         ui.heading("Dokuya çizim");
-                        ui.label(format!("kare {} · çevrim dışı geçiş {}", r.frame, r.offscreen_passes));
-                        ui.label(format!("hedef {}x{}", r.size.0, r.size.1));
+                        ui.label(format!("kare {}", r.frame));
+                        ui.label(format!("tepedeki kameranın dokusu {}x{}", r.size.0, r.size.1));
                         ui.separator();
-                        ui.label("her karede İKİ geçiş:");
-                        ui.label("  1) tepeden kamera -> çevrim dışı doku");
+                        ui.label("her karede İKİ görüntü:");
+                        ui.label("  1) tepeden kamera -> kendi dokusu (CameraTarget)");
                         ui.label("  2) önden kamera   -> pencere");
                         ui.separator();
-                        ui.label("default_render_pass hedefi dışarıdan alıyor,");
-                        ui.label("ama KAMERAYI almıyor — seçim active_camera'da.");
-                        ui.label("o yüzden geçişler arasında primary bayrağı çevriliyor.");
-                        ui.separator();
-                        ui.label("Camera'da alt-bölge (sub view) alanı YOK.");
-                        for line in &r.dumped {
-                            ui.monospace(line);
+                        ui.label("motor hedefli kamerayı karenin görüntüsünden önce,");
+                        ui.label("kendi gönderiminde ve kendi geçmişiyle çiziyor.");
+                        ui.label("oyun kodunda kamera seçimi ya da ikinci çizim yok.");
+                        if let Some(dir) = &dump {
+                            ui.separator();
+                            ui.monospace(format!("{DUMP_FRAME}. karede -> {dir}/rtt_offscreen.png"));
                         }
                     });
                 });
@@ -380,60 +278,22 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-/// Hangi kameranın etkin olduğunu bir kez günlüğe basar.
-fn log_active(world: &World, label: &str) {
-    let frame = world.get_resource::<RttReport>().map(|r| r.frame).unwrap_or(0);
-    if frame != 30 {
-        return;
-    }
-    let active = gizmo::renderer::components::active_camera(world);
-    let mut rows = Vec::new();
-    {
-        let q = world.query::<(Entity, &CameraTag, &Camera)>();
-        for (entity, tag, cam) in q.iter() {
-            rows.push(format!("id{entity}=etiket{} primary={}", tag.0, cam.primary));
-        }
-    }
-    // Kameraların GERÇEK duruşu: yaw/pitch ve iki ayrı konum kaynağı.
-    let mut poses = Vec::new();
-    {
-        let q = world.query::<(Entity, &CameraTag, &Camera, &Transform, &GlobalTransform)>();
-        for (entity, tag, cam, t, g) in q.iter() {
-            let gp = g.matrix.to_scale_rotation_translation().2;
-            poses.push(format!(
-                "id{entity}/e{}: yaw {:.2} pitch {:.2} T{:?} G{:?}",
-                tag.0,
-                cam.yaw,
-                cam.pitch,
-                (t.position.x, t.position.y, t.position.z),
-                (gp.x, gp.y, gp.z)
-            ));
-        }
-    }
-    gizmo::gizmo_log!(
-        Info,
-        "{label}: active_camera={:?} · {:?} · {:?}",
-        active,
-        rows,
-        poses
-    );
-}
-
-/// `primary` bayrağını verilen etikete taşır — kamera seçiminin tek kolu bu.
-fn set_primary(world: &mut World, tag: u8) {
-    let mut wanted: Vec<(u32, bool)> = Vec::new();
-    {
-        let q = world.query::<(Entity, &CameraTag, &Camera)>();
-        for (entity, t, _) in q.iter() {
-            wanted.push((entity.id(), t.0 == tag));
-        }
-    }
-    {
-        let mut q = world.query_mut::<(Entity, &mut Camera)>();
-        for (entity, mut camera) in q.iter_mut() {
-            if let Some((_, want)) = wanted.iter().find(|(wid, _)| *wid == entity.id()) {
-                camera.primary = *want;
-            }
+/// `GIZMO_RTT_DUMP` verildiyse tepedeki kameranın dokusunu `DUMP_FRAME`. karede PNG olarak yazan
+/// geçiş. Karenin üstüne çizilen bir geçiş olarak koşuyor (`with_pass`): o anda hedefli kameranın
+/// dokusu çizilip gönderilmiş, ve kopyada kameranın `CameraTarget`'i duruyor.
+fn dump_target(
+    dir: Option<String>,
+) -> impl FnMut(&World, &mut wgpu::CommandEncoder, &wgpu::TextureView, &mut Renderer) + Send + 'static {
+    let mut frame = 0u32;
+    move |copy, _encoder, _view, renderer| {
+        frame += 1;
+        let Some(dir) = dir.as_deref().filter(|_| frame == DUMP_FRAME) else { return };
+        let Some(target) = copy.query::<&CameraTarget>().iter().next().cloned() else { return };
+        let path = std::path::Path::new(dir).join("rtt_offscreen.png");
+        let (w, h) = target.size();
+        match gizmo::renderer::capture::texture_to_png(&renderer.device, &renderer.queue, target.texture(), &path) {
+            Ok(()) => gizmo::gizmo_log!(Info, "tepedeki kameranın dokusu yazıldı: {} ({w}x{h})", path.display()),
+            Err(e) => gizmo::gizmo_log!(Warning, "doku yazılamadı: {e}"),
         }
     }
 }

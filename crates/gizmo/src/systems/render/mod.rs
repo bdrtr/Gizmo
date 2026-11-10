@@ -274,15 +274,75 @@ pub fn draw_frame(
     }
     capture_reflection_probes(world, renderer);
     let camera = crate::renderer::components::active_camera(world);
-    let lods = step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
+    let mut positions = vec![camera_world_position(world, camera)];
+    positions.extend(target_camera_positions(world));
+    let lods = step_gpu_simulations(world, encoder, renderer, &positions);
     capture_planar_reflections(world, renderer, camera, lods);
+    draw_camera_targets(world, renderer, lods, 1);
     draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
 }
 
 /// Whether any camera in `world` asks for a [`Viewport`](crate::renderer::components::Viewport).
 fn any_camera_has_a_viewport(world: &World) -> bool {
-    world.query::<(Entity, &Camera)>().iter()
+    use crate::core::query::Without;
+    use crate::renderer::components::CameraTarget;
+    world.query_filtered::<(Entity, &Camera), Without<CameraTarget>>().iter()
         .any(|(_, c)| c.viewport.is_some())
+}
+
+/// **The cameras that draw into a texture of the game's own** ([`CameraTarget`](crate::renderer::components::CameraTarget)),
+/// each into its texture, in [`order`](Camera::order) — before the frame's own view, which this
+/// does not touch.
+///
+/// Each is a whole view through the game path's pipeline, as a split-screen view is: at the
+/// texture's aspect, rendered at the renderer's size and resampled into the texture by the last
+/// post pass, with no HUD, and with a temporal history of its own
+/// ([`Renderer::with_view_history`], from slot `first_slot`, so it shares none with a split-screen
+/// view or the frame's own camera). And each is recorded into **an encoder of its own and submitted
+/// at once**: the draw's uploads (`queue.write_buffer`) order against submission, so two views
+/// recorded into one encoder would both draw whatever the last one wrote — the frame's own view
+/// would come out as the last texture camera's.
+///
+/// The frame's GPU simulations are stepped once, for every camera (`lods`); like a planar mirror's
+/// capture, a texture camera is submitted before the frame's encoder, so it sees the simulation one
+/// step behind the frame's own view.
+pub fn draw_camera_targets(world: &World, renderer: &mut Renderer, lods: (f32, f32), first_slot: usize) {
+    use crate::renderer::components::CameraTarget;
+    let mut targets: Vec<(i32, Entity, CameraTarget)> = world
+        .query::<(Entity, &Camera, &CameraTarget)>()
+        .iter()
+        .map(|(entity, camera, target)| (camera.order, entity, target.clone()))
+        .collect();
+    targets.sort_by_key(|&(order, id, _)| (order, id));
+    for (index, (_, camera, target)) in targets.into_iter().enumerate() {
+        let (width, height) = target.size();
+        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("camera_target"),
+        });
+        renderer.with_view_history(first_slot + index, |renderer| {
+            draw_camera_view(
+                world,
+                &mut encoder,
+                target.view(),
+                renderer,
+                Some(camera),
+                lods,
+                Some([0.0, 0.0, width as f32, height as f32]),
+                false,
+                None,
+            );
+        });
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+    }
+}
+
+/// Where the cameras that draw into textures stand — for the level of detail the frame's GPU
+/// simulations are stepped at, which the nearest camera that draws sets.
+fn target_camera_positions(world: &World) -> Vec<Vec3> {
+    use crate::renderer::components::CameraTarget;
+    let ids: Vec<Entity> =
+        world.query::<(Entity, &CameraTarget)>().iter().map(|(entity, _)| entity).collect();
+    ids.into_iter().map(|id| camera_world_position(world, Some(id))).collect()
 }
 
 /// **Split screen:** every camera with a [`viewport`](crate::renderer::components::Camera::viewport)
@@ -327,7 +387,9 @@ pub fn draw_viewports(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
-    let mut views: Vec<(i32, Entity, crate::renderer::components::Viewport)> = world.query::<(Entity, &Camera)>().iter()
+    let mut views: Vec<(i32, Entity, crate::renderer::components::Viewport)> = world
+        .query_filtered::<(Entity, &Camera), crate::core::query::Without<crate::renderer::components::CameraTarget>>()
+        .iter()
         .filter_map(|(entity, c)| c.viewport.map(|v| (c.order, entity, v)))
         .collect();
     // The camera the frame is drawn through, when it has no rectangle of its own, is the whole
@@ -343,8 +405,10 @@ pub fn draw_viewports(
     if views.is_empty() {
         capture_reflection_probes(world, renderer);
         let camera = crate::renderer::components::active_camera(world);
-        let lods =
-            step_gpu_simulations(world, encoder, renderer, &[camera_world_position(world, camera)]);
+        let mut positions = vec![camera_world_position(world, camera)];
+        positions.extend(target_camera_positions(world));
+        let lods = step_gpu_simulations(world, encoder, renderer, &positions);
+        draw_camera_targets(world, renderer, lods, 1);
         draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
         return;
     }
@@ -352,8 +416,9 @@ pub fn draw_viewports(
     let size = view.texture().size();
 
     capture_reflection_probes(world, renderer);
-    let positions: Vec<Vec3> =
+    let mut positions: Vec<Vec3> =
         views.iter().map(|&(_, id, _)| camera_world_position(world, Some(id))).collect();
+    positions.extend(target_camera_positions(world));
 
     let new_encoder = |renderer: &Renderer| {
         renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -380,6 +445,9 @@ pub fn draw_viewports(
         multiview_mask: None,
     });
     let lods = step_gpu_simulations(world, &mut frame, renderer, &positions);
+    // The texture cameras after the split's own views in the history slots, and submitted before
+    // them, each on its own.
+    draw_camera_targets(world, renderer, lods, views.len());
 
     for (index, &(_, camera, viewport)) in views.iter().enumerate() {
         let region = viewport.to_pixels(size.width, size.height);

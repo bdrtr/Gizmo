@@ -28,6 +28,7 @@ pub struct GpuContext {
     queue: wgpu::Queue,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     asset_manager: Arc<RwLock<AssetManager>>,
+    output_format: wgpu::TextureFormat,
 }
 
 impl std::fmt::Debug for GpuContext {
@@ -41,6 +42,13 @@ impl GpuContext {
     #[must_use]
     pub fn device(&self) -> &wgpu::Device {
         &self.device
+    }
+
+    /// The format the renderer's last pass writes: the window's, and the one a texture a camera
+    /// draws into ([`CameraTarget`](crate::components::CameraTarget)) is made in.
+    #[must_use]
+    pub fn output_format(&self) -> wgpu::TextureFormat {
+        self.output_format
     }
 
     /// The layout a material's texture bind group is made against.
@@ -103,6 +111,7 @@ impl crate::Renderer {
             queue: self.queue.clone(),
             texture_bind_group_layout: self.scene.texture_bind_group_layout.clone(),
             asset_manager: Arc::clone(&self.asset_manager),
+            output_format: self.config.format,
         }
     }
 }

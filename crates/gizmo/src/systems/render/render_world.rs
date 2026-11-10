@@ -230,7 +230,7 @@ pub fn render_extractor() -> Extractor {
     use crate::core::component::{Children, EditorOnly, IsHidden, Parent};
     use gizmo_physics_core::components::{GlobalTransform, Transform};
     use crate::renderer::components::{
-        Camera, CameraShake, Decal, DirectionalLight, LodGroup, Material, Mesh, MeshRenderer, NoWireframe, Occluder,
+        Camera, CameraShake, CameraTarget, Decal, DirectionalLight, LodGroup, Material, Mesh, MeshRenderer, NoWireframe, Occluder,
         PlanarReflection, PointLight, PostProcess, RectLight, ReflectionProbe, Skeleton, SpotLight, Sprite, Text,
         Tilemap, Wireframe, WireframeColor,
     };
@@ -249,6 +249,7 @@ pub fn render_extractor() -> Extractor {
         // Cameras and what they see through.
         .component::<Camera>()
         .component::<CameraShake>()
+        .component::<CameraTarget>()
         .component::<PostProcess>()
         .component::<ReflectionProbe>()
         .component::<PlanarReflection>()
