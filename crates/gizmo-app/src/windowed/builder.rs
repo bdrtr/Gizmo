@@ -111,17 +111,23 @@ impl<State: 'static> App<State> {
         self
     }
 
-    /// Registers a new Event type with the system.
-    /// Thanks to this, the double-buffer `update()` runs automatically at the end of every frame.
+    /// Makes `T` an event type of the app: its queue ([`Events<T>`](gizmo_core::event::Events))
+    /// is in the world, rotated once at the end of every frame (`update`), and emptied by
+    /// [`World::clear_entities`] ([`World::init_events`] is the registration both rest on).
+    ///
+    /// **Once per type, however many times it is called.** Two plugins that both need, say,
+    /// `CollisionEvent` can both ask for it: the queue and its events are kept, and it is rotated
+    /// once. It used to be replaced on the second call and rotated twice per frame, and a queue
+    /// rotated twice throws its events away before any reader sees them.
     pub fn add_event<T: 'static + Send + Sync>(mut self) -> Self {
         tracing::debug!(event = %std::any::type_name::<T>(), "[App] event type registered");
-        self.world
-            .insert_resource(gizmo_core::event::Events::<T>::new());
-        self.event_updaters.push(Box::new(|world| {
-            if let Some(mut events) = world.get_resource_mut::<gizmo_core::event::Events<T>>() {
-                events.update();
-            }
-        }));
+        if self.world.init_events::<T>() {
+            self.event_updaters.push(Box::new(|world| {
+                if let Some(mut events) = world.get_resource_mut::<gizmo_core::event::Events<T>>() {
+                    events.update();
+                }
+            }));
+        }
         self
     }
 
@@ -542,6 +548,26 @@ mod update_hook_tests {
     /// **The loop's asset loader has a manager to load with in every app.** It runs only when the
     /// world holds an `AssetManager`, and a plain `App` held none until its game put one there — so a
     /// game that spawned `MeshData` without doing so drew nothing, silently.
+    /// **An event type asked for twice is rotated once.** Two plugins can both need one event
+    /// type; the second request used to replace the queue and add a second rotation, and a queue
+    /// rotated twice a frame throws its events away before any reader sees them.
+    #[test]
+    fn an_event_type_added_twice_keeps_its_queue_and_is_rotated_once() {
+        struct Ping;
+        let app = app().add_event::<Ping>();
+        app.world.get_resource_mut::<gizmo_core::event::Events<Ping>>().unwrap().send(Ping);
+        let mut app = app.add_event::<Ping>();
+        assert_eq!(app.event_updaters.len(), 1, "two rotations for one event type");
+        for update in &mut app.event_updaters {
+            update(&mut app.world);
+        }
+        assert_eq!(
+            app.world.get_resource::<gizmo_core::event::Events<Ping>>().unwrap().len(),
+            1,
+            "the event sent before the second registration did not reach a reader"
+        );
+    }
+
     #[test]
     fn every_app_starts_with_an_asset_manager_for_the_loader() {
         assert!(app().world.get_resource::<gizmo_renderer::asset::AssetManager>().is_some());

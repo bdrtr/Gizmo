@@ -31,10 +31,10 @@ use crate::world::World;
 /// use gizmo_core::prelude::*;
 /// struct CollisionEvent(u32);
 ///
-/// // Registration: at App level `app.add_event::<CollisionEvent>()` both inserts this
-/// // resource and calls `update()` every frame. Setting it up by hand:
+/// // Registration: at App level `app.add_event::<CollisionEvent>()` both does this and calls
+/// // `update()` every frame. On a world alone (the queue is then yours to rotate):
 /// let mut world = World::new();
-/// world.insert_resource(Events::<CollisionEvent>::new());
+/// world.init_events::<CollisionEvent>();
 ///
 /// // Sending an event (from any system):
 /// world.get_resource_mut::<Events<CollisionEvent>>().unwrap().send(CollisionEvent(7));
@@ -136,6 +136,39 @@ impl<T> Events<T> {
 impl<T> Default for Events<T> {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl World {
+    /// Makes `T` an event queue of this world: inserts an empty [`Events<T>`] unless one is there,
+    /// and records the type, so that [`World::clear_entities`] empties the queue. Returns `true`
+    /// when `T` was not an event queue of this world before — what `App::add_event` asks before it
+    /// arranges a rotation, so that a type registered twice is rotated once.
+    ///
+    /// **Why the record matters:** an event that names an entity — `CollisionEvent`,
+    /// `TriggerEvent`, `HitEvent` — outlives it in the queue, and `clear_entities` hands every
+    /// handle it destroys back bit-identical to an unrelated entity. A queue it left full would
+    /// deliver the old scene's events about the new scene's entities. The resource map cannot say
+    /// which of its entries are queues; this is how the world knows. A queue inserted with
+    /// `insert_resource` instead is not recorded, and is not emptied.
+    ///
+    /// Rotating the queue each frame ([`Events::update`]) is not done here — that is the app's,
+    /// and `App::add_event` does both. Calling this again for the same `T` keeps the queue and the
+    /// events in it.
+    pub fn init_events<T: Send + Sync + 'static>(&mut self) -> bool {
+        if self.get_resource::<Events<T>>().is_none() {
+            self.insert_resource(Events::<T>::new());
+        }
+        let id = std::any::TypeId::of::<Events<T>>();
+        if self.event_queues.iter().any(|(queue, _)| *queue == id) {
+            return false;
+        }
+        self.event_queues.push((id, |world| {
+            if let Some(mut queue) = world.get_resource_mut::<Events<T>>() {
+                queue.clear();
+            }
+        }));
+        true
     }
 }
 
@@ -469,5 +502,44 @@ mod tests {
         events.send(Ephemeral(&msg));
         events.update();
         assert_eq!(events.iter().next().unwrap().0, "test");
+    }
+
+    /// An event naming an entity.
+    struct Hit(crate::Entity);
+
+    /// **A queue the world knows about is emptied by `clear_entities`.** The handle in the queue
+    /// comes back bit-identical on the next spawn — that is what `clear_entities` does to
+    /// generations — so a queue left full delivers the old scene's event about the new scene's
+    /// entity. Both the readable batch and the one still pending go.
+    #[test]
+    fn a_registered_queue_is_emptied_by_clear_entities() {
+        let mut world = World::new();
+        assert!(world.init_events::<Hit>(), "a new event type");
+        let victim = world.spawn();
+        world.get_resource_mut::<Events<Hit>>().unwrap().send(Hit(victim));
+        world.get_resource_mut::<Events<Hit>>().unwrap().update();
+        world.get_resource_mut::<Events<Hit>>().unwrap().send(Hit(victim));
+        assert_eq!(world.get_resource::<Events<Hit>>().unwrap().len(), 1);
+
+        world.clear_entities();
+        let stranger = world.spawn();
+        assert_eq!(stranger, victim, "sanity: the handle is handed back bit for bit");
+        assert!(world.get_resource::<Events<Hit>>().unwrap().is_empty(), "the readable hit survived the clear");
+        world.get_resource_mut::<Events<Hit>>().unwrap().update();
+        let delivered: Vec<_> = world.get_resource::<Events<Hit>>().unwrap().iter().map(|h| h.0).collect();
+        assert!(delivered.is_empty(), "the pending hit about the old entity reached the new one: {delivered:?}");
+    }
+
+    /// Registering a type again keeps its queue and the events in it, and says it was known.
+    #[test]
+    fn registering_an_event_type_twice_keeps_its_queue() {
+        let mut world = World::new();
+        assert!(world.init_events::<Hit>());
+        let e = world.spawn();
+        world.get_resource_mut::<Events<Hit>>().unwrap().send(Hit(e));
+        assert!(!world.init_events::<Hit>(), "the second registration of one type");
+        world.get_resource_mut::<Events<Hit>>().unwrap().update();
+        assert_eq!(world.get_resource::<Events<Hit>>().unwrap().len(), 1, "the second registration replaced the queue");
+        assert_eq!(world.event_queues.len(), 1);
     }
 }

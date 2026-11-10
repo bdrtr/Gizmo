@@ -660,12 +660,10 @@ fn pump_event_queues(world: &mut World) {
     #[cfg(feature = "physics-dynamics")]
     {
         use gizmo_physics_core::components::HitEvent;
-        if world
-            .try_get_resource::<crate::core::event::Events<HitEvent>>()
-            .is_err()
-        {
-            world.insert_resource(crate::core::event::Events::<HitEvent>::new());
-        }
+        // Registered with the world, not merely inserted: `clear_entities` (a level reloaded in
+        // place) empties a queue the world knows about, where this one would otherwise carry hits
+        // naming entities whose handles then belong to others.
+        world.init_events::<HitEvent>();
         if let Ok(mut hits) = world.try_get_resource_mut::<crate::core::event::Events<HitEvent>>() {
             hits.update();
         }

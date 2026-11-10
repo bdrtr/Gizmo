@@ -507,14 +507,14 @@ impl World {
     /// paragraph above promises do not run here. To have them applied, call
     /// [`World::apply_commands`] **before** this, while the entities they name still exist.
     ///
-    /// **What is still yours to reset:** an `Events<T>` queue. `CollisionEvent`, `TriggerEvent`
-    /// and `HitEvent` all carry `Entity` handles, and a queue holding them across a clear has
-    /// exactly the problem above. It cannot be closed here: `Events<T>` is an ordinary resource,
-    /// type-erased in the resource map with no registry of which types are event queues, so
-    /// there is nothing generic to drain — and unlike `entity_observers`, whose whole map could
-    /// go because every value in it was per-entity, the resource map holds `Time`, `Input` and
-    /// the world's own machinery. Drain the queues your game registered, or read them before the
-    /// clear.
+    /// **The event queues the world knows about are emptied too** — every type registered with
+    /// [`World::init_events`], which `App::add_event` calls. `CollisionEvent`, `TriggerEvent` and
+    /// `HitEvent` all carry `Entity` handles, and a queue holding them across a clear has exactly
+    /// the problem above: it would deliver the old scene's events about the new scene's entities.
+    /// (Until 2026-11-10 this paragraph said it could not be done here, for want of a registry of
+    /// which resources are queues; `init_events` is that registry.) Both the readable and the
+    /// pending events go. A queue inserted with `insert_resource` is not known to the world and
+    /// is still yours to drain — register it instead.
     ///
     /// [`PoolManager`](crate::pool::PoolManager) is the same shape and worse in one way: it is
     /// not a resource at all, so this function could not reach it even if it wanted to, and its
@@ -568,6 +568,17 @@ impl World {
             .get_resource::<crate::commands::CommandQueue>()
             .map(|q| (*q).clone());
         let dropped_commands = queue.map_or(0, |q| q.clear());
+
+        // The event queues the world knows about (`init_events`). An event naming an entity
+        // outlives it in the queue, and the handle comes back bit-identical on the next spawn, so
+        // a full queue would deliver the old scene's events about the new scene's entities.
+        // Emptying one runs the events' destructors — user code — but cannot desync a column, so
+        // it sits here with the command queue, above the two clears that can. By index rather than
+        // by iterator: each function takes the world it is a field of.
+        for index in 0..self.event_queues.len() {
+            let clear = self.event_queues[index].1;
+            clear(self);
+        }
 
         // Entities resource'unu temizle (allocator state)
         if let Some(entities) = self.get_resource::<Entities>() {

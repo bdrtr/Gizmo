@@ -226,13 +226,12 @@ state instead.
     `World::apply_commands` before the clear, while the entities those commands name still exist;
     that is now written on both functions.
 
-    **The remaining edge is named rather than closed:** an `Events<T>` queue has the same defect
-    and cannot be fixed at this layer. `CollisionEvent`, `TriggerEvent` and `HitEvent` all carry
-    `Entity` handles, but `Events<T>` is an ordinary resource, type-erased in the resource map
-    with no registry of which types are event queues — so there is nothing generic to drain.
-    `entity_observers` could have its whole map cleared because every value in it was per-entity;
-    the resource map holds `Time`, `Input` and the world's own machinery, so it cannot. Closing
-    it needs an event-type registry, which is a different change from this one.
+    **The remaining edge was named rather than closed here:** an `Events<T>` queue has the same
+    defect and could not be fixed at this layer. `CollisionEvent`, `TriggerEvent` and `HitEvent`
+    all carry `Entity` handles, but `Events<T>` is an ordinary resource, type-erased in the
+    resource map with no registry of which types are event queues — so there was nothing generic
+    to drain. **Closed 2026-11-10 by the registry it asked for**: see the `entity_observers` item
+    below.
 - **Closed 2026-08-31, and found by looking somewhere else.** Auditing the ~30
   `entity_locations[..]` indexers — to decide whether the location table could be truncated the
   way the sparse index now is — turned up **six live defects and no truncation**. Five panic
@@ -646,11 +645,22 @@ state instead.
     despawned entity that had ever been observed. Measured by the regression test: sixty-four
     despawns left sixty-four entries.
 
-    **`Events<T>` is still open and this does NOT generalise to it**, which the original entry
-    guessed it would. An `Events<T>` queue is an ordinary *resource*, not an entry in a map the
-    world owns for this purpose, so there is no registration point at which to record a thunk and
-    no registry of which resource types are event queues. Closing that one needs the registry
-    first.
+    **`Events<T>` did NOT generalise from this**, which the original entry guessed it would: an
+    `Events<T>` queue is an ordinary *resource*, not an entry in a map the world owns for the
+    purpose, so there was no registration point at which to record a thunk. **Closed 2026-11-10 by
+    making one.** `World::init_events::<T>()` inserts the queue unless it is there and records the
+    type with the function that empties it; `App::add_event` calls it, `PlayLoop` registers its
+    `HitEvent` queue through it, and `clear_entities` empties every recorded queue — the readable
+    batch and the pending one — beside the command queue, above the two clears that can desync a
+    column (`a_registered_queue_is_emptied_by_clear_entities`: the hit about the destroyed entity
+    used to be delivered to the stranger its handle came back as). A queue inserted with
+    `insert_resource` is not recorded and is the caller's; the function's documentation says so.
+
+    The registry closed a second defect on the way, in `App::add_event`: it replaced the queue and
+    added a rotation every time it was called, so an event type two plugins both asked for was
+    rotated twice a frame — and a queue rotated twice throws its events away before any reader sees
+    them. It registers once per type now (`init_events` says whether the type was new), keeping the
+    queue and its events (`an_event_type_added_twice_keeps_its_queue_and_is_rotated_once`).
   - **`PoolManager` and stale handles — two of the three closed 2026-08-31, the third is the
     hard one.** Looking at the `clear_entities` case turned up two defects that need no clear at
     all, both reachable from ordinary use:
@@ -683,8 +693,8 @@ state instead.
 
       The addition is deliberately general rather than pool-shaped: `clear_entities` warns in
       prose about "a selection list, a cache keyed by `Entity`", and until now there was nothing
-      for such a cache to check. `Events<T>` is the remaining member of that class, and it still
-      needs a registry of which resource types are event queues before anything can drain it.
+      for such a cache to check. `Events<T>` was the remaining member of that class; it is closed
+      by `World::init_events` (2026-11-10, above).
   - ~~**`WorldStats::component_bytes` counts archetype columns only.**~~ **CLOSED 2026-08-31.**
     `WorldStats::sparse_component_bytes` sits beside it now and reports both halves of a sparse
     set: `dense`, which scales with entries, and `sparse`, which is four bytes per id up to the
