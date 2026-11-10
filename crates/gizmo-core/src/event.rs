@@ -142,8 +142,7 @@ impl<T> Default for Events<T> {
 impl World {
     /// Makes `T` an event queue of this world: inserts an empty [`Events<T>`] unless one is there,
     /// and records the type, so that [`World::clear_entities`] empties the queue. Returns `true`
-    /// when `T` was not an event queue of this world before — what `App::add_event` asks before it
-    /// arranges a rotation, so that a type registered twice is rotated once.
+    /// when `T` was not an event queue of this world before.
     ///
     /// **Why the record matters:** an event that names an entity — `CollisionEvent`,
     /// `TriggerEvent`, `HitEvent` — outlives it in the queue, and `clear_entities` hands every

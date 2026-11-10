@@ -27,6 +27,7 @@ impl<State: 'static> App<State> {
             #[cfg(feature = "gamepad")]
             gamepad_backend: None,
             event_updaters: Vec::new(),
+            event_types: std::collections::HashSet::new(),
             initial_scene: None,
             window_icon: None,
             record_mode: false,
@@ -121,7 +122,10 @@ impl<State: 'static> App<State> {
     /// rotated twice throws its events away before any reader sees them.
     pub fn add_event<T: 'static + Send + Sync>(mut self) -> Self {
         tracing::debug!(event = %std::any::type_name::<T>(), "[App] event type registered");
-        if self.world.init_events::<T>() {
+        self.world.init_events::<T>();
+        // Whether the APP rotates it yet — its own record, not the world's: a plugin may have
+        // registered the queue with the world already, and that arranges no rotation.
+        if self.event_types.insert(std::any::TypeId::of::<T>()) {
             self.event_updaters.push(Box::new(|world| {
                 if let Some(mut events) = world.get_resource_mut::<gizmo_core::event::Events<T>>() {
                     events.update();
@@ -545,9 +549,6 @@ mod update_hook_tests {
         App::<()>::new("test", 64, 64)
     }
 
-    /// **The loop's asset loader has a manager to load with in every app.** It runs only when the
-    /// world holds an `AssetManager`, and a plain `App` held none until its game put one there — so a
-    /// game that spawned `MeshData` without doing so drew nothing, silently.
     /// **An event type asked for twice is rotated once.** Two plugins can both need one event
     /// type; the second request used to replace the queue and add a second rotation, and a queue
     /// rotated twice a frame throws its events away before any reader sees them.
@@ -568,6 +569,32 @@ mod update_hook_tests {
         );
     }
 
+    /// **An event type a plugin registered with the world is still rotated by `add_event`.** The
+    /// world's registry says what `clear_entities` empties, not what the app rotates: a plugin can
+    /// only reach the world, and the game's `add_event` after it arranged no rotation when the
+    /// app asked the world whether the type was new — the queue was never readable.
+    #[test]
+    fn an_event_type_a_plugin_registered_is_rotated_by_add_event() {
+        struct Scored;
+        struct Registers;
+        impl crate::plugin::Plugin for Registers {
+            fn build(&self, app: &mut dyn crate::plugin::AppLike) {
+                app.parts_mut().world.init_events::<Scored>();
+            }
+        }
+        let app = app().add_plugin(Registers).add_event::<Scored>();
+        assert_eq!(app.event_updaters.len(), 1, "the app does not rotate the plugin's queue");
+        app.world.get_resource_mut::<gizmo_core::event::Events<Scored>>().unwrap().send(Scored);
+        let mut app = app;
+        for update in &mut app.event_updaters {
+            update(&mut app.world);
+        }
+        assert_eq!(app.world.get_resource::<gizmo_core::event::Events<Scored>>().unwrap().len(), 1);
+    }
+
+    /// **The loop's asset loader has a manager to load with in every app.** It runs only when the
+    /// world holds an `AssetManager`, and a plain `App` held none until its game put one there — so a
+    /// game that spawned `MeshData` without doing so drew nothing, silently.
     #[test]
     fn every_app_starts_with_an_asset_manager_for_the_loader() {
         assert!(app().world.get_resource::<gizmo_renderer::asset::AssetManager>().is_some());

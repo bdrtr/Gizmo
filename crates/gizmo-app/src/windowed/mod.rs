@@ -119,6 +119,11 @@ pub struct App<State: 'static = ()> {
     gamepad_backend: Option<crate::gamepad::GamepadBackend>,
     #[allow(clippy::type_complexity)]
     event_updaters: Vec<Box<dyn FnMut(&mut World)>>,
+    /// The event types `event_updaters` rotates — one rotation each, however often `add_event`
+    /// names one. The app's own record, not the world's: the world's (`World::init_events`) says
+    /// which queues `clear_entities` empties, and a type can be in it without the app rotating it
+    /// (a plugin registers through the world; it cannot reach `add_event`).
+    event_types: std::collections::HashSet<std::any::TypeId>,
     initial_scene: Option<String>,
     window_icon: Option<&'static [u8]>,
     /// When `true`, per-frame input is recorded and saved on exit.

@@ -151,8 +151,9 @@ impl World {
     }
 
     /// Attaches a listener for one [`EntityEvent`](crate::observer::EntityEvent) type to one
-    /// entity. [`trigger`](Self::trigger) dispatches to it, and on up the `Parent` chain if the
-    /// event opts in.
+    /// entity. [`trigger`](Self::trigger) dispatches to it, and on along the event's path if the
+    /// event opts in — the `Parent` chain unless it names another
+    /// ([`propagate_to`](crate::observer::EntityEvent::propagate_to)).
     ///
     /// The listener is handed **`&mut World`** — the same world the dispatch is running inside,
     /// so it can spawn, despawn, write components, read anything, and call `trigger` again:

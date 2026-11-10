@@ -227,7 +227,8 @@ pub trait EntityEvent: Send + Sync + 'static + Clone {
     /// need not be alive or carry any listener; a target with no listener for this event
     /// type is simply skipped. That ends the dispatch when
     /// [`can_propagate`](Self::can_propagate) is `false`, but when it is `true` the walk
-    /// continues to the ancestors regardless of whether the target itself was observed.
+    /// continues along the event's path ([`propagate_to`](Self::propagate_to)) regardless of
+    /// whether the target itself was observed.
     fn target(&self) -> Entity;
 
     /// Whether dispatch continues past the target once the target's own listeners have run
@@ -289,8 +290,9 @@ pub struct On<E, T = ()> {
     ///
     /// For a lifecycle observer, the entity that gained the component. For a propagating
     /// [`EntityEvent`], the entity whose listener is running *right now*: it equals
-    /// `event.target()` on the first hop only, and names each ancestor in turn afterwards
-    /// while `target()` keeps naming the origin.
+    /// `event.target()` on the first hop only, and names each entity on the event's path in turn
+    /// afterwards — the ancestors, on the default path — while `target()` keeps naming the
+    /// origin.
     pub entity: Entity,
     /// Binds the value to the component type `T` a lifecycle observer was registered for.
     ///
