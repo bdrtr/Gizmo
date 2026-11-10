@@ -225,17 +225,19 @@ impl World {
     }
 
     /// Delivers `event` to its target's listeners, then — if the event
-    /// [`can_propagate`](crate::observer::EntityEvent::can_propagate) — to each ancestor's in
-    /// turn, walking up the `Parent` chain.
+    /// [`can_propagate`](crate::observer::EntityEvent::can_propagate) — to each entity's in turn
+    /// along the event's path: up the `Parent` chain, unless the event names another with
+    /// [`propagate_to`](crate::observer::EntityEvent::propagate_to).
     ///
     /// Dispatch is synchronous: every listener has run before this returns. Listeners on one
     /// entity run in registration order and each receives its own clone of the event, which is
     /// why an [`EntityEvent`](crate::observer::EntityEvent) must be `Clone` where a
     /// [`trigger_global`](Self::trigger_global) event need not be.
     ///
-    /// **The walk always terminates.** It stops at an entity with no `Parent`, at a parent id
-    /// that is no longer alive, at a listener that called [`stop_propagation`](Self::stop_propagation)
-    /// — and at an entity this walk has already visited. That last one is the cycle guard:
+    /// **The walk always terminates.** It stops where the path ends (an entity with no `Parent`,
+    /// on the default path), at a next entity that is no longer alive, at a listener that called
+    /// [`stop_propagation`](Self::stop_propagation) — and at an entity this walk has already
+    /// visited, on any path. That last one is the cycle guard:
     /// `add_child` refuses to build a `Parent` loop, but `Parent` is a bare id that
     /// `add_component` writes directly and that scene loading writes out of a file verbatim, so
     /// a loop is reachable and used to hang the frame. The visited set is keyed by raw entity
@@ -248,7 +250,6 @@ impl World {
     /// nested. The propagation flag is saved and restored around the walk, so a nested dispatch
     /// that cancels itself cannot truncate the walk that called it.
     pub fn trigger<E: crate::observer::EntityEvent>(&mut self, event: E) {
-        use crate::component::Parent;
         let mut current_entity = event.target();
 
         // Saved and restored around this walk. A listener may itself `trigger`, and that nested
@@ -332,18 +333,11 @@ impl World {
                 break;
             }
 
-            // Propagate to parent
-            if let Some(parent_ptr) = self.get_component_ptr(current_entity, ComponentKey::of::<Parent>()) {
-                // A `Parent` written directly can name a dead entity, and that stops propagation.
-                // SAFETY: keyed by `TypeId::of::<Parent>()`, so the cast matches the bytes; the
-                // value is copied out immediately.
-                let parent = unsafe { (*(parent_ptr as *const Parent)).0 };
-                if !self.is_alive(parent) {
-                    break;
-                }
-                current_entity = parent;
-            } else {
-                break;
+            // The next entity on the event's path — its `Parent` unless the event says otherwise.
+            // A path written directly can name a dead entity, and that stops propagation.
+            match event.propagate_to(self, current_entity) {
+                Some(next) if self.is_alive(next) => current_entity = next,
+                _ => break,
             }
         }
 

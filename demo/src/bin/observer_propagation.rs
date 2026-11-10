@@ -12,7 +12,7 @@
 //! | varlığa bağlı dinleyici | `On<E>`, `world.observe(entity, ..)` |
 //! | dinleyicinin dünyayı görmesi | 2026-08-24'ten beri **var** — `(&mut World, On<E>)` |
 //! | olayı gönderme | `trigger` |
-//! | **yürüyüşün yolunu seçmek** | **yok** — yol her zaman `Parent` zinciri |
+//! | **yürüyüşün yolunu seçmek** | 2026-11-10'dan beri **var** — [`EntityEvent::propagate_to`]; varsayılanı `Parent` zinciri |
 //! | **kabarmayı durdurmak** | 2026-08-24'ten beri **var** — `world.stop_propagation()` |
 //! | dinleyicinin bir şey döndürmesi | **yok** — `On<E>` değerle veriliyor, dönüş `()` |
 //!
@@ -151,7 +151,8 @@ fn main() {
             let device = &scene.renderer.device;
             let cube = AssetManager::create_cube(device);
 
-            // Kök -> ... -> yaprak zinciri. `Parent` zinciri yürüyüşün TEK yolu.
+            // Kök -> ... -> yaprak zinciri. Bu demonun olayı varsayılan yolda, `Parent` zincirinde
+            // yürüyor; bir olay başka bir yolu `propagate_to` ile seçebiliyor.
             let mut chain: Vec<Entity> = Vec::new();
             for depth in 0..DEPTH {
                 let entity = scene.world.spawn_bundle((
@@ -271,7 +272,7 @@ fn main() {
                             );
                         }
                         ui.separator();
-                        ui.label("yol her zaman Parent zinciri — seçilemiyor.");
+                        ui.label("yol: Parent zinciri (varsayılan) — propagate_to ile seçilebiliyor.");
                         ui.label("kesme kanalı dinleyicinin dönüşü değil, elindeki dünya.");
                         ui.separator();
                         ui.label("boşluk — kabaran · N — kabarmayan · V — veto · X — zinciri kes");

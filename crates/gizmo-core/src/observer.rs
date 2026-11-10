@@ -14,8 +14,9 @@
 //!   not an audit trail.
 //! * **Entity-targeted events.** `World::observe` attaches a listener for one
 //!   [`EntityEvent`] type to one entity; `World::trigger` dispatches a value to that
-//!   entity's listeners and, if the event opts in, on up the `Parent` chain — until a listener
-//!   calls [`World::stop_propagation`](crate::world::World::stop_propagation).
+//!   entity's listeners and, if the event opts in, on along its path — up the `Parent` chain,
+//!   unless the event names another ([`EntityEvent::propagate_to`]) — until a listener calls
+//!   [`World::stop_propagation`](crate::world::World::stop_propagation).
 //! * **Untargeted events.** `World::observe_global` and `World::trigger_global`, keyed only by
 //!   the event's own type: "the level loaded", "the round ended". No hierarchy, so no `Clone`
 //!   bound — the listener is handed the event by reference. Added 2026-08-24; before it, such a
@@ -229,19 +230,20 @@ pub trait EntityEvent: Send + Sync + 'static + Clone {
     /// continues to the ancestors regardless of whether the target itself was observed.
     fn target(&self) -> Entity;
 
-    /// Whether dispatch continues to the target's ancestors once the target's own listeners
-    /// have run (bubbling).
+    /// Whether dispatch continues past the target once the target's own listeners have run
+    /// (bubbling).
     ///
     /// `false` by default: only [`target`](Self::target) is notified. When `true`, dispatch
-    /// walks up the `Parent` chain, running each ancestor's listeners for this event type, and
-    /// stops at the first entity that
+    /// walks the event's path — the `Parent` chain unless [`propagate_to`](Self::propagate_to)
+    /// says otherwise — running each entity's listeners for this event type, and stops at the
+    /// first entity
     ///
-    /// * has no `Parent` component,
-    /// * whose recorded parent id is no longer alive,
+    /// * with no next entity on the path (no `Parent`, for the default path),
+    /// * whose next entity is no longer alive,
     /// * whose listener called [`World::stop_propagation`](crate::world::World::stop_propagation), or
-    /// * **this walk has already visited** — the cycle guard, added 2026-08-24. `Parent` is a
-    ///   bare id that can be written directly, so a chain can loop; without this the walk did
-    ///   not terminate.
+    /// * **that this walk has already visited** — the cycle guard, added 2026-08-24. `Parent` is
+    ///   a bare id that can be written directly, so a chain can loop; without this the walk did
+    ///   not terminate. It guards any path an event chooses the same way.
     ///
     /// Listeners along the chain all receive equal clones of the same event.
     ///
@@ -249,6 +251,19 @@ pub trait EntityEvent: Send + Sync + 'static + Clone {
     /// answers at different times gets an unspecified walk rather than an interesting one —
     /// return a constant, or a value fixed when the event is constructed.
     fn can_propagate(&self) -> bool { false }
+
+    /// **The event's path**: the entity the walk goes to after `from`, when the event
+    /// [propagates](Self::can_propagate) — `None` ends it.
+    ///
+    /// The `Parent` chain by default: `from`'s parent, if it has one. An event that bubbles
+    /// along another relation answers with that instead — an item to the bag that holds it, a
+    /// wheel to the vehicle, a custom relationship's target — read from `world`, which is the
+    /// world as the listeners that just ran left it. The walk's guarantees do not depend on the
+    /// answer: a dead entity, a listener that called `stop_propagation` and an entity already
+    /// visited end it whatever path this draws.
+    fn propagate_to(&self, world: &crate::world::World, from: Entity) -> Option<Entity> {
+        world.get::<crate::component::Parent>(from).map(|parent| parent.0)
+    }
 }
 
 /// What a listener receives: the event value plus the entity this particular delivery is
@@ -1043,6 +1058,62 @@ mod tests {
             vec![0, 1, 2],
             "a global listener's stop_propagation ended the entity walk around it"
         );
+    }
+
+    /// **An event bubbles along the path it names.** An item in a bag on a player, with no
+    /// `Parent` anywhere: the event whose `propagate_to` follows `HeldBy` reaches the item, the
+    /// bag and the player in that order, and the same event on the default path stops at the item,
+    /// which has no parent. The walk's guarantees hold on the chosen path: a `HeldBy` loop ends at
+    /// the first entity visited twice.
+    #[test]
+    fn an_event_bubbles_along_the_path_it_names() {
+        #[derive(Clone, Copy)]
+        struct HeldBy(Entity);
+        crate::impl_component!(HeldBy);
+        #[derive(Clone)]
+        struct Picked {
+            at: Entity,
+            along_held_by: bool,
+        }
+        impl EntityEvent for Picked {
+            fn target(&self) -> Entity {
+                self.at
+            }
+            fn can_propagate(&self) -> bool {
+                true
+            }
+            fn propagate_to(&self, world: &World, from: Entity) -> Option<Entity> {
+                if self.along_held_by {
+                    world.get::<HeldBy>(from).map(|held| held.0)
+                } else {
+                    world.get::<crate::component::Parent>(from).map(|parent| parent.0)
+                }
+            }
+        }
+
+        let mut world = World::new();
+        let player = world.spawn();
+        let bag = world.spawn();
+        let item = world.spawn();
+        world.add_component(item, HeldBy(bag));
+        world.add_component(bag, HeldBy(player));
+        let order = Arc::new(Mutex::new(Vec::new()));
+        for (name, entity) in [("item", item), ("bag", bag), ("player", player)] {
+            let seen = Arc::clone(&order);
+            world.observe::<Picked, _>(entity, move |_world: &mut World, _on| seen.lock().unwrap().push(name));
+        }
+
+        world.trigger(Picked { at: item, along_held_by: true });
+        assert_eq!(*order.lock().unwrap(), vec!["item", "bag", "player"]);
+
+        order.lock().unwrap().clear();
+        world.trigger(Picked { at: item, along_held_by: false });
+        assert_eq!(*order.lock().unwrap(), vec!["item"], "the default path is the Parent chain, and the item has none");
+
+        world.add_component(player, HeldBy(item));
+        order.lock().unwrap().clear();
+        world.trigger(Picked { at: item, along_held_by: true });
+        assert_eq!(*order.lock().unwrap(), vec!["item", "bag", "player"], "a loop on the chosen path did not end the walk");
     }
 
     /// A `Parent` cycle terminates the walk instead of hanging the frame.
