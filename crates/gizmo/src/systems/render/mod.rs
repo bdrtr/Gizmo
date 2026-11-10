@@ -23,42 +23,16 @@ pub struct WireframeConfig {
 }
 
 
-/// Step the GPU fluid simulation for this frame.
+/// Draw the fluid's screen-space surface onto the lit HDR image — the particles the frame's step
+/// simulated ([`GpuFluidSystem::active_particles`](crate::renderer::gpu_fluid::GpuFluidSystem::active_particles),
+/// written by [`draw_ahead_of_views`]), nothing when it simulated none.
 ///
-/// `active_particles` is how much of the fluid to simulate — the caller's level-of-detail
-/// decision, because the two pictures make it differently: a game scales it by camera distance,
-/// the editor's viewport runs the whole thing (an editor shows what is there, which is the same
-/// reasoning as the `lod_vbufs` entry in the render-parity exceptions).
-///
-/// Nothing is recorded for a scene with no fluid, and the underlying pass returns immediately at
-/// zero particles.
-///
-/// It is a function here rather than a line in each pipeline for the reason `record_forward_decals`
-/// is: the editor drew no fluid at all until 2026-08-19, and a second implementation is how that
-/// comes back.
+/// It runs where the decals do: after the geometry pass has written depth (it reads it) and before
+/// post-processing reads the HDR texture. It is a function here rather than a line in each pipeline
+/// for the reason `record_forward_decals` is: the editor drew no fluid at all until 2026-08-19, and
+/// a second implementation is how that comes back.
 #[cfg(feature = "render")]
-pub fn step_gpu_fluid(
-    encoder: &mut wgpu::CommandEncoder,
-    renderer: &crate::renderer::Renderer,
-    active_particles: u32,
-) {
-    let Some(fluid) = &renderer.gpu_fluid else {
-        return;
-    };
-    fluid.compute_pass(encoder, &renderer.queue, true, active_particles);
-}
-
-/// Draw the fluid's screen-space surface onto the lit HDR image.
-///
-/// The other half of [`step_gpu_fluid`], and it runs where the decals do: after the geometry pass
-/// has written depth (it reads it) and before post-processing reads the HDR texture. The particles
-/// themselves are drawn inside the forward pass; this is the surface reconstruction over them.
-#[cfg(feature = "render")]
-pub fn record_fluid_surface(
-    encoder: &mut wgpu::CommandEncoder,
-    renderer: &crate::renderer::Renderer,
-    active_particles: u32,
-) {
+pub fn record_fluid_surface(encoder: &mut wgpu::CommandEncoder, renderer: &crate::renderer::Renderer) {
     let Some(fluid) = &renderer.gpu_fluid else {
         return;
     };
@@ -68,8 +42,52 @@ pub fn record_fluid_surface(
         &renderer.post.hdr_texture_view,
         &renderer.depth_texture_view,
         renderer.scene.view_bind_group(),
-        active_particles,
+        fluid.active_particles,
     );
+}
+
+/// Draw the GPU particles the frame's step simulated
+/// ([`GpuParticleSystem::active_particles`](crate::renderer::gpu_particles::GpuParticleSystem::active_particles),
+/// written by [`draw_ahead_of_views`]) onto the lit HDR image, in a pass of their own — nothing when
+/// it simulated none, as it does while no particle is alive.
+///
+/// # Why a pass of their own
+///
+/// The particle fragment shader SAMPLES the scene depth, so particles fade out against geometry
+/// instead of cutting into it. A texture cannot be a depth attachment and a sampled texture in the
+/// same pass, so this pass has no depth attachment and binds the depth texture instead; occlusion is
+/// done in the shader.
+///
+/// # Why one function for both pictures
+///
+/// The editor had its own copy. On 2026-07-12 the particle pipeline gained its depth binding and lost
+/// its depth-stencil state; the game path was updated that day and the copy was not, so the studio
+/// set the pipeline inside its main pass — a wgpu validation error — and panicked on its first frame
+/// for a month. Later the copy drew the whole ring every frame, alive or not, where the game draws
+/// nothing while nothing is alive.
+#[cfg(feature = "render")]
+pub fn record_gpu_particles(encoder: &mut wgpu::CommandEncoder, renderer: &crate::renderer::Renderer) {
+    let Some(particles) = &renderer.gpu_particles else {
+        return;
+    };
+    if particles.active_particles == 0 {
+        return;
+    }
+    let depth_bg = particles.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view);
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Particle Soft Pass"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &renderer.post.hdr_texture_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    particles.render_pass(&mut pass, renderer.scene.view_bind_group(), &depth_bg, particles.active_particles);
 }
 
 /// Guarantee every renderable mesh has a current `GlobalTransform` before the
@@ -272,17 +290,62 @@ pub fn draw_frame(
         draw_viewports(world, encoder, view, renderer);
         return;
     }
+    let camera = crate::renderer::components::active_camera(world);
+    draw_ahead_of_views(world, renderer, SimulationDetail::NearestOf(&[camera_world_position(world, camera)]));
+    // The texture cameras were drawn first, each with its mirrors; the frame's own mirrors last, so
+    // they are what the frame's view samples.
+    capture_planar_reflections(world, renderer, camera, renderer_aspect(renderer));
+    draw_camera_view(world, encoder, view, renderer, camera, true, None, true, None);
+}
+
+/// How much of each GPU simulation a frame runs: the particles' and the fluid's share of what they
+/// hold. Every view of the frame draws what the step ran — see [`draw_ahead_of_views`].
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub enum SimulationDetail<'a> {
+    /// The game's: less the farther the nearest camera about to draw stands — the particles from
+    /// the origin, the fluid from its tank. These are the frame's own views' cameras;
+    /// [`draw_ahead_of_views`] adds every camera that draws into a texture.
+    NearestOf(&'a [Vec3]),
+    /// All of it: an editor shows what is there, as it shows every mesh at full detail (the
+    /// `lod_vbufs` entry in the render-parity exceptions).
+    Full,
+}
+
+/// **What a frame does before its own view or views**, in this order and the same in every host —
+/// [`draw_frame`], split screen, the editor's viewport:
+///
+/// 1. the reflection probes that ask for a capture ([`capture_reflection_probes`]);
+/// 2. the frame's start: the mirrors' captures counted from zero, and the temporal state of every
+///    view whose camera is gone dropped ([`Renderer::retain_view_histories`]);
+/// 3. the GPU simulations, stepped once for every view and in a submission of their own — the
+///    volumetric smoke, the GPU rigid bodies (and the request for their readback), the fluid
+///    (only with [`Renderer::fluid_enabled`]) and the particles, each to the share `detail` asks
+///    for. The share is written to the system, and it is what every view of the frame draws;
+/// 4. every camera that draws into a texture ([`CameraTarget`](crate::renderer::components::CameraTarget)),
+///    each with its mirrors and in a submission of its own.
+///
+/// The editor did its own version of 3 and 4 until 2026-11-10, and it drifted the way copies do: it
+/// stepped its particles and GPU bodies after its monitors, which drew them a step behind; it drew
+/// its monitors at full detail with the fluid's switch never looked at, so a scene that had not
+/// turned the fluid on showed the fluid's unstepped particles on every monitor; it dispatched and
+/// drew the whole particle ring with nothing alive; and it never asked for the GPU bodies' readback,
+/// which their entities follow.
+pub fn draw_ahead_of_views(world: &World, renderer: &mut Renderer, detail: SimulationDetail) {
     capture_reflection_probes(world, renderer);
     renderer.planar.begin_frame();
-    let camera = crate::renderer::components::active_camera(world);
-    let mut positions = vec![camera_world_position(world, camera)];
-    positions.extend(target_camera_positions(world));
-    let lods = step_gpu_simulations_ahead(world, renderer, &positions);
-    // The texture cameras first, each with its mirrors; the frame's own mirrors last, so they are
-    // what the frame's view samples.
-    draw_camera_targets(world, renderer, lods, 1);
-    capture_planar_reflections(world, renderer, camera, lods, renderer_aspect(renderer));
-    draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
+    renderer.retain_view_histories(|camera| world.get::<Camera>(camera).is_some());
+    let mut cameras = Vec::new();
+    let detail = match detail {
+        SimulationDetail::NearestOf(views) => {
+            cameras.extend_from_slice(views);
+            cameras.extend(target_camera_positions(world));
+            SimulationDetail::NearestOf(&cameras)
+        }
+        SimulationDetail::Full => SimulationDetail::Full,
+    };
+    step_gpu_simulations_ahead(world, renderer, detail);
+    draw_camera_targets(world, renderer);
 }
 
 /// The renderer's own shape — the frame's, when its view is the whole target.
@@ -304,16 +367,16 @@ fn any_camera_has_a_viewport(world: &World) -> bool {
 ///
 /// Each is a whole view through the game path's pipeline, as a split-screen view is: at the
 /// texture's aspect, rendered at the renderer's size and resampled into the texture by the last
-/// post pass, with no HUD, and with a temporal history of its own
-/// ([`Renderer::with_view_history`], from slot `first_slot`, so it shares none with a split-screen
-/// view or the frame's own camera). And each is recorded into **an encoder of its own and submitted
-/// at once**: the draw's uploads (`queue.write_buffer`) order against submission, so two views
-/// recorded into one encoder would both draw whatever the last one wrote — the frame's own view
-/// would come out as the last texture camera's.
+/// post pass, with no HUD, and with a temporal history of its own — its camera's
+/// ([`Renderer::with_view_history`]). And each is recorded into **an encoder of its own and
+/// submitted at once**: the draw's uploads (`queue.write_buffer`) order against submission, so two
+/// views recorded into one encoder would both draw whatever the last one wrote — the frame's own
+/// view would come out as the last texture camera's.
 ///
-/// The frame's GPU simulations are stepped once, for every camera (`lods`), and submitted before
-/// any view, so a texture camera draws the step the frame's own view draws.
-pub fn draw_camera_targets(world: &World, renderer: &mut Renderer, lods: (f32, f32), first_slot: usize) {
+/// The frame's GPU simulations were stepped before this, once for every camera and in a submission
+/// of their own ([`draw_ahead_of_views`]), so a texture camera draws the step the frame's own view
+/// draws.
+fn draw_camera_targets(world: &World, renderer: &mut Renderer) {
     use crate::renderer::components::CameraTarget;
     let mut targets: Vec<(i32, Entity, CameraTarget)> = world
         .query::<(Entity, &Camera, &CameraTarget)>()
@@ -321,21 +384,21 @@ pub fn draw_camera_targets(world: &World, renderer: &mut Renderer, lods: (f32, f
         .map(|(entity, camera, target)| (camera.order, entity, target.clone()))
         .collect();
     targets.sort_by_key(|&(order, id, _)| (order, id));
-    for (index, (_, camera, target)) in targets.into_iter().enumerate() {
+    for (_, camera, target) in targets {
         let (width, height) = target.size();
         // Its mirrors, captured for it, just before it.
-        capture_planar_reflections(world, renderer, Some(camera), lods, width as f32 / height.max(1) as f32);
+        capture_planar_reflections(world, renderer, Some(camera), width as f32 / height.max(1) as f32);
         let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("camera_target"),
         });
-        renderer.with_view_history(first_slot + index, |renderer| {
+        renderer.with_view_history(Some(camera), |renderer| {
             draw_camera_view(
                 world,
                 &mut encoder,
                 target.view(),
                 renderer,
                 Some(camera),
-                lods,
+                true,
                 Some([0.0, 0.0, width as f32, height as f32]),
                 false,
                 None,
@@ -411,25 +474,20 @@ pub fn draw_viewports(
             views.push((order, id, crate::renderer::components::Viewport::new(0.0, 0.0, 1.0, 1.0)));
         }
     }
-    renderer.planar.begin_frame();
     if views.is_empty() {
-        capture_reflection_probes(world, renderer);
         let camera = crate::renderer::components::active_camera(world);
-        let mut positions = vec![camera_world_position(world, camera)];
-        positions.extend(target_camera_positions(world));
-        let lods = step_gpu_simulations_ahead(world, renderer, &positions);
-        draw_camera_targets(world, renderer, lods, 1);
-        capture_planar_reflections(world, renderer, camera, lods, renderer_aspect(renderer));
-        draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
+        draw_ahead_of_views(world, renderer, SimulationDetail::NearestOf(&[camera_world_position(world, camera)]));
+        capture_planar_reflections(world, renderer, camera, renderer_aspect(renderer));
+        draw_camera_view(world, encoder, view, renderer, camera, true, None, true, None);
         return;
     }
     views.sort_by_key(|&(order, id, _)| (order, id));
     let size = view.texture().size();
 
-    capture_reflection_probes(world, renderer);
-    let mut positions: Vec<Vec3> =
-        views.iter().map(|&(_, id, _)| camera_world_position(world, Some(id))).collect();
-    positions.extend(target_camera_positions(world));
+    // The probes, the GPU simulations stepped for every view and the texture cameras, each
+    // submitted before the split's own views.
+    let positions: Vec<Vec3> = views.iter().map(|&(_, id, _)| camera_world_position(world, Some(id))).collect();
+    draw_ahead_of_views(world, renderer, SimulationDetail::NearestOf(&positions));
 
     let new_encoder = |renderer: &Renderer| {
         renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -455,18 +513,16 @@ pub fn draw_viewports(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-    let lods = step_gpu_simulations_ahead(world, renderer, &positions);
-    // The texture cameras after the split's own views in the history slots, and submitted before
-    // them, each on its own.
-    draw_camera_targets(world, renderer, lods, views.len());
 
     for (index, &(_, camera, viewport)) in views.iter().enumerate() {
         let region = viewport.to_pixels(size.width, size.height);
         // Its mirrors, captured for it at its rectangle's shape, just before it: the capture is
         // submitted now and the view after it.
-        capture_planar_reflections(world, renderer, Some(camera), lods, region[2] / region[3].max(1.0));
-        renderer.with_view_history(index, |renderer| {
-            draw_camera_view(world, &mut frame, view, renderer, Some(camera), lods, Some(region), false, None);
+        capture_planar_reflections(world, renderer, Some(camera), region[2] / region[3].max(1.0));
+        // The first view is the frame's own and draws with the renderer's temporal state; every
+        // other one with its camera's.
+        renderer.with_view_history((index > 0).then_some(camera), |renderer| {
+            draw_camera_view(world, &mut frame, view, renderer, Some(camera), true, Some(region), false, None);
         });
         let done = std::mem::replace(&mut frame, new_encoder(renderer));
         renderer.queue.submit(std::iter::once(done.finish()));
@@ -590,11 +646,12 @@ pub fn capture_reflection_probes(world: &World, renderer: &mut Renderer) {
                 near: probe.near,
                 far: probe.far.max(probe.near + 0.1),
                 projection: None,
+                aspect: 1.0,
             };
             // The HDR target stands in for the output view: a capture stops before the post
             // chain, so nothing is ever written through it.
             let hdr = renderer.post.hdr_texture_view.clone();
-            draw_camera_view(world, &mut encoder, &hdr, renderer, None, (0.0, 0.0), None, false, Some(fixed));
+            draw_camera_view(world, &mut encoder, &hdr, renderer, None, false, None, false, Some(fixed));
             if let Some(gpu) = renderer.reflection_probe.as_ref() {
                 gpu.record_face(&renderer.device, &mut encoder, &renderer.post.hdr_texture_view, slot as u32, face);
             }
@@ -665,7 +722,6 @@ fn capture_planar_reflections(
     world: &World,
     renderer: &mut Renderer,
     camera: Option<Entity>,
-    lods: (f32, f32),
     aspect: f32,
 ) {
     use crate::renderer::components::PlanarReflection;
@@ -759,13 +815,14 @@ fn capture_planar_reflections(
             near: cam.near,
             far: cam.far,
             projection: Some((oblique, cam.fov)),
+            aspect,
         };
         let mut encoder = renderer
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("planar_reflection") });
         // The HDR target stands in for the output view: a capture stops before the post chain.
         let hdr = renderer.post.hdr_texture_view.clone();
-        draw_camera_view(world, &mut encoder, &hdr, renderer, Some(camera), lods, None, false, Some(fixed));
+        draw_camera_view(world, &mut encoder, &hdr, renderer, Some(camera), true, None, false, Some(fixed));
         let Renderer { planar, post, .. } = renderer;
         planar.record_copy(&mut encoder, &post.hdr_texture, owner.id());
         renderer.queue.submit(std::iter::once(encoder.finish()));
@@ -983,24 +1040,53 @@ pub(crate) fn end_debug_line_frame(world: &mut World) {
 /// frame's own encoder, so a step recorded into that encoder reached the frame's view and not theirs:
 /// they drew every particle, the fluid and the GPU bodies one step behind it
 /// (`a_texture_camera_where_the_frames_camera_stands_draws_the_frames_picture`).
-fn step_gpu_simulations_ahead(world: &World, renderer: &mut Renderer, cam_positions: &[Vec3]) -> (f32, f32) {
+fn step_gpu_simulations_ahead(world: &World, renderer: &mut Renderer, detail: SimulationDetail) {
     let mut step = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("gpu_simulations"),
     });
-    let lods = step_gpu_simulations(world, &mut step, renderer, cam_positions);
+    step_gpu_simulations(world, &mut step, renderer, detail);
     renderer.queue.submit(std::iter::once(step.finish()));
-    lods
 }
 
-/// GPU simulation for the frame — physics, fluid, particles — recorded into `encoder` once.
-/// `cam_positions` are the cameras about to draw; the nearest sets the level of detail.
-/// Returns `(particle_lod, fluid_lod)` for the draws.
+/// The share of the particles and of the fluid one camera standing at `position` asks for: less the
+/// farther it stands from the particles' origin and from the fluid's tank.
+fn detail_from(position: Vec3) -> (f32, f32) {
+    let by_distance = |distance: f32, steps: [f32; 3]| {
+        if distance < steps[0] {
+            1.0
+        } else if distance < steps[1] {
+            0.5
+        } else if distance < steps[2] {
+            0.1
+        } else {
+            0.0
+        }
+    };
+    const FLUID_TANK: Vec3 = Vec3::new(0.0, 5.0, 0.0);
+    (
+        by_distance(position.length(), [50.0, 100.0, 200.0]),
+        by_distance((position - FLUID_TANK).length(), [40.0, 80.0, 150.0]),
+    )
+}
+
+/// GPU simulation for the frame — the smoke, the GPU bodies, the fluid, the particles — recorded
+/// into `encoder` once, each to the share `detail` asks for. The share each ran is written to it
+/// (`active_particles`), and that is what every view of the frame draws.
 fn step_gpu_simulations(
     world: &World,
     encoder: &mut wgpu::CommandEncoder,
     renderer: &mut Renderer,
-    cam_positions: &[Vec3],
-) -> (f32, f32) {
+    detail: SimulationDetail,
+) {
+    // The volumetric smoke's step, once for the frame: each view only raymarches the grid.
+    if let Some(smoke) = &renderer.smoke {
+        let (time, dt) = world
+            .get_resource::<gizmo_core::time::Time>()
+            .map(|t| (t.elapsed() as f32, t.dt()))
+            .unwrap_or((0.0, 1.0 / 60.0));
+        smoke.advect(encoder, &renderer.queue, time, dt);
+    }
+
     if let Some(physics) = &renderer.gpu_physics {
         // Her frame başında sıradaki state'i çekmek için WGPU CommandEncoder'a asenkron mapping iste.
         physics.request_readback(encoder);
@@ -1009,61 +1095,28 @@ fn step_gpu_simulations(
         physics.debug_compute_pass(encoder);
     }
 
-    // Compute LOD (Level of Detail) Scaling.
-    // `fluid_lod == 0` disables the fluid entirely (both `compute_pass` and
-    // `render_ssfr` early-return on a zero active count), so a scene that hasn't
-    // opted into fluid never simulates or composites the default 100k-particle
-    // ocean — previously its SSFR water surface rendered over every scene as a
-    // mottled overlay that read like broken shadows.
-    let fluid_pos = Vec3::new(0.0, 5.0, 0.0);
-    let lods_for = |cam_pos: Vec3| {
-    let dist_to_fluid = (cam_pos - fluid_pos).length();
-    let fluid_lod = if !renderer.fluid_enabled {
-        0.0
-    } else if dist_to_fluid < 40.0 {
-        1.0
-    } else if dist_to_fluid < 80.0 {
-        0.5
-    } else if dist_to_fluid < 150.0 {
-        0.1
-    } else {
-        0.0
-    };
-
-    let dist_to_origin = cam_pos.length();
-    let particle_lod = if dist_to_origin < 50.0 {
-        1.0
-    } else if dist_to_origin < 100.0 {
-        0.5
-    } else if dist_to_origin < 200.0 {
-        0.1
-    } else {
-        0.0
-    };
-    (particle_lod, fluid_lod)
-    };
-    // Every view is simulated for: the nearest camera sets the level of detail. One camera —
-    // the ordinary frame — gives exactly what that camera alone always gave.
-    let (particle_lod, fluid_lod) = if cam_positions.is_empty() {
-        lods_for(Vec3::ZERO)
-    } else {
-        cam_positions
+    // Every view is simulated for: the nearest camera sets the level of detail. One camera — the
+    // ordinary frame — gives exactly what that camera alone always gave.
+    let (particle_share, fluid_share) = match detail {
+        SimulationDetail::Full => (1.0, 1.0),
+        SimulationDetail::NearestOf([]) => detail_from(Vec3::ZERO),
+        SimulationDetail::NearestOf(cameras) => cameras
             .iter()
-            .map(|&p| lods_for(p))
-            .fold((0.0f32, 0.0f32), |(p0, f0), (p1, f1)| (p0.max(p1), f0.max(f1)))
+            .map(|&p| detail_from(p))
+            .fold((0.0f32, 0.0f32), |(p0, f0), (p1, f1)| (p0.max(p1), f0.max(f1))),
     };
+    // No fluid unless the scene turned it on, whoever asks for how much: a zero count makes both
+    // the step and `render_ssfr` return at once, so a scene that never opted in neither simulates
+    // nor composites the default 100k-particle ocean — its SSFR surface once rendered over every
+    // scene as a mottled overlay that read like broken shadows.
+    let fluid_share = if renderer.fluid_enabled { fluid_share } else { 0.0 };
 
-    // Gpu Fluid Processing
-    let active_fluid = renderer
-        .gpu_fluid
-        .as_ref()
-        .map(|f| (f.num_particles as f32 * fluid_lod) as u32)
-        .unwrap_or(0);
-    step_gpu_fluid(encoder, renderer, active_fluid);
+    if let Some(fluid) = renderer.gpu_fluid.as_mut() {
+        fluid.active_particles = (fluid.num_particles as f32 * fluid_share) as u32;
+        fluid.compute_pass(encoder, &renderer.queue, true, fluid.active_particles);
+    }
 
-    // Gpu Particles Processing
-    if let Some(particles) = &renderer.gpu_particles {
-        let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
+    if let Some(particles) = renderer.gpu_particles.as_mut() {
         let (dt, time) = world
             .get_resource::<gizmo_core::time::Time>()
             .map(|t| (t.dt(), t.elapsed() as f32))
@@ -1078,13 +1131,15 @@ fn step_gpu_simulations(
             // Once per batch: the draw reads this, it does not clear it (see `ParticleSpawns`).
             particles.spawn_batch(&renderer.queue, spawns.batch(), spawns.particles());
         }
-        // Nothing alive: no dispatch over the whole ring (see `GpuParticleSystem::is_idle`).
-        if !particles.is_idle() {
-            particles.compute_pass(encoder, active_parts);
-        }
+        // Nothing alive: no dispatch over the whole ring, and no draw of it (see
+        // `GpuParticleSystem::is_idle`).
+        particles.active_particles = if particles.is_idle() {
+            0
+        } else {
+            (particles.max_particles as f32 * particle_share) as u32
+        };
+        particles.compute_pass(encoder, particles.active_particles);
     }
-
-    (particle_lod, fluid_lod)
 }
 
 /// A view that is not a camera entity: a reflection probe's cube face (square, 90°), or a camera
@@ -1099,12 +1154,28 @@ struct FixedView {
     far: f32,
     /// In place of the 90° square one, with the field of view it came from.
     projection: Option<(Mat4, f32)>,
+    /// The shape of the view: 1 for a probe's face, the reflected view's for a mirror. Everything
+    /// else the view fits to its shape — the shadow cascades — takes it from here, so it cannot
+    /// disagree with `projection`.
+    aspect: f32,
+}
+
+/// The shape a view is drawn at: a capture's own, else its rectangle's (a split-screen view, a
+/// camera drawing into a texture), else the whole target's.
+fn view_aspect(capture: Option<&FixedView>, region: Option<[f32; 4]>, size: (u32, u32)) -> f32 {
+    match (capture, region) {
+        (Some(fixed), _) => fixed.aspect,
+        (None, Some([_, _, w, h])) => w / h,
+        (None, None) if size.1 > 0 => size.0 as f32 / size.1 as f32,
+        (None, None) => 1.0,
+    }
 }
 
 /// One camera's picture: from its matrices to the post chain, into `region` of `view` (the whole
 /// of it when `None`), with the HUD when `overlay`. `camera` is an entity id; `None` draws from
-/// the origin, as a frame with no camera always has. `lods` comes from [`step_gpu_simulations`].
-/// With `capture`, that fixed view replaces the camera and the frame ends in the HDR target.
+/// the origin, as a frame with no camera always has. With `simulations` it draws the GPU particles
+/// and the fluid the frame's step simulated ([`step_gpu_simulations`]). With `capture`, that fixed
+/// view replaces the camera and the frame ends in the HDR target.
 #[allow(clippy::too_many_arguments)]
 fn draw_camera_view(
     world: &World,
@@ -1112,7 +1183,7 @@ fn draw_camera_view(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
     camera: Option<Entity>,
-    lods: (f32, f32),
+    simulations: bool,
     region: Option<[f32; 4]>,
     overlay: bool,
     capture: Option<FixedView>,
@@ -1124,14 +1195,11 @@ fn draw_camera_view(
     // (deferred geometry + sky + unlit), instead of being baked per-geometry in the
     // deferred pass and multiplied again by a separate global knob.
 
-    // A split-screen view takes its own rectangle's shape; the whole target otherwise.
-    let aspect = match region {
-        Some([_, _, w, h]) => w / h,
-        None if renderer.size.height > 0 => {
-            renderer.size.width as f32 / renderer.size.height as f32
-        }
-        None => 1.0,
-    };
+    // A capture takes its own shape, a split-screen view or a texture camera its rectangle's, the
+    // whole target otherwise. A mirror's capture used to be fitted (its shadow cascades) to the
+    // whole target's shape while it projected with its view's — a wide view lost the shadows at the
+    // sides of its reflection.
+    let aspect = view_aspect(capture.as_ref(), region, (renderer.size.width, renderer.size.height));
     let mut proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0);
     let mut view_mat = Mat4::from_translation(Vec3::ZERO);
     let mut cam_pos = Vec3::ZERO;
@@ -1445,8 +1513,6 @@ fn draw_camera_view(
     if let Some(physics) = &renderer.gpu_physics {
         physics.cull_pass(encoder, renderer.scene.view_bind_group());
     }
-    let (particle_lod, fluid_lod) = lods;
-
     // GPU cull pass removed since we use CPU instancing
 
     // Resize deferred G-buffers if window changed; resize SSAO + TAA to match
@@ -1515,7 +1581,7 @@ fn draw_camera_view(
         renderer.scene.update_environment(&renderer.device, &renderer.queue, encoder, &scene_uniform_data);
     }
     passes::record_forward_and_fluid(
-        encoder, renderer, world, &draw_items, uploaded_instances, particle_lod, fluid_lod,
+        encoder, renderer, world, &draw_items, uploaded_instances, simulations,
         inv_view_proj, clear_color,
     );
     passes::record_screen_space_effects(encoder, renderer);

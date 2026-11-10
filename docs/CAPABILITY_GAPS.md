@@ -451,20 +451,26 @@ The rest, each pinned by a test that goes red when it is undone:
 - **the aspect**: the projection is built for the rectangle; with the target's instead, a face-on
   cube measured **22×44** px in a half;
 - **once per frame, not per view**: transforms, materials, animation, GPU physics, fluid, particles
-  (`prepare_frame`, `step_gpu_simulations`) — per view, a sprite animation stepped to the wrong
+  (`prepare_frame`, `draw_ahead_of_views`) — per view, a sprite animation stepped to the wrong
   frame; the HUD is drawn once (per view it read **241** for half-white over black, against ~188);
-- **TAA and SSGI history per view** (`Renderer::with_view_history`): views 1.. get their own,
-  swapped in for their draw. TAA's neighbourhood clamp hides most of the cross-blending a shared
-  history causes (the left half's red count 2067 → 1933), so the test pins the cause: view 0's TAA
-  steps once per frame (shared, it stepped 8 times in 4 frames).
+- **TAA and SSGI history per view** (`Renderer::with_view_history`): every view but the frame's own
+  gets its own, **kept by its camera**, swapped in for its draw. TAA's neighbourhood clamp hides most
+  of the cross-blending a shared history causes (the left half's red count 2067 → 1933), so the test
+  pins the cause: view 0's TAA steps once per frame (shared, it stepped 8 times in 4 frames). Until
+  2026-11-10 a history was a numbered slot, the texture cameras' after the split's own views, so one
+  more split view moved every texture camera onto another camera's history, and a slot was never let
+  go; now a history is its camera's and goes with it (`Renderer::retain_view_histories`, at the start
+  of every frame). `a_view_keeps_its_cameras_temporal_state_whatever_views_the_frame_has`: a texture
+  camera draws the same picture after three split-screen frames as after three plain ones (1 478
+  pixels differed with one shared history).
 
 Not covered: the studio's viewport and Game panel draw one camera (render_parity lists `Viewport`
 as game-only, with the reason); the scene is rendered at the renderer's full internal size per view,
 so a four-way split costs four full renders.
 
 **A camera that draws into a texture — 2026-11-10.** `CameraTarget` on an entity with a `Camera`:
-every frame draws that camera into the texture before its own view (`draw_camera_targets`), through
-the game path's whole pipeline at the texture's aspect, with a temporal history slot of its own, each
+every frame draws that camera into the texture before its own view (`draw_ahead_of_views`), through
+the game path's whole pipeline at the texture's aspect, with a temporal history of its own, each
 in a submission of its own — the draw's uploads order against submission, so recorded into the
 frame's encoder it would have been the frame's view — and never as the frame's camera
 (`active_camera` passes it over) nor as a split-screen view. The studio calls the same function, so a
@@ -489,6 +495,21 @@ the frame's view. The simulations are stepped in a submission of their own ahead
 on both paths (`a_texture_camera_where_the_frames_camera_stands_draws_the_frames_picture`: a texture
 camera standing where the frame's camera stands draws the frame's picture to the pixel, a sheet of
 fast particles included — 3 368 pixels differed before).
+
+**Everything before the frame's own view is one function, the same in every host** — 2026-11-10:
+`draw_ahead_of_views` captures the reflection probes, starts the frame (mirror captures, the histories
+of cameras that are gone), steps the GPU simulations once for every view and draws every texture
+camera. The editor had its own version of the last two and it had drifted: it stepped its particles
+and GPU bodies after its monitors, which drew them a step behind; it drew its monitors at full detail
+with `fluid_enabled` never read, so a scene that had not turned the fluid on showed its unstepped
+particles on every monitor; it dispatched and drew the whole particle ring with nothing alive; and it
+never asked for the GPU bodies' readback. How much of each simulation a frame runs is a
+`SimulationDetail` — the game's distance-scaled `NearestOf`, the editor's `Full` — and the share the
+step ran is written to the system (`GpuParticleSystem::active_particles`,
+`GpuFluidSystem::active_particles`), which is what every view then draws: a draw can no longer pick a
+count of its own. `a_view_draws_what_the_frames_step_simulated` holds it at full detail (the monitor
+drew the fluid's particles where they start when the draw counted for itself), and
+`render_parity` holds the editor to the shared function and to no GPU step of its own.
 
 **History of this section, kept for the measurements:**
 

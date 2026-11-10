@@ -17,8 +17,13 @@ use ssfr::create_ssfr_sized;
 /// [`Renderer::fluid_enabled`](crate::Renderer::fluid_enabled) is set — an ocean surface over every
 /// scene is not a sensible default.
 pub struct GpuFluidSystem {
-    /// How many particles the simulation runs.
+    /// How many particles the simulation can run — its buffers' size.
     pub num_particles: u32,
+    /// How many of them this frame's step simulated, and so how many every view of the frame
+    /// draws. Written by the step (the game path's, once a frame and ahead of every view): 0
+    /// unless [`Renderer::fluid_enabled`](crate::Renderer::fluid_enabled), the share the
+    /// frame's level of detail asks for when it is, and 0 before the first step.
+    pub active_particles: u32,
     /// How many cells the neighbour-search grid has.
     pub total_cells: u32,
     /// The particles — [`FluidParticle`]s.
@@ -293,6 +298,7 @@ impl GpuFluidSystem {
 
         Self {
             num_particles,
+            active_particles: 0,
             total_cells,
             particles_buffer,
             params_buffer,

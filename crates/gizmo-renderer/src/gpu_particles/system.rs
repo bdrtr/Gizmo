@@ -19,7 +19,11 @@ pub struct GpuParticleSystem {
     pub pipelines: ParticlePipelines,
     /// The unit quad each particle is billboarded onto.
     pub quad_vertex_buffer: wgpu::Buffer,
-    /// How many particles the simulation and draw cover this frame.
+    /// How many particles this frame's step simulated, and so how many every view of the frame
+    /// draws. Written by the step (the game path's, once a frame and ahead of every view): the
+    /// ring's share the frame's level of detail asks for, 0 while nothing is alive
+    /// ([`is_idle`](Self::is_idle)), and 0 before the first step. A draw that picked its own
+    /// count drew particles the step had not moved, or left out ones it had.
     pub active_particles: u32,
     /// Where the next spawn writes. Atomic because spawning happens from `&self`, so several
     /// emitters can spawn in the same frame without taking a lock.
@@ -155,7 +159,7 @@ impl GpuParticleSystem {
             params_buffer,
             pipelines,
             quad_vertex_buffer,
-            active_particles: max_particles,
+            active_particles: 0,
             ring_head: std::sync::atomic::AtomicU32::new(0),
             clock: std::sync::Mutex::new(ParticleClock::default()),
             uploaded_batch: std::sync::atomic::AtomicU64::new(0),

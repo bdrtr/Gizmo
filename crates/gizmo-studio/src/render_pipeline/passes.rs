@@ -589,10 +589,10 @@ pub(super) fn record_studio_main_pass(
                 }
             }
 
-            // GPU particles are NOT drawn here — see `record_studio_particle_pass`, which the
-            // caller runs after this pass ends. They need a pass with no depth ATTACHMENT so the
-            // depth texture can be sampled instead, and setting their pipeline in this pass is a
-            // validation error that takes the editor down on its first frame.
+            // GPU particles are NOT drawn here — see `gizmo::systems::render::record_gpu_particles`,
+            // which the caller runs after this pass ends. They need a pass with no depth ATTACHMENT
+            // so the depth texture can be sampled instead, and setting their pipeline in this pass
+            // is a validation error that takes the editor down on its first frame.
             // --- 5. GIZMOS VE DEBUG LINES ÇİZİMİ (Play modunda gizle) ---
             if !is_playing_mode {
                 // The frame's lines as the preparation ended them (`GizmoFrame`: the game's, and the
@@ -630,57 +630,3 @@ pub(super) fn record_studio_main_pass(
             }
 }
 
-/// GPU particles, in their own pass — the way the game path has drawn them since the soft-particle
-/// work landed.
-///
-/// # Why a separate pass
-///
-/// The particle fragment shader SAMPLES the scene depth, so particles fade out against geometry
-/// instead of cutting into it. A texture cannot be a depth attachment and a sampled texture in the
-/// same pass, so this pass has no depth attachment and binds the depth texture instead; occlusion
-/// is done in the shader.
-///
-/// # Why this function exists
-///
-/// The editor did not do that. It set the particle pipeline inside the main pass — which has a
-/// depth attachment — and left the depth bind group unbound, because it was still making the call
-/// the way it looked before 2026-07-12, when the pipeline gained its depth binding and lost its
-/// depth-stencil state. The game path was updated that day; this copy was not.
-///
-/// The result was not a subtle difference in the picture. `set_pipeline` with a pipeline whose
-/// depth-stencil state does not match the pass is a wgpu validation error, so the studio panicked
-/// on its first frame and had been unable to start since. Nothing caught it: the editor's render
-/// path has no automated coverage, and the crash needs a window.
-pub(super) fn record_studio_particle_pass(
-    encoder: &mut wgpu::CommandEncoder,
-    renderer: &gizmo::renderer::Renderer,
-) {
-    let Some(particles) = &renderer.gpu_particles else { return };
-    if particles.active_particles == 0 {
-        return;
-    }
-
-    let depth_bg = particles.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view);
-    let mut ppass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        label: Some("Studio Particle Pass"),
-        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-            view: &renderer.post.hdr_texture_view,
-            depth_slice: None,
-            resolve_target: None,
-            ops: wgpu::Operations {
-                load: wgpu::LoadOp::Load,
-                store: wgpu::StoreOp::Store,
-            },
-        })],
-        depth_stencil_attachment: None,
-        timestamp_writes: None,
-        occlusion_query_set: None,
-        multiview_mask: None,
-    });
-    particles.render_pass(
-        &mut ppass,
-        renderer.scene.view_bind_group(),
-        &depth_bg,
-        particles.active_particles,
-    );
-}

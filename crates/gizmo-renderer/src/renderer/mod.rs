@@ -207,8 +207,9 @@ pub struct Renderer {
     // === TAA — Temporal Anti-Aliasing (ping-pong history + Halton jitter) ===
     /// Temporal anti-aliasing: the history buffers and the Halton jitter sequence.
     pub taa: Option<crate::taa::TaaState>,
-    /// Temporal state of split-screen views 1.., see [`Renderer::with_view_history`].
-    pub(crate) view_history: Vec<ViewHistory>,
+    /// The temporal state of every view but the frame's own, by the camera it is drawn from — see
+    /// [`Renderer::with_view_history`].
+    pub(crate) view_history: Vec<(gizmo_core::Entity, ViewHistory)>,
 
     // === FXAA — Fast Approximate Anti-Aliasing (son post-process pass) ===
     /// FXAA, the last pass in the chain. When present and enabled, post-processing writes into
@@ -831,15 +832,28 @@ impl Renderer {
     /// fill its window does not silently rebuild the whole chain at full physical resolution — that
     /// is precisely how the first `Resized` event used to defeat the initial cap.
     ///
-    /// A zero width or height is ignored (a minimised window reports one).
+    /// A zero width or height is ignored (a minimised window reports one), and so is the size the
+    /// renderer already has: the surface is configured again and nothing is rebuilt.
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        // A zero size first, before the web cap: the cap gives a canvas with no size yet 1280 × 720,
+        // and through it a minimised window rebuilt the whole chain at 1280 × 720 — and, for a window
+        // that size, at its own size, which left SSR bound to the dropped HDR target (below).
+        if new_size.width == 0 || new_size.height == 0 {
+            return;
+        }
         // Web'de dahili render çözünürlüğünü aynı cap'ten geçir (native no-op).
         // Bu olmadan ilk `Resized` olayı — tarayıcı canvas'ı CSS %100 ile
         // pencereye büyüdüğünde — surface + tüm post-process zincirini tam
         // fiziksel çözünürlükte yeniden kurup `Renderer::new`'daki 640x360
         // perf cap'ini sessizce delerdi.
         let new_size = crate::renderer::construction::cap_web_render_size(new_size);
-        if new_size.width > 0 && new_size.height > 0 {
+        if new_size == self.size {
+            if let Some(ref surface) = self.surface {
+                surface.configure(&self.device, &self.config);
+            }
+            return;
+        }
+        {
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
@@ -899,7 +913,7 @@ impl Renderer {
             self.post.blur_h_bind_group = h_bg;
             self.post.blur_v_bind_group = v_bg;
 
-            // Split-screen views' own histories were built at the old size; they rebuild on use.
+            // The other views' own histories were built at the old size; they rebuild on use.
             self.view_history.clear();
 
             // TAA history textures + bind groups (needs fresh hdr_view + position_view)
@@ -920,6 +934,13 @@ impl Renderer {
                     new_size.width,
                     new_size.height,
                 );
+            }
+            // SSR samples the HDR target and the G-buffer, both rebuilt above. It was left to the
+            // draw, which rebuilds it only when its size differs from the renderer's — so a resize
+            // that ended at SSR's own size before a frame was drawn left it reading the dropped HDR
+            // texture, and the reflections froze on the last frame before the resize.
+            if let (Some(ref mut ssr), Some(ref def)) = (&mut self.ssr, &self.deferred) {
+                ssr.resize(&self.device, def, &self.post.hdr_texture_view, new_size.width, new_size.height);
             }
             if let (Some(ref mut ssao), Some(ref def)) = (&mut self.ssao, &self.deferred) {
                 ssao.resize(
@@ -1055,26 +1076,44 @@ impl Renderer {
         }
     }
 
-    /// Runs `f` with view `view`'s temporal state in place of the renderer's own.
+    /// Runs `f` with the temporal state of the view drawn from `camera` in place of the renderer's
+    /// own — or with the renderer's own, for `None`: the frame's own view.
     ///
     /// TAA and SSGI accumulate over frames: each keeps last frame's image and camera and blends
     /// this frame into it. With two cameras drawn in one frame, one shared history would be
-    /// blended with the *other* camera's picture every frame. So view 0 uses the renderer's own
-    /// `taa`/`ssgi`, and every further view gets its own, built on first use with the renderer's
-    /// size and swapped into `self.taa`/`self.ssgi` only for the duration of `f` — which is why
-    /// the draw code needs no change to be per-view. A history is only made for an effect the
-    /// renderer has (a `None` stays `None`), and TAA's `enabled` follows the renderer's.
-    /// [`resize`](Self::resize) drops them; they rebuild at the new size.
-    pub fn with_view_history<R>(&mut self, view: usize, f: impl FnOnce(&mut Self) -> R) -> R {
-        if view == 0 {
+    /// blended with the *other* camera's picture every frame. So the frame's own view uses the
+    /// renderer's own `taa`/`ssgi`, and every other view — a split-screen view after the first, a
+    /// camera that draws into a texture — gets its own, built on first use with the renderer's size
+    /// and swapped into `self.taa`/`self.ssgi` only for the duration of `f`, which is why the draw
+    /// code needs no change to be per-view. A view holds a state for exactly the effects the
+    /// renderer has at each call, made again when the renderer's own was rebuilt, and TAA's
+    /// `enabled` follows the renderer's. [`resize`](Self::resize) drops them; they rebuild at the
+    /// new size.
+    ///
+    /// **A history is its camera's.** It was a numbered slot, and the number was the view's place
+    /// in the frame: the texture cameras came after however many split-screen views there were.
+    /// One more player in the split, or one more texture camera before it, and a camera drew
+    /// with — and blended into its picture — the history another camera had built.
+    /// [`retain_view_histories`](Self::retain_view_histories) drops the histories of cameras that
+    /// are gone.
+    pub fn with_view_history<R>(
+        &mut self,
+        camera: Option<gizmo_core::Entity>,
+        f: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        let Some(camera) = camera else {
             return f(self);
-        }
-        let slot = view - 1;
-        while self.view_history.len() <= slot {
-            let fresh = self.new_view_history();
-            self.view_history.push(fresh);
-        }
-        let mut history = std::mem::take(&mut self.view_history[slot]);
+        };
+        let slot = match self.view_history.iter().position(|(owner, _)| *owner == camera) {
+            Some(slot) => slot,
+            None => {
+                let fresh = self.new_view_history();
+                self.view_history.push((camera, fresh));
+                self.view_history.len() - 1
+            }
+        };
+        let mut history = std::mem::take(&mut self.view_history[slot].1);
+        self.reconcile_view_history(&mut history);
         let swap_taa = self.taa.is_some() && history.taa.is_some();
         let swap_ssgi = self.ssgi.is_some() && history.ssgi.is_some();
         let swap_exposure = self.auto_exposure.is_some() && history.auto_exposure.is_some();
@@ -1106,46 +1145,95 @@ impl Renderer {
         if swap_exposure {
             std::mem::swap(&mut self.auto_exposure, &mut history.auto_exposure);
         }
-        self.view_history[slot] = history;
+        // Found again by its camera: `f` holds the whole renderer, and the slot is only a place.
+        match self.view_history.iter_mut().find(|(owner, _)| *owner == camera) {
+            Some(entry) => entry.1 = history,
+            None => self.view_history.push((camera, history)),
+        }
         out
     }
 
+    /// Drops the temporal state of every view whose camera `keep` says is gone.
+    ///
+    /// A view's history ([`with_view_history`](Self::with_view_history)) holds full-size textures
+    /// — TAA's two, SSGI's, auto exposure's — and is kept from frame to frame by its camera, so a
+    /// game that makes and despawns cameras that draw into a texture would pile them up for as long
+    /// as the window keeps its size. The game path calls this at the start of every frame with
+    /// "is still a camera".
+    pub fn retain_view_histories(&mut self, mut keep: impl FnMut(gizmo_core::Entity) -> bool) {
+        self.view_history.retain(|(camera, _)| keep(*camera));
+    }
+
+    /// The cameras whose views hold a temporal state of their own
+    /// ([`with_view_history`](Self::with_view_history)), in the order they were first drawn. Each
+    /// holds full-size textures, so this is also where a leak of them would show.
+    pub fn view_history_cameras(&self) -> Vec<gizmo_core::Entity> {
+        self.view_history.iter().map(|(camera, _)| *camera).collect()
+    }
+
     fn new_view_history(&self) -> ViewHistory {
-        let Some(def) = &self.deferred else {
-            return ViewHistory::default();
-        };
+        let mut history = ViewHistory::default();
+        self.reconcile_view_history(&mut history);
+        history
+    }
+
+    /// Makes a view's `history` hold its own state for each temporal effect the renderer has now —
+    /// built fresh where the history has none, or holds one made while the renderer's own was a
+    /// different build (its `generation`) — and none for an effect the renderer has not.
+    ///
+    /// A history is built the first time its view is drawn and kept, while the renderer's effects
+    /// come and go (`enable_ssgi`, `taa = None`, the simple scene's setup). Built once and never
+    /// looked at again, it kept the effects the renderer had that first frame: one turned on later
+    /// had no state of the view's own, so the view drew with — and advanced — the frame's own, blending the
+    /// two cameras' pictures until a resize; one turned off kept its textures; one turned off and on
+    /// again kept its old accumulation.
+    fn reconcile_view_history(&self, history: &mut ViewHistory) {
         let (w, h) = (self.size.width, self.size.height);
-        ViewHistory {
-            taa: self.taa.as_ref().map(|_| {
-                crate::taa::TaaState::new(
-                    &self.device,
-                    &self.post.hdr_texture_view,
-                    &def.world_position_view,
-                    w,
-                    h,
-                )
-            }),
-            previous_view_proj: None,
-            auto_exposure: match (&self.auto_exposure, &self.post.exposure) {
-                (Some(_), Some(binding)) => Some(crate::auto_exposure::AutoExposureState::new(
-                    &self.device,
-                    &self.post.hdr_texture_view,
-                    w,
-                    h,
-                    &binding.layout,
-                )),
-                _ => None,
-            },
-            ssgi: self.ssgi.as_ref().map(|_| {
-                crate::ssgi::SsgiState::new(
-                    &self.device,
-                    &self.scene,
-                    def,
-                    &self.post.hdr_texture_view,
-                    w,
-                    h,
-                )
-            }),
+        match (&self.taa, &self.deferred) {
+            (Some(own), Some(def)) => {
+                if history.taa.is_none() || history.paired.taa != own.generation {
+                    history.taa = Some(crate::taa::TaaState::new(
+                        &self.device,
+                        &self.post.hdr_texture_view,
+                        &def.world_position_view,
+                        w,
+                        h,
+                    ));
+                    history.paired.taa = own.generation;
+                }
+            }
+            _ => history.taa = None,
+        }
+        match (&self.ssgi, &self.deferred) {
+            (Some(own), Some(def)) => {
+                if history.ssgi.is_none() || history.paired.ssgi != own.generation {
+                    history.ssgi = Some(crate::ssgi::SsgiState::new(
+                        &self.device,
+                        &self.scene,
+                        def,
+                        &self.post.hdr_texture_view,
+                        w,
+                        h,
+                    ));
+                    history.paired.ssgi = own.generation;
+                }
+            }
+            _ => history.ssgi = None,
+        }
+        match (&self.auto_exposure, &self.post.exposure) {
+            (Some(own), Some(binding)) => {
+                if history.auto_exposure.is_none() || history.paired.auto_exposure != own.generation {
+                    history.auto_exposure = Some(crate::auto_exposure::AutoExposureState::new(
+                        &self.device,
+                        &self.post.hdr_texture_view,
+                        w,
+                        h,
+                        &binding.layout,
+                    ));
+                    history.paired.auto_exposure = own.generation;
+                }
+            }
+            _ => history.auto_exposure = None,
         }
     }
 
@@ -1485,7 +1573,7 @@ mod tests {
     }
 }
 
-/// The temporal state of one split-screen view after the first — see
+/// The temporal state of one view that is not the frame's own, kept by its camera — see
 /// [`Renderer::with_view_history`].
 #[derive(Default)]
 pub(crate) struct ViewHistory {
@@ -1493,4 +1581,22 @@ pub(crate) struct ViewHistory {
     ssgi: Option<crate::ssgi::SsgiState>,
     auto_exposure: Option<crate::auto_exposure::AutoExposureState>,
     previous_view_proj: Option<[[f32; 4]; 4]>,
+    /// The `generation` of the renderer's own state each of the three was built beside — see
+    /// [`Renderer::with_view_history`]. 0 for none.
+    paired: PairedGenerations,
+}
+
+/// The renderer states a view's own were built beside, by `generation`.
+#[derive(Default)]
+pub(crate) struct PairedGenerations {
+    taa: u64,
+    ssgi: u64,
+    auto_exposure: u64,
+}
+
+/// The next number for a temporal effect's `generation`: never 0, never repeated.
+pub(crate) fn next_state_generation() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_add(1, Ordering::Relaxed)
 }

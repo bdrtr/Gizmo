@@ -4,7 +4,8 @@
 //! `smoke_raymarch.wgsl` (render): walks the grid's density along the ray (Beer-Lambert + sun
 //! scattering + scene-depth occlusion) and composites premultiplied-over into HDR. NOT a
 //! billboard — a real participating medium. A demo sets it up with `Renderer.smoke = Some(..)`;
-//! each frame `render()` does the compute and the raymarch (ping-ponging on parity).
+//! each frame [`advect`](SmokeVolume::advect) steps the grid once (ping-ponging on parity) and
+//! every view of the frame draws it with [`raymarch`](SmokeVolume::raymarch).
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use wgpu::util::DeviceExt;
@@ -476,15 +477,28 @@ impl SmokeVolume {
     /// the buffer index now holding the freshest density.
     #[tracing::instrument(skip_all, level = "trace")]
     pub fn step(&self, device: &wgpu::Device, queue: &wgpu::Queue, time: f32, dt: f32) -> usize {
-        let sim_dt = dt.clamp(1.0 / 240.0, 1.0 / 30.0);
-        tracing::trace!(grid_n = self.grid_n, dt = sim_dt, "[Smoke] advect step");
-        // step() only advects (no raymarch) → the inverse view-proj is unused; identity.
-        self.write_params(queue, time, sim_dt, IDENTITY4);
         let mut enc =
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Smoke Step") });
-        let new_cur = self.record_advect(&mut enc);
+        let new_cur = self.advect(&mut enc, queue, time, dt);
         queue.submit(Some(enc.finish()));
         new_cur
+    }
+
+    /// **The frame's one simulation step**, recorded into `encoder`: the advect compute, with the
+    /// buffers swapping through the ping-pong. Returns the buffer index now holding the freshest
+    /// density, which every [`raymarch`](Self::raymarch) after it draws.
+    ///
+    /// Once a frame, however many views draw the volume: the step used to be inside the draw, so
+    /// every view — a split-screen half, a camera drawing into a texture, a mirror's capture —
+    /// stepped it again, the smoke ran faster with every view, and each view drew a different step.
+    pub fn advect(&self, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, time: f32, dt: f32) -> usize {
+        // Advection çok büyük dt'de instabil olmasın; sabit küçük adım.
+        let sim_dt = dt.clamp(1.0 / 240.0, 1.0 / 30.0);
+        tracing::trace!(grid_n = self.grid_n, dt = sim_dt, "[Smoke] advect step");
+        // The advect reads no view; the inverse view-proj is the raymarch's and each view writes
+        // its own before drawing.
+        self.write_params(queue, time, sim_dt, IDENTITY4);
+        self.record_advect(encoder)
     }
 
     fn write_params(&self, queue: &wgpu::Queue, time: f32, dt: f32, inv_view_proj: [[f32; 4]; 4]) {
@@ -512,11 +526,13 @@ impl SmokeVolume {
         queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[p]));
     }
 
-    /// One simulation step (the advect compute) plus the volumetric raymarch into HDR. The
-    /// buffers swap through the ping-pong.
+    /// The volumetric raymarch of the freshest density into HDR, for one view — the frame's
+    /// [`advect`](Self::advect) has stepped the grid already. Writes the parameters with this
+    /// view's inverse view-projection first; each view is a submission of its own, so the next
+    /// view's write cannot reach this one's draw.
     #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(skip_all, level = "trace")]
-    pub fn render(
+    pub fn raymarch(
         &self,
         encoder: &mut wgpu::CommandEncoder,
         device: &wgpu::Device,
@@ -530,15 +546,13 @@ impl SmokeVolume {
         // raymarch reconstructs rays with this (the WGSL inverse_mat4 returns a wrong inverse).
         inv_view_proj: [[f32; 4]; 4],
     ) {
-        // Advection çok büyük dt'de instabil olmasın; sabit küçük adım.
         let sim_dt = dt.clamp(1.0 / 240.0, 1.0 / 30.0);
-        tracing::trace!(grid_n = self.grid_n, dt = sim_dt, "[Smoke] advect + raymarch");
+        tracing::trace!(grid_n = self.grid_n, "[Smoke] raymarch");
         self.write_params(queue, time, sim_dt, inv_view_proj);
+        // The freshest density, which this frame's advect left at `parity`.
+        let new_cur = self.parity.load(Ordering::Relaxed) as usize;
 
-        // 1) Advect compute (src=cur → dst=other). Obstacle-aware (see smoke_advect.wgsl).
-        let new_cur = self.record_advect(encoder);
-
-        // 2) Raymarch (yeni yoğunluk buffer'ını oku).
+        // Raymarch (yeni yoğunluk buffer'ını oku).
         let depth_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("smoke_depth_bg"),
             layout: &self.depth_layout,
@@ -728,9 +742,10 @@ mod tests {
             });
             queue.submit(Some(enc.finish()));
 
-            // Raymarch the smoke onto the HDR.
+            // One step of the volume, then the raymarch of it onto the HDR — the frame's order.
+            s.step(&device, &queue, 3.0, 1.0 / 60.0);
             let mut enc2 = device.create_command_encoder(&Default::default());
-            s.render(&mut enc2, &device, &queue, &scene_bg, &hdr_view, &depth_view, 3.0, 1.0 / 60.0, inv_vp);
+            s.raymarch(&mut enc2, &device, &queue, &scene_bg, &hdr_view, &depth_view, 3.0, 1.0 / 60.0, inv_vp);
             queue.submit(Some(enc2.finish()));
 
             // Read back HDR (Rgba16Float, 8 bytes/px; 320*8=2560, 256-aligned).

@@ -20,8 +20,10 @@ pub fn record_forward_and_fluid(
     world: &World,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
-    particle_lod: f32,
-    fluid_lod: f32,
+    // Whether this view draws the frame's GPU simulations — the particles and the fluid, as many as
+    // the frame's step simulated. A reflection probe's face does not: it is one still frame, captured
+    // before the step.
+    simulations: bool,
     // Inverse of the (unjittered) camera view-projection — the volumetric smoke raymarch
     // reconstructs rays with this instead of the buggy WGSL inverse_mat4.
     inv_view_proj: [[f32; 4]; 4],
@@ -77,56 +79,21 @@ pub fn record_forward_and_fluid(
         }
     }
 
-    // ── GPU Particles (SOFT PARTICLES) ──────────────────────────────────────────
-    // Forward pass'ten AYRI çizilir: parçacık FS'i sahne DERİNLİĞİNİ örneklemeli (geometriye
-    // sert girmesin), ama bir doku aynı pass'te hem depth-attachment hem sampled olamaz.
-    // Bu pass'te depth ATTACHMENT YOK → depth sampled bağlanır; occlusion + yumuşak-kaybolma
-    // FS'te sahne derinliğinden manuel yapılır. Renk hedefi HDR (Load, önceki sonucun üstüne).
-    if let Some(particles) = &renderer.gpu_particles {
-        let active_parts = (particles.max_particles as f32 * particle_lod) as u32;
-        // Nothing alive: no draw over the whole ring (see `GpuParticleSystem::is_idle`).
-        if active_parts > 0 && !particles.is_idle() {
-            let depth_bg =
-                particles.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view);
-            let mut ppass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Particle Soft Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &renderer.post.hdr_texture_view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Load,
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            particles.render_pass(
-                &mut ppass,
-                renderer.scene.view_bind_group(),
-                &depth_bg,
-                active_parts,
-            );
-        }
+    // ── GPU particles (soft: a pass of their own, see `record_gpu_particles`) and the fluid's
+    //    surface — both as many as the frame's step simulated. ──
+    if simulations {
+        crate::systems::render::record_gpu_particles(encoder, renderer);
+        crate::systems::render::record_fluid_surface(encoder, renderer);
     }
 
-    let active_fluid = renderer
-        .gpu_fluid
-        .as_ref()
-        .map(|f| (f.num_particles as f32 * fluid_lod) as u32)
-        .unwrap_or(0);
-    crate::systems::render::record_fluid_surface(encoder, renderer, active_fluid);
-
-    // ── Volumetrik duman (T6): sahnenin üstüne HDR'ye raymarch (post-process ÖNCESİ) ──
+    // ── Volumetrik duman (T6): sahnenin üstüne HDR'ye raymarch (post-process ÖNCESİ). The grid was
+    //    stepped once for the frame, ahead of every view (`step_gpu_simulations`); a view only draws. ──
     if let Some(smoke) = &renderer.smoke {
         let (time, dt) = world
             .get_resource::<gizmo_core::time::Time>()
             .map(|t| (t.elapsed() as f32, t.dt()))
             .unwrap_or((0.0, 1.0 / 60.0));
-        smoke.render(
+        smoke.raymarch(
             encoder,
             &renderer.device,
             &renderer.queue,

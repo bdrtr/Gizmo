@@ -8,25 +8,6 @@ mod viewpoint;
 use batching::*;
 use passes::*;
 
-/// How much of the fluid the viewport simulates and draws.
-///
-/// **Zero unless the scene opted in.** `Renderer::gpu_fluid` is `Some` on every native renderer —
-/// it is allocated up front, 100 000 particles' worth — and what decides whether a scene *has*
-/// fluid is `Renderer::fluid_enabled`, which is `false` by default and set by the two demos that
-/// want it. Reading only `num_particles` here would have run an SPH solve and a screen-space
-/// surface pass over 100 000 particles in every editor frame of every scene, which is how a
-/// capability port turns into a performance defect.
-///
-/// Past that gate the viewport runs the **whole** fluid, where the game path scales it by camera
-/// distance: an editor shows what is there, the same reasoning the render-parity exceptions
-/// already record for mesh-internal LOD.
-fn studio_fluid_particles(renderer: &gizmo::renderer::Renderer) -> u32 {
-    if !renderer.fluid_enabled {
-        return 0;
-    }
-    renderer.gpu_fluid.as_ref().map(|f| f.num_particles).unwrap_or(0)
-}
-
 /// Records the studio's render passes for one viewport — shadows, opaque, transparent, grid and
 /// skybox — into the given encoder.
 pub fn execute_render_pipeline(
@@ -61,31 +42,26 @@ fn draw_studio_frame(
     view: &wgpu::TextureView,
     renderer: &mut gizmo::renderer::Renderer,
 ) {
-    // **Reflection probes** (`ReflectionProbe`): captured by the game path's own function, so the
-    // editor's probes are the game's — six draws of the world from the probe, furniture excluded
-    // there. It submits its own work, ahead of this frame's, and returns at once when nothing
-    // needs capturing.
-    gizmo::systems::render::capture_reflection_probes(world, renderer);
-
-    // GPU fluid: stepped here, drawn twice below (particles inside the main pass, surface after
-    // it). The editor did not step or draw it at all until 2026-08-19 — a fluid scene flowed in a
-    // shipped game and showed nothing in the viewport, while this pipeline was already drawing
-    // `renderer.gpu_physics` beside it. In a submission of its own, ahead of every view, as the game
-    // path steps its simulations: a texture camera below is submitted before this frame's encoder.
-    {
-        let mut step = renderer.device.create_command_encoder(&gizmo::wgpu::CommandEncoderDescriptor {
-            label: Some("studio_gpu_fluid"),
-        });
-        gizmo::systems::render::step_gpu_fluid(&mut step, renderer, studio_fluid_particles(renderer));
-        renderer.queue.submit(std::iter::once(step.finish()));
+    // **Everything a frame does before its own view is the game's own** (`draw_ahead_of_views`),
+    // each part submitted ahead of this frame's encoder:
+    // - the reflection probes (`ReflectionProbe`) that ask for a capture, drawn from the probe
+    //   through the game path — furniture excluded there, so the editor's probes are the game's;
+    // - the GPU simulations, stepped once for every view: the smoke, the GPU bodies (with the
+    //   readback their entities follow), the fluid — only if the scene turned it on — and the
+    //   particles the preparation stepped out of every `ParticleEmitter`. What each ran is what
+    //   every view of the frame draws, this viewport's included;
+    // - every camera that draws into a texture (`CameraTarget`), so a monitor in the scene shows in
+    //   the editor what it shows in the game.
+    // These are named here because the inventory in `render_parity` reads the names this pipeline
+    // knows; that it runs them is the driver guard's to hold, which asserts the call.
+    // At full detail, where the game scales the simulations by camera distance: an editor shows
+    // what is there. The collider overlay's switch goes to the GPU bodies first, so the debug lines
+    // the step makes are this frame's.
+    if let Some(physics) = &renderer.gpu_physics {
+        let show = world.get_resource::<gizmo::editor::EditorState>().is_some_and(|s| s.show_colliders);
+        physics.set_debug_flags(&renderer.queue, u32::from(show));
     }
-
-    // **Cameras that draw into a texture** (`CameraTarget`): drawn by the game path's own function
-    // too, so a monitor in the scene shows in the editor what it shows in the game — each a whole
-    // view of the world, submitted on its own ahead of this frame, at full level of detail, as the
-    // editor shows everything.
-    renderer.planar.begin_frame();
-    gizmo::systems::render::draw_camera_targets(world, renderer, (1.0, 1.0), 1);
+    gizmo::systems::render::draw_ahead_of_views(world, renderer, gizmo::systems::render::SimulationDetail::Full);
 
     let (aspect, ed_shading_mode, show_colliders, post_params, game_view_visible) =
         sync_editor_settings(world, renderer);
@@ -574,35 +550,6 @@ fn draw_studio_frame(
             );
         }
 
-        // --- 0. COMPUTE PASSES ---
-        if let Some(gpu_particles) = &renderer.gpu_particles {
-            // On the clock, as the game's draw does: ⏸ holds it, and the curl noise evolves
-            // with the game's time rather than standing at zero.
-            let (dt, time) = world
-                .get_resource::<gizmo::core::time::Time>()
-                .map_or((0.0, 0.0), |t| (t.dt(), t.elapsed() as f32));
-            gpu_particles.update_params(&renderer.queue, dt, time);
-
-            // The frame's new particles are the preparation's (`ParticleSpawns`: the emitters
-            // `prepare_frame` stepped, and the frame's fracture dust), uploaded once per batch —
-            // the game's draw does exactly this. The emitters used to be stepped here, inside the
-            // draw, by the frame's raw delta: they went on emitting under ⏸, and the draw wrote
-            // the game world (`query_unchecked` on `ParticleEmitter`).
-            if let Some(spawns) = world.get_resource::<gizmo::systems::render::ParticleSpawns>() {
-                gpu_particles.spawn_batch(&renderer.queue, spawns.batch(), spawns.particles());
-            }
-
-            gpu_particles.compute_pass(encoder, gpu_particles.active_particles);
-        }
-
-        if let Some(physics) = &renderer.gpu_physics {
-            physics.set_debug_flags(&renderer.queue, if show_colliders { 1 } else { 0 });
-            physics.compute_pass(encoder);
-            if show_colliders {
-                physics.debug_compute_pass(encoder);
-            }
-        }
-
             // What this frame cost, measured from the list that is about to be drawn rather than
             // guessed: one draw call per batch, and triangles counted with their instances. The
             // editor's RENDER STATS overlay reads this; before it, the field it displayed
@@ -705,11 +652,10 @@ fn draw_studio_frame(
             // not a studio copy — the editor drawing forward is exactly why decals were invisible
             // here until the game ran, and a second implementation is how that would come back.
             gizmo::systems::render::record_forward_decals(encoder, renderer, world, cam_pos);
-            record_studio_particle_pass(encoder, renderer);
-            // The fluid's surface, the engine's own pass again. The viewport runs the WHOLE fluid
-            // rather than the game's distance-scaled slice: an editor shows what is there, which
-            // is the same reasoning the render-parity exceptions already record for `lod_vbufs`.
-            gizmo::systems::render::record_fluid_surface(encoder, renderer, studio_fluid_particles(renderer));
+            // The particles and the fluid's surface, the engine's own passes again, each drawing
+            // what the frame's step ran (`draw_ahead_of_views` above).
+            gizmo::systems::render::record_gpu_particles(encoder, renderer);
+            gizmo::systems::render::record_fluid_surface(encoder, renderer);
             // `Text`, the engine's own pass for the third time and for the same reason: a label's
             // place in the world is one decision, and the version of it the editor shows has to be
             // the version the game draws. Both `TextSpace` variants come with it — a world label

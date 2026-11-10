@@ -954,8 +954,10 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         "step_particle_emitters(",
         "terrain_mesh_system(",
     ];
-    // What both draws do themselves.
-    let draw = ["step_gpu_fluid(", "record_fluid_surface(", "capture_reflection_probes("];
+    // What both draws do themselves. `draw_ahead_of_views` is everything before the frame's own
+    // view: the reflection probes, the GPU simulations' step and the cameras that draw into a
+    // texture.
+    let draw = ["draw_ahead_of_views(", "record_gpu_particles(", "record_fluid_surface("];
 
     let game = code_of("crates/gizmo/src/systems/render/mod.rs");
     for driver in preparation.iter().chain(draw.iter()) {
@@ -989,6 +991,22 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         assert!(
             editor.contains(driver),
             "the editor's draw does not run {driver} — whatever it drives is missing from the viewport"
+        );
+    }
+    // And it steps no GPU simulation of its own. Its copy stepped the particles and the GPU bodies
+    // after its monitors had drawn them, so they drew a step behind; drew the monitors at full
+    // detail with the fluid's switch never read, so a scene without fluid showed the fluid's
+    // unstepped particles on every monitor; dispatched and drew the whole particle ring with nothing
+    // alive; and never asked for the GPU bodies' readback, which their entities follow.
+    let editor_draw: String = ["mod.rs", "passes.rs", "batching.rs", "viewpoint.rs"]
+        .iter()
+        .map(|file| code_of(&format!("crates/gizmo-studio/src/render_pipeline/{file}")))
+        .collect();
+    for step in [".compute_pass(", ".advect(", ".spawn_batch(", ".update_params(", ".request_readback("] {
+        assert!(
+            !editor_draw.contains(step),
+            "the editor's draw records {step} itself — the frame's GPU simulations are stepped by \
+             `draw_ahead_of_views`, once for every view and ahead of all of them"
         );
     }
 
@@ -1066,7 +1084,7 @@ fn every_capability_neither_path_names_is_accounted_for() {
 
     /// The fluid family shares one reason, and it is an open asymmetry rather than a benign one.
     const FLUID: &str = "the GPU fluid subsystem, reached through `renderer.gpu_fluid` rather \
-        than by naming a component. Both paths step and draw it now — `step_gpu_fluid` and \
+        than by naming a component. Both paths step and draw it now — `draw_ahead_of_views` and \
         `record_fluid_surface` are shared entry points and the driver guard holds both to them. \
         The editor had none of it until 2026-08-19: a fluid scene flowed in a shipped game and \
         showed nothing in the viewport.";

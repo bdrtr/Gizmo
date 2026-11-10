@@ -80,6 +80,10 @@ struct AdaptParams {
 /// adaptation step. Lives on [`Renderer::auto_exposure`](crate::Renderer::auto_exposure).
 #[non_exhaustive]
 pub struct AutoExposureState {
+    /// Which build of the effect this is — every `new` takes the next number. A split-screen
+    /// view's or a texture camera's own state compares it with the renderer's to know whether the
+    /// renderer's was built again since its own was (`Renderer::with_view_history`).
+    pub(crate) generation: u64,
     /// Whether the loop runs. `false` (the default) binds a neutral `1.0` instead.
     pub enabled: bool,
     /// Target and speeds, uploaded by [`update`](Self::update) every frame.
@@ -186,6 +190,7 @@ impl AutoExposureState {
         });
 
         Self {
+            generation: crate::renderer::next_state_generation(),
             enabled: false,
             settings,
             reduce,

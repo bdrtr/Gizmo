@@ -17,6 +17,10 @@ struct SsgiTemporalParams {
 /// Same shape as [`SsaoState`](crate::ssao::SsaoState) — trace, temporally accumulate, blur, apply
 /// — but the trace is far noisier, which is why this one has a temporal pass that SSAO does not.
 pub struct SsgiState {
+    /// Which build of the effect this is — every `new` takes the next number. A split-screen
+    /// view's or a texture camera's own state compares it with the renderer's to know whether the
+    /// renderer's was built again since its own was (`Renderer::with_view_history`).
+    pub(crate) generation: u64,
     /// The raw traced GI term.
     pub ssgi_texture: wgpu::Texture,
     /// Its view.
@@ -182,6 +186,7 @@ impl SsgiState {
         ];
 
         Self {
+            generation: crate::renderer::next_state_generation(),
             enabled: true,
             ssgi_texture,
             ssgi_view,

@@ -4035,6 +4035,13 @@ guard'lı (yorumlar kesilerek, iki yönde de).
   çağrılıyordu. Yani forward geçidi hiç akışkan çizmemiş; çizen şey `render_ssfr`. Metot ve iki
   çağrı yeri silindi — `get_pending_audio_scene_commands` deseninin aynısı: boş dönmekten başka bir
   şey yapamayan public bir yüzey.
+
+  **2026-11-10'dan beri** adım tek başına paylaşılmıyor: karenin kendi görüşünden önceki her şey
+  (yansıma probları, GPU simülasyonlarının adımı, dokuya çizen kameralar) tek fonksiyon,
+  `draw_ahead_of_views`, ve iki yol da onu çağırıyor. `fluid_enabled` kapısı adımın içinde; adımın
+  koştuğu pay sisteme yazılıyor (`active_particles`) ve her görüş onu çiziyor. Stüdyonun kendi
+  kopyası monitörleri `(1.0, 1.0)` ile çizip bu kapıyı atlıyordu, parçacıklarını ve GPU cisimlerini
+  monitörlerden sonra adımlıyordu ve GPU cisimlerinin geri okumasını hiç istemiyordu.
 - ~~`Camera2D`'nin hiçbir tüketicisi yok~~ **— silindi, ve "sorulmalı" dediğim karar ölçümle
   geldi.** İzi yazarken bağlamanın maliyetini "bir 2B boru hattı yazmak" sanmıştım. Bakınca öyle
   değil: `Camera`'nın zaten `ProjectionMode::Orthographic { height }` modu var, gerçek bir

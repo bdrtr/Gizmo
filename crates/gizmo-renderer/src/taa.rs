@@ -27,6 +27,10 @@ struct TaaParamsGpu {
 /// [`Self::prev_vp`] and blends. Hence the ping-pong: a frame cannot be both the history being read
 /// and the output being written, so the two textures swap roles every frame.
 pub struct TaaState {
+    /// Which build of the effect this is — every `new` takes the next number. A split-screen
+    /// view's or a texture camera's own state compares it with the renderer's to know whether the
+    /// renderer's was built again since its own was (`Renderer::with_view_history`).
+    pub(crate) generation: u64,
     // Ping-pong history buffers (Rgba16Float)
     history_a: wgpu::Texture,
     history_a_view: wgpu::TextureView,
@@ -157,6 +161,7 @@ impl TaaState {
         ];
 
         Self {
+            generation: crate::renderer::next_state_generation(),
             history_a,
             history_a_view,
             history_b,

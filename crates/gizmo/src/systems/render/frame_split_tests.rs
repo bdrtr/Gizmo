@@ -1060,3 +1060,388 @@ fn a_mirror_in_a_split_screen_view_reflects_for_its_camera() {
         assert_eq!(renderer.planar.captures, 2, "one capture for each view");
     });
 }
+
+/// A red-or-green cube above a polished floor, a sun, a camera on −X looking at them: a scene in
+/// which screen-space reflections have the cube to find in the floor. Returns the cube.
+fn reflecting_floor(renderer: &Renderer, world: &mut World, colour: Vec4) -> Entity {
+    use crate::renderer::components::{Material, MeshRenderer};
+    let mut assets = crate::renderer::asset::AssetManager::new();
+    let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+    let cube_mesh = crate::renderer::asset::AssetManager::create_cube(&renderer.device);
+    world.spawn_bundle((
+        Transform::new(Vec3::new(0.0, -1.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)),
+        GlobalTransform::default(),
+        cube_mesh.clone(),
+        Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.05, 0.9),
+        MeshRenderer::new(),
+    ));
+    let cube = world.spawn_bundle((
+        Transform::new(Vec3::ZERO),
+        GlobalTransform::default(),
+        cube_mesh,
+        Material::new(tex).with_pbr(colour, 0.5, 0.0),
+        MeshRenderer::new(),
+    ));
+    world.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
+    world.spawn_bundle(crate::bundles::CameraBundle {
+        position: Vec3::new(-6.0, 0.6, 0.0),
+        pitch: -0.15,
+        primary: true,
+        ..Default::default()
+    });
+    cube
+}
+
+/// **A resize leaves screen-space reflections reading the frame the chain draws.** `Renderer::resize`
+/// rebinds every effect to its new targets but SSR, which the draw rebuilt only when its size
+/// differed from the renderer's — so a resize that ended at SSR's own size before a frame was drawn
+/// (a round trip, or a 1280 × 720 window minimised: the zero size went through the web cap and came
+/// out 1280 × 720) left it sampling a HDR texture nothing drew any more, and the reflections froze
+/// on the last frame before it. Here the cube turns green after a round trip and the frame must be a
+/// fresh renderer's green frame to the pixel. And a zero size changes nothing, as documented.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_resize_leaves_reflections_reading_the_frame_the_chain_draws() {
+    use crate::renderer::components::Material;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let red = Vec4::new(0.9, 0.1, 0.1, 1.0);
+        let green = Vec4::new(0.1, 0.9, 0.1, 1.0);
+        let calm = |renderer: &mut Renderer| {
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.volumetric = None;
+        };
+
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        calm(&mut renderer);
+        assert!(renderer.ssr.is_some(), "the test needs SSR");
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        let cube = reflecting_floor(&renderer, &mut game, red);
+        prepare_frame(&mut game, &mut renderer);
+        frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+
+        renderer.resize(winit::dpi::PhysicalSize::new(0, 0));
+        assert_eq!((renderer.size.width, renderer.size.height), (128, 128), "a zero size resized the renderer");
+        renderer.resize(winit::dpi::PhysicalSize::new(96, 64));
+        renderer.resize(winit::dpi::PhysicalSize::new(128, 128));
+        game.query_mut::<&mut Material>().get_mut(cube).expect("the cube").albedo = green;
+        prepare_frame(&mut game, &mut renderer);
+        let after = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+
+        let mut fresh = crate::test_gpu::headless_renderer(128, 128).await;
+        calm(&mut fresh);
+        let mut reference = World::new();
+        reference.insert_resource(clock(1.0 / 60.0));
+        reflecting_floor(&fresh, &mut reference, green);
+        prepare_frame(&mut reference, &mut fresh);
+        let want = frame_bytes(&mut fresh, |e, v, r| draw_frame(&reference, e, v, r));
+        fresh.ssr.as_mut().expect("SSR").enabled = false;
+        let without_ssr = frame_bytes(&mut fresh, |e, v, r| draw_frame(&reference, e, v, r));
+        let shown = want.chunks(4).zip(without_ssr.chunks(4)).filter(|(a, b)| a != b).count();
+        assert!(shown > 50, "SSR changes only {shown} pixels of the scene — the comparison would not see it");
+
+        let differ = after.chunks(4).zip(want.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "after the resize the frame is not a fresh renderer's ({differ} pixels differ)");
+    });
+}
+
+/// **A view's temporal state follows the renderer's effects.** A texture camera standing where the
+/// frame's camera stands draws the frame's picture after SSGI is turned on with `enable_ssgi`. Its
+/// history was built while SSGI was off and kept none: the texture camera drew with the frame
+/// camera's own SSGI — advancing it a step ahead of the frame's view every frame — so the two
+/// pictures parted, until a resize. SSGI is checked to change the frame, so the comparison sees it.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_view_gets_its_own_temporal_state_for_an_effect_turned_on_later() {
+    use crate::renderer::components::CameraTarget;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        renderer.ssr = None;
+        renderer.volumetric = None;
+        renderer.ssgi = None;
+        let gpu = renderer.gpu_context();
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        reflecting_floor(&renderer, &mut game, Vec4::new(0.9, 0.1, 0.1, 1.0));
+        let twin = game.spawn_bundle(crate::bundles::CameraBundle {
+            position: Vec3::new(-6.0, 0.6, 0.0),
+            pitch: -0.15,
+            primary: false,
+            ..Default::default()
+        });
+        let target = CameraTarget::new(&gpu, 128, 128);
+        game.add_component(twin, target.clone());
+        prepare_frame(&mut game, &mut renderer);
+        frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+
+        renderer.enable_ssgi();
+        let mut last = Vec::new();
+        for frame in 1..5 {
+            prepare_frame(&mut game, &mut renderer);
+            last = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+            let through_twin = texture_bytes(&renderer, target.texture());
+            let differ = last.chunks(4).zip(through_twin.chunks(4)).filter(|(a, b)| a != b).count();
+            assert_eq!(differ, 0, "frame {frame}: the twin's picture parted from the frame's ({differ} pixels)");
+        }
+        renderer.ssgi.as_mut().expect("SSGI").enabled = false;
+        prepare_frame(&mut game, &mut renderer);
+        let without = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+        let shown = last.chunks(4).zip(without.chunks(4)).filter(|(a, b)| a != b).count();
+        assert!(shown > 50, "SSGI changes only {shown} pixels — the comparison would not see it");
+    });
+}
+
+/// **The volumetric smoke steps once a frame, however many views draw it.** A texture camera
+/// standing where the frame's camera stands draws the frame's picture, the smoke included, frame
+/// after frame. The step was inside the draw: each view — the texture camera, then the frame's own
+/// — stepped the grid again, so the smoke ran twice as fast and the two views drew different steps.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn the_smoke_steps_once_a_frame_whatever_views_draw_it() {
+    use crate::renderer::components::CameraTarget;
+    use crate::renderer::gpu_smoke::SmokeVolume;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        let mut smoke = SmokeVolume::new(&renderer.device, &renderer.scene.global_bind_group_layout, wgpu::TextureFormat::Rgba16Float);
+        smoke.bounds_min = [-1.8, 0.02, -1.8];
+        smoke.bounds_max = [1.8, 4.0, 1.8];
+        smoke.source = [0.0, 0.8, 0.0];
+        smoke.source_radius = 0.6;
+        smoke.inject = 9.0;
+        smoke.buoyancy = 1.7;
+        smoke.density_scale = 1.6;
+        renderer.smoke = Some(smoke);
+        let gpu = renderer.gpu_context();
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        game.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
+        let eye = crate::bundles::CameraBundle {
+            position: Vec3::new(-7.0, 2.0, 0.0),
+            primary: true,
+            ..Default::default()
+        };
+        game.spawn_bundle(eye);
+        let twin = game.spawn_bundle(crate::bundles::CameraBundle { primary: false, ..eye });
+        let target = CameraTarget::new(&gpu, 128, 128);
+        game.add_component(twin, target.clone());
+
+        let mut first = None;
+        let mut last = Vec::new();
+        for frame in 0..6 {
+            prepare_frame(&mut game, &mut renderer);
+            last = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+            let through_twin = texture_bytes(&renderer, target.texture());
+            let differ = last.chunks(4).zip(through_twin.chunks(4)).filter(|(a, b)| a != b).count();
+            assert_eq!(differ, 0, "frame {frame}: the twin drew another smoke step ({differ} pixels)");
+            first.get_or_insert_with(|| last.clone());
+        }
+        let moved = first.unwrap().chunks(4).zip(last.chunks(4)).filter(|(a, b)| a != b).count();
+        assert!(moved > 50, "the smoke changed only {moved} pixels in six frames — the comparison would not see it");
+    });
+}
+
+/// **A view is fitted to the shape it is drawn at.** A capture's own shape wins — a mirror
+/// reflecting a wide split-screen view projects at that view's shape, and its shadow cascades were
+/// fitted to the whole window's, so the reflection lost its shadows at the sides — then the view's
+/// rectangle, then the whole target.
+#[test]
+fn a_view_is_fitted_to_its_own_shape() {
+    let mirror = super::FixedView {
+        position: Vec3::ZERO,
+        forward: Vec3::NEG_Z,
+        up: Vec3::Y,
+        near: 0.1,
+        far: 100.0,
+        projection: None,
+        aspect: 3.5,
+    };
+    assert_eq!(super::view_aspect(Some(&mirror), Some([0.0, 0.0, 128.0, 64.0]), (128, 128)), 3.5);
+    assert_eq!(super::view_aspect(None, Some([0.0, 0.0, 128.0, 64.0]), (128, 128)), 2.0);
+    assert_eq!(super::view_aspect(None, None, (256, 64)), 4.0);
+    assert_eq!(super::view_aspect(None, None, (256, 0)), 1.0);
+}
+
+/// A red cube with the frame's camera on −X, a texture camera on +Z looking at it, and two more
+/// cameras on +X and −Z that take the window's two halves in the frames `split` says. Draws the
+/// frames with TAA on and returns the texture camera's last picture, with the renderer and world
+/// that drew it and the cameras — the texture camera's and the two split ones.
+async fn texture_camera_after(split: &[bool]) -> (Vec<u8>, Renderer, World, [Entity; 3]) {
+    use crate::renderer::components::{CameraTarget, Viewport};
+
+    let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+    renderer.ssgi = None;
+    renderer.ssr = None;
+    renderer.volumetric = None;
+    assert!(renderer.taa.is_some(), "the comparison is of temporal state: it needs TAA");
+    let gpu = renderer.gpu_context();
+    let mut game = World::new();
+    game.insert_resource(clock(1.0 / 60.0));
+    cube_scene(&renderer, &mut game);
+    let around = |position: Vec3, yaw: f32| crate::bundles::CameraBundle { position, yaw, primary: false, ..Default::default() };
+    let watcher = game.spawn_bundle(around(Vec3::new(0.0, 0.0, 6.0), -std::f32::consts::FRAC_PI_2));
+    let target = CameraTarget::new(&gpu, 128, 128);
+    game.add_component(watcher, target.clone());
+    let left = game.spawn_bundle(around(Vec3::new(6.0, 0.0, 0.0), std::f32::consts::PI));
+    let right = game.spawn_bundle(around(Vec3::new(0.0, 0.0, -6.0), std::f32::consts::FRAC_PI_2));
+    for &split_now in split {
+        for (camera, viewport) in [(left, Viewport::new(0.0, 0.0, 0.5, 1.0)), (right, Viewport::new(0.5, 0.0, 0.5, 1.0))] {
+            let mut lens = *game.get::<Camera>(camera).expect("a camera");
+            lens.viewport = split_now.then_some(viewport);
+            game.add_component(camera, lens);
+        }
+        prepare_frame(&mut game, &mut renderer);
+        frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+    }
+    let picture = texture_bytes(&renderer, target.texture());
+    (picture, renderer, game, [watcher, left, right])
+}
+
+/// **A view's temporal state is its camera's.** A texture camera draws the same picture on its
+/// fourth frame whether the three before it were split-screen frames or not; the renderer holds a
+/// state for the cameras it drew besides the frame's own, and lets one go when its camera is gone.
+/// The states were numbered slots, the texture cameras' after the split's own views: with the
+/// split's two views drawn the texture camera's was the third, back on one view the first — which a
+/// split-screen camera had filled — so it blended another camera's picture into its own. And a slot
+/// was never let go.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_view_keeps_its_cameras_temporal_state_whatever_views_the_frame_has() {
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let (alone, ..) = texture_camera_after(&[false; 4]).await;
+        let red = |p: &[u8]| p[0] > 40 && u32::from(p[0]) > 2 * u32::from(p[1].max(p[2])) + 10;
+        assert!(alone.chunks(4).filter(|p| red(p)).count() > 200, "the texture camera does not see the cube");
+
+        let (after_split, mut renderer, mut game, [watcher, left, right]) =
+            texture_camera_after(&[true, true, true, false]).await;
+        let differ = alone.chunks(4).zip(after_split.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "after split-screen frames the texture camera drew another picture ({differ} pixels): not its own history");
+
+        let mut held = renderer.view_history_cameras();
+        held.sort();
+        let mut drawn = vec![watcher, left, right];
+        drawn.sort();
+        assert_eq!(held, drawn, "the renderer holds temporal state for other cameras than the ones it drew besides the frame's own");
+        game.despawn(left);
+        game.despawn(right);
+        prepare_frame(&mut game, &mut renderer);
+        frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+        assert_eq!(renderer.view_history_cameras(), vec![watcher], "a despawned camera's temporal state was kept");
+    });
+}
+
+/// **Every view draws what the frame's step simulated, whoever chooses how much.** At the editor's
+/// full detail, in a scene that never turned the fluid on, the step runs none of it, and a texture
+/// camera that sees both where the fluid's particles start and where its first step gathers them
+/// draws the picture it draws with no fluid system at all; turned on, the step runs the whole fluid
+/// and the camera shows it. The particles: none while nothing is alive, the whole ring at full
+/// detail once something is. The editor drew its monitors at full detail with the fluid's switch
+/// never read, so a scene without fluid showed the fluid's unstepped particles on every monitor.
+/// A pool of 10 000, not the default 100 000: that many have hung this machine's GPU in a test.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_view_draws_what_the_frames_step_simulated() {
+    use super::{draw_ahead_of_views, SimulationDetail};
+    use crate::renderer::components::CameraTarget;
+    use crate::renderer::gpu_particles::GpuParticle;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        if renderer.gpu_fluid.is_none() || renderer.gpu_particles.is_none() {
+            eprintln!("skipping: this renderer has no GPU fluid or particles");
+            return;
+        }
+        let hdr = renderer.post.hdr_texture.format();
+        let (width, height) = (renderer.config.width, renderer.config.height);
+        renderer.gpu_fluid = Some(crate::renderer::gpu_fluid::GpuFluidSystem::new(
+            &renderer.device,
+            &renderer.queue,
+            10_000,
+            &renderer.scene.global_bind_group_layout,
+            hdr,
+            width,
+            height,
+        ));
+        let gpu = renderer.gpu_context();
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        game.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
+        // The particles start as a sheet on the floor of a 10 m tank and the first step gathers them
+        // round (0, 8, 0): from here the camera sees both.
+        let monitor = game.spawn_bundle(crate::bundles::CameraBundle {
+            position: Vec3::new(-12.0, 8.0, 0.0),
+            pitch: -0.35,
+            primary: false,
+            ..Default::default()
+        });
+        let target = CameraTarget::new(&gpu, 128, 128);
+        game.add_component(monitor, target.clone());
+        prepare_frame(&mut game, &mut renderer);
+        let fluid = |r: &Renderer| r.gpu_fluid.as_ref().map(|f| (f.active_particles, f.num_particles)).expect("a fluid");
+        let particles = |r: &Renderer| r.gpu_particles.as_ref().map(|p| (p.active_particles, p.max_particles)).expect("particles");
+        let differ = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(a, b)| a != b).count();
+
+        draw_ahead_of_views(&game, &mut renderer, SimulationDetail::Full);
+        assert_eq!(fluid(&renderer).0, 0, "the step ran a fluid the scene never turned on");
+        assert_eq!(particles(&renderer).0, 0, "the step ran particles with none alive");
+        let off = texture_bytes(&renderer, target.texture());
+        let pool = renderer.gpu_fluid.take();
+        draw_ahead_of_views(&game, &mut renderer, SimulationDetail::Full);
+        let no_system = texture_bytes(&renderer, target.texture());
+        renderer.gpu_fluid = pool;
+        assert_eq!(differ(&off, &no_system), 0, "the monitor drew a fluid the scene never turned on");
+
+        renderer.fluid_enabled = true;
+        draw_ahead_of_views(&game, &mut renderer, SimulationDetail::Full);
+        let (active, all) = fluid(&renderer);
+        assert_eq!(active, all, "full detail ran {active} of the fluid's {all} particles");
+        let on = texture_bytes(&renderer, target.texture());
+        assert!(differ(&off, &on) > 200, "the monitor does not show the pool ({} pixels changed)", differ(&off, &on));
+
+        let alive = GpuParticle {
+            position: [0.0, 2.0, 0.0],
+            life: 0.0,
+            velocity: [0.0, 0.0, 0.0],
+            max_life: 10.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            size_start: 0.2,
+            size_end: 0.2,
+            _padding: [0.0; 2],
+        };
+        renderer.gpu_particles.as_ref().expect("checked above").spawn_particles(&renderer.queue, &[alive]);
+        draw_ahead_of_views(&game, &mut renderer, SimulationDetail::Full);
+        let (active, all) = particles(&renderer);
+        assert_eq!(active, all, "full detail ran {active} of the particle ring's {all}");
+    });
+}
