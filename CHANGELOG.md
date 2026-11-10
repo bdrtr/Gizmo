@@ -50,6 +50,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A game's own surface, drawn deferred.** `Renderer::add_surface_material(label, wgsl)` composes a game's
+  `fn material_surface(input: SurfaceInput) -> Surface` into the engine's G-buffer and lit forward shaders, in place of the
+  engine's material, and `MaterialType::CustomSurface(id)` draws it: written to the G-buffer as `Pbr` is — so the deferred
+  lighting, SSAO, SSR, SSGI, decals and the velocity target all see it — and lit by the forward shader in the browser, on a
+  phone, in the editor viewport, transparent and as glass. `gizmo::surface` holds `Surface` and `SurfaceInput` (position, UV,
+  vertex colour, the geometric frame, the instance's material values, the face, the pixel, the clock, the camera), and
+  `gizmo::material::standard_surface` is what `Pbr` draws, to start from. A WGSL error is `SurfaceError::Compose`. Measured: a
+  surface returning `standard_surface(input)` draws `Pbr`'s frame to the byte. A material of the game's own could only be a
+  forward pipeline (`MaterialType::Custom`) until now. **Breaking, mildly:** `pipeline::LitLobes` is `LitSet`; the engine's
+  material moved from `gizmo::surface` to `gizmo::material` (`evaluate_surface`, `surface_uv`, the group-1 bindings) for a
+  shader that imported it.
+
 - **A system's body changed while the game runs.** The default-off `hotpatching` feature (`gizmo-engine`, `gizmo-app`,
   `gizmo-core`) calls every system, run condition, `pipe` stage, observer, hook and `DynamicSystem` body through subsecond's jump
   table, and connects the app to the Dioxus CLI; `dx serve --hot-patch` then swaps a body without a restart. Verified with
@@ -170,6 +182,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The editor viewport drew a game's own pipeline with the engine's lit shader.** Its draw loops never read
+  `Routing::custom`, so a `MaterialType::Custom` material showed in `gizmo-studio` as the engine's material with the lights
+  skipped. Both kinds of game material are drawn from the renderer's registry there now, and an unregistered id draws nothing,
+  as on the game path.
+- **A hot reload never reached the deferred path.** `rebuild_pipelines` (`Renderer::rebuild_shaders`) rebuilt every pipeline
+  but the G-buffer, prepass, environment-sky and lighting ones, so a reloaded `gbuffer.wgsl` or `deferred_lighting.wgsl`
+  changed nothing in a running studio. `DeferredState::rebuild_pipelines` does it, and registered surfaces are rebuilt after.
+- **A material's params buffer smaller than a `MaterialParams` failed far from its cause**, at a wireframe or debug-view draw
+  that reads the group with the engine's shaders. `AssetManager::material().build` says so instead.
 - **A reflection probe cost a phone 29 % of its frame rate.** The forward-only lit shader asked the probe uniform on every pixel
   which kinds of probe the scene had, and worked out the sky that a background probe then replaced. Which kinds there are is the
   same for a whole frame, so the pipelines are now built for it (`ProbeShape`: `PROBE_BACKGROUND`, `PROBE_BOXES`), and a scene with

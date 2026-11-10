@@ -12,9 +12,18 @@ const COMMON_WGSL: &str = include_str!("../shaders/common.wgsl");
 /// clear-coat, and the Lazarov env-BRDF LUT. Imports `gizmo::common`, so it is registered
 /// AFTER it below.
 const PBR_EXT_WGSL: &str = include_str!("../shaders/pbr_ext.wgsl");
-/// What a material is at a fragment (`#define_import_path gizmo::surface`), shared by the G-buffer
-/// and the forward shader.
+/// What a surface is at a fragment, and what a fragment is handed to work it out
+/// (`#define_import_path gizmo::surface`): types and functions, no bindings.
 const SURFACE_WGSL: &str = include_str!("../shaders/surface.wgsl");
+/// The engine's own material (`#define_import_path gizmo::material`): group 1 as
+/// `AssetManager::material` fills it, evaluated into a surface. Shared by the G-buffer and the forward
+/// shader, and what a game's surface can start from.
+const MATERIAL_WGSL: &str = include_str!("../shaders/material.wgsl");
+
+/// The import path a game's surface module is composed under — see
+/// [`SurfaceMaterial`](crate::custom_material::SurfaceMaterial). `gbuffer.wgsl` and `shader.wgsl`
+/// import `material_surface` from it when `CUSTOM_SURFACE` is defined.
+pub(crate) const CUSTOM_SURFACE_MODULE: &str = "gizmo::custom_surface";
 
 /// Irradiance-volume sampling (`#define_import_path gizmo::irradiance`): the WGSL port of
 /// `gi::ProbeGrid::sample` and `gi::SHCoeffs::evaluate`. Only `deferred_lighting.wgsl` imports it,
@@ -84,11 +93,23 @@ pub(crate) fn web_render_defs() -> HashMap<String, ShaderDefValue> {
 /// This used to be inlined in [`compose_wgsl`], which built the module, validated it, and dropped
 /// it on the floor — so the only thing the rest of the crate could see was text, and Rust had no
 /// way to ask what layout the shader actually ended up with. `crate::shader_contract` asks exactly
-/// that, and this is how.
+/// that, and this is how. The pipelines go through [`try_compose_wgsl`], so only the tests call it.
+#[cfg(test)]
 pub(crate) fn compose_module(
     source: &str,
     label: &str,
     shader_defs: HashMap<String, ShaderDefValue>,
+) -> Result<(naga::Module, naga::valid::ModuleInfo), String> {
+    compose_module_with(source, label, shader_defs, None)
+}
+
+/// [`compose_module`], with a game's surface module registered as [`CUSTOM_SURFACE_MODULE`] for the
+/// shader to import. `None` is the engine's shaders as they are.
+pub(crate) fn compose_module_with(
+    source: &str,
+    label: &str,
+    shader_defs: HashMap<String, ShaderDefValue>,
+    custom_surface: Option<&str>,
 ) -> Result<(naga::Module, naga::valid::ModuleInfo), String> {
     use naga_oil::compose::{
         ComposableModuleDescriptor, Composer, NagaModuleDescriptor, ShaderLanguage,
@@ -121,6 +142,15 @@ pub(crate) fn compose_module(
             ..Default::default()
         })
         .map_err(|e| format!("composing surface.wgsl failed: {e}"))?;
+    // After `surface`, which it imports.
+    composer
+        .add_composable_module(ComposableModuleDescriptor {
+            source: MATERIAL_WGSL,
+            file_path: "gizmo/material.wgsl",
+            language: ShaderLanguage::Wgsl,
+            ..Default::default()
+        })
+        .map_err(|e| format!("composing material.wgsl failed: {e}"))?;
     composer
         .add_composable_module(ComposableModuleDescriptor {
             source: IRRADIANCE_WGSL,
@@ -137,6 +167,19 @@ pub(crate) fn compose_module(
             ..Default::default()
         })
         .map_err(|e| format!("composing reflection_probes.wgsl failed: {e}"))?;
+    // Last: it may import anything above. Named by the engine, so a game's file needs no
+    // `#define_import_path` and cannot register itself over one of the engine's modules.
+    if let Some(surface) = custom_surface {
+        composer
+            .add_composable_module(ComposableModuleDescriptor {
+                source: surface,
+                file_path: label,
+                language: ShaderLanguage::Wgsl,
+                as_name: Some(CUSTOM_SURFACE_MODULE.to_string()),
+                ..Default::default()
+            })
+            .map_err(|e| format!("composing the surface of '{label}' failed: {e}"))?;
+    }
 
     let module = composer
         .make_naga_module(NagaModuleDescriptor {
@@ -176,31 +219,46 @@ pub(crate) fn compose_wgsl(
     label: &str,
     shader_defs: HashMap<String, ShaderDefValue>,
 ) -> String {
+    try_compose_wgsl(source, label, shader_defs, None).unwrap_or_else(|e| panic!("{e}"))
+}
+
+/// [`compose_wgsl`] with a game's surface module ([`compose_module_with`]), and a failure handed back
+/// rather than raised: a game's WGSL failing to compose is the game's error to report, where one of the
+/// engine's own is a broken build.
+pub(crate) fn try_compose_wgsl(
+    source: &str,
+    label: &str,
+    shader_defs: HashMap<String, ShaderDefValue>,
+    custom_surface: Option<&str>,
+) -> Result<String, String> {
     use std::hash::{Hash, Hasher};
     use std::sync::{Mutex, OnceLock};
-    static COMPOSED: OnceLock<Mutex<HashMap<u64, (String, String)>>> = OnceLock::new();
+    type Entry = (String, Option<String>, String);
+    static COMPOSED: OnceLock<Mutex<HashMap<u64, Entry>>> = OnceLock::new();
 
     // Defs in a fixed order: a `HashMap`'s iteration order is not one.
     let mut defs: Vec<(&String, &ShaderDefValue)> = shader_defs.iter().collect();
     defs.sort_by(|a, b| a.0.cmp(b.0));
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (source, label, &defs).hash(&mut h);
+    (source, label, &defs, custom_surface).hash(&mut h);
     let key = h.finish();
-    // The full source is kept beside the output and compared on a hit, so a hash collision
+    // The full sources are kept beside the output and compared on a hit, so a hash collision
     // composes afresh instead of handing back another shader.
     let cache = COMPOSED.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some((src, out)) = cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
-        if src == source {
-            return out.clone();
+    if let Some((src, surface, out)) = cache.lock().unwrap_or_else(|p| p.into_inner()).get(&key) {
+        if src == source && surface.as_deref() == custom_surface {
+            return Ok(out.clone());
         }
     }
 
-    let (module, info) = compose_module(source, label, shader_defs)
-        .unwrap_or_else(|e| panic!("{e}"));
+    let (module, info) = compose_module_with(source, label, shader_defs, custom_surface)?;
     let out = naga::back::wgsl::write_string(&module, &info, naga::back::wgsl::WriterFlags::empty())
-        .unwrap_or_else(|e| panic!("emitting WGSL for '{label}' failed: {e}"));
-    cache.lock().unwrap_or_else(|p| p.into_inner()).insert(key, (source.to_string(), out.clone()));
-    out
+        .map_err(|e| format!("emitting WGSL for '{label}' failed: {e}"))?;
+    cache
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert(key, (source.to_string(), custom_surface.map(str::to_string), out.clone()));
+    Ok(out)
 }
 
 /// Compiles a shader, preferring a copy on disk over the compiled-in fallback — the mechanism

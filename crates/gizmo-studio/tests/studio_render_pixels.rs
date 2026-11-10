@@ -2417,3 +2417,183 @@ fn a_gpu_body_shows_in_the_editor_viewport() {
     let changed = empty.chunks(4).zip(with_body.chunks(4)).filter(|(a, b)| a != b).count();
     assert!(changed > 200, "a GPU body in front of the editor camera changed {changed} pixels of the viewport");
 }
+
+/// Which material the cube in [`render_game_material_frame`] carries.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum GameMaterial {
+    /// The engine's own PBR — the reference.
+    Pbr,
+    /// A surface returning `standard_surface(input)`: the engine's material through the hook.
+    StandardSurface,
+    /// A surface painting the engine's material red.
+    RedSurface,
+    /// A pipeline of the game's own, flat magenta.
+    Custom,
+    /// `MaterialType::CustomSurface` with nothing registered under the id.
+    DanglingSurface,
+    /// `MaterialType::Custom` with nothing registered under the id.
+    DanglingCustom,
+    /// No cube.
+    None,
+}
+
+const STANDARD_SURFACE: &str = "#import gizmo::surface::{Surface, SurfaceInput}
+#import gizmo::material::{standard_surface}
+fn material_surface(input: SurfaceInput) -> Surface { return standard_surface(input); }";
+
+const RED_SURFACE: &str = "#import gizmo::surface::{Surface, SurfaceInput}
+#import gizmo::material::{standard_surface}
+fn material_surface(input: SurfaceInput) -> Surface {
+    var s = standard_surface(input);
+    s.albedo = vec3<f32>(0.9, 0.05, 0.05);
+    return s;
+}";
+
+/// Flat magenta, from the scene and instance groups alone.
+const MAGENTA_PIPELINE: &str = "#import gizmo::common::{SceneUniforms}
+@group(0) @binding(0) var<uniform> scene: SceneUniforms;
+struct InstanceRaw {
+    m0: vec4<f32>, m1: vec4<f32>, m2: vec4<f32>, m3: vec4<f32>,
+    albedo_color: vec4<f32>, pbr: vec4<f32>, ambient: vec4<f32>, emissive: vec4<f32>, optics: vec4<f32>,
+};
+@group(#{INSTANCE_GROUP}) @binding(0) var<storage, read> instances: array<InstanceRaw>;
+struct VIn { @location(0) position: vec3<f32> };
+@vertex
+fn vs_main(@builtin(instance_index) idx: u32, input: VIn) -> @builtin(position) vec4<f32> {
+    let i = instances[idx];
+    return scene.view_proj * mat4x4<f32>(i.m0, i.m1, i.m2, i.m3) * vec4<f32>(input.position, 1.0);
+}
+@fragment
+fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }";
+
+/// One editor frame of a turned cube with `material`, as [`render_scene`] draws one.
+fn render_game_material_frame(material: GameMaterial) -> Option<Vec<u8>> {
+    use gizmo::renderer::components::MaterialType;
+    use gizmo::renderer::custom_material::{CustomMaterial, CustomPipelineOptions, MaterialId, SurfaceId};
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return None;
+    }
+    pollster::block_on(async {
+        let mut renderer = shared_device_renderer(W, H).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let standard = renderer.add_surface_material("standard", STANDARD_SURFACE).expect("composes");
+        let red = renderer.add_surface_material("red", RED_SURFACE).expect("composes");
+        let magenta = CustomMaterial::from_wgsl(&renderer.device, &renderer.scene, "magenta", MAGENTA_PIPELINE, CustomPipelineOptions::default());
+        let magenta = renderer.custom_materials.register(magenta);
+
+        if material != GameMaterial::None {
+            let cube = world.spawn();
+            world.add_component(
+                cube,
+                Transform::new(Vec3::ZERO)
+                    .with_rotation(gizmo::math::Quat::from_axis_angle(Vec3::new(1.0, 1.0, 0.0).normalize(), 0.7)),
+            );
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            let mut mat = Material::new(tex).with_pbr(Vec4::new(0.8, 0.4, 0.2, 1.0), 0.6, 0.0);
+            mat.material_type = match material {
+                GameMaterial::Pbr => MaterialType::Pbr,
+                GameMaterial::StandardSurface => MaterialType::CustomSurface(standard),
+                GameMaterial::RedSurface => MaterialType::CustomSurface(red),
+                GameMaterial::Custom => MaterialType::Custom(magenta),
+                GameMaterial::DanglingSurface => MaterialType::CustomSurface(SurfaceId(red.0 + 1)),
+                GameMaterial::DanglingCustom => MaterialType::Custom(MaterialId(magenta.0 + 1)),
+                GameMaterial::None => unreachable!(),
+            };
+            world.add_component(cube, mat);
+            world.add_component(cube, MeshRenderer::new());
+        }
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
+        world.add_component(cam, GlobalTransform::default());
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, 0.0, 0.0, true),
+        );
+        world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
+        let state = StudioState {
+            current_fps: 60.0,
+            actual_dt: 1.0 / 60.0,
+            editor_camera: cam,
+            game_camera: Entity::new(4242, 0),
+            do_raycast: false,
+            play: gizmo::systems::PlayLoop::new(),
+            asset_watcher: None,
+            gc_timer: 0.0,
+            autosave_timer: 0.0,
+            visible_entity_count: 0,
+            draw_call_count: 0,
+        };
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("studio-game-material-target"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: renderer.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        execute_render_pipeline(&mut world, &state, &mut encoder, &view, &mut renderer, 0.0);
+        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("studio-game-material-readback"),
+            size: u64::from(W * H * BPP),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo { texture: &target, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(W * BPP), rows_per_image: Some(H) },
+            },
+            wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+        );
+        renderer.queue.submit(std::iter::once(encoder.finish()));
+        let slice = staging.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        let _ = renderer.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        rx.recv().expect("readback channel").expect("readback");
+        let pixels = slice.get_mapped_range().expect("a just-mapped buffer's full range is always valid").to_vec();
+        staging.unmap();
+        Some(pixels)
+    })
+}
+
+/// **A game's own materials are drawn in the editor viewport as the game draws them.** The viewport
+/// read nothing of `MaterialType::Custom` until 2026-11-11 and drew a game's pipeline with the engine's
+/// lit shader, which reads the flag such a material carries as "skip the lights". Now: a surface
+/// returning the engine's material draws the same frame as `Pbr`, to the byte; a red surface is red; a
+/// game's pipeline draws its own magenta; and an id with nothing behind it draws nothing, of either kind.
+#[test]
+fn a_games_own_materials_are_drawn_in_the_viewport_as_the_game_draws_them() {
+    let _gpu = gpu_lock();
+    let Some(pbr) = render_game_material_frame(GameMaterial::Pbr) else { return };
+    let frame = |m| render_game_material_frame(m).expect("the adapter was usable a moment ago");
+    let differing = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+
+    assert_eq!(differing(&pbr, &frame(GameMaterial::StandardSurface)), 0, "the engine's material through a surface is not Pbr's frame");
+    let red = frame(GameMaterial::RedSurface);
+    assert!(differing(&pbr, &red) > 300, "a red surface changed {} pixels", differing(&pbr, &red));
+    let middle = ((H / 2 * W + W / 2) * BPP) as usize;
+    let [r, g, b] = [red[middle], red[middle + 1], red[middle + 2]];
+    assert!(r > 2 * g.max(b), "the red surface's middle is ({r}, {g}, {b})");
+
+    let custom = frame(GameMaterial::Custom);
+    let [r, g, b] = [custom[middle], custom[middle + 1], custom[middle + 2]];
+    assert!(r > 200 && b > 200 && g < 60, "a game's magenta pipeline drew ({r}, {g}, {b}) in the viewport");
+
+    let empty = frame(GameMaterial::None);
+    for dangling in [GameMaterial::DanglingSurface, GameMaterial::DanglingCustom] {
+        assert_eq!(differing(&empty, &frame(dangling)), 0, "{dangling:?} drew something");
+    }
+}

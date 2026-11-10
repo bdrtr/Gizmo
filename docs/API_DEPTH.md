@@ -405,8 +405,10 @@ Ordered by unlocked-capability per unit of work, not by size.
 6. ~~**A bindable HDR target.**~~ **Withdrawn 2026-08-23 — the target was already bindable.**
    What the item was reaching for is a **compute reduction**: a user sensor is writable today and
    measured at 10 ms a sample, which is what makes it unusable rather than impossible.
-7. **User materials.** ✅ **Done, 2026-08-23.** The G-buffer budget settled the question rather
-   than blocking it: 28 of 32 bytes spent means forward-only, measured rather than argued.
+7. **User materials.** ✅ **Done, 2026-08-23**, forward, and **deferred 2026-11-11**: a
+   `SurfaceMaterial` is the game's `material_surface` composed into the engine's G-buffer and lit
+   forward shaders, so it fills the targets every lit draw fills. The budget that read as
+   "forward-only" (28 of 32 bytes then) only ruled out a custom material's *own* target.
 
 Items 5, 6 and 7 are also the three that would let the two unwired subsystems
 (`gizmo-renderer::visibility` and `::gi`, `CAPABILITY_GAPS.md` §F) be plugged in without a user

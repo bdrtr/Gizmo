@@ -276,9 +276,23 @@ fn draw_forward_items(
                 }
             };
 
+            // A game's surface takes the place of the engine's lit pipelines, which are the only ones
+            // above it can reach (it routes as `Pbr`), except a mirror's: a mirror shows its capture,
+            // whatever its material is.
+            let surface_pipeline = item.surface.filter(|_| mirror.is_none()).map(|id| {
+                renderer.custom_materials.surface(id).map(|surface| {
+                    if item.is_transmissive {
+                        surface.transmissive_pipeline(item.is_double_sided)
+                    } else {
+                        surface.lit_pipeline(item.lobes, item.is_transparent, item.is_double_sided, item.blend_mode)
+                    }
+                })
+            });
+
             // `Some(None)` is a registered id with nothing behind it: draw nothing rather than
-            // fall through to `engine_pipeline`, which would shade it as ordinary PBR.
-            let pipeline = match custom_pipeline {
+            // fall through to `engine_pipeline`, which would shade it as ordinary PBR. An item is
+            // a custom material or a surface, never both.
+            let pipeline = match custom_pipeline.or(surface_pipeline) {
                 Some(Some(p)) => Some(p),
                 Some(None) => None,
                 None => Some(engine_pipeline),

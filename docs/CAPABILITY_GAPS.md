@@ -177,7 +177,7 @@ their extent and clips them; the wheel drives it, and a clipped-out button takes
 scrollbar is drawn and nothing drags it.) (Click events exist since 2026-11-02:
 `ButtonBundle`'s `Clicked` is `true` for the one frame a press on the button is released on it.)
 
-### A3. User-authored shaders — **open since 2026-08-23**, forward-only
+### A3. User-authored shaders — **closed 2026-11-11**: a game's surface is drawn deferred
 
 `MaterialType` was a fixed enum: a game could not add a variant, supply its own WGSL, or attach its
 own uniform block. `MaterialType::Custom(MaterialId)` closes that, with
@@ -185,11 +185,50 @@ own uniform block. `MaterialType::Custom(MaterialId)` closes that, with
 against the engine's contract — the same composer the engine's own shaders use, so `#import` and
 `#{INSTANCE_GROUP}` work in a game's WGSL too.
 
-**Forward-only, and that is a measurement rather than a policy.** The four G-buffer targets share a
-32-byte `max_color_attachment_bytes_per_sample` budget and spend 28 (albedo `Rgba8` 4 + normal,
-position and tangent `Rgba16Float` 8 each). Four bytes left is one more `Rgba8` and not one
-`Rgba16Float`, so a custom material bringing its own G-buffer channel would spend the last of a
-shared budget on one feature.
+**A game's surface, lit by the engine, through the G-buffer: 2026-11-11.** Until then a material of
+the game's own was a whole pipeline, drawn forward after the deferred resolve, so it took no SSAO, SSR,
+SSGI or decals and wrote no velocity. `MaterialType::CustomSurface(SurfaceId)` draws a
+`SurfaceMaterial`: the game writes `fn material_surface(input: SurfaceInput) -> Surface` in WGSL —
+`gizmo::surface` has both types, `gizmo::material::standard_surface` is what `Pbr` draws there — and
+`Renderer::add_surface_material(label, wgsl)` composes it into the engine's own `gbuffer.wgsl` and
+`shader.wgsl` in place of the engine's material. So it is written to the G-buffer exactly as `Pbr` is,
+with the depth prepass cutting where the surface cuts, and lit by the same forward shader wherever a
+draw is forward: the browser, a phone (its `DETAILS` and `LOBES` tiers), the editor viewport, a
+transparent surface, glass. Routed as `Pbr` (`Routing::surface`), with its own batch. A WGSL error is
+`SurfaceError::Compose` with the compiler's text, not a panic. Measured
+(`a_custom_surface_is_drawn_as_the_engines_material_is`): a surface returning `standard_surface(input)`
+draws `Pbr`'s frame **to the byte**, opaque and transparent, and the same G-buffer albedo; one painting
+the cube red writes (243, 63, 63, 0) into it, which is 0.9/0.05 in sRGB and metalness 0; an id with
+nothing behind it draws nothing, its shadow included (1304 pixels leak without that). The same frames
+are the same to the byte on the forward-only path too (`--cfg gizmo_forward_only`), the surface on the
+`DETAILS` tier and `Pbr` on the plain one. They were not at first: every pixel of the cube differed,
+because the surface's shader was composed with its probe defs' `false` left in, and `#ifdef` asks only
+whether a name is there; `a_false_def_leaves_its_code_out_of_a_surface` holds that where CI can see
+it. Ten mutations, all caught: routing it forward, the G-buffer or the forward pass ignoring it, a
+dangling id falling back, casting, roughness read from the wrong slot, a `false` def kept, the plain
+tier taking the face, and the two rebuilds below; two more in the editor viewport.
+
+What the earlier version of this entry measured is still true and was the wrong question. The G-buffer
+had no room for a custom material's *own* channel (28 of 32 bytes then; six targets and 48 bytes a
+sample now, the native device asks for more), but a surface brings none: it fills the channels every lit
+draw fills. The game's group-1 room is unchanged, and a surface that means something else by it declares
+the group itself instead of importing `gizmo::material` (`a_surface_can_mean_its_own_group_1`). Its
+binding 6 has to hold a `MaterialParams` at least, 48 bytes, since the wireframe overlay and the debug
+views draw the group with the engine's shaders; `AssetManager::material().build` says so instead of a
+validation error at that draw.
+
+Two things it found on the way. **The editor viewport drew a `Custom` material with the engine's lit
+shader**: its loops never read `Routing::custom`, and that shader reads the flag a custom material
+carries as "skip the lights". It draws both kinds now, from the registry, and an unregistered id draws
+nothing there too (`a_games_own_materials_are_drawn_in_the_viewport_as_the_game_draws_them`). And
+**a hot reload never reached the deferred path**: `rebuild_pipelines` rebuilt everything but the
+G-buffer, prepass, environment-sky and lighting pipelines, so a reloaded `gbuffer.wgsl` or
+`deferred_lighting.wgsl` changed nothing in a running studio. They are rebuilt now, and every
+registered surface after them, from the WGSL it keeps
+(`a_hot_reload_rebuilds_the_deferred_pipelines_and_every_surface`).
+
+What stays open is a separate piece of work: the shadow pass has no fragment stage, so a cut-out — a
+surface's or the engine's own — casts its whole quad's shadow.
 
 **There is also no spare bind group**, measured the same way: native asks for
 `max_bind_groups: 6` and spends 5 (`0` scene, `1` material, `2` shadow, `3` skeleton, `4`
@@ -326,7 +365,7 @@ vector instead of screen-space stand-ins, so **the fluid looks different**: `flu
 `ocean_scene` were not looked at afterwards, because they open a window. The test uses a pool of 10 000 in one
 renderer: a new renderer per frame with the default 100 000 particles reset this machine's GPU ring eight times.
 
-Still open: a custom material cannot be drawn deferred.
+A material of the game's own is drawn deferred since 2026-11-11: see the head of this entry.
 
 ### A4. Extrusion / 2D-shape-to-mesh machinery — **landed 2026-08-24**
 
@@ -2806,10 +2845,12 @@ and `emissive` (item 4, the only undocumented one). No further silent fields.
    held: `create_extrusion` + `create_sweep` over a shared outline module. The part §E did not say
    is where the work was: cap triangulation, which is a fan for a convex outline and ear clipping
    for anything else. See A4.
-5. ~~**User materials (A3).**~~ **DONE 2026-08-23** — `MaterialType::Custom(MaterialId)`,
-   forward-only. The G-buffer budget it was said to depend on settled the question instead of
-   blocking it: 28 of 32 bytes are spent, so a custom material cannot bring a target and declares
-   itself forward. `routing.rs` stayed exhaustive and produced exactly one compile error.
+5. ~~**User materials (A3).**~~ **DONE 2026-08-23** — `MaterialType::Custom(MaterialId)`, a
+   pipeline of the game's own, forward. `routing.rs` stayed exhaustive and produced exactly one
+   compile error. **And deferred, 2026-11-11:** `MaterialType::CustomSurface(SurfaceId)`, a surface
+   the game describes and the engine lights through the G-buffer. "28 of 32 bytes are spent, so a
+   custom material cannot bring a target" was true and beside the point: a surface fills the targets
+   every lit draw fills. See A3.
 6. ~~**2D pipeline (A1).**~~ **The drawing half DONE 2026-11-01** — "largest of all; arguably a
    separate project" turned out to be one component and one pass, because the 2D camera and the
    2D transform stack already existed as an orthographic camera and a plane. What remains is the

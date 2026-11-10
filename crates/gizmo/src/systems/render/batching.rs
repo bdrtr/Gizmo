@@ -178,6 +178,9 @@ pub struct DrawItem {
     /// A material the game registered. `Some(id)` sends this batch to
     /// `MaterialRegistry`'s pipeline instead of any of the engine's.
     pub(super) custom: Option<gizmo_renderer::custom_material::MaterialId>,
+    /// A surface the game registered (`MaterialType::CustomSurface`): lit and routed as PBR, drawn
+    /// with that surface's pipelines wherever the engine's material would use its own.
+    pub(super) surface: Option<gizmo_renderer::custom_material::SurfaceId>,
     /// The Gerstner water surface: `water.wgsl` and the water pipeline, chosen in
     /// `passes::forward`. Rides `unlit` out of the deferred and shadow passes like every other
     /// forward type, and this flag is what says *which* forward pipeline.
@@ -346,6 +349,9 @@ pub(crate) struct BatchKey {
     /// and more sharply: two custom materials sharing a mesh and a texture bind group differ *only*
     /// here, so without this they would merge and one of the two pipelines would draw both.
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
+    /// Which registered surface, if any, for the same reason: two surfaces sharing a mesh and a
+    /// texture bind group differ only here, and a surface and a `Pbr` material only here.
+    surface: Option<gizmo_renderer::custom_material::SurfaceId>,
     /// Water, for the same sharp reason. Water and unlit both set `unlit` (= `skips_deferred`),
     /// so a water material and an unlit one sharing a mesh and a cached texture bind group have
     /// an otherwise **identical** key — and the batch would inherit whichever the ECS iteration
@@ -373,6 +379,7 @@ pub(crate) struct BatchData {
     casts_shadows: bool,
     visible_in_camera: bool,
     custom: Option<gizmo_renderer::custom_material::MaterialId>,
+    surface: Option<gizmo_renderer::custom_material::SurfaceId>,
     is_water: bool,
     mirror: Option<Entity>,
     is_grid: bool,
@@ -807,6 +814,7 @@ pub(super) fn collect_draw_items(
                     casts_shadows,
                     visible_in_camera,
                     custom: routing.custom,
+                    surface: routing.surface,
                     is_water,
                     mirror,
                     is_grid,
@@ -829,6 +837,7 @@ pub(super) fn collect_draw_items(
                     casts_shadows,
                     visible_in_camera,
                     custom: routing.custom,
+                    surface: routing.surface,
                     is_water,
                     mirror,
                     is_grid,
@@ -999,6 +1008,7 @@ pub(super) fn collect_draw_items(
                 is_skybox: batch.is_skybox,
                 is_backdrop: batch.is_backdrop,
                 custom: batch.custom,
+                surface: batch.surface,
                 is_water: batch.is_water,
                 mirror: batch.mirror,
                 is_grid: batch.is_grid,
@@ -1126,6 +1136,7 @@ mod batch_key_tests {
             casts_shadows: true,
             visible_in_camera: true,
             custom: None,
+            surface: None,
             is_water: false,
             mirror: None,
             is_grid: false,
@@ -1158,6 +1169,7 @@ mod batch_key_tests {
             casts_shadows: true,
             visible_in_camera: true,
             custom: None,
+            surface: None,
             is_water: false,
             mirror: None,
             is_grid: false,
@@ -1205,6 +1217,12 @@ mod batch_key_tests {
         let water = BatchKey { unlit: true, is_water: true, ..base.clone() };
         assert_ne!(unlit, water, "unlit and water must be separate batches");
         assert_ne!(backdrop, water, "backdrop and water must be separate batches");
+
+        // A game's surface routes exactly as `Pbr` does, so against a `Pbr` material on the same mesh
+        // and texture its key differs in nothing else, and neither do two surfaces' keys.
+        let surface = |i| BatchKey { surface: Some(gizmo_renderer::custom_material::SurfaceId(i)), ..base.clone() };
+        assert_ne!(base, surface(0), "PBR and a game's surface must be separate batches");
+        assert_ne!(surface(0), surface(1), "two surfaces must be separate batches");
 
         // Identical routing + shared texture/mesh → same batch (instancing preserved).
         assert_eq!(base, base.clone(), "identical materials must still batch together");

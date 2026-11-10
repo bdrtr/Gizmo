@@ -734,7 +734,7 @@ fn a_stages_settings_reach_its_frame_and_its_pass_draws_over_it() {
 }
 
 /// Reads `texture` back as tightly packed RGBA8 rows.
-fn texture_bytes(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<u8> {
+pub(super) fn texture_bytes(renderer: &Renderer, texture: &wgpu::Texture) -> Vec<u8> {
     let (w, h) = (texture.width(), texture.height());
     let row = (w * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
@@ -1455,7 +1455,7 @@ fn a_view_draws_what_the_frames_step_simulated() {
 /// shared by the whole process every frame, and filled the table with copies of itself in some
 /// ninety frames); the solver checks the live static colliders, not all hundred slots; and a joint
 /// reaches it when it is added, not when the game next happens to call `update_params`.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn the_gpu_bodies_step_on_the_games_clock() {
@@ -1523,7 +1523,7 @@ fn the_gpu_bodies_step_on_the_games_clock() {
 }
 
 /// Every box slot of the renderer's GPU bodies, read back.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 fn gpu_boxes(renderer: &Renderer) -> Vec<crate::renderer::gpu_physics::GpuBox> {
     let physics = renderer.gpu_physics.as_ref().expect("GPU bodies");
     let size = physics.boxes_buffer.size();
@@ -1548,7 +1548,7 @@ fn gpu_boxes(renderer: &Renderer) -> Vec<crate::renderer::gpu_physics::GpuBox> {
 
 /// A frame of `dt` seconds for the GPU bodies: the preparation (which uploads and frees them) and
 /// everything before the frame's own view (which steps them).
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 fn gpu_body_frame(game: &mut World, renderer: &mut Renderer, dt: f32) {
     game.get_resource_mut::<gizmo_core::time::Time>().expect("a clock").update(dt);
     prepare_frame(game, renderer);
@@ -1563,7 +1563,7 @@ fn gpu_body_frame(game: &mut World, renderer: &mut Renderer, dt: f32) {
 /// There was no way out: slots were numbered by counting the linked bodies, so the third body in,
 /// after the first had gone, was handed the second's slot, and a despawned body went on falling and
 /// being drawn. And every game began with 50 000 falling cubes and three static colliders in it.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_gpu_body_leaves_with_its_entity_and_its_slot_is_nobody_elses() {
@@ -1669,7 +1669,7 @@ fn a_gpu_body_leaves_with_its_entity_and_its_slot_is_nobody_elses() {
 /// (it fell 6.5 m in those two seconds; `kumas`'s pins, massless, never held its cloth), and the push
 /// out of a contact was shared by mass, which made a massless body the lightest of all: the floor
 /// was pushed down out from under the box (0.49 m) and the box not at all.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_gpu_body_rests_on_the_ground_the_game_gave_it() {
@@ -1717,7 +1717,7 @@ fn a_gpu_body_rests_on_the_ground_the_game_gave_it() {
 }
 
 /// A massless floor and two boxes stacked on it, dropped a hair: returns the lower and the upper.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 fn gpu_stack(game: &mut World) -> (Entity, Entity) {
     use gizmo_physics_core::Collider;
     use gizmo_physics_rigid::components::RigidBody;
@@ -1733,7 +1733,7 @@ fn gpu_stack(game: &mut World) -> (Entity, Entity) {
 /// whether the body has stopped, so a resting box always showed the g·dt its support would take away
 /// next step; and the solve bounced that back at the restitution besides. Only a body on a static
 /// collider ever slept, so a heap of GPU bodies was simulated in full for as long as it lay there.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_box_resting_on_a_box_falls_asleep() {
@@ -1775,7 +1775,7 @@ fn a_box_resting_on_a_box_falls_asleep() {
 /// (`StaticCollider`'s padding was a `vec3`, which WGSL aligns to 16), so nothing ever landed on one.
 /// And a body resting on a static collider bounced each step's gravity back at the restitution, a few
 /// centimetres a second for ever, above the energy a body must fall under to sleep.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_body_taken_out_wakes_the_sleeping_bodies_round_it() {
@@ -1822,7 +1822,7 @@ fn a_body_taken_out_wakes_the_sleeping_bodies_round_it() {
 /// after it is copied; a body put in meanwhile was given that copy's slot — empty, at the origin —
 /// and its entity jumped there for a frame. Every frame of a body's first fall keeps it near where
 /// it was put.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_body_put_in_is_not_moved_by_a_readback_copied_before_it() {
@@ -1873,7 +1873,7 @@ fn a_body_put_in_is_not_moved_by_a_readback_copied_before_it() {
 /// rises. The contact manifold is kept per slot and nothing cleared it, so the new box took over the
 /// old one's contact with the floor — and the impulse it had accumulated holding the old box up,
 /// which held the new one down.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_body_in_a_left_slot_starts_with_none_of_its_contacts() {
@@ -1928,7 +1928,7 @@ fn a_body_in_a_left_slot_starts_with_none_of_its_contacts() {
 /// so it grew by the weight it held every step and the solve's clamp — all that keeps a contact
 /// from pulling — never bit: the thrown box was pulled back down (it did not rise at all after a
 /// second's rest), and a lower box was pulled 0.3 m up after the one thrown off it.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_contact_pushes_and_never_pulls() {
@@ -2011,7 +2011,7 @@ fn a_contact_pushes_and_never_pulls() {
 /// `PlaneShape` has it — a ground raised to y = 2 is `distance = 2.0`. The GPU solver read it as
 /// `dot(x, normal) + distance == 0`, so a raised ground stood as far below the origin as it should
 /// have stood above, and a body fell past where it should have landed.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_gpu_ground_plane_stands_where_its_distance_says() {
@@ -2052,7 +2052,7 @@ fn a_gpu_ground_plane_stands_where_its_distance_says() {
 /// was solved as a touching one, so the box stopped a few centimetres above the floor and crept down
 /// onto it. The bounce is added once now, after the solve, from the approach at the step's start, and
 /// a contact not yet touching lets the two close the gap they have.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn gpu_bodies_bounce_off_each_other() {
@@ -2096,7 +2096,7 @@ fn gpu_bodies_bounce_off_each_other() {
 /// 0.45 m/s — too slow to bounce — into a box wall ends up touching it. The contact the swept test
 /// found a step ahead was solved as a touching one: the approach was stopped outright and the box
 /// hung in front of the wall by whatever gap was left that step, for good.
-#[cfg(feature = "physics")]
+#[cfg(all(feature = "physics", not(gizmo_forward_only)))]
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_gpu_body_comes_all_the_way_up_to_what_it_meets() {

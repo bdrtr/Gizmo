@@ -39,6 +39,10 @@ pub(super) struct BatchKey {
     pub(super) visible_in_camera: bool,
     // The blend is baked into the pipeline (`Material::blend_mode`); `Alpha` for opaque draws.
     pub(super) blend_mode: gizmo::renderer::components::BlendMode,
+    // A game's own material or surface: each has pipelines of its own, so two of them sharing a mesh
+    // and a texture bind group — or one and the engine's material — differ only here.
+    pub(super) custom: Option<gizmo::renderer::custom_material::MaterialId>,
+    pub(super) surface: Option<gizmo::renderer::custom_material::SurfaceId>,
 }
 
 pub(super) struct BatchData {
@@ -83,6 +87,13 @@ pub(super) struct BatchData {
     pub(super) visible_in_camera: bool,
     /// How a transparent batch blends; `Alpha` for every opaque one.
     pub(super) blend_mode: gizmo::renderer::components::BlendMode,
+    /// A pipeline of the game's own (`MaterialType::Custom`), drawn as the game path draws it: from
+    /// the renderer's registry, or not at all for an id with nothing behind it. This viewport drew
+    /// one with the engine's lit shader until 2026-11-11, reading the instance flag it carries as
+    /// "skip the lights".
+    pub(super) custom: Option<gizmo::renderer::custom_material::MaterialId>,
+    /// A surface of the game's own (`MaterialType::CustomSurface`), lit by its own forward pipelines.
+    pub(super) surface: Option<gizmo::renderer::custom_material::SurfaceId>,
 }
 
 #[derive(Clone)]
@@ -131,6 +142,10 @@ pub(super) struct FlatBatchData {
     pub(super) visible_in_camera: bool,
     /// See [`BatchData::blend_mode`].
     pub(super) blend_mode: gizmo::renderer::components::BlendMode,
+    /// See [`BatchData::custom`].
+    pub(super) custom: Option<gizmo::renderer::custom_material::MaterialId>,
+    /// See [`BatchData::surface`].
+    pub(super) surface: Option<gizmo::renderer::custom_material::SurfaceId>,
 }
 
 impl FlatBatchData {

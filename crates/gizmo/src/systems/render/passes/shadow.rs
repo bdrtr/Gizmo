@@ -33,6 +33,11 @@ pub fn record_shadow_passes(
             if !item.casts_shadows {
                 continue;
             }
+            // A game's surface casts as `Pbr` does — the branches below — unless its id has nothing
+            // behind it, which draws nothing, its shadow included.
+            if item.surface.is_some_and(|id| renderer.custom_materials.surface(id).is_none()) {
+                continue;
+            }
             // A custom material routes as `unlit` — that is what keeps it out of the deferred
             // path — but "skips the G-buffer" is not "is not solid". The shadow pass writes depth
             // only and does not care how a fragment would have shaded, so the material itself
@@ -112,6 +117,9 @@ pub fn record_shadow_passes(
         for item in draw_items {
             // Per-object opt-out (`MeshRenderer::shadows`), same as the cascade pass above.
             if !item.casts_shadows { continue; }
+            if item.surface.is_some_and(|id| renderer.custom_materials.surface(id).is_none()) {
+                continue;
+            }
             // Same decision as the cascade pass above, and for the same reason.
             match item
                 .custom

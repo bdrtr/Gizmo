@@ -3,28 +3,26 @@
 //! Motorun sunmadığı bir gölgelendirme yazmak: kendi WGSL'i, kendi boru hattı, motorun geri kalanı
 //! aynen yerinde.
 //!
-//! ## Neden ileri (forward), ve bu neden bir taviz değil
+//! ## İki tür: motorun aydınlattığı bir yüzey, ve oyunun kendi boru hattı
 //!
-//! Akla gelen ilk tasarım "özel gölgelendirici de G-tamponuna yazsın". Sığmıyor, ve sebebi bir
-//! görüş değil bir **sayı**: dört G-tamponu hedefi `max_color_attachment_bytes_per_sample`
-//! bütçesini paylaşıyor ve o bütçe **32** (WebGPU'nun garanti ettiği alt sınır). Şu an harcanan:
+//! **Özel yüzey** (`SurfaceMaterial`, `MaterialType::CustomSurface`): oyun bir parçada yüzeyin *ne
+//! olduğunu* yazıyor — rengi, normali, pürüzü, metalikliği, ışıması — bir WGSL fonksiyonunda
+//! (`material_surface`), gerisini motor yapıyor. Fonksiyon motorun kendi G-tamponu
+//! gölgelendiricisine ve ileri aydınlatma gölgelendiricisine, motorun materyalinin yerine
+//! birleştiriliyor: masaüstünde G-tamponuna `Pbr` gibi yazılıyor ve ertelenmiş aydınlatmayı, SSAO'yu,
+//! SSR'ı, SSGI'yı, çıkartmaları alıyor; tarayıcıda, telefonda, editörde ve saydam yüzeyde aynı
+//! fonksiyonu ileri gölgelendirici aydınlatıyor. Bu demoda sağdaki küre: soğumuş kabuğun
+//! çatlaklarından sızan lav.
 //!
-//! | hedef | biçim | bayt |
-//! |-------|-------|------|
-//! | albedo + metaliklik | `Rgba8UnormSrgb` | 4 |
-//! | normal + pürüz | `Rgba16Float` | 8 |
-//! | konum + saçılım/anizotropi | `Rgba16Float` | 8 |
-//! | teğet + el | `Rgba16Float` | 8 |
-//! | **toplam** | | **28 / 32** |
+//! Bu belge 2026-08-23'te bunun olamayacağını yazıyordu: G-tamponu bütçesi (o zaman 28/32 bayt)
+//! özel bir materyalin *kendi* kanalını getirmesine yer bırakmıyordu. Doğruydu ve sorun değildi:
+//! bir yüzey kendi kanalını değil, her aydınlatılan çizimin doldurduğu kanalları dolduruyor.
 //!
-//! Geriye **4 bayt** kalıyor: tam olarak bir `Rgba8` hedefi, bir `Rgba16Float` değil. Yani özel bir
-//! materyal kendi G-tamponu kanalını getiremiyor — ya paylaşılan bütçenin son kırıntısını tek bir
-//! özellik için harcayacak, ya da ertelenmiş aydınlatmanın okuduğu bir şeyi kovacak.
-//!
-//! Bu yüzden özel materyal **kendini ileri ilan ediyor**: kendi boru hattı, kendi gölgelendiricisi,
-//! ertelenmiş çözümlemeden sonra, sahnenin geri kalanının yazdığı derinlik tamponuyla. Gölge
-//! atabiliyor — gölge geçişi yalnız derinlik yazıyor, bir parçanın nasıl gölgeleneceği umurunda
-//! değil.
+//! **Özel boru hattı** (`CustomMaterial`, `MaterialType::Custom`): gölgelendirmenin hepsi oyunun —
+//! motor yalnız grupları bağlıyor ve ileri çiziyor, ertelenmiş çözümlemeden sonra, sahnenin geri
+//! kalanının yazdığı derinlik tamponuyla. Aydınlatılan bir yüzey olmayan şey için: bu demodaki
+//! hologram. Gölge atabiliyor — gölge geçişi yalnız derinlik yazıyor, bir parçanın nasıl
+//! gölgeleneceği umurunda değil.
 //!
 //! ## Boş bağlama grubu yok — ve verinin gideceği yer grup 1
 //!
@@ -44,9 +42,12 @@
 //!
 //! ## Ölçülen: özel materyal kareye ulaşıyor
 //!
-//! Sahnede üç küre: solda motorun PBR'ı, ortada motorun `Unlit`'i, sağda **kayıtlı özel materyal** —
-//! yükseklik bantlarına göre renk değiştiren, kenarında Fresnel parlaması olan bir "hologram".
-//! Hiçbiri motorun sunduğu bir görünüm değil.
+//! Sahnede dört küre: solda motorun PBR'ı, sonra motorun `Unlit`'i, sonra **kayıtlı özel boru hattı**
+//! — yükseklik bantlarına göre renk değiştiren, kenarında Fresnel parlaması olan bir "hologram" — ve
+//! en sağda **özel yüzey**, lav. Ölçümler aşağıda ilk üçün; özel yüzeyin ölçümü motorun testinde
+//! (`a_custom_surface_is_drawn_as_the_engines_material_is`): motorun materyalini döndüren bir yüzey
+//! `Pbr`'ın karesini bayt bayt çiziyor, opak ve saydam; kırmızıya boyayan bir yüzey G-tamponuna tam
+//! o kırmızıyı yazıyor (243, 63, 63).
 //!
 //! Ölçüldü (2026-08-23, `GIZMO_CM_SLAB=<0|1|2>` ile her küre tek başına, kare 200):
 //!
@@ -89,13 +90,13 @@
 //! düşme kolu geri konduğunda **5770/16384 piksel** sızarak kırmızıya dönüyor.
 //!
 //! ## Kontroller
-//!   * `GIZMO_CM_SLAB=<0|1|2>` — tek küreyi ortada yalnız bırak (ölçüm için)
+//!   * `GIZMO_CM_SLAB=<0|1|2|3>` — tek küreyi ortada yalnız bırak (ölçüm için)
 //!   * `GIZMO_CM_DANGLING=1` — kayıtsız bir id ata: hiçbir şey çizilmemeli
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::prelude::*;
 use gizmo::renderer::components::MaterialType;
-use gizmo::renderer::custom_material::{CustomMaterial, CustomPipelineOptions, MaterialId};
+use gizmo::renderer::custom_material::{CustomMaterial, CustomPipelineOptions, MaterialId, SurfaceId};
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
 /// Özel gölgelendirici.
@@ -181,6 +182,30 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Özel yüzey: soğumuş lav kabuğu ve çatlaklarından sızan ışık.
+///
+/// Yalnız yüzeyin ne olduğu burada — renk, pürüz, ışıma. Işığı, gölgesi, SSAO'su ve yansıması
+/// motorun, G-tamponu yoluyla, `Pbr`'ınkiler gibi. `standard_surface` motorun materyali; bu fonksiyon
+/// ondan başlayıp çoğunu değiştiriyor. Grup 0'ı bildirmesi gerekmiyor: zaman ve kamera
+/// `SurfaceInput`'ta geliyor.
+const LAVA_WGSL: &str = r#"
+#import gizmo::surface::{Surface, SurfaceInput}
+#import gizmo::material::{standard_surface}
+
+fn material_surface(input: SurfaceInput) -> Surface {
+    var surface = standard_surface(input);
+    let p = input.world_position * 2.6;
+    let veins = sin(p.x * 1.7 + sin(p.y * 2.3)) * sin(p.z * 1.9 + sin(p.x * 1.1))
+        * sin(p.y * 2.9 + input.time * 0.4);
+    let crack = 1.0 - smoothstep(0.0, 0.12, abs(veins));
+    surface.albedo = mix(vec3<f32>(0.08, 0.07, 0.065), vec3<f32>(0.02, 0.012, 0.01), crack);
+    surface.roughness = mix(0.85, 0.35, crack);
+    surface.metallic = 0.0;
+    surface.emissive = vec3<f32>(4.0, 1.1, 0.15) * crack * (0.75 + 0.25 * sin(input.time * 2.0));
+    return surface;
+}
+"#;
+
 /// Ölçüm defteri.
 #[derive(Clone, Copy, Default)]
 struct Report {
@@ -188,6 +213,8 @@ struct Report {
     registered: u32,
     /// Atanan id — kayıtsız kipte bunun karşılığı yok.
     id: u32,
+    /// Atanan yüzey id'si, aynı kuralla.
+    surface: u32,
 }
 gizmo::core::impl_component!(Report);
 
@@ -213,6 +240,13 @@ fn main() {
 
     App::<SimpleSceneState>::new("Gizmo Engine - Custom Material", 1280, 720)
         .with_simple_scene(move |scene, state| {
+            // 0. Yüzey: motorun gölgelendiricilerine birleştirilip derleniyor. WGSL'de bir hata
+            //    `SurfaceError` olarak dönüyor, gölgelendirici derleyicisinin iletisiyle.
+            let surface = scene
+                .renderer
+                .add_surface_material("lava", LAVA_WGSL)
+                .unwrap_or_else(|e| panic!("{e}"));
+
             let device = &scene.renderer.device;
             let queue = &scene.renderer.queue;
 
@@ -254,11 +288,13 @@ fn main() {
 
             // Kayıtsız id: kaydedilenden sonrası. Çizim yolu bunu hiçbir şeye düşürmemeli.
             let used_id = if dangling { MaterialId(id.0 + 99) } else { id };
+            let used_surface = if dangling { SurfaceId(surface.0 + 99) } else { surface };
 
-            let spheres: [(f32, MaterialType, std::sync::Arc<wgpu::BindGroup>); 3] = [
-                (-3.4, MaterialType::Pbr, white.clone()),
-                (0.0, MaterialType::Unlit, white.clone()),
-                (3.4, MaterialType::Custom(used_id), custom_bg),
+            let spheres: [(f32, MaterialType, std::sync::Arc<wgpu::BindGroup>); 4] = [
+                (-5.1, MaterialType::Pbr, white.clone()),
+                (-1.7, MaterialType::Unlit, white.clone()),
+                (1.7, MaterialType::Custom(used_id), custom_bg),
+                (5.1, MaterialType::CustomSurface(used_surface), white.clone()),
             ];
             for (i, (x, kind, bg)) in spheres.into_iter().enumerate() {
                 let x = match only {
@@ -293,10 +329,11 @@ fn main() {
             scene.world.insert_resource(Timed { buffer: time_buf });
             scene.world.insert_resource(Report {
                 frame: 0,
-                registered: 1,
+                registered: 2,
                 id: used_id.0,
+                surface: used_surface.0,
             });
-            scene.spawn_camera(state, Vec3::new(0.0, 1.6, 8.4), Vec3::new(0.0, 0.4, 0.0));
+            scene.spawn_camera(state, Vec3::new(0.0, 1.9, 11.0), Vec3::new(0.0, 0.4, 0.0));
         })
         // Kare sayacı oyun mantığı: update'te, basit sahnenin kancasının ardından.
         .add_update_hook(|world, _state, _dt, _input| {
@@ -327,6 +364,7 @@ fn main() {
                         ui.heading("Kendi materyalin");
                         ui.label(format!("kayıtlı materyal: {} · kare {}", r.registered, r.frame));
                         ui.monospace(format!("  MaterialType::Custom(MaterialId({}))", r.id));
+                        ui.monospace(format!("  MaterialType::CustomSurface(SurfaceId({}))", r.surface));
                         if dangling {
                             ui.colored_label(
                                 gizmo::egui::Color32::from_rgb(230, 160, 80),
@@ -334,9 +372,9 @@ fn main() {
                             );
                         }
                         ui.separator();
-                        ui.label("G-tamponu 28/32 bayt dolu: 4 bayt kaldı,");
-                        ui.label("bir Rgba8 hedefi kadar, bir Rgba16F kadar değil.");
-                        ui.label("-> özel materyal ileri (forward) çiziliyor.");
+                        ui.label("hologram: oyunun kendi boru hattı, ileri çiziliyor.");
+                        ui.label("lav: oyunun yüzeyi, motorun G-tamponuna yazılıyor —");
+                        ui.label("ışığı, gölgesi, SSAO'su ve yansıması motorun.");
                         ui.separator();
                         ui.label("boş bağlama grubu yok (web'de 4/4 dolu).");
                         ui.label("verinin yeri grup 1: 4 doku + 1 uniform.");

@@ -72,6 +72,10 @@ pub struct Routing {
     /// forward, still not a skybox, still not a grid — the id says *which* pipeline, not *whether*
     /// the rest of the routing applies.
     pub custom: Option<crate::custom_material::MaterialId>,
+    /// The game's own surface, and which one: lit, so routed as [`MaterialType::Pbr`] is — through the
+    /// G-buffer where there is one — with every lit pipeline fetched from the registry's
+    /// [`SurfaceMaterial`](crate::custom_material::SurfaceMaterial) instead of the engine's.
+    pub surface: Option<crate::custom_material::SurfaceId>,
     /// Drawn forward rather than through the G-buffer.
     ///
     /// Skybox, baked-lit, backdrop, unlit and water all skip the deferred path. They part company
@@ -90,6 +94,10 @@ pub fn route(material_type: MaterialType) -> Routing {
     // `None` for no reason.
     let custom = match material_type {
         MaterialType::Custom(id) => Some(id),
+        _ => None,
+    };
+    let surface = match material_type {
+        MaterialType::CustomSurface(id) => Some(id),
         _ => None,
     };
 
@@ -122,6 +130,9 @@ pub fn route(material_type: MaterialType) -> Routing {
             // "not deferred PBR" flag every other forward type carries, so a loop that only reads
             // the flag routes it correctly even before it learns about the registry.
             MaterialType::Custom(_) => (1.0, false, false, false, false, false),
+            // A surface the game describes and the engine lights: `Pbr`'s answer, through the
+            // G-buffer, with its own pipelines (`surface` above says which).
+            MaterialType::CustomSurface(_) => (0.0, false, false, false, false, false),
         };
 
     Routing {
@@ -133,6 +144,7 @@ pub fn route(material_type: MaterialType) -> Routing {
         is_backdrop,
         is_water,
         custom,
+        surface,
         skips_deferred: is_skybox
             || is_grid
             || baked_lit
@@ -183,6 +195,7 @@ mod tests {
             MaterialType::Water,
             MaterialType::Grid,
             MaterialType::Custom(crate::custom_material::MaterialId(0)),
+            MaterialType::CustomSurface(crate::custom_material::SurfaceId(0)),
         ];
         for t in all {
             let r = route(t);
@@ -216,6 +229,21 @@ mod tests {
         // Not `unlit`: that flag means exactly `MaterialType::Unlit`, and the shadow pass reads it.
         // A custom material decides shadows for itself through `CustomMaterial::casts_shadows`.
         assert!(!r.unlit_material);
+    }
+
+    /// A game's surface routes as `Pbr` does — through the G-buffer, lit, casting shadows — and says
+    /// which surface it is; it is not a `custom` pipeline, which the draw loops send forward.
+    #[test]
+    fn a_custom_surface_routes_as_pbr_and_carries_its_id() {
+        let id = crate::custom_material::SurfaceId(2);
+        let r = route(MaterialType::CustomSurface(id));
+        assert_eq!(r.surface, Some(id));
+        assert_eq!(r.custom, None, "a surface is not a pipeline of the game's own");
+        assert!(!r.skips_deferred, "a surface fills the G-buffer as the engine's material does");
+        assert_eq!(r.instance_flag, 0.0, "the G-buffer discards anything else");
+        assert_eq!(Routing { surface: None, ..r }, route(MaterialType::Pbr), "otherwise exactly Pbr's answer");
+        assert_eq!(route(MaterialType::Pbr).surface, None);
+        assert_eq!(route(MaterialType::Custom(crate::custom_material::MaterialId(2))).surface, None);
     }
 
     /// Every built-in still answers `None`, so `custom` cannot be read as "has a routing".

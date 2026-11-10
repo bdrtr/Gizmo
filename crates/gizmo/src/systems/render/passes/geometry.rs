@@ -33,7 +33,7 @@ pub fn record_deferred_geometry(
         // The cull mode is baked into the pipeline, so a double-sided material needs its own.
         // Tracked and set only on change rather than per item: the batches are not sorted by this
         // flag and a scene is overwhelmingly one-sided, so this is a handful of switches at most.
-        let mut bound: Option<(bool, bool)> = None;
+        let mut bound: Option<(Option<gizmo_renderer::custom_material::SurfaceId>, bool, bool)> = None;
         for item in draw_items {
             // `ShadowCasting::Only`: casts, is not drawn. Checked in the z-prepass as well as the
             // G-buffer below, or the object would still write depth and punch a hole in whatever
@@ -44,13 +44,23 @@ pub fn record_deferred_geometry(
             if item.unlit || item.is_skybox || item.is_transparent {
                 continue;
             }
-            if bound != Some((item.is_double_sided, item.discards)) {
-                z_pass.set_pipeline(match (item.discards, item.is_double_sided) {
-                    (true, two_sided) => &def.z_prepass_discard_pipelines[usize::from(two_sided)],
-                    (false, true) => &def.z_prepass_double_sided_pipeline,
-                    (false, false) => &def.z_prepass_pipeline,
-                });
-                bound = Some((item.is_double_sided, item.discards));
+            let key = (item.surface, item.is_double_sided, item.discards);
+            if bound != Some(key) {
+                let pipeline = match item.surface {
+                    // A game's surface cuts where its own code says, so its prepass always has the
+                    // fragment stage; an id with nothing behind it draws nothing, here as everywhere.
+                    Some(id) => match renderer.custom_materials.surface(id).and_then(|s| s.prepass_pipeline(item.is_double_sided)) {
+                        Some(pipeline) => pipeline,
+                        None => continue,
+                    },
+                    None => match (item.discards, item.is_double_sided) {
+                        (true, two_sided) => &def.z_prepass_discard_pipelines[usize::from(two_sided)],
+                        (false, true) => &def.z_prepass_double_sided_pipeline,
+                        (false, false) => &def.z_prepass_pipeline,
+                    },
+                };
+                z_pass.set_pipeline(pipeline);
+                bound = Some(key);
             }
             let skel_bg = item
                 .skeleton_bind_group
@@ -146,7 +156,7 @@ pub fn record_deferred_geometry(
         gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
         gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
         gbuf_pass.set_bind_group(5, &def.motion.bind_group, &[]);
-        let mut two_sided_bound: Option<bool> = None;
+        let mut bound: Option<(Option<gizmo_renderer::custom_material::SurfaceId>, bool)> = None;
         for item in draw_items {
             if !item.visible_in_camera {
                 continue; // ShadowCasting::Only
@@ -154,13 +164,19 @@ pub fn record_deferred_geometry(
             if item.unlit || item.is_transparent {
                 continue;
             }
-            if two_sided_bound != Some(item.is_double_sided) {
-                gbuf_pass.set_pipeline(if item.is_double_sided {
-                    &def.gbuffer_double_sided_pipeline
-                } else {
-                    &def.gbuffer_pipeline
-                });
-                two_sided_bound = Some(item.is_double_sided);
+            let key = (item.surface, item.is_double_sided);
+            if bound != Some(key) {
+                let pipeline = match item.surface {
+                    // The engine's G-buffer shader around the game's surface: written as `Pbr` is.
+                    Some(id) => match renderer.custom_materials.surface(id).and_then(|s| s.gbuffer_pipeline(item.is_double_sided)) {
+                        Some(pipeline) => pipeline,
+                        None => continue,
+                    },
+                    None if item.is_double_sided => &def.gbuffer_double_sided_pipeline,
+                    None => &def.gbuffer_pipeline,
+                };
+                gbuf_pass.set_pipeline(pipeline);
+                bound = Some(key);
             }
             let skel_bg = item
                 .skeleton_bind_group

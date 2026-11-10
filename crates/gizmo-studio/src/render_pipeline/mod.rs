@@ -409,6 +409,8 @@ fn draw_studio_frame(
                         casts_shadows,
                         visible_in_camera,
                         blend_mode,
+                        custom: routing.custom,
+                        surface: routing.surface,
                     })
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
@@ -435,6 +437,8 @@ fn draw_studio_frame(
                         casts_shadows,
                         visible_in_camera,
                         blend_mode,
+                        custom: routing.custom,
+                        surface: routing.surface,
                     });
 
                 if camera_visible {
@@ -507,6 +511,8 @@ fn draw_studio_frame(
                         casts_shadows: batch.casts_shadows,
                         visible_in_camera: batch.visible_in_camera,
                         blend_mode: batch.blend_mode,
+                        custom: batch.custom,
+                        surface: batch.surface,
                     });
                 }
             };

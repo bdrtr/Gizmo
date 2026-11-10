@@ -9994,6 +9994,218 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         render_world(&mut renderer, &mut world).await
     }
 
+    /// **A game's surface is drawn as the engine's material is** — through the G-buffer on this path,
+    /// by the lit forward shader when it is transparent — with only what its own function changes.
+    ///
+    /// One cube, drawn as `MaterialType::Pbr` and as a surface whose `material_surface` returns
+    /// `standard_surface(input)`: the engine's material through the hook. The frames must be the same
+    /// to the byte, opaque and transparent, and so must the G-buffer albedo. It means something on the
+    /// forward-only path too (`--cfg gizmo_forward_only`), where the surface is drawn on the `DETAILS`
+    /// tier and `Pbr` on the plain one, and the frames are the same there as well; every pixel of the
+    /// cube differed while a surface's shader was composed with its probe defs' `false` still in. A surface that paints the
+    /// cube red writes that red, exactly, into the G-buffer, which is what the deferred lighting, SSAO,
+    /// SSR, SSGI and decals read; before 2026-11-11 a material of the game's own could only be drawn
+    /// forward, after all of them. And an id with nothing behind it draws nothing, its shadow included.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_custom_surface_is_drawn_as_the_engines_material_is() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let largest_difference = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+            for transparent in [false, true] {
+                let (pbr, pbr_albedo) = render_surface_cube(SurfaceCase::Pbr, transparent).await;
+                let (standard, standard_albedo) = render_surface_cube(SurfaceCase::Standard, transparent).await;
+                assert_eq!(
+                    largest_difference(&pbr, &standard),
+                    0,
+                    "the engine's material through a surface's hook drew another frame than Pbr (transparent: {transparent})",
+                );
+                assert_eq!(pbr_albedo, standard_albedo, "and another G-buffer (transparent: {transparent})");
+            }
+
+            for transparent in [false, true] {
+                let (pbr, _) = render_surface_cube(SurfaceCase::Pbr, transparent).await;
+                let (red, _) = render_surface_cube(SurfaceCase::Red, transparent).await;
+                let (changed, total) = changed_pixels(&pbr, &red, 128);
+                assert!(
+                    changed >= 300,
+                    "the red surface changed {changed}/{total} pixels: its function is not reaching the frame (transparent: {transparent})",
+                );
+            }
+            // The cube's middle, in the G-buffer: `Rgba8UnormSrgb`, so 0.9 and 0.05 are 243 and 63, and
+            // alpha is the metalness, 0. The forward-only path has no G-buffer to hold it.
+            if let (_, Some(red_albedo)) = render_surface_cube(SurfaceCase::Red, false).await {
+                let middle = (64 * 128 + 64) * 4;
+                let texel = &red_albedo[middle..middle + 4];
+                for (got, want) in texel.iter().zip([243u8, 63, 63, 0]) {
+                    assert!(got.abs_diff(want) <= 1, "the G-buffer holds {texel:?} where the surface wrote (243, 63, 63, 0)");
+                }
+            }
+
+            let (dangling, _) = render_surface_cube(SurfaceCase::Dangling, false).await;
+            let (empty, _) = render_surface_cube(SurfaceCase::NoCube, false).await;
+            let (leaked, total) = changed_pixels(&dangling, &empty, 128);
+            assert_eq!(leaked, 0, "a surface id with nothing behind it drew {leaked}/{total} pixels");
+        });
+    }
+
+    /// Which material the cube in `render_surface_cube` carries.
+    #[derive(Clone, Copy, PartialEq)]
+    enum SurfaceCase {
+        /// The engine's own PBR — the reference.
+        Pbr,
+        /// [`STANDARD_SURFACE_WGSL`]: the engine's material through the hook.
+        Standard,
+        /// [`RED_SURFACE_WGSL`].
+        Red,
+        /// `MaterialType::CustomSurface` with an id nothing was registered under.
+        Dangling,
+        /// No cube at all — what "drew nothing" has to look like.
+        NoCube,
+    }
+
+    /// What `MaterialType::Pbr` draws, as a game's surface.
+    const STANDARD_SURFACE_WGSL: &str = r#"
+#import gizmo::surface::{Surface, SurfaceInput}
+#import gizmo::material::{standard_surface}
+fn material_surface(input: SurfaceInput) -> Surface {
+    return standard_surface(input);
+}
+"#;
+
+    /// The engine's material, painted red and not metal.
+    const RED_SURFACE_WGSL: &str = r#"
+#import gizmo::surface::{Surface, SurfaceInput}
+#import gizmo::material::{standard_surface}
+fn material_surface(input: SurfaceInput) -> Surface {
+    var surface = standard_surface(input);
+    surface.albedo = vec3<f32>(0.9, 0.05, 0.05);
+    surface.metallic = 0.0;
+    return surface;
+}
+"#;
+
+    /// One cube in front of a camera, as the custom material test has it: the frame, and the G-buffer's
+    /// albedo target after it where there is a G-buffer.
+    async fn render_surface_cube(case: SurfaceCase, transparent: bool) -> (Vec<u8>, Option<Vec<u8>>) {
+        const W: u32 = 128;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let standard = renderer.add_surface_material("standard", STANDARD_SURFACE_WGSL).expect("the standard surface composes");
+        let red = renderer.add_surface_material("red", RED_SURFACE_WGSL).expect("the red surface composes");
+
+        if case != SurfaceCase::NoCube {
+            use gizmo_renderer::components::MaterialType;
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::ZERO));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            let alpha = if transparent { 0.5 } else { 1.0 };
+            let mut mat = Material::new(tex.clone())
+                .with_pbr(Vec4::new(0.8, 0.4, 0.2, alpha), 0.5, 0.0)
+                .with_transparent(transparent);
+            mat.material_type = match case {
+                SurfaceCase::Pbr => MaterialType::Pbr,
+                SurfaceCase::Standard => MaterialType::CustomSurface(standard),
+                SurfaceCase::Red => MaterialType::CustomSurface(red),
+                // One past the last: ids start at 0, so this resolves to nothing.
+                SurfaceCase::Dangling => MaterialType::CustomSurface(gizmo_renderer::custom_material::SurfaceId(red.0 + 1)),
+                SurfaceCase::NoCube => unreachable!(),
+            };
+            world.add_component(cube, mat);
+            world.add_component(cube, MeshRenderer::new());
+        }
+        // A floor under it, so a shadow cast or not is part of the frame.
+        let floor = world.spawn();
+        world.add_component(floor, Transform::new(Vec3::new(0.0, -1.5, 0.0)).with_scale(Vec3::new(6.0, 0.1, 6.0)));
+        world.add_component(floor, GlobalTransform::default());
+        world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), 0.8, 0.0));
+        world.add_component(floor, MeshRenderer::new());
+
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.0, 0.0, 4.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            ..Default::default()
+        });
+        world.spawn_bundle(DirectionalLightBundle::default());
+
+        let frame = render_world(&mut renderer, &mut world).await;
+        let albedo = renderer
+            .deferred
+            .as_ref()
+            .map(|deferred| super::frame_split_tests::texture_bytes(&renderer, &deferred.albedo_metallic_tex));
+        (frame, albedo)
+    }
+
+    /// **A hot reload rebuilds the deferred pipelines and every surface.** `rebuild_pipelines` did not
+    /// reach the G-buffer, prepass, environment-sky or lighting pipelines until 2026-11-11, so a
+    /// reloaded `gbuffer.wgsl` or `deferred_lighting.wgsl` changed nothing in a running studio; a
+    /// game's surface is composed from `gbuffer.wgsl` and `shader.wgsl`, so it has to be rebuilt with
+    /// them. Each is a new pipeline afterwards — wgpu compares them by identity — and the surface
+    /// draws the same frame as before.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_hot_reload_rebuilds_the_deferred_pipelines_and_every_surface() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let id = renderer.add_surface_material("red", RED_SURFACE_WGSL).expect("composes");
+            // The forward-only path has no G-buffer, so only the forward halves are there to rebuild.
+            let deferred = |r: &Renderer| match r.deferred.as_ref() {
+                Some(d) => vec![
+                    d.gbuffer_pipeline.clone(),
+                    d.gbuffer_double_sided_pipeline.clone(),
+                    d.z_prepass_pipeline.clone(),
+                    d.z_prepass_double_sided_pipeline.clone(),
+                    d.z_prepass_discard_pipelines[0].clone(),
+                    d.z_prepass_discard_pipelines[1].clone(),
+                    d.environment_sky_pipeline.clone(),
+                    d.lighting_pipeline.clone(),
+                ],
+                None => Vec::new(),
+            };
+            let surface = |r: &Renderer| {
+                let s = r.custom_materials.surface(id).expect("registered");
+                let mut pipelines = vec![
+                    s.lit_pipeline(false, true, false, Default::default()).clone(),
+                    s.lit_pipeline(true, false, true, Default::default()).clone(),
+                    s.transmissive_pipeline(false).clone(),
+                ];
+                pipelines.extend(s.gbuffer_pipeline(false).cloned());
+                pipelines.extend(s.prepass_pipeline(true).cloned());
+                assert_eq!(pipelines.len(), if r.deferred.is_some() { 5 } else { 3 }, "a G-buffer and no surface pipelines for it");
+                pipelines
+            };
+            let (deferred_before, surface_before) = (deferred(&renderer), surface(&renderer));
+            renderer.rebuild_shaders();
+            for (i, (before, after)) in deferred_before.iter().zip(deferred(&renderer)).enumerate() {
+                assert_ne!(*before, after, "deferred pipeline {i} survived a hot reload");
+            }
+            for (i, (before, after)) in surface_before.iter().zip(surface(&renderer)).enumerate() {
+                assert_ne!(*before, after, "surface pipeline {i} survived a hot reload");
+            }
+        });
+    }
+
     /// A normal map bound through `AssetManager::material` has to reach the shading.
     ///
     /// The 7-entry material layout has always had a normal slot; what it did not have was a public

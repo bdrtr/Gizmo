@@ -150,6 +150,18 @@ pub struct DeferredState {
     pub height: u32,
 }
 
+/// What [`DeferredState::create_pipelines`] builds, by what it is drawn with.
+struct GeometryPipelines {
+    /// Single-sided, then double-sided.
+    gbuffer: [wgpu::RenderPipeline; 2],
+    /// The prepass with no fragment stage: single-sided, then double-sided.
+    z_prepass: [wgpu::RenderPipeline; 2],
+    /// The prepass that cuts what its surface cuts, likewise.
+    z_prepass_discard: [wgpu::RenderPipeline; 2],
+    environment_sky: wgpu::RenderPipeline,
+    lighting: wgpu::RenderPipeline,
+}
+
 impl DeferredState {
     /// Builds all four G-buffer targets and the three pipelines for a frame of the given size.
     pub fn new(device: &wgpu::Device, scene: &SceneState, width: u32, height: u32) -> Self {
@@ -182,37 +194,14 @@ impl DeferredState {
         );
 
         let motion = crate::motion::MotionGpu::new(device, 1024);
-        let z_prepass_pipeline = Self::create_z_prepass_pipeline(
-            device,
-            scene,
-            &motion.layout,
-            Some(wgpu::Face::Back),
-            false,
-            "Z-Prepass Pipeline",
-        );
-        let z_prepass_discard_pipelines = [
-            Self::create_z_prepass_pipeline(device, scene, &motion.layout, Some(wgpu::Face::Back), true, "Z-Prepass Discard Pipeline"),
-            Self::create_z_prepass_pipeline(device, scene, &motion.layout, None, true, "Z-Prepass Discard TwoSided Pipeline"),
-        ];
-        let z_prepass_double_sided_pipeline =
-            Self::create_z_prepass_pipeline(device, scene, &motion.layout, None, false, "Z-Prepass TwoSided Pipeline");
-        let gbuffer_pipeline = Self::create_gbuffer_pipeline(
-            device,
-            scene,
-            &motion.layout,
-            Some(wgpu::Face::Back),
-            "GBuffer Pipeline",
-        );
-        let gbuffer_double_sided_pipeline =
-            Self::create_gbuffer_pipeline(device, scene, &motion.layout, None, "GBuffer TwoSided Pipeline");
         let irradiance = crate::irradiance::IrradianceState::new(device);
-        let environment_sky_pipeline = Self::create_environment_sky_pipeline(device, scene, &irradiance.bind_group_layout);
-        let lighting_pipeline = Self::create_lighting_pipeline(
-            device,
-            scene,
-            &gbuffer_bind_group_layout,
-            &irradiance.bind_group_layout,
-        );
+        let GeometryPipelines {
+            gbuffer: [gbuffer_pipeline, gbuffer_double_sided_pipeline],
+            z_prepass: [z_prepass_pipeline, z_prepass_double_sided_pipeline],
+            z_prepass_discard: z_prepass_discard_pipelines,
+            environment_sky: environment_sky_pipeline,
+            lighting: lighting_pipeline,
+        } = Self::create_pipelines(device, scene, &motion.layout, &gbuffer_bind_group_layout, &irradiance.bind_group_layout);
 
         Self {
             albedo_metallic_tex,
@@ -242,6 +231,64 @@ impl DeferredState {
             width,
             height,
         }
+    }
+
+    /// Every pipeline this state draws with, from the shaders on disk if there are copies there — what
+    /// both construction and a hot reload ([`Self::rebuild_pipelines`]) build.
+    fn create_pipelines(
+        device: &wgpu::Device,
+        scene: &SceneState,
+        motion_layout: &wgpu::BindGroupLayout,
+        gbuffer_layout: &wgpu::BindGroupLayout,
+        irradiance_layout: &wgpu::BindGroupLayout,
+    ) -> GeometryPipelines {
+        let geometry = crate::pipeline::shaders::load_shader_composed(
+            device,
+            "demo/assets/shaders/gbuffer.wgsl",
+            include_str!("shaders/gbuffer.wgsl"),
+            "GBuffer Shader",
+        );
+        let back = Some(wgpu::Face::Back);
+        let prepass = |cull, discards, label| {
+            Self::create_z_prepass_pipeline(device, scene, motion_layout, &geometry, cull, discards, label)
+        };
+        GeometryPipelines {
+            gbuffer: [
+                Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, back, "GBuffer Pipeline"),
+                Self::create_gbuffer_pipeline(device, scene, motion_layout, &geometry, None, "GBuffer TwoSided Pipeline"),
+            ],
+            z_prepass: [
+                prepass(back, false, "Z-Prepass Pipeline"),
+                prepass(None, false, "Z-Prepass TwoSided Pipeline"),
+            ],
+            z_prepass_discard: [
+                prepass(back, true, "Z-Prepass Discard Pipeline"),
+                prepass(None, true, "Z-Prepass Discard TwoSided Pipeline"),
+            ],
+            environment_sky: Self::create_environment_sky_pipeline(device, scene, irradiance_layout),
+            lighting: Self::create_lighting_pipeline(device, scene, gbuffer_layout, irradiance_layout),
+        }
+    }
+
+    /// Recompiles `gbuffer.wgsl`, `deferred_lighting.wgsl` and `environment_sky.wgsl` and rebuilds the
+    /// pipelines drawn with them, keeping the targets, the bind groups and the irradiance volume.
+    ///
+    /// [`rebuild_pipelines`](crate::pipeline::rebuild_pipelines) did not reach these until
+    /// 2026-11-11, so a hot-reloaded copy of any of the three changed nothing in a running studio,
+    /// while the skill that describes hot reload names `deferred_lighting` as what it is for.
+    pub fn rebuild_pipelines(&mut self, device: &wgpu::Device, scene: &SceneState) {
+        let GeometryPipelines { gbuffer, z_prepass, z_prepass_discard, environment_sky, lighting } = Self::create_pipelines(
+            device,
+            scene,
+            &self.motion.layout,
+            &self.gbuffer_bind_group_layout,
+            &self.irradiance.bind_group_layout,
+        );
+        [self.gbuffer_pipeline, self.gbuffer_double_sided_pipeline] = gbuffer;
+        [self.z_prepass_pipeline, self.z_prepass_double_sided_pipeline] = z_prepass;
+        self.z_prepass_discard_pipelines = z_prepass_discard;
+        self.environment_sky_pipeline = environment_sky;
+        self.lighting_pipeline = lighting;
     }
 
     /// Recreate G-buffer textures and bind groups when the window is resized.
@@ -321,8 +368,11 @@ impl DeferredState {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: fmt,
+                // `COPY_SRC`, as the velocity target has, so a test can read what a surface wrote:
+                // that a game's own surface lands in the G-buffer is a fact about these bytes.
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                    | wgpu::TextureUsages::TEXTURE_BINDING,
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | wgpu::TextureUsages::COPY_SRC,
                 view_formats: &[],
             });
             let v = t.create_view(&wgpu::TextureViewDescriptor::default());
@@ -504,20 +554,16 @@ impl DeferredState {
         (texture, view)
     }
 
-    fn create_gbuffer_pipeline(
+    /// A G-buffer pipeline drawn with `shader`, which is `gbuffer.wgsl` composed: the engine's own
+    /// material, or a game's surface ([`SurfaceMaterial`](crate::custom_material::SurfaceMaterial)).
+    pub(crate) fn create_gbuffer_pipeline(
         device: &wgpu::Device,
         scene: &SceneState,
         motion_layout: &wgpu::BindGroupLayout,
+        shader: &wgpu::ShaderModule,
         cull_mode: Option<wgpu::Face>,
         label: &str,
     ) -> wgpu::RenderPipeline {
-        let shader = crate::pipeline::shaders::load_shader_composed(
-            device,
-            "demo/assets/shaders/gbuffer.wgsl",
-            include_str!("shaders/gbuffer.wgsl"),
-            "GBuffer Shader",
-        );
-
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("GBuffer Pipeline Layout"),
             bind_group_layouts: &[
@@ -535,13 +581,13 @@ impl DeferredState {
             label: Some(label),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(Vertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
-                module: &shader,
+                module: shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[
@@ -603,21 +649,17 @@ impl DeferredState {
         })
     }
 
-    fn create_z_prepass_pipeline(
+    /// The depth prepass of the draws [`create_gbuffer_pipeline`](Self::create_gbuffer_pipeline) draws
+    /// with the same `shader`. `discards` gives it `fs_prepass`, which cuts what the surface cuts.
+    pub(crate) fn create_z_prepass_pipeline(
         device: &wgpu::Device,
         scene: &SceneState,
         motion_layout: &wgpu::BindGroupLayout,
+        shader: &wgpu::ShaderModule,
         cull_mode: Option<wgpu::Face>,
         discards: bool,
         label: &str,
     ) -> wgpu::RenderPipeline {
-        let shader = crate::pipeline::shaders::load_shader_composed(
-            device,
-            "demo/assets/shaders/gbuffer.wgsl",
-            include_str!("shaders/gbuffer.wgsl"),
-            "Z-Prepass Shader",
-        );
-
         let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Z-Prepass Pipeline Layout"),
             bind_group_layouts: &[
@@ -636,7 +678,7 @@ impl DeferredState {
             label: Some(label),
             layout: Some(&layout),
             vertex: wgpu::VertexState {
-                module: &shader,
+                module: shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
                 buffers: &[Some(Vertex::desc())],
@@ -644,7 +686,7 @@ impl DeferredState {
             // No colour targets either way. No fragment stage at all unless the draw discards, which is
             // what makes this pass cheap.
             fragment: discards.then(|| wgpu::FragmentState {
-                module: &shader,
+                module: shader,
                 entry_point: Some("fs_prepass"),
                 compilation_options: Default::default(),
                 targets: &[],

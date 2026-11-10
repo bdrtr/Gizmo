@@ -1,7 +1,8 @@
 // SceneUniforms, LightData and the core BRDF (D_GGX/V_SmithJointGGX/F_Schlick/
 // compute_direct_lighting) come from gizmo::common, composed by load_shader_composed
-// (native) / load_shader_composed_web (web), and what a material is comes from gizmo::surface,
-// shared with the G-buffer. The forward shader diverges from the deferred
+// (native) / load_shader_composed_web (web), and what a material is comes from gizmo::material,
+// shared with the G-buffer — or, composed with `CUSTOM_SURFACE`, from a game's `material_surface`
+// (`custom_material::SurfaceMaterial`), lit here as the engine's own would be. The forward shader diverges from the deferred
 // path only in bind-group layout: WebGPU caps groups at 4, so the CSM shadow group is
 // dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
 // bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
@@ -21,7 +22,13 @@
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 #endif
-#import gizmo::surface::{evaluate_surface, surface_uv, tangent_frame}
+#import gizmo::surface::{Surface, tangent_frame}
+#ifdef CUSTOM_SURFACE
+#import gizmo::surface::{SurfaceInput}
+#import gizmo::custom_surface::{material_surface}
+#else
+#import gizmo::material::{evaluate_surface, surface_uv}
+#endif
 #ifdef LOBES
 #import gizmo::surface::{surface_lobes}
 #endif
@@ -165,7 +172,12 @@ struct VertexOutput {
 fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.color = input.color;
+#ifdef CUSTOM_SURFACE
+    // What group 1 means is the game's: see `gbuffer.wgsl`.
+    out.tex_coords = input.tex_coords;
+#else
     out.tex_coords = surface_uv(input.tex_coords);
+#endif
     
     let inst = instances[instance_idx];
     let model = mat4x4<f32>(
@@ -261,6 +273,32 @@ fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
 }
 #endif
 
+// What the material is at this fragment: the engine's own, or the game's `material_surface`.
+fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
+#ifdef CUSTOM_SURFACE
+    var input: SurfaceInput;
+    input.world_position = in.world_position;
+    input.uv = in.tex_coords;
+    input.vertex_color = in.color;
+    input.N = in.normal;
+    input.T = in.tangent;
+    input.B = in.bitangent;
+    input.albedo = in.inst_albedo;
+    input.roughness = in.inst_pbr.x;
+    input.metallic = in.inst_pbr.y;
+    input.emissive = in.inst_emissive.xyz;
+    input.front_facing = front;
+    input.frag_coord = in.clip_position;
+    input.time = scene.cascade_params.z;
+    input.camera_position = scene.camera_pos.xyz;
+    return material_surface(input);
+#else
+    return evaluate_surface(
+        in.tex_coords, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
+    );
+#endif
+}
+
 #ifdef DETAILS
 // One entry point per blend mode, because fog means something different under each. Fog stands
 // between the camera and the surface, so what reaches the screen is less of the surface and, where
@@ -301,9 +339,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
-    let surface = evaluate_surface(
-        in.tex_coords, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
-    );
+#ifdef DETAILS
+    let surface = fragment_surface(in, front);
+#else
+    // The plain tier draws front faces only. A game's surface is never built on it: only its own code
+    // knows whether it cuts (`SurfaceMaterial`).
+    let surface = fragment_surface(in, true);
+#endif
 #ifdef WIREFRAME
     // `WireframeConfig::color`: one flat colour for every line, readable on any material. Alpha 0
     // means none was asked for, and the lines keep the lit colour below.

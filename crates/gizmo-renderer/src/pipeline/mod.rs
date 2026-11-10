@@ -17,20 +17,18 @@ pub use shaders::{load_shader_composed_web, load_shader_composed_web_with};
 
 use layouts::{build_layouts, LayoutRefs};
 use pipelines::{build_core_pipelines, build_shadow_pipeline};
+pub(crate) use pipelines::{forward_pipeline, lit_set};
 use uniforms::{build_global_uniforms, build_shadow_resources};
 
 use crate::gpu_types::ShadowVsUniform;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
-/// The lit pipelines with anisotropy, clear coat and subsurface in, on the forward-only path: the top
-/// tier of [`SceneState::lit_pipeline`].
-///
-/// An Adreno 618 pays for those branches whether they are taken or not: 43 fps without them and 20
-/// with them, drawing a cube and a floor. So materials that use none of them get pipelines without
-/// the code, and batching sends the ones that do here. What uses them still costs that much: a clear
-/// coat on a floor filling the screen reads 20 fps.
-pub struct LitLobes {
+/// Every lit pipeline a draw on one tier can need, from one shader: what
+/// [`SceneState::lit_lobes`] holds on the forward-only path (the top tier of
+/// [`SceneState::lit_pipeline`]), and what a game's surface is drawn forward with
+/// ([`SurfaceMaterial`](crate::custom_material::SurfaceMaterial)).
+pub struct LitSet {
     /// As [`SceneState::render_pipeline`].
     pub render: wgpu::RenderPipeline,
     /// As [`SceneState::render_double_sided_pipeline`].
@@ -114,7 +112,12 @@ pub struct SceneState {
     pub render_details_pipeline: Option<wgpu::RenderPipeline>,
     /// The lit pipelines with anisotropy, clear coat and subsurface, where the ones above leave them
     /// out. `None` on the desktop path, whose lit pipelines always have them.
-    pub lit_lobes: Option<LitLobes>,
+    ///
+    /// An Adreno 618 pays for those branches whether they are taken or not: 43 fps without them and 20
+    /// with them, drawing a cube and a floor. So materials that use none of them get pipelines without
+    /// the code, and batching sends the ones that do here. What uses them still costs that much: a clear
+    /// coat on a floor filling the screen reads 20 fps.
+    pub lit_lobes: Option<LitSet>,
     /// The [`SceneUniforms`](crate::gpu_types::SceneUniforms) buffer — group 0, rewritten each
     /// frame.
     pub global_uniform_buffer: wgpu::Buffer,
@@ -1075,6 +1078,28 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     }
 }
 
+/// The layouts a [`SceneState`] was built with, as the pipeline builders take them. `indirect` is the
+/// irradiance volume's group layout, which the scene does not keep.
+fn layout_refs<'a>(scene: &'a SceneState, indirect: &'a wgpu::BindGroupLayout) -> LayoutRefs<'a> {
+    LayoutRefs {
+        global: &scene.global_bind_group_layout,
+        shadow: &scene.shadow_bind_group_layout,
+        shadow_pass: &scene.shadow_pass_bind_group_layout,
+        texture: &scene.texture_bind_group_layout,
+        skeleton: &scene.skeleton_bind_group_layout,
+        instance: &scene.instance_bind_group_layout,
+        indirect,
+        wire_color: &scene.wire_color_layout,
+    }
+}
+
+/// The layout a lit forward pipeline has on this path, for one built outside this module: a game's
+/// surface ([`SurfaceMaterial`](crate::custom_material::SurfaceMaterial)).
+pub(crate) fn lit_pipeline_layout(device: &wgpu::Device, scene: &SceneState) -> wgpu::PipelineLayout {
+    let indirect = crate::irradiance::IrradianceState::layout(device);
+    pipelines::lit_pipeline_layout(device, &layout_refs(scene, &indirect))
+}
+
 #[tracing::instrument(skip_all)]
 /// Recompiles every shader and rebuilds every pipeline in place, keeping the existing buffers,
 /// textures and bind groups — what [`Renderer::rebuild_shaders`](crate::Renderer::rebuild_shaders)
@@ -1085,16 +1110,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
 
     // Geçici LayoutRefs tutucusu, render pipeline'ı için mevcut layoutları referans alır
     let indirect = crate::irradiance::IrradianceState::layout(device);
-    let layouts = LayoutRefs {
-        global: &renderer.scene.global_bind_group_layout,
-        shadow: &renderer.scene.shadow_bind_group_layout,
-        shadow_pass: &renderer.scene.shadow_pass_bind_group_layout,
-        texture: &renderer.scene.texture_bind_group_layout,
-        skeleton: &renderer.scene.skeleton_bind_group_layout,
-        instance: &renderer.scene.instance_bind_group_layout,
-        indirect: &indirect,
-        wire_color: &renderer.scene.wire_color_layout,
-    };
+    let layouts = layout_refs(&renderer.scene, &indirect);
 
     let core_pipelines = build_core_pipelines(device, &layouts, renderer.scene.forward_probes.shape);
     let shadow_pipeline = build_shadow_pipeline(device, &layouts);
@@ -1141,7 +1157,13 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
             wgpu::TextureFormat::Depth32Float,
         );
     }
-    tracing::info!("[Pipeline] core + shadow + post-process + text + sprite pipelines rebuilt");
+    // The deferred path's own, and then every game surface, which is composed from both: a surface
+    // that kept its pipelines would be drawn by the old shaders beside everything drawn by the new.
+    if let Some(deferred) = renderer.deferred.as_mut() {
+        deferred.rebuild_pipelines(&renderer.device, &renderer.scene);
+    }
+    renderer.custom_materials.rebuild_surfaces(&renderer.device, &renderer.scene, renderer.deferred.as_ref());
+    tracing::info!("[Pipeline] core + shadow + deferred + post-process + text + sprite + surface pipelines rebuilt");
 }
 
 #[cfg(test)]
@@ -1155,7 +1177,9 @@ mod tests {
         use naga_oil::compose::ShaderDefValue::Bool;
         let src = include_str!("../shaders/shader.wgsl");
         let lobes = ["compute_direct_lighting_anisotropic", "layer_clear_coat", "subsurface_light"];
-        let details = ["front_facing", "discard", "dielectric_f0", "instance_keeps"];
+        // The builtin, not the word: `gizmo::surface::SurfaceInput` has a field of that name, and an
+        // unused type is no code.
+        let details = ["@builtin(front_facing)", "discard", "dielectric_f0", "instance_keeps"];
         let plain = compose_wgsl(src, "shader.wgsl", web_render_defs());
         let mut defs = web_render_defs();
         defs.insert("DETAILS".to_string(), Bool(true));

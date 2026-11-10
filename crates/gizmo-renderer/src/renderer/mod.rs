@@ -171,10 +171,11 @@ pub struct Renderer {
     // === Custom materials ===
     /// Materials the game registered — see [`crate::custom_material`].
     ///
-    /// Empty by default. A `MaterialType::Custom(id)` whose id is not in here draws nothing rather
-    /// than falling back to PBR: a silent fallback is how `routing.rs`'s own module docs describe
-    /// two capabilities dying, and an object that vanishes is a question, while an object shaded
-    /// as something else is a wrong answer.
+    /// Empty by default. A `MaterialType::Custom(id)` or `MaterialType::CustomSurface(id)` whose id
+    /// is not in here draws nothing rather than falling back to PBR: a silent fallback is how
+    /// `routing.rs`'s own module docs describe two capabilities dying, and an object that vanishes
+    /// is a question, while an object shaded as something else is a wrong answer. Surfaces are
+    /// added with [`Renderer::add_surface_material`].
     pub custom_materials: crate::custom_material::MaterialRegistry,
 
     // === SSR — Screen-Space Reflections ===
@@ -669,6 +670,23 @@ impl Renderer {
             label: Some(label),
             source: wgpu::ShaderSource::Wgsl(source.into()),
         })
+    }
+
+    /// Builds a [`SurfaceMaterial`](crate::custom_material::SurfaceMaterial) from `wgsl` and
+    /// registers it: the id is what
+    /// [`MaterialType::CustomSurface`](crate::components::MaterialType::CustomSurface) draws.
+    ///
+    /// # Errors
+    ///
+    /// [`SurfaceError::Compose`](crate::custom_material::SurfaceError::Compose) when the WGSL does not
+    /// compose with the engine's shaders; nothing is registered then.
+    pub fn add_surface_material(
+        &mut self,
+        label: &str,
+        wgsl: &str,
+    ) -> Result<crate::custom_material::SurfaceId, crate::custom_material::SurfaceError> {
+        let surface = crate::custom_material::SurfaceMaterial::from_wgsl(self, label, wgsl)?;
+        Ok(self.custom_materials.register_surface(surface))
     }
 
     /// Recompiles every shader and rebuilds every pipeline — what the studio's file watcher calls

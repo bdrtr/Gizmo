@@ -1,20 +1,50 @@
 //! Materials the engine does not have, registered by the game.
 //!
-//! # Why this is forward-only, and why that is not a compromise
+//! # Two kinds: a surface the engine lights, and a pipeline of the game's own
 //!
-//! The obvious design is "let a custom shader write the G-buffer like `Pbr` does". It does not fit,
-//! and the reason is a number rather than an opinion: the four G-buffer targets share a
-//! `max_color_attachment_bytes_per_sample` budget of **32** — the WebGPU-guaranteed limit — and
-//! they already spend **28** (4 albedo `Rgba8` + 8 normal + 8 position + 8 tangent, all `Rgba16F`).
-//! Four bytes are left. That is exactly one more `Rgba8` target and not one `Rgba16F`, so a custom
-//! material cannot bring its own G-buffer channel without either spending the last of a shared
-//! budget on one feature or displacing something the deferred lighting reads.
+//! **A [`SurfaceMaterial`]** says what a surface *is* at a fragment — its colour, normal, roughness,
+//! metalness, emission, alpha — in a WGSL function, and the engine does the rest: it is composed into
+//! the engine's own G-buffer shader and its own lit forward shader, in place of the engine's
+//! material. So on the desktop's deferred path it is written to the G-buffer exactly as `Pbr` is, and
+//! gets everything that reads it: the deferred lighting, SSAO, SSR, SSGI, decals, the velocity TAA and
+//! motion blur use. Where a draw is forward — the browser, a phone, the editor viewport, a transparent
+//! or glass surface — the same function is lit by the forward shader. Drawn by
+//! [`MaterialType::CustomSurface`](crate::components::MaterialType::CustomSurface):
 //!
-//! So a custom material declares itself forward: its own pipeline, its own shader, drawn after the
-//! deferred resolve, with the depth buffer the rest of the scene wrote. It can still cast shadows —
+//! ```wgsl
+//! #import gizmo::surface::{Surface, SurfaceInput}
+//! #import gizmo::material::{standard_surface}
+//!
+//! // The material it is drawn with, banded in red by height.
+//! fn material_surface(input: SurfaceInput) -> Surface {
+//!     var surface = standard_surface(input);
+//!     let band = step(0.5, fract(input.world_position.y * 4.0));
+//!     surface.albedo = mix(surface.albedo, vec3<f32>(0.8, 0.1, 0.1), band);
+//!     return surface;
+//! }
+//! ```
+//!
+//! `standard_surface` is what `MaterialType::Pbr` draws at that fragment, so a surface can start from
+//! the engine's material and change part of it, or build its own from `SurfaceInput`'s fields
+//! (`gizmo::surface` in WGSL: position, UV, vertex colour, the geometric frame, the instance's
+//! albedo, roughness, metalness and emission, the face, the pixel, the clock and the camera). A
+//! surface that cuts sets `alpha` under `alpha_cutoff`, and the engine's prepass cuts there too.
+//! Anisotropy, clear coat and subsurface still come from the instance's
+//! [`Material`](crate::components::Material), as for every lit draw.
+//!
+//! It does not need a G-buffer channel of its own, which is what an earlier version of this module
+//! said made the design impossible: a surface fills the channels every lit draw fills.
+//!
+//! **A [`CustomMaterial`]** is a whole pipeline of the game's own — its shader does all of the
+//! shading, and the engine only binds the groups and draws it, forward, after the deferred resolve,
+//! with the depth buffer the rest of the scene wrote. Right for what is not a lit surface: a
+//! hologram, a force field, a screen. Drawn by
+//! [`MaterialType::Custom`](crate::components::MaterialType::Custom). It can still cast shadows —
 //! the shadow pass writes depth only and does not care what a fragment would have shaded to.
 //!
 //! # Where the game's own data goes — and why not a bind group of its own
+//!
+//! The same for both kinds.
 //!
 //! There is no free bind group. The engine's layout is
 //! `0 = scene, 1 = material, 2 = shadow, 3 = skeleton, 4 = instance` on native, and
@@ -26,7 +56,9 @@
 //! The room that does exist is inside **group 1**, and it is not small: the material bind group is
 //! seven entries — base colour, sampler, normal, metallic-roughness, emissive, occlusion, and a
 //! uniform buffer — and a custom shader is free to mean something else by all of them. Four
-//! textures and a uniform buffer, with no new group and no platform split.
+//! textures and a uniform buffer, with no new group and no platform split. A surface that reads the
+//! engine's material imports its bindings from `gizmo::material`; one that means something else by
+//! them declares group 1 itself and does not import that module.
 //!
 //! [`AssetManager::material`](crate::asset::AssetManager::material) is how they are filled;
 //! `params` is the caller's own buffer:
@@ -278,10 +310,256 @@ impl CustomMaterial {
     }
 }
 
-/// The registered custom materials, indexed by [`MaterialId`].
+/// A registered [`SurfaceMaterial`]. Only meaningful to the [`MaterialRegistry`] that minted it.
+///
+/// A separate type from [`MaterialId`], so a surface cannot be named where a pipeline of the game's
+/// own is meant, or the other way round: the two are drawn by different code, and a mix-up would
+/// draw nothing with nothing to say why.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, serde::Serialize, serde::Deserialize)]
+pub struct SurfaceId(pub u32);
+
+/// Why a [`SurfaceMaterial`] could not be built.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SurfaceError {
+    /// The WGSL did not compose with the engine's shaders around it, or the result did not
+    /// validate: a syntax error, a type that does not match, no `material_surface` defined, a binding
+    /// that collides with one of the engine's. The text is the shader compiler's, and names the shader
+    /// it was composed into.
+    Compose(String),
+}
+
+impl std::fmt::Display for SurfaceError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Compose(message) => write!(f, "a surface material's WGSL did not compose: {message}"),
+        }
+    }
+}
+
+impl std::error::Error for SurfaceError {}
+
+/// A surface the game describes in WGSL and the engine lights — see the [module docs](self).
+///
+/// The WGSL defines `fn material_surface(input: SurfaceInput) -> Surface`, and is composed into the
+/// engine's G-buffer shader (on the deferred path) and its lit forward shader (everywhere a draw is
+/// forward) in place of the engine's material. The pipelines are built when it is, and again whenever
+/// the engine's are ([`rebuild_pipelines`](crate::pipeline::rebuild_pipelines): a hot reload, a change
+/// in the reflection probes a phone's lit shader is compiled for), from the WGSL it keeps.
+pub struct SurfaceMaterial {
+    label: String,
+    wgsl: String,
+    pipelines: SurfacePipelines,
+}
+
+/// The pipelines a surface is drawn with, as the engine's own material has them.
+struct SurfacePipelines {
+    /// The G-buffer pass and its prepass. `None` where there is no G-buffer: the forward-only path, or
+    /// a renderer built without one.
+    deferred: Option<DeferredSurface>,
+    /// Every lit forward draw: on the desktop path with everything in, on the forward-only path the
+    /// `DETAILS` tier, since only the surface's own code knows whether it cuts.
+    lit: crate::pipeline::LitSet,
+    /// The forward-only path's `LOBES` tier, for a material with anisotropy, clear coat or subsurface.
+    /// `None` on the desktop path, whose `lit` has them.
+    lobes: Option<crate::pipeline::LitSet>,
+    /// Glass, single-sided then double-sided.
+    glass: [wgpu::RenderPipeline; 2],
+}
+
+/// The surface's G-buffer pipelines, single-sided then double-sided each.
+struct DeferredSurface {
+    gbuffer: [wgpu::RenderPipeline; 2],
+    /// Always the prepass with a fragment stage: the surface decides where it is cut, so the depth it
+    /// leaves must have the same holes as the G-buffer.
+    prepass: [wgpu::RenderPipeline; 2],
+}
+
+impl SurfaceMaterial {
+    /// Composes `wgsl` into the engine's shaders and builds every pipeline the surface can be drawn
+    /// with on this renderer.
+    ///
+    /// # Errors
+    ///
+    /// [`SurfaceError::Compose`] when the WGSL does not compose or validate inside any of them.
+    pub fn from_wgsl(renderer: &crate::Renderer, label: &str, wgsl: &str) -> Result<Self, SurfaceError> {
+        let pipelines = SurfacePipelines::build(&renderer.device, &renderer.scene, renderer.deferred.as_ref(), label, wgsl)?;
+        Ok(Self { label: label.to_string(), wgsl: wgsl.to_string(), pipelines })
+    }
+
+    /// The name it was built under, which is also what a validation error about it names.
+    #[must_use]
+    pub fn label(&self) -> &str {
+        &self.label
+    }
+
+    /// The G-buffer pass's pipeline for a draw of this surface, `None` where there is no G-buffer.
+    #[must_use]
+    pub fn gbuffer_pipeline(&self, double_sided: bool) -> Option<&wgpu::RenderPipeline> {
+        self.pipelines.deferred.as_ref().map(|d| &d.gbuffer[usize::from(double_sided)])
+    }
+
+    /// The depth prepass's, likewise.
+    #[must_use]
+    pub fn prepass_pipeline(&self, double_sided: bool) -> Option<&wgpu::RenderPipeline> {
+        self.pipelines.deferred.as_ref().map(|d| &d.prepass[usize::from(double_sided)])
+    }
+
+    /// The lit forward pipeline for a draw of this surface, as
+    /// [`SceneState::lit_pipeline`](crate::pipeline::SceneState::lit_pipeline) chooses one for the
+    /// engine's own material: `lobes` is the material using anisotropy, clear coat or subsurface,
+    /// which only the forward-only path has a tier for.
+    #[must_use]
+    pub fn lit_pipeline(
+        &self,
+        lobes: bool,
+        transparent: bool,
+        double_sided: bool,
+        mode: crate::components::BlendMode,
+    ) -> &wgpu::RenderPipeline {
+        let set = self.pipelines.lobes.as_ref().filter(|_| lobes).unwrap_or(&self.pipelines.lit);
+        match (transparent, crate::components::BlendMode::VARIANTS.iter().position(|m| *m == mode)) {
+            (true, Some(i)) => &set.blend[i],
+            (true, None) => &set.transparent,
+            (false, _) if double_sided => &set.render_double_sided,
+            (false, _) => &set.render,
+        }
+    }
+
+    /// The glass pipeline, for a draw of this surface that
+    /// [is transmissive](crate::components::Material::is_transmissive).
+    #[must_use]
+    pub fn transmissive_pipeline(&self, double_sided: bool) -> &wgpu::RenderPipeline {
+        &self.pipelines.glass[usize::from(double_sided)]
+    }
+
+    /// Builds the pipelines again from the WGSL it was made with, against the engine's shaders as they
+    /// are now. It composed once, and the engine's shaders it is composed into are the engine's to
+    /// keep valid, so a failure here is a broken engine shader rather than the game's: it is logged
+    /// and the old pipelines are kept.
+    fn rebuild(&mut self, device: &wgpu::Device, scene: &crate::pipeline::SceneState, deferred: Option<&crate::deferred::DeferredState>) {
+        match SurfacePipelines::build(device, scene, deferred, &self.label, &self.wgsl) {
+            Ok(pipelines) => self.pipelines = pipelines,
+            Err(e) => tracing::error!("surface material `{}` kept its old pipelines: {e}", self.label),
+        }
+    }
+}
+
+impl SurfacePipelines {
+    fn build(
+        device: &wgpu::Device,
+        scene: &crate::pipeline::SceneState,
+        deferred: Option<&crate::deferred::DeferredState>,
+        label: &str,
+        wgsl: &str,
+    ) -> Result<Self, SurfaceError> {
+        use naga_oil::compose::ShaderDefValue::Bool;
+        let module = |file: &str, embedded: &str, name: &str, extra: &[(&str, naga_oil::compose::ShaderDefValue)]| {
+            // The engine's own shaders are read from disk first on the desktop path, as every one of
+            // its pipelines reads them, so a hot-reloaded `gbuffer.wgsl` reaches a surface too.
+            #[cfg(not(gizmo_forward_only))]
+            let (source, defs) = (
+                std::fs::read_to_string(file).unwrap_or_else(|_| embedded.to_string()),
+                surface_defs(crate::pipeline::shaders::native_render_defs(), extra),
+            );
+            // The forward-only path's lit shaders are compiled for the reflection probes the scene has.
+            #[cfg(gizmo_forward_only)]
+            let (source, defs) = {
+                let _ = file;
+                let probes = scene.forward_probes.shape.defs();
+                let defs: Vec<_> = probes.iter().copied().chain(extra.iter().copied()).collect();
+                (embedded.to_string(), surface_defs(crate::pipeline::shaders::web_render_defs(), &defs))
+            };
+            let name = format!("{label} ({name})");
+            let composed = crate::pipeline::shaders::try_compose_wgsl(&source, &name, defs, Some(wgsl))
+                .map_err(SurfaceError::Compose)?;
+            Ok::<_, SurfaceError>(device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some(&name),
+                source: wgpu::ShaderSource::Wgsl(composed.into()),
+            }))
+        };
+        let lit_wgsl = include_str!("shaders/shader.wgsl");
+        let lit_file = "demo/assets/shaders/shader.wgsl";
+        // What the forward-only path builds its `DETAILS` tier with, and its glass; on the desktop path
+        // every lit shader has them already.
+        let details: &[(&str, naga_oil::compose::ShaderDefValue)] =
+            if cfg!(gizmo_forward_only) { &[("DETAILS", Bool(true))] } else { &[] };
+        let with_lobes: &[(&str, naga_oil::compose::ShaderDefValue)] =
+            &[("DETAILS", Bool(true)), ("LOBES", Bool(true))];
+
+        let layout = crate::pipeline::lit_pipeline_layout(device, scene);
+        let lit = crate::pipeline::lit_set(device, &layout, &module(lit_file, lit_wgsl, "lit", details)?, label);
+        let lobes = if cfg!(gizmo_forward_only) {
+            Some(crate::pipeline::lit_set(device, &layout, &module(lit_file, lit_wgsl, "lobes", with_lobes)?, &format!("{label}, lobes")))
+        } else {
+            None
+        };
+        let glass_module = module(
+            lit_file,
+            lit_wgsl,
+            "glass",
+            &[("DETAILS", Bool(true)), ("LOBES", Bool(true)), ("TRANSMISSION", Bool(true))],
+        )?;
+        let glass = [Some(wgpu::Face::Back), None].map(|cull| {
+            crate::pipeline::forward_pipeline(
+                device,
+                &layout,
+                &glass_module,
+                "fs_main",
+                &format!("{label} (glass)"),
+                true,
+                cull,
+                None,
+                wgpu::PolygonMode::Fill,
+            )
+        });
+
+        let deferred = match deferred {
+            Some(state) => {
+                let geometry = module("demo/assets/shaders/gbuffer.wgsl", include_str!("shaders/gbuffer.wgsl"), "G-buffer", &[])?;
+                let motion = &state.motion.layout;
+                let sides = [Some(wgpu::Face::Back), None];
+                Some(DeferredSurface {
+                    gbuffer: sides.map(|cull| {
+                        crate::deferred::DeferredState::create_gbuffer_pipeline(device, scene, motion, &geometry, cull, label)
+                    }),
+                    prepass: sides.map(|cull| {
+                        crate::deferred::DeferredState::create_z_prepass_pipeline(device, scene, motion, &geometry, cull, true, label)
+                    }),
+                })
+            }
+            None => None,
+        };
+        Ok(Self { deferred, lit, lobes, glass })
+    }
+}
+
+/// The defs a surface's shader is composed under: the platform's, `CUSTOM_SURFACE`, and `extra` in
+/// order. `#ifdef` asks whether a name is there, so a `false` takes the name away rather than adding
+/// it, as the engine's own `load_shader_composed_*_with` do: a forward-only surface was composed with
+/// its probe defs' `false` left in, which compiled the probe code in, and every pixel of it differed
+/// from the engine's material until this said so.
+fn surface_defs(
+    mut defs: std::collections::HashMap<String, naga_oil::compose::ShaderDefValue>,
+    extra: &[(&str, naga_oil::compose::ShaderDefValue)],
+) -> std::collections::HashMap<String, naga_oil::compose::ShaderDefValue> {
+    use naga_oil::compose::ShaderDefValue::Bool;
+    for (name, value) in std::iter::once(("CUSTOM_SURFACE", Bool(true))).chain(extra.iter().copied()) {
+        if value == Bool(false) {
+            defs.remove(name);
+        } else {
+            defs.insert(name.to_string(), value);
+        }
+    }
+    defs
+}
+
+/// The registered custom materials, indexed by [`MaterialId`], and the registered surfaces, by
+/// [`SurfaceId`].
 #[derive(Default)]
 pub struct MaterialRegistry {
     materials: Vec<CustomMaterial>,
+    surfaces: Vec<SurfaceMaterial>,
 }
 
 impl MaterialRegistry {
@@ -323,16 +601,52 @@ impl MaterialRegistry {
             .map(|i| MaterialId(i as u32))
     }
 
-    /// How many materials are registered.
+    /// Registers a surface and returns its id. Ids are handed out as [`register`](Self::register)'s
+    /// are, in an order of their own, with the same caveat about a saved scene.
+    pub fn register_surface(&mut self, surface: SurfaceMaterial) -> SurfaceId {
+        let id = SurfaceId(u32::try_from(self.surfaces.len()).expect("a registry never reaches 4 billion"));
+        self.surfaces.push(surface);
+        id
+    }
+
+    /// The surface behind an id, or `None` if it was minted by a different registry.
+    #[must_use]
+    pub fn surface(&self, id: SurfaceId) -> Option<&SurfaceMaterial> {
+        self.surfaces.get(id.0 as usize)
+    }
+
+    /// The id of the first surface registered under `label`.
+    #[must_use]
+    pub fn surface_id_of(&self, label: &str) -> Option<SurfaceId> {
+        self.surfaces
+            .iter()
+            .position(|s| s.label == label)
+            .map(|i| SurfaceId(i as u32))
+    }
+
+    /// Builds every registered surface's pipelines again, as the engine's own are rebuilt: see
+    /// [`rebuild_pipelines`](crate::pipeline::rebuild_pipelines).
+    pub(crate) fn rebuild_surfaces(
+        &mut self,
+        device: &wgpu::Device,
+        scene: &crate::pipeline::SceneState,
+        deferred: Option<&crate::deferred::DeferredState>,
+    ) {
+        for surface in &mut self.surfaces {
+            surface.rebuild(device, scene, deferred);
+        }
+    }
+
+    /// How many materials of both kinds are registered.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.materials.len()
+        self.materials.len() + self.surfaces.len()
     }
 
     /// Whether nothing is registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.materials.is_empty()
+        self.materials.is_empty() && self.surfaces.is_empty()
     }
 }
 
@@ -382,6 +696,114 @@ mod tests {
         assert_eq!(super::check_instance_stride(&shader(&now)), Ok(()));
         let none = "@vertex fn vs_main() -> @builtin(position) vec4<f32> { return vec4<f32>(0.0); }";
         assert_eq!(super::check_instance_stride(none), Ok(()), "a shader that reads no instances");
+    }
+
+    /// **A surface composes into every shader it is drawn with, on both paths.** On the desktop: the
+    /// G-buffer shader, the lit shader and its glass. On the forward-only path: the `DETAILS` and
+    /// `LOBES` tiers of the lit shader and its glass. Composed means validated, so a surface that fails
+    /// in one of them fails to build at all instead of drawing on one path and not on another.
+    #[test]
+    fn a_surface_composes_into_every_shader_it_is_drawn_with() {
+        use crate::pipeline::shaders::{native_render_defs, try_compose_wgsl, web_render_defs};
+        use naga_oil::compose::ShaderDefValue::Bool;
+        let surface = "#import gizmo::surface::{Surface, SurfaceInput}\n\
+                       #import gizmo::material::{standard_surface}\n\
+                       fn material_surface(input: SurfaceInput) -> Surface {\n\
+                           var s = standard_surface(input);\n\
+                           s.albedo = vec3<f32>(0.123, 0.456, 0.789) * input.time;\n\
+                           return s;\n\
+                       }\n";
+        let gbuffer = include_str!("shaders/gbuffer.wgsl");
+        let lit = include_str!("shaders/shader.wgsl");
+        let with = |mut defs: std::collections::HashMap<String, naga_oil::compose::ShaderDefValue>, extra: &[&str]| {
+            defs.insert("CUSTOM_SURFACE".to_string(), Bool(true));
+            for def in extra {
+                defs.insert((*def).to_string(), Bool(true));
+            }
+            defs
+        };
+        let cases = [
+            (gbuffer, with(native_render_defs(), &[]), "desktop G-buffer"),
+            (lit, with(native_render_defs(), &[]), "desktop lit"),
+            (lit, with(native_render_defs(), &["TRANSMISSION"]), "desktop glass"),
+            (lit, with(web_render_defs(), &["DETAILS"]), "forward-only lit"),
+            (lit, with(web_render_defs(), &["DETAILS", "LOBES"]), "forward-only lobes"),
+            (lit, with(web_render_defs(), &["DETAILS", "LOBES", "TRANSMISSION"]), "forward-only glass"),
+        ];
+        for (source, defs, name) in cases {
+            let composed = try_compose_wgsl(source, name, defs, Some(surface)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            // The surface's own numbers are in what is drawn: its function is the one called.
+            assert!(composed.contains("0.123f") && composed.contains("0.789f"), "{name} lost the surface's function");
+        }
+        // And without one, the engine's material is: `evaluate_surface` samples the normal map.
+        let engine = try_compose_wgsl(gbuffer, "engine G-buffer", native_render_defs(), None).expect("the engine's G-buffer composes");
+        assert!(engine.contains("t_normal") && !engine.contains("0.123f"));
+    }
+
+    /// A def a surface is composed under as `false` is not there, so its code is not either: the probe
+    /// code of a forward-only surface in a scene with no probes. It was, and it changed every pixel of
+    /// the surface against the engine's material on that path.
+    #[test]
+    fn a_false_def_leaves_its_code_out_of_a_surface() {
+        use crate::pipeline::shaders::{try_compose_wgsl, web_render_defs};
+        use naga_oil::compose::ShaderDefValue::Bool;
+        let surface = "#import gizmo::surface::{Surface, SurfaceInput}\n\
+                       #import gizmo::material::{standard_surface}\n\
+                       fn material_surface(input: SurfaceInput) -> Surface { return standard_surface(input); }\n";
+        let lit = include_str!("shaders/shader.wgsl");
+        let composed = |background| {
+            let defs = super::surface_defs(web_render_defs(), &[("PROBE_BACKGROUND", Bool(background)), ("DETAILS", Bool(true))]);
+            assert_eq!(defs.contains_key("PROBE_BACKGROUND"), background);
+            assert!(defs.contains_key("CUSTOM_SURFACE") && defs.contains_key("DETAILS"));
+            try_compose_wgsl(lit, "probes", defs, Some(surface)).expect("composes")
+        };
+        assert!(!composed(false).contains("probe_background"), "a scene with no probe pays for one");
+        assert!(composed(true).contains("probe_background"), "a scene with a probe lost it");
+    }
+
+    /// A surface may mean something else by group 1, as a [`CustomMaterial`] may: one that declares its
+    /// own binding 6 and imports nothing from `gizmo::material` composes, and the engine's bindings are
+    /// not in what it composes to.
+    #[test]
+    fn a_surface_can_mean_its_own_group_1() {
+        use crate::pipeline::shaders::{native_render_defs, try_compose_wgsl};
+        let surface = "#import gizmo::surface::{Surface, SurfaceInput}\n\
+                       struct Mine { tint: vec4<f32>, speed: vec4<f32>, a: vec4<f32>, b: vec4<f32> };\n\
+                       @group(1) @binding(6) var<uniform> mine: Mine;\n\
+                       @group(1) @binding(0) var noise: texture_2d<f32>;\n\
+                       @group(1) @binding(1) var noise_sampler: sampler;\n\
+                       fn material_surface(input: SurfaceInput) -> Surface {\n\
+                           var s: Surface;\n\
+                           let n = textureSample(noise, noise_sampler, input.uv * mine.speed.xy).r;\n\
+                           s.base_color = mine.tint.rgb * n;\n\
+                           s.albedo = s.base_color;\n\
+                           s.alpha = 1.0;\n\
+                           s.alpha_cutoff = 0.0;\n\
+                           s.N = normalize(input.N);\n\
+                           s.roughness = 0.5;\n\
+                           s.metallic = 0.0;\n\
+                           s.emissive = vec3<f32>(0.0);\n\
+                           return s;\n\
+                       }\n";
+        let mut defs = native_render_defs();
+        defs.insert("CUSTOM_SURFACE".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+        for (source, name) in [(include_str!("shaders/gbuffer.wgsl"), "G-buffer"), (include_str!("shaders/shader.wgsl"), "lit")] {
+            let composed = try_compose_wgsl(source, name, defs.clone(), Some(surface)).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(!composed.contains("t_normal") && !composed.contains("MaterialParams"), "{name} carries the engine's material");
+        }
+    }
+
+    /// A surface that does not compose is the game's error, handed back: a syntax error, and a module
+    /// without `material_surface`, whose message names the function.
+    #[test]
+    fn a_surface_that_does_not_compose_is_an_error() {
+        use crate::pipeline::shaders::{native_render_defs, try_compose_wgsl};
+        let mut defs = native_render_defs();
+        defs.insert("CUSTOM_SURFACE".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+        let gbuffer = include_str!("shaders/gbuffer.wgsl");
+        assert!(try_compose_wgsl(gbuffer, "broken", defs.clone(), Some("fn material_surface(")).is_err());
+        let missing = try_compose_wgsl(gbuffer, "missing", defs, Some("fn something_else() {}")).expect_err("no material_surface");
+        assert!(missing.contains("material_surface"), "{missing}");
     }
 
     use super::*;

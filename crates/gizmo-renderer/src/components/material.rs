@@ -57,16 +57,23 @@ pub enum MaterialType {
     Water,
     /// The editor's ground grid — lines that fade with distance and never write depth.
     Grid,
-    /// A material the game registered: its own pipeline and shader, drawn forward.
+    /// A material the game registered: its own pipeline and shader, which does all of the shading,
+    /// drawn forward. For a lit surface of the game's own, see [`CustomSurface`](Self::CustomSurface).
     ///
     /// The id comes from [`MaterialRegistry::register`](crate::custom_material::MaterialRegistry::register).
-    /// Forward rather than deferred is a budget fact, not a policy — see
-    /// [`crate::custom_material`] for the 28-of-32 bytes that decide it.
     ///
     /// This is a variant rather than a wrapper enum around `MaterialType` because it costs nothing:
     /// `Material::material_type` keeps its type, all 56 existing uses keep compiling, and
     /// [`routing`](crate::routing) stays exhaustive — which is the property that module exists for.
     Custom(crate::custom_material::MaterialId),
+    /// A surface the game describes in WGSL and the engine lights, as it lights [`Pbr`](Self::Pbr):
+    /// through the G-buffer on the deferred path, by the lit forward shader where a draw is forward.
+    ///
+    /// The id comes from
+    /// [`MaterialRegistry::register_surface`](crate::custom_material::MaterialRegistry::register_surface);
+    /// see [`SurfaceMaterial`](crate::custom_material::SurfaceMaterial). An id with nothing behind it
+    /// draws nothing, as a [`Custom`](Self::Custom) one does.
+    CustomSurface(crate::custom_material::SurfaceId),
 }
 
 /// How a blended draw combines with what is already on screen behind it.

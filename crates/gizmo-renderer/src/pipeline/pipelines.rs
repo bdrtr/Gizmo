@@ -66,8 +66,8 @@ pub(super) struct CorePipelines {
     /// The lit transparent pipeline under each of `BlendMode::VARIANTS`.
     pub(super) blend_lit: [wgpu::RenderPipeline; 3],
     /// The lit pipelines with anisotropy, clear coat and subsurface, on the path where the ones above
-    /// leave them out. See [`LitLobes`](super::LitLobes).
-    pub(super) lobes: Option<super::LitLobes>,
+    /// leave them out. See [`LitSet`](super::LitSet).
+    pub(super) lobes: Option<super::LitSet>,
     /// See [`SceneState::render_details_pipeline`](super::SceneState::render_details_pipeline).
     pub(super) render_details: Option<wgpu::RenderPipeline>,
     /// See [`SceneState::unlit_keeps_pipeline`](super::SceneState::unlit_keeps_pipeline).
@@ -77,6 +77,109 @@ pub(super) struct CorePipelines {
     /// The unlit pipeline under each of them — and, unlike `unlit`, not writing depth: a blended
     /// draw is sorted, and a glow writing depth would hide the glow behind it.
     pub(super) blend_unlit: [wgpu::RenderPipeline; 3],
+}
+
+/// One forward pipeline over the engine's vertex layout, drawing into the HDR target against the shared
+/// depth buffer: every pipeline [`build_core_pipelines`] makes, and a game's surface's
+/// ([`SurfaceMaterial`](crate::custom_material::SurfaceMaterial)), so the two cannot disagree about
+/// any of it.
+pub(crate) fn forward_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    entry: &str,
+    label: &str,
+    depth_write: bool,
+    cull: Option<wgpu::Face>,
+    blend: Option<wgpu::BlendState>,
+    polygon_mode: wgpu::PolygonMode,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some(label),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[Some(Vertex::desc())],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba16Float,
+                blend,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleList,
+            strip_index_format: None,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: cull,
+            unclipped_depth: false,
+            polygon_mode,
+            conservative: false,
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(depth_write),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState {
+            count: 1,
+            mask: !0,
+            alpha_to_coverage_enabled: false,
+        },
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
+/// The layout of a pipeline drawn from `shader.wgsl`'s lit entry points. On the desktop path it is the
+/// five groups every forward pipeline has plus the irradiance volume's at 5, for the reflection probes
+/// (`#ifdef PROBES`); the forward-only path has four groups and puts the probes on group 0.
+pub(super) fn lit_pipeline_layout(device: &wgpu::Device, layouts: &LayoutRefs) -> wgpu::PipelineLayout {
+    #[cfg(not(gizmo_forward_only))]
+    let groups = [
+        Some(layouts.global),
+        Some(layouts.texture),
+        Some(layouts.shadow),
+        Some(layouts.skeleton),
+        Some(layouts.instance),
+        Some(layouts.indirect), // 5
+    ];
+    #[cfg(gizmo_forward_only)]
+    let groups = [Some(layouts.global), Some(layouts.texture), Some(layouts.skeleton), Some(layouts.instance)];
+    device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("Lit Forward Pipeline Layout"),
+        bind_group_layouts: &groups,
+        immediate_size: 0,
+    })
+}
+
+/// Every lit pipeline a draw on one tier can need, from that tier's `module`: opaque single- and
+/// double-sided, blended by alpha, and blended under each of the other modes. Opaque blends by alpha,
+/// as the `DETAILS` tier's does, since a cut-out's edge is drawn from its alpha.
+pub(crate) fn lit_set(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    module: &wgpu::ShaderModule,
+    name: &str,
+) -> super::LitSet {
+    let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
+    let fill = wgpu::PolygonMode::Fill;
+    super::LitSet {
+        render: forward_pipeline(device, layout, module, "fs_main", &format!("Render Pipeline ({name})"), true, Some(wgpu::Face::Back), alpha, fill),
+        render_double_sided: forward_pipeline(device, layout, module, "fs_main", &format!("Render TwoSided Pipeline ({name})"), true, None, alpha, fill),
+        transparent: forward_pipeline(device, layout, module, "fs_main", &format!("Transparent Pipeline ({name})"), false, None, alpha, fill),
+        blend: crate::components::BlendMode::VARIANTS.map(|mode| {
+            forward_pipeline(device, layout, module, lit_fragment_entry(mode), &format!("Transparent Pipeline ({mode:?}, {name})"), false, None, Some(mode.state()), fill)
+        }),
+    }
 }
 
 /// `probes`: which reflection probes the forward-only path's lit shaders read, which is what a scene has
@@ -106,18 +209,7 @@ pub(super) fn build_core_pipelines(
     // shader use it; unlit, grid and backdrop keep five. A forward pass binds group 5 once — a
     // bound group stays bound across pipeline switches.
     #[cfg(not(gizmo_forward_only))]
-    let lit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("Lit Forward Pipeline Layout"),
-        bind_group_layouts: &[
-            Some(layouts.global),
-            Some(layouts.texture),
-            Some(layouts.shadow),
-            Some(layouts.skeleton),
-            Some(layouts.instance),
-            Some(layouts.indirect), // 5
-        ],
-        immediate_size: 0,
-    });
+    let lit_pipeline_layout = lit_pipeline_layout(device, layouts);
     #[cfg(gizmo_forward_only)]
     let render_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Render Pipeline Layout"),
@@ -285,49 +377,7 @@ pub(super) fn build_core_pipelines(
                      cull: Option<wgpu::Face>,
                      blend: Option<wgpu::BlendState>,
                      polygon_mode: wgpu::PolygonMode| {
-        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some(label),
-            layout: Some(layout),
-            vertex: wgpu::VertexState {
-                module: sm,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(Vertex::desc())],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: sm,
-                entry_point: Some(entry),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    blend,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: cull,
-                unclipped_depth: false,
-                polygon_mode,
-                conservative: false,
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: Some(depth_write),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview_mask: None,
-            cache: None,
-        })
+        forward_pipeline(device, layout, sm, entry, label, depth_write, cull, blend, polygon_mode)
     };
     let create_main = |layout: &wgpu::PipelineLayout,
                        sm: &wgpu::ShaderModule,
@@ -358,15 +408,7 @@ pub(super) fn build_core_pipelines(
                 ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
             ],
         );
-        let blend = wgpu::BlendState::ALPHA_BLENDING;
-        Some(super::LitLobes {
-            render: create_main(lit_layout, &shader, "Render Pipeline (lobes)", true, Some(wgpu::Face::Back), Some(blend), wgpu::PolygonMode::Fill),
-            render_double_sided: create_main(lit_layout, &shader, "Render TwoSided Pipeline (lobes)", true, None, Some(blend), wgpu::PolygonMode::Fill),
-            transparent: create_main(lit_layout, &shader, "Transparent Pipeline (lobes)", false, None, Some(blend), wgpu::PolygonMode::Fill),
-            blend: crate::components::BlendMode::VARIANTS.map(|mode| {
-                create_at(lit_fragment_entry(mode), lit_layout, &shader, &format!("Transparent Pipeline ({mode:?}, lobes)"), false, None, Some(mode.state()), wgpu::PolygonMode::Fill)
-            }),
-        })
+        Some(lit_set(device, lit_layout, &shader, "lobes"))
     };
     #[cfg(not(gizmo_forward_only))]
     let lobes = None;

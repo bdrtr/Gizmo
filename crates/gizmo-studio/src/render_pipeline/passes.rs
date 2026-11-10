@@ -141,6 +141,32 @@ pub(super) fn sync_editor_settings(
 
 // execute_render_pipeline'ten çıkarılan render geçişleri (Tier 3: mega-fn bölmesi).
 // Yan-etki-only: encoder'a komut kaydeder, çıktı yok.
+/// What a batch is drawn with in this viewport where the engine's own material would be drawn with
+/// `engine`: a game's pipeline from the registry (`MaterialType::Custom`), a game's surface's lit
+/// pipeline (`MaterialType::CustomSurface`: glass, blended or two-sided as the batch is), or `engine`.
+/// `None` is an id with nothing behind it, which draws nothing — the game path's rule, so the two do
+/// not disagree about a scene that names a material this renderer was never given.
+fn batch_pipeline<'a>(
+    renderer: &'a gizmo::renderer::Renderer,
+    batch: &FlatBatchData,
+    transparent: bool,
+    engine: &'a wgpu::RenderPipeline,
+) -> Option<&'a wgpu::RenderPipeline> {
+    if let Some(id) = batch.custom {
+        return renderer.custom_materials.get(id).map(|c| &c.pipeline);
+    }
+    if let Some(id) = batch.surface {
+        return renderer.custom_materials.surface(id).map(|surface| {
+            if batch.is_transmissive {
+                surface.transmissive_pipeline(batch.is_double_sided)
+            } else {
+                surface.lit_pipeline(false, transparent, batch.is_double_sided, batch.blend_mode)
+            }
+        });
+    }
+    Some(engine)
+}
+
 pub(super) fn record_studio_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &gizmo::renderer::Renderer,
@@ -200,6 +226,17 @@ pub(super) fn record_studio_shadow_passes(
                 // things that cannot sensibly cast at all — and this is the object's own answer on
                 // top of them.
                 if !batch.casts_shadows {
+                    continue;
+                }
+                // A game's own pipeline decides for itself, as on the game path
+                // (`CustomMaterial::casts_shadows`), and an id with nothing behind it draws
+                // nothing, its shadow included. A game's surface casts as the engine's material.
+                if let Some(id) = batch.custom {
+                    if !renderer.custom_materials.get(id).is_some_and(|c| c.casts_shadows) {
+                        continue;
+                    }
+                }
+                if batch.surface.is_some_and(|id| renderer.custom_materials.surface(id).is_none()) {
                     continue;
                 }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
@@ -316,11 +353,14 @@ pub(super) fn record_studio_main_pass(
             // The uniform stays 0 for this mode. `deferred_lighting.wgsl` reads 3 as
             // "Roughness/Metallic", and one chip labelled "Wire" must not mean two different
             // pictures depending on which path runs.
-            render_pass.set_pipeline(if ed_shading_mode == SHADING_WIREFRAME {
+            let wireframe_view = ed_shading_mode == SHADING_WIREFRAME;
+            let engine_opaque = if wireframe_view {
                 &renderer.scene.wireframe_pipeline
             } else {
                 &renderer.scene.render_pipeline
-            });
+            };
+            render_pass.set_pipeline(engine_opaque);
+            let mut bound: *const wgpu::RenderPipeline = engine_opaque;
             for batch in flat_batches {
                 if batch.is_transparent
                     || batch.is_double_sided
@@ -336,6 +376,14 @@ pub(super) fn record_studio_main_pass(
                 }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
+                }
+                // A game's material draws with its own pipeline, but not in the wireframe view, where
+                // every batch is the same lines.
+                let pipeline = if wireframe_view { Some(engine_opaque) } else { batch_pipeline(renderer, batch, false, engine_opaque) };
+                let Some(pipeline) = pipeline else { continue };
+                if !std::ptr::eq(bound, pipeline) {
+                    render_pass.set_pipeline(pipeline);
+                    bound = pipeline;
                 }
                 let safe_end =
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
@@ -355,7 +403,9 @@ pub(super) fn record_studio_main_pass(
             }
 
             // 2. ÇİFT YÖNLÜ OPAQUE OBJELER (Kumaşlar, cull_mode = None)
-            render_pass.set_pipeline(&renderer.scene.render_double_sided_pipeline);
+            let engine_two_sided = &renderer.scene.render_double_sided_pipeline;
+            render_pass.set_pipeline(engine_two_sided);
+            let mut bound: *const wgpu::RenderPipeline = engine_two_sided;
             for batch in flat_batches {
                 if batch.is_transparent
                     || !batch.is_double_sided
@@ -368,6 +418,11 @@ pub(super) fn record_studio_main_pass(
                 }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
+                }
+                let Some(pipeline) = batch_pipeline(renderer, batch, false, engine_two_sided) else { continue };
+                if !std::ptr::eq(bound, pipeline) {
+                    render_pass.set_pipeline(pipeline);
+                    bound = pipeline;
                 }
                 let safe_end =
                     std::cmp::min(batch.end_instance, renderer.scene.instance_capacity as u32);
@@ -505,7 +560,9 @@ pub(super) fn record_studio_main_pass(
                         multiview_mask: None,
                     });
                     for batch in flat_batches.iter().filter(glass) {
-                        pass.set_pipeline(renderer.scene.transmissive_pipeline(batch.is_double_sided));
+                        let engine = renderer.scene.transmissive_pipeline(batch.is_double_sided);
+                        let Some(pipeline) = batch_pipeline(renderer, batch, true, engine) else { continue };
+                        pass.set_pipeline(pipeline);
                         pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
                         pass.set_bind_group(1, &*batch.bind_group, &[]);
                         pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
@@ -528,11 +585,13 @@ pub(super) fn record_studio_main_pass(
                 // The game path's choice (`passes::forward`): the batch's blend mode picks a
                 // variant, and an unlit draw stays unlit — this loop used to shade every
                 // transparent batch with the lit shader, unlit ones included.
-                render_pass.set_pipeline(match renderer.scene.blend_variant(batch.is_unlit, batch.blend_mode) {
+                let engine = match renderer.scene.blend_variant(batch.is_unlit, batch.blend_mode) {
                     Some(p) => p,
                     None if batch.is_unlit => &renderer.scene.unlit_pipeline,
                     None => &renderer.scene.transparent_pipeline,
-                });
+                };
+                let Some(pipeline) = batch_pipeline(renderer, batch, true, engine) else { continue };
+                render_pass.set_pipeline(pipeline);
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }

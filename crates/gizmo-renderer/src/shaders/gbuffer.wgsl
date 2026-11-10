@@ -1,9 +1,19 @@
 // G-Buffer geometry pass.
-// Writes opaque PBR surfaces to three MRTs; unlit/skybox objects are discarded here
+// Writes opaque lit surfaces to the G-buffer's targets; unlit/skybox objects are discarded here
 // and drawn in a subsequent forward pass.
+//
+// What the surface is comes from the engine's material (`gizmo::material`), or, composed with
+// `CUSTOM_SURFACE`, from a game's `material_surface` (`custom_material::SurfaceMaterial`): the same
+// shader around it, so a game's surface is written to the G-buffer exactly as the engine's own is.
 
 #import gizmo::common::{instance_keeps, dielectric_f0}
-#import gizmo::surface::{evaluate_surface, surface_uv, tangent_frame, surface_lobes}
+#import gizmo::surface::{Surface, tangent_frame, surface_lobes}
+#ifdef CUSTOM_SURFACE
+#import gizmo::surface::{SurfaceInput}
+#import gizmo::custom_surface::{material_surface}
+#else
+#import gizmo::material::{evaluate_surface, surface_uv}
+#endif
 
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
     let cross01 = cross(m[0], m[1]);
@@ -97,7 +107,13 @@ struct Motion {
 fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> VertexOutput {
     var out: VertexOutput;
     out.color     = input.color;
+#ifdef CUSTOM_SURFACE
+    // What group 1 means is the game's, so the material's UV transform is not applied here: a
+    // surface that wants it calls `gizmo::material::standard_surface`, which does.
+    out.tex_coords = input.tex_coords;
+#else
     out.tex_coords = surface_uv(input.tex_coords);
+#endif
 
     let inst  = instances[instance_idx];
     let model = mat4x4<f32>(
@@ -171,14 +187,39 @@ struct GBufferOut {
     @location(5) emissive:         vec4<f32>,
 };
 
+// What the material is at this fragment: the engine's own, or the game's `material_surface`.
+fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
+#ifdef CUSTOM_SURFACE
+    var input: SurfaceInput;
+    input.world_position = in.world_position;
+    input.uv = in.tex_coords;
+    input.vertex_color = in.color;
+    input.N = in.normal;
+    input.T = in.world_tangent.xyz;
+    input.B = in.bitangent;
+    input.albedo = in.inst_albedo;
+    input.roughness = in.inst_pbr.x;
+    input.metallic = in.inst_pbr.y;
+    input.emissive = in.inst_emissive.xyz;
+    input.front_facing = front;
+    input.frag_coord = in.clip_position;
+    input.time = scene.cascade_params.z;
+    input.camera_position = scene.camera_pos.xyz;
+    return material_surface(input);
+#else
+    return evaluate_surface(
+        in.tex_coords, in.normal, in.world_tangent.xyz, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
+    );
+#endif
+}
+
 // The depth prepass of a draw that discards: a cut-out, or a LOD crossfade. The plain prepass has no
 // fragment stage, which is right for everything else and wrong here: it writes depth over the holes,
-// and what stands behind them then fails the depth test in the G-buffer pass.
+// and what stands behind them then fails the depth test in the G-buffer pass. A game's surface always
+// takes this one, since only its own code knows whether it cuts.
 @fragment
-fn fs_prepass(in: VertexOutput) {
-    let surface = evaluate_surface(
-        in.tex_coords, in.normal, in.world_tangent.xyz, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz
-    );
+fn fs_prepass(in: VertexOutput, @builtin(front_facing) front: bool) {
+    let surface = fragment_surface(in, front);
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }
     if (!instance_keeps(in.inst_keep, surface.alpha, in.clip_position.xy)) { discard; }
 }
@@ -188,9 +229,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // Skip unlit / skybox objects — they are drawn in a forward pass
     if (in.inst_pbr.z > 0.5) { discard; }
 
-    let surface = evaluate_surface(
-        in.tex_coords, in.normal, in.world_tangent.xyz, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
-    );
+    let surface = fragment_surface(in, front);
     // glTF AlphaMode::Mask cutout: hard per-texel discard at alphaCutoff.
     // cutoff == 0 → no cutout (Opaque / Blend materials), so this is a no-op for them.
     if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }

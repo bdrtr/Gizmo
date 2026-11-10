@@ -1367,6 +1367,12 @@ impl<'a> MaterialBuilder<'a> {
 
     /// The per-material parameter buffer the shader reads. Unset, the shared default buffer —
     /// which is also why materials built without one cannot disagree about their constants.
+    ///
+    /// A game's own uniforms may go here, for a shader of its own, but the buffer must hold at least
+    /// a [`MaterialParams`](crate::gpu_types::MaterialParams) (48 bytes): the engine draws a
+    /// material's group with its own shaders too — the wireframe overlay, the editor's debug views —
+    /// and a smaller buffer is a validation error at that draw, far from here. [`build`](Self::build)
+    /// checks it.
     #[must_use]
     pub fn params(mut self, buffer: &'a wgpu::Buffer) -> Self {
         self.params = Some(buffer);
@@ -1384,6 +1390,11 @@ impl<'a> MaterialBuilder<'a> {
     ///
     /// Takes `&mut AssetManager` because the defaults are created on first use and cached there;
     /// the second call onwards costs nothing extra.
+    ///
+    /// # Panics
+    ///
+    /// If [`params`](Self::params) was given a buffer smaller than a
+    /// [`MaterialParams`](crate::gpu_types::MaterialParams).
     pub fn build(
         self,
         assets: &mut AssetManager,
@@ -1391,6 +1402,16 @@ impl<'a> MaterialBuilder<'a> {
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
     ) -> Arc<wgpu::BindGroup> {
+        if let Some(params) = self.params {
+            let least = std::mem::size_of::<crate::gpu_types::MaterialParams>() as u64;
+            assert!(
+                params.size() >= least,
+                "material `{}`: its params buffer is {} bytes and must be at least {least}, a `MaterialParams`, \
+                 because the engine's own shaders read this group too (the wireframe overlay, the debug views)",
+                self.label.unwrap_or("material"),
+                params.size(),
+            );
+        }
         assets.ensure_material_defaults(device, queue);
         let d = assets
             .material_defaults
