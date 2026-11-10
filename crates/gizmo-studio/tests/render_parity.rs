@@ -844,8 +844,11 @@ fn with_its_preparation(editor: String, workspace: &std::path::Path) -> String {
     if !code_only(&editor).contains("prepare_frame(world, renderer)") {
         return editor;
     }
+    // Line endings normalised: a Windows checkout reads `\r\n`, and the end of a body is found
+    // by its `\n}\n`.
     let game = std::fs::read_to_string(workspace.join("crates/gizmo/src/systems/render/mod.rs"))
-        .expect("the game's frame source");
+        .expect("the game's frame source")
+        .replace("\r\n", "\n");
     let body = |signature: &str| -> String {
         let start = game.find(signature).unwrap_or_else(|| panic!("`{signature}` is gone"));
         let end = game[start..].find("\n}\n").map(|e| start + e + 3).expect("its body ends");
