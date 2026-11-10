@@ -67,17 +67,24 @@ fn draw_studio_frame(
     // needs capturing.
     gizmo::systems::render::capture_reflection_probes(world, renderer);
 
-    // **Cameras that draw into a texture** (`CameraTarget`): drawn by the game path's own function
-    // too, so a monitor in the scene shows in the editor what it shows in the game — each a whole
-    // view of the world, submitted on its own ahead of this frame. The simulations are this frame's
-    // (stepped below, after them), at full level of detail, as the editor shows everything.
-    gizmo::systems::render::draw_camera_targets(world, renderer, (1.0, 1.0), 1);
-
     // GPU fluid: stepped here, drawn twice below (particles inside the main pass, surface after
     // it). The editor did not step or draw it at all until 2026-08-19 — a fluid scene flowed in a
     // shipped game and showed nothing in the viewport, while this pipeline was already drawing
-    // `renderer.gpu_physics` beside it.
-    gizmo::systems::render::step_gpu_fluid(encoder, renderer, studio_fluid_particles(renderer));
+    // `renderer.gpu_physics` beside it. In a submission of its own, ahead of every view, as the game
+    // path steps its simulations: a texture camera below is submitted before this frame's encoder.
+    {
+        let mut step = renderer.device.create_command_encoder(&gizmo::wgpu::CommandEncoderDescriptor {
+            label: Some("studio_gpu_fluid"),
+        });
+        gizmo::systems::render::step_gpu_fluid(&mut step, renderer, studio_fluid_particles(renderer));
+        renderer.queue.submit(std::iter::once(step.finish()));
+    }
+
+    // **Cameras that draw into a texture** (`CameraTarget`): drawn by the game path's own function
+    // too, so a monitor in the scene shows in the editor what it shows in the game — each a whole
+    // view of the world, submitted on its own ahead of this frame, at full level of detail, as the
+    // editor shows everything.
+    gizmo::systems::render::draw_camera_targets(world, renderer, (1.0, 1.0), 1);
 
     let (aspect, ed_shading_mode, show_colliders, post_params, game_view_visible) =
         sync_editor_settings(world, renderer);

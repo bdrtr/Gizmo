@@ -276,7 +276,7 @@ pub fn draw_frame(
     let camera = crate::renderer::components::active_camera(world);
     let mut positions = vec![camera_world_position(world, camera)];
     positions.extend(target_camera_positions(world));
-    let lods = step_gpu_simulations(world, encoder, renderer, &positions);
+    let lods = step_gpu_simulations_ahead(world, renderer, &positions);
     capture_planar_reflections(world, renderer, camera, lods);
     draw_camera_targets(world, renderer, lods, 1);
     draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
@@ -303,9 +303,8 @@ fn any_camera_has_a_viewport(world: &World) -> bool {
 /// recorded into one encoder would both draw whatever the last one wrote — the frame's own view
 /// would come out as the last texture camera's.
 ///
-/// The frame's GPU simulations are stepped once, for every camera (`lods`); like a planar mirror's
-/// capture, a texture camera is submitted before the frame's encoder, so it sees the simulation one
-/// step behind the frame's own view.
+/// The frame's GPU simulations are stepped once, for every camera (`lods`), and submitted before
+/// any view, so a texture camera draws the step the frame's own view draws.
 pub fn draw_camera_targets(world: &World, renderer: &mut Renderer, lods: (f32, f32), first_slot: usize) {
     use crate::renderer::components::CameraTarget;
     let mut targets: Vec<(i32, Entity, CameraTarget)> = world
@@ -407,7 +406,7 @@ pub fn draw_viewports(
         let camera = crate::renderer::components::active_camera(world);
         let mut positions = vec![camera_world_position(world, camera)];
         positions.extend(target_camera_positions(world));
-        let lods = step_gpu_simulations(world, encoder, renderer, &positions);
+        let lods = step_gpu_simulations_ahead(world, renderer, &positions);
         draw_camera_targets(world, renderer, lods, 1);
         draw_camera_view(world, encoder, view, renderer, camera, lods, None, true, None);
         return;
@@ -444,7 +443,7 @@ pub fn draw_viewports(
         occlusion_query_set: None,
         multiview_mask: None,
     });
-    let lods = step_gpu_simulations(world, &mut frame, renderer, &positions);
+    let lods = step_gpu_simulations_ahead(world, renderer, &positions);
     // The texture cameras after the split's own views in the history slots, and submitted before
     // them, each on its own.
     draw_camera_targets(world, renderer, lods, views.len());
@@ -951,6 +950,20 @@ pub(crate) fn end_debug_line_frame(world: &mut World) {
             world.remove_resource::<crate::renderer::GizmoFrame>();
         }
     }
+}
+
+/// The frame's GPU simulations ([`step_gpu_simulations`]), stepped once **in a submission of their
+/// own, ahead of every view**. A mirror's capture and a texture camera are each submitted before the
+/// frame's own encoder, so a step recorded into that encoder reached the frame's view and not theirs:
+/// they drew every particle, the fluid and the GPU bodies one step behind it
+/// (`a_texture_camera_where_the_frames_camera_stands_draws_the_frames_picture`).
+fn step_gpu_simulations_ahead(world: &World, renderer: &mut Renderer, cam_positions: &[Vec3]) -> (f32, f32) {
+    let mut step = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+        label: Some("gpu_simulations"),
+    });
+    let lods = step_gpu_simulations(world, &mut step, renderer, cam_positions);
+    renderer.queue.submit(std::iter::once(step.finish()));
+    lods
 }
 
 /// GPU simulation for the frame — physics, fluid, particles — recorded into `encoder` once.

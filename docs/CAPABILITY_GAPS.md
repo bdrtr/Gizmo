@@ -478,8 +478,13 @@ way and writes it out from a pass; it used to flip `primary` between two `defaul
 in a raw hook, preparing the frame twice, and is what the history below records. As a split-screen
 view does not, a texture camera does not get mirrors of its own: a mirror it sees shows the
 reflection captured for the frame's camera (per-view planar captures are a mirror's cost times the
-cameras — work of their own). And like a mirror's capture, it is submitted before the frame's encoder,
-so it draws the GPU simulations (particles, fluid, GPU physics) one step behind the frame's own view.
+cameras — work of their own). Found writing it, and fixed the same day: a texture camera and a
+mirror's capture are submitted before the frame's own encoder, and the frame's GPU simulations
+(particles, fluid, GPU physics) were recorded into that encoder, so both drew them one step behind
+the frame's view. The simulations are stepped in a submission of their own ahead of every view now,
+on both paths (`a_texture_camera_where_the_frames_camera_stands_draws_the_frames_picture`: a texture
+camera standing where the frame's camera stands draws the frame's picture to the pixel, a sheet of
+fast particles included — 3 368 pixels differed before).
 
 **History of this section, kept for the measurements:**
 

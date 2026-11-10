@@ -866,3 +866,67 @@ fn a_camera_with_a_target_draws_into_it_and_leaves_the_frame_alone() {
         assert_eq!(crate::renderer::components::active_camera(&unmarked), Some(second));
     });
 }
+
+/// **Every view of a frame sees the frame's simulation step.** A texture camera standing where the
+/// frame's camera stands, at the same shape, draws the frame's picture to the pixel — fast GPU
+/// particles included. A texture camera and a mirror's capture are submitted before the frame's own
+/// encoder, and the GPU simulations used to be recorded into that encoder, so a texture camera drew
+/// every particle where it was one step before the frame's view drew it.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_texture_camera_where_the_frames_camera_stands_draws_the_frames_picture() {
+    use crate::renderer::components::CameraTarget;
+    use crate::renderer::gpu_particles::GpuParticle;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        quiet(&mut renderer);
+        if renderer.gpu_particles.is_none() {
+            eprintln!("skipping: this renderer has no GPU particles");
+            return;
+        }
+        let gpu = renderer.gpu_context();
+        let mut game = World::new();
+        game.insert_resource(clock(1.0 / 60.0));
+        cube_scene(&renderer, &mut game);
+        // The frame's camera's twin: where it stands, looking where it looks, into a texture of the
+        // frame's size.
+        let twin = game.spawn_bundle(crate::bundles::CameraBundle {
+            position: Vec3::new(-6.0, 0.0, 0.0),
+            primary: false,
+            ..Default::default()
+        });
+        let target = CameraTarget::new(&gpu, 128, 128);
+        game.add_component(twin, target.clone());
+        prepare_frame(&mut game, &mut renderer);
+        let without = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+
+        // A sheet of fast white particles crossing the view: one step moves them 2 m.
+        let particles: Vec<GpuParticle> = (0..256)
+            .map(|i| GpuParticle {
+                position: [-2.0, -1.2 + (i / 16) as f32 * 0.15, -2.5 + (i % 16) as f32 * 0.15],
+                life: 0.0,
+                velocity: [0.0, 0.0, 120.0],
+                max_life: 10.0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                size_start: 0.12,
+                size_end: 0.12,
+                _padding: [0.0; 2],
+            })
+            .collect();
+        renderer.gpu_particles.as_ref().expect("checked above").spawn_particles(&renderer.queue, &particles);
+
+        prepare_frame(&mut game, &mut renderer);
+        let frame = frame_bytes(&mut renderer, |e, v, r| draw_frame(&game, e, v, r));
+        let through_twin = texture_bytes(&renderer, target.texture());
+        let shown = without.chunks(4).zip(frame.chunks(4)).filter(|(a, b)| a != b).count();
+        assert!(shown > 50, "the particles changed only {shown} pixels of the frame");
+        let differ = frame.chunks(4).zip(through_twin.chunks(4)).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "the twin drew a different picture from the frame's ({differ} pixels): not the same simulation step");
+    });
+}
