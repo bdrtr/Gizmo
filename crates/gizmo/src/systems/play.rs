@@ -246,11 +246,10 @@ fn apply_script_camera(
         match cmd {
             Cmd::SetCameraFov(degrees) => {
                 let radians = degrees.to_radians().max(0.001);
-                // The primary is found through a read borrow and written through a write one:
-                // the mutable query is not iterable, and holding both at once is a panic.
-                let primary = {
-                    world.query::<(crate::core::Entity, &crate::renderer::Camera)>().iter().find(|(_, cam)| cam.primary).map(|(entity, _)| entity)
-                };
+                // The camera the frame is drawn from — the renderer's own rule (`active_camera`),
+                // which falls back to the first camera when none is marked and never answers with
+                // one drawing into a texture. This used to look for the first `primary` itself.
+                let primary = crate::renderer::components::active_camera(world);
                 match primary {
                     Some(entity) => {
                         let mut cameras = world.query_mut::<&mut crate::renderer::Camera>();

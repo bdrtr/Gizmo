@@ -78,19 +78,23 @@ impl Listener {
 ///
 /// Taking [`Camera::get_right`](gizmo_renderer::Camera::get_right) instead cannot drift: it is the same function `get_view` uses to
 /// build the up vector, so the ears are by construction square to what is on screen.
+///
+/// **The ears are on the camera the frame is drawn from** — [`active_camera`](gizmo_renderer::components::active_camera),
+/// the renderer's own rule. The listener used to look for the first camera marked `primary` by
+/// itself, which is a different answer twice over: a world with no camera marked has its frame
+/// drawn from its first camera and its sound heard at the origin, and a camera drawing into a
+/// texture (`CameraTarget`) can be marked `primary` and found first — a security monitor hearing
+/// for the player.
 pub fn listener(world: &World) -> Listener {
     let mut listener = Listener::default();
-    {
-        let mut query = world.query::<(Entity, &gizmo_renderer::Camera, &Transform)>();
-        for (e, cam, t) in query.iter_mut() {
-            if cam.primary {
-                listener.position = t.position;
-                listener.right = cam.get_right();
-                if let Some(v) = world.query::<&Velocity>().get(e) {
-                    listener.velocity = v.linear;
-                }
-                break;
-            }
+    let Some(camera) = gizmo_renderer::components::active_camera(world) else { return listener };
+    let cameras = world.query::<&gizmo_renderer::Camera>();
+    let transforms = world.query::<&Transform>();
+    if let (Some(cam), Some(t)) = (cameras.get(camera), transforms.get(camera)) {
+        listener.position = t.position;
+        listener.right = cam.get_right();
+        if let Some(v) = world.query::<&Velocity>().get(camera) {
+            listener.velocity = v.linear;
         }
     }
     listener
@@ -267,6 +271,20 @@ pub fn audio_spatial_system(world: &mut World, _dt: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The listener is where the frame is drawn from.** With no camera marked `primary` the frame
+    /// is drawn from the first camera (`active_camera`), and the listener searched for a primary
+    /// alone and stayed at the origin.
+    #[test]
+    fn the_listener_stands_at_the_camera_the_frame_is_drawn_from() {
+        use gizmo_renderer::Camera;
+        let mut world = World::new();
+        let camera = world.spawn();
+        world.add_component(camera, Camera::new(1.0, 0.1, 1000.0, 0.0, 0.0, false));
+        world.add_component(camera, Transform::new(Vec3::new(5.0, 1.0, -2.0)));
+        assert_eq!(gizmo_renderer::components::active_camera(&world), Some(camera));
+        assert_eq!(listener(&world).position, Vec3::new(5.0, 1.0, -2.0));
+    }
 
     /// Regression: the listener's ears used to be square to `Transform.rotation`, which the tree
     /// writes with at least two conventions, neither matching the camera. Under the simple
