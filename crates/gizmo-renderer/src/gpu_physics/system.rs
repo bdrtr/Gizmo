@@ -970,8 +970,8 @@ impl GpuPhysicsSystem {
     }
 
     #[tracing::instrument(skip_all, level = "trace")]
-    /// Records one whole simulation step: clear, build, narrowphase, solve, joints, integrate —
-    /// each its own dispatch, in that order.
+    /// Records one whole simulation step: forces, clear, build, narrowphase, solve, integrate,
+    /// joints — each its own dispatch, in that order.
     pub fn compute_pass(&self, encoder: &mut wgpu::CommandEncoder) {
         tracing::trace!(
             boxes = self.box_high_water,
@@ -984,6 +984,10 @@ impl GpuPhysicsSystem {
             timestamp_writes: None,
         });
         cpass.set_bind_group(0, &self.pipelines.compute_bind_group, &[]);
+
+        // Faz 0: the step's forces, before the contacts are solved (see `apply_forces`).
+        cpass.set_pipeline(&self.pipelines.pipeline_apply_forces);
+        cpass.dispatch_workgroups(self.box_high_water.div_ceil(256), 1, 1);
 
         // ═══ Sequential Impulse Solver ═══
         // Faz 1: Grid'i bir kez inşa et

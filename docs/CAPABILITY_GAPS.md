@@ -561,10 +561,24 @@ Tests: `a_gpu_body_leaves_with_its_entity_and_its_slot_is_nobody_elses`,
 `a_body_put_in_is_not_moved_by_a_readback_copied_before_it`, `a_body_in_a_left_slot_starts_with_none_of_its_contacts`,
 `a_contact_warm_starts_only_from_the_step_before`.
 
-Still open there: a box resting on another body never sleeps — that contact is resolved in the solve,
-before `integrate` adds the step's gravity and judges whether the box has stopped, so it never has; only a
-body on a static collider sleeps. And the editor draws GPU bodies with no culling pass of its own, so its
-viewport would show none; nothing in the editor turns GPU bodies on.
+**A heap of GPU bodies falls asleep — 2026-11-10.** A body resting on another body never slept, so a heap
+was simulated in full for as long as it lay there. The step added gravity *after* the contacts were
+solved: a resting body came out of the solve moving up at the Baumgarte bias — the speed that would cancel
+the gravity still to come — sat a couple of centimetres deep in its support, and showed a sleeping
+neighbour, which has no such speed, a jolt each time one fell asleep. Gravity is a pass of its own now
+(`apply_forces`), before anything is solved, as semi-implicit Euler has it, and a resting body leaves the
+solve still. Found on the way and fixed with it: the Baumgarte bias was subtracted from the contact
+impulse, so the deeper two bodies sank into each other the less they were pushed apart; only a moving body
+wakes a sleeping one it touches
+(two resting bodies took turns waking each other, so neither slept); and a massless body counts as at rest,
+so a floor does not wake what sleeps on it — a body the game writes in comes with a count of 0 and wakes
+its neighbours for one step. `a_box_resting_on_a_box_falls_asleep`: a two-box stack on a floor asleep
+within eight seconds, 8 mm deep in its supports (it sank 2 cm before). And
+`a_body_taken_out_wakes_the_sleeping_bodies_round_it` is the case it was written for: the lower box of a
+sleeping stack taken out, the upper one falls to the floor.
+
+Still open there: the editor draws GPU bodies with no culling pass of its own, so its viewport would show
+none; nothing in the editor turns GPU bodies on.
 
 **History of this section, kept for the measurements:**
 

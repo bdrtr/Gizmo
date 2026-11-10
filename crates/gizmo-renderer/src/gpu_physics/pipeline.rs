@@ -12,6 +12,8 @@ pub struct PhysicsPipelines {
     pub compute_bind_group_layout: wgpu::BindGroupLayout,
     /// That group.
     pub compute_bind_group: wgpu::BindGroup,
+    /// Stage 0: the step's forces (gravity), before anything is solved.
+    pub pipeline_apply_forces: wgpu::ComputePipeline,
     /// Stage 1: clear the broadphase grid.
     pub pipeline_clear: wgpu::ComputePipeline,
     /// Stage 2: bin every body into the grid.
@@ -223,6 +225,14 @@ pub fn create_physics_pipelines(
         compilation_options: Default::default(),
         cache: None,
     });
+    let pipeline_apply_forces = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("Physics Apply Forces"),
+        layout: Some(&compute_pipeline_layout),
+        module: &compute_shader,
+        entry_point: Some("apply_forces"),
+        compilation_options: Default::default(),
+        cache: None,
+    });
     let pipeline_integrate = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Physics Integrate"),
         layout: Some(&compute_pipeline_layout),
@@ -387,6 +397,7 @@ pub fn create_physics_pipelines(
     PhysicsPipelines {
         compute_bind_group_layout,
         compute_bind_group,
+        pipeline_apply_forces,
         pipeline_clear,
         pipeline_build,
         pipeline_narrowphase,

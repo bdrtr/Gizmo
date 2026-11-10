@@ -195,6 +195,23 @@ fn hash_pos(pos: vec3<f32>) -> u32 {
     return hash % GRID_SIZE;
 }
 
+// Pass 0: the step's forces, before anything is solved. Gravity used to be added in `integrate`,
+// after the contacts: a body resting on another came out of the solve moving up at the Baumgarte
+// bias — the speed that would cancel the gravity still to come — and sat a couple of centimetres
+// deep in its support, and because a sleeping body has no such speed, the body resting on it was
+// jolted each time it fell asleep, woke it, and the two never slept. With the forces first, the
+// solve cancels this step's gravity itself and a resting body leaves it still.
+@compute @workgroup_size(256)
+fn apply_forces(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let idx = global_id.x;
+    if (idx >= params.num_boxes) { return; }
+    var body = boxes[idx];
+    // Asleep, free, leaving or massless: no force moves it.
+    if (body.state != 0u || body.mass <= 0.00001) { return; }
+    body.velocity += params.gravity * params.dt;
+    boxes[idx] = body;
+}
+
 // Pass 1
 @compute @workgroup_size(256)
 fn clear_grid(@builtin(global_invocation_id) global_id: vec3<u32>) {
@@ -333,7 +350,11 @@ fn narrowphase(@builtin(global_invocation_id) global_id: vec3<u32>) {
                 }
                 
                 if (is_intersecting || (is_swept_intersecting && global_t_first <= 1.0 && global_t_first >= 0.0)) {
-                    if (other.state == 1u) {
+                    // Only a body that is moving wakes a sleeping one it touches. A body at rest — counting
+                    // towards sleep itself — woke its sleeping neighbour every step, so two bodies resting
+                    // together took turns: one fell asleep, the other woke it the next step and fell
+                    // asleep in its place, and the stack never slept.
+                    if (other.state == 1u && me.sleep_counter == 0u) {
                         atomicStore(&awake_flags[n_idx], 1u);
                     }
                     var active_normal = hit_normal;
@@ -482,7 +503,10 @@ fn solve_collisions_safe(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let K = invMassA + invMassB + dot(crossA, ptA) + dot(crossB, ptB);
         
         // Calculate new normal impulse
-        let j_normal = -(1.0 + restitution) * vel_along_normal - bias_vel;
+        // The Baumgarte bias adds separating speed in proportion to the overlap. It was subtracted:
+        // the deeper two bodies sank into each other the less the contact pushed them apart, and at
+        // rest it pulled them together — a stack sank into its floor and rocked there.
+        let j_normal = -(1.0 + restitution) * vel_along_normal + bias_vel;
         let unprojected_new_accum = old_accum.x + (j_normal / K);
         let new_accum_n = max(unprojected_new_accum, 0.0); // Clamp to positive
         let applied_j_n = new_accum_n - old_accum.x; // Delta impulse
@@ -618,11 +642,15 @@ fn integrate(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (box_struct.mass <= 0.00001) {
         box_struct.velocity = vec3<f32>(0.0);
         box_struct.angular_velocity = vec3<f32>(0.0);
+        // At rest, by the narrowphase's reckoning: it wakes no sleeping body it touches. A massless
+        // floor counted as moving woke whatever slept on it every step. A body the game writes in
+        // (`update_box`, a teleport) comes with its own count — 0, moving — for the step after.
+        box_struct.sleep_counter = 1u;
         boxes[idx] = box_struct;
         return;
     }
     
-    box_struct.velocity += params.gravity * params.dt;
+    // Gravity is not added here: `apply_forces` added it before the contacts were solved.
     box_struct.velocity *= params.damping;
     box_struct.position += box_struct.velocity * params.dt;
     
@@ -990,8 +1018,8 @@ fn solve_joints(@builtin(global_invocation_id) global_id: vec3<u32>) {
         if (other.state >= BOX_FREE) { continue; }
         let inv_inertia_other = compute_inv_inertia_diag(other);
         
-        // Uyuyan diğer gövdeyi uyandır
-        if (other.state == 1u) {
+        // Uyuyan diğer gövdeyi uyandır — only from a body that is moving (see the narrowphase).
+        if (other.state == 1u && body.sleep_counter == 0u) {
             atomicStore(&awake_flags[other_idx], 1u);
         }
         

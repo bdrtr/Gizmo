@@ -1716,24 +1716,28 @@ fn a_gpu_body_rests_on_the_ground_the_game_gave_it() {
     });
 }
 
-/// **A body taken out wakes the sleeping bodies round it.** Two boxes asleep side by side on the
-/// floor: take one out and the other is awake the next step, to find what its support has become. A
-/// body asleep against one that went stayed asleep, leaning on nothing.
-///
-/// It needed two more things found on the way to be seen at all. The floor is a static collider,
-/// and the solver read every static collider from the wrong bytes (`StaticCollider`'s padding was a
-/// `vec3`, which WGSL aligns to 16): these boxes fell through it. And a box resting on a static
-/// collider bounced back each step's gravity at the restitution, a few centimetres a second for
-/// ever, above the energy a body must fall under to sleep; below `RESTITUTION_THRESHOLD` it rests.
-/// (A box asleep *on* a box cannot be had: that contact is resolved in the solve, before
-/// `integrate` adds the step's gravity and judges whether the box has stopped.)
+/// A massless floor and two boxes stacked on it, dropped a hair: returns the lower and the upper.
+#[cfg(feature = "physics")]
+fn gpu_stack(game: &mut World) -> (Entity, Entity) {
+    use gizmo_physics_core::Collider;
+    use gizmo_physics_rigid::components::RigidBody;
+    game.spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new(0.0, false), Collider::box_collider(Vec3::new(2.5, 0.1, 2.5))));
+    let cube = |game: &mut World, y: f32| {
+        game.spawn_bundle((Transform::new(Vec3::new(0.0, y, 0.0)), RigidBody::new(1.0, true), Collider::box_collider(Vec3::splat(0.3))))
+    };
+    (cube(game, 0.41), cube(game, 1.02))
+}
+
+/// **A box resting on a box falls asleep**, and so does the one under it. It never did: the contact
+/// between two bodies is resolved in the solve, before `integrate` adds the step's gravity and judges
+/// whether the body has stopped, so a resting box always showed the g·dt its support would take away
+/// next step; and the solve bounced that back at the restitution besides. Only a body on a static
+/// collider ever slept, so a heap of GPU bodies was simulated in full for as long as it lay there.
 #[cfg(feature = "physics")]
 #[test]
 #[ignore = "requires a GPU adapter"]
-fn a_body_taken_out_wakes_the_sleeping_bodies_round_it() {
+fn a_box_resting_on_a_box_falls_asleep() {
     use gizmo_physics_core::components::GpuPhysicsLink;
-    use gizmo_physics_core::Collider;
-    use gizmo_physics_rigid::components::RigidBody;
 
     let _gpu = crate::test_gpu::gpu_lock();
     if !usable_gpu() {
@@ -1750,25 +1754,67 @@ fn a_body_taken_out_wakes_the_sleeping_bodies_round_it() {
         }
         let mut game = World::new();
         game.insert_resource(gizmo_core::time::Time::new());
-        game.spawn_bundle((Transform::new(Vec3::ZERO), RigidBody::new(0.0, false), Collider::plane(Vec3::Y, 0.0)));
-        let cube = |game: &mut World, x: f32| {
-            game.spawn_bundle((Transform::new(Vec3::new(x, 0.3, 0.0)), RigidBody::new(1.0, true), Collider::box_collider(Vec3::splat(0.3))))
-        };
-        let taken = cube(&mut game, 0.0);
-        let beside = cube(&mut game, 0.65);
-        for _ in 0..300 {
+        let (lower, upper) = gpu_stack(&mut game);
+        for _ in 0..480 {
+            gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
+        }
+        let boxes = gpu_boxes(&renderer);
+        let at = |e: Entity| boxes[game.get::<GpuPhysicsLink>(e).expect("linked").id as usize];
+        let (lower, upper) = (at(lower), at(upper));
+        assert_eq!((lower.state, upper.state), (1, 1), "after eight seconds of rest the stack is not asleep");
+        assert!((lower.position[1] - 0.4).abs() < 0.05 && (upper.position[1] - 1.0).abs() < 0.08, "the stack is not standing: {:?} {:?}", lower.position, upper.position);
+    });
+}
+
+/// **A body taken out wakes the sleeping bodies round it.** A box asleep on a box asleep on the floor:
+/// take the lower one out and the upper one falls to the floor. Nothing told the bodies round a freed
+/// slot that it had gone, so the upper box stayed asleep in the air.
+///
+/// It needed three more things to be seen at all, each found on the way. The stack had to sleep (see
+/// `a_box_resting_on_a_box_falls_asleep`). The solver read every static collider from the wrong bytes
+/// (`StaticCollider`'s padding was a `vec3`, which WGSL aligns to 16), so nothing ever landed on one.
+/// And a body resting on a static collider bounced each step's gravity back at the restitution, a few
+/// centimetres a second for ever, above the energy a body must fall under to sleep.
+#[cfg(feature = "physics")]
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_body_taken_out_wakes_the_sleeping_bodies_round_it() {
+    use gizmo_physics_core::components::GpuPhysicsLink;
+
+    let _gpu = crate::test_gpu::gpu_lock();
+    if !usable_gpu() {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    pollster::block_on(async {
+        let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+        quiet(&mut renderer);
+        renderer.enable_gpu_physics();
+        if renderer.gpu_physics.is_none() {
+            eprintln!("skipping: this renderer has no GPU bodies");
+            return;
+        }
+        let mut game = World::new();
+        game.insert_resource(gizmo_core::time::Time::new());
+        let (lower, upper) = gpu_stack(&mut game);
+        for _ in 0..480 {
             gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
         }
         let slot = |game: &World, e: Entity| game.get::<GpuPhysicsLink>(e).expect("linked").id as usize;
-        let beside_slot = slot(&game, beside);
+        let upper_slot = slot(&game, upper);
         let boxes = gpu_boxes(&renderer);
-        assert_eq!((boxes[slot(&game, taken)].state, boxes[beside_slot].state), (1, 1), "the boxes did not fall asleep, so this proves nothing");
+        assert_eq!((boxes[slot(&game, lower)].state, boxes[upper_slot].state), (1, 1), "the stack did not fall asleep, so this proves nothing");
+        let resting = boxes[upper_slot].position[1];
 
-        game.despawn(taken);
-        for _ in 0..3 {
+        game.despawn(lower);
+        for _ in 0..90 {
             gpu_body_frame(&mut game, &mut renderer, 1.0 / 60.0);
         }
-        assert_eq!(gpu_boxes(&renderer)[beside_slot].state, 0, "the box beside the one taken out was left asleep");
+        let fallen = gpu_boxes(&renderer)[upper_slot].position[1];
+        assert!(
+            fallen < resting - 0.4 && (fallen - 0.4).abs() < 0.1,
+            "the box that rested on the one taken out is at y = {fallen} (it rested at {resting}); on the floor it is at 0.4"
+        );
     });
 }
 
