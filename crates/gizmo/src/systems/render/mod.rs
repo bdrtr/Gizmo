@@ -5028,12 +5028,19 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR or SSGI.
-    /// **What is drawn forward in front of a surface takes none of that surface's reflection or bounce
-    /// light.** A polished floor reflects a red cube; an opaque panel drawn unlit — forward, depth and
-    /// no G-buffer — stands between the camera and both. SSR and SSGI describe the G-buffer's surface
-    /// and are added after the forward pass: they were added over the panel, which took 12 137 and
-    /// 18 569 of the 96 591 and 100 681 their reflection and bounce light move on those pixels with no
-    /// panel. Now they move none of them.
+    /// **What is drawn forward in front of a surface takes that surface's reflection and bounce light
+    /// only as much as it lets through.** A polished floor reflects a red cube; a panel stands between
+    /// the camera and both. SSR and SSGI describe the G-buffer's surface and were added after the whole
+    /// forward pass, over whatever stood in front of it.
+    ///
+    /// - An opaque panel drawn unlit (forward, depth and no G-buffer) took 12 137 and 18 569 of the
+    ///   96 591 and 100 681 their reflection and bounce light move on those pixels with no panel; now
+    ///   none (`DeferredState::seen_view`).
+    /// - A pane 98 % opaque, blending by alpha, took 5 853 and 14 895; now 24 and 67 — they are added
+    ///   between the opaque world and what blends over it, which shows them as much as it lets through.
+    /// - A pane half opaque shows them (37 373 and 34 602): the bytes do not say how much, since the
+    ///   reflection's own content changed with the order (it no longer shows the pane), so this one is a
+    ///   bound, not a measure.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn what_is_drawn_forward_in_front_takes_no_reflection_or_bounce_light_from_behind() {
@@ -5045,7 +5052,9 @@ mod golden_render_tests {
             return;
         }
         // `effect` is "ssr" or "ssgi"; the other screen-space terms are off.
-        async fn frame(panel: bool, effect: &str, on: bool) -> Vec<u8> {
+        // `panel`: none; `Some(None)` an opaque one drawn unlit; `Some(Some(a))` a lit one blending by
+        // alpha `a`.
+        async fn frame(panel: Option<Option<f32>>, effect: &str, on: bool) -> Vec<u8> {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
             renderer.volumetric = None;
@@ -5070,7 +5079,13 @@ mod golden_render_tests {
                 (Vec3::ZERO, Vec3::ONE, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 0.6)),
             ]
             .into_iter()
-            .chain(panel.then(|| (Vec3::new(-3.0, 0.0, 0.0), Vec3::new(0.02, 1.2, 1.2), Material::new(tex.clone()).with_unlit(Vec4::new(0.3, 0.3, 0.8, 1.0)))))
+            .chain(panel.map(|alpha| {
+                let material = match alpha {
+                    None => Material::new(tex.clone()).with_unlit(Vec4::new(0.3, 0.3, 0.8, 1.0)),
+                    Some(a) => Material::new(tex.clone()).with_pbr(Vec4::new(0.3, 0.3, 0.8, a), 0.0, 0.9).with_transparent(true),
+                };
+                (Vec3::new(-3.0, 0.0, 0.0), Vec3::new(0.02, 1.2, 1.2), material)
+            }))
             {
                 let e = world.spawn();
                 world.add_component(e, Transform::new(at).with_scale(half));
@@ -5084,9 +5099,9 @@ mod golden_render_tests {
             render_world(&mut renderer, &mut world).await
         }
         pollster::block_on(async {
-            for effect in ["ssr", "ssgi"] {
-                let (bare_on, bare_off) = (frame(false, effect, true).await, frame(false, effect, false).await);
-                let (panel_on, panel_off) = (frame(true, effect, true).await, frame(true, effect, false).await);
+            for (effect, panel) in [("ssr", None), ("ssgi", None), ("ssr", Some(0.98)), ("ssgi", Some(0.98)), ("ssr", Some(0.5)), ("ssgi", Some(0.5))] {
+                let (bare_on, bare_off) = (frame(None, effect, true).await, frame(None, effect, false).await);
+                let (panel_on, panel_off) = (frame(Some(panel), effect, true).await, frame(Some(panel), effect, false).await);
                 // The panel's pixels: where it changes the frame.
                 let (mut pixels, mut behind, mut over) = (0, 0u64, 0u64);
                 for i in (0..bare_off.len()).step_by(4) {
@@ -5099,10 +5114,18 @@ mod golden_render_tests {
                         over += u64::from(panel_on[i + c].abs_diff(panel_off[i + c]));
                     }
                 }
-                eprintln!("{effect}: {pixels} panel pixels; {behind} moved there with no panel, {over} over the panel");
+                eprintln!("{effect} under {panel:?}: {pixels} panel pixels; {behind} moved there with no panel, {over} over the panel");
                 assert!(pixels > 4000, "the setup: the panel covers {pixels} pixels");
                 assert!(behind > 50_000, "the setup: {effect} moves {behind} on the floor and cube behind the panel");
-                assert_eq!(over, 0, "{effect} was added over a panel drawn forward in front of the surface it belongs to");
+                let share = over as f64 / behind as f64;
+                match panel {
+                    None => assert_eq!(over, 0, "{effect} was added over a panel drawn forward in front of the surface it belongs to"),
+                    Some(a) if a > 0.9 => assert!(share < 0.01, "{effect} through a pane {a} opaque: {over} of {behind}"),
+                    Some(a) => assert!(
+                        (0.2..0.6).contains(&share),
+                        "{effect} through a pane {a} opaque must show about as much as it lets through: {over} of {behind}"
+                    ),
+                }
             }
         });
     }

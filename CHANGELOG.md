@@ -240,7 +240,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the floor and sky behind it (1 275.0 against 479.9 for the same wall drawn deferred). A pass after the forward one
   writes how much of the G-buffer's surface the frame's depth shows (`DeferredState::seen_view`, `seen.wgsl`), SSR and
   SSGI are added in proportion to it, and the march stops where the depth says: none over the panel, 480.0 both ways.
-  `DeferredState::depth_view` keeps the frame's depth for the passes that read it.
+  `DeferredState::depth_view` keeps the frame's depth for the passes that read it. And SSR and SSGI are added between the
+  opaque world and what blends over it — glass, transparent surfaces, particles, the fluid — which shows them as much as
+  it lets through: a pane 98 % opaque took 5 853 and 14 895 of the floor's reflection and bounce light and takes 24 and
+  67. A reflection no longer shows what blends; glass refracts a frame that has them. The forward pass is split there
+  only when SSR, SSGI or glass needs it.
 - **Contact shadows missed everything under about 2 cm.** The march read the f16 G-buffer, started a centimetre off the
   surface, wanted a 5 mm gap and stepped a sixteenth of its length at a time — a coin, which
   `DirectionalLight::contact_shadow_length` promised, cast nothing, nor did a 1 cm step. It reads the frame's depth now (the

@@ -342,10 +342,14 @@ with one, (156, 158, 160) and (232, 188, 231) on the desktop, (94, 97, 102) and 
 phone:** the one attempt drew no frame of the game and the phone disconnected before its log could be read.
 
 Unlit and baked-lit surfaces do not fill the G-buffer. SSR and SSGI no longer reach through them since
-2026-11-11 — both are added after the forward pass, in proportion to how much of the G-buffer's surface
-the frame's depth shows (`DeferredState::seen_view`): an opaque unlit panel in front of a polished floor
-took 12 137 and 18 569 of the 96 591 and 100 681 their reflection and bounce light move on those pixels,
-and takes none now — and the volumetric march stops at them (it reads where to stop from the depth). The
+2026-11-11 — both are added after the opaque forward draws, in proportion to how much of the G-buffer's
+surface the frame's depth shows (`DeferredState::seen_view`): an opaque unlit panel in front of a polished
+floor took 12 137 and 18 569 of the 96 591 and 100 681 their reflection and bounce light move on those
+pixels, and takes none now — and the volumetric march stops at them (it reads where to stop from the
+depth). The same day they moved ahead of what blends — glass, transparent surfaces, particles, the
+fluid — which now shows them as much as it lets through: a pane 98 % opaque took 5 853 and 14 895 and
+takes 24 and 67. A reflection no longer shows what blends, as no screen-space reflection does; glass
+refracts a frame that has them. The
 motion TAA and motion blur read there is still the G-buffer's, the surface's behind, and a moving one gets
 no motion blur. Baked-lit exists to skip that cost, so changing this is its own decision.
 
@@ -827,9 +831,10 @@ cube cookies for point lights, and no cookies on web. Each item:
   opaque floor a metre under a lamp reads 229.55 against the opaque floor's 228.45 (227.15 / 227.67
   without the march) — the air under the floor shows through it. Separate because what fixes it is a
   target the transparent pass writes (the nearest transparent depth, and how much passes it), which
-  changes every forward pipeline's output, a phone's included. SSR and SSGI are added over a transparent
-  surface the same way (an opaque one drawn forward no longer takes them: see the paragraph on unlit and
-  baked-lit surfaces above).
+  changes every forward pipeline's output, a phone's included. (SSR and SSGI no longer are: they are
+  added ahead of what blends since the same day, which the march cannot simply follow — added there,
+  the air in front of a pane would be dimmed by it as much as the air behind; see the paragraph on unlit
+  and baked-lit surfaces above.)
 
 - ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
   faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or

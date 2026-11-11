@@ -45,12 +45,16 @@ pub fn record_forward_and_fluid(
             wgpu::LoadOp::Clear(1.0)
         };
 
-        // Glass reads the frame behind it, and a target cannot be read while it is drawn to: with
-        // glass in view the frame is drawn in two passes and copied between them. `draw_items` is
-        // sorted by layer, so everything before the first glass is what it can see.
+        // The opaque world first, then what blends over it — glass, transparent surfaces — in a pass of
+        // its own. Between the two, SSR and SSGI are added to the opaque frame, so what blends shows
+        // them as much as it lets through; and glass reads the frame behind it, which a target cannot
+        // be while it is drawn to, so with glass in view the frame is copied there too. `draw_items` is
+        // sorted by layer.
         let has_glass = renderer.behind.is_some()
             && draw_items.iter().any(|item| item.is_transmissive && item.camera_count > 0);
-        let world_end = if has_glass {
+        // Split only when something stands between the two: a split costs a tiled GPU — a phone's —
+        // a store and a load of the whole frame.
+        let world_end = if has_glass || super::screen_space::surface_effects_on(renderer) {
             draw_items.partition_point(|item| item.layer < super::super::batching::DrawLayer::Transmissive)
         } else {
             draw_items.len()
@@ -72,8 +76,11 @@ pub fn record_forward_and_fluid(
 
         // (GPU Particles artık AYRI bir pass'te — aşağıda — soft-particle derinlik örneklemesi için.)
         drop(render_pass);
+        super::screen_space::record_surface_effects(encoder, renderer);
         if let Some(behind) = renderer.behind.as_ref().filter(|_| has_glass) {
             behind.capture(encoder, &renderer.post.hdr_texture);
+        }
+        if world_end < draw_items.len() {
             let mut render_pass = begin_forward_pass(encoder, renderer, wgpu::LoadOp::Load, wgpu::LoadOp::Load);
             draw_forward_items(&mut render_pass, renderer, &draw_items[world_end..], uploaded_instances);
         }

@@ -1,12 +1,16 @@
 use super::super::*;
 
-pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
+/// SSR and SSGI, added to the frame between the opaque world and what blends over it: glass,
+/// transparent surfaces, particles and the fluid are drawn after, so each shows them as much as it lets
+/// through. Added after everything until 2026-11-11, so a pane 98 % opaque took the floor's reflection
+/// behind it at full strength. The cost is that the reflection no longer shows what blends: it is a
+/// reflection of the opaque frame, which is what every screen-space reflection reads.
+pub fn record_surface_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
     // ── How much of the G-buffer's surface the frame shows ─────────────────────
-    // SSR and SSGI belong to that surface and are added after the forward pass, so in proportion to
-    // it: not over an unlit or baked-lit surface, or a game's own pipeline, drawn in front of it.
-    let reflections = renderer.ssr.as_ref().is_some_and(|s| s.enabled);
-    let bounce = renderer.ssgi.as_ref().is_some_and(|s| s.enabled);
-    if let Some(def) = renderer.deferred.as_ref().filter(|_| reflections || bounce) {
+    // SSR and SSGI belong to that surface and are added after the opaque forward draws, so in
+    // proportion to it: not over an unlit or baked-lit surface, or a game's own pipeline, drawn in
+    // front of it.
+    if let Some(def) = renderer.deferred.as_ref().filter(|_| surface_effects_on(renderer)) {
         def.record_seen(encoder, renderer.scene.view_bind_group());
     }
 
@@ -166,7 +170,15 @@ pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer:
             pass.draw(0..3, 0..1);
         }
     }
+}
 
+/// Whether SSR or SSGI draws this frame: what [`record_surface_effects`] records anything for.
+pub fn surface_effects_on(renderer: &Renderer) -> bool {
+    renderer.ssr.as_ref().is_some_and(|s| s.enabled) || renderer.ssgi.as_ref().is_some_and(|s| s.enabled)
+}
+
+/// The volumetric light, added over the whole frame, after what blends: see `volumetric.wgsl`.
+pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
     // ── Volumetric Lighting (God Rays) ──────────────────────────────────────────
     if let Some(vol) = renderer.volumetric.as_ref().filter(|s| s.enabled) {
         // The shaping numbers go up every frame, so `vol.params.steps = 8.0` is the whole gesture
