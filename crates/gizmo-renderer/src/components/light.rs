@@ -104,11 +104,11 @@ pub struct DirectionalLight {
     #[serde(default)]
     pub angular_radius: f32,
     /// **Contact shadows**, in metres: how far toward the sun each pixel looks, in screen space,
-    /// for something in the way. They catch what the shadow map's depth bias or its texels lose — a
-    /// step's shadow under a bias raised against acne, detail in a far cascade — though nothing under
-    /// about 2 cm tall: the march starts a centimetre off the surface. `0` (the default) turns them
-    /// off; 0.2–0.5 suits a human-scale scene. Only the `Sun` role, and only on the deferred path
-    /// (the march reads the G-buffer). `#[serde(default)]`.
+    /// for something in the way. They catch what the shadow map's depth bias or its texels lose — the
+    /// first centimetres of a step's shadow, a coin on a table, detail in a far cascade — down to
+    /// what the depth buffer can tell from the surface under it: a 2 mm step at a centimetre a pixel.
+    /// `0` (the default) turns them off; 0.2–0.5 suits a human-scale scene. Only the `Sun` role,
+    /// and only on the deferred path (the march reads the frame's depth). `#[serde(default)]`.
     #[serde(default)]
     pub contact_shadow_length: f32,
 }

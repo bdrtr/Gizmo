@@ -1507,7 +1507,7 @@ fn draw_camera_view(
 
     // Resize deferred G-buffers if window changed; resize SSAO + TAA to match
     if let Some(ref mut def) = renderer.deferred {
-        def.resize(&renderer.device, renderer.size.width, renderer.size.height);
+        def.resize(&renderer.device, &renderer.depth_texture_view, renderer.size.width, renderer.size.height);
     }
     {
         let w = renderer.size.width;
@@ -6474,19 +6474,168 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
+    /// A step `height` metres tall and 1.2 m square on a matte floor, under a sun 15° above the
+    /// horizon with `contact` metres of contact shadows, the cascades' depth bias times
+    /// `depth_bias`; seen from 1.2 m straight above the step's edge the sun lights, so its shadow
+    /// (3.73 × `height` long) runs down the middle of the frame. A pixel is about 1.1 cm of floor.
+    async fn contact_step_frame(contact: f32, depth_bias: f32, height: f32) -> Vec<u8> {
+        use crate::renderer::components::{DirectionalLight, LightRole};
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.shadow_settings = crate::renderer::ShadowSettings::default().with_bias(depth_bias, 1.0);
+        renderer.taa = None;
+        renderer.ssgi = None;
+        renderer.ssao = None;
+        let mut world = World::new();
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        for (pos, scale) in [
+            (Vec3::new(0.0, -0.2, 0.0), Vec3::new(20.0, 0.2, 20.0)),
+            (Vec3::new(0.0, height * 0.5, 0.0), Vec3::new(0.6, height * 0.5, 0.6)),
+        ] {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(pos).with_scale(scale));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(e, MeshRenderer::new());
+        }
+        let elevation = 15f32.to_radians();
+        let sun_dir = Vec3::new(elevation.cos(), -elevation.sin(), 0.0);
+        let sun = world.spawn();
+        world.add_component(
+            sun,
+            Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_arc(Vec3::NEG_Z, sun_dir)),
+        );
+        world.add_component(sun, GlobalTransform::default());
+        world.add_component(
+            sun,
+            DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun).with_contact_shadows(contact),
+        );
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(0.6, 1.2, 0.0),
+            yaw: 0.0,
+            pitch: -std::f32::consts::FRAC_PI_2 + 0.01,
+            primary: true,
+            ..Default::default()
+        });
+        render_world(&mut renderer, &mut world).await
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
+    /// Pixels darker than 60 % of the frame's brightest — the shadowed ones.
+    fn dark_pixels(frame: &[u8]) -> usize {
+        let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
+        let hi = luma.iter().cloned().fold(0.0f32, f32::max);
+        luma.iter().filter(|&&v| v < hi * 0.6).count()
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
+    /// Pixels at least 16 levels darker in `on` than in `off`. A shadow one pixel wide is softened by
+    /// the frame's anti-aliasing — 163 lit floor reads about 115 in it, not the 70 a wide one reads —
+    /// so it is counted against the same frame without it, not against the frame's brightest.
+    fn darkened_pixels(off: &[u8], on: &[u8]) -> usize {
+        let luma = |p: &[u8]| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0;
+        off.as_chunks::<4>().0.iter().zip(on.as_chunks::<4>().0).filter(|(a, b)| luma(&a[..]) - luma(&b[..]) > 16.0).count()
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
+    /// Bytes of open floor — the top and bottom 40 rows, which the step's shadow does not cross —
+    /// that differ by more than 8 between two frames, and how many were compared.
+    fn open_floor_moved(a: &[u8], b: &[u8]) -> (usize, usize) {
+        let rows = |frame: &[u8]| -> Vec<u8> {
+            (0..40usize).chain(88..128).flat_map(|y| frame[y * 512..(y + 1) * 512].to_vec()).collect()
+        };
+        (rows(a).iter().zip(rows(b)).filter(|(x, y)| x.abs_diff(*y) > 8).count(), 80 * 512)
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// **Contact shadows catch what the shadow map's bias loses.** A 3 cm step on a floor under a sun
-    /// 15° above the horizon casts a shadow ~11 cm long. Since 2026-11-11 the cascades hold the step's
-    /// top — they draw a solid's front faces — and catch all of it themselves: 660 dark pixels, and 664
-    /// with contact shadows; when they drew its back faces they caught 363, and lost the first few
-    /// centimetres of the strip to their bias. With that bias raised threefold
-    /// (`ShadowSettings::with_bias`, as a scene fighting acne might set it), the gap between the
-    /// step's top and the floor along the light is inside it, and the cascades lose the shadow: 0
-    /// dark pixels. `contact_shadow_length` finds the step in screen space and darkens 332 of the
-    /// strip, and not one byte of open floor changes. With 0 (the default) the frame is exactly what
-    /// it was before contact shadows existed.
+    /// 15° above the horizon casts a shadow 11.2 cm long, about 1 150 pixels here. The cascades hold
+    /// 660 of them at their own bias (363 when they drew a solid's back faces): the first five
+    /// centimetres, where the floor is within their slope-scaled bias of the step's face, are lost.
+    /// With that bias raised threefold (`ShadowSettings::with_bias`, as a scene fighting acne might
+    /// set it) they lose the shadow whole: 0 dark pixels. `contact_shadow_length` finds the step in
+    /// screen space and darkens 1 122 (332 before the march read the depth buffer pixel by pixel), and
+    /// not one byte of open floor changes. With 0 (the default) the frame is exactly what it was
+    /// before contact shadows existed.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn contact_shadows_find_a_step_the_shadow_map_misses() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let held = dark_pixels(&contact_step_frame(0.0, 1.0, 0.03).await);
+            assert!(held > 600, "the cascades hold the step's shadow at their own bias: {held} dark pixels");
+            let (off, on) = (contact_step_frame(0.0, 3.0, 0.03).await, contact_step_frame(0.3, 3.0, 0.03).await);
+            let (dark_off, dark_on) = (dark_pixels(&off), dark_pixels(&on));
+            eprintln!("3 cm step: {held} held by the cascades; at 3× bias {dark_off} without contact shadows, {dark_on} with");
+            assert!(dark_off < 50, "a threefold depth bias loses the step from the cascades: {dark_off} dark pixels");
+            assert!(dark_on > dark_off + 1000, "contact shadows darkened {} more pixels", dark_on as i64 - dark_off as i64);
+            // And only there: open floor must not change at all. A march that went away from the sun
+            // dives into the floor and shadows the floor itself everywhere — it passes the count
+            // above and fails this.
+            let (moved, total) = open_floor_moved(&off, &on);
+            assert!(moved == 0, "contact shadows changed {moved}/{total} bytes of open floor — false self-shadowing");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
+    /// **Contact shadows find a step a few millimetres tall.** The same frame with steps of 1 cm,
+    /// 5 mm and 2 mm — a coin — whose shadows are 3.7 cm, 1.9 cm and 7.5 mm long, 3.4, 1.7 and 0.7
+    /// pixels. The cascades lose all three at their own bias. The march read the f16 G-buffer,
+    /// started a centimetre off the surface and wanted a 5 mm gap, in steps of a sixteenth of its
+    /// length: nothing under about 2 cm cast a contact shadow, though the setting's documentation
+    /// promised a coin.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn contact_shadows_find_a_step_a_few_millimetres_tall() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut failures = Vec::new();
+            for (height, floor) in [(0.01, 300usize), (0.005, 100), (0.002, 100)] {
+                let (off, on) = (contact_step_frame(0.0, 1.0, height).await, contact_step_frame(0.3, 1.0, height).await);
+                let (held, darkened) = (dark_pixels(&off), darkened_pixels(&off, &on));
+                let (moved, total) = open_floor_moved(&off, &on);
+                eprintln!("{} mm step: {held} dark from the cascades, {darkened} darkened by contact shadows; {moved}/{total} open-floor bytes moved", height * 1000.0);
+                if held != 0 {
+                    failures.push(format!("a {} mm step: the cascades hold {held} pixels of it — the fixture is not testing contact shadows", height * 1000.0));
+                }
+                if darkened < floor {
+                    failures.push(format!("a {} mm step: contact shadows darkened {darkened} pixels, wanted {floor}", height * 1000.0));
+                }
+                if moved != 0 {
+                    failures.push(format!("a {} mm step: {moved}/{total} bytes of open floor changed", height * 1000.0));
+                }
+            }
+            assert!(failures.is_empty(), "{failures:#?}");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
+    /// **Contact shadows leave open ground alone, at any angle.** Open ground — flat, rising 20° along
+    /// the view and tilted 20° across it — seen from 2 m up and from 30 cm, looking down steeply and
+    /// grazing it, under a sun 15° and 50° up in front of the camera, behind it and to its side:
+    /// contact shadows on must not change one byte of the frame — nothing there stands between the
+    /// ground and the sun but the ground itself. A grazing view is the hard case: the ground's depth runs far across a pixel
+    /// there, and a march that compared it with less than that shadowed the ground with itself.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn contact_shadows_leave_open_ground_alone_at_any_angle() {
         use crate::renderer::components::{DirectionalLight, LightRole};
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available())
@@ -6495,9 +6644,8 @@ mod golden_render_tests {
             eprintln!("skipping: no usable GPU adapter");
             return;
         }
-        async fn step_frame(contact: f32, depth_bias: f32) -> Vec<u8> {
+        async fn frame(contact: f32, ground: crate::math::Quat, height: f32, pitch: f32, elevation: f32, azimuth: f32) -> Vec<u8> {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
-            renderer.shadow_settings = crate::renderer::ShadowSettings::default().with_bias(depth_bias, 1.0);
             renderer.taa = None;
             renderer.ssgi = None;
             renderer.ssao = None;
@@ -6508,61 +6656,59 @@ mod golden_render_tests {
                 &renderer.queue,
                 &renderer.scene.texture_bind_group_layout,
             );
-            for (pos, scale) in [
-                (Vec3::new(0.0, -0.2, 0.0), Vec3::new(20.0, 0.2, 20.0)),
-                (Vec3::new(0.0, 0.015, 0.0), Vec3::new(0.6, 0.015, 0.6)),
-            ] {
-                let e = world.spawn();
-                world.add_component(e, Transform::new(pos).with_scale(scale));
-                world.add_component(e, GlobalTransform::default());
-                world.add_component(e, AssetManager::create_cube(&renderer.device));
-                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
-                world.add_component(e, MeshRenderer::new());
-            }
-            let elevation = 15f32.to_radians();
-            let sun_dir = Vec3::new(elevation.cos(), -elevation.sin(), 0.0);
+            // The sun's horizontal direction, from the camera's view (+X): 0 = it shines toward the
+            // camera's view, π = from in front of it into the lens's side.
+            let toward = Vec3::new(azimuth.cos(), 0.0, azimuth.sin());
+            // The ground's top through the origin, whatever its tilt.
+            let e = world.spawn();
+            world.add_component(e, Transform::new(ground * Vec3::new(0.0, -0.2, 0.0)).with_rotation(ground).with_scale(Vec3::new(40.0, 0.2, 40.0)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(e, MeshRenderer::new());
+            let sun_dir = (toward * elevation.cos() - Vec3::Y * elevation.sin()).normalize();
             let sun = world.spawn();
             world.add_component(
                 sun,
                 Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_arc(Vec3::NEG_Z, sun_dir)),
             );
             world.add_component(sun, GlobalTransform::default());
-            world.add_component(
-                sun,
-                DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun).with_contact_shadows(contact),
-            );
+            world.add_component(sun, DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun).with_contact_shadows(contact));
             world.spawn_bundle(CameraBundle {
-                position: Vec3::new(0.6, 1.2, 0.0),
+                position: Vec3::new(0.0, height, 0.0),
                 yaw: 0.0,
-                pitch: -std::f32::consts::FRAC_PI_2 + 0.01,
+                pitch,
                 primary: true,
                 ..Default::default()
             });
             render_world(&mut renderer, &mut world).await
         }
-        // Pixels darker than 60 % of the frame's brightest — the shadowed ones.
-        fn dark(frame: &[u8]) -> usize {
-            let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
-            let hi = luma.iter().cloned().fold(0.0f32, f32::max);
-            luma.iter().filter(|&&v| v < hi * 0.6).count()
-        }
         pollster::block_on(async {
-            let held = dark(&step_frame(0.0, 1.0).await);
-            assert!(held > 600, "the cascades hold the step's shadow at their own bias: {held} dark pixels");
-            let (off, on) = (step_frame(0.0, 3.0).await, step_frame(0.3, 3.0).await);
-            assert!(dark(&off) < 50, "a threefold depth bias loses the step from the cascades: {} dark pixels", dark(&off));
-            assert!(dark(&on) > dark(&off) + 250, "contact shadows darkened {} more pixels", dark(&on) as i64 - dark(&off) as i64);
-            // And only there: open floor, the top and bottom 40 rows (the step crosses the middle),
-            // must not change at all. A march that went away from the sun dives into the floor and
-            // shadows the floor itself everywhere — it passes the count above and fails this.
-            let rows = |frame: &[u8]| -> Vec<u8> {
-                (0..40usize).chain(88..128).flat_map(|y| frame[y * 512..(y + 1) * 512].to_vec()).collect()
-            };
-            let (moved, total) = (
-                rows(&off).iter().zip(rows(&on)).filter(|(a, b)| a.abs_diff(*b) > 8).count(),
-                80 * 512,
-            );
-            assert!(moved == 0, "contact shadows changed {moved}/{total} bytes of open floor — false self-shadowing");
+            let mut failures = Vec::new();
+            let tilt = 20f32.to_radians();
+            for (name, ground) in [
+                ("flat", crate::math::Quat::IDENTITY),
+                ("rising", crate::math::Quat::from_rotation_z(tilt)),
+                ("tilted across", crate::math::Quat::from_rotation_x(tilt)),
+            ] {
+                for (height, pitch) in [(2.0f32, -0.9f32), (2.0, -0.25), (0.3, -0.06)] {
+                    for elevation in [15f32.to_radians(), 50f32.to_radians()] {
+                        for azimuth in [0.0f32, std::f32::consts::FRAC_PI_2, std::f32::consts::PI] {
+                            let off = frame(0.0, ground, height, pitch, elevation, azimuth).await;
+                            let on = frame(1.0, ground, height, pitch, elevation, azimuth).await;
+                            let moved = off.iter().zip(&on).filter(|(a, b)| a.abs_diff(**b) > 8).count();
+                            if moved != 0 {
+                                failures.push(format!(
+                                    "{name} ground, camera {height} m up, pitch {pitch}; sun {:.0}° up, azimuth {:.0}°: {moved} bytes changed",
+                                    elevation.to_degrees(),
+                                    azimuth.to_degrees()
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(failures.is_empty(), "contact shadows shadowed open ground with itself: {failures:#?}");
         });
     }
 

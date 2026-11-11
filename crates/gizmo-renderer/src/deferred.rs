@@ -163,8 +163,15 @@ struct GeometryPipelines {
 }
 
 impl DeferredState {
-    /// Builds all four G-buffer targets and the three pipelines for a frame of the given size.
-    pub fn new(device: &wgpu::Device, scene: &SceneState, width: u32, height: u32) -> Self {
+    /// Builds all four G-buffer targets and the three pipelines for a frame of the given size, whose
+    /// depth is `depth_view` (the renderer's, which the lighting pass reads for contact shadows).
+    pub fn new(
+        device: &wgpu::Device,
+        scene: &SceneState,
+        depth_view: &wgpu::TextureView,
+        width: u32,
+        height: u32,
+    ) -> Self {
         let (
             albedo_metallic_tex,
             albedo_metallic_view,
@@ -191,6 +198,7 @@ impl DeferredState {
             &gbuf_sampler,
             &emissive_view,
             &velocity_view,
+            depth_view,
         );
 
         let motion = crate::motion::MotionGpu::new(device, 1024);
@@ -291,8 +299,9 @@ impl DeferredState {
         self.lighting_pipeline = lighting;
     }
 
-    /// Recreate G-buffer textures and bind groups when the window is resized.
-    pub fn resize(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+    /// Recreate G-buffer textures and bind groups when the window is resized; `depth_view` is the
+    /// frame's depth at the new size.
+    pub fn resize(&mut self, device: &wgpu::Device, depth_view: &wgpu::TextureView, width: u32, height: u32) {
         if self.width == width && self.height == height {
             return;
         }
@@ -320,6 +329,7 @@ impl DeferredState {
             &gbuf_sampler,
             &emissive_view,
             &velocity_view,
+            depth_view,
         );
         self.emissive_tex = emissive_tex;
         self.emissive_view = emissive_view;
@@ -472,6 +482,18 @@ impl DeferredState {
                     },
                     count: None,
                 },
+                // The frame's depth (`Renderer::depth_texture_view`): the contact-shadow march reads
+                // the scene from it, f32, where the world position above is f16.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Depth,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -486,6 +508,7 @@ impl DeferredState {
         sampler: &wgpu::Sampler,
         emissive_v: &wgpu::TextureView,
         velocity_v: &wgpu::TextureView,
+        depth_v: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("gbuffer_bind_group"),
@@ -518,6 +541,10 @@ impl DeferredState {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::TextureView(velocity_v),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(depth_v),
                 },
             ],
         })

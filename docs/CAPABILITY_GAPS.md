@@ -917,19 +917,25 @@ cube cookies for point lights, and no cookies on web. Each item:
   broken: the image mirrored (88.50 / 65.56), the layer off by one (61.39 both — an empty layer is
   black), the cookie sampled but not applied, and never packed. **Spot only, native only** (the web
   forward pipeline has no shadow group); point lights have no cube cookie.
-- ~~**No contact shadows.**~~ **CLOSED 2026-11-01:** `DirectionalLight::contact_shadow_length`
-  (metres, 0 = off, the default). The deferred lighting pass marches 16 steps from each pixel toward
-  the sun in screen space and compares each with the G-buffer surface there. Measured on a 3 cm
-  step under a 15° sun, its shadow ~11 cm long: while the cascades drew a solid's back faces they
-  lost the first centimetres of it to their depth bias — 363 dark pixels, 697 with contact shadows.
-  They hold the step's top since 2026-11-11 and catch all of it (660, and 664 with). With their depth
-  bias raised threefold, as a scene fighting acne might set it, they lose it whole (0); contact
-  shadows find 332 pixels of it, and not one byte of open floor changes. A march pointed away from the
-  sun dives into the floor and self-shadows it everywhere (28 416 of 40 960 open-floor bytes); the
-  test pins that, and a length never uploaded. Sun only; the forward pass has none (it marches the
-  G-buffer). **Still open:** the march starts a centimetre off the surface and wants a 5 mm gap, so
-  nothing under about 2 cm casts a contact shadow — no coin, though the setting's documentation
-  promised one until 2026-11-11 — and near the camera the cascades now catch what is taller.
+- ~~**No contact shadows.**~~ **CLOSED 2026-11-01; down to a coin since 2026-11-11.**
+  `DirectionalLight::contact_shadow_length` (metres, 0 = off, the default). The deferred lighting pass
+  marches from each pixel toward the sun in screen space against the depth buffer: pixel by pixel,
+  compared where the march enters each pixel and where it leaves it (the first 32 pixels; a march longer
+  than that on screen goes on in 16 even strides), with the receiver's own depth run across a pixel as
+  its tolerance. Measured on a step under a 15° sun, seen from 1.2 m at about 1.1 cm a pixel: a 2 mm
+  step — a coin, its shadow 7.5 mm, under a pixel — darkens 112 pixels, a 5 mm step 224 and a 1 cm step
+  336, one column of 111 for each pixel of shadow; the cascades hold none of them at their own bias. A
+  3 cm step's shadow is 11.2 cm, about 1 150 pixels: the cascades hold 660 of it at their own bias — its
+  first five centimetres, where the floor is within their slope-scaled bias of the step's face, are
+  lost — and none at three times it, and contact shadows find 1 122. Open ground changes by not one
+  byte: flat, rising 20° and tilted 20° across, seen steeply and grazing from 2 m and 30 cm, under a
+  sun 15° and 50° up from three sides. Before, the march read the f16 G-buffer, started a centimetre
+  off the surface, wanted a 5 mm gap and stepped a sixteenth of its length at a time, so nothing under
+  about 2 cm cast a contact shadow (332 of the 3 cm step's pixels, 0 of a 1 cm step's), though the
+  setting's documentation promised a coin until 2026-11-11. Caught when broken: the receiver's depth
+  run left out of the tolerance (33 006 bytes of open floor shadowed with itself), the crossings
+  replaced by strides, the march pointed away from the sun. Sun only; the forward pass has none (it
+  draws into the depth buffer the march reads).
 - ~~**No percentage-closer soft shadows.**~~ **Corrected and closed 2026-11-01; on every lit path
   since 2026-11-11.** This line described the *forward* path's fixed 3×3 PCF. The deferred path did
   have PCSS — a blocker search and a penumbra estimate — but with the light size a constant (`0.004`)

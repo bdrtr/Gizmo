@@ -39,6 +39,10 @@ var<storage, read> cluster_light_indices: array<u32>;
 @group(2) @binding(5) var t_emissive_gbuf:    texture_2d<f32>;
 // RT4: the motion vector in `xy`, and in `zw` the specular tint's hue (see `gbuffer.wgsl`).
 @group(2) @binding(6) var t_velocity_gbuf:    texture_2d<f32>;
+// The frame's depth (`Renderer::depth_texture_view`), for the contact-shadow march: f32 where the
+// G-buffer's position is f16 — a millimetre at a metre from the camera, 4 mm at 5 m, as coarse as
+// the things the march is there to find.
+@group(2) @binding(7) var t_depth: texture_depth_2d;
 
 // Reflection probes: `gizmo::reflection_probes` (group 3 here, after the irradiance volume's two
 // bindings — `REFLECTION_GROUP` is set to 3 for this shader).
@@ -73,40 +77,147 @@ fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
 // the top). inverse_mat4 / compute_direct_lighting come from gizmo::common. Only the
 // binding-dependent procedural environment and contact shadows remain deferred-local.
 
-// **Contact shadows**: a short screen-space march from the surface toward the sun, `length` metres
-// (`cluster_depth.z`; 0 = off) in 16 steps. Each step is projected into the frame and compared with
-// the G-buffer surface there: if that surface is nearer the camera than the step — by a little,
-// not by more than a `thickness` that would mean an unrelated object far in front — something
-// small sits between this pixel and the sun. That is what the shadow map misses: anything shorter
-// than its bias or finer than its texels. Steps leaving the frame, or landing on sky, see nothing.
-fn contact_shadow(world_pos: vec3<f32>, n: vec3<f32>, l: vec3<f32>) -> f32 {
-    let length = scene.cluster_depth.z;
+// The point the depth buffer holds at `pixel`, camera-relative, or w = 0 where nothing was drawn or
+// `pixel` is off the frame (a load there returns whatever the driver likes).
+fn depth_point(pixel: vec2<i32>, dims: vec2<f32>) -> vec4<f32> {
+    if (any(pixel < vec2<i32>(0)) || any(vec2<f32>(pixel) >= dims)) {
+        return vec4<f32>(0.0);
+    }
+    let d = textureLoad(t_depth, pixel, 0);
+    if (d >= 1.0) {
+        return vec4<f32>(0.0);
+    }
+    let uv = (vec2<f32>(pixel) + 0.5) / dims;
+    let h = scene.inv_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);
+    return vec4<f32>(h.xyz / h.w - scene.camera_pos.xyz, 1.0);
+}
+
+// **Contact shadows**: a short march from the surface toward the sun, `length` metres
+// (`cluster_depth.z`; 0 = off), in screen space and against the depth buffer. Where the march
+// crosses into a pixel and where it leaves it, it is compared with the surface the depth buffer holds
+// there: if that surface is nearer the camera than the march — by more than the receiver's own
+// surface runs across a pixel, and by less than a `thickness` that would mean an unrelated object far
+// in front — something small sits between this pixel and the sun. That is what the shadow map misses:
+// anything shorter than its bias or finer than its texels. Leaving the frame, or crossing sky, sees
+// nothing.
+//
+// Pixel by pixel, at the crossings: a pixel holds one depth, and the march is lowest over it where it
+// enters (or nearest it, where it leaves), so that is where a thin thing is found. Sampled at a
+// pixel's width apart the march had already risen 2.9 mm by its first sample under a 15° sun at a
+// centimetre a pixel, and a 2 mm step cast nothing. The first `CONTACT_CROSSINGS` pixels are crossed
+// so; a march longer than that on screen goes on in `CONTACT_STRIDES` even strides, where it is high
+// enough above the receiver that only something as tall as a pixel is wide can stop it.
+//
+// Everything is read from the depth buffer, the receiver's own point included. The march read the
+// f16 G-buffer, started a centimetre off the surface and wanted a 5 mm gap, in steps of a sixteenth
+// of its length: nothing under about 2 cm cast a contact shadow.
+const CONTACT_CROSSINGS: i32 = 32;
+const CONTACT_STRIDES: i32 = 16;
+
+fn contact_shadow(pixel: vec2<i32>, l: vec3<f32>) -> f32 {
+    var length = scene.cluster_depth.z;
     if (length <= 0.0) {
         return 1.0;
     }
-    let dims = vec2<f32>(textureDimensions(t_position_rel_camera));
+    let dims = vec2<f32>(textureDimensions(t_depth));
     let fwd = scene.camera_forward.xyz;
+    let here = depth_point(pixel, dims);
+    if (here.w == 0.0) {
+        return 1.0;
+    }
+    let z0 = dot(here.xyz, fwd);
+    // How far the receiver's depth runs across a pixel: the smaller side of each axis, so an edge
+    // beside this pixel does not count as its slope. Inside a pixel the march is at most half a pixel
+    // from its centre each way, where its own surface is that much nearer.
+    var slope = 0.0;
+    for (var axis = 0; axis < 2; axis = axis + 1) {
+        let o = select(vec2<i32>(0, 1), vec2<i32>(1, 0), axis == 0);
+        let a = depth_point(pixel + o, dims);
+        let b = depth_point(pixel - o, dims);
+        var run = 1e9;
+        if (a.w > 0.0) {
+            run = min(run, abs(dot(a.xyz, fwd) - z0));
+        }
+        if (b.w > 0.0) {
+            run = min(run, abs(dot(b.xyz, fwd) - z0));
+        }
+        if (run < 1e8) {
+            slope += run;
+        }
+    }
+    let tolerance = slope + 1e-4 * z0;
     let thickness = max(length * 0.5, 0.05);
-    let start = world_pos + n * 0.01;
-    for (var i = 1; i <= 16; i = i + 1) {
-        let p = start + l * (length * f32(i) / 16.0);
-        let clip = scene.view_proj * vec4<f32>(p, 1.0);
-        if (clip.w <= 0.0) {
+    let world = here.xyz + scene.camera_pos.xyz;
+    let start = scene.view_proj * vec4<f32>(world, 1.0);
+    var end = scene.view_proj * vec4<f32>(world + l * length, 1.0);
+    // A march toward the camera's plane stops short of it.
+    let w_min = max(start.w * 0.05, 1e-3);
+    if (end.w < w_min) {
+        length *= (start.w - w_min) / max(start.w - end.w, 1e-6);
+        end = scene.view_proj * vec4<f32>(world + l * length, 1.0);
+    }
+    // Screen positions in pixels (a pixel's centre at +0.5), and the march as s ∈ [0, 1] along them.
+    let from_px = vec2<f32>(start.x / start.w * 0.5 + 0.5, 0.5 - start.y / start.w * 0.5) * dims;
+    let to_px = vec2<f32>(end.x / end.w * 0.5 + 0.5, 0.5 - end.y / end.w * 0.5) * dims;
+    let span = to_px - from_px;
+    // Screen s to the march's own t: 1/w runs linearly across the screen.
+    let w_s = start.w;
+    let w_e = end.w;
+
+    // Amanatides–Woo across the pixels the march crosses, from this pixel's centre.
+    let dir = sign(span);
+    let inv = vec2<f32>(
+        select(1e9, 1.0 / abs(span.x), abs(span.x) > 1e-6),
+        select(1e9, 1.0 / abs(span.y), abs(span.y) > 1e-6),
+    );
+    var cell = pixel;
+    var next = inv * 0.5; // a pixel's centre is half a pixel from each side
+    var s_in = 0.0;
+    for (var n = 0; n < CONTACT_CROSSINGS; n = n + 1) {
+        if (next.x < next.y) {
+            s_in = next.x;
+            cell.x += i32(dir.x);
+            next.x += inv.x;
+        } else {
+            s_in = next.y;
+            cell.y += i32(dir.y);
+            next.y += inv.y;
+        }
+        if (s_in >= 1.0) {
             return 1.0;
         }
-        let ndc = clip.xy / clip.w;
-        if (abs(ndc.x) > 1.0 || abs(ndc.y) > 1.0) {
+        if (any(cell < vec2<i32>(0)) || any(vec2<f32>(cell) >= dims)) {
             return 1.0;
         }
-        let pixel = vec2<i32>(vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * dims);
-        let stored = textureLoad(t_position_rel_camera, pixel, 0);
-        if (stored.w < 0.5) {
+        let s_out = min(min(next.x, next.y), 1.0);
+        let stored = depth_point(cell, dims);
+        if (stored.w == 0.0) {
             continue; // sky
         }
-        let ray_depth = dot(p - scene.camera_pos.xyz, fwd);
-        let surface_depth = dot(stored.xyz, fwd);
-        let gap = ray_depth - surface_depth;
-        if (gap > 0.005 && gap < thickness) {
+        let t_in = s_in * w_s / ((1.0 - s_in) * w_e + s_in * w_s);
+        let t_out = s_out * w_s / ((1.0 - s_out) * w_e + s_out * w_s);
+        let ray_depth = max(dot(here.xyz + l * (length * t_in), fwd), dot(here.xyz + l * (length * t_out), fwd));
+        let gap = ray_depth - dot(stored.xyz, fwd);
+        if (gap > tolerance && gap < thickness) {
+            return 0.0;
+        }
+    }
+    // The rest of a march longer than that on screen, in even strides.
+    let s_from = s_in;
+    for (var k = 1; k <= CONTACT_STRIDES; k = k + 1) {
+        let s = s_from + (1.0 - s_from) * f32(k) / f32(CONTACT_STRIDES);
+        let at_px = from_px + span * s;
+        let at = vec2<i32>(floor(at_px));
+        if (any(at < vec2<i32>(0)) || any(vec2<f32>(at) >= dims)) {
+            return 1.0;
+        }
+        let stored = depth_point(at, dims);
+        if (stored.w == 0.0) {
+            continue;
+        }
+        let t = s * w_s / ((1.0 - s) * w_e + s * w_s);
+        let gap = dot(here.xyz + l * (length * t), fwd) - dot(stored.xyz, fwd);
+        if (gap > tolerance && gap < thickness) {
             return 0.0;
         }
     }
@@ -237,7 +348,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         );
     }
     if (scene.sun_direction.w > 0.5 && shadow_visibility > 0.0) {
-        shadow_visibility = min(shadow_visibility, contact_shadow(world_pos, N, normalize(-scene.sun_direction.xyz)));
+        shadow_visibility = min(shadow_visibility, contact_shadow(iuv, normalize(-scene.sun_direction.xyz)));
     }
     // `MeshRenderer::receives_shadows == false` (RT5's alpha is negative): no shadow falls here —
     // not the cascades, not contact shadows, and below, not the point-light cube.

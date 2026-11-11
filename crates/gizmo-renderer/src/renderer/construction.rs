@@ -600,6 +600,7 @@ impl Renderer {
         let deferred = Some(crate::deferred::DeferredState::new(
             &device,
             &scene_state,
+            &depth_texture_view,
             size.width,
             size.height,
         ));

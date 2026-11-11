@@ -233,6 +233,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Contact shadows missed everything under about 2 cm.** The march read the f16 G-buffer, started a centimetre off the
+  surface, wanted a 5 mm gap and stepped a sixteenth of its length at a time — a coin, which
+  `DirectionalLight::contact_shadow_length` promised, cast nothing, nor did a 1 cm step. It reads the frame's depth now (the
+  G-buffer group's binding 7), pixel by pixel: compared where it enters each pixel and where it leaves it, with the
+  receiver's own depth run across a pixel as its tolerance. Under a 15° sun at about 1.1 cm a pixel, a 2 mm step darkens
+  112 pixels, a 5 mm step 224 and a 1 cm step 336 (0, 0 and 0 before); a 3 cm step's 11.2 cm shadow 1 122 of its ~1 150
+  (332 before, and the cascades hold 660 at their own bias). Open ground, flat or tilted 20°, seen steeply or grazing
+  from three sides, changes by not one byte; at 1080p the march costs what it did. `DeferredState::new` and
+  `DeferredState::resize` take the frame's depth view.
 - **A lamp lit the air behind a wall, and a spot the air all round it.** The volumetric march gave every local light a
   bulb's sphere of glow and asked no light's shadow: a casting lamp behind a wall lit the air in front of it as if the wall
   were not there, a spot lit the air beside and behind its cone, and its cookie was no part of its shaft. Each light reaches

@@ -885,7 +885,7 @@ impl Renderer {
             }
 
             if let Some(ref mut def) = self.deferred {
-                def.resize(&self.device, new_size.width, new_size.height);
+                def.resize(&self.device, &self.depth_texture_view, new_size.width, new_size.height);
                 if let Some(ref mut decal) = self.decal {
                     decal.resize(&self.device, def);
                 }
