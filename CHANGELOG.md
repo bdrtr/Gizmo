@@ -233,6 +233,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Half of what a light is could not be set in the editor.** The inspector had no row for a point light's source radius
+  and tube length, a spot's source radius, or a directional light's role, angular radius and contact shadows: a soft
+  shadow, an area light's size or a contact shadow could be authored in code and not in the editor. Each has a row now
+  (the sun's angular radius in degrees), and `every_field_of_every_light_has_a_row` reads each light's fields from its own
+  serialisation and requires a row for every one, so a field added later without one fails by name.
 - **A rough surface on the web and on a phone took the wrong environment.** The forward-only path reads the presets
   from a cube (`env_cube`) whose mip for a roughness of 1 was 4 texels across, where the presets keep lobes about 20°
   wide: a matte floor lit by the environment alone read 88.76 against the desktop's 66.23, Sunset Gold's metal one 94.96
