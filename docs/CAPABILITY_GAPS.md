@@ -332,9 +332,14 @@ rough floor, matte and metal, under each preset (`a_rough_floor_lit_by_the_envir
 which pins the desktop's values): within 3.1 of the desktop everywhere, where it was up to 41 off
 (Sunset Gold metal 94.96 against 135.95); between them, at roughnesses 0.3 to 0.75, within 3 where it
 was up to 40 off. Not measured on a phone; the per-pixel cost is one sample either way. **Still open,
-found measuring it:** a mirror floor under Sunset Gold reads 184.6 there against the desktop's 178.6,
-before and after — roughness 0 reads the cube's sharpest mip, 128 texels; the other presets agree within
-0.7.
+found measuring it:** a mirror floor under Sunset Gold reads 184.6 there against the desktop's 178.6 over
+the frame's middle 8×8, before and after; the other presets agree within 0.7. It is that preset's sun
+disc, `pow(·, 4096)` at a roughness of 0 — about a degree across — which the cube's sharpest mip, 128
+texels a face, 0.7° a texel, spreads by a pixel: 236 with 71 and 78 beside it, against the desktop's 239,
+66 and 72. Separate because holding it means a bigger cube, four times the memory at 256, which is a
+phone's to measure. The disc stood at the zenith because the scene had no sun and a missing sun's
+direction is straight down; whether a preset should draw a sun the scene does not have is a question of
+its own.
 
 **And reflection probes, the same day.** That path has no group for them, so they are group 0's
 bindings 6–8: the captured cube array, a sampler and the uniform that places them, packed by the same
