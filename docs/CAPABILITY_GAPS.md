@@ -747,8 +747,10 @@ SMAA, and FXAA on as well changes nothing, since the chain runs one or the other
 
 Sphere, tube and rectangle lights exist, spot lights project cookies, and the sun has soft and
 contact shadows. The `area_lights` demo shows all of it. What is left is narrower than the heading
-ever was: no cube cookies for point lights, no cookies on web, and rectangle lights cast no
-shadows. Each item:
+ever was: no cube cookies for point lights, no cookies on web, and — wider than this line said until
+2026-11-11 — **local lights barely cast**: the sun casts through its cascades and one point light, the
+first, through a cube when `Renderer::point_shadows_enabled` is set; spot and rectangle lights cast
+nothing, so a spot inside a room lights the floor behind a pillar. Each item:
 
 - ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
   faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or
@@ -3033,8 +3035,11 @@ the frame (0 pixels when the shader's contribution is removed) and changes it in
 coefficients say (red-baked raises red more than blue — which fails when `evaluate` is replaced by
 its magnitude).
 
-Still missing: a **component**. The grid is uploaded by hand; there is no `IrradianceVolume` an
-entity carries and no automatic selection between overlapping grids.
+~~Still missing: a **component**.~~ **There is one since 2026-11-02** (`4d85ec92`; this line was not
+told): an entity carries an `IrradianceVolume` — a box and a probe count — and the engine bakes it from
+the scene's lights and bakes it again when it or a light changes, with no grid built or uploaded by hand
+(`an_irradiance_volume_bakes_itself_and_rebakes_on_change`). **Still missing, narrower:** one volume a
+scene — the first found is used — so a level cannot place several, nor blend where two meet.
 
 ### F3. The water material route — wired 2026-08-24
 
