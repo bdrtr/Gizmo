@@ -97,14 +97,24 @@ const SHADOW_BIAS_METRES_MIN: f32 = 0.0042;
 // (`local_shadows::LOCAL_SHADOW_CUBE`).
 const LOCAL_SHADOW_CUBE: u32 = 0x80000000u;
 
+// A light's `light_shadows` entry: its first layer + 1 in the low byte (0: it casts no map), the cube
+// flag above, and between them its contact-shadow length in millimetres (`local_shadows::
+// CONTACT_SHADOW_SHIFT`).
+const LOCAL_SHADOW_FIRST_MASK: u32 = 0xFFu;
+
+// How far toward its light a pixel looks for a contact shadow, metres; 0 for none.
+fn light_contact_length(entry: u32) -> f32 {
+    return f32((entry >> 8u) & 0xFFFFu) * 0.001;
+}
+
 // The local shadow layer a light's shadow is looked up in for a point `from_light` away from it, or
 // -1 for a light that casts none. `entry` is the light's `light_shadows` slot. A cube's face is the
 // axis `from_light` is longest along, numbered +X, −X, +Y, −Y, +Z, −Z as the CPU lays them out.
 fn local_shadow_layer(entry: u32, from_light: vec3<f32>) -> i32 {
-    if (entry == 0u) {
+    if ((entry & LOCAL_SHADOW_FIRST_MASK) == 0u) {
         return -1;
     }
-    let first = i32(entry & ~LOCAL_SHADOW_CUBE) - 1;
+    let first = i32(entry & LOCAL_SHADOW_FIRST_MASK) - 1;
     if ((entry & LOCAL_SHADOW_CUBE) == 0u) {
         return first;
     }

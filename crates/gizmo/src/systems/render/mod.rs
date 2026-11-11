@@ -7139,6 +7139,88 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no contact shadows.
+    /// **A local light finds a step's contact shadow, as the sun does.** The 1 cm step of
+    /// `contact_shadows_find_a_step_a_few_millimetres_tall`, lit by a point light, then a spot, 15° up and
+    /// 3.6 m off, casting no shadow map — so any shadow there is the contact shadow's. Only the sun had
+    /// contact shadows until 2026-11-11 (`DirectionalLight::contact_shadow_length`); each local light has
+    /// its own length now, carried in its shadow entry, and marches toward its light, never past it.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_local_light_finds_a_steps_contact_shadow() {
+        use crate::renderer::components::{PointLight, SpotLight};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(spot: bool, contact: f32, casts: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            // With a map, a slab hangs 30 cm up off screen between the light and the floor beyond the
+            // step, where the map shades the floor and the contact march (30 cm) cannot reach it.
+            let slab = casts.then_some((Vec3::new(-0.5, 0.3, 0.0), Vec3::new(0.1, 0.01, 0.6)));
+            for (pos, scale) in [
+                (Vec3::new(0.0, -0.2, 0.0), Vec3::new(20.0, 0.2, 20.0)),
+                (Vec3::new(0.0, 0.005, 0.0), Vec3::new(0.6, 0.005, 0.6)),
+            ]
+            .into_iter()
+            .chain(slab)
+            {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(pos).with_scale(scale));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            let at = Vec3::new(-3.0, 0.8, 0.0);
+            let lamp = world.spawn();
+            let aim = (Vec3::new(0.6, 0.0, 0.0) - at).normalize();
+            world.add_component(lamp, Transform::new(at).with_rotation(crate::math::Quat::from_rotation_arc(Vec3::NEG_Z, aim)));
+            world.add_component(lamp, GlobalTransform::default());
+            if spot {
+                let light = SpotLight::new(Vec3::ONE, 40.0, 20.0, 0.5, 0.7).with_contact_shadows(contact);
+                world.add_component(lamp, if casts { light.with_shadows() } else { light });
+            } else {
+                let light = PointLight::new(Vec3::ONE, 40.0, 20.0).with_contact_shadows(contact);
+                world.add_component(lamp, if casts { light.with_shadows() } else { light });
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.6, 1.2, 0.0),
+                yaw: 0.0,
+                pitch: -std::f32::consts::FRAC_PI_2 + 0.01,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            for spot in [false, true] {
+                let (off, on) = (frame(spot, 0.0, false).await, frame(spot, 0.3, false).await);
+                let darkened = darkened_pixels(&off, &on);
+                let (moved, total) = open_floor_moved(&off, &on);
+                eprintln!("{}: {darkened} darkened by contact shadows, {moved}/{total} open-floor bytes moved", if spot { "spot" } else { "point" });
+                assert!(darkened > 250, "a 1 cm step's contact shadow toward the light: {darkened} pixels");
+                assert_eq!(moved, 0, "and only there: {moved}/{total} bytes of open floor moved");
+                // A light that casts a map too keeps its map: the length rides the entry above the
+                // layers, and reading it as part of them would look the map up in a layer that is not.
+                let (map, both) = (frame(spot, 0.0, true).await, frame(spot, 0.3, true).await);
+                let (moved, total) = open_floor_moved(&map, &both);
+                eprintln!("  casting too: {} darkened past its map, {moved}/{total} open-floor bytes moved; the map shades {}", darkened_pixels(&map, &both), darkened_pixels(&off, &map));
+                assert!(darkened_pixels(&off, &map) > 200, "the setup: the slab's shadow in the map, {} pixels", darkened_pixels(&off, &map));
+                assert_eq!(moved, 0, "a casting light's contact shadows move no open floor: {moved}/{total}");
+            }
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// **Contact shadows leave open ground alone, at any angle.** Open ground — flat, rising 20° along
     /// the view and tilted 20° across it — seen from 2 m up and from 30 cm, looking down steeply and

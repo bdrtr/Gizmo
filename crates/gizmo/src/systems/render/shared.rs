@@ -73,6 +73,8 @@ pub struct SceneLights {
     /// The lights in `lights` that cast shadows (`casts_shadows`), as `(slot, what it casts over)`
     /// in rank order — what [`LocalShadows::plan`] lays the frame's shadow layers out from.
     pub shadow_casters: Vec<(usize, LocalShadowCaster)>,
+    /// The lights in `lights` that look for contact shadows toward them, as `(slot, metres)`.
+    pub contact_shadows: Vec<(usize, f32)>,
 }
 
 /// One light that *could* go in the frame's array, with the key that decides whether it does.
@@ -80,6 +82,8 @@ struct Candidate {
     data: LightData,
     /// What it casts a shadow over, if it casts one.
     shadow: Option<LocalShadowCaster>,
+    /// How far toward it each pixel looks for a contact shadow, metres; 0 for none.
+    contact: f32,
     /// Distance from the camera to the light's sphere of influence — `0.0` when the camera is
     /// inside it. Ascending: the lights whose light actually reaches the viewer come first.
     surface_dist: f32,
@@ -197,6 +201,7 @@ pub fn collect_scene_lights(
                     params: [0.0, 0.0, light.source_radius.max(0.0), light.source_length.max(0.0)],
                 },
                 shadow: light.casts_shadows.then_some(LocalShadowCaster::Omni { position: pos, radius: light.radius }),
+                contact: light.contact_shadow_length,
                 surface_dist,
                 reach,
                 entity_id: e.id(),
@@ -239,6 +244,7 @@ pub fn collect_scene_lights(
                     outer_angle: light.outer_angle,
                     radius: light.radius,
                 }),
+                contact: light.contact_shadow_length,
                 surface_dist,
                 reach,
                 entity_id: e.id(),
@@ -267,6 +273,7 @@ pub fn collect_scene_lights(
                 // From its centre, every way: the cube's faces behind the panel are drawn and never
                 // looked up, as nothing behind it is lit.
                 shadow: light.casts_shadows.then_some(LocalShadowCaster::Omni { position: pos, radius: light.radius }),
+                contact: light.contact_shadow_length,
                 surface_dist,
                 reach,
                 entity_id: e.id(),
@@ -301,6 +308,7 @@ pub fn collect_scene_lights(
                     params: [0.0, 2.0, 0.0, 0.0],
                 },
                 shadow: None,
+                contact: light.contact_shadow_length,
                 surface_dist: 0.0,
                 reach: f32::MAX,
                 entity_id: e.id(),
@@ -323,9 +331,13 @@ pub fn collect_scene_lights(
     // Only lights that made the cut cast: one outside the array is not lit at all, so its shadow
     // would be a map with no light in it.
     let mut shadow_casters = Vec::new();
+    let mut contact_shadows = Vec::new();
     for c in candidates.iter().take(MAX_LIGHTS) {
         if let Some(caster) = c.shadow {
             shadow_casters.push((num_lights, caster));
+        }
+        if c.contact > 0.0 {
+            contact_shadows.push((num_lights, c.contact));
         }
         lights[num_lights] = c.data;
         num_lights += 1;
@@ -362,6 +374,7 @@ pub fn collect_scene_lights(
         sun_angular_radius,
         sun_contact_shadow_length,
         shadow_casters,
+        contact_shadows,
     }
 }
 
@@ -567,7 +580,8 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
         LocalShadows::plan(lights.shadow_casters.iter().copied())
     } else {
         LocalShadows::default()
-    };
+    }
+    .with_contact_shadows(lights.contact_shadows.iter().copied());
 
     // Cluster assignment over the lights that survived collection. The indices it produces are
     // indices into `lights.lights`, which is exactly what the shader indexes.

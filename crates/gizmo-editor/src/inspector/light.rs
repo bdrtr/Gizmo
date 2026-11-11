@@ -5,6 +5,15 @@ use gizmo_core::World;
 use gizmo_math::Vec3;
 use gizmo_renderer::components::{DirectionalLight, LightRole, PointLight, RectLight, SpotLight};
 
+/// How far toward the light each pixel looks for a contact shadow, in metres.
+fn contact_shadow_row(ui: &mut egui::Ui, metres: &mut f32) {
+    ui.horizontal(|ui| {
+        ui.label("Temas gölgesi:");
+        ui.add(egui::DragValue::new(metres).speed(0.01).range(0.0..=5.0).suffix(" m"))
+            .on_hover_text("Her pikselin ışığa doğru ekranda baktığı mesafe: gölge haritasının kaçırdığı küçük temasları (bir bozuk para, bir basamağın ilk santimetreleri) yakalar; gölge düşürmeyen bir ışığa da temas gölgesi verir. 0 = kapalı. Yalnız ertelenmiş (deferred) yolda.");
+    });
+}
+
 /// A source's size, in metres: what softens its shadow and widens its highlight.
 fn source_radius_row(ui: &mut egui::Ui, radius: &mut f32) {
     ui.horizontal(|ui| {
@@ -62,6 +71,7 @@ pub fn draw_point_light_section(
                             .on_hover_text("Floresan tüp gibi uzun bir kaynak: varlığın yerel X ekseni boyunca bu uzunlukta. 0 = küre.");
                     });
                     ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
+                    contact_shadow_row(ui, &mut light.contact_shadow_length);
                 });
             ui.separator();
         }
@@ -119,11 +129,7 @@ pub fn draw_directional_light_section(
                         light.angular_radius = degrees.to_radians().clamp(0.0, 0.5);
                     }
                 });
-                ui.horizontal(|ui| {
-                    ui.label("Temas gölgesi:");
-                    ui.add(egui::DragValue::new(&mut light.contact_shadow_length).speed(0.01).range(0.0..=5.0).suffix(" m"))
-                        .on_hover_text("Her pikselin güneşe doğru ekranda baktığı mesafe: gölge haritasının kaçırdığı küçük temasları (bir bozuk para, bir basamağın ilk santimetreleri) yakalar. 0 = kapalı.");
-                });
+                contact_shadow_row(ui, &mut light.contact_shadow_length);
                 ui.label(egui::RichText::new("Güneşin açısını (gölge yönünü) değiştirmek için üst kısımdaki 'Transform' altından Rotasyon X, Y, Z değerlerini döndürün.").weak().small());
             });
         ui.separator();
@@ -218,6 +224,7 @@ pub fn draw_spot_light_section(
                     }
                 });
                 ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
+                contact_shadow_row(ui, &mut light.contact_shadow_length);
                 ui.label(egui::RichText::new("Koninin baktığı yön varlığın 'Transform' rotasyonundan gelir.").weak().small());
             });
         ui.separator();
@@ -278,6 +285,7 @@ pub fn draw_rect_light_section(
                     );
                 });
                 ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
+                contact_shadow_row(ui, &mut light.contact_shadow_length);
                 ui.label(egui::RichText::new("Panel, varlığın 'Transform' rotasyonunun ileri ekseni (−Z) yönünde, tek yüzünden ışık verir.").weak().small());
             });
         ui.separator();

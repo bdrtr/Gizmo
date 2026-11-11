@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Contact shadows for every light.** `PointLight`, `SpotLight` and `RectLight` have `contact_shadow_length` and
+  `with_contact_shadows`, as `DirectionalLight` has, and a fill or rim directional light takes its own: the lighting pass
+  marches toward each light that asks — never past it, whether the light casts a map or not — through the same march as
+  the sun's (`contact_shadow` takes its reach). The length rides the light's shadow entry, millimetres in bits 8–23 above
+  its layers (`LocalShadows::with_contact_shadows`, `local_shadows::{LOCAL_SHADOW_FIRST_MASK, CONTACT_SHADOW_SHIFT}`).
+  A 1 cm step lit by a point light or a spot 15° up and casting no map takes 448 pixels of contact shadow; an inspector
+  row on each light.
+
 - **A local light's shadow is as soft as its source is large.** A sphere-sourced point or spot light (`source_radius`),
   a tube and a rectangle light throw a penumbra as wide as their size and the gap between caster and receiver make it —
   percentage-closer soft shadows, as the sun's angular radius gives the sun's. A point source keeps its sharp edge. The

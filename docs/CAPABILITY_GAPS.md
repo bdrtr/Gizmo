@@ -963,8 +963,16 @@ cube cookies for point lights, and no cookies on web. Each item:
   about 2 cm cast a contact shadow (332 of the 3 cm step's pixels, 0 of a 1 cm step's), though the
   setting's documentation promised a coin until 2026-11-11. Caught when broken: the receiver's depth
   run left out of the tolerance (33 006 bytes of open floor shadowed with itself), the crossings
-  replaced by strides, the march pointed away from the sun. Sun only; the forward pass has none (it
-  draws into the depth buffer the march reads).
+  replaced by strides, the march pointed away from the sun. **Every light has them since the same
+  day**, not the sun only: `PointLight`, `SpotLight` and `RectLight` (and a fill or rim
+  `DirectionalLight`) have a `contact_shadow_length`, carried in the light's shadow entry as
+  millimetres above its layers (`LocalShadows::with_contact_shadows`), and the lighting pass marches
+  toward each light that asks, never past it — whether it casts a map or not. Measured, the 1 cm step
+  lit by a point light and by a spot 15° up, casting no map: 448 pixels of contact shadow each, not a
+  byte of open floor moved; casting a map too, the map's shadow of a slab hung out of the march's
+  reach (5 709 pixels) stays as it is. Caught when broken: the lengths not packed (0), the entry read
+  without masking them off its layers (10 753 bytes of open floor). The forward pass has none (it draws
+  into the depth buffer the march reads).
 - ~~**No percentage-closer soft shadows.**~~ **Corrected and closed 2026-11-01; on every lit path
   since 2026-11-11.** This line described the *forward* path's fixed 3×3 PCF. The deferred path did
   have PCSS — a blocker search and a penumbra estimate — but with the light size a constant (`0.004`)

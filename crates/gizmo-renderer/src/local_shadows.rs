@@ -61,6 +61,13 @@ pub const LOCAL_SHADOW_MARGIN_TEXELS: f32 = 4.0;
 /// Set on a light's entry ([`LocalShadows::entry`]) when its shadow is a cube of six layers.
 pub const LOCAL_SHADOW_CUBE: u32 = 1 << 31;
 
+/// The bits of a light's entry that hold its first layer + 1 (0: it casts none).
+pub const LOCAL_SHADOW_FIRST_MASK: u32 = 0xFF;
+
+/// Where a light's contact-shadow length sits in its entry: millimetres, in bits 8 to 23 (up to
+/// 65.5 m; the lights clamp it to 5). See [`LocalShadows::with_contact_shadows`].
+pub const CONTACT_SHADOW_SHIFT: u32 = 8;
+
 /// The faces of a light's cube, in layer order: +X, −X, +Y, −Y, +Z, −Z. `local_shadow_layer` in
 /// `common.wgsl` numbers them the same way; `up` is any axis square to the face's.
 const CUBE_FACES: [(Vec3, Vec3); 6] = [
@@ -142,7 +149,9 @@ impl LocalShadowLayer {
 pub struct LocalShadows {
     layers: [LocalShadowLayer; MAX_LOCAL_SHADOW_LAYERS],
     layer_count: usize,
-    /// Per light slot: 0 = casts none, else its first layer + 1, with [`LOCAL_SHADOW_CUBE`] for six.
+    /// Per light slot: its first layer + 1 in the low byte (0 = casts none), with
+    /// [`LOCAL_SHADOW_CUBE`] for six, and its contact-shadow length in millimetres above
+    /// ([`CONTACT_SHADOW_SHIFT`]).
     entries: [u32; MAX_LIGHTS],
 }
 
@@ -162,7 +171,7 @@ impl LocalShadows {
     pub fn plan(casters: impl IntoIterator<Item = (usize, LocalShadowCaster)>) -> Self {
         let mut out = Self::default();
         for (slot, caster) in casters {
-            if slot >= MAX_LIGHTS || out.entries[slot] != 0 {
+            if slot >= MAX_LIGHTS || out.entries[slot] & LOCAL_SHADOW_FIRST_MASK != 0 {
                 continue;
             }
             let free = MAX_LOCAL_SHADOW_LAYERS - out.layer_count;
@@ -198,14 +207,32 @@ impl LocalShadows {
         out
     }
 
+    /// This frame's shadows with each light in `lights` — `(light slot, metres)` — looking that far
+    /// toward its light for a contact shadow, whether it casts a shadow map or not: millimetres in
+    /// bits 8 to 23 of its entry (`light_contact_length` in `common.wgsl` reads them back). A slot past
+    /// [`MAX_LIGHTS`], or a length that is not a positive number, is left as it is.
+    #[must_use]
+    pub fn with_contact_shadows(mut self, lights: impl IntoIterator<Item = (usize, f32)>) -> Self {
+        for (slot, metres) in lights {
+            let Some(entry) = self.entries.get_mut(slot) else { continue };
+            if metres.is_nan() || metres <= 0.0 || metres.is_infinite() {
+                continue;
+            }
+            let millimetres = (metres * 1000.0).round().min(65_535.0) as u32;
+            *entry = (*entry & !(0xFFFF << CONTACT_SHADOW_SHIFT)) | (millimetres << CONTACT_SHADOW_SHIFT);
+        }
+        self
+    }
+
     /// The layers this frame draws, in array order.
     #[must_use]
     pub fn layers(&self) -> &[LocalShadowLayer] {
         &self.layers[..self.layer_count]
     }
 
-    /// Light slot `light`'s entry: 0 when it casts none, else its first layer + 1, with
-    /// [`LOCAL_SHADOW_CUBE`] set when the shadow is six layers.
+    /// Light slot `light`'s entry: its first layer + 1 in the low byte (0 when it casts none), with
+    /// [`LOCAL_SHADOW_CUBE`] set when the shadow is six layers, and its contact-shadow length in
+    /// millimetres from [`CONTACT_SHADOW_SHIFT`].
     #[must_use]
     pub fn entry(&self, light: usize) -> u32 {
         self.entries.get(light).copied().unwrap_or(0)
@@ -423,4 +450,19 @@ mod tests {
         let texels = (a - b).abs() * LOCAL_SHADOW_RES as f32;
         assert!((texels - 1.0).abs() < 1e-3, "one texel width moved {texels} texels");
     }
+
+    /// A light's contact-shadow length rides its entry above its layers, and leaves them as they are;
+    /// a light that casts no map gets one too.
+    #[test]
+    fn a_contact_shadow_length_rides_the_entry_above_the_layers() {
+        let plan = LocalShadows::plan([(1, LocalShadowCaster::Omni { position: Vec3::ZERO, radius: 5.0 })])
+            .with_contact_shadows([(1, 0.25), (3, 1.5), (4, -1.0), (5, f32::NAN), (MAX_LIGHTS, 1.0)]);
+        assert_eq!(plan.entry(1) & LOCAL_SHADOW_FIRST_MASK, 1, "the cube's first layer, as it was");
+        assert_ne!(plan.entry(1) & LOCAL_SHADOW_CUBE, 0, "still a cube");
+        assert_eq!((plan.entry(1) >> CONTACT_SHADOW_SHIFT) & 0xFFFF, 250, "25 cm in millimetres");
+        assert_eq!(plan.entry(3), 1500 << CONTACT_SHADOW_SHIFT, "a light with no map: no layers, a length");
+        assert_eq!(plan.entry(4), 0, "a negative length is none");
+        assert_eq!(plan.entry(5), 0, "and not a number is none");
+    }
+
 }

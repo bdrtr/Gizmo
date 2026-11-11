@@ -7,7 +7,7 @@
 // fullscreen pass, the procedural environment/IBL and contact shadows. The shadow lookups — the
 // sun's and the local lights' — are common.wgsl's, handed the textures, so the forward shader takes
 // the same ones.
-#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cone, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cone, spot_cookie_uv, light_contact_length, gizmo_cluster_index, scene_environment, height_fog, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -114,8 +114,8 @@ fn depth_point(pixel: vec2<i32>, dims: vec2<f32>) -> vec4<f32> {
 const CONTACT_CROSSINGS: i32 = 32;
 const CONTACT_STRIDES: i32 = 16;
 
-fn contact_shadow(pixel: vec2<i32>, l: vec3<f32>) -> f32 {
-    var length = scene.cluster_depth.z;
+fn contact_shadow(pixel: vec2<i32>, l: vec3<f32>, reach: f32) -> f32 {
+    var length = reach;
     if (length <= 0.0) {
         return 1.0;
     }
@@ -348,7 +348,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         );
     }
     if (scene.sun_direction.w > 0.5 && shadow_visibility > 0.0) {
-        shadow_visibility = min(shadow_visibility, contact_shadow(iuv, normalize(-scene.sun_direction.xyz)));
+        shadow_visibility = min(shadow_visibility, contact_shadow(iuv, normalize(-scene.sun_direction.xyz), scene.cluster_depth.z));
     }
     // `MeshRenderer::receives_shadows == false` (RT5's alpha is negative): no shadow falls here —
     // not the cascades, not contact shadows, and below, not the point-light cube.
@@ -442,6 +442,19 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 atten *= lit;
                 window *= lit;
             }
+        }
+        // Contact shadows toward this light (`contact_shadow_length`), as the sun's: what its map's bias
+        // and texels lose, and a shadow at all for a light that casts no map. Never past the light: a
+        // march beyond it would find what stands behind it.
+        let contact = light_contact_length(scene.light_shadows[i / 4u][i % 4u]);
+        if (receives_shadows && contact > 0.0 && max(atten, window) > 0.0) {
+            var reach = contact;
+            if (light_type != 2u) {
+                reach = min(contact, length(light.position.xyz - world_pos));
+            }
+            let lit = contact_shadow(iuv, L, reach);
+            atten *= lit;
+            window *= lit;
         }
 
         let light_rgb = light.color.rgb * cookie;

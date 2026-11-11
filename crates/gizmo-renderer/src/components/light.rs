@@ -31,6 +31,13 @@ pub struct PointLight {
     /// pay for a light nobody asked to cast. `#[serde(default)]`.
     #[serde(default)]
     pub casts_shadows: bool,
+    /// **Contact shadows**, in metres: how far toward this light each pixel looks, in screen space,
+    /// for something in the way — what its shadow map's bias and texels lose, and a shadow at all for
+    /// a light that casts none. As `DirectionalLight::contact_shadow_length` is for the sun, and never
+    /// past the light. `0` (the default) is off. Only on the deferred path (the march reads the
+    /// frame's depth). `#[serde(default)]`.
+    #[serde(default)]
+    pub contact_shadow_length: f32,
 }
 
 impl PointLight {
@@ -46,12 +53,20 @@ impl PointLight {
             source_radius: 0.0,
             source_length: 0.0,
             casts_shadows: false,
+            contact_shadow_length: 0.0,
         }
     }
 
     /// This light casting shadows (see [`casts_shadows`](Self::casts_shadows)).
     pub fn with_shadows(mut self) -> Self {
         self.casts_shadows = true;
+        self
+    }
+
+    /// This light with contact shadows reaching `metres` toward it (see
+    /// [`contact_shadow_length`](Self::contact_shadow_length)), clamped to 0..=5.
+    pub fn with_contact_shadows(mut self, metres: f32) -> Self {
+        self.contact_shadow_length = if metres.is_finite() { metres.clamp(0.0, 5.0) } else { 0.0 };
         self
     }
 
@@ -176,6 +191,13 @@ pub struct SpotLight {
     /// `gizmo_renderer::local_shadows`). Off by default. `#[serde(default)]`.
     #[serde(default)]
     pub casts_shadows: bool,
+    /// **Contact shadows**, in metres: how far toward this light each pixel looks, in screen space,
+    /// for something in the way — what its shadow map's bias and texels lose, and a shadow at all for
+    /// a light that casts none. As `DirectionalLight::contact_shadow_length` is for the sun, and never
+    /// past the light. `0` (the default) is off. Only on the deferred path (the march reads the
+    /// frame's depth). `#[serde(default)]`.
+    #[serde(default)]
+    pub contact_shadow_length: f32,
 }
 
 impl SpotLight {
@@ -201,12 +223,20 @@ impl SpotLight {
             source_radius: 0.0,
             cookie: None,
             casts_shadows: false,
+            contact_shadow_length: 0.0,
         }
     }
 
     /// This light casting shadows (see [`casts_shadows`](Self::casts_shadows)).
     pub fn with_shadows(mut self) -> Self {
         self.casts_shadows = true;
+        self
+    }
+
+    /// This light with contact shadows reaching `metres` toward it (see
+    /// [`contact_shadow_length`](Self::contact_shadow_length)), clamped to 0..=5.
+    pub fn with_contact_shadows(mut self, metres: f32) -> Self {
+        self.contact_shadow_length = if metres.is_finite() { metres.clamp(0.0, 5.0) } else { 0.0 };
         self
     }
 
@@ -255,6 +285,13 @@ pub struct RectLight {
     /// `gizmo_renderer::local_shadows`). Off by default. `#[serde(default)]`.
     #[serde(default)]
     pub casts_shadows: bool,
+    /// **Contact shadows**, in metres: how far toward this light each pixel looks, in screen space,
+    /// for something in the way — what its shadow map's bias and texels lose, and a shadow at all for
+    /// a light that casts none. As `DirectionalLight::contact_shadow_length` is for the sun, and never
+    /// past the light. `0` (the default) is off. Only on the deferred path (the march reads the
+    /// frame's depth). `#[serde(default)]`.
+    #[serde(default)]
+    pub contact_shadow_length: f32,
 }
 
 impl RectLight {
@@ -269,12 +306,20 @@ impl RectLight {
             width: extent(width),
             height: extent(height),
             casts_shadows: false,
+            contact_shadow_length: 0.0,
         }
     }
 
     /// This light casting shadows (see [`casts_shadows`](Self::casts_shadows)).
     pub fn with_shadows(mut self) -> Self {
         self.casts_shadows = true;
+        self
+    }
+
+    /// This light with contact shadows reaching `metres` toward it (see
+    /// [`contact_shadow_length`](Self::contact_shadow_length)), clamped to 0..=5.
+    pub fn with_contact_shadows(mut self, metres: f32) -> Self {
+        self.contact_shadow_length = if metres.is_finite() { metres.clamp(0.0, 5.0) } else { 0.0 };
         self
     }
 }
