@@ -1,14 +1,14 @@
 use super::super::*;
 
 /// What a draw casts with: a game's surface its own pipeline, anything else the engine's, by whether
-/// it is drawn by its back faces alone (`back_faces`: its mesh closes, and the pass is the sun's) and
+/// it is drawn by its front faces alone (`front_faces`: its mesh closes, and the pass is the sun's) and
 /// whether it cuts (a cut-out, a LOD crossfade). `None`: nothing it can cast with, which is a surface
 /// where there is no shadow pass.
 #[cfg(not(gizmo_forward_only))]
-fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, back_faces: bool) -> Option<&'a wgpu::RenderPipeline> {
+fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, front_faces: bool) -> Option<&'a wgpu::RenderPipeline> {
     match item.surface {
-        Some(id) => renderer.custom_materials.surface(id)?.shadow_pipeline(back_faces),
-        None => Some(renderer.scene.shadow_pipeline_for(back_faces, item.discards)),
+        Some(id) => renderer.custom_materials.surface(id)?.shadow_pipeline(front_faces),
+        None => Some(renderer.scene.shadow_pipeline_for(front_faces, item.discards)),
     }
 }
 
@@ -62,11 +62,9 @@ fn casts_into_shadow_maps(renderer: &Renderer, item: &DrawItem) -> bool {
 /// chunks meet `view_proj`'s frustum (`gizmo_renderer::shadow_culling`). Returns the instances it
 /// drew.
 ///
-/// `local`: a local light's layer, where every caster is drawn by both faces. The sun's cascades
-/// draw a closed mesh by its back faces, which keeps its lit front off its own depth; a local
-/// light's soft shadow measures its penumbra from the depth of what blocks it (`local_shadow_visibility`
-/// in `common.wgsl`), and the back faces of a cube put that at the cube's far side — its shadow came
-/// out a third as soft as its light's size throws. Its biases keep a lit face off its own depth.
+/// `local`: a local light's layer, where every caster is drawn by both faces — a light can be inside
+/// a solid, which its front faces alone would let it shine out of. The sun's cascades draw a closed
+/// mesh by its front faces, what the light meets first (`pipelines::build_shadow_pipelines`).
 #[cfg(not(gizmo_forward_only))]
 #[allow(clippy::too_many_arguments)]
 fn record_caster_pass(

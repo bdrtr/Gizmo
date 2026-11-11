@@ -232,8 +232,8 @@ pub(super) fn record_studio_shadow_passes(
 
 /// One depth pass into `target`, through the shadow pass group `light`, drawing the casters whose
 /// chunks meet `view_proj`'s frustum. Returns the instances it drew. `local`: a local light's layer,
-/// where every caster is drawn by both faces, as on the game path (its penumbra is measured from
-/// the depth of what blocks it, which a closed mesh's back faces would put at its far side).
+/// where every caster is drawn by both faces, as on the game path; the cascades draw a closed mesh by
+/// its front faces.
 #[allow(clippy::too_many_arguments)]
 fn record_studio_caster_pass(
     encoder: &mut wgpu::CommandEncoder,
@@ -263,7 +263,7 @@ fn record_studio_caster_pass(
         multiview_mask: None,
     });
 
-    // As on the game path: a closed mesh casts from its back faces and an open one from both
+    // As on the game path: a closed mesh casts from its front faces and an open one from both
     // (`Mesh::closed`), a cut-out through the stage that cuts it, a game's surface with its
     // own; and every shadow pipeline binds the light, the material, the skeleton and the
     // instances.
@@ -306,10 +306,10 @@ fn record_studio_caster_pass(
                 continue;
             }
         }
-        let back_faces = batch.closed && !local;
+        let front_faces = batch.closed && !local;
         let pipeline = match batch.surface {
-            Some(id) => renderer.custom_materials.surface(id).and_then(|s| s.shadow_pipeline(back_faces)),
-            None => Some(renderer.scene.shadow_pipeline_for(back_faces, batch.discards)),
+            Some(id) => renderer.custom_materials.surface(id).and_then(|s| s.shadow_pipeline(front_faces)),
+            None => Some(renderer.scene.shadow_pipeline_for(front_faces, batch.discards)),
         };
         // `None` is also an id with nothing behind it: it draws nothing, its shadow included.
         let Some(pipeline) = pipeline else { continue };

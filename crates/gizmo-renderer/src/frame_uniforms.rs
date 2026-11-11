@@ -421,8 +421,8 @@ impl SceneUniforms {
             lights: *lights,
             light_view_proj: shadows.cascade_view_projs.map(|m| m.to_cols_array_2d()),
             cascade_splits: shadows.cascade_splits,
-            // w = tan(sun angular radius): the soft-shadow size `filter_pcss` reads; 0 = the fixed
-            // near-crisp edge. The slot was unused padding.
+            // w = tan(sun angular radius): the soft-shadow size `sun_shadow_visibility` reads; 0 = a
+            // sun with no size, filtered 3×3. The slot was unused padding.
             camera_forward: camera.forward.extend(sun.angular_radius.max(0.0).tan()).to_array(),
             cascade_params: [camera.near, 1.0 / SHADOW_MAP_RES as f32, *elapsed_time, 0.0],
             num_lights: *num_lights,

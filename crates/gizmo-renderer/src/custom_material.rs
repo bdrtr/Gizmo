@@ -437,8 +437,8 @@ impl SurfaceMaterial {
         &self.pipelines.glass[usize::from(double_sided)]
     }
 
-    /// The shadow pass's pipeline for a draw of this surface: by its back faces alone when
-    /// `back_faces` — a mesh that closes ([`Mesh::closed`](crate::components::Mesh::closed)), in the
+    /// The shadow pass's pipeline for a draw of this surface: by its front faces alone when
+    /// `front_faces` — a mesh that closes ([`Mesh::closed`](crate::components::Mesh::closed)), in the
     /// sun's cascades — and by both otherwise, as
     /// [`SceneState::shadow_pipeline_for`](crate::pipeline::SceneState::shadow_pipeline_for) chooses;
     /// cutting wherever the surface cuts. `None` where there is no shadow pass, the forward-only path.
@@ -448,8 +448,8 @@ impl SurfaceMaterial {
     /// map's own rather than the picture's: `frag_coord` is the shadow map's pixel, and
     /// `front_facing` is the face turned to the light.
     #[must_use]
-    pub fn shadow_pipeline(&self, back_faces: bool) -> Option<&wgpu::RenderPipeline> {
-        self.pipelines.shadow.as_ref().map(|shadow| &shadow[usize::from(!back_faces)])
+    pub fn shadow_pipeline(&self, front_faces: bool) -> Option<&wgpu::RenderPipeline> {
+        self.pipelines.shadow.as_ref().map(|shadow| &shadow[usize::from(!front_faces)])
     }
 
     /// Builds the pipelines again from the WGSL it was made with, against the engine's shaders as they
@@ -548,7 +548,8 @@ impl SurfacePipelines {
                 &scene.skeleton_bind_group_layout,
                 &scene.instance_bind_group_layout,
             ];
-            Some([Some(wgpu::Face::Front), None].map(|cull| {
+            // Front faces alone, then both — as the engine's own (`pipelines::build_shadow_pipelines`).
+            Some([Some(wgpu::Face::Back), None].map(|cull| {
                 crate::pipeline::shadow_pipeline(device, groups, &caster, cull, true, &format!("{label} (shadow)"))
             }))
         };

@@ -57,10 +57,12 @@ pub struct Mesh {
     /// Whether the triangles close over a volume ([`triangles_close`]), worked out once from
     /// [`Self::cpu_vertices`] when the mesh is made.
     ///
-    /// It is what the shadow pass culls by. A closed mesh is drawn into the shadow maps by its back
-    /// faces, so its lit front can never shadow itself; a mesh that does not close has no back to
-    /// cast from — a plane, a card, a sheet of cloth — and is drawn by both faces. Until 2026-11-11
-    /// everything was drawn as if closed, and a plane facing the sun cast no shadow at all.
+    /// It is what the sun's shadow pass culls by. A closed mesh is drawn into the cascades by its front
+    /// faces, what the light meets first; a mesh that does not close may have no front toward the
+    /// light — a plane seen from behind, a card, a sheet of cloth — and is drawn by both faces. (The
+    /// local lights' layers draw every mesh by both.) Until 2026-11-11 everything was drawn as if
+    /// closed, and by its back faces: a plane facing the sun cast no shadow at all, and a solid's
+    /// soft shadow was measured from its far side.
     pub closed: bool,
 }
 
@@ -72,8 +74,8 @@ pub struct Mesh {
 /// does not close.
 ///
 /// When in doubt it answers `false`: drawing both faces into a shadow map is always a set of
-/// casters that blocks the right light, where drawing only the back faces of something open loses
-/// the shadow of every face turned to the light.
+/// casters that blocks the right light, where drawing only one side of something open loses the
+/// shadow of every face turned the other way.
 pub fn triangles_close(positions: &[Vec3]) -> bool {
     if positions.is_empty() || !positions.len().is_multiple_of(3) {
         return false;
@@ -680,8 +682,8 @@ mod closed_tests {
         assert!(!triangles_close(&positions(&AssetManager::circle_data(1.0, 12))), "a disc");
     }
 
-    /// A sheet drawn as two layers wound opposite ways closes — and casting it from its back faces
-    /// is right, since the layer turned from the light is the one drawn. A sheet with one triangle
+    /// A sheet drawn as two layers wound opposite ways closes — and casting it from its front faces
+    /// is right, since the layer turned to the light is the one drawn. A sheet with one triangle
     /// turned over does not, nor does anything empty, ragged or degenerate.
     #[test]
     fn two_layers_close_and_broken_lists_do_not() {

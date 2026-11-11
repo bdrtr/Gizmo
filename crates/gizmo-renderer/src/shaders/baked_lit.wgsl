@@ -11,6 +11,9 @@
 // its own. On the web schema that group does not exist (the 4-bind-group limit), and there the
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps}
+#ifdef SHADOWS
+#import gizmo::common::{receiver_axes, sun_shadow_visibility, shadow_distance_fade}
+#endif
 
 @group(0) @binding(0)
 var<uniform> scene: SceneUniforms;
@@ -105,24 +108,17 @@ fn select_cascade(view_depth: f32) -> u32 {
     return 3u;
 }
 
-// Mirror of `csm::SHADOW_FADE_FRACTION` / `csm::shadow_distance_fade` — see the Rust side for
-// why the band exists and what the alternative costs. `csm.rs`'s
-// `shader_shadow_fade_matches_the_rust_mirror` fails if this constant drifts.
-const SHADOW_FADE_FRACTION: f32 = 0.15;
-
-fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
-    let far = max(shadow_far, 1e-4);
-    let band = max(far * SHADOW_FADE_FRACTION, 1e-4);
-    return 1.0 - smoothstep(far - band, far, view_depth);
-}
-
-// How much sun reaches this fragment: 1.0 lit, 0.0 fully shadowed.
+// How much sun reaches this fragment: 1.0 lit, 0.0 fully shadowed — `sun_shadow_visibility` in
+// `common.wgsl`, as every lit path takes it: softened by the sun's size, pushed off the surface by both
+// `ShadowSettings` multipliers, faded out over the end of the covered range. `axes` is the surface's
+// own plane (`receiver_axes`), which a soft shadow filters along.
 //
-// A 3x3 PCF rather than the deferred path's 5x5. This runs on geometry that is already lit, so the
-// term is a multiply on top of a correct image rather than the whole of it, and the difference
-// between nine taps and twenty-five is not visible on a baked surface — while the cost is paid on
-// every pixel of a world that fills the screen.
-fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, view_depth: f32) -> f32 {
+// This path had a lookup of its own until 2026-11-11: a 3×3 filter whatever the sun's size, so a soft
+// sun cast a sharp shadow on every baked-lit surface, and a flat 16 cm depth bias — what an older NDC
+// constant had been worth, restored rather than retuned when the cascades' depth range grew. A sun
+// with no size still costs the nine taps this path was written to keep, on every pixel of a world that
+// fills the screen; a soft one costs here what it costs everywhere.
+fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: mat2x3<f32>, view_depth: f32) -> f32 {
 #ifdef SHADOWS
     if (scene.sun_direction.w < 0.5) {
         return 1.0;
@@ -133,48 +129,14 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, view_depth: f32
     if (fade <= 0.0) {
         return 1.0;
     }
-
     let ci = select_cascade(view_depth);
-    let m = scene.light_view_proj[ci];
-
-    // Normal offset, scaled to the cascade's own world texel size: a fixed offset only suits the
-    // nearest cascade, where the texel is smallest.
-    let sx = length(vec3<f32>(m[0][0], m[1][0], m[2][0]));
-    let world_texel = 2.0 * scene.cascade_params.y / max(sx, 1e-6);
-    let offset_pos = world_pos + world_normal * world_texel * 2.0;
-
-    let light_clip = m * vec4<f32>(offset_pos, 1.0);
-    let ndc = light_clip.xyz / max(light_clip.w, 1e-6);
-    let shadow_uv = ndc.xy * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5, 0.5);
-    // Outside the cascade there is nothing to say, so say lit rather than guessing. Inside the
-    // covered range this is now only reachable for a fragment that falls laterally out of the
-    // cascade box; the DISTANCE case — which used to make crossing the range boundary a 1.82x
-    // brightness step across the whole width of the world — is handled by the fade below.
-    if (shadow_uv.x < 0.0 || shadow_uv.x > 1.0 || shadow_uv.y < 0.0 || shadow_uv.y > 1.0 || ndc.z > 1.0) {
-        return 1.0;
-    }
-
-    let texel = scene.cascade_params.y;
-    // **Metres, converted with the cascade's own z gradient** — the same treatment the deferred and
-    // forward paths got, and this one needed it more than either. It was a flat `0.0015` in NDC,
-    // which is a different world distance in every cascade and moves whenever the projection's
-    // depth range does. Widening `CASTER_REACH` from 60 m to 500 m (so tall buildings would stop
-    // losing their shadows at noon) quadrupled the range, and with it this bias: **0.16 m of
-    // peter-panning became 0.82 m**, in the material path the city itself is drawn with. The third
-    // row of the cascade matrix is NDC-z per world metre; 0.16 is what the old constant was worth
-    // at the range it was chosen under, so this restores that behaviour rather than retuning it.
-    let sz = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
-    let bias = 0.16 * sz * scene.shadow_bias.x;
-    var sum = 0.0;
-    for (var x = -1; x <= 1; x++) {
-        for (var y = -1; y <= 1; y++) {
-            let o = vec2<f32>(f32(x), f32(y)) * texel;
-            sum += textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv + o, ci, ndc.z - bias);
-        }
-    }
+    let vis = sun_shadow_visibility(
+        t_shadow, s_shadow, scene.light_view_proj[ci], i32(ci), scene.cascade_params.y, world_pos, world_normal,
+        axes, normalize(-scene.sun_direction.xyz), scene.shadow_bias.xy, scene.camera_forward.w,
+    );
     // Walk the sampled term back to "lit" over the last stretch of the covered range, so the
     // end of the shadow maps is a gradient rather than a line.
-    return mix(1.0, sum / 9.0, fade);
+    return mix(1.0, vis, fade);
 #else
     return 1.0;
 #endif
@@ -182,6 +144,14 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, view_depth: f32
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    // The surface's normal and how it runs across neighbouring pixels, for the sun's shadow
+    // (`receiver_axes`) — taken first, before any pixel of the quad discards.
+    let n = normalize(in.world_normal);
+#ifdef SHADOWS
+    let surface_axes = receiver_axes(dpdx(in.world_pos), dpdy(in.world_pos), n);
+#else
+    let surface_axes = mat2x3<f32>(vec3<f32>(0.0), vec3<f32>(0.0));
+#endif
     let tex = textureSample(t_diffuse, s_diffuse, in.tex_coords);
 
     // **Cut-outs.** Foliage on a quad, a chain-link fence, a pierced railing: opaque geometry
@@ -210,7 +180,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // and put the range boundary on a sphere instead of a plane.)
     let view_depth = dot(in.world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
     // `MeshRenderer::receives_shadows == false` keeps the sun's share whole.
-    let vis = select(sun_visibility(in.world_pos, in.world_normal, view_depth), 1.0, in.inst_emissive.w < 0.0);
+    let vis = select(sun_visibility(in.world_pos, n, surface_axes, view_depth), 1.0, in.inst_emissive.w < 0.0);
 
     // The shadow darkens rather than replaces. Baked lighting already includes the sky and the
     // bounce; a shadowed patch of it is dimmer, not black, and multiplying the whole thing by the

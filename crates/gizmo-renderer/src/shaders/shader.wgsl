@@ -19,7 +19,7 @@
 #endif
 #import gizmo::common::{SceneUniforms, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
 #ifdef SHADOWS
-#import gizmo::common::{SHADOW_BIAS_METRES, SHADOW_BIAS_METRES_MIN, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes}
+#import gizmo::common::{local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
 #endif
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
@@ -347,8 +347,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
 #ifdef SHADOWS
-    // How the surface runs across neighbouring pixels, for a local light's soft shadow
-    // (`receiver_axes`) — taken first, before any pixel of the quad discards.
+    // How the surface runs across neighbouring pixels, for the soft shadows (`receiver_axes`) —
+    // taken first, before any pixel of the quad discards.
     let pos_dx = dpdx(in.world_position);
     let pos_dy = dpdy(in.world_position);
 #endif
@@ -429,54 +429,30 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     }
 #endif
 
-    // --- CSM Gölge (PCF) --- 
-    // textureSampleCompare uniform control flow gerektirir, non-uniform branch'tan önce hesapla
+    // --- The sun's shadow: `sun_shadow_visibility` in `common.wgsl`, as the deferred pass takes it —
+    // softened by the sun's size, faded out over the end of the covered range, pushed off the surface by
+    // `ShadowSettings::normal_offset`. This path filtered 3×3 whatever the sun's size, ended its shadows
+    // in a line at the covered range's edge and ignored the normal offset's multiplier, until
+    // 2026-11-11. (Contact shadows stay the deferred pass's: they march the G-buffer, which a forward
+    // draw has none of.)
     var shadow_visibility = 1.0;
 #ifdef SHADOWS
-    if (scene.sun_direction.w > 0.5) {
-        let view_depth = dot(in.world_position - scene.camera_pos.xyz, scene.camera_forward.xyz);
+    // How the surface runs across neighbouring pixels — its geometry's plane, which the soft shadows
+    // filter along (`receiver_axes`).
+    let surface_axes = receiver_axes(pos_dx, pos_dy, N);
+    let view_depth = dot(in.world_position - scene.camera_pos.xyz, scene.camera_forward.xyz);
+    let shadow_fade = shadow_distance_fade(view_depth, scene.cascade_splits.w);
+    // `inst_emissive.w < 0` is `MeshRenderer::receives_shadows == false`.
+    if (scene.sun_direction.w > 0.5 && shadow_fade > 0.0 && in.inst_emissive.w >= 0.0) {
         let ci = select_cascade(view_depth);
-        let light_vp = scene.light_view_proj[ci];
-        // Normal-offset (cascade texel'ine orantılı) — deferred ile aynı. Asıl acne çözümü
-        // gölge-pass front-face culling; burası silüet/temas için ufak offset.
-        let sx = length(vec3<f32>(light_vp[0][0], light_vp[1][0], light_vp[2][0]));
-        let world_texel = 2.0 * scene.cascade_params.y / max(sx, 1e-6);
-        let offset_pos = in.world_position + N * world_texel * 2.0;
-        let light_clip = light_vp * vec4<f32>(offset_pos, 1.0);
-        let light_ndc = light_clip.xyz / light_clip.w;
-        let shadow_uv = vec2<f32>(
-            light_ndc.x * 0.5 + 0.5,
-            (light_ndc.y * -0.5) + 0.5
+        shadow_visibility = mix(
+            1.0,
+            sun_shadow_visibility(
+                t_shadow, s_shadow, scene.light_view_proj[ci], i32(ci), scene.cascade_params.y, in.world_position, N,
+                surface_axes, normalize(-scene.sun_direction.xyz), scene.shadow_bias.xy, scene.camera_forward.w,
+            ),
+            shadow_fade,
         );
-        if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 && shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
-            let L_dir = normalize(-scene.sun_direction.xyz);
-            let slope = 1.0 - max(dot(N, L_dir), 0.0);
-            // Metres, not NDC — see the same conversion in deferred_lighting.wgsl. The third row
-            // of the cascade matrix is NDC-z per world metre.
-            let sz = length(vec3<f32>(light_vp[0][2], light_vp[1][2], light_vp[2][2]));
-            let bias = max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * sz * scene.shadow_bias.x;
-            var pcf_visibility = 0.0;
-            let texel_size = scene.cascade_params.y;
-            for (var x = -1; x <= 1; x++) {
-                for (var y = -1; y <= 1; y++) {
-                    let offset = vec2<f32>(f32(x), f32(y)) * texel_size;
-                    pcf_visibility += textureSampleCompareLevel(
-                        t_shadow, s_shadow,
-                        shadow_uv + offset,
-                        ci,
-                        light_ndc.z - bias
-                    );
-                }
-            }
-            shadow_visibility = pcf_visibility / 9.0;
-        }
-    }
-#endif
-#ifdef SHADOWS
-    // `MeshRenderer::receives_shadows == false`: computed above (the comparison needs uniform
-    // control flow), discarded here.
-    if (in.inst_emissive.w < 0.0) {
-        shadow_visibility = 1.0;
     }
 #endif
 
@@ -609,9 +585,6 @@ fn shade(in: VertexOutput) -> vec4<f32> {
 
     // Clustered: only this fragment's cluster's lights. `i` is still the index into `scene.lights`
     // so the body is unchanged from when it looped over every light.
-#ifdef SHADOWS
-    let surface_axes = receiver_axes(pos_dx, pos_dy, N);
-#endif
     let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, in.world_position);
     let cluster_range = cluster_table[cluster];
     for (var ci = 0u; ci < cluster_range.y; ci++) {

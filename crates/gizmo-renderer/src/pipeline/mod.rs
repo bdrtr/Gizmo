@@ -78,11 +78,12 @@ pub struct SceneState {
     pub mirror_pipeline: wgpu::RenderPipeline,
     /// Water with a [`PlanarReflection`](crate::components::PlanarReflection), once captured.
     pub water_mirror_pipeline: wgpu::RenderPipeline,
-    /// Depth-only, for rendering into the shadow cascades: a mesh that closes, by its back faces.
+    /// Depth-only, for rendering into the shadow cascades: a mesh that closes, by its front faces —
+    /// what the light meets first (see `pipelines::build_shadow_pipelines`).
     pub shadow_pipeline: wgpu::RenderPipeline,
-    /// The same for a mesh that does not close (`Mesh::closed`), by both faces: a plane, a card, a
-    /// sheet of cloth has no back to cast from. [`shadow_pipeline_for`](Self::shadow_pipeline_for)
-    /// chooses.
+    /// The same by both faces: a mesh that does not close (`Mesh::closed` — a plane, a card, a sheet
+    /// of cloth), and every mesh in a local light's layers, which a light inside a solid would shine
+    /// out of by its front faces alone. [`shadow_pipeline_for`](Self::shadow_pipeline_for) chooses.
     pub shadow_open_pipeline: wgpu::RenderPipeline,
     /// The two above with a fragment stage that cuts where the material does — a cut-out, a LOD
     /// crossfade — closed then open. Every shadow pipeline binds the same groups: the pass's light, the
@@ -416,15 +417,14 @@ impl SceneState {
             .clone()
     }
 
-    /// The shadow pass's pipeline for a draw of the engine's own material: by its back faces alone
-    /// when `back_faces` — a mesh that closes, in the sun's cascades — and by both otherwise (an open
-    /// mesh anywhere, and every mesh in a local light's layers, which measure a penumbra from the
-    /// depth of what blocks them); and through the cut-out stage if the draw `cuts` — a cut-out or a
-    /// LOD crossfade. A game's surface has its own
+    /// The shadow pass's pipeline for a draw of the engine's own material: by its front faces alone
+    /// when `front_faces` — a mesh that closes, in the sun's cascades — and by both otherwise (an open
+    /// mesh anywhere, and every mesh in a local light's layers); and through the cut-out stage if the
+    /// draw `cuts` — a cut-out or a LOD crossfade. A game's surface has its own
     /// ([`SurfaceMaterial::shadow_pipeline`](crate::custom_material::SurfaceMaterial::shadow_pipeline)).
-    pub fn shadow_pipeline_for(&self, back_faces: bool, cuts: bool) -> &wgpu::RenderPipeline {
-        match (cuts, back_faces) {
-            (true, back_faces) => &self.shadow_cut_out_pipelines[usize::from(!back_faces)],
+    pub fn shadow_pipeline_for(&self, front_faces: bool, cuts: bool) -> &wgpu::RenderPipeline {
+        match (cuts, front_faces) {
+            (true, front_faces) => &self.shadow_cut_out_pipelines[usize::from(!front_faces)],
             (false, true) => &self.shadow_pipeline,
             (false, false) => &self.shadow_open_pipeline,
         }

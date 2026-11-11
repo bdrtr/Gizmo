@@ -1225,6 +1225,77 @@ fn viewport_frame(world: &mut World, renderer: &mut Renderer, cam: Entity, size:
     px
 }
 
+/// A floor under a sun `angular_radius` wide, and a cube 2 m up that casts and is not drawn, seen from
+/// straight above its shadow in the editor viewport — the cube there or not.
+fn sun_viewport(angular_radius: f32, cube: bool) -> Vec<u8> {
+    use gizmo::renderer::components::{DirectionalLight, LightRole, ShadowCasting};
+    const S: u32 = 128;
+    pollster::block_on(async {
+        let mut renderer = shared_device_renderer(S, S).await;
+        let mut am = AssetManager::new();
+        let mut world = World::new();
+        let tex = am.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let ground = world.spawn();
+        world.add_component(ground, Transform::new(Vec3::ZERO));
+        world.add_component(ground, AssetManager::create_plane(&renderer.device, 40.0));
+        world.add_component(ground, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+        world.add_component(ground, MeshRenderer::new());
+        if cube {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 2.0, 0.0)).with_scale(Vec3::splat(0.6)));
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.9, 0.25, 0.25, 1.0), 0.6, 0.0));
+            world.add_component(e, MeshRenderer::new().with_shadows(ShadowCasting::Only));
+        }
+        let sun = world.spawn();
+        let aim = Vec3::new(0.3, -1.0, 0.2).normalize();
+        world.add_component(sun, Transform::new(Vec3::ZERO).with_rotation(gizmo::math::Quat::from_rotation_arc(Vec3::NEG_Z, aim)));
+        world.add_component(sun, DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun).with_angular_radius(angular_radius));
+        // The shadow falls about (0.6, 0, 0.4).
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(0.6, 5.0, 0.4)));
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                1000.0,
+                -std::f32::consts::FRAC_PI_2,
+                0.002 - std::f32::consts::FRAC_PI_2,
+                true,
+            ),
+        );
+        viewport_frame(&mut world, &mut renderer, cam, S)
+    })
+}
+
+/// **The editor's viewport softens the sun's shadow by the sun's size.** Its shader filtered the
+/// sun's shadow 3×3 whatever the sun's size, so a soft sun cast a sharp shadow in the editor and a soft
+/// one in the game; it takes the game's lookup (`sun_shadow_visibility`) since 2026-11-11. A cube 2 m
+/// over the ground, seen from above: its shadow's penumbra is 371 pixels with no size, 925 under a sun
+/// 0.05 rad wide and 1576 under one 0.1 rad wide.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn the_editor_softens_the_sun_by_its_size() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    // The pixels the cube's shadow darkens by between 15 % and 80 % of the deepest it darkens any.
+    let penumbra = |radius: f32| {
+        let (with, without) = (sun_viewport(radius, true), sun_viewport(radius, false));
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        let dark: Vec<i32> = (0..with.len() / 4).map(|i| (luma(&without, i) - luma(&with, i)).max(0)).collect();
+        let deepest = *dark.iter().max().unwrap_or(&0);
+        dark.iter().filter(|&&d| d * 100 > deepest * 15 && d * 100 <= deepest * 80).count()
+    };
+    let (sharp, soft, softer) = (penumbra(0.0), penumbra(0.05), penumbra(0.1));
+    assert!(soft > sharp * 2 && softer * 2 > soft * 3, "the editor's penumbra {sharp} → {soft} → {softer} as the sun grows");
+}
+
 /// A floor under a spot, a point or a rectangle light 4 m up, and a cube 2 m up that casts and is
 /// not drawn, seen in the editor viewport: the light casting (`casts_shadows`) or not, the cube there
 /// or not. The frame, and the shadow passes it recorded (`RenderStats::shadow_passes`).

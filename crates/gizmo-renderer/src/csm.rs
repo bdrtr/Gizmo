@@ -74,10 +74,9 @@ pub const RECEIVER_MARGIN: f32 = 40.0;
 /// shaders fall back to anyway once a fragment projects outside the last cascade. Shaders
 /// apply it as `mix(1.0, sampled, fade)`.
 ///
-/// This is the CPU mirror of `shadow_distance_fade` in `shaders/baked_lit.wgsl` and
-/// `shaders/deferred_lighting.wgsl` — the maths lives here so it can be tested without a
-/// GPU, and `shader_shadow_fade_matches_the_rust_mirror` pins the shader copies to the same
-/// constant.
+/// This is the CPU mirror of `shadow_distance_fade` in `shaders/common.wgsl`, which every lit
+/// shader applies to the sun's shadow — the maths lives here so it can be tested without a GPU,
+/// and `shader_shadow_fade_matches_the_rust_mirror` pins the shader copy to the same constant.
 pub fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
     let far = shadow_far.max(1e-4);
     let band = (far * SHADOW_FADE_FRACTION).max(1e-4);
@@ -790,33 +789,36 @@ mod tests {
         }
     }
 
-    // The WGSL copies of the fade are text, so nothing else can catch them drifting from the
-    // Rust mirror above. Adapter-free: it reads the shader sources, it does not compile them.
+    // The WGSL copy of the fade is text, so nothing else can catch it drifting from the Rust mirror
+    // above. Adapter-free: it reads the shader sources, it does not compile them. One copy, in
+    // `common.wgsl`, since 2026-11-11 — the deferred and baked-lit shaders each had their own, and the
+    // forward one none, so its shadows ended in a line at the covered range's edge.
     #[test]
     fn shader_shadow_fade_matches_the_rust_mirror() {
-        let shaders = [
+        let common = code_only(include_str!("shaders/common.wgsl"));
+        let expected = format!("const SHADOW_FADE_FRACTION: f32 = {SHADOW_FADE_FRACTION:?};");
+        assert!(
+            common.contains(&expected),
+            "common.wgsl must declare `{expected}` — the shader fade band has drifted from csm::SHADOW_FADE_FRACTION"
+        );
+        assert!(common.contains("fn shadow_distance_fade("), "common.wgsl lost its shadow_distance_fade mirror");
+        let users = [
             ("baked_lit.wgsl", include_str!("shaders/baked_lit.wgsl")),
             ("deferred_lighting.wgsl", include_str!("shaders/deferred_lighting.wgsl")),
+            ("shader.wgsl", include_str!("shaders/shader.wgsl")),
         ];
-        let expected = format!("const SHADOW_FADE_FRACTION: f32 = {SHADOW_FADE_FRACTION:?};");
-        for (name, src) in shaders {
+        for (name, src) in users {
             // WGSL comments are `//` too, and this test was satisfied by them: commenting out the
             // line that APPLIES the fade left it green, so a shader could declare the mirror,
             // never call it, and pass. Measured 2026-08-18.
             let src = code_only(src);
-            let src = src.as_str();
             assert!(
-                src.contains(&expected),
-                "{name} must declare `{expected}` — the shader fade band has drifted from \
-                 csm::SHADOW_FADE_FRACTION"
-            );
-            assert!(
-                src.contains("fn shadow_distance_fade("),
-                "{name} lost its shadow_distance_fade mirror"
+                !src.contains("const SHADOW_FADE_FRACTION"),
+                "{name} declares a fade band of its own: one copy, in common.wgsl"
             );
             assert!(
                 src.contains("shadow_distance_fade(view_depth"),
-                "{name} declares the fade but never applies it to the sampled shadow term"
+                "{name} never applies the fade to its sampled sun shadow"
             );
         }
     }

@@ -250,7 +250,7 @@ measures.
 `deferred_rendering`, it meant changing the material type. `Material::with_forward` was built and removed
 the same day, before any release. A PBR material fits the G-buffer entirely, and TAA, motion blur, SSR,
 SSGI and SSAO all need it there, so it had to stay in. The forward pass then only drew a lesser copy over
-the deferred result: no decals, no SSAO on its own surface, no PCSS, and its pixels shaded twice. Bringing
+the deferred result: no decals, no SSAO on its own surface, no PCSS then (it has the sun's since 2026-11-11), and its pixels shaded twice. Bringing
 those three across would have made it the same picture at twice the cost. A material goes forward when the
 G-buffer cannot hold it: blended, unlit, baked-lit, water, custom.
 
@@ -794,8 +794,9 @@ cube cookies for point lights, and no cookies on web. Each item:
   edge as wide as the penumbra a disc of the source's radius throws past them (`light_source_radius`:
   a sphere's or a spot's `source_radius`, a rectangle's half extents' geometric mean, a tube's
   thickness and half length averaged). Two things it needed. The layers draw every caster by both
-  faces: a cube's back faces, which the cascades draw, put its blocking depth at its far side, and its
-  shadow came out a third as soft as its light throws (penumbra 182 pixels against 308). And each tap
+  faces: a cube's back faces, which the cascades drew too until the sun's soft shadow was mended the
+  same day (A7 below), put its blocking depth at its far side, and its shadow came out a third as soft
+  as its light throws (penumbra 182 pixels against 308). And each tap
   is compared against the receiver's own plane there (Isidoro's receiver-plane bias), taken from the
   pixel's screen-space neighbours, not its normal: a filter dozens of texels wide shadowed a slanted
   floor with itself, and one following a normal map's tilt shadowed 13 105 pixels of it. Measured, a
@@ -804,8 +805,7 @@ cube cookies for point lights, and no cookies on web. Each item:
   cube just above the floor and 0.73 over one 1.6 m higher. No floor — flat, or normal-mapped 0.9 rad
   and 1.2 rad off — shadows itself by more than 2 (or 3) levels under any of them up to 72° off, nor
   does a drawn cube lit from any side. **Still open:** the volumetric pass scatters every local light
-  without asking its shadow; and the sun's own soft shadow reads its blockers from the cascades' back
-  faces, as the local layers did.
+  without asking its shadow.
 
 - ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
   faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or
@@ -814,11 +814,12 @@ cube cookies for point lights, and no cookies on web. Each item:
   whether it closes over a volume (`Mesh::closed`, worked out from its own triangles when it is made:
   every edge met by one running the other way, corners welded by position), and one that does not is
   drawn by both faces (`SceneState::shadow_open_pipeline`) in the sun's cascades, the point light's
-  cube and the editor's viewport. The plane casts 184, and 431 under a point light (332 through the
+  cube and the editor's viewport. The plane casts 185, and 431 under a point light (332 through the
   local shadow array since 2026-11-11, above); its lit face
   shadows none of itself, by so much as 2 of 255, with the sun 17°, 52° or 72° off overhead — the
   receiver's normal offset and slope bias were enough once the plane had a depth to compare with.
-  Solids are drawn as before. Nothing had tested the point light's shadows at all, and the first
+  Solids were drawn as before; the sun's cascades draw them by their front faces since the same day
+  (A7, the soft-shadow entry below). Nothing had tested the point light's shadows at all, and the first
   figures written here (233, and 554 for the cube, now 762) were measured through a second fault:
   that pass drew without the index buffer, so an indexed mesh cast its deduplicated corners three at
   a time and a plane only its first triangle — fixed the same day
@@ -901,21 +902,42 @@ cube cookies for point lights, and no cookies on web. Each item:
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01:** `DirectionalLight::contact_shadow_length`
   (metres, 0 = off, the default). The deferred lighting pass marches 16 steps from each pixel toward
   the sun in screen space and compares each with the G-buffer surface there. Measured on a 3 cm
-  step under a 15° sun — a shadow shorter than the cascades' 4.2 cm depth bias, which they lose:
-  363 dark pixels without (the step's own unlit side), 697 with, and not one byte of open floor
-  changed. A march pointed away from the sun dives into the floor and self-shadows it everywhere
-  (28 416 of 40 960 open-floor bytes); the test pins that, and a length never uploaded. Sun only;
-  the forward pass has none.
-- ~~**No percentage-closer soft shadows.**~~ **Corrected and closed 2026-11-01.** This line
-  described the *forward* path's fixed 3×3 PCF. The deferred path did have PCSS — a blocker search
-  and a penumbra estimate — but with the light size a constant (`0.004`) and the filter clamped to
-  0.6–1.2 texels, so every edge came out about one texel wide: PCSS in name. Now
-  `DirectionalLight::angular_radius` (radians, 0 = that fixed edge, the default) drives a physical
-  penumbra `2·d·tan θ`, converted to shadow-map UV through the cascade matrix's row lengths, up to
-  128 texels, its 25 taps turned per texel against banding. Measured, a 3 m pillar's 4 m shadow:
-  18 / 91 / 196 penumbra pixels at 0 / 0.02 / 0.06 rad — sharp at the base, soft at the tip. The
+  step under a 15° sun, its shadow ~11 cm long: while the cascades drew a solid's back faces they
+  lost the first centimetres of it to their depth bias — 363 dark pixels, 697 with contact shadows.
+  They hold the step's top since 2026-11-11 and catch all of it (660, and 664 with). With their depth
+  bias raised threefold, as a scene fighting acne might set it, they lose it whole (0); contact
+  shadows find 332 pixels of it, and not one byte of open floor changes. A march pointed away from the
+  sun dives into the floor and self-shadows it everywhere (28 416 of 40 960 open-floor bytes); the
+  test pins that, and a length never uploaded. Sun only; the forward pass has none (it marches the
+  G-buffer). **Still open:** the march starts a centimetre off the surface and wants a 5 mm gap, so
+  nothing under about 2 cm casts a contact shadow — no coin, though the setting's documentation
+  promised one until 2026-11-11 — and near the camera the cascades now catch what is taller.
+- ~~**No percentage-closer soft shadows.**~~ **Corrected and closed 2026-11-01; on every lit path
+  since 2026-11-11.** This line described the *forward* path's fixed 3×3 PCF. The deferred path did
+  have PCSS — a blocker search and a penumbra estimate — but with the light size a constant (`0.004`)
+  and the filter clamped to 0.6–1.2 texels, so every edge came out about one texel wide: PCSS in
+  name. Now `DirectionalLight::angular_radius` (radians; 0, the default, is a sun with no size and a
+  3×3-texel edge) drives a physical penumbra `d·tan θ` each side, d the gap between the blockers and
+  the surface, converted to shadow-map UV through the cascade matrix's row lengths, up to 64 texels
+  each side, its 25 taps turned per texel against banding. Measured, a 3 m pillar's 4 m shadow:
+  18 / 103 / 236 penumbra pixels at 0 / 0.02 / 0.06 rad — sharp at the base, soft at the tip. The
   first version read the cascade's scale from `m[0][0]` alone, near zero under a tilted sun, and
-  softened nothing; the test pins that. The forward pass keeps its fixed PCF.
+  softened nothing; the test pins that. **2026-11-11:** one lookup for every lit path
+  (`sun_shadow_visibility`, `common.wgsl`). The forward shader — glass, every transparent surface,
+  the editor's viewport — and the baked-lit one filtered 3×3 whatever the sun's size; under a 0.05
+  rad sun a cube's penumbra is now 406 pixels deferred, 415 forward and 568 baked-lit (164 / 179 / 222
+  with no size), and 925 in the editor against 371. The forward shader also ended its shadows in a
+  line at the covered range's edge and ignored the normal-offset multiplier, and the baked-lit one
+  kept a flat 16 cm depth bias of its own. And the cascades draw a closed mesh by its front faces —
+  what the sun meets, which a penumbra is measured from — where they drew its back faces, which put
+  a solid's blockers at its far side: a 1.2 m cube and a 5 cm slab with the same top cast the same
+  soft edge under a 0.1 rad sun (569 and 544 penumbra pixels; by back faces 288 against 532), and the
+  pillar's penumbra above grew from 18 / 91 / 196. Each tap compares against the
+  receiver's own plane, as the local lights' do, and the biases keep a lit face off its own depth: no
+  floor shadows itself by so much as 2 levels of 255 with the sun 17°, 52° or 72° off overhead, sharp
+  or 0.05 rad wide — a slab on any of the three paths, a plane, a plane normal-mapped 0.9 or 1.2 rad
+  toward the sun on the two paths that read normal maps — nor does a cube. Without the receiver's
+  plane, a floor under a 0.05 rad sun 72° off shadows every pixel of itself.
 
 **A trap worth naming:** `PointLight::radius` is **range**, not source size. Growing it widens and
 dims the light rather than softening its shadow — measured scene brightness rising
@@ -1381,14 +1403,14 @@ author it. The middle column is what a full implementation offers.
 | Depth of field | 6 optical knobs | **Since 2026-11-07, all but the bokeh mode** — `PostProcess::with_lens(focus, f_stops, max_blur)` is a thin lens: the focal length comes from `dof_sensor_height` (Super 35 unless set) and the camera's field of view, and a 50 mm f/2 at 5 m gives a radius of 3.65 texels at 10 m on 1080 lines, worked by hand in the test. `dof_max_depth` limits what a sky counts as. The focus band stays beside it. Blur radius is in texels of the frame (it was fractions of a 1920×1080 one), 24 taps on the golden angle, and a sharp thing no longer glows on the blurred background behind it (11944 → 2315 in the frame's middle third). A blurred foreground spreads over what is in focus behind it, which stays sharp: each pixel looks for it in 12 depth taps, with no pass of its own, at that cost per pixel while depth of field is on | `depth_of_field` |
 | SSAO | 5 quality levels + temporal denoise | **3** — `strength`, and since 2026-11-02 the sampling radius and depth bias (`SsaoState::set_shape(queue, radius, bias)`, defaults `SSAO_DEFAULT_RADIUS` 0.5 m / `SSAO_DEFAULT_BIAS` 0.015, the shader's old literals — setting them explicitly changes no byte). Measured, a cube on a floor, darkening summed over a band of floor below it: 237 at 0.5 m, 2584 at 2 m (rows only the wide radius reaches: 0 → 842); the shader keeping its literal fails. **Closed 2026-11-07:** a flat floor no longer darkens at all (0 pixels moved of 16384): a sample must find its occluder above the surface's plane, off-screen samples leave the denominator, and the blur's loads past the frame are clamped, which were a band 15 levels dark along the top and left. `SsaoState::set_quality(SsaoQuality::{Low, Medium, High, Ultra})`, 8 to 64 samples: away from 64, 8 reads 4472, 16 reads 2630, 32 reads 2567. No temporal stage: the noise tile is two half-resolution pixels and the blur is five, so the noise is gone before the frame sees it | `ssao` |
 | Anti-aliasing | 5 techniques | **3** (FXAA, SMAA since 2026-11-08, TAA) | `anti_aliasing` |
-| Shadow bias | 2 knobs | **2 since 2026-11-02** — `ShadowSettings::with_bias(depth, normal)`, multipliers on each path's own calibration (depth 4.2 cm deferred/forward and 16 cm baked-lit, normal offset 2 cascade texels), so 1/1 is bit-identical to before. Carried in `SceneUniforms::shadow_bias`, appended (fixed part now 608 B). Measured, a cube 10 cm over a floor: 76 shadow pixels by default, 52 with ×50 depth, 12 with ×50 normal; either multiplier ignored fails. A zero bias shows no acne in that scene — the shadow pass culls front faces, the real acne cure — and with the cube 40 cm up even ×50 depth changed nothing (the slope floor makes it 21 cm) | `shadow_biases` |
+| Shadow bias | 2 knobs | **2 since 2026-11-02** — `ShadowSettings::with_bias(depth, normal)`, multipliers on one calibration since 2026-11-11 (depth 4.2 cm, slope-scaled, and a normal offset of 2 cascade texels, on every lit path; the baked-lit path had a flat 16 cm of its own, the forward one took no normal multiplier and the volumetric pass no depth one), and 1/1 was bit-identical to before. Carried in `SceneUniforms::shadow_bias`, appended (fixed part now 608 B). Measured, a cube 10 cm over a floor: 76 shadow pixels by default, 53 with ×50 depth, 34 with ×50 normal (52 and 12 while the cascades drew a solid's back faces); either multiplier ignored fails. Both at zero show next to no acne in that scene, though the cascades hold a solid's lit faces since 2026-11-11 — 79 pixels against 76: the shadow pass's own slope-scaled depth bias covers a high sun | `shadow_biases` |
 | Distance fog | colour / falloff / mode | **4 baked presets** + a blend factor, and since 2026-11-02 **`Renderer::fog`** (`Fog::new(color, density).with_height(falloff, base)`), which replaces the preset's fog outright — colour, density, height falloff, base height — so fog no longer has to come with a preset's sky and mood. Two vec4s appended to `SceneUniforms` (fixed part 560 → 592 B, light ceiling 1015 → 1014). Measured, a white wall 40 m off (centre RGB): preset 213 214 215, red fog at 0.1 → 232 44 45, density 0 → 225 225 226; the override ignored fails. **Found while building it:** the height integral divided by `falloff × dir_y` and only guarded `dir_y`, so a fog that does not thin with height gave NaN and vanished; the guard is on the product now (blue fog with falloff 0 → 99 100 231). `FogMode` since 2026-11-07: exponential, squared, linear (a wall at 40 m in black fog, thin 184 and squared 198, thick 76 and squared 11, a ramp 206, 165, 0 as it closes). The sky is not fogged, by the same choice as Bevy's: it has no distance | `fog` |
 | Sky / ambient light | sky colours, ambient colour and intensity, from code | **4 baked presets** + a blend, and since 2026-11-03 **`Renderer::sky`** (`Sky::gradient(zenith, horizon, ground)`, `Sky::uniform`, `with_intensity`), which replaces the preset's sky as what lights the scene — the ambient term around each normal and the reflection along each mirror ray — on **both** shading paths (the forward one had its own baked hemisphere, a sunset, which it now also gives up). Not the background: that is `Camera::clear_color`. Three vec4s appended to `SceneUniforms` (608 → 656 B, light ceiling 1014 → 1013). Measured, a matte and a metal cube with no light at all: preset grey (103 106 113 / 83 86 91), green sky green (31 230 38 / 6 224 7; forward 0 229 0 / 0 251 0), intensity 0 dark; either shader's branch removed fails. **An image since 2026-11-07:** `Renderer::set_environment_map`, an equirectangular HDR that lights the scene, is reflected and stands behind it, in the probes' cube array. A panorama red to +X and blue to −X: behind the scene left 0 0 236, right 234 0 0; a matte ball 129 24 185 and 184 24 132 on its two sides; a mirror ball 3 0 243 and 243 0 0. **On the browser and on a phone since 2026-11-08**, through the cube that path reads its sky from (`env_cube`): the probes' prefilter at the map's own resolution, copied in mip for mip, behind the scene from mip 0. Nişancı with a panorama orange above and green below lit its floor warm and stood green behind it, at 92 fps against 94 without. Probes themselves are still desktop only | `kosucu` |
 | Cascaded shadows | configurable | **Reach and split configurable since 2026-11-02** — `Renderer::shadow_settings` (`ShadowSettings::{distance, lambda}`, defaults the old 100 m and λ 0.75), read by both paths through the shared setup; the shaders fade over the last 15 % of whatever range results, since they read it from the splits. Tested through `collect_scene_setup` in both paths: 30 m ends the range at 30 m, λ 0 moves the first split out, and the defaults are bit-identical to the old constants; a setup that ignores the setting fails. **Still constants:** 4 cascades and 3072² texels | `shadow_biases` |
 | Level of detail | per-level distances + crossfade | **All of it** — `LodGroup` has had per-level distances on both draw loops, and the row said "one level, one rule" because it measured only the automatic LOD1; `LodGroup::with_crossfade` (2026-11-07) dissolves over a band, by a screen-space pattern two levels split between them, including out to nothing past the last. The automatic LOD1 (`distance > radius × 15`, `LOD_MIN_CORNERS`, generated from a mesh's own indices) stays as it was: it switches hard | `visibility_range` |
 | Wireframe | global flag + default colour + per-entity include/exclude/colour | **All of it since 2026-11-07** — `Wireframe`, `NoWireframe`, `WireframeColor` per entity (measured on two spheres: marked only (480, 0) green pixels left/right; global with one out (0, 516); two colours 478 green, 457 red), and the studio viewport honours them and `global`. Before: **2** — `WireframeConfig::global`, all or nothing, and since 2026-11-02 `WireframeConfig::color` (one colour for every line; the wireframe pipeline compiles `shader.wgsl` with `WIREFRAME`, which returns the colour packed into `SceneUniforms::wireframe_color`). Measured on a pale sphere: 0 strongly green pixels with the lit colour, 594 with green; the shader branch removed reads 0.  Before the colour: Measured consequence: the overlay is drawn in a fixed light colour, so on a light material it is nearly invisible (edge energy only ×1.20, 1.17 % of pixels). Also: drawn in the forward pass, skybox/backdrop excluded by design, and **inert on wasm** (`PolygonMode::Line` unsupported there) | `wireframe` |
 | Clearcoat | strength + layer roughness + 3 textures | **2 since 2026-11-07** — `clear_coat`, `clear_coat_roughness`, 32 steps each in one half float in the G-buffer. The "near-binary" reading was the tone curve: a highlight at roughness 0.08 saturates it. Measured dim, on a dark surface: 0.2 adds 72, 0.8 adds 217, 0.8 at roughness 0.6 adds 53, forward and deferred within 3. No textures: nothing in the material bind group holds them, and glTF's clearcoat extension is not in the `gltf` crate | `clearcoat` |
-| Shadow caster / receiver | per-object cast **and** receive toggles | **both since 2026-11-02**: casting as `ShadowCasting::{On, Off, Only}` — `Only` casts without being drawn, which a plain cast toggle cannot express (and is drawn by no pass since 2026-11-11: the forward pass and six of the editor's loops drew it, so a transparent, unlit or baked-lit `Only` object, and every one in a browser or on a phone, showed — `a_shadow_only_object_is_drawn_by_no_pass`) — and receiving as `MeshRenderer::receives_shadows` (`with_receives_shadows(false)`, an inspector checkbox), which skips the sun's cascades, contact shadows and every local light's shadow on that surface. It rides the instance's `emissive.w` into RT5's alpha for the deferred pass; the forward and baked-lit shaders read it directly. Measured, a cube over a floor: 171 shadow pixels on an opaque floor and 174 on a transparent one disappear when it refuses; the lighting pass ignoring RT5's alpha, the forward shader ignoring the flag, and the batcher never writing it each fail. Casting fractions measured earlier: 1.06 % / 2.07 % / 4.23 % | `shadow_caster_receiver` |
+| Shadow caster / receiver | per-object cast **and** receive toggles | **both since 2026-11-02**: casting as `ShadowCasting::{On, Off, Only}` — `Only` casts without being drawn, which a plain cast toggle cannot express (and is drawn by no pass since 2026-11-11: the forward pass and six of the editor's loops drew it, so a transparent, unlit or baked-lit `Only` object, and every one in a browser or on a phone, showed — `a_shadow_only_object_is_drawn_by_no_pass`) — and receiving as `MeshRenderer::receives_shadows` (`with_receives_shadows(false)`, an inspector checkbox), which skips the sun's cascades, contact shadows and every local light's shadow on that surface. It rides the instance's `emissive.w` into RT5's alpha for the deferred pass; the forward and baked-lit shaders read it directly. Measured, a cube over a floor: 169 shadow pixels on an opaque floor and 169 on a transparent one disappear when it refuses; the lighting pass ignoring RT5's alpha, the forward shader ignoring the flag, and the batcher never writing it each fail. Casting fractions measured earlier: 1.06 % / 2.07 % / 4.23 % | `shadow_caster_receiver` |
 | Baked lighting | lightmap texture + second UV set | **vertex colour** via `MaterialType::BakedLit` — resolution is the mesh's tessellation, not a texture's. Still receives the sun's cascades, so mixed lighting works. Measured: the blue-minus-red balance flips sign, `+1.35` under `Pbr` and `−4.74` under `BakedLit`, because `BakedLit` does not see point lights | `lightmaps` |
 | Irradiance volumes | component + GPU voxel sampling | **wired 2026-08-24** — `deferred_lighting.wgsl` imports `gi_sample` from `irradiance.wgsl` and the baked grid reaches the lighting pass; F2 has the correlation against the CPU path. **Authored since 2026-11-02:** `IrradianceVolume::new(min, max, resolution).with_ambient(..)`, a component (saved in scenes) that both paths keep baked from the scene's directional and point lights — rebaked and uploaded only when a fingerprint of the volume and the lights changes. Tested: no volume uploads nothing; a 4×3×4 volume uploads 48 probes and its red ambient moves the frame's mean red−blue −12.26 → 30.40; a second still frame keeps the fingerprint; moving a light changes it; dropping the sync call fails. The bake is direct light only (no occlusion, no bounce) and spot lights are not in it | `irradiance_volumes` |
 | Volumetric / god rays | scattering, steps, phase, distance | **All six, since 2026-08-23** — `VolumetricParams::{phase_g, steps, max_distance, sun_scatter, bulb_scatter, shadow_bias}`, one 32-byte uniform uploaded per frame, and the defaults are pixel-identical to the shader literals they replaced. Plus `enabled`. Measured working: 19.55 % of pixels, max 134 | `volumetric_fog` |

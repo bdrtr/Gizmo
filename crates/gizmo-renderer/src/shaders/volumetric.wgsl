@@ -139,7 +139,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 // bias that changes meaning when an unrelated constant moves is not something to
                 // leave in four places and fix in three.
                 let sz = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
-                let bias = params.shadow_bias * sz;
+                // `ShadowSettings::depth_bias` scales it, as it scales every lookup's (it was left out here).
+                let bias = params.shadow_bias * sz * scene.shadow_bias.x;
                 let shadow_val = textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv, ci, light_ndc.z - bias);
                 
                 if (shadow_val > 0.0) {

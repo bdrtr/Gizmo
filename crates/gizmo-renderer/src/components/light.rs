@@ -98,16 +98,17 @@ pub struct DirectionalLight {
     /// the edges of the shadows it casts: a penumbra grows by `tan(angular_radius)` for every
     /// metre between the caster and the surface the shadow falls on, so a contact stays sharp and a
     /// tall caster's distant shadow blurs. The real sun is about 0.0046; an overcast sky, a few
-    /// tenths. `0` (the default) keeps the engine's fixed near-crisp edge (PCSS limited to about
-    /// one shadow-map texel), which is what scenes were made with. Only the `Sun` role casts.
-    /// `#[serde(default)]`.
+    /// tenths. `0` (the default) is a sun with no size: an edge filtered over 3×3 shadow-map texels.
+    /// Every lit path reads it — deferred, forward (glass, the editor's viewport) and baked-lit. Only
+    /// the `Sun` role casts. `#[serde(default)]`.
     #[serde(default)]
     pub angular_radius: f32,
     /// **Contact shadows**, in metres: how far toward the sun each pixel looks, in screen space,
-    /// for something in the way. They catch what the shadow map cannot — a step, a coin, the line
-    /// where an object meets the floor — anything shorter than the shadow map's bias (about 4 cm)
-    /// or finer than its texels. `0` (the default) turns them off; 0.2–0.5 suits a human-scale
-    /// scene. Only the `Sun` role. `#[serde(default)]`.
+    /// for something in the way. They catch what the shadow map's depth bias or its texels lose — a
+    /// step's shadow under a bias raised against acne, detail in a far cascade — though nothing under
+    /// about 2 cm tall: the march starts a centimetre off the surface. `0` (the default) turns them
+    /// off; 0.2–0.5 suits a human-scale scene. Only the `Sun` role, and only on the deferred path
+    /// (the march reads the G-buffer). `#[serde(default)]`.
     #[serde(default)]
     pub contact_shadow_length: f32,
 }

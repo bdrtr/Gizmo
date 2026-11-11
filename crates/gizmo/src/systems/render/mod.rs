@@ -6153,8 +6153,8 @@ mod golden_render_tests {
     /// **A bigger sun casts softer shadows.** A 3 m pillar under a 45° sun throws a long shadow; the
     /// camera looks straight down on it. The far end of that shadow is ~4 m from the pillar, where a
     /// penumbra `2·d·tan θ` wide is widest. Counted as the pixels whose brightness lies between the
-    /// frame's shadow and lit levels: `angular_radius` 0 (the default) keeps the fixed near-crisp
-    /// edge; 0.02 and 0.06 rad must widen it, and in that order.
+    /// frame's shadow and lit levels: `angular_radius` 0 (the default), a sun with no size, keeps
+    /// a 3×3-texel edge; 0.02 and 0.06 rad must widen it, and in that order.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn a_bigger_sun_casts_softer_shadows() {
@@ -6220,9 +6220,11 @@ mod golden_render_tests {
         }
         pollster::block_on(async {
             let (sharp, mid, soft) = (penumbra_pixels(0.0).await, penumbra_pixels(0.02).await, penumbra_pixels(0.06).await);
-            // Measured: 18 / 91 / 196. With the shader ignoring the radius, or reading the cascade's
-            // scale from `m[0][0]` alone (near zero under a 45° sun), all three are 18. The 128-texel
-            // cap is a quality bound the test does not pin: at 16 the soft case reads 165.
+            // Measured: 18 / 103 / 236 (18 / 91 / 196 while the cascades held the pillar's back faces,
+            // and the gap a penumbra grows over was measured from its far side). With the shader
+            // ignoring the radius, or reading the cascade's scale from `m[0][0]` alone (near zero
+            // under a 45° sun), all three are 18. The 64-texel cap (`MAX_SUN_PENUMBRA_TEXELS`) is a
+            // quality bound the test does not pin.
             assert!(
                 soft > sharp * 2 && mid > sharp && soft > mid,
                 "penumbra pixels should grow with the sun: 0 → {sharp}, 0.02 → {mid}, 0.06 → {soft}",
@@ -6231,11 +6233,16 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
-    /// **Contact shadows catch what the shadow map cannot.** A 3 cm step on a floor under a sun
-    /// 15° above the horizon: the step's shadow, ~11 cm long, is shorter than the shadow map's
-    /// depth bias, so the cascades lose it. With `contact_shadow_length` the screen-space march
-    /// finds the step and darkens the strip behind it; with 0 (the default) the frame is exactly
-    /// what it was before contact shadows existed.
+    /// **Contact shadows catch what the shadow map's bias loses.** A 3 cm step on a floor under a sun
+    /// 15° above the horizon casts a shadow ~11 cm long. Since 2026-11-11 the cascades hold the step's
+    /// top — they draw a solid's front faces — and catch all of it themselves: 660 dark pixels, and 664
+    /// with contact shadows; when they drew its back faces they caught 363, and lost the first few
+    /// centimetres of the strip to their bias. With that bias raised threefold
+    /// (`ShadowSettings::with_bias`, as a scene fighting acne might set it), the gap between the
+    /// step's top and the floor along the light is inside it, and the cascades lose the shadow: 0
+    /// dark pixels. `contact_shadow_length` finds the step in screen space and darkens 332 of the
+    /// strip, and not one byte of open floor changes. With 0 (the default) the frame is exactly what
+    /// it was before contact shadows existed.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn contact_shadows_find_a_step_the_shadow_map_misses() {
@@ -6247,8 +6254,9 @@ mod golden_render_tests {
             eprintln!("skipping: no usable GPU adapter");
             return;
         }
-        async fn step_frame(contact: f32) -> Vec<u8> {
+        async fn step_frame(contact: f32, depth_bias: f32) -> Vec<u8> {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.shadow_settings = crate::renderer::ShadowSettings::default().with_bias(depth_bias, 1.0);
             renderer.taa = None;
             renderer.ssgi = None;
             renderer.ssao = None;
@@ -6298,10 +6306,11 @@ mod golden_render_tests {
             luma.iter().filter(|&&v| v < hi * 0.6).count()
         }
         pollster::block_on(async {
-            let (off, on) = (step_frame(0.0).await, step_frame(0.3).await);
-            // Measured: 363 dark pixels without (the step's own unlit side), 697 with (the strip
-            // behind it as well).
-            assert!(dark(&on) > dark(&off) + 50, "contact shadows darkened {} more pixels", dark(&on) as i64 - dark(&off) as i64);
+            let held = dark(&step_frame(0.0, 1.0).await);
+            assert!(held > 600, "the cascades hold the step's shadow at their own bias: {held} dark pixels");
+            let (off, on) = (step_frame(0.0, 3.0).await, step_frame(0.3, 3.0).await);
+            assert!(dark(&off) < 50, "a threefold depth bias loses the step from the cascades: {} dark pixels", dark(&off));
+            assert!(dark(&on) > dark(&off) + 250, "contact shadows darkened {} more pixels", dark(&on) as i64 - dark(&off) as i64);
             // And only there: open floor, the top and bottom 40 rows (the step crosses the middle),
             // must not change at all. A march that went away from the sun dives into the floor and
             // shadows the floor itself everywhere — it passes the count above and fails this.
@@ -8389,7 +8398,7 @@ mod golden_render_tests {
                 let refusing = frame(false, transparent).await;
                 found.push((0..128 * 128).filter(|&i| luma(&receiving, i) + 20 < luma(&refusing, i)).count());
             }
-            // Measured: 171 shadow pixels on the opaque floor, 174 on the transparent one. Caught:
+            // Measured: 169 shadow pixels on the opaque floor, 169 on the transparent one. Caught:
             // the lighting pass ignoring RT5's alpha (opaque 0), the forward shader ignoring the
             // instance flag (transparent 0), and the batcher never writing it (both 0).
             assert!(found[0] > 80, "the deferred path honours it: {} shadow pixels", found[0]);
@@ -8449,6 +8458,8 @@ mod golden_render_tests {
         Panel(f32, f32),
         /// The sun, its direction `aim` (no position).
         Sun,
+        /// The sun with an angular radius, radians.
+        SoftSun(f32),
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
@@ -8491,6 +8502,26 @@ mod golden_render_tests {
         /// The casters drawn as well as casting, and receiving shadows — their own included — with
         /// the floor receiving none.
         drawn_casters: bool,
+        /// Whether drawn casters receive shadows (`drawn_casters` only).
+        casters_receive: bool,
+        /// Every caster's scale on the 2 m unit cube.
+        caster_scale: Vec3,
+        /// Which lit path draws the floor.
+        floor_path: FloorPath,
+        /// Whether the floor receives shadows (it takes none with `drawn_casters` either way).
+        floor_receives: bool,
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// Which lit path draws `LocalScene`'s floor.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum FloorPath {
+        /// Opaque PBR: the G-buffer, lit by the deferred pass.
+        Deferred,
+        /// PBR at alpha 0.99: the forward shader.
+        Forward,
+        /// `MaterialType::BakedLit`: its own shader, the sun's shadow over its vertex colour.
+        BakedLit,
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
@@ -8503,6 +8534,10 @@ mod golden_render_tests {
                 open_floor: false,
                 floor_normal_tilt: None,
                 drawn_casters: false,
+                casters_receive: true,
+                caster_scale: Vec3::splat(0.6),
+                floor_path: FloorPath::Deferred,
+                floor_receives: true,
             }
         }
     }
@@ -8559,11 +8594,19 @@ mod golden_render_tests {
                 AssetManager::material().normal(&view).build(&mut assets, &renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout)
             }
         };
-        world.add_component(floor, Material::new(floor_textures).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
-        world.add_component(floor, MeshRenderer::new().with_receives_shadows(!scene.drawn_casters));
+        let floor_material = Material::new(floor_textures);
+        world.add_component(
+            floor,
+            match scene.floor_path {
+                FloorPath::Deferred => floor_material.with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0),
+                FloorPath::Forward => floor_material.with_pbr(Vec4::new(0.8, 0.8, 0.8, 0.99), 0.9, 0.0).with_transparent(true),
+                FloorPath::BakedLit => floor_material.with_baked_lit(Vec4::new(0.8, 0.8, 0.8, 1.0)),
+            },
+        );
+        world.add_component(floor, MeshRenderer::new().with_receives_shadows(scene.floor_receives && !scene.drawn_casters));
         for &p in &scene.casters {
             let e = world.spawn();
-            world.add_component(e, Transform::new(p).with_scale(Vec3::splat(0.6)));
+            world.add_component(e, Transform::new(p).with_scale(scene.caster_scale));
             world.add_component(e, GlobalTransform::default());
             world.add_component(e, AssetManager::create_cube(&renderer.device));
             world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.9, 0.0));
@@ -8572,7 +8615,7 @@ mod golden_render_tests {
             } else {
                 gizmo_renderer::components::ShadowCasting::Only
             };
-            world.add_component(e, MeshRenderer::new().with_shadows(shadows));
+            world.add_component(e, MeshRenderer::new().with_shadows(shadows).with_receives_shadows(scene.casters_receive));
         }
         for light in &scene.lights {
             let e = world.spawn();
@@ -8608,6 +8651,11 @@ mod golden_render_tests {
                 TestLight::Sun => world.add_component(
                     e,
                     gizmo_renderer::components::DirectionalLight::new(Vec3::ONE, intensity, gizmo_renderer::components::LightRole::Sun),
+                ),
+                TestLight::SoftSun(radius) => world.add_component(
+                    e,
+                    gizmo_renderer::components::DirectionalLight::new(Vec3::ONE, intensity, gizmo_renderer::components::LightRole::Sun)
+                        .with_angular_radius(radius),
                 ),
             }
         }
@@ -8887,6 +8935,192 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A solid in the sun does not shadow itself.** The cascades drew a closed mesh by its back
+    /// faces until 2026-11-11, so its lit faces were never in the map they are looked up in; they draw
+    /// it by its front faces now — what the sun meets first, which a soft shadow measures its penumbra
+    /// from — and the lookup's biases keep a lit face off its own depth. A drawn cube, the sun 17°, 52°
+    /// and 72° off overhead, sharp and with a 0.02 rad disc: its pixels darken by no more than 2
+    /// levels of 255 when it receives shadows against when it refuses them.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_solid_in_the_sun_does_not_shadow_itself() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+            for kind in [TestLight::Sun, TestLight::SoftSun(0.02)] {
+                for degrees in [17.0_f32, 52.0, 72.0] {
+                    let tilt = degrees.to_radians();
+                    let aim = Vec3::new(-tilt.sin(), -tilt.cos(), 0.3 * tilt.sin()).normalize();
+                    let scene = |receive| LocalScene {
+                        drawn_casters: true,
+                        casters_receive: receive,
+                        ..LocalScene::new(&[LightAt { kind, at: Vec3::ZERO, aim, intensity: 3.0, casts: true }], &[Vec3::new(0.0, 0.6, 0.0)])
+                    };
+                    let receiving = local_light_frame(&scene(true)).await;
+                    let refusing = local_light_frame(&scene(false)).await;
+                    let darker = (0..128 * 128).filter(|&i| luma(&receiving, i) + 2 < luma(&refusing, i)).count();
+                    assert_eq!(darker, 0, "{kind:?} {degrees}° off overhead darkens {darker} pixels of the cube it lights");
+                }
+            }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A soft sun measures a solid's penumbra from the side it meets.** A penumbra is as wide as the
+    /// gap between what blocks the light and what it falls on, and the cascades held a closed mesh's
+    /// back faces: a cube's shadow was measured from its bottom. Now a 1.2 m-tall cube and a 5 cm slab
+    /// with the same top, under a 0.1 rad sun from near overhead, cast the same soft edge — 569 and
+    /// 544 penumbra pixels; the top is what the sun meets — where by their back faces the tall one's
+    /// was 288 against the slab's 532.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_soft_sun_measures_a_solids_penumbra_from_the_side_it_meets() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let sun = LightAt { kind: TestLight::SoftSun(0.1), at: Vec3::ZERO, aim: Vec3::new(0.15, -1.0, 0.1), intensity: 3.0, casts: true };
+            // Straight down on the two shadows, which fall about (0.25, 0, 0.17): near enough that a
+            // penumbra a few centimetres wide is pixels wide.
+            let down = 0.002 - std::f32::consts::FRAC_PI_2;
+            let camera = Some((Vec3::new(0.25, 5.0, 0.17), -std::f32::consts::FRAC_PI_2, down));
+            let shadow = |centre_y: f32, scale: Vec3| async move {
+                let scene = LocalScene { caster_scale: scale, camera, ..LocalScene::new(&[sun], &[Vec3::new(0.0, centre_y, 0.0)]) };
+                let with = local_light_frame(&scene).await;
+                let without = local_light_frame(&LocalScene { casters: Vec::new(), ..scene }).await;
+                umbra_and_penumbra(&with, &without)
+            };
+            // Both reach 2 m up: the cube from 0.8 m, the slab from 1.95 m.
+            let tall = shadow(1.4, Vec3::splat(0.6)).await;
+            let slab = shadow(1.975, Vec3::new(0.6, 0.025, 0.6)).await;
+            assert!(tall.1 > 40 && slab.1 > 40, "both shadows have a penumbra: {tall:?}, {slab:?}");
+            assert!(
+                (tall.1 as f32 - slab.1 as f32).abs() <= 0.2 * slab.1 as f32,
+                "the tall cube's penumbra {tall:?} against the slab's {slab:?}"
+            );
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **The sun does not shadow the surface it lights.** A floor is a closed slab, and the cascades
+    /// draw a closed mesh by its front faces since 2026-11-11, so the slab's lit top is in the map its
+    /// own lookup reads — as an open floor's two faces always were. With nothing to cast, a floor
+    /// receiving the sun's shadows darkens no pixel by more than 2 levels of 255 against the same floor
+    /// refusing them: a slab on the deferred, the forward and the baked-lit path, and a plane, the sun
+    /// 17°, 52° and 72° off overhead, with no size and 0.05 rad wide; nor a plane whose normal map tilts
+    /// it 0.9 or 1.2 rad toward a sun 72° off, on the two paths that read one. Measured: not one level
+    /// anywhere, but one at the steeper tilt.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_sun_does_not_shadow_the_surface_it_lights() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+            let sun = |kind: TestLight, degrees: f32| {
+                let tilt = degrees.to_radians();
+                LightAt { kind, at: Vec3::ZERO, aim: Vec3::new(-tilt.sin(), -tilt.cos(), 0.0), intensity: 3.0, casts: true }
+            };
+            // The pixels a floor darkens by more than 2 when it receives the sun's shadows.
+            let darkened = |scene: LocalScene| async move {
+                let unshadowed = local_light_frame(&LocalScene { floor_receives: false, ..scene.clone() }).await;
+                let shadowed = local_light_frame(&scene).await;
+                (0..128 * 128).filter(|&i| luma(&shadowed, i) + 2 < luma(&unshadowed, i)).count()
+            };
+            for (path, open_floor) in [(FloorPath::Deferred, false), (FloorPath::Deferred, true), (FloorPath::Forward, false), (FloorPath::BakedLit, false)] {
+                for degrees in [17.0_f32, 52.0, 72.0] {
+                    for kind in [TestLight::Sun, TestLight::SoftSun(0.05)] {
+                        let n = darkened(LocalScene { floor_path: path, open_floor, ..LocalScene::new(&[sun(kind, degrees)], &[]) }).await;
+                        assert_eq!(n, 0, "{path:?} (open: {open_floor}) under {kind:?} {degrees}° off overhead shadows {n} of its own pixels");
+                    }
+                }
+            }
+            for path in [FloorPath::Deferred, FloorPath::Forward] {
+                for normal_tilt in [0.9_f32, 1.2] {
+                    for kind in [TestLight::Sun, TestLight::SoftSun(0.05)] {
+                        let scene = LocalScene {
+                            floor_path: path,
+                            open_floor: true,
+                            floor_normal_tilt: Some(normal_tilt),
+                            ..LocalScene::new(&[sun(kind, 72.0)], &[])
+                        };
+                        let n = darkened(scene).await;
+                        assert_eq!(n, 0, "{path:?} with its normal map tilting it {normal_tilt} rad, under {kind:?} 72° off, shadows {n} of its own pixels");
+                    }
+                }
+            }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **Every lit path softens the sun alike.** The forward shader filtered the sun's shadow 3×3
+    /// whatever the sun's size, and so did the baked-lit one, so glass, the editor's viewport and every
+    /// baked-lit surface took a sharp edge where the G-buffer took a soft one; since 2026-11-11 all
+    /// three take `sun_shadow_visibility`. A 1.2 m cube 1.4 m over a floor, seen from above: with the
+    /// sun 0.05 rad wide its shadow's penumbra is 406 pixels on the deferred path, 415 on the forward
+    /// and 568 on the baked-lit, against 164, 179 and 222 with no size, and 786, 779 and 1064 at 0.1
+    /// rad. (A baked-lit shadow takes 45 % of the light, so its luma runs differently across the edge,
+    /// and its counts with it.)
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn every_lit_path_softens_the_sun_alike() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let sun = |kind| LightAt { kind, at: Vec3::ZERO, aim: Vec3::new(0.3, -1.0, 0.2), intensity: 3.0, casts: true };
+            // The cube's shadow falls about (0.6, 0, 0.4); the camera looks straight down on it.
+            let down = 0.002 - std::f32::consts::FRAC_PI_2;
+            let penumbra = |path: FloorPath, kind: TestLight| async move {
+                let scene = LocalScene {
+                    floor_path: path,
+                    camera: Some((Vec3::new(0.6, 5.0, 0.4), -std::f32::consts::FRAC_PI_2, down)),
+                    ..LocalScene::new(&[sun(kind)], &[Vec3::new(0.0, 2.0, 0.0)])
+                };
+                let with = local_light_frame(&scene).await;
+                let without = local_light_frame(&LocalScene { casters: Vec::new(), ..scene }).await;
+                umbra_and_penumbra(&with, &without).1
+            };
+            let mut deferred = (0, 0);
+            for path in [FloorPath::Deferred, FloorPath::Forward, FloorPath::BakedLit] {
+                let sharp = penumbra(path, TestLight::Sun).await;
+                let soft = penumbra(path, TestLight::SoftSun(0.05)).await;
+                let softer = penumbra(path, TestLight::SoftSun(0.1)).await;
+                assert!(soft > sharp * 2 && softer * 2 > soft * 3, "{path:?}: penumbra {sharp} → {soft} → {softer} as the sun grows");
+                match path {
+                    FloorPath::Deferred => deferred = (soft, softer),
+                    FloorPath::Forward => assert!(
+                        soft.abs_diff(deferred.0) * 10 < deferred.0 && softer.abs_diff(deferred.1) * 10 < deferred.1,
+                        "the forward penumbra ({soft}, {softer}) against the deferred one ({}, {})",
+                        deferred.0,
+                        deferred.1
+                    ),
+                    FloorPath::BakedLit => {}
+                }
+            }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A local light's shadow falls where the light throws it.** Every layout above agreeing proves
     /// they agree, not that they are right: a lookup mirrored or turned the same way in all of them
     /// would agree too. So each is put 30 m from the cube, along the direction the sun shines from,
@@ -9160,12 +9394,13 @@ mod golden_render_tests {
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A mesh that does not close casts a shadow, and does not shadow itself.** The shadow pass drew
-    /// every mesh by its back faces, which is what keeps a solid's lit front off its own depth — and a
-    /// plane, a card or a sheet of cloth has no back to cast from: a plane over a floor, facing the
-    /// sun, cast 0 shadow pixels against a cube's 236, single- or double-sided. A mesh that does not
-    /// close (`Mesh::closed`) is drawn by both faces now, and casts 184. Its lit face shadows none of
-    /// itself, by so much as 2 of 255, with the sun 17°, 52° or 72° off overhead: the receiver's normal
-    /// offset and slope bias keep it off its own depth. The cube is drawn as before, to the pixel. A
+    /// every mesh by its back faces, which kept a solid's lit front off its own depth — and a plane, a
+    /// card or a sheet of cloth has no back to cast from: a plane over a floor, facing the sun, cast 0
+    /// shadow pixels against a cube's 236, single- or double-sided. A mesh that does not close
+    /// (`Mesh::closed`) is drawn by both faces now, and casts 185. Its lit face shadows none of itself,
+    /// by so much as 2 of 255, with the sun 17°, 52° or 72° off overhead: the receiver's normal offset
+    /// and slope bias keep it off its own depth. (The sun's cascades draw a solid by its front faces
+    /// since the same day, and the cube casts 234: `a_solid_in_the_sun_does_not_shadow_itself`.) A
     /// point light's layers are drawn the same way: a point light over the floor, the cube casts 577
     /// pixels and the plane 332 (`every_local_light_casts_when_it_asks` holds the lookup to the sun's).
     /// Through the cube map the one point light had until 2026-11-11 they read 762 and 431, and 554
@@ -9204,7 +9439,7 @@ mod golden_render_tests {
     /// with `draw(0..vertex_count)` and no index buffer, so an indexed mesh — every engine primitive,
     /// every import — cast its deduplicated corners taken three at a time: a plane cast its first
     /// triangle and none of its second. The same two triangles indexed and flat cast the same shadow
-    /// now, from the sun as before (184) and from a point light (332; through the cube map the point
+    /// now, from the sun as before (185) and from a point light (332; through the cube map the point
     /// light had until 2026-11-11, 431, where the indexed plane cast 233).
     #[test]
     #[ignore = "needs a GPU adapter"]
@@ -9231,9 +9466,9 @@ mod golden_render_tests {
     /// cut-out cast its whole quad: a fence's gaps, a leaf card's corners, a dissolving surface's holes
     /// all stood in its shadow. It has one now for a draw that cuts — the engine's cut-outs and LOD
     /// crossfades, and every game surface, since only its own code knows — and it asks the material
-    /// where it is, as the G-buffer's prepass does. Measured: the plane casts 184; a cut-out over the
-    /// threshold 184, one under it everywhere 0 (184 before); a surface cutting away the half at x < 0
-    /// casts 92, and one cutting everything 0.
+    /// where it is, as the G-buffer's prepass does. Measured: the plane casts 185; a cut-out over the
+    /// threshold 185, one under it everywhere 0 (the whole plane's shadow before); a surface cutting
+    /// away the half at x < 0 casts 92, and one cutting everything 0.
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn a_cut_out_casts_the_shadow_of_what_it_keeps() {
@@ -10014,10 +10249,11 @@ mod golden_render_tests {
     /// `ShadowSettings::with_bias` scales every lookup's bias. A cube 10 cm over a floor under a
     /// high sun; the shadow is the pixels darker (by 20+) when the floor receives than when it
     /// refuses. A large depth bias jumps the comparison past the near caster and the shadow thins; a
-    /// large normal offset pushes the lookup off the floor and thins it further. (A bias of zero
-    /// shows no acne here: the shadow pass culls front faces, which is the engine's real acne
-    /// cure, and a sun this high leaves the slope term near its floor. With the cube 40 cm up even
-    /// ×50 changed nothing — 50 × 4.2 mm is 21 cm — which is why it sits 10 cm up.)
+    /// large normal offset pushes the lookup off the floor and thins it further. (Both at zero show
+    /// next to no acne here, though the cascades hold a solid's lit faces since 2026-11-11: 79 shadow
+    /// pixels against 76 — the shadow pass's own small slope-scaled depth bias keeps a face off its
+    /// own depth under a sun this high, which leaves the slope term near its floor. The cube sits
+    /// 10 cm up, inside what a ×50 depth bias can jump.)
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn shadow_bias_multipliers_thin_a_near_shadow() {
@@ -10075,8 +10311,10 @@ mod golden_render_tests {
                 let refusing = frame(false, bias).await;
                 found.push((0..128 * 128).filter(|&i| luma(&receiving, i) + 20 < luma(&refusing, i)).count());
             }
-            // Measured: 76 shadow pixels by default, 52 with ×50 depth bias, 12 with ×50 normal
-            // offset. Either multiplier ignored by the deferred pass reads the default again.
+            // Measured: 76 shadow pixels by default, 53 with ×50 depth bias, 34 with ×50 normal
+            // offset (12 while the cascades held the cube's back faces: the lookup lifted off the
+            // floor then cleared its bottom; it has its top to clear now). Either multiplier ignored
+            // by the deferred pass reads the default again.
             let (default, depth, normal) = (found[0], found[1], found[2]);
             assert!(default > 40, "the cube casts a shadow at all: {default}");
             assert!(depth + 12 < default, "a large depth bias thins the shadow: {default} → {depth}");

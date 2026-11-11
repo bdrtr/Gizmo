@@ -3,10 +3,11 @@
 //
 // SceneUniforms, LightData, compute_direct_lighting and inverse_mat4 are shared from
 // common.wgsl; the anisotropic/clear-coat/env-BRDF lobes from pbr_ext.wgsl. Both are composed
-// in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
-// the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
-// shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog, SHADOW_BIAS_METRES, SHADOW_BIAS_METRES_MIN, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes}
+// in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below: the
+// fullscreen pass, the procedural environment/IBL and contact shadows. The shadow lookups — the
+// sun's and the local lights' — are common.wgsl's, handed the textures, so the forward shader takes
+// the same ones.
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -60,18 +61,6 @@ fn select_cascade(view_depth: f32) -> u32 {
     return 3u;
 }
 
-// Mirror of `csm::SHADOW_FADE_FRACTION` / `csm::shadow_distance_fade`. Past the last cascade
-// there is no shadow data, so the term snaps to "fully lit"; without a fade that snap is a
-// hard line across the world at `cascade_splits.w`. See csm.rs for the reasoning and the
-// cost of the alternative. `shader_shadow_fade_matches_the_rust_mirror` pins the constant.
-const SHADOW_FADE_FRACTION: f32 = 0.15;
-
-fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
-    let far = max(shadow_far, 1e-4);
-    let band = max(far * SHADOW_FADE_FRACTION, 1e-4);
-    return 1.0 - smoothstep(far - band, far, view_depth);
-}
-
 // What lights and is reflected by a surface: `scene_environment` along `dir`, as in `shader.wgsl`.
 fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
     return scene_environment(
@@ -82,31 +71,7 @@ fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
 
 // The anisotropic GGX, clear-coat and env-BRDF lobes now live in gizmo::pbr_ext (imported at
 // the top). inverse_mat4 / compute_direct_lighting come from gizmo::common. Only the
-// binding-dependent PCSS shadow filter + procedural environment remain deferred-local.
-
-fn search_blockers(
-    shadow_uv: vec2<f32>, receiver_depth: f32, ci: u32, texel: f32, search_step: f32
-) -> vec2<f32> {
-    var num_blockers = 0.0;
-    var sum_depth = 0.0;
-
-    let search_radius = 2; 
-    let step = search_step;
-
-    for (var x = -search_radius; x <= search_radius; x++) {
-        for (var y = -search_radius; y <= search_radius; y++) {
-            let offset = vec2<f32>(f32(x), f32(y)) * step;
-            let sample_depth = textureSampleLevel(t_shadow, s_gbuf, shadow_uv + offset, ci, 0i);
-            
-            if (sample_depth < receiver_depth) {
-                num_blockers += 1.0;
-                sum_depth += sample_depth;
-            }
-        }
-    }
-
-    return vec2<f32>(num_blockers, sum_depth);
-}
+// binding-dependent procedural environment and contact shadows remain deferred-local.
 
 // **Contact shadows**: a short screen-space march from the surface toward the sun, `length` metres
 // (`cluster_depth.z`; 0 = off) in 16 steps. Each step is projected into the frame and compared with
@@ -146,89 +111,6 @@ fn contact_shadow(world_pos: vec3<f32>, n: vec3<f32>, l: vec3<f32>) -> f32 {
         }
     }
     return 1.0;
-}
-
-fn filter_pcss(
-    shadow_uv: vec2<f32>, receiver_depth: f32, ci: u32, bias: f32, texel: f32
-) -> f32 {
-    // `camera_forward.w` = tan(the sun's angular radius); 0 = the fixed near-crisp edge below.
-    let tan_sun = scene.camera_forward.w;
-    // The cascade is an orthographic projection of a ROTATED view, so its scales are row lengths,
-    // not single entries (the normal offset at the call site reads them the same way): row 0's
-    // length is NDC-x per metre, row 2's NDC-z per metre. A depth difference over row 2 is metres,
-    // and metres times row 0 / 2 is shadow-map UV. (`m[0][0]` alone is near zero under a 45° sun —
-    // the first version read it and every penumbra came out a fraction of a texel.)
-    let light_vp = scene.light_view_proj[ci];
-    let metres_per_depth = 1.0 / max(length(vec3<f32>(light_vp[0][2], light_vp[1][2], light_vp[2][2])), 1e-8);
-    let uv_per_metre = length(vec3<f32>(light_vp[0][0], light_vp[1][0], light_vp[2][0])) * 0.5;
-    // Where blockers can be: the penumbra a blocker halfway to the light would cast. Wider for a
-    // bigger sun, never narrower than the fixed search.
-    let search_step = select(
-        texel * 1.5,
-        clamp(receiver_depth * metres_per_depth * tan_sun * uv_per_metre * 0.25, texel * 1.5, texel * 32.0),
-        tan_sun > 0.0,
-    );
-    let blockers = search_blockers(shadow_uv, receiver_depth, ci, texel, search_step);
-    let num_blockers = blockers.x;
-    
-    if (num_blockers < 0.5) {
-        return 1.0;
-    }
-
-    let avg_blocker_depth = blockers.y / num_blockers;
-
-    if (tan_sun > 0.0) {
-        // **Physical penumbra:** a disc of angular radius θ casts an edge `2·d·tan θ` wide, d being
-        // the distance from blocker to receiver — at the 3072² map's resolution that is tens to
-        // hundreds of texels (0.06 rad, 4 m: ~150), so the cap is 128. Twenty-five taps that far
-        // apart would band, so the grid is turned by a per-texel angle: banding becomes fine noise,
-        // which TAA then averages away.
-        let width_uv = 2.0 * (receiver_depth - avg_blocker_depth) * metres_per_depth * tan_sun * uv_per_metre;
-        let radius = clamp(width_uv * 0.5, texel * 0.6, texel * 128.0);
-        let angle = fract(sin(dot(floor(shadow_uv / texel), vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.2831853;
-        let rot = mat2x2<f32>(cos(angle), sin(angle), -sin(angle), cos(angle));
-        var soft_sum = 0.0;
-        let soft_step = radius / 2.0;
-        for (var x = -2; x <= 2; x++) {
-            for (var y = -2; y <= 2; y++) {
-                let offset = rot * (vec2<f32>(f32(x), f32(y)) * soft_step);
-                soft_sum += textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv + offset, ci, receiver_depth - bias);
-            }
-        }
-        return soft_sum / 25.0;
-    }
-
-    // (receiver - blocker) / blocker * light_size
-    // The sun is nearly a point source at infinity → small angular size → crisp
-    // shadows that only soften with distance from the caster. 0.015 modelled a
-    // large area light (a soft, unrealistic blob); 0.004 keeps contact-hardening
-    // but a sun-like edge.
-    let light_size = 0.004;
-    let penumbra = (receiver_depth - avg_blocker_depth) / max(avg_blocker_depth, 0.0001) * light_size;
-
-    // Crisp sun shadow: keep the PCF radius near one texel — just enough to
-    // anti-alias the shadow-map edge (no blocky stair-stepping), not so much that
-    // it turns soft/mushy. The higher SHADOW_MAP_RES (3072) makes one texel small
-    // on screen, so a ~1-texel filter reads as a sharp, straight edge.
-    let filter_radius = clamp(penumbra, texel * 0.6, texel * 1.2);
-
-    var shadow_sum = 0.0;
-    let grid_size = 2;
-    let step = filter_radius / 2.0;
-
-    for (var x = -grid_size; x <= grid_size; x++) {
-        for (var y = -grid_size; y <= grid_size; y++) {
-            let offset = vec2<f32>(f32(x), f32(y)) * step;
-            // `textureSampleCompareLevel`, not `textureSampleCompare`: the latter takes implicit
-            // derivatives, and this loop sits inside the non-uniform `shadow_uv` bounds branch. On
-            // D3D12 that is a "gradient instruction used in a loop with varying iteration" and FXC
-            // fails the whole pipeline — the Deferred Lighting pipeline did not compile on Windows
-            // at all, so nothing rendered. A shadow map has no mips, so level 0 is what was meant.
-            shadow_sum += textureSampleCompareLevel(t_shadow, s_shadow, shadow_uv + offset, ci, receiver_depth - bias);
-        }
-    }
-
-    return shadow_sum / 25.0;
 }
 
 fn compute_height_fog(world_pos: vec3<f32>, camera_pos: vec3<f32>) -> vec4<f32> {
@@ -332,50 +214,27 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         specular_ibl += coat_env_specular(specular_env_coat, NdV, coat_roughness) * clear_coat;
     }
 
-    // --- CSM Shadow ---
+    // How the surface runs across neighbouring pixels — its geometry's plane, which the soft shadows
+    // filter along (`receiver_axes`).
+    let surface_axes = receiver_axes(pos_dx, pos_dy, N);
+
+    // --- The sun's shadow: `sun_shadow_visibility` in `common.wgsl`, as the forward shader takes it.
     var shadow_visibility = 1.0;
     let view_depth = dot(world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
     // cascade_splits.w = far edge of the last cascade = the whole covered range.
     let shadow_fade = shadow_distance_fade(view_depth, scene.cascade_splits.w);
     if (scene.sun_direction.w > 0.5 && shadow_fade > 0.0) {
-        let ci         = select_cascade(view_depth);
-
-        // Normal-offset shadows: cascade'in DÜNYA texel boyutuna ORANTILI offset ile
-        // örnek noktasını yüzeyden ayır. Sabit N*0.0018 yalnızca en yakın cascade'e
-        // uyuyordu; uzak cascade'lerde (texel çok daha büyük) offset texel'in ~1/4'ü
-        // kalıp yüzeyi temizleyemiyor → diagonal self-shadow acne. Ortho X ölçeği
-        // sx = |M'nin lineer satır-0'ı| (V ortonormal), world_texel = 2·uv_texel/sx;
-        // ~2 texel offset her cascade'de acne'yi keser, peter-pan minimum.
-        // Asıl acne çözümü gölge-pass'te FRONT-FACE CULLING (arka yüzler haritada) — aydınlık
-        // ön yüz kendi derinliğiyle kıyaslanmaz. Burada yalnız silüet/temas için ufak, cascade
-        // texel'ine orantılı normal-offset kalır (grazing 1/NoL patch'i artık gereksiz).
-        let m = scene.light_view_proj[ci];
-        let sx = length(vec3<f32>(m[0][0], m[1][0], m[2][0]));
-        let world_texel = 2.0 * scene.cascade_params.y / max(sx, 1e-6);
-        let offset_pos = world_pos + N * world_texel * 2.0 * scene.shadow_bias.y;
-        let light_clip = m * vec4<f32>(offset_pos, 1.0);
-
-        let light_ndc  = light_clip.xyz / light_clip.w;
-        let shadow_uv  = vec2<f32>(light_ndc.x * 0.5 + 0.5, light_ndc.y * -0.5 + 0.5);
-
-        if (shadow_uv.x >= 0.0 && shadow_uv.x <= 1.0 &&
-            shadow_uv.y >= 0.0 && shadow_uv.y <= 1.0 && light_ndc.z <= 1.0) {
-            let slope  = 1.0 - max(dot(N, normalize(-scene.sun_direction.xyz)), 0.0);
-            // Normal-offset (yukarıdaki world_texel·2) örneği yüzeyden ittiği için depth
-            // bias küçük kalır. Eski düz-zemin tabanı `if (N.y>0.99){bias=max(bias,0.005)}`
-            // 50x aşırı düzeltmeydi ve gölgeyi kaynağın tabanından peter-pan'ledi.
-            // **The bias is metres, converted here — not an NDC constant.** An NDC bias means a different
-            // world distance for every cascade and changes the moment the projection's depth range
-            // does, which made it impossible to widen that range without peter-panning every
-            // shadow. The third row of the cascade matrix is NDC-z per world metre, exactly as the
-            // first row is used for the normal offset above.
-            let sz     = length(vec3<f32>(m[0][2], m[1][2], m[2][2]));
-            let bias   = max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * sz * scene.shadow_bias.x;
-            let texel  = scene.cascade_params.y;
-            // Walk the sampled term back to "lit" over the last stretch of the covered range,
-            // so the end of the shadow maps is a gradient rather than a line.
-            shadow_visibility = mix(1.0, filter_pcss(shadow_uv, light_ndc.z, ci, bias, texel), shadow_fade);
-        }
+        let ci = select_cascade(view_depth);
+        // Walked back to "lit" over the last stretch of the covered range, so the end of the shadow
+        // maps is a gradient rather than a line.
+        shadow_visibility = mix(
+            1.0,
+            sun_shadow_visibility(
+                t_shadow, s_shadow, scene.light_view_proj[ci], i32(ci), scene.cascade_params.y, world_pos, N,
+                surface_axes, normalize(-scene.sun_direction.xyz), scene.shadow_bias.xy, scene.camera_forward.w,
+            ),
+            shadow_fade,
+        );
     }
     if (scene.sun_direction.w > 0.5 && shadow_visibility > 0.0) {
         shadow_visibility = min(shadow_visibility, contact_shadow(world_pos, N, normalize(-scene.sun_direction.xyz)));
@@ -421,7 +280,6 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Only the lights assigned to THIS fragment's cluster, instead of every light in the frame.
     // `i` still holds the index into `scene.lights`, so everything below — including the
     // point-shadow caster comparison — reads exactly as it did when this looped over all of them.
-    let surface_axes = receiver_axes(pos_dx, pos_dy, N);
     let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, world_pos);
     let cluster_range = cluster_table[cluster];
     for (var ci = 0u; ci < cluster_range.y; ci++) {

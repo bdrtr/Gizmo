@@ -207,6 +207,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The sun's cascades draw a solid by its front faces** — what the sun meets — where they drew its back faces, so a
+  soft shadow measures its penumbra from the side the light meets: a 1.2 m cube and a 5 cm slab with the same top cast
+  the same soft edge (by back faces the cube's was half as wide), a 3 m pillar's penumbra reads 18 / 103 / 236 pixels at
+  0 / 0.02 / 0.06 rad (18 / 91 / 196), and the cascades hold a 3 cm step's whole shadow (660 dark pixels against 363).
+  The lookup's biases and the receiver's plane keep a lit face off its own depth: with the sun 17°–72° off overhead,
+  sharp or soft, no floor shadows itself by 2 levels of 255 — a slab on every lit path, a plane, a normal-mapped plane —
+  and no cube does.
+  `SceneState::shadow_pipeline_for(front_faces, cuts)` and `SurfaceMaterial::shadow_pipeline(front_faces)` take the
+  closed-mesh choice by its new name. A local light's layers still draw every caster by both faces.
 - **A frame with no sun draws no cascades.** Every lookup of the sun's cascades asks for the sun first, and a sunless
   frame drew all four anyway, every caster in each, and kept objects off screen for them. `SceneSetup::draws_cascades`
   and `SceneSetup::shadow_view_projs` decide it for both paths, and `SceneSetupInputs::shadow_maps` (was
@@ -224,6 +233,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A soft sun cast a sharp shadow on glass, in the editor and on every baked-lit surface.** The forward and baked-lit
+  shaders filtered the sun's shadow 3×3 whatever `DirectionalLight::angular_radius` said. Every lit path takes one lookup
+  now (`sun_shadow_visibility`, in `common.wgsl`): a cube's penumbra under a 0.05 rad sun is 406 pixels deferred, 415
+  forward and 568 baked-lit (164 / 179 / 222 with no size), and 925 in the editor's viewport against 371. With it, the
+  forward shader's shadows fade out over the end of the covered range (they ended in a line), and take
+  `ShadowSettings::normal_offset`; the baked-lit one gives up its flat 16 cm depth bias for the shared slope-scaled one;
+  the volumetric pass takes `ShadowSettings::depth_bias`; and the shadow fade is one function, where the deferred and
+  baked-lit shaders each had a copy.
 - **Two views in one encoder drew the first with the second's instances.** `SceneView` gave a view its own uniforms,
   clusters and shadow matrices, and left the instance buffer shared — and what a camera draws is what it sees. The guard
   test passed while its two cameras laid their instances out alike. Each view has its own instance buffer now
@@ -261,7 +278,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   itself and leaves a plane, a card or a sheet of cloth facing the light with nothing to cast: 0 shadow pixels against a
   cube's 236, single- or double-sided, from the sun and from a point light. `Mesh::closed` says whether a mesh closes over
   a volume (from its own triangles), and one that does not is drawn into the shadow maps by both faces
-  (`SceneState::shadow_open_pipeline`, `shadow_pipeline_for`), in the game and in the editor. The plane casts 184, and does
+  (`SceneState::shadow_open_pipeline`, `shadow_pipeline_for`), in the game and in the editor. The plane casts 185, and does
   not shadow its own lit face.
 - **The capsule mesh did not close.** Its equator ring was placed at 0 for both hemispheres, so each hemisphere's last band
   slanted into the middle of the tube and the tube's rims met nothing; an odd latitude count left no equator ring. Each

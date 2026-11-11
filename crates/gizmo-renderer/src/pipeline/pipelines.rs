@@ -714,7 +714,7 @@ pub(super) fn build_core_pipelines(
 /// The shadow pass's pipelines, by whether the mesh closes and whether the draw cuts: see
 /// [`SceneState::shadow_pipeline_for`](super::SceneState::shadow_pipeline_for).
 pub(super) struct ShadowPipelines {
-    /// No fragment stage: single-sided by its back faces for a closed mesh, then both faces for an
+    /// No fragment stage: single-sided by its front faces for a closed mesh, then both faces for an
     /// open one.
     pub(super) plain: [wgpu::RenderPipeline; 2],
     /// `shadow.wgsl`'s `CUT_OUT`, likewise: a cut-out or a LOD crossfade, cut where the picture is.
@@ -723,13 +723,19 @@ pub(super) struct ShadowPipelines {
 
 /// Builds [`ShadowPipelines`].
 ///
-/// FRONT-FACE CULLING for a closed mesh: only its BACK faces are written into the shadow map. The lit
-/// front face's depth is never stored, so it cannot shadow itself, and self-shadow acne — the grainy
-/// vertical bands on faces the light grazes — is gone entirely. A normal offset did nothing at grazing
-/// angles (offset·L → 0); for a solid caster this is the canonical answer. An open mesh has no back
-/// faces to cast with: drawn this way, a plane facing the sun cast nothing (0 shadow pixels against a
-/// cube's 236, measured 2026-11-11), so it is drawn by both faces, and the receiver's normal offset and
-/// slope bias keep its lit face off its own depth.
+/// A closed mesh is drawn by its FRONT faces — what the light meets first — and an open one by both.
+/// A soft shadow measures its penumbra from the depth of what blocks the light (`sun_shadow_visibility`
+/// and `local_shadow_visibility` in `common.wgsl`), and until 2026-11-11 the closed meshes were drawn by
+/// their BACK faces, which put that depth at a solid's far side: a cube's shadow came out a third as
+/// soft as its light threw. That culling was the acne cure — the lit face's depth never stored, it could
+/// not shadow itself — and the lookups cure it now as they do for an open mesh, which always had its lit
+/// face in the map: a normal offset of two texels, which at a grazing angle lifts the lookup a distance
+/// `offset / cos θ` off the surface along the ray, more than its filter's taps climb it (`1.5 texels ×
+/// tan θ`); a slope-scaled depth bias in metres; and across a soft filter's width, each tap compared
+/// against the receiver's own plane. An open mesh has no back faces to cast with: drawn by them alone, a
+/// plane facing the sun cast nothing (0 shadow pixels against a cube's 236, measured 2026-11-11). The
+/// local lights' layers draw every mesh by both faces: a light can be inside a solid, which its front
+/// faces alone would let it shine out of.
 pub(super) fn build_shadow_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> ShadowPipelines {
     use naga_oil::compose::ShaderDefValue::Bool;
     let source = include_str!("../shaders/shadow.wgsl");
@@ -750,15 +756,15 @@ pub(super) fn build_shadow_pipelines(device: &wgpu::Device, layouts: &LayoutRefs
         super::shaders::load_shader_composed_web_with(device, source, "Shadow Cut-Out Shader", &[("CUT_OUT", Bool(true))]),
     );
     let groups = [layouts.shadow_pass, layouts.texture, layouts.skeleton, layouts.instance];
-    let back = Some(wgpu::Face::Front);
+    let front = Some(wgpu::Face::Back);
     ShadowPipelines {
         plain: [
-            shadow_pipeline(device, groups, &plain, back, false, "Shadow Pipeline"),
-            shadow_pipeline(device, groups, &plain, None, false, "Shadow Pipeline (open meshes)"),
+            shadow_pipeline(device, groups, &plain, front, false, "Shadow Pipeline"),
+            shadow_pipeline(device, groups, &plain, None, false, "Shadow Pipeline (both faces)"),
         ],
         cut_out: [
-            shadow_pipeline(device, groups, &cut, back, true, "Shadow Pipeline (cut-outs)"),
-            shadow_pipeline(device, groups, &cut, None, true, "Shadow Pipeline (open cut-outs)"),
+            shadow_pipeline(device, groups, &cut, front, true, "Shadow Pipeline (cut-outs)"),
+            shadow_pipeline(device, groups, &cut, None, true, "Shadow Pipeline (cut-outs, both faces)"),
         ],
     }
 }
@@ -812,8 +818,8 @@ pub(crate) fn shadow_pipeline(
             depth_write_enabled: Some(true),
             depth_compare: Some(wgpu::CompareFunction::LessEqual),
             stencil: wgpu::StencilState::default(),
-            // Front-face culling arka yüzleri sakladığından bias çok az gerekir; peter-panning
-            // (kutu ile gölgesi arası gri boşluk) olmasın diye düşük tutuldu.
+            // Small: the lookups carry the biases (see `build_shadow_pipelines`), and a large one here
+            // would peter-pan — a grey gap between a box and its shadow.
             bias: wgpu::DepthBiasState {
                 constant: 1,
                 slope_scale: 1.0,

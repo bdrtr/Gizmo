@@ -122,7 +122,7 @@ fn local_shadow_layer(entry: u32, from_light: vec3<f32>) -> i32 {
 // cube face, 50 cm at 10 m.
 const MAX_PENUMBRA_TEXELS: f32 = 48.0;
 
-// Two directions along the surface a shadow falls on, for `local_shadow_grade`: the pixel's own
+// Two directions along the surface a shadow falls on, for `shadow_grade`: the pixel's own
 // neighbours (`dx`, `dy`: the screen-space derivatives of its world position), which lie on its
 // geometry — where they agree with its normal `n` to within 75°; at an edge, where a neighbour is
 // another surface, the plane square to `n`. Not `n`'s plane always: a normal map tilts `n` off the
@@ -139,24 +139,21 @@ fn receiver_axes(dx: vec3<f32>, dy: vec3<f32>, n: vec3<f32>) -> mat2x3<f32> {
     return mat2x3<f32>(t1, cross(n, t1));
 }
 
-// How a surface's depth runs across a local shadow layer: d(ndc z)/d(uv) of the plane through `at`
-// along `axes` (`receiver_axes`), from two points `step` metres along it, against `here` = (uv, ndc z)
-// at `at`. Zero where the plane is edge-on to the light (nothing of it is lit there) and capped where
-// it is near to edge-on, so a tap is never moved further than the plane leaning 80° away from the
-// light would.
-fn local_shadow_grade(layer: LocalShadowLayer, at: vec3<f32>, axes: mat2x3<f32>, step: f32, here: vec3<f32>) -> vec2<f32> {
-    let a = layer_point(layer.view_proj * vec4<f32>(at + axes[0] * step, 1.0)) - here;
-    let b = layer_point(layer.view_proj * vec4<f32>(at + axes[1] * step, 1.0)) - here;
+// How a surface's depth runs across a shadow map: d(ndc z)/d(uv) of the plane through `at` along
+// `axes` (`receiver_axes`), from two points `step` metres along it projected through `view_proj`,
+// against `here` = (uv, ndc z) at `at`; zero where the plane is edge-on to the light (nothing of it is
+// lit there). Not capped: across a plane the extrapolation is exact at any angle. A cap at 80° stood
+// here, written in terms of the gradient itself so that it never capped anything; made to cap, it
+// shadowed a flat floor wherever a light grazed it past 80° — 76 pixels under an 80 cm sphere 72° off
+// the floor's normal.
+fn shadow_grade(view_proj: mat4x4<f32>, at: vec3<f32>, axes: mat2x3<f32>, step: f32, here: vec3<f32>) -> vec2<f32> {
+    let a = layer_point(view_proj * vec4<f32>(at + axes[0] * step, 1.0)) - here;
+    let b = layer_point(view_proj * vec4<f32>(at + axes[1] * step, 1.0)) - here;
     let det = a.x * b.y - a.y * b.x;
     if (abs(det) < 1e-14) {
         return vec2<f32>(0.0);
     }
-    let grade = vec2<f32>(a.z * b.y - b.z * a.y, b.z * a.x - a.z * b.x) / det;
-    // At 80° a plane climbs tan 80° = 5.7 of its texel per texel across; in NDC that is 5.7 times what
-    // a texel of depth is worth at this distance — `a.z` at a one-texel step face on.
-    let cap = 5.7 * length(vec2<f32>(length(a.xy), length(b.xy))) * max(abs(a.z), abs(b.z)) / max(length(a.xy) * length(b.xy), 1e-12);
-    let size = length(grade);
-    return select(grade, grade * (cap / size), size > cap);
+    return vec2<f32>(a.z * b.y - b.z * a.y, b.z * a.x - a.z * b.x) / det;
 }
 
 // A clip-space point as a layer's (uv, ndc z).
@@ -248,7 +245,7 @@ fn local_shadow_visibility(
     // of texels wide, a floor at a slant from the light climbs further than any fixed bias, and the
     // filter shadowed the floor with the floor — everywhere past the angle where it outran the bias.
     // Two points a texel along the surface, projected, give how its depth runs across the layer.
-    let grade = local_shadow_grade(layer, world_pos + offset, axes, depth * layer.params.z, vec3<f32>(uv, ndc.z));
+    let grade = shadow_grade(layer.view_proj, world_pos + offset, axes, depth * layer.params.z, vec3<f32>(uv, ndc.z));
     // **Blockers**: where the disc's light to this point can be stopped — at a third of the way
     // from the light, the disc seen from here is twice its radius across — searched on a 5×5 grid,
     // as far out as the widest penumbra the filter below draws: a point at a penumbra's outer edge
@@ -288,6 +285,116 @@ fn local_shadow_visibility(
         for (var y = -2; y <= 2; y++) {
             let offset_uv = turn * (vec2<f32>(f32(x), f32(y)) * (radius * 0.5));
             lit += textureSampleCompareLevel(t, s, uv + offset_uv, index, reference + dot(grade, offset_uv));
+        }
+    }
+    return lit / 25.0;
+}
+
+// Mirror of `csm::SHADOW_FADE_FRACTION` / `csm::shadow_distance_fade`. Past the last cascade there is
+// no shadow data, so the term snaps to "fully lit"; without a fade that snap is a hard line across
+// the world at `cascade_splits.w`. See csm.rs for the reasoning and the cost of the alternative;
+// `shader_shadow_fade_matches_the_rust_mirror` pins the constant. One copy, here: the deferred and
+// baked-lit shaders each had their own, and the forward one none — its shadows ended in that line.
+const SHADOW_FADE_FRACTION: f32 = 0.15;
+
+fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
+    let far = max(shadow_far, 1e-4);
+    let band = max(far * SHADOW_FADE_FRACTION, 1e-4);
+    return 1.0 - smoothstep(far - band, far, view_depth);
+}
+
+// The widest the sun's penumbra is drawn, each side, in its cascade's texels — 28 cm in the nearest
+// cascade at the default 100 m of shadow distance, 3.8 m in the last.
+const MAX_SUN_PENUMBRA_TEXELS: f32 = 64.0;
+
+// How much of the sun reaches `world_pos` past cascade `cascade` (its matrix `light_vp`, its texel
+// `texel` of uv): 1 lit, 0 shadowed, filtered between. `n` is the surface normal, `axes` two
+// directions along its geometry (`receiver_axes`), `to_sun` the unit vector toward the sun, `bias` =
+// `scene.shadow_bias.xy` and `tan_sun` the tangent of the sun's angular radius
+// (`DirectionalLight::angular_radius`; `scene.camera_forward.w`).
+//
+// One lookup for every lit path. The forward shader filtered 3×3 whatever the sun's size, so glass,
+// the editor viewport and every transparent surface took a sharp shadow where the G-buffer took a soft
+// one, and it ignored `ShadowSettings::normal_offset`.
+//
+// The biases are the local lights' in an orthographic frame: two cascade texels along the normal, and
+// a slope-scaled depth bias in metres through the cascade's NDC-z per metre (row 2 of its matrix). A
+// sun with no size is filtered over 3×3 texels. One with a size softens as a disc of that angular
+// radius does — percentage-closer soft shadows: the blockers up the light's way are found and the
+// edge is filtered as wide as the penumbra they throw, `d·tan θ` each side, d the gap between them
+// and the surface, each tap against the receiver's own plane.
+fn sun_shadow_visibility(
+    t: texture_depth_2d_array,
+    s: sampler_comparison,
+    light_vp: mat4x4<f32>,
+    cascade: i32,
+    texel: f32,
+    world_pos: vec3<f32>,
+    n: vec3<f32>,
+    axes: mat2x3<f32>,
+    to_sun: vec3<f32>,
+    bias: vec2<f32>,
+    tan_sun: f32,
+) -> f32 {
+    // Row 0 of the cascade's linear part is NDC-x per metre, row 2 NDC-z per metre: the cascade is an
+    // orthographic projection of a rotated view, so these are row lengths, not single entries.
+    let sx = length(vec3<f32>(light_vp[0][0], light_vp[1][0], light_vp[2][0]));
+    let sz = length(vec3<f32>(light_vp[0][2], light_vp[1][2], light_vp[2][2]));
+    let world_texel = 2.0 * texel / max(sx, 1e-6);
+    let at = world_pos + n * (world_texel * 2.0 * bias.y);
+    let here = layer_point(light_vp * vec4<f32>(at, 1.0));
+    let uv = here.xy;
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || here.z > 1.0) {
+        return 1.0;
+    }
+    let slope = 1.0 - clamp(dot(n, to_sun), 0.0, 1.0);
+    let reference = here.z - max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * sz * bias.x;
+    if (tan_sun <= 0.0) {
+        var lit = 0.0;
+        for (var x = -1; x <= 1; x++) {
+            for (var y = -1; y <= 1; y++) {
+                lit += textureSampleCompareLevel(t, s, uv + vec2<f32>(f32(x), f32(y)) * texel, cascade, reference);
+            }
+        }
+        return lit / 9.0;
+    }
+    let uv_per_metre = sx * 0.5;
+    let metres_per_ndc = 1.0 / max(sz, 1e-8);
+    let grade = shadow_grade(light_vp, at, axes, world_texel, here);
+    // **Blockers**: anywhere up the light's way, to the cascade's near plane — the reach its casters
+    // are fitted to, `here.z` of NDC away — so the sun seen from here is that far × tan θ wide each
+    // side, as far as the widest penumbra drawn.
+    let search = clamp(here.z * metres_per_ndc * tan_sun * uv_per_metre, 1.5 * texel, MAX_SUN_PENUMBRA_TEXELS * texel);
+    let size = vec2<f32>(textureDimensions(t));
+    var blockers = 0.0;
+    var blocker_ndc = 0.0;
+    for (var x = -2; x <= 2; x++) {
+        for (var y = -2; y <= 2; y++) {
+            let step = vec2<f32>(f32(x), f32(y)) * (search * 0.5);
+            let p = clamp(uv + step, vec2<f32>(0.0), vec2<f32>(1.0));
+            let stored = textureLoad(t, vec2<i32>(min(p * size, size - 1.0)), cascade, 0);
+            if (stored < reference + dot(grade, step)) {
+                blockers += 1.0;
+                blocker_ndc += stored;
+            }
+        }
+    }
+    if (blockers < 0.5) {
+        return 1.0;
+    }
+    // **The penumbra** the sun's disc throws past them, each side: the gap (metres — the cascade's
+    // depth is linear) times tan θ.
+    let gap = max(here.z - blocker_ndc / blockers, 0.0) * metres_per_ndc;
+    let radius = clamp(gap * tan_sun * uv_per_metre, texel, MAX_SUN_PENUMBRA_TEXELS * texel);
+    // Twenty-five taps that far apart would band, so the grid turns by a per-texel angle — banding
+    // becomes fine noise, which TAA averages away.
+    let angle = fract(sin(dot(floor(uv / texel), vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+    let turn = mat2x2<f32>(cos(angle), sin(angle), -sin(angle), cos(angle));
+    var lit = 0.0;
+    for (var x = -2; x <= 2; x++) {
+        for (var y = -2; y <= 2; y++) {
+            let offset_uv = turn * (vec2<f32>(f32(x), f32(y)) * (radius * 0.5));
+            lit += textureSampleCompareLevel(t, s, uv + offset_uv, cascade, reference + dot(grade, offset_uv));
         }
     }
     return lit / 25.0;
