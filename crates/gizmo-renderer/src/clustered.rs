@@ -117,6 +117,7 @@ pub struct LightSphere {
     pub center: Vec3,
     /// Radius past which the light contributes nothing. The lighting shaders window their
     /// attenuation with `clamp(1 - (d/r)^4, 0, 1)`, so this is exact rather than a heuristic.
+    /// Infinite for a light with no reach to end — a directional light — which every cluster takes.
     pub radius: f32,
 }
 
@@ -256,6 +257,19 @@ pub fn assign_lights(
     };
 
     for (light_index, light) in lights.iter().enumerate() {
+        // A light with no reach to end lights every cluster: a directional light, a fill or a rim
+        // (`DirectionalLight` other than the scene's sun). Its centre means nothing, so it is not
+        // asked to be finite.
+        if light.radius == f32::INFINITY {
+            for list in &mut lists {
+                if list.len() < MAX_LIGHTS_PER_CLUSTER {
+                    list.push(light_index as u32);
+                } else {
+                    dropped += 1;
+                }
+            }
+            continue;
+        }
         if !light.center.is_finite() || !light.radius.is_finite() || light.radius <= 0.0 {
             continue;
         }
@@ -539,11 +553,23 @@ mod tests {
             view(0.1, 50.0),
             &[
                 LightSphere { center: Vec3::new(f32::NAN, 0.0, -5.0), radius: 5.0 },
-                LightSphere { center: Vec3::new(0.0, 0.0, -5.0), radius: f32::INFINITY },
+                LightSphere { center: Vec3::new(0.0, 0.0, -5.0), radius: f32::NAN },
+                LightSphere { center: Vec3::new(0.0, 0.0, -5.0), radius: f32::NEG_INFINITY },
                 LightSphere { center: Vec3::new(0.0, 0.0, -5.0), radius: 0.0 },
             ],
         );
         assert_eq!(total(&a), 0);
+    }
+
+    /// A light with an infinite radius — a directional light — is in every cluster, wherever its
+    /// centre says it is (it means nothing for such a light).
+    #[test]
+    fn a_light_with_no_reach_to_end_is_in_every_cluster() {
+        let grid = ClusterGrid { x: 2, y: 2, z: 2 };
+        for center in [Vec3::ZERO, Vec3::new(0.0, 0.0, 500.0), Vec3::NAN] {
+            let a = assign_lights(grid, view(0.1, 50.0), &[LightSphere { center, radius: f32::INFINITY }]);
+            assert_eq!(total(&a), grid.count(), "centre {center}");
+        }
     }
 }
 

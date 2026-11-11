@@ -233,6 +233,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A fill or rim light lit nothing.** Only the scene's sun was read from the world, so a `DirectionalLight` with
+  `LightRole::Generic` — "an ordinary directional light, fill or rim" — and every sun after the first lit nothing: the
+  floor under one read what it reads unlit. Each is a directional light in the frame's light array now, without a shadow,
+  in every cluster (`clustered::assign_lights` puts a light of infinite radius in all of them), and the volumetric light
+  scatters it as it scatters the sun: a fill 63° up lights a floor to 198.08, as the sun does, and leaves the floor
+  beside a cube lit where the sun shades it.
 - **Half of what a light is could not be set in the editor.** The inspector had no row for a point light's source radius
   and tube length, a spot's source radius, or a directional light's role, angular radius and contact shadows: a soft
   shadow, an area light's size or a contact shadow could be authored in code and not in the editor. Each has a row now

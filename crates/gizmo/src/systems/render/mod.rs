@@ -5028,6 +5028,88 @@ mod golden_render_tests {
         });
     }
 
+    /// **A fill light lights as the sun does, without its shadow.** A directional light 63° up shines
+    /// on a floor with a cube on it, as the scene's sun, as a fill (`LightRole::Generic`), or not at
+    /// all. Only the sun was ever read from the world, so a fill or rim light — or a second sun — lit
+    /// nothing: the floor under one read what it reads with no light. It is a directional light in the
+    /// light array now, in every cluster: the open floor reads as the sun's, and (where there are
+    /// shadows) the floor beside the cube that the sun shades, the fill does not. Runs on whichever
+    /// path the build draws with.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_fill_light_lights_as_the_sun_does_without_its_shadow() {
+        use crate::renderer::components::{DirectionalLight, LightRole};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // (open floor, the darkest of four patches beside the cube), mean luma.
+        async fn floor(role: Option<LightRole>) -> (f32, f32) {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssao = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            for (at, half) in [(Vec3::new(0.0, -0.1, 0.0), Vec3::new(10.0, 0.1, 10.0)), (Vec3::new(0.0, 0.5, 0.0), Vec3::splat(0.5))] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                // `with_pbr(albedo, roughness, metallic)`: matte.
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), 0.9, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            if let Some(role) = role {
+                let light = world.spawn();
+                let dir = Vec3::new(0.0, -1.0, 0.5).normalize();
+                world.add_component(light, Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_arc(Vec3::NEG_Z, dir)));
+                world.add_component(light, GlobalTransform::default());
+                world.add_component(light, DirectionalLight::new(Vec3::ONE, 3.0, role));
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 6.0, 0.0),
+                yaw: 0.0,
+                pitch: -std::f32::consts::FRAC_PI_2 + 0.01,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let patch = |cx: usize, cy: usize| {
+                let mut sum = 0.0;
+                for y in cy - 2..cy + 2 {
+                    for x in cx - 2..cx + 2 {
+                        let p = &frame[(y * 128 + x) * 4..];
+                        sum += (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0;
+                    }
+                }
+                sum / 16.0
+            };
+            // 0.75 m from the cube's centre each way, 0.25 m past its faces; a pixel is 5.4 cm.
+            let beside = [patch(50, 64), patch(78, 64), patch(64, 50), patch(64, 78)];
+            (patch(16, 16), beside.into_iter().fold(f32::MAX, f32::min))
+        }
+        pollster::block_on(async {
+            let (dark, _) = floor(None).await;
+            let (sun, sun_beside) = floor(Some(LightRole::Sun)).await;
+            let (fill, fill_beside) = floor(Some(LightRole::Generic)).await;
+            eprintln!("open floor: {dark:.2} unlit, {sun:.2} under the sun, {fill:.2} under a fill; beside the cube {sun_beside:.2} / {fill_beside:.2}");
+            assert!(fill > dark + 15.0, "a fill light lights the floor: {dark:.2} → {fill:.2}");
+            assert!((fill - sun).abs() < 1.5, "a fill lights as the sun does: {fill:.2} against {sun:.2}");
+            #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+            {
+                assert!(sun_beside < sun - 15.0, "the setup: the sun shades the floor beside the cube ({sun_beside:.2} of {sun:.2})");
+                assert!(fill_beside > fill - 5.0, "a fill casts no shadow: {fill_beside:.2} beside the cube, {fill:.2} open");
+            }
+        });
+    }
+
     /// **A rough floor lit by the environment alone reads alike on every path.** No light: under each of
     /// the four presets, a floor of roughness 1 — matte, then metal — seen from above takes the
     /// environment straight up, at a roughness of 1. The desktop works the environment out per pixel.

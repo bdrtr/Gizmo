@@ -194,6 +194,15 @@ fn fs_main(in: VertexOutput) -> MarchOut {
         for (var j = 0u; j < scene.num_lights; j += 1u) {
             let light = scene.lights[j];
             let kind = u32(light.params.y);
+            // A directional light other than the sun — a fill, a rim — scatters as the sun does,
+            // through the phase function, without the sun's shadow. Its radius is infinite and its
+            // position means nothing, so the bulb's sphere below is not its shape.
+            if (kind == 2u) {
+                let toward = normalize(-light.direction.xyz);
+                total_scatter += light.color.rgb * light.position.w * params.sun_scatter
+                    * phase_function(params.phase_g, dot(ray_dir, toward)) * step_size;
+                continue;
+            }
             let radius = light.color.a;
             let from_light = current_pos - light.position.xyz;
             let dist = length(from_light);

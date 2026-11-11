@@ -274,6 +274,40 @@ pub fn collect_scene_lights(
         }
     }
 
+    {
+        // Every directional light but the scene's sun — a fill, a rim, a second sun — lights as the sun
+        // does, without its shadow: type 2 in the array, in every cluster (an infinite radius), ranked
+        // ahead of everything, since it reaches every pixel. Only the sun was ever read here, so until
+        // 2026-11-11 a fill or rim light lit nothing at all. The sun is the first `Sun` in query order,
+        // as below.
+        let q = world.query::<(Entity, &DirectionalLight)>();
+        let mut sun_seen = false;
+        for (e, light) in q.iter() {
+            if light.role == LightRole::Sun && !sun_seen {
+                sun_seen = true;
+                continue;
+            }
+            let Some((_, rot)) = world_tf(e) else { continue };
+            let dir = rot.mul_vec3(Vec3::new(0.0, 0.0, -1.0)).normalize_or_zero();
+            if dir == Vec3::ZERO || !light.intensity.is_finite() {
+                continue;
+            }
+            candidates.push(Candidate {
+                data: LightData {
+                    position: [0.0, 0.0, 0.0, light.intensity],
+                    color: [light.color.x, light.color.y, light.color.z, f32::INFINITY],
+                    direction: [dir.x, dir.y, dir.z, 0.0],
+                    // params.y = 2 → directional.
+                    params: [0.0, 2.0, 0.0, 0.0],
+                },
+                shadow: None,
+                surface_dist: 0.0,
+                reach: f32::MAX,
+                entity_id: e.id(),
+            });
+        }
+    }
+
     // Nearest influence first, then the light that throws furthest, then entity id. `total_cmp`
     // rather than `partial_cmp().unwrap()`: the scores are sanitized above, and a total order is
     // what makes this a sort at all.
