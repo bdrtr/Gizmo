@@ -182,6 +182,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A point light was half as bright on a forward-drawn surface.** The forward shader divided its falloff by `d² + 1`
+  and the deferred pass by `d² + 0.01`, so a light a metre from a transparent surface — and from anything in the editor
+  viewport, a browser or a phone — gave about half: a matte floor read 195.5 where the G-buffer's read 228.5. Both passes
+  call `light_falloff` in `common.wgsl` now (the deferred pass's formula, which a rectangle light's integral agrees with).
+- **A game with no background of its own was dark on the desktop and sky blue on a phone.** `Camera::clear_color`'s
+  `None` meant each path's own: the deferred path's dark grey, the forward-only path's light blue. It is
+  `frame_uniforms::DEFAULT_BACKGROUND`, the grey, on every path now. **Changes the look** of a browser or phone game
+  that set no background, to the desktop's; set `Camera::clear_color` for another.
 - **An opaque draw was blended where it was drawn forward.** The forward lit pipelines on the desktop, the forward-only
   path's `DETAILS` and `LOBES` tiers, the opaque unlit pipelines and a game surface's opaque set blended a texel by its
   alpha while writing its depth, so a cut-out's kept texels under 1 and an opaque material's texture alpha showed what was

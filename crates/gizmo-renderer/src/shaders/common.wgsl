@@ -43,7 +43,7 @@ struct SceneUniforms {
     // `WireframeConfig::color`, RGBA8; alpha 0 = none. Read by the WIREFRAME build of shader.wgsl.
     wireframe_color: u32,
     _pre_align_pad: u32,
-    // `Camera::clear_color`; red < 0 = none (the deferred pass's own dark grey).
+    // The background: `Camera::clear_color`, or `frame_uniforms::DEFAULT_BACKGROUND`.
     clear_color: vec3<f32>,
     environment_blend_t: f32,
     environment_preset: u32,
@@ -328,6 +328,20 @@ fn dielectric_f0(packed: f32) -> f32 {
 
 fn F_Schlick(VoH: f32, f0: vec3<f32>) -> vec3<f32> {
     return f0 + (vec3<f32>(1.0) - f0) * pow(clamp(1.0 - VoH, 0.0, 1.0), 5.0);
+}
+
+// How much of a point or spot light reaches a surface `distance` metres away, given its `radius` of
+// influence: the inverse square, windowed to nothing at the radius by `(1 - (d/r)^4)^2`. `x` is that
+// attenuation and `y` the window alone. The deferred lighting pass and the forward shader both come here:
+// the forward shader divided by `d² + 1` where the deferred pass divides by `d² + 0.01`, so a light a
+// metre from a transparent surface, in the editor viewport, in a browser or on a phone gave half of what
+// it gave the G-buffer's — 195.5 against 228.5 on a matte floor, where a 5 cm rectangle light, whose
+// polygon integral is this inverse square, read 226.8 on both (2026-11-11).
+fn light_falloff(distance: f32, radius: f32) -> vec2<f32> {
+    let d_over_r = distance / max(radius, 0.001);
+    let w = clamp(1.0 - d_over_r * d_over_r * d_over_r * d_over_r, 0.0, 1.0);
+    let window = w * w;
+    return vec2<f32>(window / (distance * distance + 0.01), window);
 }
 
 // Direct PBR lighting for one light. Diffuse carries the Lambert 1/PI so it is

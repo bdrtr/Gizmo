@@ -319,6 +319,17 @@ is roughness `k / 5`; the floor's colour moved by 2 to 3 of 255 with it. `captur
 returns at once on that path now, since nothing there reads a probe: a probe in a web or phone scene drew
 the world six times for nothing.
 
+**Open, measured 2026-11-11: the cube's rough mips are too coarse for the presets' lobes.** A matte
+floor (roughness 1) lit by the environment alone reads 88.8 on the forward-only path against 66.2 on the
+desktop, by either of the desktop's passes; drawn with the analytic environment instead of the cube, the
+forward-only path reads 66.1. The presets keep lobes about 20° wide even at a roughness of 1 — Studio
+Neutral's key light is `pow(cos, 12)` — and mip 5 is 4 texels a face, 22.5° a texel, so an upward normal
+reads the four texels round the zenith, 19° towards that light, where the lobe is about fifteen times
+what it is straight up. The bake is right (`the_cube_shows_the_sky_by_direction_and_roughness`); its coarsest mips cannot hold the
+function. Separate from today's fixes because the answer is a design choice — the cube's size, or its
+roughness-to-mip mapping — that the reflection probes' mip-for-mip copy into the cube shares, and its
+memory and bake cost are a phone's to measure.
+
 **And reflection probes, the same day.** That path has no group for them, so they are group 0's
 bindings 6–8: the captured cube array, a sampler and the uniform that places them, packed by the same
 `irradiance::reflection_uniform` the desktop's irradiance group uses. `reflection_probes.wgsl` takes its

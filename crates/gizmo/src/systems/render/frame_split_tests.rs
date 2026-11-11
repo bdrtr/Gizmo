@@ -300,6 +300,7 @@ fn a_probe_capture_request_is_honoured_once_without_writing_the_probe() {
     });
 }
 
+#[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles.
 /// **A frame's particles are put out once, however many times it is drawn.** The draw reads
 /// `ParticleSpawns` and cannot clear it, so a frame drawn twice — or a copy of the world drawn again
 /// without being refreshed — would put the same burst out every time; the particle system keeps the
@@ -456,6 +457,11 @@ fn a_frame_drawn_from_an_extracted_copy_is_the_frame_drawn_from_the_original() {
             ("the visibility index", Box::new(|w: &mut World| drop(w.remove_resource::<VisibilityIndex>()))),
             ("the underwater fog", Box::new(|w: &mut World| drop(w.remove_resource::<WaterVolumes>()))),
         ] {
+            // The forward-only path draws no underwater fog, so the copy's volumes change nothing
+            // there; the rest of the copy still has to reach the picture.
+            if cfg!(gizmo_forward_only) && what == "the underwater fog" {
+                continue;
+            }
             // A copy of its own, by an extractor of its own: an extractor copies what changed since
             // its last run, so one that already ran would leave a new world nearly empty.
             let mut without = World::new();
@@ -1061,6 +1067,7 @@ fn a_mirror_in_a_split_screen_view_reflects_for_its_camera() {
     });
 }
 
+#[cfg(not(gizmo_forward_only))] // Only the SSR tests, which the forward-only path does not run, use it.
 /// A red-or-green cube above a polished floor, a sun, a camera on −X looking at them: a scene in
 /// which screen-space reflections have the cube to find in the floor. Returns the cube.
 fn reflecting_floor(renderer: &Renderer, world: &mut World, colour: Vec4) -> Entity {
@@ -1092,6 +1099,7 @@ fn reflecting_floor(renderer: &Renderer, world: &mut World, colour: Vec4) -> Ent
     cube
 }
 
+#[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR.
 /// **A resize leaves screen-space reflections reading the frame the chain draws.** `Renderer::resize`
 /// rebinds every effect to its new targets but SSR, which the draw rebuilt only when its size
 /// differed from the renderer's — so a resize that ended at SSR's own size before a frame was drawn
@@ -1152,6 +1160,7 @@ fn a_resize_leaves_reflections_reading_the_frame_the_chain_draws() {
     });
 }
 
+#[cfg(not(gizmo_forward_only))] // The forward-only path has no SSGI.
 /// **A view's temporal state follows the renderer's effects.** A texture camera standing where the
 /// frame's camera stands draws the frame's picture after SSGI is turned on with `enable_ssgi`. Its
 /// history was built while SSGI was off and kept none: the texture camera drew with the frame
@@ -1282,6 +1291,7 @@ fn a_view_is_fitted_to_its_own_shape() {
     assert_eq!(super::view_aspect(None, None, (256, 0)), 1.0);
 }
 
+#[cfg(not(gizmo_forward_only))] // Only the temporal-state tests, which the forward-only path does not run, use it.
 /// A red cube with the frame's camera on −X, a texture camera on +Z looking at it, and two more
 /// cameras on +X and −Z that take the window's two halves in the frames `split` says. Draws the
 /// frames with TAA on and returns the texture camera's last picture, with the renderer and world
@@ -1317,6 +1327,7 @@ async fn texture_camera_after(split: &[bool]) -> (Vec<u8>, Renderer, World, [Ent
     (picture, renderer, game, [watcher, left, right])
 }
 
+#[cfg(not(gizmo_forward_only))] // The forward-only path has no TAA.
 /// **A view's temporal state is its camera's.** A texture camera draws the same picture on its
 /// fourth frame whether the three before it were split-screen frames or not; the renderer holds a
 /// state for the cameras it drew besides the frame's own, and lets one go when its camera is gone.

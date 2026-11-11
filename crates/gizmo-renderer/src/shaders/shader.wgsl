@@ -17,7 +17,7 @@
 #ifdef DETAILS
 #import gizmo::common::{dielectric_f0, instance_keeps}
 #endif
-#import gizmo::common::{SceneUniforms, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
+#import gizmo::common::{SceneUniforms, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
@@ -612,13 +612,11 @@ fn shade(in: VertexOutput) -> vec4<f32> {
             attenuation = 1.0;
         } else {
             let to_light = light.position.xyz - in.world_position;
-            let distance = length(to_light);
-            let radius = max(light.color.a, 0.001);
             L = normalize(to_light);
-            let d_over_r = distance / radius;
-            attenuation = clamp(1.0 - d_over_r * d_over_r * d_over_r * d_over_r, 0.0, 1.0);
-            window = attenuation * attenuation;
-            attenuation = window / (distance * distance + 1.0);
+            // The deferred pass's falloff, from the one function: see `light_falloff`.
+            let falloff = light_falloff(length(to_light), light.color.a);
+            attenuation = falloff.x;
+            window = falloff.y;
             if (light_type == 1u) {
                 let spot_dir = normalize(light.direction.xyz);
                 let cos_angle = dot(-L, spot_dir);

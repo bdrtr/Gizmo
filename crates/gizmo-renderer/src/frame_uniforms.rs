@@ -188,8 +188,8 @@ pub struct EnvironmentFrame {
     pub blend_t: f32,
     /// Debug shading mode (0 = normal shading).
     pub shading_mode: u32,
-    /// The rendered camera's background, linear RGB (`Camera::clear_color`); `None` keeps the
-    /// path's own.
+    /// The rendered camera's background, linear RGB (`Camera::clear_color`); `None` is
+    /// [`DEFAULT_BACKGROUND`].
     pub clear_color: Option<[f32; 3]>,
     /// The colour a wireframe is drawn in (`WireframeConfig::color`); `None` keeps the lit
     /// colour.
@@ -260,12 +260,21 @@ fn frame_fog(preset: u32, preset_2: u32, blend_t: f32, fog: Option<Fog>) -> ([f3
     ([color[0], color[1], color[2], density], [falloff, -5.0, 0.0, 0.0])
 }
 
+/// What fills the frame where nothing is drawn when the camera asks for nothing else
+/// (`Camera::clear_color`), linear RGB: a dark grey, on every path.
+///
+/// The deferred path drew this and the forward-only path a light blue (0.4, 0.6, 0.9) until
+/// 2026-11-11, which `Camera::clear_color`'s docs wrote down as each path's own: a game with no
+/// background of its own was dark on the desktop and sky blue in a browser and on a phone, and the
+/// low-alpha lines of a grid material all but vanished against the blue.
+pub const DEFAULT_BACKGROUND: [f32; 3] = [0.05, 0.05, 0.05];
+
 /// Height fog, set by hand rather than by the environment preset — `Renderer::fog`.
 ///
 /// The deferred pass integrates it along each view ray: `density` is how thick it is at
 /// `base_height`, thinning by `exp(-height_falloff · h)` above it. The presets' numbers, for scale:
 /// density 0.008–0.035, falloff 0.04–0.12, base −5 m. Applies to geometry; the empty background
-/// is `Camera::clear_color` or the path's own.
+/// is `Camera::clear_color` or [`DEFAULT_BACKGROUND`].
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Fog {
@@ -453,7 +462,7 @@ impl SceneUniforms {
                 byte(r) | (byte(g) << 8) | (byte(b) << 16) | (255 << 24)
             }),
             _pre_align_pad: 0,
-            clear_color: environment.clear_color.unwrap_or([-1.0, 0.0, 0.0]),
+            clear_color: environment.clear_color.unwrap_or(DEFAULT_BACKGROUND),
             environment_blend_t: environment.blend_t,
             environment_preset: environment.preset,
             point_shadows_enabled: u32::from(shadows.point_shadows_enabled),
@@ -661,7 +670,7 @@ mod tests {
         let u = SceneUniforms::new(&SceneFrame { camera: a_camera(), ..Default::default() });
         assert_eq!(u._pre_align_pad, 0);
         assert_eq!(u.wireframe_color, 0, "no wireframe colour asked for: alpha 0, the lit colour");
-        assert_eq!(u.clear_color, [-1.0, 0.0, 0.0], "no background asked for reads as 'none'");
+        assert_eq!(u.clear_color, DEFAULT_BACKGROUND, "no background asked for is the one default");
         // Written against MAX_LIGHTS rather than as literals: the light array is the block's only
         // variable-length part, so `FIXED + MAX_LIGHTS * 64` still fails on any *other* field
         // moving — which is what this guards — without needing a hand-recomputed number every time

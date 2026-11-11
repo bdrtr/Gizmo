@@ -51,7 +51,8 @@ pub fn draw_camera_section(
                         );
                     });
                     ui.checkbox(&mut cam.primary, "Ana Kamera");
-                    // `Camera::clear_color`: off keeps the render path's own background.
+                    // `Camera::clear_color`: off is the one default background
+                    // (`frame_uniforms::DEFAULT_BACKGROUND`), the same on every path.
                     ui.horizontal(|ui| {
                         let mut on = cam.clear_color.is_some();
                         if ui.checkbox(&mut on, "Arka plan rengi").changed() {

@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -250,14 +250,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let pos_sample       = textureLoad(t_position_rel_camera,   iuv, 0);
     let tangent_sample   = textureLoad(t_world_tangent,    iuv, 0);
 
-    // Unwritten pixels (skipped geometry, unlit objects) — a clean dark grey, rather than
-    // whatever the G-buffer happened to still hold from the previous frame.
-    // `Camera::clear_color` where the camera asked for one (red ≥ 0).
+    // Unwritten pixels (skipped geometry, unlit objects): the background — the camera's, or the
+    // one default every path draws (`frame_uniforms::DEFAULT_BACKGROUND`) — rather than whatever the
+    // G-buffer happened to still hold from the previous frame.
     if (pos_sample.w < 0.5) {
-        if (scene.clear_color.x >= 0.0) {
-            return vec4<f32>(scene.clear_color, 1.0);
-        }
-        return vec4<f32>(0.05, 0.05, 0.05, 1.0);
+        return vec4<f32>(scene.clear_color, 1.0);
     }
 
     let albedo    = albedo_metallic.rgb;
@@ -442,13 +439,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             L = normalize(-light.direction.xyz);
         } else {
             let to_light = light.position.xyz - world_pos;
-            let dist     = length(to_light);
-            let radius   = max(light.color.a, 0.001);
             L = normalize(to_light);
-            let d_over_r = dist / radius;
-            atten = clamp(1.0 - d_over_r * d_over_r * d_over_r * d_over_r, 0.0, 1.0);
-            window = atten * atten;
-            atten = window / (dist * dist + 0.01);
+            let falloff = light_falloff(length(to_light), light.color.a);
+            atten = falloff.x;
+            window = falloff.y;
 
             if (light_type == 3u) {
                 // A rectangle lights one side: nothing behind it, for the anisotropic and

@@ -3725,6 +3725,8 @@ mod golden_render_tests {
 
     /// Which screen-space pass to switch off for a comparison render.
     #[derive(Clone, Copy, PartialEq)]
+    // Most variants are the deferred passes', whose tests the forward-only path does not run.
+    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
     enum Effect {
         None,
         Ssgi,
@@ -3898,6 +3900,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR.
     /// A screen-space reflection is weighted by the surface's own Fresnel, so a floor that mirrors
     /// more shows more of the cube. It read a literal 0.04 until 2026-11-07.
     #[test]
@@ -3923,6 +3926,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR.
     /// **A polished metal floor shows the scene.** A red cube on a mirror-like floor under a blue sky:
     /// below the cube the floor reads red where the sky's blue would be, because what the reflection found
     /// replaces the environment rather than adding to it. Both sides of that are asserted: red goes up and
@@ -3990,6 +3994,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no the deferred passes.
     /// The reversible off switch has to produce the *same* frame as the destructive one.
     ///
     /// Before this, the only way to switch a screen-space pass off was `renderer.ssr = None`,
@@ -4037,6 +4042,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no the deferred passes.
     /// **The way back from `= None` is the renderer's own build.** SSR, SSGI and volumetric lighting
     /// freed and built again with `Renderer::enable_ssr` / `enable_ssgi` / `enable_volumetric` draw
     /// the frame the renderer as constructed draws, to the pixel — the construction builds them
@@ -4218,6 +4224,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no irradiance volumes.
     /// An `IrradianceVolume` placed in the world is baked and uploaded by the frame itself: its
     /// probes reach the lighting pass (a red ambient tints a dim scene red), a still scene does not
     /// rebake (the fingerprint holds), and moving a light does.
@@ -4413,6 +4420,7 @@ mod golden_render_tests {
         render_world(&mut renderer, &mut world).await
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR.
     /// Moving SSR's constants out of the shader has to be a move, not an edit.
     ///
     /// Same reasoning as `the_defaults_are_the_shader_literals_they_replaced` does for volumetric:
@@ -4629,6 +4637,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
     /// Every one of the six has to actually reach the frame, or it is a field, not a control.
     ///
     /// Each parameter needs the scene that can show it, and finding those was most of the work:
@@ -4704,6 +4713,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
     /// `steps` is a cost knob, not a look knob, and the measurement has to be told that.
     ///
     /// Scattering accumulates as `Σ contribution × step_size` with `step_size = max_distance /
@@ -4934,7 +4944,11 @@ mod golden_render_tests {
                 "a face-on cube is {w}×{h} px in its half — the projection is not using the half's aspect",
             );
 
-            // TAA on: four frames, each view with its own history.
+            // TAA on: four frames, each view with its own history — where there is TAA. The
+            // forward-only path has none, and the halves above are the whole of it there.
+            if cfg!(gizmo_forward_only) {
+                return;
+            }
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.ssgi = None;
             let mut frame = Vec::new();
@@ -5218,6 +5232,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no auto exposure.
     /// **Auto exposure closes the loop**: the same sunlit floor under a sun ten times brighter.
     /// Measured mean brightness: 232 against 119 without it (1.95×, the bright one held down only
     /// by tone mapping), 171 against 135 with it (1.27× — the rest is light that does not scale
@@ -5302,6 +5317,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no motion blur.
     /// **Camera motion blur** (`PostProcess::motion_blur`) smears what the camera's own motion moved
     /// and nothing else. Against the same frame with the shutter at 0:
     /// - a camera that turned since the last frame loses edge energy, and a half-open shutter
@@ -6185,6 +6201,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// **A bigger sun casts softer shadows.** A 3 m pillar under a 45° sun throws a long shadow; the
     /// camera looks straight down on it. The far end of that shadow is ~4 m from the pillar, where a
     /// penumbra `2·d·tan θ` wide is widest. Counted as the pixels whose brightness lies between the
@@ -6265,6 +6282,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// **Contact shadows catch what the shadow map cannot.** A 3 cm step on a floor under a sun
     /// 15° above the horizon: the step's shadow, ~11 cm long, is shorter than the shadow map's
     /// depth bias, so the cascades lose it. With `contact_shadow_length` the screen-space march
@@ -6418,6 +6436,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no a G-buffer.
     /// **The G-buffer's velocity is object motion as well as camera motion.** Two cubes under a
     /// still camera; between two frames one slides 0.3 m to the right and the other stays. On the
     /// second frame the still cube's velocity must be exactly zero and the moving one's must point
@@ -6526,6 +6545,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no motion blur.
     /// **Object motion blur.** Under a still camera, one cube slides 0.3 m between two frames and
     /// one stays. With the shutter open the moving cube's edges smear — its strip of the frame loses
     /// edge energy against the same frame with the shutter shut — and the still cube's strip is
@@ -6879,6 +6899,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no light cookies.
     /// A spot light's cookie is projected through its cone, the right way round. A spot points
     /// straight down at a matte floor, seen from above (world +X is the screen's right — measured in
     /// the rectangle-light test). Its cookie is black on the left, white on the right, so the pool
@@ -7687,6 +7708,7 @@ mod golden_render_tests {
         last
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles and smoke.
     /// **Particles and smoke stand in the fog like everything else.** In fog thick enough to hide a
     /// surface entirely, each vanishes into the wall behind it: the frame with it is the frame without
     /// it. With no fog it is plainly there, or this would prove nothing.
@@ -7824,6 +7846,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no a deferred path to compare with.
     /// **Every material knob and map means the same on both paths.** The forward shader read only the
     /// base colour for as long as both existed: a normal map never reached a browser, nor anisotropy,
     /// clear coat, subsurface or a metallic-roughness, emissive or occlusion map. Each case has to
@@ -8229,6 +8252,70 @@ mod golden_render_tests {
         });
     }
 
+    /// **A point light falls off alike on every pass.** The forward shader divided its falloff by
+    /// `d² + 1` where the deferred pass divides by `d² + 0.01`, so a light a metre above a matte floor
+    /// lit a transparent floor — and everything drawn in the editor, a browser or on a phone — at 195.5
+    /// where the G-buffer's floor read 228.5, while a 5 cm rectangle light, whose integral is the inverse
+    /// square, read 226.8 on both. Both passes share `light_falloff` now: the same floor drawn opaque
+    /// (through the G-buffer here) and nearly opaque (forward) reads within a level of 255 under it.
+    /// (The forward-only path draws both forward; there `a_rect_light_lights_one_side_like_a_point_light_
+    /// seen_face_on` holds the point light to the rectangle's integral.)
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_point_light_falls_off_alike_on_every_pass() {
+        use crate::renderer::components::PointLight;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn centre(transparent: bool) -> f32 {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            let alpha = if transparent { 0.99 } else { 1.0 };
+            let floor_material = Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, alpha), 1.0, 0.0).with_transparent(transparent);
+            world.add_component(floor, floor_material);
+            world.add_component(floor, MeshRenderer::new());
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 3.0, 20.0));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 3.0, 0.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -1.5,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let mut sum = 0.0;
+            for y in 60..68 {
+                for x in 60..68 {
+                    let p = &frame[(y * 128 + x) * 4..];
+                    sum += (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0;
+                }
+            }
+            sum / 64.0
+        }
+        pollster::block_on(async {
+            let opaque = centre(false).await;
+            let forward = centre(true).await;
+            assert!(opaque > 200.0, "the point light lights the floor: {opaque:.2}");
+            assert!((opaque - forward).abs() < 1.0, "the forward pass lights it {forward:.2}, the opaque pass {opaque:.2}");
+        });
+    }
+
     /// A `Grid` material draws as a grid in the game, as in the editor: lines, not a flat plane.
     /// Seen from above, the lower half of the frame must be full of sharp horizontal edges; the
     /// same plane routed any other way (deferred PBR, as it was, or the plain unlit pipeline)
@@ -8293,6 +8380,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// `MeshRenderer::with_receives_shadows(false)` keeps a surface out of every shadow, on both
     /// draw paths. A cube over a matte floor under a high sun: the pixels that are darker (by 20+)
     /// when the floor receives than when it refuses are the cube's shadow on it. Opaque floor →
@@ -8626,6 +8714,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSAO.
     /// `SsaoState::set_shape` reshapes the occlusion. A cube on a floor, darkening measured against
     /// the same frame with SSAO off, summed over a band of floor just below the cube: the default
     /// 0.5 m radius keeps the occlusion in the crease, 2 m spreads a halo across the band. Setting
@@ -8698,6 +8787,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no TAA.
     /// **TAA treats the frame's edge like the rest of it.** Its history is clamped to the colours around
     /// each pixel, and around an edge pixel that read past the frame, where a load returns zero. So black
     /// was always in range, and what appears at an edge came in over many frames where it came in at once
@@ -8755,6 +8845,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no depth of field.
     /// **A lens: the f-number sets how far things leave focus, the focus sets what is sharp.** Three cubes
     /// at 4, 8 and 16 m, focused on the middle one. Half-toned pixels around each, which is how wide its
     /// edge has spread, against the same frame with no depth of field.
@@ -8831,6 +8922,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no depth of field.
     /// **A blurred foreground has a soft edge over what is in focus behind it, and what is behind stays
     /// sharp.** A dark cube close to the camera in front of a green wall in focus, with a blue bar on the wall.
     /// Outside the cube's sharp silhouette the wall darkens near it, where a sharp pixel used to gather
@@ -8913,6 +9005,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSAO.
     /// **A flat floor is not occluded by anything**, and the frame's edges are not lit by the samples
     /// that fell off them. Both were in this pass until 2026-11-07: with nothing on it a floor darkened by
     /// more than four levels over a quarter of a frame, with bright bands along its edges. And the
@@ -9066,6 +9159,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no line drawing (WebGPU has no line mode).
     /// `WireframeConfig::color` draws every line in one colour. On a pale material the lit lines
     /// are close to invisible — the gap `wireframe` measured — so the test counts strongly green
     /// pixels: next to none with the lit colour, many with green asked for.
@@ -9113,6 +9207,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no line drawing (WebGPU has no line mode).
     /// **Lines one entity at a time.** Two pale spheres: the marker draws the left one's, the opt-out
     /// keeps the left one's out of a global overlay, and each sphere's own colour holds under it.
     #[test]
@@ -9368,6 +9463,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// `ShadowSettings::with_bias` scales every lookup's bias. A cube 10 cm over a floor under a
     /// high sun; the shadow is the pixels darker (by 20+) when the floor receives than when it
     /// refuses. A large depth bias jumps the comparison past the near caster and the shadow thins; a
@@ -9441,6 +9537,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no bloom.
     /// **Bloom's edge and its budget.** A patch just under the threshold glows with a soft edge and not
     /// with a hard one; and added, a bloom brightens the whole frame, where conserving energy it does not.
     #[test]
@@ -9495,6 +9592,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no bloom.
     /// `bloom_radius` and `bloom_iterations` widen the halo. A small, very bright cube (about
     /// 12 px across) in a dark scene; the halo is the mean brightness of a ring 8–24 px from its
     /// centre. The default blur's taps are one full-frame texel apart, so its halo barely leaves
@@ -9864,6 +9962,7 @@ mod golden_render_tests {
         out
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no irradiance volumes.
     /// A baked probe grid has to reach the frame, and reach it as the CPU path computes it.
     ///
     /// `gi::ProbeGrid` was written, tested and unplugged — `to_gpu_data` had exactly one caller,
@@ -9914,6 +10013,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // Only the irradiance tests, which the forward-only path does not run, use it.
     /// Mean per-channel difference between two RGBA8 frames, as `[r, g, b]`.
     fn mean_channel_delta(a: &[u8], b: &[u8]) -> [f32; 3] {
         let (a_px, _) = a.as_chunks::<4>();
@@ -9932,6 +10032,7 @@ mod golden_render_tests {
         ]
     }
 
+    #[cfg(not(gizmo_forward_only))] // Only the irradiance tests, which the forward-only path does not run, use it.
     /// A white floor under a dim sun, optionally with a probe grid baked from one coloured light.
     ///
     /// The floor is white and rough so the indirect term is the only thing distinguishing the
@@ -10703,6 +10804,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no GPU particles.
     /// The particle system is busy while an emitter feeds it and idle once the emitter is gone and
     /// the last particle has had time to die — the state the draw path skips the whole ring on.
     #[test]

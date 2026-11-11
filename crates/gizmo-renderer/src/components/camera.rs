@@ -101,9 +101,10 @@ pub struct Camera {
     /// order. Ties go by entity order. `#[serde(default)]`.
     #[serde(default)]
     pub order: i32,
-    /// What fills the frame where nothing is drawn — linear RGB. `None` (the default) keeps each
-    /// path's own background: the deferred path's dark grey, the forward path's light blue. A
-    /// skybox or a backdrop still draws over it. `#[serde(default)]`.
+    /// What fills the frame where nothing is drawn — linear RGB. `None` (the default) is
+    /// [`DEFAULT_BACKGROUND`](crate::frame_uniforms::DEFAULT_BACKGROUND), a dark grey, on every path:
+    /// the forward-only path's was a light blue until 2026-11-11. A skybox or a backdrop still draws
+    /// over it. `#[serde(default)]`.
     #[serde(default)]
     pub clear_color: Option<gizmo_math::Vec3>,
 }
