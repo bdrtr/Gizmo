@@ -152,7 +152,7 @@ impl SsrState {
             &params_buffer,
         );
 
-        let apply_bind_group = Self::mk_apply_bg(device, &apply_bgl, &ssr_view, &linear_sampler);
+        let apply_bind_group = Self::mk_apply_bg(device, &apply_bgl, &ssr_view, &linear_sampler, &deferred.seen_view);
 
         let ssr_pipeline = Self::mk_ssr_pipeline(device, scene, &ssr_bgl, &deferred.irradiance.bind_group_layout);
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl);
@@ -201,7 +201,7 @@ impl SsrState {
             &self.params_buffer,
         );
         self.apply_bind_group =
-            Self::mk_apply_bg(device, &self.apply_bgl, &ssr_view, &self.nearest_sampler);
+            Self::mk_apply_bg(device, &self.apply_bgl, &ssr_view, &self.nearest_sampler, &deferred.seen_view);
 
         self.ssr_texture = ssr_texture;
         self.ssr_view = ssr_view;
@@ -340,6 +340,18 @@ impl SsrState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // How much of the G-buffer's surface the frame shows (`DeferredState::seen_view`):
+                // the term is added in proportion, so not over what was drawn forward in front of it.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -401,6 +413,7 @@ impl SsrState {
         layout: &wgpu::BindGroupLayout,
         ssr_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
+        seen: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ssr_apply_bg"),
@@ -413,6 +426,10 @@ impl SsrState {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(seen),
                 },
             ],
         })

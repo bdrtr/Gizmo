@@ -14,7 +14,10 @@
 @group(1) @binding(3) var t_cookie: texture_2d_array<f32>;
 @group(1) @binding(4) var s_cookie: sampler;
 
-@group(2) @binding(0) var t_position_rel_camera: texture_2d<f32>;
+// The frame's depth, where each ray stops: the nearest opaque surface, drawn deferred or forward. The
+// G-buffer stood here, which an unlit or baked-lit surface does not write, so a ray marched on through
+// an opaque wall drawn forward, and the air behind it was added over the wall.
+@group(2) @binding(0) var t_depth: texture_depth_2d;
 @group(2) @binding(1) var s_linear: sampler;
 
 // The six numbers that used to be literals in this file. See `VolumetricParams` on the Rust side;
@@ -75,9 +78,9 @@ fn phase_function(g: f32, cos_theta: f32) -> f32 {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let tex_size = textureDimensions(t_position_rel_camera);
+    let tex_size = textureDimensions(t_depth);
     let iuv = vec2<i32>(in.screen_uv * vec2<f32>(tex_size));
-    let pos_sample = textureLoad(t_position_rel_camera, iuv, 0);
+    let depth = textureLoad(t_depth, iuv, 0);
     let cam_pos = scene.camera_pos.xyz;
     
     // ── Ray Direction Reconstruction ──
@@ -91,13 +94,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let near_world = near_h.xyz / near_h.w;
     let ray_dir_reconstructed = normalize(near_world - cam_pos);
 
-    // G-buffer position is camera-relative (see gbuffer.wgsl); put it back in world space.
-    var target_pos = pos_sample.xyz + scene.camera_pos.xyz;
     var ray_dir = ray_dir_reconstructed;
     var max_dist = params.max_distance; // Far clip for skybox god rays
-    
-    if (pos_sample.w >= 0.5) {
-        let diff = target_pos - cam_pos;
+
+    // The surface the ray stops at, from the depth at the centre of the pixel it reads.
+    if (depth < 1.0) {
+        let uv = (vec2<f32>(iuv) + 0.5) / vec2<f32>(tex_size);
+        let h = inv_vp * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, depth, 1.0);
+        let diff = h.xyz / h.w - cam_pos;
         max_dist = min(length(diff), params.max_distance);
         ray_dir = normalize(diff);
     }

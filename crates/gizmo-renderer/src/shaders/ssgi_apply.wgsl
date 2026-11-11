@@ -1,5 +1,8 @@
 @group(0) @binding(0) var t_ssgi_blurred: texture_2d<f32>;
 @group(0) @binding(1) var s_linear: sampler;
+// How much of the G-buffer's surface the frame shows (`DeferredState::seen_view`): the bounce light
+// belongs to that surface, so it is not added over what was drawn forward in front of it.
+@group(0) @binding(2) var t_seen: texture_2d<f32>;
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -24,7 +27,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // the half-res source size pushed UV up to ~2.0 and clamped everything outside the
     // top-left quadrant to the edge texel. The linear sampler upscales the half-res GI.
     let ssgi_color = textureSample(t_ssgi_blurred, s_linear, in.uv).rgb;
+    let seen = textureLoad(t_seen, vec2<i32>(in.position.xy), 0).r;
 
     // Additive blending will add this to the HDR texture
-    return vec4(ssgi_color, 1.0);
+    return vec4(ssgi_color * seen, 1.0);
 }

@@ -233,6 +233,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **SSR, SSGI and the volumetric march reached through what was drawn forward.** All three describe the G-buffer's
+  surface and are added after the forward pass, and an unlit or baked-lit surface, or a game's own pipeline, writes depth
+  and no G-buffer: an opaque unlit panel in front of a polished floor took 12 137 and 18 569 of the 96 591 and 100 681 the
+  floor's reflection and bounce light move on those pixels, and the volumetric march went on through an unlit wall to
+  the floor and sky behind it (1 275.0 against 479.9 for the same wall drawn deferred). A pass after the forward one
+  writes how much of the G-buffer's surface the frame's depth shows (`DeferredState::seen_view`, `seen.wgsl`), SSR and
+  SSGI are added in proportion to it, and the march stops where the depth says: none over the panel, 480.0 both ways.
+  `DeferredState::depth_view` keeps the frame's depth for the passes that read it.
 - **Contact shadows missed everything under about 2 cm.** The march read the f16 G-buffer, started a centimetre off the
   surface, wanted a 5 mm gap and stepped a sixteenth of its length at a time — a coin, which
   `DirectionalLight::contact_shadow_length` promised, cast nothing, nor did a 1 cm step. It reads the frame's depth now (the

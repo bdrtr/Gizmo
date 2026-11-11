@@ -1,7 +1,14 @@
 use super::super::*;
 
 pub fn record_screen_space_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer) {
-
+    // ── How much of the G-buffer's surface the frame shows ─────────────────────
+    // SSR and SSGI belong to that surface and are added after the forward pass, so in proportion to
+    // it: not over an unlit or baked-lit surface, or a game's own pipeline, drawn in front of it.
+    let reflections = renderer.ssr.as_ref().is_some_and(|s| s.enabled);
+    let bounce = renderer.ssgi.as_ref().is_some_and(|s| s.enabled);
+    if let Some(def) = renderer.deferred.as_ref().filter(|_| reflections || bounce) {
+        def.record_seen(encoder, renderer.scene.view_bind_group());
+    }
 
     // ── SSR: Screen Space Reflections ───────────────────────────────────────────
     if let Some(ssr) = renderer.ssr.as_ref().filter(|s| s.enabled) {

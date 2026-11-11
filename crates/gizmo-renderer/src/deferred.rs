@@ -144,6 +144,20 @@ pub struct DeferredState {
     /// between two surfaces.
     pub gbuf_sampler: wgpu::Sampler,
 
+    /// The frame's depth (`Renderer::depth_texture_view`), as the lighting pass's contact shadows and
+    /// the [`seen`](Self::seen_view) pass read it. Replaced on resize.
+    pub depth_view: wgpu::TextureView,
+    /// How much of each pixel's G-buffer surface the finished opaque frame shows: 1 where the
+    /// frame's depth is that surface, 0 where something drawn forward stands in front of it (see
+    /// `seen.wgsl`). SSR and SSGI are added in proportion to it. Written by
+    /// [`record_seen`](Self::record_seen) after the forward pass; `COPY_SRC` so a test can read it.
+    pub seen_texture: wgpu::Texture,
+    /// Its view.
+    pub seen_view: wgpu::TextureView,
+    seen_pipeline: wgpu::RenderPipeline,
+    seen_bgl: wgpu::BindGroupLayout,
+    seen_bind_group: wgpu::BindGroup,
+
     /// The G-buffer's width, in pixels.
     pub width: u32,
     /// Its height.
@@ -160,6 +174,7 @@ struct GeometryPipelines {
     z_prepass_discard: [wgpu::RenderPipeline; 2],
     environment_sky: wgpu::RenderPipeline,
     lighting: wgpu::RenderPipeline,
+    seen: wgpu::RenderPipeline,
 }
 
 impl DeferredState {
@@ -201,6 +216,10 @@ impl DeferredState {
             depth_view,
         );
 
+        let seen_bgl = Self::create_seen_layout(device);
+        let (seen_texture, seen_view) = Self::create_seen_texture(device, width, height);
+        let seen_bind_group = Self::create_seen_bind_group(device, &seen_bgl, depth_view, &world_position_view);
+
         let motion = crate::motion::MotionGpu::new(device, 1024);
         let irradiance = crate::irradiance::IrradianceState::new(device);
         let GeometryPipelines {
@@ -209,7 +228,15 @@ impl DeferredState {
             z_prepass_discard: z_prepass_discard_pipelines,
             environment_sky: environment_sky_pipeline,
             lighting: lighting_pipeline,
-        } = Self::create_pipelines(device, scene, &motion.layout, &gbuffer_bind_group_layout, &irradiance.bind_group_layout);
+            seen: seen_pipeline,
+        } = Self::create_pipelines(
+            device,
+            scene,
+            &motion.layout,
+            &gbuffer_bind_group_layout,
+            &irradiance.bind_group_layout,
+            &seen_bgl,
+        );
 
         Self {
             albedo_metallic_tex,
@@ -236,6 +263,12 @@ impl DeferredState {
             gbuffer_bind_group_layout,
             gbuffer_bind_group,
             gbuf_sampler,
+            depth_view: depth_view.clone(),
+            seen_texture,
+            seen_view,
+            seen_pipeline,
+            seen_bgl,
+            seen_bind_group,
             width,
             height,
         }
@@ -249,6 +282,7 @@ impl DeferredState {
         motion_layout: &wgpu::BindGroupLayout,
         gbuffer_layout: &wgpu::BindGroupLayout,
         irradiance_layout: &wgpu::BindGroupLayout,
+        seen_layout: &wgpu::BindGroupLayout,
     ) -> GeometryPipelines {
         let geometry = crate::pipeline::shaders::load_shader_composed(
             device,
@@ -275,6 +309,7 @@ impl DeferredState {
             ],
             environment_sky: Self::create_environment_sky_pipeline(device, scene, irradiance_layout),
             lighting: Self::create_lighting_pipeline(device, scene, gbuffer_layout, irradiance_layout),
+            seen: Self::create_seen_pipeline(device, scene, seen_layout),
         }
     }
 
@@ -285,18 +320,20 @@ impl DeferredState {
     /// 2026-11-11, so a hot-reloaded copy of any of the three changed nothing in a running studio,
     /// while the skill that describes hot reload names `deferred_lighting` as what it is for.
     pub fn rebuild_pipelines(&mut self, device: &wgpu::Device, scene: &SceneState) {
-        let GeometryPipelines { gbuffer, z_prepass, z_prepass_discard, environment_sky, lighting } = Self::create_pipelines(
+        let GeometryPipelines { gbuffer, z_prepass, z_prepass_discard, environment_sky, lighting, seen } = Self::create_pipelines(
             device,
             scene,
             &self.motion.layout,
             &self.gbuffer_bind_group_layout,
             &self.irradiance.bind_group_layout,
+            &self.seen_bgl,
         );
         [self.gbuffer_pipeline, self.gbuffer_double_sided_pipeline] = gbuffer;
         [self.z_prepass_pipeline, self.z_prepass_double_sided_pipeline] = z_prepass;
         self.z_prepass_discard_pipelines = z_prepass_discard;
         self.environment_sky_pipeline = environment_sky;
         self.lighting_pipeline = lighting;
+        self.seen_pipeline = seen;
     }
 
     /// Recreate G-buffer textures and bind groups when the window is resized; `depth_view` is the
@@ -345,8 +382,142 @@ impl DeferredState {
         self.world_tangent_tex = world_tangent_tex;
         self.world_tangent_view = world_tangent_view;
         self.gbuf_sampler = gbuf_sampler;
+        let (seen_texture, seen_view) = Self::create_seen_texture(device, width, height);
+        self.seen_bind_group = Self::create_seen_bind_group(device, &self.seen_bgl, depth_view, &self.world_position_view);
+        self.seen_texture = seen_texture;
+        self.seen_view = seen_view;
+        self.depth_view = depth_view.clone();
         self.width = width;
         self.height = height;
+    }
+
+    /// Writes [`seen_view`](Self::seen_view) from the frame's depth, after the forward pass has drawn
+    /// into it and before SSR and SSGI are added. `scene` is the view's group 0 (its
+    /// `SceneUniforms`).
+    pub fn record_seen(&self, encoder: &mut wgpu::CommandEncoder, scene: &wgpu::BindGroup) {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Seen Pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &self.seen_view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_pipeline(&self.seen_pipeline);
+        pass.set_bind_group(0, scene, &[]);
+        pass.set_bind_group(1, &self.seen_bind_group, &[]);
+        pass.draw(0..3, 0..1);
+    }
+
+    /// The format of [`seen_view`](Self::seen_view).
+    pub const SEEN_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+
+    fn create_seen_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("deferred_seen"),
+            size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::SEEN_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        (texture, view)
+    }
+
+    fn create_seen_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("deferred_seen_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Depth,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    },
+                    count: None,
+                },
+            ],
+        })
+    }
+
+    fn create_seen_bind_group(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        depth: &wgpu::TextureView,
+        position: &wgpu::TextureView,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("deferred_seen_bg"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(depth) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(position) },
+            ],
+        })
+    }
+
+    fn create_seen_pipeline(device: &wgpu::Device, scene: &SceneState, seen_layout: &wgpu::BindGroupLayout) -> wgpu::RenderPipeline {
+        let shader = crate::pipeline::shaders::load_shader_composed(
+            device,
+            "demo/assets/shaders/seen.wgsl",
+            include_str!("shaders/seen.wgsl"),
+            "Seen Shader",
+        );
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Seen Layout"),
+            bind_group_layouts: &[Some(&scene.global_bind_group_layout), Some(seen_layout)],
+            immediate_size: 0,
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Seen Pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: Self::SEEN_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────

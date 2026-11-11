@@ -171,7 +171,7 @@ impl SsgiState {
         let blur_bg_a = Self::mk_blur_bg(device, &blur_bgl, &history_a_view, &linear_sampler);
         let blur_bg_b = Self::mk_blur_bg(device, &blur_bgl, &history_b_view, &linear_sampler);
         let apply_bind_group =
-            Self::mk_apply_bg(device, &apply_bgl, &ssgi_blurred_view, &linear_sampler);
+            Self::mk_apply_bg(device, &apply_bgl, &ssgi_blurred_view, &linear_sampler, &deferred.seen_view);
 
         let ssgi_pipeline = Self::mk_ssgi_pipeline(device, scene, &ssgi_bgl);
         let blur_pipeline = Self::mk_blur_pipeline(device, &blur_bgl);
@@ -267,7 +267,7 @@ impl SsgiState {
         self.blur_bg_a = Self::mk_blur_bg(device, &self.blur_bgl, &hav, &self.linear_sampler);
         self.blur_bg_b = Self::mk_blur_bg(device, &self.blur_bgl, &hbv, &self.linear_sampler);
         self.apply_bind_group =
-            Self::mk_apply_bg(device, &self.apply_bgl, &v2, &self.linear_sampler);
+            Self::mk_apply_bg(device, &self.apply_bgl, &v2, &self.linear_sampler, &deferred.seen_view);
 
         self.ssgi_texture = t1;
         self.ssgi_view = v1;
@@ -450,6 +450,18 @@ impl SsgiState {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                // How much of the G-buffer's surface the frame shows (`DeferredState::seen_view`):
+                // the term is added in proportion, so not over what was drawn forward in front of it.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -518,6 +530,7 @@ impl SsgiState {
         layout: &wgpu::BindGroupLayout,
         ssgi_blurred: &wgpu::TextureView,
         samp: &wgpu::Sampler,
+        seen: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("ssgi_apply_bg"),
@@ -530,6 +543,10 @@ impl SsgiState {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(samp),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(seen),
                 },
             ],
         })

@@ -139,7 +139,7 @@ impl VolumetricState {
         let volumetric_bind_group = Self::mk_volumetric_bg(
             device,
             &volumetric_bgl,
-            &deferred.world_position_view,
+            &deferred.depth_view,
             &linear_sampler,
             &params_buffer,
         );
@@ -185,7 +185,7 @@ impl VolumetricState {
         self.volumetric_bind_group = Self::mk_volumetric_bg(
             device,
             &self.volumetric_bgl,
-            &deferred.world_position_view,
+            &deferred.depth_view,
             &self.linear_sampler,
             &self.params_buffer,
         );
@@ -229,13 +229,13 @@ impl VolumetricState {
             label: Some("volumetric_bgl"),
             entries: &[
                 wgpu::BindGroupLayoutEntry {
-                    // t_world_position
+                    // The frame's depth: where each ray stops.
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         multisampled: false,
                         view_dimension: wgpu::TextureViewDimension::D2,
-                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        sample_type: wgpu::TextureSampleType::Depth,
                     },
                     count: None,
                 },
@@ -288,7 +288,7 @@ impl VolumetricState {
     fn mk_volumetric_bg(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
-        pos_view: &wgpu::TextureView,
+        depth_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         params: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
@@ -298,7 +298,7 @@ impl VolumetricState {
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(pos_view),
+                    resource: wgpu::BindingResource::TextureView(depth_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,

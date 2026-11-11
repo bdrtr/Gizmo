@@ -4961,6 +4961,152 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
+    /// **The march stops at a wall drawn forward as at one drawn deferred.** A lamp stands behind a
+    /// wall the camera faces; the march must stop at the wall whether the wall is lit through the
+    /// G-buffer or drawn unlit, forward. The march read where to stop from the G-buffer, which an
+    /// unlit surface does not write: its rays went on through the wall to the far floor and the sky,
+    /// and the lamp's air behind the wall was added over it — 1 275.0 against 479.9 for the same wall
+    /// drawn deferred. It reads the frame's depth now: 480.0 both ways.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_march_stops_at_a_wall_drawn_forward_as_at_one_drawn_deferred() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn air(unlit: bool) -> f32 {
+            let mut renderer = air_renderer().await;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            let wall = world.spawn();
+            world.add_component(wall, Transform::new(Vec3::new(0.0, 1.0, 2.0)).with_scale(Vec3::new(7.0, 7.0, 0.05)));
+            world.add_component(wall, GlobalTransform::default());
+            world.add_component(wall, AssetManager::create_cube(&renderer.device));
+            let material = Material::new(tex);
+            world.add_component(
+                wall,
+                if unlit {
+                    material.with_unlit(Vec4::new(0.6, 0.6, 0.6, 1.0))
+                } else {
+                    material.with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.0, 0.9)
+                },
+            );
+            world.add_component(wall, MeshRenderer::new());
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.0, 4.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 40.0, 9.0));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.0, -4.0),
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let (air, side) = volumetric_air(&mut renderer, &mut world).await;
+            air_in(&air, side, 0..side, 0..side)
+        }
+        pollster::block_on(async {
+            let deferred = air(false).await;
+            let forward = air(true).await;
+            eprintln!("air in front of the wall: {deferred:.4} drawn deferred, {forward:.4} drawn unlit");
+            assert!(deferred > 1.0, "the lamp lights the air in front of the wall: {deferred:.4}");
+            assert!(
+                (forward - deferred).abs() <= 1e-3 * deferred,
+                "the march must stop at the wall either way: {forward:.4} unlit against {deferred:.4} deferred"
+            );
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR or SSGI.
+    /// **What is drawn forward in front of a surface takes none of that surface's reflection or bounce
+    /// light.** A polished floor reflects a red cube; an opaque panel drawn unlit — forward, depth and
+    /// no G-buffer — stands between the camera and both. SSR and SSGI describe the G-buffer's surface
+    /// and are added after the forward pass: they were added over the panel, which took 12 137 and
+    /// 18 569 of the 96 591 and 100 681 their reflection and bounce light move on those pixels with no
+    /// panel. Now they move none of them.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn what_is_drawn_forward_in_front_takes_no_reflection_or_bounce_light_from_behind() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // `effect` is "ssr" or "ssgi"; the other screen-space terms are off.
+        async fn frame(panel: bool, effect: &str, on: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.volumetric = None;
+            // Nothing that spreads a pixel into its neighbours: anti-aliasing blends the panel's edge
+            // with the floor beside it, which does take the reflection and the bounce light, and
+            // FXAA's search reaches two pixels in along an edge.
+            renderer.fxaa = None;
+            renderer.smaa = None;
+            renderer.cas = None;
+            renderer.bloom_intensity = 0.0;
+            if effect != "ssr" || !on {
+                renderer.ssr = None;
+            }
+            if effect != "ssgi" || !on {
+                renderer.ssgi = None;
+            }
+            let mut assets = AssetManager::new();
+            let mut world = World::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            for (at, half, material) in [
+                (Vec3::new(0.0, -1.2, 0.0), Vec3::new(20.0, 0.2, 20.0), Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 1.0, 0.05)),
+                (Vec3::ZERO, Vec3::ONE, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 0.6)),
+            ]
+            .into_iter()
+            .chain(panel.then(|| (Vec3::new(-3.0, 0.0, 0.0), Vec3::new(0.02, 1.2, 1.2), Material::new(tex.clone()).with_unlit(Vec4::new(0.3, 0.3, 0.8, 1.0)))))
+            {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(-5.0, 2.0, 0.0), yaw: 0.0, pitch: -0.35, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            for effect in ["ssr", "ssgi"] {
+                let (bare_on, bare_off) = (frame(false, effect, true).await, frame(false, effect, false).await);
+                let (panel_on, panel_off) = (frame(true, effect, true).await, frame(true, effect, false).await);
+                // The panel's pixels: where it changes the frame.
+                let (mut pixels, mut behind, mut over) = (0, 0u64, 0u64);
+                for i in (0..bare_off.len()).step_by(4) {
+                    if (0..3).all(|c| panel_off[i + c].abs_diff(bare_off[i + c]) <= 20) {
+                        continue;
+                    }
+                    pixels += 1;
+                    for c in 0..3 {
+                        behind += u64::from(bare_on[i + c].abs_diff(bare_off[i + c]));
+                        over += u64::from(panel_on[i + c].abs_diff(panel_off[i + c]));
+                    }
+                }
+                eprintln!("{effect}: {pixels} panel pixels; {behind} moved there with no panel, {over} over the panel");
+                assert!(pixels > 4000, "the setup: the panel covers {pixels} pixels");
+                assert!(behind > 50_000, "the setup: {effect} moves {behind} on the floor and cube behind the panel");
+                assert_eq!(over, 0, "{effect} was added over a panel drawn forward in front of the surface it belongs to");
+            }
+        });
+    }
+
     /// Two cameras, one encoder, one submit — which is what `SceneView` exists for.
     ///
     /// Camera matrices used to live in one buffer written with `queue.write_buffer`, and those
