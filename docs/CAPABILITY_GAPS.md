@@ -772,12 +772,21 @@ shadows. Each item:
   `a_cut_out_casts_what_it_keeps_in_the_viewport`). Measuring it turned up two more faults, fixed
   with it: a `ShadowCasting::Only` object was drawn by the forward pass, and the point light's faces
   were drawn without the index buffer (above).
-- **Open, and next: an opaque cut-out is blended where it is drawn forward.** The desktop's forward lit
-  pipelines and the forward-only path's `DETAILS` tier blend an opaque draw by its alpha while writing
-  its depth, so a cut-out's kept texels under 1 show what was drawn before them — by the order the
-  batches came out of a hash map. Measured in the editor viewport: a plane at alpha 0.8 cut at 0.5
-  changed 1 577 pixels by up to 34 between identical frames, in 3 renders of 6. The G-buffer writes
-  the same texels solid, so the viewport and a phone show cut-out edges the desktop game does not.
+- ~~**An opaque cut-out was blended where it was drawn forward.**~~ **CLOSED 2026-11-11.** The
+  desktop's forward lit pipelines, the forward-only path's `DETAILS` and `LOBES` tiers, the opaque
+  unlit pipelines and a game surface's opaque set all blended an opaque draw by its alpha while
+  writing its depth, so a cut-out's kept texels under 1 — and an opaque material's texture alpha —
+  showed what was drawn before them, by the order the batches came out of a hash map. Measured in the
+  editor viewport: a plane at alpha 0.8 cut at 0.5 changed 1 577 pixels by up to 34 between identical
+  frames, in 3 renders of 6; on the forward-only path a cube so cut differed from itself at alpha 1 by
+  5 476 pixels, and an unlit one on the desktop by 3 614. The G-buffer writes those texels solid, so
+  the viewport and a phone showed edges the desktop game does not. Every pipeline an opaque draw takes
+  is unblended now (`pipelines::OPAQUE`), and a transparent unlit draw blending by alpha has a pipeline
+  of its own (`SceneState::unlit_blended_pipeline`). The cube draws the same frame at 0.8 as at 1 on
+  both paths and in the viewport, lit, two-sided, unlit and as a game's surface
+  (`an_opaque_draw_is_not_blended_on_any_route`, `an_opaque_cut_out_is_drawn_solid_in_the_viewport`).
+  **A look that changes:** a cut-out's soft edges in the editor and on a phone are as hard as the
+  game's.
 
 - **Spherical area lights: CLOSED 2026-11-01** — `PointLight::source_radius` / `SpotLight::source_radius`
   (metres, 0 = a point, the default), through `compute_sphere_lighting` in `common.wgsl`, both

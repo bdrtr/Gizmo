@@ -263,7 +263,7 @@ fn draw_forward_items(
                 // takes that mode's variant, which also does not write depth.
                 match item.is_transparent.then(|| renderer.scene.blend_variant(true, item.blend_mode)).flatten() {
                     Some(p) => p,
-                    None => renderer.scene.unlit_for(item.discards),
+                    None => renderer.scene.unlit_for(item.discards, item.is_transparent),
                 }
             } else {
                 // There is no two-sided *variant* of the blended pipeline because the blended

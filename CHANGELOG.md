@@ -182,6 +182,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An opaque draw was blended where it was drawn forward.** The forward lit pipelines on the desktop, the forward-only
+  path's `DETAILS` and `LOBES` tiers, the opaque unlit pipelines and a game surface's opaque set blended a texel by its
+  alpha while writing its depth, so a cut-out's kept texels under 1 and an opaque material's texture alpha showed what was
+  drawn first — the editor's frame changed between identical renders, by up to 1 577 pixels. None of them blends now
+  (`pipelines::OPAQUE`), as the G-buffer never did; a transparent unlit draw takes `SceneState::unlit_blended_pipeline`,
+  and `SceneState::unlit_for` takes whether the draw is transparent. **Changes the look** of cut-out edges in the editor
+  and on the forward-only path, to the game's.
 - **A cut-out cast its whole quad's shadow.** The shadow pass had no fragment stage. `shadow.wgsl`'s cut-out stage now
   asks the material where it is, for the engine's cut-outs and LOD crossfades and for every game surface (with its own
   `material_surface`, handed the frame's camera and clock through `ShadowVsUniform`). A cut-out cut away everywhere casts

@@ -50,6 +50,8 @@ pub(super) struct CorePipelines {
     pub(super) render_double_sided: wgpu::RenderPipeline,
     pub(super) wireframe: wgpu::RenderPipeline,
     pub(super) unlit: wgpu::RenderPipeline,
+    /// See [`SceneState::unlit_blended_pipeline`](super::SceneState::unlit_blended_pipeline).
+    pub(super) unlit_blended: wgpu::RenderPipeline,
     pub(super) baked_lit: wgpu::RenderPipeline,
     pub(super) baked_lit_transparent: wgpu::RenderPipeline,
     pub(super) sky: wgpu::RenderPipeline,
@@ -161,8 +163,8 @@ pub(super) fn lit_pipeline_layout(device: &wgpu::Device, layouts: &LayoutRefs) -
 }
 
 /// Every lit pipeline a draw on one tier can need, from that tier's `module`: opaque single- and
-/// double-sided, blended by alpha, and blended under each of the other modes. Opaque blends by alpha,
-/// as the `DETAILS` tier's does, since a cut-out's edge is drawn from its alpha.
+/// double-sided, blended by alpha, and blended under each of the other modes. The opaque ones do not
+/// blend: see [`OPAQUE`].
 pub(crate) fn lit_set(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
@@ -172,14 +174,24 @@ pub(crate) fn lit_set(
     let alpha = Some(wgpu::BlendState::ALPHA_BLENDING);
     let fill = wgpu::PolygonMode::Fill;
     super::LitSet {
-        render: forward_pipeline(device, layout, module, "fs_main", &format!("Render Pipeline ({name})"), true, Some(wgpu::Face::Back), alpha, fill),
-        render_double_sided: forward_pipeline(device, layout, module, "fs_main", &format!("Render TwoSided Pipeline ({name})"), true, None, alpha, fill),
+        render: forward_pipeline(device, layout, module, "fs_main", &format!("Render Pipeline ({name})"), true, Some(wgpu::Face::Back), OPAQUE, fill),
+        render_double_sided: forward_pipeline(device, layout, module, "fs_main", &format!("Render TwoSided Pipeline ({name})"), true, None, OPAQUE, fill),
         transparent: forward_pipeline(device, layout, module, "fs_main", &format!("Transparent Pipeline ({name})"), false, None, alpha, fill),
         blend: crate::components::BlendMode::VARIANTS.map(|mode| {
             forward_pipeline(device, layout, module, lit_fragment_entry(mode), &format!("Transparent Pipeline ({mode:?}, {name})"), false, None, Some(mode.state()), fill)
         }),
     }
 }
+
+/// The blend of every pipeline an opaque draw takes: none. Opaque means opaque, as it does in the
+/// G-buffer, which writes a surface's texels solid whatever their alpha. These pipelines write depth
+/// and draw in no particular order, so blending a texel by its alpha shows whatever happened to be
+/// drawn behind it first: until 2026-11-11 a cut-out's kept texels under 1 showed the sky, or the other
+/// of two batches a hash map gave first, in the editor viewport, on the forward-only path's `DETAILS`
+/// tier and wherever an unlit or a game's surface was drawn forward — 1 577 pixels changing between
+/// identical frames in the editor. A surface that shows through says so with
+/// `Material::is_transparent` and is drawn, sorted, by the blended pipelines.
+pub(crate) const OPAQUE: Option<wgpu::BlendState> = None;
 
 /// `probes`: which reflection probes the forward-only path's lit shaders read, which is what a scene has
 /// ([`ProbeShape`](super::ProbeShape), `SceneState::set_forward_reflections`). The desktop's read any,
@@ -439,7 +451,7 @@ pub(super) fn build_core_pipelines(
         "Render Pipeline (details)",
         true,
         Some(wgpu::Face::Back),
-        Some(wgpu::BlendState::ALPHA_BLENDING),
+        OPAQUE,
         wgpu::PolygonMode::Fill,
     ));
     #[cfg(not(gizmo_forward_only))]
@@ -465,7 +477,7 @@ pub(super) fn build_core_pipelines(
         "Unlit Pipeline (may discard)",
         true,
         None,
-        Some(wgpu::BlendState::ALPHA_BLENDING),
+        OPAQUE,
         wgpu::PolygonMode::Fill,
     ));
     #[cfg(not(gizmo_forward_only))]
@@ -511,11 +523,8 @@ pub(super) fn build_core_pipelines(
             "Render Pipeline",
             true,
             Some(wgpu::Face::Back),
-            // Opaque means opaque on the forward-only path, as it does in the G-buffer: this tier has no
-            // discard, and blending a texel away while writing its depth would cut whatever is drawn
-            // behind it later. A surface that shows through says so with `Material::is_transparent` or
-            // `Material::alpha_cutoff`, and is not on this tier.
-            if cfg!(gizmo_forward_only) { None } else { Some(wgpu::BlendState::ALPHA_BLENDING) },
+            // See `OPAQUE`: on every path, as in the G-buffer.
+            OPAQUE,
             wgpu::PolygonMode::Fill,
         ),
         render_double_sided: create_main(
@@ -524,7 +533,7 @@ pub(super) fn build_core_pipelines(
             "Render TwoSided Pipeline",
             true,
             None,
-            Some(wgpu::BlendState::ALPHA_BLENDING),
+            OPAQUE,
             wgpu::PolygonMode::Fill,
         ),
         wireframe: create_main(
@@ -554,6 +563,17 @@ pub(super) fn build_core_pipelines(
             &render_pipeline_layout,
             &unlit_shader,
             "Unlit Pipeline",
+            true,
+            None,
+            OPAQUE,
+            wgpu::PolygonMode::Fill,
+        ),
+        // A transparent unlit draw blending by alpha, which the opaque `unlit` drew until 2026-11-11
+        // (see `OPAQUE`). It may discard, and it writes depth, as that pipeline did for it.
+        unlit_blended: create_main(
+            &render_pipeline_layout,
+            unlit_keeps_shader,
+            "Unlit Pipeline (blended)",
             true,
             None,
             Some(wgpu::BlendState::ALPHA_BLENDING),

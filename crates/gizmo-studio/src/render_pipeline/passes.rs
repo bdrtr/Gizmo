@@ -609,7 +609,7 @@ pub(super) fn record_studio_main_pass(
                 // transparent batch with the lit shader, unlit ones included.
                 let engine = match renderer.scene.blend_variant(batch.is_unlit, batch.blend_mode) {
                     Some(p) => p,
-                    None if batch.is_unlit => &renderer.scene.unlit_pipeline,
+                    None if batch.is_unlit => &renderer.scene.unlit_blended_pipeline,
                     None => &renderer.scene.transparent_pipeline,
                 };
                 let Some(pipeline) = batch_pipeline(renderer, batch, true, engine) else { continue };

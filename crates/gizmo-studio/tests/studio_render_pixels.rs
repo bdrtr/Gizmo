@@ -1062,11 +1062,13 @@ fn a_cut_out_casts_what_it_keeps_in_the_viewport() {
         on.chunks(BPP as usize).zip(off.chunks(BPP as usize)).filter(|(a, b)| luma(a) + 20 < luma(b)).count()
     };
     let whole = shadowed(|m| m);
-    // Alpha 1, not a value between the threshold and 1: this viewport draws an opaque cut-out's texels
-    // blended while writing depth, so one at 0.8 shows the ground or the clear colour through it by
-    // which batch the hash map gave first, and the frame changes from run to run (4 in 25). That is
-    // the viewport's drawing of a cut-out, not its shadow.
-    let kept = shadowed(|m| m.with_alpha_cutoff(0.5));
+    // Kept at 0.8, between the threshold and 1. The viewport drew such texels blended while writing
+    // depth until `an_opaque_cut_out_is_drawn_solid_in_the_viewport` held, so this count changed from
+    // run to run (4 in 25 read 2786): the ground or the clear colour showed through, by which batch a
+    // hash map gave first.
+    let kept = shadowed(|m| {
+        m.with_pbr(Vec4::new(0.9, 0.25, 0.25, 0.8), 0.6, 0.0).with_transparent(false).with_alpha_cutoff(0.5)
+    });
     // `with_pbr` makes an alpha under 1 transparent; a cut-out is opaque, cut.
     let cut = shadowed(|m| {
         m.with_pbr(Vec4::new(0.9, 0.25, 0.25, 0.3), 0.6, 0.0).with_transparent(false).with_alpha_cutoff(0.5)
@@ -2552,7 +2554,7 @@ fn render_game_material_frame(material: GameMaterial) -> Option<Vec<u8>> {
 /// its casting `shadows`.
 fn render_cube_frame(
     material: GameMaterial,
-    adjust: fn(Material) -> Material,
+    adjust: impl FnOnce(Material) -> Material,
     shadows: gizmo::renderer::components::ShadowCasting,
 ) -> Option<Vec<u8>> {
     use gizmo::renderer::components::MaterialType;
@@ -2654,6 +2656,43 @@ fn render_cube_frame(
         staging.unmap();
         Some(pixels)
     })
+}
+
+/// **An opaque cut-out is drawn solid in the viewport, as the game's G-buffer draws it.** The
+/// viewport's opaque pipeline blended a texel by its alpha while writing its depth, and its opaque
+/// batches come out of a hash map in no fixed order: a cut-out kept at 0.8 showed the clear colour or
+/// the ground through it by which was drawn first, and identical frames differed by up to 1 577
+/// pixels (3 renders of 6). Now the cube at 0.8 draws the frame it draws at 1, every time, lit and
+/// unlit.
+#[test]
+fn an_opaque_cut_out_is_drawn_solid_in_the_viewport() {
+    use gizmo::renderer::components::{MaterialType, ShadowCasting};
+    let _gpu = gpu_lock();
+    let Some(_) = render_game_material_frame(GameMaterial::None) else { return };
+    // The cube's own material, with its alpha set and cut at 0.5: `with_pbr` would also reset its type.
+    fn cut(mut m: Material, alpha: f32) -> Material {
+        m.albedo.w = alpha;
+        m.with_transparent(false).with_alpha_cutoff(0.5)
+    }
+    let routes: [(&str, GameMaterial, fn(Material) -> Material); 4] = [
+        ("lit", GameMaterial::Pbr, |m| m),
+        ("two-sided", GameMaterial::Pbr, |m| m.with_double_sided(true)),
+        ("unlit", GameMaterial::Pbr, |mut m| {
+            m.material_type = MaterialType::Unlit;
+            m
+        }),
+        ("game-surface", GameMaterial::StandardSurface, |m| m),
+    ];
+    for (name, material, route) in routes {
+        let solid = |m| cut(route(m), 1.0);
+        let reference = render_cube_frame(material, solid, ShadowCasting::On).expect("usable");
+        let kept = |m| cut(route(m), 0.8);
+        for run in 0..3 {
+            let frame = render_cube_frame(material, kept, ShadowCasting::On).expect("usable");
+            let differing = reference.chunks(4).zip(frame.chunks(4)).filter(|(a, b)| a != b).count();
+            assert_eq!(differing, 0, "the {name} cut-out kept at 0.8 drew {differing} pixels unlike it at 1 (render {run})");
+        }
+    }
 }
 
 /// **A shadow-only object is drawn by no loop of the viewport.** Only the single-sided opaque loop

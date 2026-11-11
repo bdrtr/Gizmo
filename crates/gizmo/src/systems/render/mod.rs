@@ -13028,6 +13028,126 @@ fn material_surface(input: SurfaceInput) -> Surface {
         });
     }
 
+    /// **An opaque draw is not blended, on any route.** The G-buffer writes an opaque surface's texels
+    /// solid whatever their alpha, and the forward lit and unlit pipelines blended them by it while
+    /// writing their depth: a cut-out's kept texels under 1 showed the sky behind — or whatever batch a
+    /// hash map gave first — on the forward-only path, in the editor, and wherever an unlit or a game's
+    /// surface was drawn forward. A cube cut out at 0.5 draws the same frame at alpha 0.8 as at alpha 1,
+    /// lit, unlit, two-sided and as a game's surface, on whichever path this build draws with.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn an_opaque_draw_is_not_blended_on_any_route() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        use gizmo_renderer::components::MaterialType;
+        async fn frame(alpha: f32, route: fn(Material, &mut Renderer) -> Material) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut assets = AssetManager::new();
+            let mut world = World::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::ZERO));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            // `with_pbr` makes an alpha under 1 transparent; a cut-out is opaque, cut.
+            let cut_out = Material::new(tex)
+                .with_pbr(Vec4::new(0.9, 0.2, 0.2, alpha), 0.5, 0.0)
+                .with_transparent(false)
+                .with_alpha_cutoff(0.5);
+            world.add_component(e, route(cut_out, &mut renderer));
+            world.add_component(e, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 4.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                ..Default::default()
+            });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await
+        }
+        let routes: [(&str, fn(Material, &mut Renderer) -> Material); 4] = [
+            ("lit", |m, _| m),
+            ("two-sided", |m, _| m.with_double_sided(true)),
+            ("unlit", |mut m, _| {
+                m.material_type = MaterialType::Unlit;
+                m
+            }),
+            ("game-surface", |mut m, r| {
+                m.material_type = MaterialType::CustomSurface(r.add_surface_material("standard", STANDARD_SURFACE_WGSL).expect("composes"));
+                m
+            }),
+        ];
+        pollster::block_on(async {
+            for (name, route) in routes {
+                let solid = frame(1.0, route).await;
+                let kept = frame(0.8, route).await;
+                let (differs, total) = changed_pixels(&solid, &kept, 128);
+                assert_eq!(differs, 0, "the {name} cut-out kept at alpha 0.8 drew {differs}/{total} pixels unlike the same at alpha 1");
+            }
+        });
+    }
+
+    /// **A transparent unlit draw blends by its alpha.** Opaque and transparent unlit draws blending by
+    /// alpha shared one pipeline, which blended, and an opaque draw must not (`an_opaque_draw_is_not_
+    /// blended_on_any_route`), so the two have a pipeline each: an unlit panel at alpha 0.5 in front of
+    /// an unlit wall shows the two mixed, between the wall's colour and its own opaque one, channel by
+    /// channel.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_transparent_unlit_draw_blends_by_its_alpha() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn middle(panel_alpha: Option<f32>) -> [u8; 3] {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut assets = AssetManager::new();
+            let mut world = World::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let wall = world.spawn();
+            world.add_component(wall, Transform::new(Vec3::new(0.0, 0.0, -2.0)).with_scale(Vec3::new(20.0, 20.0, 0.1)));
+            world.add_component(wall, GlobalTransform::default());
+            world.add_component(wall, AssetManager::create_cube(&renderer.device));
+            world.add_component(wall, Material::new(tex.clone()).with_unlit(Vec4::new(0.1, 0.3, 0.7, 1.0)));
+            world.add_component(wall, MeshRenderer::new());
+            if let Some(alpha) = panel_alpha {
+                let panel = world.spawn();
+                world.add_component(panel, Transform::new(Vec3::ZERO).with_scale(Vec3::new(1.0, 1.0, 0.05)));
+                world.add_component(panel, GlobalTransform::default());
+                world.add_component(panel, AssetManager::create_cube(&renderer.device));
+                world.add_component(panel, Material::new(tex).with_unlit(Vec4::new(0.9, 0.2, 0.1, alpha)));
+                world.add_component(panel, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 4.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let i = (64 * 128 + 64) * 4;
+            [frame[i], frame[i + 1], frame[i + 2]]
+        }
+        pollster::block_on(async {
+            let wall = middle(None).await;
+            let solid = middle(Some(1.0)).await;
+            let blended = middle(Some(0.5)).await;
+            for c in [0, 2] {
+                let (low, high) = (wall[c].min(solid[c]), wall[c].max(solid[c]));
+                assert!(
+                    low < blended[c] && blended[c] < high,
+                    "channel {c}: the half-transparent panel reads {blended:?}, not between the wall's {wall:?} and its own {solid:?}",
+                );
+            }
+        });
+    }
+
     /// What hiding an object actually does — and what the docs said it did.
     ///
     /// `docs/CAPABILITY_GAPS.md` listed a missing `Visibility` component whose consequence was

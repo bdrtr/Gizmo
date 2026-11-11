@@ -46,7 +46,11 @@ pub struct SceneState {
     /// The same, with culling off, for materials marked double-sided.
     pub render_double_sided_pipeline: wgpu::RenderPipeline,
     /// Albedo straight through, no lighting — see [`MaterialType::Unlit`](crate::components::MaterialType::Unlit).
+    /// Opaque: it does not blend (`pipelines::OPAQUE`).
     pub unlit_pipeline: wgpu::RenderPipeline,
+    /// The same for a transparent unlit draw blending by alpha; the other blend modes have
+    /// [`blend_unlit_pipelines`](Self::blend_unlit_pipelines).
+    pub unlit_blended_pipeline: wgpu::RenderPipeline,
     /// Baked lighting × texture, with the sun's cascade term. See `shaders/baked_lit.wgsl`.
     pub baked_lit_pipeline: wgpu::RenderPipeline,
     /// The same shader with alpha blending and no depth write, for a `BakedLit` material
@@ -495,8 +499,12 @@ impl SceneState {
         self.env_cube.background()
     }
 
-    /// The pipeline for an unlit draw blending by alpha, or not at all. `discards` says it may discard.
-    pub fn unlit_for(&self, discards: bool) -> &wgpu::RenderPipeline {
+    /// The pipeline for an unlit draw that is opaque, or `transparent` and blending by alpha.
+    /// `discards` says an opaque one may discard; a blended one always may.
+    pub fn unlit_for(&self, discards: bool, transparent: bool) -> &wgpu::RenderPipeline {
+        if transparent {
+            return &self.unlit_blended_pipeline;
+        }
         self.unlit_keeps_pipeline.as_ref().filter(|_| discards).unwrap_or(&self.unlit_pipeline)
     }
 
@@ -1042,6 +1050,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         render_double_sided_pipeline: core_pipelines.render_double_sided,
         wireframe_pipeline: core_pipelines.wireframe,
         unlit_pipeline: core_pipelines.unlit,
+        unlit_blended_pipeline: core_pipelines.unlit_blended,
         baked_lit_pipeline: core_pipelines.baked_lit,
         baked_lit_transparent_pipeline: core_pipelines.baked_lit_transparent,
         sky_pipeline: core_pipelines.sky,
@@ -1147,6 +1156,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.render_double_sided_pipeline = core_pipelines.render_double_sided;
     renderer.scene.wireframe_pipeline = core_pipelines.wireframe;
     renderer.scene.unlit_pipeline = core_pipelines.unlit;
+    renderer.scene.unlit_blended_pipeline = core_pipelines.unlit_blended;
     renderer.scene.baked_lit_pipeline = core_pipelines.baked_lit;
     renderer.scene.baked_lit_transparent_pipeline = core_pipelines.baked_lit_transparent;
     renderer.scene.sky_pipeline = core_pipelines.sky;
