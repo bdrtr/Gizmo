@@ -186,6 +186,80 @@ impl LightProbe {
     }
 }
 
+/// A local light as [`ProbeGrid::bake_from_lights`] takes it: where it stands, its colour and
+/// intensity, how far it reaches, and which way it throws its light.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub struct BakeLight {
+    /// World position.
+    pub position: Vec3,
+    /// Linear RGB colour.
+    pub color: Vec3,
+    /// Brightness.
+    pub intensity: f32,
+    /// The distance past which it lights nothing.
+    pub radius: f32,
+    /// Which way it throws its light.
+    pub emits: Emits,
+}
+
+impl BakeLight {
+    /// A point light: every way.
+    pub fn point(position: Vec3, color: Vec3, intensity: f32, radius: f32) -> Self {
+        Self { position, color, intensity, radius, emits: Emits::Everywhere }
+    }
+
+    /// A spot light down `axis` (unit), full inside `inner` and nothing past `outer` (half-angles,
+    /// radians), as `SpotLight` lights a surface.
+    pub fn spot(position: Vec3, color: Vec3, intensity: f32, radius: f32, axis: Vec3, inner: f32, outer: f32) -> Self {
+        Self { position, color, intensity, radius, emits: Emits::Cone { axis, cos_inner: inner.cos(), cos_outer: outer.cos() } }
+    }
+
+    /// A panel facing `normal` (unit): one side, dimmer off its axis as a flat emitter is, as
+    /// `RectLight` lights a surface from far away.
+    pub fn panel(position: Vec3, color: Vec3, intensity: f32, radius: f32, normal: Vec3) -> Self {
+        Self { position, color, intensity, radius, emits: Emits::Face { normal } }
+    }
+}
+
+/// Which way a [`BakeLight`] throws its light.
+#[derive(Clone, Copy, Debug, PartialEq)]
+#[non_exhaustive]
+pub enum Emits {
+    /// Every way: a point light.
+    Everywhere,
+    /// Down a cone: a spot light. `axis` is unit; the cosines of its inner and outer half-angles.
+    Cone {
+        /// The cone's axis, unit.
+        axis: Vec3,
+        /// Cosine of the half-angle inside which it is full.
+        cos_inner: f32,
+        /// Cosine of the half-angle past which it is nothing.
+        cos_outer: f32,
+    },
+    /// From one face: a rectangle light. `normal` is the side it lights, unit.
+    Face {
+        /// The side it lights, unit.
+        normal: Vec3,
+    },
+}
+
+impl Emits {
+    /// How much of the light goes along `from_light` (unit, from the light outward): 1 for a point;
+    /// for a cone, the square of the ramp from its outer to its inner cosine, as the lit shaders'
+    /// `spot_cone`; for a face, the cosine off its normal, and nothing behind it.
+    pub fn toward(self, from_light: Vec3) -> f32 {
+        match self {
+            Self::Everywhere => 1.0,
+            Self::Cone { axis, cos_inner, cos_outer } => {
+                let ramp = ((from_light.dot(axis) - cos_outer) / (cos_inner - cos_outer).max(0.001)).clamp(0.0, 1.0);
+                ramp * ramp
+            }
+            Self::Face { normal } => from_light.dot(normal).max(0.0),
+        }
+    }
+}
+
 /// The probe grid — probes placed at regular intervals across the scene.
 pub struct ProbeGrid {
     /// The probes, in x-major grid order.
@@ -235,12 +309,13 @@ impl ProbeGrid {
 
     /// Simple baking: computes each probe's SH coefficients from the scene's lights.
     ///
-    /// Instead of a real path tracer, it projects the existing DirectionalLights and PointLights
-    /// into SH analytically.
+    /// Instead of a real path tracer, it projects the directional lights — `(travel direction,
+    /// colour, intensity)` — and the local ones ([`BakeLight`]: points, spots, panels, each by where
+    /// it throws its light) into SH analytically.
     pub fn bake_from_lights(
         &mut self,
         directional_lights: &[(Vec3, Vec3, f32)], // (direction, color, intensity)
-        point_lights: &[(Vec3, Vec3, f32, f32)],  // (position, color, intensity, radius)
+        local_lights: &[BakeLight],
         ambient_color: Vec3,
     ) {
         let start = Instant::now();
@@ -261,19 +336,24 @@ impl ProbeGrid {
                 coeffs.add_directional_light(-dir, color * intensity);
             }
 
-            // Point lights (probe'a göre yön ve uzaklık hesapla)
-            for &(light_pos, color, intensity, radius) in point_lights {
-                let to_light = light_pos - probe.position;
+            // Local lights, by direction and distance from the probe, and by how much of each comes
+            // this way: all of a point light's, a spot's inside its cone, a panel's on its lit side.
+            for light in local_lights {
+                let to_light = light.position - probe.position;
                 let dist = to_light.length();
-                if dist < 0.001 || dist > radius {
+                if dist < 0.001 || dist > light.radius {
                     continue;
                 }
 
                 let direction = to_light / dist;
-                let attenuation = 1.0 - (dist / radius).min(1.0);
+                let attenuation = 1.0 - (dist / light.radius).min(1.0);
                 let attenuation = attenuation * attenuation; // quadratic falloff
+                let emitted = light.emits.toward(-direction);
+                if emitted <= 0.0 {
+                    continue;
+                }
 
-                coeffs.add_directional_light(direction, color * intensity * attenuation);
+                coeffs.add_directional_light(direction, light.color * light.intensity * attenuation * emitted);
             }
 
             probe.coeffs = coeffs;
@@ -492,4 +572,34 @@ mod tests {
         assert_eq!(data[3], 0.1);
         assert_eq!(data.len(), 28);
     }
+
+    /// **A spot and a panel light the probes their light reaches, and only those.** A probe two metres
+    /// below each light: a point light lights it; a spot aimed at it lights it as much (it is on the
+    /// cone's axis) and one aimed away not at all; a panel facing it lights it as much, one facing away
+    /// not at all. The bake took point lights only until 2026-11-11, so a scene lit by spots and panels
+    /// baked its ambient alone.
+    #[test]
+    fn a_spot_and_a_panel_light_the_probes_their_light_reaches() {
+        let up_light = |light: BakeLight| {
+            let mut grid = ProbeGrid::new(Vec3::new(-0.5, -0.5, -0.5), Vec3::new(0.5, 0.5, 0.5), [1, 1, 1]);
+            grid.bake_from_lights(&[], &[light], Vec3::ZERO);
+            grid.sample(Vec3::ZERO).evaluate(Vec3::Y).x
+        };
+        let at = Vec3::new(0.0, 2.0, 0.0);
+        let point = up_light(BakeLight::point(at, Vec3::ONE, 3.0, 10.0));
+        let spot_at = up_light(BakeLight::spot(at, Vec3::ONE, 3.0, 10.0, Vec3::NEG_Y, 0.3, 0.5));
+        let spot_away = up_light(BakeLight::spot(at, Vec3::ONE, 3.0, 10.0, Vec3::Y, 0.3, 0.5));
+        let panel_at = up_light(BakeLight::panel(at, Vec3::ONE, 3.0, 10.0, Vec3::NEG_Y));
+        let panel_away = up_light(BakeLight::panel(at, Vec3::ONE, 3.0, 10.0, Vec3::Y));
+        assert!(point > 0.0, "a point light lights the probe below it: {point}");
+        assert!((spot_at - point).abs() < 1e-5 && (panel_at - point).abs() < 1e-5, "on the axis, as a point: {spot_at} / {panel_at} / {point}");
+        assert!(spot_away <= 0.0 && panel_away <= 0.0, "aimed away, nothing: {spot_away} / {panel_away}");
+        // Half way out of the cone's ramp, a quarter: the square of the ramp, as the lit shaders.
+        let mid = (0.4f32).cos();
+        let ramp = (mid - 0.5f32.cos()) / (0.3f32.cos() - 0.5f32.cos());
+        let cone = Emits::Cone { axis: Vec3::NEG_Y, cos_inner: 0.3f32.cos(), cos_outer: 0.5f32.cos() };
+        let along = Vec3::new(0.4f32.sin(), -0.4f32.cos(), 0.0);
+        assert!((cone.toward(along) - ramp * ramp).abs() < 1e-5);
+    }
+
 }

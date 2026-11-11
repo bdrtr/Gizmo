@@ -263,7 +263,7 @@ pub use deferred::{
     DeferredState, GBUFFER_ALBEDO_METALLIC_FORMAT, GBUFFER_NORMAL_ROUGHNESS_FORMAT,
     GBUFFER_WORLD_POSITION_FORMAT, GBUFFER_WORLD_TANGENT_FORMAT,
 };
-pub use gi::{LightProbe, ProbeGrid, SHCoeffs};
+pub use gi::{BakeLight, Emits, LightProbe, ProbeGrid, SHCoeffs};
 pub use gpu_types::{
     InstanceRaw, LightData, MaterialParams, PostProcessUniforms, SceneUniforms, ShadowVsUniform,
     Vertex,

@@ -233,6 +233,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **An irradiance volume baked point lights and no others.** A spot or a rectangle light was not in the bake, so a room lit
+  by them baked its ambient alone. `ProbeGrid::bake_from_lights` takes `gi::BakeLight`s — a point, a spot down its cone
+  (the lit shaders' ramp), a panel from its lit face (dimmer off its axis) — where it took `(position, colour, intensity,
+  radius)` tuples, and the scene's volume bakes every one of them, rebaking when one is added, moved or turned.
 - **A fill or rim light lit nothing.** Only the scene's sun was read from the world, so a `DirectionalLight` with
   `LightRole::Generic` — "an ordinary directional light, fill or rim" — and every sun after the first lit nothing: the
   floor under one read what it reads unlit. Each is a directional light in the frame's light array now, without a shadow,

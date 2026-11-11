@@ -447,12 +447,29 @@ pub fn sync_irradiance_volume(world: &World, renderer: &mut crate::renderer::Ren
             }
         }
     }
-    let mut points = Vec::new();
+    // Every local light, each by where it throws its light: a spot down its cone, a panel from its lit
+    // face. Point lights only until 2026-11-11, so a room lit by spots and panels baked its ambient alone.
+    use crate::renderer::gi::BakeLight;
+    let mut locals = Vec::new();
     {
         let q = world.query::<(Entity, &PointLight)>();
         for (e, light) in q.iter() {
             if let Some((pos, _)) = world_tf(e) {
-                points.push((pos, light.color, light.intensity, light.radius));
+                locals.push(BakeLight::point(pos, light.color, light.intensity, light.radius));
+            }
+        }
+        let q = world.query::<(Entity, &SpotLight)>();
+        for (e, light) in q.iter() {
+            if let Some((pos, rot)) = world_tf(e) {
+                let axis = rot.mul_vec3(Vec3::NEG_Z).normalize_or_zero();
+                locals.push(BakeLight::spot(pos, light.color, light.intensity, light.radius, axis, light.inner_angle, light.outer_angle));
+            }
+        }
+        let q = world.query::<(Entity, &RectLight)>();
+        for (e, light) in q.iter() {
+            if let Some((pos, rot)) = world_tf(e) {
+                let normal = rot.mul_vec3(Vec3::NEG_Z).normalize_or_zero();
+                locals.push(BakeLight::panel(pos, light.color, light.intensity, light.radius, normal));
             }
         }
     }
@@ -465,8 +482,13 @@ pub fn sync_irradiance_volume(world: &World, renderer: &mut crate::renderer::Ren
     for (d, c, i) in &directional {
         d.to_array().into_iter().chain(c.to_array()).chain([*i]).for_each(&mut put);
     }
-    for (p, c, i, r) in &points {
-        p.to_array().into_iter().chain(c.to_array()).chain([*i, *r]).for_each(&mut put);
+    for light in &locals {
+        let shape = match light.emits {
+            crate::renderer::gi::Emits::Cone { axis, cos_inner, cos_outer } => [1.0, axis.x, axis.y, axis.z, cos_inner, cos_outer],
+            crate::renderer::gi::Emits::Face { normal } => [2.0, normal.x, normal.y, normal.z, 0.0, 0.0],
+            _ => [0.0; 6],
+        };
+        light.position.to_array().into_iter().chain(light.color.to_array()).chain([light.intensity, light.radius]).chain(shape).for_each(&mut put);
     }
     let fingerprint = hasher.finish();
 
@@ -476,7 +498,7 @@ pub fn sync_irradiance_volume(world: &World, renderer: &mut crate::renderer::Ren
         return;
     }
     let mut grid = crate::renderer::gi::ProbeGrid::new(volume.min, volume.max, volume.resolution);
-    grid.bake_from_lights(&directional, &points, volume.ambient);
+    grid.bake_from_lights(&directional, &locals, volume.ambient);
     def.irradiance.upload(device, queue, &grid);
     def.irradiance.baked_from = Some(fingerprint);
 }

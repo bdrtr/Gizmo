@@ -159,7 +159,9 @@ fn main() {
             );
             grid.bake_from_lights(
                 &[(sun_dir, sun_colour, 0.35)],
-                &point_lights,
+                &point_lights.map(|(position, colour, intensity, radius)| {
+                    gizmo::renderer::gi::BakeLight::point(position, colour, intensity, radius)
+                }),
                 Vec3::splat(0.03),
             );
 

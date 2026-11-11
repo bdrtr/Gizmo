@@ -4175,7 +4175,7 @@ mod golden_render_tests {
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no irradiance volumes.
     /// An `IrradianceVolume` placed in the world is baked and uploaded by the frame itself: its
     /// probes reach the lighting pass (a red ambient tints a dim scene red), a still scene does not
-    /// rebake (the fingerprint holds), and moving a light does.
+    /// rebake (the fingerprint holds), and moving a light does — a spot's added or turned too.
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn an_irradiance_volume_bakes_itself_and_rebakes_on_change() {
@@ -4238,7 +4238,20 @@ mod golden_render_tests {
                 q.get_mut(lamp).unwrap().position.x = 1.0;
             }
             let _ = render_world(&mut renderer, &mut world).await;
-            assert_ne!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, Some(first), "a moved light rebakes");
+            let moved = renderer.deferred.as_ref().unwrap().irradiance.baked_from;
+            assert_ne!(moved, Some(first), "a moved light rebakes");
+
+            // A spot is in the bake too (point lights only, until 2026-11-11), and which way it aims.
+            let spot = world.spawn();
+            world.add_component(spot, Transform::new(Vec3::new(0.0, 2.0, 0.0)));
+            world.add_component(spot, GlobalTransform::default());
+            world.add_component(spot, crate::renderer::components::SpotLight::new(Vec3::ONE, 2.0, 8.0, 0.3, 0.5));
+            let _ = render_world(&mut renderer, &mut world).await;
+            let with_spot = renderer.deferred.as_ref().unwrap().irradiance.baked_from;
+            assert_ne!(with_spot, moved, "a spot rebakes");
+            world.query_mut::<&mut Transform>().get_mut(spot).unwrap().rotation = crate::math::Quat::from_rotation_x(1.0);
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_ne!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, with_spot, "a spot turned rebakes");
 
             // Measured: mean red − blue −12.26 without the volume, 30.40 with its red ambient.
             assert!(
