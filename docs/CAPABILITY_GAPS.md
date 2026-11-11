@@ -25,8 +25,8 @@ capabilities in section A.
 
 **Section A as of 2026-11-02:** sprites (A1), text (A2), extrusion (A4), reflection probes (A5),
 split screen (A5b), area lights / cookies / soft and contact shadows (A7) and motion blur (A7c) are
-closed, occlusion culling (A7b) since 2026-11-05. Open: user shaders stay forward-only (A3) and MSAA is
-declined by decision (A6). A8's three closed: runtime component definition 2026-11-08, system
+closed, occlusion culling (A7b) since 2026-11-05, and a game's own surface is drawn through the G-buffer
+since 2026-11-11 (A3; a pipeline of its own stays forward). MSAA is declined by decision (A6). A8's three closed: runtime component definition 2026-11-08, system
 hot-patching 2026-11-09, and the render world 2026-11-10 — the frame drawn from a copy on a render
 thread, with what a game adds on the stage and cameras that draw into textures. Planar reflections
 (A7d) closed 2026-11-06. The
