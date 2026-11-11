@@ -5027,6 +5027,93 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer to write motion to.
+    /// **What is drawn forward writes how it moved, as what is drawn deferred does.** A cube moves
+    /// 30 cm to the side between two frames in front of a still wall; the G-buffer's velocity target
+    /// (RT4, what TAA reprojects by and motion blur smears along) is read back at the cube. A cube
+    /// lit through the G-buffer writes its motion there. One drawn forward — unlit, baked-lit — wrote
+    /// none, so those pixels kept the still wall's: TAA reprojected the cube's pixels as if they stood
+    /// still, and motion blur left a moving unlit object sharp.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn what_is_drawn_forward_writes_how_it_moved() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // The mean screen-UV motion across the middle of the frame, after the cube moved; `behind`
+        // puts the cube behind the wall, where it must write nothing.
+        async fn motion(kind: &str, behind: bool) -> [f32; 2] {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let wall = world.spawn();
+            world.add_component(wall, Transform::new(Vec3::new(0.0, 0.0, 3.0)).with_scale(Vec3::new(10.0, 10.0, 0.1)));
+            world.add_component(wall, GlobalTransform::default());
+            world.add_component(wall, AssetManager::create_cube(&renderer.device));
+            world.add_component(wall, Material::new(tex.clone()).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.0, 0.9));
+            world.add_component(wall, MeshRenderer::new());
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 0.0, if behind { 5.0 } else { 0.0 })).with_scale(Vec3::splat(0.6)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            let material = Material::new(tex);
+            let material = match kind {
+                "deferred" => material.with_pbr(Vec4::new(0.8, 0.2, 0.2, 1.0), 0.0, 0.5),
+                "unlit" => material.with_unlit(Vec4::new(0.8, 0.2, 0.2, 1.0)),
+                _ => material.with_baked_lit(Vec4::new(0.8, 0.2, 0.2, 1.0)),
+            };
+            world.add_component(cube, material);
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(DirectionalLightBundle::default());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, -4.0),
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await;
+            world.query_mut::<&mut Transform>().get_mut(cube).expect("the cube").position.x = 0.3;
+            render_world(&mut renderer, &mut world).await;
+            let def = renderer.deferred.as_ref().expect("the deferred path");
+            let bytes = read_target(&renderer, &def.velocity_tex, 128).await;
+            let texel = |x: usize, y: usize| {
+                let t = &bytes[(y * 128 + x) * 8..];
+                [0, 1].map(|c| f16_bits_to_f32(u16::from_le_bytes([t[2 * c], t[2 * c + 1]])))
+            };
+            let mut sum = [0.0f32; 2];
+            for y in 60..68 {
+                for x in 60..68 {
+                    let v = texel(x, y);
+                    sum[0] += v[0] / 64.0;
+                    sum[1] += v[1] / 64.0;
+                }
+            }
+            sum
+        }
+        pollster::block_on(async {
+            let deferred = motion("deferred", false).await;
+            eprintln!("deferred cube: {deferred:?}");
+            assert!(deferred[0].abs() > 0.01, "the setup: a cube lit through the G-buffer writes its motion ({deferred:?})");
+            for kind in ["unlit", "baked-lit"] {
+                let forward = motion(kind, false).await;
+                let hidden = motion(kind, true).await;
+                eprintln!("{kind} cube: {forward:?}; behind the wall {hidden:?}");
+                assert_eq!(hidden, [0.0, 0.0], "a cube drawn {kind} behind the still wall wrote its motion over the wall");
+                assert!(
+                    (forward[0] - deferred[0]).abs() < 0.05 * deferred[0].abs() && (forward[1] - deferred[1]).abs() < 1e-3,
+                    "a cube drawn {kind} wrote {forward:?} where one drawn deferred writes {deferred:?}"
+                );
+            }
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
     /// **A pane shows the air behind it as much as it lets through, and dims none in front of it.** A
     /// lamp stands a metre behind a pane the camera faces, then halfway between them; the pane is

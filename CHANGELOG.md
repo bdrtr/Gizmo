@@ -233,6 +233,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A moving unlit or baked-lit object had no motion of its own for TAA and motion blur.** Both read the G-buffer's
+  velocity, which a surface drawn forward does not write, so its pixels kept the motion of what stood behind: an unlit cube
+  moved 30 cm read 0 where a deferred one reads −0.0764, TAA reprojected it as if it stood still and motion blur left it
+  sharp. After the forward pass each opaque surface drawn forward is drawn again through the G-buffer's vertex stage
+  into the velocity's `xy` alone, where the forward pass left the depth (`fs_motion`, `DeferredState::motion_pipelines`):
+  −0.0764 unlit and baked-lit, and nothing from one behind a still wall. Not water, a mirror or a game's own pipeline.
 - **A pane let through all of the volumetric air behind it.** A surface that blends writes neither the G-buffer nor
   depth, so the march ran on through it and its air was added over everything: a lamp a metre behind a pane 98 % opaque
   moved 3 926 242 of the frame against 2 381 984 through an opaque pane. The nearest surface that blends is drawn alone,

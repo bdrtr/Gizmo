@@ -117,6 +117,9 @@ pub struct DeferredState {
     /// The prepass of a draw that discards, single-sided then double-sided: see `fs_prepass` in
     /// `gbuffer.wgsl`.
     pub z_prepass_discard_pipelines: [wgpu::RenderPipeline; 2],
+    /// The motion of a surface drawn forward into RT4's `xy`, single-sided then double-sided: see
+    /// `fs_motion` in `gbuffer.wgsl`. Drawn after the forward pass, against the depth it left.
+    pub motion_pipelines: [wgpu::RenderPipeline; 2],
 
     // Lighting pass (fullscreen triangle → HDR texture)
     /// The lighting pass: a fullscreen triangle that reads the four targets and resolves every
@@ -175,6 +178,8 @@ struct GeometryPipelines {
     environment_sky: wgpu::RenderPipeline,
     lighting: wgpu::RenderPipeline,
     seen: wgpu::RenderPipeline,
+    /// Single-sided, then double-sided.
+    motion: [wgpu::RenderPipeline; 2],
 }
 
 impl DeferredState {
@@ -229,6 +234,7 @@ impl DeferredState {
             environment_sky: environment_sky_pipeline,
             lighting: lighting_pipeline,
             seen: seen_pipeline,
+            motion: motion_pipelines,
         } = Self::create_pipelines(
             device,
             scene,
@@ -257,6 +263,7 @@ impl DeferredState {
             z_prepass_pipeline,
             z_prepass_double_sided_pipeline,
             z_prepass_discard_pipelines,
+            motion_pipelines,
             environment_sky_pipeline,
             lighting_pipeline,
             irradiance,
@@ -310,6 +317,7 @@ impl DeferredState {
             environment_sky: Self::create_environment_sky_pipeline(device, scene, irradiance_layout),
             lighting: Self::create_lighting_pipeline(device, scene, gbuffer_layout, irradiance_layout),
             seen: Self::create_seen_pipeline(device, scene, seen_layout),
+            motion: [back, None].map(|cull| Self::create_motion_pipeline(device, scene, motion_layout, &geometry, cull)),
         }
     }
 
@@ -320,7 +328,7 @@ impl DeferredState {
     /// 2026-11-11, so a hot-reloaded copy of any of the three changed nothing in a running studio,
     /// while the skill that describes hot reload names `deferred_lighting` as what it is for.
     pub fn rebuild_pipelines(&mut self, device: &wgpu::Device, scene: &SceneState) {
-        let GeometryPipelines { gbuffer, z_prepass, z_prepass_discard, environment_sky, lighting, seen } = Self::create_pipelines(
+        let GeometryPipelines { gbuffer, z_prepass, z_prepass_discard, environment_sky, lighting, seen, motion } = Self::create_pipelines(
             device,
             scene,
             &self.motion.layout,
@@ -334,6 +342,7 @@ impl DeferredState {
         self.environment_sky_pipeline = environment_sky;
         self.lighting_pipeline = lighting;
         self.seen_pipeline = seen;
+        self.motion_pipelines = motion;
     }
 
     /// Recreate G-buffer textures and bind groups when the window is resized; `depth_view` is the
@@ -840,6 +849,67 @@ impl DeferredState {
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
+        })
+    }
+
+    /// `fs_motion`: a forward surface's motion into RT4's `xy`, nothing else, where the forward pass left
+    /// the frame's depth. The forward shaders project a point through the same matrices but are other
+    /// modules, so the depth they wrote is matched with a pull of a few units toward the camera rather
+    /// than exactly.
+    fn create_motion_pipeline(
+        device: &wgpu::Device,
+        scene: &SceneState,
+        motion_layout: &wgpu::BindGroupLayout,
+        shader: &wgpu::ShaderModule,
+        cull_mode: Option<wgpu::Face>,
+    ) -> wgpu::RenderPipeline {
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Forward Motion Pipeline Layout"),
+            bind_group_layouts: &[
+                Some(&scene.global_bind_group_layout),
+                Some(&scene.texture_bind_group_layout),
+                Some(&scene.shadow_bind_group_layout),
+                Some(&scene.skeleton_bind_group_layout),
+                Some(&scene.instance_bind_group_layout),
+                Some(motion_layout),
+            ],
+            immediate_size: 0,
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(if cull_mode.is_some() { "Forward Motion Pipeline" } else { "Forward Motion TwoSided Pipeline" }),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[Some(Vertex::desc())],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: shader,
+                entry_point: Some("fs_motion"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: crate::motion::VELOCITY_FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::RED | wgpu::ColorWrites::GREEN,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState { constant: -4, slope_scale: -1.0, clamp: 0.0 },
             }),
             multisample: wgpu::MultisampleState::default(),
             multiview_mask: None,

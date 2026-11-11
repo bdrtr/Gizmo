@@ -91,6 +91,9 @@ pub fn record_forward_and_fluid(
         }
     }
 
+    // How what was drawn forward and opaque moved, into the G-buffer's velocity, for TAA and motion blur.
+    record_forward_motion(encoder, renderer, draw_items, uploaded_instances);
+
     // ── GPU particles (soft: a pass of their own, see `record_gpu_particles`) and the fluid's
     //    surface — both as many as the frame's step simulated. ──
     if simulations {
@@ -116,6 +119,61 @@ pub fn record_forward_and_fluid(
             dt,
             inv_view_proj,
         );
+    }
+}
+
+/// How each opaque surface drawn forward moved — unlit, baked-lit — into the G-buffer's velocity, where
+/// the forward pass left the frame's depth (`fs_motion` in `gbuffer.wgsl`). They write depth and no
+/// G-buffer, so their pixels kept the motion of what stood behind them: TAA reprojected a moving unlit
+/// object as if it stood still, and motion blur left it sharp. Not a sky, a backdrop, the grid, water
+/// (its waves move its vertices, which this pass would not), a mirror, or a game's own pipeline (its own
+/// vertex stage); nothing that blends, whose pixels are what stands behind as much as they are its own.
+fn record_forward_motion(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, draw_items: &[DrawItem], uploaded_instances: u32) {
+    let Some(def) = renderer.deferred.as_ref() else {
+        return;
+    };
+    let moving = |item: &&DrawItem| {
+        item.visible_in_camera
+            && item.unlit
+            && !item.is_transparent
+            && !item.is_skybox
+            && !item.is_backdrop
+            && !item.is_grid
+            && !item.is_water
+            && item.mirror.is_none()
+            && item.custom.is_none()
+            && !item.camera_instance_range(uploaded_instances).is_empty()
+    };
+    if !draw_items.iter().any(|item| moving(&item)) {
+        return;
+    }
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Forward Motion"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: &def.velocity_view,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &renderer.depth_texture_view,
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
+    pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+    pass.set_bind_group(BG_INSTANCE, renderer.scene.view_instance_bind_group(), &[]);
+    pass.set_bind_group(5, &def.motion.bind_group, &[]);
+    for item in draw_items.iter().filter(moving) {
+        pass.set_pipeline(&def.motion_pipelines[usize::from(item.is_double_sided)]);
+        let skeleton = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
+        pass.set_bind_group(3, skeleton.as_ref(), &[]);
+        pass.set_bind_group(1, &*item.bind_group, &[]);
+        item.record_draw(&mut pass, item.camera_instance_range(uploaded_instances));
     }
 }
 

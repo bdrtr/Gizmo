@@ -224,6 +224,20 @@ fn fs_prepass(in: VertexOutput, @builtin(front_facing) front: bool) {
     if (!instance_keeps(in.inst_keep, surface.alpha, in.clip_position.xy)) { discard; }
 }
 
+// How a surface drawn forward moved — unlit, baked-lit — which writes depth and no G-buffer: RT4's `xy`
+// alone (its pipeline writes nothing else, so the tint's hue in `zw` stays the surface's behind it,
+// which no forward surface reads), where the forward draw left the frame's depth. TAA reprojects by
+// it and motion blur smears along it; without it both read the motion of what stands behind.
+@fragment
+fn fs_motion(in: VertexOutput, @builtin(front_facing) front: bool) -> @location(0) vec4<f32> {
+    let surface = fragment_surface(in, front);
+    if (surface.alpha_cutoff > 0.0 && surface.alpha < surface.alpha_cutoff) { discard; }
+    if (!instance_keeps(in.inst_keep, surface.alpha, in.clip_position.xy)) { discard; }
+    let now_ndc    = in.motion_now.xy / in.motion_now.w;
+    let before_ndc = in.motion_before.xy / in.motion_before.w;
+    return vec4<f32>((now_ndc - before_ndc) * vec2<f32>(0.5, -0.5), 0.0, 0.0);
+}
+
 @fragment
 fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // Skip unlit / skybox objects — they are drawn in a forward pass

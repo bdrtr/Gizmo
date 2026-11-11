@@ -350,8 +350,12 @@ depth). The same day they moved ahead of what blends — glass, transparent surf
 fluid — which now shows them as much as it lets through: a pane 98 % opaque took 5 853 and 14 895 and
 takes 24 and 67. A reflection no longer shows what blends, as no screen-space reflection does; glass
 refracts a frame that has them. The
-motion TAA and motion blur read there is still the G-buffer's, the surface's behind, and a moving one gets
-no motion blur. Baked-lit exists to skip that cost, so changing this is its own decision.
+motion TAA and motion blur read there was the G-buffer's too, the surface's behind, until the same day: a
+pass after the forward one draws each opaque surface drawn forward again, through the G-buffer's vertex
+stage, into the velocity's `xy` alone where the forward pass left the depth (`fs_motion`), so an unlit or
+baked-lit cube moved 30 cm writes −0.0764 as a deferred one does (0 before), and one behind a still wall
+writes nothing. Not water (its waves move its vertices), a mirror or a game's own pipeline. Filling the
+G-buffer itself is what baked-lit exists to skip, so that stays its own decision.
 
 **The environment presets moved to the forward shader, 2026-11-06 (decided and applied).** They lived
 in the deferred shader alone, so `shader.wgsl` lit everything with a fixed warm hemisphere: a red cube
@@ -1088,7 +1092,8 @@ without the tiles: eight taps along both axes out to the blur's reach) carries i
 a still camera, one cube moved 0.3 m: its strip's edge energy 1 122 066 shut, 313 386 open (700 320
 without the neighbour max), its trail reaching the background beside it (12 of 72 pixels without),
 and the still cube's strip byte-identical. Transparent (forward) objects are not in the G-buffer and
-take the velocity of what is behind them.
+take the velocity of what is behind them; opaque ones drawn forward write their own since 2026-11-11
+(`fs_motion`; see the paragraph on unlit and baked-lit surfaces in A3).
 
 **Auto exposure is built in** (`renderer.auto_exposure`, off by default, native). The loop this entry
 asked for, closed without the CPU: `LuminanceReduce` measures, one compute invocation moves the
