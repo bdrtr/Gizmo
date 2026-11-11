@@ -182,6 +182,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A shadow-only object was drawn whenever it was drawn forward.** `ShadowCasting::Only` casts and is not drawn, and
+  only the G-buffer passes asked: a blended, unlit, baked-lit or game-material `Only` object stood in the picture, and on the
+  forward-only path (browser, phone), where every draw is forward, every one did — a transparent cube 5 658 pixels of it. The
+  forward pass skips it now, and so does every draw loop of the editor viewport; its double-sided, transparent, glass, sky,
+  backdrop and grid loops drew it too.
 - **A plane cast no shadow.** The shadow pass drew every mesh by its back faces, which keeps a solid from shadowing
   itself and leaves a plane, a card or a sheet of cloth facing the light with nothing to cast: 0 shadow pixels against a
   cube's 236, single- or double-sided, from the sun and from a point light. `Mesh::closed` says whether a mesh closes over

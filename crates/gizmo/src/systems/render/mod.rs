@@ -12819,6 +12819,86 @@ fn material_surface(input: SurfaceInput) -> Surface {
         render_world(&mut renderer, &mut world).await
     }
 
+    /// **A shadow-only object is not drawn, whichever pass would have drawn it.** The G-buffer
+    /// passes skipped a `ShadowCasting::Only` draw and the forward pass did not ask: a transparent,
+    /// unlit, baked-lit or custom one stood in the picture — and on the forward-only path, where every
+    /// draw is forward, all of them did. One cube in front of the camera and nothing for its shadow to
+    /// fall on, drawn each way as `Only`: every frame is the empty one.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_shadow_only_object_is_drawn_by_no_pass() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        use gizmo_renderer::components::{MaterialType, ShadowCasting};
+        // `material` builds the cube's material from the white texture and the renderer, which
+        // registers what a custom route needs.
+        async fn frame(cube: Option<(ShadowCasting, fn(Material, &mut Renderer) -> Material)>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut assets = AssetManager::new();
+            let mut world = World::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            if let Some((shadows, material)) = cube {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::ZERO));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                let base = Material::new(tex).with_pbr(Vec4::new(0.9, 0.2, 0.2, 1.0), 0.5, 0.0);
+                world.add_component(e, material(base, &mut renderer));
+                world.add_component(e, MeshRenderer::new().with_shadows(shadows));
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 4.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                ..Default::default()
+            });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await
+        }
+        let routes: [(&str, fn(Material, &mut Renderer) -> Material); 6] = [
+            ("opaque", |m, _| m),
+            ("transparent", |m, _| m.with_pbr(Vec4::new(0.9, 0.2, 0.2, 0.6), 0.5, 0.0)),
+            ("unlit", |mut m, _| {
+                m.material_type = MaterialType::Unlit;
+                m
+            }),
+            ("baked-lit", |mut m, _| {
+                m.material_type = MaterialType::BakedLit;
+                m
+            }),
+            ("a game's pipeline", |mut m, r| {
+                let custom = gizmo_renderer::custom_material::CustomMaterial::from_wgsl(
+                    &r.device,
+                    &r.scene,
+                    "test_custom",
+                    TEST_CUSTOM_WGSL,
+                    gizmo_renderer::custom_material::CustomPipelineOptions::default(),
+                );
+                m.material_type = MaterialType::Custom(r.custom_materials.register(custom));
+                m
+            }),
+            ("a game's transparent surface", |m, r| {
+                let id = r.add_surface_material("standard", STANDARD_SURFACE_WGSL).expect("composes");
+                let mut m = m.with_pbr(Vec4::new(0.9, 0.2, 0.2, 0.6), 0.5, 0.0);
+                m.material_type = MaterialType::CustomSurface(id);
+                m
+            }),
+        ];
+        pollster::block_on(async {
+            let empty = frame(None).await;
+            for (name, material) in routes {
+                let (drawn, total) = changed_pixels(&empty, &frame(Some((ShadowCasting::On, material))).await, 128);
+                assert!(drawn >= 300, "the {name} cube changed {drawn}/{total} pixels: the fixture is not drawing it");
+                let (left, _) = changed_pixels(&empty, &frame(Some((ShadowCasting::Only, material))).await, 128);
+                assert_eq!(left, 0, "a shadow-only {name} cube was drawn: {left} pixels");
+            }
+        });
+    }
+
     /// What hiding an object actually does — and what the docs said it did.
     ///
     /// `docs/CAPABILITY_GAPS.md` listed a missing `Visibility` component whose consequence was
@@ -12860,13 +12940,20 @@ fn material_surface(input: SurfaceInput) -> Surface {
                  is what the capability list used to claim",
             );
 
-            // `ShadowCasting::Only` is not: the cube goes, the shadow stays.
+            // `ShadowCasting::Only` is not: the cube goes, the shadow stays — where there are shadows.
+            // The forward-only path draws none, so there it leaves the empty frame; it drew the cube
+            // until 2026-11-11, since that path draws everything forward and the forward pass did not
+            // ask (`a_shadow_only_object_is_drawn_by_no_pass`).
             let (residue, _) = changed_pixels(&absent, &shadow_only, 128);
-            assert!(
-                residue >= 100,
-                "`ShadowCasting::Only` left {residue} pixels — it is supposed to keep casting, so \
-                 either the shadow is gone or the fixture has no shadow to lose",
-            );
+            if cfg!(gizmo_forward_only) {
+                assert_eq!(residue, 0, "`ShadowCasting::Only` left {residue} pixels on a path with no shadows");
+            } else {
+                assert!(
+                    residue >= 100,
+                    "`ShadowCasting::Only` left {residue} pixels — it is supposed to keep casting, so \
+                     either the shadow is gone or the fixture has no shadow to lose",
+                );
+            }
             let (still_drawn, _) = changed_pixels(&shown, &shadow_only, 128);
             assert!(
                 still_drawn >= 300,

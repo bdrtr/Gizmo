@@ -159,6 +159,13 @@ fn draw_forward_items(
     uploaded_instances: u32,
 ) {
     for item in draw_items {
+        // `ShadowCasting::Only`: casts, is not drawn — by this pass either, which until 2026-11-11 did
+        // not ask, so a shadow-only draw stood in the picture whenever it was drawn forward: blended,
+        // unlit, baked-lit, a game's own, and everything on the forward-only path. Its wireframe goes
+        // with it, as the editor's does.
+        if !item.visible_in_camera {
+            continue;
+        }
         let mut draw_solid = false;
         // Neither the sky nor a backdrop is world geometry a wireframe overlay is about,
         // and the wireframe pipeline is `shader.wgsl`: it neither camera-locks nor pins

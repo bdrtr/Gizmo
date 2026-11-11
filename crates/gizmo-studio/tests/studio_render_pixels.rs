@@ -2500,6 +2500,16 @@ fn fs_main() -> @location(0) vec4<f32> { return vec4<f32>(1.0, 0.0, 1.0, 1.0); }
 
 /// One editor frame of a turned cube with `material`, as [`render_scene`] draws one.
 fn render_game_material_frame(material: GameMaterial) -> Option<Vec<u8>> {
+    render_cube_frame(material, |m| m, gizmo::renderer::components::ShadowCasting::On)
+}
+
+/// [`render_game_material_frame`], with the cube's material changed by `adjust` once it is built and
+/// its casting `shadows`.
+fn render_cube_frame(
+    material: GameMaterial,
+    adjust: fn(Material) -> Material,
+    shadows: gizmo::renderer::components::ShadowCasting,
+) -> Option<Vec<u8>> {
     use gizmo::renderer::components::MaterialType;
     use gizmo::renderer::custom_material::{CustomMaterial, CustomPipelineOptions, MaterialId, SurfaceId};
     if !pollster::block_on(Renderer::headless_adapter_available())
@@ -2536,8 +2546,8 @@ fn render_game_material_frame(material: GameMaterial) -> Option<Vec<u8>> {
                 GameMaterial::DanglingCustom => MaterialType::Custom(MaterialId(magenta.0 + 1)),
                 GameMaterial::None => unreachable!(),
             };
-            world.add_component(cube, mat);
-            world.add_component(cube, MeshRenderer::new());
+            world.add_component(cube, adjust(mat));
+            world.add_component(cube, MeshRenderer::new().with_shadows(shadows));
         }
         let cam = world.spawn();
         world.add_component(cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
@@ -2599,6 +2609,29 @@ fn render_game_material_frame(material: GameMaterial) -> Option<Vec<u8>> {
         staging.unmap();
         Some(pixels)
     })
+}
+
+/// **A shadow-only object is drawn by no loop of the viewport.** Only the single-sided opaque loop
+/// and the water's asked; the double-sided, transparent, glass, sky, backdrop and grid loops drew a
+/// `ShadowCasting::Only` batch as if it were `On`. Each of three of them, drawn `On` and then `Only`:
+/// the second frame is the empty one.
+#[test]
+fn a_shadow_only_object_is_drawn_by_no_loop_of_the_viewport() {
+    use gizmo::renderer::components::ShadowCasting;
+    let _gpu = gpu_lock();
+    let Some(empty) = render_game_material_frame(GameMaterial::None) else { return };
+    let differing = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(x, y)| x != y).count();
+    let routes: [(&str, fn(Material) -> Material); 3] = [
+        ("double-sided", |m| m.with_double_sided(true)),
+        ("transparent", |m| m.with_pbr(Vec4::new(0.8, 0.4, 0.2, 0.6), 0.6, 0.0)),
+        ("glass", |m| m.with_pbr(Vec4::new(0.8, 0.4, 0.2, 0.6), 0.6, 0.0).with_transmission(1.0)),
+    ];
+    for (name, adjust) in routes {
+        let on = render_cube_frame(GameMaterial::Pbr, adjust, ShadowCasting::On).expect("usable");
+        assert!(differing(&empty, &on) > 300, "the {name} cube is not drawn at all");
+        let only = render_cube_frame(GameMaterial::Pbr, adjust, ShadowCasting::Only).expect("usable");
+        assert_eq!(differing(&empty, &only), 0, "a shadow-only {name} cube was drawn in the viewport");
+    }
 }
 
 /// **A game's own materials are drawn in the editor viewport as the game draws them.** The viewport

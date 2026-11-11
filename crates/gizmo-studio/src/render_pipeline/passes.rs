@@ -330,7 +330,7 @@ pub(super) fn record_studio_main_pass(
             // path expresses the same rule as `DrawLayer::Backdrop` in its draw-order sort.)
             render_pass.set_pipeline(&renderer.scene.backdrop_pipeline);
             for batch in flat_batches {
-                if !batch.is_backdrop {
+                if !batch.is_backdrop || !batch.visible_in_camera {
                     continue;
                 }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
@@ -412,6 +412,12 @@ pub(super) fn record_studio_main_pass(
             render_pass.set_pipeline(engine_two_sided);
             let mut bound: *const wgpu::RenderPipeline = engine_two_sided;
             for batch in flat_batches {
+                // `ShadowCasting::Only`: casts, is not drawn. This loop, the sky's, the transparent
+                // one, the glass one and the grid's drew it until 2026-11-11; the single-sided one
+                // and the water's asked.
+                if !batch.visible_in_camera {
+                    continue;
+                }
                 if batch.is_transparent
                     || !batch.is_double_sided
                     || batch.is_skybox
@@ -493,7 +499,7 @@ pub(super) fn record_studio_main_pass(
             // 3. SKYBOX YAKALAMA VE ÖZEL PIPELINE İLE ÇİZİM
             render_pass.set_pipeline(&renderer.scene.sky_pipeline);
             for batch in flat_batches {
-                if !batch.is_skybox {
+                if !batch.is_skybox || !batch.visible_in_camera {
                     continue;
                 } // Sadece Skybox'u çiz
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
@@ -564,7 +570,7 @@ pub(super) fn record_studio_main_pass(
                         occlusion_query_set: None,
                         multiview_mask: None,
                     });
-                    for batch in flat_batches.iter().filter(glass) {
+                    for batch in flat_batches.iter().filter(glass).filter(|b| b.visible_in_camera) {
                         let engine = renderer.scene.transmissive_pipeline(batch.is_double_sided);
                         let Some(pipeline) = batch_pipeline(renderer, batch, true, engine) else { continue };
                         pass.set_pipeline(pipeline);
@@ -587,6 +593,9 @@ pub(super) fn record_studio_main_pass(
                 if !batch.is_transparent || batch.is_transmissive || batch.is_grid || batch.is_backdrop || batch.is_water {
                     continue;
                 } // Sadece saydamları çiz (backdrop ve su kendi geçişlerinde çizildi)
+                if !batch.visible_in_camera {
+                    continue;
+                }
                 // The game path's choice (`passes::forward`): the batch's blend mode picks a
                 // variant, and an unlit draw stays unlit — this loop used to shade every
                 // transparent batch with the lit shader, unlit ones included.
@@ -632,7 +641,7 @@ pub(super) fn record_studio_main_pass(
             if !is_playing_mode && show_grid {
                 render_pass.set_pipeline(&renderer.scene.grid_pipeline);
                 for batch in flat_batches {
-                    if !batch.is_grid {
+                    if !batch.is_grid || !batch.visible_in_camera {
                         continue;
                     }
                     if batch.start_instance >= renderer.scene.instance_capacity as u32 {
