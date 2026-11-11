@@ -6,7 +6,8 @@ use gizmo_math::Vec3;
 use gizmo_renderer::components::{PointLight, DirectionalLight, RectLight, SpotLight};
 
 
-/// The point-light rows: colour, intensity and radius.
+/// The point-light rows: colour, intensity, radius and whether it casts shadows. (The radius was
+/// named here and had no row until 2026-11-11.)
 pub fn draw_point_light_section(
     ui: &mut egui::Ui,
     world: &World,
@@ -35,6 +36,16 @@ pub fn draw_point_light_section(
                                 .range(0.0..=100.0),
                         );
                     });
+                    ui.horizontal(|ui| {
+                        ui.label("Menzil:");
+                        ui.add(
+                            egui::DragValue::new(&mut light.radius)
+                                .speed(0.1)
+                                .range(0.001..=500.0)
+                                .suffix(" m"),
+                        );
+                    });
+                    ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
                 });
             ui.separator();
         }
@@ -76,7 +87,8 @@ pub fn draw_directional_light_section(
 }
 
 
-/// The spot-light rows: colour, intensity, reach, and the two cone angles.
+/// The spot-light rows: colour, intensity, reach, the two cone angles, the cookie and whether it
+/// casts shadows.
 ///
 /// The engine has drawn spot lights and the scene file has carried them since the component
 /// existed, and this section did not exist — so a spot light arriving from Rust or from a
@@ -160,13 +172,15 @@ pub fn draw_spot_light_section(
                         light.cookie = (!text.is_empty()).then(|| text.to_string());
                     }
                 });
+                ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
                 ui.label(egui::RichText::new("Koninin baktığı yön varlığın 'Transform' rotasyonundan gelir.").weak().small());
             });
         ui.separator();
     }
 }
 
-/// The `RectLight` section: colour, intensity, range and the panel's two extents. Which way the
+/// The `RectLight` section: colour, intensity, range, the panel's two extents and whether it casts
+/// shadows (from its centre). Which way the
 /// panel faces is the entity's rotation (its forward axis, local −Z), as for a spot light.
 pub fn draw_rect_light_section(
     ui: &mut egui::Ui,
@@ -218,6 +232,7 @@ pub fn draw_rect_light_section(
                             .suffix(" m"),
                     );
                 });
+                ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
                 ui.label(egui::RichText::new("Panel, varlığın 'Transform' rotasyonunun ileri ekseni (−Z) yönünde, tek yüzünden ışık verir.").weak().small());
             });
         ui.separator();

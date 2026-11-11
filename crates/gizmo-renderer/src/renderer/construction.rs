@@ -571,14 +571,12 @@ impl Renderer {
             shadow_cascade_layer_views: scene.shadow_cascade_layer_views,
             shadow_depth_texture: scene.shadow_depth_texture,
             cookies: scene.cookies,
-            point_shadow_depth_texture: scene.point_shadow_depth_texture,
-            point_shadow_cube_view: scene.point_shadow_cube_view,
-            point_shadow_face_views: scene.point_shadow_face_views,
+            local_shadow_maps: scene.local_shadow_maps,
             shadow_pass_bind_group_layout: scene.shadow_pass_bind_group_layout,
             shadow_cascade_uniform_buffers: scene.shadow_cascade_uniform_buffers,
             shadow_pass_bind_groups: scene.shadow_pass_bind_groups,
-            point_shadow_uniform_buffers: scene.point_shadow_uniform_buffers,
-            point_shadow_pass_bind_groups: scene.point_shadow_pass_bind_groups,
+            local_shadow_uniform_buffers: scene.local_shadow_uniform_buffers,
+            local_shadow_pass_bind_groups: scene.local_shadow_pass_bind_groups,
             global_uniform_buffer: scene.global_uniform_buffer,
             global_bind_group_layout: scene.global_bind_group_layout,
             global_bind_group: scene.global_bind_group,
@@ -588,6 +586,7 @@ impl Renderer {
             cluster_index_buffer: scene.cluster_index_buffer,
             shadow_bind_group_layout: scene.shadow_bind_group_layout,
             shadow_bind_group: scene.shadow_bind_group,
+            shadow_sampler: scene.shadow_sampler,
             texture_bind_group_layout: scene.texture_bind_group_layout,
             skeleton_bind_group_layout: scene.skeleton_bind_group_layout,
             dummy_skeleton_bind_group: scene.dummy_skeleton_bind_group,
@@ -765,7 +764,6 @@ impl Renderer {
             // this field existed — so the default is the old behaviour exactly.
             vignette_intensity: 0.25,
             film_grain_intensity: 0.012, // Photographic film grain — ince (statik olduğu için düşük; yüksekte düz yüzeylerde sabit gürültü kaplaması görünür)
-            point_shadows_enabled: false,
             // The 100k-particle fluid system above is allocated but idle: its SSFR
             // water surface only composites when a scene opts in. Otherwise every
             // non-fluid scene got a stray mottled ocean drawn over it.

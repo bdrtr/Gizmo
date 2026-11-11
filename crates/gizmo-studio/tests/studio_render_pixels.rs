@@ -1146,77 +1146,161 @@ fn shadow_scene_with(
             ..Default::default()
         });
 
-        let state = StudioState {
-            current_fps: 60.0,
-            actual_dt: 1.0 / 60.0,
-            editor_camera: cam,
-            game_camera: Entity::new(4242, 0),
-            do_raycast: false,
-            play: gizmo::systems::PlayLoop::new(),
-            asset_watcher: None,
-            gc_timer: 0.0,
-            autosave_timer: 0.0,
-            visible_entity_count: 0,
-            draw_call_count: 0,
-        };
-
-        let format = renderer.config.format;
-        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("shadow-mode-target"),
-            size: wgpu::Extent3d { width: S, height: S, depth_or_array_layers: 1 },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
-        let mut enc = renderer
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
-        execute_render_pipeline(&mut world, &state, &mut enc, &view, &mut renderer, 0.0);
-
-        let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: u64::from(S * S * BPP),
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        enc.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &target,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &staging,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(S * BPP),
-                    rows_per_image: Some(S),
-                },
-            },
-            wgpu::Extent3d { width: S, height: S, depth_or_array_layers: 1 },
-        );
-        renderer.queue.submit(std::iter::once(enc.finish()));
-
-        let slice = staging.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        let _ = renderer
-            .device
-            .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
-        rx.recv().expect("channel").expect("map");
-        let px = slice.get_mapped_range()
-        // wgpu 30 made this fallible; the range is the whole buffer the test just mapped.
-        .expect("a just-mapped buffer's full range is always valid").to_vec();
-        staging.unmap();
-        px
+        viewport_frame(&mut world, &mut renderer, cam, S)
     }))
+}
+
+/// The editor viewport's frame of `world`, through `cam`, `size` pixels square: one call of the
+/// studio's whole render pipeline, read back.
+fn viewport_frame(world: &mut World, renderer: &mut Renderer, cam: Entity, size: u32) -> Vec<u8> {
+    let state = StudioState {
+        current_fps: 60.0,
+        actual_dt: 1.0 / 60.0,
+        editor_camera: cam,
+        game_camera: Entity::new(4242, 0),
+        do_raycast: false,
+        play: gizmo::systems::PlayLoop::new(),
+        asset_watcher: None,
+        gc_timer: 0.0,
+        autosave_timer: 0.0,
+        visible_entity_count: 0,
+        draw_call_count: 0,
+    };
+
+    let format = renderer.config.format;
+    let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("viewport-frame-target"),
+        size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+    let mut enc = renderer
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+    execute_render_pipeline(world, &state, &mut enc, &view, renderer, 0.0);
+
+    let staging = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u64::from(size * size * BPP),
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    enc.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture: &target,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &staging,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(size * BPP),
+                rows_per_image: Some(size),
+            },
+        },
+        wgpu::Extent3d { width: size, height: size, depth_or_array_layers: 1 },
+    );
+    renderer.queue.submit(std::iter::once(enc.finish()));
+
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |r| {
+        let _ = tx.send(r);
+    });
+    let _ = renderer
+        .device
+        .poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    rx.recv().expect("channel").expect("map");
+    let px = slice.get_mapped_range()
+    // wgpu 30 made this fallible; the range is the whole buffer the test just mapped.
+    .expect("a just-mapped buffer's full range is always valid").to_vec();
+    staging.unmap();
+    px
+}
+
+/// A floor under a spot, a point or a rectangle light 4 m up, and a cube 2 m up that casts and is
+/// not drawn, seen in the editor viewport: the light casting (`casts_shadows`) or not, the cube there
+/// or not.
+fn local_light_viewport(kind: u8, casts: bool, cube: bool) -> Vec<u8> {
+    const S: u32 = 128;
+    pollster::block_on(async {
+        let mut renderer = shared_device_renderer(S, S).await;
+        let mut am = AssetManager::new();
+        let mut world = World::new();
+        let tex = am.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let ground = world.spawn();
+        world.add_component(ground, Transform::new(Vec3::ZERO));
+        world.add_component(ground, AssetManager::create_plane(&renderer.device, 40.0));
+        world.add_component(ground, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+        world.add_component(ground, MeshRenderer::new());
+        if cube {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 2.0, 0.0)).with_scale(Vec3::splat(0.5)));
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.9, 0.25, 0.25, 1.0), 0.6, 0.0));
+            world.add_component(e, MeshRenderer::new().with_shadows(gizmo::renderer::components::ShadowCasting::Only));
+        }
+        let light = world.spawn();
+        let down = gizmo::math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2);
+        world.add_component(light, Transform::new(Vec3::new(0.3, 4.0, 0.2)).with_rotation(down));
+        match kind {
+            0 => world.add_component(light, PointLight { casts_shadows: casts, ..PointLight::new(Vec3::ONE, 60.0, 30.0) }),
+            1 => world.add_component(
+                light,
+                gizmo::renderer::components::SpotLight { casts_shadows: casts, ..gizmo::renderer::components::SpotLight::new(Vec3::ONE, 60.0, 30.0, 0.8, 1.0) },
+            ),
+            _ => world.add_component(
+                light,
+                gizmo::renderer::components::RectLight { casts_shadows: casts, ..gizmo::renderer::components::RectLight::new(Vec3::ONE, 60.0, 30.0, 0.2, 0.2) },
+            ),
+        }
+        let cam = world.spawn();
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 8.0, 8.0)));
+        world.add_component(
+            cam,
+            gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, -std::f32::consts::FRAC_PI_2, -0.8, true),
+        );
+        viewport_frame(&mut world, &mut renderer, cam, S)
+    })
+}
+
+/// **The editor's viewport draws a local light's shadow.** It drew none: the one point light that
+/// could cast did so only through the deferred pass, and the viewport — the forward shader — never
+/// looked. A point, a spot and a rectangle light over a floor, a cube between: the shadow darkens
+/// 886, 877 and 884 pixels of the floor by 20 or more, alike for the three (one cube, one light
+/// position), and none when the light does not cast; with the forward shader's lookup ignored, 0.
+#[test]
+#[ignore = "requires a GPU adapter"]
+fn a_local_light_casts_in_the_viewport() {
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    let luma = |p: &[u8]| (p[0] as i32 + p[1] as i32 + p[2] as i32) / 3;
+    let shadow = |kind: u8, casts: bool| {
+        let with = local_light_viewport(kind, casts, true);
+        let without = local_light_viewport(kind, casts, false);
+        with.chunks(BPP as usize).zip(without.chunks(BPP as usize)).filter(|(a, b)| luma(a) + 20 < luma(b)).count()
+    };
+    let mut counts = Vec::new();
+    for kind in 0..3 {
+        assert_eq!(shadow(kind, false), 0, "light {kind} casts without asking to");
+        let cast = shadow(kind, true);
+        assert!(cast > 200, "light {kind} casts {cast} shadow pixels in the viewport");
+        counts.push(cast);
+    }
+    let (min, max) = (*counts.iter().min().unwrap(), *counts.iter().max().unwrap());
+    assert!(max - min <= max / 50, "point, spot and rectangle cast alike: {counts:?}");
 }
 
 
@@ -2162,6 +2246,7 @@ fn the_editor_viewport_reflects_a_probe_captured_without_furniture() {
             color: Vec3::ONE,
             intensity: 60.0,
             radius: 30.0,
+            casts_shadows: false,
         });
         world.spawn_bundle((
             Transform::new(Vec3::ZERO),

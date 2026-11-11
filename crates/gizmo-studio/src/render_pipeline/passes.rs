@@ -167,110 +167,151 @@ fn batch_pipeline<'a>(
     Some(engine)
 }
 
-/// The sun's cascades for this view. `camera_position` and `elapsed_time` are what a game's surface is
-/// handed when its shadow is cut where the picture is.
+/// This view's shadow maps: the sun's cascades, then each local light's layer (`local_layers`, the
+/// frame's `SceneSetup::local_shadows`; the array must already hold them,
+/// `SceneState::ensure_local_shadow_layers`). `camera_position` and `elapsed_time` are what a game's
+/// surface is handed when its shadow is cut where the picture is.
 pub(super) fn record_studio_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &gizmo::renderer::Renderer,
     flat_batches: &[FlatBatchData],
     light_view_proj_cascades: &[[[f32; 4]; 4]; 4],
+    local_layers: &[gizmo::renderer::local_shadows::LocalShadowLayer],
     camera_position: gizmo::math::Vec3,
     elapsed_time: f32,
 ) {
-        for (cascade_i, &cascade_view_proj) in light_view_proj_cascades.iter().enumerate() {
-            renderer.queue.write_buffer(
-                renderer.scene.view_shadow_cascade_buffer(cascade_i),
-                0,
-                gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform::new(
-                    cascade_view_proj,
-                    camera_position.to_array(),
-                    elapsed_time,
-                )),
-            );
+    for (cascade_i, &cascade_view_proj) in light_view_proj_cascades.iter().enumerate() {
+        renderer.queue.write_buffer(
+            renderer.scene.view_shadow_cascade_buffer(cascade_i),
+            0,
+            gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform::new(
+                cascade_view_proj,
+                camera_position.to_array(),
+                elapsed_time,
+            )),
+        );
+        record_studio_caster_pass(
+            encoder,
+            renderer,
+            flat_batches,
+            &format!("Shadow Pass cascade {cascade_i}"),
+            &renderer.scene.shadow_cascade_layer_views[cascade_i],
+            renderer.scene.view_shadow_pass_bind_group(cascade_i),
+        );
+    }
+    let local_layers = &local_layers[..local_layers.len().min(renderer.scene.local_shadow_maps.layers())];
+    for (layer_i, layer) in local_layers.iter().enumerate() {
+        renderer.queue.write_buffer(
+            renderer.scene.view_local_shadow_buffer(layer_i),
+            0,
+            gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform::new(
+                layer.view_proj.to_cols_array_2d(),
+                camera_position.to_array(),
+                elapsed_time,
+            )),
+        );
+        record_studio_caster_pass(
+            encoder,
+            renderer,
+            flat_batches,
+            "Local Shadow Pass",
+            &renderer.scene.local_shadow_maps.layer_views[layer_i],
+            renderer.scene.view_local_shadow_pass_bind_group(layer_i),
+        );
+    }
+}
 
-            let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some(&format!("Shadow Pass cascade {cascade_i}")),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &renderer.scene.shadow_cascade_layer_views[cascade_i],
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            multiview_mask: None,
-            });
+/// One depth pass into `target`, every caster drawn through the shadow pass group `light`.
+fn record_studio_caster_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &gizmo::renderer::Renderer,
+    flat_batches: &[FlatBatchData],
+    label: &str,
+    target: &wgpu::TextureView,
+    light: &wgpu::BindGroup,
+) {
+    let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: target,
+            depth_ops: Some(wgpu::Operations {
+                load: wgpu::LoadOp::Clear(1.0),
+                store: wgpu::StoreOp::Store,
+            }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
 
-            // As on the game path: a closed mesh casts from its back faces and an open one from both
-            // (`Mesh::closed`), a cut-out through the stage that cuts it, a game's surface with its
-            // own; and every shadow pipeline binds the cascade, the material, the skeleton and the
-            // instances.
-            shadow_pass.set_bind_group(0, renderer.scene.view_shadow_pass_bind_group(cascade_i), &[]);
-            shadow_pass.set_bind_group(3, &renderer.scene.instance_bind_group, &[]);
-            let mut bound: Option<*const wgpu::RenderPipeline> = None;
-            for batch in flat_batches {
-                // Non-casters must not write the shadow maps — matches the game path
-                // (`passes.rs`: skip unlit/transparent) and the `classify_visibility`
-                // caster predicate (excludes Unlit/Skybox/Grid/transparent). Their
-                // CAMERA-VISIBLE instances still live in `[start_instance, end_instance)`
-                // here, so without this filter the editor grid / a skybox / transparent
-                // objects would cast shadows (grid → ground-coplanar self-shadow acne,
-                // skybox → shadows the whole scene).
-                if batch.is_transparent
-                    || batch.is_skybox
-                    || batch.is_grid
-                    || batch.is_unlit
-                    || batch.is_backdrop
-                    // Water draws forward with a vertex shader that displaces it; the shadow
-                    // pipeline's does not, so its shadow would be the flat plane's. The game
-                    // path skips it for the same reason (it rides `unlit` out of both shadow
-                    // passes there), and this viewport must agree or the editor shows a shadow
-                    // the build does not have.
-                    || batch.is_water
-                {
-                    continue;
-                }
-                // Per-object opt-out. The material-derived rules above still hold — they exclude
-                // things that cannot sensibly cast at all — and this is the object's own answer on
-                // top of them.
-                if !batch.casts_shadows {
-                    continue;
-                }
-                // A game's own pipeline decides for itself, as on the game path
-                // (`CustomMaterial::casts_shadows`), and an id with nothing behind it draws
-                // nothing, its shadow included. A game's surface casts as the engine's material.
-                if let Some(id) = batch.custom {
-                    if !renderer.custom_materials.get(id).is_some_and(|c| c.casts_shadows) {
-                        continue;
-                    }
-                }
-                if batch.start_instance >= renderer.scene.instance_capacity as u32 {
-                    continue;
-                }
-                let pipeline = match batch.surface {
-                    Some(id) => renderer.custom_materials.surface(id).and_then(|s| s.shadow_pipeline(batch.closed)),
-                    None => Some(renderer.scene.shadow_pipeline_for(batch.closed, batch.discards)),
-                };
-                // `None` is also an id with nothing behind it: it draws nothing, its shadow included.
-                let Some(pipeline) = pipeline else { continue };
-                if bound != Some(std::ptr::from_ref(pipeline)) {
-                    shadow_pass.set_pipeline(pipeline);
-                    bound = Some(std::ptr::from_ref(pipeline));
-                }
-                // Shadow pass draws the FULL range (camera-visible + off-screen casters).
-                let safe_end = std::cmp::min(
-                    batch.shadow_end_instance,
-                    renderer.scene.instance_capacity as u32,
-                );
-
-                shadow_pass.set_bind_group(1, &*batch.bind_group, &[]);
-                shadow_pass.set_bind_group(2, &*batch.skeleton_bg, &[]);
-                batch.record_draw(&mut shadow_pass, batch.start_instance..safe_end);
+    // As on the game path: a closed mesh casts from its back faces and an open one from both
+    // (`Mesh::closed`), a cut-out through the stage that cuts it, a game's surface with its
+    // own; and every shadow pipeline binds the light, the material, the skeleton and the
+    // instances.
+    shadow_pass.set_bind_group(0, light, &[]);
+    shadow_pass.set_bind_group(3, &renderer.scene.instance_bind_group, &[]);
+    let mut bound: Option<*const wgpu::RenderPipeline> = None;
+    for batch in flat_batches {
+        // Non-casters must not write the shadow maps — matches the game path
+        // (`passes.rs`: skip unlit/transparent) and the `classify_visibility`
+        // caster predicate (excludes Unlit/Skybox/Grid/transparent). Their
+        // CAMERA-VISIBLE instances still live in `[start_instance, end_instance)`
+        // here, so without this filter the editor grid / a skybox / transparent
+        // objects would cast shadows (grid → ground-coplanar self-shadow acne,
+        // skybox → shadows the whole scene).
+        if batch.is_transparent
+            || batch.is_skybox
+            || batch.is_grid
+            || batch.is_unlit
+            || batch.is_backdrop
+            // Water draws forward with a vertex shader that displaces it; the shadow
+            // pipeline's does not, so its shadow would be the flat plane's. The game
+            // path skips it for the same reason (it rides `unlit` out of both shadow
+            // passes there), and this viewport must agree or the editor shows a shadow
+            // the build does not have.
+            || batch.is_water
+        {
+            continue;
+        }
+        // Per-object opt-out. The material-derived rules above still hold — they exclude
+        // things that cannot sensibly cast at all — and this is the object's own answer on
+        // top of them.
+        if !batch.casts_shadows {
+            continue;
+        }
+        // A game's own pipeline decides for itself, as on the game path
+        // (`CustomMaterial::casts_shadows`), and an id with nothing behind it draws
+        // nothing, its shadow included. A game's surface casts as the engine's material.
+        if let Some(id) = batch.custom {
+            if !renderer.custom_materials.get(id).is_some_and(|c| c.casts_shadows) {
+                continue;
             }
         }
+        if batch.start_instance >= renderer.scene.instance_capacity as u32 {
+            continue;
+        }
+        let pipeline = match batch.surface {
+            Some(id) => renderer.custom_materials.surface(id).and_then(|s| s.shadow_pipeline(batch.closed)),
+            None => Some(renderer.scene.shadow_pipeline_for(batch.closed, batch.discards)),
+        };
+        // `None` is also an id with nothing behind it: it draws nothing, its shadow included.
+        let Some(pipeline) = pipeline else { continue };
+        if bound != Some(std::ptr::from_ref(pipeline)) {
+            shadow_pass.set_pipeline(pipeline);
+            bound = Some(std::ptr::from_ref(pipeline));
+        }
+        // Shadow pass draws the FULL range (camera-visible + off-screen casters).
+        let safe_end = std::cmp::min(
+            batch.shadow_end_instance,
+            renderer.scene.instance_capacity as u32,
+        );
+
+        shadow_pass.set_bind_group(1, &*batch.bind_group, &[]);
+        shadow_pass.set_bind_group(2, &*batch.skeleton_bg, &[]);
+        batch.record_draw(&mut shadow_pass, batch.start_instance..safe_end);
+    }
 }
 
 /// Records the scene into the HDR target.

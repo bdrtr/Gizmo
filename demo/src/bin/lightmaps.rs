@@ -135,6 +135,7 @@ fn main() {
                 color: Vec3::new(0.3, 0.6, 1.0),
                 intensity: 8.0,
                 radius: 8.0,
+                casts_shadows: false,
             });
 
             gizmo::gizmo_log!(

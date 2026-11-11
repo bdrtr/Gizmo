@@ -19,6 +19,9 @@ pub struct DemoState {
     pub orbit_time: f32, // Accumulated time specifically for camera orbiting angle
     pub dir_light_ent: Option<Entity>, // Safe typed entity handles to prevent dangling references
     pub point_light_ent: Option<Entity>,
+    /// Whether the lamp's bulb casts shadows — its `PointLight::casts_shadows`, written by
+    /// `animate_lights`. A renderer-wide switch until 2026-11-11.
+    pub point_shadows: bool,
     pub ssr_enabled: bool,
     pub ssgi_enabled: bool,
     pub volumetric_enabled: bool,
@@ -47,7 +50,6 @@ struct RendererPanel {
     dof_blur_size: f32,
     chromatic_aberration: f32,
     film_grain_intensity: f32,
-    point_shadows_enabled: bool,
     /// The TAA switch, when the renderer has TAA.
     taa: Option<TaaPanel>,
 }
@@ -72,7 +74,6 @@ impl RendererPanel {
             dof_blur_size: r.dof_blur_size,
             chromatic_aberration: r.chromatic_aberration,
             film_grain_intensity: r.film_grain_intensity,
-            point_shadows_enabled: r.point_shadows_enabled,
             taa: r.taa.as_ref().map(|t| TaaPanel { enabled: t.enabled }),
         }
     }
@@ -90,7 +91,6 @@ impl RendererPanel {
         r.dof_blur_size = self.dof_blur_size;
         r.chromatic_aberration = self.chromatic_aberration;
         r.film_grain_intensity = self.film_grain_intensity;
-        r.point_shadows_enabled = self.point_shadows_enabled;
         if let (Some(taa), Some(panel)) = (r.taa.as_mut(), self.taa) {
             taa.enabled = panel.enabled;
         }
@@ -181,6 +181,7 @@ fn main() {
                 intensity: 25.0,                 // yüksek yerel şiddet
                 radius: 1.0,                     // 1 m yarıçap → yerelleşmiş ampul gibi davranır
                 color: Vec3::new(1.0, 0.9, 0.7), // sıcak klasik ampul ışığı
+                casts_shadows: false,             // panelden açılır (`DemoState::point_shadows`)
             });
 
             // Sol tarafta yansıtıcı, anizotropik bakır Torus (yüksek-parlak lake clear-coat)
@@ -257,6 +258,7 @@ fn main() {
                 orbit_time: 0.0,
                 dir_light_ent: Some(dir_light_ent),
                 point_light_ent: Some(point_light_ent),
+                point_shadows: false,
                 ssr_enabled: false,
                 ssgi_enabled: false,
                 volumetric_enabled: true,
@@ -363,7 +365,7 @@ fn main() {
 
                     ui.horizontal(|ui| {
                         ui.label("Point Light Shadows:");
-                        ui.checkbox(&mut renderer.point_shadows_enabled, "");
+                        ui.checkbox(&mut demo_state.point_shadows, "");
                     });
 
                     ui.separator();
@@ -606,7 +608,7 @@ fn main() {
                         // total frame time calculations based on active rendering passes
                         let gbuffer_ms = 1.45;
                         let shadow_ms = 0.82;
-                        let point_shadow_ms = if renderer.point_shadows_enabled {
+                        let point_shadow_ms = if demo_state.point_shadows {
                             1.12
                         } else {
                             0.0
@@ -912,6 +914,7 @@ fn animate_lights(
         let point_id = point_ent;
         if let Some((mut trans, mut pt)) = q_point.get_mut(point_id) {
             pt.intensity = if show_point { 15.0 } else { 0.0 };
+            pt.casts_shadows = state.point_shadows;
             // Point light represents the bulb, so it must stay stationary inside the lamp!
             trans.position = Vec3::new(0.25, 0.15, -0.13);
         }

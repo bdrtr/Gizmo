@@ -247,6 +247,7 @@ fn main() {
                     color: colour,
                     intensity,
                     radius,
+                    casts_shadows: false,
                 });
             }
             scene.world.spawn_bundle(DirectionalLightBundle {

@@ -31,6 +31,7 @@ use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res};
 use gizmo::core::HierarchyExt;
 use gizmo::prelude::*;
+use gizmo::renderer::components::mesh::ShadowCasting;
 use gizmo::renderer::components::SpotLight;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
@@ -99,6 +100,7 @@ fn main() {
                         radius: 5.0,
                         inner_angle: FRAC_PI_4 * 0.85,
                         outer_angle: FRAC_PI_4,
+                        casts_shadows: true,
                     });
 
                     // Ampul: kırmızı ve parlayan.
@@ -109,7 +111,9 @@ fn main() {
                         Material::new(white.clone())
                             .with_pbr(Vec4::new(1.0, 0.0, 0.0, 1.0), 0.5, 0.0)
                             .with_emissive(Vec3::new(1.0, 0.0, 0.0)),
-                        MeshRenderer::new(),
+                        // Around its own light, and the nose below in front of it: casting, either
+                        // would shut the cone in.
+                        MeshRenderer::new().with_shadows(ShadowCasting::Off),
                     ));
                     scene.world.add_child(light, marker);
 
@@ -121,7 +125,7 @@ fn main() {
                         Material::new(white.clone())
                             .with_pbr(Vec4::new(0.369, 0.0, 0.0, 1.0), 0.5, 0.0)
                             .with_emissive(Vec3::new(0.369, 0.0, 0.0)),
-                        MeshRenderer::new(),
+                        MeshRenderer::new().with_shadows(ShadowCasting::Off),
                     ));
                     scene.world.add_child(light, direction);
                 }

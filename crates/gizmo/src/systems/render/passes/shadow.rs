@@ -30,148 +30,111 @@ fn bind_caster(
     pass.set_bind_group(2, skeleton.as_ref(), &[]);
 }
 
+/// Whether `item` casts into a shadow map at all: its own flag, then its material's say — the same
+/// answer for the cascades and every local light's layer.
+#[cfg(not(gizmo_forward_only))]
+fn casts_into_shadow_maps(renderer: &Renderer, item: &DrawItem) -> bool {
+    // Per-object opt-out, on top of the material rules: `MeshRenderer::shadows`. A flag the editor
+    // obeys and the game ignores would make the viewport lie about the build.
+    if !item.casts_shadows {
+        return false;
+    }
+    // A game's surface casts as `Pbr` does — the branches below — unless its id has nothing behind
+    // it, which draws nothing, its shadow included.
+    if item.surface.is_some_and(|id| renderer.custom_materials.surface(id).is_none()) {
+        return false;
+    }
+    // A custom material routes as `unlit` — that is what keeps it out of the deferred path — but
+    // "skips the G-buffer" is not "is not solid". The shadow pass writes depth only and does not
+    // care how a fragment would have shaded, so the material itself decides, through
+    // `CustomMaterial::casts_shadows`. Without this arm the flag would be a field that reads `true`
+    // and does nothing, which is the exact defect `CAPABILITY_GAPS.md` §D keeps a list of.
+    match item.custom.map(|id| renderer.custom_materials.get(id).is_some_and(|c| c.casts_shadows)) {
+        Some(cast) => cast,
+        // Baked-lit geometry casts. It is `unlit` in the sense of skipping the deferred path, but it
+        // is a solid world and a world that does not occlude the sun has no shadows in it at all.
+        None => !((item.unlit && !item.baked_lit) || item.is_transparent),
+    }
+}
+
+/// One depth pass into `target`, drawing every caster through the shadow pass group `light`.
+#[cfg(not(gizmo_forward_only))]
+fn record_caster_pass(
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &Renderer,
+    draw_items: &[DrawItem],
+    uploaded_instances: u32,
+    label: &str,
+    target: &wgpu::TextureView,
+    light: &wgpu::BindGroup,
+) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some(label),
+        color_attachments: &[],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: target,
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    // Every shadow pipeline has the same groups: the light's matrix, the material (read by a
+    // cut-out), the skeleton and the instances.
+    pass.set_bind_group(0, light, &[]);
+    pass.set_bind_group(3, &renderer.scene.instance_bind_group, &[]);
+    let mut bound = None;
+    for item in draw_items {
+        if !casts_into_shadow_maps(renderer, item) {
+            continue;
+        }
+        let Some(pipeline) = caster_pipeline(renderer, item) else { continue };
+        bind_caster(&mut pass, renderer, item, pipeline, &mut bound);
+        // Two-region instance layout (see collect_draw_items): the camera-visible instances
+        // (region A) and the off-screen shadow-only casters (region B) are not contiguous, so cast
+        // from BOTH ranges with a draw each. Empty ranges draw 0 instances = no-op. Through
+        // `record_draw`, which binds the index buffer: the point light's cube drew `0..vertex_count`
+        // unindexed until 2026-11-11, so an indexed mesh — every primitive and import — cast its
+        // deduplicated corners taken three at a time, a plane its first triangle and nothing of the
+        // second.
+        item.record_draw(&mut pass, item.camera_instance_range(uploaded_instances));
+        item.record_draw(&mut pass, item.shadow_instance_range(uploaded_instances));
+    }
+}
+
+/// The frame's shadow maps: one depth pass per cascade, then one per local shadow layer the frame
+/// planned (`local_layers`, `SceneSetup::local_shadows`), each layer's matrix already written to its
+/// buffer. A frame where no light casts records no local pass at all.
 #[cfg(not(gizmo_forward_only))]
 pub fn record_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &Renderer,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
+    local_layers: usize,
 ) {
-    // CSM shadow passes — one depth-only pass per cascade.
     for i in 0..crate::renderer::CASCADE_COUNT {
-        let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Shadow Pass"),
-            color_attachments: &[],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &renderer.scene.shadow_cascade_layer_views[i],
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        // Every shadow pipeline has the same groups: the cascade, the material (read by a cut-out),
-        // the skeleton and the instances.
-        shadow_pass.set_bind_group(0, renderer.scene.view_shadow_pass_bind_group(i), &[]);
-        shadow_pass.set_bind_group(3, &renderer.scene.instance_bind_group, &[]);
-        let mut bound = None;
-        for item in draw_items {
-            // Per-object opt-out, on top of the material rules: `MeshRenderer::shadows`. A flag
-            // the editor obeys and the game ignores would make the viewport lie about the build.
-            if !item.casts_shadows {
-                continue;
-            }
-            // A game's surface casts as `Pbr` does — the branches below — unless its id has nothing
-            // behind it, which draws nothing, its shadow included.
-            if item.surface.is_some_and(|id| renderer.custom_materials.surface(id).is_none()) {
-                continue;
-            }
-            // A custom material routes as `unlit` — that is what keeps it out of the deferred
-            // path — but "skips the G-buffer" is not "is not solid". The shadow pass writes depth
-            // only and does not care how a fragment would have shaded, so the material itself
-            // decides, through `CustomMaterial::casts_shadows`. Without this arm the flag would be
-            // a field that reads `true` and does nothing, which is the exact defect
-            // `CAPABILITY_GAPS.md` §D keeps a list of.
-            match item
-                .custom
-                .map(|id| renderer.custom_materials.get(id).is_some_and(|c| c.casts_shadows))
-            {
-                Some(true) => {}
-                Some(false) => continue,
-                None => {
-                    // Baked-lit geometry casts. It is `unlit` in the sense of skipping the
-                    // deferred path, but it is a solid world and a world that does not occlude the
-                    // sun has no shadows in it at all.
-                    if (item.unlit && !item.baked_lit) || item.is_transparent {
-                        continue;
-            }
-                }
-            }
-            let Some(pipeline) = caster_pipeline(renderer, item) else { continue };
-            bind_caster(&mut shadow_pass, renderer, item, pipeline, &mut bound);
-            // Two-region instance layout (see collect_draw_items): the camera-visible
-            // instances (region A) and the off-screen shadow-only casters (region B) are no
-            // longer contiguous, so cast shadows from BOTH ranges with a draw each. Empty
-            // ranges (e.g. a batch with no off-screen casters) draw 0 instances = no-op.
-            item.record_draw(
-                &mut shadow_pass,
-                item.camera_instance_range(uploaded_instances),
-            );
-            item.record_draw(
-                &mut shadow_pass,
-                item.shadow_instance_range(uploaded_instances),
-            );
-        }
+        record_caster_pass(
+            encoder,
+            renderer,
+            draw_items,
+            uploaded_instances,
+            "Shadow Pass",
+            &renderer.scene.shadow_cascade_layer_views[i],
+            renderer.scene.view_shadow_pass_bind_group(i),
+        );
     }
-
-    // Point Light Shadow Passes — 6 faces.
-    //
-    // Gated on the flag the *sampling* side already reads: `SceneUniforms.point_shadows_enabled`
-    // is written from this same bool (`systems/render/mod.rs`), and `deferred_lighting.wgsl`
-    // skips the point-shadow lookup unless it is set. It defaults to false
-    // (`renderer/construction.rs`), so by default this recorded six depth passes per frame — two
-    // draws per lit item each, twelve of the twenty-three a lit batch costs — into a cubemap
-    // nothing sampled. `gizmo-studio` never recorded them at all, so this is the game path
-    // catching up rather than a behaviour change.
-    //
-    // Both gates must stay on the one bool. If the uniform is ever set independently of it, the
-    // shader would sample a cubemap this skipped writing, which is a worse failure than the waste.
-    if !renderer.point_shadows_enabled {
-        return;
+    let local_layers = local_layers.min(renderer.scene.local_shadow_maps.layers());
+    for i in 0..local_layers {
+        record_caster_pass(
+            encoder,
+            renderer,
+            draw_items,
+            uploaded_instances,
+            "Local Shadow Pass",
+            &renderer.scene.local_shadow_maps.layer_views[i],
+            renderer.scene.view_local_shadow_pass_bind_group(i),
+        );
     }
-    for i in 0..6 {
-        let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Point Shadow Pass"),
-            color_attachments: &[],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: &renderer.scene.point_shadow_face_views[i],
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(1.0),
-                    store: wgpu::StoreOp::Store,
-                }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        // The directional shadow pipelines, chosen the same way: only the face's matrix differs.
-        shadow_pass.set_bind_group(0, renderer.scene.view_point_shadow_pass_bind_group(i), &[]);
-        shadow_pass.set_bind_group(3, &renderer.scene.instance_bind_group, &[]);
-        let mut bound = None;
-        for item in draw_items {
-            // Per-object opt-out (`MeshRenderer::shadows`), same as the cascade pass above.
-            if !item.casts_shadows { continue; }
-            if item.surface.is_some_and(|id| renderer.custom_materials.surface(id).is_none()) {
-                continue;
-            }
-            // Same decision as the cascade pass above, and for the same reason.
-            match item
-                .custom
-                .map(|id| renderer.custom_materials.get(id).is_some_and(|c| c.casts_shadows))
-            {
-                Some(true) => {}
-                Some(false) => continue,
-                None => {
-                    if (item.unlit && !item.baked_lit) || item.is_transparent {
-                        continue;
-                    }
-                }
-            }
-            let Some(pipeline) = caster_pipeline(renderer, item) else { continue };
-            bind_caster(&mut shadow_pass, renderer, item, pipeline, &mut bound);
-            // Both instance regions cast into the point-shadow faces (see the directional
-            // pass above for why the two ranges are non-contiguous). Through `record_draw`, which
-            // binds the index buffer: this pass drew `0..vertex_count` unindexed until 2026-11-11, so
-            // an indexed mesh — every primitive and import — cast its deduplicated corners taken
-            // three at a time, a plane its first triangle and nothing of the second.
-            item.record_draw(&mut shadow_pass, item.camera_instance_range(uploaded_instances));
-            item.record_draw(&mut shadow_pass, item.shadow_instance_range(uploaded_instances));
-        }
-    }
-
 }

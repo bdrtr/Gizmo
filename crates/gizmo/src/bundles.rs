@@ -97,6 +97,8 @@ pub struct PointLightBundle {
     /// attenuation with `clamp(1 - (d/r)^4, 0, 1)`, so the light contributes exactly nothing
     /// past it — which is also what clustered culling uses to decide where it is needed.
     pub radius: f32,
+    /// Whether it casts shadows — [`PointLight::casts_shadows`]. Off by default.
+    pub casts_shadows: bool,
 }
 
 #[cfg(feature = "render")]
@@ -107,6 +109,7 @@ impl Default for PointLightBundle {
             color: Vec3::new(1.0, 1.0, 1.0),
             intensity: 5.0,
             radius: 20.0,
+            casts_shadows: false,
         }
     }
 }
@@ -120,7 +123,7 @@ impl Bundle for PointLightBundle {
         world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
         world.add_component(
             entity,
-            PointLight::new(self.color, self.intensity, self.radius),
+            PointLight { casts_shadows: self.casts_shadows, ..PointLight::new(self.color, self.intensity, self.radius) },
         );
     }
 }
@@ -148,6 +151,8 @@ pub struct SpotLightBundle {
     /// Half-angle where the cone reaches zero, in radians. The falloff lives between the two, so
     /// an outer equal to the inner gives a hard edge.
     pub outer_angle: f32,
+    /// Whether it casts shadows — [`SpotLight::casts_shadows`]. Off by default.
+    pub casts_shadows: bool,
 }
 
 #[cfg(feature = "render")]
@@ -161,6 +166,7 @@ impl Default for SpotLightBundle {
             radius: 30.0,
             inner_angle: 0.4,
             outer_angle: 0.6,
+            casts_shadows: false,
         }
     }
 }
@@ -177,13 +183,10 @@ impl Bundle for SpotLightBundle {
         world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
         world.add_component(
             entity,
-            SpotLight::new(
-                self.color,
-                self.intensity,
-                self.radius,
-                self.inner_angle,
-                self.outer_angle,
-            ),
+            SpotLight {
+                casts_shadows: self.casts_shadows,
+                ..SpotLight::new(self.color, self.intensity, self.radius, self.inner_angle, self.outer_angle)
+            },
         );
     }
 }

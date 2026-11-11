@@ -34,6 +34,7 @@ use gizmo::core::query::{Query, With};
 use gizmo::core::system::{IntoSystemConfig, Phase, Res};
 use gizmo::core::HierarchyExt;
 use gizmo::prelude::*;
+use gizmo::renderer::components::mesh::ShadowCasting;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 use std::f32::consts::{FRAC_PI_2, FRAC_PI_4};
 
@@ -134,7 +135,9 @@ fn main() {
                     color,
                     intensity: LAMP_INTENSITY,
                     radius: LAMP_RANGE,
+                    casts_shadows: true,
                 });
+                // The bulb sits around its own light: casting, it would shut the light in.
                 let marker = scene.world.spawn_bundle((
                     Transform::new(Vec3::ZERO),
                     GlobalTransform::default(),
@@ -142,7 +145,7 @@ fn main() {
                     Material::new(white.clone())
                         .with_pbr(Vec4::new(color.x, color.y, color.z, 1.0), 0.5, 0.0)
                         .with_emissive(emissive),
-                    MeshRenderer::new(),
+                    MeshRenderer::new().with_shadows(ShadowCasting::Off),
                 ));
                 scene.world.add_child(light, marker);
             };
@@ -169,6 +172,7 @@ fn main() {
                 radius: LAMP_RANGE,
                 inner_angle: 0.6,
                 outer_angle: 0.8,
+                casts_shadows: true,
             });
             let spot_marker = scene.world.spawn_bundle((
                 Transform::new(Vec3::ZERO),
@@ -177,7 +181,7 @@ fn main() {
                 Material::new(white.clone())
                     .with_pbr(Vec4::new(0.0, 1.0, 0.0, 1.0), 0.5, 0.0)
                     .with_emissive(Vec3::new(0.0, 4.0, 0.0)),
-                MeshRenderer::new(),
+                MeshRenderer::new().with_shadows(ShadowCasting::Off),
             ));
             scene.world.add_child(spot, spot_marker);
 

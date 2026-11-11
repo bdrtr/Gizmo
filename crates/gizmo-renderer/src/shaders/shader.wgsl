@@ -18,6 +18,9 @@
 #import gizmo::common::{dielectric_f0, instance_keeps}
 #endif
 #import gizmo::common::{SceneUniforms, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
+#ifdef SHADOWS
+#import gizmo::common::{SHADOW_BIAS_METRES, SHADOW_BIAS_METRES_MIN, local_shadow_layer, local_shadow_visibility}
+#endif
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
 #import gizmo::pbr_ext::{compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
@@ -96,6 +99,10 @@ var t_shadow: texture_depth_2d_array;
 
 @group(2) @binding(1)
 var s_shadow: sampler_comparison;
+
+// The local lights' shadows (`gizmo_renderer::local_shadows`), a layer or six a light.
+@group(2) @binding(2)
+var t_local_shadow: texture_depth_2d_array;
 
 // Light cookies (`gizmo_renderer::cookies`) — beside the shadow maps, so native only.
 @group(2) @binding(3)
@@ -441,7 +448,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
             // Metres, not NDC — see the same conversion in deferred_lighting.wgsl. The third row
             // of the cascade matrix is NDC-z per world metre.
             let sz = length(vec3<f32>(light_vp[0][2], light_vp[1][2], light_vp[2][2]));
-            let bias = max(0.042 * slope, 0.0042) * sz * scene.shadow_bias.x;
+            let bias = max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * sz * scene.shadow_bias.x;
             var pcf_visibility = 0.0;
             let texel_size = scene.cascade_params.y;
             for (var x = -1; x <= 1; x++) {
@@ -633,6 +640,19 @@ fn shade(in: VertexOutput) -> vec4<f32> {
                 }
 #endif
             }
+#ifdef SHADOWS
+            // The light's shadow, as the deferred pass takes it: see `local_shadow_visibility`.
+            // `inst_emissive.w < 0` is `MeshRenderer::receives_shadows == false`.
+            let shadow_layer = local_shadow_layer(scene.light_shadows[i / 4u][i % 4u], in.world_position - light.position.xyz);
+            if (in.inst_emissive.w >= 0.0 && shadow_layer >= 0 && max(attenuation, window) > 0.0) {
+                let lit = local_shadow_visibility(
+                    t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer], shadow_layer,
+                    in.world_position, N, to_light, scene.shadow_bias.xy,
+                );
+                attenuation *= lit;
+                window *= lit;
+            }
+#endif
         }
         let light_rgb = light.color.rgb * cookie;
         var light_color_contrib = vec3<f32>(0.0);

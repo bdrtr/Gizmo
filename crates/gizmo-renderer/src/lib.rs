@@ -132,6 +132,8 @@ pub mod motion;
 pub mod reflection;
 /// Light cookies: images a spot light projects through its cone.
 pub mod cookies;
+/// The shadow maps point, spot and rectangle lights cast through: one array, layers by rank.
+pub mod local_shadows;
 /// Auto exposure: the luminance sensor fed back into the composite pass, on the GPU.
 pub mod auto_exposure;
 /// Contrast-adaptive sharpening, the last post pass.

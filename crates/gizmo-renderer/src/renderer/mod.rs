@@ -356,8 +356,6 @@ pub struct Renderer {
     pub vignette_intensity: f32,
     /// Strength of the animated film grain. 0 = off.
     pub film_grain_intensity: f32,
-    /// Whether point lights cast shadows this frame.
-    pub point_shadows_enabled: bool,
     /// Whether the GPU SPH fluid "ocean" is simulated and composited this frame.
     /// A renderer always allocates a 100k-particle fluid system, but its water
     /// surface must NOT render over every scene — only scenes that actually want
@@ -1322,11 +1320,13 @@ mod tests {
     #[test]
     fn test_gpu_uniform_struct_sizes() {
         // Extremely critical alignment checks to prevent runtime pipeline crashes on GPU
-        let expect_scene = 656 + crate::frame_uniforms::MAX_LIGHTS * 64;
+        // 64 bytes a light of `LightData` and 4 of its shadow's entry, 3 216 fixed (656 until the
+        // local shadow layers, 2026-11-11).
+        let expect_scene = 3216 + crate::frame_uniforms::MAX_LIGHTS * 68;
         assert_eq!(
             std::mem::size_of::<crate::gpu_types::SceneUniforms>(),
             expect_scene,
-            "SceneUniforms size shifted from 656 + 64*MAX_LIGHTS bytes!"
+            "SceneUniforms size shifted from 3216 + 68*MAX_LIGHTS bytes!"
         );
         assert_eq!(std::mem::size_of::<crate::gpu_types::LightData>(), 64, "LightData size shifted from target 64 bytes!");
         // 80 since 2026-08-24: the tone-mapping pair (curve + white point) is a fifth vec4. It was

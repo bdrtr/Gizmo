@@ -745,12 +745,50 @@ SMAA, and FXAA on as well changes nothing, since the chain runs one or the other
 
 ### A7. Area lights, light cookies, contact and soft shadows — **CLOSED 2026-11-02**
 
-Sphere, tube and rectangle lights exist, spot lights project cookies, and the sun has soft and
-contact shadows. The `area_lights` demo shows all of it. What is left is narrower than the heading
-ever was: no cube cookies for point lights, no cookies on web, and — wider than this line said until
-2026-11-11 — **local lights barely cast**: the sun casts through its cascades and one point light, the
-first, through a cube when `Renderer::point_shadows_enabled` is set; spot and rectangle lights cast
-nothing, so a spot inside a room lights the floor behind a pillar. Each item:
+Sphere, tube and rectangle lights exist, spot lights project cookies, the sun has soft and contact
+shadows, and since 2026-11-11 every local light casts when it asks to. The `area_lights` demo shows
+all of it. What is left is narrower than the heading ever was: no cube cookies for point lights, no
+cookies on web, and a local light's shadow is hard — cast from the light's centre, a sphere's, a
+tube's or a rectangle's size softening nothing (the sun's angular radius does soften its own). Each
+item:
+
+- ~~**Local lights barely cast.**~~ **CLOSED 2026-11-11.** The sun cast through its cascades and one
+  point light — the first in rank — through a cube map while `Renderer::point_shadows_enabled` was set,
+  looked up by the deferred pass alone, so nothing drawn forward (glass, the editor's viewport) saw
+  it; spot and rectangle lights cast nothing, and a spot in a room lit the floor behind a pillar.
+  Every local light now says for itself whether it casts (`PointLight`/`SpotLight`/`RectLight::
+  casts_shadows`, `with_shadows()`, off by default; the renderer-wide flag is gone), and the ones that
+  do share one depth texture array (`gizmo_renderer::local_shadows`): a spot whose cone is no wider
+  than 80° (Unreal's cap) takes one layer down it, a point or rectangle light — or a wider spot — six,
+  a cube around it, the face picked in the shader by the direction from the light. The layers go to
+  the lights in the frame's rank order until 32 are spent; the array grows to what a frame asks for
+  (4 MiB a layer at 1024²) and does not shrink. The CPU builds each layer's matrix, the shadow pass
+  draws through it, and both lit shaders look it up through it — `local_shadow_visibility` in
+  `common.wgsl`, 3×3 filtered, with the cascades' two biases — so the three cannot disagree about a
+  face; each layer reaches four texels past its share so a filter at a face's edge reads the scene.
+  Off-screen casters are kept for any layer's frustum as well as the cascades', and the editor draws
+  the layers as the game does. Measured over a floor, a cube under a light 3.5 m up: a point, a 40° and
+  a 69° spot (one layer), an 83° spot (six) and a rectangle light cast 576, 576, 578, 576 and 576
+  shadow pixels, none of them a pixel without asking. Put 30 m off along a sun leaning on both axes —
+  the spot aimed past the cube, so it sits off the middle of every layer — each casts onto the sun's
+  252 pixels: point and rectangle 249 of 263 (94 %), the spot 251 of 279 (90 %). A point light 1 m up
+  casts all four ways through its side faces (1 421, 1 421, 1 392, 1 422); a cube 4 m off screen and
+  outside the cascades casts 12 025 pixels into the frame; a spot and a point light 4 m apart cast 825
+  and 577; an open floor 17°, 52° and 72° off a spot's or a point's axis does not shadow itself by a
+  single level. In the viewport, a point, a spot and a rectangle light cast alike (886, 877, 884), and
+  nothing without asking (`a_local_light_casts_in_the_viewport`). With a normal map tilting that floor
+  1.2 rad toward the light, at most 3 levels of 255 remain — 10 without the depth bias, which is what
+  it is for (the normal offset alone clears any flat surface); both biases read the shading normal, as
+  the cascades' do. Broken on purpose, each of these is caught: off-screen casters kept for the cascades only, a
+  layer read mirrored, the ±X or ±Z faces swapped, the lookup ignored, the normal offset or the depth
+  bias removed. The one point light that could cast before cast this cube's shadow at 762 pixels (and
+  the plane's at 431), through a cube map and the hardware's cube lookup; nothing had measured it
+  against anything. Not on the web or a phone, which draw no shadows. The `spotlight` demo's sixteen
+  cones cast now — its documentation said they did — and the `lighting`
+  demo's lamps and spot. **Still open, each its own piece of work:** soft local shadows by the source's
+  size (PCSS, as the sun's angular radius does); per-layer culling (each layer draws every caster in the
+  frame, as each cascade does, so sixteen shadowed spots are sixteen more depth passes over the scene —
+  unmeasured); and the volumetric pass, which scatters every local light without asking its shadow.
 
 - ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
   faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or
@@ -759,7 +797,8 @@ nothing, so a spot inside a room lights the floor behind a pillar. Each item:
   whether it closes over a volume (`Mesh::closed`, worked out from its own triangles when it is made:
   every edge met by one running the other way, corners welded by position), and one that does not is
   drawn by both faces (`SceneState::shadow_open_pipeline`) in the sun's cascades, the point light's
-  cube and the editor's viewport. The plane casts 184, and 431 under a point light; its lit face
+  cube and the editor's viewport. The plane casts 184, and 431 under a point light (332 through the
+  local shadow array since 2026-11-11, above); its lit face
   shadows none of itself, by so much as 2 of 255, with the sun 17°, 52° or 72° off overhead — the
   receiver's normal offset and slope bias were enough once the plane had a depth to compare with.
   Solids are drawn as before. Nothing had tested the point light's shadows at all, and the first
@@ -830,9 +869,9 @@ nothing, so a spot inside a room lights the floor behind a pillar. Each item:
   panel 5258 → 6018 pixels over 150 while the spot under it dims (226.71 → 202.64). Over the glossy
   floor, a 1.2 m × 5 cm panel's highlight 0.80 → 4.44 wide per height, the frame's mean 80.89 →
   83.65. Each was confirmed by breaking it: orientation never uploaded, diffuse from the centre,
-  the area halved, the volumetric gate removed, the renormalisation removed — all five fail. Not
-  shadow casters; the volumetric pass still scatters every light as a point otherwise (spot cones
-  included, as before).
+  the area halved, the volumetric gate removed, the renormalisation removed — all five fail. Shadow
+  casters since 2026-11-11, from their centre (above); the volumetric pass still scatters every light
+  as a point otherwise (spot cones included, as before).
 - ~~**No light texture (cookie/gobo).**~~ **CLOSED 2026-11-02:** `SpotLight::cookie` — a name
   registered with `Renderer::insert_light_cookie`, or on native a path loaded on first use. Eight
   256² layers in one array beside the shadow maps; the outer cone fills the image, its up is world
@@ -1332,7 +1371,7 @@ author it. The middle column is what a full implementation offers.
 | Level of detail | per-level distances + crossfade | **All of it** — `LodGroup` has had per-level distances on both draw loops, and the row said "one level, one rule" because it measured only the automatic LOD1; `LodGroup::with_crossfade` (2026-11-07) dissolves over a band, by a screen-space pattern two levels split between them, including out to nothing past the last. The automatic LOD1 (`distance > radius × 15`, `LOD_MIN_CORNERS`, generated from a mesh's own indices) stays as it was: it switches hard | `visibility_range` |
 | Wireframe | global flag + default colour + per-entity include/exclude/colour | **All of it since 2026-11-07** — `Wireframe`, `NoWireframe`, `WireframeColor` per entity (measured on two spheres: marked only (480, 0) green pixels left/right; global with one out (0, 516); two colours 478 green, 457 red), and the studio viewport honours them and `global`. Before: **2** — `WireframeConfig::global`, all or nothing, and since 2026-11-02 `WireframeConfig::color` (one colour for every line; the wireframe pipeline compiles `shader.wgsl` with `WIREFRAME`, which returns the colour packed into `SceneUniforms::wireframe_color`). Measured on a pale sphere: 0 strongly green pixels with the lit colour, 594 with green; the shader branch removed reads 0.  Before the colour: Measured consequence: the overlay is drawn in a fixed light colour, so on a light material it is nearly invisible (edge energy only ×1.20, 1.17 % of pixels). Also: drawn in the forward pass, skybox/backdrop excluded by design, and **inert on wasm** (`PolygonMode::Line` unsupported there) | `wireframe` |
 | Clearcoat | strength + layer roughness + 3 textures | **2 since 2026-11-07** — `clear_coat`, `clear_coat_roughness`, 32 steps each in one half float in the G-buffer. The "near-binary" reading was the tone curve: a highlight at roughness 0.08 saturates it. Measured dim, on a dark surface: 0.2 adds 72, 0.8 adds 217, 0.8 at roughness 0.6 adds 53, forward and deferred within 3. No textures: nothing in the material bind group holds them, and glTF's clearcoat extension is not in the `gltf` crate | `clearcoat` |
-| Shadow caster / receiver | per-object cast **and** receive toggles | **both since 2026-11-02**: casting as `ShadowCasting::{On, Off, Only}` — `Only` casts without being drawn, which a plain cast toggle cannot express (and is drawn by no pass since 2026-11-11: the forward pass and six of the editor's loops drew it, so a transparent, unlit or baked-lit `Only` object, and every one in a browser or on a phone, showed — `a_shadow_only_object_is_drawn_by_no_pass`) — and receiving as `MeshRenderer::receives_shadows` (`with_receives_shadows(false)`, an inspector checkbox), which skips the sun's cascades, contact shadows and the point-light cube on that surface. It rides the instance's `emissive.w` into RT5's alpha for the deferred pass; the forward and baked-lit shaders read it directly. Measured, a cube over a floor: 171 shadow pixels on an opaque floor and 174 on a transparent one disappear when it refuses; the lighting pass ignoring RT5's alpha, the forward shader ignoring the flag, and the batcher never writing it each fail. Casting fractions measured earlier: 1.06 % / 2.07 % / 4.23 % | `shadow_caster_receiver` |
+| Shadow caster / receiver | per-object cast **and** receive toggles | **both since 2026-11-02**: casting as `ShadowCasting::{On, Off, Only}` — `Only` casts without being drawn, which a plain cast toggle cannot express (and is drawn by no pass since 2026-11-11: the forward pass and six of the editor's loops drew it, so a transparent, unlit or baked-lit `Only` object, and every one in a browser or on a phone, showed — `a_shadow_only_object_is_drawn_by_no_pass`) — and receiving as `MeshRenderer::receives_shadows` (`with_receives_shadows(false)`, an inspector checkbox), which skips the sun's cascades, contact shadows and every local light's shadow on that surface. It rides the instance's `emissive.w` into RT5's alpha for the deferred pass; the forward and baked-lit shaders read it directly. Measured, a cube over a floor: 171 shadow pixels on an opaque floor and 174 on a transparent one disappear when it refuses; the lighting pass ignoring RT5's alpha, the forward shader ignoring the flag, and the batcher never writing it each fail. Casting fractions measured earlier: 1.06 % / 2.07 % / 4.23 % | `shadow_caster_receiver` |
 | Baked lighting | lightmap texture + second UV set | **vertex colour** via `MaterialType::BakedLit` — resolution is the mesh's tessellation, not a texture's. Still receives the sun's cascades, so mixed lighting works. Measured: the blue-minus-red balance flips sign, `+1.35` under `Pbr` and `−4.74` under `BakedLit`, because `BakedLit` does not see point lights | `lightmaps` |
 | Irradiance volumes | component + GPU voxel sampling | **wired 2026-08-24** — `deferred_lighting.wgsl` imports `gi_sample` from `irradiance.wgsl` and the baked grid reaches the lighting pass; F2 has the correlation against the CPU path. **Authored since 2026-11-02:** `IrradianceVolume::new(min, max, resolution).with_ambient(..)`, a component (saved in scenes) that both paths keep baked from the scene's directional and point lights — rebaked and uploaded only when a fingerprint of the volume and the lights changes. Tested: no volume uploads nothing; a 4×3×4 volume uploads 48 probes and its red ambient moves the frame's mean red−blue −12.26 → 30.40; a second still frame keeps the fingerprint; moving a light changes it; dropping the sync call fails. The bake is direct light only (no occlusion, no bounce) and spot lights are not in it | `irradiance_volumes` |
 | Volumetric / god rays | scattering, steps, phase, distance | **All six, since 2026-08-23** — `VolumetricParams::{phase_g, steps, max_distance, sun_scatter, bulb_scatter, shadow_bias}`, one 32-byte uniform uploaded per frame, and the defaults are pixel-identical to the shader literals they replaced. Plus `enabled`. Measured working: 19.55 % of pixels, max 134 | `volumetric_fog` |

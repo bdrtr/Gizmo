@@ -128,9 +128,8 @@ fn draw_studio_frame(
                 sky: renderer.sky,
                 ..Default::default()
             },
-            // The editor records no point-shadow cube pass, so there is no cube to sample;
-            // enabling the lookup would read whatever the game path left in it.
-            point_shadows_enabled: false,
+            // The viewport draws the local lights' shadow layers, as the game does.
+            local_shadows: true,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
@@ -138,6 +137,7 @@ fn draw_studio_frame(
     );
     let cascade_mats = setup.cascade_view_projs;
     let light_view_proj_cascades = cascade_mats.map(|m| m.to_cols_array_2d());
+    renderer.scene.ensure_local_shadow_layers(&renderer.device, setup.local_shadows.layers().len());
 
     // Global Uniforms (Her frame sadece 1 kere gönderilir).
     let scene_uniform_data = gizmo::renderer::SceneUniforms::new(&setup.frame);
@@ -160,11 +160,15 @@ fn draw_studio_frame(
     // The gizmo pass draws the game camera's frustum as a wire box in edit mode.
     let game_view_proj = viewpoint::game_view_proj(world, state.game_camera, aspect, &vp);
 
-    // Per-cascade LIGHT frusta — shadow casters are culled against these (not the camera
-    // frustum), so off-screen objects that cast shadows INTO view aren't dropped.
-    let cascade_frusta: [gizmo::renderer::Frustum; 4] = std::array::from_fn(|i| {
-        gizmo::renderer::Frustum::from_matrix(&Mat4::from_cols_array_2d(&light_view_proj_cascades[i]))
-    });
+    // Every shadow map's LIGHT frustum — the cascades', then each local light's layer. Shadow
+    // casters are culled against these (not the camera frustum), so off-screen objects that cast
+    // shadows INTO view aren't dropped.
+    let shadow_frusta: Vec<gizmo::renderer::Frustum> = cascade_mats
+        .iter()
+        .copied()
+        .chain(setup.local_shadows.layers().iter().map(|l| l.view_proj))
+        .map(|m| gizmo::renderer::Frustum::from_matrix(&m))
+        .collect();
 
     let mut debug_aabbs = Vec::new();
 
@@ -253,7 +257,7 @@ fn draw_studio_frame(
                 } else {
                     match gizmo::renderer::classify_visibility_world(
                         &culling_frustum,
-                        &cascade_frusta,
+                        &shadow_frusta,
                         world_aabb,
                         mat.material_type,
                         mat.is_transparent,
@@ -651,7 +655,15 @@ fn draw_studio_frame(
             }
 
             // --- 1. CSM GÖLGE PASS + 2. ANA RENDER PASS (Tier 3: geçişler ayrı fn) ---
-            record_studio_shadow_passes(encoder, renderer, flat_batches.as_slice(), &light_view_proj_cascades, cam_pos, elapsed_time);
+            record_studio_shadow_passes(
+                encoder,
+                renderer,
+                flat_batches.as_slice(),
+                &light_view_proj_cascades,
+                setup.local_shadows.layers(),
+                cam_pos,
+                elapsed_time,
+            );
             // The GPU bodies this viewport sees, culled against its camera as the game path culls each
             // of its views. The main pass draws them from the count this writes; with no cull of its
             // own it drew whatever count the last view's cull had left — none, in an editor that had
@@ -822,13 +834,14 @@ fn record_game_view(
                 sky: renderer.sky,
                 ..Default::default()
             },
-            point_shadows_enabled: false,
+            local_shadows: true,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
         },
     );
     let cascades = setup.cascade_view_projs.map(|m| m.to_cols_array_2d());
+    renderer.scene.ensure_local_shadow_layers(&renderer.device, setup.local_shadows.layers().len());
 
     renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));
     let scene_uniform = gizmo::renderer::SceneUniforms::new(&setup.frame);
@@ -843,7 +856,15 @@ fn record_game_view(
     let mut enc = renderer
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Game View") });
-    record_studio_shadow_passes(&mut enc, renderer, batches, &cascades, camera.position, elapsed_time);
+    record_studio_shadow_passes(
+        &mut enc,
+        renderer,
+        batches,
+        &cascades,
+        setup.local_shadows.layers(),
+        camera.position,
+        elapsed_time,
+    );
     // The GPU bodies the game camera sees, culled against it (see the viewport's cull).
     if let Some(physics) = &renderer.gpu_physics {
         physics.cull_pass(&mut enc, renderer.scene.view_bind_group());

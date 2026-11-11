@@ -16,6 +16,7 @@ use crate::core::World;
 use crate::math::{Vec3, Vec4};
 use crate::renderer::components::{DirectionalLight, LightRole, PointLight, RectLight, SpotLight};
 use crate::renderer::gpu_types::LightData;
+use crate::renderer::local_shadows::{LocalShadowCaster, LocalShadows};
 use crate::renderer::MAX_LIGHTS;
 use gizmo_physics_core::components::{GlobalTransform, Transform};
 
@@ -69,17 +70,16 @@ pub struct SceneLights {
     pub sun_angular_radius: f32,
     /// The sun's contact-shadow length, metres (0 = off, and with no sun).
     pub sun_contact_shadow_length: f32,
-    /// Index into `lights` of the point light that owns the single point-shadow cube,
-    /// or `-1` when there is no point light. There is only one point-shadow cubemap, so
-    /// exactly one point light casts; the caller renders that light's cube and the shader
-    /// only samples it for this index (avoids applying one cube to every point light).
-    pub shadow_point_index: i32,
+    /// The lights in `lights` that cast shadows (`casts_shadows`), as `(slot, what it casts over)`
+    /// in rank order — what [`LocalShadows::plan`] lays the frame's shadow layers out from.
+    pub shadow_casters: Vec<(usize, LocalShadowCaster)>,
 }
 
 /// One light that *could* go in the frame's array, with the key that decides whether it does.
 struct Candidate {
     data: LightData,
-    is_point: bool,
+    /// What it casts a shadow over, if it casts one.
+    shadow: Option<LocalShadowCaster>,
     /// Distance from the camera to the light's sphere of influence — `0.0` when the camera is
     /// inside it. Ascending: the lights whose light actually reaches the viewer come first.
     surface_dist: f32,
@@ -196,7 +196,7 @@ pub fn collect_scene_lights(
                     // (both 0 = a point).
                     params: [0.0, 0.0, light.source_radius.max(0.0), light.source_length.max(0.0)],
                 },
-                is_point: true,
+                shadow: light.casts_shadows.then_some(LocalShadowCaster::Omni { position: pos, radius: light.radius }),
                 surface_dist,
                 reach,
                 entity_id: e.id(),
@@ -233,7 +233,12 @@ pub fn collect_scene_lights(
                         light.cookie.as_deref().and_then(|c| cookies.layer(c)).map_or(0.0, |l| l as f32 + 1.0),
                     ],
                 },
-                is_point: false,
+                shadow: light.casts_shadows.then_some(LocalShadowCaster::Spot {
+                    position: pos,
+                    direction: dir,
+                    outer_angle: light.outer_angle,
+                    radius: light.radius,
+                }),
                 surface_dist,
                 reach,
                 entity_id: e.id(),
@@ -259,7 +264,9 @@ pub fn collect_scene_lights(
                     // params.y = 3 → RectLight; params.zw = half width, half height.
                     params: [0.0, 3.0, light.width.max(0.0) * 0.5, light.height.max(0.0) * 0.5],
                 },
-                is_point: false,
+                // From its centre, every way: the cube's faces behind the panel are drawn and never
+                // looked up, as nothing behind it is lit.
+                shadow: light.casts_shadows.then_some(LocalShadowCaster::Omni { position: pos, radius: light.radius }),
                 surface_dist,
                 reach,
                 entity_id: e.id(),
@@ -279,13 +286,12 @@ pub fn collect_scene_lights(
 
     let mut lights = [LightData::default(); MAX_LIGHTS];
     let mut num_lights = 0usize;
-    // The highest-ranked point light *that made the cut* owns the single point-shadow cube — a
-    // light outside the array is not lit at all, so casting its shadow would be a cube with no
-    // light in it.
-    let mut shadow_point_index: i32 = -1;
+    // Only lights that made the cut cast: one outside the array is not lit at all, so its shadow
+    // would be a map with no light in it.
+    let mut shadow_casters = Vec::new();
     for c in candidates.iter().take(MAX_LIGHTS) {
-        if c.is_point && shadow_point_index < 0 {
-            shadow_point_index = num_lights as i32;
+        if let Some(caster) = c.shadow {
+            shadow_casters.push((num_lights, caster));
         }
         lights[num_lights] = c.data;
         num_lights += 1;
@@ -321,7 +327,7 @@ pub fn collect_scene_lights(
         has_sun,
         sun_angular_radius,
         sun_contact_shadow_length,
-        shadow_point_index,
+        shadow_casters,
     }
 }
 
@@ -352,9 +358,12 @@ pub struct SceneSetup {
     /// The cascade matrices the frame carries, kept as `Mat4` because the shadow pass writes them
     /// to its own per-cascade uniform buffers.
     pub cascade_view_projs: [gizmo_math::Mat4; 4],
-    /// The collected lights. The caller needs `shadow_point_index` (and that light's position and
-    /// radius) to decide whether to render the point-shadow cube and where to put it.
+    /// The collected lights.
     pub lights: SceneLights,
+    /// The local lights' shadow layers, as the frame carries them: the caller draws each layer
+    /// through its matrix (and grows the array to hold them,
+    /// `SceneState::ensure_local_shadow_layers`). Empty when the inputs said this path draws none.
+    pub local_shadows: LocalShadows,
     /// Which of those lights reach which cluster of the view volume.
     ///
     /// Computed here because this is where the camera and the collected lights are both in hand,
@@ -450,9 +459,10 @@ pub struct SceneSetupInputs {
     pub shadow_caster: ShadowCaster,
     /// Sky, ambient and fog — everything lighting the scene that is not a light.
     pub environment: crate::renderer::EnvironmentFrame,
-    /// Whether this path renders the point-shadow cube. A path that does not must leave it off:
-    /// the lookup would sample whatever the cube held on the last frame that did.
-    pub point_shadows_enabled: bool,
+    /// Whether this path draws the local lights' shadow layers. A path that does not must leave it
+    /// off, and every light then lights unshadowed: the lookups would read whatever the layers held
+    /// when last drawn.
+    pub local_shadows: bool,
     /// Time since the scene started, in seconds; what animated shaders advance on.
     pub elapsed_time: f32,
     /// Which cookie name is in which layer — `renderer.light_cookies.table()`.
@@ -512,6 +522,12 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
     let cascade_view_projs =
         if shadow_dir.is_some() { cascades.view_projs } else { [Mat4::IDENTITY; 4] };
 
+    let local_shadows = if inputs.local_shadows {
+        LocalShadows::plan(lights.shadow_casters.iter().copied())
+    } else {
+        LocalShadows::default()
+    };
+
     // Cluster assignment over the lights that survived collection. The indices it produces are
     // indices into `lights.lights`, which is exactly what the shader indexes.
     let grid = crate::renderer::clustered::ClusterGrid::default();
@@ -562,10 +578,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
             shadows: crate::renderer::ShadowFrame {
                 cascade_view_projs,
                 cascade_splits: cascades.splits,
-                // Inert unless `point_shadows_enabled` is also set — the shader tests both — so
-                // both paths can carry the same index and only the flag decides.
-                point_caster: u32::try_from(lights.shadow_point_index).ok(),
-                point_shadows_enabled: inputs.point_shadows_enabled,
+                local: local_shadows,
                 bias_scale: [inputs.shadow_settings.depth_bias, inputs.shadow_settings.normal_offset],
             },
             environment: inputs.environment,
@@ -573,6 +586,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
         },
         cascade_view_projs,
         lights,
+        local_shadows,
     }
 }
 
@@ -637,7 +651,7 @@ mod tests {
         let q = gizmo_math::Quat::from_xyzw(d.direction[0], d.direction[1], d.direction[2], d.direction[3]);
         let emit = q * Vec3::new(0.0, 0.0, -1.0);
         assert!(emit.distance(Vec3::new(0.0, -1.0, 0.0)) < 1e-5, "the panel faces down: {emit:?}");
-        assert_eq!(l.shadow_point_index, -1, "a rectangle light is not the point-shadow caster");
+        assert!(l.shadow_casters.is_empty(), "a rectangle light that does not ask casts nothing");
     }
 
     #[test]
@@ -668,8 +682,7 @@ mod tests {
 
     /// Ranking decides the order, not the light's kind: a spot nearer the camera than a point
     /// comes first, which is the property the old collector could not have (it filled every point
-    /// before looking at a single spot). The `Transform`-only fallback still resolves, and the
-    /// point-shadow index follows the light to wherever the ranking put it.
+    /// before looking at a single spot). The `Transform`-only fallback still resolves.
     #[test]
     fn the_nearer_light_ranks_first_even_when_it_is_the_spot() {
         let mut world = World::new();
@@ -693,22 +706,49 @@ mod tests {
         assert_eq!(l.lights[1].params[1], 0.0);
         // Spot position came from its Transform (GlobalTransform-less) fallback.
         assert_eq!(l.lights[0].position, [1.0, 2.0, 3.0, 7.0]);
-        assert_eq!(l.shadow_point_index, 1, "the caster index points at the point light's slot");
+        assert!(l.shadow_casters.is_empty(), "neither light asked to cast");
     }
 
-    // With no point light there is no point-shadow caster: the index must be -1 so the
-    // shader (which reads caster_index + 1) sees 0 = "no point shadow this frame" and the
-    // caller skips rendering the cube.
+    /// A light casts when it asks to, whatever its kind, and its caster names the slot the ranking
+    /// put it in — what the shader looks its shadow up by. A spot casts down its cone, a point and a
+    /// rectangle light all around their centre.
     #[test]
-    fn no_point_light_has_no_shadow_caster() {
+    fn the_lights_that_ask_cast_from_the_slots_they_ranked_into() {
+        use crate::renderer::components::RectLight;
         let mut world = World::new();
-        let s = world.spawn();
-        world.add_component(s, GlobalTransform::default());
-        world.add_component(s, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5));
+        let far_point = world.spawn();
+        world.add_component(far_point, Transform::new(Vec3::new(0.0, 0.0, 40.0)));
+        world.add_component(far_point, PointLight::new(Vec3::ONE, 5.0, 10.0).with_shadows());
+        let near_spot = world.spawn();
+        world.add_component(near_spot, Transform::new(Vec3::new(0.0, 1.0, 3.0)));
+        world.add_component(near_spot, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5).with_shadows());
+        let quiet = world.spawn();
+        world.add_component(quiet, Transform::new(Vec3::new(0.0, 0.0, 10.0)));
+        world.add_component(quiet, PointLight::new(Vec3::ONE, 5.0, 4.0));
+        let panel = world.spawn();
+        world.add_component(panel, Transform::new(Vec3::new(2.0, 0.0, 20.0)));
+        world.add_component(panel, RectLight::new(Vec3::ONE, 4.0, 6.0, 1.0, 1.0).with_shadows());
 
         let l = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
-        assert_eq!(l.num_lights, 1);
-        assert_eq!(l.shadow_point_index, -1, "no point light → no point-shadow caster");
+        assert_eq!(l.num_lights, 4);
+        let slot_of = |z: f32| (0..4).find(|&i| l.lights[i].position[2] == z).unwrap();
+        assert_eq!(
+            l.shadow_casters,
+            vec![
+                (
+                    slot_of(3.0),
+                    LocalShadowCaster::Spot {
+                        position: Vec3::new(0.0, 1.0, 3.0),
+                        direction: Vec3::NEG_Z,
+                        outer_angle: 0.5,
+                        radius: 20.0
+                    }
+                ),
+                (slot_of(20.0), LocalShadowCaster::Omni { position: Vec3::new(2.0, 0.0, 20.0), radius: 6.0 }),
+                (slot_of(40.0), LocalShadowCaster::Omni { position: Vec3::new(0.0, 0.0, 40.0), radius: 10.0 }),
+            ],
+            "in rank order, the quiet light left out"
+        );
     }
 
     /// Spawn a point light at `z` with a `Transform`, and return its entity.
@@ -778,7 +818,7 @@ mod tests {
         let after = collect_scene_lights(&world, Vec3::ZERO, wide_view(), &Default::default());
 
         assert_eq!(selected_z(&before), selected_z(&after), "same world, same ten lights");
-        assert_eq!(before.shadow_point_index, after.shadow_point_index);
+        assert_eq!(before.shadow_casters, after.shadow_casters);
     }
 
     /// A full array of distant point lights no longer starves a spotlight at the camera.

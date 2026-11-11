@@ -423,7 +423,6 @@ mod tests {
             ("deferred_lighting.wgsl", include_str!("../shaders/deferred_lighting.wgsl")),
             ("gbuffer.wgsl", include_str!("../shaders/gbuffer.wgsl")),
             ("shadow.wgsl", include_str!("../shaders/shadow.wgsl")),
-            ("point_shadow.wgsl", include_str!("../shaders/point_shadow.wgsl")),
         ];
         for (name, src) in native_only {
             compose_wgsl(src, name, native_render_defs());
@@ -492,8 +491,9 @@ mod tests {
         );
         // Shadow bindings + sampling are gone (they'd be undefined ids on the 4-group layout).
         // Match the binding DECLARATION, not the bare substring "t_shadow" — the always-present
-        // SceneUniforms field `point_shadows_enabled` contains "t_shadow" as a substring.
+        // SceneUniforms field `light_shadows` contains "t_shadow" as a substring.
         assert!(!web.contains("var t_shadow"), "web variant must not declare t_shadow");
+        assert!(!web.contains("var t_local_shadow"), "web variant must not declare the local shadow layers");
         assert!(
             !web.contains("textureSampleCompare"),
             "web variant must not sample shadows"

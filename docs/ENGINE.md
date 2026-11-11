@@ -1131,22 +1131,24 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   is fixed. **Since 2026-11-02 it is 608 B fixed (16 992 B)**: `fog` and `fog_shape` (for
   `Renderer::fog`) and `shadow_bias` (for `ShadowSettings`'s bias multipliers) were appended.
   **Since 2026-11-03 it is 656 B fixed (17 040 B)**: `sky_zenith`, `sky_horizon` and `sky_ground`
-  (for `Renderer::sky`), and the ceiling below is 1013 lights.
+  (for `Renderer::sky`). **Since 2026-11-11 it is 3 216 B fixed and 68 B a light (20 624 B)**: the
+  local lights' 32 shadow layers (`local_shadow_layers`, 80 B each) and each light's entry in them
+  (`light_shadows`, 4 B a light), and the ceiling below is 916 lights.
 
   **Clustered culling landed the same day, and the cap is now 256.** `MAX_LIGHTS` was never a
   hardware limit — it was the per-fragment loop over *every* light in the frame wearing a constant's
   clothing. `gizmo-renderer::clustered` cuts the view volume into 16×9×24 clusters, assigns each
   light to the clusters its sphere touches, and both lighting loops (deferred and forward) now walk
   their own fragment's list, bounded by `MAX_LIGHTS_PER_CLUSTER` = 32 whatever the scene holds. The
-  hard ceiling left is the uniform block: `(65536 − 656) / 64` = 1013 lights (1015 at the 560 B
-  fixed part this was written against), and the honest move
+  hard ceiling left is the uniform block: `(65536 − 3216) / 68` = 916 lights (1015 at the 560 B
+  fixed part this was written against, 1013 at 656 B), and the honest move
   past a few hundred is to put the light array in a storage buffer rather than inch toward that
   cliff.
 
   **That ceiling is computed now, not argued.**
   `the_scene_block_fits_the_uniform_binding_floor_every_webgpu_target_guarantees` asserts the block
   is inside the 64 KiB `maxUniformBufferBindingSize` every WebGPU target guarantees, and that the
-  656 / 1013 figures quoted here are this layout's (it said 560 / 1015 until the fog and bias fields, and 608 / 1014 until the sky). Before it, raising `MAX_LIGHTS` past the cliff
+  3 216 / 916 figures quoted here are this layout's (it said 560 / 1015 until the fog and bias fields, 608 / 1014 until the sky, and 656 / 1013 until the local shadow layers). Before it, raising `MAX_LIGHTS` past the cliff
   would have compiled, passed every test, and failed at **run time** on the first machine that
   enforces the floor — as a bind-group validation error, which is the least informative place to
   learn about arithmetic done in a header. Verified red at `MAX_LIGHTS` = 1200: 77 360 B, with the
@@ -2289,7 +2291,8 @@ Derived work (the inverse view-projection, the packed `cascade_params` slots, th
 padding, the shadow texel size) now happens once in `SceneUniforms::new(&SceneFrame)`; what the two
 paths legitimately disagree about is arguments at a call site with the reason next to them —
 studio's identity cascades when nothing casts, its point-shadow lookup left off because it records
-no cube pass, its exposure from the editor slider. The engine path is byte-identical (12 golden
+no cube pass (until 2026-11-11, when both paths came to draw every local light's shadow layers and
+the argument became `local_shadows: true` on both), its exposure from the editor slider. The engine path is byte-identical (12 golden
 render tests, hashes unchanged) except for the two dead fields.
 
 The guard is `no_hand_filled_uniform_literals_outside_the_constructor`, and it **walks the

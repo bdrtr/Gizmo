@@ -136,12 +136,13 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
+            // The local lights' shadow layers (`crate::local_shadows`).
             wgpu::BindGroupLayoutEntry {
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Texture {
                     multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::Cube,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
                     sample_type: wgpu::TextureSampleType::Depth,
                 },
                 count: None,

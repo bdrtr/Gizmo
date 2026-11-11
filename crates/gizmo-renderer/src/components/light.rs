@@ -25,6 +25,11 @@ pub struct PointLight {
     /// averages the two ends. `#[serde(default)]`.
     #[serde(default)]
     pub source_length: f32,
+    /// Whether it casts shadows: six layers of the local shadow array, a cube around it (see
+    /// `gizmo_renderer::local_shadows`). Off by default — six depth passes a frame is not a cost to
+    /// pay for a light nobody asked to cast. `#[serde(default)]`.
+    #[serde(default)]
+    pub casts_shadows: bool,
 }
 
 impl PointLight {
@@ -39,7 +44,14 @@ impl PointLight {
             radius,
             source_radius: 0.0,
             source_length: 0.0,
+            casts_shadows: false,
         }
+    }
+
+    /// This light casting shadows (see [`casts_shadows`](Self::casts_shadows)).
+    pub fn with_shadows(mut self) -> Self {
+        self.casts_shadows = true;
+        self
     }
 
     /// This light as a tube `metres` long along the entity's local X axis (see
@@ -157,6 +169,11 @@ pub struct SpotLight {
     /// (the default) is a plain cone. See `gizmo_renderer::cookies`. `#[serde(default)]`.
     #[serde(default)]
     pub cookie: Option<String>,
+    /// Whether it casts shadows: one layer of the local shadow array down its cone, or six around it
+    /// for a cone wider than `local_shadows::SPOT_FRUSTUM_MAX_ANGLE` (see
+    /// `gizmo_renderer::local_shadows`). Off by default. `#[serde(default)]`.
+    #[serde(default)]
+    pub casts_shadows: bool,
 }
 
 impl SpotLight {
@@ -181,7 +198,14 @@ impl SpotLight {
             outer_angle,
             source_radius: 0.0,
             cookie: None,
+            casts_shadows: false,
         }
+    }
+
+    /// This light casting shadows (see [`casts_shadows`](Self::casts_shadows)).
+    pub fn with_shadows(mut self) -> Self {
+        self.casts_shadows = true;
+        self
     }
 
     /// This light projecting the cookie `name` (see [`cookie`](Self::cookie)).
@@ -209,7 +233,8 @@ impl SpotLight {
 ///
 /// `intensity` is the on-axis intensity — the rectangle's radiance is `intensity / area` — so a
 /// panel seen face on from far away lights like a [`PointLight`] of the same intensity, and
-/// dimmer off axis, as a flat emitter does. No shadows: rectangle lights are not shadow casters.
+/// dimmer off axis, as a flat emitter does. Its shadow, when it [`casts_shadows`](Self::casts_shadows),
+/// is cast from its centre: hard where a panel's would soften with its size.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RectLight {
     /// Linear RGB colour.
@@ -223,6 +248,10 @@ pub struct RectLight {
     pub width: f32,
     /// Extent along the entity's local Y, in metres.
     pub height: f32,
+    /// Whether it casts shadows: six layers of the local shadow array, a cube around its centre (see
+    /// `gizmo_renderer::local_shadows`). Off by default. `#[serde(default)]`.
+    #[serde(default)]
+    pub casts_shadows: bool,
 }
 
 impl RectLight {
@@ -236,7 +265,14 @@ impl RectLight {
             radius: radius.max(0.001),
             width: extent(width),
             height: extent(height),
+            casts_shadows: false,
         }
+    }
+
+    /// This light casting shadows (see [`casts_shadows`](Self::casts_shadows)).
+    pub fn with_shadows(mut self) -> Self {
+        self.casts_shadows = true;
+        self
     }
 }
 

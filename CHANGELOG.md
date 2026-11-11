@@ -50,6 +50,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Every local light casts shadows, when it asks to.** `PointLight`, `SpotLight` and `RectLight` have
+  `casts_shadows` (and `with_shadows()`; off by default, `#[serde(default)]`), and so do `PointLightBundle` and
+  `SpotLightBundle`. The lights that cast share one depth texture array (`gizmo_renderer::local_shadows`): a spot whose
+  cone is no wider than 80° takes one layer down it, a point or rectangle light — or a wider spot — six, a cube around it.
+  Layers go to the lights in the frame's rank order until 32 are spent, and the array grows to what a frame asks for. Both
+  lit shaders look a light's shadow up through the matrix it was drawn with (`local_shadow_visibility` in `common.wgsl`),
+  so it falls in the deferred pass, on glass and in the editor viewport alike; off-screen casters inside a light's layers
+  are kept for them. Only the sun and one point light could cast before. The editor's light sections have a checkbox for
+  it (and the point light's the range row it lacked), and the `lighting` and `spotlight` demos' lamps cast (the latter's
+  documentation said its sixteen cones did).
+  Desktop only, as every shadow is.
+
 - **A game's own surface, drawn deferred.** `Renderer::add_surface_material(label, wgsl)` composes a game's
   `fn material_surface(input: SurfaceInput) -> Surface` into the engine's G-buffer and lit forward shaders, in place of the
   engine's material, and `MaterialType::CustomSurface(id)` draws it: written to the G-buffer as `Pbr` is — so the deferred
@@ -179,6 +191,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A system parameter can be written outside `gizmo-core`.** `SystemParam` was sealed; it is `unsafe trait SystemParam` now, as
   in Bevy, with the contract on the trait: `get_access_info` declares everything `fetch` touches. **Breaking** for nobody outside
   the crate, since nobody could implement it; `system_param!` still needs no `unsafe`.
+
+### Changed
+
+- **`Renderer::point_shadows_enabled` is gone**, with `ShadowFrame::{point_caster, point_shadows_enabled}` and
+  `SceneSetupInputs::point_shadows_enabled` (now `local_shadows`, whether a path draws the local shadow layers): a light
+  says for itself whether it casts (`casts_shadows`). `SceneUniforms` carries the local shadow layers and each light's entry
+  in them (3 216 bytes fixed and 68 a light, 20 624 in all; the uniform floor now caps the light array at 916), and
+  `cascade_params.w` is unused. The shadow group's binding 2 is the local shadow array (`texture_depth_2d_array`), not a
+  cube. `SceneState::{point_shadow_*}` became `local_shadow_maps`, `local_shadow_uniform_buffers` and
+  `local_shadow_pass_bind_groups`, with `ensure_local_shadow_layers`.
 
 ### Fixed
 

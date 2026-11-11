@@ -1422,50 +1422,30 @@ fn draw_camera_view(
                 fog: renderer.fog,
                 sky: renderer.sky,
             },
-            point_shadows_enabled: renderer.point_shadows_enabled,
+            // The forward-only path has no shadow passes to draw them with.
+            local_shadows: cfg!(not(gizmo_forward_only)),
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
         },
     );
-    let scene_lights = &setup.lights;
     let light_view_projs: [[[f32; 4]; 4]; 4] =
         setup.cascade_view_projs.map(|m| m.to_cols_array_2d());
-    let lights_data = scene_lights.lights;
 
-    #[allow(unused_assignments)]
-    let mut point_light_view_projs = [gizmo_math::Mat4::IDENTITY; 6];
-    // Build the point-shadow cube for the ONE designated caster (shared.rs picks the
-    // first point light). Take its position/radius from the collected light array so the
-    // CPU and the shader agree on which light owns the cube, and so a light with only a
-    // Transform (no GlobalTransform) still casts — matching how it is lit.
-    if renderer.point_shadows_enabled && scene_lights.shadow_point_index >= 0 {
-        let idx = scene_lights.shadow_point_index as usize;
-        let lp = lights_data[idx].position;
-        let pos = gizmo_math::Vec3::new(lp[0], lp[1], lp[2]);
-        // Far plane tracks the light radius (the shader decodes depth with the same far).
-        let radius = lights_data[idx].color[3].max(1.0);
-        let proj = gizmo_math::Mat4::perspective_rh(std::f32::consts::FRAC_PI_2, 1.0, 0.1, radius);
-        point_light_view_projs = [
-            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::X, -gizmo_math::Vec3::Y),
-            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_X, -gizmo_math::Vec3::Y),
-            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Y, gizmo_math::Vec3::Z),
-            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Y, gizmo_math::Vec3::NEG_Z),
-            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::Z, -gizmo_math::Vec3::Y),
-            proj * gizmo_math::Mat4::look_to_rh(pos, gizmo_math::Vec3::NEG_Z, -gizmo_math::Vec3::Y),
-        ];
-
-        for (i, view_proj) in point_light_view_projs.iter().enumerate() {
-            renderer.queue.write_buffer(
-                renderer.scene.view_point_shadow_buffer(i),
-                0,
-                bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform::new(
-                    view_proj.to_cols_array_2d(),
-                    cam_pos.to_array(),
-                    elapsed_time,
-                )),
-            );
-        }
+    // The local lights' shadow layers: the array grown to hold them, each layer's matrix where its
+    // pass reads it. The forward-only path draws none and planned none.
+    let local_shadow_layers = setup.local_shadows.layers();
+    renderer.scene.ensure_local_shadow_layers(&renderer.device, local_shadow_layers.len());
+    for (i, layer) in local_shadow_layers.iter().enumerate() {
+        renderer.queue.write_buffer(
+            renderer.scene.view_local_shadow_buffer(i),
+            0,
+            bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform::new(
+                layer.view_proj.to_cols_array_2d(),
+                cam_pos.to_array(),
+                elapsed_time,
+            )),
+        );
     }
 
 
@@ -1515,8 +1495,16 @@ fn draw_camera_view(
 
     // CPU batched instancing (replaces the GPU cull): walk the world, frustum-cull, group into
     // instanced batches and upload the instance buffer. Lives in `batching.rs`.
+    // An object off screen still casts into any shadow map it stands in: the cascades', and every
+    // local light's layer.
+    let shadow_view_projs: Vec<Mat4> = setup
+        .cascade_view_projs
+        .iter()
+        .copied()
+        .chain(setup.local_shadows.layers().iter().map(|l| l.view_proj))
+        .collect();
     let (draw_items, uploaded_instances) =
-        batching::collect_draw_items(world, renderer, unjittered_view_proj, setup.cascade_view_projs, cam_pos);
+        batching::collect_draw_items(world, renderer, unjittered_view_proj, &shadow_view_projs, cam_pos);
     record_render_stats(renderer, &draw_items, elapsed_time);
 
     // The GPU-physics cull reads the view's camera, so it is per view; its simulation is not.
@@ -1567,7 +1555,7 @@ fn draw_camera_view(
     // Web şemasında gölge yok (4-grup limiti, forward shader'dan shadow örneklemesi
     // `load_shader_web` ile sökülür) — depth-only CSM/point geçitleri boşa GPU olur.
     #[cfg(not(gizmo_forward_only))]
-    passes::record_shadow_passes(encoder, renderer, &draw_items, uploaded_instances);
+    passes::record_shadow_passes(encoder, renderer, &draw_items, uploaded_instances, setup.local_shadows.layers().len());
     passes::record_deferred_geometry(
         encoder,
         renderer,
@@ -1780,7 +1768,7 @@ mod golden_render_tests {
     use crate::math::{Vec3, Vec4};
     use crate::physics::components::{GlobalTransform, Transform};
     use crate::renderer::asset::AssetManager;
-    use crate::renderer::components::{Material, MeshRenderer};
+    use crate::renderer::components::{Material, MeshRenderer, PointLight, SpotLight};
     use crate::renderer::Renderer;
 
     /// The same scene renders the same whether it sits at the world origin or two kilometres away.
@@ -2427,11 +2415,8 @@ mod golden_render_tests {
     }
 
     /// Render the standard lit cube through the real pipeline and return the frame's bytes.
-    ///
-    /// `point_shadows` sets [`Renderer::point_shadows_enabled`], which gates both the six
-    /// point-shadow face passes and the shader's lookup into the cubemap they write.
-    async fn render_frame(exposure: f32, point_shadows: bool) -> Vec<u8> {
-        render_frame_with_mesh(exposure, point_shadows, AssetManager::create_cube).await
+    async fn render_frame(exposure: f32) -> Vec<u8> {
+        render_frame_with_mesh(exposure, AssetManager::create_cube).await
     }
 
     /// As [`render_frame`], but the caller supplies the geometry.
@@ -2442,7 +2427,6 @@ mod golden_render_tests {
     /// code path, which is what makes an equality assertion on the two frames meaningful.
     async fn render_frame_with_mesh(
         exposure: f32,
-        point_shadows: bool,
         make_mesh: impl FnOnce(&wgpu::Device) -> crate::renderer::components::Mesh,
     ) -> Vec<u8> {
         // The offscreen target `render_world` renders into is the same size; these size the
@@ -2451,7 +2435,6 @@ mod golden_render_tests {
         const H: u32 = 128;
 
         let mut renderer = crate::test_gpu::headless_renderer(W, H).await;
-        renderer.point_shadows_enabled = point_shadows;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
 
@@ -2751,7 +2734,7 @@ mod golden_render_tests {
                 &world,
                 &mut renderer,
                 view_proj,
-                [gizmo_math::Mat4::IDENTITY; 4],
+                &[gizmo_math::Mat4::IDENTITY; 4],
                 Vec3::new(0.0, 0.0, 40.0),
             );
 
@@ -3217,13 +3200,13 @@ mod golden_render_tests {
             assert_eq!(vertices.len(), 36, "cube_vertices is meant to be a flat triangle list");
 
             let flat_verts = vertices.clone();
-            let flat = render_frame_with_mesh(1.0, false, move |device| {
+            let flat = render_frame_with_mesh(1.0, move |device| {
                 crate::renderer::components::Mesh::from_vertices(device, &flat_verts, "flat_cube")
             })
             .await;
 
             let indexed_verts = vertices.clone();
-            let indexed = render_frame_with_mesh(1.0, false, move |device| {
+            let indexed = render_frame_with_mesh(1.0, move |device| {
                 let mesh = crate::renderer::components::Mesh::new_indexed(
                     device,
                     &indexed_verts,
@@ -3647,7 +3630,7 @@ mod golden_render_tests {
 
     /// The mean of every RGB byte in a frame (alpha excluded).
     async fn render_mean_brightness(exposure: f32) -> f32 {
-        let data = render_frame(exposure, false).await;
+        let data = render_frame(exposure).await;
         let sum: u64 = data.as_chunks::<4>().0.iter().map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64).sum();
         sum as f32 / (data.len() / 4 * 3) as f32
     }
@@ -3677,48 +3660,6 @@ mod golden_render_tests {
                 bright > dim + 1.0,
                 "higher camera exposure must brighten the scene, but exp=1.0 mean={dim:.2} \
                  vs exp=2.0 mean={bright:.2} (exposure not applied / detached from post?)"
-            );
-        });
-    }
-
-    /// The six point-shadow face passes are skipped when nothing samples them, and skipping
-    /// them changes no pixel.
-    ///
-    /// `Renderer::point_shadows_enabled` defaults to false, and `deferred_lighting.wgsl` already
-    /// gates its cubemap lookup on the uniform written from that same bool. Until this was fixed
-    /// the passes ran anyway — six depth passes a frame, two draws per lit item each, twelve of
-    /// the twenty-three draws a lit batch costs, into a cubemap nothing read.
-    ///
-    /// Rendering the same scene both ways and demanding byte-identical output is what proves the
-    /// skipped work was unobserved. It is also what catches the dangerous version of this change:
-    /// gate something the shader *does* sample — the cascades, say — and the frames diverge here
-    /// rather than in someone's screenshot.
-    #[test]
-    fn skipping_the_point_shadow_passes_changes_no_pixel() {
-        let _gpu = crate::test_gpu::gpu_lock();
-        if !pollster::block_on(Renderer::headless_adapter_available()) {
-            eprintln!("skipping skipping_the_point_shadow_passes_changes_no_pixel: no GPU adapter");
-            return;
-        }
-        // Software adapters build these pipelines in seconds and cannot finish rendering
-        // through them — see the longer note on the first of these tests.
-        if pollster::block_on(Renderer::headless_adapter_is_software()) {
-            eprintln!("skipping skipping_the_point_shadow_passes_changes_no_pixel: software adapter");
-            return;
-        }
-        pollster::block_on(async {
-            let gated = render_frame(1.0, false).await;
-            let recorded = render_frame(1.0, true).await;
-            assert_eq!(gated.len(), recorded.len(), "same target, same byte count");
-            let differing = gated.iter().zip(&recorded).filter(|(a, b)| a != b).count();
-            assert_eq!(
-                differing, 0,
-                "{differing} bytes differ between a frame with the point-shadow passes recorded                  and one with them skipped — this scene has no point light, so they cannot be                  observable; a gate was put on a pass something samples"
-            );
-            // And the frame is a real render, not two identical blank targets.
-            assert!(
-                gated.as_chunks::<4>().0.iter().any(|p| p[..3] != gated[..3]),
-                "the frame is uniform — nothing was drawn, so the comparison proves nothing"
             );
         });
     }
@@ -4562,6 +4503,7 @@ mod golden_render_tests {
                 color: Vec3::new(1.0, 0.85, 0.6),
                 intensity: 20.0,
                 radius: 14.0,
+                casts_shadows: false,
             });
         }
 
@@ -5441,6 +5383,7 @@ mod golden_render_tests {
             color: Vec3::ONE,
             intensity: 60.0,
             radius: 30.0,
+            casts_shadows: false,
         });
     }
 
@@ -8244,10 +8187,10 @@ mod golden_render_tests {
             let view_proj = gizmo_math::Mat4::perspective_rh(1.0, 1.0, 0.1, 100.0)
                 * gizmo_math::Mat4::look_at_rh(Vec3::ZERO, Vec3::NEG_Z, Vec3::Y);
             let cascade = gizmo_math::Mat4::orthographic_rh(-50.0, 50.0, -50.0, 50.0, -50.0, 50.0);
-            let (_, casting) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, [cascade; 4], Vec3::ZERO);
+            let (_, casting) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, &[cascade; 4], Vec3::ZERO);
             assert_eq!(casting, 1, "the setup: as a caster it goes to the shadow maps");
             world.query_mut::<&mut MeshRenderer>().get_mut(e).expect("renderer").shadows = ShadowCasting::Off;
-            let (_, silent) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, [cascade; 4], Vec3::ZERO);
+            let (_, silent) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, &[cascade; 4], Vec3::ZERO);
             assert_eq!(silent, 0, "unseen and casting nothing, and still uploaded");
         });
     }
@@ -8487,6 +8430,411 @@ mod golden_render_tests {
         )
     }
 
+    /// A light for `local_light_frame`.
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum TestLight {
+        Point,
+        /// Its cone's half-angle, radians.
+        Spot(f32),
+        Rect,
+        /// The sun, its direction `aim` (no position).
+        Sun,
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// One light of a `local_light_frame` scene: what it is, where, which way its forward axis points
+    /// (a sun, a spot and a rectangle shine along it), how bright, and whether it casts.
+    #[derive(Clone, Copy, Debug)]
+    struct LightAt {
+        kind: TestLight,
+        at: Vec3,
+        aim: Vec3,
+        intensity: f32,
+        casts: bool,
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    impl LightAt {
+        /// `kind` 3.5 m up at `at`'s x and z, aimed down, as bright as `thin_caster_frame`'s point light.
+        fn over(kind: TestLight, x: f32, z: f32, casts: bool) -> Self {
+            Self { kind, at: Vec3::new(x, 3.5, z), aim: Vec3::NEG_Y, intensity: 40.0, casts }
+        }
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// A scene for `local_light_frame`.
+    #[derive(Clone, Debug)]
+    struct LocalScene {
+        lights: Vec<LightAt>,
+        /// A cube at each — the 2 m unit cube scaled 0.6, so 1.2 m on a side — that casts and is not
+        /// drawn, so what darkens is its shadow.
+        casters: Vec<Vec3>,
+        /// (position, yaw, pitch); `thin_caster_frame`'s camera when `None`.
+        camera: Option<(Vec3, f32, f32)>,
+        /// The floor as a plane — open, so the shadow pass draws both its faces and the depth its own
+        /// lookup compares against is its own surface's — rather than a slab, whose lit top is never
+        /// in its shadow map at all.
+        open_floor: bool,
+        /// `ShadowSettings::distance`: how far the sun's cascades reach, when not 100 m.
+        shadow_distance: Option<f32>,
+        /// A normal map on the floor tilting its shading normal this many radians toward +X (the
+        /// plane's tangent), where it is not the geometry's.
+        floor_normal_tilt: Option<f32>,
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    impl LocalScene {
+        fn new(lights: &[LightAt], casters: &[Vec3]) -> Self {
+            Self {
+                lights: lights.to_vec(),
+                casters: casters.to_vec(),
+                camera: None,
+                open_floor: false,
+                shadow_distance: None,
+                floor_normal_tilt: None,
+            }
+        }
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// `scene`, rendered: a floor, its casters and its lights.
+    async fn local_light_frame(scene: &LocalScene) -> Vec<u8> {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        renderer.ssgi = None;
+        renderer.ssr = None;
+        renderer.ssao = None;
+        renderer.volumetric = None;
+        if let Some(metres) = scene.shadow_distance {
+            renderer.shadow_settings = renderer.shadow_settings.with_distance(metres);
+        }
+        let mut world = World::new();
+        let mut assets = AssetManager::new();
+        let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+        let floor = world.spawn();
+        world.add_component(floor, GlobalTransform::default());
+        if scene.open_floor {
+            world.add_component(floor, Transform::new(Vec3::ZERO));
+            world.add_component(floor, AssetManager::create_plane(&renderer.device, 80.0));
+        } else {
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(40.0, 0.2, 40.0)));
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+        }
+        let floor_textures = match scene.floor_normal_tilt {
+            None => tex.clone(),
+            Some(tilt) => {
+                // One texel of tangent-space normal, (sin, 0, cos) of the tilt.
+                let texel = [((tilt.sin() * 0.5 + 0.5) * 255.0).round() as u8, 128, ((tilt.cos() * 0.5 + 0.5) * 255.0).round() as u8, 255];
+                let normal = renderer.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("tilted normal"),
+                    size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                renderer.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo { texture: &normal, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    &texel,
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4), rows_per_image: Some(1) },
+                    wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                );
+                let view = normal.create_view(&wgpu::TextureViewDescriptor::default());
+                AssetManager::material().normal(&view).build(&mut assets, &renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout)
+            }
+        };
+        world.add_component(floor, Material::new(floor_textures).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+        world.add_component(floor, MeshRenderer::new());
+        for &p in &scene.casters {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(p).with_scale(Vec3::splat(0.6)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.9, 0.0));
+            world.add_component(e, MeshRenderer::new().with_shadows(gizmo_renderer::components::ShadowCasting::Only));
+        }
+        for light in &scene.lights {
+            let e = world.spawn();
+            // Every light here shines along its local −Z.
+            let rotation = gizmo_math::Quat::from_rotation_arc(Vec3::NEG_Z, light.aim.normalize());
+            world.add_component(e, Transform::new(light.at).with_rotation(rotation));
+            world.add_component(e, GlobalTransform::default());
+            let (intensity, casts_shadows) = (light.intensity, light.casts);
+            match light.kind {
+                TestLight::Point => world.add_component(e, PointLight { casts_shadows, ..PointLight::new(Vec3::ONE, intensity, 60.0) }),
+                TestLight::Spot(outer) => world.add_component(
+                    e,
+                    SpotLight { casts_shadows, ..SpotLight::new(Vec3::ONE, intensity, 60.0, outer * 0.85, outer) },
+                ),
+                TestLight::Rect => world.add_component(
+                    e,
+                    gizmo_renderer::components::RectLight {
+                        casts_shadows,
+                        ..gizmo_renderer::components::RectLight::new(Vec3::ONE, intensity, 60.0, 0.2, 0.2)
+                    },
+                ),
+                TestLight::Sun => world.add_component(
+                    e,
+                    gizmo_renderer::components::DirectionalLight::new(Vec3::ONE, intensity, gizmo_renderer::components::LightRole::Sun),
+                ),
+            }
+        }
+        let (position, yaw, pitch) = scene.camera.unwrap_or((Vec3::new(0.0, 6.0, 6.0), -std::f32::consts::FRAC_PI_2, -0.8));
+        world.spawn_bundle(CameraBundle { position, yaw, pitch, primary: true, ..Default::default() });
+        render_world(&mut renderer, &mut world).await
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// Which pixels of `with` are darker than `without` by 20 or more: the shadow.
+    fn shadow_pixels(with: &[u8], without: &[u8]) -> std::collections::BTreeSet<usize> {
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        (0..with.len() / 4).filter(|&i| luma(with, i) + 20 < luma(without, i)).collect()
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// The shadow `scene`'s lights cast from its casters: the pixels it darkens against the same
+    /// frame with nothing to cast.
+    async fn local_shadow(scene: &LocalScene) -> std::collections::BTreeSet<usize> {
+        let with = local_light_frame(scene).await;
+        let without = local_light_frame(&LocalScene { casters: Vec::new(), ..scene.clone() }).await;
+        shadow_pixels(&with, &without)
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **Every local light casts, when it asks to.** Only the sun and one point light could: a spot
+    /// lit the floor behind a pillar, and a rectangle light too. A point, a spot (40°, 69°: one
+    /// layer down the cone), a spot past `SPOT_FRUSTUM_MAX_ANGLE` (83°: six) and a rectangle light
+    /// 3.5 m over a cube cast the same shadow — 576, 576, 578, 576 and 576 pixels — each from its own
+    /// layout of the array, through one lookup. Without `casts_shadows` none of them casts a pixel.
+    /// (The one point light that could cast before cast 762 here, through a cube map and the
+    /// hardware's cube lookup; how much of that was right, nothing measured.)
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn every_local_light_casts_when_it_asks() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let cube = [Vec3::new(0.0, 1.0, 0.0)];
+            let mut counts = Vec::new();
+            for kind in [TestLight::Point, TestLight::Spot(0.7), TestLight::Spot(1.2), TestLight::Spot(1.45), TestLight::Rect] {
+                let quiet = local_shadow(&LocalScene::new(&[LightAt::over(kind, 0.4, 0.3, false)], &cube)).await;
+                assert!(quiet.is_empty(), "{kind:?} casts {} pixels without asking to", quiet.len());
+                let cast = local_shadow(&LocalScene::new(&[LightAt::over(kind, 0.4, 0.3, true)], &cube)).await;
+                assert!(cast.len() > 450, "{kind:?} casts {} shadow pixels", cast.len());
+                counts.push((kind, cast.len()));
+            }
+            let (min, max) = (counts.iter().map(|c| c.1).min().unwrap(), counts.iter().map(|c| c.1).max().unwrap());
+            assert!(max - min <= 6, "one cube, one light position, five layouts: {counts:?}");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A local light's shadow does not fall on the surface it lights.** An open floor — a plane,
+    /// drawn into the shadow map by both its faces, so the depth its lookup compares against is its
+    /// own — under a spot and a point light 17°, 52° and 72° off its normal: turning their shadows on,
+    /// with nothing to cast, darkens no pixel by more than 2 of 255, and with a normal map tilting it
+    /// 0.9 rad toward the light neither. The lookup's two biases are the cascades' — two texels along
+    /// the normal, 4.2 cm in metres scaled by the slope — and both matter. The normal offset alone
+    /// clears a flat floor at any angle (it lifts the lookup off the surface by more than its filter's
+    /// reach climbs it, by 2/sin of the angle); the depth bias is for a normal that is not the
+    /// geometry's: a map tilting it 1.2 rad, under light 72° off, leaves at most 3 levels of 255
+    /// (2 pixels for the spot, 74 for the point) with it and up to 10 without (256 and 883). Both
+    /// biases read the shading normal, as the cascades' do — the G-buffer holds no other — which is
+    /// why those 3 levels stay.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_local_light_does_not_shadow_the_surface_it_lights() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+            for kind in [TestLight::Spot(0.7), TestLight::Point] {
+                for degrees in [17.0_f32, 52.0, 72.0] {
+                    let tilt = degrees.to_radians();
+                    let at = Vec3::new(4.0 * tilt.sin(), 4.0 * tilt.cos(), 0.0);
+                    let light = |casts| LightAt { kind, at, aim: -at, intensity: 40.0, casts };
+                    let scene = |casts| LocalScene { open_floor: true, ..LocalScene::new(&[light(casts)], &[]) };
+                    let unshadowed = local_light_frame(&scene(false)).await;
+                    let shadowed = local_light_frame(&scene(true)).await;
+                    let darker = (0..128 * 128).filter(|&i| luma(&shadowed, i) + 2 < luma(&unshadowed, i)).count();
+                    assert_eq!(darker, 0, "{kind:?} {degrees}° off the floor's normal shadows {darker} of its pixels");
+                }
+                let tilt = 72.0_f32.to_radians();
+                let at = Vec3::new(4.0 * tilt.sin(), 4.0 * tilt.cos(), 0.0);
+                for (normal_tilt, allowed) in [(0.9, 2), (1.2, 4)] {
+                    let scene = |casts| LocalScene {
+                        open_floor: true,
+                        floor_normal_tilt: Some(normal_tilt),
+                        ..LocalScene::new(&[LightAt { kind, at, aim: -at, intensity: 40.0, casts }], &[])
+                    };
+                    let unshadowed = local_light_frame(&scene(false)).await;
+                    let shadowed = local_light_frame(&scene(true)).await;
+                    let darker = (0..128 * 128).filter(|&i| luma(&shadowed, i) + allowed < luma(&unshadowed, i)).count();
+                    assert_eq!(darker, 0, "{kind:?} 72° off a floor whose normal map tilts it {normal_tilt} rad shadows {darker} of its pixels by more than {allowed}");
+                }
+            }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A local light's shadow falls where the light throws it.** Every layout above agreeing proves
+    /// they agree, not that they are right: a lookup mirrored or turned the same way in all of them
+    /// would agree too. So each is put 30 m from the cube, along the direction the sun shines from,
+    /// where its rays are all but parallel, and its shadow must fall on the sun's: the two pixel sets
+    /// overlap by more than 85 % of their union. The sun leans along both of the floor's axes and the
+    /// spot is aimed past the cube, so the cube sits off the middle of every layer it is drawn into,
+    /// on both of its axes: a layer read mirrored either way would put the shadow metres away.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_far_local_light_casts_the_suns_shadow() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let cube = Vec3::new(0.0, 1.0, 0.0);
+            // The sun 0.3 rad off overhead, leaning toward −X and −Z.
+            let aim = Vec3::new(-(0.3_f32.sin()) * 0.6_f32.cos(), -(0.3_f32.cos()), -(0.3_f32.sin()) * 0.6_f32.sin());
+            let sun = local_shadow(&LocalScene::new(
+                &[LightAt { kind: TestLight::Sun, at: Vec3::ZERO, aim, intensity: 3.0, casts: true }],
+                &[cube],
+            ))
+            .await;
+            assert!(sun.len() > 150, "the sun casts {}", sun.len());
+            let at = cube - aim * 30.0;
+            for (kind, target) in [
+                (TestLight::Point, cube),
+                (TestLight::Rect, cube),
+                // 1.5 m past the cube: inside the cone's core, off its axis.
+                (TestLight::Spot(0.15), cube + Vec3::new(1.2, 0.0, -0.9)),
+            ] {
+                let light = LightAt { kind, at, aim: target - at, intensity: 2700.0, casts: true };
+                let local = local_shadow(&LocalScene::new(&[light], &[cube])).await;
+                let shared = local.intersection(&sun).count();
+                let union = local.union(&sun).count();
+                assert!(
+                    shared * 100 > union * 85,
+                    "{kind:?} 30 m off casts {} pixels, {shared} of them where the sun's {} fall",
+                    local.len(),
+                    sun.len()
+                );
+            }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A caster off screen still casts into the frame.** Off-screen objects were kept for the shadow
+    /// passes only while they stood in one of the sun's cascades, so a cube beside the view, between a
+    /// spot and the floor in front of the camera, was culled and its shadow went with it. Every local
+    /// light's layers are frusta the culling keeps casters for now. The camera looks straight down at
+    /// the floor, the cube stands 4 m outside its view, and the cascades reach 6 m — not to the cube,
+    /// which only the spot's layer then holds.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_caster_off_screen_casts_a_local_shadow_into_the_frame() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let spot = LightAt {
+                kind: TestLight::Spot(0.5),
+                at: Vec3::new(-9.0, 1.5, 0.0),
+                aim: Vec3::new(11.0, -1.5, 0.0),
+                intensity: 300.0,
+                casts: true,
+            };
+            let scene = LocalScene {
+                // Straight down over x = 3: the floor from x ≈ 0 to 6 is in view, x = −5 is not.
+                camera: Some((Vec3::new(3.0, 5.0, 0.0), -std::f32::consts::FRAC_PI_2, -1.5)),
+                shadow_distance: Some(6.0),
+                ..LocalScene::new(&[spot], &[Vec3::new(-5.0, 0.8, 0.0)])
+            };
+            let shadow = local_shadow(&scene).await;
+            assert!(shadow.len() > 3000, "the cube off screen casts {} pixels into the frame", shadow.len());
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **Two lights cast two shadows**, each from its own layers: a spot and a point light 4 m apart, a
+    /// cube under each, and each shadow is in its half of the frame (825 and 577 pixels).
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn two_local_lights_cast_two_shadows() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let lights = [LightAt::over(TestLight::Spot(0.6), -2.0, 0.3, true), LightAt::over(TestLight::Point, 2.0, 0.3, true)];
+            let shadow = local_shadow(&LocalScene::new(&lights, &[Vec3::new(-2.0, 1.0, 0.0), Vec3::new(2.0, 1.0, 0.0)])).await;
+            let left = shadow.iter().filter(|&&i| i % 128 < 64).count();
+            let right = shadow.len() - left;
+            assert!(left > 300 && right > 300, "left {left}, right {right}");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A point light casts every way.** The tests above look down a light's −Y face; this one puts
+    /// a point light 1 m over the floor with a cube 2 m off on each side, so each shadow runs out
+    /// along the floor through a side face — ±X and ±Z — and the camera looks straight down on all
+    /// four. A face picked by the wrong axis, or numbered the wrong way, sends a shadow nowhere.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_point_light_casts_every_way() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let light = LightAt { kind: TestLight::Point, at: Vec3::new(0.0, 1.0, 0.0), aim: Vec3::NEG_Y, intensity: 40.0, casts: true };
+            let casters = [Vec3::new(2.0, 0.5, 0.0), Vec3::new(-2.0, 0.5, 0.0), Vec3::new(0.0, 0.5, 2.0), Vec3::new(0.0, 0.5, -2.0)];
+            let scene = LocalScene {
+                // As near straight down as the camera goes (its pitch stops 0.001 short), so the light
+                // is the frame's centre and the four directions are alike.
+                camera: Some((Vec3::new(0.0, 9.0, 0.0), -std::f32::consts::FRAC_PI_2, 0.002 - std::f32::consts::FRAC_PI_2)),
+                ..LocalScene::new(&[light], &casters)
+            };
+            let shadow = local_shadow(&scene).await;
+            // Pixel (column, row) from the frame's centre: x runs right, z down the frame.
+            let side = |i: usize| -> (i32, i32) { ((i % 128) as i32 - 64, (i / 128) as i32 - 64) };
+            let counts = [
+                shadow.iter().filter(|&&i| { let (c, r) = side(i); c > r.abs() }).count(),
+                shadow.iter().filter(|&&i| { let (c, r) = side(i); -c > r.abs() }).count(),
+                shadow.iter().filter(|&&i| { let (c, r) = side(i); r > c.abs() }).count(),
+                shadow.iter().filter(|&&i| { let (c, r) = side(i); -r > c.abs() }).count(),
+            ];
+            assert!(counts.iter().all(|&n| n > 150), "shadow pixels right, left, down, up: {counts:?}");
+            let (min, max) = (*counts.iter().min().unwrap(), *counts.iter().max().unwrap());
+            assert!(max - min < max / 10, "four cubes alike around the light cast alike: {counts:?}");
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// How many floor pixels a caster darkens by 20 or more, under a high sun — or, with `point`,
     /// under a point light above it casting through its cube map.
@@ -8594,11 +8942,11 @@ mod golden_render_tests {
                     });
                 }
                 None => {
-                    renderer.point_shadows_enabled = true;
                     world.spawn_bundle(crate::bundles::PointLightBundle {
                         position: Vec3::new(0.4, 3.5, 0.3),
                         intensity: 40.0,
                         radius: 30.0,
+                        casts_shadows: true,
                         ..Default::default()
                     });
                 }
@@ -8621,10 +8969,12 @@ mod golden_render_tests {
     /// sun, cast 0 shadow pixels against a cube's 236, single- or double-sided. A mesh that does not
     /// close (`Mesh::closed`) is drawn by both faces now, and casts 184. Its lit face shadows none of
     /// itself, by so much as 2 of 255, with the sun 17°, 52° or 72° off overhead: the receiver's normal
-    /// offset and slope bias keep it off its own depth. The cube is drawn as before, to the pixel. The
-    /// point light's cube map is drawn the same way, and nothing tested it at all: a point light over
-    /// the floor, the cube casts 762 pixels and the plane 431. (554 and 233 when first written, which
-    /// were measured through a second fault: see `a_point_light_casts_an_indexed_mesh_as_its_triangles`.)
+    /// offset and slope bias keep it off its own depth. The cube is drawn as before, to the pixel. A
+    /// point light's layers are drawn the same way: a point light over the floor, the cube casts 577
+    /// pixels and the plane 332 (`every_local_light_casts_when_it_asks` holds the lookup to the sun's).
+    /// Through the cube map the one point light had until 2026-11-11 they read 762 and 431, and 554
+    /// and 233 before that, measured through a second fault: see
+    /// `a_point_light_casts_an_indexed_mesh_as_its_triangles`.
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn an_open_mesh_casts_a_shadow_and_does_not_shadow_itself() {
@@ -8639,12 +8989,12 @@ mod golden_render_tests {
             let cube = thin_caster_shadow(Caster::Cube, false).await;
             assert!(cube > 150, "the cube casts {cube} shadow pixels");
             let point_cube = thin_caster_shadow(Caster::Cube, true).await;
-            assert!(point_cube > 600, "the cube casts {point_cube} shadow pixels from a point light");
+            assert!(point_cube > 450, "the cube casts {point_cube} shadow pixels from a point light");
             for plane in [Caster::Plane, Caster::TwoSidedPlane] {
                 let shadow = thin_caster_shadow(plane, false).await;
                 assert!(shadow > 120, "{plane:?}, facing the sun, casts {shadow} shadow pixels");
                 let point = thin_caster_shadow(plane, true).await;
-                assert!(point > 300, "{plane:?}, facing a point light, casts {point} shadow pixels");
+                assert!(point > 250, "{plane:?}, facing a point light, casts {point} shadow pixels");
                 for tilt in [0.3, 0.9, 1.25] {
                     let own = thin_caster_self_shadow(plane, 1, tilt).await;
                     assert_eq!(own, 0, "{plane:?} shadows {own} of its own pixels, the sun {tilt} rad off overhead");
@@ -8658,7 +9008,8 @@ mod golden_render_tests {
     /// with `draw(0..vertex_count)` and no index buffer, so an indexed mesh — every engine primitive,
     /// every import — cast its deduplicated corners taken three at a time: a plane cast its first
     /// triangle and none of its second. The same two triangles indexed and flat cast the same shadow
-    /// now, from the sun as before (184) and from a point light (431; the indexed plane cast 233).
+    /// now, from the sun as before (184) and from a point light (332; through the cube map the point
+    /// light had until 2026-11-11, 431, where the indexed plane cast 233).
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn a_point_light_casts_an_indexed_mesh_as_its_triangles() {
@@ -9858,6 +10209,7 @@ mod golden_render_tests {
             color: Vec3::new(1.0, 0.8, 0.6),
             intensity: 14.0,
             radius: 9.0,
+            casts_shadows: false,
         });
 
         // One camera, moved between the two recordings. Moving it is what makes the trap

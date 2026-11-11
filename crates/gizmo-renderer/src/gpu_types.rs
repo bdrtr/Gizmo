@@ -397,21 +397,22 @@ pub struct SceneUniforms {
     pub clear_color: [f32; 3],
     /// How far between the two environment presets: 0 = fully [`Self::environment_preset`],
     /// 1 = fully [`Self::environment_preset_2`].
-    pub environment_blend_t: f32, // offset 1084-1087
+    pub environment_blend_t: f32,
     /// The active sky/environment preset.
-    pub environment_preset: u32, // offset 1088-1091
-    /// Non-zero when point lights cast shadows this frame.
-    pub point_shadows_enabled: u32, // offset 1092-1095
+    pub environment_preset: u32,
+    /// Padding. `point_shadows_enabled` until 2026-11-11, when every local light came to say for
+    /// itself whether it casts ([`Self::light_shadows`]); kept so no offset after it moves.
+    pub _pad_shadow_flag: u32,
     /// The preset being blended towards. Called `environment_preset_b` on the WGSL side — only
     /// the offset has to agree, not the name.
-    pub environment_preset_2: u32, // offset 1096-1099
+    pub environment_preset_2: u32,
     /// Debug shading mode: 0 = shade normally, 1 = show world normals, 2 = show albedo.
     ///
     /// The forward and deferred shaders MUST number these identically. They did not once: the
     /// studio's toolbar wrote this uniform every frame while rendering forward, and the forward
     /// shader had no branch for it, so the Normals and Albedo chips produced output byte-identical
     /// to Lit.
-    pub shading_mode: u32, // offset 1100-1103
+    pub shading_mode: u32,
     /// inverse(view_proj), computed once per frame on the CPU so fullscreen passes that
     /// unproject NDC→world (volumetric, particle soft-depth) read it instead of recomputing a
     /// full 4×4 inverse per fragment. Appended at the 16-byte-aligned tail (`464 + 64·MAX_LIGHTS`) so every
@@ -443,9 +444,44 @@ pub struct SceneUniforms {
     pub sky_horizon: [f32; 4],
     /// rgb = the colour straight down; a unused.
     pub sky_ground: [f32; 4],
-                           // Total: 656 + 64·MAX_LIGHTS bytes (17 040 at MAX_LIGHTS = 256).
-                           // The 64 KiB uniform floor caps this layout at 1013 lights — checked by
-                           // `frame_uniforms`'s `the_scene_block_fits_the_uniform_binding_floor_…`.
+    /// The local lights' shadow layers ([`crate::local_shadows`]): what each was drawn through, and
+    /// its depth range. The first `ShadowFrame::local.layers().len()` are live.
+    pub local_shadow_layers: [LocalShadowLayerRaw; crate::local_shadows::MAX_LOCAL_SHADOW_LAYERS],
+    /// Each light slot's shadow, as [`LocalShadows::entry`](crate::local_shadows::LocalShadows::entry)
+    /// gives it: 0 = none, else its first layer + 1, with `LOCAL_SHADOW_CUBE` set for six layers.
+    /// Four slots to a row — a uniform array's elements sit 16 bytes apart.
+    pub light_shadows: [[u32; 4]; crate::frame_uniforms::MAX_LIGHTS / 4],
+    // Total: 3 216 + 68·MAX_LIGHTS bytes (20 624 at MAX_LIGHTS = 256). The 64 KiB uniform floor
+    // caps this layout at 916 lights — checked by `frame_uniforms`'s
+    // `the_scene_block_fits_the_uniform_binding_floor_…`.
+}
+
+const _: () = assert!(crate::frame_uniforms::MAX_LIGHTS.is_multiple_of(4), "light_shadows packs four slots to a row");
+
+/// One local shadow layer as the shaders read it — `common.wgsl`'s `LocalShadowLayer`, built from a
+/// [`LocalShadowLayer`](crate::local_shadows::LocalShadowLayer).
+#[repr(C)]
+#[derive(Copy, Clone, Debug, PartialEq, Pod, Zeroable)]
+pub struct LocalShadowLayerRaw {
+    /// World → the layer's clip space.
+    pub view_proj: [[f32; 4]; 4],
+    /// x = the near plane, y = the far plane (metres), z = a texel's width per metre of depth,
+    /// w = 1 / the layer's resolution.
+    pub params: [f32; 4],
+}
+
+impl From<&crate::local_shadows::LocalShadowLayer> for LocalShadowLayerRaw {
+    fn from(layer: &crate::local_shadows::LocalShadowLayer) -> Self {
+        Self {
+            view_proj: layer.view_proj.to_cols_array_2d(),
+            params: [
+                layer.near,
+                layer.far,
+                layer.texel_per_metre,
+                1.0 / crate::local_shadows::LOCAL_SHADOW_RES as f32,
+            ],
+        }
+    }
 }
 
 /// One draw's per-instance record: its transform and the material values that do not live in a
@@ -817,14 +853,16 @@ mod tests {
         // wrong offsets for i > 0 — see `every_instance_shader_declares_the_full_struct`.
         assert_eq!(std::mem::size_of::<InstanceRaw>(), 144, "InstanceRaw");
         assert_eq!(std::mem::size_of::<MaterialParams>(), 48, "MaterialParams = 3×vec4");
-        // The fixed part is 656 bytes (560 until `fog` / `fog_shape` and `shadow_bias` were appended, 2026-11-02;
-        // 608 until the three `sky_*` rows, 2026-11-03);
-        // the light array is the rest. Expressed against
-        // MAX_LIGHTS so raising the light ceiling does not require editing three literals in
-        // three files (and so that forgetting one is not how the layout drifts).
+        assert_eq!(std::mem::size_of::<LocalShadowLayerRaw>(), 80, "LocalShadowLayerRaw = mat4 + vec4");
+        // The fixed part is 3 216 bytes (560 until `fog` / `fog_shape` and `shadow_bias` were
+        // appended, 2026-11-02; 608 until the three `sky_*` rows, 2026-11-03; 656 until the local
+        // shadow layers, 2026-11-11); each light slot is 64 bytes of `LightData` and 4 of
+        // `light_shadows`. Expressed against MAX_LIGHTS so raising the light ceiling does not
+        // require editing three literals in three files (and so that forgetting one is not how the
+        // layout drifts).
         assert_eq!(
             std::mem::size_of::<SceneUniforms>(),
-            656 + crate::frame_uniforms::MAX_LIGHTS * 64,
+            3216 + crate::frame_uniforms::MAX_LIGHTS * 68,
             "SceneUniforms total"
         );
     }

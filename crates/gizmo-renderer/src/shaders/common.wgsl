@@ -26,6 +26,14 @@ struct LightData {
     params:    vec4<f32>,
 };
 
+// One layer of the local shadow array (`gizmo_renderer::local_shadows`, gpu_types::LocalShadowLayerRaw):
+// the matrix it was drawn through, and params = (near, far, a texel's width per metre of depth,
+// 1 / resolution).
+struct LocalShadowLayer {
+    view_proj: mat4x4<f32>,
+    params:    vec4<f32>,
+};
+
 // Global per-frame scene uniform. MUST stay byte-compatible with
 // gpu_types::SceneUniforms on the CPU side.
 struct SceneUniforms {
@@ -37,7 +45,7 @@ struct SceneUniforms {
     light_view_proj: array<mat4x4<f32>, 4>,
     cascade_splits:  vec4<f32>,
     camera_forward:  vec4<f32>,
-    cascade_params:  vec4<f32>,   // x=znear, y=1/shadowRes, z=time, w=point-shadow caster idx+1
+    cascade_params:  vec4<f32>,   // x=znear, y=1/shadowRes, z=time, w unused
     num_lights: u32,
     exposure: f32,
     // `WireframeConfig::color`, RGBA8; alpha 0 = none. Read by the WIREFRAME build of shader.wgsl.
@@ -47,7 +55,8 @@ struct SceneUniforms {
     clear_color: vec3<f32>,
     environment_blend_t: f32,
     environment_preset: u32,
-    point_shadows_enabled: u32,
+    // Padding (`point_shadows_enabled` until 2026-11-11).
+    _pad_shadow_flag: u32,
     // Named without a trailing digit: naga_oil reserves the `_<number>` suffix for naga's
     // WGSL writeback name-mangling and rejects composable-module identifiers that use it.
     // Only the byte layout must match gpu_types::SceneUniforms.environment_preset_2.
@@ -72,7 +81,89 @@ struct SceneUniforms {
     sky_zenith: vec4<f32>,
     sky_horizon: vec4<f32>,
     sky_ground: vec4<f32>,
+    // The local lights' shadow layers, and each light slot's entry in them, four to a row:
+    // `local_shadow_layer` reads an entry. See `gizmo_renderer::local_shadows`.
+    local_shadow_layers: array<LocalShadowLayer, 32>,
+    light_shadows: array<vec4<u32>, 64>,
 };
+
+// Depth bias in METRES, for every shadow lookup that is a surface's: the cascades' and the local
+// lights'. Calibrated to reproduce what the old NDC constants were worth at the depth range they were
+// chosen under: 0.0004 NDC over a ~105 m cascade is 4.2 cm, and the 0.00004 floor is 4.2 mm.
+const SHADOW_BIAS_METRES: f32 = 0.042;
+const SHADOW_BIAS_METRES_MIN: f32 = 0.0042;
+
+// Set on a light's `light_shadows` entry when its shadow is six layers, a cube around it
+// (`local_shadows::LOCAL_SHADOW_CUBE`).
+const LOCAL_SHADOW_CUBE: u32 = 0x80000000u;
+
+// The local shadow layer a light's shadow is looked up in for a point `from_light` away from it, or
+// -1 for a light that casts none. `entry` is the light's `light_shadows` slot. A cube's face is the
+// axis `from_light` is longest along, numbered +X, −X, +Y, −Y, +Z, −Z as the CPU lays them out.
+fn local_shadow_layer(entry: u32, from_light: vec3<f32>) -> i32 {
+    if (entry == 0u) {
+        return -1;
+    }
+    let first = i32(entry & ~LOCAL_SHADOW_CUBE) - 1;
+    if ((entry & LOCAL_SHADOW_CUBE) == 0u) {
+        return first;
+    }
+    let a = abs(from_light);
+    if (a.x >= a.y && a.x >= a.z) {
+        return first + select(1, 0, from_light.x >= 0.0);
+    }
+    if (a.y >= a.z) {
+        return first + select(3, 2, from_light.y >= 0.0);
+    }
+    return first + select(5, 4, from_light.z >= 0.0);
+}
+
+// How much of a local light reaches `world_pos` past its shadow: 1 lit, 0 shadowed, filtered between
+// over 3×3 texels. `t`/`s` are the local shadow array and the comparison sampler, `layer` the layer
+// `index` names, `n` the surface normal, `to_light` the vector from the surface to the light, and
+// `bias` = `scene.shadow_bias.xy` (the depth-bias and normal-offset multipliers).
+//
+// The same two biases the cascades take, in the same units: pushed off the surface by two texels'
+// width at this distance, and compared past it by a slope-scaled depth bias in metres — turned into
+// this layer's NDC at this depth, which is the step a perspective map needs and an orthographic one
+// does not (a fixed NDC bias would grow with the square of the distance from the light).
+fn local_shadow_visibility(
+    t: texture_depth_2d_array,
+    s: sampler_comparison,
+    layer: LocalShadowLayer,
+    index: i32,
+    world_pos: vec3<f32>,
+    n: vec3<f32>,
+    to_light: vec3<f32>,
+    bias: vec2<f32>,
+) -> f32 {
+    let near = layer.params.x;
+    let far = layer.params.y;
+    // Depth along the layer's axis is a perspective clip's w.
+    let depth = max((layer.view_proj * vec4<f32>(world_pos, 1.0)).w, near);
+    let offset = n * (depth * layer.params.z * 2.0 * bias.y);
+    let clip = layer.view_proj * vec4<f32>(world_pos + offset, 1.0);
+    if (clip.w <= near) {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    // d(ndc z)/d(depth) for a [0, 1] perspective: near·far / ((far − near)·depth²).
+    let ndc_per_metre = near * far / max((far - near) * clip.w * clip.w, 1e-12);
+    let slope = 1.0 - clamp(dot(n, normalize(to_light)), 0.0, 1.0);
+    let reference = ndc.z - max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * ndc_per_metre * bias.x;
+    let texel = layer.params.w;
+    var lit = 0.0;
+    for (var x = -1; x <= 1; x++) {
+        for (var y = -1; y <= 1; y++) {
+            lit += textureSampleCompareLevel(t, s, uv + vec2<f32>(f32(x), f32(y)) * texel, index, reference);
+        }
+    }
+    return lit / 9.0;
+}
 
 // `Renderer::sky` along `dir`: the gradient, softened toward the hemisphere's average as
 // `roughness` grows (a rough surface sees a wide cone of it). Pure: the colours come in.

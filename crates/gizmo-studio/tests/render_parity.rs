@@ -37,7 +37,7 @@ fn a_camera() -> CameraFrame {
 }
 
 /// The arguments the **game** path passes: cascades from the sun only, environment presets and
-/// debug shading from the renderer, point-shadow cube rendered.
+/// debug shading from the renderer, the local lights' shadow layers drawn.
 fn game_inputs() -> SceneSetupInputs {
     SceneSetupInputs {
         camera: a_camera(),
@@ -46,7 +46,7 @@ fn game_inputs() -> SceneSetupInputs {
         shadow_caster: ShadowCaster::SunOnly,
         // Live renderer state in the real call; the values themselves are not the subject here.
         environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0, clear_color: None, wireframe_color: None, fog: None, sky: None },
-        point_shadows_enabled: true,
+        local_shadows: true,
         elapsed_time: 7.5,
         light_cookies: Default::default(),
         shadow_settings: Default::default(),
@@ -54,8 +54,8 @@ fn game_inputs() -> SceneSetupInputs {
 }
 
 /// The arguments the **editor** path passes: a shadow-casting fallback so a sunless scene still
-/// shows shadows, no environment blend, debug shading from the viewport dropdown, and no
-/// point-shadow cube because it records no such pass.
+/// shows shadows, no environment blend, debug shading from the viewport dropdown — and the local
+/// lights' shadow layers drawn, as the game draws them (it drew none until 2026-11-11).
 fn editor_inputs() -> SceneSetupInputs {
     SceneSetupInputs {
         camera: a_camera(),
@@ -63,7 +63,7 @@ fn editor_inputs() -> SceneSetupInputs {
         cam_fov: 0.8,
         shadow_caster: ShadowCaster::SunOrFirstLight,
         environment: EnvironmentFrame { shading_mode: 4, ..Default::default() },
-        point_shadows_enabled: false,
+        local_shadows: true,
         elapsed_time: 7.5,
         light_cookies: Default::default(),
         shadow_settings: Default::default(),
@@ -80,7 +80,7 @@ fn sunlit_scene() -> World {
     );
     let lamp = world.spawn();
     world.add_component(lamp, GlobalTransform::default());
-    world.add_component(lamp, PointLight::new(Vec3::new(0.2, 0.4, 1.0), 800.0, 25.0));
+    world.add_component(lamp, PointLight::new(Vec3::new(0.2, 0.4, 1.0), 800.0, 25.0).with_shadows());
     world
 }
 
@@ -141,11 +141,10 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
     assert_eq!(g.cascade_params[0], e.cascade_params[0], "camera z-near");
     assert_eq!(g.cascade_params[1], e.cascade_params[1], "shadow texel size");
     assert_eq!(g.cascade_params[2], e.cascade_params[2], "elapsed time");
-    assert_eq!(
-        g.cascade_params[3], e.cascade_params[3],
-        "the point-shadow caster index is the same light; only `point_shadows_enabled` decides \
-         whether the shader looks at it"
-    );
+    assert_eq!(g.cascade_params[3], e.cascade_params[3], "unused, and the same");
+    assert_eq!(g.light_shadows, e.light_shadows, "the same lights cast, from the same slots");
+    assert_ne!(g.light_shadows, [[0; 4]; gizmo::renderer::MAX_LIGHTS / 4], "the lamp casts");
+    assert_eq!(g.local_shadow_layers, e.local_shadow_layers, "through the same layers");
     assert_eq!(g.view_proj, e.view_proj);
     assert_eq!(g.camera_pos, e.camera_pos);
     assert_eq!(g.camera_forward, e.camera_forward);
@@ -154,8 +153,6 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
 
     // ── The declared differences, asserted as differences so that removing one is also a test
     //    failure — a silent convergence is as much a surprise as a silent divergence. ──
-    assert_eq!(g.point_shadows_enabled, 1, "the game renders the cube");
-    assert_eq!(e.point_shadows_enabled, 0, "the editor records no cube pass");
     assert_ne!(g.shading_mode, e.shading_mode, "debug shading is the viewport's, not the scene's");
     assert_eq!(
         (e.environment_preset, e.environment_preset_2, e.environment_blend_t),
@@ -165,6 +162,7 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
 
     // And nothing else. Every field of the block is either compared above or named here.
     assert_eq!(g._pre_align_pad, e._pre_align_pad);
+    assert_eq!(g._pad_shadow_flag, e._pad_shadow_flag);
     assert_eq!(g.wireframe_color, e.wireframe_color);
     // Neither asks for a fog of its own, so each stands in its preset's, and the presets are a declared
     // difference above: the editor's is preset 0, the game's halfway from 2 to 3.
@@ -182,9 +180,10 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
     assert_eq!(g.clear_color, e.clear_color);
     assert_eq!(
         std::mem::size_of::<SceneUniforms>(),
-        656 + gizmo::renderer::MAX_LIGHTS * 64,
+        3216 + gizmo::renderer::MAX_LIGHTS * 68,
         "a field was added to the block — decide here whether the two paths should agree on it \
-         (the light array is the block's only variable part, so it is written against MAX_LIGHTS)"
+         (the light array and its shadow entries are the block's only variable part, so it is \
+         written against MAX_LIGHTS)"
     );
 }
 

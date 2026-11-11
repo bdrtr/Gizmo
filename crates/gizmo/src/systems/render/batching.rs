@@ -470,10 +470,12 @@ fn build_occlusion(
 
 /// Collect visible + shadow-casting meshes into instanced draw batches for one frame.
 ///
-/// The caller passes the UNJITTERED view-proj and the cascade view-projs so culling uses
-/// clean (non-TAA-jittered) frusta — camera-visible instances feed the main passes, off-screen
-/// casters inside a cascade's light frustum feed the shadow maps only. Returns the draw list and
-/// the number of instances that actually reached the GPU buffer (draw ranges clamp to it).
+/// The caller passes the UNJITTERED view-proj and every shadow map's view-proj — the cascades',
+/// then each local light's layer — so culling uses clean (non-TAA-jittered) frusta: camera-visible
+/// instances feed the main passes, off-screen casters inside any shadow map's frustum feed the
+/// shadow passes only. Until 2026-11-11 only the cascades were passed, so an object just off screen
+/// beside a lamp cast no shadow into the frame from it. Returns the draw list and the number of
+/// instances that actually reached the GPU buffer (draw ranges clamp to it).
 ///
 /// Takes the renderer mutably to GROW the instance buffer for what the frame needs. It did not
 /// until 2026-08-15: `Renderer::ensure_instance_capacity` has existed, and been unit-tested, with
@@ -483,7 +485,7 @@ pub(super) fn collect_draw_items(
     world: &World,
     renderer: &mut Renderer,
     unjittered_view_proj: Mat4,
-    cascade_vp: [Mat4; 4],
+    shadow_vp: &[Mat4],
     cam_pos: Vec3,
 ) -> (Vec<DrawItem>, u32) {
     let renderers = world.query::<&MeshRenderer>();
@@ -527,10 +529,10 @@ pub(super) fn collect_draw_items(
     let skip_mirrors = renderer.skip_mirrors;
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
-    // Per-cascade LIGHT frusta — shadow casters are culled against these, NOT the camera
+    // Every shadow map's LIGHT frustum — shadow casters are culled against these, NOT the camera
     // frustum, so objects outside the view that cast shadows INTO it aren't dropped.
-    let cascade_frusta: [crate::math::Frustum; 4] =
-        cascade_vp.map(|m| crate::math::Frustum::from_matrix(&m));
+    let shadow_frusta: Vec<crate::math::Frustum> =
+        shadow_vp.iter().map(crate::math::Frustum::from_matrix).collect();
 
     RENDER_CACHE.with(|rc| {
         let mut cache = rc.borrow_mut();
@@ -627,7 +629,7 @@ pub(super) fn collect_draw_items(
                 let drawn_world_aabb = $mesh.bounds.transform(&drawn_model);
                 let camera_visible = match crate::renderer::classify_visibility_world(
                     &frustum,
-                    &cascade_frusta,
+                    &shadow_frusta,
                     drawn_world_aabb,
                     $mat.material_type,
                     $mat.is_transparent,
@@ -663,7 +665,7 @@ pub(super) fn collect_draw_items(
                     ) {
                     occluded_objects.set(occluded_objects.get() + 1);
                     match crate::renderer::unseen_visibility(
-                        &cascade_frusta,
+                        &shadow_frusta,
                         drawn_world_aabb,
                         $mat.material_type,
                         $mat.is_transparent,
@@ -904,9 +906,9 @@ pub(super) fn collect_draw_items(
         let index_candidates: Option<Vec<u32>> = {
             let idx = world.try_get_resource::<super::visibility_index::VisibilityIndex>().ok();
             idx.filter(|i| !i.is_empty()).map(|i| {
-                let mut frusta = Vec::with_capacity(1 + cascade_frusta.len());
+                let mut frusta = Vec::with_capacity(1 + shadow_frusta.len());
                 frusta.push(frustum);
-                frusta.extend_from_slice(&cascade_frusta);
+                frusta.extend_from_slice(&shadow_frusta);
                 let mut out = Vec::new();
                 i.tree.query_frusta(&frusta, &mut out);
                 out

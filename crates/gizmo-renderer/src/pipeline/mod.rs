@@ -21,6 +21,7 @@ pub(crate) use pipelines::{forward_pipeline, lit_set, shadow_pipeline};
 use uniforms::{build_global_uniforms, build_shadow_resources};
 
 use crate::gpu_types::ShadowVsUniform;
+use crate::local_shadows::MAX_LOCAL_SHADOW_LAYERS;
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -158,8 +159,11 @@ pub struct SceneState {
     pub cluster_index_buffer: wgpu::Buffer,
     /// Layout of the group the lit shaders sample the shadow maps through.
     pub shadow_bind_group_layout: wgpu::BindGroupLayout,
-    /// That group: the cascade array, the point-light cube, and their comparison samplers.
+    /// That group: the cascade array, the local shadow array, their comparison sampler and the
+    /// cookies. Rebuilt when the local shadow array grows, so a pass reads it when it records.
     pub shadow_bind_group: wgpu::BindGroup,
+    /// The comparison sampler every shadow lookup reads through, kept to rebuild that group.
+    pub shadow_sampler: wgpu::Sampler,
     /// Depth `texture_2d_array` (all CSM layers) for comparison sampling in lit shaders.
     pub shadow_texture_view: wgpu::TextureView,
     /// One 2D depth view per cascade for shadow map rendering passes.
@@ -168,23 +172,21 @@ pub struct SceneState {
     pub shadow_depth_texture: wgpu::Texture,
     /// The light-cookie array the shadow group carries at bindings 3 and 4. See [`crate::cookies`].
     pub cookies: crate::cookies::CookieTextures,
-    /// The point-light shadow cube's depth texture.
-    pub point_shadow_depth_texture: wgpu::Texture,
-    /// It as a cube view, for sampling.
-    pub point_shadow_cube_view: wgpu::TextureView,
-    /// One 2-D view per cube face, for rendering into.
-    pub point_shadow_face_views: [wgpu::TextureView; 6],
+    /// The local lights' shadow layers ([`crate::local_shadows`]), as many as a frame has asked for:
+    /// see [`ensure_local_shadow_layers`](Self::ensure_local_shadow_layers).
+    pub local_shadow_maps: crate::local_shadows::LocalShadowMaps,
     /// Layout of the shadow pass's own group, holding just its light-view-projection.
     pub shadow_pass_bind_group_layout: wgpu::BindGroupLayout,
     /// One uniform buffer + bind group per CSM cascade (avoids per-pass overwrite races on the queue).
     pub shadow_cascade_uniform_buffers: [wgpu::Buffer; 4],
     /// The matching bind groups, one per cascade.
     pub shadow_pass_bind_groups: [wgpu::BindGroup; 4],
-    /// One uniform buffer per cube face, for the same reason as the cascades': six passes writing
-    /// one buffer would race on the queue.
-    pub point_shadow_uniform_buffers: [wgpu::Buffer; 6],
-    /// The matching bind groups, one per face.
-    pub point_shadow_pass_bind_groups: [wgpu::BindGroup; 6],
+    /// One uniform buffer per local shadow layer, for the same reason as the cascades': passes
+    /// writing one buffer would race on the queue. All of them up front — 96 bytes each — so only
+    /// the texture has to grow.
+    pub local_shadow_uniform_buffers: [wgpu::Buffer; MAX_LOCAL_SHADOW_LAYERS],
+    /// The matching bind groups, one per layer.
+    pub local_shadow_pass_bind_groups: [wgpu::BindGroup; MAX_LOCAL_SHADOW_LAYERS],
     /// Layout of a material's texture group — every [`Material`](crate::components::Material)
     /// builds its bind group against this.
     pub texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -268,17 +270,18 @@ pub struct SceneView {
     pub shadow_cascade_uniform_buffers: [wgpu::Buffer; 4],
     /// The matching bind groups, one per cascade.
     pub shadow_pass_bind_groups: [wgpu::BindGroup; 4],
-    /// This view's point-shadow face matrices, one per cube face.
-    pub point_shadow_uniform_buffers: [wgpu::Buffer; 6],
-    /// The matching bind groups, one per face.
-    pub point_shadow_pass_bind_groups: [wgpu::BindGroup; 6],
+    /// This view's local shadow layer matrices, one per layer: which lights cast, and from where,
+    /// depends on the camera that ranks them.
+    pub local_shadow_uniform_buffers: [wgpu::Buffer; MAX_LOCAL_SHADOW_LAYERS],
+    /// The matching bind groups, one per layer.
+    pub local_shadow_pass_bind_groups: [wgpu::BindGroup; MAX_LOCAL_SHADOW_LAYERS],
 }
 
 impl SceneView {
     /// Builds a view with its own camera uniform, cluster buffers and shadow-pass uniforms.
     ///
     /// Everything here is per-camera *derived* state written with `queue.write_buffer`. Textures
-    /// are not: the cascade array, the point-shadow cube and the G-buffer are all shared, because
+    /// are not: the cascade array, the local shadow array and the G-buffer are all shared, because
     /// render passes run in recording order and each view's passes rewrite them in turn.
     #[must_use]
     pub fn new(device: &wgpu::Device, scene: &SceneState, label: &str) -> Self {
@@ -338,10 +341,10 @@ impl SceneView {
             std::array::from_fn(|i| mk_shadow_uniform(i, "cascade"));
         let shadow_pass_bind_groups: [wgpu::BindGroup; 4] =
             std::array::from_fn(|i| mk_shadow_bg(&shadow_cascade_uniform_buffers[i], i, "cascade"));
-        let point_shadow_uniform_buffers: [wgpu::Buffer; 6] =
-            std::array::from_fn(|i| mk_shadow_uniform(i, "point"));
-        let point_shadow_pass_bind_groups: [wgpu::BindGroup; 6] =
-            std::array::from_fn(|i| mk_shadow_bg(&point_shadow_uniform_buffers[i], i, "point"));
+        let local_shadow_uniform_buffers: [wgpu::Buffer; MAX_LOCAL_SHADOW_LAYERS] =
+            std::array::from_fn(|i| mk_shadow_uniform(i, "local shadow"));
+        let local_shadow_pass_bind_groups: [wgpu::BindGroup; MAX_LOCAL_SHADOW_LAYERS] =
+            std::array::from_fn(|i| mk_shadow_bg(&local_shadow_uniform_buffers[i], i, "local shadow"));
 
         Self {
             uniform_buffer,
@@ -350,8 +353,8 @@ impl SceneView {
             cluster_index_buffer,
             shadow_cascade_uniform_buffers,
             shadow_pass_bind_groups,
-            point_shadow_uniform_buffers,
-            point_shadow_pass_bind_groups,
+            local_shadow_uniform_buffers,
+            local_shadow_pass_bind_groups,
         }
     }
 
@@ -749,30 +752,52 @@ impl SceneState {
         }
     }
 
-    /// The point-shadow bind group for cube face `i` in the active view.
+    /// The bind group for local shadow layer `i` in the active view.
     ///
     /// # Panics
     ///
-    /// Same condition as [`view_shadow_pass_bind_group`](Self::view_shadow_pass_bind_group).
+    /// Same condition as [`view_shadow_pass_bind_group`](Self::view_shadow_pass_bind_group), and
+    /// when `i` is not below [`MAX_LOCAL_SHADOW_LAYERS`].
     #[must_use]
-    pub fn view_point_shadow_pass_bind_group(&self, i: usize) -> &wgpu::BindGroup {
+    pub fn view_local_shadow_pass_bind_group(&self, i: usize) -> &wgpu::BindGroup {
         match self.active() {
-            None => &self.point_shadow_pass_bind_groups[i],
-            Some(v) => &v.point_shadow_pass_bind_groups[i],
+            None => &self.local_shadow_pass_bind_groups[i],
+            Some(v) => &v.local_shadow_pass_bind_groups[i],
         }
     }
 
-    /// The point-shadow face-matrix buffer for cube face `i` in the active view.
+    /// The matrix buffer for local shadow layer `i` in the active view.
     ///
     /// # Panics
     ///
-    /// Same condition as [`view_shadow_pass_bind_group`](Self::view_shadow_pass_bind_group).
+    /// As [`view_local_shadow_pass_bind_group`](Self::view_local_shadow_pass_bind_group).
     #[must_use]
-    pub fn view_point_shadow_buffer(&self, i: usize) -> &wgpu::Buffer {
+    pub fn view_local_shadow_buffer(&self, i: usize) -> &wgpu::Buffer {
         match self.active() {
-            None => &self.point_shadow_uniform_buffers[i],
-            Some(v) => &v.point_shadow_uniform_buffers[i],
+            None => &self.local_shadow_uniform_buffers[i],
+            Some(v) => &v.local_shadow_uniform_buffers[i],
         }
+    }
+
+    /// Grows the local shadow array to hold at least `layers` layers (up to
+    /// [`MAX_LOCAL_SHADOW_LAYERS`]), rebuilding [`shadow_bind_group`](Self::shadow_bind_group), and
+    /// returns whether it did. A frame calls it with its plan's layer count before recording the
+    /// passes that draw them; it never shrinks.
+    pub fn ensure_local_shadow_layers(&mut self, device: &wgpu::Device, layers: usize) -> bool {
+        let layers = layers.min(MAX_LOCAL_SHADOW_LAYERS);
+        if layers <= self.local_shadow_maps.layers() {
+            return false;
+        }
+        self.local_shadow_maps = crate::local_shadows::LocalShadowMaps::new(device, layers as u32);
+        self.shadow_bind_group = shadow_group(
+            device,
+            &self.shadow_bind_group_layout,
+            &self.shadow_texture_view,
+            &self.shadow_sampler,
+            &self.local_shadow_maps.view,
+            &self.cookies,
+        );
+        true
     }
 
     /// Grows the instance buffer to hold at least `needed` instances, rebuilding its bind group,
@@ -854,15 +879,9 @@ impl SceneState {
 /// [`SceneState`].
 pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let global_uniform_buffer = build_global_uniforms(device);
-    let (
-        shadow_depth_texture,
-        shadow_texture_view,
-        shadow_cascade_layer_views,
-        shadow_sampler,
-        point_shadow_depth_texture,
-        point_shadow_cube_view,
-        point_shadow_face_views,
-    ) = build_shadow_resources(device);
+    let (shadow_depth_texture, shadow_texture_view, shadow_cascade_layer_views, shadow_sampler) =
+        build_shadow_resources(device);
+    let local_shadow_maps = crate::local_shadows::LocalShadowMaps::new(device, 1);
     let layouts = build_layouts(device);
     let cookies = crate::cookies::CookieTextures::new(device);
 
@@ -914,32 +933,8 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         &forward_probes,
     );
 
-    let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &layouts.shadow,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::TextureView(&shadow_texture_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: wgpu::BindingResource::Sampler(&shadow_sampler),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: wgpu::BindingResource::TextureView(&point_shadow_cube_view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: wgpu::BindingResource::TextureView(&cookies.view),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: wgpu::BindingResource::Sampler(&cookies.sampler),
-            },
-        ],
-        label: Some("shadow_bind_group"),
-    });
+    let shadow_bind_group =
+        shadow_group(device, &layouts.shadow, &shadow_texture_view, &shadow_sampler, &local_shadow_maps.view, &cookies);
 
     let id4 = [
         [1.0f32, 0.0, 0.0, 0.0],
@@ -966,22 +961,22 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         })
     });
 
-    let point_shadow_uniform_buffers = std::array::from_fn(|i| {
+    let local_shadow_uniform_buffers: [wgpu::Buffer; MAX_LOCAL_SHADOW_LAYERS] = std::array::from_fn(|i| {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("Point shadow VS uniform {i}")),
+            label: Some(&format!("Local shadow VS uniform {i}")),
             contents: bytemuck::bytes_of(&ShadowVsUniform::new(id4, [0.0; 3], 0.0)),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })
     });
 
-    let point_shadow_pass_bind_groups = std::array::from_fn(|i| {
+    let local_shadow_pass_bind_groups = std::array::from_fn(|i| {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &layouts.shadow_pass, // Reusing same layout as directional shadows
+            layout: &layouts.shadow_pass, // The cascades' layout: every shadow pass binds the same group 0.
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
-                resource: point_shadow_uniform_buffers[i].as_entire_binding(),
+                resource: local_shadow_uniform_buffers[i].as_entire_binding(),
             }],
-            label: Some(&format!("point_shadow_pass_bind_group_{i}")),
+            label: Some(&format!("local_shadow_pass_bind_group_{i}")),
         })
     });
 
@@ -1086,18 +1081,17 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         cluster_index_buffer,
         shadow_bind_group_layout: layouts.shadow,
         shadow_bind_group,
+        shadow_sampler,
         shadow_texture_view,
         shadow_cascade_layer_views,
         shadow_depth_texture,
         cookies,
-        point_shadow_depth_texture,
-        point_shadow_cube_view,
-        point_shadow_face_views,
+        local_shadow_maps,
         shadow_pass_bind_group_layout: layouts.shadow_pass,
         shadow_cascade_uniform_buffers,
         shadow_pass_bind_groups,
-        point_shadow_uniform_buffers,
-        point_shadow_pass_bind_groups,
+        local_shadow_uniform_buffers,
+        local_shadow_pass_bind_groups,
         texture_bind_group_layout: layouts.texture,
         skeleton_bind_group_layout: layouts.skeleton,
         dummy_skeleton_bind_group,
@@ -1106,6 +1100,29 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         instance_bind_group,
         instance_capacity: initial_capacity,
     }
+}
+
+/// The lit shaders' shadow group: the cascades, the comparison sampler, the local shadow array and
+/// the cookies, in binding order.
+fn shadow_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    cascades: &wgpu::TextureView,
+    sampler: &wgpu::Sampler,
+    local: &wgpu::TextureView,
+    cookies: &crate::cookies::CookieTextures,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(cascades) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(local) },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&cookies.view) },
+            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(&cookies.sampler) },
+        ],
+        label: Some("shadow_bind_group"),
+    })
 }
 
 /// The layouts a [`SceneState`] was built with, as the pipeline builders take them. `indirect` is the
@@ -1342,7 +1359,6 @@ mod tests {
                 ("water.wgsl", include_str!("../shaders/water.wgsl")),
                 ("planar_mirror.wgsl", include_str!("../shaders/planar_mirror.wgsl")),
                 ("shadow.wgsl", include_str!("../shaders/shadow.wgsl")),
-                ("point_shadow.wgsl", include_str!("../shaders/point_shadow.wgsl")),
                 ("decal.wgsl", include_str!("../shaders/decal.wgsl")),
                 (
                     "decal_forward.wgsl",

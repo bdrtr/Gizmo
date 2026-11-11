@@ -44,6 +44,7 @@
 //! literals nobody put side by side.
 
 use crate::csm::{CASCADE_COUNT, SHADOW_MAP_RES};
+use bytemuck::Zeroable;
 use crate::gpu_types::{LightData, PostProcessUniforms, SceneUniforms};
 use gizmo_math::{Mat4, Vec3};
 
@@ -66,14 +67,14 @@ use gizmo_math::{Mat4, Vec3};
 /// list, bounded by
 /// [`MAX_LIGHTS_PER_CLUSTER`](crate::clustered::MAX_LIGHTS_PER_CLUSTER) = 32 whatever the scene
 /// holds, so what this constant limits is only how many lights a *frame* may carry, and the costs
-/// are linear and small: 16 KiB of the scene block (16944 bytes total, against a 64 KiB
+/// are linear and small: 17 KiB of the scene block (20 624 bytes total, against a 64 KiB
 /// uniform-binding floor everywhere WebGPU runs) and 0.1–0.8 ms of CPU assignment depending on how
 /// many lights are actually in view.
 ///
-/// Why not more: the light array lives in the *uniform* block, so the hard ceiling is
-/// `(65536 - 656) / 64` = 1013 lights, and past a few hundred the honest move is to put the array in
-/// a storage buffer rather than to inch this number toward a cliff. 256 is a round number well
-/// inside the limit that no hand-lit scene is going to reach.
+/// Why not more: the light array lives in the *uniform* block, 64 bytes a light and 4 more for its
+/// shadow's entry, so the hard ceiling is `(65536 - 3216) / 68` = 916 lights, and past a few hundred
+/// the honest move is to put the array in a storage buffer rather than to inch this number toward a
+/// cliff. 256 is a round number well inside the limit that no hand-lit scene is going to reach.
 pub const MAX_LIGHTS: usize = 256;
 
 /// The active camera, as *both* uniform blocks need it.
@@ -153,12 +154,10 @@ pub struct ShadowFrame {
     /// Far distance along the camera forward for cascades 0..3; `w` is the far edge of the covered
     /// range, which is what the shaders fade the shadow term out over.
     pub cascade_splits: [f32; CASCADE_COUNT],
-    /// Index into [`SceneFrame::lights`] of the one point light that owns the shadow cube, or
-    /// `None` when nothing casts. Reaches the shader as `cascade_params.w` = index + 1.
-    pub point_caster: Option<u32>,
-    /// Whether the point-shadow cube was rendered this frame. A path that does not record the cube
-    /// pass must leave this `false`: the lookup would otherwise sample whatever the cube held last.
-    pub point_shadows_enabled: bool,
+    /// The local lights' shadows: which light casts through which layers, and each layer's
+    /// projection. A path that does not draw the layers must leave this empty — the lookup would
+    /// read whatever they held when last drawn.
+    pub local: crate::local_shadows::LocalShadows,
     /// `ShadowSettings::depth_bias` and `normal_offset`, the multipliers on every lookup's bias.
     pub bias_scale: [f32; 2],
 }
@@ -170,8 +169,7 @@ impl Default for ShadowFrame {
             // The splits the renderer's initial buffer has always carried; overwritten by the
             // cascade helper on the first real frame.
             cascade_splits: [1.0, 10.0, 50.0, 500.0],
-            point_caster: None,
-            point_shadows_enabled: false,
+            local: crate::local_shadows::LocalShadows::default(),
             bias_scale: [1.0, 1.0],
         }
     }
@@ -426,12 +424,7 @@ impl SceneUniforms {
             // w = tan(sun angular radius): the soft-shadow size `filter_pcss` reads; 0 = the fixed
             // near-crisp edge. The slot was unused padding.
             camera_forward: camera.forward.extend(sun.angular_radius.max(0.0).tan()).to_array(),
-            cascade_params: [
-                camera.near,
-                1.0 / SHADOW_MAP_RES as f32,
-                *elapsed_time,
-                shadows.point_caster.map_or(0.0, |i| (i + 1) as f32),
-            ],
+            cascade_params: [camera.near, 1.0 / SHADOW_MAP_RES as f32, *elapsed_time, 0.0],
             num_lights: *num_lights,
             // Derived here rather than plumbed: the grid is the one `ClusterGrid::default()` both
             // sides use, and the depth mapping comes from the camera's own near/far, which this
@@ -465,10 +458,24 @@ impl SceneUniforms {
             clear_color: environment.clear_color.unwrap_or(DEFAULT_BACKGROUND),
             environment_blend_t: environment.blend_t,
             environment_preset: environment.preset,
-            point_shadows_enabled: u32::from(shadows.point_shadows_enabled),
+            _pad_shadow_flag: 0,
             environment_preset_2: environment.preset_2,
             shading_mode: environment.shading_mode,
             inv_view_proj: camera.view_proj.inverse().to_cols_array_2d(),
+            local_shadow_layers: {
+                let mut raw = [crate::gpu_types::LocalShadowLayerRaw::zeroed(); crate::local_shadows::MAX_LOCAL_SHADOW_LAYERS];
+                for (slot, layer) in raw.iter_mut().zip(shadows.local.layers()) {
+                    *slot = layer.into();
+                }
+                raw
+            },
+            light_shadows: {
+                let mut rows = [[0u32; 4]; MAX_LIGHTS / 4];
+                for (row, entries) in rows.iter_mut().zip(shadows.local.entries().as_chunks::<4>().0) {
+                    *row = *entries;
+                }
+                rows
+            },
         }
     }
 }
@@ -614,23 +621,16 @@ mod tests {
 
     /// The four `cascade_params` slots are a packing decision, and every one of them was wrong
     /// somewhere: `.x` was a literal 0.1 in the engine path, `.z` was a literal 0.0 in both (frozen
-    /// water), `.w` was 0.0 in studio. Pin what each slot means.
+    /// water), `.w` was 0.0 in studio. Pin what each slot means — `.w` carried the one point light
+    /// with a shadow until 2026-11-11, and is unused since every light's shadow has a slot of its own.
     #[test]
     fn cascade_params_slots_carry_what_common_wgsl_says_they_do() {
-        let frame = SceneFrame {
-            camera: a_camera(),
-            elapsed_time: 12.5,
-            shadows: ShadowFrame { point_caster: Some(3), ..Default::default() },
-            ..Default::default()
-        };
+        let frame = SceneFrame { camera: a_camera(), elapsed_time: 12.5, ..Default::default() };
         let u = SceneUniforms::new(&frame);
         assert_eq!(u.cascade_params[0], 0.25, "x = the camera's z-near, not a literal 0.1");
         assert_eq!(u.cascade_params[1], 1.0 / SHADOW_MAP_RES as f32, "y = PCF texel size");
         assert_eq!(u.cascade_params[2], 12.5, "z = elapsed time; 0.0 here freezes the water");
-        assert_eq!(u.cascade_params[3], 4.0, "w = caster index + 1, so 0 can mean 'none'");
-
-        let none = SceneUniforms::new(&SceneFrame::default());
-        assert_eq!(none.cascade_params[3], 0.0, "no caster must encode as 0, not as light 0");
+        assert_eq!(u.cascade_params[3], 0.0, "w = unused");
     }
 
     /// `sun_direction.w` is a flag, not a component. A scene with no sun that ships `w = 1.0` pays
@@ -677,7 +677,8 @@ mod tests {
         // the light ceiling changes. (It was `1168` / `1104`, correct only at MAX_LIGHTS = 10.)
         const LIGHT_BYTES: usize = std::mem::size_of::<LightData>(); // 4 × vec4 = 64
         assert_eq!(LIGHT_BYTES, 64);
-        assert_eq!(std::mem::size_of::<SceneUniforms>(), 656 + MAX_LIGHTS * LIGHT_BYTES);
+        // And 4 bytes a light of `light_shadows`.
+        assert_eq!(std::mem::size_of::<SceneUniforms>(), 3216 + MAX_LIGHTS * (LIGHT_BYTES + 4));
         assert_eq!(
             std::mem::offset_of!(SceneUniforms, inv_view_proj),
             464 + MAX_LIGHTS * LIGHT_BYTES
@@ -689,7 +690,7 @@ mod tests {
     ///
     /// `maxUniformBufferBindingSize` is **64 KiB** everywhere WebGPU runs — that is the
     /// guaranteed floor, and the number `MAX_LIGHTS` has always been argued against. The argument
-    /// lived in prose: docs/ENGINE.md works out `(65536 − 656) / 64 = 1013` lights as the hard
+    /// lived in prose: docs/ENGINE.md works out `(65536 − 3216) / 68 = 916` lights as the hard
     /// ceiling. Nothing computed it, so raising `MAX_LIGHTS` past it would have compiled, passed
     /// every test, and then failed at **run time** on the first machine that enforces the floor —
     /// as a bind-group validation error, which is the least informative place to learn about an
@@ -703,6 +704,8 @@ mod tests {
     fn the_scene_block_fits_the_uniform_binding_floor_every_webgpu_target_guarantees() {
         /// `maxUniformBufferBindingSize`, the WebGPU-guaranteed minimum.
         const UNIFORM_FLOOR: usize = 65_536;
+        // A light's `LightData` and its four bytes of `light_shadows`.
+        let per_light = std::mem::size_of::<LightData>() + 4;
         let block = std::mem::size_of::<SceneUniforms>();
         assert!(
             block <= UNIFORM_FLOOR,
@@ -710,31 +713,40 @@ mod tests {
              target guarantees — MAX_LIGHTS is {MAX_LIGHTS} and the ceiling is {} for this \
              layout. Past a few hundred lights the answer is a storage buffer, not a bigger \
              uniform.",
-            (UNIFORM_FLOOR - (block - MAX_LIGHTS * std::mem::size_of::<LightData>()))
-                / std::mem::size_of::<LightData>()
+            (UNIFORM_FLOOR - (block - MAX_LIGHTS * per_light)) / per_light
         );
 
         // …and the ceiling the documentation argues from is the one this layout actually has.
-        let fixed = block - MAX_LIGHTS * std::mem::size_of::<LightData>();
-        assert_eq!(fixed, 656, "the block's fixed part (560 before the fog override, 592 before the shadow bias, 608 before the sky)");
+        let fixed = block - MAX_LIGHTS * per_light;
         assert_eq!(
-            (UNIFORM_FLOOR - fixed) / std::mem::size_of::<LightData>(),
-            1013,
-            "the light ceiling docs/ENGINE.md quotes"
+            fixed, 3216,
+            "the block's fixed part (560 before the fog override, 592 before the shadow bias, 608 \
+             before the sky, 656 before the local shadow layers)"
         );
+        assert_eq!((UNIFORM_FLOOR - fixed) / per_light, 916, "the light ceiling docs/ENGINE.md quotes");
     }
 
-    /// A path that renders no point-shadow cube must not enable the lookup — the shader would
-    /// sample whatever the cube held on the last frame that did.
+    /// The block carries the frame's local shadows as planned: each light's entry in its slot, each
+    /// layer's matrix and depth range — and nothing for a frame that planned none.
     #[test]
-    fn point_shadows_are_off_unless_the_caller_rendered_the_cube() {
+    fn the_block_carries_the_local_shadows_as_planned() {
+        use crate::local_shadows::{LocalShadowCaster, LocalShadows, LOCAL_SHADOW_CUBE};
         let off = SceneUniforms::new(&SceneFrame::default());
-        assert_eq!(off.point_shadows_enabled, 0);
+        assert!(off.light_shadows.iter().flatten().all(|&e| e == 0), "no plan, no light casts");
+
+        let local = LocalShadows::plan([
+            (5, LocalShadowCaster::Spot { position: Vec3::Y, direction: Vec3::NEG_Y, outer_angle: 0.5, radius: 9.0 }),
+            (2, LocalShadowCaster::Omni { position: Vec3::X, radius: 7.0 }),
+        ]);
         let on = SceneUniforms::new(&SceneFrame {
-            shadows: ShadowFrame { point_shadows_enabled: true, ..Default::default() },
+            shadows: ShadowFrame { local, ..Default::default() },
             ..Default::default()
         });
-        assert_eq!(on.point_shadows_enabled, 1);
+        assert_eq!(on.light_shadows[1][1], 1, "slot 5 is row 1, column 1: the spot's layer 0");
+        assert_eq!(on.light_shadows[0][2], 2 | LOCAL_SHADOW_CUBE, "slot 2: the cube from layer 1");
+        assert_eq!(on.local_shadow_layers[0].view_proj, local.layers()[0].view_proj.to_cols_array_2d());
+        assert_eq!(on.local_shadow_layers[6].params[1], 7.0, "the cube's last face reaches as far as its light");
+        assert_eq!(on.local_shadow_layers[7], crate::gpu_types::LocalShadowLayerRaw::zeroed(), "past the plan, nothing");
     }
 
     /// The bug this constructor exists for, as an assertion: the post block's depth pair must be

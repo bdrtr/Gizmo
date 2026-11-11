@@ -106,6 +106,7 @@ fn main() {
                 color: Vec3::new(1.0, 1.0, 1.0),
                 intensity: 10.0,
                 radius: 40.0,
+                casts_shadows: false,
             };
             bundle.apply(scene.world, light_ent);
 

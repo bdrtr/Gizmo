@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog, SHADOW_BIAS_METRES, SHADOW_BIAS_METRES_MIN, local_shadow_layer, local_shadow_visibility}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -24,7 +24,8 @@ var<storage, read> cluster_table: array<vec2<u32>>;
 var<storage, read> cluster_light_indices: array<u32>;
 @group(1) @binding(0) var t_shadow: texture_depth_2d_array;
 @group(1) @binding(1) var s_shadow: sampler_comparison;
-@group(1) @binding(2) var t_point_shadow: texture_depth_cube;
+// The local lights' shadows (`gizmo_renderer::local_shadows`), a layer or six a light.
+@group(1) @binding(2) var t_local_shadow: texture_depth_2d_array;
 // Light cookies (`gizmo_renderer::cookies`): a spot's params.w = layer + 1.
 @group(1) @binding(3) var t_cookie: texture_2d_array<f32>;
 @group(1) @binding(4) var s_cookie: sampler;
@@ -64,12 +65,6 @@ fn select_cascade(view_depth: f32) -> u32 {
 // hard line across the world at `cascade_splits.w`. See csm.rs for the reasoning and the
 // cost of the alternative. `shader_shadow_fade_matches_the_rust_mirror` pins the constant.
 const SHADOW_FADE_FRACTION: f32 = 0.15;
-
-// Depth bias in METRES. Calibrated to reproduce what the old NDC constants were worth at the
-// depth range they were chosen under: 0.0004 NDC over a ~105 m cascade is 4.2 cm, and the 0.00004
-// floor is 4.2 mm.
-const SHADOW_BIAS_METRES: f32 = 0.042;
-const SHADOW_BIAS_METRES_MIN: f32 = 0.0042;
 
 fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
     let far = max(shadow_far, 1e-4);
@@ -465,52 +460,18 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                         t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0
                     ).rgb;
                 }
-            } else if (light_type == 0u) {
-                // Point Light Shadow (optional). There is a single point-shadow cube;
-                // it belongs to ONE designated caster whose cubemap was rendered this
-                // frame. cascade_params.w carries (caster_index + 1), with 0 meaning
-                // "no point shadow this frame". The old code applied this one cube to
-                // EVERY point light using each light's own position, so every light but
-                // the caster got a shadow centred on the wrong place.
-                let sp_idx = u32(scene.cascade_params.w);
-                if (receives_shadows && scene.point_shadows_enabled > 0u && sp_idx > 0u && i == sp_idx - 1u) {
-                    let dir_from_light = world_pos - light.position.xyz;
-                    let abs_dir = abs(dir_from_light);
-                    let z_near = 0.1;
-                    // Far plane tracks the light's radius (the same value the CPU builds
-                    // the cube projection with) instead of a hardcoded 100 that clipped
-                    // large lights and wasted depth precision on small ones.
-                    let z_far  = max(light.color.a, 1.0);
-                    let z_val  = max(abs_dir.x, max(abs_dir.y, abs_dir.z));
-                    let clip_z = (z_far * (z_val - z_near)) / (z_val * (z_far - z_near));
-
-                    // Slope-scaled bias only. The old flat-ground floor
-                    // `if (N.y > 0.99) { bias = max(bias, 0.01); }` was the same 200x
-                    // over-correction the CSM path already dropped — it peter-panned the
-                    // shadow off a flat receiver's contact point.
-                    //
-                    // **Metres, converted — and here the NDC form was far worse than it was for
-                    // the cascades.** `clip_z` above is a perspective depth, so its derivative
-                    // falls off as 1/d²: a fixed NDC bias therefore grows as the *square* of the
-                    // distance from the light. Worked out for the old 0.0005 — 5 mm a metre from
-                    // the light, 50 cm at the edge of a 10 m light, **1.99 m** at the edge of a
-                    // 20 m one and **12.5 m** at the edge of a 50 m one. Surfaces out near a large
-                    // light's range simply stop receiving shadow, because the comparison has been
-                    // pushed metres past every caster.
-                    //
-                    // d(clip_z)/d(z_val) = z_far·z_near / (z_val²·(z_far − z_near)), so multiplying
-                    // a metre figure by it gives the NDC bias that means that many metres *here*.
-                    // The constant is the cascades' own SHADOW_BIAS_METRES: it is the same
-                    // physical question — how far to push a depth comparison to clear a surface —
-                    // and one engine answering it two ways is worse than either answer.
-                    let slope = 1.0 - max(dot(N, normalize(dir_from_light)), 0.0);
-                    let ndc_per_metre =
-                        (z_far * z_near) / max(z_val * z_val * (z_far - z_near), 1e-6);
-                    let bias = max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN)
-                        * ndc_per_metre * scene.shadow_bias.x;
-                    let shadow_vis = textureSampleCompareLevel(t_point_shadow, s_shadow, dir_from_light, clip_z - bias);
-                    atten *= shadow_vis;
-                }
+            }
+            // The light's shadow, if it casts one (`gizmo_renderer::local_shadows`) and lights this
+            // point at all. On `window` as well as `atten`: a rectangle light is shaded from the
+            // window alone.
+            let shadow_layer = local_shadow_layer(scene.light_shadows[i / 4u][i % 4u], world_pos - light.position.xyz);
+            if (receives_shadows && shadow_layer >= 0 && max(atten, window) > 0.0) {
+                let lit = local_shadow_visibility(
+                    t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer], shadow_layer,
+                    world_pos, N, light.position.xyz - world_pos, scene.shadow_bias.xy,
+                );
+                atten *= lit;
+                window *= lit;
             }
         }
 
