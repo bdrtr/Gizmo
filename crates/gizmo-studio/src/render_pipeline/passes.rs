@@ -167,7 +167,8 @@ fn batch_pipeline<'a>(
     Some(engine)
 }
 
-/// This view's shadow maps: the sun's cascades, then each local light's layer (`local_layers`, the
+/// This view's shadow maps, and how many depth passes they took: the sun's cascades when there are
+/// any to draw (`SceneSetup::draws_cascades`), then each local light's layer (`local_layers`, the
 /// frame's `SceneSetup::local_shadows`; the array must already hold them,
 /// `SceneState::ensure_local_shadow_layers`). `camera_position` and `elapsed_time` are what a game's
 /// surface is handed when its shadow is cut where the picture is.
@@ -175,12 +176,13 @@ pub(super) fn record_studio_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &gizmo::renderer::Renderer,
     flat_batches: &[FlatBatchData],
-    light_view_proj_cascades: &[[[f32; 4]; 4]; 4],
+    light_view_proj_cascades: Option<&[[[f32; 4]; 4]; 4]>,
     local_layers: &[gizmo::renderer::local_shadows::LocalShadowLayer],
     camera_position: gizmo::math::Vec3,
     elapsed_time: f32,
-) {
-    for (cascade_i, &cascade_view_proj) in light_view_proj_cascades.iter().enumerate() {
+) -> u32 {
+    let mut passes = 0;
+    for (cascade_i, &cascade_view_proj) in light_view_proj_cascades.into_iter().flatten().enumerate() {
         renderer.queue.write_buffer(
             renderer.scene.view_shadow_cascade_buffer(cascade_i),
             0,
@@ -198,6 +200,7 @@ pub(super) fn record_studio_shadow_passes(
             &renderer.scene.shadow_cascade_layer_views[cascade_i],
             renderer.scene.view_shadow_pass_bind_group(cascade_i),
         );
+        passes += 1;
     }
     let local_layers = &local_layers[..local_layers.len().min(renderer.scene.local_shadow_maps.layers())];
     for (layer_i, layer) in local_layers.iter().enumerate() {
@@ -218,7 +221,9 @@ pub(super) fn record_studio_shadow_passes(
             &renderer.scene.local_shadow_maps.layer_views[layer_i],
             renderer.scene.view_local_shadow_pass_bind_group(layer_i),
         );
+        passes += 1;
     }
+    passes
 }
 
 /// One depth pass into `target`, every caster drawn through the shadow pass group `light`.

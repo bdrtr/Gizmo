@@ -459,6 +459,10 @@ pub struct RenderStats {
     pub triangles: u32,
     /// Instances uploaded this frame, across all batches.
     pub instances: u32,
+    /// Depth passes recorded into shadow maps: the sun's four cascades when there is a sun, and
+    /// one per layer of every local light that casts (six for a point light). Each draws every
+    /// caster in the frame, so this is the multiplier on the shadows' share of it.
+    pub shadow_passes: u32,
     /// GPU memory wgpu has allocated, in bytes — `None` when the backend does not report it.
     ///
     /// This is the allocator's view (`Device::generate_allocator_report`), not the driver's total

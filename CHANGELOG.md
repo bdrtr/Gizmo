@@ -50,6 +50,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **How many shadow passes a frame records**: `RenderStats::shadow_passes` — the sun's four cascades when there is a
+  sun, one per local shadow layer — with a row in the editor's viewport overlay. Each pass draws every caster, so it is
+  the multiplier on the shadows' share of the frame.
+
 - **Every local light casts shadows, when it asks to.** `PointLight`, `SpotLight` and `RectLight` have
   `casts_shadows` (and `with_shadows()`; off by default, `#[serde(default)]`), and so do `PointLightBundle` and
   `SpotLightBundle`. The lights that cast share one depth texture array (`gizmo_renderer::local_shadows`): a spot whose
@@ -194,6 +198,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A frame with no sun draws no cascades.** Every lookup of the sun's cascades asks for the sun first, and a sunless
+  frame drew all four anyway, every caster in each, and kept objects off screen for them. `SceneSetup::draws_cascades`
+  and `SceneSetup::shadow_view_projs` decide it for both paths. `ShadowCaster` and `SceneSetupInputs::shadow_caster` are
+  gone: the editor fitted the cascades to its first light when there was no sun, and nothing ever read them — a light
+  that should cast says so with `casts_shadows`, in the viewport as in the game.
 - **`Renderer::point_shadows_enabled` is gone**, with `ShadowFrame::{point_caster, point_shadows_enabled}` and
   `SceneSetupInputs::point_shadows_enabled` (now `local_shadows`, whether a path draws the local shadow layers): a light
   says for itself whether it casts (`casts_shadows`). `SceneUniforms` carries the local shadow layers and each light's entry

@@ -1227,8 +1227,8 @@ fn viewport_frame(world: &mut World, renderer: &mut Renderer, cam: Entity, size:
 
 /// A floor under a spot, a point or a rectangle light 4 m up, and a cube 2 m up that casts and is
 /// not drawn, seen in the editor viewport: the light casting (`casts_shadows`) or not, the cube there
-/// or not.
-fn local_light_viewport(kind: u8, casts: bool, cube: bool) -> Vec<u8> {
+/// or not. The frame, and the shadow passes it recorded (`RenderStats::shadow_passes`).
+fn local_light_viewport(kind: u8, casts: bool, cube: bool) -> (Vec<u8>, u32) {
     const S: u32 = 128;
     pollster::block_on(async {
         let mut renderer = shared_device_renderer(S, S).await;
@@ -1267,7 +1267,8 @@ fn local_light_viewport(kind: u8, casts: bool, cube: bool) -> Vec<u8> {
             cam,
             gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, -std::f32::consts::FRAC_PI_2, -0.8, true),
         );
-        viewport_frame(&mut world, &mut renderer, cam, S)
+        let frame = viewport_frame(&mut world, &mut renderer, cam, S);
+        (frame, renderer.render_stats.expect("the viewport records its stats").shadow_passes)
     })
 }
 
@@ -1276,6 +1277,9 @@ fn local_light_viewport(kind: u8, casts: bool, cube: bool) -> Vec<u8> {
 /// looked. A point, a spot and a rectangle light over a floor, a cube between: the shadow darkens
 /// 886, 877 and 884 pixels of the floor by 20 or more, alike for the three (one cube, one light
 /// position), and none when the light does not cast; with the forward shader's lookup ignored, 0.
+/// The viewport records the shadow passes the game would: six for the point and the rectangle
+/// light, one for the spot, and none at all when it does not cast — no sun, so no cascades either,
+/// where the editor drew four fitted to its first light until 2026-11-11, which nothing read.
 #[test]
 #[ignore = "requires a GPU adapter"]
 fn a_local_light_casts_in_the_viewport() {
@@ -1288,15 +1292,17 @@ fn a_local_light_casts_in_the_viewport() {
     }
     let luma = |p: &[u8]| (p[0] as i32 + p[1] as i32 + p[2] as i32) / 3;
     let shadow = |kind: u8, casts: bool| {
-        let with = local_light_viewport(kind, casts, true);
-        let without = local_light_viewport(kind, casts, false);
-        with.chunks(BPP as usize).zip(without.chunks(BPP as usize)).filter(|(a, b)| luma(a) + 20 < luma(b)).count()
+        let (with, passes) = local_light_viewport(kind, casts, true);
+        let (without, _) = local_light_viewport(kind, casts, false);
+        let pixels = with.chunks(BPP as usize).zip(without.chunks(BPP as usize)).filter(|(a, b)| luma(a) + 20 < luma(b)).count();
+        (pixels, passes)
     };
     let mut counts = Vec::new();
-    for kind in 0..3 {
-        assert_eq!(shadow(kind, false), 0, "light {kind} casts without asking to");
-        let cast = shadow(kind, true);
+    for (kind, layers) in [(0, 6), (1, 1), (2, 6)] {
+        assert_eq!(shadow(kind, false), (0, 0), "light {kind} casts without asking to");
+        let (cast, passes) = shadow(kind, true);
         assert!(cast > 200, "light {kind} casts {cast} shadow pixels in the viewport");
+        assert_eq!(passes, layers, "light {kind}'s shadow passes");
         counts.push(cast);
     }
     let (min, max) = (*counts.iter().min().unwrap(), *counts.iter().max().unwrap());

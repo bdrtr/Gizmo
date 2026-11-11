@@ -22,7 +22,7 @@ use gizmo::core::World;
 use gizmo::math::Vec3;
 use gizmo::renderer::components::{DirectionalLight, LightRole, PointLight};
 use gizmo::renderer::{CameraFrame, EnvironmentFrame, SceneUniforms};
-use gizmo::systems::render::{collect_scene_setup, SceneSetup, SceneSetupInputs, ShadowCaster};
+use gizmo::systems::render::{collect_scene_setup, SceneSetup, SceneSetupInputs};
 use gizmo::prelude::GlobalTransform;
 
 fn a_camera() -> CameraFrame {
@@ -36,14 +36,13 @@ fn a_camera() -> CameraFrame {
     }
 }
 
-/// The arguments the **game** path passes: cascades from the sun only, environment presets and
-/// debug shading from the renderer, the local lights' shadow layers drawn.
+/// The arguments the **game** path passes: environment presets and debug shading from the renderer,
+/// the local lights' shadow layers drawn.
 fn game_inputs() -> SceneSetupInputs {
     SceneSetupInputs {
         camera: a_camera(),
         aspect: 1.6,
         cam_fov: 0.8,
-        shadow_caster: ShadowCaster::SunOnly,
         // Live renderer state in the real call; the values themselves are not the subject here.
         environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0, clear_color: None, wireframe_color: None, fog: None, sky: None },
         local_shadows: true,
@@ -53,15 +52,15 @@ fn game_inputs() -> SceneSetupInputs {
     }
 }
 
-/// The arguments the **editor** path passes: a shadow-casting fallback so a sunless scene still
-/// shows shadows, no environment blend, debug shading from the viewport dropdown — and the local
-/// lights' shadow layers drawn, as the game draws them (it drew none until 2026-11-11).
+/// The arguments the **editor** path passes: no environment blend, debug shading from the viewport
+/// dropdown — and the local lights' shadow layers drawn, as the game draws them (it drew none until
+/// 2026-11-11, and fitted the cascades to its first light when there was no sun: see
+/// `neither_path_draws_cascades_without_a_sun`).
 fn editor_inputs() -> SceneSetupInputs {
     SceneSetupInputs {
         camera: a_camera(),
         aspect: 1.6,
         cam_fov: 0.8,
-        shadow_caster: ShadowCaster::SunOrFirstLight,
         environment: EnvironmentFrame { shading_mode: 4, ..Default::default() },
         local_shadows: true,
         elapsed_time: 7.5,
@@ -187,10 +186,13 @@ fn the_two_paths_agree_on_everything_the_world_decides() {
     );
 }
 
-/// The editor's one real policy difference, and the reason it exists: a scene someone is still
-/// lighting has no sun yet, and a viewport with no shadows at all reads as broken.
+/// **Without a sun neither path draws the cascades**: every lookup of them asks for the sun first,
+/// so they would be four depth passes over every caster for nothing (`SceneSetup::draws_cascades`).
+/// The editor fitted them to its first light when there was no sun, until 2026-11-11 — "a viewport
+/// with no shadows at all reads as broken" — and nothing ever read them; a light that should cast
+/// says so itself now (`casts_shadows`), in the viewport as in the game.
 #[test]
-fn the_editor_casts_from_a_light_when_the_scene_has_no_sun() {
+fn neither_path_draws_cascades_without_a_sun() {
     let mut world = World::new();
     let lamp = world.spawn();
     world.add_component(lamp, GlobalTransform::default());
@@ -203,27 +205,9 @@ fn the_editor_casts_from_a_light_when_the_scene_has_no_sun() {
         0.0,
         "no sun means the shader skips the sun branch in both paths"
     );
-    assert_ne!(
-        game.cascade_view_projs, editor.cascade_view_projs,
-        "the editor fits its cascades to the lamp; the game leaves them on the default \
-         down-vector because nothing will sample them"
-    );
-}
-
-/// With nothing to cast from, the editor leaves the matrices at identity rather than shipping a
-/// fit to a placeholder direction — the splits stay real, because the shadow-distance fade reads
-/// them whether or not anything casts.
-#[test]
-fn an_unlit_scene_leaves_the_editor_cascades_at_identity() {
-    let world = World::new();
-    let (game, editor) = both_ways(&world);
-
-    assert_eq!(editor.cascade_view_projs, [gizmo::math::Mat4::IDENTITY; 4]);
-    assert_ne!(game.cascade_view_projs, [gizmo::math::Mat4::IDENTITY; 4], "the game always fits");
-    let e = SceneUniforms::new(&editor.frame);
-    assert!(e.cascade_splits.iter().all(|s| *s > 0.0), "splits stay real for the distance fade");
-    assert_eq!(e.sun_direction[3], 0.0);
-    assert_eq!(e.num_lights, 0);
+    assert!(!game.draws_cascades() && !editor.draws_cascades(), "nor are the cascades drawn");
+    assert!(game.shadow_view_projs().is_empty() && editor.shadow_view_projs().is_empty(), "nor kept for");
+    assert_eq!(game.cascade_view_projs, editor.cascade_view_projs, "one rule for both paths, not two");
 }
 
 /// The parity above is only worth anything while both paths actually go through the shared
@@ -280,31 +264,6 @@ fn neither_render_path_builds_its_own_scene_setup() {
         "a render path stepped outside the shared setup, so the parity tests in this file no \
          longer cover it:\n  {}",
         offenders.join("\n  ")
-    );
-
-    // The argument sets above are this file's claim about what each path passes. Pin the one
-    // argument that is a policy rather than a live value, so the claim cannot quietly stop being
-    // true — a test comparing two argument sets nobody uses would pass forever.
-    let sources = |dir: &std::path::Path| {
-        let mut files = Vec::new();
-        collect_rs(dir, &mut files);
-        files
-            .iter()
-            // `shared.rs` happens to sit inside the game path's directory and is where the enum
-            // is *defined*, so it names both variants; only call sites are the subject here.
-            .filter(|f| f.file_name().is_some_and(|n| n != "shared.rs"))
-            .map(|f| std::fs::read_to_string(f).unwrap_or_default())
-            .collect::<String>()
-    };
-    let game = sources(&paths[0]);
-    let editor = sources(&paths[1]);
-    assert!(
-        game.contains("ShadowCaster::SunOnly") && !game.contains("ShadowCaster::SunOrFirstLight"),
-        "the game path no longer casts from the sun only — `game_inputs()` above is now fiction"
-    );
-    assert!(
-        editor.contains("ShadowCaster::SunOrFirstLight") && !editor.contains("ShadowCaster::SunOnly"),
-        "the editor path no longer falls back to a light — `editor_inputs()` above is now fiction"
     );
 }
 

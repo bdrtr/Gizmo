@@ -103,18 +103,21 @@ fn record_caster_pass(
     }
 }
 
-/// The frame's shadow maps: one depth pass per cascade, then one per local shadow layer the frame
+/// The frame's shadow maps, and how many depth passes they took: one per cascade when `cascades`
+/// (`SceneSetup::draws_cascades` — the frame has a sun), then one per local shadow layer the frame
 /// planned (`local_layers`, `SceneSetup::local_shadows`), each layer's matrix already written to its
-/// buffer. A frame where no light casts records no local pass at all.
+/// buffer. A frame with no sun and no light that casts records none.
 #[cfg(not(gizmo_forward_only))]
 pub fn record_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &Renderer,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
+    cascades: bool,
     local_layers: usize,
-) {
-    for i in 0..crate::renderer::CASCADE_COUNT {
+) -> u32 {
+    let mut passes = 0;
+    for i in (0..crate::renderer::CASCADE_COUNT).filter(|_| cascades) {
         record_caster_pass(
             encoder,
             renderer,
@@ -124,6 +127,7 @@ pub fn record_shadow_passes(
             &renderer.scene.shadow_cascade_layer_views[i],
             renderer.scene.view_shadow_pass_bind_group(i),
         );
+        passes += 1;
     }
     let local_layers = local_layers.min(renderer.scene.local_shadow_maps.layers());
     for i in 0..local_layers {
@@ -136,5 +140,7 @@ pub fn record_shadow_passes(
             &renderer.scene.local_shadow_maps.layer_views[i],
             renderer.scene.view_local_shadow_pass_bind_group(i),
         );
+        passes += 1;
     }
+    passes
 }

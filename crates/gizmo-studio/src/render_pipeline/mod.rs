@@ -116,9 +116,6 @@ fn draw_studio_frame(
             camera,
             aspect,
             cam_fov,
-            // A scene being lit by hand often has no sun yet, and an editor viewport with no
-            // shadows at all reads as broken rather than as unlit.
-            shadow_caster: gizmo::systems::render::ShadowCaster::SunOrFirstLight,
             // The editor renders the scene as authored: no environment preset blend, and the
             // shading mode comes from the viewport's debug dropdown, not from the renderer.
             environment: gizmo::renderer::EnvironmentFrame {
@@ -160,15 +157,11 @@ fn draw_studio_frame(
     // The gizmo pass draws the game camera's frustum as a wire box in edit mode.
     let game_view_proj = viewpoint::game_view_proj(world, state.game_camera, aspect, &vp);
 
-    // Every shadow map's LIGHT frustum — the cascades', then each local light's layer. Shadow
-    // casters are culled against these (not the camera frustum), so off-screen objects that cast
-    // shadows INTO view aren't dropped.
-    let shadow_frusta: Vec<gizmo::renderer::Frustum> = cascade_mats
-        .iter()
-        .copied()
-        .chain(setup.local_shadows.layers().iter().map(|l| l.view_proj))
-        .map(|m| gizmo::renderer::Frustum::from_matrix(&m))
-        .collect();
+    // Every shadow map's LIGHT frustum the frame draws — the sun's cascades, then each local light's
+    // layers (`SceneSetup::shadow_view_projs`). Shadow casters are culled against these (not the
+    // camera frustum), so off-screen objects that cast shadows INTO view aren't dropped.
+    let shadow_frusta: Vec<gizmo::renderer::Frustum> =
+        setup.shadow_view_projs().iter().map(gizmo::renderer::Frustum::from_matrix).collect();
 
     let mut debug_aabbs = Vec::new();
 
@@ -655,11 +648,11 @@ fn draw_studio_frame(
             }
 
             // --- 1. CSM GÖLGE PASS + 2. ANA RENDER PASS (Tier 3: geçişler ayrı fn) ---
-            record_studio_shadow_passes(
+            render_stats.shadow_passes = record_studio_shadow_passes(
                 encoder,
                 renderer,
                 flat_batches.as_slice(),
-                &light_view_proj_cascades,
+                setup.draws_cascades().then_some(&light_view_proj_cascades),
                 setup.local_shadows.layers(),
                 cam_pos,
                 elapsed_time,
@@ -821,7 +814,6 @@ fn record_game_view(
             camera,
             aspect,
             cam_fov,
-            shadow_caster: gizmo::systems::render::ShadowCaster::SunOrFirstLight,
             // The game view is the game's picture: the same environment the game path gives
             // `SceneSetupInputs`. It dropped all of this until 2026-11-07.
             environment: gizmo::renderer::EnvironmentFrame {
@@ -860,7 +852,7 @@ fn record_game_view(
         &mut enc,
         renderer,
         batches,
-        &cascades,
+        setup.draws_cascades().then_some(&cascades),
         setup.local_shadows.layers(),
         camera.position,
         elapsed_time,

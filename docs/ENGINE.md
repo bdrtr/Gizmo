@@ -3420,7 +3420,9 @@ Kök kayıtlı ("The root the sweep could not see"). Beş kesim:
    kırk satır (güneş-var bayrağı, cascade'ın hangi ışığı takip edeceği, ışıksız sahnede identity
    geri düşüşü, point-shadow caster indeksi) iki dosyada ayrı ayrı yazılıydı. İki yol arasındaki
    fark artık **adlandırılmış bir politika**: `ShadowCaster::SunOnly` (oyun) ve `SunOrFirstLight`
-   (editör). Test aynı dünya için iki argüman setini yan yana koyup bloğun **dünyanın karar
+   (editör). (Removed 2026-11-11: every cascade lookup asks for the sun first, so the editor's
+   cascades fitted to its first light were never read; neither path draws cascades without a sun
+   now — `SceneSetup::draws_cascades`, `neither_path_draws_cascades_without_a_sun`.) Test aynı dünya için iki argüman setini yan yana koyup bloğun **dünyanın karar
    verdiği** her alanında eşitlik, yalnız her yolun ilan ettiği üç alanda fark arıyor. Yanına iki
    bekçi: hiçbir render yolu `collect_scene_lights`/`compute_directional_cascades`'i doğrudan
    çağıramaz (çağırırsa parite testi o yolu kapsamıyor demektir), ve her yolun hangi politikayı

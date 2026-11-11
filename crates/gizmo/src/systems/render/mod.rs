@@ -1399,8 +1399,7 @@ fn draw_camera_view(
         .unwrap_or(0.0);
 
     // Lights, cascades and the whole scene block — via the shared setup helper, so the game and
-    // studio renderers can only differ in what they pass it. The game always casts from the sun;
-    // the editor's fallback to a point light is the other `ShadowCaster`.
+    // studio renderers can only differ in what they pass it.
     // Cookies a spot names by path are read from disk the first frame they are needed.
     #[cfg(not(target_arch = "wasm32"))]
     renderer.sync_light_cookies(world);
@@ -1411,7 +1410,6 @@ fn draw_camera_view(
             camera,
             aspect,
             cam_fov,
-            shadow_caster: ShadowCaster::SunOnly,
             environment: crate::renderer::EnvironmentFrame {
                 preset: renderer.environment_preset,
                 preset_2: renderer.environment_preset_2,
@@ -1495,16 +1493,10 @@ fn draw_camera_view(
 
     // CPU batched instancing (replaces the GPU cull): walk the world, frustum-cull, group into
     // instanced batches and upload the instance buffer. Lives in `batching.rs`.
-    // An object off screen still casts into any shadow map it stands in: the cascades', and every
-    // local light's layer.
-    let shadow_view_projs: Vec<Mat4> = setup
-        .cascade_view_projs
-        .iter()
-        .copied()
-        .chain(setup.local_shadows.layers().iter().map(|l| l.view_proj))
-        .collect();
+    // An object off screen still casts into any shadow map the frame draws: the sun's cascades, and
+    // every local light's layers.
     let (draw_items, uploaded_instances) =
-        batching::collect_draw_items(world, renderer, unjittered_view_proj, &shadow_view_projs, cam_pos);
+        batching::collect_draw_items(world, renderer, unjittered_view_proj, &setup.shadow_view_projs(), cam_pos);
     record_render_stats(renderer, &draw_items, elapsed_time);
 
     // The GPU-physics cull reads the view's camera, so it is per view; its simulation is not.
@@ -1555,7 +1547,19 @@ fn draw_camera_view(
     // Web şemasında gölge yok (4-grup limiti, forward shader'dan shadow örneklemesi
     // `load_shader_web` ile sökülür) — depth-only CSM/point geçitleri boşa GPU olur.
     #[cfg(not(gizmo_forward_only))]
-    passes::record_shadow_passes(encoder, renderer, &draw_items, uploaded_instances, setup.local_shadows.layers().len());
+    {
+        let shadow_passes = passes::record_shadow_passes(
+            encoder,
+            renderer,
+            &draw_items,
+            uploaded_instances,
+            setup.draws_cascades(),
+            setup.local_shadows.layers().len(),
+        );
+        if let Some(stats) = renderer.render_stats.as_mut() {
+            stats.shadow_passes = shadow_passes;
+        }
+    }
     passes::record_deferred_geometry(
         encoder,
         renderer,
@@ -1674,7 +1678,7 @@ pub use hidden::collect_hidden;
 mod shared;
 pub use shared::{
     active_camera_grade, collect_scene_lights, collect_scene_setup, sync_irradiance_volume, SceneLights,
-    SceneSetup, SceneSetupInputs, ShadowCaster,
+    SceneSetup, SceneSetupInputs,
 };
 
 #[cfg(test)]
@@ -8476,8 +8480,6 @@ mod golden_render_tests {
         /// lookup compares against is its own surface's — rather than a slab, whose lit top is never
         /// in its shadow map at all.
         open_floor: bool,
-        /// `ShadowSettings::distance`: how far the sun's cascades reach, when not 100 m.
-        shadow_distance: Option<f32>,
         /// A normal map on the floor tilting its shading normal this many radians toward +X (the
         /// plane's tangent), where it is not the geometry's.
         floor_normal_tilt: Option<f32>,
@@ -8491,7 +8493,6 @@ mod golden_render_tests {
                 casters: casters.to_vec(),
                 camera: None,
                 open_floor: false,
-                shadow_distance: None,
                 floor_normal_tilt: None,
             }
         }
@@ -8500,15 +8501,18 @@ mod golden_render_tests {
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// `scene`, rendered: a floor, its casters and its lights.
     async fn local_light_frame(scene: &LocalScene) -> Vec<u8> {
+        local_light_render(scene).await.0
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// [`local_light_frame`], with what the frame says it cost.
+    async fn local_light_render(scene: &LocalScene) -> (Vec<u8>, crate::renderer::components::RenderStats) {
         let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
         renderer.taa = None;
         renderer.ssgi = None;
         renderer.ssr = None;
         renderer.ssao = None;
         renderer.volumetric = None;
-        if let Some(metres) = scene.shadow_distance {
-            renderer.shadow_settings = renderer.shadow_settings.with_distance(metres);
-        }
         let mut world = World::new();
         let mut assets = AssetManager::new();
         let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
@@ -8584,7 +8588,9 @@ mod golden_render_tests {
         }
         let (position, yaw, pitch) = scene.camera.unwrap_or((Vec3::new(0.0, 6.0, 6.0), -std::f32::consts::FRAC_PI_2, -0.8));
         world.spawn_bundle(CameraBundle { position, yaw, pitch, primary: true, ..Default::default() });
-        render_world(&mut renderer, &mut world).await
+        let frame = render_world(&mut renderer, &mut world).await;
+        let stats = *world.get_resource::<crate::renderer::components::RenderStats>().expect("the game path publishes RenderStats");
+        (frame, stats)
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
@@ -8601,6 +8607,39 @@ mod golden_render_tests {
         let with = local_light_frame(scene).await;
         let without = local_light_frame(&LocalScene { casters: Vec::new(), ..scene.clone() }).await;
         shadow_pixels(&with, &without)
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A frame draws the shadow maps something reads, and says how many** (`RenderStats::
+    /// shadow_passes`). A frame with no sun drew the sun's four cascades all the same — every caster
+    /// in each — though every lookup of them asks for the sun first; now a scene lit by two casting
+    /// spots and no sun draws 2 depth passes, the same with a sun 6, and with neither, nothing. A
+    /// point light that casts is six more.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_frame_draws_only_the_shadow_maps_something_reads() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let cube = [Vec3::new(0.0, 1.0, 0.0)];
+            let spots = [LightAt::over(TestLight::Spot(0.6), -1.0, 0.0, true), LightAt::over(TestLight::Spot(0.6), 1.0, 0.0, true)];
+            let sun = LightAt { kind: TestLight::Sun, at: Vec3::ZERO, aim: Vec3::new(-0.3, -1.0, 0.1), intensity: 3.0, casts: true };
+            let passes = |lights: &[LightAt]| {
+                let scene = LocalScene::new(lights, &cube);
+                async move { local_light_render(&scene).await.1.shadow_passes }
+            };
+            assert_eq!(passes(&[]).await, 0, "no light, no shadow map");
+            assert_eq!(passes(&spots).await, 2, "two spots, no sun: their two layers");
+            assert_eq!(passes(&[spots[0], spots[1], sun]).await, 6, "and the sun's four cascades with it");
+            assert_eq!(passes(&[sun]).await, 4, "the sun alone");
+            assert_eq!(passes(&[LightAt::over(TestLight::Point, 0.0, 0.0, true)]).await, 6, "a point light's cube");
+            assert_eq!(passes(&[LightAt::over(TestLight::Spot(0.6), 0.0, 0.0, false)]).await, 0, "a spot that does not cast");
+        });
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
@@ -8743,8 +8782,8 @@ mod golden_render_tests {
     /// passes only while they stood in one of the sun's cascades, so a cube beside the view, between a
     /// spot and the floor in front of the camera, was culled and its shadow went with it. Every local
     /// light's layers are frusta the culling keeps casters for now. The camera looks straight down at
-    /// the floor, the cube stands 4 m outside its view, and the cascades reach 6 m — not to the cube,
-    /// which only the spot's layer then holds.
+    /// the floor and the cube stands 4 m outside its view; there is no sun, so no cascade keeps it
+    /// (`SceneSetup::shadow_view_projs`), and only the spot's layer does.
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn a_caster_off_screen_casts_a_local_shadow_into_the_frame() {
@@ -8766,7 +8805,6 @@ mod golden_render_tests {
             let scene = LocalScene {
                 // Straight down over x = 3: the floor from x ≈ 0 to 6 is in view, x = −5 is not.
                 camera: Some((Vec3::new(3.0, 5.0, 0.0), -std::f32::consts::FRAC_PI_2, -1.5)),
-                shadow_distance: Some(6.0),
                 ..LocalScene::new(&[spot], &[Vec3::new(-5.0, 0.8, 0.0)])
             };
             let shadow = local_shadow(&scene).await;

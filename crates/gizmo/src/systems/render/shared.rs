@@ -331,26 +331,6 @@ pub fn collect_scene_lights(
     }
 }
 
-/// Which light the directional cascades are fitted to. The two render paths answer differently,
-/// and this is the whole of the difference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShadowCaster {
-    /// The sun, and nothing else — the game's rule. A scene with no sun still gets cascades
-    /// (fitted to the collector's default down-vector) but `SunFrame::present` is false, so the
-    /// shader never samples them.
-    SunOnly,
-    /// The sun if there is one, otherwise the first collected light, aimed at the origin — the
-    /// editor's rule. A scene being lit by hand often has no sun yet, and a viewport with no
-    /// shadows at all reads as broken rather than as unlit.
-    ///
-    /// "First collected light" is what the code does, and since lights are ranked it now means
-    /// something a scene author can predict: the light with the most influence at the camera,
-    /// point or spot (see [`collect_scene_lights`]). It used to mean whichever light ECS iteration
-    /// reached first, which is why the comment before it claimed "first point light" — true only
-    /// while the old collector filled points ahead of spots.
-    SunOrFirstLight,
-}
-
 /// What the two render paths derive from the world for one frame.
 pub struct SceneSetup {
     /// Ready for `SceneUniforms::new`.
@@ -372,6 +352,25 @@ pub struct SceneSetup {
     /// buffers, so a path that skips the upload lights nothing at all — which is the failure mode
     /// to expect if a new render path appears and forgets.
     pub clusters: crate::renderer::clustered::ClusterAssignment,
+}
+
+impl SceneSetup {
+    /// Whether this frame draws the sun's cascades: when it has a sun, which is the one thing every
+    /// lookup of them asks first. A frame without one drew all four, every caster in each, until
+    /// 2026-11-11, and kept off-screen objects for them.
+    #[must_use]
+    pub fn draws_cascades(&self) -> bool {
+        self.frame.sun.present
+    }
+
+    /// The view-projection of every shadow map this frame draws, in the order its passes draw
+    /// them: the cascades when [`draws_cascades`](Self::draws_cascades), then each local light's
+    /// layers. An object off screen inside any of them is kept for the shadow passes.
+    #[must_use]
+    pub fn shadow_view_projs(&self) -> Vec<gizmo_math::Mat4> {
+        let cascades: &[gizmo_math::Mat4] = if self.draws_cascades() { &self.cascade_view_projs } else { &[] };
+        cascades.iter().copied().chain(self.local_shadows.layers().iter().map(|l| l.view_proj)).collect()
+    }
 }
 
 /// Keep the deferred pass's irradiance grid baked from the scene's [`IrradianceVolume`]: the first
@@ -455,8 +454,6 @@ pub struct SceneSetupInputs {
     pub aspect: f32,
     /// The camera's vertical field of view, in radians.
     pub cam_fov: f32,
-    /// Which light casts the cascaded shadows this frame, if any.
-    pub shadow_caster: ShadowCaster,
     /// Sky, ambient and fog — everything lighting the scene that is not a light.
     pub environment: crate::renderer::EnvironmentFrame,
     /// Whether this path draws the local lights' shadow layers. A path that does not must leave it
@@ -487,26 +484,13 @@ pub struct SceneSetupInputs {
 /// out of here is everything downstream: the deferred G-buffer recorder and the editor's forward
 /// recorder genuinely differ, and merging those is not the goal.
 pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSetup {
-    use gizmo_math::Mat4;
-
     let lights = collect_scene_lights(world, inputs.camera.position, inputs.camera.view_proj, &inputs.light_cookies);
 
-    let shadow_dir = match inputs.shadow_caster {
-        // Always fits, sun or not. `sun_dir` is the collector's down-vector default when the
-        // scene has no sun, and the cascades built from it are simply never sampled.
-        ShadowCaster::SunOnly => Some(lights.sun_dir),
-        ShadowCaster::SunOrFirstLight => {
-            if lights.has_sun {
-                Some(lights.sun_dir)
-            } else if lights.num_lights > 0 {
-                let p = lights.lights[0].position;
-                Some((Vec3::ZERO - Vec3::new(p[0], p[1], p[2])).normalize())
-            } else {
-                None
-            }
-        }
-    };
-
+    // The sun's cascades, fitted whether or not there is a sun — `sun_dir` is the collector's
+    // down-vector then — and drawn and read only when there is one (`SceneSetup::draws_cascades`).
+    // The editor fitted them to its first light when there was no sun, until 2026-11-11; every
+    // lookup asks for the sun first, so nothing ever read them, and a light that should cast now
+    // says so itself (`casts_shadows`).
     let cascades = crate::renderer::compute_directional_cascades_with(
         inputs.camera.position,
         inputs.camera.forward,
@@ -514,13 +498,10 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
         inputs.cam_fov,
         inputs.camera.near,
         inputs.camera.far,
-        shadow_dir.unwrap_or(Vec3::new(0.0, -1.0, 0.0)),
+        lights.sun_dir,
         inputs.shadow_settings,
     );
-    // Nothing to cast from → identity, and the splits stay meaningful for the shadow-distance
-    // fade. Only the editor's policy can reach this; the game's always has a direction.
-    let cascade_view_projs =
-        if shadow_dir.is_some() { cascades.view_projs } else { [Mat4::IDENTITY; 4] };
+    let cascade_view_projs = cascades.view_projs;
 
     let local_shadows = if inputs.local_shadows {
         LocalShadows::plan(lights.shadow_casters.iter().copied())
@@ -707,6 +688,46 @@ mod tests {
         // Spot position came from its Transform (GlobalTransform-less) fallback.
         assert_eq!(l.lights[0].position, [1.0, 2.0, 3.0, 7.0]);
         assert!(l.shadow_casters.is_empty(), "neither light asked to cast");
+    }
+
+    /// The frame's shadow maps are the sun's cascades only when there is a sun — every lookup of
+    /// them asks for one first — and every casting local light's layers whatever the sky.
+    #[test]
+    fn a_frame_draws_the_cascades_only_under_a_sun() {
+        use crate::renderer::components::{DirectionalLight, LightRole};
+        let inputs = SceneSetupInputs {
+            camera: crate::renderer::CameraFrame {
+                view_proj: wide_view(),
+                position: Vec3::ZERO,
+                forward: Vec3::Z,
+                near: 0.1,
+                far: 20_000.0,
+                exposure: 1.0,
+            },
+            aspect: 1.0,
+            cam_fov: std::f32::consts::FRAC_PI_2,
+            environment: Default::default(),
+            local_shadows: true,
+            elapsed_time: 0.0,
+            light_cookies: Default::default(),
+            shadow_settings: Default::default(),
+        };
+        let mut world = World::new();
+        let spot = world.spawn();
+        world.add_component(spot, Transform::new(Vec3::new(0.0, 2.0, 5.0)));
+        world.add_component(spot, SpotLight::new(Vec3::ONE, 7.0, 20.0, 0.3, 0.5).with_shadows());
+        let dark = collect_scene_setup(&world, &inputs);
+        assert!(!dark.draws_cascades(), "no sun, no cascades");
+        assert_eq!(dark.shadow_view_projs(), vec![dark.local_shadows.layers()[0].view_proj], "the spot's layer alone");
+
+        let sun = world.spawn();
+        world.add_component(sun, Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_x(-1.0)));
+        world.add_component(sun, DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun));
+        let lit = collect_scene_setup(&world, &inputs);
+        assert!(lit.draws_cascades());
+        let maps = lit.shadow_view_projs();
+        assert_eq!(maps[..4], lit.cascade_view_projs, "the cascades first, in pass order");
+        assert_eq!(maps[4..], [lit.local_shadows.layers()[0].view_proj], "then the spot's layer");
     }
 
     /// A light casts when it asks to, whatever its kind, and its caster names the slot the ranking
