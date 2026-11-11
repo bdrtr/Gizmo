@@ -233,6 +233,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A lamp lit the air behind a wall, and a spot the air all round it.** The volumetric march gave every local light a
+  bulb's sphere of glow and asked no light's shadow: a casting lamp behind a wall lit the air in front of it as if the wall
+  were not there, a spot lit the air beside and behind its cone, and its cookie was no part of its shaft. Each light reaches
+  the air now as it reaches a surface there — inside a spot's cone and through its cookie, and past its shadow when it
+  `casts_shadows`. Measured on the march's own target: the air in front of a 10 cm wall with a casting lamp a metre behind
+  it, 703.8 without the shadow and 1.18 with it (769.3 either way before); beside a 0.15 rad spot's cone, 0 (211 either
+  side, against 260 in it). The march's samples were each stepped
+  before they were taken, so the last landed up to a step past the surface its ray ends on — through a thin wall, into the
+  light behind it; they end short of it now. The spot's cone is one function in `common.wgsl` (`spot_cone`), where the
+  deferred and forward passes had a copy each. `VolumetricState::volumetric_texture` is `COPY_SRC`, so the scattering term
+  can be read back on its own, and `VolumetricState::{width, height}` say they are the frame's size, which they always were.
 - **A soft sun cast a sharp shadow on glass, in the editor and on every baked-lit surface.** The forward and baked-lit
   shaders filtered the sun's shadow 3×3 whatever `DirectionalLight::angular_radius` said. Every lit path takes one lookup
   now (`sun_shadow_visibility`, in `common.wgsl`): a cube's penumbra under a 0.05 rad sun is 406 pixels deferred, 415

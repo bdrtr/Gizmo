@@ -7,7 +7,7 @@
 // fullscreen pass, the procedural environment/IBL and contact shadows. The shadow lookups — the
 // sun's and the local lights' — are common.wgsl's, handed the textures, so the forward shader takes
 // the same ones.
-#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cone, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -312,13 +312,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                     window = 0.0;
                 }
             } else if (light_type == 1u) {
-                let spot_dir = normalize(light.direction.xyz);
-                let cos_a    = dot(-L, spot_dir);
-                let inner    = light.direction.w;
-                let outer    = light.params.x;
-                let eps      = max(inner - outer, 0.001);
-                let sf       = clamp((cos_a - outer) / eps, 0.0, 1.0);
-                atten *= sf * sf;
+                atten *= spot_cone(light, -L);
                 if (light.params.w > 0.0) {
                     cookie = textureSampleLevel(
                         t_cookie, s_cookie, spot_cookie_uv(light, world_pos), i32(light.params.w) - 1, 0.0

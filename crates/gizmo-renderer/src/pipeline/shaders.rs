@@ -418,11 +418,13 @@ mod tests {
             defs.insert("PLANAR".to_string(), ShaderDefValue::Bool(true));
             compose_wgsl(water, "water.wgsl (planar)", defs);
         }
-        // Native-only (no web schema): the deferred pass and the two shadow passes.
+        // Native-only (no web schema): the deferred pass, the shadow pass and the volumetric
+        // march, which reads the same shadow group the lit passes do.
         let native_only: &[(&str, &str)] = &[
             ("deferred_lighting.wgsl", include_str!("../shaders/deferred_lighting.wgsl")),
             ("gbuffer.wgsl", include_str!("../shaders/gbuffer.wgsl")),
             ("shadow.wgsl", include_str!("../shaders/shadow.wgsl")),
+            ("volumetric.wgsl", include_str!("../shaders/volumetric.wgsl")),
         ];
         for (name, src) in native_only {
             compose_wgsl(src, name, native_render_defs());

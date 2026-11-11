@@ -1773,7 +1773,9 @@ mod golden_render_tests {
     use crate::math::{Vec3, Vec4};
     use crate::physics::components::{GlobalTransform, Transform};
     use crate::renderer::asset::AssetManager;
-    use crate::renderer::components::{Material, MeshRenderer, PointLight, SpotLight};
+    use crate::renderer::components::{Material, MeshRenderer};
+    #[cfg(not(gizmo_forward_only))] // Only the tests of what that path does not draw name them.
+    use crate::renderer::components::{PointLight, SpotLight};
     use crate::renderer::Renderer;
 
     /// The same scene renders the same whether it sits at the world origin or two kilometres away.
@@ -4716,6 +4718,245 @@ mod golden_render_tests {
                 largest <= 48,
                 "4 steps and 64 steps differ by up to {largest} per channel — refining the march \
                  should not change what it renders this much (measured 32)",
+            );
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
+    /// A half-float's bits as an `f32`: what a `Rgba16Float` target holds.
+    fn f16_bits_to_f32(bits: u16) -> f32 {
+        let sign = if bits & 0x8000 != 0 { -1.0 } else { 1.0 };
+        let exponent = i32::from((bits >> 10) & 0x1f);
+        let mantissa = f32::from(bits & 0x3ff);
+        sign * match exponent {
+            0 => mantissa * 2f32.powi(-24),
+            31 => f32::INFINITY,
+            e => (1.0 + mantissa / 1024.0) * 2f32.powi(e - 15),
+        }
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
+    /// What the volumetric march put in the air of `world`, texel by texel: its own target (half the
+    /// frame's size a side, `Rgba16Float`) read back before the apply pass blurs it into the frame,
+    /// as r + g + b. The frame's bytes would bury a lamp's air under the floor it lights; this is the
+    /// scattering term alone. No sun in these scenes, so it is the local lights' term alone.
+    async fn volumetric_air(renderer: &mut Renderer, world: &mut World) -> (Vec<f32>, usize) {
+        render_world(renderer, world).await;
+        let vol = renderer.volumetric.as_ref().expect("the deferred path marches the air");
+        let side = vol.volumetric_texture.width();
+        assert_eq!(side, vol.volumetric_texture.height(), "a square frame has a square march");
+        let bytes = read_target(renderer, &vol.volumetric_texture, side).await;
+        let air = bytes
+            .as_chunks::<8>()
+            .0
+            .iter()
+            .map(|t| (0..3).map(|c| f16_bits_to_f32(u16::from_le_bytes([t[2 * c], t[2 * c + 1]]))).sum())
+            .collect();
+        (air, side as usize)
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
+    /// The sum of `air` over columns `xs` and rows `ys` of a `side`-wide target.
+    fn air_in(air: &[f32], side: usize, xs: std::ops::Range<usize>, ys: std::ops::Range<usize>) -> f32 {
+        ys.flat_map(|y| xs.clone().map(move |x| (x, y))).map(|(x, y)| air[y * side + x]).sum()
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
+    /// A renderer for the air tests: the deferred path with its volumetric march and nothing that
+    /// reads the frame back over time.
+    async fn air_renderer() -> Renderer {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        renderer.ssgi = None;
+        renderer.ssr = None;
+        renderer.enable_volumetric();
+        renderer
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The air tests' own: that path has no volumetric light.
+    /// A box of half extents `half` at `at` (the cube mesh spans −1…1), white and matte, casting and
+    /// receiving as any mesh does.
+    fn air_box(world: &mut World, renderer: &Renderer, assets: &mut AssetManager, at: Vec3, half: Vec3) {
+        let tex = assets.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+        let e = world.spawn();
+        world.add_component(e, Transform::new(at).with_scale(half));
+        world.add_component(e, GlobalTransform::default());
+        world.add_component(e, AssetManager::create_cube(&renderer.device));
+        world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.0, 0.9));
+        world.add_component(e, MeshRenderer::new());
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
+    /// **A lamp behind a wall lights no air in front of it, when it casts.** A point light stands
+    /// a metre behind a 10 cm wall that fills the view; the camera looks at the wall from the other
+    /// side. Every point of air the camera sees is in the wall's shadow, so the march must find
+    /// almost nothing there — as the wall's own face is dark. Without `casts_shadows` the lamp
+    /// lights through walls, on surfaces and in the air alike.
+    ///
+    /// Two faults kept the air lit. The march never asked a local light's shadow: the air in
+    /// front of the wall glowed as brightly as with no wall. And each sample was stepped before it
+    /// was taken, so the last one landed up to a step past the surface the ray ends on — through a
+    /// thin wall, into the lamp's lit air behind it.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_lamp_behind_a_wall_lights_no_air_in_front_of_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn air(casts: bool) -> f32 {
+            let mut renderer = air_renderer().await;
+            let mut assets = AssetManager::new();
+            let mut world = World::new();
+            air_box(&mut world, &renderer, &mut assets, Vec3::new(0.0, 1.0, 2.0), Vec3::new(7.0, 7.0, 0.05));
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.0, 3.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            let light = PointLight::new(Vec3::ONE, 40.0, 9.0);
+            world.add_component(lamp, if casts { light.with_shadows() } else { light });
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.0, -4.0),
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let (air, side) = volumetric_air(&mut renderer, &mut world).await;
+            air_in(&air, side, 0..side, 0..side)
+        }
+        pollster::block_on(async {
+            let through = air(false).await;
+            let shadowed = air(true).await;
+            eprintln!("air in front of the wall: {through:.4} without the lamp's shadow, {shadowed:.4} with it");
+            assert!(through > 1.0, "the lamp must light the air at all: {through:.4}");
+            // Measured 1.18 of 703.8 — the first few centimetres of air in front of the wall are
+            // inside the comparison's bias. Before: 769.3 of 769.3 (no shadow asked), and 71.5 of 769.3
+            // with the shadow but the samples stepped before they were taken.
+            assert!(
+                shadowed < 0.01 * through,
+                "the wall's shadow must keep the lamp's air behind it: {shadowed:.4} of {through:.4}"
+            );
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
+    /// **A spot lights the air of its cone, and the cone's air is shadowed and patterned as its
+    /// floor is.** A narrow spot points straight down, seen from the side; the march's target is
+    /// cut into a middle band (the cone) and two outer bands (the air beside it, inside the light's
+    /// radius). The march gave a spot a bulb's sphere of glow: the air beside the cone, and above
+    /// the lamp, as bright as the beam at the same distance.
+    ///
+    /// The same spot, wide, with a slab over one side of its cone, must leave the air under the slab
+    /// dark on that side when it casts, and its cookie — black on one side — must darken that
+    /// side's air as it does the floor's.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_spot_lights_the_air_of_its_cone_as_it_lights_its_floor() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // (left, middle, right) thirds of the air below the eye line; `slab` puts a casting slab
+        // over the +X half of the cone, half a metre under the lamp.
+        async fn bands(spot: SpotLight, slab: bool) -> (f32, f32, f32) {
+            let mut renderer = air_renderer().await;
+            // 2×1: black, white.
+            renderer
+                .insert_light_cookie("half", &[0, 0, 0, 255, 255, 255, 255, 255], 2, 1)
+                .expect("one cookie fits");
+            let mut assets = AssetManager::new();
+            let mut world = World::new();
+            air_box(&mut world, &renderer, &mut assets, Vec3::new(0.0, -2.0, 0.0), Vec3::new(20.0, 0.1, 20.0));
+            if slab {
+                air_box(&mut world, &renderer, &mut assets, Vec3::new(1.5, 3.4, 0.0), Vec3::new(1.5, 0.05, 3.0));
+            }
+            let lamp = world.spawn();
+            // Spots aim along local −Z: −90° about X aims straight down.
+            world.add_component(
+                lamp,
+                Transform::new(Vec3::new(0.0, 4.0, 0.0))
+                    .with_rotation(gizmo_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+            );
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, spot);
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.0, -8.0),
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let (air, side) = volumetric_air(&mut renderer, &mut world).await;
+            let third = side / 3;
+            let below = side / 2..side;
+            (
+                air_in(&air, side, 0..third, below.clone()),
+                air_in(&air, side, third..side - third, below.clone()),
+                air_in(&air, side, side - third..side, below),
+            )
+        }
+        pollster::block_on(async {
+            // The cone: 0.15 rad, so 0.9 m wide at the floor 6 m down, and the outer thirds of the
+            // view look past it by two metres and more.
+            let narrow = || SpotLight::new(Vec3::ONE, 60.0, 12.0, 0.1, 0.15);
+            let (l, m, r) = bands(narrow(), false).await;
+            eprintln!("narrow spot's air: {l:.4} / {m:.4} / {r:.4}");
+            assert!(m > 0.5, "the beam must light its own air: {m:.4}");
+            // Measured 0 + 0 beside 6.49; with no cone asked, 211.2 + 211.7 beside 259.8.
+            assert!(
+                l + r < 0.02 * m,
+                "the air beside a spot's cone is dark: {l:.4} + {r:.4} beside {m:.4} in it"
+            );
+
+            // A wide cone, so its air fills the view's thirds; its two sides alike unless something
+            // takes one.
+            let wide = || SpotLight::new(Vec3::ONE, 60.0, 12.0, 0.5, 0.6);
+            let (open_l, open_m, open_r) = bands(wide(), false).await;
+            eprintln!("wide spot's air: {open_l:.4} / {open_m:.4} / {open_r:.4}");
+            assert!(
+                (open_l - open_r).abs() < 0.1 * (open_l + open_r),
+                "an open cone's air is symmetric: {open_l:.4} / {open_r:.4}"
+            );
+            assert!(open_l > 0.2 * open_m, "a wide cone's air reaches the outer thirds: {open_l:.4} of {open_m:.4}");
+
+            // The slab over +X: which third that is on screen is not this test's question, so the
+            // darker side is compared with the lit one.
+            let (cast_l, _, cast_r) = bands(wide().with_shadows(), true).await;
+            let (through_l, _, through_r) = bands(wide(), true).await;
+            eprintln!("slab over one side: {cast_l:.4} / {cast_r:.4} casting, {through_l:.4} / {through_r:.4} not");
+            assert!(
+                (through_l - through_r).abs() < 0.1 * (through_l + through_r),
+                "a spot that casts no shadow lights the air under the slab: {through_l:.4} / {through_r:.4}"
+            );
+            // Measured 0 / 26.56 casting, the uncast 27.77 / 26.56 not.
+            assert!(
+                cast_l.min(cast_r) < 0.1 * cast_l.max(cast_r),
+                "the slab's side of the cone is dark under it: {cast_l:.4} / {cast_r:.4}"
+            );
+
+            // The cookie: black on one side of the image, white on the other.
+            // Measured 26.51 / 0.06; ignoring the cookie, 27.77 / 26.56.
+            let (cut_l, _, cut_r) = bands(wide().with_cookie("half"), false).await;
+            eprintln!("cookie: {cut_l:.4} / {cut_r:.4}");
+            assert!(
+                cut_l.min(cut_r) < 0.1 * cut_l.max(cut_r),
+                "the cookie's black side keeps the light out of that side's air: {cut_l:.4} / {cut_r:.4}"
+            );
+            assert!(
+                cut_l.max(cut_r) > 0.6 * open_l.max(open_r),
+                "its white side lets it through: {:.4} against {:.4} with no cookie",
+                cut_l.max(cut_r),
+                open_l.max(open_r),
             );
         });
     }
@@ -8233,6 +8474,11 @@ mod golden_render_tests {
             renderer.taa = None;
             renderer.ssgi = None;
             renderer.ssr = None;
+            // Not the falloff's: the volumetric march stops at the G-buffer's surface, which a
+            // transparent floor does not write, so it marches on under the floor and adds that air
+            // over it — 228.45 opaque against 229.55 transparent with it, 227.67 / 227.15 without.
+            // Open in CAPABILITY_GAPS (A7, volumetric light behind a transparent surface).
+            renderer.volumetric = None;
             let mut world = World::new();
             let mut assets = AssetManager::new();
             let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);

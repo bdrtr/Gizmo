@@ -17,7 +17,7 @@
 #ifdef DETAILS
 #import gizmo::common::{dielectric_f0, instance_keeps}
 #endif
-#import gizmo::common::{SceneUniforms, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
+#import gizmo::common::{SceneUniforms, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cone, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
 #ifdef SHADOWS
 #import gizmo::common::{local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
 #endif
@@ -607,13 +607,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
             attenuation = falloff.x;
             window = falloff.y;
             if (light_type == 1u) {
-                let spot_dir = normalize(light.direction.xyz);
-                let cos_angle = dot(-L, spot_dir);
-                let inner_cos = light.direction.w;
-                let outer_cos = light.params.x;
-                let epsilon = max(inner_cos - outer_cos, 0.001);
-                let spot_factor = clamp((cos_angle - outer_cos) / epsilon, 0.0, 1.0);
-                attenuation *= spot_factor * spot_factor;
+                attenuation *= spot_cone(light, -L);
 #ifdef SHADOWS
                 if (light.params.w > 0.0) {
                     cookie = textureSampleLevel(

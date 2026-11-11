@@ -290,6 +290,35 @@ fn local_shadow_visibility(
     return lit / 25.0;
 }
 
+// How much of a local light reaches a point in the air past its shadow — the volumetric march's
+// lookup, which `local_shadow_visibility` is not: the air has no normal to push it along and no
+// plane to compare a filter against. One bilinear comparison (the march's jitter and TAA smooth
+// what is left), compared past the stored depth by `bias_metres` turned into this layer's NDC at
+// this depth, as the surface lookup turns its own: a march step that lands on a surface must not
+// shadow that surface's own air.
+fn local_shadow_in_air(
+    t: texture_depth_2d_array,
+    s: sampler_comparison,
+    layer: LocalShadowLayer,
+    index: i32,
+    point: vec3<f32>,
+    bias_metres: f32,
+) -> f32 {
+    let near = layer.params.x;
+    let far = layer.params.y;
+    let clip = layer.view_proj * vec4<f32>(point, 1.0);
+    if (clip.w <= near) {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    let ndc_per_metre = near * far / max((far - near) * clip.w * clip.w, 1e-12);
+    return textureSampleCompareLevel(t, s, uv, index, ndc.z - bias_metres * ndc_per_metre);
+}
+
 // Mirror of `csm::SHADOW_FADE_FRACTION` / `csm::shadow_distance_fade`. Past the last cascade there is
 // no shadow data, so the term snaps to "fully lit"; without a fade that snap is a hard line across
 // the world at `cascade_splits.w`. See csm.rs for the reasoning and the cost of the alternative;
@@ -808,6 +837,17 @@ fn compute_tube_lighting(
     let diffuse = kD * albedo * NoL * INV_PI;
     let specular = D * Vis * F * NoLs;
     return (diffuse + specular) * light_color * intensity * atten;
+}
+
+// How much of a spot light's cone reaches along `from_light` (unit, from the light toward the
+// point): 1 inside the inner cone, 0 outside the outer, and the square of the linear ramp between.
+// One copy for every path a spot lights — the deferred and forward passes each had their own, and
+// the volumetric march none, so a spot's air glowed all round it as a bulb's does.
+fn spot_cone(light: LightData, from_light: vec3<f32>) -> f32 {
+    let cos_a = dot(from_light, normalize(light.direction.xyz));
+    let outer = light.params.x;
+    let ramp = clamp((cos_a - outer) / max(light.direction.w - outer, 0.001), 0.0, 1.0);
+    return ramp * ramp;
 }
 
 // Where `world_pos` falls on a spot light's cookie (`gizmo_renderer::cookies`): the outer cone

@@ -27,11 +27,13 @@ pub struct VolumetricParams {
     pub max_distance: f32,
     /// Scattering coefficient for the directional light. Shader default **0.0015**.
     pub sun_scatter: f32,
-    /// Scattering coefficient for point and spot bulbs inside their radius. Shader default
-    /// **0.0008**.
+    /// Scattering coefficient for the local lights — point, spot and rectangle — inside their
+    /// radius, where each reaches the air: a spot's cone and cookie, a rectangle's lit side, and
+    /// past the light's shadow when it casts one. Shader default **0.0008**.
     pub bulb_scatter: f32,
-    /// Shadow-comparison bias, scaled by the cascade's depth range exactly as the shader did with
-    /// the literal. Shader default **0.16**.
+    /// How far past a shadow map's stored depth a point of the air is compared, in metres (times
+    /// `ShadowSettings::depth_bias`), so that a march step landing on a surface is not shadowed by
+    /// it: for the sun's cascades and the local lights' layers alike. Shader default **0.16**.
     pub shadow_bias: f32,
     /// Padding to a 32-byte uniform. Not a knob.
     pub _pad: [f32; 2],
@@ -51,7 +53,8 @@ impl Default for VolumetricParams {
     }
 }
 
-/// Volumetric lighting — the shafts of light ("god rays") raymarched through the shadow cascades.
+/// Volumetric lighting — the shafts of light ("god rays") raymarched through the sun's cascades and
+/// the local lights' shadow layers.
 ///
 /// Marched at reduced resolution and then applied over the HDR target: the effect is low-frequency,
 /// so a half-resolution march is not visibly different and is several times cheaper.
@@ -75,9 +78,9 @@ pub struct VolumetricState {
 
     linear_sampler: wgpu::Sampler,
 
-    /// The march target's width, in pixels.
+    /// The width of the frame it was built for, in pixels; the march target is half of it.
     pub width: u32,
-    /// Its height.
+    /// That frame's height.
     pub height: u32,
     /// Whether the pass runs this frame.
     ///
@@ -210,7 +213,11 @@ impl VolumetricState {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            // `COPY_SRC` so the scattering term can be read back on its own, before the apply pass
+            // blurs it into a frame where the surfaces it lights outshine it.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let v = t.create_view(&wgpu::TextureViewDescriptor::default());

@@ -2,12 +2,17 @@
 // SceneUniforms and LightData come from gizmo::common (composed in by load_shader_composed).
 // Only volumetric-specific helpers stay local. The NDC→world unprojection reads the
 // CPU-computed scene.inv_view_proj instead of inverting view_proj per fragment.
-#import gizmo::common::{SceneUniforms, LightData, rotate_by_quat}
+#import gizmo::common::{SceneUniforms, LightData, rotate_by_quat, spot_cone, spot_cookie_uv, local_shadow_layer, local_shadow_in_air}
 
 @group(0) @binding(0) var<uniform> scene: SceneUniforms;
 
 @group(1) @binding(0) var t_shadow: texture_depth_2d_array;
 @group(1) @binding(1) var s_shadow: sampler_comparison;
+// The local lights' shadow layers and the spots' cookies (`gizmo_renderer::{local_shadows, cookies}`):
+// the shadow group the lit passes take, so a light's air is shadowed and patterned as its surfaces are.
+@group(1) @binding(2) var t_local_shadow: texture_depth_2d_array;
+@group(1) @binding(3) var t_cookie: texture_2d_array<f32>;
+@group(1) @binding(4) var s_cookie: sampler;
 
 @group(2) @binding(0) var t_position_rel_camera: texture_2d<f32>;
 @group(2) @binding(1) var s_linear: sampler;
@@ -104,11 +109,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let steps = max(params.steps, 1.0);
     let step_size = max_dist / steps;
     
-    var current_pos = cam_pos;
-    
-    // Jitter starting position to trade banding for noise (smooths out with TAA/bloom)
+    // Jitter the first sample to trade banding for noise (smoothed by TAA and bloom). The samples
+    // are `jitter + k·step` for k = 0 … steps−1, all short of `max_dist`: they were stepped before
+    // each was taken, so the last landed up to a step past the surface the ray ends on — inside it,
+    // where the light it shadows is dark.
     let jitter = rand(in.position.xy) * step_size;
-    current_pos += ray_dir * jitter;
+    var current_pos = cam_pos + ray_dir * (jitter - step_size);
     
     var total_scatter = vec3<f32>(0.0);
     
@@ -149,26 +155,47 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
         }
         
-        // ── 2. Local Point & Spot Light Bulb Glows ──
+        // ── 2. Local lights: what of each reaches this point of the air ──
+        //
+        // As a surface here would take it: inside the light's radius, on the side a rectangle
+        // emits from, inside a spot's cone and through its cookie, and past the light's shadow when
+        // it casts one. Without the cone a spot's air glowed all round it, behind it included; without
+        // the shadow a spot through a doorway lit the air behind the wall as brightly as in front.
         for (var j = 0u; j < scene.num_lights; j += 1u) {
             let light = scene.lights[j];
-            let light_pos = light.position.xyz;
-            let intensity = light.position.w;
-            let color = light.color.rgb;
+            let kind = u32(light.params.y);
             let radius = light.color.a;
-            
-            let to_light = light_pos - current_pos;
-            let dist = length(to_light);
-            
-            // A rectangle light (type 3) emits from one face: the air behind it stays dark.
-            let behind_rect = u32(light.params.y) == 3u
-                && dot(-to_light, rotate_by_quat(light.direction, vec3<f32>(0.0, 0.0, -1.0))) <= 0.0;
-            if (dist < radius && !behind_rect) {
-                let atten = clamp(1.0 - (dist / radius), 0.0, 1.0);
-                // Dynamic volumetric light scattering factor
-                let scatter = color * intensity * params.bulb_scatter * atten * atten;
-                total_scatter += scatter * step_size;
+            let from_light = current_pos - light.position.xyz;
+            let dist = length(from_light);
+            if (dist >= radius) {
+                continue;
             }
+            // A rectangle light emits from one face: the air behind it stays dark.
+            if (kind == 3u && dot(from_light, rotate_by_quat(light.direction, vec3<f32>(0.0, 0.0, -1.0))) <= 0.0) {
+                continue;
+            }
+            let near = clamp(1.0 - dist / radius, 0.0, 1.0);
+            var reach = near * near;
+            var colour = light.color.rgb;
+            if (kind == 1u) {
+                reach *= spot_cone(light, from_light / max(dist, 1e-6));
+                if (reach > 0.0 && light.params.w > 0.0) {
+                    colour *= textureSampleLevel(
+                        t_cookie, s_cookie, spot_cookie_uv(light, current_pos), i32(light.params.w) - 1, 0.0
+                    ).rgb;
+                }
+            }
+            if (reach <= 0.0) {
+                continue;
+            }
+            let layer = local_shadow_layer(scene.light_shadows[j / 4u][j % 4u], from_light);
+            if (layer >= 0) {
+                reach *= local_shadow_in_air(
+                    t_local_shadow, s_shadow, scene.local_shadow_layers[layer], layer, current_pos,
+                    params.shadow_bias * scene.shadow_bias.x,
+                );
+            }
+            total_scatter += colour * light.position.w * params.bulb_scatter * reach * step_size;
         }
     }
     

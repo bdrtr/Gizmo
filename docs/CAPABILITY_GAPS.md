@@ -804,8 +804,26 @@ cube cookies for point lights, and no cookies on web. Each item:
   30 cm sphere's 283 and 308, a 60 cm panel's 279 and 311; the sphere's penumbra share is 0.41 over a
   cube just above the floor and 0.73 over one 1.6 m higher. No floor — flat, or normal-mapped 0.9 rad
   and 1.2 rad off — shadows itself by more than 2 (or 3) levels under any of them up to 72° off, nor
-  does a drawn cube lit from any side. **Still open:** the volumetric pass scatters every local light
-  without asking its shadow.
+  does a drawn cube lit from any side. **The air takes it too since the same day**: the volumetric
+  march gave every local light a bulb's sphere of glow and asked no light's shadow, so a lamp behind a
+  wall lit the air in front of it, and a spot the air beside and behind its cone, its cookie no part
+  of its shaft. Each light reaches the air now as it reaches a surface there — a spot's cone
+  (`spot_cone`, one function where the deferred and forward passes had a copy each) and cookie, and
+  past its shadow (`local_shadow_in_air`: one bilinear comparison, no normal and no receiver plane in
+  the air). Measured on the march's own target: the air in front of a 10 cm wall, a casting lamp a
+  metre behind it, 703.8 without the shadow and 1.18 with it (769.3 either way before); beside a
+  0.15 rad spot's cone, 0 (211.2 and 211.7 either side, against 259.8 in it); a
+  casting slab over one side of a wide cone, 0 on that side and the uncast 26.6 on the other; a
+  black-and-white cookie, 26.5 / 0.06. The march's samples were each stepped before they were taken,
+  so the last landed up to a step past the surface its ray ends on — through that wall, into the
+  lamp's air (71.5 of 769): they end short of it now. Caught when broken: the shadow, the cone or the
+  cookie left out, the samples stepped first again. **Open, measured the same day: the air behind a
+  transparent surface.** A transparent surface writes neither the G-buffer nor depth, so the march runs
+  on through it, and its air is added after the transparent pass, at full strength over it: a 99 %
+  opaque floor a metre under a lamp reads 229.55 against the opaque floor's 228.45 (227.15 / 227.67
+  without the march) — the air under the floor shows through it. Separate because what fixes it is a
+  target the transparent pass writes (the nearest transparent depth, and how much passes it), which
+  changes every forward pipeline's output, a phone's included, and SSR's apply has the same order.
 
 - ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
   faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or
