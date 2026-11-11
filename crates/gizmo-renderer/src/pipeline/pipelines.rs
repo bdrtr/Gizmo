@@ -1,7 +1,6 @@
 //! Creating the render pipelines (core + shadow).
 
 use super::layouts::LayoutRefs;
-use super::shaders::load_shader;
 #[cfg(not(gizmo_forward_only))]
 use super::shaders::load_shader_composed;
 #[cfg(gizmo_forward_only)]
@@ -692,32 +691,74 @@ pub(super) fn build_core_pipelines(
     }
 }
 
-/// The shadow pass's pipelines: one for a mesh that closes, which casts from its back faces, and one
-/// for a mesh that does not, which casts from both. See [`Mesh::closed`](crate::components::Mesh::closed).
-pub(super) fn build_shadow_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> [wgpu::RenderPipeline; 2] {
-    // FRONT-FACE CULLING for a closed mesh: gölge haritasına yalnız ARKA yüzler yazılır. Aydınlık ön
-    // yüzün derinliği hiç saklanmadığından kendini gölgeleyemez → self-shadow acne (yalayan
-    // yüzlerdeki dikey grenli bantlar) tamamen biter. Normal-offset grazing açıda etkisizdi
-    // (offset·L → 0); solid casterlar için kanonik çözüm budur. An open mesh has no back faces to
-    // cast with: drawn this way, a plane facing the sun cast nothing (0 shadow pixels against a
-    // cube's 236, measured 2026-11-11), so it is drawn by both faces, and the receiver's normal
-    // offset and slope bias keep its lit face off its own depth.
-    [
-        build_shadow_pipeline(device, layouts, Some(wgpu::Face::Front), "Shadow Pipeline"),
-        build_shadow_pipeline(device, layouts, None, "Shadow Pipeline (open meshes)"),
-    ]
+/// The shadow pass's pipelines, by whether the mesh closes and whether the draw cuts: see
+/// [`SceneState::shadow_pipeline_for`](super::SceneState::shadow_pipeline_for).
+pub(super) struct ShadowPipelines {
+    /// No fragment stage: single-sided by its back faces for a closed mesh, then both faces for an
+    /// open one.
+    pub(super) plain: [wgpu::RenderPipeline; 2],
+    /// `shadow.wgsl`'s `CUT_OUT`, likewise: a cut-out or a LOD crossfade, cut where the picture is.
+    pub(super) cut_out: [wgpu::RenderPipeline; 2],
 }
 
-fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs, cull_mode: Option<wgpu::Face>, label: &str) -> wgpu::RenderPipeline {
-    let shadow_shader = load_shader(
-        device,
-        "demo/assets/shaders/shadow.wgsl",
-        include_str!("../shaders/shadow.wgsl"),
-        "Shadow Shader",
+/// Builds [`ShadowPipelines`].
+///
+/// FRONT-FACE CULLING for a closed mesh: only its BACK faces are written into the shadow map. The lit
+/// front face's depth is never stored, so it cannot shadow itself, and self-shadow acne — the grainy
+/// vertical bands on faces the light grazes — is gone entirely. A normal offset did nothing at grazing
+/// angles (offset·L → 0); for a solid caster this is the canonical answer. An open mesh has no back
+/// faces to cast with: drawn this way, a plane facing the sun cast nothing (0 shadow pixels against a
+/// cube's 236, measured 2026-11-11), so it is drawn by both faces, and the receiver's normal offset and
+/// slope bias keep its lit face off its own depth.
+pub(super) fn build_shadow_pipelines(device: &wgpu::Device, layouts: &LayoutRefs) -> ShadowPipelines {
+    use naga_oil::compose::ShaderDefValue::Bool;
+    let source = include_str!("../shaders/shadow.wgsl");
+    #[cfg(not(gizmo_forward_only))]
+    let (plain, cut) = (
+        load_shader_composed(device, "demo/assets/shaders/shadow.wgsl", source, "Shadow Shader"),
+        super::shaders::load_shader_composed_with(
+            device,
+            "demo/assets/shaders/shadow.wgsl",
+            source,
+            "Shadow Cut-Out Shader",
+            &[("CUT_OUT", Bool(true))],
+        ),
     );
+    #[cfg(gizmo_forward_only)]
+    let (plain, cut) = (
+        load_shader_composed_web(device, source, "Shadow Shader"),
+        super::shaders::load_shader_composed_web_with(device, source, "Shadow Cut-Out Shader", &[("CUT_OUT", Bool(true))]),
+    );
+    let groups = [layouts.shadow_pass, layouts.texture, layouts.skeleton, layouts.instance];
+    let back = Some(wgpu::Face::Front);
+    ShadowPipelines {
+        plain: [
+            shadow_pipeline(device, groups, &plain, back, false, "Shadow Pipeline"),
+            shadow_pipeline(device, groups, &plain, None, false, "Shadow Pipeline (open meshes)"),
+        ],
+        cut_out: [
+            shadow_pipeline(device, groups, &cut, back, true, "Shadow Pipeline (cut-outs)"),
+            shadow_pipeline(device, groups, &cut, None, true, "Shadow Pipeline (open cut-outs)"),
+        ],
+    }
+}
+
+/// One shadow pass pipeline drawn with `shader`, which is `shadow.wgsl` composed: with `cut_out` it
+/// has the fragment stage that cuts, `fs_cut_out`. `groups` are the pass's light, the material, the
+/// skeleton and the instances, which every shadow pipeline has in that order, so a pass binds the
+/// same groups whichever pipeline draws. A game's surface builds its own through this
+/// ([`SurfaceMaterial`](crate::custom_material::SurfaceMaterial)).
+pub(crate) fn shadow_pipeline(
+    device: &wgpu::Device,
+    groups: [&wgpu::BindGroupLayout; 4],
+    shader: &wgpu::ShaderModule,
+    cull_mode: Option<wgpu::Face>,
+    cut_out: bool,
+    label: &str,
+) -> wgpu::RenderPipeline {
     let shadow_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: Some("Shadow Pipeline Layout"),
-        bind_group_layouts: &[Some(layouts.shadow_pass), Some(layouts.skeleton), Some(layouts.instance)],
+        bind_group_layouts: &groups.map(Some),
         immediate_size: 0,
     });
 
@@ -725,12 +766,19 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs, cull_mode:
         label: Some(label),
         layout: Some(&shadow_layout),
         vertex: wgpu::VertexState {
-            module: &shadow_shader,
+            module: shader,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
             buffers: &[Some(Vertex::desc())],
         },
-        fragment: None,
+        // No colour targets either way, and no fragment stage at all unless the draw cuts, which
+        // is what keeps the pass cheap.
+        fragment: cut_out.then(|| wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fs_cut_out"),
+            compilation_options: Default::default(),
+            targets: &[],
+        }),
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             front_face: wgpu::FrontFace::Ccw,
@@ -754,7 +802,7 @@ fn build_shadow_pipeline(device: &wgpu::Device, layouts: &LayoutRefs, cull_mode:
         }),
         multisample: wgpu::MultisampleState::default(),
         multiview_mask: None,
-            cache: None,
+        cache: None,
     })
 }
 

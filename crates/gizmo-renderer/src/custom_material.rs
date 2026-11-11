@@ -365,6 +365,10 @@ struct SurfacePipelines {
     lobes: Option<crate::pipeline::LitSet>,
     /// Glass, single-sided then double-sided.
     glass: [wgpu::RenderPipeline; 2],
+    /// The shadow pass, a closed mesh then an open one, always through the cut-out stage: only the
+    /// surface's own code knows where it is cut. `None` on the forward-only path, which has no shadow
+    /// pass.
+    shadow: Option<[wgpu::RenderPipeline; 2]>,
 }
 
 /// The surface's G-buffer pipelines, single-sided then double-sided each.
@@ -431,6 +435,19 @@ impl SurfaceMaterial {
     #[must_use]
     pub fn transmissive_pipeline(&self, double_sided: bool) -> &wgpu::RenderPipeline {
         &self.pipelines.glass[usize::from(double_sided)]
+    }
+
+    /// The shadow pass's pipeline for a draw of this surface: by its back faces if the mesh closes and
+    /// by both if not ([`Mesh::closed`](crate::components::Mesh::closed)), cutting wherever the
+    /// surface cuts. `None` where there is no shadow pass, the forward-only path.
+    ///
+    /// The surface is handed the frame's camera and clock there as in the picture, so a surface that
+    /// dissolves over time casts what is left of it. Two of `SurfaceInput`'s fields mean the shadow
+    /// map's own rather than the picture's: `frag_coord` is the shadow map's pixel, and
+    /// `front_facing` is the face turned to the light.
+    #[must_use]
+    pub fn shadow_pipeline(&self, closed: bool) -> Option<&wgpu::RenderPipeline> {
+        self.pipelines.shadow.as_ref().map(|shadow| &shadow[usize::from(!closed)])
     }
 
     /// Builds the pipelines again from the WGSL it was made with, against the engine's shaders as they
@@ -514,6 +531,26 @@ impl SurfacePipelines {
             )
         });
 
+        let shadow = if cfg!(gizmo_forward_only) {
+            None
+        } else {
+            let caster = module(
+                "demo/assets/shaders/shadow.wgsl",
+                include_str!("shaders/shadow.wgsl"),
+                "shadow",
+                &[("CUT_OUT", Bool(true))],
+            )?;
+            let groups = [
+                &scene.shadow_pass_bind_group_layout,
+                &scene.texture_bind_group_layout,
+                &scene.skeleton_bind_group_layout,
+                &scene.instance_bind_group_layout,
+            ];
+            Some([Some(wgpu::Face::Front), None].map(|cull| {
+                crate::pipeline::shadow_pipeline(device, groups, &caster, cull, true, &format!("{label} (shadow)"))
+            }))
+        };
+
         let deferred = match deferred {
             Some(state) => {
                 let geometry = module("demo/assets/shaders/gbuffer.wgsl", include_str!("shaders/gbuffer.wgsl"), "G-buffer", &[])?;
@@ -530,7 +567,7 @@ impl SurfacePipelines {
             }
             None => None,
         };
-        Ok(Self { deferred, lit, lobes, glass })
+        Ok(Self { deferred, lit, lobes, glass, shadow })
     }
 }
 

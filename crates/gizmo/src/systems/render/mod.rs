@@ -1459,9 +1459,11 @@ fn draw_camera_view(
             renderer.queue.write_buffer(
                 renderer.scene.view_point_shadow_buffer(i),
                 0,
-                bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
-                    light_view_proj: view_proj.to_cols_array_2d(),
-                }),
+                bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform::new(
+                    view_proj.to_cols_array_2d(),
+                    cam_pos.to_array(),
+                    elapsed_time,
+                )),
             );
         }
     }
@@ -1482,9 +1484,11 @@ fn draw_camera_view(
         renderer.queue.write_buffer(
             renderer.scene.view_shadow_cascade_buffer(i),
             0,
-            bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform {
-                light_view_proj: *light_view_proj,
-            }),
+            bytemuck::bytes_of(&crate::renderer::gpu_types::ShadowVsUniform::new(
+                *light_view_proj,
+                cam_pos.to_array(),
+                elapsed_time,
+            )),
         );
     }
 
@@ -8357,6 +8361,7 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// Which caster stands over the floor in `thin_caster_shadow`.
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum Caster {
@@ -8368,8 +8373,33 @@ mod golden_render_tests {
         Plane,
         /// The same plane, double-sided.
         TwoSidedPlane,
+        /// The plane as a cut-out at 0.5, its albedo's alpha this: under the threshold everywhere,
+        /// or over it.
+        CutPlane(f32),
+        /// The plane drawn by a game's surface that cuts it where the world's x is under 0, or, with
+        /// `everywhere`, all of it.
+        SurfacePlane { everywhere: bool },
+        /// The plane's two triangles as one mesh, deduplicated and indexed (`Mesh::new_indexed`) or
+        /// as a flat list (`Mesh::from_vertices`).
+        TrianglesPlane { indexed: bool },
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// A game's surface that cuts itself away where the world's x is under `CUT_X`.
+    fn cutting_surface(cut_x: f32) -> String {
+        format!(
+            "#import gizmo::surface::{{Surface, SurfaceInput}}\n\
+             #import gizmo::material::{{standard_surface}}\n\
+             fn material_surface(input: SurfaceInput) -> Surface {{\n\
+                 var s = standard_surface(input);\n\
+                 s.alpha_cutoff = 0.5;\n\
+                 s.alpha = select(1.0, 0.0, input.world_position.x < {cut_x:.1});\n\
+                 return s;\n\
+             }}\n"
+        )
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// How many floor pixels a caster darkens by 20 or more, under a high sun — or, with `point`,
     /// under a point light above it casting through its cube map.
     async fn thin_caster_shadow(caster: Caster, point: bool) -> usize {
@@ -8380,6 +8410,7 @@ mod golden_render_tests {
         (0..128 * 128).filter(|&i| luma(&with, i) + 20 < luma(&empty, i)).count()
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// How many of a drawn caster's own pixels are darker by 20 or more when it receives shadows than
     /// when it does not: what it shadows of itself. Its shadow on the floor is in both frames.
     async fn thin_caster_self_shadow(caster: Caster, threshold: i32, sun_tilt: f32) -> usize {
@@ -8389,6 +8420,7 @@ mod golden_render_tests {
         (0..128 * 128).filter(|&i| luma(&receiving, i) + threshold < luma(&refusing, i)).count()
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// The floor and `caster` under a sun `sun_tilt` radians off overhead, or with `None` a point
     /// light above them and point shadows on. `drawn`: the caster is in the picture as well as in the
     /// shadow maps; `receives`: shadows fall on it.
@@ -8423,6 +8455,40 @@ mod golden_render_tests {
                         world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
                         world.add_component(e, AssetManager::create_plane(&renderer.device, 1.2));
                         world.add_component(e, mat.with_double_sided(caster == Caster::TwoSidedPlane));
+                    }
+                    Caster::CutPlane(alpha) => {
+                        world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+                        world.add_component(e, AssetManager::create_plane(&renderer.device, 1.2));
+                        // `with_pbr` makes an alpha under 1 transparent; a cut-out is opaque, cut.
+                        let mat = mat.with_pbr(Vec4::new(0.8, 0.3, 0.3, alpha), 0.9, 0.0).with_transparent(false);
+                        world.add_component(e, mat.with_alpha_cutoff(0.5));
+                    }
+                    Caster::SurfacePlane { everywhere } => {
+                        let wgsl = cutting_surface(if everywhere { 100.0 } else { 0.0 });
+                        let id = renderer.add_surface_material("cutting", &wgsl).expect("the cutting surface composes");
+                        world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+                        world.add_component(e, AssetManager::create_plane(&renderer.device, 1.2));
+                        let mut mat = mat;
+                        mat.material_type = gizmo_renderer::components::MaterialType::CustomSurface(id);
+                        world.add_component(e, mat);
+                    }
+                    Caster::TrianglesPlane { indexed } => {
+                        let corner = |x: f32, z: f32| crate::renderer::gpu_types::Vertex {
+                            position: [x, 0.0, z],
+                            normal: [0.0, 1.0, 0.0],
+                            ..Default::default()
+                        };
+                        let h = 0.6;
+                        // `create_plane`'s winding, facing up.
+                        let triangles = [corner(-h, -h), corner(h, h), corner(h, -h), corner(-h, -h), corner(-h, h), corner(h, h)];
+                        let mesh = if indexed {
+                            crate::renderer::components::Mesh::new_indexed(&renderer.device, &triangles, Vec3::ZERO, "indexed plane".into())
+                        } else {
+                            crate::renderer::components::Mesh::from_vertices(&renderer.device, &triangles, "flat plane")
+                        };
+                        world.add_component(e, Transform::new(Vec3::new(0.0, 1.0, 0.0)));
+                        world.add_component(e, mesh);
+                        world.add_component(e, mat);
                     }
                     Caster::None => unreachable!(),
                 }
@@ -8460,6 +8526,7 @@ mod golden_render_tests {
         }
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A mesh that does not close casts a shadow, and does not shadow itself.** The shadow pass drew
     /// every mesh by its back faces, which is what keeps a solid's lit front off its own depth — and a
     /// plane, a card or a sheet of cloth has no back to cast from: a plane over a floor, facing the
@@ -8468,7 +8535,8 @@ mod golden_render_tests {
     /// itself, by so much as 2 of 255, with the sun 17°, 52° or 72° off overhead: the receiver's normal
     /// offset and slope bias keep it off its own depth. The cube is drawn as before, to the pixel. The
     /// point light's cube map is drawn the same way, and nothing tested it at all: a point light over
-    /// the floor, the cube casts 554 pixels and the plane 233.
+    /// the floor, the cube casts 762 pixels and the plane 431. (554 and 233 when first written, which
+    /// were measured through a second fault: see `a_point_light_casts_an_indexed_mesh_as_its_triangles`.)
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn an_open_mesh_casts_a_shadow_and_does_not_shadow_itself() {
@@ -8483,17 +8551,78 @@ mod golden_render_tests {
             let cube = thin_caster_shadow(Caster::Cube, false).await;
             assert!(cube > 150, "the cube casts {cube} shadow pixels");
             let point_cube = thin_caster_shadow(Caster::Cube, true).await;
-            assert!(point_cube > 300, "the cube casts {point_cube} shadow pixels from a point light");
+            assert!(point_cube > 600, "the cube casts {point_cube} shadow pixels from a point light");
             for plane in [Caster::Plane, Caster::TwoSidedPlane] {
                 let shadow = thin_caster_shadow(plane, false).await;
                 assert!(shadow > 120, "{plane:?}, facing the sun, casts {shadow} shadow pixels");
                 let point = thin_caster_shadow(plane, true).await;
-                assert!(point > 120, "{plane:?}, facing a point light, casts {point} shadow pixels");
+                assert!(point > 300, "{plane:?}, facing a point light, casts {point} shadow pixels");
                 for tilt in [0.3, 0.9, 1.25] {
                     let own = thin_caster_self_shadow(plane, 1, tilt).await;
                     assert_eq!(own, 0, "{plane:?} shadows {own} of its own pixels, the sun {tilt} rad off overhead");
                 }
             }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A point light casts an indexed mesh as its triangles.** The point light's six faces were drawn
+    /// with `draw(0..vertex_count)` and no index buffer, so an indexed mesh — every engine primitive,
+    /// every import — cast its deduplicated corners taken three at a time: a plane cast its first
+    /// triangle and none of its second. The same two triangles indexed and flat cast the same shadow
+    /// now, from the sun as before (184) and from a point light (431; the indexed plane cast 233).
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_point_light_casts_an_indexed_mesh_as_its_triangles() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            for point in [false, true] {
+                let flat = thin_caster_shadow(Caster::TrianglesPlane { indexed: false }, point).await;
+                let indexed = thin_caster_shadow(Caster::TrianglesPlane { indexed: true }, point).await;
+                assert!(flat > 120, "the flat plane casts {flat} (point light: {point})");
+                assert_eq!(indexed, flat, "the indexed plane casts another shadow than its own triangles (point light: {point})");
+            }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A cut-out casts the shadow of what it keeps.** The shadow pass had no fragment stage, so a
+    /// cut-out cast its whole quad: a fence's gaps, a leaf card's corners, a dissolving surface's holes
+    /// all stood in its shadow. It has one now for a draw that cuts — the engine's cut-outs and LOD
+    /// crossfades, and every game surface, since only its own code knows — and it asks the material
+    /// where it is, as the G-buffer's prepass does. Measured: the plane casts 184; a cut-out over the
+    /// threshold 184, one under it everywhere 0 (184 before); a surface cutting away the half at x < 0
+    /// casts 92, and one cutting everything 0.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_cut_out_casts_the_shadow_of_what_it_keeps() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let whole = thin_caster_shadow(Caster::Plane, false).await;
+            let kept = thin_caster_shadow(Caster::CutPlane(0.8), false).await;
+            let cut = thin_caster_shadow(Caster::CutPlane(0.3), false).await;
+            let half = thin_caster_shadow(Caster::SurfacePlane { everywhere: false }, false).await;
+            let none = thin_caster_shadow(Caster::SurfacePlane { everywhere: true }, false).await;
+            assert!(whole > 120, "the plane casts {whole}");
+            assert_eq!(kept, whole, "a cut-out that keeps everything casts as the plane does");
+            assert_eq!(cut, 0, "a cut-out that keeps nothing casts {cut} shadow pixels");
+            assert_eq!(none, 0, "a surface cut away everywhere casts {none} shadow pixels");
+            assert!(
+                half * 10 > whole * 3 && half * 10 < whole * 7,
+                "a surface cut away at x < 0 casts {half} of the plane's {whole}",
+            );
         });
     }
 

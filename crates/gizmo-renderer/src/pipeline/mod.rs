@@ -17,7 +17,7 @@ pub use shaders::{load_shader_composed_web, load_shader_composed_web_with};
 
 use layouts::{build_layouts, LayoutRefs};
 use pipelines::{build_core_pipelines, build_shadow_pipelines};
-pub(crate) use pipelines::{forward_pipeline, lit_set};
+pub(crate) use pipelines::{forward_pipeline, lit_set, shadow_pipeline};
 use uniforms::{build_global_uniforms, build_shadow_resources};
 
 use crate::gpu_types::ShadowVsUniform;
@@ -79,6 +79,10 @@ pub struct SceneState {
     /// sheet of cloth has no back to cast from. [`shadow_pipeline_for`](Self::shadow_pipeline_for)
     /// chooses.
     pub shadow_open_pipeline: wgpu::RenderPipeline,
+    /// The two above with a fragment stage that cuts where the material does — a cut-out, a LOD
+    /// crossfade — closed then open. Every shadow pipeline binds the same groups: the pass's light, the
+    /// material, the skeleton and the instances.
+    pub shadow_cut_out_pipelines: [wgpu::RenderPipeline; 2],
     /// Line-topology, for wireframe views.
     pub wireframe_pipeline: wgpu::RenderPipeline,
     /// Alpha-blended, no depth write, for the transparent bucket.
@@ -385,10 +389,16 @@ impl SceneState {
             .clone()
     }
 
-    /// The shadow pass's pipeline for a mesh: [`shadow_pipeline`](Self::shadow_pipeline) if it closes,
-    /// [`shadow_open_pipeline`](Self::shadow_open_pipeline) if not.
-    pub fn shadow_pipeline_for(&self, closed: bool) -> &wgpu::RenderPipeline {
-        if closed { &self.shadow_pipeline } else { &self.shadow_open_pipeline }
+    /// The shadow pass's pipeline for a draw of the engine's own material: by its back faces if the
+    /// mesh closes and by both if not, and through the cut-out stage if the draw `cuts` — a cut-out or
+    /// a LOD crossfade. A game's surface has its own
+    /// ([`SurfaceMaterial::shadow_pipeline`](crate::custom_material::SurfaceMaterial::shadow_pipeline)).
+    pub fn shadow_pipeline_for(&self, closed: bool, cuts: bool) -> &wgpu::RenderPipeline {
+        match (cuts, closed) {
+            (true, closed) => &self.shadow_cut_out_pipelines[usize::from(!closed)],
+            (false, true) => &self.shadow_pipeline,
+            (false, false) => &self.shadow_open_pipeline,
+        }
     }
 
     /// The lit pipeline that also reads the frame behind it, for a draw that
@@ -932,9 +942,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let shadow_cascade_uniform_buffers = std::array::from_fn(|i| {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("Shadow cascade VS uniform {i}")),
-            contents: bytemuck::bytes_of(&ShadowVsUniform {
-                light_view_proj: id4,
-            }),
+            contents: bytemuck::bytes_of(&ShadowVsUniform::new(id4, [0.0; 3], 0.0)),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })
     });
@@ -953,9 +961,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let point_shadow_uniform_buffers = std::array::from_fn(|i| {
         device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("Point shadow VS uniform {i}")),
-            contents: bytemuck::bytes_of(&ShadowVsUniform {
-                light_view_proj: id4,
-            }),
+            contents: bytemuck::bytes_of(&ShadowVsUniform::new(id4, [0.0; 3], 0.0)),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         })
     });
@@ -1021,7 +1027,10 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         wire_color: &wire_color_layout,
     };
     let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default());
-    let [shadow_pipeline, shadow_open_pipeline] = build_shadow_pipelines(device, &layout_refs);
+    let pipelines::ShadowPipelines {
+        plain: [shadow_pipeline, shadow_open_pipeline],
+        cut_out: shadow_cut_out_pipelines,
+    } = build_shadow_pipelines(device, &layout_refs);
 
     tracing::info!(
         initial_instance_capacity = initial_capacity,
@@ -1058,6 +1067,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         behind_sampler,
         shadow_pipeline,
         shadow_open_pipeline,
+        shadow_cut_out_pipelines,
         global_uniform_buffer,
         global_bind_group_layout: layouts.global,
         global_bind_group,
@@ -1124,7 +1134,10 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let layouts = layout_refs(&renderer.scene, &indirect);
 
     let core_pipelines = build_core_pipelines(device, &layouts, renderer.scene.forward_probes.shape);
-    let [shadow_pipeline, shadow_open_pipeline] = build_shadow_pipelines(device, &layouts);
+    let pipelines::ShadowPipelines {
+        plain: [shadow_pipeline, shadow_open_pipeline],
+        cut_out: shadow_cut_out_pipelines,
+    } = build_shadow_pipelines(device, &layouts);
 
     renderer.scene.lit_lobes = core_pipelines.lobes;
     renderer.scene.render_details_pipeline = core_pipelines.render_details;
@@ -1148,6 +1161,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     renderer.scene.blend_unlit_pipelines = core_pipelines.blend_unlit;
     renderer.scene.shadow_pipeline = shadow_pipeline;
     renderer.scene.shadow_open_pipeline = shadow_open_pipeline;
+    renderer.scene.shadow_cut_out_pipelines = shadow_cut_out_pipelines;
 
     crate::post_process::rebuild_post_pipelines(renderer, &post_shader);
 

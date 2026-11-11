@@ -227,8 +227,8 @@ G-buffer, prepass, environment-sky and lighting pipelines, so a reloaded `gbuffe
 registered surface after them, from the WGSL it keeps
 (`a_hot_reload_rebuilds_the_deferred_pipelines_and_every_surface`).
 
-What stays open is a separate piece of work: the shadow pass has no fragment stage, so a cut-out — a
-surface's or the engine's own — casts its whole quad's shadow.
+A surface's shadow is cut where the surface is, as of the same day: see the cut-out entry under A7,
+which closed for the engine's own cut-outs at the same time.
 
 **There is also no spare bind group**, measured the same way: native asks for
 `max_bind_groups: 6` and spends 5 (`0` scene, `1` material, `2` shadow, `3` skeleton, `4`
@@ -746,15 +746,38 @@ shadows. Each item:
   whether it closes over a volume (`Mesh::closed`, worked out from its own triangles when it is made:
   every edge met by one running the other way, corners welded by position), and one that does not is
   drawn by both faces (`SceneState::shadow_open_pipeline`) in the sun's cascades, the point light's
-  cube and the editor's viewport. The plane casts 184, and 233 under a point light; its lit face
+  cube and the editor's viewport. The plane casts 184, and 431 under a point light; its lit face
   shadows none of itself, by so much as 2 of 255, with the sun 17°, 52° or 72° off overhead — the
   receiver's normal offset and slope bias were enough once the plane had a depth to compare with.
-  Solids are drawn as before. Nothing had tested the point light's shadows at all; the cube casts 554
-  pixels there (`an_open_mesh_casts_a_shadow_and_does_not_shadow_itself`,
+  Solids are drawn as before. Nothing had tested the point light's shadows at all, and the first
+  figures written here (233, and 554 for the cube, now 762) were measured through a second fault:
+  that pass drew without the index buffer, so an indexed mesh cast its deduplicated corners three at
+  a time and a plane only its first triangle — fixed the same day
+  (`a_point_light_casts_an_indexed_mesh_as_its_triangles`; `an_open_mesh_casts_a_shadow_and_does_not_shadow_itself`,
   `an_open_mesh_casts_a_shadow_in_the_viewport`). The test of closedness found the engine's capsule
   open: its equator ring sat at 0 for both hemispheres, so each one's last band slanted into the tube
   and the tube's rims met nothing, and an odd latitude count left no equator ring at all. It closes
-  now. **Still open:** a cut-out casts its whole quad, since the shadow pass has no fragment stage.
+  now.
+- ~~**A cut-out cast its whole quad.**~~ **CLOSED 2026-11-11.** The shadow pass had no fragment
+  stage, so a fence's gaps, a leaf card's corners and a dissolving surface's holes all stood in its
+  shadow. `shadow.wgsl` has a cut-out stage now (`CUT_OUT`, `fs_cut_out`), which asks the material
+  where it is, as the G-buffer's prepass does: the engine's cut-outs and LOD crossfades take it
+  (`SceneState::shadow_pipeline_for(closed, cuts)`), and every game surface has its own, composed with
+  its `material_surface`, since only its own code knows where it cuts — handed the frame's camera and
+  clock (`ShadowVsUniform::{camera_position, params}`), so a surface dissolving over time casts what
+  is left of it. Every shadow pipeline has the same four groups (light, material, skeleton,
+  instances). Measured over a floor: the plane casts 184; a cut-out kept everywhere 184, cut away
+  everywhere 0 (184 before); a surface cutting away the half at x < 0 casts 92, and one cutting
+  everything 0 (`a_cut_out_casts_the_shadow_of_what_it_keeps`, and the editor's
+  `a_cut_out_casts_what_it_keeps_in_the_viewport`). Measuring it turned up two more faults, fixed
+  with it: a `ShadowCasting::Only` object was drawn by the forward pass, and the point light's faces
+  were drawn without the index buffer (above).
+- **Open, and next: an opaque cut-out is blended where it is drawn forward.** The desktop's forward lit
+  pipelines and the forward-only path's `DETAILS` tier blend an opaque draw by its alpha while writing
+  its depth, so a cut-out's kept texels under 1 show what was drawn before them — by the order the
+  batches came out of a hash map. Measured in the editor viewport: a plane at alpha 0.8 cut at 0.5
+  changed 1 577 pixels by up to 34 between identical frames, in 3 renders of 6. The G-buffer writes
+  the same texels solid, so the viewport and a phone show cut-out edges the desktop game does not.
 
 - **Spherical area lights: CLOSED 2026-11-01** — `PointLight::source_radius` / `SpotLight::source_radius`
   (metres, 0 = a point, the default), through `compute_sphere_lighting` in `common.wgsl`, both

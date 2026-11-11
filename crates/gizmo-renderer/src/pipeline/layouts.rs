@@ -171,7 +171,9 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
         label: Some("shadow_pass_bind_group_layout"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::VERTEX,
+            // The fragment stage too: a cut-out's (`shadow.wgsl`'s `CUT_OUT`) reads the frame's
+            // camera and clock for a game's surface.
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,

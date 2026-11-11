@@ -367,6 +367,31 @@ fn every_light_declaration_matches_the_bytes_rust_uploads() {
     assert!(problems.is_empty(), "light layout disagreements:\n  {}", problems.join("\n  "));
 }
 
+/// **A shadow pass's uniform**, as `shadow.wgsl` declares it: the light's matrix, and since
+/// 2026-11-11 the frame's camera and clock, which a cut-out's stage hands a game's surface. A field
+/// read from the wrong offset would cut a dissolving surface's shadow at the wrong time with nothing
+/// to say so.
+#[test]
+fn every_shadow_pass_declaration_matches_the_bytes_rust_uploads() {
+    use crate::gpu_types::ShadowVsUniform;
+    let truth = vec![
+        ("light_view_proj", offset_of!(ShadowVsUniform, light_view_proj) as u32),
+        ("camera_position", offset_of!(ShadowVsUniform, camera_position) as u32),
+        ("params", offset_of!(ShadowVsUniform, params) as u32),
+    ];
+    let size = std::mem::size_of::<ShadowVsUniform>();
+    let mut problems = Vec::new();
+    let mut checked = Vec::new();
+    for (shader, src) in all_shaders() {
+        for (struct_name, fields, span) in struct_members(&shader, &src, "ShadowVsUniform") {
+            check(&shader, &struct_name, &fields, span, &truth, size, &mut problems);
+            checked.push(shader.clone());
+        }
+    }
+    assert!(checked.iter().any(|s| s.contains("shadow.wgsl")), "`shadow.wgsl` no longer declares `ShadowVsUniform`: {checked:?}");
+    assert!(problems.is_empty(), "shadow pass layout disagreements:\n  {}", problems.join("\n  "));
+}
+
 /// **The GPU bodies' structs**, as the solver, the culling pass and the debug lines declare them —
 /// by exact name, since `fem_compute.wgsl` declares a `GpuCollider` of its own for another system.
 ///

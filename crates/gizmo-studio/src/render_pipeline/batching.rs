@@ -46,6 +46,8 @@ pub(super) struct BatchKey {
     // Whether the mesh closes (`Mesh::closed`), which the shadow pass casts by: a field a game may
     // set on a mesh sharing a buffer with another.
     pub(super) closed: bool,
+    // A cut-out or a LOD crossfade: its shadow goes through the stage that cuts it.
+    pub(super) discards: bool,
 }
 
 pub(super) struct BatchData {
@@ -99,6 +101,9 @@ pub(super) struct BatchData {
     pub(super) surface: Option<gizmo::renderer::custom_material::SurfaceId>,
     /// The mesh closes over a volume (`Mesh::closed`): cast from its back faces, an open one from both.
     pub(super) closed: bool,
+    /// A cut-out (`Material::alpha_cutoff`) or a LOD crossfade: cast through the shadow pass's stage
+    /// that cuts, as the game path does.
+    pub(super) discards: bool,
 }
 
 #[derive(Clone)]
@@ -153,6 +158,8 @@ pub(super) struct FlatBatchData {
     pub(super) surface: Option<gizmo::renderer::custom_material::SurfaceId>,
     /// See [`BatchData::closed`].
     pub(super) closed: bool,
+    /// See [`BatchData::discards`].
+    pub(super) discards: bool,
 }
 
 impl FlatBatchData {

@@ -182,6 +182,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A cut-out cast its whole quad's shadow.** The shadow pass had no fragment stage. `shadow.wgsl`'s cut-out stage now
+  asks the material where it is, for the engine's cut-outs and LOD crossfades and for every game surface (with its own
+  `material_surface`, handed the frame's camera and clock through `ShadowVsUniform`). A cut-out cut away everywhere casts
+  nothing, where it cast the plane's 184 pixels. Every shadow pipeline binds the same four groups — light, material,
+  skeleton, instances — and `SceneState::shadow_pipeline_for` takes whether the draw cuts.
+- **A point light cast an indexed mesh as its deduplicated corners.** Its six faces were drawn with `draw(0..vertex_count)`
+  and no index buffer, so every engine primitive and import cast the wrong triangles — a plane only its first. They are
+  drawn through the index buffer now: the same triangles indexed and flat cast the same 431 pixels.
 - **A shadow-only object was drawn whenever it was drawn forward.** `ShadowCasting::Only` casts and is not drawn, and
   only the G-buffer passes asked: a blended, unlit, baked-lit or game-material `Only` object stood in the picture, and on the
   forward-only path (browser, phone), where every draw is forward, every one did — a transparent cube 5 658 pixels of it. The

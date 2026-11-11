@@ -315,12 +315,28 @@ impl TonemapCurve {
     }
 }
 
-/// Uniform block for the shadow pass vertex shader only (one cascade matrix per draw).
+/// Uniform block for one shadow pass: a sun cascade or a point light's cube face. `shadow.wgsl`.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct ShadowVsUniform {
     /// World → clip space for the cascade being rendered.
     pub light_view_proj: [[f32; 4]; 4],
+    /// The frame's camera, `w` unused: what a game's surface is handed as
+    /// `SurfaceInput::camera_position` when its shadow is cut where it is.
+    pub camera_position: [f32; 4],
+    /// `x`: the frame's clock, `SceneUniforms::cascade_params.z`'s, which a surface that cuts itself
+    /// by time reads; the rest unused.
+    pub params: [f32; 4],
+}
+
+impl ShadowVsUniform {
+    /// This pass's light, seen from `camera_position` at `elapsed_time` seconds: a cut-out's shadow is
+    /// cut where the frame shows it cut.
+    #[must_use]
+    pub fn new(light_view_proj: [[f32; 4]; 4], camera_position: [f32; 3], elapsed_time: f32) -> Self {
+        let [x, y, z] = camera_position;
+        Self { light_view_proj, camera_position: [x, y, z, 1.0], params: [elapsed_time, 0.0, 0.0, 0.0] }
+    }
 }
 
 /// The per-frame uniform block every shader binds at group 0 — camera, sun, lights, cascades and

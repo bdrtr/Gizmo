@@ -412,6 +412,7 @@ fn draw_studio_frame(
                         custom: routing.custom,
                         surface: routing.surface,
                         closed: active_mesh.closed,
+                        discards: mat.alpha_cutoff > 0.0 || lod_fade.is_some(),
                     })
                     .or_insert_with(|| BatchData {
                         vbuf: active_mesh.vbuf.clone(),
@@ -441,6 +442,7 @@ fn draw_studio_frame(
                         custom: routing.custom,
                         surface: routing.surface,
                         closed: active_mesh.closed,
+                        discards: mat.alpha_cutoff > 0.0 || lod_fade.is_some(),
                     });
 
                 if camera_visible {
@@ -516,6 +518,7 @@ fn draw_studio_frame(
                         custom: batch.custom,
                         surface: batch.surface,
                         closed: batch.closed,
+                        discards: batch.discards,
                     });
                 }
             };
@@ -648,7 +651,7 @@ fn draw_studio_frame(
             }
 
             // --- 1. CSM GÖLGE PASS + 2. ANA RENDER PASS (Tier 3: geçişler ayrı fn) ---
-            record_studio_shadow_passes(encoder, renderer, flat_batches.as_slice(), &light_view_proj_cascades);
+            record_studio_shadow_passes(encoder, renderer, flat_batches.as_slice(), &light_view_proj_cascades, cam_pos, elapsed_time);
             // The GPU bodies this viewport sees, culled against its camera as the game path culls each
             // of its views. The main pass draws them from the count this writes; with no cull of its
             // own it drew whatever count the last view's cull had left — none, in an editor that had
@@ -840,7 +843,7 @@ fn record_game_view(
     let mut enc = renderer
         .device
         .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Game View") });
-    record_studio_shadow_passes(&mut enc, renderer, batches, &cascades);
+    record_studio_shadow_passes(&mut enc, renderer, batches, &cascades, camera.position, elapsed_time);
     // The GPU bodies the game camera sees, culled against it (see the viewport's cull).
     if let Some(physics) = &renderer.gpu_physics {
         physics.cull_pass(&mut enc, renderer.scene.view_bind_group());

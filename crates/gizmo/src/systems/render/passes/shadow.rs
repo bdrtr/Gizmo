@@ -1,5 +1,35 @@
 use super::super::*;
 
+/// What a draw casts with: a game's surface its own pipeline, anything else the engine's, by whether
+/// its mesh closes and whether it cuts (a cut-out, a LOD crossfade). `None`: nothing it can cast
+/// with, which is a surface where there is no shadow pass.
+#[cfg(not(gizmo_forward_only))]
+fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem) -> Option<&'a wgpu::RenderPipeline> {
+    match item.surface {
+        Some(id) => renderer.custom_materials.surface(id)?.shadow_pipeline(item.closed),
+        None => Some(renderer.scene.shadow_pipeline_for(item.closed, item.discards)),
+    }
+}
+
+/// Binds what every shadow pipeline reads per draw — the material for a cut-out's fragment stage,
+/// the skeleton — and the pipeline itself when it changes.
+#[cfg(not(gizmo_forward_only))]
+fn bind_caster(
+    pass: &mut wgpu::RenderPass<'_>,
+    renderer: &Renderer,
+    item: &DrawItem,
+    pipeline: &wgpu::RenderPipeline,
+    bound: &mut Option<*const wgpu::RenderPipeline>,
+) {
+    if *bound != Some(std::ptr::from_ref(pipeline)) {
+        pass.set_pipeline(pipeline);
+        *bound = Some(std::ptr::from_ref(pipeline));
+    }
+    let skeleton = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
+    pass.set_bind_group(1, &*item.bind_group, &[]);
+    pass.set_bind_group(2, skeleton.as_ref(), &[]);
+}
+
 #[cfg(not(gizmo_forward_only))]
 pub fn record_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
@@ -24,10 +54,11 @@ pub fn record_shadow_passes(
             occlusion_query_set: None,
             multiview_mask: None,
         });
+        // Every shadow pipeline has the same groups: the cascade, the material (read by a cut-out),
+        // the skeleton and the instances.
         shadow_pass.set_bind_group(0, renderer.scene.view_shadow_pass_bind_group(i), &[]);
-        shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
-        // A closed mesh casts from its back faces and an open one from both (`Mesh::closed`).
-        let mut bound: Option<bool> = None;
+        shadow_pass.set_bind_group(3, &renderer.scene.instance_bind_group, &[]);
+        let mut bound = None;
         for item in draw_items {
             // Per-object opt-out, on top of the material rules: `MeshRenderer::shadows`. A flag
             // the editor obeys and the game ignores would make the viewport lie about the build.
@@ -60,15 +91,8 @@ pub fn record_shadow_passes(
             }
                 }
             }
-            if bound != Some(item.closed) {
-                shadow_pass.set_pipeline(renderer.scene.shadow_pipeline_for(item.closed));
-                bound = Some(item.closed);
-            }
-            let skel_bg = item
-                .skeleton_bind_group
-                .as_ref()
-                .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-            shadow_pass.set_bind_group(1, skel_bg.as_ref(), &[]);
+            let Some(pipeline) = caster_pipeline(renderer, item) else { continue };
+            bind_caster(&mut shadow_pass, renderer, item, pipeline, &mut bound);
             // Two-region instance layout (see collect_draw_items): the camera-visible
             // instances (region A) and the off-screen shadow-only casters (region B) are no
             // longer contiguous, so cast shadows from BOTH ranges with a draw each. Empty
@@ -115,11 +139,10 @@ pub fn record_shadow_passes(
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        // We reuse the directional shadow pipelines because they only do position transformation,
-        // a closed mesh by its back faces and an open one by both, as above.
+        // The directional shadow pipelines, chosen the same way: only the face's matrix differs.
         shadow_pass.set_bind_group(0, renderer.scene.view_point_shadow_pass_bind_group(i), &[]);
-        shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
-        let mut bound: Option<bool> = None;
+        shadow_pass.set_bind_group(3, &renderer.scene.instance_bind_group, &[]);
+        let mut bound = None;
         for item in draw_items {
             // Per-object opt-out (`MeshRenderer::shadows`), same as the cascade pass above.
             if !item.casts_shadows { continue; }
@@ -139,26 +162,15 @@ pub fn record_shadow_passes(
                     }
                 }
             }
-            if bound != Some(item.closed) {
-                shadow_pass.set_pipeline(renderer.scene.shadow_pipeline_for(item.closed));
-                bound = Some(item.closed);
-            }
-            let skel_bg = item
-                .skeleton_bind_group
-                .as_ref()
-                .unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
-            shadow_pass.set_bind_group(1, skel_bg.as_ref(), &[]);
-            shadow_pass.set_vertex_buffer(0, item.vbuf.slice(..));
+            let Some(pipeline) = caster_pipeline(renderer, item) else { continue };
+            bind_caster(&mut shadow_pass, renderer, item, pipeline, &mut bound);
             // Both instance regions cast into the point-shadow faces (see the directional
-            // pass above for why the two ranges are non-contiguous).
-            shadow_pass.draw(
-                0..item.vertex_count,
-                item.camera_instance_range(uploaded_instances),
-            );
-            shadow_pass.draw(
-                0..item.vertex_count,
-                item.shadow_instance_range(uploaded_instances),
-            );
+            // pass above for why the two ranges are non-contiguous). Through `record_draw`, which
+            // binds the index buffer: this pass drew `0..vertex_count` unindexed until 2026-11-11, so
+            // an indexed mesh — every primitive and import — cast its deduplicated corners taken
+            // three at a time, a plane its first triangle and nothing of the second.
+            item.record_draw(&mut shadow_pass, item.camera_instance_range(uploaded_instances));
+            item.record_draw(&mut shadow_pass, item.shadow_instance_range(uploaded_instances));
         }
     }
 

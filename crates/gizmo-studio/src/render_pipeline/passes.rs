@@ -167,19 +167,25 @@ fn batch_pipeline<'a>(
     Some(engine)
 }
 
+/// The sun's cascades for this view. `camera_position` and `elapsed_time` are what a game's surface is
+/// handed when its shadow is cut where the picture is.
 pub(super) fn record_studio_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &gizmo::renderer::Renderer,
     flat_batches: &[FlatBatchData],
     light_view_proj_cascades: &[[[f32; 4]; 4]; 4],
+    camera_position: gizmo::math::Vec3,
+    elapsed_time: f32,
 ) {
         for (cascade_i, &cascade_view_proj) in light_view_proj_cascades.iter().enumerate() {
             renderer.queue.write_buffer(
                 renderer.scene.view_shadow_cascade_buffer(cascade_i),
                 0,
-                gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform {
-                    light_view_proj: cascade_view_proj,
-                }),
+                gizmo::bytemuck::bytes_of(&gizmo::renderer::ShadowVsUniform::new(
+                    cascade_view_proj,
+                    camera_position.to_array(),
+                    elapsed_time,
+                )),
             );
 
             let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -198,9 +204,13 @@ pub(super) fn record_studio_shadow_passes(
             multiview_mask: None,
             });
 
-            // A closed mesh casts from its back faces and an open one from both (`Mesh::closed`), as
-            // on the game path.
-            let mut bound: Option<bool> = None;
+            // As on the game path: a closed mesh casts from its back faces and an open one from both
+            // (`Mesh::closed`), a cut-out through the stage that cuts it, a game's surface with its
+            // own; and every shadow pipeline binds the cascade, the material, the skeleton and the
+            // instances.
+            shadow_pass.set_bind_group(0, renderer.scene.view_shadow_pass_bind_group(cascade_i), &[]);
+            shadow_pass.set_bind_group(3, &renderer.scene.instance_bind_group, &[]);
+            let mut bound: Option<*const wgpu::RenderPipeline> = None;
             for batch in flat_batches {
                 // Non-casters must not write the shadow maps — matches the game path
                 // (`passes.rs`: skip unlit/transparent) and the `classify_visibility`
@@ -237,15 +247,18 @@ pub(super) fn record_studio_shadow_passes(
                         continue;
                     }
                 }
-                if batch.surface.is_some_and(|id| renderer.custom_materials.surface(id).is_none()) {
-                    continue;
-                }
                 if batch.start_instance >= renderer.scene.instance_capacity as u32 {
                     continue;
                 }
-                if bound != Some(batch.closed) {
-                    shadow_pass.set_pipeline(renderer.scene.shadow_pipeline_for(batch.closed));
-                    bound = Some(batch.closed);
+                let pipeline = match batch.surface {
+                    Some(id) => renderer.custom_materials.surface(id).and_then(|s| s.shadow_pipeline(batch.closed)),
+                    None => Some(renderer.scene.shadow_pipeline_for(batch.closed, batch.discards)),
+                };
+                // `None` is also an id with nothing behind it: it draws nothing, its shadow included.
+                let Some(pipeline) = pipeline else { continue };
+                if bound != Some(std::ptr::from_ref(pipeline)) {
+                    shadow_pass.set_pipeline(pipeline);
+                    bound = Some(std::ptr::from_ref(pipeline));
                 }
                 // Shadow pass draws the FULL range (camera-visible + off-screen casters).
                 let safe_end = std::cmp::min(
@@ -253,13 +266,8 @@ pub(super) fn record_studio_shadow_passes(
                     renderer.scene.instance_capacity as u32,
                 );
 
-                shadow_pass.set_bind_group(
-                    0,
-                    renderer.scene.view_shadow_pass_bind_group(cascade_i),
-                    &[],
-                );
-                shadow_pass.set_bind_group(1, &*batch.skeleton_bg, &[]);
-                shadow_pass.set_bind_group(2, &renderer.scene.instance_bind_group, &[]);
+                shadow_pass.set_bind_group(1, &*batch.bind_group, &[]);
+                shadow_pass.set_bind_group(2, &*batch.skeleton_bg, &[]);
                 batch.record_draw(&mut shadow_pass, batch.start_instance..safe_end);
             }
         }

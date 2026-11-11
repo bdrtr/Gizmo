@@ -1040,6 +1040,42 @@ fn an_open_mesh_casts_a_shadow_in_the_viewport() {
     assert!(shadowed > 1000, "a plane facing the sun shadows {shadowed} pixels of the ground");
 }
 
+/// **A cut-out casts the shadow of what it keeps, in the editor viewport as in the game.** The
+/// viewport's shadow pass had no fragment stage either, so a cut-out cast its whole quad. A plane cut
+/// out everywhere (alpha 0.3 under a 0.5 threshold) casts nothing now, and one kept everywhere casts as
+/// the plain plane does, through the stage that cuts: 1368 pixels each.
+#[test]
+fn a_cut_out_casts_what_it_keeps_in_the_viewport() {
+    use gizmo::renderer::components::ShadowCasting;
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    let luma = |p: &[u8]| (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3;
+    // The plane casting and not casting: the two frames differ by its shadow alone.
+    let shadowed = |adjust: fn(Material) -> Material| {
+        let on = shadow_scene_with(ShadowCasting::On, true, adjust).expect("On");
+        let off = shadow_scene_with(ShadowCasting::Off, true, adjust).expect("Off");
+        on.chunks(BPP as usize).zip(off.chunks(BPP as usize)).filter(|(a, b)| luma(a) + 20 < luma(b)).count()
+    };
+    let whole = shadowed(|m| m);
+    // Alpha 1, not a value between the threshold and 1: this viewport draws an opaque cut-out's texels
+    // blended while writing depth, so one at 0.8 shows the ground or the clear colour through it by
+    // which batch the hash map gave first, and the frame changes from run to run (4 in 25). That is
+    // the viewport's drawing of a cut-out, not its shadow.
+    let kept = shadowed(|m| m.with_alpha_cutoff(0.5));
+    // `with_pbr` makes an alpha under 1 transparent; a cut-out is opaque, cut.
+    let cut = shadowed(|m| {
+        m.with_pbr(Vec4::new(0.9, 0.25, 0.25, 0.3), 0.6, 0.0).with_transparent(false).with_alpha_cutoff(0.5)
+    });
+    assert!(whole > 1000, "the plane shadows {whole} pixels of the ground");
+    assert_eq!(kept, whole, "a cut-out kept everywhere casts {kept} against the plane's {whole}");
+    assert_eq!(cut, 0, "a cut-out cut away everywhere casts {cut} shadow pixels");
+}
+
 /// The shadow scenario from `the_editor_casts_a_shadow_onto_the_ground`, with the cube's casting
 /// mode as a parameter. Returns the frame as raw bytes.
 fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<u8>> {
@@ -1048,6 +1084,15 @@ fn shadow_scene(mode: gizmo::renderer::components::ShadowCasting) -> Option<Vec<
 
 /// [`shadow_scene`], with a plane facing up in the cube's place when `plane`.
 fn shadow_scene_of(mode: gizmo::renderer::components::ShadowCasting, plane: bool) -> Option<Vec<u8>> {
+    shadow_scene_with(mode, plane, |m| m)
+}
+
+/// [`shadow_scene_of`], the caster's material changed by `adjust`.
+fn shadow_scene_with(
+    mode: gizmo::renderer::components::ShadowCasting,
+    plane: bool,
+    adjust: fn(Material) -> Material,
+) -> Option<Vec<u8>> {
     const S: u32 = 256;
     Some(pollster::block_on(async {
         let mut renderer = shared_device_renderer(S, S).await;
@@ -1076,7 +1121,7 @@ fn shadow_scene_of(mode: gizmo::renderer::components::ShadowCasting, plane: bool
         );
         world.add_component(
             cube,
-            Material::new(tex).with_pbr(Vec4::new(0.9, 0.25, 0.25, 1.0), 0.6, 0.0),
+            adjust(Material::new(tex).with_pbr(Vec4::new(0.9, 0.25, 0.25, 1.0), 0.6, 0.0)),
         );
         world.add_component(cube, MeshRenderer::new().with_shadows(mode));
 
@@ -2662,3 +2707,4 @@ fn a_games_own_materials_are_drawn_in_the_viewport_as_the_game_draws_them() {
         assert_eq!(differing(&empty, &frame(dangling)), 0, "{dangling:?} drew something");
     }
 }
+
