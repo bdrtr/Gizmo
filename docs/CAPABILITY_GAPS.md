@@ -319,16 +319,22 @@ is roughness `k / 5`; the floor's colour moved by 2 to 3 of 255 with it. `captur
 returns at once on that path now, since nothing there reads a probe: a probe in a web or phone scene drew
 the world six times for nothing.
 
-**Open, measured 2026-11-11: the cube's rough mips are too coarse for the presets' lobes.** A matte
-floor (roughness 1) lit by the environment alone reads 88.8 on the forward-only path against 66.2 on the
-desktop, by either of the desktop's passes; drawn with the analytic environment instead of the cube, the
-forward-only path reads 66.1. The presets keep lobes about 20° wide even at a roughness of 1 — Studio
-Neutral's key light is `pow(cos, 12)` — and mip 5 is 4 texels a face, 22.5° a texel, so an upward normal
-reads the four texels round the zenith, 19° towards that light, where the lobe is about fifteen times
-what it is straight up. The bake is right (`the_cube_shows_the_sky_by_direction_and_roughness`); its coarsest mips cannot hold the
-function. Separate from today's fixes because the answer is a design choice — the cube's size, or its
-roughness-to-mip mapping — that the reflection probes' mip-for-mip copy into the cube shares, and its
-memory and bake cost are a phone's to measure.
+~~**The cube's rough mips are too coarse for the presets' lobes.**~~ **CLOSED 2026-11-11.** A matte
+floor (roughness 1) lit by the environment alone read 88.76 on the forward-only path against 66.23 on the
+desktop. The presets keep lobes about 20° wide even at a roughness of 1 — Studio Neutral's key light is
+`pow(cos, 12)` — and mip 5 was 4 texels a face, 22.5° a texel, so an upward normal read the four texels
+round the zenith, 19° towards that light: the zenith texel there read 0.183 where the function is 0.03.
+The sky's cube stops at 16 texels now (`env_cube::sky_levels`; 128, 64, 32, 16 — a roughness of 0, ⅓, ⅔
+and 1), and the shader takes the roughness across the cube's own mips, so a map's cube, a GGX prefilter
+that is as smooth as 4 texels at a roughness of 1, still goes down to 4 as a probe's slot does and copies
+in mip for mip. The memory is what it was, and the bake is 24 passes where it was 36. Measured on a
+rough floor, matte and metal, under each preset (`a_rough_floor_lit_by_the_environment_reads_alike_on_every_path`,
+which pins the desktop's values): within 3.1 of the desktop everywhere, where it was up to 41 off
+(Sunset Gold metal 94.96 against 135.95); between them, at roughnesses 0.3 to 0.75, within 3 where it
+was up to 40 off. Not measured on a phone; the per-pixel cost is one sample either way. **Still open,
+found measuring it:** a mirror floor under Sunset Gold reads 184.6 there against the desktop's 178.6,
+before and after — roughness 0 reads the cube's sharpest mip, 128 texels; the other presets agree within
+0.7.
 
 **And reflection probes, the same day.** That path has no group for them, so they are group 0's
 bindings 6–8: the captured cube array, a sampler and the uniform that places them, packed by the same
@@ -344,8 +350,8 @@ phone:** the one attempt drew no frame of the game and the phone disconnected be
 Unlit and baked-lit surfaces do not fill the G-buffer. SSR and SSGI no longer reach through them since
 2026-11-11 — both are added after the opaque forward draws, in proportion to how much of the G-buffer's
 surface the frame's depth shows (`DeferredState::seen_view`): an opaque unlit panel in front of a polished
-floor took 12 137 and 18 569 of the 96 591 and 100 681 their reflection and bounce light move on those
-pixels, and takes none now — and the volumetric march stops at them (it reads where to stop from the
+red cube on a floor took 12 137 and 18 569 of the 96 591 and 100 681 they move on those pixels — the
+cube's reflection, the bounce light of both — and takes none now — and the volumetric march stops at them (it reads where to stop from the
 depth). The same day they moved ahead of what blends — glass, transparent surfaces, particles, the
 fluid — which now shows them as much as it lets through: a pane 98 % opaque took 5 853 and 14 895 and
 takes 24 and 67. A reflection no longer shows what blends, as no screen-space reflection does; glass
@@ -823,7 +829,7 @@ cube cookies for point lights, and no cookies on web. Each item:
   (`spot_cone`, one function where the deferred and forward passes had a copy each) and cookie, and
   past its shadow (`local_shadow_in_air`: one bilinear comparison, no normal and no receiver plane in
   the air). Measured on the march's own target: the air in front of a 10 cm wall, a casting lamp a
-  metre behind it, 703.8 without the shadow and 1.18 with it (769.3 either way before); beside a
+  metre behind it, 703.9 without the shadow and 1.18 with it (769.3 either way before); beside a
   0.15 rad spot's cone, 0 (211.2 and 211.7 either side, against 259.8 in it); a
   casting slab over one side of a wide cone, 0 on that side and the uncast 26.6 on the other; a
   black-and-white cookie, 26.5 / 0.06. The march's samples were each stepped before they were taken,

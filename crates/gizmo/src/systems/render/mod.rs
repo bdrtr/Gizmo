@@ -4786,7 +4786,8 @@ mod golden_render_tests {
         world.add_component(e, Transform::new(at).with_scale(half));
         world.add_component(e, GlobalTransform::default());
         world.add_component(e, AssetManager::create_cube(&renderer.device));
-        world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.0, 0.9));
+        // `with_pbr(albedo, roughness, metallic)`.
+        world.add_component(e, Material::new(tex).with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.9, 0.0));
         world.add_component(e, MeshRenderer::new());
     }
 
@@ -4836,7 +4837,7 @@ mod golden_render_tests {
             let shadowed = air(true).await;
             eprintln!("air in front of the wall: {through:.4} without the lamp's shadow, {shadowed:.4} with it");
             assert!(through > 1.0, "the lamp must light the air at all: {through:.4}");
-            // Measured 1.18 of 703.8 — the first few centimetres of air in front of the wall are
+            // Measured 1.18 of 703.9 — the first few centimetres of air in front of the wall are
             // inside the comparison's bias. Before: 769.3 of 769.3 (no shadow asked), and 71.5 of 769.3
             // with the shadow but the samples stepped before they were taken.
             assert!(
@@ -4938,14 +4939,14 @@ mod golden_render_tests {
                 (through_l - through_r).abs() < 0.1 * (through_l + through_r),
                 "a spot that casts no shadow lights the air under the slab: {through_l:.4} / {through_r:.4}"
             );
-            // Measured 0 / 26.56 casting, the uncast 27.77 / 26.56 not.
+            // Measured 0 / 26.58 casting, the uncast 27.80 / 26.58 not.
             assert!(
                 cast_l.min(cast_r) < 0.1 * cast_l.max(cast_r),
                 "the slab's side of the cone is dark under it: {cast_l:.4} / {cast_r:.4}"
             );
 
             // The cookie: black on one side of the image, white on the other.
-            // Measured 26.51 / 0.06; ignoring the cookie, 27.77 / 26.56.
+            // Measured 26.53 / 0.06; ignoring the cookie, 27.80 / 26.58.
             let (cut_l, _, cut_r) = bands(wide().with_cookie("half"), false).await;
             eprintln!("cookie: {cut_l:.4} / {cut_r:.4}");
             assert!(
@@ -4997,7 +4998,7 @@ mod golden_render_tests {
                 if unlit {
                     material.with_unlit(Vec4::new(0.6, 0.6, 0.6, 1.0))
                 } else {
-                    material.with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.0, 0.9)
+                    material.with_pbr(Vec4::new(0.6, 0.6, 0.6, 1.0), 0.9, 0.0)
                 },
             );
             world.add_component(wall, MeshRenderer::new());
@@ -5024,6 +5025,88 @@ mod golden_render_tests {
                 (forward - deferred).abs() <= 1e-3 * deferred,
                 "the march must stop at the wall either way: {forward:.4} unlit against {deferred:.4} deferred"
             );
+        });
+    }
+
+    /// **A rough floor lit by the environment alone reads alike on every path.** No light: under each of
+    /// the four presets, a floor of roughness 1 — matte, then metal — seen from above takes the
+    /// environment straight up, at a roughness of 1. The desktop works the environment out per pixel.
+    /// The forward-only path — a browser's, a phone's — reads it from a cube drawn once (`env_cube`),
+    /// whose mip for a roughness of 1 was 4 texels across, 22.5° a texel, where the presets keep lobes
+    /// about 20° wide: an upward normal read the four texels round the zenith, 19° towards Studio
+    /// Neutral's key light. The matte floor read 88.76 against the desktop's 66.23 under it, and Sunset
+    /// Gold's 148.30 against 186.27. The sky's cube stops at 16 texels now (`env_cube::sky_levels`). Runs
+    /// on whichever path the build draws with, against what the desktop reads; bloom off, which the
+    /// forward-only path does not have.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_rough_floor_lit_by_the_environment_reads_alike_on_every_path() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn floor(preset: u32, metallic: f32) -> f32 {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.environment_preset = preset;
+            renderer.bloom_intensity = 0.0;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            // `with_pbr(albedo, roughness, metallic)`.
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 1.0, metallic));
+            world.add_component(floor, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 3.0, 0.0),
+                yaw: 0.0,
+                pitch: -std::f32::consts::FRAC_PI_2 + 0.01,
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let mut sum = 0.0;
+            for y in 60..68 {
+                for x in 60..68 {
+                    let p = &frame[(y * 128 + x) * 4..];
+                    sum += (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0;
+                }
+            }
+            sum / 64.0
+        }
+        pollster::block_on(async {
+            // What the desktop reads, working the environment out per pixel: (preset, metallic, luma).
+            // The forward-only path read 148.30 and 88.76 for the first two matte floors, 94.96, 40.96,
+            // 37.43 and 105.05 for the metal ones; it reads all of them within 3.1 now.
+            const DESKTOP: [(u32, f32, f32); 8] = [
+                (0, 0.0, 186.27),
+                (0, 1.0, 135.95),
+                (1, 0.0, 66.23),
+                (1, 1.0, 26.48),
+                (2, 0.0, 72.52),
+                (2, 1.0, 33.49),
+                (3, 0.0, 170.73),
+                (3, 1.0, 117.24),
+            ];
+            let mut failures: Vec<String> = Vec::new();
+            for (preset, metallic, want) in DESKTOP {
+                let got = floor(preset, metallic).await;
+                eprintln!("preset {preset}, metallic {metallic}: {got:.2} (the desktop {want:.2})");
+                if (got - want).abs() > 3.5 {
+                    failures.push(format!("preset {preset}, metallic {metallic}: {got:.2}, the desktop {want:.2}"));
+                }
+            }
+            assert!(failures.is_empty(), "{failures:#?}");
         });
     }
 
@@ -5193,8 +5276,9 @@ mod golden_render_tests {
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR or SSGI.
     /// **What is drawn forward in front of a surface takes that surface's reflection and bounce light
-    /// only as much as it lets through.** A polished floor reflects a red cube; a panel stands between
-    /// the camera and both. SSR and SSGI describe the G-buffer's surface and were added after the whole
+    /// only as much as it lets through.** A polished red cube stands on a rough floor — SSR reflects on
+    /// the cube (the floor is past `roughness_cutoff`), SSGI bounces between both — and a panel stands
+    /// between the camera and them. SSR and SSGI describe the G-buffer's surface and were added after the whole
     /// forward pass, over whatever stood in front of it.
     ///
     /// - An opaque panel drawn unlit (forward, depth and no G-buffer) took 12 137 and 18 569 of the
@@ -5239,6 +5323,7 @@ mod golden_render_tests {
             let mut world = World::new();
             let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
             for (at, half, material) in [
+                // `with_pbr(albedo, roughness, metallic)`: the floor rough, the cube polished.
                 (Vec3::new(0.0, -1.2, 0.0), Vec3::new(20.0, 0.2, 20.0), Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 1.0, 0.05)),
                 (Vec3::ZERO, Vec3::ONE, Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.15, 0.15, 1.0), 0.0, 0.6)),
             ]

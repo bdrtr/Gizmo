@@ -6,7 +6,15 @@
 //! Adreno 618 with a floor filling the screen that was most of the frame: 63 fps with them, about 140
 //! with a constant in their place. So on the forward-only path they are drawn into this cube when what
 //! they depend on changes, mip `k` at roughness `k / (levels - 1)`, and the shader samples it (`ENV_CUBE`
-//! in `shader.wgsl`). The desktop path keeps working them out per pixel, next to its reflection probes.
+//! in `shader.wgsl`, the roughness across the cube's own mips). The desktop path keeps working them out per
+//! pixel, next to its reflection probes.
+//!
+//! The sky's cube stops at 16 texels across ([`sky_levels`]): the presets keep lobes about 20° wide even
+//! at a roughness of 1 (Studio Neutral's key light is `pow(cos, 12)`), and a mip 4 texels across — 22.5°
+//! a texel — cannot hold them. Read there, an upward normal took the four texels round the zenith, 19°
+//! towards that light, and a matte floor lit by the environment alone read 88.8 against the desktop's
+//! 66.2. A map's cube goes down to 4 as a probe's does: its mips are a GGX prefilter, which at a roughness
+//! of 1 is as smooth as 4 texels.
 //!
 //! An [`EnvironmentMap`] takes the cube's place on that path, as it takes a probe slot's on the desktop:
 //! the same GGX prefilter ([`ReflectionProbeGpu`]), at the map's own resolution, copied in mip for mip,
@@ -22,10 +30,16 @@ use crate::reflection::{ReflectionProbeGpu, FACES};
 pub(crate) const BASE_SIZE: u32 = 128;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 
-/// Mips of a cube `size` texels across: down to 4, as a reflection probe's, so a prefiltered probe slot
-/// copies in mip for mip and a roughness means the same mip in both.
+/// Mips of a map's cube `size` texels across: down to 4, as a reflection probe's, so a prefiltered probe
+/// slot copies in mip for mip and a roughness means the same mip in both.
 pub(crate) fn levels_for(size: u32) -> u32 {
     size.trailing_zeros() - 1
+}
+
+/// Mips of the sky's cube `size` texels across: down to 16, the coarsest that holds the presets' lobes at
+/// a roughness of 1 (see the [module docs](self)).
+pub(crate) fn sky_levels(size: u32) -> u32 {
+    size.trailing_zeros().saturating_sub(3).max(1)
 }
 
 /// What the cube shows, as `env_bake.wgsl` reads it. Two equal ones draw the same cube.
@@ -43,14 +57,15 @@ pub(crate) struct EnvInputs {
 }
 
 impl EnvInputs {
-    /// The parts of a frame's uniforms that the environment depends on, for a cube `size` texels across.
-    pub(crate) fn of(u: &SceneUniforms, size: u32) -> Self {
+    /// The parts of a frame's uniforms that the environment depends on, for a cube `size` texels across
+    /// with `levels` mips.
+    pub(crate) fn of(u: &SceneUniforms, size: u32, levels: u32) -> Self {
         Self {
             zenith: u.sky_zenith,
             horizon: u.sky_horizon,
             ground: u.sky_ground,
             sun_direction: u.sun_direction,
-            params: [u.environment_preset, u.environment_preset_2, size, levels_for(size)],
+            params: [u.environment_preset, u.environment_preset_2, size, levels],
             blend: [u.environment_blend_t, 0.0, 0.0, 0.0],
         }
     }
@@ -63,11 +78,11 @@ struct Storage {
     /// One per mip and face, mip-major: target `i` is face `i % 6` of mip `i / 6`.
     targets: Vec<wgpu::TextureView>,
     size: u32,
+    levels: u32,
 }
 
 impl Storage {
-    fn new(device: &wgpu::Device, size: u32) -> Self {
-        let levels = levels_for(size);
+    fn new(device: &wgpu::Device, size: u32, levels: u32) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("environment cube"),
             size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: FACES as u32 },
@@ -99,7 +114,7 @@ impl Storage {
                 })
             })
             .collect();
-        Self { texture, view, targets, size }
+        Self { texture, view, targets, size, levels }
     }
 }
 
@@ -124,7 +139,14 @@ impl EnvironmentCube {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        Self { storage: Storage::new(device, BASE_SIZE), inputs, drawn: None, bake: None, map: None, showing_map: false }
+        Self {
+            storage: Storage::new(device, BASE_SIZE, sky_levels(BASE_SIZE)),
+            inputs,
+            drawn: None,
+            bake: None,
+            map: None,
+            showing_map: false,
+        }
     }
 
     /// The whole cube, every mip, for group 0.
@@ -141,7 +163,7 @@ impl EnvironmentCube {
         encoder: &mut wgpu::CommandEncoder,
         uniforms: &SceneUniforms,
     ) -> bool {
-        let inputs = EnvInputs::of(uniforms, self.storage.size);
+        let inputs = EnvInputs::of(uniforms, self.storage.size, self.storage.levels);
         if self.showing_map || self.drawn == Some(inputs) {
             return false;
         }
@@ -182,9 +204,10 @@ impl EnvironmentCube {
     ) -> bool {
         self.drawn = None;
         let size = map.map_or(BASE_SIZE, |m| m.resolution.clamp(8, 1024).next_power_of_two());
-        let resized = size != self.storage.size;
+        let levels = if map.is_some() { levels_for(size) } else { sky_levels(size) };
+        let resized = (size, levels) != (self.storage.size, self.storage.levels);
         if resized {
-            self.storage = Storage::new(device, size);
+            self.storage = Storage::new(device, size, levels);
         }
         let Some(map) = map else {
             self.showing_map = false;
@@ -348,7 +371,8 @@ mod tests {
         let mut moved = a;
         moved.camera_pos = [9.0, 9.0, 9.0, 1.0];
         moved.num_lights = 3;
-        assert_eq!(EnvInputs::of(&a, BASE_SIZE), EnvInputs::of(&moved, BASE_SIZE), "a camera or a light is not the sky");
+        let levels = sky_levels(BASE_SIZE);
+        assert_eq!(EnvInputs::of(&a, BASE_SIZE, levels), EnvInputs::of(&moved, BASE_SIZE, levels), "a camera or a light is not the sky");
         for change in [
             |u: &mut SceneUniforms| u.sky_horizon[0] = 0.5,
             |u: &mut SceneUniforms| u.sun_direction[0] = 0.3,
@@ -358,7 +382,7 @@ mod tests {
         ] {
             let mut b = a;
             change(&mut b);
-            assert_ne!(EnvInputs::of(&a, BASE_SIZE), EnvInputs::of(&b, BASE_SIZE));
+            assert_ne!(EnvInputs::of(&a, BASE_SIZE, sky_levels(BASE_SIZE)), EnvInputs::of(&b, BASE_SIZE, sky_levels(BASE_SIZE)));
         }
     }
 
@@ -438,7 +462,7 @@ mod tests {
             let bottom = texel(&device, &queue, &cube, 0, 0, mid, BASE_SIZE - 3);
             assert!(top[0] > top[2] && bottom[2] > bottom[0], "+X is upside down: top {top:?}, bottom {bottom:?}");
 
-            let last = levels_for(BASE_SIZE) - 1;
+            let last = sky_levels(BASE_SIZE) - 1;
             let small = (BASE_SIZE >> last) / 2;
             let rough = texel(&device, &queue, &cube, last, 2, small, small);
             close(rough, [0.5, 0.5, 0.0], "+Y at a roughness of 1");

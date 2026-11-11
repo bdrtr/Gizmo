@@ -233,6 +233,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A rough surface on the web and on a phone took the wrong environment.** The forward-only path reads the presets
+  from a cube (`env_cube`) whose mip for a roughness of 1 was 4 texels across, where the presets keep lobes about 20°
+  wide: a matte floor lit by the environment alone read 88.76 against the desktop's 66.23, Sunset Gold's metal one 94.96
+  against 135.95, and every roughness between was off by up to 40. The sky's cube stops at 16 texels (`sky_levels`) and
+  the shader takes the roughness across the cube's own mips: within 3.1 of the desktop under every preset, matte and
+  metal. The memory is what it was and the bake is 24 passes where it was 36; a map's cube still goes down to 4 as a
+  probe's slot does.
 - **A moving unlit or baked-lit object had no motion of its own for TAA and motion blur.** Both read the G-buffer's
   velocity, which a surface drawn forward does not write, so its pixels kept the motion of what stood behind: an unlit cube
   moved 30 cm read 0 where a deferred one reads −0.0764, TAA reprojected it as if it stood still and motion blur left it
@@ -249,14 +256,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   227.94 and 228.45 with it (229.55 before).
 - **SSR, SSGI and the volumetric march reached through what was drawn forward.** All three describe the G-buffer's
   surface and are added after the forward pass, and an unlit or baked-lit surface, or a game's own pipeline, writes depth
-  and no G-buffer: an opaque unlit panel in front of a polished floor took 12 137 and 18 569 of the 96 591 and 100 681 the
-  floor's reflection and bounce light move on those pixels, and the volumetric march went on through an unlit wall to
+  and no G-buffer: an opaque unlit panel in front of a polished red cube on a floor took 12 137 and 18 569 of the 96 591
+  and 100 681 SSR and SSGI move on those pixels (the cube's reflection, the floor's and the cube's bounce light), and the volumetric march went on through an unlit wall to
   the floor and sky behind it (1 275.0 against 479.9 for the same wall drawn deferred). A pass after the forward one
   writes how much of the G-buffer's surface the frame's depth shows (`DeferredState::seen_view`, `seen.wgsl`), SSR and
   SSGI are added in proportion to it, and the march stops where the depth says: none over the panel, 480.0 both ways.
   `DeferredState::depth_view` keeps the frame's depth for the passes that read it. And SSR and SSGI are added between the
   opaque world and what blends over it — glass, transparent surfaces, particles, the fluid — which shows them as much as
-  it lets through: a pane 98 % opaque took 5 853 and 14 895 of the floor's reflection and bounce light and takes 24 and
+  it lets through: a pane 98 % opaque took 5 853 and 14 895 of that reflection and bounce light and takes 24 and
   67. A reflection no longer shows what blends; glass refracts a frame that has them. The forward pass is split there
   only when SSR, SSGI or glass needs it.
 - **Contact shadows missed everything under about 2 cm.** The march read the f16 G-buffer, started a centimetre off the
@@ -273,7 +280,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   were not there, a spot lit the air beside and behind its cone, and its cookie was no part of its shaft. Each light reaches
   the air now as it reaches a surface there — inside a spot's cone and through its cookie, and past its shadow when it
   `casts_shadows`. Measured on the march's own target: the air in front of a 10 cm wall with a casting lamp a metre behind
-  it, 703.8 without the shadow and 1.18 with it (769.3 either way before); beside a 0.15 rad spot's cone, 0 (211 either
+  it, 703.9 without the shadow and 1.18 with it (769.3 either way before); beside a 0.15 rad spot's cone, 0 (211 either
   side, against 260 in it). The march's samples were each stepped
   before they were taken, so the last landed up to a step past the surface its ray ends on — through a thin wall, into the
   light behind it; they end short of it now. The spot's cone is one function in `common.wgsl` (`spot_cone`), where the
