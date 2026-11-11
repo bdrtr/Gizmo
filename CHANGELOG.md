@@ -50,6 +50,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A local light's shadow is as soft as its source is large.** A sphere-sourced point or spot light (`source_radius`),
+  a tube and a rectangle light throw a penumbra as wide as their size and the gap between caster and receiver make it —
+  percentage-closer soft shadows, as the sun's angular radius gives the sun's. A point source keeps its sharp edge. The
+  local layers draw every caster by both faces for it (a closed mesh's back faces put the blocker at its far side), and
+  each filter tap compares against the receiver's own plane, taken from the pixel's neighbours.
 - **A shadow pass draws the casters in its own frustum**, not every caster of the frame (`gizmo_renderer::shadow_culling`):
   a batch's instances are put in spatial order and cut into runs of 64 with a box each, and each cascade and local layer
   draws the runs it meets — in the game and the editor viewport alike. On 2 500 objects under 16 shadowed spots and the

@@ -1256,9 +1256,12 @@ fn local_light_viewport(kind: u8, casts: bool, cube: bool) -> (Vec<u8>, u32) {
                 light,
                 gizmo::renderer::components::SpotLight { casts_shadows: casts, ..gizmo::renderer::components::SpotLight::new(Vec3::ONE, 60.0, 30.0, 0.8, 1.0) },
             ),
+            // 2 cm across: a point's size, so its shadow can be held to the point's and the spot's. A
+            // larger panel softens its edge (`a_light_with_a_size_casts_a_soft_shadow`): 20 cm read 783
+            // pixels here against the point's 886.
             _ => world.add_component(
                 light,
-                gizmo::renderer::components::RectLight { casts_shadows: casts, ..gizmo::renderer::components::RectLight::new(Vec3::ONE, 60.0, 30.0, 0.2, 0.2) },
+                gizmo::renderer::components::RectLight { casts_shadows: casts, ..gizmo::renderer::components::RectLight::new(Vec3::ONE, 60.0, 30.0, 0.02, 0.02) },
             ),
         }
         let cam = world.spawn();
@@ -1275,8 +1278,9 @@ fn local_light_viewport(kind: u8, casts: bool, cube: bool) -> (Vec<u8>, u32) {
 /// **The editor's viewport draws a local light's shadow.** It drew none: the one point light that
 /// could cast did so only through the deferred pass, and the viewport — the forward shader — never
 /// looked. A point, a spot and a rectangle light over a floor, a cube between: the shadow darkens
-/// 886, 877 and 884 pixels of the floor by 20 or more, alike for the three (one cube, one light
-/// position), and none when the light does not cast; with the forward shader's lookup ignored, 0.
+/// 886, 877 and 880 pixels of the floor by 20 or more, alike for the three (one cube, one light
+/// position, a point-sized panel), and none when the light does not cast; with the forward shader's
+/// lookup ignored, 0.
 /// The viewport records the shadow passes the game would: six for the point and the rectangle
 /// light, one for the spot, and none at all when it does not cast — no sun, so no cascades either,
 /// where the editor drew four fitted to its first light until 2026-11-11, which nothing read.

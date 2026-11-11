@@ -200,6 +200,7 @@ pub(super) fn record_studio_shadow_passes(
             &renderer.scene.shadow_cascade_layer_views[cascade_i],
             renderer.scene.view_shadow_pass_bind_group(cascade_i),
             Mat4::from_cols_array_2d(&cascade_view_proj),
+            false,
         );
         passes += 1;
     }
@@ -222,6 +223,7 @@ pub(super) fn record_studio_shadow_passes(
             &renderer.scene.local_shadow_maps.layer_views[layer_i],
             renderer.scene.view_local_shadow_pass_bind_group(layer_i),
             layer.view_proj,
+            true,
         );
         passes += 1;
     }
@@ -229,7 +231,10 @@ pub(super) fn record_studio_shadow_passes(
 }
 
 /// One depth pass into `target`, through the shadow pass group `light`, drawing the casters whose
-/// chunks meet `view_proj`'s frustum. Returns the instances it drew.
+/// chunks meet `view_proj`'s frustum. Returns the instances it drew. `local`: a local light's layer,
+/// where every caster is drawn by both faces, as on the game path (its penumbra is measured from
+/// the depth of what blocks it, which a closed mesh's back faces would put at its far side).
+#[allow(clippy::too_many_arguments)]
 fn record_studio_caster_pass(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &gizmo::renderer::Renderer,
@@ -238,6 +243,7 @@ fn record_studio_caster_pass(
     target: &wgpu::TextureView,
     light: &wgpu::BindGroup,
     view_proj: Mat4,
+    local: bool,
 ) -> u32 {
     let frustum = gizmo::renderer::Frustum::from_matrix(&view_proj);
     let mut drawn = 0;
@@ -300,9 +306,10 @@ fn record_studio_caster_pass(
                 continue;
             }
         }
+        let back_faces = batch.closed && !local;
         let pipeline = match batch.surface {
-            Some(id) => renderer.custom_materials.surface(id).and_then(|s| s.shadow_pipeline(batch.closed)),
-            None => Some(renderer.scene.shadow_pipeline_for(batch.closed, batch.discards)),
+            Some(id) => renderer.custom_materials.surface(id).and_then(|s| s.shadow_pipeline(back_faces)),
+            None => Some(renderer.scene.shadow_pipeline_for(back_faces, batch.discards)),
         };
         // `None` is also an id with nothing behind it: it draws nothing, its shadow included.
         let Some(pipeline) = pipeline else { continue };

@@ -19,7 +19,7 @@
 #endif
 #import gizmo::common::{SceneUniforms, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
 #ifdef SHADOWS
-#import gizmo::common::{SHADOW_BIAS_METRES, SHADOW_BIAS_METRES_MIN, local_shadow_layer, local_shadow_visibility}
+#import gizmo::common::{SHADOW_BIAS_METRES, SHADOW_BIAS_METRES_MIN, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes}
 #endif
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
@@ -346,6 +346,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
+#ifdef SHADOWS
+    // How the surface runs across neighbouring pixels, for a local light's soft shadow
+    // (`receiver_axes`) — taken first, before any pixel of the quad discards.
+    let pos_dx = dpdx(in.world_position);
+    let pos_dy = dpdy(in.world_position);
+#endif
 #ifdef DETAILS
     let surface = fragment_surface(in, front);
 #else
@@ -603,6 +609,9 @@ fn shade(in: VertexOutput) -> vec4<f32> {
 
     // Clustered: only this fragment's cluster's lights. `i` is still the index into `scene.lights`
     // so the body is unchanged from when it looped over every light.
+#ifdef SHADOWS
+    let surface_axes = receiver_axes(pos_dx, pos_dy, N);
+#endif
     let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, in.world_position);
     let cluster_range = cluster_table[cluster];
     for (var ci = 0u; ci < cluster_range.y; ci++) {
@@ -647,7 +656,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
             if (in.inst_emissive.w >= 0.0 && shadow_layer >= 0 && max(attenuation, window) > 0.0) {
                 let lit = local_shadow_visibility(
                     t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer], shadow_layer,
-                    in.world_position, N, to_light, scene.shadow_bias.xy,
+                    in.world_position, N, surface_axes, to_light, scene.shadow_bias.xy, light_source_radius(light),
                 );
                 attenuation *= lit;
                 window *= lit;

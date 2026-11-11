@@ -1,13 +1,14 @@
 use super::super::*;
 
 /// What a draw casts with: a game's surface its own pipeline, anything else the engine's, by whether
-/// its mesh closes and whether it cuts (a cut-out, a LOD crossfade). `None`: nothing it can cast
-/// with, which is a surface where there is no shadow pass.
+/// it is drawn by its back faces alone (`back_faces`: its mesh closes, and the pass is the sun's) and
+/// whether it cuts (a cut-out, a LOD crossfade). `None`: nothing it can cast with, which is a surface
+/// where there is no shadow pass.
 #[cfg(not(gizmo_forward_only))]
-fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem) -> Option<&'a wgpu::RenderPipeline> {
+fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, back_faces: bool) -> Option<&'a wgpu::RenderPipeline> {
     match item.surface {
-        Some(id) => renderer.custom_materials.surface(id)?.shadow_pipeline(item.closed),
-        None => Some(renderer.scene.shadow_pipeline_for(item.closed, item.discards)),
+        Some(id) => renderer.custom_materials.surface(id)?.shadow_pipeline(back_faces),
+        None => Some(renderer.scene.shadow_pipeline_for(back_faces, item.discards)),
     }
 }
 
@@ -60,6 +61,12 @@ fn casts_into_shadow_maps(renderer: &Renderer, item: &DrawItem) -> bool {
 /// One depth pass into `target`, through the shadow pass group `light`, drawing the casters whose
 /// chunks meet `view_proj`'s frustum (`gizmo_renderer::shadow_culling`). Returns the instances it
 /// drew.
+///
+/// `local`: a local light's layer, where every caster is drawn by both faces. The sun's cascades
+/// draw a closed mesh by its back faces, which keeps its lit front off its own depth; a local
+/// light's soft shadow measures its penumbra from the depth of what blocks it (`local_shadow_visibility`
+/// in `common.wgsl`), and the back faces of a cube put that at the cube's far side — its shadow came
+/// out a third as soft as its light's size throws. Its biases keep a lit face off its own depth.
 #[cfg(not(gizmo_forward_only))]
 #[allow(clippy::too_many_arguments)]
 fn record_caster_pass(
@@ -71,6 +78,7 @@ fn record_caster_pass(
     target: &wgpu::TextureView,
     light: &wgpu::BindGroup,
     view_proj: Mat4,
+    local: bool,
 ) -> u32 {
     let frustum = crate::math::Frustum::from_matrix(&view_proj);
     let mut drawn = 0;
@@ -95,7 +103,7 @@ fn record_caster_pass(
         if !casts_into_shadow_maps(renderer, item) {
             continue;
         }
-        let Some(pipeline) = caster_pipeline(renderer, item) else { continue };
+        let Some(pipeline) = caster_pipeline(renderer, item, item.closed && !local) else { continue };
         // The runs of this batch's instances — camera-visible ones (region A) and off-screen
         // casters (region B) alike — that this pass's frustum meets, each a draw. Through
         // `record_draw`, which binds the index buffer: the point light's cube drew `0..vertex_count`
@@ -139,6 +147,7 @@ pub fn record_shadow_passes(
             &renderer.scene.shadow_cascade_layer_views[i],
             renderer.scene.view_shadow_pass_bind_group(i),
             *view_proj,
+            false,
         );
         passes += 1;
     }
@@ -153,6 +162,7 @@ pub fn record_shadow_passes(
             &renderer.scene.local_shadow_maps.layer_views[i],
             renderer.scene.view_local_shadow_pass_bind_group(i),
             layer.view_proj,
+            true,
         );
         passes += 1;
     }

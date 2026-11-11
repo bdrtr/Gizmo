@@ -437,17 +437,19 @@ impl SurfaceMaterial {
         &self.pipelines.glass[usize::from(double_sided)]
     }
 
-    /// The shadow pass's pipeline for a draw of this surface: by its back faces if the mesh closes and
-    /// by both if not ([`Mesh::closed`](crate::components::Mesh::closed)), cutting wherever the
-    /// surface cuts. `None` where there is no shadow pass, the forward-only path.
+    /// The shadow pass's pipeline for a draw of this surface: by its back faces alone when
+    /// `back_faces` — a mesh that closes ([`Mesh::closed`](crate::components::Mesh::closed)), in the
+    /// sun's cascades — and by both otherwise, as
+    /// [`SceneState::shadow_pipeline_for`](crate::pipeline::SceneState::shadow_pipeline_for) chooses;
+    /// cutting wherever the surface cuts. `None` where there is no shadow pass, the forward-only path.
     ///
     /// The surface is handed the frame's camera and clock there as in the picture, so a surface that
     /// dissolves over time casts what is left of it. Two of `SurfaceInput`'s fields mean the shadow
     /// map's own rather than the picture's: `frag_coord` is the shadow map's pixel, and
     /// `front_facing` is the face turned to the light.
     #[must_use]
-    pub fn shadow_pipeline(&self, closed: bool) -> Option<&wgpu::RenderPipeline> {
-        self.pipelines.shadow.as_ref().map(|shadow| &shadow[usize::from(!closed)])
+    pub fn shadow_pipeline(&self, back_faces: bool) -> Option<&wgpu::RenderPipeline> {
+        self.pipelines.shadow.as_ref().map(|shadow| &shadow[usize::from(!back_faces)])
     }
 
     /// Builds the pipelines again from the WGSL it was made with, against the engine's shaders as they

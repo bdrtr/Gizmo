@@ -118,15 +118,87 @@ fn local_shadow_layer(entry: u32, from_light: vec3<f32>) -> i32 {
     return first + select(5, 4, from_light.z >= 0.0);
 }
 
-// How much of a local light reaches `world_pos` past its shadow: 1 lit, 0 shadowed, filtered between
-// over 3×3 texels. `t`/`s` are the local shadow array and the comparison sampler, `layer` the layer
-// `index` names, `n` the surface normal, `to_light` the vector from the surface to the light, and
-// `bias` = `scene.shadow_bias.xy` (the depth-bias and normal-offset multipliers).
+// The widest a local light's penumbra is drawn, each side, in its layer's texels: 5 cm at 1 m from a
+// cube face, 50 cm at 10 m.
+const MAX_PENUMBRA_TEXELS: f32 = 48.0;
+
+// Two directions along the surface a shadow falls on, for `local_shadow_grade`: the pixel's own
+// neighbours (`dx`, `dy`: the screen-space derivatives of its world position), which lie on its
+// geometry — where they agree with its normal `n` to within 75°; at an edge, where a neighbour is
+// another surface, the plane square to `n`. Not `n`'s plane always: a normal map tilts `n` off the
+// geometry, and a filter that follows it climbs out of the surface — 13 105 pixels of a floor shadowed
+// themselves under an 80 cm sphere with its normal map tilting it 0.9 rad.
+fn receiver_axes(dx: vec3<f32>, dy: vec3<f32>, n: vec3<f32>) -> mat2x3<f32> {
+    let g = cross(dx, dy);
+    let len = length(g);
+    if (len > 1e-12 && abs(dot(g / len, n)) > 0.26) {
+        return mat2x3<f32>(normalize(dx), normalize(dy));
+    }
+    let side = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(n.y) > 0.9);
+    let t1 = normalize(cross(n, side));
+    return mat2x3<f32>(t1, cross(n, t1));
+}
+
+// How a surface's depth runs across a local shadow layer: d(ndc z)/d(uv) of the plane through `at`
+// along `axes` (`receiver_axes`), from two points `step` metres along it, against `here` = (uv, ndc z)
+// at `at`. Zero where the plane is edge-on to the light (nothing of it is lit there) and capped where
+// it is near to edge-on, so a tap is never moved further than the plane leaning 80° away from the
+// light would.
+fn local_shadow_grade(layer: LocalShadowLayer, at: vec3<f32>, axes: mat2x3<f32>, step: f32, here: vec3<f32>) -> vec2<f32> {
+    let a = layer_point(layer.view_proj * vec4<f32>(at + axes[0] * step, 1.0)) - here;
+    let b = layer_point(layer.view_proj * vec4<f32>(at + axes[1] * step, 1.0)) - here;
+    let det = a.x * b.y - a.y * b.x;
+    if (abs(det) < 1e-14) {
+        return vec2<f32>(0.0);
+    }
+    let grade = vec2<f32>(a.z * b.y - b.z * a.y, b.z * a.x - a.z * b.x) / det;
+    // At 80° a plane climbs tan 80° = 5.7 of its texel per texel across; in NDC that is 5.7 times what
+    // a texel of depth is worth at this distance — `a.z` at a one-texel step face on.
+    let cap = 5.7 * length(vec2<f32>(length(a.xy), length(b.xy))) * max(abs(a.z), abs(b.z)) / max(length(a.xy) * length(b.xy), 1e-12);
+    let size = length(grade);
+    return select(grade, grade * (cap / size), size > cap);
+}
+
+// A clip-space point as a layer's (uv, ndc z).
+fn layer_point(clip: vec4<f32>) -> vec3<f32> {
+    let p = clip.xyz / clip.w;
+    return vec3<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5, p.z);
+}
+
+// The radius of a light's source, metres — what softens its shadow (`local_shadow_visibility`): a
+// point's or a spot's `source_radius`; for a tube, its thickness and half its length averaged (its
+// penumbra is long along the tube and narrow across it, and one disc stands in for both); for a
+// rectangle, the geometric mean of its half extents. 0 for a point source.
+fn light_source_radius(light: LightData) -> f32 {
+    let kind = u32(light.params.y);
+    if (kind == 3u) {
+        return sqrt(max(light.params.z * light.params.w, 0.0));
+    }
+    // A point light's params.w is its tube length; a spot's is its cookie.
+    if (kind == 0u && light.params.w > 0.0) {
+        return 0.5 * (light.params.z + 0.5 * light.params.w);
+    }
+    if (kind <= 1u) {
+        return max(light.params.z, 0.0);
+    }
+    return 0.0;
+}
+
+// How much of a local light reaches `world_pos` past its shadow: 1 lit, 0 shadowed, filtered between.
+// `t`/`s` are the local shadow array and the comparison sampler, `layer` the layer `index` names, `n`
+// the surface normal, `axes` two directions along its geometry (`receiver_axes`), `to_light` the
+// vector from the surface to the light, `bias` = `scene.shadow_bias.xy` (the depth-bias and
+// normal-offset multipliers) and `source_radius` the light's (`light_source_radius`).
 //
 // The same two biases the cascades take, in the same units: pushed off the surface by two texels'
 // width at this distance, and compared past it by a slope-scaled depth bias in metres — turned into
 // this layer's NDC at this depth, which is the step a perspective map needs and an orthographic one
 // does not (a fixed NDC bias would grow with the square of the distance from the light).
+//
+// A point source's edge is filtered over 3×3 texels. A source with a size softens it as the sun's
+// angular radius softens the sun's — percentage-closer soft shadows: the blockers between the surface
+// and the light are found, and the edge is filtered as wide as the penumbra a disc of that radius
+// throws past them, so a shadow is sharp where its caster touches and soft away from it.
 fn local_shadow_visibility(
     t: texture_depth_2d_array,
     s: sampler_comparison,
@@ -134,8 +206,10 @@ fn local_shadow_visibility(
     index: i32,
     world_pos: vec3<f32>,
     n: vec3<f32>,
+    axes: mat2x3<f32>,
     to_light: vec3<f32>,
     bias: vec2<f32>,
+    source_radius: f32,
 ) -> f32 {
     let near = layer.params.x;
     let far = layer.params.y;
@@ -156,13 +230,67 @@ fn local_shadow_visibility(
     let slope = 1.0 - clamp(dot(n, normalize(to_light)), 0.0, 1.0);
     let reference = ndc.z - max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * ndc_per_metre * bias.x;
     let texel = layer.params.w;
-    var lit = 0.0;
-    for (var x = -1; x <= 1; x++) {
-        for (var y = -1; y <= 1; y++) {
-            lit += textureSampleCompareLevel(t, s, uv + vec2<f32>(f32(x), f32(y)) * texel, index, reference);
+    if (source_radius <= 0.0) {
+        var lit = 0.0;
+        for (var x = -1; x <= 1; x++) {
+            for (var y = -1; y <= 1; y++) {
+                lit += textureSampleCompareLevel(t, s, uv + vec2<f32>(f32(x), f32(y)) * texel, index, reference);
+            }
+        }
+        return lit / 9.0;
+    }
+    // The layer spans `span`·z metres at depth z (span = 2·tan of its half-angle), so `m` metres at
+    // the receiver's depth are m / (span·z) of its uv.
+    let span = layer.params.z / layer.params.w;
+    let z_receiver = clip.w;
+    // **The receiver's plane** (Isidoro's receiver-plane depth bias): a tap far from the centre is
+    // compared against where the surface is there, not where it is here. Across a penumbra dozens
+    // of texels wide, a floor at a slant from the light climbs further than any fixed bias, and the
+    // filter shadowed the floor with the floor — everywhere past the angle where it outran the bias.
+    // Two points a texel along the surface, projected, give how its depth runs across the layer.
+    let grade = local_shadow_grade(layer, world_pos + offset, axes, depth * layer.params.z, vec3<f32>(uv, ndc.z));
+    // **Blockers**: where the disc's light to this point can be stopped — at a third of the way
+    // from the light, the disc seen from here is twice its radius across — searched on a 5×5 grid,
+    // as far out as the widest penumbra the filter below draws: a point at a penumbra's outer edge
+    // finds its blockers that far away, and a narrower search left it lit.
+    let search = clamp(2.0 * source_radius / (span * z_receiver), 1.5 * texel, MAX_PENUMBRA_TEXELS * texel);
+    let size = vec2<f32>(textureDimensions(t));
+    var blockers = 0.0;
+    var blocker_ndc = 0.0;
+    for (var x = -2; x <= 2; x++) {
+        for (var y = -2; y <= 2; y++) {
+            let step = vec2<f32>(f32(x), f32(y)) * (search * 0.5);
+            let p = clamp(uv + step, vec2<f32>(0.0), vec2<f32>(1.0));
+            let stored = textureLoad(t, vec2<i32>(min(p * size, size - 1.0)), index, 0);
+            if (stored < reference + dot(grade, step)) {
+                blockers += 1.0;
+                blocker_ndc += stored;
+            }
         }
     }
-    return lit / 9.0;
+    if (blockers < 0.5) {
+        return 1.0;
+    }
+    // Their mean depth, linear: a [0, 1] perspective's NDC is near·far / (far − ndc·(far − near)).
+    let z_blocker = near * far / max(far - (blocker_ndc / blockers) * (far - near), 1e-6);
+    // **The penumbra** a disc of `source_radius` throws past them, each side: R·(z_r − z_b)/z_b.
+    let radius = clamp(
+        source_radius * max(z_receiver - z_blocker, 0.0) / (max(z_blocker, near) * span * z_receiver),
+        texel,
+        MAX_PENUMBRA_TEXELS * texel,
+    );
+    // Twenty-five taps that far apart would band, so the grid turns by a per-texel angle — banding
+    // becomes fine noise, which TAA averages away, as in the sun's filter.
+    let angle = fract(sin(dot(floor(uv / texel), vec2<f32>(12.9898, 78.233))) * 43758.5453) * 6.2831853;
+    let turn = mat2x2<f32>(cos(angle), sin(angle), -sin(angle), cos(angle));
+    var lit = 0.0;
+    for (var x = -2; x <= 2; x++) {
+        for (var y = -2; y <= 2; y++) {
+            let offset_uv = turn * (vec2<f32>(f32(x), f32(y)) * (radius * 0.5));
+            lit += textureSampleCompareLevel(t, s, uv + offset_uv, index, reference + dot(grade, offset_uv));
+        }
+    }
+    return lit / 25.0;
 }
 
 // `Renderer::sky` along `dir`: the gradient, softened toward the hemisphere's average as

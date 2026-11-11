@@ -15,7 +15,8 @@ pub struct PointLight {
     /// [`radius`](Self::radius)). A sphere light's highlight on a glossy surface is as big as the
     /// sphere's reflection, not a pinpoint; `0` (the default) is the old point source. Specular
     /// uses the representative-point method (the point on the sphere nearest the reflected ray,
-    /// energy-normalised), diffuse the centre. `#[serde(default)]`.
+    /// energy-normalised), diffuse the centre. It softens the light's shadow too, when it
+    /// [`casts_shadows`](Self::casts_shadows): the penumbra a disc this size throws. `#[serde(default)]`.
     #[serde(default)]
     pub source_radius: f32,
     /// Length of the light's source along the entity's **local X axis**, in metres — a tube
@@ -234,7 +235,8 @@ impl SpotLight {
 /// `intensity` is the on-axis intensity — the rectangle's radiance is `intensity / area` — so a
 /// panel seen face on from far away lights like a [`PointLight`] of the same intensity, and
 /// dimmer off axis, as a flat emitter does. Its shadow, when it [`casts_shadows`](Self::casts_shadows),
-/// is cast from its centre: hard where a panel's would soften with its size.
+/// is cast from its centre and softened by its size, as a disc of the geometric mean of its half
+/// extents would soften it.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RectLight {
     /// Linear RGB colour.

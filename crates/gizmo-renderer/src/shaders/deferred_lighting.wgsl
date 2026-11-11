@@ -6,7 +6,7 @@
 // in by load_shader_composed (naga_oil). Only binding-dependent deferred code lives below:
 // the fullscreen pass, procedural environment/IBL and PCSS shadows (they read `scene` and the
 // shadow textures, so per the common.wgsl convention they stay out of the pure modules).
-#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog, SHADOW_BIAS_METRES, SHADOW_BIAS_METRES_MIN, local_shadow_layer, local_shadow_visibility}
+#import gizmo::common::{SceneUniforms, LightData, dielectric_f0, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, rotate_by_quat, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog, SHADOW_BIAS_METRES, SHADOW_BIAS_METRES_MIN, local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes}
 #import gizmo::pbr_ext::{approximate_env_brdf, compute_direct_lighting_anisotropic, subsurface_ambient, anisotropic_reflection, coat_env_attenuation, coat_env_specular, layer_clear_coat, subsurface_light}
 
 // Irradiance volumes: group 3. See `irradiance.wgsl` and `gizmo_renderer::irradiance`.
@@ -244,6 +244,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let normal_roughness = textureLoad(t_normal_roughness, iuv, 0);
     let pos_sample       = textureLoad(t_position_rel_camera,   iuv, 0);
     let tangent_sample   = textureLoad(t_world_tangent,    iuv, 0);
+    // How the surface runs across neighbouring pixels: its geometry's plane, which a local light's
+    // soft shadow filters along (`receiver_axes`). Taken here, before any pixel returns, where every
+    // pixel of the quad is still running.
+    let pos_dx = dpdx(pos_sample.xyz);
+    let pos_dy = dpdy(pos_sample.xyz);
 
     // Unwritten pixels (skipped geometry, unlit objects): the background — the camera's, or the
     // one default every path draws (`frame_uniforms::DEFAULT_BACKGROUND`) — rather than whatever the
@@ -416,6 +421,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Only the lights assigned to THIS fragment's cluster, instead of every light in the frame.
     // `i` still holds the index into `scene.lights`, so everything below — including the
     // point-shadow caster comparison — reads exactly as it did when this looped over all of them.
+    let surface_axes = receiver_axes(pos_dx, pos_dy, N);
     let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, world_pos);
     let cluster_range = cluster_table[cluster];
     for (var ci = 0u; ci < cluster_range.y; ci++) {
@@ -468,7 +474,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
             if (receives_shadows && shadow_layer >= 0 && max(atten, window) > 0.0) {
                 let lit = local_shadow_visibility(
                     t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer], shadow_layer,
-                    world_pos, N, light.position.xyz - world_pos, scene.shadow_bias.xy,
+                    world_pos, N, surface_axes, light.position.xyz - world_pos, scene.shadow_bias.xy, light_source_radius(light),
                 );
                 atten *= lit;
                 window *= lit;

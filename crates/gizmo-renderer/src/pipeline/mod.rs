@@ -416,13 +416,15 @@ impl SceneState {
             .clone()
     }
 
-    /// The shadow pass's pipeline for a draw of the engine's own material: by its back faces if the
-    /// mesh closes and by both if not, and through the cut-out stage if the draw `cuts` — a cut-out or
-    /// a LOD crossfade. A game's surface has its own
+    /// The shadow pass's pipeline for a draw of the engine's own material: by its back faces alone
+    /// when `back_faces` — a mesh that closes, in the sun's cascades — and by both otherwise (an open
+    /// mesh anywhere, and every mesh in a local light's layers, which measure a penumbra from the
+    /// depth of what blocks them); and through the cut-out stage if the draw `cuts` — a cut-out or a
+    /// LOD crossfade. A game's surface has its own
     /// ([`SurfaceMaterial::shadow_pipeline`](crate::custom_material::SurfaceMaterial::shadow_pipeline)).
-    pub fn shadow_pipeline_for(&self, closed: bool, cuts: bool) -> &wgpu::RenderPipeline {
-        match (cuts, closed) {
-            (true, closed) => &self.shadow_cut_out_pipelines[usize::from(!closed)],
+    pub fn shadow_pipeline_for(&self, back_faces: bool, cuts: bool) -> &wgpu::RenderPipeline {
+        match (cuts, back_faces) {
+            (true, back_faces) => &self.shadow_cut_out_pipelines[usize::from(!back_faces)],
             (false, true) => &self.shadow_pipeline,
             (false, false) => &self.shadow_open_pipeline,
         }

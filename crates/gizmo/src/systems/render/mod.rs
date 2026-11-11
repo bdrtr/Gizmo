@@ -8440,9 +8440,13 @@ mod golden_render_tests {
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum TestLight {
         Point,
+        /// A point light whose source is a sphere of this radius, metres.
+        Sphere(f32),
         /// Its cone's half-angle, radians.
         Spot(f32),
         Rect,
+        /// A rectangle light this wide and high, metres.
+        Panel(f32, f32),
         /// The sun, its direction `aim` (no position).
         Sun,
     }
@@ -8484,6 +8488,9 @@ mod golden_render_tests {
         /// A normal map on the floor tilting its shading normal this many radians toward +X (the
         /// plane's tangent), where it is not the geometry's.
         floor_normal_tilt: Option<f32>,
+        /// The casters drawn as well as casting, and receiving shadows — their own included — with
+        /// the floor receiving none.
+        drawn_casters: bool,
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
@@ -8495,6 +8502,7 @@ mod golden_render_tests {
                 camera: None,
                 open_floor: false,
                 floor_normal_tilt: None,
+                drawn_casters: false,
             }
         }
     }
@@ -8552,14 +8560,19 @@ mod golden_render_tests {
             }
         };
         world.add_component(floor, Material::new(floor_textures).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
-        world.add_component(floor, MeshRenderer::new());
+        world.add_component(floor, MeshRenderer::new().with_receives_shadows(!scene.drawn_casters));
         for &p in &scene.casters {
             let e = world.spawn();
             world.add_component(e, Transform::new(p).with_scale(Vec3::splat(0.6)));
             world.add_component(e, GlobalTransform::default());
             world.add_component(e, AssetManager::create_cube(&renderer.device));
             world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.9, 0.0));
-            world.add_component(e, MeshRenderer::new().with_shadows(gizmo_renderer::components::ShadowCasting::Only));
+            let shadows = if scene.drawn_casters {
+                gizmo_renderer::components::ShadowCasting::On
+            } else {
+                gizmo_renderer::components::ShadowCasting::Only
+            };
+            world.add_component(e, MeshRenderer::new().with_shadows(shadows));
         }
         for light in &scene.lights {
             let e = world.spawn();
@@ -8570,6 +8583,17 @@ mod golden_render_tests {
             let (intensity, casts_shadows) = (light.intensity, light.casts);
             match light.kind {
                 TestLight::Point => world.add_component(e, PointLight { casts_shadows, ..PointLight::new(Vec3::ONE, intensity, 60.0) }),
+                TestLight::Sphere(radius) => world.add_component(
+                    e,
+                    PointLight { casts_shadows, ..PointLight::new(Vec3::ONE, intensity, 60.0).with_source_radius(radius) },
+                ),
+                TestLight::Panel(width, height) => world.add_component(
+                    e,
+                    gizmo_renderer::components::RectLight {
+                        casts_shadows,
+                        ..gizmo_renderer::components::RectLight::new(Vec3::ONE, intensity, 60.0, width, height)
+                    },
+                ),
                 TestLight::Spot(outer) => world.add_component(
                     e,
                     SpotLight { casts_shadows, ..SpotLight::new(Vec3::ONE, intensity, 60.0, outer * 0.85, outer) },
@@ -8683,6 +8707,62 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// How a caster's shadow falls on the floor: (umbra, penumbra) pixel counts — darkened by more
+    /// than 80 % of the deepest darkening, and by between 15 % and 80 % of it.
+    fn umbra_and_penumbra(with: &[u8], without: &[u8]) -> (usize, usize) {
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        let dark: Vec<i32> = (0..with.len() / 4).map(|i| (luma(without, i) - luma(with, i)).max(0)).collect();
+        let deepest = *dark.iter().max().unwrap_or(&0);
+        let umbra = dark.iter().filter(|&&d| d * 100 > deepest * 80).count();
+        let penumbra = dark.iter().filter(|&&d| d * 100 > deepest * 15 && d * 100 <= deepest * 80).count();
+        (umbra, penumbra)
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A light with a size casts a soft shadow, sharp where the caster is near.** A local light's
+    /// shadow was a point's whatever its source: a 30 cm bulb, a 1 m softbox, a fluorescent tube all
+    /// cast a hard edge. The lookup finds the blockers between the surface and the light and filters
+    /// the edge as wide as the penumbra a disc of the source's radius throws past them
+    /// (`light_source_radius`), as the sun's angular radius does for the sun. Measured over a floor, a
+    /// cube under a light 3.5 m up: a point source's shadow is nearly all umbra; a 30 cm sphere's has
+    /// a penumbra several times as wide and a smaller umbra, and so has a 60 cm square panel's. And
+    /// raising the cube widens the penumbra against its shadow: the soft edge grows with the gap
+    /// between the caster and what it shadows, which a filter of fixed width cannot do.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_light_with_a_size_casts_a_soft_shadow() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let shadow = |kind: TestLight, cube_y: f32| async move {
+                let scene = LocalScene::new(&[LightAt::over(kind, 0.4, 0.3, true)], &[Vec3::new(0.0, cube_y, 0.0)]);
+                let with = local_light_frame(&scene).await;
+                let without = local_light_frame(&LocalScene { casters: Vec::new(), ..scene }).await;
+                umbra_and_penumbra(&with, &without)
+            };
+            // What share of a shadow is its penumbra.
+            let share = |(u, p): (usize, usize)| p as f32 / (u + p).max(1) as f32;
+            let point = shadow(TestLight::Point, 1.0).await;
+            let sphere = shadow(TestLight::Sphere(0.3), 1.0).await;
+            let panel = shadow(TestLight::Panel(0.6, 0.6), 1.0).await;
+            for (name, soft) in [("sphere", sphere), ("panel", panel)] {
+                assert!(share(soft) > share(point) + 0.2, "a {name}'s penumbra {soft:?} against a point's {point:?}");
+                assert!(soft.0 * 10 < point.0 * 8, "a {name}'s umbra {} against a point's {}", soft.0, point.0);
+            }
+            // Contact hardening: the same sphere over a cube resting just above the floor and one
+            // raised 1.6 m higher.
+            let low = shadow(TestLight::Sphere(0.3), 0.65).await;
+            let high = shadow(TestLight::Sphere(0.3), 2.25).await;
+            assert!(share(high) > share(low) + 0.2, "penumbra share low {:.2}, high {:.2}", share(low), share(high));
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **Every local light casts, when it asks to.** Only the sun and one point light could: a spot
     /// lit the floor behind a pillar, and a rectangle light too. A point, a spot (40°, 69°: one
     /// layer down the cone), a spot past `SPOT_FRUSTUM_MAX_ANGLE` (83°: six) and a rectangle light
@@ -8740,7 +8820,9 @@ mod golden_render_tests {
         }
         pollster::block_on(async {
             let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
-            for kind in [TestLight::Spot(0.7), TestLight::Point] {
+            // The large sources filter dozens of texels wide; without the receiver's plane the floor
+            // shadowed itself past ~40° from an 80 cm sphere.
+            for kind in [TestLight::Spot(0.7), TestLight::Point, TestLight::Sphere(0.8), TestLight::Panel(1.0, 1.0)] {
                 for degrees in [17.0_f32, 52.0, 72.0] {
                     let tilt = degrees.to_radians();
                     let at = Vec3::new(4.0 * tilt.sin(), 4.0 * tilt.cos(), 0.0);
@@ -8763,6 +8845,42 @@ mod golden_render_tests {
                     let shadowed = local_light_frame(&scene(true)).await;
                     let darker = (0..128 * 128).filter(|&i| luma(&shadowed, i) + allowed < luma(&unshadowed, i)).count();
                     assert_eq!(darker, 0, "{kind:?} 72° off a floor whose normal map tilts it {normal_tilt} rad shadows {darker} of its pixels by more than {allowed}");
+                }
+            }
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A solid lit by a local light does not shadow itself.** A local light's layers draw every caster
+    /// by both faces — a soft shadow measures its penumbra from the depth of what blocks it, and a
+    /// cube's back faces put that at its far side — so a cube's lit faces are in the map they are
+    /// looked up in, as the sun's cascades never let them be. The lookup's biases keep them off it: a
+    /// drawn cube under a point, a spot, a 40 cm sphere and an 80 cm panel, lit from the side and above
+    /// so its faces meet the light at every angle, darkens by no more than 2 levels of 255 anywhere
+    /// when its light's shadows are turned on (the floor takes none, so only the cube could).
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_solid_lit_by_a_local_light_does_not_shadow_itself() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+            let cube = Vec3::new(0.0, 0.6, 0.0);
+            for kind in [TestLight::Point, TestLight::Spot(0.9), TestLight::Sphere(0.4), TestLight::Panel(0.8, 0.8)] {
+                for at in [Vec3::new(2.5, 3.0, 1.5), Vec3::new(-3.0, 1.2, 2.0)] {
+                    let scene = |casts| LocalScene {
+                        drawn_casters: true,
+                        ..LocalScene::new(&[LightAt { kind, at, aim: cube - at, intensity: 40.0, casts }], &[cube])
+                    };
+                    let unshadowed = local_light_frame(&scene(false)).await;
+                    let shadowed = local_light_frame(&scene(true)).await;
+                    let darker = (0..128 * 128).filter(|&i| luma(&shadowed, i) + 2 < luma(&unshadowed, i)).count();
+                    assert_eq!(darker, 0, "{kind:?} from {at} darkens {darker} pixels of the cube it lights");
                 }
             }
         });

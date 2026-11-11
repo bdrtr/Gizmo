@@ -46,7 +46,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   are sphere, tube and rectangle, and spot lights take cookies (§A7: `source_radius` /
   `source_length` / `RectLight` / `SpotLight::cookie`, cookies native-only. Soft sun shadows and
   contact shadows are `DirectionalLight::angular_radius` / `contact_shadow_length`; a local light's
-  shadow is `casts_shadows`, hard, from the light's centre), occlusion culling is opt-in (`Occluder`, §A7b), motion blur
+  shadow is `casts_shadows`, as soft as its source is large), occlusion culling is opt-in (`Occluder`, §A7b), motion blur
   covers camera and objects but not transparent ones (§A7c, `PostProcess::motion_blur`; auto exposure
   is `renderer.auto_exposure`). Split screen works on the game path (`Camera::viewport`, §A5b), and a camera draws into a texture of the game's own with `CameraTarget` (on both paths, §A5b); the studio previews a
   split-screen game through its primary camera. Transparent materials blend by

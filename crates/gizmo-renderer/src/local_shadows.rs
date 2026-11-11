@@ -10,6 +10,9 @@
 //!   face a layer, the face chosen in the shader by the direction from the light
 //!   (`local_shadow_layer` in `common.wgsl`). A rectangle casts from its centre.
 //!
+//! Every layer draws its casters by both faces, and the lookup softens a light's edge by its
+//! source's size (`local_shadow_visibility`, `light_source_radius` in `common.wgsl`).
+//!
 //! The layers go to the lights that ask for them (`casts_shadows` on the light) in the frame's rank
 //! order — the order `collect_scene_lights` put them in, nearest influence first — until the pool
 //! of [`MAX_LOCAL_SHADOW_LAYERS`](crate::local_shadows::MAX_LOCAL_SHADOW_LAYERS) is spent. A light

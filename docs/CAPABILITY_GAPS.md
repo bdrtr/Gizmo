@@ -746,11 +746,9 @@ SMAA, and FXAA on as well changes nothing, since the chain runs one or the other
 ### A7. Area lights, light cookies, contact and soft shadows — **CLOSED 2026-11-02**
 
 Sphere, tube and rectangle lights exist, spot lights project cookies, the sun has soft and contact
-shadows, and since 2026-11-11 every local light casts when it asks to. The `area_lights` demo shows
-all of it. What is left is narrower than the heading ever was: no cube cookies for point lights, no
-cookies on web, and a local light's shadow is hard — cast from the light's centre, a sphere's, a
-tube's or a rectangle's size softening nothing (the sun's angular radius does soften its own). Each
-item:
+shadows, and since 2026-11-11 every local light casts when it asks to, as soft as its source is
+large. The `area_lights` demo shows all of it. What is left is narrower than the heading ever was: no
+cube cookies for point lights, and no cookies on web. Each item:
 
 - ~~**Local lights barely cast.**~~ **CLOSED 2026-11-11.** The sun cast through its cascades and one
   point light — the first in rank — through a cube map while `Renderer::point_shadows_enabled` was set,
@@ -775,7 +773,7 @@ item:
   casts all four ways through its side faces (1 421, 1 421, 1 392, 1 422); a cube 4 m off screen and
   outside the cascades casts 12 025 pixels into the frame; a spot and a point light 4 m apart cast 825
   and 577; an open floor 17°, 52° and 72° off a spot's or a point's axis does not shadow itself by a
-  single level. In the viewport, a point, a spot and a rectangle light cast alike (886, 877, 884), and
+  single level. In the viewport, a point, a spot and a point-sized rectangle light cast alike (886, 877, 880), and
   nothing without asking (`a_local_light_casts_in_the_viewport`). With a normal map tilting that floor
   1.2 rad toward the light, at most 3 levels of 255 remain — 10 without the depth bias, which is what
   it is for (the normal offset alone clears any flat surface); both biases read the shading normal, as
@@ -791,9 +789,23 @@ item:
   (3.8 million triangles) under 16 shadowed spots: 26 096 shadow instances and 15.3 ms a frame →
   5 698 and 10.7 ms (9.1 ms with no shadows); with the sun too, 50 020 and 23.0 ms → 13 607 and
   14.1 ms; every frame byte for byte the unculled one. A spot over one cube of a field of 400 draws 10
-  of the 401 casters. **Still open, each its own piece of work:** soft local shadows by the source's
-  size (PCSS, as the sun's angular radius does), and the volumetric pass, which scatters every local
-  light without asking its shadow.
+  of the 401 casters. **Soft by the source's size since the same day**, as the sun's angular radius
+  softens the sun's: the lookup finds the blockers between a surface and the light and filters the
+  edge as wide as the penumbra a disc of the source's radius throws past them (`light_source_radius`:
+  a sphere's or a spot's `source_radius`, a rectangle's half extents' geometric mean, a tube's
+  thickness and half length averaged). Two things it needed. The layers draw every caster by both
+  faces: a cube's back faces, which the cascades draw, put its blocking depth at its far side, and its
+  shadow came out a third as soft as its light throws (penumbra 182 pixels against 308). And each tap
+  is compared against the receiver's own plane there (Isidoro's receiver-plane bias), taken from the
+  pixel's screen-space neighbours, not its normal: a filter dozens of texels wide shadowed a slanted
+  floor with itself, and one following a normal map's tilt shadowed 13 105 pixels of it. Measured, a
+  cube under a light 3.5 m up: a point source's shadow is 439 pixels of umbra and 134 of penumbra, a
+  30 cm sphere's 283 and 308, a 60 cm panel's 279 and 311; the sphere's penumbra share is 0.41 over a
+  cube just above the floor and 0.73 over one 1.6 m higher. No floor — flat, or normal-mapped 0.9 rad
+  and 1.2 rad off — shadows itself by more than 2 (or 3) levels under any of them up to 72° off, nor
+  does a drawn cube lit from any side. **Still open:** the volumetric pass scatters every local light
+  without asking its shadow; and the sun's own soft shadow reads its blockers from the cascades' back
+  faces, as the local layers did.
 
 - ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
   faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or
