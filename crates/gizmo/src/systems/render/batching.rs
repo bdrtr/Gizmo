@@ -234,15 +234,13 @@ pub struct DrawItem {
     /// Number of camera-visible instances (== the old camera-culled set). Main/geometry
     /// passes draw `first_instance .. first_instance + camera_count`.
     pub(super) camera_count: u32,
-    /// Start of this batch's SHADOW-ONLY casters in region B (all camera instances of all
-    /// batches come first, then all shadow-only casters — see `collect_draw_items`). These
-    /// are NOT contiguous with the camera range, so shadow passes draw them as a separate
-    /// range. (Only the shadow passes read it — no shadows on web, the fields are dead there.)
+    /// Both regions' instances — the camera-visible ones (region A) and this batch's shadow-only
+    /// casters, after every camera instance in region B (see `collect_draw_items`) — cut into
+    /// spatial runs with a box each, for the shadow passes to draw the ones their frustum meets
+    /// (`gizmo_renderer::shadow_culling`). Empty for a batch that casts nothing, and on a frame that
+    /// draws no shadow map. (Only the shadow passes read it — no shadows on web or a phone.)
     #[cfg_attr(gizmo_forward_only, allow(dead_code))]
-    pub(super) shadow_first_instance: u32,
-    /// Number of shadow-only casters (region B) for this batch.
-    #[cfg_attr(gizmo_forward_only, allow(dead_code))]
-    pub(super) shadow_count: u32,
+    pub(super) shadow_chunks: Vec<gizmo_renderer::shadow_culling::ShadowChunk>,
     /// Representative distance used to sort BACKDROP and TRANSPARENT batches back-to-front
     /// (see `cmp_draw_order` / `batch_sort_depth`). 0.0 for opaque batches (unused —
     /// the depth buffer resolves opaque draw order).
@@ -293,17 +291,6 @@ impl DrawItem {
             ..(self.first_instance + self.camera_count)
                 .min(uploaded)
                 .max(self.first_instance)
-    }
-
-    /// Shadow-only caster range (region B), clamped to what fit the GPU buffer. Because
-    /// region B is appended AFTER every camera instance, capacity truncation drops these
-    /// off-screen casters before it ever drops camera-visible geometry.
-    #[cfg(not(gizmo_forward_only))]
-    pub(super) fn shadow_instance_range(&self, uploaded: u32) -> std::ops::Range<u32> {
-        self.shadow_first_instance
-            ..(self.shadow_first_instance + self.shadow_count)
-                .min(uploaded)
-                .max(self.shadow_first_instance)
     }
 }
 
@@ -407,6 +394,12 @@ pub(crate) struct BatchData {
     previous: Vec<[[f32; 4]; 4]>,
     /// The same for `shadow_instances`; never read by the G-buffer, kept so indices line up.
     shadow_previous: Vec<[[f32; 4]; 4]>,
+    /// Each of `instances`' world box as it is drawn, index for index: what the shadow passes cull
+    /// it by. (A transparent batch's paint-order sort leaves these behind; it casts nothing, so
+    /// nothing reads them.)
+    bounds: Vec<crate::math::Aabb>,
+    /// The same for `shadow_instances`.
+    shadow_bounds: Vec<crate::math::Aabb>,
     /// How many collections in a row gave this batch nothing to draw — see `IDLE_COLLECTIONS`.
     idle: u32,
 }
@@ -557,6 +550,8 @@ pub(super) fn collect_draw_items(
             batch.shadow_instances.clear();
             batch.previous.clear();
             batch.shadow_previous.clear();
+            batch.bounds.clear();
+            batch.shadow_bounds.clear();
         }
         cache.instances.clear();
         cache.draw_items.clear();
@@ -864,15 +859,19 @@ pub(super) fn collect_draw_items(
                     shadow_instances: Vec::new(),
                     previous: Vec::new(),
                     shadow_previous: Vec::new(),
+                    bounds: Vec::new(),
+                    shadow_bounds: Vec::new(),
                     idle: 0,
                 });
                 if camera_visible {
                     batch.instances.push(instance_data);
                     batch.previous.push(previous_model);
+                    batch.bounds.push(drawn_world_aabb);
                 } else {
                     // Off-screen caster kept above for shadow maps only.
                     batch.shadow_instances.push(instance_data);
                     batch.shadow_previous.push(previous_model);
+                    batch.shadow_bounds.push(drawn_world_aabb);
                 }
             };
         }
@@ -969,8 +968,8 @@ pub(super) fn collect_draw_items(
         // eaten slots (and which mesh vanished flipped with nondeterministic HashMap order).
         // Splitting the regions means truncation drops off-screen shadow casters first and
         // never starves on-screen geometry. The two ranges are non-contiguous, so DrawItem
-        // carries both (first_instance/camera_count and shadow_first_instance/shadow_count)
-        // and the shadow pass draws them separately.
+        // carries its camera range (first_instance/camera_count) and chunks over both regions,
+        // which the shadow passes draw.
         // Blending is paint order — the transparent pipeline writes no depth — so a transparent
         // batch's instances have to be far-to-near too, not just the batches relative to each
         // other. Only the editor did this; the engine appended them in collection order, so two
@@ -983,6 +982,25 @@ pub(super) fn collect_draw_items(
                 // another instance's history.
                 batch.previous = batch.instances.iter().map(|i| i.model).collect();
             }
+        }
+
+        // A batch that casts into a shadow map this frame draws, in spatial order, so that its runs
+        // of neighbours are compact and a shadow pass can draw the runs its frustum meets
+        // (`gizmo_renderer::shadow_culling`). Opaque only: a transparent or backdrop batch casts
+        // nothing, and its order is its paint order.
+        let shadows_drawn = !shadow_vp.is_empty();
+        for batch in cache.batches.values_mut() {
+            if !shadows_drawn || !batch.casts_shadows || batch.is_transparent || batch.is_backdrop {
+                continue;
+            }
+            let order = gizmo_renderer::shadow_culling::spatial_order(&batch.bounds);
+            batch.instances = order.iter().map(|&i| batch.instances[i as usize]).collect();
+            batch.previous = order.iter().map(|&i| batch.previous[i as usize]).collect();
+            batch.bounds = order.iter().map(|&i| batch.bounds[i as usize]).collect();
+            let order = gizmo_renderer::shadow_culling::spatial_order(&batch.shadow_bounds);
+            batch.shadow_instances = order.iter().map(|&i| batch.shadow_instances[i as usize]).collect();
+            batch.shadow_previous = order.iter().map(|&i| batch.shadow_previous[i as usize]).collect();
+            batch.shadow_bounds = order.iter().map(|&i| batch.shadow_bounds[i as usize]).collect();
         }
 
         let batches: Vec<&BatchData> = cache
@@ -1040,8 +1058,13 @@ pub(super) fn collect_draw_items(
                 layer: draw_layer(batch.is_backdrop, batch.is_transmissive, batch.is_transparent),
                 first_instance,
                 camera_count,
-                shadow_first_instance: 0,
-                shadow_count: 0,
+                shadow_chunks: {
+                    let mut chunks = Vec::new();
+                    if shadows_drawn && batch.casts_shadows {
+                        gizmo_renderer::shadow_culling::chunk(&batch.bounds, first_instance, &mut chunks);
+                    }
+                    chunks
+                },
                 sort_depth,
             });
         }
@@ -1054,8 +1077,9 @@ pub(super) fn collect_draw_items(
             local_instances.extend(&batch.shadow_instances);
             local_previous.extend(&batch.shadow_previous);
             let item = &mut local_draw_items[draw_item_base + i];
-            item.shadow_first_instance = shadow_first_instance;
-            item.shadow_count = batch.shadow_instances.len() as u32;
+            if shadows_drawn && batch.casts_shadows {
+                gizmo_renderer::shadow_culling::chunk(&batch.shadow_bounds, shadow_first_instance, &mut item.shadow_chunks);
+            }
         }
 
         // Order draw items for correct compositing: backdrops first, then the opaque world,
@@ -1086,7 +1110,7 @@ pub(super) fn collect_draw_items(
         }
 
         // Instance limiti kontrolü (Taşmaları önlemek için capaciteyi zorla)
-        let max_instances = renderer.scene.instance_capacity;
+        let max_instances = renderer.scene.view_instance_capacity();
         let instances_slice = if cache.instances.len() > max_instances {
             &cache.instances[..max_instances]
         } else {
@@ -1094,8 +1118,9 @@ pub(super) fn collect_draw_items(
         };
 
         if !instances_slice.is_empty() {
+            // The active view's own buffer: its instances are what its camera sees.
             renderer.queue.write_buffer(
-                &renderer.scene.instance_buffer,
+                renderer.scene.view_instance_buffer(),
                 0,
                 bytemuck::cast_slice(instances_slice),
             );

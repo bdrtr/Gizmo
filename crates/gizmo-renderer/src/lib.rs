@@ -134,6 +134,8 @@ pub mod reflection;
 pub mod cookies;
 /// The shadow maps point, spot and rectangle lights cast through: one array, layers by rank.
 pub mod local_shadows;
+/// Which casters a shadow pass draws: chunks of a batch's instances, culled by the pass's frustum.
+pub mod shadow_culling;
 /// Auto exposure: the luminance sensor fed back into the composite pass, on the GPU.
 pub mod auto_exposure;
 /// Contrast-adaptive sharpening, the last post pass.

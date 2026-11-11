@@ -479,6 +479,7 @@ fn draw_viewport_overlays(
         ("tris", format_thousands(stats.triangles)),
         ("instances", stats.instances.to_string()),
         ("shadow passes", stats.shadow_passes.to_string()),
+        ("shadow instances", stats.shadow_instances.to_string()),
         ("entities", entities.to_string()),
     ];
     // The prototype's `vram` row, present only when the backend actually reports allocations.

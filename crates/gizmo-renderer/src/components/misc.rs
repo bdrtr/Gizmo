@@ -460,9 +460,12 @@ pub struct RenderStats {
     /// Instances uploaded this frame, across all batches.
     pub instances: u32,
     /// Depth passes recorded into shadow maps: the sun's four cascades when there is a sun, and
-    /// one per layer of every local light that casts (six for a point light). Each draws every
-    /// caster in the frame, so this is the multiplier on the shadows' share of it.
+    /// one per layer of every local light that casts (six for a point light).
     pub shadow_passes: u32,
+    /// Instances those passes drew between them. Each pass draws the casters whose chunk of
+    /// neighbours meets its frustum (`gizmo_renderer::shadow_culling`), so a lamp lighting a corner
+    /// of the level adds that corner, not the level.
+    pub shadow_instances: u32,
     /// GPU memory wgpu has allocated, in bytes — `None` when the backend does not report it.
     ///
     /// This is the allocator's view (`Device::generate_allocator_report`), not the driver's total

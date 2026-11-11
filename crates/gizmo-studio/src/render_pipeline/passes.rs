@@ -180,8 +180,8 @@ pub(super) fn record_studio_shadow_passes(
     local_layers: &[gizmo::renderer::local_shadows::LocalShadowLayer],
     camera_position: gizmo::math::Vec3,
     elapsed_time: f32,
-) -> u32 {
-    let mut passes = 0;
+) -> (u32, u32) {
+    let (mut passes, mut drawn) = (0, 0);
     for (cascade_i, &cascade_view_proj) in light_view_proj_cascades.into_iter().flatten().enumerate() {
         renderer.queue.write_buffer(
             renderer.scene.view_shadow_cascade_buffer(cascade_i),
@@ -192,13 +192,14 @@ pub(super) fn record_studio_shadow_passes(
                 elapsed_time,
             )),
         );
-        record_studio_caster_pass(
+        drawn += record_studio_caster_pass(
             encoder,
             renderer,
             flat_batches,
             &format!("Shadow Pass cascade {cascade_i}"),
             &renderer.scene.shadow_cascade_layer_views[cascade_i],
             renderer.scene.view_shadow_pass_bind_group(cascade_i),
+            Mat4::from_cols_array_2d(&cascade_view_proj),
         );
         passes += 1;
     }
@@ -213,20 +214,22 @@ pub(super) fn record_studio_shadow_passes(
                 elapsed_time,
             )),
         );
-        record_studio_caster_pass(
+        drawn += record_studio_caster_pass(
             encoder,
             renderer,
             flat_batches,
             "Local Shadow Pass",
             &renderer.scene.local_shadow_maps.layer_views[layer_i],
             renderer.scene.view_local_shadow_pass_bind_group(layer_i),
+            layer.view_proj,
         );
         passes += 1;
     }
-    passes
+    (passes, drawn)
 }
 
-/// One depth pass into `target`, every caster drawn through the shadow pass group `light`.
+/// One depth pass into `target`, through the shadow pass group `light`, drawing the casters whose
+/// chunks meet `view_proj`'s frustum. Returns the instances it drew.
 fn record_studio_caster_pass(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &gizmo::renderer::Renderer,
@@ -234,7 +237,10 @@ fn record_studio_caster_pass(
     label: &str,
     target: &wgpu::TextureView,
     light: &wgpu::BindGroup,
-) {
+    view_proj: Mat4,
+) -> u32 {
+    let frustum = gizmo::renderer::Frustum::from_matrix(&view_proj);
+    let mut drawn = 0;
     let mut shadow_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &[],
@@ -294,29 +300,31 @@ fn record_studio_caster_pass(
                 continue;
             }
         }
-        if batch.start_instance >= renderer.scene.instance_capacity as u32 {
-            continue;
-        }
         let pipeline = match batch.surface {
             Some(id) => renderer.custom_materials.surface(id).and_then(|s| s.shadow_pipeline(batch.closed)),
             None => Some(renderer.scene.shadow_pipeline_for(batch.closed, batch.discards)),
         };
         // `None` is also an id with nothing behind it: it draws nothing, its shadow included.
         let Some(pipeline) = pipeline else { continue };
+        // The runs of this batch — camera-visible instances and off-screen casters alike — that this
+        // pass's frustum meets, clamped to what the instance buffer holds.
+        let capacity = renderer.scene.instance_capacity as u32;
+        let mut ranges = gizmo::renderer::shadow_culling::visible_ranges(&batch.shadow_chunks, &frustum, capacity).peekable();
+        if ranges.peek().is_none() {
+            continue;
+        }
         if bound != Some(std::ptr::from_ref(pipeline)) {
             shadow_pass.set_pipeline(pipeline);
             bound = Some(std::ptr::from_ref(pipeline));
         }
-        // Shadow pass draws the FULL range (camera-visible + off-screen casters).
-        let safe_end = std::cmp::min(
-            batch.shadow_end_instance,
-            renderer.scene.instance_capacity as u32,
-        );
-
         shadow_pass.set_bind_group(1, &*batch.bind_group, &[]);
         shadow_pass.set_bind_group(2, &*batch.skeleton_bg, &[]);
-        batch.record_draw(&mut shadow_pass, batch.start_instance..safe_end);
+        for range in ranges {
+            drawn += range.end - range.start;
+            batch.record_draw(&mut shadow_pass, range);
+        }
     }
+    drawn
 }
 
 /// Records the scene into the HDR target.

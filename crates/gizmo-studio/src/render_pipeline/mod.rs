@@ -125,8 +125,8 @@ fn draw_studio_frame(
                 sky: renderer.sky,
                 ..Default::default()
             },
-            // The viewport draws the local lights' shadow layers, as the game does.
-            local_shadows: true,
+            // The viewport draws shadow maps, as the game does.
+            shadow_maps: true,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
@@ -425,6 +425,8 @@ fn draw_studio_frame(
                         skeleton_bg: skel_bg,
                         instances: vec_pool.pop().unwrap_or_else(|| Vec::with_capacity(32)),
                         shadow_instances: Vec::new(),
+                        bounds: Vec::new(),
+                        shadow_bounds: Vec::new(),
                         is_skybox,
                         is_grid,
                         is_unlit,
@@ -444,9 +446,11 @@ fn draw_studio_frame(
 
                 if camera_visible {
                     batch.instances.push(instance_data);
+                    batch.bounds.push(world_aabb);
                 } else {
                     // Off-screen caster kept above for shadow maps only.
                     batch.shadow_instances.push(instance_data);
+                    batch.shadow_bounds.push(world_aabb);
                 }
                 }
             }
@@ -479,14 +483,34 @@ fn draw_studio_frame(
                 }
 
                 for mut batch in drained {
+                    // A batch that casts, in spatial order, cut into runs for the shadow passes to
+                    // cull (`gizmo_renderer::shadow_culling`) — through the game path's functions.
+                    // Whether or not this view draws a shadow map: the Game panel draws its own
+                    // from these same batches, and a light this camera's ranking left out may be in
+                    // its. Opaque only: a transparent batch casts nothing, and its order is its
+                    // paint order.
+                    let chunked = batch.casts_shadows && !is_transparent && !batch.is_backdrop;
+                    if chunked {
+                        use gizmo::renderer::shadow_culling::spatial_order;
+                        let order = spatial_order(&batch.bounds);
+                        batch.instances = order.iter().map(|&i| batch.instances[i as usize]).collect();
+                        batch.bounds = order.iter().map(|&i| batch.bounds[i as usize]).collect();
+                        let order = spatial_order(&batch.shadow_bounds);
+                        batch.shadow_instances = order.iter().map(|&i| batch.shadow_instances[i as usize]).collect();
+                        batch.shadow_bounds = order.iter().map(|&i| batch.shadow_bounds[i as usize]).collect();
+                    }
                     let start = all_inst.len() as u32;
                     // Camera-visible instances FIRST (main passes draw up to end_instance),
-                    // then off-screen shadow casters (shadow pass draws up to shadow_end_instance).
+                    // then off-screen shadow casters (the shadow passes draw `shadow_chunks`).
                     let count = batch.instances.len() as u32;
                     all_inst.append(&mut batch.instances);
                     vec_pool.push(batch.instances); // Empty vec with capacity is pushed back!
-                    let shadow_count = batch.shadow_instances.len() as u32;
                     all_inst.append(&mut batch.shadow_instances);
+                    let mut shadow_chunks = Vec::new();
+                    if chunked {
+                        gizmo::renderer::shadow_culling::chunk(&batch.bounds, start, &mut shadow_chunks);
+                        gizmo::renderer::shadow_culling::chunk(&batch.shadow_bounds, start + count, &mut shadow_chunks);
+                    }
 
                     flat_b.push(FlatBatchData {
                         vbuf: batch.vbuf,
@@ -498,7 +522,7 @@ fn draw_studio_frame(
                         skeleton_bg: batch.skeleton_bg,
                         start_instance: start,
                         end_instance: start + count,
-                        shadow_end_instance: start + count + shadow_count,
+                        shadow_chunks,
                         is_transparent,
                         is_transmissive: batch.is_transmissive,
                         wire: batch.wire,
@@ -648,7 +672,7 @@ fn draw_studio_frame(
             }
 
             // --- 1. CSM GÖLGE PASS + 2. ANA RENDER PASS (Tier 3: geçişler ayrı fn) ---
-            render_stats.shadow_passes = record_studio_shadow_passes(
+            (render_stats.shadow_passes, render_stats.shadow_instances) = record_studio_shadow_passes(
                 encoder,
                 renderer,
                 flat_batches.as_slice(),
@@ -826,7 +850,7 @@ fn record_game_view(
                 sky: renderer.sky,
                 ..Default::default()
             },
-            local_shadows: true,
+            shadow_maps: true,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,

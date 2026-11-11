@@ -785,10 +785,15 @@ item:
   the plane's at 431), through a cube map and the hardware's cube lookup; nothing had measured it
   against anything. Not on the web or a phone, which draw no shadows. The `spotlight` demo's sixteen
   cones cast now — its documentation said they did — and the `lighting`
-  demo's lamps and spot. **Still open, each its own piece of work:** soft local shadows by the source's
-  size (PCSS, as the sun's angular radius does); per-layer culling (each layer draws every caster in the
-  frame, as each cascade does, so sixteen shadowed spots are sixteen more depth passes over the scene —
-  unmeasured); and the volumetric pass, which scatters every local light without asking its shadow.
+  demo's lamps and spot. **Each pass draws only the casters in its frustum since the same day**
+  (`gizmo_renderer::shadow_culling`): a batch's instances are in spatial order, cut into runs of 64
+  with a box each, and every cascade and layer draws the runs it meets. Measured on 2 500 objects
+  (3.8 million triangles) under 16 shadowed spots: 26 096 shadow instances and 15.3 ms a frame →
+  5 698 and 10.7 ms (9.1 ms with no shadows); with the sun too, 50 020 and 23.0 ms → 13 607 and
+  14.1 ms; every frame byte for byte the unculled one. A spot over one cube of a field of 400 draws 10
+  of the 401 casters. **Still open, each its own piece of work:** soft local shadows by the source's
+  size (PCSS, as the sun's angular radius does), and the volumetric pass, which scatters every local
+  light without asking its shadow.
 
 - ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
   faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or

@@ -70,6 +70,10 @@ pub(super) struct BatchData {
     /// Casters outside the camera frustum but inside a shadow cascade's light frustum —
     /// drawn into the shadow maps only so off-screen objects still cast visible shadows.
     pub(super) shadow_instances: Vec<gizmo::renderer::InstanceRaw>,
+    /// Each of `instances`' world box, index for index — what the shadow passes cull it by.
+    pub(super) bounds: Vec<gizmo::math::Aabb>,
+    /// The same for `shadow_instances`.
+    pub(super) shadow_bounds: Vec<gizmo::math::Aabb>,
     pub(super) is_skybox: bool,
     pub(super) is_grid: bool,
     pub(super) is_unlit: bool,
@@ -126,9 +130,11 @@ pub(super) struct FlatBatchData {
     pub(super) start_instance: u32,
     /// End of the CAMERA-visible range (main passes draw `start..end_instance`).
     pub(super) end_instance: u32,
-    /// End of the full range incl. off-screen shadow casters (shadow pass draws
-    /// `start..shadow_end_instance`). Equals `end_instance` when there are none.
-    pub(super) shadow_end_instance: u32,
+    /// The camera-visible instances and, after them, the off-screen casters, cut into spatial runs
+    /// with a box each for the shadow passes to draw the ones their frustum meets
+    /// (`gizmo_renderer::shadow_culling`, as the game path does). Empty for a batch that casts
+    /// nothing, and on a frame that draws no shadow map.
+    pub(super) shadow_chunks: Vec<gizmo::renderer::shadow_culling::ShadowChunk>,
     pub(super) is_transparent: bool,
     /// The wireframe overlay's group 5, if this batch's lines are drawn.
     pub(super) wire: Option<std::sync::Arc<wgpu::BindGroup>>,

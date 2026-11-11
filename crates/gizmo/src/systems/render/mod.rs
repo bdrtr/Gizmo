@@ -1420,8 +1420,8 @@ fn draw_camera_view(
                 fog: renderer.fog,
                 sky: renderer.sky,
             },
-            // The forward-only path has no shadow passes to draw them with.
-            local_shadows: cfg!(not(gizmo_forward_only)),
+            // The forward-only path has no shadow passes: no maps to plan or keep casters for.
+            shadow_maps: cfg!(not(gizmo_forward_only)),
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
@@ -1548,16 +1548,17 @@ fn draw_camera_view(
     // `load_shader_web` ile sökülür) — depth-only CSM/point geçitleri boşa GPU olur.
     #[cfg(not(gizmo_forward_only))]
     {
-        let shadow_passes = passes::record_shadow_passes(
+        let (shadow_passes, shadow_instances) = passes::record_shadow_passes(
             encoder,
             renderer,
             &draw_items,
             uploaded_instances,
-            setup.draws_cascades(),
-            setup.local_shadows.layers().len(),
+            setup.draws_cascades().then_some(&setup.cascade_view_projs),
+            setup.local_shadows.layers(),
         );
         if let Some(stats) = renderer.render_stats.as_mut() {
             stats.shadow_passes = shadow_passes;
+            stats.shadow_instances = shadow_instances;
         }
     }
     passes::record_deferred_geometry(
@@ -8643,6 +8644,45 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
+    /// **A shadow pass draws the casters in its own frustum.** Every pass drew every caster: a spot
+    /// lighting one cube of a 20 × 20 field drew all 400 into its layer. A batch's instances are
+    /// in spatial order now, in runs of 64 with a box each, and a pass draws the runs its frustum
+    /// meets (`gizmo_renderer::shadow_culling`): with the whole field in view, that spot's pass draws
+    /// 10 of the 401 casters (the floor among them; all 401 without the culling), and the cube under
+    /// it still casts. Measured on 2 500 objects under 16 shadowed spots and the sun, with
+    /// every frame byte for byte the one drawn without culling: shadow instances 50 020 → 13 607,
+    /// the frame 23.0 → 14.1 ms (16 spots alone: 26 096 → 5 698, 15.3 → 10.7 ms).
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_shadow_pass_draws_the_casters_in_its_frustum() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let field: Vec<Vec3> = (0..400).map(|i| Vec3::new((i % 20) as f32 * 3.0 - 28.5, 0.6, (i / 20) as f32 * 3.0 - 28.5)).collect();
+            let spot = LightAt { kind: TestLight::Spot(0.6), at: Vec3::new(1.5, 4.0, 1.5), aim: Vec3::NEG_Y, intensity: 40.0, casts: true };
+            let down = 0.002 - std::f32::consts::FRAC_PI_2;
+            // From 60 m up the whole field is in the camera's frustum, every cube uploaded — so what
+            // the spot's pass leaves out, the culling left out (all 401 casters, the floor with them,
+            // without it).
+            let wide = LocalScene { camera: Some((Vec3::new(1.5, 60.0, 1.6), -std::f32::consts::FRAC_PI_2, down)), ..LocalScene::new(&[spot], &field) };
+            let (_, stats) = local_light_render(&wide).await;
+            assert_eq!(stats.shadow_passes, 1);
+            assert!(stats.shadow_instances <= 65, "one spot over a field of 400 draws {} of them", stats.shadow_instances);
+            // And from close by, the cube under the spot casts all the same.
+            let near = LocalScene { camera: Some((Vec3::new(1.5, 9.0, 1.6), -std::f32::consts::FRAC_PI_2, down)), ..wide.clone() };
+            let with = local_light_frame(&near).await;
+            let without = local_light_frame(&LocalScene { casters: Vec::new(), ..near }).await;
+            let shadow = shadow_pixels(&with, &without).len();
+            assert!(shadow > 200, "the cube under the spot casts {shadow} pixels");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **Every local light casts, when it asks to.** Only the sun and one point light could: a spot
     /// lit the floor behind a pillar, and a rectangle light too. A point, a spot (40°, 69°: one
     /// layer down the cone), a spot past `SPOT_FRUSTUM_MAX_ANGLE` (83°: six) and a rectangle light
@@ -10188,8 +10228,8 @@ mod golden_render_tests {
         (a, b)
     }
 
-    /// The scene both two-camera fixtures use: an off-centre cube, a floor to receive its shadow,
-    /// a shadow-casting sun, and one camera.
+    /// The scene both two-camera fixtures use: an off-centre cube the first camera sees, a sphere
+    /// the second does, a floor to receive their shadows, a shadow-casting sun, and one camera.
     ///
     /// Shared so the single-camera reference and the two-pass run cannot drift — a reference that
     /// rendered a different scene would compare nothing.
@@ -10215,6 +10255,21 @@ mod golden_render_tests {
             Material::new(tex).with_pbr(Vec4::new(0.9, 0.5, 0.2, 1.0), 0.5, 0.0),
         );
         world.add_component(cube, MeshRenderer::new());
+
+        // A sphere only the second camera sees, as the cube is one only the first sees: what each
+        // view draws is a different list of instances. With one instance buffer between the views
+        // the first pass drew the second's list, and the test held only while the two happened to
+        // lay their instances out alike — which they stopped doing on a phone's path the day it
+        // stopped keeping off-screen objects for shadow maps it never draws (2026-11-11).
+        let sphere = world.spawn();
+        world.add_component(sphere, Transform::new(Vec3::new(-5.5, 0.0, 0.0)));
+        world.add_component(sphere, GlobalTransform::default());
+        world.add_component(sphere, AssetManager::create_sphere(&renderer.device, 0.5, 16, 24));
+        world.add_component(
+            sphere,
+            Material::new(tex2.clone()).with_pbr(Vec4::new(0.2, 0.5, 0.9, 1.0), 0.5, 0.0),
+        );
+        world.add_component(sphere, MeshRenderer::new());
 
         // A floor for the cube to cast onto. Without something receiving a shadow, the cascade
         // split is unobservable and a test comparing frames measures only the camera.

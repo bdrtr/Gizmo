@@ -57,8 +57,11 @@ fn casts_into_shadow_maps(renderer: &Renderer, item: &DrawItem) -> bool {
     }
 }
 
-/// One depth pass into `target`, drawing every caster through the shadow pass group `light`.
+/// One depth pass into `target`, through the shadow pass group `light`, drawing the casters whose
+/// chunks meet `view_proj`'s frustum (`gizmo_renderer::shadow_culling`). Returns the instances it
+/// drew.
 #[cfg(not(gizmo_forward_only))]
+#[allow(clippy::too_many_arguments)]
 fn record_caster_pass(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &Renderer,
@@ -67,7 +70,10 @@ fn record_caster_pass(
     label: &str,
     target: &wgpu::TextureView,
     light: &wgpu::BindGroup,
-) {
+    view_proj: Mat4,
+) -> u32 {
+    let frustum = crate::math::Frustum::from_matrix(&view_proj);
+    let mut drawn = 0;
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some(label),
         color_attachments: &[],
@@ -83,42 +89,48 @@ fn record_caster_pass(
     // Every shadow pipeline has the same groups: the light's matrix, the material (read by a
     // cut-out), the skeleton and the instances.
     pass.set_bind_group(0, light, &[]);
-    pass.set_bind_group(3, &renderer.scene.instance_bind_group, &[]);
+    pass.set_bind_group(3, renderer.scene.view_instance_bind_group(), &[]);
     let mut bound = None;
     for item in draw_items {
         if !casts_into_shadow_maps(renderer, item) {
             continue;
         }
         let Some(pipeline) = caster_pipeline(renderer, item) else { continue };
-        bind_caster(&mut pass, renderer, item, pipeline, &mut bound);
-        // Two-region instance layout (see collect_draw_items): the camera-visible instances
-        // (region A) and the off-screen shadow-only casters (region B) are not contiguous, so cast
-        // from BOTH ranges with a draw each. Empty ranges draw 0 instances = no-op. Through
+        // The runs of this batch's instances — camera-visible ones (region A) and off-screen
+        // casters (region B) alike — that this pass's frustum meets, each a draw. Through
         // `record_draw`, which binds the index buffer: the point light's cube drew `0..vertex_count`
         // unindexed until 2026-11-11, so an indexed mesh — every primitive and import — cast its
         // deduplicated corners taken three at a time, a plane its first triangle and nothing of the
         // second.
-        item.record_draw(&mut pass, item.camera_instance_range(uploaded_instances));
-        item.record_draw(&mut pass, item.shadow_instance_range(uploaded_instances));
+        let mut ranges = gizmo_renderer::shadow_culling::visible_ranges(&item.shadow_chunks, &frustum, uploaded_instances).peekable();
+        if ranges.peek().is_some() {
+            bind_caster(&mut pass, renderer, item, pipeline, &mut bound);
+        }
+        for range in ranges {
+            drawn += range.end - range.start;
+            item.record_draw(&mut pass, range);
+        }
     }
+    drawn
 }
 
-/// The frame's shadow maps, and how many depth passes they took: one per cascade when `cascades`
+/// The frame's shadow maps: one depth pass per cascade when `cascades` holds their matrices
 /// (`SceneSetup::draws_cascades` — the frame has a sun), then one per local shadow layer the frame
-/// planned (`local_layers`, `SceneSetup::local_shadows`), each layer's matrix already written to its
-/// buffer. A frame with no sun and no light that casts records none.
+/// planned (`SceneSetup::local_shadows`), each matrix already written to its pass's buffer. A frame
+/// with no sun and no light that casts records none. Returns the passes recorded and the instances
+/// they drew between them.
 #[cfg(not(gizmo_forward_only))]
 pub fn record_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &Renderer,
     draw_items: &[DrawItem],
     uploaded_instances: u32,
-    cascades: bool,
-    local_layers: usize,
-) -> u32 {
-    let mut passes = 0;
-    for i in (0..crate::renderer::CASCADE_COUNT).filter(|_| cascades) {
-        record_caster_pass(
+    cascades: Option<&[Mat4; crate::renderer::CASCADE_COUNT]>,
+    local_layers: &[gizmo_renderer::local_shadows::LocalShadowLayer],
+) -> (u32, u32) {
+    let (mut passes, mut drawn) = (0, 0);
+    for (i, view_proj) in cascades.into_iter().flatten().enumerate() {
+        drawn += record_caster_pass(
             encoder,
             renderer,
             draw_items,
@@ -126,12 +138,13 @@ pub fn record_shadow_passes(
             "Shadow Pass",
             &renderer.scene.shadow_cascade_layer_views[i],
             renderer.scene.view_shadow_pass_bind_group(i),
+            *view_proj,
         );
         passes += 1;
     }
-    let local_layers = local_layers.min(renderer.scene.local_shadow_maps.layers());
-    for i in 0..local_layers {
-        record_caster_pass(
+    let local_layers = &local_layers[..local_layers.len().min(renderer.scene.local_shadow_maps.layers())];
+    for (i, layer) in local_layers.iter().enumerate() {
+        drawn += record_caster_pass(
             encoder,
             renderer,
             draw_items,
@@ -139,8 +152,9 @@ pub fn record_shadow_passes(
             "Local Shadow Pass",
             &renderer.scene.local_shadow_maps.layer_views[i],
             renderer.scene.view_local_shadow_pass_bind_group(i),
+            layer.view_proj,
         );
         passes += 1;
     }
-    passes
+    (passes, drawn)
 }

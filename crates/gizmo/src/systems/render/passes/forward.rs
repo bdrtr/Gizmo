@@ -141,7 +141,7 @@ fn begin_forward_pass<'e>(
     // Web şemasında shadow grubu pipeline layout'unda yok (4-grup limiti).
     #[cfg(not(gizmo_forward_only))]
     render_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-    render_pass.set_bind_group(BG_INSTANCE, &renderer.scene.instance_bind_group, &[]);
+    render_pass.set_bind_group(BG_INSTANCE, renderer.scene.view_instance_bind_group(), &[]);
     // Group 5 of the lit pipelines: the irradiance volume's group, for reflection probes.
     // Bound once; it stays bound across the pipeline switches below.
     #[cfg(not(gizmo_forward_only))]

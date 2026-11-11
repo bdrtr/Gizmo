@@ -37,7 +37,7 @@ fn a_camera() -> CameraFrame {
 }
 
 /// The arguments the **game** path passes: environment presets and debug shading from the renderer,
-/// the local lights' shadow layers drawn.
+/// shadow maps drawn.
 fn game_inputs() -> SceneSetupInputs {
     SceneSetupInputs {
         camera: a_camera(),
@@ -45,7 +45,7 @@ fn game_inputs() -> SceneSetupInputs {
         cam_fov: 0.8,
         // Live renderer state in the real call; the values themselves are not the subject here.
         environment: EnvironmentFrame { preset: 2, preset_2: 3, blend_t: 0.5, shading_mode: 0, clear_color: None, wireframe_color: None, fog: None, sky: None },
-        local_shadows: true,
+        shadow_maps: true,
         elapsed_time: 7.5,
         light_cookies: Default::default(),
         shadow_settings: Default::default(),
@@ -53,7 +53,7 @@ fn game_inputs() -> SceneSetupInputs {
 }
 
 /// The arguments the **editor** path passes: no environment blend, debug shading from the viewport
-/// dropdown — and the local lights' shadow layers drawn, as the game draws them (it drew none until
+/// dropdown — and shadow maps drawn as the game draws them (it drew no local light's until
 /// 2026-11-11, and fitted the cascades to its first light when there was no sun: see
 /// `neither_path_draws_cascades_without_a_sun`).
 fn editor_inputs() -> SceneSetupInputs {
@@ -62,7 +62,7 @@ fn editor_inputs() -> SceneSetupInputs {
         aspect: 1.6,
         cam_fov: 0.8,
         environment: EnvironmentFrame { shading_mode: 4, ..Default::default() },
-        local_shadows: true,
+        shadow_maps: true,
         elapsed_time: 7.5,
         light_cookies: Default::default(),
         shadow_settings: Default::default(),

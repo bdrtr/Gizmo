@@ -241,9 +241,13 @@ pub struct SceneState {
 /// # }
 /// ```
 ///
-/// The cluster table and light index list are shared with the frame's own view rather than
-/// duplicated: they are built from the *scene*, not from the camera, so a second camera does not
-/// need a second copy.
+/// Everything a camera derives and the draw writes with `queue.write_buffer` is the view's own: its
+/// scene uniforms, its cluster lists, its shadow passes' matrices and its instances — what it sees.
+/// (This line said the cluster lists were shared, being "built from the scene"; they are a
+/// view-space grid, and have been the view's own since 2026-08-24. The instances shared one buffer
+/// until 2026-11-11.) Textures are shared — the shadow maps, the G-buffer — because render passes
+/// run in recording order and each view's passes rewrite them in turn; and temporal state (TAA,
+/// SSGI accumulation, last frame's models) is the renderer's, not a view's.
 pub struct SceneView {
     /// This view's [`SceneUniforms`](crate::gpu_types::SceneUniforms) buffer.
     pub uniform_buffer: wgpu::Buffer,
@@ -275,13 +279,23 @@ pub struct SceneView {
     pub local_shadow_uniform_buffers: [wgpu::Buffer; MAX_LOCAL_SHADOW_LAYERS],
     /// The matching bind groups, one per layer.
     pub local_shadow_pass_bind_groups: [wgpu::BindGroup; MAX_LOCAL_SHADOW_LAYERS],
+    /// This view's instances. What a camera draws is what it sees, so two views see two lists —
+    /// and with one buffer between them, written with `queue.write_buffer`, the first view's draws
+    /// read the second's list (until 2026-11-11: it held only while both happened to lay their
+    /// instances out alike).
+    pub instance_buffer: wgpu::Buffer,
+    /// Its bind group, rebuilt when the buffer grows.
+    pub instance_bind_group: wgpu::BindGroup,
+    /// How many instances it holds.
+    pub instance_capacity: usize,
 }
 
 impl SceneView {
     /// Builds a view with its own camera uniform, cluster buffers and shadow-pass uniforms.
     ///
-    /// Everything here is per-camera *derived* state written with `queue.write_buffer`. Textures
-    /// are not: the cascade array, the local shadow array and the G-buffer are all shared, because
+    /// Everything here is per-camera *derived* state written with `queue.write_buffer`, its instance
+    /// buffer as large as the frame's is now (it grows, as that one does, with what it draws).
+    /// Textures are not: the cascade array, the local shadow array and the G-buffer are all shared, because
     /// render passes run in recording order and each view's passes rewrite them in turn.
     #[must_use]
     pub fn new(device: &wgpu::Device, scene: &SceneState, label: &str) -> Self {
@@ -345,6 +359,9 @@ impl SceneView {
             std::array::from_fn(|i| mk_shadow_uniform(i, "local shadow"));
         let local_shadow_pass_bind_groups: [wgpu::BindGroup; MAX_LOCAL_SHADOW_LAYERS] =
             std::array::from_fn(|i| mk_shadow_bg(&local_shadow_uniform_buffers[i], i, "local shadow"));
+        let instance_capacity = scene.instance_capacity.max(1);
+        let (instance_buffer, instance_bind_group) =
+            instance_store(device, &scene.instance_bind_group_layout, instance_capacity, label);
 
         Self {
             uniform_buffer,
@@ -355,6 +372,9 @@ impl SceneView {
             shadow_pass_bind_groups,
             local_shadow_uniform_buffers,
             local_shadow_pass_bind_groups,
+            instance_buffer,
+            instance_bind_group,
+            instance_capacity,
         }
     }
 
@@ -800,39 +820,85 @@ impl SceneState {
         true
     }
 
-    /// Grows the instance buffer to hold at least `needed` instances, rebuilding its bind group,
-    /// and returns whether it reallocated. A caller holding the old bind group must re-read it
-    /// when this returns `true`.
+    /// Grows the active view's instance buffer — the frame's own when no view is active — to hold
+    /// at least `needed` instances, rebuilding its bind group, and returns whether it reallocated.
+    /// A caller holding the old bind group must re-read it when this returns `true`.
     pub fn ensure_instance_capacity(&mut self, device: &wgpu::Device, needed: usize) -> bool {
-        if needed <= self.instance_capacity {
+        let layout = &self.instance_bind_group_layout;
+        let (buffer, bind_group, capacity) = match self.active_view {
+            None => (&mut self.instance_buffer, &mut self.instance_bind_group, &mut self.instance_capacity),
+            Some(i) => {
+                let count = self.views.len();
+                let v = self.views.get_mut(i).unwrap_or_else(|| panic!("active_view = Some({i}) but only {count} view(s) exist"));
+                (&mut v.instance_buffer, &mut v.instance_bind_group, &mut v.instance_capacity)
+            }
+        };
+        if needed <= *capacity {
             return false;
         }
-
-        let new_capacity = if self.instance_capacity == 0 {
+        let new_capacity = if *capacity == 0 {
             needed.max(8_192)
         } else {
-            needed.max(self.instance_capacity + self.instance_capacity / 2).max(self.instance_capacity + 4096)
+            needed.max(*capacity + *capacity / 2).max(*capacity + 4096)
         };
-        let new_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Instance Buffer (grown)"),
-            size: (new_capacity * std::mem::size_of::<crate::InstanceRaw>()) as u64,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let new_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.instance_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: new_buffer.as_entire_binding(),
-            }],
-            label: Some("instance_bind_group (grown)"),
-        });
-
-        self.instance_buffer = new_buffer;
-        self.instance_bind_group = new_bind_group;
-        self.instance_capacity = new_capacity;
+        (*buffer, *bind_group) = instance_store(device, layout, new_capacity, "instances (grown)");
+        *capacity = new_capacity;
         true
     }
+
+    /// The instance buffer the active view's draws read — its own, or the frame's (selected as
+    /// [`view_bind_group`](Self::view_bind_group) selects): a frame's instances are what its camera
+    /// sees, written there by the batcher.
+    ///
+    /// # Panics
+    ///
+    /// Same condition as [`view_shadow_pass_bind_group`](Self::view_shadow_pass_bind_group).
+    #[must_use]
+    pub fn view_instance_buffer(&self) -> &wgpu::Buffer {
+        self.active().map_or(&self.instance_buffer, |v| &v.instance_buffer)
+    }
+
+    /// [`view_instance_buffer`](Self::view_instance_buffer)'s bind group, for every pass that draws
+    /// instances.
+    ///
+    /// # Panics
+    ///
+    /// Same condition as [`view_shadow_pass_bind_group`](Self::view_shadow_pass_bind_group).
+    #[must_use]
+    pub fn view_instance_bind_group(&self) -> &wgpu::BindGroup {
+        self.active().map_or(&self.instance_bind_group, |v| &v.instance_bind_group)
+    }
+
+    /// How many instances [`view_instance_buffer`](Self::view_instance_buffer) holds.
+    ///
+    /// # Panics
+    ///
+    /// Same condition as [`view_shadow_pass_bind_group`](Self::view_shadow_pass_bind_group).
+    #[must_use]
+    pub fn view_instance_capacity(&self) -> usize {
+        self.active().map_or(self.instance_capacity, |v| v.instance_capacity)
+    }
+}
+
+/// An instance buffer of `capacity` instances and its bind group.
+fn instance_store(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    capacity: usize,
+    label: &str,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size: (capacity * std::mem::size_of::<crate::InstanceRaw>()) as u64,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout,
+        entries: &[wgpu::BindGroupEntry { binding: 0, resource: buffer.as_entire_binding() }],
+        label: Some(label),
+    });
+    (buffer, bind_group)
 }
 
 // ------------------------------------------------------------------

@@ -28,7 +28,7 @@ pub fn record_deferred_geometry(
         });
         z_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         z_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-        z_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+        z_pass.set_bind_group(4, renderer.scene.view_instance_bind_group(), &[]);
         z_pass.set_bind_group(5, &def.motion.bind_group, &[]);
         // The cull mode is baked into the pipeline, so a double-sided material needs its own.
         // Tracked and set only on change rather than per item: the batches are not sorted by this
@@ -154,7 +154,7 @@ pub fn record_deferred_geometry(
         });
         gbuf_pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
         gbuf_pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
-        gbuf_pass.set_bind_group(4, &renderer.scene.instance_bind_group, &[]);
+        gbuf_pass.set_bind_group(4, renderer.scene.view_instance_bind_group(), &[]);
         gbuf_pass.set_bind_group(5, &def.motion.bind_group, &[]);
         let mut bound: Option<(Option<gizmo_renderer::custom_material::SurfaceId>, bool)> = None;
         for item in draw_items {

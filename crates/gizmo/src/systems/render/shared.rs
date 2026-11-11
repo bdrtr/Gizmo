@@ -344,6 +344,8 @@ pub struct SceneSetup {
     /// through its matrix (and grows the array to hold them,
     /// `SceneState::ensure_local_shadow_layers`). Empty when the inputs said this path draws none.
     pub local_shadows: LocalShadows,
+    /// Whether this path draws shadow maps at all (`SceneSetupInputs::shadow_maps`).
+    pub shadow_maps: bool,
     /// Which of those lights reach which cluster of the view volume.
     ///
     /// Computed here because this is where the camera and the collected lights are both in hand,
@@ -355,12 +357,13 @@ pub struct SceneSetup {
 }
 
 impl SceneSetup {
-    /// Whether this frame draws the sun's cascades: when it has a sun, which is the one thing every
-    /// lookup of them asks first. A frame without one drew all four, every caster in each, until
-    /// 2026-11-11, and kept off-screen objects for them.
+    /// Whether this frame draws the sun's cascades: when its path draws shadow maps at all
+    /// (`SceneSetupInputs::shadow_maps`) and it has a sun, which is the one thing every lookup of
+    /// them asks first. A frame without one drew all four, every caster in each, until 2026-11-11,
+    /// and kept off-screen objects for them — as the forward-only path did with a sun, drawing none.
     #[must_use]
     pub fn draws_cascades(&self) -> bool {
-        self.frame.sun.present
+        self.shadow_maps && self.frame.sun.present
     }
 
     /// The view-projection of every shadow map this frame draws, in the order its passes draw
@@ -456,10 +459,11 @@ pub struct SceneSetupInputs {
     pub cam_fov: f32,
     /// Sky, ambient and fog — everything lighting the scene that is not a light.
     pub environment: crate::renderer::EnvironmentFrame,
-    /// Whether this path draws the local lights' shadow layers. A path that does not must leave it
-    /// off, and every light then lights unshadowed: the lookups would read whatever the layers held
-    /// when last drawn.
-    pub local_shadows: bool,
+    /// Whether this path draws shadow maps at all — the sun's cascades and the local lights' layers.
+    /// A path that does not (the forward-only one: the browser's and a phone's) must leave it off:
+    /// nothing is planned or culled for maps it never draws, and the lookups would otherwise read
+    /// whatever the local layers held when last drawn.
+    pub shadow_maps: bool,
     /// Time since the scene started, in seconds; what animated shaders advance on.
     pub elapsed_time: f32,
     /// Which cookie name is in which layer — `renderer.light_cookies.table()`.
@@ -503,7 +507,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
     );
     let cascade_view_projs = cascades.view_projs;
 
-    let local_shadows = if inputs.local_shadows {
+    let local_shadows = if inputs.shadow_maps {
         LocalShadows::plan(lights.shadow_casters.iter().copied())
     } else {
         LocalShadows::default()
@@ -568,6 +572,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
         cascade_view_projs,
         lights,
         local_shadows,
+        shadow_maps: inputs.shadow_maps,
     }
 }
 
@@ -707,7 +712,7 @@ mod tests {
             aspect: 1.0,
             cam_fov: std::f32::consts::FRAC_PI_2,
             environment: Default::default(),
-            local_shadows: true,
+            shadow_maps: true,
             elapsed_time: 0.0,
             light_cookies: Default::default(),
             shadow_settings: Default::default(),
@@ -728,6 +733,12 @@ mod tests {
         let maps = lit.shadow_view_projs();
         assert_eq!(maps[..4], lit.cascade_view_projs, "the cascades first, in pass order");
         assert_eq!(maps[4..], [lit.local_shadows.layers()[0].view_proj], "then the spot's layer");
+
+        // A path that draws no shadow maps — the browser's, a phone's — plans none, sun or not, and
+        // keeps no off-screen object for them.
+        let phone = collect_scene_setup(&world, &SceneSetupInputs { shadow_maps: false, ..inputs });
+        assert!(!phone.draws_cascades() && phone.shadow_view_projs().is_empty());
+        assert!(phone.local_shadows.layers().is_empty());
     }
 
     /// A light casts when it asks to, whatever its kind, and its caster names the slot the ranking

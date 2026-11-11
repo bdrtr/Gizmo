@@ -332,6 +332,15 @@ Guarded by `two_cameras_in_one_encoder_render_two_different_frames`, which pins 
 passes without a view must be **pixel-identical** (the trap is still there and still reproducible),
 and two passes with one must differ.
 
+**The instances were still shared, until 2026-11-11.** One instance buffer served every view, and
+what a camera draws is what it sees: the first view's draws read the second view's list. The guard
+held only because its two cameras happened to lay their instances out alike — an object the second
+camera could not see was still uploaded for the sun's cascades, in the same slot — and it went red on
+the forward-only path the day that path stopped keeping off-screen objects for shadow maps it never
+draws (3 284 of 16 384 pixels). Each view has its own instance buffer now
+(`SceneState::view_instance_buffer`), and the guard's scene has a sphere only the second camera sees,
+so the two lists differ on both paths: with one buffer between them, 3 541 pixels.
+
 **A frame the user's pass can read.** ❌ **This entry was wrong, and checking it is what showed
 that** (2026-08-23). It said the frame could not be sampled because the surface is
 `RENDER_ATTACHMENT` (+`COPY_SRC`) with no `TEXTURE_BINDING`. True of the *surface* — and irrelevant,

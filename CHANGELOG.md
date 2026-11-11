@@ -50,9 +50,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **How many shadow passes a frame records**: `RenderStats::shadow_passes` — the sun's four cascades when there is a
-  sun, one per local shadow layer — with a row in the editor's viewport overlay. Each pass draws every caster, so it is
-  the multiplier on the shadows' share of the frame.
+- **A shadow pass draws the casters in its own frustum**, not every caster of the frame (`gizmo_renderer::shadow_culling`):
+  a batch's instances are put in spatial order and cut into runs of 64 with a box each, and each cascade and local layer
+  draws the runs it meets — in the game and the editor viewport alike. On 2 500 objects under 16 shadowed spots and the
+  sun, shadow instances 50 020 → 13 607 and the frame 23.0 → 14.1 ms, every frame byte for byte the one drawn without it.
+- **How many shadow passes a frame records, and what they draw**: `RenderStats::shadow_passes` (the sun's four cascades
+  when there is a sun, one per local shadow layer) and `shadow_instances`, each with a row in the editor's viewport
+  overlay.
 
 - **Every local light casts shadows, when it asks to.** `PointLight`, `SpotLight` and `RectLight` have
   `casts_shadows` (and `with_shadows()`; off by default, `#[serde(default)]`), and so do `PointLightBundle` and
@@ -200,7 +204,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 - **A frame with no sun draws no cascades.** Every lookup of the sun's cascades asks for the sun first, and a sunless
   frame drew all four anyway, every caster in each, and kept objects off screen for them. `SceneSetup::draws_cascades`
-  and `SceneSetup::shadow_view_projs` decide it for both paths. `ShadowCaster` and `SceneSetupInputs::shadow_caster` are
+  and `SceneSetup::shadow_view_projs` decide it for both paths, and `SceneSetupInputs::shadow_maps` (was
+  `local_shadows`) says whether a path draws shadow maps at all: the forward-only path — a browser, a phone — kept
+  off-screen objects for the sun's cascades it never draws. `ShadowCaster` and `SceneSetupInputs::shadow_caster` are
   gone: the editor fitted the cascades to its first light when there was no sun, and nothing ever read them — a light
   that should cast says so with `casts_shadows`, in the viewport as in the game.
 - **`Renderer::point_shadows_enabled` is gone**, with `ShadowFrame::{point_caster, point_shadows_enabled}` and
@@ -213,6 +219,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Two views in one encoder drew the first with the second's instances.** `SceneView` gave a view its own uniforms,
+  clusters and shadow matrices, and left the instance buffer shared — and what a camera draws is what it sees. The guard
+  test passed while its two cameras laid their instances out alike. Each view has its own instance buffer now
+  (`SceneState::view_instance_buffer`, `view_instance_bind_group`, `view_instance_capacity`), and the guard's cameras see
+  different objects.
 - **A point light was half as bright on a forward-drawn surface.** The forward shader divided its falloff by `d² + 1`
   and the deferred pass by `d² + 0.01`, so a light a metre from a transparent surface — and from anything in the editor
   viewport, a browser or a phone — gave about half: a matte floor read 195.5 where the G-buffer's read 228.5. Both passes
