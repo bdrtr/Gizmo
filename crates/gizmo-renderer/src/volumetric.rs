@@ -59,10 +59,21 @@ impl Default for VolumetricParams {
 /// Marched at reduced resolution and then applied over the HDR target: the effect is low-frequency,
 /// so a half-resolution march is not visibly different and is several times cheaper.
 pub struct VolumetricState {
-    /// The marched scattering term.
+    /// The marched scattering term in front of the nearest surface that blends — all of it where
+    /// none does — added over the finished frame.
     pub volumetric_texture: wgpu::Texture,
     /// Its view.
     pub volumetric_view: wgpu::TextureView,
+    /// The scattering term behind the nearest surface that blends, added ahead of what blends, which
+    /// shows it as much as it lets through. `COPY_SRC`, as the front is.
+    pub behind_texture: wgpu::Texture,
+    /// Its view.
+    pub behind_view: wgpu::TextureView,
+    /// The depth of the nearest surface that blends — glass, a transparent surface — drawn alone,
+    /// depth only, ahead of them: where the march splits the air between the two terms. Frame-sized.
+    pub veil_depth_texture: wgpu::Texture,
+    /// Its view, the depth attachment of that pass.
+    pub veil_depth_view: wgpu::TextureView,
 
     /// The raymarch pass.
     pub volumetric_pipeline: wgpu::RenderPipeline,
@@ -73,8 +84,10 @@ pub struct VolumetricState {
     /// The apply pass, adding the scattering over the HDR target.
     pub apply_pipeline: wgpu::RenderPipeline,
     apply_bgl: wgpu::BindGroupLayout,
-    /// Its input. Rebuilt on resize.
+    /// Its input for the air in front. Rebuilt on resize.
     pub apply_bind_group: wgpu::BindGroup,
+    /// Its input for the air behind. Rebuilt on resize.
+    pub behind_apply_bind_group: wgpu::BindGroup,
 
     linear_sampler: wgpu::Sampler,
 
@@ -122,6 +135,8 @@ impl VolumetricState {
         let half_w = (width / 2).max(1);
         let half_h = (height / 2).max(1);
         let (volumetric_texture, volumetric_view) = Self::mk_tex(device, half_w, half_h);
+        let (behind_texture, behind_view) = Self::mk_tex(device, half_w, half_h);
+        let (veil_depth_texture, veil_depth_view) = Self::mk_veil_depth(device, width, height);
 
         let volumetric_bgl = Self::mk_volumetric_bgl(device);
         let apply_bgl = Self::mk_apply_bgl(device);
@@ -142,10 +157,12 @@ impl VolumetricState {
             &deferred.depth_view,
             &linear_sampler,
             &params_buffer,
+            &veil_depth_view,
         );
 
         let apply_bind_group =
             Self::mk_apply_bg(device, &apply_bgl, &volumetric_view, &linear_sampler);
+        let behind_apply_bind_group = Self::mk_apply_bg(device, &apply_bgl, &behind_view, &linear_sampler);
 
         let volumetric_pipeline = Self::mk_volumetric_pipeline(device, scene, &volumetric_bgl);
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl);
@@ -156,12 +173,17 @@ impl VolumetricState {
             params_buffer,
             volumetric_texture,
             volumetric_view,
+            behind_texture,
+            behind_view,
+            veil_depth_texture,
+            veil_depth_view,
             volumetric_pipeline,
             volumetric_bgl,
             volumetric_bind_group,
             apply_pipeline,
             apply_bgl,
             apply_bind_group,
+            behind_apply_bind_group,
             linear_sampler,
             width,
             height,
@@ -181,6 +203,12 @@ impl VolumetricState {
         let (t, v) = Self::mk_tex(device, half_w, half_h);
         self.volumetric_texture = t;
         self.volumetric_view = v;
+        let (t, v) = Self::mk_tex(device, half_w, half_h);
+        self.behind_texture = t;
+        self.behind_view = v;
+        let (t, v) = Self::mk_veil_depth(device, width, height);
+        self.veil_depth_texture = t;
+        self.veil_depth_view = v;
 
         self.volumetric_bind_group = Self::mk_volumetric_bg(
             device,
@@ -188,6 +216,7 @@ impl VolumetricState {
             &deferred.depth_view,
             &self.linear_sampler,
             &self.params_buffer,
+            &self.veil_depth_view,
         );
 
         self.apply_bind_group = Self::mk_apply_bg(
@@ -196,6 +225,8 @@ impl VolumetricState {
             &self.volumetric_view,
             &self.linear_sampler,
         );
+        self.behind_apply_bind_group =
+            Self::mk_apply_bg(device, &self.apply_bgl, &self.behind_view, &self.linear_sampler);
 
         self.width = width;
         self.height = height;
@@ -218,6 +249,21 @@ impl VolumetricState {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let v = t.create_view(&wgpu::TextureViewDescriptor::default());
+        (t, v)
+    }
+
+    fn mk_veil_depth(device: &wgpu::Device, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView) {
+        let t = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("volumetric_veil_depth"),
+            size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let v = t.create_view(&wgpu::TextureViewDescriptor::default());
@@ -257,6 +303,17 @@ impl VolumetricState {
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    // The nearest surface that blends: where the air splits.
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Depth,
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -291,6 +348,7 @@ impl VolumetricState {
         depth_view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
         params: &wgpu::Buffer,
+        veil_depth: &wgpu::TextureView,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("volumetric_bg"),
@@ -307,6 +365,10 @@ impl VolumetricState {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: params.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(veil_depth),
                 },
             ],
         })
@@ -367,11 +429,19 @@ impl VolumetricState {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba16Float,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                // The air in front of the nearest surface that blends, then behind it.
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba16Float,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
             }),
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,

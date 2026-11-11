@@ -54,7 +54,8 @@ pub fn record_forward_and_fluid(
             && draw_items.iter().any(|item| item.is_transmissive && item.camera_count > 0);
         // Split only when something stands between the two: a split costs a tiled GPU — a phone's —
         // a store and a load of the whole frame.
-        let world_end = if has_glass || super::screen_space::surface_effects_on(renderer) {
+        let volumetric = super::screen_space::volumetric_on(renderer);
+        let world_end = if has_glass || volumetric || super::screen_space::surface_effects_on(renderer) {
             draw_items.partition_point(|item| item.layer < super::super::batching::DrawLayer::Transmissive)
         } else {
             draw_items.len()
@@ -77,6 +78,10 @@ pub fn record_forward_and_fluid(
         // (GPU Particles artık AYRI bir pass'te — aşağıda — soft-particle derinlik örneklemesi için.)
         drop(render_pass);
         super::screen_space::record_surface_effects(encoder, renderer);
+        if volumetric {
+            record_veil_depth(encoder, renderer, &draw_items[world_end..], uploaded_instances);
+            super::screen_space::record_volumetric_march(encoder, renderer);
+        }
         if let Some(behind) = renderer.behind.as_ref().filter(|_| has_glass) {
             behind.capture(encoder, &renderer.post.hdr_texture);
         }
@@ -111,6 +116,57 @@ pub fn record_forward_and_fluid(
             dt,
             inv_view_proj,
         );
+    }
+}
+
+/// The depth of the nearest surface that blends, depth only, into the volumetric march's
+/// `veil_depth_view`: where it splits the air between what is added ahead of what blends and what is
+/// added over it. `blended` is what is drawn after the opaque world. An additive draw is left out: it
+/// only adds, so the air behind it is no less seen than the air in front, and putting it behind would
+/// dim it by whatever pane stands further back. Drawn through the G-buffer's depth prepass — no
+/// culling, as a blended draw has none, and cutting what a cut-out cuts — so a water surface splits
+/// the air where its mesh lies, not where its waves are.
+fn record_veil_depth(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, blended: &[DrawItem], uploaded_instances: u32) {
+    let (Some(def), Some(vol)) = (renderer.deferred.as_ref(), renderer.volumetric.as_ref()) else {
+        return;
+    };
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("Volumetric Veil Depth"),
+        color_attachments: &[],
+        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+            view: &vol.veil_depth_view,
+            depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+            stencil_ops: None,
+        }),
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_bind_group(0, renderer.scene.view_bind_group(), &[]);
+    pass.set_bind_group(2, &renderer.scene.shadow_bind_group, &[]);
+    pass.set_bind_group(BG_INSTANCE, renderer.scene.view_instance_bind_group(), &[]);
+    pass.set_bind_group(5, &def.motion.bind_group, &[]);
+    for item in blended {
+        if !item.visible_in_camera || item.blend_mode == crate::renderer::components::BlendMode::Additive {
+            continue;
+        }
+        let instances = item.camera_instance_range(uploaded_instances);
+        if instances.is_empty() {
+            continue;
+        }
+        let pipeline = match item.surface {
+            Some(id) => match renderer.custom_materials.surface(id).and_then(|s| s.prepass_pipeline(true)) {
+                Some(pipeline) => pipeline,
+                None => continue,
+            },
+            None if item.discards => &def.z_prepass_discard_pipelines[1],
+            None => &def.z_prepass_double_sided_pipeline,
+        };
+        pass.set_pipeline(pipeline);
+        let skeleton = item.skeleton_bind_group.as_ref().unwrap_or(&renderer.scene.dummy_skeleton_bind_group);
+        pass.set_bind_group(3, skeleton.as_ref(), &[]);
+        pass.set_bind_group(1, &*item.bind_group, &[]);
+        item.record_draw(&mut pass, instances);
     }
 }
 

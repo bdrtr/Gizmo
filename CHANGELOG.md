@@ -233,6 +233,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A pane let through all of the volumetric air behind it.** A surface that blends writes neither the G-buffer nor
+  depth, so the march ran on through it and its air was added over everything: a lamp a metre behind a pane 98 % opaque
+  moved 3 926 242 of the frame against 2 381 984 through an opaque pane. The nearest surface that blends is drawn alone,
+  depth only, ahead of them (`VolumetricState::veil_depth_view`, through the G-buffer's prepass), and the march splits
+  the air there (`VolumetricState::behind_view`): the air behind is added ahead of what blends, which shows it as much as
+  it lets through (2 345 837), the air in front over everything (3 720 388 against 3 729 351, the lamp in front). The
+  point-light falloff test draws its volumetric light again: a transparent floor and an opaque one under a lamp read
+  227.94 and 228.45 with it (229.55 before).
 - **SSR, SSGI and the volumetric march reached through what was drawn forward.** All three describe the G-buffer's
   surface and are added after the forward pass, and an unlit or baked-lit surface, or a game's own pipeline, writes depth
   and no G-buffer: an opaque unlit panel in front of a polished floor took 12 137 and 18 569 of the 96 591 and 100 681 the

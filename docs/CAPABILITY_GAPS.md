@@ -825,16 +825,19 @@ cube cookies for point lights, and no cookies on web. Each item:
   black-and-white cookie, 26.5 / 0.06. The march's samples were each stepped before they were taken,
   so the last landed up to a step past the surface its ray ends on — through that wall, into the
   lamp's air (71.5 of 769): they end short of it now. Caught when broken: the shadow, the cone or the
-  cookie left out, the samples stepped first again. **Open, measured the same day: the air behind a
-  transparent surface.** A transparent surface writes neither the G-buffer nor depth, so the march runs
-  on through it, and its air is added after the transparent pass, at full strength over it: a 99 %
-  opaque floor a metre under a lamp reads 229.55 against the opaque floor's 228.45 (227.15 / 227.67
-  without the march) — the air under the floor shows through it. Separate because what fixes it is a
-  target the transparent pass writes (the nearest transparent depth, and how much passes it), which
-  changes every forward pipeline's output, a phone's included. (SSR and SSGI no longer are: they are
-  added ahead of what blends since the same day, which the march cannot simply follow — added there,
-  the air in front of a pane would be dimmed by it as much as the air behind; see the paragraph on unlit
-  and baked-lit surfaces above.)
+  cookie left out, the samples stepped first again. **And the air behind a surface that blends, the
+  same day.** Such a surface writes neither the G-buffer nor depth, so the march ran on through it and
+  its air was added over everything: a 99 % opaque floor a metre under a lamp read 229.55 against the
+  opaque floor's 228.45 — the air under the floor showed through it. Added ahead of what blends, as SSR
+  and SSGI now are, the air in front of a pane would be dimmed as much as the air behind. So the
+  nearest surface that blends is drawn alone, depth only, ahead of them (through the G-buffer's prepass,
+  into `VolumetricState::veil_depth_view`; an additive one is left out, as it only adds), and the march
+  splits the air there: what is behind it is added ahead of what blends, which shows it as much as it
+  lets through, what is in front over everything. The floor reads 227.94. A lamp a metre behind a pane
+  the camera faces moves 2 381 984 of the frame through an opaque pane, 3 926 242 through one 98 %
+  opaque before and 2 345 837 now; halfway between them, 3 729 351 and 3 720 388. Caught when broken:
+  all of the air added over everything, all of it ahead of what blends (2 591). A water surface splits
+  the air where its mesh lies, not where its waves are.
 
 - ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
   faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or

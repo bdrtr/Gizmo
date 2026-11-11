@@ -32,6 +32,17 @@ struct VolumetricParams {
     _pad: vec2<f32>,
 }
 @group(2) @binding(2) var<uniform> params: VolumetricParams;
+// The depth of the nearest surface that blends — glass, a transparent surface — drawn alone, depth
+// only, ahead of them (`VolumetricState::veil_depth_view`); 1 where there is none. The air behind it is
+// written to `behind` and added ahead of what blends, which shows it as much as it lets through; the
+// air in front to `front`, added over everything. Added over everything, all of it, a pane 98 %
+// opaque let through the whole of the air behind it.
+@group(2) @binding(3) var t_veil_depth: texture_depth_2d;
+
+struct MarchOut {
+    @location(0) front: vec4<f32>,
+    @location(1) behind: vec4<f32>,
+};
 
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
@@ -77,7 +88,7 @@ fn phase_function(g: f32, cos_theta: f32) -> f32 {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput) -> MarchOut {
     let tex_size = textureDimensions(t_depth);
     let iuv = vec2<i32>(in.screen_uv * vec2<f32>(tex_size));
     let depth = textureLoad(t_depth, iuv, 0);
@@ -106,8 +117,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         ray_dir = normalize(diff);
     }
     
+    var out: MarchOut;
+    out.front = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    out.behind = vec4<f32>(0.0, 0.0, 0.0, 1.0);
     if (max_dist < 0.1) {
-        return vec4(0.0);
+        return out;
+    }
+
+    // How far along the view the nearest surface that blends stands; past the march's end where none.
+    let fwd = scene.camera_forward.xyz;
+    var veil = 3.0e38;
+    let veil_d = textureLoad(t_veil_depth, iuv, 0);
+    if (veil_d < 1.0) {
+        let uv = (vec2<f32>(iuv) + 0.5) / vec2<f32>(tex_size);
+        let h = inv_vp * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, veil_d, 1.0);
+        veil = dot(h.xyz / h.w - cam_pos, fwd);
     }
     
     let steps = max(params.steps, 1.0);
@@ -120,7 +144,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let jitter = rand(in.position.xy) * step_size;
     var current_pos = cam_pos + ray_dir * (jitter - step_size);
     
-    var total_scatter = vec3<f32>(0.0);
+    var front = vec3<f32>(0.0);
+    var behind = vec3<f32>(0.0);
     
     // Sun Directional Light Precalculations
     let L_sun = normalize(-scene.sun_direction.xyz);
@@ -130,6 +155,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     
     for (var i = 0.0; i < steps; i += 1.0) {
         current_pos += ray_dir * step_size;
+        var total_scatter = vec3<f32>(0.0);
         
         // ── 1. Sun God Rays (Directional Cascade Shadows) ──
         if (scene.sun_direction.w > 0.5) {
@@ -201,7 +227,14 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             }
             total_scatter += colour * light.position.w * params.bulb_scatter * reach * step_size;
         }
+        if (dot(current_pos - cam_pos, fwd) < veil) {
+            front += total_scatter;
+        } else {
+            behind += total_scatter;
+        }
     }
     
-    return vec4<f32>(total_scatter, 1.0);
+    out.front = vec4<f32>(front, 1.0);
+    out.behind = vec4<f32>(behind, 1.0);
+    return out;
 }

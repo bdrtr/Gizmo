@@ -5027,6 +5027,83 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
+    /// **A pane shows the air behind it as much as it lets through, and dims none in front of it.** A
+    /// lamp stands a metre behind a pane the camera faces, then halfway between them; the pane is
+    /// opaque, drawn deferred, or 98 % opaque and blending. What the volumetric light moves in the
+    /// frame must be the same for both panes, give or take what the blending one lets through.
+    ///
+    /// The march was added over everything, so the blending pane let through the whole of the air
+    /// behind it: 3 926 242 against the opaque pane's 2 381 984, the lamp behind. Added ahead of what
+    /// blends instead, it would dim the air in front as much as the air behind: 2 591. So the march
+    /// splits the air at the depth of the nearest surface that blends — the air behind it is added
+    /// ahead of what blends, the air in front over everything: 2 345 837 against 2 381 984 with the
+    /// lamp behind, 3 720 388 against 3 729 351 with it in front.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_pane_shows_the_air_behind_it_as_much_as_it_lets_through() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // The frame, `lamp_z` the lamp's depth (the pane is at 2), the pane blending at `alpha` or not.
+        async fn frame(volumetric: bool, lamp_z: f32, alpha: Option<f32>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssr = None;
+            renderer.ssgi = None;
+            renderer.fxaa = None;
+            renderer.smaa = None;
+            renderer.cas = None;
+            renderer.bloom_intensity = 0.0;
+            if !volumetric {
+                renderer.volumetric = None;
+            }
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let pane = world.spawn();
+            world.add_component(pane, Transform::new(Vec3::new(0.0, 1.0, 2.0)).with_scale(Vec3::new(7.0, 7.0, 0.02)));
+            world.add_component(pane, GlobalTransform::default());
+            world.add_component(pane, AssetManager::create_cube(&renderer.device));
+            let material = Material::new(tex).with_pbr(Vec4::new(0.3, 0.3, 0.35, alpha.unwrap_or(1.0)), 0.0, 0.9);
+            world.add_component(pane, if alpha.is_some() { material.with_transparent(true) } else { material });
+            world.add_component(pane, MeshRenderer::new());
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.0, lamp_z)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 40.0, 9.0));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.0, -4.0),
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            render_world(&mut renderer, &mut world).await
+        }
+        // What the volumetric light moves in the frame.
+        async fn air(lamp_z: f32, alpha: Option<f32>) -> u64 {
+            let (on, off) = (frame(true, lamp_z, alpha).await, frame(false, lamp_z, alpha).await);
+            on.iter().zip(&off).map(|(a, b)| u64::from(a.abs_diff(*b))).sum()
+        }
+        pollster::block_on(async {
+            for (place, lamp_z) in [("behind", 3.0), ("in front of", -1.0)] {
+                let opaque = air(lamp_z, None).await;
+                let blending = air(lamp_z, Some(0.98)).await;
+                eprintln!("lamp {place} the pane: the air moves {opaque} with an opaque pane, {blending} with one 98 % opaque");
+                assert!(opaque > 20_000, "the setup: the lamp lights the air in front of the pane ({opaque})");
+                assert!(
+                    blending.abs_diff(opaque) < opaque / 10,
+                    "lamp {place} the pane: the air moves {blending} through a pane 98 % opaque, {opaque} with an opaque one"
+                );
+            }
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR or SSGI.
     /// **What is drawn forward in front of a surface takes that surface's reflection and bounce light
     /// only as much as it lets through.** A polished floor reflects a red cube; a panel stands between
@@ -8789,11 +8866,6 @@ mod golden_render_tests {
             renderer.taa = None;
             renderer.ssgi = None;
             renderer.ssr = None;
-            // Not the falloff's: the volumetric march stops at the G-buffer's surface, which a
-            // transparent floor does not write, so it marches on under the floor and adds that air
-            // over it — 228.45 opaque against 229.55 transparent with it, 227.67 / 227.15 without.
-            // Open in CAPABILITY_GAPS (A7, volumetric light behind a transparent surface).
-            renderer.volumetric = None;
             let mut world = World::new();
             let mut assets = AssetManager::new();
             let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
