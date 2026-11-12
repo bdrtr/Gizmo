@@ -1011,7 +1011,7 @@ impl Renderer {
     /// drawn onto `output_view`, so every output a host post-processes gets the HUD, untouched by
     /// exposure, bloom, tone mapping, vignette or FXAA. See `crate::overlay`.
     pub fn run_post_processing(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         output_view: &wgpu::TextureView,
     ) {
@@ -1030,7 +1030,7 @@ impl Renderer {
     /// after the last view ([`record_overlay`](Self::record_overlay)); drawn per view it would be
     /// laid over itself once per view, which doubles anything translucent.
     pub fn run_post_processing_in(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         output_view: &wgpu::TextureView,
         region: Option<[f32; 4]>,
@@ -1043,6 +1043,10 @@ impl Renderer {
         // Auto exposure measures the finished HDR frame and adapts before the composite reads it.
         if let Some(ae) = self.auto_exposure.as_ref().filter(|a| a.enabled) {
             ae.record(encoder);
+        }
+        // CAS's input is the frame's size only while CAS runs.
+        if let Some(cas) = self.cas.as_mut() {
+            cas.ensure_input(&self.device);
         }
         let smaa = self.smaa.as_ref();
         let fxaa = self.fxaa.as_ref().filter(|f| f.enabled && smaa.is_none());

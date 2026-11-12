@@ -692,7 +692,7 @@ pub fn create_post_textures(
     wgpu::BindGroup,
     wgpu::BindGroup,
 ) {
-    let make = |label: &str| -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
+    let make = |label: &str, width: u32, height: u32| -> (wgpu::Texture, wgpu::TextureView, wgpu::BindGroup) {
         let tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
@@ -727,9 +727,13 @@ pub fn create_post_textures(
         (tex, view, bg)
     };
 
-    let (hdr_t, hdr_v, hdr_bg) = make("HDR Texture");
-    let (_be_t, be_v, be_bg) = make("Bloom Extract Texture");
-    let (_bb_t, bb_v, bb_bg) = make("Bloom Blur Texture");
+    let (hdr_t, hdr_v, hdr_bg) = make("HDR Texture", width, height);
+    // The forward-only path has no bloom: its composite binds the extract target and never samples it,
+    // and nothing draws into either. A texel each there — they were the frame's size, two HDR targets
+    // (14 MiB on a phone) that nothing wrote or read, until 2026-11-12.
+    let (bloom_w, bloom_h) = if cfg!(gizmo_forward_only) { (1, 1) } else { (width, height) };
+    let (_be_t, be_v, be_bg) = make("Bloom Extract Texture", bloom_w, bloom_h);
+    let (_bb_t, bb_v, bb_bg) = make("Bloom Blur Texture", bloom_w, bloom_h);
 
     let cb_bg = composite_bloom_group(device, composite_bloom_bgl, &be_v, sampler, depth_view, lut_view);
 

@@ -34,7 +34,10 @@ pub struct CasState {
     pub bind_group: wgpu::BindGroup,
     /// [`CasParams`], written by [`set_sharpness`](Self::set_sharpness).
     pub params_buffer: wgpu::Buffer,
-    /// What the previous pass (composite, or FXAA) renders into while CAS is enabled.
+    /// What the previous pass (composite, or FXAA) renders into while CAS is enabled — the frame's
+    /// size then, and a single texel while it is not ([`ensure_input`](Self::ensure_input)). It was the
+    /// frame's size from the start until 2026-11-12, though CAS starts disabled: 3.5 MiB on a phone,
+    /// 9.9 at 2400 × 1080, that nothing drew into.
     pub input_texture: wgpu::Texture,
     /// View of [`input_texture`](Self::input_texture).
     pub input_texture_view: wgpu::TextureView,
@@ -43,6 +46,9 @@ pub struct CasState {
     /// Whether the pass runs. `false` (the default) leaves the chain exactly as without CAS.
     pub enabled: bool,
     sharpness: f32,
+    /// The output's format and the frame's size, which the input takes while CAS is enabled.
+    format: wgpu::TextureFormat,
+    size: (u32, u32),
 }
 
 /// The uniform block of `cas.wgsl`.
@@ -85,8 +91,7 @@ impl CasState {
             mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
-        let (input_texture, input_texture_view) =
-            create_input_texture(device, surface_format, width, height);
+        let (input_texture, input_texture_view) = create_input_texture(device, surface_format, 1, 1);
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("CAS Params Buffer"),
             contents: bytemuck::cast_slice(&[CasParams {
@@ -174,7 +179,33 @@ impl CasState {
             sampler,
             enabled: false,
             sharpness: DEFAULT_SHARPNESS,
+            format: surface_format,
+            size: (width, height),
         }
+    }
+
+    /// Gives the input the frame's size while CAS is enabled, and a single texel while it is not.
+    /// The post chain calls it before it runs, so turning [`enabled`](Self::enabled) on or off is
+    /// all a game does.
+    pub fn ensure_input(&mut self, device: &wgpu::Device) {
+        let (width, height) = if self.enabled { self.size } else { (1, 1) };
+        let current = self.input_texture.size();
+        if (current.width, current.height) != (width.max(1), height.max(1)) {
+            self.rebuild_input(device, width, height);
+        }
+    }
+
+    fn rebuild_input(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        let (texture, view) = create_input_texture(device, self.format, width, height);
+        self.input_texture = texture;
+        self.input_texture_view = view;
+        self.bind_group = create_bind_group(
+            device,
+            &self.bind_group_layout,
+            &self.input_texture_view,
+            &self.sampler,
+            &self.params_buffer,
+        );
     }
 
     /// The current sharpness, 0..=1.
@@ -192,18 +223,12 @@ impl CasState {
         );
     }
 
-    /// Rebuilds the input texture (and its bind group) at the new size.
+    /// Takes the frame's new size, and gives the input it at once while CAS is enabled.
     pub fn resize(&mut self, device: &wgpu::Device, surface_format: wgpu::TextureFormat, width: u32, height: u32) {
-        let (texture, view) = create_input_texture(device, surface_format, width, height);
-        self.input_texture = texture;
-        self.input_texture_view = view;
-        self.bind_group = create_bind_group(
-            device,
-            &self.bind_group_layout,
-            &self.input_texture_view,
-            &self.sampler,
-            &self.params_buffer,
-        );
+        self.format = surface_format;
+        self.size = (width, height);
+        let (w, h) = if self.enabled { (width, height) } else { (1, 1) };
+        self.rebuild_input(device, w, h);
     }
 }
 
@@ -311,6 +336,8 @@ mod tests {
     async fn sharpen(device: &wgpu::Device, queue: &wgpu::Queue, input: &[u8], sharpness: f32) -> Vec<u8> {
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let mut cas = CasState::new(device, format, W, H);
+        cas.enabled = true;
+        cas.ensure_input(device);
         cas.set_sharpness(queue, sharpness);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {

@@ -261,6 +261,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A phone held 168 MiB of render targets it never drew.** The forward-only path — a browser's, a phone's — draws no
+  shadow maps, no light cookie and no bloom, and allocated all of them at full size: the sun's cascades 3072² × 4 (144
+  MiB), a local shadow layer 1024² (4 MiB), the cookie array 256² × 8 (2 MiB) and two bloom targets the frame's size (14
+  MiB at a phone's 1431 × 643). There each is a texel now, and cookies are neither loaded nor uploaded. On every path
+  CAS's input is the frame's size only while CAS runs (`CasState::ensure_input`, called by the post chain, which takes
+  `&mut self` for it; it was full size from the start though CAS starts off, 3.5 MiB on that phone), and the debug lines'
+  buffer grows with the lines by powers of two up to `MAX_GIZMO_VERTICES` (200 000) where it started there, 5.3 MiB;
+  `GizmoRendererSystem::update` takes the device for it. Measured on an Adreno 618, the memory Nişancı takes from the
+  system (`MemAvailable` before and after it starts, six runs each, builds in turn): 406 MB on average before, 236
+  after. `a_renderer_holds_memory_for_what_it_draws` holds both paths to it.
 - **Every game failed to start on an Adreno 618 phone.** Without shadow maps, `baked_lit.wgsl` built a zero `mat2x3` and
   passed it to a `sun_visibility` that returned 1 without reading it, and the driver's Vulkan compiler dereferenced a null
   pointer building the baked-lit pipeline (since `c3adce93`, 2026-11-11; found by resolving the crash's return address

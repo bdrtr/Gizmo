@@ -16,13 +16,18 @@ pub(super) fn build_global_uniforms(device: &wgpu::Device) -> wgpu::Buffer {
     })
 }
 
+/// The sun's cascades, `SHADOW_MAP_RES`² a layer. **On the forward-only path a texel a layer**: that
+/// path — a browser's, a phone's — draws no shadow maps and its lit pipelines have no shadow group, so
+/// the array is only what the shadow group is built over. It was the full 3072² × 4 there too until
+/// 2026-11-12, 144 MiB of an Android game's memory that nothing wrote or read.
 pub(super) fn build_shadow_resources(
     device: &wgpu::Device,
 ) -> (wgpu::Texture, wgpu::TextureView, [wgpu::TextureView; 4], wgpu::Sampler) {
+    let res = if cfg!(gizmo_forward_only) { 1 } else { SHADOW_MAP_RES };
     let shadow_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
         size: wgpu::Extent3d {
-            width: SHADOW_MAP_RES,
-            height: SHADOW_MAP_RES,
+            width: res,
+            height: res,
             depth_or_array_layers: 4,
         },
         mip_level_count: 1,

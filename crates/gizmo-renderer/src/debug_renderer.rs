@@ -241,15 +241,30 @@ pub struct GizmoRendererSystem {
     pub pipeline_no_depth: wgpu::RenderPipeline,
     /// The vertex buffer the frame's lines are uploaded into.
     pub vertex_buffer: wgpu::Buffer,
-    /// How many vertices that buffer holds. Lines past this are dropped rather than
-    /// reallocating mid-frame.
+    /// How many vertices that buffer holds now. It grows, by powers of two, to what a frame asks
+    /// for, up to [`MAX_GIZMO_VERTICES`]; lines past that are dropped. It held 200 000 from the
+    /// start until 2026-11-12 — 5.3 MiB that a game drawing no debug line, every phone game, paid for.
     pub max_vertices: u32,
     /// How many vertices the last [`update`](Self::update) wrote — the draw count.
     pub index_count: u32,
 }
 
+/// The most debug-line vertices a frame draws; the rest are dropped, with a warning.
+pub const MAX_GIZMO_VERTICES: u32 = 200_000;
+/// What the vertex buffer holds before a frame asks for more: 1 024 vertices, 28 KiB.
+const FIRST_GIZMO_VERTICES: u32 = 1024;
+
+fn gizmo_vertex_buffer(device: &wgpu::Device, vertices: u32) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Gizmo Vertex Buffer"),
+        size: (vertices as usize * std::mem::size_of::<GpuGizmoVertex>()) as wgpu::BufferAddress,
+        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 impl GizmoRendererSystem {
-    /// Builds both pipelines and allocates the vertex buffer.
+    /// Builds both pipelines and a small vertex buffer, which grows with the lines.
     pub fn new(
         device: &wgpu::Device,
         global_bind_group_layout: &wgpu::BindGroupLayout,
@@ -327,14 +342,8 @@ impl GizmoRendererSystem {
         desc.label = Some("Debug Lines No-Depth Pipeline");
         let pipeline_no_depth = device.create_render_pipeline(&desc);
 
-        let max_vertices = 200_000;
-        let vertex_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Gizmo Vertex Buffer"),
-            size: (max_vertices as usize * std::mem::size_of::<GpuGizmoVertex>())
-                as wgpu::BufferAddress,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let max_vertices = FIRST_GIZMO_VERTICES;
+        let vertex_buffer = gizmo_vertex_buffer(device, max_vertices);
 
         Self {
             pipeline,
@@ -345,9 +354,15 @@ impl GizmoRendererSystem {
         }
     }
 
-    /// Uploads this frame's lines, truncating at [`max_vertices`](Self::max_vertices).
-    pub fn update(&mut self, queue: &wgpu::Queue, gizmos: &Gizmos) {
+    /// Uploads this frame's lines, growing the buffer to hold them up to [`MAX_GIZMO_VERTICES`] and
+    /// truncating past that.
+    pub fn update(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, gizmos: &Gizmos) {
         self.index_count = gizmos.vertex_count() as u32;
+        let wanted = self.index_count.min(MAX_GIZMO_VERTICES);
+        if wanted > self.max_vertices {
+            self.max_vertices = wanted.next_power_of_two().min(MAX_GIZMO_VERTICES);
+            self.vertex_buffer = gizmo_vertex_buffer(device, self.max_vertices);
+        }
         if self.index_count > 0 {
             let to_write = self.index_count.min(self.max_vertices) as usize;
 

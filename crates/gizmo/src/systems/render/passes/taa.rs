@@ -72,7 +72,7 @@ pub fn record_taa_and_overlays(
     if let Some(frame) = world.get_resource::<crate::renderer::GizmoFrame>().filter(|_| debug_lines) {
         let gizmos = frame.gizmos();
         if let Some(debug_renderer) = &mut renderer.debug_renderer {
-            debug_renderer.update(&renderer.queue, gizmos);
+            debug_renderer.update(&renderer.device, &renderer.queue, gizmos);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Gizmo Render Pass (Post-TAA)"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

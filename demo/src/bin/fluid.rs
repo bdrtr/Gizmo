@@ -428,7 +428,7 @@ fn fluid_only_render_pass(
                     Vec3::new(25.0, 50.0, 25.0),
                     [0.2, 0.6, 1.0, 0.5],
                 );
-                debug_renderer.update(&renderer.queue, &gizmos);
+                debug_renderer.update(&renderer.device, &renderer.queue, &gizmos);
                 debug_renderer.render(
                     &mut render_pass,
                     &renderer.scene.global_bind_group,

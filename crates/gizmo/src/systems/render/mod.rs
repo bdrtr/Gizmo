@@ -5348,6 +5348,72 @@ mod golden_render_tests {
         });
     }
 
+    /// **A renderer holds memory for what it draws.** The forward-only path — a browser's, a phone's —
+    /// draws no shadow maps, no cookie and no bloom, and held all of them at full size: the sun's
+    /// cascades 3072² × 4 (144 MiB), a local shadow layer 1024² (4 MiB), the cookie array 256² × 8
+    /// (2 MiB) and two bloom targets the frame's size (14 MiB at a phone's 1431 × 643) — 167.6 MiB of
+    /// an Android game's memory that nothing wrote or read, until 2026-11-12. There each is a texel; on
+    /// the desktop, which draws them, they keep their sizes. On both paths CAS's input is the frame's
+    /// size only while CAS runs (it was from the start, though CAS starts off), and the debug lines'
+    /// buffer grows with the lines up to its 200 000 (it started there, 5.3 MiB).
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_renderer_holds_memory_for_what_it_draws() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 96).await;
+            let edge = |t: &wgpu::Texture| (t.size().width, t.size().height);
+            let (shadow, local, cookies) = (
+                edge(&renderer.scene.shadow_depth_texture),
+                edge(&renderer.scene.local_shadow_maps.texture),
+                edge(&renderer.scene.cookies.texture),
+            );
+            eprintln!("shadow {shadow:?}, local {local:?}, cookies {cookies:?}");
+            if cfg!(gizmo_forward_only) {
+                assert_eq!((shadow, local, cookies), ((1, 1), (1, 1), (1, 1)), "the forward-only path draws none of them");
+            } else {
+                let full = gizmo_renderer::SHADOW_MAP_RES;
+                assert_eq!(shadow, (full, full), "the desktop's cascades");
+                assert_eq!(local.0, gizmo_renderer::local_shadows::LOCAL_SHADOW_RES, "the desktop's local layers");
+                assert_eq!(cookies.0, gizmo_renderer::cookies::COOKIE_SIZE, "the desktop's cookies");
+            }
+
+            // CAS: a texel while off, the frame's size while it runs, and a texel again.
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.0, 4.0), primary: true, ..Default::default() });
+            let cas_input = |r: &Renderer| r.cas.as_ref().map(|c| edge(&c.input_texture));
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_eq!(cas_input(&renderer), Some((1, 1)), "CAS off holds a texel");
+            renderer.cas.as_mut().expect("a CAS stage").enabled = true;
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_eq!(cas_input(&renderer), Some((128, 96)), "CAS on takes the frame's size");
+            renderer.cas.as_mut().expect("a CAS stage").enabled = false;
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_eq!(cas_input(&renderer), Some((1, 1)), "CAS off again lets it go");
+
+            // The debug lines' buffer: small, then as many as a frame draws, up to its ceiling.
+            let lines = renderer.debug_renderer.as_mut().expect("a debug line renderer");
+            assert_eq!(lines.max_vertices, 1024, "it starts small");
+            let mut gizmos = gizmo_renderer::debug_renderer::Gizmos::default();
+            for i in 0..2500 {
+                gizmos.draw_line(Vec3::ZERO, Vec3::new(i as f32, 1.0, 0.0), [1.0; 4]);
+            }
+            lines.update(&renderer.device, &renderer.queue, &gizmos);
+            assert_eq!(lines.max_vertices, 8192, "5 000 vertices take the next power of two");
+            for i in 0..150_000 {
+                gizmos.draw_line(Vec3::ZERO, Vec3::new(i as f32, 1.0, 0.0), [1.0; 4]);
+            }
+            lines.update(&renderer.device, &renderer.queue, &gizmos);
+            assert_eq!(lines.max_vertices, gizmo_renderer::debug_renderer::MAX_GIZMO_VERTICES, "and no more than the ceiling");
+        });
+    }
+
     /// **A preset's sun stands where the scene's sun is, or where the preset's own is — never at the
     /// zenith because there is none.** A white mirror floor under Sunset Gold, the brightest pixel near
     /// the frame's middle: looking straight down it shows the zenith, looking along the floor towards

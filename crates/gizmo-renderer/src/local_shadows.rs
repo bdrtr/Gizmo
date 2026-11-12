@@ -262,13 +262,15 @@ pub struct LocalShadowMaps {
 }
 
 impl LocalShadowMaps {
-    /// An array of `layers` layers (at least one, so there is always something to bind).
+    /// An array of `layers` layers (at least one, so there is always something to bind). A texel a
+    /// layer on the forward-only path, which draws no shadow maps (see `build_shadow_resources`).
     #[must_use]
     pub fn new(device: &wgpu::Device, layers: u32) -> Self {
         let layers = layers.max(1);
+        let res = if cfg!(gizmo_forward_only) { 1 } else { LOCAL_SHADOW_RES };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("local_shadow_layers"),
-            size: wgpu::Extent3d { width: LOCAL_SHADOW_RES, height: LOCAL_SHADOW_RES, depth_or_array_layers: layers },
+            size: wgpu::Extent3d { width: res, height: res, depth_or_array_layers: layers },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,

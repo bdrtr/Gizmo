@@ -755,7 +755,7 @@ pub(super) fn record_studio_main_pass(
                     }
 
                     if let Some(debug_renderer) = &mut renderer.debug_renderer {
-                        debug_renderer.update(&renderer.queue, &gizmos);
+                        debug_renderer.update(&renderer.device, &renderer.queue, &gizmos);
                         debug_renderer.render(
                             &mut render_pass,
                             renderer.scene.view_bind_group(),
