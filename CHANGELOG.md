@@ -60,8 +60,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   On by default, as the desktop's; `ShadowSettings::with_forward_only(false)` turns it off there. Measured on an Adreno
   618, Nişancı with its floor filling the screen: about 104 fps without it, 90 with it — and 39 drawn as the desktop draws
   it (four cascades chosen per pixel, filtered 3×3), 63 with a single tap from four, 72 from a fixed one; the cascades
-  themselves cost about 1 ms. Over 100 m its texels are about 10 cm, so a small world's shadows step at the edges; a game
-  sets a shorter `with_distance`. **Found on that phone:** its compiler crashed
+  themselves cost about 1 ms. It covers 40 m by default there (`SHADOW_DISTANCE`), where its texels are about 4 cm:
+  over the desktop's 100 m they were 10 cm and a crate's shadow stepped at its edges, and 40 m read 100.6 fps against
+  98.9 over 100 m — nothing. **Found on that phone:** its compiler crashed
   building any pipeline with the sun's shadow in, because `sun_shadow_visibility` handed the cascade's matrix on to
   `shadow_grade`; `shadow_grade` takes the two projected points now, and `no_web_shader_hands_on_a_matrix_parameter` holds
   every web shader to it. `SceneSetupInputs::shadow_maps` is `sun_shadow_maps` and

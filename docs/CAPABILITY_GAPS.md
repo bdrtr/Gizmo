@@ -1014,11 +1014,12 @@ cube cookies for point lights, and no cookies on web. Each item:
   (39.5 against 39.0). **Found on that phone:** its Vulkan compiler crashed building any lit pipeline with the sun's
   shadow in — `sun_shadow_visibility` handed the cascade's matrix, its own parameter, on to `shadow_grade`; taken apart a
   piece at a time on the phone, it built with that call gone, and does with `shadow_grade` taking the two projected
-  points (`no_web_shader_hands_on_a_matrix_parameter`). **Still open:** over 100 m that cascade's texels are about 10 cm,
-  so a small world's shadows step at their edges (a game sets a shorter `ShadowSettings::with_distance`); 40 m as the
-  default took the steps away and read 73 fps against 90 in one reading — the floor filling more of the map — which wants
-  measuring before it is taken; no local light's shadow and no cookie on that path (their group holds three textures
-  more).
+  points (`no_web_shader_hands_on_a_matrix_parameter`). The back of a double-sided surface is pushed off the other way
+  per fragment, in the tier that draws backs (the front's push shadowed a panel's back the sun shone on: 84 against
+  194, 194 both now). It covers **40 m** by default there (`SHADOW_DISTANCE`): over 100 m that cascade's texels were
+  about 10 cm and a crate's shadow stepped at its edges; over 40 m about 4 cm, and two runs each, in turn, read 100.6 fps
+  against 98.9 — it costs nothing (one earlier reading of 73 was the phone in use). **Still open:** no local light's
+  shadow and no cookie on that path (their group holds three textures more).
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01; down to a coin since 2026-11-11.**
   `DirectionalLight::contact_shadow_length` (metres, 0 = off, the default). The deferred lighting pass
   marches from each pixel toward the sun in screen space against the depth buffer: pixel by pixel,

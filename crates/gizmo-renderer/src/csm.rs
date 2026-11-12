@@ -31,12 +31,12 @@ pub const SHADOW_MAP_RES: u32 = if cfg!(gizmo_forward_only) { 2048 } else { 3072
 /// blurry. Capping the shadow range packs the cascades onto what's actually near the
 /// camera, giving crisp contact shadows. Fragments past this distance are unshadowed.
 ///
-/// On the forward-only path one cascade holds the whole range (`CASCADES_DRAWN`), so its 2048 texels are
-/// about 10 cm each over 100 m, and a phone game's 80 cm crate casts a shadow stepped like a staircase
-/// (2026-11-12). A game with a small world sets less with `ShadowSettings::with_distance`. A shorter
-/// default is not taken unmeasured: over 40 m the steps were gone, and one reading on an Adreno 618 put
-/// the frame at 73 fps where 100 m read 90 — the floor filling more of the map it is drawn into.
-pub const SHADOW_DISTANCE: f32 = 100.0;
+/// **40 m on the forward-only path**, where one cascade holds the whole range (`CASCADES_DRAWN`): over
+/// 100 m its 2048 texels were about 10 cm each, and a phone game's 80 cm crate cast a shadow stepped like
+/// a staircase; over 40 m about 4 cm, and the steps are gone. It costs nothing there: on an Adreno 618 the
+/// same game read 100.6 fps over 40 m against 98.9 over 100 m (2026-11-12, two runs of 20 readings each,
+/// in turn). A game sets its own with `ShadowSettings::with_distance`.
+pub const SHADOW_DISTANCE: f32 = if cfg!(gizmo_forward_only) { 40.0 } else { 100.0 };
 
 /// Blend between logarithmic (1.0) and uniform (0.0) cascade splits. 0.75 leans
 /// logarithmic for denser near-camera texels while keeping the far cascade sane.
