@@ -12,7 +12,7 @@
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps}
 #ifdef SHADOWS
-#import gizmo::common::{receiver_axes, sun_shadow_visibility, shadow_distance_fade}
+#import gizmo::common::{ReceiverAxes, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
 #endif
 
 @group(0) @binding(0)
@@ -124,7 +124,7 @@ fn select_cascade(view_depth: f32) -> u32 {
 // constant had been worth, restored rather than retuned when the cascades' depth range grew. A sun
 // with no size still costs the nine taps this path was written to keep, on every pixel of a world that
 // fills the screen; a soft one costs here what it costs everywhere.
-fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: mat2x3<f32>, view_depth: f32) -> f32 {
+fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: ReceiverAxes, view_depth: f32) -> f32 {
     if (scene.sun_direction.w < 0.5) {
         return 1.0;
     }

@@ -138,15 +138,24 @@ const MAX_PENUMBRA_TEXELS: f32 = 48.0;
 // another surface, the plane square to `n`. Not `n`'s plane always: a normal map tilts `n` off the
 // geometry, and a filter that follows it climbs out of the surface — 13 105 pixels of a floor shadowed
 // themselves under an 80 cm sphere with its normal map tilting it 0.9 rad.
-fn receiver_axes(dx: vec3<f32>, dy: vec3<f32>, n: vec3<f32>) -> mat2x3<f32> {
+//
+// Two vectors rather than a `mat2x3`: the forward-only path (a browser's, a phone's) takes no matrix
+// that is not square, after one crashed an Adreno 618's Vulkan compiler (`baked_lit.wgsl`, 2026-11-12;
+// `no_web_shader_holds_a_matrix_that_is_not_square`), and this is what that path's sun shadow reads.
+struct ReceiverAxes {
+    u: vec3<f32>,
+    v: vec3<f32>,
+};
+
+fn receiver_axes(dx: vec3<f32>, dy: vec3<f32>, n: vec3<f32>) -> ReceiverAxes {
     let g = cross(dx, dy);
     let len = length(g);
     if (len > 1e-12 && abs(dot(g / len, n)) > 0.26) {
-        return mat2x3<f32>(normalize(dx), normalize(dy));
+        return ReceiverAxes(normalize(dx), normalize(dy));
     }
     let side = select(vec3<f32>(0.0, 1.0, 0.0), vec3<f32>(1.0, 0.0, 0.0), abs(n.y) > 0.9);
     let t1 = normalize(cross(n, side));
-    return mat2x3<f32>(t1, cross(n, t1));
+    return ReceiverAxes(t1, cross(n, t1));
 }
 
 // How a surface's depth runs across a shadow map: d(ndc z)/d(uv) of the plane through `at` along
@@ -156,9 +165,9 @@ fn receiver_axes(dx: vec3<f32>, dy: vec3<f32>, n: vec3<f32>) -> mat2x3<f32> {
 // here, written in terms of the gradient itself so that it never capped anything; made to cap, it
 // shadowed a flat floor wherever a light grazed it past 80° — 76 pixels under an 80 cm sphere 72° off
 // the floor's normal.
-fn shadow_grade(view_proj: mat4x4<f32>, at: vec3<f32>, axes: mat2x3<f32>, step: f32, here: vec3<f32>) -> vec2<f32> {
-    let a = layer_point(view_proj * vec4<f32>(at + axes[0] * step, 1.0)) - here;
-    let b = layer_point(view_proj * vec4<f32>(at + axes[1] * step, 1.0)) - here;
+fn shadow_grade(view_proj: mat4x4<f32>, at: vec3<f32>, axes: ReceiverAxes, step: f32, here: vec3<f32>) -> vec2<f32> {
+    let a = layer_point(view_proj * vec4<f32>(at + axes.u * step, 1.0)) - here;
+    let b = layer_point(view_proj * vec4<f32>(at + axes.v * step, 1.0)) - here;
     let det = a.x * b.y - a.y * b.x;
     if (abs(det) < 1e-14) {
         return vec2<f32>(0.0);
@@ -213,7 +222,7 @@ fn local_shadow_visibility(
     index: i32,
     world_pos: vec3<f32>,
     n: vec3<f32>,
-    axes: mat2x3<f32>,
+    axes: ReceiverAxes,
     to_light: vec3<f32>,
     bias: vec2<f32>,
     source_radius: f32,
@@ -370,7 +379,7 @@ fn sun_shadow_visibility(
     texel: f32,
     world_pos: vec3<f32>,
     n: vec3<f32>,
-    axes: mat2x3<f32>,
+    axes: ReceiverAxes,
     to_sun: vec3<f32>,
     bias: vec2<f32>,
     tan_sun: f32,

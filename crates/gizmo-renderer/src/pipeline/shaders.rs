@@ -484,9 +484,9 @@ mod tests {
         assert!(offenders.is_empty(), "functions taking more than {LIMIT} bytes by value: {offenders:#?}");
     }
 
-    /// **No shader the forward-only path builds holds a matrix that is not square.** That path — a
-    /// browser's, a phone's — draws no shadow maps, and the shadow code is the only place one lives
-    /// (`receiver_axes`' `mat2x3`). `baked_lit.wgsl` built a zero `mat2x3` without `SHADOWS` and passed it
+    /// **No shader the forward-only path builds holds a matrix that is not square.** The shadow code
+    /// held the only one (`receiver_axes`' `mat2x3`, two vectors since: `ReceiverAxes`).
+    /// `baked_lit.wgsl` built a zero `mat2x3` without `SHADOWS` and passed it
     /// to a `sun_visibility` that returned 1 without reading it, and the Adreno 618's Vulkan compiler
     /// dereferenced a null pointer building that pipeline (driver V@0502, 2026-11-12): every game on that
     /// phone failed to start, and every gate here was green. Desktop drivers take the shape; what this

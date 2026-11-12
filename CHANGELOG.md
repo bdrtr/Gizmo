@@ -215,6 +215,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`receiver_axes` in `common.wgsl` returns a `ReceiverAxes` (two `vec3`s, `u` and `v`) where it returned a `mat2x3`**,
+  and the shadow lookups take it. The forward-only path takes no matrix that is not square, after one crashed an Adreno
+  618's compiler, and its sun shadow will read these; on the desktop every frame is as it was.
 - **The forward-only path's environment cube is drawn in one pass.** Every face of every mip is a tile of one atlas
   (768 × 240 texels, 1.5 MB), drawn together and copied into the cube a tile at a time, where it was a pass for each face
   of each mip, 24 of them. On an Adreno 618 a sky that changes every frame — Nişancı under Sunset Gold with its sun turned
