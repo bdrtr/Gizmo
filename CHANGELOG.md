@@ -50,12 +50,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **The sun's shadow in a browser and on a phone.** The forward-only path drew no shadow map at all; it draws the sun's
-  cascades now, at 1024² a layer (`SHADOW_MAP_RES` on that path, 16 MiB, allocated the first frame that draws them),
-  through the same caster pipelines, and its lit and baked-lit pipelines read them through group 0's bindings 9 and 10
-  (`SUN_SHADOWS`; `SUN_SHADOW_GROUP`/`SUN_SHADOW_TEXTURE_BINDING`/`SUN_SHADOW_SAMPLER_BINDING` place them there and, on the
-  desktop, in the shadow group). The pipelines are built with it only while a scene has a sun whose cascades a frame
-  draws (`SceneState::set_forward_sun_shadows`). `SceneSetupInputs::shadow_maps` is `sun_shadow_maps` and
+- **The sun's shadow in a browser and on a phone, when a game asks** (`ShadowSettings::with_forward_only(true)`). The
+  forward-only path drew no shadow map at all; asked, it draws the sun's cascades, at 1024² a layer (`SHADOW_MAP_RES` on
+  that path, 16 MiB, allocated the first frame that draws them), through the same caster pipelines, and its lit and
+  baked-lit pipelines read them through group 0's bindings 9 and 10 (`SUN_SHADOWS`;
+  `SUN_SHADOW_GROUP`/`SUN_SHADOW_TEXTURE_BINDING`/`SUN_SHADOW_SAMPLER_BINDING` place them there and, on the desktop, in the
+  shadow group), built with it only while a scene has a sun whose cascades a frame draws
+  (`SceneState::set_forward_sun_shadows`). **Off by default, because a phone pays for it**: on an Adreno 618, Nişancı with
+  its floor filling the screen runs at 105 fps without it and 39 with it as the desktop draws it (a 3×3 filter, the
+  cascade chosen per pixel); a single tap reads 63 and a single tap from a fixed cascade 72, and the cascades themselves
+  cost about 1 ms. A filter that phone can afford is its own piece of work. **Found on that phone:** its compiler crashed
+  building any pipeline with the sun's shadow in, because `sun_shadow_visibility` handed the cascade's matrix on to
+  `shadow_grade`; `shadow_grade` takes the two projected points now, and `no_web_shader_hands_on_a_matrix_parameter` holds
+  every web shader to it. `SceneSetupInputs::shadow_maps` is `sun_shadow_maps` and
   `local_shadow_maps`: that path draws no local light's layer. A game's own surface casts there too (its caster pipeline
   is built on every path) and `ShadowCasting::Only` keeps its shadow. The floor beside a cube under the sun reads 64.23
   against 197.98 open there, 63.15 against 198.08 on the desktop.

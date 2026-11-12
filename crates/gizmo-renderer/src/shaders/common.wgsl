@@ -158,16 +158,19 @@ fn receiver_axes(dx: vec3<f32>, dy: vec3<f32>, n: vec3<f32>) -> ReceiverAxes {
     return ReceiverAxes(t1, cross(n, t1));
 }
 
-// How a surface's depth runs across a shadow map: d(ndc z)/d(uv) of the plane through `at` along
-// `axes` (`receiver_axes`), from two points `step` metres along it projected through `view_proj`,
-// against `here` = (uv, ndc z) at `at`; zero where the plane is edge-on to the light (nothing of it is
-// lit there). Not capped: across a plane the extrapolation is exact at any angle. A cap at 80° stood
-// here, written in terms of the gradient itself so that it never capped anything; made to cap, it
-// shadowed a flat floor wherever a light grazed it past 80° — 76 pixels under an 80 cm sphere 72° off
-// the floor's normal.
-fn shadow_grade(view_proj: mat4x4<f32>, at: vec3<f32>, axes: ReceiverAxes, step: f32, here: vec3<f32>) -> vec2<f32> {
-    let a = layer_point(view_proj * vec4<f32>(at + axes.u * step, 1.0)) - here;
-    let b = layer_point(view_proj * vec4<f32>(at + axes.v * step, 1.0)) - here;
+// How a surface's depth runs across a shadow map: d(ndc z)/d(uv) of its plane, from `a` and `b` —
+// two points along it (`receiver_axes`, a step apart), projected into the map as (uv, ndc z) and taken
+// from `here`, the point itself; zero where the plane is edge-on to the light (nothing of it is lit
+// there). Not capped: across a plane the extrapolation is exact at any angle. A cap at 80° stood here,
+// written in terms of the gradient itself so that it never capped anything; made to cap, it shadowed a
+// flat floor wherever a light grazed it past 80° — 76 pixels under an 80 cm sphere 72° off the floor's
+// normal.
+//
+// The caller projects the two points: this took the map's matrix and projected them itself until
+// 2026-11-12, and an Adreno 618's Vulkan compiler dereferenced a null pointer building any pipeline in
+// which the shadow lookup handed it the matrix it had been handed (found on a phone by taking the lookup
+// apart a piece at a time; `no_web_shader_hands_on_a_matrix_parameter` holds every web shader to it).
+fn shadow_grade(a: vec3<f32>, b: vec3<f32>) -> vec2<f32> {
     let det = a.x * b.y - a.y * b.x;
     if (abs(det) < 1e-14) {
         return vec2<f32>(0.0);
@@ -264,7 +267,13 @@ fn local_shadow_visibility(
     // of texels wide, a floor at a slant from the light climbs further than any fixed bias, and the
     // filter shadowed the floor with the floor — everywhere past the angle where it outran the bias.
     // Two points a texel along the surface, projected, give how its depth runs across the layer.
-    let grade = shadow_grade(layer.view_proj, world_pos + offset, axes, depth * layer.params.z, vec3<f32>(uv, ndc.z));
+    let grade_at = world_pos + offset;
+    let grade_step = depth * layer.params.z;
+    let grade_here = vec3<f32>(uv, ndc.z);
+    let grade = shadow_grade(
+        layer_point(layer.view_proj * vec4<f32>(grade_at + axes.u * grade_step, 1.0)) - grade_here,
+        layer_point(layer.view_proj * vec4<f32>(grade_at + axes.v * grade_step, 1.0)) - grade_here,
+    );
     // **Blockers**: where the disc's light to this point can be stopped — at a third of the way
     // from the light, the disc seen from here is twice its radius across — searched on a 5×5 grid,
     // as far out as the widest penumbra the filter below draws: a point at a penumbra's outer edge
@@ -408,7 +417,10 @@ fn sun_shadow_visibility(
     }
     let uv_per_metre = sx * 0.5;
     let metres_per_ndc = 1.0 / max(sz, 1e-8);
-    let grade = shadow_grade(light_vp, at, axes, world_texel, here);
+    let grade = shadow_grade(
+        layer_point(light_vp * vec4<f32>(at + axes.u * world_texel, 1.0)) - here,
+        layer_point(light_vp * vec4<f32>(at + axes.v * world_texel, 1.0)) - here,
+    );
     // **Blockers**: anywhere up the light's way, to the cascade's near plane — the reach its casters
     // are fitted to, `here.z` of NDC away — so the sun seen from here is that far × tan θ wide each
     // side, as far as the widest penumbra drawn.

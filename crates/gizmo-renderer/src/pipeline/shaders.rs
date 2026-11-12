@@ -550,6 +550,77 @@ mod tests {
         assert!(offenders.is_empty(), "matrices that are not square on the forward-only path: {offenders:#?}");
     }
 
+    /// **No shader the forward-only path builds hands a matrix it was handed on to another function.**
+    /// `sun_shadow_visibility` passed its cascade's matrix, its own parameter, to `shadow_grade`, and the
+    /// Adreno 618's Vulkan compiler dereferenced a null pointer building every lit pipeline with the sun's
+    /// shadow in (2026-11-12) — found on that phone by taking the lookup apart a piece at a time: it
+    /// builds with the call gone, and with `shadow_grade` taking the two projected points instead. A
+    /// matrix parameter used where it is is fine (the lookup's own, `inverse_transpose_3x3`'s), and so is
+    /// a struct handed on (`shade`'s `in`, `sun_visibility`'s axes, both built on that phone). Desktop
+    /// drivers take the shape; what this can see is the shape, in every shader the web schema composes,
+    /// at every lit tier, with and without the sun's shadow.
+    #[test]
+    fn no_web_shader_hands_on_a_matrix_parameter() {
+        use naga::{Block, Expression, Statement, TypeInner};
+        fn calls<'a>(block: &'a Block, out: &mut Vec<&'a [naga::Handle<Expression>]>) {
+            for statement in block.iter() {
+                match statement {
+                    Statement::Call { arguments, .. } => out.push(arguments),
+                    Statement::Block(b) => calls(b, out),
+                    Statement::If { accept, reject, .. } => {
+                        calls(accept, out);
+                        calls(reject, out);
+                    }
+                    Statement::Loop { body, continuing, .. } => {
+                        calls(body, out);
+                        calls(continuing, out);
+                    }
+                    Statement::Switch { cases, .. } => cases.iter().for_each(|c| calls(&c.body, out)),
+                    _ => {}
+                }
+            }
+        }
+        let shaders: &[(&str, &str)] = &[
+            ("shader.wgsl", include_str!("../shaders/shader.wgsl")),
+            ("baked_lit.wgsl", include_str!("../shaders/baked_lit.wgsl")),
+            ("unlit.wgsl", include_str!("../shaders/unlit.wgsl")),
+            ("water.wgsl", include_str!("../shaders/water.wgsl")),
+            ("sky.wgsl", include_str!("../shaders/sky.wgsl")),
+            ("env_bake.wgsl", include_str!("../shaders/env_bake.wgsl")),
+        ];
+        let tiers: &[&[&str]] = &[&[], &["DETAILS", "KEEPS", "LOBES", "PROBES"], &["SUN_SHADOWS"], &["SUN_SHADOWS", "DETAILS", "KEEPS", "LOBES"]];
+        let mut offenders = Vec::new();
+        for &(name, src) in shaders {
+            for tier in tiers {
+                let mut defs = web_render_defs();
+                for def in *tier {
+                    defs.insert(def.to_string(), ShaderDefValue::Bool(true));
+                }
+                let (module, _) = compose_module(src, name, defs).expect("composes");
+                for (_, function) in module.functions.iter() {
+                    let mut found = Vec::new();
+                    calls(&function.body, &mut found);
+                    for arguments in found {
+                        for &argument in arguments {
+                            let Expression::FunctionArgument(i) = function.expressions[argument] else { continue };
+                            let ty = &module.types[function.arguments[i as usize].ty].inner;
+                            if matches!(ty, TypeInner::Matrix { .. }) {
+                                offenders.push(format!(
+                                    "{name} {tier:?}: {} hands on its `{}`",
+                                    function.name.as_deref().unwrap_or("?"),
+                                    function.arguments[i as usize].name.as_deref().unwrap_or("?"),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        offenders.sort();
+        offenders.dedup();
+        assert!(offenders.is_empty(), "parameters handed on that the Adreno 618's compiler crashes on: {offenders:#?}");
+    }
+
     #[test]
     fn web_compose_strips_shadows_and_shifts_groups() {
         let web = compose_wgsl(SHADER_SRC, "shader.wgsl", web_render_defs());

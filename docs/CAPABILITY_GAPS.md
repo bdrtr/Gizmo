@@ -993,9 +993,9 @@ cube cookies for point lights, and no cookies on web. Each item:
   broken: the image mirrored (88.50 / 65.56), the layer off by one (61.39 both — an empty layer is
   black), the cookie sampled but not applied, and never packed. **Spot only, native only** (the web
   forward pipeline has no shadow group); point lights have no cube cookie.
-- ~~**No shadow at all in a browser or on a phone.**~~ **The sun's, since 2026-11-12.** The forward-only path drew no
-  shadow map: WebGPU's four bind groups left no room for the shadow group, so its lit pipelines had none and its frame
-  planned none. It draws the sun's cascades now (`passes::record_shadow_passes`, the same caster pipelines, which fit in
+- ~~**No shadow at all in a browser or on a phone.**~~ **The sun's, when a game asks, since 2026-11-12**
+  (`ShadowSettings::with_forward_only(true)`). The forward-only path drew no shadow map: WebGPU's four bind groups left no
+  room for the shadow group, so its lit pipelines had none and its frame planned none. Asked, it draws the sun's cascades (`passes::record_shadow_passes`, the same caster pipelines, which fit in
   four groups), at 1024² a layer (`SHADOW_MAP_RES` on that path; 16 MiB, allocated the first frame that draws them), and
   its lit and baked-lit pipelines read them through group 0's bindings 9 and 10 (`SUN_SHADOWS`, with
   `SUN_SHADOW_GROUP`/`_BINDING` defs placing them there and in the shadow group on the desktop). Built with
@@ -1004,9 +1004,18 @@ cube cookies for point lights, and no cookies on web. Each item:
   (`a_fill_light_lights_as_the_sun_does_without_its_shadow`, now on both paths): the floor beside a cube under the sun
   64.23 against 197.98 open, the desktop's 63.15 against 198.08. A game's own surface casts there too (its caster
   pipeline was the desktop's alone; `a_custom_surface_is_drawn_as_the_engines_material_is` drew a hole in the
-  shadow on that path until it was built there as well), and `ShadowCasting::Only` keeps its shadow there. **Still
-  open:** no local light's shadow and no cookie on that path (their group holds three textures more), and the cost on
-  a phone is to be measured.
+  shadow on that path until it was built there as well), and `ShadowCasting::Only` keeps its shadow there. **Off by
+  default, measured on an Adreno 618** (Nişancı, its floor filling the screen, portrait, 20 HUD readings a run): 105 fps
+  without it, 39 with it as the desktop draws it. Taken apart: the cascades cost about 1 ms (81 fps drawn and unread);
+  sampling them about 13 ms (40 fps read and undrawn); a single tap reads 63, a single tap from a cascade fixed for the
+  frame 72, the 3×3 filter's code compiled in and not run 64 — the taps, the per-pixel choice of one matrix out of four,
+  and the code's presence each cost milliseconds there. Building it only for a sun with a size (the soft shadow's code
+  left out for a hard one) read 39.5 against 39.0: nothing. **Found on that phone:** its Vulkan compiler crashed building
+  any lit pipeline with it in — `sun_shadow_visibility` handed the cascade's matrix, its own parameter, on to
+  `shadow_grade`; taken apart a piece at a time on the phone, it built with that call gone, and does with `shadow_grade`
+  taking the two projected points (`no_web_shader_hands_on_a_matrix_parameter`). **Still open:** a filter a phone can
+  afford — the coordinates worked out per vertex, fewer cascades, one tap — which is a piece of work of its own and the
+  phone's to measure; no local light's shadow and no cookie on that path (their group holds three textures more).
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01; down to a coin since 2026-11-11.**
   `DirectionalLight::contact_shadow_length` (metres, 0 = off, the default). The deferred lighting pass
   marches from each pixel toward the sun in screen space against the depth buffer: pixel by pixel,

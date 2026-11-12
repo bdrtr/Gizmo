@@ -146,15 +146,29 @@ pub struct ShadowSettings {
     /// Scales how far each lookup is pushed off the surface along its normal before it is projected
     /// into the cascade (2 texels of that cascade by default). 1 by default.
     pub normal_offset: f32,
+    /// Whether the forward-only path — a browser's, a phone's — draws the sun's shadow. **Off by
+    /// default**: it costs a phone more than most games there can give. Measured on an Adreno 618,
+    /// `nisanci` with its floor filling the screen at 105 fps without it (2026-11-12): 39 with it as the
+    /// desktop draws it (a 3×3 filter, the four cascades chosen per pixel), 63 with a single tap, 72
+    /// with a single tap from a cascade fixed for the frame — the filter's taps, the per-pixel choice
+    /// of a matrix out of four and the code's presence each cost milliseconds there. The cascades
+    /// themselves cost about 1 ms. The desktop draws the sun's shadow whatever this says.
+    pub forward_only: bool,
 }
 
 impl Default for ShadowSettings {
     fn default() -> Self {
-        Self { distance: SHADOW_DISTANCE, lambda: CASCADE_LAMBDA, depth_bias: 1.0, normal_offset: 1.0 }
+        Self { distance: SHADOW_DISTANCE, lambda: CASCADE_LAMBDA, depth_bias: 1.0, normal_offset: 1.0, forward_only: false }
     }
 }
 
 impl ShadowSettings {
+    /// The sun's shadow on the forward-only path too (see [`forward_only`](Self::forward_only)).
+    pub fn with_forward_only(mut self, on: bool) -> Self {
+        self.forward_only = on;
+        self
+    }
+
     /// Shadows out to `metres` (floored at 1 m), split as by default.
     pub fn with_distance(mut self, metres: f32) -> Self {
         self.distance = if metres.is_finite() { metres.max(1.0) } else { SHADOW_DISTANCE };

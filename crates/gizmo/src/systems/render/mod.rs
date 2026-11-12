@@ -1519,8 +1519,9 @@ fn draw_camera_view(
                 sky: renderer.sky,
             },
             // The forward-only path has no shadow passes: no maps to plan or keep casters for.
-            // Every path draws the sun's cascades; the forward-only one no local light's layer.
-            sun_shadow_maps: true,
+            // The forward-only path draws the sun's cascades only when a game asks
+            // (`ShadowSettings::forward_only`), and no local light's layer.
+            sun_shadow_maps: !cfg!(gizmo_forward_only) || renderer.shadow_settings.forward_only,
             local_shadow_maps: cfg!(not(gizmo_forward_only)),
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
@@ -5194,7 +5195,8 @@ mod golden_render_tests {
     /// nothing: the floor under one read what it reads with no light. It is a directional light in the
     /// light array now, in every cluster: the open floor reads as the sun's, and the floor beside the
     /// cube that the sun shades, the fill does not. Runs on whichever path the build draws with — the
-    /// forward-only one, a browser's or a phone's, drew no shadow at all until 2026-11-12.
+    /// forward-only one, a browser's or a phone's, drew no shadow at all until 2026-11-12, and draws the
+    /// sun's when a game asks (`ShadowSettings::forward_only`), as this does.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn a_fill_light_lights_as_the_sun_does_without_its_shadow() {
@@ -5210,6 +5212,8 @@ mod golden_render_tests {
         async fn floor(role: Option<LightRole>) -> (f32, f32) {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            // The sun's shadow on the forward-only path too, which a game asks for there.
+            renderer.shadow_settings = renderer.shadow_settings.with_forward_only(true);
             renderer.ssao = None;
             renderer.ssgi = None;
             renderer.ssr = None;
@@ -5262,7 +5266,7 @@ mod golden_render_tests {
             eprintln!("open floor: {dark:.2} unlit, {sun:.2} under the sun, {fill:.2} under a fill; beside the cube {sun_beside:.2} / {fill_beside:.2}");
             assert!(fill > dark + 15.0, "a fill light lights the floor: {dark:.2} → {fill:.2}");
             assert!((fill - sun).abs() < 1.5, "a fill lights as the sun does: {fill:.2} against {sun:.2}");
-            // On every path: the forward-only one draws the sun's cascades since 2026-11-12.
+            // On every path: the forward-only one draws the sun's cascades, when asked, since 2026-11-12.
             assert!(sun_beside < sun - 15.0, "the sun shades the floor beside the cube ({sun_beside:.2} of {sun:.2})");
             assert!(fill_beside > fill - 5.0, "a fill casts no shadow: {fill_beside:.2} beside the cube, {fill:.2} open");
         });
@@ -5404,10 +5408,14 @@ mod golden_render_tests {
                 crate::renderer::components::DirectionalLight::new(Vec3::ONE, 1.0, crate::renderer::components::LightRole::Sun),
             );
             let _ = render_world(&mut renderer, &mut world).await;
-            // Their path's size: 3072 on the desktop, 1024 on the forward-only path, which draws them since
-            // 2026-11-12.
+            // The forward-only path draws them only when a game asks (`ShadowSettings::forward_only`);
+            // then at its size, 1024, where the desktop's are 3072.
             let full = gizmo_renderer::SHADOW_MAP_RES;
-            assert_eq!(edge(&renderer.scene.shadow_depth_texture), (full, full), "a sun's cascades, at their path's size");
+            let unasked = if cfg!(gizmo_forward_only) { (1, 1) } else { (full, full) };
+            assert_eq!(edge(&renderer.scene.shadow_depth_texture), unasked, "a sun's cascades, unless this path draws none");
+            renderer.shadow_settings = renderer.shadow_settings.with_forward_only(true);
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_eq!(edge(&renderer.scene.shadow_depth_texture), (full, full), "and asked for, at their path's size");
 
             // CAS: a texel while off, the frame's size while it runs, and a texel again.
             let cas_input = |r: &Renderer| r.cas.as_ref().map(|c| edge(&c.input_texture));
@@ -12738,6 +12746,8 @@ fn material_surface(input: SurfaceInput) -> Surface {
     async fn render_surface_cube(case: SurfaceCase, transparent: bool) -> (Vec<u8>, Option<Vec<u8>>) {
         const W: u32 = 128;
         let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
+        // The sun's shadow on the forward-only path too, which a game asks for there: a surface casts.
+        renderer.shadow_settings = renderer.shadow_settings.with_forward_only(true);
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
         let tex = asset_manager.create_white_texture(
@@ -15564,7 +15574,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
             );
 
             // `ShadowCasting::Only` is not: the cube goes, the shadow stays — on every path since
-            // 2026-11-12, when the forward-only one took the sun's shadow (it left the empty frame
+            // 2026-11-12, when the forward-only one took the sun's shadow where asked (it left the empty frame
             // there before, and drew the cube until 2026-11-11, since that path draws everything forward
             // and the forward pass did not ask: `a_shadow_only_object_is_drawn_by_no_pass`).
             let (residue, _) = changed_pixels(&absent, &shadow_only, 128);
@@ -15619,6 +15629,8 @@ fn material_surface(input: SurfaceInput) -> Surface {
         const W: u32 = 128;
         let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
         renderer.taa = None;
+        // The sun's shadow on the forward-only path too, which a game asks for there.
+        renderer.shadow_settings = renderer.shadow_settings.with_forward_only(true);
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
         let tex = asset_manager.create_white_texture(
