@@ -484,6 +484,50 @@ mod tests {
         assert!(offenders.is_empty(), "functions taking more than {LIMIT} bytes by value: {offenders:#?}");
     }
 
+    /// **No shader the forward-only path builds holds a matrix that is not square.** That path — a
+    /// browser's, a phone's — draws no shadow maps, and the shadow code is the only place one lives
+    /// (`receiver_axes`' `mat2x3`). `baked_lit.wgsl` built a zero `mat2x3` without `SHADOWS` and passed it
+    /// to a `sun_visibility` that returned 1 without reading it, and the Adreno 618's Vulkan compiler
+    /// dereferenced a null pointer building that pipeline (driver V@0502, 2026-11-12): every game on that
+    /// phone failed to start, and every gate here was green. Desktop drivers take the shape; what this
+    /// can see is the shape, in every shader the web schema composes, with each of the lit tiers' defs.
+    #[test]
+    fn no_web_shader_holds_a_matrix_that_is_not_square() {
+        let shaders: &[(&str, &str)] = &[
+            ("shader.wgsl", include_str!("../shaders/shader.wgsl")),
+            ("baked_lit.wgsl", include_str!("../shaders/baked_lit.wgsl")),
+            ("unlit.wgsl", include_str!("../shaders/unlit.wgsl")),
+            ("water.wgsl", include_str!("../shaders/water.wgsl")),
+            ("planar_mirror.wgsl", include_str!("../shaders/planar_mirror.wgsl")),
+            ("sky.wgsl", include_str!("../shaders/sky.wgsl")),
+            ("backdrop.wgsl", include_str!("../shaders/backdrop.wgsl")),
+            ("grid.wgsl", include_str!("../shaders/grid.wgsl")),
+            ("text.wgsl", include_str!("../shaders/text.wgsl")),
+            ("env_bake.wgsl", include_str!("../shaders/env_bake.wgsl")),
+        ];
+        // The lit pipelines' tiers on that path (`SceneState::lit_pipeline`), each on top of the schema.
+        let tiers: &[&[&str]] = &[&[], &["DETAILS", "KEEPS"], &["DETAILS", "KEEPS", "LOBES"], &["DETAILS", "KEEPS", "LOBES", "PROBES"]];
+        let mut offenders = Vec::new();
+        for &(name, src) in shaders {
+            for tier in tiers {
+                let mut defs = web_render_defs();
+                for def in *tier {
+                    defs.insert(def.to_string(), ShaderDefValue::Bool(true));
+                }
+                let (module, _) = compose_module(src, name, defs).expect("composes");
+                for (_, ty) in module.types.iter() {
+                    if let naga::TypeInner::Matrix { columns, rows, .. } = ty.inner {
+                        if columns as u8 != rows as u8 {
+                            offenders.push(format!("{name} {tier:?}: mat{}x{}", columns as u8, rows as u8));
+                        }
+                    }
+                }
+            }
+        }
+        offenders.dedup();
+        assert!(offenders.is_empty(), "matrices that are not square on the forward-only path: {offenders:#?}");
+    }
+
     #[test]
     fn web_compose_strips_shadows_and_shifts_groups() {
         let web = compose_wgsl(SHADER_SRC, "shader.wgsl", web_render_defs());

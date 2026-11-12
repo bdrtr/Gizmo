@@ -101,6 +101,12 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
     return out;
 }
 
+// The sun's shadow, on the paths that draw shadow maps. A path that does not (the forward-only one: a
+// browser's, a phone's) compiles none of it — not even a placeholder: it built a zero `mat2x3` here and
+// passed it to a `sun_visibility` that returned 1 without reading it, and the Adreno 618's Vulkan
+// compiler dereferenced a null pointer building this pipeline (2026-11-12, every game on that phone
+// failed to start).
+#ifdef SHADOWS
 fn select_cascade(view_depth: f32) -> u32 {
     if (view_depth < scene.cascade_splits.x) { return 0u; }
     if (view_depth < scene.cascade_splits.y) { return 1u; }
@@ -119,7 +125,6 @@ fn select_cascade(view_depth: f32) -> u32 {
 // with no size still costs the nine taps this path was written to keep, on every pixel of a world that
 // fills the screen; a soft one costs here what it costs everywhere.
 fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: mat2x3<f32>, view_depth: f32) -> f32 {
-#ifdef SHADOWS
     if (scene.sun_direction.w < 0.5) {
         return 1.0;
     }
@@ -137,20 +142,16 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: mat2x3<f3
     // Walk the sampled term back to "lit" over the last stretch of the covered range, so the
     // end of the shadow maps is a gradient rather than a line.
     return mix(1.0, vis, fade);
-#else
-    return 1.0;
-#endif
 }
+#endif
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // The surface's normal and how it runs across neighbouring pixels, for the sun's shadow
     // (`receiver_axes`) — taken first, before any pixel of the quad discards.
-    let n = normalize(in.world_normal);
 #ifdef SHADOWS
+    let n = normalize(in.world_normal);
     let surface_axes = receiver_axes(dpdx(in.world_pos), dpdy(in.world_pos), n);
-#else
-    let surface_axes = mat2x3<f32>(vec3<f32>(0.0), vec3<f32>(0.0));
 #endif
     let tex = textureSample(t_diffuse, s_diffuse, in.tex_coords);
 
@@ -178,9 +179,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // in, and what `select_cascade` and the fade both assume. (Radial `length(...)` overstates
     // the depth of anything off-axis, so it picked a cascade too far out at the screen edges
     // and put the range boundary on a sphere instead of a plane.)
+#ifdef SHADOWS
     let view_depth = dot(in.world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
     // `MeshRenderer::receives_shadows == false` keeps the sun's share whole.
     let vis = select(sun_visibility(in.world_pos, n, surface_axes, view_depth), 1.0, in.inst_emissive.w < 0.0);
+#else
+    let vis = 1.0;
+#endif
 
     // The shadow darkens rather than replaces. Baked lighting already includes the sky and the
     // bounce; a shadowed patch of it is dimmer, not black, and multiplying the whole thing by the
