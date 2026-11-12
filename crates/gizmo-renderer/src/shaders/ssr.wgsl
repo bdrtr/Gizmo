@@ -1,6 +1,6 @@
 // SSR Raymarching Shader
 // SceneUniforms shared from gizmo::common (composed by load_shader_composed).
-#import gizmo::common::{SceneUniforms, dielectric_f0, sky_gradient, preset_environment}
+#import gizmo::common::{SceneUniforms, dielectric_f0, scene_environment}
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #import gizmo::reflection_probes::{probe_environment}
 
@@ -35,12 +35,10 @@ struct SsrParams {
 // really there. The same expression as `deferred_lighting.wgsl`'s.
 fn reflected_environment(R: vec3<f32>, N: vec3<f32>, world_pos: vec3<f32>, roughness: f32) -> vec3<f32> {
     let bent = normalize(mix(R, N, roughness));
-    var sky = vec3<f32>(0.0);
-    if (scene.sky_zenith.a >= 0.0) {
-        sky = sky_gradient(bent, scene.sky_zenith.rgb, scene.sky_horizon.rgb, scene.sky_ground.rgb, roughness) * scene.sky_zenith.a;
-    } else {
-        sky = preset_environment(bent, roughness, scene.environment_preset, scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz));
-    }
+    let sky = scene_environment(
+        bent, roughness, scene.sky_zenith, scene.sky_horizon.rgb, scene.sky_ground.rgb, scene.environment_preset,
+        scene.environment_preset_b, scene.environment_blend_t, scene.sun_direction,
+    );
     return probe_environment(R, world_pos, roughness, sky);
 }
 

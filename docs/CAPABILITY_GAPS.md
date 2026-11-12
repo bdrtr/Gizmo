@@ -337,9 +337,21 @@ the frame's middle 8×8, before and after; the other presets agree within 0.7. I
 disc, `pow(·, 4096)` at a roughness of 0 — about a degree across — which the cube's sharpest mip, 128
 texels a face, 0.7° a texel, spreads by a pixel: 236 with 71 and 78 beside it, against the desktop's 239,
 66 and 72. Separate because holding it means a bigger cube, four times the memory at 256, which is a
-phone's to measure. The disc stood at the zenith because the scene had no sun and a missing sun's
-direction is straight down; whether a preset should draw a sun the scene does not have is a question of
-its own.
+phone's to measure. (That floor saw the disc at the zenith because the scene had no sun; it sees the
+dark sky there since 2026-11-12, and the spread is wherever a mirror shows the disc.)
+
+~~**A preset drew a sun the scene does not have, at the zenith.**~~ **CLOSED 2026-11-12.** Sunset Gold
+and Classic Daylight place their disc and glow by the scene's sun, and a scene without one passed the
+placeholder a missing sun's direction holds, straight down: a sunset's sun stood overhead. Each preset
+places its own now when the scene has none (`preset_sun` in `common.wgsl`, fed `sun_direction` with its
+presence flag in `w`): Sunset Gold's eight degrees over the horizon, Classic Daylight's at fifty-three,
+as Studio Neutral's key and Midnight Neon's signs were always their own. Measured on a white mirror
+floor, the brightest pixel near the middle (`a_preset_draws_its_sun_where_the_scene_has_it_or_where_its_own_is`):
+no sun, the zenith 63.7 (the disc, 247, before) and the preset's own 246.0; a sun overhead that lights
+nothing, the zenith 247.3 and the preset's own 134.0, the horizon's glow without its disc. Both paths.
+**This changed the look** of a scene under those two presets without a sun: a rough floor seen from
+above reads 80.88 where it read 186.27 (Sunset Gold, matte) and 135.15 where it read 170.73 (Classic
+Daylight). SSR's sky fallback calls `scene_environment` now instead of a copy of its branches.
 
 **And reflection probes, the same day.** That path has no group for them, so they are group 0's
 bindings 6–8: the captured cube array, a sampler and the uniform that places them, packed by the same

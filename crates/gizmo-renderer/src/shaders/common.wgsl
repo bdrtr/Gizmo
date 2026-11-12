@@ -540,31 +540,48 @@ fn single_preset_environment(preset: u32, dir: vec3<f32>, roughness: f32, sun_di
 
 // What lights and is reflected by a surface along `dir`: `Renderer::sky` when one is set (`zenith.a`, its
 // intensity, ≥ 0; < 0 = none), otherwise the presets. The forward and deferred shaders call it per pixel
-// with the frame's uniforms, and `env_bake.wgsl` once per texel of the forward-only path's cube.
+// with the frame's uniforms, and `env_bake.wgsl` once per texel of the forward-only path's cube. `sun` is
+// the frame's `sun_direction` as it is uploaded: the way the sun shines, and in `w` whether there is one.
 fn scene_environment(
     dir: vec3<f32>, roughness: f32, zenith: vec4<f32>, horizon: vec3<f32>, ground: vec3<f32>, preset: u32,
-    preset_b: u32, blend_t: f32, sun_dir: vec3<f32>,
+    preset_b: u32, blend_t: f32, sun: vec4<f32>,
 ) -> vec3<f32> {
     if (zenith.a >= 0.0) {
         return sky_gradient(dir, zenith.rgb, horizon, ground, roughness) * zenith.a;
     }
-    return preset_environment(dir, roughness, preset, preset_b, blend_t, sun_dir);
+    return preset_environment(dir, roughness, preset, preset_b, blend_t, sun);
+}
+
+// Towards where a preset's sun stands. The scene's sun when it has one (`sun.w`), so the disc, its glow
+// and the shadows agree; otherwise the preset's own, as Studio Neutral's key and Midnight Neon's signs
+// are its own: Sunset Gold's eight degrees over the horizon, Classic Daylight's at fifty-three. A scene
+// without a sun took the placeholder a missing sun's direction holds, straight down, and stood a
+// sunset's sun at the zenith.
+fn preset_sun(preset: u32, sun: vec4<f32>) -> vec3<f32> {
+    if (sun.w > 0.5) {
+        return normalize(-sun.xyz);
+    }
+    if (preset == 0u) {
+        return normalize(vec3<f32>(0.8, 0.14, 0.5));
+    }
+    return normalize(vec3<f32>(0.4, 0.8, 0.45));
 }
 
 // The environment presets along `dir`, `blend_t` of the way from `preset` to `preset_b`: what lights
-// a surface and what it reflects, for the deferred and the forward shader alike. Pure: `sun_dir` is
-// the direction towards the sun.
-fn preset_environment(dir: vec3<f32>, roughness: f32, preset: u32, preset_b: u32, blend_t: f32, sun_dir: vec3<f32>) -> vec3<f32> {
+// a surface and what it reflects, for the deferred and the forward shader alike. Pure: `sun` as
+// `scene_environment` takes it, each preset's sun placed by `preset_sun`.
+fn preset_environment(dir: vec3<f32>, roughness: f32, preset: u32, preset_b: u32, blend_t: f32, sun: vec4<f32>) -> vec3<f32> {
     let zenith = dir.y;
-    let sun_dot = max(dot(dir, sun_dir), 0.0);
 
     // Smooth transition factor at the horizon (zenith = 0.0)
     let horizon_blend = smoothstep(0.0, 1.0, clamp(zenith * 10.0 + 0.5, 0.0, 1.0));
 
-    let color1 = single_preset_environment(preset, dir, roughness, sun_dir, sun_dot, zenith, horizon_blend);
+    let sun_a = preset_sun(preset, sun);
+    let color1 = single_preset_environment(preset, dir, roughness, sun_a, max(dot(dir, sun_a), 0.0), zenith, horizon_blend);
 
     if (blend_t > 0.001) {
-        let color2 = single_preset_environment(preset_b, dir, roughness, sun_dir, sun_dot, zenith, horizon_blend);
+        let sun_b = preset_sun(preset_b, sun);
+        let color2 = single_preset_environment(preset_b, dir, roughness, sun_b, max(dot(dir, sun_b), 0.0), zenith, horizon_blend);
         return mix(color1, color2, blend_t);
     }
 

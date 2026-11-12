@@ -241,6 +241,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A preset drew a sunset's sun at the zenith in a scene with no sun.** Sunset Gold and Classic Daylight place their
+  disc and glow by the scene's sun, and without one they took the placeholder a missing sun's direction holds, straight
+  down. Each places its own now (`preset_sun` in `common.wgsl`): Sunset Gold's eight degrees over the horizon, Classic
+  Daylight's at fifty-three, as Studio Neutral and Midnight Neon always kept their own lights. A mirror floor seen from
+  above reads 63.7 where the disc read 247, and 246.0 looking along it towards the preset's own sun; a sun in the scene
+  still places the disc, even one that lights nothing. This changes the look of a scene under those two presets with
+  no sun: a rough floor seen from above, 80.88 where it read 186.27 under Sunset Gold. `scene_environment` and
+  `preset_environment` take the frame's `sun_direction` as uploaded, its presence flag in `w`, where they took a
+  direction; SSR's sky fallback calls `scene_environment` instead of copying it.
 - **A smoke let through all of the volumetric air behind it.** The march splits the air at the nearest thing that
   blends, and the GPU particles were not one: with no pane in the frame all of a lamp's air behind a wall of smoke was
   added over the smoke at full strength. The particles are drawn into the split's depth where they show at all

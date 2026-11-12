@@ -69,7 +69,7 @@ fn select_cascade(view_depth: f32) -> u32 {
 fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
     return scene_environment(
         dir, roughness, scene.sky_zenith, scene.sky_horizon.rgb, scene.sky_ground.rgb, scene.environment_preset,
-        scene.environment_preset_b, scene.environment_blend_t, normalize(-scene.sun_direction.xyz),
+        scene.environment_preset_b, scene.environment_blend_t, scene.sun_direction,
     );
 }
 

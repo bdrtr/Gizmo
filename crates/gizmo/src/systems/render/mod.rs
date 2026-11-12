@@ -5132,7 +5132,9 @@ mod golden_render_tests {
     /// Neutral's key light. The matte floor read 88.76 against the desktop's 66.23 under it, and Sunset
     /// Gold's 148.30 against 186.27. The sky's cube stops at 16 texels now (`env_cube::sky_levels`). Runs
     /// on whichever path the build draws with, against what the desktop reads; bloom off, which the
-    /// forward-only path does not have.
+    /// forward-only path does not have. Sunset Gold and Classic Daylight read less since 2026-11-12
+    /// (186.27 → 80.88 and 170.73 → 135.15 matte): with no sun in the scene their suns stood at the
+    /// zenith, straight over this floor, and stand at their own now (`preset_sun`).
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn a_rough_floor_lit_by_the_environment_reads_alike_on_every_path() {
@@ -5181,17 +5183,18 @@ mod golden_render_tests {
         }
         pollster::block_on(async {
             // What the desktop reads, working the environment out per pixel: (preset, metallic, luma).
-            // The forward-only path read 148.30 and 88.76 for the first two matte floors, 94.96, 40.96,
-            // 37.43 and 105.05 for the metal ones; it reads all of them within 3.1 now.
+            // With the suns at the zenith, the forward-only path read 148.30 and 88.76 for the first two
+            // matte floors (the desktop 186.27 and 66.23), 94.96, 40.96, 37.43 and 105.05 for the metal
+            // ones; it reads all of them within 3.1 now.
             const DESKTOP: [(u32, f32, f32); 8] = [
-                (0, 0.0, 186.27),
-                (0, 1.0, 135.95),
+                (0, 0.0, 80.88),
+                (0, 1.0, 45.82),
                 (1, 0.0, 66.23),
                 (1, 1.0, 26.48),
                 (2, 0.0, 72.52),
                 (2, 1.0, 33.49),
-                (3, 0.0, 170.73),
-                (3, 1.0, 117.24),
+                (3, 0.0, 135.15),
+                (3, 1.0, 89.04),
             ];
             let mut failures: Vec<String> = Vec::new();
             for (preset, metallic, want) in DESKTOP {
@@ -5202,6 +5205,93 @@ mod golden_render_tests {
                 }
             }
             assert!(failures.is_empty(), "{failures:#?}");
+        });
+    }
+
+    /// **A preset's sun stands where the scene's sun is, or where the preset's own is — never at the
+    /// zenith because there is none.** A white mirror floor under Sunset Gold, the brightest pixel near
+    /// the frame's middle: looking straight down it shows the zenith, looking along the floor towards
+    /// the preset's own sun (eight degrees up) it shows that. A scene without a sun took the placeholder
+    /// a missing sun's direction holds, straight down, so the disc stood at the zenith (236 there) and
+    /// the preset's sunset had no sun on its horizon. A sun that lights nothing (intensity 0) still
+    /// places the disc: it is the scene's sun, so the preset's own goes. Runs on whichever path the
+    /// build draws with — on the forward-only one through the cube `env_cube` bakes.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_preset_draws_its_sun_where_the_scene_has_it_or_where_its_own_is() {
+        use crate::renderer::components::{DirectionalLight, LightRole};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn brightest(sun: Option<Vec3>, sky: Vec3) -> f32 {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.environment_preset = 0;
+            renderer.bloom_intensity = 0.0;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(200.0, 0.2, 200.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            // `with_pbr(albedo, roughness, metallic)`: a white metal mirror.
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::ONE, 0.0, 1.0));
+            world.add_component(floor, MeshRenderer::new());
+            if let Some(shines) = sun {
+                let e = world.spawn();
+                world.add_component(
+                    e,
+                    Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_arc(Vec3::NEG_Z, shines)),
+                );
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, DirectionalLight::new(Vec3::ONE, 0.0, LightRole::Sun));
+            }
+            // The mirror turns a ray looking down at `-sky.y` into one up at `sky`.
+            let look = Vec3::new(sky.x, -sky.y, sky.z).normalize();
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.0, 0.0),
+                yaw: look.z.atan2(look.x),
+                pitch: look.y.asin().max(-std::f32::consts::FRAC_PI_2 + 0.01),
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let mut most = 0.0f32;
+            for y in 56..72 {
+                for x in 56..72 {
+                    let p = &frame[(y * 128 + x) * 4..];
+                    most = most.max((p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0);
+                }
+            }
+            most
+        }
+        pollster::block_on(async {
+            let zenith = Vec3::Y;
+            let own = Vec3::new(0.8, 0.14, 0.5).normalize();
+            let readings = [
+                ("no sun, the zenith", brightest(None, zenith).await),
+                ("no sun, the preset's own", brightest(None, own).await),
+                ("a sun overhead, the zenith", brightest(Some(Vec3::NEG_Y), zenith).await),
+                ("a sun overhead, the preset's own", brightest(Some(Vec3::NEG_Y), own).await),
+            ];
+            for (what, luma) in readings {
+                eprintln!("{what}: {luma:.1}");
+            }
+            let [(_, none_up), (_, none_own), (_, sun_up), (_, sun_own)] = readings;
+            // The disc reads over 240; the horizon's orange glow round the preset's own sun, 134.
+            assert!(none_up < 180.0, "no sun stands a sunset's sun at the zenith: {none_up:.1}");
+            assert!(none_own > 220.0, "no sun, and the preset's own is not on its horizon: {none_own:.1}");
+            assert!(sun_up > 220.0, "the scene's sun overhead, and the disc is not there: {sun_up:.1}");
+            assert!(sun_own < 180.0, "the scene has a sun, and the preset still draws its own: {sun_own:.1}");
         });
     }
 

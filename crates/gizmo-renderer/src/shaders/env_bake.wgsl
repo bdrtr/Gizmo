@@ -57,7 +57,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let roughness = f32(level) / f32(max(env.params.w, 2u) - 1u);
     let colour = scene_environment(
         dir, roughness, env.zenith, env.horizon.rgb, env.ground.rgb, env.params.x, env.params.y, env.blend.x,
-        normalize(-env.sun_direction.xyz),
+        env.sun_direction,
     );
     return vec4<f32>(colour, 1.0);
 }
