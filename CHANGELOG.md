@@ -215,6 +215,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The forward-only path's environment cube is drawn in one pass.** Every face of every mip is a tile of one atlas
+  (768 × 240 texels, 1.5 MB), drawn together and copied into the cube a tile at a time, where it was a pass for each face
+  of each mip, 24 of them. On an Adreno 618 a sky that changes every frame — Nişancı under Sunset Gold with its sun turned
+  every frame — ran at 67.4 fps and runs at 137.9 (40 readings each; about 156 standing still): the redraw costs 0.85 ms
+  where it cost 8.4, which was the passes, not the texels.
 - **An `IrradianceVolume` bakes the light the scene bounces, captured from each probe** — where it baked each light's
   direct light analytically, which the lighting pass then added again on top of the light's own, unshadowed. From each
   probe the lit scene is drawn six ways, as a reflection probe's faces are, with the sky left out (the background black,

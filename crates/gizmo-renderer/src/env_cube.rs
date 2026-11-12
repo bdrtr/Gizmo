@@ -16,6 +16,12 @@
 //! 66.2. A map's cube goes down to 4 as a probe's does: its mips are a GGX prefilter, which at a roughness
 //! of 1 is as smooth as 4 texels.
 //!
+//! **Drawn in one pass.** Every face of every mip is a tile of one atlas (768 × 240 texels at 128), drawn
+//! together and then copied into the cube a tile at a time. It was a pass for each face of each mip until
+//! 2026-11-12, 24 of them, and on an Adreno 618 a sky that changes every frame — a turning sun under Sunset
+//! Gold — cost 8.4 ms a frame that way and costs 0.85 ms now (`nisanci` 67.4 fps against 137.9, 40 readings
+//! each, its sky standing still at about 156): a tiled GPU's cost was the passes, not the texels.
+//!
 //! An [`EnvironmentMap`] takes the cube's place on that path, as it takes a probe slot's on the desktop:
 //! the same GGX prefilter ([`ReflectionProbeGpu`]), at the map's own resolution, copied in mip for mip,
 //! and drawn behind the scene from mip 0.
@@ -104,14 +110,50 @@ pub(crate) fn preset_uses_sun(preset: u32) -> bool {
     preset != 1 && preset != 2
 }
 
-/// The texture and its views, for one size.
+/// The texture and its view, for one size.
 struct Storage {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
-    /// One per mip and face, mip-major: target `i` is face `i % 6` of mip `i / 6`.
-    targets: Vec<wgpu::TextureView>,
     size: u32,
     levels: u32,
+}
+
+/// The texture the sky is drawn into before the cube takes it: every face of every mip as a tile of one
+/// image (`env_bake.wgsl`'s `tile`), so the whole cube is one pass and a copy a tile. `6 × size` texels
+/// wide and the mips' rows high — 768 × 240 at 128.
+struct Atlas {
+    texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    size: u32,
+    levels: u32,
+}
+
+impl Atlas {
+    fn new(device: &wgpu::Device, size: u32, levels: u32) -> Self {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("environment cube atlas"),
+            size: wgpu::Extent3d { width: 6 * size, height: Self::height(size, levels), depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        Self { texture, view, size, levels }
+    }
+
+    /// The rows of `levels` mips from `size` down, one above the other.
+    fn height(size: u32, levels: u32) -> u32 {
+        2 * (size - (size >> levels))
+    }
+
+    /// Face `face` of mip `level`'s tile: its corner and its edge, as `env_bake.wgsl`'s `tile`.
+    fn tile(&self, level: u32, face: u32) -> (u32, u32, u32) {
+        let edge = self.size >> level;
+        (face * edge, 2 * (self.size - edge), edge)
+    }
 }
 
 impl Storage {
@@ -134,20 +176,7 @@ impl Storage {
             dimension: Some(wgpu::TextureViewDimension::Cube),
             ..Default::default()
         });
-        let targets = (0..levels * FACES as u32)
-            .map(|i| {
-                texture.create_view(&wgpu::TextureViewDescriptor {
-                    label: Some("environment cube face"),
-                    dimension: Some(wgpu::TextureViewDimension::D2),
-                    base_mip_level: i / FACES as u32,
-                    mip_level_count: Some(1),
-                    base_array_layer: i % FACES as u32,
-                    array_layer_count: Some(1),
-                    ..Default::default()
-                })
-            })
-            .collect();
-        Self { texture, view, targets, size, levels }
+        Self { texture, view, size, levels }
     }
 }
 
@@ -159,6 +188,8 @@ pub(crate) struct EnvironmentCube {
     drawn: Option<EnvInputs>,
     /// Built the first time it draws, so a path that never samples the cube never compiles its shader.
     bake: Option<(wgpu::RenderPipeline, wgpu::BindGroup)>,
+    /// What the sky is drawn into first; built the first time it draws, and again for another size.
+    atlas: Option<Atlas>,
     /// The prefilter a map goes through, and what draws it behind the scene; built for the first map.
     map: Option<(ReflectionProbeGpu, wgpu::RenderPipeline)>,
     showing_map: bool,
@@ -177,6 +208,7 @@ impl EnvironmentCube {
             inputs,
             drawn: None,
             bake: None,
+            atlas: None,
             map: None,
             showing_map: false,
         }
@@ -204,16 +236,22 @@ impl EnvironmentCube {
         true
     }
 
-    /// Draws every mip and face from `inputs`.
+    /// Draws every mip and face from `inputs`: all of them in one pass, into the atlas, then each tile
+    /// copied into its face and mip.
     fn draw(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, inputs: EnvInputs) {
         queue.write_buffer(&self.inputs, 0, bytemuck::bytes_of(&inputs));
         let buffer = &self.inputs;
         let (pipeline, group) = self.bake.get_or_insert_with(|| bake_pipeline(device, buffer));
-        for (i, target) in self.storage.targets.iter().enumerate() {
+        let (size, levels) = (self.storage.size, self.storage.levels);
+        if self.atlas.as_ref().is_none_or(|a| a.size != size || a.levels != levels) {
+            self.atlas = Some(Atlas::new(device, size, levels));
+        }
+        let Some(atlas) = self.atlas.as_ref() else { return };
+        {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("environment cube"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: target,
+                    view: &atlas.view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::BLACK), store: wgpu::StoreOp::Store },
@@ -223,8 +261,27 @@ impl EnvironmentCube {
             });
             pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &*group, &[]);
-            let i = i as u32;
-            pass.draw(0..3, i..i + 1);
+            pass.draw(0..6, 0..levels * FACES as u32);
+        }
+        for level in 0..levels {
+            for face in 0..FACES as u32 {
+                let (x, y, edge) = atlas.tile(level, face);
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &atlas.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x, y, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &self.storage.texture,
+                        mip_level: level,
+                        origin: wgpu::Origin3d { x: 0, y: 0, z: face },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d { width: edge, height: edge, depth_or_array_layers: 1 },
+                );
+            }
         }
         self.drawn = Some(inputs);
     }
@@ -345,7 +402,8 @@ fn bake_pipeline(device: &wgpu::Device, inputs: &wgpu::Buffer) -> (wgpu::RenderP
         label: Some("environment cube"),
         entries: &[wgpu::BindGroupLayoutEntry {
             binding: 0,
-            visibility: wgpu::ShaderStages::FRAGMENT,
+            // The vertex stage places each target's tile from the sizes in it.
+            visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
             ty: wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
                 has_dynamic_offset: false,

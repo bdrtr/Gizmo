@@ -345,8 +345,10 @@ the desktop's at 128 and within 3 at 256. On the Adreno 618, Nişancı, 20 HUD r
 builds turn about in one sitting: with the sky standing still 158.3 fps at 256 against 156.0 at 128 (58
 and 52 readings) — nothing measurable; Android's `Graphics` 19.12 MB against 18.95 (+3.1 MB on paper).
 With the sky drawn again every frame (its sun turned each frame, under Sunset Gold's rules) 53.7 against
-62.9: **2.7 ms a frame**, four times the texels and a fifth mip. A disc a pixel softer on a mirror is
-not worth that to a game whose sky moves, so the cube stays at 128.
+62.9: **2.7 ms a frame**, four times the texels and a fifth mip. Measured again once the cube was drawn
+in one pass (below): 122.7 against 139.9, **1.0 ms a frame**, and 7.7 MB more (the cube 3.1, its atlas
+4.6). A disc a pixel softer on a mirror is not worth either to a game whose sky moves, so the cube stays
+at 128.
 
 ~~**A sun the sky does not have drew the cube again.**~~ **CLOSED 2026-11-12, measured on that phone.**
 The cube was keyed on every input the presets take, so a turning sun drew it again every frame under
@@ -355,13 +357,19 @@ Nişancı with its sun turning ran at 62.9 fps against 156 standing still. `EnvI
 `scene_environment` reads now (`env_cube::preset_uses_sun`), and the same build turning its sun reads
 146.9 (149.4 and 144.5, 20 readings each, with the old one's 51.0 between them).
 `the_presets_left_without_a_sun_draw_none` draws each preset with the sun in two places past the key and
-holds the shader to it. **Still open, found measuring it:** a sky that really changes every frame — a
-day's sun under Sunset Gold or Classic Daylight, an animated `Renderer::sky` — draws the cube every frame,
-and on that phone that costs **9.5 ms** at 128 (157 → 63 fps). Two runs apart (24 passes and 131 k
-texels against 30 and 524 k) put most of it on the passes, about 0.35 ms each, not on the texels — a
-tiled GPU's cost per render pass. Separate because cutting it is a change to how the cube is drawn —
-several faces a pass as colour attachments, four `Rgba16Float` targets being the 32 bytes a sample the
-WebGPU minimum allows, or the faces spread over frames — and each wants the phone to say what it saves.
+holds the shader to it.
+
+~~**A sky that changes every frame cost a phone 8.4 ms a frame.**~~ **CLOSED 2026-11-12, measured on
+that phone.** A day's sun under Sunset Gold or Classic Daylight, or an animated `Renderer::sky`, draws the
+cube every frame, and it was drawn a face of a mip a pass: 24 passes. Two runs apart (24 passes and 131 k
+texels against 30 and 524 k) put most of the cost on the passes, not the texels — a tiled GPU's cost per
+render pass. Now every face of every mip is a tile of one atlas, drawn in one pass and copied into the
+cube a tile at a time (`env_bake.wgsl`'s `tile`, `env_cube::Atlas`). Nişancı under Sunset Gold with its
+sun turned every frame, 20 HUD readings a run, the two builds in turn over one package: 66.2 and 68.6
+fps the old way, 137.3 and 138.6 the new — 14.8 ms a frame against 7.3, where the sky standing still is
+about 6.4. The redraw costs 0.85 ms where it cost 8.4. The cube's GPU tests (each face where a cube is
+sampled, each mip its roughness, the presets' suns) hold the tiles to their faces; the atlas is 768 × 240
+texels, 1.5 MB.
 
 ~~**A preset drew a sun the scene does not have, at the zenith.**~~ **CLOSED 2026-11-12.** Sunset Gold
 and Classic Daylight place their disc and glow by the scene's sun, and a scene without one passed the
