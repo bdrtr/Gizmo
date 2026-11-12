@@ -95,6 +95,9 @@ pub(crate) fn web_render_defs() -> HashMap<String, ShaderDefValue> {
         ("SUN_SHADOW_GROUP".to_string(), ShaderDefValue::UInt(0)),
         ("SUN_SHADOW_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(9)),
         ("SUN_SHADOW_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(10)),
+        // And read as a phone can afford: one cascade, a coordinate from the vertices, one tap
+        // (`sun_shadow_coord`, `sun_shadow_tap`; `csm::CASCADES_DRAWN`).
+        ("SUN_SHADOW_PER_VERTEX".to_string(), ShaderDefValue::Bool(true)),
     ])
 }
 

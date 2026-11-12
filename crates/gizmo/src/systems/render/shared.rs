@@ -418,7 +418,8 @@ impl SceneSetup {
     /// layers. An object off screen inside any of them is kept for the shadow passes.
     #[must_use]
     pub fn shadow_view_projs(&self) -> Vec<gizmo_math::Mat4> {
-        let cascades: &[gizmo_math::Mat4] = if self.draws_cascades() { &self.cascade_view_projs } else { &[] };
+        let drawn = crate::renderer::csm::CASCADES_DRAWN;
+        let cascades: &[gizmo_math::Mat4] = if self.draws_cascades() { &self.cascade_view_projs[..drawn] } else { &[] };
         cascades.iter().copied().chain(self.local_shadows.layers().iter().map(|l| l.view_proj)).collect()
     }
 }

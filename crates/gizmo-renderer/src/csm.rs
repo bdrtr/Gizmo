@@ -7,13 +7,20 @@ use gizmo_math::{Mat4, Vec3};
 /// Must match `texture_depth_2d_array` layer count and `SceneUniforms.light_view_proj` length.
 pub const CASCADE_COUNT: usize = 4;
 
+/// How many cascades this build's path draws: all four on the desktop; **one** on the forward-only
+/// path — a browser's, a phone's — over the whole shadow distance, every matrix in
+/// `SceneUniforms::light_view_proj` that one, and its lit shaders read it at a coordinate worked out per
+/// vertex (`SUN_SHADOW_PER_VERTEX`). On an Adreno 618 choosing one of four per pixel and filtering it
+/// 3×3, as the desktop does, took a game from 105 fps to 39 (2026-11-12).
+pub const CASCADES_DRAWN: usize = if cfg!(gizmo_forward_only) { 1 } else { CASCADE_COUNT };
+
 /// Resolution (width = height) of each cascade depth map, on this build's path. 3072 on the desktop
 /// (was 2048) so a crisp ~1-texel PCF edge doesn't read as blocky on close-up geometry; the four
 /// layers are 144 MiB, which a desktop GPU holds. **1024 on the forward-only path** — a browser's, a
 /// phone's — where they are 16 MiB: that path draws the sun's cascades since 2026-11-12, and a phone
 /// has neither the memory nor the fill for 3072. Either way allocated only once a frame draws them
 /// (`SceneState::ensure_sun_shadow_maps`).
-pub const SHADOW_MAP_RES: u32 = if cfg!(gizmo_forward_only) { 1024 } else { 3072 };
+pub const SHADOW_MAP_RES: u32 = if cfg!(gizmo_forward_only) { 2048 } else { 3072 };
 
 /// Maximum world distance the cascades cover, independent of the camera's far plane.
 ///
@@ -23,6 +30,12 @@ pub const SHADOW_MAP_RES: u32 = if cfg!(gizmo_forward_only) { 1024 } else { 3072
 /// a nearby object gets a handful of shadow texels and its shadow reads blocky and
 /// blurry. Capping the shadow range packs the cascades onto what's actually near the
 /// camera, giving crisp contact shadows. Fragments past this distance are unshadowed.
+///
+/// On the forward-only path one cascade holds the whole range (`CASCADES_DRAWN`), so its 2048 texels are
+/// about 10 cm each over 100 m, and a phone game's 80 cm crate casts a shadow stepped like a staircase
+/// (2026-11-12). A game with a small world sets less with `ShadowSettings::with_distance`. A shorter
+/// default is not taken unmeasured: over 40 m the steps were gone, and one reading on an Adreno 618 put
+/// the frame at 73 fps where 100 m read 90 — the floor filling more of the map it is drawn into.
 pub const SHADOW_DISTANCE: f32 = 100.0;
 
 /// Blend between logarithmic (1.0) and uniform (0.0) cascade splits. 0.75 leans
@@ -146,24 +159,24 @@ pub struct ShadowSettings {
     /// Scales how far each lookup is pushed off the surface along its normal before it is projected
     /// into the cascade (2 texels of that cascade by default). 1 by default.
     pub normal_offset: f32,
-    /// Whether the forward-only path — a browser's, a phone's — draws the sun's shadow. **Off by
-    /// default**: it costs a phone more than most games there can give. Measured on an Adreno 618,
-    /// `nisanci` with its floor filling the screen at 105 fps without it (2026-11-12): 39 with it as the
-    /// desktop draws it (a 3×3 filter, the four cascades chosen per pixel), 63 with a single tap, 72
-    /// with a single tap from a cascade fixed for the frame — the filter's taps, the per-pixel choice
-    /// of a matrix out of four and the code's presence each cost milliseconds there. The cascades
-    /// themselves cost about 1 ms. The desktop draws the sun's shadow whatever this says.
+    /// Whether the forward-only path — a browser's, a phone's — draws the sun's shadow. On by default,
+    /// as the desktop's is. That path draws it as a phone can afford: one cascade over the whole range
+    /// (`CASCADES_DRAWN`), read at a coordinate worked out per vertex, one tap. Measured on an Adreno 618,
+    /// `nisanci` with its floor filling the screen (2026-11-12): about 104 fps without it, 90 with it —
+    /// and 39 with it drawn as the desktop draws it (four cascades chosen per pixel, filtered 3×3), which
+    /// is why it is not. Off leaves that path's frame as it was before it had a shadow at all. The
+    /// desktop draws the sun's shadow whatever this says.
     pub forward_only: bool,
 }
 
 impl Default for ShadowSettings {
     fn default() -> Self {
-        Self { distance: SHADOW_DISTANCE, lambda: CASCADE_LAMBDA, depth_bias: 1.0, normal_offset: 1.0, forward_only: false }
+        Self { distance: SHADOW_DISTANCE, lambda: CASCADE_LAMBDA, depth_bias: 1.0, normal_offset: 1.0, forward_only: true }
     }
 }
 
 impl ShadowSettings {
-    /// The sun's shadow on the forward-only path too (see [`forward_only`](Self::forward_only)).
+    /// The sun's shadow on the forward-only path, or not (see [`forward_only`](Self::forward_only)).
     pub fn with_forward_only(mut self, on: bool) -> Self {
         self.forward_only = on;
         self
@@ -203,8 +216,13 @@ pub fn compute_directional_cascades_with(
     settings: ShadowSettings,
 ) -> ShadowCascades {
     let shadow_far = cam_far.min(settings.distance.max(1.0));
-    let splits = cascade_split_distances(cam_near, shadow_far, settings.lambda.clamp(0.0, 1.0));
-    let view_projs = directional_cascade_view_projs(
+    // One cascade drawn (`CASCADES_DRAWN`): it covers the whole distance, and every slot holds it.
+    let splits = if CASCADES_DRAWN == 1 {
+        [shadow_far; CASCADE_COUNT]
+    } else {
+        cascade_split_distances(cam_near, shadow_far, settings.lambda.clamp(0.0, 1.0))
+    };
+    let mut view_projs = directional_cascade_view_projs(
         cam_pos,
         cam_forward,
         aspect,
@@ -214,6 +232,9 @@ pub fn compute_directional_cascades_with(
         light_dir,
         SHADOW_MAP_RES,
     );
+    if CASCADES_DRAWN == 1 {
+        view_projs = [view_projs[0]; CASCADE_COUNT];
+    }
     ShadowCascades { splits, view_projs }
 }
 

@@ -50,16 +50,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
-- **The sun's shadow in a browser and on a phone, when a game asks** (`ShadowSettings::with_forward_only(true)`). The
-  forward-only path drew no shadow map at all; asked, it draws the sun's cascades, at 1024² a layer (`SHADOW_MAP_RES` on
-  that path, 16 MiB, allocated the first frame that draws them), through the same caster pipelines, and its lit and
-  baked-lit pipelines read them through group 0's bindings 9 and 10 (`SUN_SHADOWS`;
+- **The sun's shadow in a browser and on a phone.** The forward-only path drew no shadow map at all. It draws the sun's
+  shadow now as a phone can afford: **one cascade** over the whole range (`csm::CASCADES_DRAWN`; 2048², one layer, 16 MiB,
+  allocated the first frame that draws it), drawn through the same caster pipelines, and read by its lit and baked-lit
+  shaders at a coordinate worked out **per vertex** with **one tap** (`SUN_SHADOW_PER_VERTEX`: `sun_shadow_coord`,
+  `sun_shadow_tap`), through group 0's bindings 9 and 10 (`SUN_SHADOWS`;
   `SUN_SHADOW_GROUP`/`SUN_SHADOW_TEXTURE_BINDING`/`SUN_SHADOW_SAMPLER_BINDING` place them there and, on the desktop, in the
-  shadow group), built with it only while a scene has a sun whose cascades a frame draws
-  (`SceneState::set_forward_sun_shadows`). **Off by default, because a phone pays for it**: on an Adreno 618, Nişancı with
-  its floor filling the screen runs at 105 fps without it and 39 with it as the desktop draws it (a 3×3 filter, the
-  cascade chosen per pixel); a single tap reads 63 and a single tap from a fixed cascade 72, and the cascades themselves
-  cost about 1 ms. A filter that phone can afford is its own piece of work. **Found on that phone:** its compiler crashed
+  shadow group), built in only while a scene has a sun whose cascade a frame draws (`SceneState::set_forward_sun_shadows`).
+  On by default, as the desktop's; `ShadowSettings::with_forward_only(false)` turns it off there. Measured on an Adreno
+  618, Nişancı with its floor filling the screen: about 104 fps without it, 90 with it — and 39 drawn as the desktop draws
+  it (four cascades chosen per pixel, filtered 3×3), 63 with a single tap from four, 72 from a fixed one; the cascades
+  themselves cost about 1 ms. Over 100 m its texels are about 10 cm, so a small world's shadows step at the edges; a game
+  sets a shorter `with_distance`. **Found on that phone:** its compiler crashed
   building any pipeline with the sun's shadow in, because `sun_shadow_visibility` handed the cascade's matrix on to
   `shadow_grade`; `shadow_grade` takes the two projected points now, and `no_web_shader_hands_on_a_matrix_parameter` holds
   every web shader to it. `SceneSetupInputs::shadow_maps` is `sun_shadow_maps` and

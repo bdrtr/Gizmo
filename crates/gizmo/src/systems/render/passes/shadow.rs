@@ -130,7 +130,8 @@ pub fn record_shadow_passes(
     local_layers: &[gizmo_renderer::local_shadows::LocalShadowLayer],
 ) -> (u32, u32) {
     let (mut passes, mut drawn) = (0, 0);
-    for (i, view_proj) in cascades.into_iter().flatten().enumerate() {
+    // As many as this path draws (`CASCADES_DRAWN`: one on the forward-only path).
+    for (i, view_proj) in cascades.into_iter().flatten().take(crate::renderer::csm::CASCADES_DRAWN).enumerate() {
         drawn += record_caster_pass(
             encoder,
             renderer,

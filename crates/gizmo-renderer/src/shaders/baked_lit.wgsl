@@ -12,7 +12,11 @@
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps}
 #ifdef SUN_SHADOWS
+#ifdef SUN_SHADOW_PER_VERTEX
+#import gizmo::common::{sun_shadow_coord, sun_shadow_lean, sun_shadow_tap, shadow_distance_fade}
+#else
 #import gizmo::common::{ReceiverAxes, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
+#endif
 #endif
 
 @group(0) @binding(0)
@@ -76,6 +80,12 @@ struct VertexOutput {
     @location(5) inst_ambient: vec3<f32>,
     @location(6) inst_emissive: vec4<f32>,  // w < 0: receives no shadows
     @location(7) inst_cutoff: f32,
+#ifdef SUN_SHADOWS
+#ifdef SUN_SHADOW_PER_VERTEX
+    // Where the sun's one cascade sees this point (`sun_shadow_coord`).
+    @location(8) sun_shadow: vec4<f32>,
+#endif
+#endif
 };
 
 @vertex
@@ -100,6 +110,13 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
     out.inst_cutoff = inst.ambient.w;
     // Only for the shadow's normal offset — nothing here shades with it.
     out.world_normal = normalize((model * vec4<f32>(input.normal, 0.0)).xyz);
+#ifdef SUN_SHADOWS
+#ifdef SUN_SHADOW_PER_VERTEX
+    // Pushed along the normal it shades with, as the desktop's baked-lit lookup is.
+    out.sun_shadow = sun_shadow_coord(scene.light_view_proj[0], world.xyz)
+        + vec4<f32>(sun_shadow_lean(scene.light_view_proj[0], scene.cascade_params.y, scene.shadow_bias.y, out.world_normal), 0.0);
+#endif
+#endif
     return out;
 }
 
@@ -109,6 +126,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
 // compiler dereferenced a null pointer building this pipeline (2026-11-12, every game on that phone
 // failed to start).
 #ifdef SUN_SHADOWS
+#ifndef SUN_SHADOW_PER_VERTEX
 fn select_cascade(view_depth: f32) -> u32 {
     if (view_depth < scene.cascade_splits.x) { return 0u; }
     if (view_depth < scene.cascade_splits.y) { return 1u; }
@@ -146,6 +164,7 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: ReceiverA
     return mix(1.0, vis, fade);
 }
 #endif
+#endif
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
@@ -153,7 +172,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // (`receiver_axes`) — taken first, before any pixel of the quad discards.
 #ifdef SUN_SHADOWS
     let n = normalize(in.world_normal);
+#ifndef SUN_SHADOW_PER_VERTEX
     let surface_axes = receiver_axes(dpdx(in.world_pos), dpdy(in.world_pos), n);
+#endif
 #endif
     let tex = textureSample(t_diffuse, s_diffuse, in.tex_coords);
 
@@ -183,8 +204,17 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // and put the range boundary on a sphere instead of a plane.)
 #ifdef SUN_SHADOWS
     let view_depth = dot(in.world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
+#ifdef SUN_SHADOW_PER_VERTEX
+    // The forward-only path's: one cascade, a coordinate from the vertices, one tap (`sun_shadow_tap`).
+    var vis = 1.0;
+    let fade = shadow_distance_fade(view_depth, scene.cascade_splits.w);
+    if (scene.sun_direction.w > 0.5 && fade > 0.0 && in.inst_emissive.w >= 0.0) {
+        vis = mix(1.0, sun_shadow_tap(t_shadow, s_shadow, in.sun_shadow, n, normalize(-scene.sun_direction.xyz), scene.shadow_bias.x), fade);
+    }
+#else
     // `MeshRenderer::receives_shadows == false` keeps the sun's share whole.
     let vis = select(sun_visibility(in.world_pos, n, surface_axes, view_depth), 1.0, in.inst_emissive.w < 0.0);
+#endif
 #else
     let vis = 1.0;
 #endif

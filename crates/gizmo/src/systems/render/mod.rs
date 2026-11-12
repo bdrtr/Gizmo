@@ -1519,7 +1519,7 @@ fn draw_camera_view(
                 sky: renderer.sky,
             },
             // The forward-only path has no shadow passes: no maps to plan or keep casters for.
-            // The forward-only path draws the sun's cascades only when a game asks
+            // The forward-only path draws the sun's cascade unless a game says not to
             // (`ShadowSettings::forward_only`), and no local light's layer.
             sun_shadow_maps: !cfg!(gizmo_forward_only) || renderer.shadow_settings.forward_only,
             local_shadow_maps: cfg!(not(gizmo_forward_only)),
@@ -5407,15 +5407,22 @@ mod golden_render_tests {
                 sun,
                 crate::renderer::components::DirectionalLight::new(Vec3::ONE, 1.0, crate::renderer::components::LightRole::Sun),
             );
+            // A game that turns the forward-only path's off (`ShadowSettings::forward_only`) has none
+            // there; the desktop draws them whatever it says.
+            renderer.shadow_settings = renderer.shadow_settings.with_forward_only(false);
             let _ = render_world(&mut renderer, &mut world).await;
-            // The forward-only path draws them only when a game asks (`ShadowSettings::forward_only`);
-            // then at its size, 1024, where the desktop's are 3072.
             let full = gizmo_renderer::SHADOW_MAP_RES;
-            let unasked = if cfg!(gizmo_forward_only) { (1, 1) } else { (full, full) };
-            assert_eq!(edge(&renderer.scene.shadow_depth_texture), unasked, "a sun's cascades, unless this path draws none");
+            let turned_off = if cfg!(gizmo_forward_only) { (1, 1) } else { (full, full) };
+            assert_eq!(edge(&renderer.scene.shadow_depth_texture), turned_off, "a sun's cascades, unless turned off there");
+            // On, as by default: at their path's size, 2048 and one layer there, 3072 and four here.
             renderer.shadow_settings = renderer.shadow_settings.with_forward_only(true);
             let _ = render_world(&mut renderer, &mut world).await;
-            assert_eq!(edge(&renderer.scene.shadow_depth_texture), (full, full), "and asked for, at their path's size");
+            assert_eq!(edge(&renderer.scene.shadow_depth_texture), (full, full), "a sun's cascades, at their path's size");
+            assert_eq!(
+                renderer.scene.shadow_depth_texture.size().depth_or_array_layers,
+                gizmo_renderer::csm::CASCADES_DRAWN as u32,
+                "a layer a cascade drawn",
+            );
 
             // CAS: a texel while off, the frame's size while it runs, and a texel again.
             let cas_input = |r: &Renderer| r.cas.as_ref().map(|c| edge(&c.input_texture));

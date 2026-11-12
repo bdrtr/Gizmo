@@ -23,11 +23,13 @@ pub(super) fn build_shadow_resources(
     device: &wgpu::Device,
     res: u32,
 ) -> (wgpu::Texture, wgpu::TextureView, [wgpu::TextureView; 4], wgpu::Sampler) {
+    // A layer a cascade drawn (`CASCADES_DRAWN`): one on the forward-only path.
+    let layers = crate::csm::CASCADES_DRAWN as u32;
     let shadow_depth_texture = device.create_texture(&wgpu::TextureDescriptor {
         size: wgpu::Extent3d {
             width: res,
             height: res,
-            depth_or_array_layers: 4,
+            depth_or_array_layers: layers,
         },
         mip_level_count: 1,
         sample_count: 1,
@@ -59,7 +61,8 @@ pub(super) fn build_shadow_resources(
             aspect: wgpu::TextureAspect::DepthOnly,
             base_mip_level: 0,
             mip_level_count: None,
-            base_array_layer: i as u32,
+            // The cascades past those drawn have no layer of their own, and no pass draws into them.
+            base_array_layer: (i as u32).min(layers - 1),
             array_layer_count: Some(1),
         })
     });

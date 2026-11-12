@@ -364,6 +364,40 @@ fn shadow_distance_fade(view_depth: f32, shadow_far: f32) -> f32 {
 // cascade at the default 100 m of shadow distance, 3.8 m in the last.
 const MAX_SUN_PENUMBRA_TEXELS: f32 = 64.0;
 
+// The forward-only path's sun shadow (a browser's, a phone's; `SUN_SHADOW_PER_VERTEX`): one cascade over
+// the whole shadow distance (`csm::CASCADES_DRAWN`), read at a coordinate worked out per vertex, one tap.
+// On an Adreno 618 the desktop's lookup — a cascade chosen per pixel out of four, filtered 3×3 — took a
+// game from 105 fps to 39 (2026-11-12).
+//
+// Where `world_pos` falls in the cascade `light_vp`: (uv, depth, depth per metre). Orthographic, so it
+// interpolates across a triangle exactly.
+fn sun_shadow_coord(light_vp: mat4x4<f32>, world_pos: vec3<f32>) -> vec4<f32> {
+    let sz = length(vec3<f32>(light_vp[0][2], light_vp[1][2], light_vp[2][2]));
+    return vec4<f32>(layer_point(light_vp * vec4<f32>(world_pos, 1.0)), sz);
+}
+
+// How far, in the cascade's (uv, depth), a point moves pushed off its surface along `n` by `normal_offset`
+// × 2 of the cascade's texels — added to `sun_shadow_coord` per vertex, and taken off twice per fragment
+// where the back of a double-sided surface is seen, which is pushed the other way.
+fn sun_shadow_lean(light_vp: mat4x4<f32>, texel: f32, normal_offset: f32, n: vec3<f32>) -> vec3<f32> {
+    let sx = length(vec3<f32>(light_vp[0][0], light_vp[1][0], light_vp[2][0]));
+    let world_texel = 2.0 * texel / max(sx, 1e-6);
+    let push = (light_vp * vec4<f32>(n * (world_texel * 2.0 * normal_offset), 0.0)).xyz;
+    return vec3<f32>(push.x * 0.5, -push.y * 0.5, push.z);
+}
+
+// How much sun reaches a point at `coord` (`sun_shadow_coord`) in layer 0 of `t`: one tap, which the
+// comparison sampler's linear filter makes a 2×2 one, against the depth less the slope-scaled bias the
+// desktop's lookup takes. 1 outside the cascade.
+fn sun_shadow_tap(t: texture_depth_2d_array, s: sampler_comparison, coord: vec4<f32>, n: vec3<f32>, to_sun: vec3<f32>, bias: f32) -> f32 {
+    if (coord.x < 0.0 || coord.x > 1.0 || coord.y < 0.0 || coord.y > 1.0 || coord.z > 1.0) {
+        return 1.0;
+    }
+    let slope = 1.0 - clamp(dot(n, to_sun), 0.0, 1.0);
+    let reference = coord.z - max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * coord.w * bias;
+    return textureSampleCompareLevel(t, s, coord.xy, 0, reference);
+}
+
 // How much of the sun reaches `world_pos` past cascade `cascade` (its matrix `light_vp`, its texel
 // `texel` of uv): 1 lit, 0 shadowed, filtered between. `n` is the surface normal, `axes` two
 // directions along its geometry (`receiver_axes`), `to_sun` the unit vector toward the sun, `bias` =

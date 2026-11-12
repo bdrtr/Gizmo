@@ -19,7 +19,11 @@
 #endif
 #import gizmo::common::{SceneUniforms, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cone, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
 #ifdef SUN_SHADOWS
+#ifdef SUN_SHADOW_PER_VERTEX
+#import gizmo::common::{sun_shadow_coord, sun_shadow_lean, sun_shadow_tap, shadow_distance_fade}
+#else
 #import gizmo::common::{receiver_axes, sun_shadow_visibility, shadow_distance_fade}
+#endif
 #endif
 #ifdef SHADOWS
 #import gizmo::common::{local_shadow_layer, local_shadow_visibility, light_source_radius}
@@ -181,6 +185,13 @@ struct VertexOutput {
 #ifdef LOBES
     @location(11) inst_coat_roughness: f32,  // Material::clear_coat_roughness
 #endif
+#ifdef SUN_SHADOWS
+#ifdef SUN_SHADOW_PER_VERTEX
+    // Where the sun's one cascade sees this point pushed off its front (`sun_shadow_coord`,
+    // `sun_shadow_lean`). One location: the glass tier uses every other one there is.
+    @location(14) sun_shadow: vec4<f32>,
+#endif
+#endif
 };
 
 @vertex
@@ -253,6 +264,13 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 #endif
 #ifdef LOBES
     out.inst_coat_roughness = inst.ambient.z;
+#endif
+
+#ifdef SUN_SHADOWS
+#ifdef SUN_SHADOW_PER_VERTEX
+    out.sun_shadow = sun_shadow_coord(scene.light_view_proj[0], world_pos.xyz)
+        + vec4<f32>(sun_shadow_lean(scene.light_view_proj[0], scene.cascade_params.y, scene.shadow_bias.y, frame.N), 0.0);
+#endif
 #endif
 
     // Kameraya yansıt
@@ -355,10 +373,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
 #ifdef SUN_SHADOWS
+#ifndef SUN_SHADOW_PER_VERTEX
     // How the surface runs across neighbouring pixels, for the soft shadows (`receiver_axes`) —
     // taken first, before any pixel of the quad discards.
     let pos_dx = dpdx(in.world_position);
     let pos_dy = dpdy(in.world_position);
+#endif
 #endif
 #ifdef DETAILS
     let surface = fragment_surface(in, front);
@@ -445,6 +465,28 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     // draw has none of.)
     var shadow_visibility = 1.0;
 #ifdef SUN_SHADOWS
+#ifdef SUN_SHADOW_PER_VERTEX
+    // The forward-only path's: one cascade, a coordinate from the vertices, one tap (`sun_shadow_tap`).
+    let view_depth = dot(in.world_position - scene.camera_pos.xyz, scene.camera_forward.xyz);
+    let shadow_fade = shadow_distance_fade(view_depth, scene.cascade_splits.w);
+    if (scene.sun_direction.w > 0.5 && shadow_fade > 0.0 && in.inst_emissive.w >= 0.0) {
+        var coord = in.sun_shadow;
+#ifdef DETAILS
+        // The back of a double-sided surface, which only this tier draws, is pushed off the other way:
+        // the front's push there shadowed the back of a panel the sun shone straight on (84 against the
+        // front's 194, 2026-11-12).
+        if (!front) {
+            let lean = sun_shadow_lean(scene.light_view_proj[0], scene.cascade_params.y, scene.shadow_bias.y, normalize(in.normal));
+            coord -= vec4<f32>(2.0 * lean, 0.0);
+        }
+#endif
+        shadow_visibility = mix(
+            1.0,
+            sun_shadow_tap(t_shadow, s_shadow, coord, N, normalize(-scene.sun_direction.xyz), scene.shadow_bias.x),
+            shadow_fade,
+        );
+    }
+#else
     // How the surface runs across neighbouring pixels — its geometry's plane, which the soft shadows
     // filter along (`receiver_axes`).
     let surface_axes = receiver_axes(pos_dx, pos_dy, N);
@@ -462,6 +504,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
             shadow_fade,
         );
     }
+#endif
 #endif
 
     // An unlit or sky flag only reaches this shader through the wireframe pipeline, which draws every
