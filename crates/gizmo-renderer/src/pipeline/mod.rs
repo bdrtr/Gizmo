@@ -801,6 +801,31 @@ impl SceneState {
         }
     }
 
+    /// Gives the sun's cascades their `SHADOW_MAP_RES` the first frame that `draws` them, rebuilding the
+    /// shadow group over them, and returns whether it did. Until then they are a texel a layer
+    /// (`build_shadow_resources`), so a scene with no sun, and a path that draws no shadow maps, holds
+    /// none of their 144 MiB. They are kept from then on, as the local layers are.
+    pub fn ensure_sun_shadow_maps(&mut self, device: &wgpu::Device, draws: bool) -> bool {
+        let res = crate::csm::SHADOW_MAP_RES;
+        if !draws || self.shadow_depth_texture.size().width == res {
+            return false;
+        }
+        let (texture, view, layers, sampler) = build_shadow_resources(device, res);
+        self.shadow_depth_texture = texture;
+        self.shadow_texture_view = view;
+        self.shadow_cascade_layer_views = layers;
+        self.shadow_sampler = sampler;
+        self.shadow_bind_group = shadow_group(
+            device,
+            &self.shadow_bind_group_layout,
+            &self.shadow_texture_view,
+            &self.shadow_sampler,
+            &self.local_shadow_maps.view,
+            &self.cookies,
+        );
+        true
+    }
+
     /// Grows the local shadow array to hold at least `layers` layers (up to
     /// [`MAX_LOCAL_SHADOW_LAYERS`]), rebuilding [`shadow_bind_group`](Self::shadow_bind_group), and
     /// returns whether it did. A frame calls it with its plan's layer count before recording the
@@ -947,8 +972,9 @@ impl SceneState {
 /// [`SceneState`].
 pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     let global_uniform_buffer = build_global_uniforms(device);
+    // A texel a cascade until a frame draws them (`ensure_sun_shadow_maps`).
     let (shadow_depth_texture, shadow_texture_view, shadow_cascade_layer_views, shadow_sampler) =
-        build_shadow_resources(device);
+        build_shadow_resources(device, 1);
     let local_shadow_maps = crate::local_shadows::LocalShadowMaps::new(device, 1);
     let layouts = build_layouts(device);
     let cookies = crate::cookies::CookieTextures::new(device);

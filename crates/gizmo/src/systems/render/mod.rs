@@ -1531,6 +1531,7 @@ fn draw_camera_view(
     // The local lights' shadow layers: the array grown to hold them, each layer's matrix where its
     // pass reads it. The forward-only path draws none and planned none.
     let local_shadow_layers = setup.local_shadows.layers();
+    renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades());
     renderer.scene.ensure_local_shadow_layers(&renderer.device, local_shadow_layers.len());
     for (i, layer) in local_shadow_layers.iter().enumerate() {
         renderer.queue.write_buffer(
@@ -5353,7 +5354,8 @@ mod golden_render_tests {
     /// cascades 3072² × 4 (144 MiB), a local shadow layer 1024² (4 MiB), the cookie array 256² × 8
     /// (2 MiB) and two bloom targets the frame's size (14 MiB at a phone's 1431 × 643) — 167.6 MiB of
     /// an Android game's memory that nothing wrote or read, until 2026-11-12. There each is a texel; on
-    /// the desktop, which draws them, they keep their sizes. On both paths CAS's input is the frame's
+    /// the desktop, which draws them, they keep their sizes — the sun's cascades from the first frame
+    /// that draws them, so a scene with no sun holds none of them there either. On both paths CAS's input is the frame's
     /// size only while CAS runs (it was from the start, though CAS starts off), and the debug lines'
     /// buffer grows with the lines up to its 200 000 (it started there, 5.3 MiB).
     #[test]
@@ -5375,18 +5377,34 @@ mod golden_render_tests {
                 edge(&renderer.scene.cookies.texture),
             );
             eprintln!("shadow {shadow:?}, local {local:?}, cookies {cookies:?}");
+            // The sun's cascades are a texel until a frame draws them, on every path.
+            assert_eq!(shadow, (1, 1), "the cascades before any frame drew them");
             if cfg!(gizmo_forward_only) {
-                assert_eq!((shadow, local, cookies), ((1, 1), (1, 1), (1, 1)), "the forward-only path draws none of them");
+                assert_eq!((local, cookies), ((1, 1), (1, 1)), "the forward-only path draws none of them");
             } else {
-                let full = gizmo_renderer::SHADOW_MAP_RES;
-                assert_eq!(shadow, (full, full), "the desktop's cascades");
                 assert_eq!(local.0, gizmo_renderer::local_shadows::LOCAL_SHADOW_RES, "the desktop's local layers");
                 assert_eq!(cookies.0, gizmo_renderer::cookies::COOKIE_SIZE, "the desktop's cookies");
             }
 
-            // CAS: a texel while off, the frame's size while it runs, and a texel again.
+            // A frame with no sun leaves the cascades a texel; one with a sun gives them their size
+            // on a path that draws them.
             let mut world = World::new();
             world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.0, 4.0), primary: true, ..Default::default() });
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_eq!(edge(&renderer.scene.shadow_depth_texture), (1, 1), "no sun, no cascades");
+            let sun = world.spawn();
+            world.add_component(sun, Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_x(-1.0)));
+            world.add_component(sun, GlobalTransform::default());
+            world.add_component(
+                sun,
+                crate::renderer::components::DirectionalLight::new(Vec3::ONE, 1.0, crate::renderer::components::LightRole::Sun),
+            );
+            let _ = render_world(&mut renderer, &mut world).await;
+            let full = gizmo_renderer::SHADOW_MAP_RES;
+            let drawn = if cfg!(gizmo_forward_only) { (1, 1) } else { (full, full) };
+            assert_eq!(edge(&renderer.scene.shadow_depth_texture), drawn, "a sun's cascades, where they are drawn");
+
+            // CAS: a texel while off, the frame's size while it runs, and a texel again.
             let cas_input = |r: &Renderer| r.cas.as_ref().map(|c| edge(&c.input_texture));
             let _ = render_world(&mut renderer, &mut world).await;
             assert_eq!(cas_input(&renderer), Some((1, 1)), "CAS off holds a texel");

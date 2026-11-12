@@ -133,6 +133,7 @@ fn draw_studio_frame(
     );
     let cascade_mats = setup.cascade_view_projs;
     let light_view_proj_cascades = cascade_mats.map(|m| m.to_cols_array_2d());
+    renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades());
     renderer.scene.ensure_local_shadow_layers(&renderer.device, setup.local_shadows.layers().len());
 
     // Global Uniforms (Her frame sadece 1 kere gönderilir).
@@ -855,6 +856,7 @@ fn record_game_view(
         },
     );
     let cascades = setup.cascade_view_projs.map(|m| m.to_cols_array_2d());
+    renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades());
     renderer.scene.ensure_local_shadow_layers(&renderer.device, setup.local_shadows.layers().len());
 
     renderer.update_post_process(&renderer.queue, post_params.with_camera(&camera));

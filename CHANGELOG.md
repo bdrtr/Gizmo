@@ -264,6 +264,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A scene with no sun held the sun's cascades all the same.** They are a texel a layer until a frame draws them
+  (`SceneState::ensure_sun_shadow_maps`, beside the local layers' growth, on the game path and both of the editor's), where
+  they were 3072² × 4 from the start: 144 MiB on the desktop for a scene lit by lamps alone.
 - **A phone held 168 MiB of render targets it never drew.** The forward-only path — a browser's, a phone's — draws no
   shadow maps, no light cookie and no bloom, and allocated all of them at full size: the sun's cascades 3072² × 4 (144
   MiB), a local shadow layer 1024² (4 MiB), the cookie array 256² × 8 (2 MiB) and two bloom targets the frame's size (14
