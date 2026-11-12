@@ -3,7 +3,7 @@
 //! # What this connects
 //!
 //! [`gi`](crate::gi) has held a complete irradiance-volume implementation — `SHCoeffs`,
-//! `LightProbe`, `ProbeGrid` with analytic baking and trilinear sampling, seven tests — with
+//! `LightProbe`, `ProbeGrid` with trilinear sampling, seven tests — with
 //! nothing in the render path calling it. `CAPABILITY_GAPS.md` §F2 recorded the shape of that:
 //! `to_gpu_data` had exactly one caller, its own test, and no shader read a spherical-harmonic
 //! coefficient. A game that wanted indirect light had to sample on the CPU and fold the result
@@ -151,15 +151,31 @@ impl<'a> ReflectionSet<'a> {
     }
 }
 
-/// A box of irradiance probes the engine bakes from the scene's lights and keeps baked: place it,
-/// size it, and the deferred lighting pass reads it for indirect light — no hand-built
-/// [`ProbeGrid`] and no upload call. Rebaked whenever it or a light changes (the bake projects
-/// each light into the probes' spherical harmonics analytically: direct light, no occlusion, so
-/// it is cheap — a few hundred probes against a few hundred lights is well under a millisecond).
+/// A box of irradiance probes the engine bakes from the scene itself: place it, size it, and the
+/// deferred lighting pass reads it for indirect light — no hand-built [`ProbeGrid`] and no upload
+/// call.
 ///
-/// One per scene: the first found is used. A grid uploaded by hand
-/// (`IrradianceState::upload`) is left alone while no volume exists.
-#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
+/// **What it holds is light bounced off the scene**: from each probe the engine draws the lit scene
+/// six ways, as a [`ReflectionProbe`](crate::components::ReflectionProbe) is drawn, and projects
+/// what it sees into the probe's spherical harmonics — a red wall's light on the white floor beside
+/// it, a lamp's pool reflected up onto a ceiling, an emissive panel lighting a room. The sky is left
+/// out of the drawing (the background, an environment map, a skybox or backdrop): the lighting pass
+/// adds the sky to every surface itself, so a volume holding it too would count it twice. So are
+/// the lights themselves — a light is not something the drawing shows — so a volume adds no copy of
+/// any light's direct light, which the lighting pass also adds itself. Until 2026-11-12 it was baked
+/// from the lights alone, analytically: each one's direct light, unshadowed, which the lighting pass
+/// then added again on top of the light's own.
+///
+/// **Baked once**, on the first frame it exists, and again when it changes or after
+/// [`request_capture`](Self::request_capture): every probe is six full renders, so a 4×3×4 volume is
+/// 288 of them — a cost for a level load, not for every frame. Move a light or change the room,
+/// then ask for a rebake. A bake is one bounce: the volume's previous light is not in its captures.
+///
+/// One per scene: the first found is used. A grid uploaded by hand (`IrradianceState::upload`) is
+/// left alone while no volume exists; a volume's bake goes when the volume does. The deferred path's
+/// alone, as the volume always was: the forward-only path (a browser's, a phone's) has no group for
+/// it.
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct IrradianceVolume {
     /// The box's minimum corner, world space.
@@ -168,20 +184,51 @@ pub struct IrradianceVolume {
     pub max: gizmo_math::Vec3,
     /// Probes along each axis (each at least 2).
     pub resolution: [u32; 3],
-    /// A constant light added to every probe — the sky's average, roughly.
+    /// A constant light added to every probe, as a radiance from every direction: a white matte
+    /// surface takes it as it is. It was a sixteenth of that, `1/4π`, until 2026-11-12.
     pub ambient: gizmo_math::Vec3,
+    /// Which bake this volume asks for — bumped by [`request_capture`](Self::request_capture). Every
+    /// new volume starts at a value no other has had, as a reflection probe does (see
+    /// `ReflectionProbe`'s field of the same name). Not saved: a loaded volume is a new one.
+    #[serde(skip, default = "crate::components::reflection_probe::fresh_request")]
+    capture_request: u64,
+}
+
+/// What the game authors, compared: the bake request is the renderer's business.
+impl PartialEq for IrradianceVolume {
+    fn eq(&self, other: &Self) -> bool {
+        self.min == other.min && self.max == other.max && self.resolution == other.resolution && self.ambient == other.ambient
+    }
 }
 
 impl IrradianceVolume {
     /// A volume over the box `min`–`max` with `resolution` probes per axis, no ambient.
     pub fn new(min: gizmo_math::Vec3, max: gizmo_math::Vec3, resolution: [u32; 3]) -> Self {
-        Self { min: min.min(max), max: min.max(max), resolution: resolution.map(|r| r.max(2)), ambient: gizmo_math::Vec3::ZERO }
+        Self {
+            min: min.min(max),
+            max: min.max(max),
+            resolution: resolution.map(|r| r.max(2)),
+            ambient: gizmo_math::Vec3::ZERO,
+            capture_request: crate::components::reflection_probe::fresh_request(),
+        }
     }
 
     /// The same volume with `ambient` added to every probe.
     pub fn with_ambient(mut self, ambient: gizmo_math::Vec3) -> Self {
         self.ambient = ambient.max(gizmo_math::Vec3::ZERO);
         self
+    }
+
+    /// Bakes again on the next frame.
+    pub fn request_capture(&mut self) {
+        self.capture_request = self.capture_request.wrapping_add(1);
+    }
+
+    /// Which bake this volume asks for. The renderer keeps what it last baked
+    /// (`IrradianceState::baked_from`) and bakes again when this, or the volume, differs.
+    #[must_use]
+    pub fn capture_request(&self) -> u64 {
+        self.capture_request
     }
 }
 
@@ -206,11 +253,13 @@ pub struct IrradianceState {
     /// How many probes are currently uploaded. `0` is a valid, neutral state.
     pub probe_count: usize,
     /// What the uploaded grid was baked from, when it came from an [`IrradianceVolume`] — a hash
-    /// of the volume and the scene's lights. The sync step rebakes only when it changes. `None`
+    /// of the volume and its bake request. The game path bakes again only when it changes. `None`
     /// for a grid uploaded by hand, or none.
     pub baked_from: Option<u64>,
     /// Capacity in probes, so an upload of the same size does not reallocate.
     capacity: usize,
+    /// The bake's pipelines, built the first time a volume is baked.
+    bake: Option<crate::irradiance_bake::ProbeBake>,
 }
 
 impl IrradianceState {
@@ -309,7 +358,7 @@ impl IrradianceState {
         let probes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("irradiance_probes"),
             contents: bytemuck::cast_slice(&[0.0f32; PROBE_FLOATS]),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
         });
         let meta_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("irradiance_meta"),
@@ -341,6 +390,7 @@ impl IrradianceState {
             probe_count: 0,
             baked_from: None,
             capacity: 1,
+            bake: None,
         }
     }
 
@@ -408,7 +458,7 @@ impl IrradianceState {
             self.probes_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("irradiance_probes"),
                 contents: bytemuck::cast_slice(&data),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
             });
             self.capacity = count.max(1);
             self.rebind(device);
@@ -436,6 +486,67 @@ impl IrradianceState {
             }),
         );
         self.probe_count = count;
+    }
+
+    /// Starts baking `grid` (its probes' places; their coefficients are not read) with `ambient` added
+    /// to each probe, a radiance as [`IrradianceVolume::ambient`] is. The grid goes up with nothing in
+    /// its probes, so the volume adds no light to its own captures, and [`baked_from`](Self::baked_from)
+    /// is cleared until the bake is finished. Then, for each probe in order: its six faces drawn and
+    /// handed to [`record_bake_face`](Self::record_bake_face), then
+    /// [`record_bake_probe`](Self::record_bake_probe); and [`record_bake_finish`](Self::record_bake_finish)
+    /// once every probe is in.
+    pub fn begin_bake(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, grid: &ProbeGrid, ambient: gizmo_math::Vec3) {
+        self.upload(device, queue, &ProbeGrid::new(grid.grid_min, grid.grid_max, grid.resolution));
+        self.baked_from = None;
+        self.bake
+            .get_or_insert_with(|| crate::irradiance_bake::ProbeBake::new(device))
+            .begin(device, grid.probes.len(), ambient);
+    }
+
+    /// Records filtering `frame` — the HDR target, just drawn from the probe by a 90° square camera
+    /// looking along [`face_basis`](crate::reflection::face_basis)`(face)` — into that face.
+    pub fn record_bake_face(&self, device: &wgpu::Device, encoder: &mut wgpu::CommandEncoder, frame: &wgpu::TextureView, face: usize) {
+        if let Some(bake) = self.bake.as_ref() {
+            bake.record_face(device, encoder, frame, face);
+        }
+    }
+
+    /// Records projecting the six faces just recorded into probe `probe` (its index in the grid).
+    pub fn record_bake_probe(&self, encoder: &mut wgpu::CommandEncoder, probe: usize) {
+        if let Some(bake) = self.bake.as_ref() {
+            bake.record_probe(encoder, probe);
+        }
+    }
+
+    /// Records putting the finished bake where the lighting pass reads it.
+    pub fn record_bake_finish(&mut self, encoder: &mut wgpu::CommandEncoder) {
+        if let Some(bake) = self.bake.as_mut() {
+            bake.record_finish(encoder, &self.probes_buffer);
+        }
+    }
+
+    /// The probes the lighting pass reads, read back from the GPU — what a bake put there. Waits for
+    /// the GPU; for tools and tests.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn read_probes(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Vec<crate::gi::SHCoeffs> {
+        let size = (self.probe_count * PROBE_FLOATS * 4) as u64;
+        if size == 0 {
+            return Vec::new();
+        }
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("irradiance_probes_read"),
+            size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("irradiance_probes_read") });
+        encoder.copy_buffer_to_buffer(&self.probes_buffer, 0, &staging, 0, size);
+        queue.submit(std::iter::once(encoder.finish()));
+        let slice = staging.slice(..);
+        slice.map_async(wgpu::MapMode::Read, |_| {});
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        let Ok(mapped) = slice.get_mapped_range() else { return Vec::new() };
+        bytemuck::cast_slice::<u8, f32>(&mapped).as_chunks::<PROBE_FLOATS>().0.iter().map(crate::gi::SHCoeffs::from_gpu_data).collect()
     }
 
     /// Whether anything is uploaded. The shader checks the same thing through `probe_count`.

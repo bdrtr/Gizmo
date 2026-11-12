@@ -746,6 +746,7 @@ impl Renderer {
             render_stats: None,
             planar: Default::default(),
             skip_mirrors: false,
+            skip_sky: false,
             exposure: 1.15,
             // Depth of field is an opt-in artistic effect, not a default: with it
             // ON, any scene whose subject isn't near `dof_focus_dist` (4.5 m) is

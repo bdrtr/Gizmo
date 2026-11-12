@@ -315,7 +315,9 @@ pub enum SimulationDetail<'a> {
 /// **What a frame does before its own view or views**, in this order and the same in every host —
 /// [`draw_frame`], split screen, the editor's viewport:
 ///
-/// 1. the reflection probes that ask for a capture ([`capture_reflection_probes`]);
+/// 1. the irradiance volume, when it asks for a bake ([`capture_irradiance_volume`]), then the
+///    reflection probes that ask for a capture ([`capture_reflection_probes`]) — so a probe's
+///    capture shows the volume's light, as the frame will;
 /// 2. the frame's start: the mirrors' captures counted from zero, and the temporal state of every
 ///    view whose camera is gone dropped ([`Renderer::retain_view_histories`]);
 /// 3. the GPU simulations, stepped once for every view and in a submission of their own — the
@@ -332,6 +334,7 @@ pub enum SimulationDetail<'a> {
 /// drew the whole particle ring with nothing alive; and it never asked for the GPU bodies' readback,
 /// which their entities follow.
 pub fn draw_ahead_of_views(world: &World, renderer: &mut Renderer, detail: SimulationDetail) {
+    capture_irradiance_volume(world, renderer);
     capture_reflection_probes(world, renderer);
     renderer.planar.begin_frame();
     renderer.retain_view_histories(|camera| world.get::<Camera>(camera).is_some());
@@ -647,6 +650,7 @@ pub fn capture_reflection_probes(world: &World, renderer: &mut Renderer) {
                 far: probe.far.max(probe.near + 0.1),
                 projection: None,
                 aspect: 1.0,
+                bounce: false,
             };
             // The HDR target stands in for the output view: a capture stops before the post
             // chain, so nothing is ever written through it.
@@ -707,6 +711,93 @@ pub fn capture_reflection_probes(world: &World, renderer: &mut Renderer) {
         return;
     }
     tracing::debug!(captured = pending.len(), probes = owners.len(), size, "[Render] reflection probes captured");
+}
+
+/// Bakes the scene's [`IrradianceVolume`] when it asks for it: on the first frame it exists, after it
+/// changes, and after [`IrradianceVolume::request_capture`]. From each probe the scene is drawn six
+/// ways as a reflection probe's faces are — each face **its own submission**, for the reason
+/// [`capture_reflection_probes`] gives — with the sky left out (`FixedView::bounce`), and the faces
+/// projected into the probe's spherical harmonics on the GPU
+/// ([`IrradianceState`](crate::renderer::irradiance::IrradianceState)'s `begin_bake` and the rest).
+/// TAA, SSGI and the motion history are set aside for it and put back, as for a probe.
+///
+/// Which volume and which request the uploaded grid was baked from is the renderer's record
+/// (`IrradianceState::baked_from`); the component is never written back. A volume that goes takes
+/// its bake with it; a grid uploaded by hand, with no volume, is left alone.
+///
+/// [`IrradianceVolume`]: crate::renderer::irradiance::IrradianceVolume
+/// [`IrradianceVolume::request_capture`]: crate::renderer::irradiance::IrradianceVolume::request_capture
+pub fn capture_irradiance_volume(world: &World, renderer: &mut Renderer) {
+    use crate::renderer::irradiance::IrradianceVolume;
+    use crate::renderer::reflection::FACES;
+    use std::hash::{Hash, Hasher};
+    let volume = world.query::<&IrradianceVolume>().iter().next().copied();
+    let Some(def) = renderer.deferred.as_mut() else { return };
+    let Some(volume) = volume else {
+        // Its volume gone, a bake goes with it.
+        if def.irradiance.baked_from.take().is_some() {
+            let empty = crate::renderer::gi::ProbeGrid::new(Vec3::ZERO, Vec3::ZERO, [0, 0, 0]);
+            def.irradiance.upload(&renderer.device, &renderer.queue, &empty);
+        }
+        return;
+    };
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for v in [volume.min, volume.max, volume.ambient] {
+        v.to_array().iter().for_each(|f| f.to_bits().hash(&mut hasher));
+    }
+    volume.resolution.hash(&mut hasher);
+    volume.capture_request().hash(&mut hasher);
+    let fingerprint = hasher.finish();
+    if def.irradiance.baked_from == Some(fingerprint) {
+        return;
+    }
+
+    let grid = crate::renderer::gi::ProbeGrid::new(volume.min, volume.max, volume.resolution);
+    def.irradiance.begin_bake(&renderer.device, &renderer.queue, &grid, volume.ambient);
+    let taa = renderer.taa.take();
+    let ssgi = renderer.ssgi.take();
+    let history = renderer.previous_view_proj.take();
+    for (index, probe) in grid.probes.iter().enumerate() {
+        for face in 0..FACES {
+            let (forward, up) = crate::renderer::reflection::face_basis(face);
+            let mut encoder = renderer
+                .device
+                .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("irradiance_volume_face") });
+            let fixed = FixedView {
+                position: probe.position,
+                forward,
+                up,
+                near: 0.05,
+                far: 1000.0,
+                projection: None,
+                aspect: 1.0,
+                bounce: true,
+            };
+            // The HDR target stands in for the output view: a capture stops before the post chain.
+            let hdr = renderer.post.hdr_texture_view.clone();
+            draw_camera_view(world, &mut encoder, &hdr, renderer, None, false, None, false, Some(fixed));
+            if let Some(def) = renderer.deferred.as_ref() {
+                def.irradiance.record_bake_face(&renderer.device, &mut encoder, &renderer.post.hdr_texture_view, face);
+                if face + 1 == FACES {
+                    def.irradiance.record_bake_probe(&mut encoder, index);
+                }
+            }
+            renderer.queue.submit(std::iter::once(encoder.finish()));
+        }
+    }
+    let mut encoder = renderer
+        .device
+        .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("irradiance_volume_finish") });
+    if let Some(def) = renderer.deferred.as_mut() {
+        def.irradiance.record_bake_finish(&mut encoder);
+        def.irradiance.baked_from = Some(fingerprint);
+    }
+    renderer.queue.submit(std::iter::once(encoder.finish()));
+    renderer.taa = taa;
+    renderer.ssgi = ssgi;
+    renderer.previous_view_proj = history;
+    renderer.skip_sky = false;
+    tracing::debug!(probes = grid.probes.len(), "[Render] irradiance volume baked");
 }
 
 /// Draws the scene again for each [`PlanarReflection`] `camera` can see from the front, into that
@@ -816,6 +907,7 @@ fn capture_planar_reflections(
             far: cam.far,
             projection: Some((oblique, cam.fov)),
             aspect,
+            bounce: false,
         };
         let mut encoder = renderer
             .device
@@ -1164,6 +1256,9 @@ struct FixedView {
     /// else the view fits to its shape — the shadow cascades — takes it from here, so it cannot
     /// disagree with `projection`.
     aspect: f32,
+    /// An irradiance volume's capture: the light bounced off the scene alone, the sky left out —
+    /// the background black, no environment map, skybox or backdrop (`Renderer::skip_sky`).
+    bounce: bool,
 }
 
 /// The shape a view is drawn at: a capture's own, else its rectangle's (a split-screen view, a
@@ -1195,6 +1290,7 @@ fn draw_camera_view(
     capture: Option<FixedView>,
 ) {
     renderer.skip_mirrors = capture.is_some();
+    renderer.skip_sky = capture.as_ref().is_some_and(|fixed| fixed.bounce);
     // Post-process params are written AFTER the active camera is resolved (below), so the
     // single exposure knob can be the camera's exposure — see the update_post_process call
     // after camera selection. Exposure is applied ONCE here, over the whole composited HDR
@@ -1296,10 +1392,13 @@ fn draw_camera_view(
 
     // The active camera, in the one form both uniform blocks are built from. Assembled after the
     // TAA jitter so `view_proj` is the matrix this frame actually rasterises with.
-    // The rendered camera's background, if it asked for one (`Camera::clear_color`).
-    let clear_color = camera
-        .and_then(|c| world.query::<&Camera>().get(c).and_then(|cam| cam.clear_color))
-        .map(|c| c.to_array());
+    // The rendered camera's background, if it asked for one (`Camera::clear_color`); black for an
+    // irradiance volume's capture, which holds the light bounced off the scene and not the sky's.
+    let clear_color = if renderer.skip_sky {
+        Some([0.0; 3])
+    } else {
+        camera.and_then(|c| world.query::<&Camera>().get(c).and_then(|cam| cam.clear_color)).map(|c| c.to_array())
+    };
     let camera = crate::renderer::CameraFrame {
         view_proj,
         position: cam_pos,
@@ -1403,7 +1502,6 @@ fn draw_camera_view(
     // Cookies a spot names by path are read from disk the first frame they are needed.
     #[cfg(not(target_arch = "wasm32"))]
     renderer.sync_light_cookies(world);
-    shared::sync_irradiance_volume(world, renderer);
     let setup = collect_scene_setup(
         world,
         &SceneSetupInputs {
@@ -1678,7 +1776,7 @@ pub use hidden::collect_hidden;
 
 mod shared;
 pub use shared::{
-    active_camera_grade, collect_scene_lights, collect_scene_setup, sync_irradiance_volume, SceneLights,
+    active_camera_grade, collect_scene_lights, collect_scene_setup, SceneLights,
     SceneSetup, SceneSetupInputs,
 };
 
@@ -4173,13 +4271,17 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no irradiance volumes.
-    /// An `IrradianceVolume` placed in the world is baked and uploaded by the frame itself: its
-    /// probes reach the lighting pass (a red ambient tints a dim scene red), a still scene does not
-    /// rebake (the fingerprint holds), and moving a light does — a spot's added or turned too.
+    /// **An `IrradianceVolume` holds the light the scene bounces, and no copy of a light's own.** A white
+    /// floor beside a red wall, the sun on both: with a volume the floor near the wall takes the wall's
+    /// red, measured as the mean red − blue over the floor in front of it. A floor under a lamp, nothing
+    /// else: the volume leaves it as it was, where the analytic bake it replaces (2026-11-12) added each
+    /// light's direct light again, unshadowed, at 9/4π of its irradiance against the lit shaders' 1/π.
+    /// It bakes on the first frame and keeps that bake: a still frame and a moved light leave it, a
+    /// request bakes again, and a volume that goes takes its probes with it.
     #[test]
     #[ignore = "needs a GPU adapter"]
-    fn an_irradiance_volume_bakes_itself_and_rebakes_on_change() {
-        use crate::renderer::components::PointLight;
+    fn an_irradiance_volume_holds_the_light_the_scene_bounces() {
+        use crate::renderer::components::{DirectionalLight, LightRole, PointLight};
         use crate::renderer::irradiance::IrradianceVolume;
         let _gpu = crate::test_gpu::gpu_lock();
         if !pollster::block_on(Renderer::headless_adapter_available())
@@ -4188,78 +4290,116 @@ mod golden_render_tests {
             eprintln!("skipping: no usable GPU adapter");
             return;
         }
+        fn slab(world: &mut World, renderer: &Renderer, tex: &std::sync::Arc<wgpu::BindGroup>, at: Vec3, half: Vec3, albedo: Vec4) {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(at).with_scale(half));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            // `with_pbr(albedo, roughness, metallic)`: matte.
+            world.add_component(e, Material::new(tex.clone()).with_pbr(albedo, 0.9, 0.0));
+            world.add_component(e, MeshRenderer::new());
+        }
+        // The floor's rows and their mean red − blue and luma. Looking straight down with the yaw at 0,
+        // world +X is up the frame: rows 60..98 are the floor from 1.3 to 2 m off the camera's x,
+        // towards the wall at the bottom edge.
+        let measure = |f: &[u8]| -> (f32, f32) {
+            let (mut tint, mut luma, mut n) = (0.0, 0.0, 0.0);
+            for y in 60..98 {
+                for x in 0..128 {
+                    let p = &f[(y * 128 + x) * 4..];
+                    tint += p[0] as f32 - p[2] as f32;
+                    luma += (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0;
+                    n += 1.0;
+                }
+            }
+            (tint / n, luma / n)
+        };
         pollster::block_on(async {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.bloom_intensity = 0.0;
             let mut world = World::new();
             let mut assets = AssetManager::new();
             let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
-            let floor = world.spawn();
-            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
-            world.add_component(floor, GlobalTransform::default());
-            world.add_component(floor, AssetManager::create_cube(&renderer.device));
-            world.add_component(floor, Material::new(tex).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
-            world.add_component(floor, MeshRenderer::new());
-            let lamp = world.spawn();
-            world.add_component(lamp, Transform::new(Vec3::new(0.0, 2.0, 0.0)));
-            world.add_component(lamp, GlobalTransform::default());
-            world.add_component(lamp, PointLight::new(Vec3::ONE, 0.5, 10.0));
+            slab(&mut world, &renderer, &tex, Vec3::new(0.0, -0.2, 0.0), Vec3::new(20.0, 0.2, 20.0), Vec4::new(0.8, 0.8, 0.8, 1.0));
+            slab(&mut world, &renderer, &tex, Vec3::new(-2.5, 1.5, 0.0), Vec3::new(0.1, 1.5, 3.0), Vec4::new(0.9, 0.05, 0.05, 1.0));
+            let sun = world.spawn();
+            let shines = Vec3::new(-1.0, -0.6, 0.0).normalize();
+            world.add_component(sun, Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_arc(Vec3::NEG_Z, shines)));
+            world.add_component(sun, GlobalTransform::default());
+            world.add_component(sun, DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun));
             world.spawn_bundle(CameraBundle {
-                position: Vec3::new(0.0, 3.0, 4.0),
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: -0.6,
+                position: Vec3::new(-1.2, 3.5, 0.0),
+                yaw: 0.0,
+                pitch: -std::f32::consts::FRAC_PI_2 + 0.01,
                 primary: true,
                 ..Default::default()
             });
-            let red_minus_blue = |f: &[u8]| -> f32 {
-                let px = f.as_chunks::<4>().0;
-                px.iter().map(|p| p[0] as f32 - p[2] as f32).sum::<f32>() / px.len() as f32
-            };
 
-            let plain = render_world(&mut renderer, &mut world).await;
+            let plain = measure(&render_world(&mut renderer, &mut world).await);
             assert_eq!(renderer.deferred.as_ref().unwrap().irradiance.probe_count, 0, "no volume, no grid");
-
             let volume = world.spawn();
-            world.add_component(
-                volume,
-                IrradianceVolume::new(Vec3::new(-5.0, -1.0, -5.0), Vec3::new(5.0, 4.0, 5.0), [4, 3, 4])
-                    .with_ambient(Vec3::new(1.5, 0.0, 0.0)),
-            );
-            let tinted = render_world(&mut renderer, &mut world).await;
+            world.add_component(volume, IrradianceVolume::new(Vec3::new(-3.0, 0.0, -3.0), Vec3::new(3.0, 2.0, 3.0), [3, 2, 3]));
+            let bled = measure(&render_world(&mut renderer, &mut world).await);
             let irr = &renderer.deferred.as_ref().unwrap().irradiance;
-            assert_eq!(irr.probe_count, 48, "a 4×3×4 grid uploaded");
+            assert_eq!(irr.probe_count, 18, "a 3×2×3 grid uploaded");
             let first = irr.baked_from.expect("baked from the volume");
+            eprintln!("beside the red wall, red − blue {:.2} → {:.2}, luma {:.2} → {:.2}", plain.0, bled.0, plain.1, bled.1);
+            assert!(bled.0 > plain.0 + 6.0, "the wall's red reaches the floor: {:.2} → {:.2}", plain.0, bled.0);
+            // The probe 0.4 m in front of the wall, (−2, 0.5, 0): red from the wall's way, −X, where the
+            // wall (0.9/π × 3 × 0.857 = 0.74 red) fills most of what a surface facing it sees; white
+            // from the open side, half of it the sunlit floor — the faces projected the right way round.
+            // Measured [0.748, 0.101, 0.103] and [0.269, 0.281, 0.286].
+            let probes = irr.read_probes(&renderer.device, &renderer.queue);
+            let (toward, away) = (probes[6].evaluate(Vec3::NEG_X), probes[6].evaluate(Vec3::X));
+            eprintln!("the probe by the wall: towards it {toward:.3}, away {away:.3}");
+            assert!(toward.x - toward.z > 0.4 && (away.x - away.z).abs() < 0.05, "red from the wall's side: {toward:.3} / {away:.3}");
+            assert!((0.6..0.9).contains(&toward.x), "as bright as the wall it faces: {toward:.3}");
 
             let _ = render_world(&mut renderer, &mut world).await;
-            assert_eq!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, Some(first), "a still scene does not rebake");
-
-            {
-                let mut q = world.query_mut::<&mut Transform>();
-                q.get_mut(lamp).unwrap().position.x = 1.0;
-            }
+            assert_eq!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, Some(first), "a still frame keeps its bake");
+            world.query_mut::<&mut Transform>().get_mut(sun).unwrap().rotation = crate::math::Quat::from_rotation_x(-1.2);
             let _ = render_world(&mut renderer, &mut world).await;
-            let moved = renderer.deferred.as_ref().unwrap().irradiance.baked_from;
-            assert_ne!(moved, Some(first), "a moved light rebakes");
-
-            // A spot is in the bake too (point lights only, until 2026-11-11), and which way it aims.
-            let spot = world.spawn();
-            world.add_component(spot, Transform::new(Vec3::new(0.0, 2.0, 0.0)));
-            world.add_component(spot, GlobalTransform::default());
-            world.add_component(spot, crate::renderer::components::SpotLight::new(Vec3::ONE, 2.0, 8.0, 0.3, 0.5));
+            assert_eq!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, Some(first), "a moved light does not bake again");
+            world.query_mut::<&mut IrradianceVolume>().get_mut(volume).unwrap().request_capture();
             let _ = render_world(&mut renderer, &mut world).await;
-            let with_spot = renderer.deferred.as_ref().unwrap().irradiance.baked_from;
-            assert_ne!(with_spot, moved, "a spot rebakes");
-            world.query_mut::<&mut Transform>().get_mut(spot).unwrap().rotation = crate::math::Quat::from_rotation_x(1.0);
+            let again = renderer.deferred.as_ref().unwrap().irradiance.baked_from;
+            assert!(again.is_some() && again != Some(first), "a request bakes again");
+            world.despawn(volume);
             let _ = render_world(&mut renderer, &mut world).await;
-            assert_ne!(renderer.deferred.as_ref().unwrap().irradiance.baked_from, with_spot, "a spot turned rebakes");
+            let irr = &renderer.deferred.as_ref().unwrap().irradiance;
+            assert!(irr.probe_count == 0 && irr.baked_from.is_none(), "a volume gone takes its bake with it");
+        });
 
-            // Measured: mean red − blue −12.26 without the volume, 30.40 with its red ambient.
-            assert!(
-                red_minus_blue(&tinted) > red_minus_blue(&plain) + 20.0,
-                "the volume's light reaches the frame: {:.2} → {:.2}",
-                red_minus_blue(&plain),
-                red_minus_blue(&tinted)
-            );
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.bloom_intensity = 0.0;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            slab(&mut world, &renderer, &tex, Vec3::new(0.0, -0.2, 0.0), Vec3::new(20.0, 0.2, 20.0), Vec4::new(0.8, 0.8, 0.8, 1.0));
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(-1.6, 1.5, 0.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 3.0, 10.0));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-1.2, 3.5, 0.0),
+                yaw: 0.0,
+                pitch: -std::f32::consts::FRAC_PI_2 + 0.01,
+                primary: true,
+                ..Default::default()
+            });
+            let plain = measure(&render_world(&mut renderer, &mut world).await);
+            let volume = world.spawn();
+            world.add_component(volume, IrradianceVolume::new(Vec3::new(-3.0, 0.0, -3.0), Vec3::new(3.0, 2.0, 3.0), [3, 2, 3]));
+            let with = measure(&render_world(&mut renderer, &mut world).await);
+            eprintln!("a floor under a lamp, luma {:.2} → {:.2}", plain.1, with.1);
+            assert!((with.1 - plain.1).abs() < 3.0, "a lit floor and nothing to bounce off: {:.2} → {:.2}", plain.1, with.1);
         });
     }
 

@@ -125,6 +125,7 @@ pub mod capture;
 pub mod routing;
 pub mod custom_material;
 pub mod irradiance;
+mod irradiance_bake;
 pub mod luminance;
 /// Per-object motion: last frame's model matrices and the G-buffer velocity target.
 pub mod motion;
@@ -263,7 +264,7 @@ pub use deferred::{
     DeferredState, GBUFFER_ALBEDO_METALLIC_FORMAT, GBUFFER_NORMAL_ROUGHNESS_FORMAT,
     GBUFFER_WORLD_POSITION_FORMAT, GBUFFER_WORLD_TANGENT_FORMAT,
 };
-pub use gi::{BakeLight, Emits, LightProbe, ProbeGrid, SHCoeffs};
+pub use gi::{LightProbe, ProbeGrid, SHCoeffs};
 pub use gpu_types::{
     InstanceRaw, LightData, MaterialParams, PostProcessUniforms, SceneUniforms, ShadowVsUniform,
     Vertex,

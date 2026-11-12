@@ -215,6 +215,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **An `IrradianceVolume` bakes the light the scene bounces, captured from each probe** — where it baked each light's
+  direct light analytically, which the lighting pass then added again on top of the light's own, unshadowed. From each
+  probe the lit scene is drawn six ways, as a reflection probe's faces are, with the sky left out (the background black,
+  no environment map, skybox or backdrop: `Renderer::skip_sky`, set by the capture), and each face is box-filtered to 32²
+  and projected into the probe's harmonics on the GPU (`irradiance_bake.wgsl`). The floor before a sunlit red wall turns
+  red with the volume (mean red − blue −1.95 → 13.21) and a probe 0.4 m from the wall reads the wall's own 0.74 red
+  towards it; a floor under a lamp alone is left as it was (155.61 → 157.00). A volume bakes on its first frame, when it
+  changes and on `IrradianceVolume::request_capture()` — not when a light moves; a 4×3×4 volume is 288 renders. A
+  volume removed takes its bake with it. `capture_irradiance_volume` runs in `draw_ahead_of_views`, before the
+  reflection probes, in place of `sync_irradiance_volume`, which is gone; `IrradianceState` has `begin_bake`,
+  `record_bake_face`, `record_bake_probe`, `record_bake_finish` and `read_probes`. **Breaking:** `ProbeGrid::bake_from_lights`,
+  `gi::BakeLight` and `gi::Emits` are removed. **The coefficients hold irradiance over π** (`gi::COSINE_BANDS`):
+  `SHCoeffs::add_directional_light` projects a light as a matte surface takes it — it read `9/4π` of a light's
+  irradiance head-on where a matte surface takes `1/π` — and `SHCoeffs::add_ambient` and `IrradianceVolume::ambient`
+  are a radiance, read back as it is (an ambient of 1 read `1/4π`). `SHCoeffs::from_gpu_data` reads the layout back.
 - **The sun's cascades draw a solid by its front faces** — what the sun meets — where they drew its back faces, so a
   soft shadow measures its penumbra from the side the light meets: a 1.2 m cube and a 5 cm slab with the same top cast
   the same soft edge (by back faces the cube's was half as wide), a 3 m pillar's penumbra reads 18 / 103 / 236 pixels at

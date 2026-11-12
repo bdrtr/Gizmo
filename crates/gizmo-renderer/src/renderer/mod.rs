@@ -329,6 +329,10 @@ pub struct Renderer {
     pub planar: crate::planar::PlanarReflections,
     /// This view is itself a capture: mirrors are left out of it.
     pub skip_mirrors: bool,
+    /// This view captures the light bounced into an irradiance volume: what stands for the sky —
+    /// the background, an environment map, a skybox or backdrop — is left out of it, as the lighting
+    /// pass adds the sky to every surface itself.
+    pub skip_sky: bool,
     /// Linear exposure multiplier applied before tone mapping.
     pub exposure: f32,
     /// Whether depth of field runs.

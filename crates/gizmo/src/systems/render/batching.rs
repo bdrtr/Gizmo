@@ -520,6 +520,7 @@ pub(super) fn collect_draw_items(
     let occluded_objects = std::cell::Cell::new(0u32);
     let reflections = world.query::<&crate::renderer::components::PlanarReflection>();
     let skip_mirrors = renderer.skip_mirrors;
+    let skip_sky = renderer.skip_sky;
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
     // Every shadow map's LIGHT frustum — shadow casters are culled against these, NOT the camera
@@ -583,6 +584,10 @@ pub(super) fn collect_draw_items(
                 }
 
                 let routing = crate::renderer::routing::route($mat.material_type);
+                // An irradiance volume's capture is the light bounced off the scene, not the sky's.
+                if skip_sky && (routing.is_skybox || routing.is_backdrop) {
+                    continue;
+                }
 
                 let center_mat = Mat4::from_translation($mesh.center_offset);
                 let model = $trans.matrix * center_mat;

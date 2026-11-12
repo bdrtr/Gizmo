@@ -475,7 +475,7 @@ fn draw_forward_items(
 /// An [`EnvironmentMap`](crate::renderer::environment::EnvironmentMap) behind the scene: at the far
 /// plane, so only where nothing was drawn, ahead of everything that blends over it.
 fn draw_environment_sky(render_pass: &mut wgpu::RenderPass<'_>, renderer: &Renderer) {
-    if renderer.environment_map.is_none() {
+    if renderer.environment_map.is_none() || renderer.skip_sky {
         return;
     }
     // The forward-only path keeps it in the cube its lit shader reads the sky from, on group 0.

@@ -47,8 +47,9 @@ pub struct ReflectionProbe {
     capture_request: u64,
 }
 
-/// A request value no probe in this process has held: the start of a new probe.
-fn fresh_request() -> u64 {
+/// A request value no probe in this process has held: the start of a new probe. An
+/// [`IrradianceVolume`](crate::irradiance::IrradianceVolume) starts from one too, for the same reason.
+pub(crate) fn fresh_request() -> u64 {
     use std::sync::atomic::{AtomicU64, Ordering};
     // Requests advance by one per `request_capture`, so new probes are spaced far apart.
     static NEXT: AtomicU64 = AtomicU64::new(1 << 32);

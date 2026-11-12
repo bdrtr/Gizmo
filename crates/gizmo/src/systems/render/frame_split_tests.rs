@@ -1284,6 +1284,7 @@ fn a_view_is_fitted_to_its_own_shape() {
         far: 100.0,
         projection: None,
         aspect: 3.5,
+        bounce: false,
     };
     assert_eq!(super::view_aspect(Some(&mirror), Some([0.0, 0.0, 128.0, 64.0]), (128, 128)), 3.5);
     assert_eq!(super::view_aspect(None, Some([0.0, 0.0, 128.0, 64.0]), (128, 128)), 2.0);
