@@ -66,7 +66,7 @@ impl EnvInputs {
     /// placeholder is not where the preset's own stands.
     ///
     /// Every input went in as it stood until 2026-11-12, so a turning sun drew the cube again every
-    /// frame under Studio Neutral, which has no sun: Nişancı with its sun turning ran at 63 fps on an
+    /// frame under Studio Neutral, which has no sun: `nisanci` with its sun turning ran at 63 fps on an
     /// Adreno 618, where it runs at about 157.
     pub(crate) fn of(u: &SceneUniforms, size: u32, levels: u32) -> Self {
         if u.sky_zenith[3] >= 0.0 {

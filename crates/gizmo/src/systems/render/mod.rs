@@ -5442,7 +5442,7 @@ mod golden_render_tests {
     /// it a little: the row and the column through the disc's middle, within 10 of the desktop's (9 at
     /// the column's end). A 256-texel cube holds it within 3, and is not taken: measured on an Adreno 618
     /// (2026-11-12), it costs nothing while the sky stands still and 2.7 ms a frame while it is drawn
-    /// again every frame (Nişancı with its sun turning, 63 fps against 54).
+    /// again every frame (`nisanci` with its sun turning, 63 fps against 54).
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn a_mirror_shows_the_sun_disc_alike_on_every_path() {
