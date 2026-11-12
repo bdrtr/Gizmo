@@ -256,6 +256,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Every game failed to start on an Adreno 618 phone.** Without shadow maps, `baked_lit.wgsl` built a zero `mat2x3` and
+  passed it to a `sun_visibility` that returned 1 without reading it, and the driver's Vulkan compiler dereferenced a null
+  pointer building the baked-lit pipeline (since `c3adce93`, 2026-11-11; found by resolving the crash's return address
+  in the build's own library to the pipeline's label). The forward-only path compiles none of the sun's shadow now, not
+  even a placeholder, and `no_web_shader_holds_a_matrix_that_is_not_square` holds every shader that path composes, at
+  every lit tier, to the shape: it names baked-lit's `mat2x3` four times against the old source.
+- **A sun the sky does not have drew the environment cube again.** The forward-only path's cube was keyed on every
+  input the presets take, so a turning sun drew it every frame under Studio Neutral and Midnight Neon, which keep lights of
+  their own, and under a set sky: Nişancı with its sun turning ran at 62.9 fps on an Adreno 618 against 156 standing still,
+  and reads 146.9 now. `EnvInputs::of` keys it on what `scene_environment` reads (`env_cube::preset_uses_sun`);
+  `the_presets_left_without_a_sun_draw_none` holds the shader to the key. A 256-texel cube was measured on the same phone
+  and not taken: it holds the sun's disc on a mirror within 3 of the desktop where 128 holds it within 9, costs nothing
+  while the sky stands still, and 2.7 ms a frame while it is drawn every frame (`docs/CAPABILITY_GAPS.md`).
 - **A preset drew a sunset's sun at the zenith in a scene with no sun.** Sunset Gold and Classic Daylight place their
   disc and glow by the scene's sun, and without one they took the placeholder a missing sun's direction holds, straight
   down. Each places its own now (`preset_sun` in `common.wgsl`): Sunset Gold's eight degrees over the horizon, Classic

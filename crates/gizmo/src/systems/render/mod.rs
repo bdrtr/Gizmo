@@ -5435,6 +5435,75 @@ mod golden_render_tests {
         });
     }
 
+    /// **A mirror shows the sun's disc alike on every path.** A white mirror floor under Sunset Gold,
+    /// looking along it at the preset's own sun, whose disc (`pow(·, 4096)`, about a degree across) is
+    /// the sharpest thing any preset holds. The desktop works it out per pixel; the forward-only path —
+    /// a browser's, a phone's — reads it from `env_cube`'s sharpest mip, 128 texels a face, which spreads
+    /// it a little: the row and the column through the disc's middle, within 10 of the desktop's (9 at
+    /// the column's end). A 256-texel cube holds it within 3, and is not taken: measured on an Adreno 618
+    /// (2026-11-12), it costs nothing while the sky stands still and 2.7 ms a frame while it is drawn
+    /// again every frame (Nişancı with its sun turning, 63 fps against 54).
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_mirror_shows_the_sun_disc_alike_on_every_path() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.environment_preset = 0;
+            renderer.bloom_intensity = 0.0;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.fxaa = None;
+            renderer.smaa = None;
+            renderer.cas = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(200.0, 0.2, 200.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex).with_pbr(Vec4::ONE, 0.0, 1.0));
+            world.add_component(floor, MeshRenderer::new());
+            let sky = Vec3::new(0.8, 0.14, 0.5).normalize();
+            let look = Vec3::new(sky.x, -sky.y, sky.z);
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.0, 0.0),
+                yaw: look.z.atan2(look.x),
+                pitch: look.y.asin(),
+                primary: true,
+                ..Default::default()
+            });
+            let frame = render_world(&mut renderer, &mut world).await;
+            let luma = |x: usize, y: usize| {
+                let p = &frame[(y * 128 + x) * 4..];
+                (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0
+            };
+            let (peak, at) = (56..72)
+                .flat_map(|y| (56..72).map(move |x| (x, y)))
+                .map(|(x, y)| (luma(x, y), (x, y)))
+                .fold((0.0f32, (0, 0)), |a, b| if b.0 > a.0 { b } else { a });
+            let row: Vec<f32> = (at.0 - 4..=at.0 + 4).map(|x| luma(x, at.1)).collect();
+            let column: Vec<f32> = (at.1 - 4..=at.1 + 4).map(|y| luma(at.0, y)).collect();
+            eprintln!("disc at {at:?}, peak {peak:.1}\n  row {row:.0?}\n  column {column:.0?}");
+            // The desktop's, per pixel.
+            const ROW: [f32; 9] = [160.0, 198.0, 227.0, 240.0, 246.0, 246.0, 243.0, 232.0, 209.0];
+            const COLUMN: [f32; 9] = [183.0, 215.0, 235.0, 243.0, 246.0, 243.0, 235.0, 217.0, 183.0];
+            assert_eq!(at, (63, 58), "the disc stands where the desktop draws it");
+            let apart = row.iter().zip(ROW).chain(column.iter().zip(COLUMN)).map(|(g, w)| (g - w).abs()).fold(0.0f32, f32::max);
+            assert!(apart <= 10.0, "the disc is {apart} from the desktop's: row {row:.0?}, column {column:.0?}");
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no G-buffer to write motion to.
     /// **What is drawn forward writes how it moved, as what is drawn deferred does.** A cube moves
     /// 30 cm to the side between two frames in front of a still wall; the G-buffer's velocity target

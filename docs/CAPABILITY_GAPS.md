@@ -331,14 +331,37 @@ in mip for mip. The memory is what it was, and the bake is 24 passes where it wa
 rough floor, matte and metal, under each preset (`a_rough_floor_lit_by_the_environment_reads_alike_on_every_path`,
 which pins the desktop's values): within 3.1 of the desktop everywhere, where it was up to 41 off
 (Sunset Gold metal 94.96 against 135.95); between them, at roughnesses 0.3 to 0.75, within 3 where it
-was up to 40 off. Not measured on a phone; the per-pixel cost is one sample either way. **Still open,
-found measuring it:** a mirror floor under Sunset Gold reads 184.6 there against the desktop's 178.6 over
-the frame's middle 8×8, before and after; the other presets agree within 0.7. It is that preset's sun
-disc, `pow(·, 4096)` at a roughness of 0 — about a degree across — which the cube's sharpest mip, 128
-texels a face, 0.7° a texel, spreads by a pixel: 236 with 71 and 78 beside it, against the desktop's 239,
-66 and 72. Separate because holding it means a bigger cube, four times the memory at 256, which is a
-phone's to measure. (That floor saw the disc at the zenith because the scene had no sun; it sees the
-dark sky there since 2026-11-12, and the spread is wherever a mirror shows the disc.)
+was up to 40 off. Not measured on a phone; the per-pixel cost is one sample either way. **Found
+measuring it:** a mirror floor under Sunset Gold reads 184.6 there against the desktop's 178.6 over the
+frame's middle 8×8, before and after; the other presets agree within 0.7. It is that preset's sun disc,
+`pow(·, 4096)` at a roughness of 0 — about a degree across — which the cube's sharpest mip, 128 texels a
+face, 0.7° a texel, spreads by a pixel: 236 with 71 and 78 beside it, against the desktop's 239, 66 and
+72. (That floor saw the disc at the zenith because the scene had no sun; it sees the dark sky there since
+2026-11-12, and the spread is wherever a mirror shows the disc.)
+
+**A 256-texel sky cube, measured on the phone 2026-11-12 and not taken.** Looking along a mirror at the
+disc (`a_mirror_shows_the_sun_disc_alike_on_every_path`), the row and column through it are within 9 of
+the desktop's at 128 and within 3 at 256. On the Adreno 618, Nişancı, 20 HUD readings a run, the two
+builds turn about in one sitting: with the sky standing still 158.3 fps at 256 against 156.0 at 128 (58
+and 52 readings) — nothing measurable; Android's `Graphics` 19.12 MB against 18.95 (+3.1 MB on paper).
+With the sky drawn again every frame (its sun turned each frame, under Sunset Gold's rules) 53.7 against
+62.9: **2.7 ms a frame**, four times the texels and a fifth mip. A disc a pixel softer on a mirror is
+not worth that to a game whose sky moves, so the cube stays at 128.
+
+~~**A sun the sky does not have drew the cube again.**~~ **CLOSED 2026-11-12, measured on that phone.**
+The cube was keyed on every input the presets take, so a turning sun drew it again every frame under
+Studio Neutral and Midnight Neon, which keep lights of their own, and under a set sky, which has none:
+Nişancı with its sun turning ran at 62.9 fps against 156 standing still. `EnvInputs::of` keys it on what
+`scene_environment` reads now (`env_cube::preset_uses_sun`), and the same build turning its sun reads
+146.9 (149.4 and 144.5, 20 readings each, with the old one's 51.0 between them).
+`the_presets_left_without_a_sun_draw_none` draws each preset with the sun in two places past the key and
+holds the shader to it. **Still open, found measuring it:** a sky that really changes every frame — a
+day's sun under Sunset Gold or Classic Daylight, an animated `Renderer::sky` — draws the cube every frame,
+and on that phone that costs **9.5 ms** at 128 (157 → 63 fps). Two runs apart (24 passes and 131 k
+texels against 30 and 524 k) put most of it on the passes, about 0.35 ms each, not on the texels — a
+tiled GPU's cost per render pass. Separate because cutting it is a change to how the cube is drawn —
+several faces a pass as colour attachments, four `Rgba16Float` targets being the 32 bytes a sample the
+WebGPU minimum allows, or the faces spread over frames — and each wants the phone to say what it saves.
 
 ~~**A preset drew a sun the scene does not have, at the zenith.**~~ **CLOSED 2026-11-12.** Sunset Gold
 and Classic Daylight place their disc and glow by the scene's sun, and a scene without one passed the

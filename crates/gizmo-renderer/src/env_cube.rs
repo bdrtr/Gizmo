@@ -58,17 +58,50 @@ pub(crate) struct EnvInputs {
 
 impl EnvInputs {
     /// The parts of a frame's uniforms that the environment depends on, for a cube `size` texels across
-    /// with `levels` mips.
+    /// with `levels` mips — **only** those, so a change to anything else leaves the cube as it is. What
+    /// `scene_environment` in `common.wgsl` reads: a set sky (`zenith.a ≥ 0`) its three colours and its
+    /// intensity, and nothing of the presets or the sun; otherwise the preset, the one blended towards
+    /// and how far only while it is blended towards, and the sun only for a preset that places one
+    /// (`preset_uses_sun`) — its direction only while the scene has one, since a missing sun's
+    /// placeholder is not where the preset's own stands.
+    ///
+    /// Every input went in as it stood until 2026-11-12, so a turning sun drew the cube again every
+    /// frame under Studio Neutral, which has no sun: Nişancı with its sun turning ran at 63 fps on an
+    /// Adreno 618, where it runs at about 157.
     pub(crate) fn of(u: &SceneUniforms, size: u32, levels: u32) -> Self {
+        if u.sky_zenith[3] >= 0.0 {
+            return Self {
+                zenith: u.sky_zenith,
+                horizon: [u.sky_horizon[0], u.sky_horizon[1], u.sky_horizon[2], 0.0],
+                ground: [u.sky_ground[0], u.sky_ground[1], u.sky_ground[2], 0.0],
+                sun_direction: [0.0; 4],
+                params: [0, 0, size, levels],
+                blend: [0.0; 4],
+            };
+        }
+        let blended = u.environment_blend_t > 0.001;
+        let (preset_b, blend_t) = if blended { (u.environment_preset_2, u.environment_blend_t) } else { (0, 0.0) };
+        let sun_matters = preset_uses_sun(u.environment_preset) || (blended && preset_uses_sun(preset_b));
+        let sun_direction = match (sun_matters, u.sun_direction[3] > 0.5) {
+            (true, true) => [u.sun_direction[0], u.sun_direction[1], u.sun_direction[2], 1.0],
+            _ => [0.0; 4],
+        };
         Self {
-            zenith: u.sky_zenith,
-            horizon: u.sky_horizon,
-            ground: u.sky_ground,
-            sun_direction: u.sun_direction,
-            params: [u.environment_preset, u.environment_preset_2, size, levels],
-            blend: [u.environment_blend_t, 0.0, 0.0, 0.0],
+            zenith: [0.0, 0.0, 0.0, -1.0],
+            horizon: [0.0; 4],
+            ground: [0.0; 4],
+            sun_direction,
+            params: [u.environment_preset, preset_b, size, levels],
+            blend: [blend_t, 0.0, 0.0, 0.0],
         }
     }
+}
+
+/// Whether environment preset `preset` places a sun by the scene's (`preset_sun` in `common.wgsl`):
+/// Sunset Gold (0) and Classic Daylight, which is every number past Midnight Neon (2). Studio Neutral
+/// (1) and Midnight Neon keep lights of their own.
+pub(crate) fn preset_uses_sun(preset: u32) -> bool {
+    preset != 1 && preset != 2
 }
 
 /// The texture and its views, for one size.
@@ -167,6 +200,12 @@ impl EnvironmentCube {
         if self.showing_map || self.drawn == Some(inputs) {
             return false;
         }
+        self.draw(device, queue, encoder, inputs);
+        true
+    }
+
+    /// Draws every mip and face from `inputs`.
+    fn draw(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, encoder: &mut wgpu::CommandEncoder, inputs: EnvInputs) {
         queue.write_buffer(&self.inputs, 0, bytemuck::bytes_of(&inputs));
         let buffer = &self.inputs;
         let (pipeline, group) = self.bake.get_or_insert_with(|| bake_pipeline(device, buffer));
@@ -188,7 +227,6 @@ impl EnvironmentCube {
             pass.draw(0..3, i..i + 1);
         }
         self.drawn = Some(inputs);
-        true
     }
 
     /// Shows `map` in place of the sky, lighting and reflected and behind the scene, or the sky again with
@@ -363,27 +401,114 @@ mod tests {
         u
     }
 
-    /// The parts of a frame the environment does not depend on leave the cube as it is; any it does
-    /// depend on redraws it.
+    /// The presets alone, Sunset Gold (which places a sun), with the sun shining.
+    fn presets() -> SceneUniforms {
+        let mut u = uniforms();
+        u.sky_zenith = [0.0, 0.0, 0.0, -1.0];
+        u.environment_preset = 0;
+        u
+    }
+
+    /// **What the environment does not depend on leaves the cube as it is; what it does depend on draws
+    /// it again.** A camera or a light never redraws it. Under a set sky, its colours do, and the presets
+    /// and the sun do not. Under the presets, the preset does, and the sun does only for one that places
+    /// a sun — not Studio Neutral or Midnight Neon — and its direction only while the scene has one; the
+    /// preset blended towards and how far only while it is blended towards. Every input redrew it until
+    /// 2026-11-12, so a turning sun drew it every frame under Studio Neutral.
     #[test]
     fn only_what_the_environment_depends_on_redraws_it() {
-        let a = uniforms();
-        let mut moved = a;
-        moved.camera_pos = [9.0, 9.0, 9.0, 1.0];
-        moved.num_lights = 3;
-        let levels = sky_levels(BASE_SIZE);
-        assert_eq!(EnvInputs::of(&a, BASE_SIZE, levels), EnvInputs::of(&moved, BASE_SIZE, levels), "a camera or a light is not the sky");
-        for change in [
-            |u: &mut SceneUniforms| u.sky_horizon[0] = 0.5,
-            |u: &mut SceneUniforms| u.sun_direction[0] = 0.3,
-            |u: &mut SceneUniforms| u.environment_preset = 2,
-            |u: &mut SceneUniforms| u.environment_preset_2 = 1,
-            |u: &mut SceneUniforms| u.environment_blend_t = 0.5,
-        ] {
-            let mut b = a;
+        let of = |u: &SceneUniforms| EnvInputs::of(u, BASE_SIZE, sky_levels(BASE_SIZE));
+        let same = |a: &SceneUniforms, change: fn(&mut SceneUniforms), what: &str| {
+            let mut b = *a;
             change(&mut b);
-            assert_ne!(EnvInputs::of(&a, BASE_SIZE, sky_levels(BASE_SIZE)), EnvInputs::of(&b, BASE_SIZE, sky_levels(BASE_SIZE)));
+            assert_eq!(of(a), of(&b), "{what} redraws the cube");
+        };
+        let differs = |a: &SceneUniforms, change: fn(&mut SceneUniforms), what: &str| {
+            let mut b = *a;
+            change(&mut b);
+            assert_ne!(of(a), of(&b), "{what} leaves the cube as it was");
+        };
+        for u in [uniforms(), presets()] {
+            same(&u, |u| u.camera_pos = [9.0, 9.0, 9.0, 1.0], "a camera");
+            same(&u, |u| u.num_lights = 3, "a light");
         }
+
+        let sky = uniforms();
+        differs(&sky, |u| u.sky_horizon[0] = 0.5, "a set sky's horizon");
+        differs(&sky, |u| u.sky_zenith[3] = 2.0, "a set sky's intensity");
+        same(&sky, |u| u.sun_direction[0] = 0.3, "the sun under a set sky");
+        same(&sky, |u| u.environment_preset = 2, "a preset under a set sky");
+
+        let sunset = presets();
+        differs(&sunset, |u| u.sun_direction[0] = 0.3, "the sun under Sunset Gold");
+        differs(&sunset, |u| u.sun_direction[3] = 0.0, "the sun going under Sunset Gold");
+        differs(&sunset, |u| u.environment_preset = 2, "another preset");
+        same(&sunset, |u| u.sky_horizon[0] = 0.5, "an unset sky's colours");
+        same(&sunset, |u| u.environment_preset_2 = 1, "a preset not blended towards");
+        differs(&sunset, |u| u.environment_blend_t = 0.5, "a blend");
+        let mut gone = sunset;
+        gone.sun_direction[3] = 0.0;
+        same(&gone, |u| u.sun_direction[0] = 0.3, "a missing sun's placeholder");
+
+        let mut studio = presets();
+        studio.environment_preset = 1;
+        same(&studio, |u| u.sun_direction[0] = 0.3, "the sun under Studio Neutral");
+        same(&studio, |u| u.sun_direction[3] = 0.0, "the sun going under Studio Neutral");
+        let mut towards_sunset = studio;
+        towards_sunset.environment_preset_2 = 0;
+        towards_sunset.environment_blend_t = 0.5;
+        differs(&towards_sunset, |u| u.sun_direction[0] = 0.3, "the sun under a blend towards Sunset Gold");
+    }
+
+    /// **The presets the cube's key leaves the sun out of really have none** — the shader's side of
+    /// [`only_what_the_environment_depends_on_redraws_it`]. Each preset drawn with the sun in two places,
+    /// past the key: Studio Neutral and Midnight Neon draw the same cube both times, Sunset Gold and Classic
+    /// Daylight do not. A preset given a sun of its own scene's without `preset_uses_sun` knowing would
+    /// keep its first sun in the cube on the forward-only path.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_presets_left_without_a_sun_draw_none() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        pollster::block_on(async {
+            let Some((device, queue)) = crate::test_gpu::headless_device().await else {
+                eprintln!("skipping: no usable GPU adapter");
+                return;
+            };
+            let mut cube = EnvironmentCube::new(&device);
+            let mut drawn = |preset: u32, sun: [f32; 4]| {
+                let levels = sky_levels(BASE_SIZE);
+                let inputs = EnvInputs {
+                    zenith: [0.0, 0.0, 0.0, -1.0],
+                    horizon: [0.0; 4],
+                    ground: [0.0; 4],
+                    sun_direction: sun,
+                    params: [preset, 0, BASE_SIZE, levels],
+                    blend: [0.0; 4],
+                };
+                let mut encoder = device.create_command_encoder(&Default::default());
+                cube.draw(&device, &queue, &mut encoder, inputs);
+                queue.submit(Some(encoder.finish()));
+                // Every face's centre and a corner, sharp and rough.
+                let mut out = Vec::new();
+                for (level, at) in [(0, BASE_SIZE / 2), (0, 3), (levels - 1, (BASE_SIZE >> (levels - 1)) / 2)] {
+                    for face in 0..6 {
+                        out.extend(texel(&device, &queue, &cube, level, face, at, at));
+                    }
+                }
+                out
+            };
+            let overhead = [0.0, -1.0, 0.0, 1.0];
+            let aside = [0.7, -0.3, 0.6, 1.0];
+            for preset in 0..4 {
+                let (a, b) = (drawn(preset, overhead), drawn(preset, aside));
+                let apart = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
+                if preset_uses_sun(preset) {
+                    assert!(apart > 0.05, "preset {preset} places a sun, and moving it changed nothing");
+                } else {
+                    assert!(apart < 1e-6, "preset {preset} has no sun of the scene's, and moving it changed the cube by {apart}");
+                }
+            }
+        });
     }
 
     /// Reads one texel of a mip and face back, as linear RGB.
