@@ -241,6 +241,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A smoke let through all of the volumetric air behind it.** The march splits the air at the nearest thing that
+  blends, and the GPU particles were not one: with no pane in the frame all of a lamp's air behind a wall of smoke was
+  added over the smoke at full strength. The particles are drawn into the split's depth where they show at all
+  (`fs_veil` in `particle_render.wgsl`, `GpuParticleSystem::record_veil`): 52.10 of the air in front of such a wall and
+  86.64 behind it, where it was 138.74 in front; an opaque wall in its place leaves 49.65 in front.
 - **An irradiance volume baked point lights and no others.** A spot or a rectangle light was not in the bake, so a room lit
   by them baked its ambient alone. `ProbeGrid::bake_from_lights` takes `gi::BakeLight`s — a point, a spot down its cone
   (the lit shaders' ramp), a panel from its lit face (dimmer off its axis) — where it took `(position, colour, intensity,

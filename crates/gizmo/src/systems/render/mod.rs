@@ -5293,6 +5293,107 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
+    /// **A smoke splits the volumetric air as a pane does.** A wall of GPU particles stands at z = 2
+    /// between the camera and a lamp a metre behind it. The march splits the air at the nearest thing
+    /// that blends — the air behind it is added ahead of it and shows through it as much as it lets
+    /// through, the air in front over everything — and the particles were not one: with no pane in the
+    /// frame, all of the lamp's air was the air in front, added over the smoke at full strength. Read
+    /// from the march's two targets where the smoke is dense: the air in front of it is the air in front
+    /// of an opaque wall standing where it stands, and the rest is behind it.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_smoke_splits_the_volumetric_air_as_a_pane_does() {
+        use crate::renderer::gpu_particles::GpuParticle;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // (front, behind) summed over the middle of the march's targets; `smoke`: none, a wall of
+        // particles (`Some(false)`), or an opaque wall in its place (`Some(true)`).
+        async fn air(smoke: Option<bool>) -> Option<(f32, f32)> {
+            let mut renderer = air_renderer().await;
+            let particles = renderer.gpu_particles.as_ref()?;
+            let mut world = World::new();
+            match smoke {
+                // Still soft rounds close enough to overlap, half way through their lives (past the
+                // fade a particle is born with).
+                Some(false) => particles.spawn_particles(
+                    &renderer.queue,
+                    &(0..24 * 24)
+                        .map(|i| GpuParticle {
+                            position: [-3.0 + (i % 24) as f32 * 0.26, -2.0 + (i / 24) as f32 * 0.26, 2.0],
+                            life: 500.0,
+                            velocity: [0.0; 3],
+                            max_life: 1000.0,
+                            color: [0.4, 0.4, 0.45, 1.0],
+                            size_start: 0.35,
+                            size_end: 0.35,
+                            _padding: [0.0; 2],
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                Some(true) => {
+                    let mut assets = AssetManager::new();
+                    air_box(&mut world, &renderer, &mut assets, Vec3::new(0.0, 1.0, 2.0), Vec3::new(7.0, 7.0, 0.02));
+                }
+                None => {}
+            }
+            let lamp = world.spawn();
+            world.add_component(lamp, Transform::new(Vec3::new(0.0, 1.0, 3.0)));
+            world.add_component(lamp, GlobalTransform::default());
+            world.add_component(lamp, PointLight::new(Vec3::ONE, 40.0, 9.0));
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 1.0, -4.0),
+                yaw: std::f32::consts::FRAC_PI_2,
+                pitch: 0.0,
+                primary: true,
+                ..Default::default()
+            });
+            let (front, side) = volumetric_air(&mut renderer, &mut world).await;
+            let vol = renderer.volumetric.as_ref().expect("the march");
+            let bytes = read_target(&renderer, &vol.behind_texture, side as u32).await;
+            let behind: Vec<f32> = bytes
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|t| (0..3).map(|c| f16_bits_to_f32(u16::from_le_bytes([t[2 * c], t[2 * c + 1]]))).sum())
+                .collect();
+            let middle = side / 2 - 8..side / 2 + 8;
+            Some((air_in(&front, side, middle.clone(), middle.clone()), air_in(&behind, side, middle.clone(), middle)))
+        }
+        pollster::block_on(async {
+            let Some(clear) = air(None).await else {
+                eprintln!("skipping: this renderer has no GPU particles");
+                return;
+            };
+            let smoke = air(Some(false)).await.expect("particles");
+            let wall = air(Some(true)).await.expect("particles");
+            eprintln!("(front, behind): clear {clear:?}, smoke {smoke:?}, wall {wall:?}");
+            assert!(clear.1 == 0.0 && wall.1 == 0.0, "with nothing that blends, no air is behind it: {clear:?} / {wall:?}");
+            assert!(clear.0 > wall.0 * 1.5, "the setup: the lamp's air reaches past the wall ({clear:?} against {wall:?})");
+            // Measured: clear (138.74, 0), smoke (52.10, 86.64), wall (49.65, 0) — the smoke's quads
+            // stand a little off the wall's face, and its gaps let some through.
+            assert!(
+                ((smoke.0 + smoke.1) - clear.0).abs() < 0.01 * clear.0,
+                "the split moves the air and does not make or lose it: {} + {} against {}",
+                smoke.0,
+                smoke.1,
+                clear.0
+            );
+            assert!(
+                (smoke.0 - wall.0).abs() < 0.1 * wall.0,
+                "the air in front of the smoke is the air in front of a wall where it stands: {} against {}",
+                smoke.0,
+                wall.0
+            );
+            assert!(smoke.1 > 0.5 * (clear.0 - wall.0), "and the rest is behind it: {} of {}", smoke.1, clear.0 - wall.0);
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no volumetric light.
     /// **A pane shows the air behind it as much as it lets through, and dims none in front of it.** A
     /// lamp stands a metre behind a pane the camera faces, then halfway between them; the pane is
     /// opaque, drawn deferred, or 98 % opaque and blending. What the volumetric light moves in the

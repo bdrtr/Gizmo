@@ -98,8 +98,9 @@ fn vs_main(
 // yaklaşınca yavaşça kaybolur.
 const SOFT_FADE: f32 = 0.6;
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+// The particle's texel: the flipbook's frame for its age, or the soft round, as rgb and alpha — before
+// its own tint and fade (`in.color`), lighting and the scene's depth soften it.
+fn particle_texel(in: VertexOutput) -> vec4<f32> {
     var base_rgb: vec3<f32> = vec3<f32>(1.0);
     var base_alpha: f32;
     if (flipbook_cfg.y > 0.5) {
@@ -124,6 +125,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // Prosedürel yumuşak yuvarlak (kıvılcım/toz — flipbook kapalıyken eski davranış).
         base_alpha = smoothstep(1.0, 0.0, length(in.uv));
     }
+    return vec4<f32>(base_rgb, base_alpha);
+}
+
+// The particle's depth where it shows at all, for the volumetric march's split
+// (`VolumetricState::veil_depth_view`): the air behind it is added ahead of it and shows through it as
+// much as it lets through. A texel nearly clear of it is left out, so the air behind is not split at a
+// corner of a quad that shows nothing.
+@fragment
+fn fs_veil(in: VertexOutput) {
+    if (in.color.a * particle_texel(in).a < 0.05) {
+        discard;
+    }
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let texel = particle_texel(in);
+    var base_rgb = texel.rgb;
+    let base_alpha = texel.a;
 
     // T4 LIT: billboard'u KÜRE gibi ele al → küresel normal + half-lambert + ambient → duman
     // güneşe göre aydınlanır (bir yanı parlak, diğeri gölgeli). Emissive için kapalı.

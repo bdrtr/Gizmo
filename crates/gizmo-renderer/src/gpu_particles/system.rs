@@ -442,6 +442,28 @@ impl GpuParticleSystem {
         rpass.draw(0..4, 0..active_particles);
     }
 
+    /// Records the billboards depth only, where they show at all, into a pass whose depth attachment
+    /// is the volumetric march's `veil_depth_view`: what it splits the air at.
+    #[cfg(not(gizmo_forward_only))]
+    pub fn record_veil<'a>(
+        &'a self,
+        rpass: &mut wgpu::RenderPass<'a>,
+        global_bind_group: &'a wgpu::BindGroup,
+        depth_bind_group: &'a wgpu::BindGroup,
+        active_particles: u32,
+    ) {
+        if active_particles == 0 {
+            return;
+        }
+        rpass.set_pipeline(&self.pipelines.veil_pipeline);
+        rpass.set_bind_group(0, global_bind_group, &[]);
+        rpass.set_bind_group(1, depth_bind_group, &[]);
+        rpass.set_bind_group(2, &self.flipbook_bind_group, &[]);
+        rpass.set_vertex_buffer(0, self.quad_vertex_buffer.slice(..));
+        rpass.set_vertex_buffer(1, self.particles_buffer.slice(..));
+        rpass.draw(0..4, 0..active_particles);
+    }
+
     /// Helper method to spawn an explosion of particles (e.g. dust or debris from a fracture).
     pub fn spawn_explosion(
         &self,

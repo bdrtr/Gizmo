@@ -852,7 +852,10 @@ cube cookies for point lights, and no cookies on web. Each item:
   the camera faces moves 2 381 984 of the frame through an opaque pane, 3 926 242 through one 98 %
   opaque before and 2 345 837 now; halfway between them, 3 729 351 and 3 720 388. Caught when broken:
   all of the air added over everything, all of it ahead of what blends (2 591). A water surface splits
-  the air where its mesh lies, not where its waves are.
+  the air where its mesh lies, not where its waves are. The GPU particles split it too since the same
+  day, where they show at all (`fs_veil` in `particle_render.wgsl`): a wall of smoke a metre in front of
+  a lamp leaves 52.10 of its air in front and 86.64 behind, where it was all in front (138.74, added
+  over the smoke at full strength); an opaque wall in its place leaves 49.65 in front.
 
 - ~~**A plane cast no shadow.**~~ **CLOSED 2026-11-11.** The shadow pass drew every mesh by its back
   faces — right for a solid, whose lit front then never meets its own depth — and a plane, a card or

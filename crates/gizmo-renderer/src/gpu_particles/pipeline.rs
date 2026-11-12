@@ -17,6 +17,11 @@ pub struct ParticlePipelines {
     /// default; `set_flipbook` uploads the real atlas. The `misc.z` flag switches it on and off
     /// in the FS.
     pub flipbook_bind_group_layout: wgpu::BindGroupLayout,
+    /// The same billboards, depth only, where they show at all (`fs_veil`): what the volumetric
+    /// march splits the air at (`VolumetricState::veil_depth_view`). Native: the forward-only path
+    /// has no volumetric light.
+    #[cfg(not(gizmo_forward_only))]
+    pub veil_pipeline: wgpu::RenderPipeline,
 }
 
 /// Builds both particle pipelines and the compute bind group over the given buffers.
@@ -197,11 +202,54 @@ pub fn create_particle_pipelines(
             cache: None,
     });
 
+    #[cfg(not(gizmo_forward_only))]
+    let veil_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("Particle Veil Pipeline"),
+        layout: Some(&render_pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &render_shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[
+                Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<[f32; 2]>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![4 => Float32x2],
+                }),
+                Some(GpuParticle::desc()),
+            ],
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: &render_shader,
+            entry_point: Some("fs_veil"),
+            compilation_options: Default::default(),
+            targets: &[],
+        }),
+        primitive: wgpu::PrimitiveState {
+            topology: wgpu::PrimitiveTopology::TriangleStrip,
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: None,
+            ..Default::default()
+        },
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: wgpu::TextureFormat::Depth32Float,
+            depth_write_enabled: Some(true),
+            depth_compare: Some(wgpu::CompareFunction::LessEqual),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    });
+
     ParticlePipelines {
         compute_pipeline,
         compute_bind_group,
         render_pipeline,
         depth_bind_group_layout,
         flipbook_bind_group_layout,
+        #[cfg(not(gizmo_forward_only))]
+        veil_pipeline,
     }
 }

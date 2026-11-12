@@ -79,7 +79,7 @@ pub fn record_forward_and_fluid(
         drop(render_pass);
         super::screen_space::record_surface_effects(encoder, renderer);
         if volumetric {
-            record_veil_depth(encoder, renderer, &draw_items[world_end..], uploaded_instances);
+            record_veil_depth(encoder, renderer, &draw_items[world_end..], uploaded_instances, simulations);
             super::screen_space::record_volumetric_march(encoder, renderer);
         }
         if let Some(behind) = renderer.behind.as_ref().filter(|_| has_glass) {
@@ -183,11 +183,27 @@ fn record_forward_motion(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer
 /// only adds, so the air behind it is no less seen than the air in front, and putting it behind would
 /// dim it by whatever pane stands further back. Drawn through the G-buffer's depth prepass — no
 /// culling, as a blended draw has none, and cutting what a cut-out cuts — so a water surface splits
-/// the air where its mesh lies, not where its waves are.
-fn record_veil_depth(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, blended: &[DrawItem], uploaded_instances: u32) {
+/// the air where its mesh lies, not where its waves are. With `simulations`, the GPU particles too,
+/// where they show at all: a smoke shows the air behind it as much as it lets it through.
+fn record_veil_depth(
+    encoder: &mut wgpu::CommandEncoder,
+    renderer: &Renderer,
+    blended: &[DrawItem],
+    uploaded_instances: u32,
+    simulations: bool,
+) {
     let (Some(def), Some(vol)) = (renderer.deferred.as_ref(), renderer.volumetric.as_ref()) else {
         return;
     };
+    // The particles' soft-fade group reads the frame's depth: built before the pass, which borrows it.
+    #[cfg(not(gizmo_forward_only))]
+    let particles = renderer
+        .gpu_particles
+        .as_ref()
+        .filter(|p| simulations && p.active_particles > 0)
+        .map(|p| (p, p.create_depth_bind_group(&renderer.device, &renderer.depth_texture_view)));
+    #[cfg(gizmo_forward_only)]
+    let _ = simulations;
     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
         label: Some("Volumetric Veil Depth"),
         color_attachments: &[],
@@ -225,6 +241,10 @@ fn record_veil_depth(encoder: &mut wgpu::CommandEncoder, renderer: &Renderer, bl
         pass.set_bind_group(3, skeleton.as_ref(), &[]);
         pass.set_bind_group(1, &*item.bind_group, &[]);
         item.record_draw(&mut pass, instances);
+    }
+    #[cfg(not(gizmo_forward_only))]
+    if let Some((particles, depth)) = particles.as_ref() {
+        particles.record_veil(&mut pass, renderer.scene.view_bind_group(), depth, particles.active_particles);
     }
 }
 
