@@ -125,7 +125,8 @@ fn draw_studio_frame(
                 ..Default::default()
             },
             // The viewport draws shadow maps, as the game does.
-            shadow_maps: true,
+            sun_shadow_maps: true,
+            local_shadow_maps: true,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
@@ -849,7 +850,8 @@ fn record_game_view(
                 sky: renderer.sky,
                 ..Default::default()
             },
-            shadow_maps: true,
+            sun_shadow_maps: true,
+            local_shadow_maps: true,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,

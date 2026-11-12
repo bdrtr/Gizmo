@@ -567,6 +567,7 @@ impl Renderer {
             behind_sampler: scene.behind_sampler,
             env_cube: scene.env_cube,
             forward_probes: scene.forward_probes,
+            forward_sun_shadows: scene.forward_sun_shadows,
             shadow_texture_view: scene.shadow_texture_view,
             shadow_cascade_layer_views: scene.shadow_cascade_layer_views,
             shadow_depth_texture: scene.shadow_depth_texture,

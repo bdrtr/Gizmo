@@ -117,6 +117,11 @@ pub struct SceneState {
     pub(crate) env_cube: crate::env_cube::EnvironmentCube,
     /// Reflection probes as the forward-only path's lit shader reads them, on group 0.
     pub(crate) forward_probes: ForwardProbes,
+    /// Whether the forward-only path's lit pipelines are built with the sun's shadow (`SUN_SHADOWS`):
+    /// while the scene has a sun whose cascades a frame draws ([`set_forward_sun_shadows`](Self::set_forward_sun_shadows)).
+    /// Frame-constant, so decided when the pipelines are built, as the probes' shape is. The desktop's
+    /// read the sun's shadow always.
+    pub(crate) forward_sun_shadows: bool,
     /// [`unlit_pipeline`](Self::unlit_pipeline) with `KEEPS`, on the forward-only path, whose plain one
     /// cannot discard: a cut-out, a LOD crossfade. `None` on the desktop path, whose unlit pipeline can.
     pub unlit_keeps_pipeline: Option<wgpu::RenderPipeline>,
@@ -331,6 +336,7 @@ impl SceneView {
             &scene.behind_sampler,
             scene.env_cube.view(),
             &scene.forward_probes,
+            (&scene.shadow_texture_view, &scene.shadow_sampler),
         );
 
         let mk_shadow_uniform = |i: usize, kind: &str| {
@@ -452,6 +458,7 @@ impl SceneState {
                 &self.behind_sampler,
                 self.env_cube.view(),
                 &self.forward_probes,
+                (&self.shadow_texture_view, &self.shadow_sampler),
             )
         };
         let global = build(&self.global_uniform_buffer, &self.cluster_table_buffer, &self.cluster_index_buffer);
@@ -486,6 +493,15 @@ impl SceneState {
         self.set_behind_view(device, Some(&behind));
         let changed = shape != self.forward_probes.shape;
         self.forward_probes.shape = shape;
+        changed
+    }
+
+    /// Whether the forward-only path's lit pipelines read the sun's shadow — `draws`: this frame draws the
+    /// sun's cascades. True when that changed: the caller builds the pipelines again then
+    /// ([`rebuild_pipelines`]), so a scene without a sun pays nothing for it per fragment.
+    pub fn set_forward_sun_shadows(&mut self, draws: bool) -> bool {
+        let changed = draws != self.forward_sun_shadows;
+        self.forward_sun_shadows = draws;
         changed
     }
 
@@ -668,6 +684,7 @@ fn global_group(
     sampler: &wgpu::Sampler,
     environment: &wgpu::TextureView,
     probes: &ForwardProbes,
+    (sun_shadow, sun_shadow_sampler): (&wgpu::TextureView, &wgpu::Sampler),
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some(label),
@@ -682,6 +699,8 @@ fn global_group(
             wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(probes.view()) },
             wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&probes.sampler) },
             wgpu::BindGroupEntry { binding: 8, resource: probes.uniform.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(sun_shadow) },
+            wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(sun_shadow_sampler) },
         ],
     })
 }
@@ -823,6 +842,9 @@ impl SceneState {
             &self.local_shadow_maps.view,
             &self.cookies,
         );
+        // Every view's group 0 holds them too (bindings 9 and 10).
+        let behind = self.behind_view.clone();
+        self.set_behind_view(device, Some(&behind));
         true
     }
 
@@ -1025,6 +1047,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         &behind_sampler,
         env_cube.view(),
         &forward_probes,
+        (&shadow_texture_view, &shadow_sampler),
     );
 
     let shadow_bind_group =
@@ -1123,7 +1146,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         indirect: &indirect,
         wire_color: &wire_color_layout,
     };
-    let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default());
+    let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default(), false);
     let pipelines::ShadowPipelines {
         plain: [shadow_pipeline, shadow_open_pipeline],
         cut_out: shadow_cut_out_pipelines,
@@ -1161,6 +1184,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         behind_view: behind_fallback.clone(),
         env_cube,
         forward_probes,
+        forward_sun_shadows: false,
         behind_fallback,
         behind_sampler,
         shadow_pipeline,
@@ -1253,7 +1277,8 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let indirect = crate::irradiance::IrradianceState::layout(device);
     let layouts = layout_refs(&renderer.scene, &indirect);
 
-    let core_pipelines = build_core_pipelines(device, &layouts, renderer.scene.forward_probes.shape);
+    let core_pipelines =
+        build_core_pipelines(device, &layouts, renderer.scene.forward_probes.shape, renderer.scene.forward_sun_shadows);
     let pipelines::ShadowPipelines {
         plain: [shadow_pipeline, shadow_open_pipeline],
         cut_out: shadow_cut_out_pipelines,
@@ -1527,6 +1552,12 @@ mod tests {
                             }
                             variants.push((label, shaders::compose_wgsl(src, name, probes)));
                         }
+                        let mut sun = shaders::web_render_defs();
+                        sun.insert("SUN_SHADOWS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        variants.push(("web with the sun's shadow", shaders::compose_wgsl(src, name, sun.clone())));
+                        sun.insert("LOBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        sun.insert("DETAILS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        variants.push(("web with lobes and the sun's shadow", shaders::compose_wgsl(src, name, sun)));
                         let mut defs = shaders::web_render_defs();
                         defs.insert("DETAILS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         variants.push(("web with details", shaders::compose_wgsl(src, name, defs.clone())));

@@ -7,10 +7,13 @@ use gizmo_math::{Mat4, Vec3};
 /// Must match `texture_depth_2d_array` layer count and `SceneUniforms.light_view_proj` length.
 pub const CASCADE_COUNT: usize = 4;
 
-/// Resolution (width = height) of each cascade depth map. 3072 (was 2048) so a
-/// crisp ~1-texel PCF edge doesn't read as blocky on close-up geometry; the extra
-/// VRAM (4 × 3072² × Depth32 ≈ 302 MB) is acceptable on a modern GPU.
-pub const SHADOW_MAP_RES: u32 = 3072;
+/// Resolution (width = height) of each cascade depth map, on this build's path. 3072 on the desktop
+/// (was 2048) so a crisp ~1-texel PCF edge doesn't read as blocky on close-up geometry; the four
+/// layers are 144 MiB, which a desktop GPU holds. **1024 on the forward-only path** — a browser's, a
+/// phone's — where they are 16 MiB: that path draws the sun's cascades since 2026-11-12, and a phone
+/// has neither the memory nor the fill for 3072. Either way allocated only once a frame draws them
+/// (`SceneState::ensure_sun_shadow_maps`).
+pub const SHADOW_MAP_RES: u32 = if cfg!(gizmo_forward_only) { 1024 } else { 3072 };
 
 /// Maximum world distance the cascades cover, independent of the camera's far plane.
 ///

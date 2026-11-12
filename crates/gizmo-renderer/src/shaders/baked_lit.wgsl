@@ -11,7 +11,7 @@
 // its own. On the web schema that group does not exist (the 4-bind-group limit), and there the
 // shadow term is 1.0 — the same reduction the rest of the web pipeline already makes.
 #import gizmo::common::{SceneUniforms, height_fog, instance_keeps}
-#ifdef SHADOWS
+#ifdef SUN_SHADOWS
 #import gizmo::common::{ReceiverAxes, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
 #endif
 
@@ -23,9 +23,11 @@ var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1)
 var s_diffuse: sampler;
 
-#ifdef SHADOWS
-@group(2) @binding(0) var t_shadow: texture_depth_2d_array;
-@group(2) @binding(1) var s_shadow: sampler_comparison;
+// The sun's cascades, where `shader.wgsl` reads them: the shadow group's on the desktop, group 0's on
+// the forward-only path while the scene has a sun that casts.
+#ifdef SUN_SHADOWS
+@group(#{SUN_SHADOW_GROUP}) @binding(#{SUN_SHADOW_TEXTURE_BINDING}) var t_shadow: texture_depth_2d_array;
+@group(#{SUN_SHADOW_GROUP}) @binding(#{SUN_SHADOW_SAMPLER_BINDING}) var s_shadow: sampler_comparison;
 #endif
 
 struct SkeletonData {
@@ -106,7 +108,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
 // passed it to a `sun_visibility` that returned 1 without reading it, and the Adreno 618's Vulkan
 // compiler dereferenced a null pointer building this pipeline (2026-11-12, every game on that phone
 // failed to start).
-#ifdef SHADOWS
+#ifdef SUN_SHADOWS
 fn select_cascade(view_depth: f32) -> u32 {
     if (view_depth < scene.cascade_splits.x) { return 0u; }
     if (view_depth < scene.cascade_splits.y) { return 1u; }
@@ -149,7 +151,7 @@ fn sun_visibility(world_pos: vec3<f32>, world_normal: vec3<f32>, axes: ReceiverA
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // The surface's normal and how it runs across neighbouring pixels, for the sun's shadow
     // (`receiver_axes`) — taken first, before any pixel of the quad discards.
-#ifdef SHADOWS
+#ifdef SUN_SHADOWS
     let n = normalize(in.world_normal);
     let surface_axes = receiver_axes(dpdx(in.world_pos), dpdy(in.world_pos), n);
 #endif
@@ -179,7 +181,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // in, and what `select_cascade` and the fade both assume. (Radial `length(...)` overstates
     // the depth of anything off-axis, so it picked a cascade too far out at the screen edges
     // and put the range boundary on a sphere instead of a plane.)
-#ifdef SHADOWS
+#ifdef SUN_SHADOWS
     let view_depth = dot(in.world_pos - scene.camera_pos.xyz, scene.camera_forward.xyz);
     // `MeshRenderer::receives_shadows == false` keeps the sun's share whole.
     let vis = select(sun_visibility(in.world_pos, n, surface_axes, view_depth), 1.0, in.inst_emissive.w < 0.0);

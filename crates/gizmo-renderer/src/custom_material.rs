@@ -486,7 +486,8 @@ impl SurfacePipelines {
             let (source, defs) = {
                 let _ = file;
                 let probes = scene.forward_probes.shape.defs();
-                let defs: Vec<_> = probes.iter().copied().chain(extra.iter().copied()).collect();
+                let sun = ("SUN_SHADOWS", naga_oil::compose::ShaderDefValue::Bool(scene.forward_sun_shadows));
+                let defs: Vec<_> = probes.iter().copied().chain([sun]).chain(extra.iter().copied()).collect();
                 (embedded.to_string(), surface_defs(crate::pipeline::shaders::web_render_defs(), &defs))
             };
             let name = format!("{label} ({name})");
@@ -533,9 +534,9 @@ impl SurfacePipelines {
             )
         });
 
-        let shadow = if cfg!(gizmo_forward_only) {
-            None
-        } else {
+        // On every path: the forward-only one draws the sun's cascades since 2026-11-12, and a surface that
+        // cast nothing there left a hole in a shadow the engine's own material would have cast.
+        let shadow = {
             let caster = module(
                 "demo/assets/shaders/shadow.wgsl",
                 include_str!("shaders/shadow.wgsl"),

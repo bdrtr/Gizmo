@@ -200,6 +200,7 @@ pub(super) fn build_core_pipelines(
     device: &wgpu::Device,
     layouts: &LayoutRefs,
     #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] probes: super::ProbeShape,
+    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] sun_shadows: bool,
 ) -> CorePipelines {
     // WASM: max 4 bind groups (Chrome WebGPU), shadow kaldırıldı
     // Native: 5 bind groups (shadow dahil)
@@ -240,15 +241,18 @@ pub(super) fn build_core_pipelines(
         include_str!("../shaders/shader.wgsl"),
         "Shader",
     );
-    // The two probe defs every forward-only lit shader below is built with.
+    // The two probe defs every forward-only lit shader below is built with, and whether it reads the
+    // sun's shadow (`SceneState::forward_sun_shadows`).
     #[cfg(gizmo_forward_only)]
     let [probe_background, probe_boxes] = probes.defs();
+    #[cfg(gizmo_forward_only)]
+    let sun_shadow = ("SUN_SHADOWS", naga_oil::compose::ShaderDefValue::Bool(sun_shadows));
     #[cfg(gizmo_forward_only)]
     let shader = super::shaders::load_shader_composed_web_with(
         device,
         include_str!("../shaders/shader.wgsl"),
         "Shader",
-        &[probe_background, probe_boxes],
+        &[probe_background, probe_boxes, sun_shadow],
     );
     // The wireframe draws the same shader with `WIREFRAME` on, which lets a frame's
     // `wireframe_color` replace the lit colour. Native only: the web has no line mode, so its
@@ -287,8 +291,12 @@ pub(super) fn build_core_pipelines(
     #[cfg(gizmo_forward_only)]
     let unlit_shader = load_shader_composed_web(device, include_str!("../shaders/unlit.wgsl"), "Unlit Shader");
     #[cfg(gizmo_forward_only)]
-    let baked_lit_shader =
-        load_shader_composed_web(device, include_str!("../shaders/baked_lit.wgsl"), "Baked-Lit Shader");
+    let baked_lit_shader = super::shaders::load_shader_composed_web_with(
+        device,
+        include_str!("../shaders/baked_lit.wgsl"),
+        "Baked-Lit Shader",
+        &[sun_shadow],
+    );
 
     #[cfg(not(gizmo_forward_only))]
     let mirror_shader = load_shader_composed(
@@ -415,6 +423,7 @@ pub(super) fn build_core_pipelines(
             &[
                 probe_background,
                 probe_boxes,
+                sun_shadow,
                 ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
                 ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
             ],
@@ -434,6 +443,7 @@ pub(super) fn build_core_pipelines(
         &[
             probe_background,
                 probe_boxes,
+                sun_shadow,
             ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
         ],
     );
@@ -502,6 +512,7 @@ pub(super) fn build_core_pipelines(
         &[
             probe_background,
                 probe_boxes,
+                sun_shadow,
             ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
             ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
             ("TRANSMISSION", naga_oil::compose::ShaderDefValue::Bool(true)),

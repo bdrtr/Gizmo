@@ -50,6 +50,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The sun's shadow in a browser and on a phone.** The forward-only path drew no shadow map at all; it draws the sun's
+  cascades now, at 1024² a layer (`SHADOW_MAP_RES` on that path, 16 MiB, allocated the first frame that draws them),
+  through the same caster pipelines, and its lit and baked-lit pipelines read them through group 0's bindings 9 and 10
+  (`SUN_SHADOWS`; `SUN_SHADOW_GROUP`/`SUN_SHADOW_TEXTURE_BINDING`/`SUN_SHADOW_SAMPLER_BINDING` place them there and, on the
+  desktop, in the shadow group). The pipelines are built with it only while a scene has a sun whose cascades a frame
+  draws (`SceneState::set_forward_sun_shadows`). `SceneSetupInputs::shadow_maps` is `sun_shadow_maps` and
+  `local_shadow_maps`: that path draws no local light's layer. A game's own surface casts there too (its caster pipeline
+  is built on every path) and `ShadowCasting::Only` keeps its shadow. The floor beside a cube under the sun reads 64.23
+  against 197.98 open there, 63.15 against 198.08 on the desktop.
+
 - **Contact shadows for every light.** `PointLight`, `SpotLight` and `RectLight` have `contact_shadow_length` and
   `with_contact_shadows`, as `DirectionalLight` has, and a fill or rim directional light takes its own: the lighting pass
   marches toward each light that asks — never past it, whether the light casts a map or not — through the same march as

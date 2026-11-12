@@ -18,8 +18,11 @@
 #import gizmo::common::{dielectric_f0, instance_keeps}
 #endif
 #import gizmo::common::{SceneUniforms, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cone, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
+#ifdef SUN_SHADOWS
+#import gizmo::common::{receiver_axes, sun_shadow_visibility, shadow_distance_fade}
+#endif
 #ifdef SHADOWS
-#import gizmo::common::{local_shadow_layer, local_shadow_visibility, light_source_radius, receiver_axes, sun_shadow_visibility, shadow_distance_fade}
+#import gizmo::common::{local_shadow_layer, local_shadow_visibility, light_source_radius}
 #endif
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
@@ -93,13 +96,18 @@ var s_behind: sampler;
 var t_environment: texture_cube<f32>;
 #endif
 
-#ifdef SHADOWS
-@group(2) @binding(0)
+// The sun's cascades: the shadow group's on the desktop, group 0's on the forward-only path (a
+// browser's, a phone's), which has no shadow group and builds its lit pipelines with `SUN_SHADOWS` only
+// while the scene has a sun that casts (`SceneState::lit_pipeline`).
+#ifdef SUN_SHADOWS
+@group(#{SUN_SHADOW_GROUP}) @binding(#{SUN_SHADOW_TEXTURE_BINDING})
 var t_shadow: texture_depth_2d_array;
 
-@group(2) @binding(1)
+@group(#{SUN_SHADOW_GROUP}) @binding(#{SUN_SHADOW_SAMPLER_BINDING})
 var s_shadow: sampler_comparison;
+#endif
 
+#ifdef SHADOWS
 // The local lights' shadows (`gizmo_renderer::local_shadows`), a layer or six a light.
 @group(2) @binding(2)
 var t_local_shadow: texture_depth_2d_array;
@@ -346,7 +354,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
 fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
-#ifdef SHADOWS
+#ifdef SUN_SHADOWS
     // How the surface runs across neighbouring pixels, for the soft shadows (`receiver_axes`) —
     // taken first, before any pixel of the quad discards.
     let pos_dx = dpdx(in.world_position);
@@ -436,7 +444,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     // 2026-11-11. (Contact shadows stay the deferred pass's: they march the G-buffer, which a forward
     // draw has none of.)
     var shadow_visibility = 1.0;
-#ifdef SHADOWS
+#ifdef SUN_SHADOWS
     // How the surface runs across neighbouring pixels — its geometry's plane, which the soft shadows
     // filter along (`receiver_axes`).
     let surface_axes = receiver_axes(pos_dx, pos_dy, N);

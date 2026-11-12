@@ -847,7 +847,8 @@ cube cookies for point lights, and no cookies on web. Each item:
   layer read mirrored, the ±X or ±Z faces swapped, the lookup ignored, the normal offset or the depth
   bias removed. The one point light that could cast before cast this cube's shadow at 762 pixels (and
   the plane's at 431), through a cube map and the hardware's cube lookup; nothing had measured it
-  against anything. Not on the web or a phone, which draw no shadows. The `spotlight` demo's sixteen
+  against anything. Not on the web or a phone, which draw the sun's shadow alone (since 2026-11-12, below)
+  and no local light's. The `spotlight` demo's sixteen
   cones cast now — its documentation said they did — and the `lighting`
   demo's lamps and spot. **Each pass draws only the casters in its frustum since the same day**
   (`gizmo_renderer::shadow_culling`): a batch's instances are in spatial order, cut into runs of 64
@@ -992,6 +993,20 @@ cube cookies for point lights, and no cookies on web. Each item:
   broken: the image mirrored (88.50 / 65.56), the layer off by one (61.39 both — an empty layer is
   black), the cookie sampled but not applied, and never packed. **Spot only, native only** (the web
   forward pipeline has no shadow group); point lights have no cube cookie.
+- ~~**No shadow at all in a browser or on a phone.**~~ **The sun's, since 2026-11-12.** The forward-only path drew no
+  shadow map: WebGPU's four bind groups left no room for the shadow group, so its lit pipelines had none and its frame
+  planned none. It draws the sun's cascades now (`passes::record_shadow_passes`, the same caster pipelines, which fit in
+  four groups), at 1024² a layer (`SHADOW_MAP_RES` on that path; 16 MiB, allocated the first frame that draws them), and
+  its lit and baked-lit pipelines read them through group 0's bindings 9 and 10 (`SUN_SHADOWS`, with
+  `SUN_SHADOW_GROUP`/`_BINDING` defs placing them there and in the shadow group on the desktop). Built with
+  `SUN_SHADOWS` only while a scene has a sun whose cascades a frame draws (`SceneState::set_forward_sun_shadows`), so a
+  scene without one pays nothing per fragment. Measured on the desktop's forward-only build
+  (`a_fill_light_lights_as_the_sun_does_without_its_shadow`, now on both paths): the floor beside a cube under the sun
+  64.23 against 197.98 open, the desktop's 63.15 against 198.08. A game's own surface casts there too (its caster
+  pipeline was the desktop's alone; `a_custom_surface_is_drawn_as_the_engines_material_is` drew a hole in the
+  shadow on that path until it was built there as well), and `ShadowCasting::Only` keeps its shadow there. **Still
+  open:** no local light's shadow and no cookie on that path (their group holds three textures more), and the cost on
+  a phone is to be measured.
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01; down to a coin since 2026-11-11.**
   `DirectionalLight::contact_shadow_length` (metres, 0 = off, the default). The deferred lighting pass
   marches from each pixel toward the sun in screen space against the depth buffer: pixel by pixel,

@@ -41,6 +41,11 @@ const REFLECTION_PROBES_WGSL: &str = include_str!("../shaders/reflection_probes.
 pub(crate) fn native_render_defs() -> HashMap<String, ShaderDefValue> {
     HashMap::from([
         ("SHADOWS".to_string(), ShaderDefValue::Bool(true)),
+        // The sun's cascades, in the shadow group with the rest of the shadows.
+        ("SUN_SHADOWS".to_string(), ShaderDefValue::Bool(true)),
+        ("SUN_SHADOW_GROUP".to_string(), ShaderDefValue::UInt(2)),
+        ("SUN_SHADOW_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(0)),
+        ("SUN_SHADOW_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(1)),
         ("SKELETON_GROUP".to_string(), ShaderDefValue::UInt(3)),
         ("INSTANCE_GROUP".to_string(), ShaderDefValue::UInt(4)),
         // The forward pass's sixth group (the native device asks for six): the irradiance
@@ -85,6 +90,11 @@ pub(crate) fn web_render_defs() -> HashMap<String, ShaderDefValue> {
         ("REFLECTION_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(6)),
         ("REFLECTION_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(7)),
         ("REFLECTION_UNIFORM_BINDING".to_string(), ShaderDefValue::UInt(8)),
+        // The sun's cascades, for the lit pipelines built with `SUN_SHADOWS` while a scene has a sun that
+        // casts: group 0's bindings 9–10, this path having no shadow group.
+        ("SUN_SHADOW_GROUP".to_string(), ShaderDefValue::UInt(0)),
+        ("SUN_SHADOW_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(9)),
+        ("SUN_SHADOW_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(10)),
     ])
 }
 
@@ -411,6 +421,10 @@ mod tests {
         for (name, src) in web_capable {
             compose_wgsl(src, name, native_render_defs());
             compose_wgsl(src, name, web_render_defs());
+            // The forward-only path's lit pipelines with the sun's shadow, on group 0.
+            let mut sun = web_render_defs();
+            sun.insert("SUN_SHADOWS".to_string(), ShaderDefValue::Bool(true));
+            compose_wgsl(src, name, sun);
         }
         // Water showing a `PlanarReflection` is its own variant of the same source.
         let water = include_str!("../shaders/water.wgsl");
@@ -506,7 +520,15 @@ mod tests {
             ("env_bake.wgsl", include_str!("../shaders/env_bake.wgsl")),
         ];
         // The lit pipelines' tiers on that path (`SceneState::lit_pipeline`), each on top of the schema.
-        let tiers: &[&[&str]] = &[&[], &["DETAILS", "KEEPS"], &["DETAILS", "KEEPS", "LOBES"], &["DETAILS", "KEEPS", "LOBES", "PROBES"]];
+        let tiers: &[&[&str]] = &[
+            &[],
+            &["DETAILS", "KEEPS"],
+            &["DETAILS", "KEEPS", "LOBES"],
+            &["DETAILS", "KEEPS", "LOBES", "PROBES"],
+            // With the sun's shadow, which that path reads since 2026-11-12 (`SceneState::forward_sun_shadows`).
+            &["SUN_SHADOWS"],
+            &["SUN_SHADOWS", "DETAILS", "KEEPS", "LOBES"],
+        ];
         let mut offenders = Vec::new();
         for &(name, src) in shaders {
             for tier in tiers {

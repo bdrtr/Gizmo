@@ -4,7 +4,6 @@ use super::super::*;
 /// it is drawn by its front faces alone (`front_faces`: its mesh closes, and the pass is the sun's) and
 /// whether it cuts (a cut-out, a LOD crossfade). `None`: nothing it can cast with, which is a surface
 /// where there is no shadow pass.
-#[cfg(not(gizmo_forward_only))]
 fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, front_faces: bool) -> Option<&'a wgpu::RenderPipeline> {
     match item.surface {
         Some(id) => renderer.custom_materials.surface(id)?.shadow_pipeline(front_faces),
@@ -14,7 +13,6 @@ fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, front_faces: boo
 
 /// Binds what every shadow pipeline reads per draw — the material for a cut-out's fragment stage,
 /// the skeleton — and the pipeline itself when it changes.
-#[cfg(not(gizmo_forward_only))]
 fn bind_caster(
     pass: &mut wgpu::RenderPass<'_>,
     renderer: &Renderer,
@@ -33,7 +31,6 @@ fn bind_caster(
 
 /// Whether `item` casts into a shadow map at all: its own flag, then its material's say — the same
 /// answer for the cascades and every local light's layer.
-#[cfg(not(gizmo_forward_only))]
 fn casts_into_shadow_maps(renderer: &Renderer, item: &DrawItem) -> bool {
     // Per-object opt-out, on top of the material rules: `MeshRenderer::shadows`. A flag the editor
     // obeys and the game ignores would make the viewport lie about the build.
@@ -65,7 +62,6 @@ fn casts_into_shadow_maps(renderer: &Renderer, item: &DrawItem) -> bool {
 /// `local`: a local light's layer, where every caster is drawn by both faces — a light can be inside
 /// a solid, which its front faces alone would let it shine out of. The sun's cascades draw a closed
 /// mesh by its front faces, what the light meets first (`pipelines::build_shadow_pipelines`).
-#[cfg(not(gizmo_forward_only))]
 #[allow(clippy::too_many_arguments)]
 fn record_caster_pass(
     encoder: &mut wgpu::CommandEncoder,
@@ -125,7 +121,6 @@ fn record_caster_pass(
 /// planned (`SceneSetup::local_shadows`), each matrix already written to its pass's buffer. A frame
 /// with no sun and no light that casts records none. Returns the passes recorded and the instances
 /// they drew between them.
-#[cfg(not(gizmo_forward_only))]
 pub fn record_shadow_passes(
     encoder: &mut wgpu::CommandEncoder,
     renderer: &Renderer,

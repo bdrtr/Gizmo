@@ -1519,7 +1519,9 @@ fn draw_camera_view(
                 sky: renderer.sky,
             },
             // The forward-only path has no shadow passes: no maps to plan or keep casters for.
-            shadow_maps: cfg!(not(gizmo_forward_only)),
+            // Every path draws the sun's cascades; the forward-only one no local light's layer.
+            sun_shadow_maps: true,
+            local_shadow_maps: cfg!(not(gizmo_forward_only)),
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
@@ -1532,6 +1534,11 @@ fn draw_camera_view(
     // pass reads it. The forward-only path draws none and planned none.
     let local_shadow_layers = setup.local_shadows.layers();
     renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades());
+    // The forward-only path's lit pipelines read the sun's shadow only while there is one to read: a sun
+    // appearing or going builds them again (`SceneState::set_forward_sun_shadows`).
+    if cfg!(gizmo_forward_only) && renderer.scene.set_forward_sun_shadows(setup.draws_cascades()) {
+        crate::renderer::pipeline::rebuild_pipelines(renderer);
+    }
     renderer.scene.ensure_local_shadow_layers(&renderer.device, local_shadow_layers.len());
     for (i, layer) in local_shadow_layers.iter().enumerate() {
         renderer.queue.write_buffer(
@@ -1643,9 +1650,8 @@ fn draw_camera_view(
         }
     }
 
-    // Web şemasında gölge yok (4-grup limiti, forward shader'dan shadow örneklemesi
-    // `load_shader_web` ile sökülür) — depth-only CSM/point geçitleri boşa GPU olur.
-    #[cfg(not(gizmo_forward_only))]
+    // The sun's cascades on every path; the local lights' layers where they were planned (not on the
+    // forward-only path).
     {
         let (shadow_passes, shadow_instances) = passes::record_shadow_passes(
             encoder,
@@ -5186,9 +5192,9 @@ mod golden_render_tests {
     /// on a floor with a cube on it, as the scene's sun, as a fill (`LightRole::Generic`), or not at
     /// all. Only the sun was ever read from the world, so a fill or rim light — or a second sun — lit
     /// nothing: the floor under one read what it reads with no light. It is a directional light in the
-    /// light array now, in every cluster: the open floor reads as the sun's, and (where there are
-    /// shadows) the floor beside the cube that the sun shades, the fill does not. Runs on whichever
-    /// path the build draws with.
+    /// light array now, in every cluster: the open floor reads as the sun's, and the floor beside the
+    /// cube that the sun shades, the fill does not. Runs on whichever path the build draws with — the
+    /// forward-only one, a browser's or a phone's, drew no shadow at all until 2026-11-12.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn a_fill_light_lights_as_the_sun_does_without_its_shadow() {
@@ -5256,11 +5262,9 @@ mod golden_render_tests {
             eprintln!("open floor: {dark:.2} unlit, {sun:.2} under the sun, {fill:.2} under a fill; beside the cube {sun_beside:.2} / {fill_beside:.2}");
             assert!(fill > dark + 15.0, "a fill light lights the floor: {dark:.2} → {fill:.2}");
             assert!((fill - sun).abs() < 1.5, "a fill lights as the sun does: {fill:.2} against {sun:.2}");
-            #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
-            {
-                assert!(sun_beside < sun - 15.0, "the setup: the sun shades the floor beside the cube ({sun_beside:.2} of {sun:.2})");
-                assert!(fill_beside > fill - 5.0, "a fill casts no shadow: {fill_beside:.2} beside the cube, {fill:.2} open");
-            }
+            // On every path: the forward-only one draws the sun's cascades since 2026-11-12.
+            assert!(sun_beside < sun - 15.0, "the sun shades the floor beside the cube ({sun_beside:.2} of {sun:.2})");
+            assert!(fill_beside > fill - 5.0, "a fill casts no shadow: {fill_beside:.2} beside the cube, {fill:.2} open");
         });
     }
 
@@ -5400,9 +5404,10 @@ mod golden_render_tests {
                 crate::renderer::components::DirectionalLight::new(Vec3::ONE, 1.0, crate::renderer::components::LightRole::Sun),
             );
             let _ = render_world(&mut renderer, &mut world).await;
+            // Their path's size: 3072 on the desktop, 1024 on the forward-only path, which draws them since
+            // 2026-11-12.
             let full = gizmo_renderer::SHADOW_MAP_RES;
-            let drawn = if cfg!(gizmo_forward_only) { (1, 1) } else { (full, full) };
-            assert_eq!(edge(&renderer.scene.shadow_depth_texture), drawn, "a sun's cascades, where they are drawn");
+            assert_eq!(edge(&renderer.scene.shadow_depth_texture), (full, full), "a sun's cascades, at their path's size");
 
             // CAS: a texel while off, the frame's size while it runs, and a texel again.
             let cas_input = |r: &Renderer| r.cas.as_ref().map(|c| edge(&c.input_texture));
@@ -15558,20 +15563,16 @@ fn material_surface(input: SurfaceInput) -> Surface {
                  is what the capability list used to claim",
             );
 
-            // `ShadowCasting::Only` is not: the cube goes, the shadow stays — where there are shadows.
-            // The forward-only path draws none, so there it leaves the empty frame; it drew the cube
-            // until 2026-11-11, since that path draws everything forward and the forward pass did not
-            // ask (`a_shadow_only_object_is_drawn_by_no_pass`).
+            // `ShadowCasting::Only` is not: the cube goes, the shadow stays — on every path since
+            // 2026-11-12, when the forward-only one took the sun's shadow (it left the empty frame
+            // there before, and drew the cube until 2026-11-11, since that path draws everything forward
+            // and the forward pass did not ask: `a_shadow_only_object_is_drawn_by_no_pass`).
             let (residue, _) = changed_pixels(&absent, &shadow_only, 128);
-            if cfg!(gizmo_forward_only) {
-                assert_eq!(residue, 0, "`ShadowCasting::Only` left {residue} pixels on a path with no shadows");
-            } else {
-                assert!(
-                    residue >= 100,
-                    "`ShadowCasting::Only` left {residue} pixels — it is supposed to keep casting, so \
-                     either the shadow is gone or the fixture has no shadow to lose",
-                );
-            }
+            assert!(
+                residue >= 100,
+                "`ShadowCasting::Only` left {residue} pixels — it is supposed to keep casting, so \
+                 either the shadow is gone or the fixture has no shadow to lose",
+            );
             let (still_drawn, _) = changed_pixels(&shown, &shadow_only, 128);
             assert!(
                 still_drawn >= 300,

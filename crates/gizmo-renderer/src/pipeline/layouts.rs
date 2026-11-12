@@ -114,6 +114,25 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 },
                 count: None,
             },
+            // The sun's cascades and their comparison sampler, for the forward-only path's lit shaders
+            // (`SUN_SHADOWS`), which have no shadow group. The desktop reads them through its shadow
+            // group and binds the same ones here.
+            wgpu::BindGroupLayoutEntry {
+                binding: 9,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    sample_type: wgpu::TextureSampleType::Depth,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 10,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
+                count: None,
+            },
         ],
     });
 
