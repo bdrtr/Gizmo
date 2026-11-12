@@ -171,14 +171,14 @@ fn measure(tip_mass: f32, iterations: usize, hz: f32, warm: f32, frames: usize) 
             n += 1;
             lo = lo.min(len);
             hi = hi.max(len);
-            for i in 1..=LINKS {
-                tail_max_v = tail_max_v.max(w.velocities[i].linear.length());
+            for velocity in &w.velocities[1..=LINKS] {
+                tail_max_v = tail_max_v.max(velocity.linear.length());
             }
         }
     }
     let mut final_max_v = 0.0f32;
-    for i in 1..=LINKS {
-        final_max_v = final_max_v.max(w.velocities[i].linear.length());
+    for velocity in &w.velocities[1..=LINKS] {
+        final_max_v = final_max_v.max(velocity.linear.length());
     }
     Chain {
         final_len: ANCHOR_Y - w.transforms[LINKS].position.y,

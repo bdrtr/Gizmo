@@ -81,8 +81,8 @@ fn soak_box_stack_stays_stable() {
 
     // 3) Kutular yanal sürüklenmedi ve sırası korundu (tünelleme/çökme yok).
     let mut prev_y = -1.0f32;
-    for i in 1..=n {
-        let p = world.transforms[i].position;
+    for (i, transform) in world.transforms.iter().enumerate().take(n + 1).skip(1) {
+        let p = transform.position;
         assert!(
             p.x.abs() < 1.0 && p.z.abs() < 1.0,
             "kutu {i} yanal sürüklendi: {p:?}"
@@ -140,8 +140,8 @@ fn soak_falling_stack_survives_impact() {
 
     // 3) Yığın dik kaldı: yanal sürüklenme yok ve sıra korundu (çökme/saçılma yok).
     let mut prev_y = -1.0f32;
-    for i in 1..=n {
-        let p = world.transforms[i].position;
+    for (i, transform) in world.transforms.iter().enumerate().take(n + 1).skip(1) {
+        let p = transform.position;
         assert!(
             p.x.abs() < 0.3 && p.z.abs() < 0.3,
             "kutu {i} yanal kaydı (yığın çöktü): {p:?}"
@@ -216,8 +216,8 @@ fn soak_tall_stack_n16_stays_upright() {
     // 2) Yığın DİK kaldı: yanal sürüklenme küçük + sıra korundu (çökme/saçılma yok).
     let mut prev_y = -1.0f32;
     let mut max_xz = 0.0f32;
-    for i in 1..=n {
-        let p = world.transforms[i].position;
+    for (i, transform) in world.transforms.iter().enumerate().take(n + 1).skip(1) {
+        let p = transform.position;
         max_xz = max_xz.max(p.x.abs()).max(p.z.abs());
         assert!(
             p.y > prev_y + 0.3,
@@ -856,8 +856,8 @@ fn soak_demo_tower_awake_stays_upright() {
         );
     }
     // Nothing toppled off or sank through the floor.
-    for i in 1..=n {
-        let p = world.transforms[i].position;
+    for (i, transform) in world.transforms.iter().enumerate().take(n + 1).skip(1) {
+        let p = transform.position;
         assert!(p.is_finite(), "block {i} non-finite");
         assert!(p.y > 0.0 && p.x.abs() < 8.0, "block {i} left the tower: {p:?}");
     }

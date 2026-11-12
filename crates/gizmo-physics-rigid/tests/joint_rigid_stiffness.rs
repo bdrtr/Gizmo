@@ -293,8 +293,8 @@ fn run_chain(
     w.joint_solver.rigid_hertz = rigid_hertz;
     w.joint_solver.warm_start_factor = warm_start_factor;
     for _ in 0..substeps {
-        for i in 1..=CHAIN_LINKS as usize {
-            w.rigid_bodies[i].wake_up();
+        for body in &mut w.rigid_bodies[1..=CHAIN_LINKS as usize] {
+            body.wake_up();
         }
         w.step(1.0 / 240.0).ok();
     }

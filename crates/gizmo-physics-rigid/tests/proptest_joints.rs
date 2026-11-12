@@ -100,8 +100,8 @@ proptest! {
 
         for frame in 0..200 {
             world.step(1.0 / 60.0).ok();
-            for i in 0..world.transforms.len() {
-                let p = world.transforms[i].position;
+            for (i, transform) in world.transforms.iter().enumerate() {
+                let p = transform.position;
                 prop_assert!(p.is_finite(), "kare {frame}: cisim {i} NaN/Inf");
                 prop_assert!(
                     p.length() < 100.0,

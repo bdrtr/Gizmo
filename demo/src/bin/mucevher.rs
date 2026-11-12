@@ -158,9 +158,9 @@ fn self_test() -> bool {
     }
     let game = run.world.get_resource::<Game>().expect("oyun kaynağı");
     let (mut filled, mut placed) = (0, 0);
-    for x in 0..N {
-        for y in 0..N {
-            if let Some((_, id)) = game.cells[x][y] {
+    for (x, column) in game.cells.iter().enumerate() {
+        for (y, cell) in column.iter().enumerate() {
+            if let Some((_, id)) = *cell {
                 filled += 1;
                 let at = run.world.query::<&Transform>().get(id).map(|t| t.position);
                 if at.is_some_and(|p| (p - cell_pos(x, y)).length() < 0.01) {
@@ -204,11 +204,9 @@ fn main() {
 
 /// Eşleşmesiz yeni bir tahta.
 fn fill_board(world: &mut World, game: &mut Game) {
-    for x in 0..N {
-        for y in 0..N {
-            if let Some((_, id)) = game.cells[x][y].take() {
-                world.despawn(id);
-            }
+    for cell in game.cells.iter_mut().flatten() {
+        if let Some((_, id)) = cell.take() {
+            world.despawn(id);
         }
     }
     for x in 0..N {
