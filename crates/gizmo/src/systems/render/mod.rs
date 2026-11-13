@@ -13169,6 +13169,115 @@ fn material_surface(input: SurfaceInput) -> Surface {
         });
     }
 
+    /// A 3 m quad facing the camera, textured red with a faint green glow and no emissive texture, as
+    /// a glTF file on disk: `quad.gltf` with its
+    /// `quad.bin` and `red.png` beside it. Returns the `.gltf`'s path.
+    fn write_red_gltf_quad() -> String {
+        let dir = std::env::temp_dir().join(format!("gizmo-gltf-quad-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([230, 20, 20, 255])).save(dir.join("red.png")).expect("png");
+        let mut bin: Vec<u8> = Vec::new();
+        for p in [[-1.5f32, -1.5, 0.0], [1.5, -1.5, 0.0], [1.5, 1.5, 0.0], [-1.5, 1.5, 0.0]] {
+            p.iter().for_each(|v| bin.extend_from_slice(&v.to_le_bytes()));
+        }
+        for _ in 0..4 {
+            [0.0f32, 0.0, 1.0].iter().for_each(|v| bin.extend_from_slice(&v.to_le_bytes()));
+        }
+        for uv in [[0.0f32, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]] {
+            uv.iter().for_each(|v| bin.extend_from_slice(&v.to_le_bytes()));
+        }
+        for i in [0u16, 1, 2, 0, 2, 3] {
+            bin.extend_from_slice(&i.to_le_bytes());
+        }
+        std::fs::write(dir.join("quad.bin"), &bin).expect("bin");
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],
+            "nodes":[{{"mesh":0,"name":"Quad"}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2}},"indices":3,"material":0}}]}}],
+            "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}},"metallicFactor":0.0,"roughnessFactor":0.6}},"emissiveFactor":[0.0,0.15,0.0]}}],
+            "textures":[{{"source":0}}],"images":[{{"uri":"red.png"}}],
+            "buffers":[{{"uri":"quad.bin","byteLength":{len}}}],
+            "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":48}},{{"buffer":0,"byteOffset":48,"byteLength":48}},
+                           {{"buffer":0,"byteOffset":96,"byteLength":32}},{{"buffer":0,"byteOffset":128,"byteLength":12}}],
+            "accessors":[{{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[-1.5,-1.5,0.0],"max":[1.5,1.5,0.0]}},
+                         {{"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"}},
+                         {{"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"}},
+                         {{"bufferView":3,"componentType":5123,"count":6,"type":"SCALAR"}}]}}"#,
+            len = bin.len()
+        );
+        let path = dir.join("quad.gltf");
+        std::fs::write(&path, json).expect("gltf");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// **A textured glTF model keeps its geometry and its texture through a save and a reopen.**
+    /// The model spawned and drawn; the scene saved; a fresh renderer and world load it, a frame is
+    /// drawn before the mesh loader runs (so the material finds its images by importing the file
+    /// itself), the loader runs, and the frame drawn then is the first one. Until 2026-11-13 the
+    /// model's meshes carried no `MeshSource` and its texture was named `gltf_tex_base_0`, which
+    /// is no file: it reopened with no geometry, and with a white material had there been any.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_textured_gltf_model_keeps_its_geometry_and_its_texture_through_a_save_and_reopen() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let model = write_red_gltf_quad();
+        let scene_path = std::env::temp_dir().join(format!("gizmo-gltf-quad-{}.scene", std::process::id()));
+        let scene_path = scene_path.to_string_lossy().into_owned();
+        let centre = |frame: &[u8]| {
+            let i = (64 * 128 + 64) * 4;
+            (i32::from(frame[i]), i32::from(frame[i + 1]), i32::from(frame[i + 2]))
+        };
+        let setup = |world: &mut World| {
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+        };
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            {
+                let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                commands.spawn_gltf(Vec3::ZERO, &model, false).expect("the model loads");
+            }
+            setup(&mut world);
+            let drawn = render_world(&mut renderer, &mut world).await;
+            let (r, g, b) = centre(&drawn);
+            assert!(r > g + 40 && r > b + 40, "the spawned model is not red: {:?}", (r, g, b));
+            crate::scene::SceneData::save(&world, &scene_path, &crate::full_scene_registry()).expect("saves");
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &crate::full_scene_registry()).expect("loads");
+            // A frame before the mesh loader has read the model: the material resolves first, and
+            // has to find its images by importing the file itself — the order a reopen can take.
+            render_world(&mut renderer, &mut world).await;
+            {
+                let manager = renderer.asset_manager.clone();
+                let mut assets = manager.write().unwrap();
+                crate::renderer::asset_loading::run_asset_loading_system(
+                    &mut world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    &mut assets,
+                );
+            }
+            let reopened = render_world(&mut renderer, &mut world).await;
+            let (r2, g2, b2) = centre(&reopened);
+            assert!(r2 > g2 + 40 && r2 > b2 + 40, "the reopened model lost its texture: {:?} where it was {:?}", (r2, g2, b2), (r, g, b));
+            let (changed, total) = changed_pixels(&drawn, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened model drew {changed}/{total} pixels otherwise");
+        });
+        let _ = std::fs::remove_file(&scene_path);
+    }
+
     /// Writes the test images the material-map tests name by path: ridges as a normal map (data,
     /// so read linear), and plain white for an emissive map. Returns `(normal, white)`.
     fn write_map_images() -> (String, String) {

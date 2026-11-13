@@ -253,6 +253,10 @@ fn referenced_file(value: &str, kind: RefKind) -> Option<String> {
         // `gltf_tex_` names a texture *inside* an imported model, resolved from the model rather
         // than from the filesystem.
         RefKind::Texture if value.starts_with("gltf_tex_") => None,
+        // An image inside a model (`gltf:<file>#<n>`, since 2026-11-13): the model is the file.
+        RefKind::Texture if gizmo::renderer::asset::loaders::split_gltf_image_key(value).is_some() => {
+            gizmo::renderer::asset::loaders::split_gltf_image_key(value).map(|(file, _)| file.to_string())
+        }
         RefKind::Texture | RefKind::Path | RefKind::Sound => Some(value.to_string()),
     }
 }
@@ -310,6 +314,17 @@ fn audit_scene_assets(world: &World, project_root: &std::path::Path) -> Vec<Miss
         for d in descs.iter() {
             if let Some(t) = &d.texture_source {
                 refs.push(("Materyal dokusu".into(), t.clone(), RefKind::Texture));
+            }
+            // The maps beside it (2026-11-13): a normal map the scene names ships with it too.
+            for (what, map) in [
+                ("Normal haritası", &d.maps.normal),
+                ("Metal-pürüzlülük haritası", &d.maps.metallic_roughness),
+                ("Emisyon haritası", &d.maps.emissive),
+                ("Oklüzyon haritası", &d.maps.occlusion),
+            ] {
+                if let Some(t) = map {
+                    refs.push((what.into(), t.clone(), RefKind::Texture));
+                }
             }
         }
     }
@@ -767,6 +782,11 @@ mod export_copy_tests {
              this is what EVERY textured model dragged into the editor stores"
         );
         assert_eq!(
+            referenced_file("gltf:demo/assets/car.glb#3", RefKind::Texture).as_deref(),
+            Some("demo/assets/car.glb"),
+            "an image inside a model is shipped as the model"
+        );
+        assert_eq!(
             referenced_file("demo/assets/grass.jpg", RefKind::Texture).as_deref(),
             Some("demo/assets/grass.jpg")
         );
@@ -849,6 +869,15 @@ mod export_copy_tests {
             gizmo::core::component::MeshSource("standard_cube".to_string()),
         );
 
+        // (6) A material's normal map that resolves nowhere: the maps are references too.
+        let mapped = world.spawn();
+        world.add_component(
+            mapped,
+            gizmo::renderer::components::MaterialDesc::default().with_maps(
+                gizmo::renderer::components::MaterialMaps::default().with_normal("assets/missing_n.png", 1.0),
+            ),
+        );
+
         let missing = audit_scene_assets(&world, std::path::Path::new("."));
         let _ = std::fs::remove_file(&real);
 
@@ -865,9 +894,13 @@ mod export_copy_tests {
             reported.contains(&("assets/does_not_exist.glb", MissingReason::Unresolved)),
             "a reference that resolves nowhere is worth a different sentence: {reported:?}"
         );
+        assert!(
+            reported.contains(&("assets/missing_n.png", MissingReason::Unresolved)),
+            "a material's normal map is a reference like its base colour: {reported:?}"
+        );
         assert_eq!(
             missing.len(),
-            2,
+            3,
             "the shipped script, the named sound and the built-in cube must all stay quiet: \
              {reported:?}"
         );

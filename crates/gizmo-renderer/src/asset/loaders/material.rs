@@ -145,9 +145,26 @@ fn material_uv_transform(material: &gltf::Material) -> crate::gpu_types::UvTrans
     }
 }
 
+/// The name a glTF file's image goes by as a texture: `gltf:<file>#<image index>`. What a glTF
+/// material's [`texture_source`](crate::components::Material::texture_source) and
+/// [`maps`](crate::components::Material::maps) hold, and what
+/// [`AssetManager::load_texture_view`](crate::asset::AssetManager::load_texture_view) resolves.
+pub fn gltf_image_key(file_path: &str, image: usize) -> String {
+    format!("gltf:{file_path}#{image}")
+}
+
+/// The file and the image index a [`gltf_image_key`] names, `None` for any other name. The index is
+/// after the last `#`, so a `#` in the file's own name is kept in the path.
+pub fn split_gltf_image_key(key: &str) -> Option<(&str, usize)> {
+    let rest = key.strip_prefix("gltf:")?;
+    let (file, index) = rest.rsplit_once('#')?;
+    Some((file, index.parse().ok()?))
+}
+
 pub(super) fn build_gltf_materials(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
+    file_path: &str,
     document: &gltf::Document,
     gpu_images: &[GpuImage],
     defaults: &crate::asset::MaterialDefaults,
@@ -217,6 +234,15 @@ pub(super) fn build_gltf_materials(
             // glow; folded into the factor here (LDR-additive in the g-buffer).
             let emissive =
                 emissive_with_strength(material.emissive_factor(), material.emissive_strength());
+            // With an emissive texture the factor multiplies it, in the material's params; without
+            // one glTF's emission is the factor alone, which is what `Material::emissive` adds. Kept
+            // there it is data (`MaterialMaps` zeroes a factor that has no map), so the material
+            // shades the same when its bind group is built again from its description.
+            let (emissive, instance_emissive) = if material.emissive_texture().is_some() {
+                (emissive, [0.0; 3])
+            } else {
+                ([0.0; 3], emissive)
+            };
             let normal_scale = material.normal_texture().map(|nt| nt.scale()).unwrap_or(1.0);
             let occlusion_strength = material
                 .occlusion_texture()
@@ -271,12 +297,25 @@ pub(super) fn build_gltf_materials(
             };
 
             let mut mat = Material::new(bind_group);
-            if has_base {
-                mat.texture_source = Some(format!(
-                    "gltf_tex_base_{}",
-                    material.index().unwrap_or(usize::MAX)
-                ));
-            }
+            // Every texture named by the image it is in this file (`gltf_image_key`), so the material
+            // is data like any other: a scene saves these names, and `AssetManager::load_material`
+            // finds the images again — imported once more if this run has not read the file.
+            let key = |image: Option<usize>| image.map(|i| gltf_image_key(file_path, i));
+            mat.texture_source = key(pbr.base_color_texture().map(|t| t.texture().source().index()));
+            let image = |info: Option<gltf::texture::Info>| key(info.map(|t| t.texture().source().index()));
+            mat.maps = crate::components::MaterialMaps {
+                normal: key(material.normal_texture().map(|t| t.texture().source().index())),
+                normal_scale,
+                metallic_roughness: image(pbr.metallic_roughness_texture()),
+                emissive: image(material.emissive_texture()),
+                emissive_factor: gizmo_math::Vec3::from(emissive),
+                occlusion: key(material.occlusion_texture().map(|t| t.texture().source().index())),
+                occlusion_strength,
+                uv_scale: uv_transform.scale,
+                uv_rotation: uv_transform.rotation,
+                uv_offset: uv_transform.offset,
+            };
+            mat.emissive = gizmo_math::Vec3::from(instance_emissive);
 
             let mat_name = material.name().unwrap_or("").to_lowercase();
             let is_glass = mat_name.contains("glass");

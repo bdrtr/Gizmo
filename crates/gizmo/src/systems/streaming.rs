@@ -94,7 +94,7 @@ fn apply_completed_textures(world: &World) {
     for (entity_ids, path, bind_group) in installed {
         for eid in entity_ids {
             if let Some(mut mat) = materials.entity(eid as u32).and_then(|e| materials.get_mut(e)) {
-                if still_wants(mat.texture_source.as_deref(), &path) && streams(&mat.maps) {
+                if still_wants(mat.texture_source.as_deref(), &path) && streams(&path, &mat.maps) {
                     mat.bind_group = bind_group.clone();
                 }
             }
@@ -105,9 +105,10 @@ fn apply_completed_textures(world: &World) {
 /// Whether a material's texture is streamed at all. A streamed texture arrives as a bind group over
 /// the base colour alone, and a material that names other maps (`Material::maps`) would lose them to
 /// it — its normal map gone the moment the camera came near. Such a material's bind group is built
-/// whole from its sources (`material_sync`), base colour included, and is left alone here.
-fn streams(maps: &gizmo_renderer::components::MaterialMaps) -> bool {
-    maps.is_empty()
+/// whole from its sources (`material_sync`), base colour included, and is left alone here. Nor is
+/// an image inside a glTF file (`gltf:<file>#<n>`): it is no file of its own to stream from.
+fn streams(texture_source: &str, maps: &gizmo_renderer::components::MaterialMaps) -> bool {
+    maps.is_empty() && gizmo_renderer::asset::loaders::split_gltf_image_key(texture_source).is_none()
 }
 
 /// Does the material on the id that asked for `path` still want it?
@@ -177,7 +178,7 @@ fn request_nearby_textures(world: &World) {
         let Some(path) = mat.texture_source.clone() else {
             continue;
         };
-        if !streams(&mat.maps) {
+        if !streams(&path, &mat.maps) {
             continue;
         }
         let Some(t) = transforms.get(e) else {
@@ -221,8 +222,9 @@ mod tests {
         use gizmo_renderer::components::{MaterialDesc, MaterialMaps};
         let plain = MaterialDesc::default();
         let mapped = MaterialDesc::default().with_maps(MaterialMaps::default().with_normal("n.png", 1.0));
-        assert!(super::streams(&plain.maps));
-        assert!(!super::streams(&mapped.maps), "a material with a normal map would lose it to a streamed texture");
+        assert!(super::streams("grass.png", &plain.maps));
+        assert!(!super::streams("grass.png", &mapped.maps), "a material with a normal map would lose it to a streamed texture");
+        assert!(!super::streams("gltf:models/car.glb#2", &plain.maps), "an image inside a model is no file to stream");
     }
 
     #[test]

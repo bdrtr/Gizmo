@@ -88,6 +88,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **A glTF model survives a save and a reopen.** A model dragged into the editor saved with no `MeshSource` — the
+  spawner gave its meshes none — and its texture named `gltf_tex_base_0`, which is no file and was shared by every
+  model's first material: it reopened with no geometry, and with a white material had there been any (the scene
+  format's own docs listed it as a known asymmetry). Each primitive now names its mesh's cache key, and each image of
+  a model is named `gltf:<file>#<image>` (`asset::loaders::gltf_image_key`), so a glTF material's base colour and maps
+  are data: `AssetManager::load_texture_view` finds them, importing the model again when this run has not read it. The
+  reopened frame is the saved one byte for byte, on both paths, whether the material or the mesh loader reaches the
+  file first. `MaterialMaps` carries the UV transform (`KHR_texture_transform`); a glTF `emissiveFactor` with no
+  emissive texture is the material's `emissive`, which every lit path adds. Exports ship the model a `gltf:` texture
+  names and every map a material names.
+
 - **The Shader Graph tab's "Apply" is undoable from the scene** (`EditorAction::SurfaceGraphsChanged`, each entity's
   graph before and after): Ctrl+Z takes the graph off the entities it was applied to, or gives them back the one they
   had. The edits that follow an Apply are not recorded there; they follow the tab's graph, which has its own undo.

@@ -153,9 +153,26 @@ impl super::AssetManager {
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
         path_or_uuid: &str,
         srgb: bool,
     ) -> Result<Arc<wgpu::TextureView>, AssetError> {
+        // An image inside a glTF file (`gltf_image_key`): there when the file has been imported in
+        // this run, and imported now when it has not — a scene that reopens names the textures of a
+        // model before or after the mesh loader has read the file, and either order finds them.
+        if let Some((file, _)) = super::loaders::split_gltf_image_key(path_or_uuid) {
+            let key = (path_or_uuid.to_string(), srgb);
+            if let Some(view) = self.view_cache.get(&key) {
+                return Ok(view.clone());
+            }
+            let white = self.create_white_texture(device, queue, layout);
+            self.load_gltf_scene(device, queue, layout, white, file)?;
+            return self
+                .view_cache
+                .get(&key)
+                .cloned()
+                .ok_or_else(|| AssetError::GltfImageMissing { key: path_or_uuid.to_string() });
+        }
         let (resolved_path, cache_key) = self.resolve_texture_cache_key(path_or_uuid)?;
         if let Some(view) = self.view_cache.get(&(cache_key.clone(), srgb)) {
             return Ok(view.clone());
@@ -190,7 +207,9 @@ impl super::AssetManager {
         // else need no buffer of their own.
         let params_neutral =
             bytemuck::bytes_of(&maps.params()) == bytemuck::bytes_of(&crate::gpu_types::MaterialParams::default());
-        if maps.is_empty() && params_neutral {
+        // A glTF image has no single-texture bind group of its own: it goes through the builder.
+        let gltf_base = base.is_some_and(|b| super::loaders::split_gltf_image_key(b).is_some());
+        if maps.is_empty() && params_neutral && !gltf_base {
             return match base {
                 Some(path) => self.load_material_texture(device, queue, layout, path).unwrap_or_else(|error| {
                     tracing::warn!(path, %error, "[Material] base colour texture would not load; drawing white");
@@ -206,7 +225,7 @@ impl super::AssetManager {
         }
         let mut view = |path: &Option<String>, srgb: bool, slot: &str| -> Option<Arc<wgpu::TextureView>> {
             let path = path.as_deref()?;
-            self.load_texture_view(device, queue, path, srgb)
+            self.load_texture_view(device, queue, layout, path, srgb)
                 .map_err(|error| tracing::warn!(path, slot, %error, "[Material] map would not load; drawing the neutral one"))
                 .ok()
         };

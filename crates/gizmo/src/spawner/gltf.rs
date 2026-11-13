@@ -291,6 +291,10 @@ fn spawn_gltf_node_flat(
         newly_added_prims.push(prim);
 
         world.add_component(prim, mesh.clone());
+        // The mesh's cache key (`gltf_mesh_<file>_<node>_p<n>`) as its source, so a scene saves the
+        // model and the loader reads the file again when it opens. Without it a saved model
+        // reopened with no geometry at all.
+        world.add_component(prim, gizmo_core::component::MeshSource(mesh.source.clone()));
         world.add_component(prim, mat_opt.clone().unwrap_or_else(|| default_mat.clone()));
         world.add_component(prim, MeshRenderer::new());
 

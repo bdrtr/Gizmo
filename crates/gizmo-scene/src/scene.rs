@@ -417,10 +417,11 @@ pub struct EntityData {
     /// bad key surfaces at GPU upload time — an `error!` line plus an empty mesh — rather than
     /// at scene load, and in a headless build it stays inert data.
     ///
-    /// Note the asymmetry: `MeshSource` is only ever *added* by
-    /// [`SceneData::instantiate_entities`]. Entities handed a GPU `Mesh` directly (the
-    /// `spawner` helpers, glTF import) carry no `MeshSource`, so they save with
-    /// `mesh_source: None` and reload without geometry.
+    /// Note the asymmetry: an entity handed a GPU `Mesh` directly carries a `MeshSource` only if
+    /// whoever made it added one. glTF import does, since 2026-11-13 — each primitive names its
+    /// cache key, so a model dragged into the editor saves and reopens. The `spawner` helpers that
+    /// build a mesh in code (`spawn_cube`, a sphere of some radius) do not: no key names such a mesh,
+    /// so they save with `mesh_source: None` and reload without geometry.
     pub mesh_source: Option<String>,
     /// Stable identity of the asset [`mesh_source`](Self::mesh_source) names, when one is known —
     /// the UUID from its `.meta` sidecar, as a string.

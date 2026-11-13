@@ -181,9 +181,10 @@ pub struct Material {
     /// a black surface can still glow — the same relationship glTF's `emissiveFactor` has to
     /// base colour.
     ///
-    /// Read by [`MaterialType::BakedLit`]. Defaults to zero. (The textured-PBR path has its
-    /// own emissive, from the glTF material's `emissiveFactor` + emissive map; this knob does
-    /// not touch it.)
+    /// Read by every lit path, `Pbr` and [`MaterialType::BakedLit`] alike, and added to what an
+    /// emissive map gives ([`maps`](Self::maps)). Defaults to zero. A glTF material's
+    /// `emissiveFactor` lands here when it has no emissive texture, and multiplies the texture when
+    /// it has one.
     pub emissive: gizmo_math::Vec3,
     /// Where the albedo texture came from; `None` for an untextured material. Used for
     /// reloading and for recognising an already-loaded texture.
@@ -303,6 +304,13 @@ pub struct MaterialMaps {
     pub occlusion: Option<String>,
     /// How much of the occlusion map applies: 0 none, 1 all. glTF's `occlusionTexture.strength`.
     pub occlusion_strength: f32,
+    /// The UV every texture of the material is read at, moved: scaled, then turned (radians), then
+    /// offset. glTF's `KHR_texture_transform`. The identity by default.
+    pub uv_scale: [f32; 2],
+    /// See [`uv_scale`](Self::uv_scale).
+    pub uv_rotation: f32,
+    /// See [`uv_scale`](Self::uv_scale).
+    pub uv_offset: [f32; 2],
 }
 
 impl Default for MaterialMaps {
@@ -316,11 +324,23 @@ impl Default for MaterialMaps {
             emissive_factor: gizmo_math::Vec3::ONE,
             occlusion: None,
             occlusion_strength: 1.0,
+            uv_scale: [1.0, 1.0],
+            uv_rotation: 0.0,
+            uv_offset: [0.0, 0.0],
         }
     }
 }
 
 impl MaterialMaps {
+    /// A UV transform for every texture of the material: scale, then rotation (radians), then offset.
+    #[must_use]
+    pub fn with_uv_transform(mut self, scale: [f32; 2], rotation: f32, offset: [f32; 2]) -> Self {
+        self.uv_scale = scale;
+        self.uv_rotation = rotation;
+        self.uv_offset = offset;
+        self
+    }
+
     /// Whether no map is named: the material's bind group needs nothing but its base colour.
     #[must_use]
     pub fn is_empty(&self) -> bool {
@@ -336,7 +356,7 @@ impl MaterialMaps {
             emissive,
             self.normal_scale,
             self.occlusion_strength,
-            crate::gpu_types::UvTransform::default(),
+            crate::gpu_types::UvTransform { offset: self.uv_offset, rotation: self.uv_rotation, scale: self.uv_scale },
             0.0,
         )
     }

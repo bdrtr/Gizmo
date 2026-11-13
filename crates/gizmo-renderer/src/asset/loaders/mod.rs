@@ -17,6 +17,7 @@ use wgpu::util::DeviceExt;
 mod animation;
 mod images;
 mod material;
+pub use material::{gltf_image_key, split_gltf_image_key};
 mod mesh;
 mod obj;
 mod skeleton;
@@ -132,6 +133,12 @@ impl super::AssetManager {
         self.ensure_material_defaults(device, queue);
         let srgb_flags = classify_gltf_image_srgb(&document, images.len());
         let gpu_images = upload_gltf_images(device, queue, file_path, &images, &srgb_flags);
+        // Each image by its name (`gltf_image_key`), in the colour space it was uploaded in: what a
+        // glTF material's description names, so it resolves to these same textures.
+        for (index, (image, srgb)) in gpu_images.iter().zip(&srgb_flags).enumerate() {
+            self.view_cache
+                .insert((gltf_image_key(file_path, index), *srgb), Arc::new(image.view.clone()));
+        }
 
         // ── 2. Materials ──────────────────────────────────────────────────
         let defaults = self
@@ -140,6 +147,7 @@ impl super::AssetManager {
         let gltf_materials = build_gltf_materials(
             device,
             texture_bind_group_layout,
+            file_path,
             &document,
             &gpu_images,
             defaults,

@@ -59,6 +59,13 @@ pub enum AssetError {
         source: gltf::Error,
     },
 
+    /// A glTF image name (`gltf:<file>#<index>`) whose file imports but has no image at that index,
+    /// or none read in the colour space asked for.
+    GltfImageMissing {
+        /// The name asked for.
+        key: String,
+    },
+
     /// A texture upload requested a zero width or height.
     ZeroDimensionTexture {
         /// The texture's cache key, which is what identifies it before it has a GPU handle.
@@ -154,6 +161,9 @@ impl std::fmt::Display for AssetError {
             ),
             AssetError::GltfImport { path, .. } => {
                 write!(f, "glTF import failed ({})", path.display())
+            }
+            AssetError::GltfImageMissing { key } => {
+                write!(f, "no image '{key}' in its glTF file, in the colour space asked for")
             }
             AssetError::Fetch { url, message } => {
                 write!(f, "fetch failed for '{url}': {message}")
