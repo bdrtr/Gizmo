@@ -41,6 +41,17 @@ pub enum EditorAction {
         /// Its clips after it.
         after: std::sync::Arc<[gizmo_renderer::AnimationClip]>,
     },
+    /// The Shader Graph tab's "Apply": each entity's `SurfaceGraph` before and after, `None` where it
+    /// had none. Only "Apply" is recorded: the edits that follow it reach the entities as the tab's
+    /// graph changes, and the tab has its own undo for those.
+    SurfaceGraphsChanged {
+        /// `(entity, its graph before, its graph after)`.
+        changes: Vec<(
+            gizmo_core::entity::Entity,
+            Option<gizmo_renderer::shader_graph::ShaderGraph>,
+            Option<gizmo_renderer::shader_graph::ShaderGraph>,
+        )>,
+    },
     /// A dynamic or otherwise unclassified component changed
     ComponentChanged {
         /// The entity whose component changed.
@@ -174,6 +185,12 @@ impl History {
                     self.redo_stack
                         .push_back(EditorAction::AnimationClipsChanged { entity, before, after });
                 }
+                EditorAction::SurfaceGraphsChanged { changes } => {
+                    for (entity, before, _) in &changes {
+                        set_surface_graph(world, *entity, before.as_ref());
+                    }
+                    self.redo_stack.push_back(EditorAction::SurfaceGraphsChanged { changes });
+                }
                 other => {
                     // Henüz implement edilmedi — stack'e geri koy
                     tracing::error!("Uyarı: Bu action türü henüz geri alınamıyor (Undo desteklenmiyor).");
@@ -239,6 +256,12 @@ impl History {
                     self.undo_stack
                         .push_back(EditorAction::AnimationClipsChanged { entity, before, after });
                 }
+                EditorAction::SurfaceGraphsChanged { changes } => {
+                    for (entity, _, after) in &changes {
+                        set_surface_graph(world, *entity, after.as_ref());
+                    }
+                    self.undo_stack.push_back(EditorAction::SurfaceGraphsChanged { changes });
+                }
                 other => {
                     tracing::error!(
                         "Uyarı: Bu action türü henüz ileri alınamıyor (Redo desteklenmiyor)."
@@ -247,6 +270,19 @@ impl History {
                 }
             }
         }
+    }
+}
+
+/// Puts `graph` on `entity` as its `SurfaceGraph`, or takes the component off for `None`. A dead
+/// entity is skipped, generation-safely, as every arm above skips one.
+fn set_surface_graph(world: &mut World, entity: gizmo_core::entity::Entity, graph: Option<&gizmo_renderer::shader_graph::ShaderGraph>) {
+    use gizmo_renderer::shader_graph::SurfaceGraph;
+    if !world.is_alive(entity) {
+        return;
+    }
+    match graph {
+        Some(graph) => world.add_component(entity, SurfaceGraph::new(graph.clone())),
+        None => world.remove_component::<SurfaceGraph>(entity),
     }
 }
 

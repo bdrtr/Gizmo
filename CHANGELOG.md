@@ -76,6 +76,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keeps roughness in 0.05..1 and metalness in 0..1, as the engine's material does: a roughness of 0 linked straight in
   was a GGX lobe of zero width.
 
+- **The Shader Graph tab's "Apply" is undoable from the scene** (`EditorAction::SurfaceGraphsChanged`, each entity's
+  graph before and after): Ctrl+Z takes the graph off the entities it was applied to, or gives them back the one they
+  had. The edits that follow an Apply are not recorded there; they follow the tab's graph, which has its own undo.
+
 - **The local lights' shadows and the spots' cookies in a browser and on a phone.** The forward-only path drew the sun's
   shadow alone. A point, spot or rectangle light that casts (`casts_shadows`) casts there now, and a spot's cookie
   shows: its lit shaders read the layers and the cookies through group 0's bindings 11–13 (`LOCAL_LIGHT_MAPS`, placed by

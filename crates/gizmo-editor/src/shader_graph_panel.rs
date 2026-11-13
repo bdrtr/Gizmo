@@ -277,8 +277,14 @@ pub fn apply_to_world(world: &mut gizmo_core::World, state: &mut EditorState) {
             let descs = world.query::<&MaterialDesc>();
             selected.into_iter().filter(|e| materials.get(*e).is_some() || descs.get(*e).is_some()).collect()
         };
+        let mut changes = Vec::with_capacity(targets.len());
         for &entity in &targets {
+            let before = world.query::<&SurfaceGraph>().get(entity).map(|g| g.graph.clone());
             world.add_component(entity, SurfaceGraph::new(panel.graph.clone()));
+            changes.push((entity, before, Some(panel.graph.clone())));
+        }
+        if !changes.is_empty() {
+            state.history.push(crate::history::EditorAction::SurfaceGraphsChanged { changes });
         }
         panel.status = match targets.len() {
             0 => "Nothing selected has a material".to_string(),
@@ -858,6 +864,12 @@ mod tests {
         assert_eq!(graph_of(&world, with_material), Some(state.shader_graph.graph.clone()));
         assert_eq!(graph_of(&world, without), None, "an entity with no material got a surface");
         assert_eq!(state.shader_graph.linked(), &[with_material]);
+
+        // "Apply" is one step of the editor's own history: undone, the entity has no graph again.
+        state.history.undo(&mut world);
+        assert_eq!(graph_of(&world, with_material), None, "undo left the applied graph");
+        state.history.redo(&mut world);
+        assert_eq!(graph_of(&world, with_material), Some(state.shader_graph.graph.clone()), "redo did not put it back");
 
         // A later edit reaches it…
         let noise = state.shader_graph.add_node(NodeKind::Noise, [40.0, 200.0]);
