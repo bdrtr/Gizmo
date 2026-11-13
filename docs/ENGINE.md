@@ -1500,6 +1500,16 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   same, still, a day after `Collider::cylinder` landed. Both now carry their own shape. Nothing in
   the studio needed fixing: it has no cone primitive to be wrong about.
 
+- **Scene fidelity — what a scene saves is what the world holds (decided 2026-11-14).** A component
+  nobody registered was not written and nothing said so: a decal, a sprite, a collision layer, a
+  whole UI were gone after a save, and after ⏹ for any entity play had destroyed (the ▶ snapshot is a
+  scene). `gizmo-studio/tests/scene_fidelity.rs` holds every engine component to the registry: each
+  is saved, or listed in `NOT_SAVED` with why a scene must not hold it (carried by the format,
+  rebuilt from what is saved, runtime-only, the editor's own, generic over a game's type), or listed
+  in `OPEN` — which only shrinks. Started at 119 components, 63 open, to be closed class by class:
+  what is seen, physics and play, animation, UI. Already closed the same day: meshes built in code
+  (`mesh_sync`), `MeshData`, glTF models with their skeletons, clips and clip edits, material maps,
+  unnamed textures.
 - **Shader Graph.** A node editor plus WGSL generation. The largest item on the editor list and a
   project on its own. **The graph and its WGSL landed 2026-11-13** (`gizmo_renderer::shader_graph`):
   it generates a `material_surface`, so it reuses everything `SurfaceMaterial` already is — composed
