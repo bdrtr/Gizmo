@@ -7,8 +7,9 @@
 //! and when that is a key the engine can build again ([`AssetManager::rebuilds_mesh`]),
 //! [`describe_meshes`] writes it as the entity's `MeshSource`.
 //!
-//! A mesh made from points in code (an extrusion, a `MeshData`) has no such key and is left
-//! undescribed, as before.
+//! A mesh made from points is saved as its [`MeshData`](crate::components::MeshData), which a
+//! scene holds vertices and all; one built straight onto the GPU from points has neither, and
+//! [`undescribed_meshes`] names it so the editor can say so before a save loses it.
 
 use gizmo_core::component::MeshSource;
 use gizmo_core::{Entity, World};
@@ -72,6 +73,25 @@ pub fn describe_meshes(world: &mut World) {
         }
         world.add_component(entity, DescribedMesh(source));
     }
+}
+
+/// The entities whose geometry a scene cannot hold: a `Mesh` with neither a `MeshSource` naming it
+/// nor the `MeshData` it was made from — a mesh built straight onto the GPU from points. Editor-only
+/// entities are left out. What a save or the editor's Play snapshot would come back without, for
+/// the editor to say so by name.
+#[must_use]
+pub fn undescribed_meshes(world: &World) -> Vec<Entity> {
+    let sources = world.query::<&MeshSource>();
+    let data = world.query::<&crate::components::MeshData>();
+    let markers = world.query::<&gizmo_core::component::EditorOnly>();
+    let names = world.query::<&gizmo_core::EntityName>();
+    world
+        .query::<(Entity, &Mesh)>()
+        .iter()
+        .map(|(e, _)| e)
+        .filter(|e| sources.get(*e).is_none() && data.get(*e).is_none())
+        .filter(|e| !gizmo_core::component::is_editor_only(markers.get(*e).is_some(), names.get(*e).map(|n| n.0.as_str())))
+        .collect()
 }
 
 #[cfg(test)]

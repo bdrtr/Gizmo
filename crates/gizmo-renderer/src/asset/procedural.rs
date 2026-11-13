@@ -108,6 +108,12 @@ impl super::AssetManager {
     /// caps are triangulated as a fan from the first point, which is only correct for a convex
     /// polygon.
     pub fn create_convex_extrusion(device: &wgpu::Device, points_2d: &[[f32; 2]], depth: f32) -> Mesh {
+        let vertices = Self::convex_extrusion_data(points_2d, depth);
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, "extrusion".to_string())
+    }
+
+    /// [`create_convex_extrusion`](Self::create_convex_extrusion)'s triangle list, without a GPU.
+    pub(crate) fn convex_extrusion_data(points_2d: &[[f32; 2]], depth: f32) -> Vec<Vertex> {
         let mut vertices = Vec::new();
         let half_d = depth / 2.0;
         let def_j = [0; 4]; let def_w = [0.0; 4];
@@ -163,12 +169,29 @@ impl super::AssetManager {
             vertices.push(Vertex { position: v1_bot, normal: [0.0, -1.0, 0.0], tex_coords: [0.5 + p1[0], 0.5 + p1[1]], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
         }
 
-        Mesh::new_indexed(device, &vertices, Vec3::ZERO, "extrusion".to_string())
+        vertices
     }
 
     /// Extrudes the ring between two 2-D outlines along Z — a shape with a hole, which
     /// [`create_convex_extrusion`](Self::create_convex_extrusion) cannot express.
     pub fn create_ring_extrusion(device: &wgpu::Device, inner_points: &[[f32; 2]], outer_points: &[[f32; 2]], depth: f32) -> Mesh {
+        let vertices = Self::ring_extrusion_data(inner_points, outer_points, depth);
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, "ring_extrusion".to_string())
+    }
+
+    /// [`create_ring_extrusion`](Self::create_ring_extrusion)'s triangle list, without a GPU.
+    /// The outlines pair point for point — each slice of the ring runs from `inner[i]`, `outer[i]` to
+    /// the next pair — so they must have the same number of points; outlines that do not give no
+    /// triangles (and a warning) rather than an index past the end of the shorter one.
+    pub(crate) fn ring_extrusion_data(inner_points: &[[f32; 2]], outer_points: &[[f32; 2]], depth: f32) -> Vec<Vertex> {
+        if inner_points.len() != outer_points.len() {
+            tracing::warn!(
+                inner = inner_points.len(),
+                outer = outer_points.len(),
+                "[Mesh] a ring extrusion's outlines pair point for point and these do not; no ring built"
+            );
+            return Vec::new();
+        }
         let mut vertices = Vec::new();
         let half_d = depth / 2.0;
         let def_j = [0; 4]; let def_w = [0.0; 4];
@@ -239,6 +262,6 @@ impl super::AssetManager {
             vertices.push(Vertex { position: v_i1_b, normal: n_bot, tex_coords: [i1[0], i1[1]], color: col, joint_indices: def_j, joint_weights: def_w, ..Default::default() });
         }
 
-        Mesh::new_indexed(device, &vertices, Vec3::ZERO, "ring_extrusion".to_string())
+        vertices
     }
 }

@@ -237,6 +237,10 @@ pub fn render_studio(
         }
     }
 
+    if save_req.is_some() || play_start {
+        warn_undescribed_meshes(world, if play_start { "▶ Play" } else { "Kaydetme" });
+    }
+
     if let Some(path) = save_req {
         // Saved WITH identity: each asset reference also records the UUID of the file it names, so
         // a later load can find that file if it has since moved. The path is written exactly as
@@ -722,5 +726,31 @@ mod gltf_request_tests {
             found.is_empty(),
             "debug scaffolding is back in the engine's log output: {found:?}"
         );
+    }
+}
+
+/// Says, by name, which entities a save or the Play snapshot will bring back without their geometry:
+/// a mesh built straight onto the GPU from points, with neither a `MeshSource` nor the `MeshData`
+/// it was made from (`gizmo::renderer::mesh_sync::undescribed_meshes`). Silent loss is what this
+/// stops; the fix is the game's, and the message says what it is.
+fn warn_undescribed_meshes(world: &mut World, when: &str) {
+    let lost = gizmo::renderer::mesh_sync::undescribed_meshes(world);
+    if lost.is_empty() {
+        return;
+    }
+    let names: Vec<String> = {
+        let names = world.query::<&gizmo::core::EntityName>();
+        lost.iter().take(5).map(|e| names.get(*e).map(|n| n.0.clone()).unwrap_or_else(|| format!("#{}", e.id()))).collect()
+    };
+    let more = lost.len().saturating_sub(names.len());
+    let message = format!(
+        "{when}: {} nesnenin geometrisi sahneye yazılamıyor ({}{}) — GPU'ya noktalardan kurulmuş bir ağ; MeshData ile yapılırsa kaydedilir.",
+        lost.len(),
+        names.join(", "),
+        if more > 0 { format!(" ve {more} tane daha") } else { String::new() },
+    );
+    tracing::warn!(count = lost.len(), "{message}");
+    if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+        ed.log_warning(&message);
     }
 }

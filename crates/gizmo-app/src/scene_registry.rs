@@ -88,6 +88,9 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::components::AnimationPlayer, "AnimationPlayer");
         // A model's clips as the editor's timeline left them, played instead of the file's.
         reg_or_warn!(gizmo_renderer::gltf_model::GltfClipEdits, "GltfClipEdits");
+        // Geometry made from points in code, vertices and all (decided 2026-11-14): saved, and
+        // carried through the editor's Play/Stop snapshot, which re-creates what play destroyed.
+        reg_or_warn!(gizmo_renderer::components::MeshData, "MeshData");
     }
 
     #[cfg(feature = "audio")]

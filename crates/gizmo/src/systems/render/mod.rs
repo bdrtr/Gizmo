@@ -13564,6 +13564,88 @@ fn material_surface(input: SurfaceInput) -> Surface {
         let _ = std::fs::remove_file(&scene_path);
     }
 
+    /// **Geometry made from points survives the editor's Play/Stop and a save.** A star extruded
+    /// in code (`MeshData`) is drawn; a snapshot is taken as ▶ takes one; the star is destroyed, as a
+    /// game destroys a breakable; ⏹ restores the snapshot, and the frame is the first one. Then a
+    /// save and a reopen by a fresh renderer: the same frame again. Before 2026-11-14 a `MeshData`
+    /// was not scene data, and the restored star stood there with no geometry.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn geometry_made_from_points_survives_play_stop_and_a_save() {
+        use gizmo_renderer::components::{MaterialDesc, MeshData};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let load = |world: &mut World, renderer: &Renderer| {
+            let manager = renderer.asset_manager.clone();
+            let mut assets = manager.write().unwrap();
+            crate::renderer::asset_loading::run_asset_loading_system(
+                world,
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+                &mut assets,
+            );
+        };
+        let scene_path = std::env::temp_dir().join(format!("gizmo-meshdata-{}.scene", std::process::id()));
+        let scene_path = scene_path.to_string_lossy().into_owned();
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let star: Vec<gizmo_math::Vec2> = (0..10)
+                .map(|i| {
+                    let a = i as f32 * std::f32::consts::TAU / 10.0;
+                    let r = if i % 2 == 0 { 1.4 } else { 0.6 };
+                    gizmo_math::Vec2::new(a.cos() * r, a.sin() * r)
+                })
+                .collect();
+            let e = world.spawn();
+            world.add_component(e, gizmo_core::EntityName::new("star"));
+            world.add_component(e, Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_x(0.6)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, MeshData::extrude(&star, 0.4).expect("a star"));
+            world.add_component(e, MaterialDesc::default().with_pbr(Vec4::new(0.9, 0.6, 0.1, 1.0), 0.5, 0.0));
+            world.add_component(e, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            load(&mut world, &renderer);
+            let drawn = render_world(&mut renderer, &mut world).await;
+            let empty = {
+                let mut w = World::new();
+                w.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+                w.spawn_bundle(DirectionalLightBundle::default());
+                render_world(&mut renderer, &mut w).await
+            };
+            assert!(changed_pixels(&drawn, &empty, 128).0 >= 300, "the star is not drawn to begin with");
+
+            // ▶, the game destroys it, ⏹.
+            let registry = crate::full_scene_registry();
+            let snapshot = crate::scene::SceneSnapshot::capture(&world, &registry, &Default::default());
+            world.despawn(e);
+            snapshot.restore(&mut world, &registry, &Default::default());
+            load(&mut world, &renderer);
+            let restored = render_world(&mut renderer, &mut world).await;
+            let (changed, total) = changed_pixels(&drawn, &restored, 128);
+            assert_eq!(changed, 0, "after ⏹ the star drew {changed}/{total} pixels otherwise");
+
+            crate::scene::SceneData::save(&world, &scene_path, &registry).expect("saves");
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &registry).expect("loads");
+            load(&mut world, &renderer);
+            let reopened = render_world(&mut renderer, &mut world).await;
+            let (changed, total) = changed_pixels(&drawn, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened star drew {changed}/{total} pixels otherwise");
+        });
+        let _ = std::fs::remove_file(&scene_path);
+    }
+
     /// **A paused game's playhead, moved, moves the pose.** The editor's ⏸ holds the clock still
     /// (`Time::set_paused`: dt is 0) and its timeline scrubs `AnimationPlayer::current_time`; the
     /// frame has to show the pose at the new time. It did not: the clips were evaluated only on a

@@ -383,25 +383,32 @@ impl<'a> SceneBuilder<'a> {
     }
 
     /// Extrudes a convex 2-D outline into a textured solid, and returns its entity.
+    ///
+    /// The geometry is a [`MeshData`](crate::renderer::components::MeshData), which a scene saves, and
+    /// the body collides as the solid's own convex hull.
     pub fn spawn_textured_convex_extrusion(&mut self, position: Vec3, points: &[[f32; 2]], depth: f32) -> crate::core::entity::Entity {
-        let mesh = AssetManager::create_convex_extrusion(&self.renderer.device, points, depth);
+        let mesh = crate::renderer::components::MeshData::convex_extrusion(points, depth);
+        let collider = convex_extrusion_collider(points, depth);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
         let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
-        // Since we are in XZ plane initially in demo2, let's allow it to just spawn.
-        // Or actually the generated extrusion might be in XZ plane already. 
         self.world.add_component(ent, Transform::new(position));
         self.world.add_component(ent, crate::physics::components::GlobalTransform::default());
         self.world.add_component(ent, mesh);
         self.world.add_component(ent, mat);
         self.world.add_component(ent, MeshRenderer::new());
-        self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(Collider::sphere(1.0)));
+        self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(collider));
         ent
     }
 
     /// Extrudes a ring — an outer outline with an inner one cut out — into a textured solid.
+    ///
+    /// The geometry is a [`MeshData`](crate::renderer::components::MeshData), which a scene saves, and
+    /// the body collides as its slices: one convex hull each, so the hole stays a hole. The two
+    /// outlines pair point for point and must have as many points each.
     pub fn spawn_textured_ring_extrusion(&mut self, position: Vec3, inner_points: &[[f32; 2]], outer_points: &[[f32; 2]], depth: f32) -> crate::core::entity::Entity {
-        let mesh = AssetManager::create_ring_extrusion(&self.renderer.device, inner_points, outer_points, depth);
+        let mesh = crate::renderer::components::MeshData::ring_extrusion(inner_points, outer_points, depth);
+        let collider = ring_extrusion_collider(inner_points, outer_points, depth);
         let tex = self.asset_manager.create_uv_debug_texture(&self.renderer.device, &self.renderer.queue, &self.renderer.scene.texture_bind_group_layout);
         let mat = Material::new(tex).with_pbr(Vec4::new(0.5, 0.5, 0.5, 1.0), 0.6, 0.0);
         let ent = self.world.spawn();
@@ -410,7 +417,7 @@ impl<'a> SceneBuilder<'a> {
         self.world.add_component(ent, mesh);
         self.world.add_component(ent, mat);
         self.world.add_component(ent, MeshRenderer::new());
-        self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(Collider::sphere(1.0)));
+        self.world.add_bundle(ent, RigidBodyBundle::dynamic(10.0).with_collider(collider));
         ent
     }
 
@@ -960,6 +967,84 @@ impl SimpleAppExt for App<SimpleSceneState> {
         .set_update(simple_scene_update)
         // Drawn from a copy of the game world (`RenderWorld`): the draw is handed only the copy.
         .set_render_stage(systems::render::RenderWorld::new())
+    }
+}
+
+/// The convex hull of a convex outline extruded along Y by `depth`, centred: the shape
+/// [`MeshData::convex_extrusion`](crate::renderer::components::MeshData::convex_extrusion) draws.
+fn convex_extrusion_collider(points: &[[f32; 2]], depth: f32) -> Collider {
+    let h = depth / 2.0;
+    let corners: Vec<Vec3> =
+        points.iter().flat_map(|p| [Vec3::new(p[0], -h, p[1]), Vec3::new(p[0], h, p[1])]).collect();
+    Collider::convex_hull(&corners)
+}
+
+/// A ring extruded along Y by `depth` as one convex hull per slice — the slice from `inner[i]`,
+/// `outer[i]` to the next pair — so a body can pass through its hole. Outlines that do not pair
+/// point for point give the outer outline's hull: what the ring would be with its hole filled.
+fn ring_extrusion_collider(inner: &[[f32; 2]], outer: &[[f32; 2]], depth: f32) -> Collider {
+    if inner.len() != outer.len() || outer.len() < 3 {
+        return convex_extrusion_collider(outer, depth);
+    }
+    let h = depth / 2.0;
+    let n = outer.len();
+    Collider::compound((0..n).map(|i| {
+        let j = (i + 1) % n;
+        let corners: Vec<Vec3> = [outer[i], outer[j], inner[i], inner[j]]
+            .iter()
+            .flat_map(|p| [Vec3::new(p[0], -h, p[1]), Vec3::new(p[0], h, p[1])])
+            .collect();
+        (Transform::default(), Collider::convex_hull(&corners))
+    }))
+}
+
+#[cfg(test)]
+mod extrusion_collider_tests {
+    use super::*;
+    use crate::physics::components::ColliderShape;
+
+    fn square() -> Vec<[f32; 2]> {
+        vec![[-0.5, -0.5], [0.5, -0.5], [0.5, 0.5], [-0.5, 0.5]]
+    }
+
+    fn circle(radius: f32, n: usize) -> Vec<[f32; 2]> {
+        (0..n)
+            .map(|i| {
+                let a = i as f32 * std::f32::consts::TAU / n as f32;
+                [radius * a.cos(), radius * a.sin()]
+            })
+            .collect()
+    }
+
+    /// **An extrusion collides as itself.** It collided as a unit sphere whatever its outline: a flat
+    /// slab 0.2 thick had a 2 m ball for a body. The hull's box is the solid's box.
+    #[test]
+    fn a_convex_extrusion_collides_as_its_hull() {
+        let collider = convex_extrusion_collider(&square(), 0.2);
+        assert!(matches!(collider.shape, ColliderShape::ConvexHull(_)));
+        let aabb = collider.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+        assert!((Vec3::from(aabb.min) - Vec3::new(-0.5, -0.1, -0.5)).length() < 1e-5, "{aabb:?}");
+        assert!((Vec3::from(aabb.max) - Vec3::new(0.5, 0.1, 0.5)).length() < 1e-5, "{aabb:?}");
+    }
+
+    /// **A ring collides as its slices, so its hole is a hole**: one hull per slice, together
+    /// spanning the outer outline, none reaching the centre.
+    #[test]
+    fn a_ring_extrusion_collides_as_its_slices() {
+        let (inner, outer) = (circle(0.25, 16), circle(0.5, 16));
+        let collider = ring_extrusion_collider(&inner, &outer, 0.2);
+        let ColliderShape::Compound(parts) = &collider.shape else { panic!("a ring is not one hull") };
+        assert_eq!(parts.len(), 16);
+        let aabb = collider.compute_aabb(Vec3::ZERO, Quat::IDENTITY);
+        assert!((aabb.max.x - 0.5).abs() < 1e-5 && (aabb.min.x + 0.5).abs() < 1e-5, "{aabb:?}");
+        for (_, part) in parts {
+            let ColliderShape::ConvexHull(hull) = &**part else { panic!("a slice is not a hull") };
+            let nearest = hull.vertices.iter().map(|v| Vec3::new(v.x, 0.0, v.z).length()).fold(f32::MAX, f32::min);
+            assert!(nearest > 0.24, "a slice reaches into the hole: {nearest}");
+        }
+        // Outlines that do not pair: the outer outline's hull, not a panic.
+        let filled = ring_extrusion_collider(&circle(0.25, 8), &outer, 0.2);
+        assert!(matches!(filled.shape, ColliderShape::ConvexHull(_)));
     }
 }
 

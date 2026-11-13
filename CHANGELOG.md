@@ -88,6 +88,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Geometry made from points is scene data** (`MeshData` is saved, decided 2026-11-14). It was "the game's to make
+  again", and that was true of a save and not of the editor's own loop: ▶ snapshots the scene and ⏹ re-creates what
+  play destroyed from that snapshot, so a breakable or a pickup built from points came back with no geometry. A scene
+  stores a `MeshData` as one list per vertex channel and leaves out a channel every vertex holds at its default; it
+  reads back to the bit, and a damaged one is an error. Cost, measured in release: half a millisecond per thousand
+  vertices to capture or restore (59 400 vertices: 29 ms and 36 ms). `SimpleApp::spawn_textured_convex_extrusion` and
+  `spawn_textured_ring_extrusion` spawn `MeshData` and collide as their shape — the solid's convex hull, and one hull
+  per slice of a ring so its hole is a hole — where both had a unit sphere for a body whatever the outline; mismatched
+  ring outlines are refused instead of indexing past the shorter one. What still cannot be saved (a mesh put straight
+  onto the GPU from points) is named in the studio's console at a save and at ▶ (`mesh_sync::undescribed_meshes`).
+
 - **A model's clips edited in the timeline are the scene's** (`gltf_model::GltfClipEdits`, decided 2026-11-14). The
   timeline edits an entity's own copy of its clips; a reopened model read them from its file again and the edits were
   gone. While a model's player plays other clips than its file's, `sync_clip_edits` keeps them beside it for the save,
