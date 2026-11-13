@@ -66,8 +66,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   two shadows, a caster off screen into the frame, a cookie the right way round, nothing shadowing itself; five stay
   the desktop's, three measuring how a light's size softens its shadow, which one tap does not, and two the deferred
   pass's contact shadows. `every_local_light_casts_when_it_asks` reads 564–584 pixels across its five layouts there
-  (6 apart on the desktop).
-  **Not yet measured on a phone.**
+  (6 apart on the desktop). Measured on an Adreno 618 — Nişancı, portrait, a casting point light 3 m over its floor
+  for the measurement, 20 readings a build, in turn: it builds and draws (the compiler takes the new code); drawing the
+  light's six 512² layers costs nothing that shows (52.6 fps drawn and unread against 52.2 without them), and reading
+  them under a floor that fills the screen about 2.8 ms (45.7). The same game without a casting light reads as before
+  (88 against 86.7 and 96.6): its pipelines are what they were.
 
 - **The sun's shadow in a browser and on a phone.** The forward-only path drew no shadow map at all. It draws the sun's
   shadow now as a phone can afford: **one cascade** over the whole range (`csm::CASCADES_DRAWN`; 2048², one layer, 16 MiB,
