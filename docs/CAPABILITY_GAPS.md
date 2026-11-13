@@ -1575,8 +1575,10 @@ Two measured caveats worth keeping:
   the default is still that blur, and the default's taps are one full-frame texel apart, so on a
   small source its halo barely leaves the source (a ring at 25 px read the same with bloom on and
   off).
-- **The fog knob is not a fog knob.** `environment_preset` also selects the sky and the overall
-  lighting mood, so fog cannot be changed independently of the scene's look.
+- ~~**The fog knob is not a fog knob.**~~ **Closed 2026-11-02** (this line stayed open until 2026-11-13):
+  `Renderer::fog` replaces the preset's fog outright — colour, density, height falloff, base height,
+  and since 2026-11-07 its `FogMode` — without touching the preset's sky or mood; see the distance
+  fog row above.
 
 ---
 
