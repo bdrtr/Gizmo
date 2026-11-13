@@ -86,6 +86,8 @@ pub fn full_scene_registry() -> SceneRegistry {
         // in its bind pose and never moved.
         reg_or_warn!(gizmo_renderer::gltf_model::GltfModel, "GltfModel");
         reg_or_warn!(gizmo_renderer::components::AnimationPlayer, "AnimationPlayer");
+        // A model's clips as the editor's timeline left them, played instead of the file's.
+        reg_or_warn!(gizmo_renderer::gltf_model::GltfClipEdits, "GltfClipEdits");
     }
 
     #[cfg(feature = "audio")]

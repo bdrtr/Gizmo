@@ -8,7 +8,7 @@
 /// Produced by the glTF loader (`gizmo-renderer`'s `asset::loaders::animation`):
 /// [`Keyframe::new`] for `LINEAR`/`STEP` samplers, [`Keyframe::with_tangents`] for
 /// `CUBICSPLINE`.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Keyframe<T> {
     /// Timestamp in **seconds**, measured from the start of the owning clip (the glTF
     /// sampler's input accessor value, copied verbatim — no rebasing to zero).
@@ -78,7 +78,7 @@ enum SegmentPos {
 /// This is the skeletal (GPU-skinning) counterpart of the transform-track
 /// [`crate::clip::Interpolation`]; the two enums are separate only because the two
 /// subsystems are (see [`crate::skeletal`]), and they must stay behaviourally identical.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum InterpolationMode {
     /// Blend the two bracketing keyframes with the caller-supplied interpolator at the
     /// normalized segment position — `lerp` for translation/scale, `slerp` for rotation
@@ -111,7 +111,7 @@ pub enum InterpolationMode {
 /// is read-only data that any number of entities can play at different times at once.
 ///
 /// [`AnimationClip::translations`]: super::clip::AnimationClip::translations
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Track<T> {
     /// The glTF **global node index** this channel targets
     /// (`channel.target().node().index()`) — *not* a bone/joint index into

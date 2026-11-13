@@ -88,6 +88,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **A model's clips edited in the timeline are the scene's** (`gltf_model::GltfClipEdits`, decided 2026-11-14). The
+  timeline edits an entity's own copy of its clips; a reopened model read them from its file again and the edits were
+  gone. While a model's player plays other clips than its file's, `sync_clip_edits` keeps them beside it for the save,
+  and a reopened model plays them; an undo back to the file's clips takes them away. The file is never written: another
+  scene may use it, and it may be someone else's asset. The skeletal clip types are `serde` and `PartialEq` for it.
+
 - **Shapes built in code survive a save and a reopen** (`mesh_sync::describe_meshes`). The spawner helpers,
   `SimpleApp`'s shapes and a game's own `AssetManager::create_sphere(..)` hand an entity a GPU `Mesh` and no
   `MeshSource`, so such an entity saved as a transform with nothing to draw. Every builder now names its mesh with all

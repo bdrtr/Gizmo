@@ -38,7 +38,7 @@ use gizmo_math::{Quat, Vec3};
 /// actually writes wins (of the `translations`, only Hips-named tracks write at all).
 /// glTF morph-target (weight) channels have no representation here; the loader
 /// discards them.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnimationClip {
     /// The glTF animation's name, or `"unnamed"` when the asset supplied none.
     ///

@@ -1070,6 +1070,8 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // A glTF model read from a scene file gets its skeletons and clips back from the model's file
     // before anything poses it.
     crate::renderer::gltf_model::resolve_gltf_models(world, renderer);
+    // A model whose clips the editor has changed keeps those clips for the save to write.
+    crate::renderer::gltf_model::sync_clip_edits(world);
     let animation_dt = world
         .get_resource::<gizmo_core::time::Time>()
         .map(|t| t.dt())
@@ -13487,6 +13489,78 @@ fn material_surface(input: SurfaceInput) -> Surface {
             let (changed, total) = changed_pixels(&posed, &reopened, 128);
             assert_eq!(changed, 0, "the reopened model stands otherwise: {changed}/{total} pixels differ");
         });
+        let _ = std::fs::remove_file(&scene_path);
+    }
+
+    /// **A model's clips, edited in the editor, are what a reopened scene plays.** The skinned model's
+    /// clip turned the other way (its last rotation key mirrored, as a timeline edit leaves a clip),
+    /// held half way and drawn; saved; reopened by a fresh renderer and world: the edited pose, byte for
+    /// byte, and not the file's. The file was not written.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn an_edited_clip_is_what_a_reopened_model_plays() {
+        use gizmo_renderer::components::AnimationPlayer;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let model = write_skinned_gltf();
+        let file_before = std::fs::read(&model).expect("the model");
+        let scene_path = format!("{model}.edited.scene");
+        let hold = |world: &mut World, time: f32| {
+            for (_, mut player) in world.query_mut::<(gizmo_core::Entity, &mut AnimationPlayer)>().iter_mut() {
+                player.current_time = time;
+                player.speed = 0.0;
+            }
+        };
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            {
+                let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                commands.spawn_gltf(Vec3::ZERO, &model, false).expect("the model loads");
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            hold(&mut world, 0.5);
+            let file_pose = render_world(&mut renderer, &mut world).await;
+            // The edit: the clip's last rotation key mirrored, on a copy of the table, as the timeline
+            // writes one.
+            for (_, mut player) in world.query_mut::<(gizmo_core::Entity, &mut AnimationPlayer)>().iter_mut() {
+                let mut clips = player.animations.to_vec();
+                let key = clips[0].rotations[0].keyframes.last_mut().expect("a key");
+                key.value = key.value.inverse();
+                player.animations = std::sync::Arc::from(clips.into_boxed_slice());
+            }
+            let edited_pose = render_world(&mut renderer, &mut world).await;
+            let (moved, total) = changed_pixels(&file_pose, &edited_pose, 128);
+            assert!(moved >= 200, "the edit changed {moved}/{total} pixels: it is not an edit that shows");
+            crate::scene::SceneData::save(&world, &scene_path, &crate::full_scene_registry()).expect("saves");
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &crate::full_scene_registry()).expect("loads");
+            {
+                let manager = renderer.asset_manager.clone();
+                let mut assets = manager.write().unwrap();
+                crate::renderer::asset_loading::run_asset_loading_system(
+                    &mut world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    &mut assets,
+                );
+            }
+            let reopened = render_world(&mut renderer, &mut world).await;
+            let (changed, total) = changed_pixels(&edited_pose, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened model plays other clips than the edited ones: {changed}/{total} pixels differ");
+        });
+        assert_eq!(std::fs::read(&model).expect("the model"), file_before, "the model's file was written");
         let _ = std::fs::remove_file(&scene_path);
     }
 

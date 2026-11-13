@@ -40,10 +40,6 @@ impl<'a> Commands<'a> {
                     .add_component(root, gizmo_physics_core::components::GlobalTransform::default());
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", path)));
-                // The file it came from, which a scene saves; its skeletons and clips are given
-                // below, so the resolver has nothing to do for it this run.
-                self.world.add_component(root, gizmo_renderer::gltf_model::GltfModel::new(path));
-                self.world.add_component(root, gizmo_renderer::gltf_model::GltfModelResolved);
                 self.world
                     .add_component(root, gizmo_core::component::Children(Vec::new()));
 
@@ -83,6 +79,9 @@ impl<'a> Commands<'a> {
                     );
                 }
 
+                // The file it came from, which a scene saves, and the clips it gave: the resolver
+                // has nothing to do for this model, and an edit to its clips is told from them.
+                gizmo_renderer::gltf_model::mark_spawned(self.world, root, path);
                 // Bir-kez yaşam-döngüsü olayı: ağır bir asset yüklendi + sahneye spawn'landı.
                 tracing::info!(
                     path,
@@ -144,8 +143,6 @@ impl<'a> Commands<'a> {
                     .add_component(root, gizmo_physics_core::components::GlobalTransform::default());
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", completion.path)));
-                self.world.add_component(root, gizmo_renderer::gltf_model::GltfModel::new(completion.path.clone()));
-                self.world.add_component(root, gizmo_renderer::gltf_model::GltfModelResolved);
                 self.world
                     .add_component(root, gizmo_core::component::Children(Vec::new()));
 
@@ -185,6 +182,7 @@ impl<'a> Commands<'a> {
                     );
                 }
 
+                gizmo_renderer::gltf_model::mark_spawned(self.world, root, &completion.path);
                 // Bir-kez yaşam-döngüsü olayı: asenkron import GPU'ya alındı + spawn'landı.
                 tracing::info!(
                     path = %completion.path,

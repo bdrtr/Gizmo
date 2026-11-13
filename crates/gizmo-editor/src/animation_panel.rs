@@ -34,8 +34,11 @@
 //!
 //! `AnimationPlayer::animations` is a per-spawn `Arc<[AnimationClip]>` — the glTF spawner builds a
 //! fresh one per instance, so a hundred copies of a model hold a hundred independent clip sets.
-//! Editing here therefore changes one entity and neither its siblings nor the file on disk. That
-//! is a real limitation, not a design: writing back to the asset is a separate job.
+//! Editing here therefore changes one entity and neither its siblings nor the file on disk — and
+//! that is the design, decided 2026-11-14: the edits are the scene's. A glTF model whose clips are
+//! not its file's carries `gizmo_renderer::gltf_model::GltfClipEdits`, which the scene saves and a
+//! reopened model plays; an undo back to the file's clips takes it away. The file is never written:
+//! another scene may use it, and it may be someone else's asset.
 //!
 //! # What the prototype has that this does not
 //!
