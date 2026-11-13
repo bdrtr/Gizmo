@@ -50,6 +50,7 @@ fn game_inputs() -> SceneSetupInputs {
         elapsed_time: 7.5,
         light_cookies: Default::default(),
         shadow_settings: Default::default(),
+        scene_extent: None,
     }
 }
 
@@ -68,6 +69,7 @@ fn editor_inputs() -> SceneSetupInputs {
         elapsed_time: 7.5,
         light_cookies: Default::default(),
         shadow_settings: Default::default(),
+        scene_extent: None,
     }
 }
 

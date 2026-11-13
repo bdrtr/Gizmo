@@ -450,6 +450,9 @@ pub struct SceneSetupInputs {
     pub light_cookies: crate::renderer::cookies::CookieTable,
     /// How far the cascades reach and how they split it — `renderer.shadow_settings`.
     pub shadow_settings: crate::renderer::ShadowSettings,
+    /// The box around what the last frame drew — `renderer.scene_extent.last()` — which the cascades
+    /// are fitted into when `shadow_settings.fit_to_scene` says so. `None` leaves them the distance.
+    pub scene_extent: Option<crate::math::Aabb>,
 }
 
 /// Build one frame's scene state, for either render path.
@@ -475,6 +478,10 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
     // The editor fitted them to its first light when there was no sun, until 2026-11-11; every
     // lookup asks for the sun first, so nothing ever read them, and a light that should cast now
     // says so itself (`casts_shadows`).
+    // As deep as this view sees into what the last frame drew, where the settings fit them to it.
+    let seen = inputs.scene_extent.filter(|_| inputs.shadow_settings.fit_to_scene).and_then(|extent| {
+        crate::renderer::seen_depth(inputs.camera.view_proj, inputs.camera.position, inputs.camera.forward, extent)
+    });
     let cascades = crate::renderer::compute_directional_cascades_with(
         inputs.camera.position,
         inputs.camera.forward,
@@ -484,6 +491,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
         inputs.camera.far,
         lights.sun_dir,
         inputs.shadow_settings,
+        seen,
     );
     let cascade_view_projs = cascades.view_projs;
 
@@ -676,6 +684,44 @@ mod tests {
         assert!(l.shadow_casters.is_empty(), "neither light asked to cast");
     }
 
+    /// The setup fits the sun's cascades into the box the last frame drew when the settings ask for it —
+    /// as deep as this view sees into it, rounded as `fitted_reach` rounds — and leaves them the distance
+    /// when they do not, when there is no box, or when the view does not see it.
+    #[test]
+    fn the_cascades_fit_into_what_the_last_frame_drew() {
+        use crate::renderer::components::{DirectionalLight, LightRole};
+        let eye = Vec3::new(0.0, 2.3, 2.3);
+        let forward = Vec3::new(0.0, -(0.85f32).sin(), -(0.85f32).cos());
+        let view_proj = gizmo_math::Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, 0.45, 0.1, 2000.0)
+            * gizmo_math::Mat4::look_at_rh(eye, eye + forward, Vec3::Y);
+        let table = crate::math::Aabb::new(Vec3::new(-0.7, -0.1, -1.3), Vec3::new(0.7, 0.15, 1.3));
+        let inputs = |fit: bool, scene_extent: Option<crate::math::Aabb>| SceneSetupInputs {
+            camera: crate::renderer::CameraFrame { view_proj, position: eye, forward, near: 0.1, far: 2000.0, exposure: 1.0 },
+            aspect: 0.45,
+            cam_fov: std::f32::consts::FRAC_PI_4,
+            environment: Default::default(),
+            sun_shadow_maps: true,
+            local_shadow_maps: false,
+            elapsed_time: 0.0,
+            light_cookies: Default::default(),
+            shadow_settings: crate::renderer::ShadowSettings::default().with_fit_to_scene(fit),
+            scene_extent,
+        };
+        let mut world = World::new();
+        let sun = world.spawn();
+        world.add_component(sun, Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_x(-1.0)));
+        world.add_component(sun, DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun));
+        let reach = |inputs: SceneSetupInputs| collect_scene_setup(&world, &inputs).frame.shadows.cascade_splits[3];
+
+        let seen = crate::renderer::seen_depth(view_proj, eye, forward, table).expect("the table is in view");
+        assert_eq!(reach(inputs(true, Some(table))), crate::renderer::fitted_reach(seen));
+        assert!(reach(inputs(true, Some(table))) < 8.0, "{}", reach(inputs(true, Some(table))));
+        assert_eq!(reach(inputs(false, Some(table))), crate::renderer::SHADOW_DISTANCE);
+        assert_eq!(reach(inputs(true, None)), crate::renderer::SHADOW_DISTANCE);
+        let behind = crate::math::Aabb::new(Vec3::new(-1.0, 0.0, 5.0), Vec3::new(1.0, 1.0, 7.0));
+        assert_eq!(reach(inputs(true, Some(behind))), crate::renderer::SHADOW_DISTANCE);
+    }
+
     /// The frame's shadow maps are the sun's cascades only when there is a sun — every lookup of
     /// them asks for one first — and every casting local light's layers whatever the sky.
     #[test]
@@ -698,6 +744,7 @@ mod tests {
             elapsed_time: 0.0,
             light_cookies: Default::default(),
             shadow_settings: Default::default(),
+            scene_extent: None,
         };
         let mut world = World::new();
         let spot = world.spawn();

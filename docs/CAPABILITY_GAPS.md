@@ -1018,8 +1018,11 @@ cube cookies for point lights, and no cookies on web. Each item:
   per fragment, in the tier that draws backs (the front's push shadowed a panel's back the sun shone on: 84 against
   194, 194 both now). It covers **40 m** by default there (`SHADOW_DISTANCE`): over 100 m that cascade's texels were
   about 10 cm and a crate's shadow stepped at its edges; over 40 m about 4 cm, and two runs each, in turn, read 100.6 fps
-  against 98.9 — it costs nothing (one earlier reading of 73 was the phone in use). **Still open:** no local light's
-  shadow and no cookie on that path (their group holds three textures more).
+  against 98.9 — it costs nothing (one earlier reading of 73 was the phone in use). Since 2026-11-13 it reaches only as
+  deep as the camera sees into what the last frame drew (`ShadowSettings::fit_to_scene`, `csm::seen_depth`), rounded up
+  to a half octave: `pinbol`'s table, 4.2 m deep, took 31.5 mm texels over 40 m and takes 4.5 mm over 5.66 m — its
+  bumpers' shadows were faint smudges and are whole, for about 0.3 ms on that phone (108.8 fps against 112.0 and 112.8).
+  **Still open:** no local light's shadow and no cookie on that path (their group holds three textures more).
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01; down to a coin since 2026-11-11.**
   `DirectionalLight::contact_shadow_length` (metres, 0 = off, the default). The deferred lighting pass
   marches from each pixel toward the sun in screen space against the depth buffer: pixel by pixel,

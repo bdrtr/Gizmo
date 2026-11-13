@@ -240,6 +240,9 @@ pub struct Renderer {
     /// How far the sun's cascaded shadows reach and how the cascades split it — see
     /// [`ShadowSettings`](crate::csm::ShadowSettings). The defaults are the old constants.
     pub shadow_settings: crate::csm::ShadowSettings,
+    /// The box around what the last frame drew, which `shadow_settings.fit_to_scene` fits the cascades
+    /// into — see [`SceneExtent`](crate::csm::SceneExtent). The game path's walk fills it.
+    pub scene_extent: crate::csm::SceneExtent,
     /// Half a step of noise before the 8-bit output, against banding in smooth dark gradients — a
     /// sky, a vignette, a light's falloff on a wall. Off by default, so frames are byte-identical
     /// to before unless asked.

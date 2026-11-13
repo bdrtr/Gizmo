@@ -356,8 +356,11 @@ pub fn app() -> App<SimpleSceneState> {
 /// Masa, ışık, kamera, HUD (pencere de GPU da gerekmez).
 fn setup(world: &mut World, font: gizmo::renderer::text::FontId) -> Game {
     let table = Table::new(world, true);
+    // Güneş sağ önden, 54° yukarıdan: gölgeler sola ve geriye düşer. Önceden tam kameranın baktığı
+    // yöne (−z) 63° iniyordu; her gölge kendi cisminin arkasına düştü ve cisim onu kameradan sakladı —
+    // 16 cm'lik bir tamponun 8 cm'lik gölgesi, tamponun kapattığı 14 cm'nin içinde kalıyordu.
     world.spawn_bundle((
-        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_x(-1.1)),
+        Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.7) * Quat::from_rotation_x(-0.95)),
         GlobalTransform::default(),
         DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 2.4, LightRole::Sun),
     ));

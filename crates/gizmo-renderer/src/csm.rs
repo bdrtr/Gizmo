@@ -2,7 +2,7 @@
 //! several cascades, each rendered to a layer of a `depth2d_array` with its own light
 //! orthographic projection (tighter texel density near the camera).
 
-use gizmo_math::{Mat4, Vec3};
+use gizmo_math::{Aabb, Frustum, Mat4, Vec3, Vec3A};
 
 /// Must match `texture_depth_2d_array` layer count and `SceneUniforms.light_view_proj` length.
 pub const CASCADE_COUNT: usize = 4;
@@ -16,10 +16,10 @@ pub const CASCADES_DRAWN: usize = if cfg!(gizmo_forward_only) { 1 } else { CASCA
 
 /// Resolution (width = height) of each cascade depth map, on this build's path. 3072 on the desktop
 /// (was 2048) so a crisp ~1-texel PCF edge doesn't read as blocky on close-up geometry; the four
-/// layers are 144 MiB, which a desktop GPU holds. **1024 on the forward-only path** — a browser's, a
-/// phone's — where they are 16 MiB: that path draws the sun's cascades since 2026-11-12, and a phone
-/// has neither the memory nor the fill for 3072. Either way allocated only once a frame draws them
-/// (`SceneState::ensure_sun_shadow_maps`).
+/// layers are 144 MiB, which a desktop GPU holds. **2048 on the forward-only path** — a browser's, a
+/// phone's — where its one layer (`CASCADES_DRAWN`) is 16 MiB: that path draws the sun's cascade since
+/// 2026-11-12, and a phone has neither the memory nor the fill for four of 3072. Either way allocated
+/// only once a frame draws them (`SceneState::ensure_sun_shadow_maps`).
 pub const SHADOW_MAP_RES: u32 = if cfg!(gizmo_forward_only) { 2048 } else { 3072 };
 
 /// Maximum world distance the cascades cover, independent of the camera's far plane.
@@ -136,6 +136,7 @@ pub fn compute_directional_cascades(
         cam_far,
         light_dir,
         ShadowSettings::default(),
+        None,
     )
 }
 
@@ -167,15 +168,38 @@ pub struct ShadowSettings {
     /// is why it is not. Off leaves that path's frame as it was before it had a shadow at all. The
     /// desktop draws the sun's shadow whatever this says.
     pub forward_only: bool,
+    /// Whether the cascades reach only as deep as the camera sees into the scene — [`seen_depth`], past
+    /// the fade band and rounded up to a half octave ([`fitted_reach`]) — when that is short of
+    /// [`distance`](Self::distance). **On where one cascade is drawn** (`CASCADES_DRAWN`, the
+    /// forward-only path): it holds the whole range, so its texels follow the range, and `pinbol`'s
+    /// table, 4.2 m deep from where its camera stands, was shadowed in 31.5 mm texels over 40 m (a phone
+    /// held upright, 60° of view) where 5.66 m of reach gives 4.5 mm. Off on the desktop, whose four cascades already
+    /// put fine texels near the camera; and the volumetric light reads them in the air past the last
+    /// surface, which a fit to the surfaces would leave unshadowed.
+    pub fit_to_scene: bool,
 }
 
 impl Default for ShadowSettings {
     fn default() -> Self {
-        Self { distance: SHADOW_DISTANCE, lambda: CASCADE_LAMBDA, depth_bias: 1.0, normal_offset: 1.0, forward_only: true }
+        Self {
+            distance: SHADOW_DISTANCE,
+            lambda: CASCADE_LAMBDA,
+            depth_bias: 1.0,
+            normal_offset: 1.0,
+            forward_only: true,
+            fit_to_scene: CASCADES_DRAWN == 1,
+        }
     }
 }
 
 impl ShadowSettings {
+    /// The cascades fitted to how deep the camera sees into the scene, or not (see
+    /// [`fit_to_scene`](Self::fit_to_scene)).
+    pub fn with_fit_to_scene(mut self, on: bool) -> Self {
+        self.fit_to_scene = on;
+        self
+    }
+
     /// The sun's shadow on the forward-only path, or not (see [`forward_only`](Self::forward_only)).
     pub fn with_forward_only(mut self, on: bool) -> Self {
         self.forward_only = on;
@@ -204,7 +228,9 @@ impl ShadowSettings {
     }
 }
 
-/// [`compute_directional_cascades`] with the reach and split blend given rather than the defaults.
+/// [`compute_directional_cascades`] with the reach and split blend given rather than the defaults,
+/// and how deep the camera sees into the scene ([`seen_depth`]; `None` when that is not known), which
+/// shortens the reach when [`ShadowSettings::fit_to_scene`] asks for it.
 pub fn compute_directional_cascades_with(
     cam_pos: Vec3,
     cam_forward: Vec3,
@@ -214,8 +240,12 @@ pub fn compute_directional_cascades_with(
     cam_far: f32,
     light_dir: Vec3,
     settings: ShadowSettings,
+    seen: Option<f32>,
 ) -> ShadowCascades {
-    let shadow_far = cam_far.min(settings.distance.max(1.0));
+    let mut shadow_far = cam_far.min(settings.distance.max(1.0));
+    if let Some(seen) = seen.filter(|d| settings.fit_to_scene && d.is_finite()) {
+        shadow_far = shadow_far.min(fitted_reach(seen));
+    }
     // One cascade drawn (`CASCADES_DRAWN`): it covers the whole distance, and every slot holds it.
     let splits = if CASCADES_DRAWN == 1 {
         [shadow_far; CASCADE_COUNT]
@@ -236,6 +266,134 @@ pub fn compute_directional_cascades_with(
         view_projs = [view_projs[0]; CASCADE_COUNT];
     }
     ShadowCascades { splits, view_projs }
+}
+
+/// How far along `forward` from `cam_pos` the farthest point of `scene` the camera can see lies — the
+/// deepest a surface the frame shades can be. `None` when the box is out of view, empty or not finite.
+///
+/// Exact for the box: the view's frustum and the box meet in a convex region, and its deepest point is
+/// one of its corners, each where three of the eleven planes bounding it meet — the frustum's four
+/// sides and its near plane, read out of `view_proj` (so a rolled or an orthographic camera is the one
+/// it is), and the box's six faces. The far plane is left out: what it cuts off, the cap on the reach
+/// cuts off too. 165 triples, solved relative to the camera so that a scene 2 km from the origin keeps
+/// its precision.
+///
+/// A box around everything a frame drew, against the next frame's view: a pinball table seen from 3 m
+/// is 4 m deep however much air the frustum holds, and a floor seen from above ends where the view's
+/// top edge meets it.
+pub fn seen_depth(view_proj: Mat4, cam_pos: Vec3, forward: Vec3, scene: Aabb) -> Option<f32> {
+    if scene.is_empty() || !scene.min.is_finite() || !scene.max.is_finite() {
+        return None;
+    }
+    let eye = Vec3A::from(cam_pos);
+    let frustum = Frustum::from_matrix(&view_proj);
+    let (lo, hi) = (scene.min - eye, scene.max - eye);
+    let mut planes = [(Vec3A::ZERO, 0.0f32); 11];
+    // Left, right, bottom, top, near: the frustum's own order, moved to the camera's origin.
+    for (slot, plane) in planes.iter_mut().zip(&frustum.planes()[..5]) {
+        *slot = (plane.normal, plane.distance + plane.normal.dot(eye));
+    }
+    planes[5] = (Vec3A::X, -lo.x);
+    planes[6] = (Vec3A::NEG_X, hi.x);
+    planes[7] = (Vec3A::Y, -lo.y);
+    planes[8] = (Vec3A::NEG_Y, hi.y);
+    planes[9] = (Vec3A::Z, -lo.z);
+    planes[10] = (Vec3A::NEG_Z, hi.z);
+    let forward = Vec3A::from(forward.normalize_or_zero());
+    let mut deepest: Option<f32> = None;
+    for i in 0..planes.len() {
+        for j in i + 1..planes.len() {
+            for k in j + 1..planes.len() {
+                let ((a, da), (b, db), (c, dc)) = (planes[i], planes[j], planes[k]);
+                let bc = b.cross(c);
+                let det = a.dot(bc);
+                if det.abs() < 1e-6 {
+                    continue;
+                }
+                let p = -(da * bc + db * c.cross(a) + dc * a.cross(b)) / det;
+                let tolerance = 1e-4 * (1.0 + p.abs().max_element());
+                if planes.iter().all(|&(n, d)| n.dot(p) + d >= -tolerance) {
+                    let depth = forward.dot(p);
+                    deepest = Some(deepest.map_or(depth, |d| d.max(depth)));
+                }
+            }
+        }
+    }
+    deepest
+}
+
+/// The reach the cascades are given for a scene seen `seen` metres deep ([`seen_depth`]): far enough
+/// that the deepest surface lies before the fade band ([`SHADOW_FADE_FRACTION`]) and takes its shadow
+/// whole, and rounded up to a half octave, at least 1 m. The rounding is what keeps the texel size
+/// still: the cascade's box is snapped to its texels (`a_static_point_keeps_its_sub_texel_phase`), and
+/// a reach that followed every centimetre of a moving camera would change their size every frame and
+/// crawl every shadow edge. It changes at the steps, by √2.
+pub fn fitted_reach(seen: f32) -> f32 {
+    let need = (seen / (1.0 - SHADOW_FADE_FRACTION)).max(1.0);
+    2f32.powf((need.log2() * 2.0).ceil() * 0.5)
+}
+
+/// The box around everything a frame's walks placed in the world — every view's, the probes' and the
+/// mirrors' included — which the next frame's views see into ([`seen_depth`]). A frame's own box is not
+/// known until its walk, and the walk needs the cascades it would fit: one frame behind, which only
+/// something that moved more than the √2 of rounding in one frame can feel.
+///
+/// Not the sky, a backdrop or the grid ([`takes`](Self::takes)). A box that is not finite leaves the
+/// frame unfitted.
+#[derive(Debug, Clone, Copy)]
+pub struct SceneExtent {
+    building: Aabb,
+    unbounded: bool,
+    last: Option<Aabb>,
+}
+
+impl Default for SceneExtent {
+    fn default() -> Self {
+        Self { building: Aabb::empty(), unbounded: false, last: None }
+    }
+}
+
+impl SceneExtent {
+    /// The frame is over: what it drew is what the next one sees into.
+    pub fn begin_frame(&mut self) {
+        self.last = (!self.unbounded && self.building.is_valid()).then_some(self.building);
+        self.building = Aabb::empty();
+        self.unbounded = false;
+    }
+
+    /// Something drawn this frame, where it is drawn.
+    pub fn include(&mut self, drawn: Aabb) {
+        if drawn.is_empty() {
+            return;
+        }
+        if drawn.min.is_finite() && drawn.max.is_finite() {
+            self.building = self.building.merge(drawn);
+        } else {
+            self.unbounded = true;
+        }
+    }
+
+    /// Whether a surface of this material is part of the scene's box: not the sky, a backdrop or the
+    /// grid, which are drawn around the camera or as scenery at any distance, not where the scene is.
+    /// Both draw paths' walks ask this.
+    pub fn takes(material_type: crate::components::MaterialType) -> bool {
+        use crate::components::MaterialType;
+        !matches!(
+            material_type,
+            MaterialType::Skybox | MaterialType::Backdrop | MaterialType::BackdropPlaced | MaterialType::Grid
+        )
+    }
+
+    /// What one walk drew — gathered on its own while the walk holds the renderer — added to the frame's.
+    pub fn absorb(&mut self, walk: SceneExtent) {
+        self.building = self.building.merge(walk.building);
+        self.unbounded |= walk.unbounded;
+    }
+
+    /// The box around what the last frame drew; `None` before one has, or when it was not finite.
+    pub fn last(&self) -> Option<Aabb> {
+        self.last
+    }
 }
 
 /// Logarithmic-linear split distances in **world units** along `cam_forward` from `cam_pos`.
@@ -696,16 +854,147 @@ mod tests {
     fn shadow_settings_default_to_the_old_constants() {
         let args = (Vec3::ZERO, Vec3::NEG_Z, 1.6, 0.8, 0.1, 1500.0, Vec3::new(0.3, -1.0, 0.2));
         let a = compute_directional_cascades(args.0, args.1, args.2, args.3, args.4, args.5, args.6);
-        let b = compute_directional_cascades_with(args.0, args.1, args.2, args.3, args.4, args.5, args.6, ShadowSettings::default());
+        let b = compute_directional_cascades_with(args.0, args.1, args.2, args.3, args.4, args.5, args.6, ShadowSettings::default(), None);
         assert_eq!(a.splits, b.splits);
         assert_eq!(a.view_projs, b.view_projs);
         let short = compute_directional_cascades_with(
             args.0, args.1, args.2, args.3, args.4, args.5, args.6,
             ShadowSettings::default().with_distance(40.0),
+            None,
         );
         assert!((short.splits[3] - 40.0).abs() < 1e-4, "{:?}", short.splits);
         assert_eq!(ShadowSettings::default().with_lambda(7.0).lambda, 1.0, "clamped");
         assert_eq!(ShadowSettings::default().with_distance(-3.0).distance, 1.0, "floored");
+    }
+
+    /// `pinbol`'s camera: 2.3 m up and back, pitched 0.85 rad down, a phone held upright.
+    fn table_camera(aspect: f32) -> (Mat4, Vec3, Vec3) {
+        let eye = Vec3::new(0.0, 2.3, 2.3);
+        let forward = Vec3::new(0.0, -(0.85f32).sin(), -(0.85f32).cos());
+        let view_proj = Mat4::perspective_rh(std::f32::consts::FRAC_PI_4, aspect, 0.1, 2000.0)
+            * Mat4::look_at_rh(eye, eye + forward, Vec3::Y);
+        (view_proj, eye, forward)
+    }
+
+    /// A box wholly in view is seen as deep as its deepest corner — what `pinbol`'s table is, and why its
+    /// cascade can be 6 m long rather than 40.
+    #[test]
+    fn a_box_in_view_is_seen_as_deep_as_its_deepest_corner() {
+        let (view_proj, eye, forward) = table_camera(0.45);
+        let table = Aabb::new(Vec3::new(-0.7, -0.1, -1.3), Vec3::new(0.7, 0.15, 1.3));
+        let deepest = (0..8)
+            .map(|i| {
+                let corner = Vec3::new(
+                    if i & 1 == 0 { -0.7 } else { 0.7 },
+                    if i & 2 == 0 { -0.1 } else { 0.15 },
+                    if i & 4 == 0 { -1.3 } else { 1.3 },
+                );
+                forward.dot(corner - eye)
+            })
+            .fold(f32::MIN, f32::max);
+        let seen = seen_depth(view_proj, eye, forward, table).expect("the table is in view");
+        assert!((seen - deepest).abs() < 1e-3, "seen {seen}, deepest corner {deepest}");
+        assert!(seen < 4.5, "{seen}");
+    }
+
+    /// A floor that runs to the horizon is seen only as far as the view's top edge meets it: from 10 m up,
+    /// pitched 60° down with a 60° view, that edge points 30° down and meets the floor's underside, 10.1 m
+    /// below, 17.5 m deep along the forward axis. Its corners are 500 m away and say nothing.
+    #[test]
+    fn a_floor_seen_from_above_ends_where_the_top_of_the_view_meets_it() {
+        let eye = Vec3::new(0.0, 10.0, 0.0);
+        let pitch = -60f32.to_radians();
+        let forward = Vec3::new(0.0, pitch.sin(), -pitch.cos());
+        let view_proj = Mat4::perspective_rh(60f32.to_radians(), 1.0, 0.1, 2000.0)
+            * Mat4::look_at_rh(eye, eye + forward, Vec3::Y);
+        let floor = Aabb::new(Vec3::new(-500.0, -0.1, -500.0), Vec3::new(500.0, 0.0, 500.0));
+        let seen = seen_depth(view_proj, eye, forward, floor).expect("the floor is in view");
+        let top_edge_down = forward.y + (-pitch).cos() * 30f32.to_radians().tan();
+        let expected = -10.1 / top_edge_down;
+        assert!((seen - expected).abs() < 0.02, "seen {seen}, expected {expected}");
+    }
+
+    /// What the camera cannot see, it is not fitted to — and a box that is no box is not one either.
+    #[test]
+    fn a_box_out_of_view_is_not_seen() {
+        let (view_proj, eye, forward) = table_camera(0.45);
+        let behind = Aabb::new(Vec3::new(-1.0, 0.0, 5.0), Vec3::new(1.0, 1.0, 7.0));
+        assert_eq!(seen_depth(view_proj, eye, forward, behind), None);
+        assert_eq!(seen_depth(view_proj, eye, forward, Aabb::empty()), None);
+        let endless = Aabb::new(Vec3::splat(f32::NEG_INFINITY), Vec3::splat(f32::INFINITY));
+        assert_eq!(seen_depth(view_proj, eye, forward, endless), None);
+    }
+
+    /// The reach is past the fade band and on a half octave: 4.1 m seen is 4.82 m needed, given 2^2.5.
+    #[test]
+    fn the_reach_rounds_up_to_a_half_octave_past_the_fade() {
+        assert!((fitted_reach(4.1) - 2f32.powf(2.5)).abs() < 1e-4, "{}", fitted_reach(4.1));
+        assert_eq!(fitted_reach(0.0), 1.0);
+        assert_eq!(fitted_reach(-3.0), 1.0);
+        for seen in [0.5f32, 1.0, 3.3, 7.9, 40.0, 333.0] {
+            let reach = fitted_reach(seen);
+            assert!(reach * (1.0 - SHADOW_FADE_FRACTION) >= seen - 1e-4, "{seen} → {reach}");
+            assert!(reach * (1.0 - SHADOW_FADE_FRACTION) < seen * std::f32::consts::SQRT_2 + 1.0, "{seen} → {reach}");
+        }
+    }
+
+    /// Fitted, the cascades reach as deep as the scene and their texels shrink with it; a scene deeper
+    /// than the distance keeps the distance; off, nothing changes; and two depths on the same half
+    /// octave give the same matrices, which is what keeps a shadow edge from crawling as the camera
+    /// moves.
+    #[test]
+    fn fitted_cascades_reach_as_deep_as_the_scene() {
+        let fit = ShadowSettings::default().with_fit_to_scene(true);
+        let cascades = |settings: ShadowSettings, seen: Option<f32>| {
+            compute_directional_cascades_with(
+                Vec3::new(0.0, 2.3, 2.3),
+                Vec3::new(0.0, -0.75, -0.66).normalize(),
+                0.45,
+                std::f32::consts::FRAC_PI_4,
+                0.1,
+                2000.0,
+                Vec3::new(-0.4, -0.8, -0.45).normalize(),
+                settings,
+                seen,
+            )
+        };
+        let width = |c: &ShadowCascades| 2.0 / c.view_projs[CASCADE_COUNT - 1].x_axis.truncate().length();
+        let table = cascades(fit, Some(4.1));
+        assert!((table.splits[CASCADE_COUNT - 1] - fitted_reach(4.1)).abs() < 1e-4, "{:?}", table.splits);
+        let whole = cascades(fit.with_fit_to_scene(false), Some(4.1));
+        assert_eq!(whole.splits[CASCADE_COUNT - 1], SHADOW_DISTANCE);
+        assert!(width(&table) * 4.0 < width(&whole), "{} against {}", width(&table), width(&whole));
+        assert_eq!(cascades(fit, Some(1000.0)).splits[CASCADE_COUNT - 1], SHADOW_DISTANCE);
+        assert_eq!(cascades(fit, None).splits[CASCADE_COUNT - 1], SHADOW_DISTANCE);
+        assert_eq!(cascades(fit, Some(f32::NAN)).splits[CASCADE_COUNT - 1], SHADOW_DISTANCE);
+        assert_eq!(cascades(fit, Some(4.1)).view_projs, cascades(fit, Some(4.6)).view_projs);
+        assert_eq!(ShadowSettings::default().fit_to_scene, CASCADES_DRAWN == 1);
+    }
+
+    /// The box a frame drew is the next frame's, whole; a frame that drew nothing leaves none, and one
+    /// that drew something without end leaves the next unfitted rather than fitted to the rest.
+    #[test]
+    fn the_scene_extent_is_the_last_frames() {
+        let mut extent = SceneExtent::default();
+        assert_eq!(extent.last(), None);
+        extent.include(Aabb::new(Vec3::ZERO, Vec3::ONE));
+        extent.include(Aabb::new(Vec3::splat(-2.0), Vec3::splat(-1.0)));
+        extent.include(Aabb::empty());
+        assert_eq!(extent.last(), None, "not before the frame is over");
+        extent.begin_frame();
+        assert_eq!(extent.last(), Some(Aabb::new(Vec3::splat(-2.0), Vec3::ONE)));
+        extent.begin_frame();
+        assert_eq!(extent.last(), None, "a frame that drew nothing");
+        extent.include(Aabb::new(Vec3::ZERO, Vec3::ONE));
+        extent.include(Aabb::new(Vec3::ZERO, Vec3::new(f32::INFINITY, 1.0, 1.0)));
+        extent.begin_frame();
+        assert_eq!(extent.last(), None, "a frame that drew something without end");
+        let mut walk = SceneExtent::default();
+        walk.include(Aabb::new(Vec3::splat(3.0), Vec3::splat(4.0)));
+        extent.include(Aabb::new(Vec3::ZERO, Vec3::ONE));
+        extent.absorb(walk);
+        extent.begin_frame();
+        assert_eq!(extent.last(), Some(Aabb::new(Vec3::ZERO, Vec3::splat(4.0))), "two walks, one frame");
     }
 
     // ── Shadow-distance fade (the cure for the hard brightness step at SHADOW_DISTANCE) ──

@@ -130,6 +130,7 @@ fn draw_studio_frame(
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
+            scene_extent: renderer.scene_extent.last(),
         },
     );
     let cascade_mats = setup.cascade_view_projs;
@@ -170,6 +171,9 @@ fn draw_studio_frame(
     let mut game_view_rendered = false;
     // Filled inside the block below, kept with the renderer after it.
     let mut render_stats = gizmo::renderer::components::RenderStats::default();
+    // The box around what this walk draws, the next frame's to fit its cascades into — as the game's
+    // walk keeps it (`ShadowSettings::fit_to_scene`). Not the editor's own furniture.
+    let mut drawn_extent = gizmo::renderer::SceneExtent::default();
 
     CACHE.with(|cache_ref| {
         let mut cache = cache_ref.borrow_mut();
@@ -245,6 +249,9 @@ fn draw_studio_frame(
                 // One `Aabb::transform` for the camera test AND every cascade test (and the
                 // debug-AABB push below reuses it) — `classify_visibility` redid it per frustum.
                 let world_aabb = mesh.bounds.transform(&model);
+                if gizmo::renderer::SceneExtent::takes(mat.material_type) && editor_only.get(e).is_none() {
+                    drawn_extent.include(world_aabb);
+                }
                 let routing = gizmo::renderer::routing::route(mat.material_type);
                 let camera_visible = if gizmo::renderer::is_camera_locked(mat.material_type) {
                     true
@@ -724,6 +731,7 @@ fn draw_studio_frame(
     // Kept with the renderer, and published to the world at the next frame's preparation, as the
     // game's draw does: the draw reads the world, it does not write it.
     renderer.render_stats = Some(render_stats);
+    renderer.scene_extent.absorb(drawn_extent);
 
     // --- 3. POST-PROCESSING (Bloom + Tone Mapping → Ekrana Yaz) ---
     // Scoped so the resource borrow ends before the game view needs the world again.
@@ -855,6 +863,7 @@ fn record_game_view(
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
+            scene_extent: renderer.scene_extent.last(),
         },
     );
     let cascades = setup.cascade_view_projs.map(|m| m.to_cols_array_2d());

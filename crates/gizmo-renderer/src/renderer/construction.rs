@@ -717,6 +717,7 @@ impl Renderer {
             motion_history: Default::default(),
             light_cookies: Default::default(),
             shadow_settings: Default::default(),
+            scene_extent: Default::default(),
             fog: None,
             sky: None,
             deband_dither: false,

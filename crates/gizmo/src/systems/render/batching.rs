@@ -518,6 +518,9 @@ pub(super) fn collect_draw_items(
     let wire_global = world.get_resource::<super::WireframeConfig>().is_some_and(|c| c.global);
     let wire_any = wire_global || wire_on.iter().next().is_some();
     let occluded_objects = std::cell::Cell::new(0u32);
+    // The box around what this walk placed in the world, for the next frame's cascades
+    // (`ShadowSettings::fit_to_scene`). In a cell: the walk holds the renderer.
+    let drawn_extent = std::cell::Cell::new(crate::renderer::SceneExtent::default());
     let reflections = world.query::<&crate::renderer::components::PlanarReflection>();
     let skip_mirrors = renderer.skip_mirrors;
     let skip_sky = renderer.skip_sky;
@@ -627,6 +630,12 @@ pub(super) fn collect_draw_items(
                 // redo it per frustum — 5× here, once for the camera and once per cascade —
                 // for the same box and the same answer.
                 let drawn_world_aabb = $mesh.bounds.transform(&drawn_model);
+                // In the scene's box whether or not this view sees it: the next frame's view may.
+                if crate::renderer::SceneExtent::takes($mat.material_type) {
+                    let mut extent = drawn_extent.get();
+                    extent.include(drawn_world_aabb);
+                    drawn_extent.set(extent);
+                }
                 let camera_visible = match crate::renderer::classify_visibility_world(
                     &frustum,
                     &shadow_frusta,
@@ -960,6 +969,7 @@ pub(super) fn collect_draw_items(
         }
         
         renderer.occluded_objects = occluded_objects.get();
+        renderer.scene_extent.absorb(drawn_extent.get());
 
         let mut local_instances: Vec<crate::renderer::gpu_types::InstanceRaw> = std::mem::take(&mut cache.instances);
         let mut local_draw_items: Vec<DrawItem> = std::mem::take(&mut cache.draw_items);

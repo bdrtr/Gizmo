@@ -334,6 +334,9 @@ pub enum SimulationDetail<'a> {
 /// drew the whole particle ring with nothing alive; and it never asked for the GPU bodies' readback,
 /// which their entities follow.
 pub fn draw_ahead_of_views(world: &World, renderer: &mut Renderer, detail: SimulationDetail) {
+    // What the last frame drew is what this one's views see into (`ShadowSettings::fit_to_scene`) —
+    // the captures below included.
+    renderer.scene_extent.begin_frame();
     capture_irradiance_volume(world, renderer);
     capture_reflection_probes(world, renderer);
     renderer.planar.begin_frame();
@@ -1526,6 +1529,7 @@ fn draw_camera_view(
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
+            scene_extent: renderer.scene_extent.last(),
         },
     );
     let light_view_projs: [[[f32; 4]; 4]; 4] =
@@ -9692,6 +9696,55 @@ mod golden_render_tests {
             world.query_mut::<&mut MeshRenderer>().get_mut(e).expect("renderer").shadows = ShadowCasting::Off;
             let (_, silent) = crate::systems::render::batching::collect_draw_items(&world, &mut renderer, view_proj, &[cascade; 4], Vec3::ZERO);
             assert_eq!(silent, 0, "unseen and casting nothing, and still uploaded");
+        });
+    }
+
+    /// The walk keeps the box around what it drew, for the next frame's cascades to fit into
+    /// (`ShadowSettings::fit_to_scene`): the two cubes are in it, one of them behind the camera, and the
+    /// sky that wraps them both is not — or every scene with a sky would be a kilometre deep.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_walk_keeps_the_box_around_what_it_drew() {
+        use crate::renderer::components::MaterialType;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            for (at, half, kind) in [
+                (Vec3::new(-1.0, 0.5, 0.0), 0.5, MaterialType::Pbr),
+                (Vec3::new(2.0, 0.5, 9.0), 0.5, MaterialType::Pbr),
+                (Vec3::ZERO, 500.0, MaterialType::Skybox),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(Vec3::splat(half)));
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                let mut material = Material::new(tex.clone());
+                material.material_type = kind;
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 3.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.4,
+                primary: true,
+                ..Default::default()
+            });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await;
+            assert_eq!(renderer.scene_extent.last(), None, "the first frame has no last one");
+            render_world(&mut renderer, &mut world).await;
+            let drawn = renderer.scene_extent.last().expect("the first frame's box");
+            let near = |a: gizmo_math::Vec3A, b: Vec3| (a - gizmo_math::Vec3A::from(b)).abs().max_element() < 1e-4;
+            assert!(near(drawn.min, Vec3::new(-1.5, 0.0, -0.5)) && near(drawn.max, Vec3::new(2.5, 1.0, 9.5)), "{drawn:?}");
         });
     }
 

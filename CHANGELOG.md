@@ -235,6 +235,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A single cascade reaches only as deep as the camera sees into the scene** (`ShadowSettings::fit_to_scene`, on where
+  one cascade is drawn — the forward-only path, a browser's and a phone's). That cascade holds the whole range, so its
+  texels followed the 40 m whatever the scene: `pinbol`'s table, 4.2 m deep from its camera, was shadowed in 31.5 mm
+  texels (a phone held upright, 60° of view). The walk keeps the box around what it drew (`Renderer::scene_extent`,
+  `csm::SceneExtent`, not the sky, a backdrop or the grid — `SceneExtent::takes`, both draw paths), the next frame's view
+  is cut against it (`csm::seen_depth`: the deepest corner of frustum and box, the frustum read out of the view's own
+  matrix), and the reach is that depth past the fade band, rounded up to a half octave (`csm::fitted_reach`) so the
+  texel size changes only at those steps: 5.66 m and 4.5 mm for the table, whose bumpers' shadows, faint smudges over
+  40 m, are whole on an Adreno 618. It costs that phone about 0.3 ms, the table now filling the map it took a sliver
+  of: 108.8 fps against 112.0 and 112.8 without it (in turn, 10 readings each of SurfaceFlinger's last 127 presents).
+  A floor to the horizon seen from above ends where the view's top edge meets it. Off on the desktop, whose four cascades already put fine texels near the camera
+  and whose volumetric light reads them in the air past the last surface; `with_fit_to_scene(true)` turns it on there.
+  `compute_directional_cascades_with` takes the seen depth, `SceneSetupInputs` the box. `pinbol`'s sun turned too: it
+  fell along the camera's view, so every shadow lay behind its caster, inside what the caster hid from the camera.
 - **`receiver_axes` in `common.wgsl` returns a `ReceiverAxes` (two `vec3`s, `u` and `v`) where it returned a `mat2x3`**,
   and the shadow lookups take it. The forward-only path takes no matrix that is not square, after one crashed an Adreno
   618's compiler, and its sun shadow will read these; on the desktop every frame is as it was.
