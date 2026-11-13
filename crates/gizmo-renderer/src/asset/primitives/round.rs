@@ -195,7 +195,7 @@ impl crate::asset::AssetManager {
     /// A capped cylinder about the Y axis.
     pub fn create_cylinder(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
         let vertices = Self::cylinder_data(radius, height, radial_segments);
-        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("cylinder_{}_{}", radius, height))
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("cylinder_{radius}_{height}_{radial_segments}"))
     }
 
     /// A cone's vertices (side wall + base), CCW-wound on the outside. Pure data.
@@ -245,7 +245,7 @@ impl crate::asset::AssetManager {
     /// A cone about the Y axis, with a capped base.
     pub fn create_cone(device: &wgpu::Device, radius: f32, height: f32, radial_segments: u32) -> Mesh {
         let vertices = Self::cone_data(radius, height, radial_segments);
-        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("cone_{}_{}", radius, height))
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("cone_{radius}_{height}_{radial_segments}"))
     }
 
     /// A torus: `radius` to the centre of the tube, `tube_radius` around it.
@@ -292,7 +292,7 @@ impl crate::asset::AssetManager {
             }
         }
 
-        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("torus_{}_{}", radius, tube_radius))
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("torus_{radius}_{tube_radius}_{radial_segments}_{tubular_segments}"))
     }
 
     /// A capsule's vertices (tube + two hemispheres), CCW-wound on the outside. Pure data.
@@ -397,7 +397,7 @@ impl crate::asset::AssetManager {
     /// A capsule about the Y axis: a cylinder of length `depth` with a hemisphere on each end.
     pub fn create_capsule(device: &wgpu::Device, radius: f32, depth: f32, latitudes: u32, longitudes: u32) -> Mesh {
         let vertices = Self::capsule_data(radius, depth, latitudes, longitudes);
-        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("capsule_{}_{}", radius, depth))
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("capsule_{radius}_{depth}_{latitudes}_{longitudes}"))
     }
 
 }

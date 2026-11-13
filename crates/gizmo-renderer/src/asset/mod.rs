@@ -645,20 +645,25 @@ impl AssetManager {
     /// `primitive/<key>`, the prefix [`garbage_collect`](Self::garbage_collect) already kept alive
     /// — it had been written for a primitive cache that nothing filled.
     pub fn primitive_mesh(&mut self, device: &wgpu::Device, key: &str) -> Option<Mesh> {
-        let build: fn(&wgpu::Device) -> Mesh = match key {
-            "standard_cube" => Self::create_cube,
-            "inverted_cube" => Self::create_inverted_cube,
-            "plane" => |d| Self::create_plane(d, 200.0),
-            "sphere" => |d| Self::create_sphere(d, 1.0, 16, 16),
-            "sprite_quad" => |d| Self::create_sprite_quad(d, 1.0, 1.0),
-            // Radius 1, half-height 1 — what `Collider::cylinder(r, h)` takes, so the same
-            // numbers in `Transform::scale` and in the collider draw and collide the same shape.
-            "cylinder" => |d| Self::create_cylinder(d, 1.0, 2.0, 24),
-            "cone" => |d| Self::create_cone(d, 1.0, 2.0, 24),
-            _ => return None,
-        };
+        let shape = PrimitiveShape::parse(key)?;
         let cache_key = format!("primitive/{key}");
-        Some(self.mesh_cache.entry(cache_key).or_insert_with(|| build(device)).clone())
+        Some(self.mesh_cache.entry(cache_key).or_insert_with(|| shape.build(device)).clone())
+    }
+
+    /// Whether a mesh's [`source`](crate::components::Mesh::source) names geometry the engine can
+    /// build again from the key alone: a primitive with its parameters (`sphere_0.5_16_16`, what
+    /// `create_sphere(0.5, 16, 16)` names its mesh), a mesh inside a glTF file, or an OBJ file. Such
+    /// a mesh can be saved as its `MeshSource`; one made from points in code cannot.
+    #[must_use]
+    pub fn rebuilds_mesh(key: &str) -> bool {
+        PrimitiveShape::parse(key).is_some() || key.starts_with(gizmo_core::component::MeshSource::GLTF_PREFIX) || key.starts_with("obj:")
+    }
+
+    /// Whether a mesh key names a primitive the engine generates rather than a file: one of
+    /// [`PRIMITIVE_MESH_KEYS`](Self::PRIMITIVE_MESH_KEYS), or a primitive with its parameters.
+    #[must_use]
+    pub fn is_primitive_mesh_key(key: &str) -> bool {
+        PrimitiveShape::parse(key).is_some()
     }
 
     /// Return a cached mesh by its source ID without triggering a load.
@@ -1442,5 +1447,119 @@ impl<'a> MaterialBuilder<'a> {
             self.params.unwrap_or(&d.params_buffer),
             self.label.unwrap_or("material"),
         )
+    }
+}
+
+/// A primitive a mesh key names, with its parameters — see
+/// [`AssetManager::primitive_mesh`]. The keys are the ones the `create_*` builders name their meshes
+/// with, so a mesh built in code is described by its own `source`, and the bare names of
+/// [`AssetManager::PRIMITIVE_MESH_KEYS`] are the defaults they always were.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PrimitiveShape {
+    Cube,
+    InvertedCube,
+    Plane(f32),
+    PlaneSubdivided(f32, u32),
+    Circle(f32, u32),
+    Sphere(f32, u32, u32),
+    Cylinder(f32, f32, u32),
+    Cone(f32, f32, u32),
+    Torus(f32, f32, u32, u32),
+    Capsule(f32, f32, u32, u32),
+    SpriteQuad(f32, f32),
+    Tetrahedron(f32),
+    Frustum(f32, f32, f32, u32),
+}
+
+impl PrimitiveShape {
+    /// The shape `key` names, `None` for any other key — and for one whose numbers do not parse,
+    /// are not finite, or ask for fewer segments than a shape can be built from (a hand-edited file).
+    fn parse(key: &str) -> Option<Self> {
+        use PrimitiveShape::*;
+        match key {
+            "standard_cube" => return Some(Cube),
+            "inverted_cube" => return Some(InvertedCube),
+            "plane" => return Some(Plane(200.0)),
+            "sphere" => return Some(Sphere(1.0, 16, 16)),
+            "sprite_quad" => return Some(SpriteQuad(1.0, 1.0)),
+            // Radius 1, half-height 1 — what `Collider::cylinder(r, h)` takes, so the same
+            // numbers in `Transform::scale` and in the collider draw and collide the same shape.
+            "cylinder" => return Some(Cylinder(1.0, 2.0, 24)),
+            "cone" => return Some(Cone(1.0, 2.0, 24)),
+            _ => {}
+        }
+        // Longest names first: `sprite_quad_` and `conical_frustum_` hold an underscore of their own.
+        let names = [
+            "conical_frustum", "sprite_quad", "tetrahedron", "cylinder", "capsule", "sphere", "circle", "torus", "plane",
+            "cone",
+        ];
+        let name = names.iter().find(|n| key.strip_prefix(**n).is_some_and(|rest| rest.starts_with('_')))?;
+        let args: Vec<&str> = key[name.len() + 1..].split('_').collect();
+        let f = |i: usize| -> Option<f32> { args.get(i)?.parse::<f32>().ok().filter(|v| v.is_finite()) };
+        let n = |i: usize, least: u32| -> Option<u32> { args.get(i)?.parse::<u32>().ok().filter(|v| *v >= least) };
+        let arity = |count: usize| (args.len() == count).then_some(());
+        Some(match *name {
+            "plane" if args.len() == 1 => Plane(f(0)?),
+            "plane" => {
+                arity(2)?;
+                PlaneSubdivided(f(0)?, n(1, 1)?)
+            }
+            "circle" => {
+                arity(2)?;
+                Circle(f(0)?, n(1, 3)?)
+            }
+            "sphere" => {
+                arity(3)?;
+                Sphere(f(0)?, n(1, 2)?, n(2, 3)?)
+            }
+            "cylinder" => {
+                arity(3)?;
+                Cylinder(f(0)?, f(1)?, n(2, 3)?)
+            }
+            "cone" => {
+                arity(3)?;
+                Cone(f(0)?, f(1)?, n(2, 3)?)
+            }
+            "torus" => {
+                arity(4)?;
+                Torus(f(0)?, f(1)?, n(2, 3)?, n(3, 3)?)
+            }
+            "capsule" => {
+                arity(4)?;
+                Capsule(f(0)?, f(1)?, n(2, 2)?, n(3, 3)?)
+            }
+            "sprite_quad" => {
+                arity(2)?;
+                SpriteQuad(f(0)?, f(1)?)
+            }
+            "tetrahedron" => {
+                arity(1)?;
+                Tetrahedron(f(0)?)
+            }
+            "conical_frustum" => {
+                arity(4)?;
+                Frustum(f(0)?, f(1)?, f(2)?, n(3, 3)?)
+            }
+            _ => return None,
+        })
+    }
+
+    fn build(self, device: &wgpu::Device) -> Mesh {
+        use PrimitiveShape::*;
+        match self {
+            Cube => AssetManager::create_cube(device),
+            InvertedCube => AssetManager::create_inverted_cube(device),
+            Plane(size) => AssetManager::create_plane(device, size),
+            PlaneSubdivided(size, segments) => AssetManager::create_plane_subdivided(device, size, segments),
+            Circle(radius, segments) => AssetManager::create_circle(device, radius, segments),
+            Sphere(radius, stacks, slices) => AssetManager::create_sphere(device, radius, stacks, slices),
+            Cylinder(radius, height, segments) => AssetManager::create_cylinder(device, radius, height, segments),
+            Cone(radius, height, segments) => AssetManager::create_cone(device, radius, height, segments),
+            Torus(radius, tube, radial, tubular) => AssetManager::create_torus(device, radius, tube, radial, tubular),
+            Capsule(radius, depth, latitudes, longitudes) => AssetManager::create_capsule(device, radius, depth, latitudes, longitudes),
+            SpriteQuad(width, height) => AssetManager::create_sprite_quad(device, width, height),
+            Tetrahedron(size) => AssetManager::create_tetrahedron(device, size),
+            Frustum(bottom, top, height, segments) => AssetManager::create_conical_frustum(device, bottom, top, height, segments),
+        }
     }
 }

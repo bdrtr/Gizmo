@@ -251,7 +251,7 @@ impl crate::asset::AssetManager {
             device,
             &vertices,
             Vec3::ZERO,
-            "sprite_quad".to_string(),
+            format!("sprite_quad_{width}_{height}"),
         )
     }
 }

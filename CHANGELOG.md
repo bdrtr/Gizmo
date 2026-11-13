@@ -88,6 +88,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Shapes built in code survive a save and a reopen** (`mesh_sync::describe_meshes`). The spawner helpers,
+  `SimpleApp`'s shapes and a game's own `AssetManager::create_sphere(..)` hand an entity a GPU `Mesh` and no
+  `MeshSource`, so such an entity saved as a transform with nothing to draw. Every builder now names its mesh with all
+  of its parameters (`sphere_0.5_20_20`, `cylinder_0.25_2_24`, `torus_1_0.25_24_12`, `sprite_quad_2_1`; the cylinder,
+  cone, torus, capsule, sprite quad, tetrahedron and frustum names lacked some), `AssetManager::primitive_mesh` builds
+  any of them, and the name becomes the entity's `MeshSource` — and follows the mesh when it is swapped. A mesh made from
+  points in code (an extrusion, a `MeshData`) has no such name and is left as it was. The studio's export audit asks the
+  same parser which keys are generated rather than files.
+
 - **A paused game's playhead, moved, moves the pose.** Skeletal clips and state machines were evaluated only on a clock
   that ran (`dt > 0`), while the editor's ⏸ holds dt at 0 and its timeline scrubs `AnimationPlayer::current_time`:
   scrubbing a paused game changed nothing on screen. They are evaluated every prepared frame now; at dt 0 a player's

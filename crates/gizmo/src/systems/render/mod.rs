@@ -1045,6 +1045,9 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // the material's type — before the descriptions are synced, so a save writes the type drawn.
     crate::renderer::shader_graph::resolve_surface_graphs(world, renderer);
     crate::renderer::material_sync::sync_material_descriptions(world);
+    // And every mesh built in code that a key can build again names itself as its `MeshSource`, so
+    // a save writes it (`mesh_sync`).
+    crate::renderer::mesh_sync::describe_meshes(world);
 
     // **Advance skeletal animation.** `collect_draw_items` below reads `Skeleton` for its skinning
     // matrices, and until this call nothing in the engine ever advanced the pose it reads: the two
@@ -13530,6 +13533,59 @@ fn material_surface(input: SurfaceInput) -> Surface {
             let time = world.query::<&AnimationPlayer>().iter().next().map(|p| p.current_time);
             assert_eq!(time, Some(0.5), "a paused clock advanced the playhead");
         });
+    }
+
+    /// **Shapes built in code survive a save and a reopen.** A sphere of radius 0.5, a cube and a
+    /// 6 m plane from the spawner helpers, which hand an entity a GPU `Mesh` and no `MeshSource`:
+    /// they saved as transforms with nothing to draw. Each mesh's own name (`sphere_0.5_20_20`) is
+    /// now its `MeshSource` (`mesh_sync`), so the reopened frame is the saved one.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn shapes_built_in_code_survive_a_save_and_reopen() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let scene_path = std::env::temp_dir().join(format!("gizmo-shapes-{}.scene", std::process::id()));
+        let scene_path = scene_path.to_string_lossy().into_owned();
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            {
+                let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                commands.spawn_sphere(Vec3::new(-1.2, 0.3, 0.0), 0.5, crate::color::Color::RED);
+                commands.spawn_cube(Vec3::new(1.2, 0.3, 0.0), crate::color::Color::BLUE);
+                commands.spawn_plane(Vec3::new(0.0, -1.0, 0.0), 6.0, crate::color::Color::GREEN);
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.5, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            let drawn = render_world(&mut renderer, &mut world).await;
+            crate::scene::SceneData::save(&world, &scene_path, &crate::full_scene_registry()).expect("saves");
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &crate::full_scene_registry()).expect("loads");
+            {
+                let manager = renderer.asset_manager.clone();
+                let mut assets = manager.write().unwrap();
+                crate::renderer::asset_loading::run_asset_loading_system(
+                    &mut world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    &mut assets,
+                );
+            }
+            let reopened = render_world(&mut renderer, &mut world).await;
+            let (changed, total) = changed_pixels(&drawn, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened shapes drew {changed}/{total} pixels otherwise");
+        });
+        let _ = std::fs::remove_file(&scene_path);
     }
 
     /// Writes the test images the material-map tests name by path: ridges as a normal map (data,

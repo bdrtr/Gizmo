@@ -216,12 +216,6 @@ enum RefKind {
     Sound,
 }
 
-/// The built-in meshes that are generated rather than loaded. A scene naming one references no
-/// file, and reporting it as a missing asset would be crying wolf on every default cube.
-///
-/// The renderer's own list, not a copy: this was a second list of five names, and a primitive
-/// added to the loader would have been reported here as a missing file.
-const PROCEDURAL_MESHES: [&str; 7] = gizmo::renderer::asset::AssetManager::PRIMITIVE_MESH_KEYS;
 
 /// The file a stored reference names, or `None` when it names no file at all.
 ///
@@ -242,7 +236,10 @@ fn referenced_file(value: &str, kind: RefKind) -> Option<String> {
     }
     match kind {
         RefKind::Mesh => {
-            if PROCEDURAL_MESHES.contains(&value) {
+            // A built-in mesh, bare or with its parameters, is generated rather than loaded:
+            // reporting it as a missing asset would be crying wolf on every default cube. The
+            // renderer's own parser, not a list here, so a primitive the loader learns is known.
+            if gizmo::renderer::asset::AssetManager::is_primitive_mesh_key(value) {
                 return None;
             }
             if let Some((path, _sub)) = gizmo::core::component::MeshSource::split_gltf_key(value) {
@@ -756,8 +753,12 @@ mod export_copy_tests {
     #[test]
     fn a_reference_is_read_through_the_encoding_it_was_stored_in() {
         // Built-ins are generated, not loaded — reporting them would cry wolf on every cube.
-        for builtin in PROCEDURAL_MESHES {
+        for builtin in gizmo::renderer::asset::AssetManager::PRIMITIVE_MESH_KEYS {
             assert_eq!(referenced_file(builtin, RefKind::Mesh), None, "{builtin}");
+        }
+        // A primitive with its parameters, as a mesh built in code names itself (2026-11-13).
+        for built in ["sphere_0.5_20_20", "plane_10", "cylinder_0.25_2_24"] {
+            assert_eq!(referenced_file(built, RefKind::Mesh), None, "{built}");
         }
 
         assert_eq!(
