@@ -88,6 +88,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **A material over a texture it does not name keeps it through a save.** `Material::new(renderer.load_texture(path)?)`
+  and a material over `create_uv_debug_texture` or `create_checkerboard_texture` named no texture, and were saved
+  untextured: they reopened white. The bind group says which texture it is (`AssetManager::texture_source_of`, a file's
+  path or UUID, or a generated texture's name), and the first frame that sees such a material names it
+  (`material_sync::rebind_changed_materials`), without building anything again. A generated texture's name
+  (`AssetManager::UV_DEBUG_TEXTURE`, `CHECKERBOARD_TEXTURE`) is made again on load rather than looked for on disk, is
+  not streamed, and is not reported by the export audit as a missing file.
+
 - **Geometry made from points is scene data** (`MeshData` is saved, decided 2026-11-14). It was "the game's to make
   again", and that was true of a save and not of the editor's own loop: ▶ snapshots the scene and ⏹ re-creates what
   play destroyed from that snapshot, so a breakable or a pickup built from points came back with no geometry. A scene

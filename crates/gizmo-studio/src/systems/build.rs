@@ -250,6 +250,8 @@ fn referenced_file(value: &str, kind: RefKind) -> Option<String> {
         // `gltf_tex_` names a texture *inside* an imported model, resolved from the model rather
         // than from the filesystem.
         RefKind::Texture if value.starts_with("gltf_tex_") => None,
+        // A texture the engine generates (`__uv_debug_texture__`): no file to ship.
+        RefKind::Texture if gizmo::renderer::asset::AssetManager::is_generated_texture_key(value) => None,
         // An image inside a model (`gltf:<file>#<n>`, since 2026-11-13): the model is the file.
         RefKind::Texture if gizmo::renderer::asset::loaders::split_gltf_image_key(value).is_some() => {
             gizmo::renderer::asset::loaders::split_gltf_image_key(value).map(|(file, _)| file.to_string())
@@ -781,6 +783,11 @@ mod export_copy_tests {
             None,
             "a texture inside an imported model is resolved from the model, not from disk — and \
              this is what EVERY textured model dragged into the editor stores"
+        );
+        assert_eq!(
+            referenced_file(gizmo::renderer::asset::AssetManager::UV_DEBUG_TEXTURE, RefKind::Texture),
+            None,
+            "a generated texture is no file"
         );
         assert_eq!(
             referenced_file("gltf:demo/assets/car.glb#3", RefKind::Texture).as_deref(),

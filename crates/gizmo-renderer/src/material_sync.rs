@@ -203,7 +203,32 @@ pub fn rebind_changed_materials(world: &mut World, renderer: &crate::Renderer) {
         }
         (adopt, changed)
     };
+    // A material seen for the first time that names no texture may still be drawn over one this
+    // renderer loaded or generated — built as `Material::new(renderer.load_texture(path)?)`. Its
+    // bind group says which; naming it here is what a save writes, so the material comes back
+    // textured instead of white. The bind group stays as it is.
+    let assets = renderer.asset_manager.read().unwrap_or_else(|p| p.into_inner());
+    let adopt: Vec<(Entity, BoundSources)> = adopt
+        .into_iter()
+        .map(|(entity, mut sources)| {
+            if sources.texture_source.is_none() && sources.maps.is_empty() {
+                let named = world.query::<&Material>().get(entity).and_then(|m| assets.texture_source_of(&m.bind_group));
+                if let Some(name) = named {
+                    sources.texture_source = Some(name);
+                }
+            }
+            (entity, sources)
+        })
+        .collect();
+    drop(assets);
     for (entity, sources) in adopt {
+        if let Some(name) = sources.texture_source.clone() {
+            if let Some(mut material) = world.query_mut::<&mut Material>().get_mut(entity) {
+                if material.texture_source.is_none() {
+                    material.texture_source = Some(name);
+                }
+            }
+        }
         world.add_component(entity, sources);
     }
     if changed.is_empty() {

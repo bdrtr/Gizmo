@@ -13646,6 +13646,74 @@ fn material_surface(input: SurfaceInput) -> Surface {
         let _ = std::fs::remove_file(&scene_path);
     }
 
+    /// **A material built over a loaded or generated texture keeps it through a save, named or not.**
+    /// `Material::new(renderer.load_texture(path)?)` and `Material::new(uv_debug)` name no texture;
+    /// they were saved untextured and reopened white. The bind group says which texture it is, and
+    /// the first frame names it (`material_sync::rebind_changed_materials`): the reopened frame is the
+    /// saved one.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_material_over_an_unnamed_texture_keeps_it_through_a_save() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("gizmo-unnamed-texture-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let stripes = dir.join("stripes.png");
+        image::RgbaImage::from_fn(8, 8, |x, _| if x % 2 == 0 { image::Rgba([240, 30, 30, 255]) } else { image::Rgba([30, 30, 240, 255]) })
+            .save(&stripes)
+            .expect("png");
+        let scene_path = dir.join("scene.scene").to_string_lossy().into_owned();
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let loaded = renderer.load_texture(&stripes.to_string_lossy()).expect("the stripes load");
+            let uv = renderer.asset_manager.write().unwrap().create_uv_debug_texture(
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+            );
+            for (x, texture) in [(-1.1, loaded), (1.1, uv)] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(x, 0.0, 0.0)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, gizmo_core::component::MeshSource("standard_cube".to_string()));
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(texture).with_pbr(Vec4::ONE, 0.6, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            let drawn = render_world(&mut renderer, &mut world).await;
+            crate::scene::SceneData::save(&world, &scene_path, &crate::full_scene_registry()).expect("saves");
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &crate::full_scene_registry()).expect("loads");
+            {
+                let manager = renderer.asset_manager.clone();
+                let mut assets = manager.write().unwrap();
+                crate::renderer::asset_loading::run_asset_loading_system(
+                    &mut world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    &mut assets,
+                );
+            }
+            let reopened = render_world(&mut renderer, &mut world).await;
+            let (changed, total) = changed_pixels(&drawn, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened cubes drew {changed}/{total} pixels otherwise");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// **A paused game's playhead, moved, moves the pose.** The editor's ⏸ holds the clock still
     /// (`Time::set_paused`: dt is 0) and its timeline scrubs `AnimationPlayer::current_time`; the
     /// frame has to show the pose at the new time. It did not: the clips were evaluated only on a

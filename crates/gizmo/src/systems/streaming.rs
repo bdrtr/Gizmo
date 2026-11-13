@@ -106,9 +106,12 @@ fn apply_completed_textures(world: &World) {
 /// the base colour alone, and a material that names other maps (`Material::maps`) would lose them to
 /// it — its normal map gone the moment the camera came near. Such a material's bind group is built
 /// whole from its sources (`material_sync`), base colour included, and is left alone here. Nor is
-/// an image inside a glTF file (`gltf:<file>#<n>`): it is no file of its own to stream from.
+/// an image inside a glTF file (`gltf:<file>#<n>`): it is no file of its own to stream from — and
+/// nor is a texture the engine generates (`__uv_debug_texture__`).
 fn streams(texture_source: &str, maps: &gizmo_renderer::components::MaterialMaps) -> bool {
-    maps.is_empty() && gizmo_renderer::asset::loaders::split_gltf_image_key(texture_source).is_none()
+    maps.is_empty()
+        && gizmo_renderer::asset::loaders::split_gltf_image_key(texture_source).is_none()
+        && !gizmo_renderer::asset::AssetManager::is_generated_texture_key(texture_source)
 }
 
 /// Does the material on the id that asked for `path` still want it?
@@ -225,6 +228,7 @@ mod tests {
         assert!(super::streams("grass.png", &plain.maps));
         assert!(!super::streams("grass.png", &mapped.maps), "a material with a normal map would lose it to a streamed texture");
         assert!(!super::streams("gltf:models/car.glb#2", &plain.maps), "an image inside a model is no file to stream");
+        assert!(!super::streams(gizmo_renderer::asset::AssetManager::UV_DEBUG_TEXTURE, &plain.maps), "a generated texture is no file to stream");
     }
 
     #[test]

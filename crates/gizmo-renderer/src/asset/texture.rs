@@ -294,6 +294,14 @@ impl super::AssetManager {
         layout: &wgpu::BindGroupLayout,
         path_or_uuid: &str,
     ) -> Result<Arc<wgpu::BindGroup>, AssetError> {
+        // A texture the engine generates is made again, not looked for on disk: its name is what a
+        // material built over one is saved with (`texture_source_of`).
+        match path_or_uuid {
+            Self::CHECKERBOARD_TEXTURE => return Ok(self.create_checkerboard_texture(device, queue, layout)),
+            Self::UV_DEBUG_TEXTURE => return Ok(self.create_uv_debug_texture(device, queue, layout)),
+            Self::WHITE_TEXTURE => return Ok(self.create_white_texture(device, queue, layout)),
+            _ => {}
+        }
         let (resolved_path, cache_key) = self.resolve_texture_cache_key(path_or_uuid)?;
 
         if let Some(cached) = self.texture_cache.get(&cache_key) {
@@ -322,6 +330,34 @@ impl super::AssetManager {
 
     // ── Procedural textures ───────────────────────────────────────────────
 
+    /// The name [`create_white_texture`](Self::create_white_texture)'s bind group is cached under.
+    pub const WHITE_TEXTURE: &'static str = "__white_fallback_texture__";
+    /// The name [`create_checkerboard_texture`](Self::create_checkerboard_texture)'s is cached under,
+    /// and what a material over it is saved as.
+    pub const CHECKERBOARD_TEXTURE: &'static str = "__checkerboard_texture__";
+    /// The same for [`create_uv_debug_texture`](Self::create_uv_debug_texture).
+    pub const UV_DEBUG_TEXTURE: &'static str = "__uv_debug_texture__";
+
+    /// Whether `key` names a texture the engine generates rather than a file.
+    #[must_use]
+    pub fn is_generated_texture_key(key: &str) -> bool {
+        matches!(key, Self::WHITE_TEXTURE | Self::CHECKERBOARD_TEXTURE | Self::UV_DEBUG_TEXTURE)
+    }
+
+    /// The name a material bind group from this manager's texture cache was made under — a file's
+    /// path or its asset UUID, or a generated texture's name — or `None` for one it did not make, and
+    /// for the white one, which is a material with no texture. What lets a material built over a
+    /// loaded texture without naming it (`Material::new(renderer.load_texture(path)?)`) be saved as
+    /// textured: it was saved white.
+    #[must_use]
+    pub fn texture_source_of(&self, bind_group: &Arc<wgpu::BindGroup>) -> Option<String> {
+        self.texture_cache
+            .iter()
+            .find(|(_, cached)| Arc::ptr_eq(cached, bind_group))
+            .map(|(key, _)| key.clone())
+            .filter(|key| key != Self::WHITE_TEXTURE)
+    }
+
     /// Return (creating once) a 1×1 opaque-white texture.
     ///
     /// Used as the default albedo map for materials that specify no texture.
@@ -331,7 +367,7 @@ impl super::AssetManager {
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
     ) -> Arc<wgpu::BindGroup> {
-        const KEY: &str = "__white_fallback_texture__";
+        const KEY: &str = super::AssetManager::WHITE_TEXTURE;
 
         if let Some(cached) = self.texture_cache.get(KEY) {
             return cached.clone();
@@ -369,7 +405,7 @@ impl super::AssetManager {
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
     ) -> Arc<wgpu::BindGroup> {
-        const KEY: &str = "__checkerboard_texture__";
+        const KEY: &str = super::AssetManager::CHECKERBOARD_TEXTURE;
         const SIZE: u32 = 256;
         const CELL: u32 = 32; // pixels per checker square
 
@@ -404,7 +440,7 @@ impl super::AssetManager {
         queue: &wgpu::Queue,
         layout: &wgpu::BindGroupLayout,
     ) -> Arc<wgpu::BindGroup> {
-        const KEY: &str = "__uv_debug_texture__";
+        const KEY: &str = super::AssetManager::UV_DEBUG_TEXTURE;
         const TEXTURE_SIZE: usize = 8;
 
         if let Some(cached) = self.texture_cache.get(KEY) {
