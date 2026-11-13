@@ -243,6 +243,8 @@ pub struct AssetManager {
     view_cache: std::collections::HashMap<(String, bool), Arc<wgpu::TextureView>>,
     /// Material bind groups by the sources they were built from ([`load_material`](Self::load_material)).
     material_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
+    /// Imported glTF scenes by the path asked for ([`gltf_scene`](Self::gltf_scene)).
+    gltf_scenes: std::collections::HashMap<String, Arc<loaders::GltfSceneAsset>>,
     /// Lazily created magenta octahedron used while async loads are in flight.
     placeholder_mesh: Option<Mesh>,
     /// Lazily created shared default maps for the textured-PBR material bind group.
@@ -286,6 +288,7 @@ impl AssetManager {
             texture_cache: std::collections::HashMap::new(),
             view_cache: std::collections::HashMap::new(),
             material_cache: std::collections::HashMap::new(),
+            gltf_scenes: std::collections::HashMap::new(),
             placeholder_mesh: None,
             material_defaults: None,
             path_to_uuid: std::collections::HashMap::new(),

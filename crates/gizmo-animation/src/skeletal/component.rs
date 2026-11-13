@@ -20,9 +20,15 @@ use std::sync::Arc;
 /// the glTF spawner fills in with `..Default::default()`. A player whose `animations` is
 /// empty is skipped entirely by the renderer.
 ///
+/// **Saved with a scene, clips excepted.** The playhead, the clip chosen, the speed, the loop
+/// flag and a fade in flight are the player's state and travel in a scene file; the clips are the
+/// model's data, `#[serde(skip)]`, and are given back by whatever made the player — for a glTF
+/// model, `gizmo_renderer::gltf_model::resolve_gltf_models`, which reads them from the file again.
+///
 /// [`current_time`]: Self::current_time
 /// [`prev_animation`]: Self::prev_animation
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AnimationPlayer {
     /// Playhead into the active clip, in **seconds**.
     ///
@@ -76,7 +82,8 @@ pub struct AnimationPlayer {
     /// existing player's `Arc` rather than spawning each instance from the asset.
     ///
     /// Treated as immutable — swap the whole `Arc` to change the set. Empty by default,
-    /// which makes the renderer skip the entity outright.
+    /// which makes the renderer skip the entity outright. Not saved with a scene (see the type).
+    #[serde(skip)]
     pub animations: Arc<[AnimationClip]>,
     // Blending support
     /// Seconds elapsed into the in-flight cross-fade; the blend weight is

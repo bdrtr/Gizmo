@@ -81,6 +81,11 @@ pub fn full_scene_registry() -> SceneRegistry {
         // nothing in another run; the graph is what travels, and `resolve_surface_graphs` builds the
         // surface from it after a load.
         reg_or_warn!(gizmo_renderer::shader_graph::SurfaceGraph, "SurfaceGraph");
+        // A glTF model: the file on its root, and its player's state (the clips are the file's, and
+        // come back from it — `gizmo_renderer::gltf_model`). Without them an animated model reopened
+        // in its bind pose and never moved.
+        reg_or_warn!(gizmo_renderer::gltf_model::GltfModel, "GltfModel");
+        reg_or_warn!(gizmo_renderer::components::AnimationPlayer, "AnimationPlayer");
     }
 
     #[cfg(feature = "audio")]

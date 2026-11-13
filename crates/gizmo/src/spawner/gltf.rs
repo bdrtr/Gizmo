@@ -40,6 +40,10 @@ impl<'a> Commands<'a> {
                     .add_component(root, gizmo_physics_core::components::GlobalTransform::default());
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", path)));
+                // The file it came from, which a scene saves; its skeletons and clips are given
+                // below, so the resolver has nothing to do for it this run.
+                self.world.add_component(root, gizmo_renderer::gltf_model::GltfModel::new(path));
+                self.world.add_component(root, gizmo_renderer::gltf_model::GltfModelResolved);
                 self.world
                     .add_component(root, gizmo_core::component::Children(Vec::new()));
 
@@ -140,6 +144,8 @@ impl<'a> Commands<'a> {
                     .add_component(root, gizmo_physics_core::components::GlobalTransform::default());
                 self.world
                     .add_component(root, EntityName(format!("GLTF: {}", completion.path)));
+                self.world.add_component(root, gizmo_renderer::gltf_model::GltfModel::new(completion.path.clone()));
+                self.world.add_component(root, gizmo_renderer::gltf_model::GltfModelResolved);
                 self.world
                     .add_component(root, gizmo_core::component::Children(Vec::new()));
 

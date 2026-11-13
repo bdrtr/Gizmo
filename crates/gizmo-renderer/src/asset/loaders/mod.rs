@@ -72,6 +72,30 @@ pub struct GltfSceneAsset {
 // ============================================================================
 
 impl super::AssetManager {
+    /// [`load_gltf_scene`](Self::load_gltf_scene), once per path: the second call for a path hands back
+    /// the first one's scene. For what has to be read from a model again and again — its skeletons
+    /// and clips, for every reopened instance of it — without importing the file each time.
+    ///
+    /// # Errors
+    ///
+    /// As [`load_gltf_scene`](Self::load_gltf_scene); a failure is not remembered, so the next call
+    /// tries again.
+    pub fn gltf_scene(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        texture_bind_group_layout: &wgpu::BindGroupLayout,
+        path_or_uuid: &str,
+    ) -> Result<Arc<GltfSceneAsset>, AssetError> {
+        if let Some(scene) = self.gltf_scenes.get(path_or_uuid) {
+            return Ok(scene.clone());
+        }
+        let white = self.create_white_texture(device, queue, texture_bind_group_layout);
+        let scene = Arc::new(self.load_gltf_scene(device, queue, texture_bind_group_layout, white, path_or_uuid)?);
+        self.gltf_scenes.insert(path_or_uuid.to_string(), scene.clone());
+        Ok(scene)
+    }
+
     /// Imports a glTF/GLB file into engine types: meshes and materials into the cache, and the
     /// node tree, animations and skeletons into the returned [`GltfSceneAsset`].
     pub fn load_gltf_scene(

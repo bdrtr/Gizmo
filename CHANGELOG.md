@@ -88,6 +88,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **An animated, skinned glTF model keeps its skeleton, its clips and its place in them through a save and a reopen.**
+  A skeleton is a GPU buffer and a clip table is the file's data; neither was saved or rebuilt, and the player was not
+  saved either, so a reopened character stood in its bind pose and never moved. The model's root carries
+  `gltf_model::GltfModel` (its file, saved), `AnimationPlayer` is saved without its clips (`#[serde(skip)]`), and
+  `resolve_gltf_models`, part of every prepared frame, gives a reopened model its skeletons (on the root and on each
+  skinned mesh, found by `MeshSource`) and its clips back from the file, imported once per path
+  (`AssetManager::gltf_scene`). A model held half way through its clip reopens in the same pose, byte for byte, on
+  both paths.
+
 - **A texture handed to the material builder is read blended, not as hard texels.** `AssetManager::material()`'s
   shared default sampler was nearest for magnification, minification and mips, while a texture loaded by path and a
   glTF texture with no sampler are read linear and mipmapped: a material built with the builder and no sampler of its

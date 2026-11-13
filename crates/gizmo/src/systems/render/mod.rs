@@ -1064,6 +1064,9 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // render-parity inventory reads these paths for the capabilities they know, and a type only
     // ever touched through a system is invisible otherwise. The studio's pipeline drives both
     // as well; it drove only the player until 2026-08-19.
+    // A glTF model read from a scene file gets its skeletons and clips back from the model's file
+    // before anything poses it.
+    crate::renderer::gltf_model::resolve_gltf_models(world, renderer);
     let animation_dt = world
         .get_resource::<gizmo_core::time::Time>()
         .map(|t| t.dt())
@@ -13348,6 +13351,144 @@ fn material_surface(input: SurfaceInput) -> Surface {
             let (changed, total) = changed_pixels(&nearest_drawn, &nearest_reopened, 128);
             assert_eq!(changed, 0, "the reopened model is read through another sampler: {changed}/{total} pixels differ");
         });
+    }
+
+    /// A skinned, animated glTF on disk: a red quad whose top two corners follow a joint `Tip`,
+    /// child of `Root`, and one clip that turns `Tip` a quarter turn about Z over a second. Returns
+    /// the `.gltf`'s path.
+    fn write_skinned_gltf() -> String {
+        let dir = std::env::temp_dir().join(format!("gizmo-gltf-skinned-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([230, 20, 20, 255])).save(dir.join("red.png")).expect("png");
+        let mut bin: Vec<u8> = Vec::new();
+        let f32s = |bin: &mut Vec<u8>, v: &[f32]| v.iter().for_each(|x| bin.extend_from_slice(&x.to_le_bytes()));
+        for p in [[-1.0f32, -1.5, 0.0], [1.0, -1.5, 0.0], [1.0, 1.5, 0.0], [-1.0, 1.5, 0.0]] {
+            f32s(&mut bin, &p); // 0..48
+        }
+        for _ in 0..4 {
+            f32s(&mut bin, &[0.0, 0.0, 1.0]); // 48..96
+        }
+        for uv in [[0.0f32, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]] {
+            f32s(&mut bin, &uv); // 96..128
+        }
+        for joint in [0u16, 0, 1, 1] {
+            for j in [joint, 0, 0, 0] {
+                bin.extend_from_slice(&j.to_le_bytes()); // 128..160
+            }
+        }
+        for _ in 0..4 {
+            f32s(&mut bin, &[1.0, 0.0, 0.0, 0.0]); // 160..224
+        }
+        for i in [0u16, 1, 2, 0, 2, 3] {
+            bin.extend_from_slice(&i.to_le_bytes()); // 224..236
+        }
+        for _ in 0..2 {
+            f32s(&mut bin, &gizmo_math::Mat4::IDENTITY.to_cols_array()); // 236..364
+        }
+        f32s(&mut bin, &[0.0, 1.0]); // 364..372
+        let h = std::f32::consts::FRAC_1_SQRT_2;
+        f32s(&mut bin, &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, h, h]); // 372..404
+        std::fs::write(dir.join("skinned.bin"), &bin).expect("bin");
+        let view = |offset: usize, length: usize| format!(r#"{{"buffer":0,"byteOffset":{offset},"byteLength":{length}}}"#);
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0,1]}}],
+            "nodes":[{{"mesh":0,"skin":0,"name":"Body"}},{{"name":"Root","children":[2]}},{{"name":"Tip"}}],
+            "skins":[{{"joints":[1,2],"inverseBindMatrices":6}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,"JOINTS_0":3,"WEIGHTS_0":4}},"indices":5,"material":0}}]}}],
+            "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}},"metallicFactor":0.0,"roughnessFactor":0.6}}}}],
+            "textures":[{{"source":0}}],"images":[{{"uri":"red.png"}}],
+            "animations":[{{"name":"Bend","channels":[{{"sampler":0,"target":{{"node":2,"path":"rotation"}}}}],
+                            "samplers":[{{"input":7,"output":8,"interpolation":"LINEAR"}}]}}],
+            "buffers":[{{"uri":"skinned.bin","byteLength":{len}}}],
+            "bufferViews":[{v0},{v1},{v2},{v3},{v4},{v5},{v6},{v7},{v8}],
+            "accessors":[{{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[-1.0,-1.5,0.0],"max":[1.0,1.5,0.0]}},
+                         {{"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"}},
+                         {{"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"}},
+                         {{"bufferView":3,"componentType":5123,"count":4,"type":"VEC4"}},
+                         {{"bufferView":4,"componentType":5126,"count":4,"type":"VEC4"}},
+                         {{"bufferView":5,"componentType":5123,"count":6,"type":"SCALAR"}},
+                         {{"bufferView":6,"componentType":5126,"count":2,"type":"MAT4"}},
+                         {{"bufferView":7,"componentType":5126,"count":2,"type":"SCALAR","min":[0.0],"max":[1.0]}},
+                         {{"bufferView":8,"componentType":5126,"count":2,"type":"VEC4"}}]}}"#,
+            len = bin.len(),
+            v0 = view(0, 48), v1 = view(48, 48), v2 = view(96, 32), v3 = view(128, 32), v4 = view(160, 64),
+            v5 = view(224, 12), v6 = view(236, 128), v7 = view(364, 8), v8 = view(372, 32),
+        );
+        let path = dir.join("skinned.gltf");
+        std::fs::write(&path, json).expect("gltf");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// **An animated, skinned glTF model keeps its skeleton, its clips and where it was in them
+    /// through a save and a reopen.** Held half way through its clip (speed 0), the bent quad is
+    /// drawn; the scene is saved and opened by a fresh renderer and world; the reopened frame is the
+    /// saved one. It is not the bind pose either, so the pose is what is compared. A skeleton and a
+    /// clip table are GPU and file data, not scene data: before 2026-11-13 neither was saved nor
+    /// rebuilt, and a reopened character stood in its bind pose and never moved.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn an_animated_gltf_model_keeps_its_pose_through_a_save_and_reopen() {
+        use gizmo_renderer::components::AnimationPlayer;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let model = write_skinned_gltf();
+        let scene_path = format!("{model}.scene");
+        // Held at `time`, and posed there: a frame advances the clips only on a clock that runs
+        // (`Time`), which a test world has none of, so the pose is evaluated once, at dt 0.
+        let hold = |world: &mut World, renderer: &Renderer, time: f32| {
+            for (_, mut player) in world.query_mut::<(gizmo_core::Entity, &mut AnimationPlayer)>().iter_mut() {
+                player.current_time = time;
+                player.speed = 0.0;
+            }
+            crate::renderer::animation_update_system(world, 0.0, &renderer.queue);
+        };
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            {
+                let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                commands.spawn_gltf(Vec3::ZERO, &model, false).expect("the model loads");
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            hold(&mut world, &renderer, 0.0);
+            let bind = render_world(&mut renderer, &mut world).await;
+            hold(&mut world, &renderer, 0.5);
+            let posed = render_world(&mut renderer, &mut world).await;
+            let (bent, total) = changed_pixels(&bind, &posed, 128);
+            assert!(bent >= 200, "half way through the clip drew like the bind pose ({bent}/{total}): the fixture does not animate");
+            crate::scene::SceneData::save(&world, &scene_path, &crate::full_scene_registry()).expect("saves");
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &crate::full_scene_registry()).expect("loads");
+            {
+                let manager = renderer.asset_manager.clone();
+                let mut assets = manager.write().unwrap();
+                crate::renderer::asset_loading::run_asset_loading_system(
+                    &mut world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    &mut assets,
+                );
+            }
+            // The first frame gives the model its skeleton and its clips back; then it is posed where
+            // the file says it was.
+            render_world(&mut renderer, &mut world).await;
+            crate::renderer::animation_update_system(&mut world, 0.0, &renderer.queue);
+            let reopened = render_world(&mut renderer, &mut world).await;
+            let (changed, total) = changed_pixels(&posed, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened model stands otherwise: {changed}/{total} pixels differ");
+        });
+        let _ = std::fs::remove_file(&scene_path);
     }
 
     /// Writes the test images the material-map tests name by path: ridges as a normal map (data,
