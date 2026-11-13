@@ -642,7 +642,11 @@ fn surface_defs(
 #[derive(Default)]
 pub struct MaterialRegistry {
     materials: Vec<CustomMaterial>,
-    surfaces: Vec<SurfaceMaterial>,
+    /// `None` where a graph's surface was released: an id is never handed out twice.
+    surfaces: Vec<Option<SurfaceMaterial>>,
+    /// The surfaces built from shader graphs, by the WGSL each graph is, so entities with the same
+    /// graph share one and a graph edited back to what it was finds its old surface.
+    graph_surfaces: std::collections::HashMap<String, SurfaceId>,
 }
 
 impl MaterialRegistry {
@@ -688,14 +692,15 @@ impl MaterialRegistry {
     /// are, in an order of their own, with the same caveat about a saved scene.
     pub fn register_surface(&mut self, surface: SurfaceMaterial) -> SurfaceId {
         let id = SurfaceId(u32::try_from(self.surfaces.len()).expect("a registry never reaches 4 billion"));
-        self.surfaces.push(surface);
+        self.surfaces.push(Some(surface));
         id
     }
 
-    /// The surface behind an id, or `None` if it was minted by a different registry.
+    /// The surface behind an id, or `None` if it was minted by a different registry or was a graph's
+    /// and has been released.
     #[must_use]
     pub fn surface(&self, id: SurfaceId) -> Option<&SurfaceMaterial> {
-        self.surfaces.get(id.0 as usize)
+        self.surfaces.get(id.0 as usize)?.as_ref()
     }
 
     /// The id of the first surface registered under `label`.
@@ -703,8 +708,42 @@ impl MaterialRegistry {
     pub fn surface_id_of(&self, label: &str) -> Option<SurfaceId> {
         self.surfaces
             .iter()
-            .position(|s| s.label == label)
+            .position(|s| s.as_ref().is_some_and(|s| s.label == label))
             .map(|i| SurfaceId(i as u32))
+    }
+
+    /// The surface already built for a graph whose WGSL is `wgsl`.
+    #[must_use]
+    pub(crate) fn graph_surface(&self, wgsl: &str) -> Option<SurfaceId> {
+        self.graph_surfaces.get(wgsl).copied()
+    }
+
+    /// Registers a surface built from a graph whose WGSL is `wgsl`.
+    pub(crate) fn register_graph_surface(&mut self, wgsl: String, surface: SurfaceMaterial) -> SurfaceId {
+        let id = self.register_surface(surface);
+        self.graph_surfaces.insert(wgsl, id);
+        id
+    }
+
+    /// Releases every graph's surface not in `used`, pipelines and all. Its id resolves to `None`
+    /// from then on, and is not handed out again. Surfaces registered by hand are never released.
+    pub(crate) fn release_graph_surfaces_except(&mut self, used: &std::collections::HashSet<SurfaceId>) {
+        let surfaces = &mut self.surfaces;
+        self.graph_surfaces.retain(|_, id| {
+            let keep = used.contains(id);
+            if !keep {
+                if let Some(slot) = surfaces.get_mut(id.0 as usize) {
+                    *slot = None;
+                }
+            }
+            keep
+        });
+    }
+
+    /// How many graphs have a surface built.
+    #[must_use]
+    pub fn graph_surface_count(&self) -> usize {
+        self.graph_surfaces.len()
     }
 
     /// Builds every registered surface's pipelines again, as the engine's own are rebuilt: see
@@ -715,7 +754,7 @@ impl MaterialRegistry {
         scene: &crate::pipeline::SceneState,
         deferred: Option<&crate::deferred::DeferredState>,
     ) {
-        for surface in &mut self.surfaces {
+        for surface in self.surfaces.iter_mut().flatten() {
             surface.rebuild(device, scene, deferred);
         }
     }
@@ -723,13 +762,13 @@ impl MaterialRegistry {
     /// How many materials of both kinds are registered.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.materials.len() + self.surfaces.len()
+        self.materials.len() + self.surfaces.iter().flatten().count()
     }
 
     /// Whether nothing is registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.materials.is_empty() && self.surfaces.is_empty()
+        self.materials.is_empty() && self.surfaces.iter().all(Option::is_none)
     }
 }
 

@@ -77,6 +77,10 @@ pub fn full_scene_registry() -> SceneRegistry {
         // writes a description for every material so a save has something to write, the other
         // rebuilds the material from the description on load.
         reg_or_warn!(MaterialDesc, "MaterialDesc");
+        // A material built from nodes. The surface id it is drawn with is the renderer's and means
+        // nothing in another run; the graph is what travels, and `resolve_surface_graphs` builds the
+        // surface from it after a load.
+        reg_or_warn!(gizmo_renderer::shader_graph::SurfaceGraph, "SurfaceGraph");
     }
 
     #[cfg(feature = "audio")]
@@ -165,6 +169,39 @@ mod tests {
         gizmo_scene::scene::SceneData::load_into(path, &mut loaded, &registry).unwrap();
         let healths: Vec<Health> = loaded.query::<&Health>().iter().cloned().collect();
         assert_eq!(healths, vec![Health { hp: 7.5, lives: 3 }]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A material built from nodes travels in the scene file: the graph, every node, link and
+    /// value of it, comes back as it was saved.
+    #[cfg(feature = "render")]
+    #[test]
+    fn a_surface_graph_survives_a_save_and_load() {
+        use gizmo_renderer::shader_graph::{NodeKind, ShaderGraph, SurfaceGraph};
+        let dir = std::env::temp_dir().join(format!("gizmo_surface_graph_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("scene.ron");
+        let path = path.to_str().unwrap();
+
+        let mut graph = ShaderGraph::new();
+        let noise = graph.add(NodeKind::Noise, [10.0, 20.0]);
+        graph.node_mut(noise).unwrap().values[1] = [4.0; 4];
+        let color = graph.add(NodeKind::Color([0.9, 0.05, 0.05, 1.0]), [10.0, 120.0]);
+        let multiply = graph.add(NodeKind::Multiply, [200.0, 60.0]);
+        graph.connect(noise, 0, multiply, 0).unwrap();
+        graph.connect(color, 0, multiply, 1).unwrap();
+        graph.connect(multiply, 0, graph.output().unwrap(), 0).unwrap();
+
+        let mut world = gizmo_core::World::new();
+        let e = world.spawn();
+        world.add_component(e, gizmo_core::EntityName::new("statue"));
+        world.add_component(e, SurfaceGraph::new(graph.clone()));
+        gizmo_scene::scene::SceneData::save(&world, path, &full_scene_registry()).unwrap();
+
+        let mut loaded = gizmo_core::World::new();
+        gizmo_scene::scene::SceneData::load_into(path, &mut loaded, &full_scene_registry()).unwrap();
+        let graphs: Vec<ShaderGraph> = loaded.query::<&SurfaceGraph>().iter().map(|g| g.graph.clone()).collect();
+        assert_eq!(graphs, vec![graph]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

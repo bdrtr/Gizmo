@@ -25,6 +25,8 @@ pub enum EditorTab {
     ScriptEditor,
     /// Frame timings and the flamegraph.
     Profiler,
+    /// The node editor for a surface built from nodes.
+    ShaderGraph,
 }
 
 /// The gizmo tool's mode

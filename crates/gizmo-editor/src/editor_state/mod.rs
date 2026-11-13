@@ -108,6 +108,8 @@ pub struct EditorState {
     pub console: ConsoleState,
     /// The script editor: the open file, its text and whether it is dirty.
     pub script: ScriptEditorState,
+    /// The shader graph tab: the graph being edited and what the editor is doing with it.
+    pub shader_graph: crate::shader_graph_panel::ShaderGraphPanelState,
 
     /// Preferences that persist between sessions, on disk.
     pub prefs: EditorPrefs,
@@ -278,6 +280,7 @@ impl EditorState {
             selection: SelectionState::default(),
             console: ConsoleState::default(),
             script: ScriptEditorState::default(),
+            shader_graph: crate::shader_graph_panel::ShaderGraphPanelState::default(),
             prefs,
 
             inspector_drag_original_transforms: std::collections::HashMap::new(),

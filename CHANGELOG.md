@@ -58,7 +58,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `SurfaceMaterial::from_graph` build and register it. An output input nothing is linked to keeps the engine's
   material: `ShaderGraph::new()` draws the frame `MaterialType::Pbr` draws, byte for byte, on both paths. A link joins any
   two widths (a float spreads, a longer vector is cut, a shorter one padded); a loop is refused by `connect` and is a
-  `GraphError` when it comes from a file. The node editor is the next piece.
+  `GraphError` when it comes from a file.
+
+- **The Shader Graph tab, and a graph a scene keeps.** `gizmo-editor`'s `Window ▸ Shader Graph` is a node editor for it:
+  drag an output onto an input to link (a loop is refused and the status line says why), drag a linked input away to
+  move or drop its link, right-click the canvas to add a node and a title to delete one, edit unlinked inputs and
+  constants in place, undo and redo, save and load a `.shadergraph` (JSON), and read the WGSL it is. "Apply" puts the
+  graph on the selected entities as a `SurfaceGraph` component and links them to the tab, so every edit reaches the
+  viewport as it is made; "Edit selected" opens an entity's graph. `SurfaceGraph` is saved with the scene, and
+  `resolve_surface_graphs`, part of every prepared frame, draws it: one surface per distinct graph, built when a graph
+  is new or changed, set over a stale id a load brings, released with the last entity drawing it
+  (`MaterialRegistry` slots are released, never reused); taken off, the entity draws the engine's material again.
 
 - **The local lights' shadows and the spots' cookies in a browser and on a phone.** The forward-only path drew the sun's
   shadow alone. A point, spot or rectangle light that casts (`casts_shadows`) casts there now, and a spot's cookie

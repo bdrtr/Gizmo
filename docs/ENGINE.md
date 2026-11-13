@@ -1507,8 +1507,14 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   rather than a pipeline of its own. Every node kind and every output of each composes into all five
   shaders a surface is drawn with (a unit test, no GPU); the empty graph draws `Pbr`'s frame to the
   byte and a red graph the frame its hand-written WGSL draws, on the desktop and the forward-only
-  path (`a_shader_graph_is_drawn_as_the_surface_it_stands_for`). **Open:** the node editor in
-  `gizmo-editor`, and a graph as an asset an entity's material names, saved with the scene.
+  path (`a_shader_graph_is_drawn_as_the_surface_it_stands_for`). **The editor and the scene side
+  landed the same day:** `gizmo-editor`'s Shader Graph tab (`shader_graph_panel`, its drags tested
+  headlessly with real pointer events) and the `SurfaceGraph` component, which a scene saves and
+  `resolve_surface_graphs` draws — one surface per distinct graph, released with its last entity
+  (`a_surface_graph_is_built_once_and_released_with_its_last_entity`). **Still open, each its own
+  piece:** textures beyond the material's base colour (a graph can sample only what group 1 binds),
+  a normal-map node (`TangentToWorld` exists; the material's normal map is reachable only through
+  `Standard`), and the tab's edits in the editor's own undo history (the tab has its own).
 
 
 ---

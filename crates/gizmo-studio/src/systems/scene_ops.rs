@@ -14,6 +14,8 @@ pub fn handle_scene_operations(
     // --- INSPECTOR JSON GÜNCELLEMELERİ ---
     // The editor's own drain, shared with the in-engine editor, which used to drop these.
     gizmo::editor::component_requests::apply_json_updates(world, editor_state);
+    // The shader graph tab's "Apply", "Edit selected" and live edits.
+    gizmo::editor::shader_graph_panel::apply_to_world(world, editor_state);
 
     // --- DİNAMİK COMPONENT EKLEME İŞLEMİ ---
     if let Some((ent_id, comp_name)) = editor_state.add_component_request.take() {

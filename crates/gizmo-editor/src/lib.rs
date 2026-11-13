@@ -46,6 +46,8 @@ pub mod profiler_panel;
 pub mod rebinding;
 /// The scene view tab: the editable viewport, its gizmo and its picking.
 pub mod scene_view;
+/// The shader graph tab: a node editor for a surface built from nodes.
+pub mod shader_graph_panel;
 pub mod toolbar;
 /// The editor's floating windows — settings, and the dialogs that are not panels.
 pub mod windows;
@@ -97,6 +99,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::ScriptEditor => "Script Editor".into(),
             EditorTab::Profiler => "Profiler".into(),
             EditorTab::Animation => "Animation".into(),
+            EditorTab::ShaderGraph => "Shader Graph".into(),
         }
     }
 
@@ -112,6 +115,7 @@ impl<'a> TabViewer for EditorTabViewer<'a> {
             EditorTab::ScriptEditor => windows::ui_script_editor(ui, self.state),
             EditorTab::Profiler => profiler_panel::ui_profiler(ui, self.world, self.state),
             EditorTab::Animation => animation_panel::ui_animation(ui, self.world, self.state),
+            EditorTab::ShaderGraph => shader_graph_panel::ui_shader_graph(ui, self.world, self.state),
         }
     }
 }

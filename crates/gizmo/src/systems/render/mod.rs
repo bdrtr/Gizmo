@@ -1037,6 +1037,10 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // something to write. Until 2026-08-19 neither happened and a saved scene lost every material
     // a user had authored.
     crate::renderer::material_sync::resolve_material_descriptions(world, renderer);
+    // A material built from nodes (`SurfaceGraph`) is drawn with its graph's surface: built here
+    // when the graph is new or changed, and set again over whatever a load or an edit wrote into
+    // the material's type — before the descriptions are synced, so a save writes the type drawn.
+    crate::renderer::shader_graph::resolve_surface_graphs(world, renderer);
     crate::renderer::material_sync::sync_material_descriptions(world);
 
     // **Advance skeletal animation.** `collect_draw_items` below reads `Skeleton` for its skinning
@@ -12791,6 +12795,15 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                 assert!(wgsl == graph, "the red graph drew another frame than its WGSL (transparent: {transparent})");
                 assert_eq!(wgsl_albedo, graph_albedo, "and another G-buffer (transparent: {transparent})");
             }
+            // As a component: drawn as the graph, over a `Pbr` type and over an id from another run.
+            for case in [SurfaceCase::GraphComponent, SurfaceCase::StaleGraphComponent] {
+                for transparent in [false, true] {
+                    let (graph, _) = render_surface_cube(SurfaceCase::RedGraph, transparent).await;
+                    let (component, _) = render_surface_cube(case, transparent).await;
+                    let (changed, total) = changed_pixels(&graph, &component, 128);
+                    assert_eq!(changed, 0, "a SurfaceGraph component drew {changed}/{total} pixels unlike its graph's surface (transparent: {transparent})");
+                }
+            }
             if let (_, Some(albedo)) = render_surface_cube(SurfaceCase::RedGraph, false).await {
                 let middle = (64 * 128 + 64) * 4;
                 let texel = &albedo[middle..middle + 4];
@@ -12798,6 +12811,78 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
                     assert!(got.abs_diff(want) <= 1, "the G-buffer holds {texel:?} where the graph wrote (243, 63, 63, 0)");
                 }
             }
+        });
+    }
+
+    /// **A `SurfaceGraph`'s surface lives as long as an entity draws it.** Two cubes with one graph
+    /// share one surface; an edited graph is built anew and the old surface released; the component
+    /// taken off gives the cube the engine's material back and releases the last surface, and the
+    /// frame is then `Pbr`'s again.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_surface_graph_is_built_once_and_released_with_its_last_entity() {
+        use gizmo_renderer::components::MaterialType;
+        use gizmo_renderer::shader_graph::{NodeKind, SurfaceGraph};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            // Frame after frame: the temporal pass would make two frames of one scene differ.
+            renderer.taa = None;
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            let mut cubes = Vec::new();
+            for x in [-1.2, 1.2] {
+                let cube = world.spawn();
+                world.add_component(cube, Transform::new(Vec3::new(x, 0.0, 0.0)));
+                world.add_component(cube, GlobalTransform::default());
+                world.add_component(cube, AssetManager::create_cube(&renderer.device));
+                world.add_component(cube, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.4, 0.2, 1.0), 0.5, 0.0));
+                world.add_component(cube, MeshRenderer::new());
+                cubes.push(cube);
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            let pbr = render_world(&mut renderer, &mut world).await;
+            let type_of = |world: &World, e| world.query::<&Material>().get(e).map(|m| m.material_type);
+
+            for &cube in &cubes {
+                world.add_component(cube, SurfaceGraph::new(red_graph()));
+            }
+            let red = render_world(&mut renderer, &mut world).await;
+            assert_eq!(renderer.custom_materials.graph_surface_count(), 1, "two cubes with one graph built two surfaces");
+            let first = type_of(&world, cubes[0]);
+            assert!(matches!(first, Some(MaterialType::CustomSurface(_))) && first == type_of(&world, cubes[1]));
+            assert!(changed_pixels(&pbr, &red, 128).0 >= 300, "the graph is not on screen");
+
+            // One cube's graph edited: a second surface; then both edited alike: the first released.
+            let mut edited = red_graph();
+            let one = edited.add(NodeKind::Float(1.0), [0.0, 0.0]);
+            edited.connect(one, 0, edited.output().unwrap(), 2).unwrap();
+            world.add_component(cubes[0], SurfaceGraph::new(edited.clone()));
+            render_world(&mut renderer, &mut world).await;
+            assert_eq!(renderer.custom_materials.graph_surface_count(), 2);
+            world.add_component(cubes[1], SurfaceGraph::new(edited));
+            render_world(&mut renderer, &mut world).await;
+            assert_eq!(renderer.custom_materials.graph_surface_count(), 1, "the surface nobody draws was kept");
+            if let Some(MaterialType::CustomSurface(old)) = first {
+                assert!(renderer.custom_materials.surface(old).is_none(), "the released surface still resolves");
+            }
+
+            for &cube in &cubes {
+                world.remove_component::<SurfaceGraph>(cube);
+            }
+            let back = render_world(&mut renderer, &mut world).await;
+            assert_eq!(type_of(&world, cubes[0]), Some(MaterialType::Pbr));
+            assert_eq!(renderer.custom_materials.graph_surface_count(), 0);
+            let (changed, total) = changed_pixels(&pbr, &back, 128);
+            assert_eq!(changed, 0, "with the graph gone the frame is not Pbr's: {changed}/{total} pixels differ");
         });
     }
 
@@ -12814,6 +12899,10 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         EmptyGraph,
         /// [`red_graph`]: what [`RED_SURFACE_WGSL`] writes, as nodes.
         RedGraph,
+        /// A `Pbr` material with [`red_graph`] as a `SurfaceGraph` component.
+        GraphComponent,
+        /// The same, with the material's type an id from another run, as a loaded scene has it.
+        StaleGraphComponent,
         /// `MaterialType::CustomSurface` with an id nothing was registered under.
         Dangling,
         /// No cube at all — what "drew nothing" has to look like.
@@ -12890,12 +12979,17 @@ fn material_surface(input: SurfaceInput) -> Surface {
                 SurfaceCase::Red => MaterialType::CustomSurface(red),
                 SurfaceCase::EmptyGraph => MaterialType::CustomSurface(empty_graph),
                 SurfaceCase::RedGraph => MaterialType::CustomSurface(red_graph),
+                SurfaceCase::GraphComponent => MaterialType::Pbr,
+                SurfaceCase::StaleGraphComponent => MaterialType::CustomSurface(gizmo_renderer::custom_material::SurfaceId(999)),
                 // One past the last: ids start at 0, so this resolves to nothing.
                 SurfaceCase::Dangling => MaterialType::CustomSurface(gizmo_renderer::custom_material::SurfaceId(red_graph.0 + 1)),
                 SurfaceCase::NoCube => unreachable!(),
             };
             world.add_component(cube, mat);
             world.add_component(cube, MeshRenderer::new());
+            if matches!(case, SurfaceCase::GraphComponent | SurfaceCase::StaleGraphComponent) {
+                world.add_component(cube, gizmo_renderer::shader_graph::SurfaceGraph::new(self::red_graph()));
+            }
         }
         // A floor under it, so a shadow cast or not is part of the frame.
         let floor = world.spawn();

@@ -94,6 +94,10 @@ fn draw_menu_bar(ui: &mut egui::Ui, state: &mut EditorState) {
                         state.toggle_tab(crate::editor_state::EditorTab::Console);
                         ui.close();
                     }
+                    if ui.button("Shader Graph").clicked() {
+                        state.toggle_tab(crate::editor_state::EditorTab::ShaderGraph);
+                        ui.close();
+                    }
                     ui.separator();
                     if ui.button("Düzeni Kaydet").clicked() {
                         if let Err(e) = state.save_layout() {

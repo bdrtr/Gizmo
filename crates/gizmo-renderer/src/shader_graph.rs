@@ -296,6 +296,25 @@ impl NodeKind {
         ]
     }
 
+    /// Which group an editor lists it under: `"Input"`, `"Constant"`, `"Math"`, `"Vector"`,
+    /// `"Pattern"`, or `"Output"` for the surface itself.
+    #[must_use]
+    pub fn category(&self) -> &'static str {
+        use NodeKind::*;
+        match self {
+            Output => "Output",
+            Uv | WorldPosition | WorldNormal | ViewDirection | VertexColor | Time | CameraPosition | ScreenPosition
+            | Material | Standard | Texture => "Input",
+            Float(_) | Vector2(_) | Vector3(_) | Color(_) => "Constant",
+            Add | Subtract | Multiply | Divide | Power | Minimum | Maximum | Modulo | Abs | Floor | Ceil | Fract
+            | Sin | Cos | Sqrt | Exp | Negate | OneMinus | Saturate | Lerp | Clamp | Step | Smoothstep | Remap => {
+                "Math"
+            }
+            Normalize | Length | Distance | Dot | Cross | Split | Combine | TangentToWorld => "Vector",
+            Fresnel | Checker | Noise => "Pattern",
+        }
+    }
+
     /// Its name, as an editor shows it.
     #[must_use]
     pub fn name(&self) -> &'static str {
@@ -873,6 +892,118 @@ impl ShaderGraph {
         order.push(id);
         Ok(())
     }
+}
+
+/// A material built from nodes, as a component: an entity with a `Material` and this is drawn with
+/// the graph's surface.
+///
+/// The graph is the authored thing and travels in a scene file (`gizmo-app` registers it as
+/// `"SurfaceGraph"`); the [`SurfaceId`](crate::custom_material::SurfaceId) it is drawn with is the
+/// renderer's and does not. [`resolve_surface_graphs`] — part of every frame the engine prepares —
+/// builds the surface when the graph is new or has changed, sets the entity's
+/// [`MaterialType::CustomSurface`](crate::components::MaterialType::CustomSurface) to it, and puts it
+/// back after anything else writes the material type, so a scene that loads a stale id draws the
+/// graph. A graph that is not one surface draws the engine's material and says why once. Removing
+/// the component gives the entity the engine's material back.
+#[derive(Clone, PartialEq, Debug, Default, Serialize, Deserialize)]
+pub struct SurfaceGraph {
+    /// The graph.
+    pub graph: ShaderGraph,
+}
+
+impl SurfaceGraph {
+    /// A component drawing `graph`.
+    #[must_use]
+    pub fn new(graph: ShaderGraph) -> Self {
+        Self { graph }
+    }
+}
+
+/// What [`resolve_surface_graphs`] last built an entity's graph into: the graph, to tell when it
+/// changes, and the surface, `None` when it did not build.
+#[derive(Clone)]
+struct ResolvedSurfaceGraph {
+    graph: ShaderGraph,
+    surface: Option<crate::custom_material::SurfaceId>,
+}
+
+gizmo_core::impl_component!(SurfaceGraph, ResolvedSurfaceGraph);
+
+/// Gives every entity with a [`SurfaceGraph`] and a `Material` its graph's surface — see
+/// [`SurfaceGraph`]. A graph's surface is built once per distinct graph and shared; one no entity
+/// draws any more is released, pipelines and all.
+pub fn resolve_surface_graphs(world: &mut gizmo_core::World, renderer: &mut crate::Renderer) {
+    use crate::components::{Material, MaterialType};
+    use gizmo_core::Entity;
+
+    // The graphs that are new or changed since they were last built.
+    let stale: Vec<(Entity, ShaderGraph)> = {
+        let resolved = world.query::<&ResolvedSurfaceGraph>();
+        world
+            .query::<(Entity, &SurfaceGraph)>()
+            .iter()
+            .filter(|(e, g)| resolved.get(*e).is_none_or(|r| r.graph != g.graph))
+            .map(|(e, g)| (e, g.graph.clone()))
+            .collect()
+    };
+    for (entity, graph) in stale {
+        let previous = world.query::<&ResolvedSurfaceGraph>().get(entity).and_then(|r| r.surface);
+        let surface = match renderer.surface_for_graph(&graph) {
+            Ok(id) => Some(id),
+            Err(error) => {
+                tracing::warn!(entity = entity.id(), %error, "[SurfaceGraph] the graph does not build; drawing the engine's material");
+                None
+            }
+        };
+        // A graph that stopped building gives back the engine's material, not a released surface.
+        if surface.is_none() {
+            if let (Some(old), Some(mut material)) = (previous, world.query_mut::<&mut Material>().get_mut(entity)) {
+                if material.material_type == MaterialType::CustomSurface(old) {
+                    material.material_type = MaterialType::Pbr;
+                }
+            }
+        }
+        world.add_component(entity, ResolvedSurfaceGraph { graph, surface });
+    }
+
+    // A graph taken off an entity takes its surface with it.
+    let removed: Vec<(Entity, Option<crate::custom_material::SurfaceId>)> = {
+        let graphs = world.query::<&SurfaceGraph>();
+        world
+            .query::<(Entity, &ResolvedSurfaceGraph)>()
+            .iter()
+            .filter(|(e, _)| graphs.get(*e).is_none())
+            .map(|(e, r)| (e, r.surface))
+            .collect()
+    };
+    for (entity, surface) in removed {
+        if let (Some(id), Some(mut material)) = (surface, world.query_mut::<&mut Material>().get_mut(entity)) {
+            if material.material_type == MaterialType::CustomSurface(id) {
+                material.material_type = MaterialType::Pbr;
+            }
+        }
+        world.remove_component::<ResolvedSurfaceGraph>(entity);
+    }
+
+    // Every material drawn by a graph says so, whatever wrote its type since.
+    let mut used = std::collections::HashSet::new();
+    {
+        let resolved: Vec<(Entity, crate::custom_material::SurfaceId)> = world
+            .query::<(Entity, &ResolvedSurfaceGraph)>()
+            .iter()
+            .filter_map(|(e, r)| r.surface.map(|s| (e, s)))
+            .collect();
+        let mut materials = world.query_mut::<&mut Material>();
+        for (entity, id) in resolved {
+            used.insert(id);
+            if let Some(mut material) = materials.get_mut(entity) {
+                if material.material_type != MaterialType::CustomSurface(id) {
+                    material.material_type = MaterialType::CustomSurface(id);
+                }
+            }
+        }
+    }
+    renderer.custom_materials.release_graph_surfaces_except(&used);
 }
 
 struct Compiled {
