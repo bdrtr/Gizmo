@@ -2916,6 +2916,7 @@ dependencies = [
  "gizmo-scripting",
  "gizmo-ui",
  "gizmo-window",
+ "image",
  "pollster",
  "rayon",
  "rustc-hash 2.1.3",

@@ -106,6 +106,8 @@ gizmo-net = { version = "0.11.0", path = "../gizmo-net", optional = true, defaul
 
 [dev-dependencies]
 criterion = "0.5"
+# Writes the image files the material-map tests load from disk, as a scene's paths would name them.
+image = { version = "0.25", default-features = false, features = ["png"] }
 rayon = "1.11.0"
 pollster = "0.4"
 

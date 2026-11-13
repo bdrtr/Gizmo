@@ -94,12 +94,20 @@ fn apply_completed_textures(world: &World) {
     for (entity_ids, path, bind_group) in installed {
         for eid in entity_ids {
             if let Some(mut mat) = materials.entity(eid as u32).and_then(|e| materials.get_mut(e)) {
-                if still_wants(mat.texture_source.as_deref(), &path) {
+                if still_wants(mat.texture_source.as_deref(), &path) && streams(&mat.maps) {
                     mat.bind_group = bind_group.clone();
                 }
             }
         }
     }
+}
+
+/// Whether a material's texture is streamed at all. A streamed texture arrives as a bind group over
+/// the base colour alone, and a material that names other maps (`Material::maps`) would lose them to
+/// it — its normal map gone the moment the camera came near. Such a material's bind group is built
+/// whole from its sources (`material_sync`), base colour included, and is left alone here.
+fn streams(maps: &gizmo_renderer::components::MaterialMaps) -> bool {
+    maps.is_empty()
 }
 
 /// Does the material on the id that asked for `path` still want it?
@@ -169,6 +177,9 @@ fn request_nearby_textures(world: &World) {
         let Some(path) = mat.texture_source.clone() else {
             continue;
         };
+        if !streams(&mat.maps) {
+            continue;
+        }
         let Some(t) = transforms.get(e) else {
             continue;
         };
@@ -203,6 +214,17 @@ fn should_request(
 
 #[cfg(test)]
 mod tests {
+    /// A material with maps is not streamed: a streamed texture is a bind group over the base colour
+    /// alone, and would take the maps with it.
+    #[test]
+    fn a_material_with_maps_is_not_streamed() {
+        use gizmo_renderer::components::{MaterialDesc, MaterialMaps};
+        let plain = MaterialDesc::default();
+        let mapped = MaterialDesc::default().with_maps(MaterialMaps::default().with_normal("n.png", 1.0));
+        assert!(super::streams(&plain.maps));
+        assert!(!super::streams(&mapped.maps), "a material with a normal map would lose it to a streamed texture");
+    }
+
     #[test]
     fn a_finished_texture_goes_only_to_a_material_that_still_asks_for_it() {
         // The same id, now another entity's material: a different texture, or none.

@@ -188,6 +188,13 @@ pub struct Material {
     /// Where the albedo texture came from; `None` for an untextured material. Used for
     /// reloading and for recognising an already-loaded texture.
     pub texture_source: Option<String>,
+    /// The material's other maps — normal, metallic-roughness, emissive, occlusion — by where they
+    /// come from, with their strengths. Like [`texture_source`](Self::texture_source), data the
+    /// bind group is built from: change either and [`crate::material_sync`] builds the bind group
+    /// again. A material built by hand with maps the bind group holds but these do not name (the
+    /// glTF loader, [`AssetManager::material`](crate::asset::AssetManager::material)) keeps its bind
+    /// group until one of them changes.
+    pub maps: MaterialMaps,
     /// The shading route — see [`MaterialType`].
     pub material_type: MaterialType,
     /// Whether this draw goes into the transparent bucket: sorted back to front, alpha blended,
@@ -268,6 +275,104 @@ pub fn reflectance_from_ior(ior: f32) -> f32 {
     r * r
 }
 
+/// A material's maps besides its base colour, by where each comes from, and how strongly each
+/// applies — what [`Material::maps`] and [`MaterialDesc::maps`] hold, and what a scene saves.
+///
+/// A path is read as [`Material::texture_source`] is (a file, an embedded asset or an asset's
+/// UUID). The normal, metallic-roughness and occlusion maps are data and are read linear; the
+/// emissive map is a colour and is read as sRGB, as the base colour is. A map that is `None`, or
+/// does not load, is the neutral one: flat, white, white, white.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+#[non_exhaustive]
+pub struct MaterialMaps {
+    /// A tangent-space normal map.
+    pub normal: Option<String>,
+    /// How far the normal map tilts the surface: 1 as authored, 0 flat. glTF's `normalTexture.scale`.
+    pub normal_scale: f32,
+    /// Roughness in green and metalness in blue, multiplying [`Material::roughness`] and
+    /// [`Material::metallic`]: glTF's packing.
+    pub metallic_roughness: Option<String>,
+    /// Light the surface gives off, as a picture: multiplied by
+    /// [`emissive_factor`](Self::emissive_factor) and added to [`Material::emissive`].
+    pub emissive: Option<String>,
+    /// The emissive map's multiplier, linear RGB. White by default, so a map set is a map seen; with
+    /// no emissive map it is not used.
+    pub emissive_factor: gizmo_math::Vec3,
+    /// Ambient occlusion in red: 1 is open.
+    pub occlusion: Option<String>,
+    /// How much of the occlusion map applies: 0 none, 1 all. glTF's `occlusionTexture.strength`.
+    pub occlusion_strength: f32,
+}
+
+impl Default for MaterialMaps {
+    /// No maps, every strength as authored.
+    fn default() -> Self {
+        Self {
+            normal: None,
+            normal_scale: 1.0,
+            metallic_roughness: None,
+            emissive: None,
+            emissive_factor: gizmo_math::Vec3::ONE,
+            occlusion: None,
+            occlusion_strength: 1.0,
+        }
+    }
+}
+
+impl MaterialMaps {
+    /// Whether no map is named: the material's bind group needs nothing but its base colour.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.normal.is_none() && self.metallic_roughness.is_none() && self.emissive.is_none() && self.occlusion.is_none()
+    }
+
+    /// The per-material constants the shader reads beside the maps: the strengths, with the emissive
+    /// factor only when there is an emissive map (the default map is white, and would otherwise glow).
+    #[must_use]
+    pub fn params(&self) -> crate::gpu_types::MaterialParams {
+        let emissive = if self.emissive.is_some() { self.emissive_factor.to_array() } else { [0.0; 3] };
+        crate::gpu_types::MaterialParams::new(
+            emissive,
+            self.normal_scale,
+            self.occlusion_strength,
+            crate::gpu_types::UvTransform::default(),
+            0.0,
+        )
+    }
+
+    /// A normal map.
+    #[must_use]
+    pub fn with_normal(mut self, path: impl Into<String>, scale: f32) -> Self {
+        self.normal = Some(path.into());
+        self.normal_scale = scale;
+        self
+    }
+
+    /// A metallic-roughness map.
+    #[must_use]
+    pub fn with_metallic_roughness(mut self, path: impl Into<String>) -> Self {
+        self.metallic_roughness = Some(path.into());
+        self
+    }
+
+    /// An emissive map and its multiplier.
+    #[must_use]
+    pub fn with_emissive(mut self, path: impl Into<String>, factor: gizmo_math::Vec3) -> Self {
+        self.emissive = Some(path.into());
+        self.emissive_factor = factor;
+        self
+    }
+
+    /// An occlusion map and how much of it applies.
+    #[must_use]
+    pub fn with_occlusion(mut self, path: impl Into<String>, strength: f32) -> Self {
+        self.occlusion = Some(path.into());
+        self.occlusion_strength = strength;
+        self
+    }
+}
+
 /// Everything a [`Material`] is, minus the one thing a file cannot hold: the bind group.
 ///
 /// **This is the material a scene saves.** `Material` owns an `Arc<wgpu::BindGroup>` — a handle to
@@ -306,6 +411,9 @@ pub struct MaterialDesc {
     /// rebuild the bind group. `None` resolves to the renderer's white 1×1, which is what an
     /// untextured material already draws with.
     pub texture_source: Option<String>,
+    /// See [`Material::maps`]. `#[serde(default)]`: scenes saved before it read as no maps.
+    #[serde(default)]
+    pub maps: MaterialMaps,
     /// See [`Material::material_type`].
     pub material_type: MaterialType,
     /// See [`Material::is_transparent`].
@@ -368,6 +476,7 @@ impl From<&Material> for MaterialDesc {
             ambient,
             emissive,
             texture_source,
+            maps,
             material_type,
             is_transparent,
             is_double_sided,
@@ -391,6 +500,7 @@ impl From<&Material> for MaterialDesc {
             ambient: *ambient,
             emissive: *emissive,
             texture_source: texture_source.clone(),
+            maps: maps.clone(),
             material_type: *material_type,
             is_transparent: *is_transparent,
             is_double_sided: *is_double_sided,
@@ -422,6 +532,7 @@ impl MaterialDesc {
             ambient: self.ambient,
             emissive: self.emissive,
             texture_source: self.texture_source,
+            maps: self.maps,
             material_type: self.material_type,
             is_transparent: self.is_transparent,
             is_double_sided: self.is_double_sided,
@@ -454,6 +565,7 @@ impl Default for MaterialDesc {
             ambient: gizmo_math::Vec3::ZERO,
             emissive: gizmo_math::Vec3::ZERO,
             texture_source: None,
+            maps: MaterialMaps::default(),
             material_type: MaterialType::Pbr,
             is_transparent: false,
             is_double_sided: false,
@@ -487,6 +599,13 @@ macro_rules! material_builders {
         if albedo.w < 1.0 {
             self.is_transparent = true;
         }
+        self
+    }
+
+    /// Sets [`Material::maps`]: the normal, metallic-roughness, emissive and occlusion maps the bind
+    /// group is built from.
+    pub fn with_maps(mut self, maps: MaterialMaps) -> Self {
+        self.maps = maps;
         self
     }
 

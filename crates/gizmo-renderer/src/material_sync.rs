@@ -160,26 +160,64 @@ pub fn resolve_material_descriptions(world: &mut World, renderer: &crate::Render
 
     let count = pending.len();
     for (entity, desc) in pending {
-        let bind_group = match desc.texture_source.as_deref() {
-            Some(path) => match renderer.load_texture(path) {
-                Ok(bg) => bg,
-                Err(e) => {
-                    tracing::warn!(
-                        entity,
-                        path,
-                        error = ?e,
-                        "[Material] texture named by a scene would not load; falling back to white"
-                    );
-                    renderer.white_material_bind_group()
-                }
-            },
-            None => renderer.white_material_bind_group(),
-        };
+        // Every map the description names, not the base colour alone: a scene that saved a normal
+        // map draws one when it opens. What will not load is warned about and neutral.
+        let bind_group = renderer.material_bind_group(desc.texture_source.as_deref(), &desc.maps);
         if let Some(e) = world.get_entity(entity) {
+            let bound = BoundSources { texture_source: desc.texture_source.clone(), maps: desc.maps.clone() };
             world.add_component(e, desc.into_material(bind_group));
+            world.add_component(e, bound);
         }
     }
     tracing::debug!(count, "[Material] descriptions resolved into materials");
+}
+
+/// What a material's bind group was built from, as [`rebind_changed_materials`] last saw it.
+#[derive(Clone, PartialEq)]
+struct BoundSources {
+    texture_source: Option<String>,
+    maps: crate::components::MaterialMaps,
+}
+impl gizmo_core::component::Component for BoundSources {}
+
+/// Builds a material's bind group again when what it is built from changes: its
+/// [`texture_source`](Material::texture_source) or its [`maps`](Material::maps) — a texture dropped
+/// onto it in the editor, a map a game sets, an undo. Each is loaded as
+/// [`resolve_material_descriptions`] loads them, and shared.
+///
+/// A material seen for the first time is taken as it is: its bind group may hold what its fields do
+/// not name (the glTF loader's maps, a builder's views, a texture still streaming in), and only a
+/// change of a source is a reason to replace it.
+pub fn rebind_changed_materials(world: &mut World, renderer: &crate::Renderer) {
+    let (adopt, changed): (Vec<(Entity, BoundSources)>, Vec<(Entity, BoundSources)>) = {
+        let bound = world.query::<&BoundSources>();
+        let mut adopt = Vec::new();
+        let mut changed = Vec::new();
+        for (entity, material) in world.query::<(Entity, &Material)>().iter() {
+            let now = BoundSources { texture_source: material.texture_source.clone(), maps: material.maps.clone() };
+            match bound.get(entity) {
+                None => adopt.push((entity, now)),
+                Some(before) if *before != now => changed.push((entity, now)),
+                Some(_) => {}
+            }
+        }
+        (adopt, changed)
+    };
+    for (entity, sources) in adopt {
+        world.add_component(entity, sources);
+    }
+    if changed.is_empty() {
+        return;
+    }
+    let count = changed.len();
+    for (entity, sources) in changed {
+        let bind_group = renderer.material_bind_group(sources.texture_source.as_deref(), &sources.maps);
+        if let Some(mut material) = world.query_mut::<&mut Material>().get_mut(entity) {
+            material.bind_group = bind_group;
+        }
+        world.add_component(entity, sources);
+    }
+    tracing::debug!(count, "[Material] bind groups rebuilt for changed sources");
 }
 
 #[cfg(test)]
@@ -205,6 +243,11 @@ mod tests {
             ambient: gizmo_math::Vec3::new(0.01, 0.02, 0.03),
             emissive: gizmo_math::Vec3::new(1.0, 2.0, 3.0),
             texture_source: Some("textures/brick.png".to_string()),
+            maps: crate::components::MaterialMaps::default()
+                .with_normal("textures/brick_n.png", 0.5)
+                .with_metallic_roughness("textures/brick_mr.png")
+                .with_emissive("textures/brick_e.png", gizmo_math::Vec3::new(2.0, 1.0, 0.5))
+                .with_occlusion("textures/brick_ao.png", 0.75),
             material_type: MaterialType::BakedLit,
             is_transparent: true,
             is_double_sided: true,
@@ -238,6 +281,7 @@ mod tests {
             ambient: gizmo_math::Vec3::ZERO,
             emissive: gizmo_math::Vec3::ZERO,
             texture_source: None,
+            maps: Default::default(),
             material_type: MaterialType::Pbr,
             is_transparent: false,
             is_double_sided: false,
@@ -253,6 +297,52 @@ mod tests {
         let back: MaterialDesc =
             ron::from_str(&ron::to_string(&desc).expect("serialize")).expect("deserialize");
         assert_eq!(back.texture_source, None);
+    }
+
+    /// A scene saved before materials had maps opens with none: the field is `serde(default)`, and
+    /// so is every field inside it, so a file that names only a normal map gets the other strengths
+    /// as authored.
+    #[test]
+    fn a_description_saved_before_maps_reads_as_none() {
+        let mut text = ron::to_string(&MaterialDesc::default()).expect("serialize");
+        // Cut `maps:(…),` out, parentheses balanced: what a file written before the field looks like.
+        let start = text.find("maps:").expect("maps is written");
+        let mut depth = 0;
+        let mut end = start;
+        for (i, c) in text[start..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = start + i + 2; // the `)` and the `,` after it
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        text.replace_range(start..end, "");
+        assert!(!text.contains("normal_scale"), "the cut left part of the maps: {text}");
+        let old: MaterialDesc = ron::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"));
+        assert_eq!(old.maps, crate::components::MaterialMaps::default());
+
+        let partial: crate::components::MaterialMaps = ron::from_str("(normal: Some(\"n.png\"))").expect("one field");
+        assert_eq!(partial.normal.as_deref(), Some("n.png"));
+        assert_eq!((partial.normal_scale, partial.occlusion_strength), (1.0, 1.0));
+    }
+
+    /// The emissive factor shines through the emissive map only: without one the slot is white, and
+    /// a factor reaching the shader would light the whole surface.
+    #[test]
+    fn the_emissive_factor_needs_an_emissive_map() {
+        let factor = gizmo_math::Vec3::new(1.0, 0.5, 0.25);
+        let mut maps = crate::components::MaterialMaps { emissive_factor: factor, ..Default::default() };
+        assert_eq!(maps.params().emissive_and_normal_scale[..3], [0.0; 3]);
+        maps.emissive = Some("glow.png".to_string());
+        assert_eq!(maps.params().emissive_and_normal_scale[..3], [1.0, 0.5, 0.25]);
+        let neutral = crate::components::MaterialMaps::default().params();
+        assert_eq!(bytemuck::bytes_of(&neutral), bytemuck::bytes_of(&crate::gpu_types::MaterialParams::default()));
     }
 }
 

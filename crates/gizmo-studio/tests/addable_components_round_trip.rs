@@ -194,6 +194,10 @@ fn a_material_description_survives_the_file() {
             ambient: Vec3::ZERO,
             emissive: Vec3::new(0.0, 1.0, 0.0),
             texture_source: Some("textures/rust.png".to_string()),
+            // The maps travel with the scene too (2026-11-13): a normal map saved is a normal map loaded.
+            maps: gizmo::renderer::components::MaterialMaps::default()
+                .with_normal("textures/rust_n.png", 0.7)
+                .with_occlusion("textures/rust_ao.png", 0.5),
             material_type: MaterialType::Pbr,
             is_transparent: false,
             is_double_sided: true,

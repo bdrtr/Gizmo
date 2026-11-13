@@ -50,6 +50,23 @@ impl Renderer {
         )
     }
 
+    /// The bind group a material with base colour `base` and `maps` draws with — see
+    /// [`AssetManager::load_material`](crate::asset::AssetManager::load_material). Cached; a map that
+    /// does not load is warned about and neutral.
+    pub fn material_bind_group(
+        &self,
+        base: Option<&str>,
+        maps: &crate::components::MaterialMaps,
+    ) -> Arc<wgpu::BindGroup> {
+        self.asset_manager.write().unwrap_or_else(|p| p.into_inner()).load_material(
+            &self.device,
+            &self.queue,
+            &self.scene.texture_bind_group_layout,
+            base,
+            maps,
+        )
+    }
+
     /// Loads a texture from disk (including the BC7 pipeline).
     /// Cached: the same path is not loaded twice.
     pub fn load_texture(

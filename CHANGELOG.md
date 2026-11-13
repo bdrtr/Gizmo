@@ -76,6 +76,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   keeps roughness in 0.05..1 and metalness in 0..1, as the engine's material does: a roughness of 0 linked straight in
   was a GGX lobe of zero width.
 
+- **A material's maps are data: a scene keeps them and the editor sets them** (`Material::maps`, `MaterialDesc::maps`,
+  `MaterialMaps`: the normal, metallic-roughness, emissive and occlusion maps by path, with the normal scale, the emissive
+  factor and the occlusion strength). A material could name its base colour and nothing else, so a scene lost every
+  other map on save and the inspector could not set one; the bind group held them and nothing said where they came from.
+  The inspector has a slot for each, dropped onto from the asset browser and cleared with ×, and their strengths.
+  `material_sync::rebind_changed_materials` builds a bind group again when its sources change — which also closes the
+  inspector's "TODO: We need to load this texture actually via a system": a base colour dropped onto a material showed
+  only if texture streaming happened to reach it. Data maps are read linear, colours sRGB, each uploaded once and
+  shared (`AssetManager::load_texture_view`, `load_material`); a map that does not load is warned about and neutral.
+  Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
+  have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
+
 - **The Shader Graph tab's "Apply" is undoable from the scene** (`EditorAction::SurfaceGraphsChanged`, each entity's
   graph before and after): Ctrl+Z takes the graph off the entities it was applied to, or gives them back the one they
   had. The edits that follow an Apply are not recorded there; they follow the tab's graph, which has its own undo.

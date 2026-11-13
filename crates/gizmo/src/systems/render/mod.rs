@@ -1037,6 +1037,9 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // something to write. Until 2026-08-19 neither happened and a saved scene lost every material
     // a user had authored.
     crate::renderer::material_sync::resolve_material_descriptions(world, renderer);
+    // A material whose texture or maps changed since its bind group was built — in the editor, by
+    // the game, by an undo — is built again from them.
+    crate::renderer::material_sync::rebind_changed_materials(world, renderer);
     // A material built from nodes (`SurfaceGraph`) is drawn with its graph's surface: built here
     // when the graph is new or changed, and set again over whatever a load or an edit wrote into
     // the material's type — before the descriptions are synced, so a save writes the type drawn.
@@ -13163,6 +13166,110 @@ fn material_surface(input: SurfaceInput) -> Surface {
             let mapped = render_normal_mapped_quad_with(true, Some(&graph)).await;
             let (changed, total) = changed_pixels(&plain, &mapped, 128);
             assert!(changed >= 400, "the normal map changed {changed}/{total} pixels through the graph");
+        });
+    }
+
+    /// Writes the test images the material-map tests name by path: ridges as a normal map (data,
+    /// so read linear), and plain white for an emissive map. Returns `(normal, white)`.
+    fn write_map_images() -> (String, String) {
+        let dir = std::env::temp_dir().join(format!("gizmo-material-maps-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let normal = dir.join("ridges_n.png");
+        let white = dir.join("white.png");
+        let ridges = image::RgbaImage::from_fn(256, 256, |x, _| {
+            let u = x as f32 / 256.0;
+            let slope = (u * std::f32::consts::TAU * 8.0).sin() * 0.9;
+            let n = Vec3::new(-slope, 0.0, 1.0).normalize();
+            image::Rgba([((n.x * 0.5 + 0.5) * 255.0) as u8, ((n.y * 0.5 + 0.5) * 255.0) as u8, ((n.z * 0.5 + 0.5) * 255.0) as u8, 255])
+        });
+        ridges.save(&normal).expect("normal map written");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([255, 255, 255, 255])).save(&white).expect("white written");
+        (normal.to_string_lossy().into_owned(), white.to_string_lossy().into_owned())
+    }
+
+    /// The raking-light quad of [`render_normal_mapped_quad`] with `desc` as its only material: a
+    /// `MaterialDesc` and no `Material`, as a scene that has just loaded has it. The world and the
+    /// renderer are kept, to draw it again after a change. Off: the temporal pass and auto exposure,
+    /// and the screen-space passes, whose noise turns with the frame — on ridges it moves pixels by
+    /// up to 2 levels from one frame to the next (measured), for TAA to average away. So two frames
+    /// of one scene are the same frame.
+    async fn desc_quad(desc: gizmo_renderer::components::MaterialDesc) -> (Renderer, World, gizmo_core::Entity) {
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        renderer.auto_exposure = None;
+        renderer.ssao = None;
+        renderer.ssgi = None;
+        renderer.ssr = None;
+        let mut world = World::new();
+        let quad = world.spawn();
+        world.add_component(quad, Transform::new(Vec3::ZERO).with_scale(Vec3::new(3.0, 3.0, 0.1)));
+        world.add_component(quad, GlobalTransform::default());
+        world.add_component(quad, AssetManager::create_cube(&renderer.device));
+        world.add_component(quad, desc);
+        world.add_component(quad, MeshRenderer::new());
+        world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+        world.spawn_bundle(DirectionalLightBundle {
+            rotation: gizmo_math::Quat::from_rotation_y(1.35) * gizmo_math::Quat::from_rotation_x(-0.15),
+            intensity: 3.5,
+            ..Default::default()
+        });
+        (renderer, world, quad)
+    }
+
+    /// **A material's maps are data: a scene keeps them, and a change to them is drawn.**
+    ///
+    /// A loaded `MaterialDesc` naming a normal map draws it — the ridges shade the quad — where the
+    /// same description without it does not. On a live material, setting the same map draws the frame
+    /// the loaded one drew, byte for byte, and clearing it draws the plain frame again: the bind group
+    /// follows its sources. An emissive map lights the surface by its factor; the factor with no map
+    /// lights nothing. Before 2026-11-13 a material could name only its base colour, so a scene lost
+    /// every other map on save and the editor could not set one.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_materials_maps_are_saved_loaded_and_follow_their_sources() {
+        use gizmo_renderer::components::{MaterialDesc, MaterialMaps};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let (normal, white) = write_map_images();
+        let base = MaterialDesc::default().with_pbr(Vec4::new(0.8, 0.7, 0.6, 1.0), 0.6, 0.0);
+        pollster::block_on(async {
+            let (mut r, mut w, _) = desc_quad(base.clone()).await;
+            let plain = render_world(&mut r, &mut w).await;
+            let (mut r, mut w, _) = desc_quad(base.clone().with_maps(MaterialMaps::default().with_normal(normal.clone(), 1.0))).await;
+            let loaded = render_world(&mut r, &mut w).await;
+            let (changed, total) = changed_pixels(&plain, &loaded, 128);
+            assert!(changed >= 400, "a loaded normal map changed {changed}/{total} pixels: it is not drawn");
+
+            // The same map set on a live material, and taken off again.
+            let (mut r, mut w, quad) = desc_quad(base.clone()).await;
+            assert_eq!(render_world(&mut r, &mut w).await, plain);
+            if let Some(mut m) = w.query_mut::<&mut Material>().get_mut(quad) {
+                m.maps = MaterialMaps::default().with_normal(normal.clone(), 1.0);
+            }
+            let set = render_world(&mut r, &mut w).await;
+            assert!(set == loaded, "a map set on a live material drew another frame than the loaded one");
+            if let Some(mut m) = w.query_mut::<&mut Material>().get_mut(quad) {
+                m.maps = MaterialMaps::default();
+            }
+            let cleared = render_world(&mut r, &mut w).await;
+            assert!(cleared == plain, "clearing the map did not give the plain frame back");
+
+            // Emission: by its factor through a white map, nothing without one.
+            let red = Vec3::new(4.0, 0.0, 0.0);
+            let mut factor_only = MaterialMaps::default();
+            factor_only.emissive_factor = red;
+            let (mut r, mut w, _) = desc_quad(base.clone().with_maps(factor_only)).await;
+            assert!(render_world(&mut r, &mut w).await == plain, "an emissive factor with no map lit the surface");
+            let (mut r, mut w, _) = desc_quad(base.clone().with_maps(MaterialMaps::default().with_emissive(white.clone(), red))).await;
+            let glowing = render_world(&mut r, &mut w).await;
+            let middle = (64 * 128 + 64) * 4;
+            let (p, g) = (&plain[middle..middle + 3], &glowing[middle..middle + 3]);
+            assert!(g[0] > p[0] && g[0] - p[0] > g[1].saturating_sub(p[1]) + 20, "the emissive map did not light the middle red: {p:?} → {g:?}");
         });
     }
 

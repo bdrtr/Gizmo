@@ -71,6 +71,34 @@ impl super::AssetManager {
             });
         }
 
+        let (view, mip_level_count) =
+            Self::upload_rgba_texture(device, queue, cache_key, rgba, width, height, wgpu::TextureFormat::Rgba8UnormSrgb);
+        let sampler = crate::texture_quality::material_sampler(
+            device,
+            "linear_repeat_sampler",
+            wgpu::AddressMode::Repeat,
+            wgpu::AddressMode::Repeat,
+            wgpu::FilterMode::Linear,
+            wgpu::FilterMode::Linear,
+            mip_level_count > 1,
+        );
+        let bg = self
+            .assemble_single_texture_bind_group(device, queue, layout, &view, &sampler, cache_key);
+        self.texture_cache.insert(cache_key.to_string(), bg.clone());
+        Ok(bg)
+    }
+
+    /// Uploads checked RGBA8 pixels as a mipmapped texture of `format` and returns its view and its
+    /// mip count. `format` is sRGB for a colour, linear for data (a normal or a packed map).
+    fn upload_rgba_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        label: &str,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+    ) -> (wgpu::TextureView, u32) {
         let texture_size = wgpu::Extent3d {
             width,
             height,
@@ -84,9 +112,9 @@ impl super::AssetManager {
             mip_level_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: crate::texture_quality::MIPPED_TEXTURE_USAGE,
-            label: Some(cache_key),
+            label: Some(label),
             view_formats: &[],
         });
 
@@ -107,24 +135,113 @@ impl super::AssetManager {
         );
 
         if mip_level_count > 1 {
-            crate::texture_quality::MipmapBlitter::new(device, wgpu::TextureFormat::Rgba8UnormSrgb)
+            crate::texture_quality::MipmapBlitter::new(device, format)
                 .generate(device, queue, &texture, mip_level_count);
         }
 
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let sampler = crate::texture_quality::material_sampler(
-            device,
-            "linear_repeat_sampler",
-            wgpu::AddressMode::Repeat,
-            wgpu::AddressMode::Repeat,
-            wgpu::FilterMode::Linear,
-            wgpu::FilterMode::Linear,
-            mip_level_count > 1,
-        );
-        let bg = self
-            .assemble_single_texture_bind_group(device, queue, layout, &view, &sampler, cache_key);
-        self.texture_cache.insert(cache_key.to_string(), bg.clone());
-        Ok(bg)
+        (texture.create_view(&wgpu::TextureViewDescriptor::default()), mip_level_count)
+    }
+
+    /// A texture's view, read from `path_or_uuid` as [`load_material_texture`](Self::load_material_texture)
+    /// reads one, as sRGB (`srgb`, a colour) or linear (data), uploaded once per path and format.
+    ///
+    /// # Errors
+    ///
+    /// As [`load_material_texture`](Self::load_material_texture): no such file or asset, an image that
+    /// does not decode, or one of zero size.
+    pub fn load_texture_view(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        path_or_uuid: &str,
+        srgb: bool,
+    ) -> Result<Arc<wgpu::TextureView>, AssetError> {
+        let (resolved_path, cache_key) = self.resolve_texture_cache_key(path_or_uuid)?;
+        if let Some(view) = self.view_cache.get(&(cache_key.clone(), srgb)) {
+            return Ok(view.clone());
+        }
+        let (rgba, width, height) = self.decode_texture_rgba(&resolved_path)?;
+        if width == 0 || height == 0 {
+            return Err(AssetError::ZeroDimensionTexture { cache_key, width, height });
+        }
+        let format = if srgb { wgpu::TextureFormat::Rgba8UnormSrgb } else { wgpu::TextureFormat::Rgba8Unorm };
+        let (view, _) = Self::upload_rgba_texture(device, queue, &cache_key, &rgba, width, height, format);
+        let view = Arc::new(view);
+        self.view_cache.insert((cache_key, srgb), view.clone());
+        Ok(view)
+    }
+
+    /// The bind group a material with base colour `base` and `maps` draws with, built once per set of
+    /// sources and shared after.
+    ///
+    /// With no maps it is [`load_material_texture`](Self::load_material_texture)'s (or the white one's,
+    /// for no base colour), so a material that names only a base colour shares the bind group it always
+    /// had. A texture that does not load is warned about and drawn as the neutral one in its slot: one
+    /// missing file costs that map, not the material.
+    pub fn load_material(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        base: Option<&str>,
+        maps: &crate::components::MaterialMaps,
+    ) -> Arc<wgpu::BindGroup> {
+        // The shared default buffer is `MaterialParams::default()`: strengths that ask for nothing
+        // else need no buffer of their own.
+        let params_neutral =
+            bytemuck::bytes_of(&maps.params()) == bytemuck::bytes_of(&crate::gpu_types::MaterialParams::default());
+        if maps.is_empty() && params_neutral {
+            return match base {
+                Some(path) => self.load_material_texture(device, queue, layout, path).unwrap_or_else(|error| {
+                    tracing::warn!(path, %error, "[Material] base colour texture would not load; drawing white");
+                    self.create_white_texture(device, queue, layout)
+                }),
+                None => self.create_white_texture(device, queue, layout),
+            };
+        }
+
+        let key = format!("{base:?}|{maps:?}");
+        if let Some(cached) = self.material_cache.get(&key) {
+            return cached.clone();
+        }
+        let mut view = |path: &Option<String>, srgb: bool, slot: &str| -> Option<Arc<wgpu::TextureView>> {
+            let path = path.as_deref()?;
+            self.load_texture_view(device, queue, path, srgb)
+                .map_err(|error| tracing::warn!(path, slot, %error, "[Material] map would not load; drawing the neutral one"))
+                .ok()
+        };
+        let base_view = view(&base.map(str::to_string), true, "base colour");
+        let normal = view(&maps.normal, false, "normal");
+        let metallic_roughness = view(&maps.metallic_roughness, false, "metallic-roughness");
+        let emissive = view(&maps.emissive, true, "emissive");
+        let occlusion = view(&maps.occlusion, false, "occlusion");
+        let params = {
+            use wgpu::util::DeviceExt;
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("material_params"),
+                contents: bytemuck::cast_slice(&[maps.params()]),
+                usage: wgpu::BufferUsages::UNIFORM,
+            })
+        };
+        let mut builder = super::AssetManager::material().params(&params).label("material_maps");
+        if let Some(v) = base_view.as_deref() {
+            builder = builder.base_colour(v);
+        }
+        if let Some(v) = normal.as_deref() {
+            builder = builder.normal(v);
+        }
+        if let Some(v) = metallic_roughness.as_deref() {
+            builder = builder.metallic_roughness(v);
+        }
+        if let Some(v) = emissive.as_deref() {
+            builder = builder.emissive(v);
+        }
+        if let Some(v) = occlusion.as_deref() {
+            builder = builder.occlusion(v);
+        }
+        let bind_group = builder.build(self, device, queue, layout);
+        self.material_cache.insert(key, bind_group.clone());
+        bind_group
     }
 
     // ── Public load API ───────────────────────────────────────────────────
