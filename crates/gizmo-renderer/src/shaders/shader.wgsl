@@ -17,7 +17,20 @@
 #ifdef DETAILS
 #import gizmo::common::{dielectric_f0, instance_keeps}
 #endif
-#import gizmo::common::{SceneUniforms, light_falloff, compute_direct_lighting, compute_sphere_lighting, compute_tube_lighting, compute_rect_lighting, spot_cone, spot_cookie_uv, gizmo_cluster_index, scene_environment, height_fog}
+#import gizmo::common::{SceneUniforms, compute_direct_lighting, scene_environment, height_fog}
+// The local lights, in tiers on the forward-only path as the material is (`LightShape`): their loop only
+// while a scene has one, a sized source's and a rectangle's lighting only while it has one of those. Not
+// taken is not free there: on an Adreno 618 the rectangle's, tube's and sphere's branches cost a lit floor
+// about 4.8 ms under one plain point light that took none of them (2026-11-13).
+#ifdef LOCAL_LIGHTS
+#import gizmo::common::{light_falloff, spot_cone, spot_cookie_uv, gizmo_cluster_index}
+#endif
+#ifdef SIZED_LIGHTS
+#import gizmo::common::{compute_sphere_lighting, compute_tube_lighting}
+#endif
+#ifdef RECT_LIGHTS
+#import gizmo::common::{compute_rect_lighting}
+#endif
 #ifdef SUN_SHADOWS
 #ifdef SUN_SHADOW_PER_VERTEX
 #import gizmo::common::{sun_shadow_coord, sun_shadow_lean, sun_shadow_tap, shadow_distance_fade}
@@ -646,6 +659,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         total_lighting += sun_light;
     }
 
+#ifdef LOCAL_LIGHTS
     // Clustered: only this fragment's cluster's lights. `i` is still the index into `scene.lights`
     // so the body is unchanged from when it looped over every light.
     let cluster = gizmo_cluster_index(scene.view_proj, scene.camera_pos.xyz, scene.camera_forward.xyz, scene.cluster_dims, scene.cluster_depth, in.world_position);
@@ -704,20 +718,25 @@ fn shade(in: VertexOutput) -> vec4<f32> {
         }
         let light_rgb = light.color.rgb * cookie;
         var light_color_contrib = vec3<f32>(0.0);
+#ifdef RECT_LIGHTS
         if (light_type == 3u) {
             // A rectangle light (`compute_rect_lighting`; one-sided, so it gates itself).
             light_color_contrib = compute_rect_lighting(
                 N, view_dir, light.position.xyz - in.world_position, light.direction, light.params.z,
                 light.params.w, albedo, min_roughness, metallic, f0, light_rgb, intensity, window
             );
+        } else
+#endif
 #ifdef LOBES
-        } else if (anisotropy > 0.0) {
+        if (anisotropy > 0.0) {
             light_color_contrib = compute_direct_lighting_anisotropic(
                 N, view_dir, L, T, B, albedo, min_roughness, metallic, anisotropy, f0,
                 light_rgb, intensity, attenuation
             );
+        } else
 #endif
-        } else if (light_type == 0u && light.params.w > 0.0) {
+#ifdef SIZED_LIGHTS
+        if (light_type == 0u && light.params.w > 0.0) {
             // A tube light (`compute_tube_lighting`).
             light_color_contrib = compute_tube_lighting(
                 N, view_dir, light.position.xyz - in.world_position, light.direction.xyz, light.params.w,
@@ -729,7 +748,9 @@ fn shade(in: VertexOutput) -> vec4<f32> {
                 N, view_dir, light.position.xyz - in.world_position, light.params.z, albedo,
                 min_roughness, metallic, f0, light_rgb, intensity, attenuation
             );
-        } else {
+        } else
+#endif
+        {
             light_color_contrib = compute_direct_lighting(
                 N, view_dir, L, albedo, min_roughness, metallic, f0,
                 light_rgb, intensity, attenuation
@@ -742,6 +763,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
 #endif
         total_lighting += light_color_contrib;
     }
+#endif
     
     var indirect = vec3<f32>(0.0);
 #ifdef IRRADIANCE

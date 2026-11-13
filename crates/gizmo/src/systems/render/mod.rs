@@ -1543,13 +1543,15 @@ fn draw_camera_view(
     // the local lights' layers and cookies only while a frame draws a layer or lights a spot through a
     // cookie: either appearing or going builds them again (`SceneState::set_forward_sun_shadows`,
     // `set_forward_local_light_maps`), so a scene without them pays nothing for them per fragment.
+    // And the local lights' loop only while there are some, a sized source's or a rectangle's lighting
+    // only while there is one of those (`SceneState::set_forward_lights`).
     if cfg!(gizmo_forward_only) {
-        let cookie = setup.frame.lights[..(setup.frame.num_lights as usize).min(setup.frame.lights.len())]
-            .iter()
-            .any(|light| light.params[1] == 1.0 && light.params[3] > 0.0);
+        let lights = &setup.frame.lights[..(setup.frame.num_lights as usize).min(setup.frame.lights.len())];
+        let cookie = lights.iter().any(|light| light.params[1] == 1.0 && light.params[3] > 0.0);
         let sun = renderer.scene.set_forward_sun_shadows(setup.draws_cascades());
         let local = renderer.scene.set_forward_local_light_maps(!local_shadow_layers.is_empty() || cookie);
-        if sun || local {
+        let kinds = renderer.scene.set_forward_lights(crate::renderer::pipeline::LightShape::of(lights));
+        if sun || local || kinds {
             crate::renderer::pipeline::rebuild_pipelines(renderer);
         }
     }

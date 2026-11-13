@@ -569,6 +569,7 @@ impl Renderer {
             forward_probes: scene.forward_probes,
             forward_sun_shadows: scene.forward_sun_shadows,
             forward_local_light_maps: scene.forward_local_light_maps,
+            forward_lights: scene.forward_lights,
             shadow_texture_view: scene.shadow_texture_view,
             shadow_cascade_layer_views: scene.shadow_cascade_layer_views,
             shadow_depth_texture: scene.shadow_depth_texture,

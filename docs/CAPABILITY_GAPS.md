@@ -1029,7 +1029,10 @@ cube cookies for point lights, and no cookies on web. Each item:
   light's size softening its shadow (one tap does not) and the deferred pass's contact shadows. On an Adreno 618
   (Nişancı with a casting point light 3 m over its floor, portrait, 20 readings a build in turn): the six 512² layers
   cost nothing that shows (52.6 fps drawn and unread, 52.2 without), the reads about 2.8 ms with the floor filling the
-  screen (45.7); a scene without a casting light reads as before (88 against 86.7 and 96.6).
+  screen (45.7); a scene without a casting light reads as before (88 against 86.7 and 96.6). **Its lit shaders carry
+  only the kinds of local light a scene has since the same day** (`LightShape`): the loop held the rectangle's, tube's
+  and sphere's lighting under a plain point light (64 fps against 92 without them), and the loop and its cluster
+  lookup ran with no light at all — Nişancı as it is reads 127 where it read 87.
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01; down to a coin since 2026-11-11.**
   `DirectionalLight::contact_shadow_length` (metres, 0 = off, the default). The deferred lighting pass
   marches from each pixel toward the sun in screen space against the depth buffer: pixel by pixel,

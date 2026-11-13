@@ -126,6 +126,9 @@ pub struct SceneState {
     /// (`LOCAL_LIGHT_MAPS`): while a frame draws a local light's shadow or lights a spot's cookie
     /// ([`set_forward_local_light_maps`](Self::set_forward_local_light_maps)).
     pub(crate) forward_local_light_maps: bool,
+    /// The kinds of local light the forward-only path's lit pipelines are built for
+    /// ([`set_forward_lights`](Self::set_forward_lights)).
+    pub(crate) forward_lights: LightShape,
     /// [`unlit_pipeline`](Self::unlit_pipeline) with `KEEPS`, on the forward-only path, whose plain one
     /// cannot discard: a cut-out, a LOD crossfade. `None` on the desktop path, whose unlit pipeline can.
     pub unlit_keeps_pipeline: Option<wgpu::RenderPipeline>,
@@ -522,6 +525,15 @@ impl SceneState {
         changed
     }
 
+    /// The kinds of local light the forward-only path's lit pipelines read — `shape`: this frame's
+    /// ([`LightShape::of`]). True when that changed, and the caller builds the pipelines again
+    /// ([`rebuild_pipelines`]): a scene pays per fragment only for the kinds of light it has.
+    pub fn set_forward_lights(&mut self, shape: LightShape) -> bool {
+        let changed = shape != self.forward_lights;
+        self.forward_lights = shape;
+        changed
+    }
+
     /// Draws the environment cube again if this frame's sky, presets or sun changed what it shows; true if
     /// it did. The forward-only path's lit shader reads the cube. The desktop path works the environment
     /// out per pixel, next to its reflection probes, and has no reason to call this.
@@ -645,6 +657,46 @@ impl ProbeShape {
         [
             ("PROBE_BACKGROUND", naga_oil::compose::ShaderDefValue::Bool(self.background)),
             ("PROBE_BOXES", naga_oil::compose::ShaderDefValue::Bool(self.boxes)),
+        ]
+    }
+}
+
+/// Which kinds of local light a scene has, which is what the forward-only path's lit shaders are built
+/// for (`LOCAL_LIGHTS`, `SIZED_LIGHTS`, `RECT_LIGHTS`) — as they are built for its reflection probes
+/// (`ProbeShape`). On an Adreno 618 a branch not taken is not free: a floor under one plain point light
+/// read 64 fps with the rectangle's, tube's and sphere's branches compiled in and none of them taken, and
+/// 92 without them (2026-11-13). The desktop's are built for every kind, deciding per light.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LightShape {
+    /// Any light in the clustered list — a point, a spot, a rectangle or a fill light.
+    pub local: bool,
+    /// A point or spot light with a source radius, or a tube.
+    pub sized: bool,
+    /// A rectangle light.
+    pub rect: bool,
+}
+
+impl LightShape {
+    /// The shape of a frame's packed lights (`SceneFrame::lights`, `num_lights` of them live).
+    pub fn of(lights: &[crate::gpu_types::LightData]) -> Self {
+        let mut shape = Self { local: !lights.is_empty(), ..Self::default() };
+        for light in lights {
+            let kind = light.params[1] as u32;
+            shape.rect |= kind == 3;
+            // A tube (a point with a length), or a point or spot with a source radius.
+            shape.sized |= (kind == 0 && light.params[3] > 0.0) || (kind <= 1 && light.params[2] > 0.0);
+        }
+        shape
+    }
+
+    /// The shader defs that build a lit shader for it.
+    #[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
+    pub(crate) fn defs(self) -> [(&'static str, naga_oil::compose::ShaderDefValue); 3] {
+        [
+            ("LOCAL_LIGHTS", naga_oil::compose::ShaderDefValue::Bool(self.local)),
+            ("SIZED_LIGHTS", naga_oil::compose::ShaderDefValue::Bool(self.sized)),
+            ("RECT_LIGHTS", naga_oil::compose::ShaderDefValue::Bool(self.rect)),
         ]
     }
 }
@@ -1186,7 +1238,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         indirect: &indirect,
         wire_color: &wire_color_layout,
     };
-    let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default(), false, false);
+    let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default(), false, false, LightShape::default());
     let pipelines::ShadowPipelines {
         plain: [shadow_pipeline, shadow_open_pipeline],
         cut_out: shadow_cut_out_pipelines,
@@ -1226,6 +1278,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         forward_probes,
         forward_sun_shadows: false,
         forward_local_light_maps: false,
+        forward_lights: LightShape::default(),
         behind_fallback,
         behind_sampler,
         shadow_pipeline,
@@ -1325,6 +1378,7 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
             renderer.scene.forward_probes.shape,
             renderer.scene.forward_sun_shadows,
             renderer.scene.forward_local_light_maps,
+            renderer.scene.forward_lights,
         );
     let pipelines::ShadowPipelines {
         plain: [shadow_pipeline, shadow_open_pipeline],
@@ -1387,6 +1441,68 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
 
 #[cfg(test)]
 mod tests {
+    /// **The forward-only path's lit shader carries only the kinds of local light a scene has.** On an
+    /// Adreno 618 a floor under one plain point light read 64 fps with the rectangle's, tube's and sphere's
+    /// lighting compiled in and none taken, 92 without them, and a scene with no local light pays for the
+    /// loop and its cluster lookup the same way. The desktop's shader has every kind.
+    #[test]
+    fn the_web_shader_carries_only_the_kinds_of_light_a_scene_has() {
+        use super::shaders::{compose_wgsl, native_render_defs, web_render_defs};
+        use naga_oil::compose::ShaderDefValue::Bool;
+        let src = include_str!("../shaders/shader.wgsl");
+        let compose = |kinds: &[&str]| {
+            let mut defs = web_render_defs();
+            for kind in kinds {
+                defs.insert(kind.to_string(), Bool(true));
+            }
+            compose_wgsl(src, "shader.wgsl", defs)
+        };
+        let has = |wgsl: &str, f: &str| wgsl.contains(&format!("fn {f}"));
+        let none = compose(&[]);
+        let plain = compose(&["LOCAL_LIGHTS"]);
+        let sized = compose(&["LOCAL_LIGHTS", "SIZED_LIGHTS"]);
+        let rect = compose(&["LOCAL_LIGHTS", "RECT_LIGHTS"]);
+        let desktop = compose_wgsl(src, "shader.wgsl", native_render_defs());
+        assert!(!has(&none, "gizmo_cluster_index") && !none.contains("cluster_light_indices["), "no light, no loop");
+        assert!(has(&plain, "gizmo_cluster_index") && has(&plain, "light_falloff"), "a light, its loop");
+        for (wgsl, label, sphere, rectangle) in [
+            (&plain, "plain lights", false, false),
+            (&sized, "sized sources", true, false),
+            (&rect, "rectangles", false, true),
+            (&desktop, "the desktop", true, true),
+        ] {
+            assert_eq!(has(wgsl, "compute_sphere_lighting"), sphere, "{label}: the sphere's lighting");
+            assert_eq!(has(wgsl, "compute_tube_lighting"), sphere, "{label}: the tube's lighting");
+            assert_eq!(has(wgsl, "compute_rect_lighting"), rectangle, "{label}: the rectangle's lighting");
+        }
+    }
+
+    /// The kinds a frame's packed lights are: a plain point, a spot with a source radius, a tube (a point
+    /// with a length), a rectangle and a fill light (directional, in the list).
+    #[test]
+    fn a_frames_lights_have_the_shape_of_their_kinds() {
+        use crate::gpu_types::LightData;
+        let light = |kind: f32, radius: f32, w: f32| LightData {
+            position: [0.0; 4],
+            color: [1.0; 4],
+            direction: [0.0, -1.0, 0.0, 0.9],
+            params: [0.8, kind, radius, w],
+        };
+        let shape = |lights: &[LightData]| LightShape::of(lights);
+        assert_eq!(shape(&[]), LightShape::default());
+        assert_eq!(shape(&[light(0.0, 0.0, 0.0)]), LightShape { local: true, sized: false, rect: false });
+        assert_eq!(shape(&[light(2.0, 0.0, 0.0)]), LightShape { local: true, sized: false, rect: false }, "a fill light");
+        // A spot's `w` is its cookie, not a length.
+        assert_eq!(shape(&[light(1.0, 0.0, 3.0)]), LightShape { local: true, sized: false, rect: false }, "a cookie");
+        assert!(shape(&[light(1.0, 0.1, 0.0)]).sized, "a spot with a source radius");
+        assert!(shape(&[light(0.0, 0.0, 1.5)]).sized, "a tube");
+        assert_eq!(shape(&[light(3.0, 0.5, 0.25)]), LightShape { local: true, sized: false, rect: true }, "a rectangle's zw are its size");
+        assert_eq!(
+            shape(&[light(0.0, 0.0, 0.0), light(3.0, 0.5, 0.25), light(0.0, 0.2, 0.0)]),
+            LightShape { local: true, sized: true, rect: true },
+        );
+    }
+
     /// **The forward-only path's plain lit shader carries no anisotropy, clear coat or subsurface.**
     /// An Adreno 618 pays for those branches even when no material takes them: 20 fps against 43,
     /// drawing a cube and a floor. Only a phone can measure that, so this holds the cause in place.
@@ -1605,11 +1721,19 @@ mod tests {
                         sun.insert("LOBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         sun.insert("DETAILS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         variants.push(("web with lobes and the sun's shadow", shaders::compose_wgsl(src, name, sun)));
+                        // The local lights' kinds, each alone.
+                        for kind in ["LOCAL_LIGHTS", "SIZED_LIGHTS", "RECT_LIGHTS"] {
+                            let mut defs = shaders::web_render_defs();
+                            defs.insert("LOCAL_LIGHTS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                            defs.insert(kind.to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                            variants.push(("web with a kind of local light", shaders::compose_wgsl(src, name, defs)));
+                        }
                         // The local lights' layers and cookies, alone and with everything else.
                         let mut local = shaders::web_render_defs();
+                        local.insert("LOCAL_LIGHTS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         local.insert("LOCAL_LIGHT_MAPS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         variants.push(("web with the local lights' maps", shaders::compose_wgsl(src, name, local.clone())));
-                        for def in ["SUN_SHADOWS", "DETAILS", "LOBES", "TRANSMISSION"] {
+                        for def in ["SUN_SHADOWS", "DETAILS", "LOBES", "TRANSMISSION", "SIZED_LIGHTS", "RECT_LIGHTS"] {
                             local.insert(def.to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         }
                         variants.push(("web glass with every shadow", shaders::compose_wgsl(src, name, local)));

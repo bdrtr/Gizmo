@@ -50,6 +50,11 @@ pub(crate) fn native_render_defs() -> HashMap<String, ShaderDefValue> {
         // filters them (`local_shadow_visibility`).
         ("LOCAL_LIGHT_MAPS".to_string(), ShaderDefValue::Bool(true)),
         ("LOCAL_LIGHT_MAP_GROUP".to_string(), ShaderDefValue::UInt(2)),
+        // Every kind of local light, always; the forward-only path builds its lit shaders for the kinds a
+        // scene has (`LightShape`).
+        ("LOCAL_LIGHTS".to_string(), ShaderDefValue::Bool(true)),
+        ("SIZED_LIGHTS".to_string(), ShaderDefValue::Bool(true)),
+        ("RECT_LIGHTS".to_string(), ShaderDefValue::Bool(true)),
         ("LOCAL_SHADOW_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(2)),
         ("COOKIE_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(3)),
         ("COOKIE_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(4)),
@@ -548,8 +553,8 @@ mod tests {
             &["SUN_SHADOWS"],
             &["SUN_SHADOWS", "DETAILS", "KEEPS", "LOBES"],
             // With the local lights' shadows and cookies, since 2026-11-13, alone and with the sun's.
-            &["LOCAL_LIGHT_MAPS"],
-            &["SUN_SHADOWS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION"],
+            &["LOCAL_LIGHTS", "LOCAL_LIGHT_MAPS"],
+            &["SUN_SHADOWS", "LOCAL_LIGHTS", "SIZED_LIGHTS", "RECT_LIGHTS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION"],
         ];
         let mut offenders = Vec::new();
         for &(name, src) in shaders {
@@ -615,8 +620,8 @@ mod tests {
             &["DETAILS", "KEEPS", "LOBES", "PROBES"],
             &["SUN_SHADOWS"],
             &["SUN_SHADOWS", "DETAILS", "KEEPS", "LOBES"],
-            &["LOCAL_LIGHT_MAPS"],
-            &["SUN_SHADOWS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION"],
+            &["LOCAL_LIGHTS", "LOCAL_LIGHT_MAPS"],
+            &["SUN_SHADOWS", "LOCAL_LIGHTS", "SIZED_LIGHTS", "RECT_LIGHTS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION"],
         ];
         let mut offenders = Vec::new();
         for &(name, src) in shaders {
@@ -679,6 +684,7 @@ mod tests {
     fn web_compose_with_local_light_maps_reads_them_from_group_0() {
         for sun in [false, true] {
             let mut defs = web_render_defs();
+            defs.insert("LOCAL_LIGHTS".to_string(), ShaderDefValue::Bool(true));
             defs.insert("LOCAL_LIGHT_MAPS".to_string(), ShaderDefValue::Bool(true));
             defs.insert("SUN_SHADOWS".to_string(), ShaderDefValue::Bool(sun));
             let web = compose_wgsl(SHADER_SRC, "shader.wgsl", defs);

@@ -257,6 +257,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The forward-only path's lit shaders carry only the kinds of local light a scene has** (`pipeline::LightShape`:
+  `LOCAL_LIGHTS`, `SIZED_LIGHTS`, `RECT_LIGHTS`, built in by `SceneState::set_forward_lights` as the probes and the
+  shadows are). The local lights' loop and its cluster lookup ran in every lit fragment whether or not a scene had a
+  light, and a light's loop held the rectangle's, tube's and sphere's lighting whatever kind it was: on an Adreno 618
+  a branch not taken is not free. Measured there (Nişancı, portrait, 20 readings a build, in turn): under one plain
+  point light added for the measurement, 56 and 53 fps before, **92** now; Nişancı as it is, with no local light,
+  87 and 74 before, **127** now. Taken apart first — the same light with only the plain lighting in the loop read
+  92.5 against 64, and with almost nothing in it 120. The desktop's shader has every kind, as before.
 - **A single cascade reaches only as deep as the camera sees into the scene** (`ShadowSettings::fit_to_scene`, on where
   one cascade is drawn — the forward-only path, a browser's and a phone's). That cascade holds the whole range, so its
   texels followed the 40 m whatever the scene: `pinbol`'s table, 4.2 m deep from its camera, was shadowed in 31.5 mm

@@ -488,7 +488,9 @@ impl SurfacePipelines {
                 let probes = scene.forward_probes.shape.defs();
                 let sun = ("SUN_SHADOWS", naga_oil::compose::ShaderDefValue::Bool(scene.forward_sun_shadows));
                 let local = ("LOCAL_LIGHT_MAPS", naga_oil::compose::ShaderDefValue::Bool(scene.forward_local_light_maps));
-                let defs: Vec<_> = probes.iter().copied().chain([sun, local]).chain(extra.iter().copied()).collect();
+                let lights = scene.forward_lights.defs();
+                let defs: Vec<_> =
+                    probes.iter().copied().chain([sun, local]).chain(lights).chain(extra.iter().copied()).collect();
                 (embedded.to_string(), surface_defs(crate::pipeline::shaders::web_render_defs(), &defs))
             };
             let name = format!("{label} ({name})");
