@@ -88,6 +88,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **A texture handed to the material builder is read blended, not as hard texels.** `AssetManager::material()`'s
+  shared default sampler was nearest for magnification, minification and mips, while a texture loaded by path and a
+  glTF texture with no sampler are read linear and mipmapped: a material built with the builder and no sampler of its
+  own shimmered at a distance and showed square texels up close. It is tiled, linear and mipmapped now. **Looks
+  change** for such materials. Found because a reopened glTF model read through it: a linear model came back with
+  4608 of 16384 pixels changed.
+
+- **A glTF model's sampler is data** (`MaterialMaps::wrap_u`, `wrap_v`, `mag_filter`, `min_filter`: `TextureWrap`,
+  `TextureFilter`), so a pixel-art model read nearest is read nearest after a reopen, and an inspector edit keeps it.
+
 - **A glTF model survives a save and a reopen.** A model dragged into the editor saved with no `MeshSource` — the
   spawner gave its meshes none — and its texture named `gltf_tex_base_0`, which is no file and was shared by every
   model's first material: it reopened with no geometry, and with a white material had there been any (the scene

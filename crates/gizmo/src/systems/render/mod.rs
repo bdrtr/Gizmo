@@ -13173,9 +13173,15 @@ fn material_surface(input: SurfaceInput) -> Surface {
     /// a glTF file on disk: `quad.gltf` with its
     /// `quad.bin` and `red.png` beside it. Returns the `.gltf`'s path.
     fn write_red_gltf_quad() -> String {
-        let dir = std::env::temp_dir().join(format!("gizmo-gltf-quad-{}", std::process::id()));
+        write_gltf_quad("red", &image::RgbaImage::from_pixel(4, 4, image::Rgba([230, 20, 20, 255])), None)
+    }
+
+    /// [`write_red_gltf_quad`]'s quad with `texture` as its base colour, read through `sampler` (a
+    /// glTF sampler object, as JSON) when one is given, in a directory of its own named `name`.
+    fn write_gltf_quad(name: &str, texture: &image::RgbaImage, sampler: Option<&str>) -> String {
+        let dir = std::env::temp_dir().join(format!("gizmo-gltf-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        image::RgbaImage::from_pixel(4, 4, image::Rgba([230, 20, 20, 255])).save(dir.join("red.png")).expect("png");
+        texture.save(dir.join("red.png")).expect("png");
         let mut bin: Vec<u8> = Vec::new();
         for p in [[-1.5f32, -1.5, 0.0], [1.5, -1.5, 0.0], [1.5, 1.5, 0.0], [-1.5, 1.5, 0.0]] {
             p.iter().for_each(|v| bin.extend_from_slice(&v.to_le_bytes()));
@@ -13195,7 +13201,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
             "nodes":[{{"mesh":0,"name":"Quad"}}],
             "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2}},"indices":3,"material":0}}]}}],
             "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}},"metallicFactor":0.0,"roughnessFactor":0.6}},"emissiveFactor":[0.0,0.15,0.0]}}],
-            "textures":[{{"source":0}}],"images":[{{"uri":"red.png"}}],
+            "textures":[{{"source":0{sampler_ref}}}],"images":[{{"uri":"red.png"}}],{samplers}
             "buffers":[{{"uri":"quad.bin","byteLength":{len}}}],
             "bufferViews":[{{"buffer":0,"byteOffset":0,"byteLength":48}},{{"buffer":0,"byteOffset":48,"byteLength":48}},
                            {{"buffer":0,"byteOffset":96,"byteLength":32}},{{"buffer":0,"byteOffset":128,"byteLength":12}}],
@@ -13203,7 +13209,9 @@ fn material_surface(input: SurfaceInput) -> Surface {
                          {{"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"}},
                          {{"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"}},
                          {{"bufferView":3,"componentType":5123,"count":6,"type":"SCALAR"}}]}}"#,
-            len = bin.len()
+            len = bin.len(),
+            sampler_ref = if sampler.is_some() { ",\"sampler\":0" } else { "" },
+            samplers = sampler.map(|s| format!("\"samplers\":[{s}],")).unwrap_or_default(),
         );
         let path = dir.join("quad.gltf");
         std::fs::write(&path, json).expect("gltf");
@@ -13276,6 +13284,70 @@ fn material_surface(input: SurfaceInput) -> Surface {
             assert_eq!(changed, 0, "the reopened model drew {changed}/{total} pixels otherwise");
         });
         let _ = std::fs::remove_file(&scene_path);
+    }
+
+    /// **A glTF model's sampler survives a save and a reopen.** A 2×2 checker magnified over the
+    /// quad, read nearest (hard squares) where a linear sampler blends it: the reopened frame is the
+    /// saved one, and the saved one is not the linear one — the sampler is in what is drawn, and in
+    /// what is saved. Before the sampler was data, a reopened pixel-art model came back blurred.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_gltf_models_sampler_survives_a_save_and_reopen() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let checker = image::RgbaImage::from_fn(2, 2, |x, y| {
+            if (x + y) % 2 == 0 { image::Rgba([230, 20, 20, 255]) } else { image::Rgba([20, 20, 230, 255]) }
+        });
+        // 9728 = NEAREST, 33071 = CLAMP_TO_EDGE; 9729 = LINEAR.
+        let nearest = write_gltf_quad("nearest", &checker, Some(r#"{"magFilter":9728,"minFilter":9728,"wrapS":33071,"wrapT":33071}"#));
+        let linear = write_gltf_quad("linear", &checker, Some(r#"{"magFilter":9729,"minFilter":9729}"#));
+        pollster::block_on(async {
+            let draw = |model: String| async move {
+                let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+                renderer.taa = None;
+                let mut world = World::new();
+                {
+                    let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                    commands.spawn_gltf(Vec3::ZERO, &model, false).expect("the model loads");
+                }
+                world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+                world.spawn_bundle(DirectionalLightBundle::default());
+                let frame = render_world(&mut renderer, &mut world).await;
+                let path = format!("{model}.scene");
+                crate::scene::SceneData::save(&world, &path, &crate::full_scene_registry()).expect("saves");
+                let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+                renderer.taa = None;
+                let mut world = World::new();
+                crate::scene::SceneData::load_into(&path, &mut world, &crate::full_scene_registry()).expect("loads");
+                {
+                    let manager = renderer.asset_manager.clone();
+                    let mut assets = manager.write().unwrap();
+                    crate::renderer::asset_loading::run_asset_loading_system(
+                        &mut world,
+                        &renderer.device,
+                        &renderer.queue,
+                        &renderer.scene.texture_bind_group_layout,
+                        &mut assets,
+                    );
+                }
+                let reopened = render_world(&mut renderer, &mut world).await;
+                let _ = std::fs::remove_file(&path);
+                (frame, reopened)
+            };
+            let (nearest_drawn, nearest_reopened) = draw(nearest).await;
+            let (linear_drawn, linear_reopened) = draw(linear).await;
+            let (changed, total) = changed_pixels(&linear_drawn, &linear_reopened, 128);
+            assert_eq!(changed, 0, "the reopened linear model is read through another sampler: {changed}/{total} pixels differ");
+            let (blended, total) = changed_pixels(&nearest_drawn, &linear_drawn, 128);
+            assert!(blended >= 300, "nearest and linear drew alike ({blended}/{total}): the sampler is not what is drawn");
+            let (changed, total) = changed_pixels(&nearest_drawn, &nearest_reopened, 128);
+            assert_eq!(changed, 0, "the reopened model is read through another sampler: {changed}/{total} pixels differ");
+        });
     }
 
     /// Writes the test images the material-map tests name by path: ridges as a normal map (data,

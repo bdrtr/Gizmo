@@ -193,7 +193,8 @@ pub(super) fn build_gltf_materials(
             let base_color = pbr.base_color_factor();
 
             // Shared sampler honouring this material's glTF wrap/filter settings.
-            let mat_sampler = &sampler_cache[&material_sampler_key(&material)];
+            let mat_sampler_key = material_sampler_key(&material);
+            let mat_sampler = &sampler_cache[&mat_sampler_key];
 
             // Resolve each map's image view (or the neutral default).
             let base_view = pbr
@@ -314,6 +315,10 @@ pub(super) fn build_gltf_materials(
                 uv_scale: uv_transform.scale,
                 uv_rotation: uv_transform.rotation,
                 uv_offset: uv_transform.offset,
+                wrap_u: crate::components::TextureWrap::from_address_mode(mat_sampler_key.wrap_u),
+                wrap_v: crate::components::TextureWrap::from_address_mode(mat_sampler_key.wrap_v),
+                mag_filter: crate::components::TextureFilter::from_filter_mode(mat_sampler_key.mag),
+                min_filter: crate::components::TextureFilter::from_filter_mode(mat_sampler_key.min),
             };
             mat.emissive = gizmo_math::Vec3::from(instance_emissive);
 

@@ -1034,6 +1034,8 @@ fn every_capability_neither_path_names_is_accounted_for() {
         ("ColorTween", "advanced by `color_tween_system`, which BOTH paths call on the animation clock — `both_draw_paths_run_the_same_per_frame_drivers` lists it; the component is only ever touched through the system, which is why it is not named here."),
         ("MeshData", "geometry as data, like `Terrain` a recipe and not a picture: `run_asset_loading_system` (the app loop both hosts run on) uploads it into a `Mesh`, and `Mesh` is what both paths draw. `an_entity_described_without_a_gpu…`'s sibling `mesh_data_made_without_a_gpu_is_drawn_once_the_loader_has_run` is the end-to-end check."),
         ("MaterialMaps", "a `Material`'s map paths and strengths: data the bind group is built from, by `material_sync` inside `prepare_frame`, which both hosts run; both draw loops then bind the result as `Material::bind_group`, so neither has a reason to name the type. `a_materials_maps_are_saved_loaded_and_follow_their_sources` is the end-to-end check."),
+        ("TextureWrap", "a member of `MaterialMaps`, read where the bind group is built, as it is."),
+        ("TextureFilter", "the same."),
         ("RenderTarget", "an app-level render-to-texture handle (`gizmo-app`'s editor runtime), not a per-picture capability; the editor's own two are in EXCEPTIONS above."),
 
         // ── Genuinely one-sided, measured, and NOT a one-line fix ──────────────────────────

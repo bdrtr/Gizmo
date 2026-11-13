@@ -209,7 +209,7 @@ impl super::AssetManager {
             bytemuck::bytes_of(&maps.params()) == bytemuck::bytes_of(&crate::gpu_types::MaterialParams::default());
         // A glTF image has no single-texture bind group of its own: it goes through the builder.
         let gltf_base = base.is_some_and(|b| super::loaders::split_gltf_image_key(b).is_some());
-        if maps.is_empty() && params_neutral && !gltf_base {
+        if maps.is_empty() && params_neutral && maps.default_sampling() && !gltf_base {
             return match base {
                 Some(path) => self.load_material_texture(device, queue, layout, path).unwrap_or_else(|error| {
                     tracing::warn!(path, %error, "[Material] base colour texture would not load; drawing white");
@@ -242,7 +242,23 @@ impl super::AssetManager {
                 usage: wgpu::BufferUsages::UNIFORM,
             })
         };
+        // The sampler only when the material asks for another: the builder's default is tiled and
+        // blended with mipmaps, the one every texture is read through unless told otherwise.
+        let sampler = (!maps.default_sampling()).then(|| {
+            crate::texture_quality::material_sampler(
+                device,
+                "material_maps_sampler",
+                maps.wrap_u.address_mode(),
+                maps.wrap_v.address_mode(),
+                maps.mag_filter.filter_mode(),
+                maps.min_filter.filter_mode(),
+                true,
+            )
+        });
         let mut builder = super::AssetManager::material().params(&params).label("material_maps");
+        if let Some(s) = sampler.as_ref() {
+            builder = builder.sampler(s);
+        }
         if let Some(v) = base_view.as_deref() {
             builder = builder.base_colour(v);
         }

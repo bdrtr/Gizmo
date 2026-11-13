@@ -372,16 +372,20 @@ impl AssetManager {
             mk_linear_1x1("__default_flat_normal__", [128, 128, 255, 255]);
         let (white_tex, white_view) = mk_linear_1x1("__default_white_map__", [255, 255, 255, 255]);
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("material_default_sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Nearest,
-            min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-            ..Default::default()
-        });
+        // Tiled, blended and mipmapped: what a texture loaded by path is read through
+        // (`install_decoded_material_texture`) and what glTF says a texture with no sampler gets.
+        // It was nearest everywhere, so a texture handed to the builder with no sampler of its own —
+        // every material built from `MaterialMaps`, and a reopened glTF model — read as hard texels
+        // and shimmered at a distance, unlike the same texture loaded any other way.
+        let sampler = crate::texture_quality::material_sampler(
+            device,
+            "material_default_sampler",
+            wgpu::AddressMode::Repeat,
+            wgpu::AddressMode::Repeat,
+            wgpu::FilterMode::Linear,
+            wgpu::FilterMode::Linear,
+            true,
+        );
 
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("__default_material_params__"),

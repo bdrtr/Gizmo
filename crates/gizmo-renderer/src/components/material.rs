@@ -311,6 +311,81 @@ pub struct MaterialMaps {
     pub uv_rotation: f32,
     /// See [`uv_scale`](Self::uv_scale).
     pub uv_offset: [f32; 2],
+    /// What a texture read past its edge across U finds. glTF's sampler `wrapS`.
+    pub wrap_u: TextureWrap,
+    /// Across V. glTF's `wrapT`.
+    pub wrap_v: TextureWrap,
+    /// How a texture shown larger than it is fills the pixels between its texels: blended, or the
+    /// nearest one (pixel art). glTF's `magFilter`.
+    pub mag_filter: TextureFilter,
+    /// How one shown smaller is read. glTF's `minFilter`.
+    pub min_filter: TextureFilter,
+}
+
+/// What a texture read past its edge finds — see [`MaterialMaps::wrap_u`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum TextureWrap {
+    /// The texture again: tiling.
+    #[default]
+    Repeat,
+    /// Its edge texel, stretched.
+    Clamp,
+    /// The texture again, mirrored every other time.
+    Mirror,
+}
+
+impl TextureWrap {
+    /// As wgpu says it.
+    #[must_use]
+    pub fn address_mode(self) -> wgpu::AddressMode {
+        match self {
+            Self::Repeat => wgpu::AddressMode::Repeat,
+            Self::Clamp => wgpu::AddressMode::ClampToEdge,
+            Self::Mirror => wgpu::AddressMode::MirrorRepeat,
+        }
+    }
+
+    /// From wgpu's; a border colour, which no material sets, reads as a clamp.
+    #[must_use]
+    pub fn from_address_mode(mode: wgpu::AddressMode) -> Self {
+        match mode {
+            wgpu::AddressMode::Repeat => Self::Repeat,
+            wgpu::AddressMode::MirrorRepeat => Self::Mirror,
+            _ => Self::Clamp,
+        }
+    }
+}
+
+/// How a texture is filtered — see [`MaterialMaps::mag_filter`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum TextureFilter {
+    /// Blended between texels.
+    #[default]
+    Linear,
+    /// The nearest texel, hard-edged.
+    Nearest,
+}
+
+impl TextureFilter {
+    /// As wgpu says it.
+    #[must_use]
+    pub fn filter_mode(self) -> wgpu::FilterMode {
+        match self {
+            Self::Linear => wgpu::FilterMode::Linear,
+            Self::Nearest => wgpu::FilterMode::Nearest,
+        }
+    }
+
+    /// From wgpu's.
+    #[must_use]
+    pub fn from_filter_mode(mode: wgpu::FilterMode) -> Self {
+        match mode {
+            wgpu::FilterMode::Nearest => Self::Nearest,
+            _ => Self::Linear,
+        }
+    }
 }
 
 impl Default for MaterialMaps {
@@ -327,6 +402,10 @@ impl Default for MaterialMaps {
             uv_scale: [1.0, 1.0],
             uv_rotation: 0.0,
             uv_offset: [0.0, 0.0],
+            wrap_u: TextureWrap::Repeat,
+            wrap_v: TextureWrap::Repeat,
+            mag_filter: TextureFilter::Linear,
+            min_filter: TextureFilter::Linear,
         }
     }
 }
@@ -339,6 +418,23 @@ impl MaterialMaps {
         self.uv_rotation = rotation;
         self.uv_offset = offset;
         self
+    }
+
+    /// How every texture of the material is read past its edges and between its texels.
+    #[must_use]
+    pub fn with_sampling(mut self, wrap_u: TextureWrap, wrap_v: TextureWrap, mag: TextureFilter, min: TextureFilter) -> Self {
+        self.wrap_u = wrap_u;
+        self.wrap_v = wrap_v;
+        self.mag_filter = mag;
+        self.min_filter = min;
+        self
+    }
+
+    /// Whether its textures are read as every texture is by default: tiled and blended.
+    #[must_use]
+    pub fn default_sampling(&self) -> bool {
+        (self.wrap_u, self.wrap_v, self.mag_filter, self.min_filter)
+            == (TextureWrap::Repeat, TextureWrap::Repeat, TextureFilter::Linear, TextureFilter::Linear)
     }
 
     /// Whether no map is named: the material's bind group needs nothing but its base colour.
