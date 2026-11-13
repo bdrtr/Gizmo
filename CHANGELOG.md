@@ -243,8 +243,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is cut against it (`csm::seen_depth`: the deepest corner of frustum and box, the frustum read out of the view's own
   matrix), and the reach is that depth past the fade band, rounded up to a half octave (`csm::fitted_reach`) so the
   texel size changes only at those steps: 5.66 m and 4.5 mm for the table, whose bumpers' shadows, faint smudges over
-  40 m, are whole on an Adreno 618. It costs that phone about 0.3 ms, the table now filling the map it took a sliver
-  of: 108.8 fps against 112.0 and 112.8 without it (in turn, 10 readings each of SurfaceFlinger's last 127 presents).
+  40 m, are whole on an Adreno 618. It costs that phone about 0.3 ms: 108.8 fps against 112.0 and 112.8 without it
+  (in turn, 10 readings each of SurfaceFlinger's last 127 presents). Not in drawing the map — the table covers about
+  3.5 % of it now and 0.07 % before, 146 000 texels of depth — and not taken apart further.
   A floor to the horizon seen from above ends where the view's top edge meets it. Off on the desktop, whose four cascades already put fine texels near the camera
   and whose volumetric light reads them in the air past the last surface; `with_fit_to_scene(true)` turns it on there.
   `compute_directional_cascades_with` takes the seen depth, `SceneSetupInputs` the box. `pinbol`'s sun turned too: it
