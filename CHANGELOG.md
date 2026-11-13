@@ -70,6 +70,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is new or changed, set over a stale id a load brings, released with the last entity drawing it
   (`MaterialRegistry` slots are released, never reused); taken off, the entity draws the engine's material again.
 
+- **A graph reads every map the material binds.** `NormalMap` (into the world, with a strength), `MetallicRoughnessMap`,
+  `EmissiveMap` and `OcclusionMap` beside the base texture: a graph that builds the surface back from them and the
+  `Material` node draws `Pbr`'s frame to within one level, with a ridged normal map bound and without. The output now
+  keeps roughness in 0.05..1 and metalness in 0..1, as the engine's material does: a roughness of 0 linked straight in
+  was a GGX lobe of zero width.
+
 - **The local lights' shadows and the spots' cookies in a browser and on a phone.** The forward-only path drew the sun's
   shadow alone. A point, spot or rectangle light that casts (`casts_shadows`) casts there now, and a spot's cookie
   shows: its lit shaders read the layers and the cookies through group 0's bindings 11–13 (`LOCAL_LIGHT_MAPS`, placed by

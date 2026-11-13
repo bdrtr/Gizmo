@@ -13103,12 +13103,80 @@ fn material_surface(input: SurfaceInput) -> Surface {
         });
     }
 
+    /// **The map nodes read the material's maps as the engine's material does.** A graph that
+    /// builds the surface back from the `Material` node and the map nodes — the normal from
+    /// `NormalMap`, roughness and metalness through `MetallicRoughnessMap`, the albedo through
+    /// `OcclusionMap` — draws the frame `Pbr` draws, with a ridged normal map bound and without, to
+    /// within one level of rounding; and the map reaches it, as it reaches `Pbr`.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_map_nodes_read_the_materials_maps_as_the_engine_does() {
+        use gizmo_renderer::shader_graph::{NodeKind, ShaderGraph};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let mut graph = ShaderGraph::new();
+        let out = graph.output().unwrap();
+        let material = graph.add(NodeKind::Material, [0.0, 0.0]);
+        let texture = graph.add(NodeKind::Texture, [0.0, 0.0]);
+        let vertex = graph.add(NodeKind::VertexColor, [0.0, 0.0]);
+        let occlusion = graph.add(NodeKind::OcclusionMap, [0.0, 0.0]);
+        let mr = graph.add(NodeKind::MetallicRoughnessMap, [0.0, 0.0]);
+        let normal = graph.add(NodeKind::NormalMap, [0.0, 0.0]);
+        let tinted = graph.add(NodeKind::Multiply, [0.0, 0.0]);
+        let coloured = graph.add(NodeKind::Multiply, [0.0, 0.0]);
+        let albedo = graph.add(NodeKind::Multiply, [0.0, 0.0]);
+        let roughness = graph.add(NodeKind::Multiply, [0.0, 0.0]);
+        let metallic = graph.add(NodeKind::Multiply, [0.0, 0.0]);
+        for (from, output, to, input) in [
+            (material, 0, tinted, 0),
+            (texture, 0, tinted, 1),
+            (tinted, 0, coloured, 0),
+            (vertex, 0, coloured, 1),
+            (coloured, 0, albedo, 0),
+            (occlusion, 0, albedo, 1),
+            (albedo, 0, out, 0),
+            (material, 2, roughness, 0),
+            (mr, 0, roughness, 1),
+            (roughness, 0, out, 2),
+            (material, 3, metallic, 0),
+            (mr, 1, metallic, 1),
+            (metallic, 0, out, 3),
+            (material, 4, out, 4),
+            (normal, 0, out, 5),
+        ] {
+            graph.connect(from, output, to, input).unwrap();
+        }
+        pollster::block_on(async {
+            let largest = |a: &[u8], b: &[u8]| a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap_or(0);
+            for mapped in [false, true] {
+                let pbr = render_normal_mapped_quad_with(mapped, None).await;
+                let rebuilt = render_normal_mapped_quad_with(mapped, Some(&graph)).await;
+                let difference = largest(&pbr, &rebuilt);
+                assert!(difference <= 1, "the rebuilt surface is {difference} levels off Pbr (mapped: {mapped})");
+            }
+            let plain = render_normal_mapped_quad_with(false, Some(&graph)).await;
+            let mapped = render_normal_mapped_quad_with(true, Some(&graph)).await;
+            let (changed, total) = changed_pixels(&plain, &mapped, 128);
+            assert!(changed >= 400, "the normal map changed {changed}/{total} pixels through the graph");
+        });
+    }
+
     /// One flat quad under a raking light. `mapped` binds a generated normal map through the
     /// builder; otherwise the two runs are identical, geometry included.
     async fn render_normal_mapped_quad(mapped: bool) -> Vec<u8> {
+        render_normal_mapped_quad_with(mapped, None).await
+    }
+
+    /// [`render_normal_mapped_quad`], drawn with `graph`'s surface when one is given.
+    async fn render_normal_mapped_quad_with(mapped: bool, graph: Option<&gizmo_renderer::shader_graph::ShaderGraph>) -> Vec<u8> {
         const W: u32 = 128;
         const MAP: u32 = 256;
-        let renderer = crate::test_gpu::headless_renderer(W, W).await;
+        let mut renderer = crate::test_gpu::headless_renderer(W, W).await;
         let mut asset_manager = AssetManager::new();
         let mut world = World::new();
 
@@ -13188,10 +13256,12 @@ fn material_surface(input: SurfaceInput) -> Surface {
         );
         world.add_component(quad, GlobalTransform::default());
         world.add_component(quad, AssetManager::create_cube(&renderer.device));
-        world.add_component(
-            quad,
-            Material::new(bind_group).with_pbr(Vec4::new(0.8, 0.7, 0.6, 1.0), 0.6, 0.0),
-        );
+        let mut material = Material::new(bind_group).with_pbr(Vec4::new(0.8, 0.7, 0.6, 1.0), 0.6, 0.0);
+        if let Some(graph) = graph {
+            material.material_type =
+                gizmo_renderer::components::MaterialType::CustomSurface(renderer.add_surface_graph("graph", graph).expect("the graph builds"));
+        }
+        world.add_component(quad, material);
         world.add_component(quad, MeshRenderer::new());
 
         world.spawn_bundle(CameraBundle {

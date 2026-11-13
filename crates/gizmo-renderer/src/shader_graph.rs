@@ -169,6 +169,15 @@ pub enum NodeKind {
     Standard,
     /// The material's base colour texture, at a UV (the material's own when nothing is linked).
     Texture,
+    /// The material's normal map at a UV, turned into the world: the normal it gives, unit length.
+    /// `strength` scales its tilt as the material's own normal scale does.
+    NormalMap,
+    /// The material's metallic-roughness map at a UV: roughness from green, metalness from blue.
+    MetallicRoughnessMap,
+    /// The material's emissive map at a UV.
+    EmissiveMap,
+    /// The material's occlusion map at a UV: 1 is unoccluded.
+    OcclusionMap,
 
     // ── Constants ───────────────────────────────────────────────────────────
     /// A number.
@@ -286,7 +295,7 @@ impl NodeKind {
         use NodeKind::*;
         vec![
             Uv, WorldPosition, WorldNormal, ViewDirection, VertexColor, Time, CameraPosition, ScreenPosition,
-            Material, Standard, Texture,
+            Material, Standard, Texture, NormalMap, MetallicRoughnessMap, EmissiveMap, OcclusionMap,
             Float(1.0), Vector2([0.0, 0.0]), Vector3([0.0, 0.0, 0.0]), Color([1.0, 1.0, 1.0, 1.0]),
             Add, Subtract, Multiply, Divide, Power, Minimum, Maximum, Modulo,
             Abs, Floor, Ceil, Fract, Sin, Cos, Sqrt, Exp, Negate, OneMinus, Saturate,
@@ -304,7 +313,7 @@ impl NodeKind {
         match self {
             Output => "Output",
             Uv | WorldPosition | WorldNormal | ViewDirection | VertexColor | Time | CameraPosition | ScreenPosition
-            | Material | Standard | Texture => "Input",
+            | Material | Standard | Texture | NormalMap | MetallicRoughnessMap | EmissiveMap | OcclusionMap => "Input",
             Float(_) | Vector2(_) | Vector3(_) | Color(_) => "Constant",
             Add | Subtract | Multiply | Divide | Power | Minimum | Maximum | Modulo | Abs | Floor | Ceil | Fract
             | Sin | Cos | Sqrt | Exp | Negate | OneMinus | Saturate | Lerp | Clamp | Step | Smoothstep | Remap => {
@@ -332,6 +341,10 @@ impl NodeKind {
             Material => "Material",
             Standard => "Standard Surface",
             Texture => "Base Texture",
+            NormalMap => "Normal Map",
+            MetallicRoughnessMap => "Metallic-Roughness Map",
+            EmissiveMap => "Emissive Map",
+            OcclusionMap => "Occlusion Map",
             Float(_) => "Float",
             Vector2(_) => "Vector2",
             Vector3(_) => "Vector3",
@@ -390,6 +403,15 @@ impl NodeKind {
             Uv | WorldPosition | WorldNormal | ViewDirection | VertexColor | Time | CameraPosition
             | ScreenPosition | Material | Standard | Float(_) | Vector2(_) | Vector3(_) | Color(_) => &[],
             Texture => const { &[InputSlot { name: "uv", ty: SlotType::Fixed(V2), default: InputDefault::MaterialUv }] },
+            NormalMap => const {
+                &[
+                    InputSlot { name: "uv", ty: SlotType::Fixed(V2), default: InputDefault::MaterialUv },
+                    value("strength", F, 1.0),
+                ]
+            },
+            MetallicRoughnessMap | EmissiveMap | OcclusionMap => const {
+                &[InputSlot { name: "uv", ty: SlotType::Fixed(V2), default: InputDefault::MaterialUv }]
+            },
             Add | Subtract => const { &[any("a", 0.0), any("b", 0.0)] },
             Multiply | Divide => const { &[any("a", 1.0), any("b", 1.0)] },
             Power => const { &[any("base", 1.0), any("exponent", 1.0)] },
@@ -454,6 +476,10 @@ impl NodeKind {
                 out("normal", V3),
             ] },
             Texture => const { &[out("rgb", V3), out("a", F)] },
+            NormalMap => const { &[out("normal", V3)] },
+            MetallicRoughnessMap => const { &[out("roughness", F), out("metallic", F)] },
+            EmissiveMap => const { &[out("rgb", V3)] },
+            OcclusionMap => const { &[out("occlusion", F)] },
             Float(_) => const { &[out("value", F)] },
             Vector2(_) => const { &[out("value", V2)] },
             Vector3(_) => const { &[out("value", V3)] },
@@ -834,6 +860,14 @@ impl ShaderGraph {
                         "normal" => {
                             let _ = writeln!(body, "    surface.N = normalize({arg});");
                         }
+                        // The ranges the engine's material keeps them in: a roughness of 0 is a
+                        // GGX lobe of zero width, and a metalness outside 0..1 is no material.
+                        "roughness" => {
+                            let _ = writeln!(body, "    surface.roughness = clamp({arg}, 0.05, 1.0);");
+                        }
+                        "metallic" => {
+                            let _ = writeln!(body, "    surface.metallic = saturate({arg});");
+                        }
                         field => {
                             let _ = writeln!(body, "    surface.{field} = {arg};");
                         }
@@ -857,7 +891,7 @@ impl ShaderGraph {
         let mut wgsl = String::from(
             "// Generated from a shader graph (gizmo_renderer::shader_graph).\n\
              #import gizmo::surface::{Surface, SurfaceInput}\n\
-             #import gizmo::material::{standard_surface, surface_uv, t_diffuse, s_diffuse}\n\n",
+             #import gizmo::material::{standard_surface, surface_uv, t_diffuse, s_diffuse, t_normal, t_mr, t_emissive, t_ao}\n\n",
         );
         if noise {
             wgsl.push_str(NOISE_WGSL);
@@ -1102,6 +1136,23 @@ fn node_exprs(node: &GraphNode, id: NodeId, a: &[String], any: ValueType, body: 
             let _ = writeln!(body, "    let n{}_texel = textureSample(t_diffuse, s_diffuse, {});", id.0, a[0]);
             vec![format!("n{}_texel.rgb", id.0), format!("n{}_texel.a", id.0)]
         }
+        // As the engine's material reads it (`gizmo::material::evaluate_surface`): a flat map is the
+        // geometric normal, and a degenerate sum comes out dark rather than NaN.
+        NormalMap => {
+            let _ = writeln!(
+                body,
+                "    let n{0}_ts = textureSample(t_normal, s_diffuse, {1}).xyz * 2.0 - 1.0;\n    \
+                 let n{0}_w = input.T * (n{0}_ts.x * {2}) + input.B * (n{0}_ts.y * {2}) + input.N * max(n{0}_ts.z, 1e-4);",
+                id.0, a[0], a[1]
+            );
+            vec![format!("n{0}_w / max(length(n{0}_w), 1e-6)", id.0)]
+        }
+        MetallicRoughnessMap => {
+            let _ = writeln!(body, "    let n{}_mr = textureSample(t_mr, s_diffuse, {});", id.0, a[0]);
+            vec![format!("n{}_mr.g", id.0), format!("n{}_mr.b", id.0)]
+        }
+        EmissiveMap => vec![format!("textureSample(t_emissive, s_diffuse, {}).rgb", a[0])],
+        OcclusionMap => vec![format!("textureSample(t_ao, s_diffuse, {}).r", a[0])],
         Float(v) => vec![literal(&[*v], id)?],
         Vector2(v) => vec![literal(v, id)?],
         Vector3(v) => vec![literal(v, id)?],

@@ -1512,9 +1512,10 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   headlessly with real pointer events) and the `SurfaceGraph` component, which a scene saves and
   `resolve_surface_graphs` draws — one surface per distinct graph, released with its last entity
   (`a_surface_graph_is_built_once_and_released_with_its_last_entity`). **Still open, each its own
-  piece:** textures beyond the material's base colour (a graph can sample only what group 1 binds),
-  a normal-map node (`TangentToWorld` exists; the material's normal map is reachable only through
-  `Standard`), and the tab's edits in the editor's own undo history (the tab has its own).
+  piece:** a texture of the graph's own (a graph samples the five maps group 1 binds — base colour,
+  normal, metallic-roughness, emissive, occlusion — since the same day, and a sixth needs a binding
+  the web's four groups have no room for, see `custom_material`), and the tab's edits in the
+  editor's own undo history (the tab has its own).
 
 
 ---
