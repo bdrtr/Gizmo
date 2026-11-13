@@ -46,6 +46,13 @@ pub(crate) fn native_render_defs() -> HashMap<String, ShaderDefValue> {
         ("SUN_SHADOW_GROUP".to_string(), ShaderDefValue::UInt(2)),
         ("SUN_SHADOW_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(0)),
         ("SUN_SHADOW_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(1)),
+        // The local lights' shadow layers and cookies, in the same group, filtered as the deferred pass
+        // filters them (`local_shadow_visibility`).
+        ("LOCAL_LIGHT_MAPS".to_string(), ShaderDefValue::Bool(true)),
+        ("LOCAL_LIGHT_MAP_GROUP".to_string(), ShaderDefValue::UInt(2)),
+        ("LOCAL_SHADOW_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(2)),
+        ("COOKIE_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(3)),
+        ("COOKIE_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(4)),
         ("SKELETON_GROUP".to_string(), ShaderDefValue::UInt(3)),
         ("INSTANCE_GROUP".to_string(), ShaderDefValue::UInt(4)),
         // The forward pass's sixth group (the native device asks for six): the irradiance
@@ -98,6 +105,15 @@ pub(crate) fn web_render_defs() -> HashMap<String, ShaderDefValue> {
         // And read as a phone can afford: one cascade, a coordinate from the vertices, one tap
         // (`sun_shadow_coord`, `sun_shadow_tap`; `csm::CASCADES_DRAWN`).
         ("SUN_SHADOW_PER_VERTEX".to_string(), ShaderDefValue::Bool(true)),
+        // The local lights' shadow layers and cookies, for the lit pipelines built with `LOCAL_LIGHT_MAPS`
+        // while a frame draws a local light's shadow or a spot's cookie: group 0's bindings 11–13. Read
+        // with one tap (`local_shadow_tap`) — a light's coordinate cannot come from the vertices, a
+        // fragment's lights being its cluster's.
+        ("LOCAL_LIGHT_MAP_GROUP".to_string(), ShaderDefValue::UInt(0)),
+        ("LOCAL_SHADOW_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(11)),
+        ("COOKIE_TEXTURE_BINDING".to_string(), ShaderDefValue::UInt(12)),
+        ("COOKIE_SAMPLER_BINDING".to_string(), ShaderDefValue::UInt(13)),
+        ("LOCAL_SHADOW_TAP".to_string(), ShaderDefValue::Bool(true)),
     ])
 }
 
@@ -531,6 +547,9 @@ mod tests {
             // With the sun's shadow, which that path reads since 2026-11-12 (`SceneState::forward_sun_shadows`).
             &["SUN_SHADOWS"],
             &["SUN_SHADOWS", "DETAILS", "KEEPS", "LOBES"],
+            // With the local lights' shadows and cookies, since 2026-11-13, alone and with the sun's.
+            &["LOCAL_LIGHT_MAPS"],
+            &["SUN_SHADOWS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION"],
         ];
         let mut offenders = Vec::new();
         for &(name, src) in shaders {
@@ -591,7 +610,14 @@ mod tests {
             ("sky.wgsl", include_str!("../shaders/sky.wgsl")),
             ("env_bake.wgsl", include_str!("../shaders/env_bake.wgsl")),
         ];
-        let tiers: &[&[&str]] = &[&[], &["DETAILS", "KEEPS", "LOBES", "PROBES"], &["SUN_SHADOWS"], &["SUN_SHADOWS", "DETAILS", "KEEPS", "LOBES"]];
+        let tiers: &[&[&str]] = &[
+            &[],
+            &["DETAILS", "KEEPS", "LOBES", "PROBES"],
+            &["SUN_SHADOWS"],
+            &["SUN_SHADOWS", "DETAILS", "KEEPS", "LOBES"],
+            &["LOCAL_LIGHT_MAPS"],
+            &["SUN_SHADOWS", "LOCAL_LIGHT_MAPS", "DETAILS", "KEEPS", "LOBES", "TRANSMISSION"],
+        ];
         let mut offenders = Vec::new();
         for &(name, src) in shaders {
             for tier in tiers {
@@ -643,6 +669,33 @@ mod tests {
         );
         // With no shadow group, instance shifts from 4 to 3 → group 4 disappears entirely.
         assert!(!web.contains("@group(4)"), "web variant must not use @group(4)");
+    }
+
+    /// **With `LOCAL_LIGHT_MAPS`, the web lit shader reads the local lights' layers and cookies from group
+    /// 0**, bindings 11–13 as `layouts::build_layouts` offers them, with the sun's comparison sampler
+    /// (binding 10) whether or not it reads the sun's shadow — and one tap a light, not the desktop's
+    /// filter. With the sun's shadow too, the sampler is declared once.
+    #[test]
+    fn web_compose_with_local_light_maps_reads_them_from_group_0() {
+        for sun in [false, true] {
+            let mut defs = web_render_defs();
+            defs.insert("LOCAL_LIGHT_MAPS".to_string(), ShaderDefValue::Bool(true));
+            defs.insert("SUN_SHADOWS".to_string(), ShaderDefValue::Bool(sun));
+            let web = compose_wgsl(SHADER_SRC, "shader.wgsl", defs);
+            let declared = |binding: u32, name: &str| {
+                web.lines().collect::<Vec<_>>().windows(2).any(|w| {
+                    w[0].contains("@group(0)") && w[0].contains(&format!("@binding({binding})")) && w[1].contains(name)
+                        || w[0].contains("@group(0)") && w[0].contains(&format!("@binding({binding})")) && w[0].contains(name)
+                })
+            };
+            assert!(declared(11, "t_local_shadow"), "sun {sun}: the local layers at group 0, binding 11\n{web}");
+            assert!(declared(12, "t_cookie"), "sun {sun}: the cookies at binding 12");
+            assert!(declared(13, "s_cookie"), "sun {sun}: their sampler at binding 13");
+            assert!(declared(10, "s_shadow"), "sun {sun}: the comparison sampler at binding 10");
+            assert_eq!(web.matches("var s_shadow").count(), 1, "sun {sun}: one comparison sampler");
+            assert!(web.contains("fn local_shadow_tap"), "sun {sun}: the one-tap lookup");
+            assert!(!web.contains("fn local_shadow_visibility"), "sun {sun}: not the desktop's filter");
+        }
     }
 
     #[test]

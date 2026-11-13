@@ -59,13 +59,25 @@ pub struct CookieTextures {
 }
 
 impl CookieTextures {
-    /// Creates the array. Its layers start zeroed — black — which is never seen: a spot samples a
-    /// layer only once a cookie has been written to it. **A single texel on the forward-only path**,
-    /// which samples no cookie (they sit beside the shadow maps, in a group that path does not have),
-    /// so the array is only what the shadow group is built over; a cookie keeps its layer there and
-    /// nothing is uploaded.
+    /// Creates the array, [`COOKIE_LAYERS`] of [`COOKIE_SIZE`]². Its layers start zeroed — black —
+    /// which is never seen: a spot samples a layer only once a cookie has been written to it.
     pub fn new(device: &wgpu::Device) -> Self {
-        let (size, layers) = if cfg!(gizmo_forward_only) { (1, 1) } else { (COOKIE_SIZE, COOKIE_LAYERS) };
+        Self::sized(device, COOKIE_SIZE, COOKIE_LAYERS)
+    }
+
+    /// One texel: what a renderer holds until a game registers a cookie, on every path
+    /// (`SceneState::ensure_cookies`), so a scene with none holds none of their 2 MiB.
+    pub fn placeholder(device: &wgpu::Device) -> Self {
+        Self::sized(device, 1, 1)
+    }
+
+    /// Whether this is the array cookies are written to, rather than [`placeholder`](Self::placeholder)'s
+    /// texel.
+    pub fn is_resident(&self) -> bool {
+        self.texture.size().width == COOKIE_SIZE
+    }
+
+    fn sized(device: &wgpu::Device, size: u32, layers: u32) -> Self {
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("light_cookies"),
             size: wgpu::Extent3d { width: size, height: size, depth_or_array_layers: layers },
@@ -156,11 +168,6 @@ impl LightCookies {
             }
         };
         self.failed.remove(name);
-        // The forward-only path draws no cookie: the layer is the name's, and there is nothing to fill.
-        if cfg!(gizmo_forward_only) {
-            let _ = (queue, textures);
-            return Ok(layer);
-        }
         let pixels = resample(rgba, width, height, COOKIE_SIZE);
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
@@ -179,12 +186,8 @@ impl LightCookies {
     /// Loads, from disk, every cookie a `SpotLight` in `world` names that is neither resident nor
     /// already failed. The name is the path. A failure is logged once. Native only — the browser
     /// has no file system to read; register cookies there with [`insert`](Self::insert).
-    /// Nothing on the forward-only path, which draws no cookie: there is no file worth reading.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn sync(&mut self, world: &gizmo_core::World, queue: &wgpu::Queue, textures: &CookieTextures) {
-        if cfg!(gizmo_forward_only) {
-            return;
-        }
         let mut wanted: Vec<String> = Vec::new();
         {
             let q = world.query::<&crate::components::SpotLight>();
@@ -216,6 +219,7 @@ impl crate::Renderer {
     /// at the top; a [`SpotLight`](crate::components::SpotLight) whose `cookie` is `name` projects
     /// it. See [`LightCookies::insert`].
     pub fn insert_light_cookie(&mut self, name: &str, rgba: &[u8], width: u32, height: u32) -> Result<u32, CookieError> {
+        self.scene.ensure_cookies(&self.device);
         self.light_cookies.insert(&self.queue, &self.scene.cookies, name, rgba, width, height)
     }
 
@@ -223,6 +227,12 @@ impl crate::Renderer {
     /// render paths call it once a frame; see [`LightCookies::sync`].
     #[cfg(not(target_arch = "wasm32"))]
     pub fn sync_light_cookies(&mut self, world: &gizmo_core::World) {
+        // The array is made the first time a spot names a cookie.
+        if !self.scene.cookies.is_resident()
+            && world.query::<&crate::components::SpotLight>().iter().any(|light| light.cookie.is_some())
+        {
+            self.scene.ensure_cookies(&self.device);
+        }
         self.light_cookies.sync(world, &self.queue, &self.scene.cookies);
     }
 }

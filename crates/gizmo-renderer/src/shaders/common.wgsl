@@ -203,6 +203,43 @@ fn light_source_radius(light: LightData) -> f32 {
     return 0.0;
 }
 
+// The forward-only path's local shadow (a browser's, a phone's; `LOCAL_SHADOW_TAP`): `local_shadow_visibility`'s
+// lookup — pushed off the surface and biased alike — read with one tap, which the comparison sampler's
+// linear filter makes a 2×2 one. `view_proj` and `params` are the layer's (`LocalShadowLayer`), `index` its
+// layer in `t`. 1 outside the layer.
+//
+// The layer's matrix comes in as a parameter of its own and goes no further: an Adreno 618's compiler
+// crashed on a matrix in a struct that is not square, and on a matrix parameter handed on to another
+// function (`no_web_shader_hands_on_a_matrix_parameter`).
+fn local_shadow_tap(
+    t: texture_depth_2d_array,
+    s: sampler_comparison,
+    view_proj: mat4x4<f32>,
+    params: vec4<f32>,
+    index: i32,
+    world_pos: vec3<f32>,
+    n: vec3<f32>,
+    to_light: vec3<f32>,
+    bias: vec2<f32>,
+) -> f32 {
+    let near = params.x;
+    let far = params.y;
+    let depth = max((view_proj * vec4<f32>(world_pos, 1.0)).w, near);
+    let clip = view_proj * vec4<f32>(world_pos + n * (depth * params.z * 2.0 * bias.y), 1.0);
+    if (clip.w <= near) {
+        return 1.0;
+    }
+    let ndc = clip.xyz / clip.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    let ndc_per_metre = near * far / max((far - near) * clip.w * clip.w, 1e-12);
+    let slope = 1.0 - clamp(dot(n, normalize(to_light)), 0.0, 1.0);
+    let reference = ndc.z - max(SHADOW_BIAS_METRES * slope, SHADOW_BIAS_METRES_MIN) * ndc_per_metre * bias.x;
+    return textureSampleCompareLevel(t, s, uv, index, reference);
+}
+
 // How much of a local light reaches `world_pos` past its shadow: 1 lit, 0 shadowed, filtered between.
 // `t`/`s` are the local shadow array and the comparison sampler, `layer` the layer `index` names, `n`
 // the surface normal, `axes` two directions along its geometry (`receiver_axes`), `to_light` the

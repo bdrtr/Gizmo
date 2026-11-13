@@ -1521,11 +1521,10 @@ fn draw_camera_view(
                 fog: renderer.fog,
                 sky: renderer.sky,
             },
-            // The forward-only path has no shadow passes: no maps to plan or keep casters for.
-            // The forward-only path draws the sun's cascade unless a game says not to
-            // (`ShadowSettings::forward_only`), and no local light's layer.
+            // The forward-only path draws the sun's cascade and the local lights' layers unless a game
+            // says not to (`ShadowSettings::forward_only`).
             sun_shadow_maps: !cfg!(gizmo_forward_only) || renderer.shadow_settings.forward_only,
-            local_shadow_maps: cfg!(not(gizmo_forward_only)),
+            local_shadow_maps: !cfg!(gizmo_forward_only) || renderer.shadow_settings.forward_only,
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
@@ -1536,15 +1535,24 @@ fn draw_camera_view(
         setup.cascade_view_projs.map(|m| m.to_cols_array_2d());
 
     // The local lights' shadow layers: the array grown to hold them, each layer's matrix where its
-    // pass reads it. The forward-only path draws none and planned none.
+    // pass reads it.
     let local_shadow_layers = setup.local_shadows.layers();
     renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades());
-    // The forward-only path's lit pipelines read the sun's shadow only while there is one to read: a sun
-    // appearing or going builds them again (`SceneState::set_forward_sun_shadows`).
-    if cfg!(gizmo_forward_only) && renderer.scene.set_forward_sun_shadows(setup.draws_cascades()) {
-        crate::renderer::pipeline::rebuild_pipelines(renderer);
-    }
     renderer.scene.ensure_local_shadow_layers(&renderer.device, local_shadow_layers.len());
+    // The forward-only path's lit pipelines read the sun's shadow only while there is one to read, and
+    // the local lights' layers and cookies only while a frame draws a layer or lights a spot through a
+    // cookie: either appearing or going builds them again (`SceneState::set_forward_sun_shadows`,
+    // `set_forward_local_light_maps`), so a scene without them pays nothing for them per fragment.
+    if cfg!(gizmo_forward_only) {
+        let cookie = setup.frame.lights[..(setup.frame.num_lights as usize).min(setup.frame.lights.len())]
+            .iter()
+            .any(|light| light.params[1] == 1.0 && light.params[3] > 0.0);
+        let sun = renderer.scene.set_forward_sun_shadows(setup.draws_cascades());
+        let local = renderer.scene.set_forward_local_light_maps(!local_shadow_layers.is_empty() || cookie);
+        if sun || local {
+            crate::renderer::pipeline::rebuild_pipelines(renderer);
+        }
+    }
     for (i, layer) in local_shadow_layers.iter().enumerate() {
         renderer.queue.write_buffer(
             renderer.scene.view_local_shadow_buffer(i),
@@ -1884,7 +1892,6 @@ mod golden_render_tests {
     use crate::physics::components::{GlobalTransform, Transform};
     use crate::renderer::asset::AssetManager;
     use crate::renderer::components::{Material, MeshRenderer};
-    #[cfg(not(gizmo_forward_only))] // Only the tests of what that path does not draw name them.
     use crate::renderer::components::{PointLight, SpotLight};
     use crate::renderer::Renderer;
 
@@ -5389,14 +5396,11 @@ mod golden_render_tests {
                 edge(&renderer.scene.cookies.texture),
             );
             eprintln!("shadow {shadow:?}, local {local:?}, cookies {cookies:?}");
-            // The sun's cascades are a texel until a frame draws them, on every path.
-            assert_eq!(shadow, (1, 1), "the cascades before any frame drew them");
-            if cfg!(gizmo_forward_only) {
-                assert_eq!((local, cookies), ((1, 1), (1, 1)), "the forward-only path draws none of them");
-            } else {
-                assert_eq!(local.0, gizmo_renderer::local_shadows::LOCAL_SHADOW_RES, "the desktop's local layers");
-                assert_eq!(cookies.0, gizmo_renderer::cookies::COOKIE_SIZE, "the desktop's cookies");
-            }
+            // The sun's cascades, the local lights' layers and the cookies are a texel each until a frame
+            // draws them, on every path (the local layers and the cookies since 2026-11-13: the desktop
+            // held a 4 MiB layer and 2 MiB of cookies from the start, and the forward-only path draws
+            // them now).
+            assert_eq!((shadow, local, cookies), ((1, 1), (1, 1), (1, 1)), "nothing drawn yet");
 
             // A frame with no sun leaves the cascades a texel; one with a sun gives them their size
             // on a path that draws them.
@@ -5427,6 +5431,25 @@ mod golden_render_tests {
                 gizmo_renderer::csm::CASCADES_DRAWN as u32,
                 "a layer a cascade drawn",
             );
+
+            // A local light's layers once one casts — 512² on the forward-only path, 1024² here — and the
+            // cookies once a game registers one.
+            assert_eq!(edge(&renderer.scene.local_shadow_maps.texture), (1, 1), "no light casts yet");
+            let spot = world.spawn();
+            world.add_component(
+                spot,
+                Transform::new(Vec3::new(0.0, 3.0, 0.0)).with_rotation(crate::math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
+            );
+            world.add_component(spot, GlobalTransform::default());
+            world.add_component(spot, crate::renderer::components::SpotLight::new(Vec3::ONE, 5.0, 10.0, 0.3, 0.5).with_shadows());
+            let _ = render_world(&mut renderer, &mut world).await;
+            let res = gizmo_renderer::local_shadows::LOCAL_SHADOW_RES;
+            assert_eq!(edge(&renderer.scene.local_shadow_maps.texture), (res, res), "a casting spot's layer");
+            assert_eq!(res, if cfg!(gizmo_forward_only) { 512 } else { 1024 });
+            assert_eq!(edge(&renderer.scene.cookies.texture), (1, 1), "no cookie yet");
+            renderer.insert_light_cookie("dots", &[255; 16], 2, 2).expect("a cookie fits");
+            let size = gizmo_renderer::cookies::COOKIE_SIZE;
+            assert_eq!(edge(&renderer.scene.cookies.texture), (size, size), "a registered cookie's array");
 
             // CAS: a texel while off, the frame's size while it runs, and a texel again.
             let cas_input = |r: &Renderer| r.cas.as_ref().map(|c| edge(&c.input_texture));
@@ -7411,12 +7434,12 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// **A bigger sun casts softer shadows.** A 3 m pillar under a 45° sun throws a long shadow; the
     /// camera looks straight down on it. The far end of that shadow is ~4 m from the pillar, where a
     /// penumbra `2·d·tan θ` wide is widest. Counted as the pixels whose brightness lies between the
     /// frame's shadow and lit levels: `angular_radius` 0 (the default), a sun with no size, keeps
     /// a 3×3-texel edge; 0.02 and 0.06 rad must widen it, and in that order.
+    #[cfg(not(gizmo_forward_only))] // The forward-only path's shadows are one tap: a light's size does not soften them there.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn a_bigger_sun_casts_softer_shadows() {
@@ -7494,11 +7517,11 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// A step `height` metres tall and 1.2 m square on a matte floor, under a sun 15° above the
     /// horizon with `contact` metres of contact shadows, the cascades' depth bias times
     /// `depth_bias`; seen from 1.2 m straight above the step's edge the sun lights, so its shadow
     /// (3.73 × `height` long) runs down the middle of the frame. A pixel is about 1.1 cm of floor.
+    #[cfg(not(gizmo_forward_only))] // Only the contact-shadow tests that path does not run use it.
     async fn contact_step_frame(contact: f32, depth_bias: f32, height: f32) -> Vec<u8> {
         use crate::renderer::components::{DirectionalLight, LightRole};
         let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
@@ -7546,26 +7569,26 @@ mod golden_render_tests {
         render_world(&mut renderer, &mut world).await
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// Pixels darker than 60 % of the frame's brightest — the shadowed ones.
+    #[cfg(not(gizmo_forward_only))] // Only the contact-shadow tests that path does not run use it.
     fn dark_pixels(frame: &[u8]) -> usize {
         let luma: Vec<f32> = frame.as_chunks::<4>().0.iter().map(|p| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0).collect();
         let hi = luma.iter().cloned().fold(0.0f32, f32::max);
         luma.iter().filter(|&&v| v < hi * 0.6).count()
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// Pixels at least 16 levels darker in `on` than in `off`. A shadow one pixel wide is softened by
     /// the frame's anti-aliasing — 163 lit floor reads about 115 in it, not the 70 a wide one reads —
     /// so it is counted against the same frame without it, not against the frame's brightest.
+    #[cfg(not(gizmo_forward_only))] // Only the contact-shadow tests that path does not run use it.
     fn darkened_pixels(off: &[u8], on: &[u8]) -> usize {
         let luma = |p: &[u8]| (p[0] as f32 + p[1] as f32 + p[2] as f32) / 3.0;
         off.as_chunks::<4>().0.iter().zip(on.as_chunks::<4>().0).filter(|(a, b)| luma(&a[..]) - luma(&b[..]) > 16.0).count()
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// Bytes of open floor — the top and bottom 40 rows, which the step's shadow does not cross —
     /// that differ by more than 8 between two frames, and how many were compared.
+    #[cfg(not(gizmo_forward_only))] // Only the contact-shadow tests that path does not run use it.
     fn open_floor_moved(a: &[u8], b: &[u8]) -> (usize, usize) {
         let rows = |frame: &[u8]| -> Vec<u8> {
             (0..40usize).chain(88..128).flat_map(|y| frame[y * 512..(y + 1) * 512].to_vec()).collect()
@@ -7573,7 +7596,6 @@ mod golden_render_tests {
         (rows(a).iter().zip(rows(b)).filter(|(x, y)| x.abs_diff(*y) > 8).count(), 80 * 512)
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// **Contact shadows catch what the shadow map's bias loses.** A 3 cm step on a floor under a sun
     /// 15° above the horizon casts a shadow 11.2 cm long, about 1 150 pixels here. The cascades hold
     /// 660 of them at their own bias (363 when they drew a solid's back faces): the first five
@@ -7583,6 +7605,7 @@ mod golden_render_tests {
     /// screen space and darkens 1 122 (332 before the march read the depth buffer pixel by pixel), and
     /// not one byte of open floor changes. With 0 (the default) the frame is exactly what it was
     /// before contact shadows existed.
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no contact shadows: they march the G-buffer.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn contact_shadows_find_a_step_the_shadow_map_misses() {
@@ -7609,13 +7632,13 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// **Contact shadows find a step a few millimetres tall.** The same frame with steps of 1 cm,
     /// 5 mm and 2 mm — a coin — whose shadows are 3.7 cm, 1.9 cm and 7.5 mm long, 3.4, 1.7 and 0.7
     /// pixels. The cascades lose all three at their own bias. The march read the f16 G-buffer,
     /// started a centimetre off the surface and wanted a 5 mm gap, in steps of a sixteenth of its
     /// length: nothing under about 2 cm cast a contact shadow, though the setting's documentation
     /// promised a coin.
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no contact shadows: they march the G-buffer.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn contact_shadows_find_a_step_a_few_millimetres_tall() {
@@ -7729,7 +7752,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// **Contact shadows leave open ground alone, at any angle.** Open ground — flat, rising 20° along
     /// the view and tilted 20° across it — seen from 2 m up and from 30 cm, looking down steeply and
     /// grazing it, under a sun 15° and 50° up in front of the camera, behind it and to its side:
@@ -8346,7 +8368,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no light cookies.
     /// A spot light's cookie is projected through its cone, the right way round. A spot points
     /// straight down at a matte floor, seen from above (world +X is the screen's right — measured in
     /// the rectangle-light test). Its cookie is black on the left, white on the right, so the pool
@@ -9876,7 +9897,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// `MeshRenderer::with_receives_shadows(false)` keeps a surface out of every shadow, on both
     /// draw paths. A cube over a matte floor under a high sun: the pixels that are darker (by 20+)
     /// when the floor receives than when it refuses are the cube's shadow on it. Opaque floor →
@@ -9945,7 +9965,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// Which caster stands over the floor in `thin_caster_shadow`.
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum Caster {
@@ -9968,7 +9987,6 @@ mod golden_render_tests {
         TrianglesPlane { indexed: bool },
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// A game's surface that cuts itself away where the world's x is under `CUT_X`.
     fn cutting_surface(cut_x: f32) -> String {
         format!(
@@ -9984,7 +10002,6 @@ mod golden_render_tests {
     }
 
     /// A light for `local_light_frame`.
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum TestLight {
         Point,
@@ -10001,7 +10018,6 @@ mod golden_render_tests {
         SoftSun(f32),
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// One light of a `local_light_frame` scene: what it is, where, which way its forward axis points
     /// (a sun, a spot and a rectangle shine along it), how bright, and whether it casts.
     #[derive(Clone, Copy, Debug)]
@@ -10013,7 +10029,6 @@ mod golden_render_tests {
         casts: bool,
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     impl LightAt {
         /// `kind` 3.5 m up at `at`'s x and z, aimed down, as bright as `thin_caster_frame`'s point light.
         fn over(kind: TestLight, x: f32, z: f32, casts: bool) -> Self {
@@ -10021,7 +10036,6 @@ mod golden_render_tests {
         }
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// A scene for `local_light_frame`.
     #[derive(Clone, Debug)]
     struct LocalScene {
@@ -10051,7 +10065,6 @@ mod golden_render_tests {
         floor_receives: bool,
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// Which lit path draws `LocalScene`'s floor.
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum FloorPath {
@@ -10063,7 +10076,6 @@ mod golden_render_tests {
         BakedLit,
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     impl LocalScene {
         fn new(lights: &[LightAt], casters: &[Vec3]) -> Self {
             Self {
@@ -10081,13 +10093,11 @@ mod golden_render_tests {
         }
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// `scene`, rendered: a floor, its casters and its lights.
     async fn local_light_frame(scene: &LocalScene) -> Vec<u8> {
         local_light_render(scene).await.0
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// [`local_light_frame`], with what the frame says it cost.
     async fn local_light_render(scene: &LocalScene) -> (Vec<u8>, crate::renderer::components::RenderStats) {
         let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
@@ -10205,14 +10215,12 @@ mod golden_render_tests {
         (frame, stats)
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// Which pixels of `with` are darker than `without` by 20 or more: the shadow.
     fn shadow_pixels(with: &[u8], without: &[u8]) -> std::collections::BTreeSet<usize> {
         let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
         (0..with.len() / 4).filter(|&i| luma(with, i) + 20 < luma(without, i)).collect()
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// The shadow `scene`'s lights cast from its casters: the pixels it darkens against the same
     /// frame with nothing to cast.
     async fn local_shadow(scene: &LocalScene) -> std::collections::BTreeSet<usize> {
@@ -10221,12 +10229,11 @@ mod golden_render_tests {
         shadow_pixels(&with, &without)
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A frame draws the shadow maps something reads, and says how many** (`RenderStats::
     /// shadow_passes`). A frame with no sun drew the sun's four cascades all the same — every caster
     /// in each — though every lookup of them asks for the sun first; now a scene lit by two casting
-    /// spots and no sun draws 2 depth passes, the same with a sun 6, and with neither, nothing. A
-    /// point light that casts is six more.
+    /// spots and no sun draws 2 depth passes, the same with a sun 6 (3 on the forward-only path, which
+    /// draws one cascade), and with neither, nothing. A point light that casts is six more.
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn a_frame_draws_only_the_shadow_maps_something_reads() {
@@ -10247,14 +10254,15 @@ mod golden_render_tests {
             };
             assert_eq!(passes(&[]).await, 0, "no light, no shadow map");
             assert_eq!(passes(&spots).await, 2, "two spots, no sun: their two layers");
-            assert_eq!(passes(&[spots[0], spots[1], sun]).await, 6, "and the sun's four cascades with it");
-            assert_eq!(passes(&[sun]).await, 4, "the sun alone");
+            // Four cascades on the desktop, one on the forward-only path (`CASCADES_DRAWN`).
+            let cascades = gizmo_renderer::csm::CASCADES_DRAWN as u32;
+            assert_eq!(passes(&[spots[0], spots[1], sun]).await, 2 + cascades, "and the sun's cascades with it");
+            assert_eq!(passes(&[sun]).await, cascades, "the sun alone");
             assert_eq!(passes(&[LightAt::over(TestLight::Point, 0.0, 0.0, true)]).await, 6, "a point light's cube");
             assert_eq!(passes(&[LightAt::over(TestLight::Spot(0.6), 0.0, 0.0, false)]).await, 0, "a spot that does not cast");
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A shadow pass draws the casters in its own frustum.** Every pass drew every caster: a spot
     /// lighting one cube of a 20 × 20 field drew all 400 into its layer. A batch's instances are
     /// in spatial order now, in runs of 64 with a box each, and a pass draws the runs its frustum
@@ -10293,7 +10301,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// How a caster's shadow falls on the floor: (umbra, penumbra) pixel counts — darkened by more
     /// than 80 % of the deepest darkening, and by between 15 % and 80 % of it.
     fn umbra_and_penumbra(with: &[u8], without: &[u8]) -> (usize, usize) {
@@ -10305,7 +10312,6 @@ mod golden_render_tests {
         (umbra, penumbra)
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A light with a size casts a soft shadow, sharp where the caster is near.** A local light's
     /// shadow was a point's whatever its source: a 30 cm bulb, a 1 m softbox, a fluorescent tube all
     /// cast a hard edge. The lookup finds the blockers between the surface and the light and filters
@@ -10315,6 +10321,7 @@ mod golden_render_tests {
     /// a penumbra several times as wide and a smaller umbra, and so has a 60 cm square panel's. And
     /// raising the cube widens the penumbra against its shadow: the soft edge grows with the gap
     /// between the caster and what it shadows, which a filter of fixed width cannot do.
+    #[cfg(not(gizmo_forward_only))] // The forward-only path's shadows are one tap: a light's size does not soften them there.
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn a_light_with_a_size_casts_a_soft_shadow() {
@@ -10349,12 +10356,13 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **Every local light casts, when it asks to.** Only the sun and one point light could: a spot
     /// lit the floor behind a pillar, and a rectangle light too. A point, a spot (40°, 69°: one
     /// layer down the cone), a spot past `SPOT_FRUSTUM_MAX_ANGLE` (83°: six) and a rectangle light
     /// 3.5 m over a cube cast the same shadow — 576, 576, 578, 576 and 576 pixels — each from its own
-    /// layout of the array, through one lookup. Without `casts_shadows` none of them casts a pixel.
+    /// layout of the array, through one lookup — 564 to 584 on the forward-only path, whose one tap at
+    /// 512² puts each layout's edge on its own texel grid. Without `casts_shadows` none of them casts a
+    /// pixel.
     /// (The one point light that could cast before cast 762 here, through a cube map and the
     /// hardware's cube lookup; how much of that was right, nothing measured.)
     #[test]
@@ -10378,11 +10386,13 @@ mod golden_render_tests {
                 counts.push((kind, cast.len()));
             }
             let (min, max) = (counts.iter().map(|c| c.1).min().unwrap(), counts.iter().map(|c| c.1).max().unwrap());
-            assert!(max - min <= 6, "one cube, one light position, five layouts: {counts:?}");
+            // One tap at 512² on the forward-only path puts each layout's edge on its own texel grid:
+            // 564 to 584 there (2026-11-13), where the desktop's 3×3 at 1024² holds them within 6.
+            let spread = if cfg!(gizmo_forward_only) { 24 } else { 6 };
+            assert!(max - min <= spread, "one cube, one light position, five layouts: {counts:?}");
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A local light's shadow does not fall on the surface it lights.** An open floor — a plane,
     /// drawn into the shadow map by both its faces, so the depth its lookup compares against is its
     /// own — under a spot and a point light 17°, 52° and 72° off its normal: turning their shadows on,
@@ -10437,7 +10447,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A solid lit by a local light does not shadow itself.** A local light's layers draw every caster
     /// by both faces — a soft shadow measures its penumbra from the depth of what blocks it, and a
     /// cube's back faces put that at its far side — so a cube's lit faces are in the map they are
@@ -10473,7 +10482,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A solid in the sun does not shadow itself.** The cascades drew a closed mesh by its back
     /// faces until 2026-11-11, so its lit faces were never in the map they are looked up in; they draw
     /// it by its front faces now — what the sun meets first, which a soft shadow measures its penumbra
@@ -10510,7 +10518,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A soft sun measures a solid's penumbra from the side it meets.** A penumbra is as wide as the
     /// gap between what blocks the light and what it falls on, and the cascades held a closed mesh's
     /// back faces: a cube's shadow was measured from its bottom. Now a 1.2 m-tall cube and a 5 cm slab
@@ -10550,7 +10557,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **The sun does not shadow the surface it lights.** A floor is a closed slab, and the cascades
     /// draw a closed mesh by its front faces since 2026-11-11, so the slab's lit top is in the map its
     /// own lookup reads — as an open floor's two faces always were. With nothing to cast, a floor
@@ -10606,7 +10612,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **Every lit path softens the sun alike.** The forward shader filtered the sun's shadow 3×3
     /// whatever the sun's size, and so did the baked-lit one, so glass, the editor's viewport and every
     /// baked-lit surface took a sharp edge where the G-buffer took a soft one; since 2026-11-11 all
@@ -10615,6 +10620,7 @@ mod golden_render_tests {
     /// and 568 on the baked-lit, against 164, 179 and 222 with no size, and 786, 779 and 1064 at 0.1
     /// rad. (A baked-lit shadow takes 45 % of the light, so its luma runs differently across the edge,
     /// and its counts with it.)
+    #[cfg(not(gizmo_forward_only))] // The forward-only path's shadows are one tap: a light's size does not soften them there.
     #[test]
     #[ignore = "needs a GPU adapter"]
     fn every_lit_path_softens_the_sun_alike() {
@@ -10659,7 +10665,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A local light's shadow falls where the light throws it.** Every layout above agreeing proves
     /// they agree, not that they are right: a lookup mirrored or turned the same way in all of them
     /// would agree too. So each is put 30 m from the cube, along the direction the sun shines from,
@@ -10708,7 +10713,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A caster off screen still casts into the frame.** Off-screen objects were kept for the shadow
     /// passes only while they stood in one of the sun's cascades, so a cube beside the view, between a
     /// spot and the floor in front of the camera, was culled and its shadow went with it. Every local
@@ -10743,7 +10747,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **Two lights cast two shadows**, each from its own layers: a spot and a point light 4 m apart, a
     /// cube under each, and each shadow is in its half of the frame (825 and 577 pixels).
     #[test]
@@ -10765,7 +10768,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A point light casts every way.** The tests above look down a light's −Y face; this one puts
     /// a point light 1 m over the floor with a cube 2 m off on each side, so each shadow runs out
     /// along the floor through a side face — ±X and ±Z — and the camera looks straight down on all
@@ -10804,7 +10806,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// How many floor pixels a caster darkens by 20 or more, under a high sun — or, with `point`,
     /// under a point light above it casting through its cube map.
     async fn thin_caster_shadow(caster: Caster, point: bool) -> usize {
@@ -10815,7 +10816,6 @@ mod golden_render_tests {
         (0..128 * 128).filter(|&i| luma(&with, i) + 20 < luma(&empty, i)).count()
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// How many of a drawn caster's own pixels are darker by 20 or more when it receives shadows than
     /// when it does not: what it shadows of itself. Its shadow on the floor is in both frames.
     async fn thin_caster_self_shadow(caster: Caster, threshold: i32, sun_tilt: f32) -> usize {
@@ -10825,7 +10825,6 @@ mod golden_render_tests {
         (0..128 * 128).filter(|&i| luma(&receiving, i) + threshold < luma(&refusing, i)).count()
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// The floor and `caster` under a sun `sun_tilt` radians off overhead, or with `None` a point
     /// light above them and point shadows on. `drawn`: the caster is in the picture as well as in the
     /// shadow maps; `receives`: shadows fall on it.
@@ -10931,7 +10930,6 @@ mod golden_render_tests {
         }
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A mesh that does not close casts a shadow, and does not shadow itself.** The shadow pass drew
     /// every mesh by its back faces, which kept a solid's lit front off its own depth — and a plane, a
     /// card or a sheet of cloth has no back to cast from: a plane over a floor, facing the sun, cast 0
@@ -10973,7 +10971,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A point light casts an indexed mesh as its triangles.** The point light's six faces were drawn
     /// with `draw(0..vertex_count)` and no index buffer, so an indexed mesh — every engine primitive,
     /// every import — cast its deduplicated corners taken three at a time: a plane cast its first
@@ -11000,7 +10997,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path draws no shadows.
     /// **A cut-out casts the shadow of what it keeps.** The shadow pass had no fragment stage, so a
     /// cut-out cast its whole quad: a fence's gaps, a leaf card's corners, a dissolving surface's holes
     /// all stood in its shadow. It has one now for a draw that cuts — the engine's cut-outs and LOD
@@ -11784,7 +11780,6 @@ mod golden_render_tests {
         });
     }
 
-    #[cfg(not(gizmo_forward_only))] // The forward-only path has no shadows.
     /// `ShadowSettings::with_bias` scales every lookup's bias. A cube 10 cm over a floor under a
     /// high sun; the shadow is the pixels darker (by 20+) when the floor receives than when it
     /// refuses. A large depth bias jumps the comparison past the near caster and the shadow thins; a

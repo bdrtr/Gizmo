@@ -847,8 +847,7 @@ cube cookies for point lights, and no cookies on web. Each item:
   layer read mirrored, the ±X or ±Z faces swapped, the lookup ignored, the normal offset or the depth
   bias removed. The one point light that could cast before cast this cube's shadow at 762 pixels (and
   the plane's at 431), through a cube map and the hardware's cube lookup; nothing had measured it
-  against anything. Not on the web or a phone, which draw the sun's shadow alone (since 2026-11-12, below)
-  and no local light's. The `spotlight` demo's sixteen
+  against anything. On the web and a phone since 2026-11-13, read with one tap at 512² (below). The `spotlight` demo's sixteen
   cones cast now — its documentation said they did — and the `lighting`
   demo's lamps and spot. **Each pass draws only the casters in its frustum since the same day**
   (`gizmo_renderer::shadow_culling`): a batch's instances are in spatial order, cut into runs of 64
@@ -991,8 +990,8 @@ cube cookies for point lights, and no cookies on web. Each item:
   cookie on a spot aimed straight down: the floor's halves 65.56 / 88.48 against 93.82 / 93.80
   without it and 61.39 unlit; a cookie named but never found reads exactly as none. Caught when
   broken: the image mirrored (88.50 / 65.56), the layer off by one (61.39 both — an empty layer is
-  black), the cookie sampled but not applied, and never packed. **Spot only, native only** (the web
-  forward pipeline has no shadow group); point lights have no cube cookie.
+  black), the cookie sampled but not applied, and never packed. **Spot only**; point lights have no cube cookie. On the
+  web and a phone since 2026-11-13, through group 0 (below).
 - ~~**No shadow at all in a browser or on a phone.**~~ **The sun's, since 2026-11-12.** The forward-only path drew no
   shadow map: WebGPU's four bind groups left no room for the shadow group, so its lit pipelines had none and its frame
   planned none. It draws the sun's now, as a phone can afford — **one cascade** over the whole range
@@ -1022,7 +1021,13 @@ cube cookies for point lights, and no cookies on web. Each item:
   deep as the camera sees into what the last frame drew (`ShadowSettings::fit_to_scene`, `csm::seen_depth`), rounded up
   to a half octave: `pinbol`'s table, 4.2 m deep, took 31.5 mm texels over 40 m and takes 4.5 mm over 5.66 m — its
   bumpers' shadows were faint smudges and are whole, for about 0.3 ms on that phone (108.8 fps against 112.0 and 112.8).
-  **Still open:** no local light's shadow and no cookie on that path (their group holds three textures more).
+  **The local lights' shadows and the spots' cookies since 2026-11-13**, through group 0's bindings 11–13
+  (`LOCAL_LIGHT_MAPS`), read with one tap a light (`local_shadow_tap`) from 512² layers, built in only while a frame
+  draws a layer or a cookie (`SceneState::set_forward_local_light_maps`). Only there: the desktop's deferred lighting
+  layout would hold 17 sampled textures with them, one past WebGPU's 16, and reads them from its shadow group. The
+  shadow tests that path skipped run there (its GPU suite 119 where it was 100); five stay the desktop's, measuring a
+  light's size softening its shadow (one tap does not) and the deferred pass's contact shadows. **Not yet measured on a phone**, for speed or
+  for the Adreno compiler.
 - ~~**No contact shadows.**~~ **CLOSED 2026-11-01; down to a coin since 2026-11-11.**
   `DirectionalLight::contact_shadow_length` (metres, 0 = off, the default). The deferred lighting pass
   marches from each pixel toward the sun in screen space against the depth buffer: pixel by pixel,

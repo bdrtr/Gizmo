@@ -201,6 +201,7 @@ pub(super) fn build_core_pipelines(
     layouts: &LayoutRefs,
     #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] probes: super::ProbeShape,
     #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] sun_shadows: bool,
+    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] local_light_maps: bool,
 ) -> CorePipelines {
     // WASM: max 4 bind groups (Chrome WebGPU), shadow kaldırıldı
     // Native: 5 bind groups (shadow dahil)
@@ -247,12 +248,15 @@ pub(super) fn build_core_pipelines(
     let [probe_background, probe_boxes] = probes.defs();
     #[cfg(gizmo_forward_only)]
     let sun_shadow = ("SUN_SHADOWS", naga_oil::compose::ShaderDefValue::Bool(sun_shadows));
+    // And whether they read the local lights' shadows and cookies (`SceneState::forward_local_light_maps`).
+    #[cfg(gizmo_forward_only)]
+    let local_maps = ("LOCAL_LIGHT_MAPS", naga_oil::compose::ShaderDefValue::Bool(local_light_maps));
     #[cfg(gizmo_forward_only)]
     let shader = super::shaders::load_shader_composed_web_with(
         device,
         include_str!("../shaders/shader.wgsl"),
         "Shader",
-        &[probe_background, probe_boxes, sun_shadow],
+        &[probe_background, probe_boxes, sun_shadow, local_maps],
     );
     // The wireframe draws the same shader with `WIREFRAME` on, which lets a frame's
     // `wireframe_color` replace the lit colour. Native only: the web has no line mode, so its
@@ -424,6 +428,7 @@ pub(super) fn build_core_pipelines(
                 probe_background,
                 probe_boxes,
                 sun_shadow,
+                local_maps,
                 ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
                 ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
             ],
@@ -444,6 +449,7 @@ pub(super) fn build_core_pipelines(
             probe_background,
                 probe_boxes,
                 sun_shadow,
+                local_maps,
             ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
         ],
     );
@@ -513,6 +519,7 @@ pub(super) fn build_core_pipelines(
             probe_background,
                 probe_boxes,
                 sun_shadow,
+                local_maps,
             ("DETAILS", naga_oil::compose::ShaderDefValue::Bool(true)),
             ("LOBES", naga_oil::compose::ShaderDefValue::Bool(true)),
             ("TRANSMISSION", naga_oil::compose::ShaderDefValue::Bool(true)),

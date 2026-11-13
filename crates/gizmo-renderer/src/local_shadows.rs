@@ -35,12 +35,14 @@
 use crate::frame_uniforms::MAX_LIGHTS;
 use gizmo_math::{Mat4, Vec3};
 
-/// Texels along a side of each layer.
-pub const LOCAL_SHADOW_RES: u32 = 1024;
+/// Texels along a side of each layer: 1024 on the desktop, **512 on the forward-only path** — a
+/// browser's, a phone's — where a point light's six layers are 6 MiB rather than 24 and draw a quarter
+/// of the texels, and the lookup is one tap where the desktop filters 3×3 or wider.
+pub const LOCAL_SHADOW_RES: u32 = if cfg!(gizmo_forward_only) { 512 } else { 1024 };
 
 /// How many layers one frame's lights may share: five point lights and two spots, or thirty-two
-/// spots. Each is [`LOCAL_SHADOW_RES`]² of 32-bit depth, 4 MiB, allocated only once a frame uses
-/// it ([`crate::pipeline::SceneState::ensure_local_shadow_layers`]).
+/// spots. Each is [`LOCAL_SHADOW_RES`]² of 32-bit depth, 4 MiB on the desktop, allocated only once a
+/// frame uses it ([`crate::pipeline::SceneState::ensure_local_shadow_layers`]); a texel until then.
 pub const MAX_LOCAL_SHADOW_LAYERS: usize = 32;
 
 /// The near plane of every layer, metres. A caster nearer its light than this is not in its
@@ -262,12 +264,29 @@ pub struct LocalShadowMaps {
 }
 
 impl LocalShadowMaps {
-    /// An array of `layers` layers (at least one, so there is always something to bind). A texel a
-    /// layer on the forward-only path, which draws no shadow maps (see `build_shadow_resources`).
+    /// An array of `layers` layers (at least one, so there is always something to bind), each
+    /// [`LOCAL_SHADOW_RES`]² texels.
     #[must_use]
     pub fn new(device: &wgpu::Device, layers: u32) -> Self {
+        Self::sized(device, layers, LOCAL_SHADOW_RES)
+    }
+
+    /// One layer of one texel: what a renderer holds until a frame draws a local light's shadow, on
+    /// every path (`SceneState::ensure_local_shadow_layers`), so a scene with no light that casts holds
+    /// none of their 4 MiB a layer.
+    #[must_use]
+    pub fn placeholder(device: &wgpu::Device) -> Self {
+        Self::sized(device, 1, 1)
+    }
+
+    /// Whether this is [`placeholder`](Self::placeholder)'s texel rather than layers a frame can draw.
+    #[must_use]
+    pub fn is_placeholder(&self) -> bool {
+        self.texture.size().width == 1
+    }
+
+    fn sized(device: &wgpu::Device, layers: u32, res: u32) -> Self {
         let layers = layers.max(1);
-        let res = if cfg!(gizmo_forward_only) { 1 } else { LOCAL_SHADOW_RES };
         let texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("local_shadow_layers"),
             size: wgpu::Extent3d { width: res, height: res, depth_or_array_layers: layers },

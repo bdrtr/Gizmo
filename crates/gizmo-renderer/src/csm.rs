@@ -160,13 +160,15 @@ pub struct ShadowSettings {
     /// Scales how far each lookup is pushed off the surface along its normal before it is projected
     /// into the cascade (2 texels of that cascade by default). 1 by default.
     pub normal_offset: f32,
-    /// Whether the forward-only path — a browser's, a phone's — draws the sun's shadow. On by default,
-    /// as the desktop's is. That path draws it as a phone can afford: one cascade over the whole range
-    /// (`CASCADES_DRAWN`), read at a coordinate worked out per vertex, one tap. Measured on an Adreno 618,
+    /// Whether the forward-only path — a browser's, a phone's — draws shadow maps: the sun's, and since
+    /// 2026-11-13 the local lights' that cast (`casts_shadows`). On by default, as the desktop's are. That
+    /// path draws them as a phone can afford: the sun's as one cascade over the whole range
+    /// (`CASCADES_DRAWN`), read at a coordinate worked out per vertex, one tap; a local light's layers at
+    /// `LOCAL_SHADOW_RES` (512 there), read with one tap. Measured on an Adreno 618,
     /// `nisanci` with its floor filling the screen (2026-11-12): about 104 fps without it, 90 with it —
     /// and 39 with it drawn as the desktop draws it (four cascades chosen per pixel, filtered 3×3), which
     /// is why it is not. Off leaves that path's frame as it was before it had a shadow at all. The
-    /// desktop draws the sun's shadow whatever this says.
+    /// desktop draws its shadow maps whatever this says.
     pub forward_only: bool,
     /// Whether the cascades reach only as deep as the camera sees into the scene — [`seen_depth`], past
     /// the fade band and rounded up to a half octave ([`fitted_reach`]) — when that is short of

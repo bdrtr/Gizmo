@@ -16,9 +16,8 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
     // baseline this engine targets, so a fifth group would take clustering away from the browser.
     // Group 0 is bound by every pipeline, and a shader that does not light simply does not declare
     // bindings 1 and 2 — wgpu allows a layout to offer more than a shader uses, not less.
-    let global = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-        label: Some("global_bind_group_layout"),
-        entries: &[
+    #[allow(unused_mut)] // The forward-only path adds to it.
+    let mut global_entries = vec![
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
                 visibility: wgpu::ShaderStages::VERTEX
@@ -133,7 +132,44 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
-        ],
+    ];
+    // The local lights' shadow layers and cookies, with the cookies' sampler, for the forward-only path's lit
+    // shaders (`LOCAL_LIGHT_MAPS`), which have no shadow group: there the lit pipeline layout holds 11
+    // sampled textures and 5 samplers with them, of WebGPU's 16 and 16 a stage. Not on the desktop, which
+    // reads them from its shadow group (bindings 2–4): its deferred lighting layout, over group 0 and the
+    // G-buffer, would hold 17.
+    #[cfg(gizmo_forward_only)]
+    global_entries.extend([
+            wgpu::BindGroupLayoutEntry {
+                binding: 11,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    sample_type: wgpu::TextureSampleType::Depth,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 12,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 13,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+    ]);
+    let global = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("global_bind_group_layout"),
+        entries: &global_entries,
     });
 
     let shadow = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {

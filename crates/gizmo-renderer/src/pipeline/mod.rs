@@ -122,6 +122,10 @@ pub struct SceneState {
     /// Frame-constant, so decided when the pipelines are built, as the probes' shape is. The desktop's
     /// read the sun's shadow always.
     pub(crate) forward_sun_shadows: bool,
+    /// Whether the forward-only path's lit pipelines read the local lights' shadows and cookies
+    /// (`LOCAL_LIGHT_MAPS`): while a frame draws a local light's shadow or lights a spot's cookie
+    /// ([`set_forward_local_light_maps`](Self::set_forward_local_light_maps)).
+    pub(crate) forward_local_light_maps: bool,
     /// [`unlit_pipeline`](Self::unlit_pipeline) with `KEEPS`, on the forward-only path, whose plain one
     /// cannot discard: a cut-out, a LOD crossfade. `None` on the desktop path, whose unlit pipeline can.
     pub unlit_keeps_pipeline: Option<wgpu::RenderPipeline>,
@@ -337,6 +341,7 @@ impl SceneView {
             scene.env_cube.view(),
             &scene.forward_probes,
             (&scene.shadow_texture_view, &scene.shadow_sampler),
+            (&scene.local_shadow_maps.view, &scene.cookies),
         );
 
         let mk_shadow_uniform = |i: usize, kind: &str| {
@@ -459,6 +464,7 @@ impl SceneState {
                 self.env_cube.view(),
                 &self.forward_probes,
                 (&self.shadow_texture_view, &self.shadow_sampler),
+                (&self.local_shadow_maps.view, &self.cookies),
             )
         };
         let global = build(&self.global_uniform_buffer, &self.cluster_table_buffer, &self.cluster_index_buffer);
@@ -502,6 +508,17 @@ impl SceneState {
     pub fn set_forward_sun_shadows(&mut self, draws: bool) -> bool {
         let changed = draws != self.forward_sun_shadows;
         self.forward_sun_shadows = draws;
+        changed
+    }
+
+    /// Whether the forward-only path's lit pipelines read the local lights' shadow layers and the spots'
+    /// cookies — `reads`: this frame draws a local light's shadow or lights a spot through a cookie. True
+    /// when that changed, and the caller builds the pipelines again ([`rebuild_pipelines`]), as for the
+    /// sun ([`set_forward_sun_shadows`](Self::set_forward_sun_shadows)): a scene without them pays
+    /// nothing for them per fragment.
+    pub fn set_forward_local_light_maps(&mut self, reads: bool) -> bool {
+        let changed = reads != self.forward_local_light_maps;
+        self.forward_local_light_maps = reads;
         changed
     }
 
@@ -685,11 +702,13 @@ fn global_group(
     environment: &wgpu::TextureView,
     probes: &ForwardProbes,
     (sun_shadow, sun_shadow_sampler): (&wgpu::TextureView, &wgpu::Sampler),
+    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] (local_shadow, cookies): (
+        &wgpu::TextureView,
+        &crate::cookies::CookieTextures,
+    ),
 ) -> wgpu::BindGroup {
-    device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some(label),
-        layout,
-        entries: &[
+    #[allow(unused_mut)] // The forward-only path adds to it.
+    let mut entries = vec![
             wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 1, resource: table.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 2, resource: indices.as_entire_binding() },
@@ -701,8 +720,15 @@ fn global_group(
             wgpu::BindGroupEntry { binding: 8, resource: probes.uniform.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(sun_shadow) },
             wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(sun_shadow_sampler) },
-        ],
-    })
+    ];
+    // The local lights' layers and cookies: the forward-only path's only (see `build_layouts`).
+    #[cfg(gizmo_forward_only)]
+    entries.extend([
+        wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::TextureView(local_shadow) },
+        wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::TextureView(&cookies.view) },
+        wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::Sampler(&cookies.sampler) },
+    ]);
+    device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some(label), layout, entries: &entries })
 }
 
 impl SceneState {
@@ -834,30 +860,40 @@ impl SceneState {
         self.shadow_texture_view = view;
         self.shadow_cascade_layer_views = layers;
         self.shadow_sampler = sampler;
-        self.shadow_bind_group = shadow_group(
-            device,
-            &self.shadow_bind_group_layout,
-            &self.shadow_texture_view,
-            &self.shadow_sampler,
-            &self.local_shadow_maps.view,
-            &self.cookies,
-        );
-        // Every view's group 0 holds them too (bindings 9 and 10).
-        let behind = self.behind_view.clone();
-        self.set_behind_view(device, Some(&behind));
+        // The shadow group, and every view's group 0, which holds them too (bindings 9 and 10).
+        self.rebuild_light_map_groups(device);
         true
     }
 
     /// Grows the local shadow array to hold at least `layers` layers (up to
-    /// [`MAX_LOCAL_SHADOW_LAYERS`]), rebuilding [`shadow_bind_group`](Self::shadow_bind_group), and
-    /// returns whether it did. A frame calls it with its plan's layer count before recording the
-    /// passes that draw them; it never shrinks.
+    /// [`MAX_LOCAL_SHADOW_LAYERS`]), rebuilding [`shadow_bind_group`](Self::shadow_bind_group) and every
+    /// view's group 0 over it, and returns whether it did. A frame calls it with its plan's layer count
+    /// before recording the passes that draw them; it never shrinks. Until a frame plans one the array is
+    /// a texel ([`LocalShadowMaps::placeholder`](crate::local_shadows::LocalShadowMaps::placeholder)).
     pub fn ensure_local_shadow_layers(&mut self, device: &wgpu::Device, layers: usize) -> bool {
         let layers = layers.min(MAX_LOCAL_SHADOW_LAYERS);
-        if layers <= self.local_shadow_maps.layers() {
+        if layers == 0 || (layers <= self.local_shadow_maps.layers() && !self.local_shadow_maps.is_placeholder()) {
             return false;
         }
         self.local_shadow_maps = crate::local_shadows::LocalShadowMaps::new(device, layers as u32);
+        self.rebuild_light_map_groups(device);
+        true
+    }
+
+    /// Makes the cookie array — a texel until a game registers a cookie — and returns whether it did,
+    /// rebuilding the groups that hold it. [`Renderer::insert_light_cookie`](crate::Renderer::insert_light_cookie)
+    /// and the cookie sync call it.
+    pub fn ensure_cookies(&mut self, device: &wgpu::Device) -> bool {
+        if self.cookies.is_resident() {
+            return false;
+        }
+        self.cookies = crate::cookies::CookieTextures::new(device);
+        self.rebuild_light_map_groups(device);
+        true
+    }
+
+    /// The shadow group and every view's group 0 again, over the shadow maps and cookies there are now.
+    fn rebuild_light_map_groups(&mut self, device: &wgpu::Device) {
         self.shadow_bind_group = shadow_group(
             device,
             &self.shadow_bind_group_layout,
@@ -866,7 +902,8 @@ impl SceneState {
             &self.local_shadow_maps.view,
             &self.cookies,
         );
-        true
+        let behind = self.behind_view.clone();
+        self.set_behind_view(device, Some(&behind));
     }
 
     /// Grows the active view's instance buffer — the frame's own when no view is active — to hold
@@ -997,9 +1034,11 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
     // A texel a cascade until a frame draws them (`ensure_sun_shadow_maps`).
     let (shadow_depth_texture, shadow_texture_view, shadow_cascade_layer_views, shadow_sampler) =
         build_shadow_resources(device, 1);
-    let local_shadow_maps = crate::local_shadows::LocalShadowMaps::new(device, 1);
+    // A texel each until a frame draws a local light's shadow, or a game registers a cookie
+    // (`ensure_local_shadow_layers`, `ensure_cookies`).
+    let local_shadow_maps = crate::local_shadows::LocalShadowMaps::placeholder(device);
     let layouts = build_layouts(device);
-    let cookies = crate::cookies::CookieTextures::new(device);
+    let cookies = crate::cookies::CookieTextures::placeholder(device);
 
     let grid = crate::clustered::ClusterGrid::default();
     let cluster_table_buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1048,6 +1087,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         env_cube.view(),
         &forward_probes,
         (&shadow_texture_view, &shadow_sampler),
+        (&local_shadow_maps.view, &cookies),
     );
 
     let shadow_bind_group =
@@ -1146,7 +1186,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         indirect: &indirect,
         wire_color: &wire_color_layout,
     };
-    let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default(), false);
+    let core_pipelines = build_core_pipelines(device, &layout_refs, ProbeShape::default(), false, false);
     let pipelines::ShadowPipelines {
         plain: [shadow_pipeline, shadow_open_pipeline],
         cut_out: shadow_cut_out_pipelines,
@@ -1185,6 +1225,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         env_cube,
         forward_probes,
         forward_sun_shadows: false,
+        forward_local_light_maps: false,
         behind_fallback,
         behind_sampler,
         shadow_pipeline,
@@ -1278,7 +1319,13 @@ pub fn rebuild_pipelines(renderer: &mut crate::Renderer) {
     let layouts = layout_refs(&renderer.scene, &indirect);
 
     let core_pipelines =
-        build_core_pipelines(device, &layouts, renderer.scene.forward_probes.shape, renderer.scene.forward_sun_shadows);
+        build_core_pipelines(
+            device,
+            &layouts,
+            renderer.scene.forward_probes.shape,
+            renderer.scene.forward_sun_shadows,
+            renderer.scene.forward_local_light_maps,
+        );
     let pipelines::ShadowPipelines {
         plain: [shadow_pipeline, shadow_open_pipeline],
         cut_out: shadow_cut_out_pipelines,
@@ -1558,6 +1605,14 @@ mod tests {
                         sun.insert("LOBES".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         sun.insert("DETAILS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         variants.push(("web with lobes and the sun's shadow", shaders::compose_wgsl(src, name, sun)));
+                        // The local lights' layers and cookies, alone and with everything else.
+                        let mut local = shaders::web_render_defs();
+                        local.insert("LOCAL_LIGHT_MAPS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        variants.push(("web with the local lights' maps", shaders::compose_wgsl(src, name, local.clone())));
+                        for def in ["SUN_SHADOWS", "DETAILS", "LOBES", "TRANSMISSION"] {
+                            local.insert(def.to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
+                        }
+                        variants.push(("web glass with every shadow", shaders::compose_wgsl(src, name, local)));
                         let mut defs = shaders::web_render_defs();
                         defs.insert("DETAILS".to_string(), naga_oil::compose::ShaderDefValue::Bool(true));
                         variants.push(("web with details", shaders::compose_wgsl(src, name, defs.clone())));

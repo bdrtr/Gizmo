@@ -4,8 +4,8 @@
 // shared with the G-buffer — or, composed with `CUSTOM_SURFACE`, from a game's `material_surface`
 // (`custom_material::SurfaceMaterial`), lit here as the engine's own would be. The forward shader diverges from the deferred
 // path only in bind-group layout: WebGPU caps groups at 4, so the CSM shadow group is
-// dropped on web. That divergence is expressed at the SOURCE via `#ifdef SHADOWS` (shadow
-// bindings + PCF block) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
+// dropped on web. That divergence is expressed at the SOURCE via the shadow defs (`SUN_SHADOWS`,
+// `LOCAL_LIGHT_MAPS`, with the group and binding each is read from) and `@group(#{SKELETON_GROUP})` / `@group(#{INSTANCE_GROUP})`
 // (3/4 native, 2/3 web) — never by grepping naga's reformatted output.
 // Three tiers on the forward-only path, where a phone pays for code whether or not a draw takes it.
 // None of the defs: a plain opaque surface, which is most of a frame. `DETAILS` adds what a draw has to
@@ -25,8 +25,12 @@
 #import gizmo::common::{receiver_axes, sun_shadow_visibility, shadow_distance_fade}
 #endif
 #endif
-#ifdef SHADOWS
+#ifdef LOCAL_LIGHT_MAPS
+#ifdef LOCAL_SHADOW_TAP
+#import gizmo::common::{local_shadow_layer, local_shadow_tap}
+#else
 #import gizmo::common::{local_shadow_layer, local_shadow_visibility, light_source_radius}
+#endif
 #endif
 #import gizmo::pbr_ext::{approximate_env_brdf}
 #ifdef LOBES
@@ -111,16 +115,24 @@ var t_shadow: texture_depth_2d_array;
 var s_shadow: sampler_comparison;
 #endif
 
-#ifdef SHADOWS
-// The local lights' shadows (`gizmo_renderer::local_shadows`), a layer or six a light.
-@group(2) @binding(2)
+#ifdef LOCAL_LIGHT_MAPS
+// The local lights' shadows (`gizmo_renderer::local_shadows`), a layer or six a light, and the spots'
+// cookies (`gizmo_renderer::cookies`): the shadow group's on the desktop, group 0's on the forward-only
+// path, which builds its lit pipelines with them only while a frame draws one
+// (`SceneState::set_forward_local_light_maps`).
+@group(#{LOCAL_LIGHT_MAP_GROUP}) @binding(#{LOCAL_SHADOW_TEXTURE_BINDING})
 var t_local_shadow: texture_depth_2d_array;
 
-// Light cookies (`gizmo_renderer::cookies`) — beside the shadow maps, so native only.
-@group(2) @binding(3)
+@group(#{LOCAL_LIGHT_MAP_GROUP}) @binding(#{COOKIE_TEXTURE_BINDING})
 var t_cookie: texture_2d_array<f32>;
-@group(2) @binding(4)
+@group(#{LOCAL_LIGHT_MAP_GROUP}) @binding(#{COOKIE_SAMPLER_BINDING})
 var s_cookie: sampler;
+
+#ifndef SUN_SHADOWS
+// Their comparison sampler is the sun's, declared above only with the sun's shadow.
+@group(#{SUN_SHADOW_GROUP}) @binding(#{SUN_SHADOW_SAMPLER_BINDING})
+var s_shadow: sampler_comparison;
+#endif
 #endif
 
 struct SkeletonData {
@@ -659,7 +671,7 @@ fn shade(in: VertexOutput) -> vec4<f32> {
             window = falloff.y;
             if (light_type == 1u) {
                 attenuation *= spot_cone(light, -L);
-#ifdef SHADOWS
+#ifdef LOCAL_LIGHT_MAPS
                 if (light.params.w > 0.0) {
                     cookie = textureSampleLevel(
                         t_cookie, s_cookie, spot_cookie_uv(light, in.world_position), i32(light.params.w) - 1, 0.0
@@ -667,15 +679,24 @@ fn shade(in: VertexOutput) -> vec4<f32> {
                 }
 #endif
             }
-#ifdef SHADOWS
-            // The light's shadow, as the deferred pass takes it: see `local_shadow_visibility`.
+#ifdef LOCAL_LIGHT_MAPS
+            // The light's shadow, as the deferred pass takes it: see `local_shadow_visibility` — or, on the
+            // forward-only path, with one tap (`local_shadow_tap`).
             // `inst_emissive.w < 0` is `MeshRenderer::receives_shadows == false`.
             let shadow_layer = local_shadow_layer(scene.light_shadows[i / 4u][i % 4u], in.world_position - light.position.xyz);
             if (in.inst_emissive.w >= 0.0 && shadow_layer >= 0 && max(attenuation, window) > 0.0) {
+#ifdef LOCAL_SHADOW_TAP
+                let lit = local_shadow_tap(
+                    t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer].view_proj,
+                    scene.local_shadow_layers[shadow_layer].params, shadow_layer, in.world_position, N, to_light,
+                    scene.shadow_bias.xy,
+                );
+#else
                 let lit = local_shadow_visibility(
                     t_local_shadow, s_shadow, scene.local_shadow_layers[shadow_layer], shadow_layer,
                     in.world_position, N, surface_axes, to_light, scene.shadow_bias.xy, light_source_radius(light),
                 );
+#endif
                 attenuation *= lit;
                 window *= lit;
             }

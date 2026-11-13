@@ -50,6 +50,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The local lights' shadows and the spots' cookies in a browser and on a phone.** The forward-only path drew the sun's
+  shadow alone. A point, spot or rectangle light that casts (`casts_shadows`) casts there now, and a spot's cookie
+  shows: its lit shaders read the layers and the cookies through group 0's bindings 11–13 (`LOCAL_LIGHT_MAPS`, placed by
+  `LOCAL_LIGHT_MAP_GROUP` / `LOCAL_SHADOW_TEXTURE_BINDING` / `COOKIE_TEXTURE_BINDING` / `COOKIE_SAMPLER_BINDING`, which
+  put them in the shadow group on the desktop), with **one tap** a light (`local_shadow_tap`: the desktop's lookup,
+  pushed off and biased alike, unfiltered), built in only while a frame draws a local light's layer or a spot's
+  cookie (`SceneState::set_forward_local_light_maps`). Its layers are 512² there (`LOCAL_SHADOW_RES`; 1024² on the
+  desktop), 1 MiB each, 6 for a point light. `ShadowSettings::forward_only` turns them off with the sun's. The local
+  layers and the cookie array are a texel on **both** paths until a frame draws a layer or a game registers a cookie
+  (`LocalShadowMaps::placeholder`, `CookieTextures::placeholder`, `SceneState::ensure_cookies`): the desktop held 4 MiB
+  and 2 MiB of them from the start. Bindings 11–13 are the forward-only path's alone — the desktop's deferred
+  lighting layout would hold 17 sampled textures with them, one past WebGPU's 16. The shadow tests that path skipped as
+  drawing none run there now — its GPU suite runs 119 where it ran 100 — a point light casting every way, two lights
+  two shadows, a caster off screen into the frame, a cookie the right way round, nothing shadowing itself; five stay
+  the desktop's, three measuring how a light's size softens its shadow, which one tap does not, and two the deferred
+  pass's contact shadows. `every_local_light_casts_when_it_asks` reads 564–584 pixels across its five layouts there
+  (6 apart on the desktop).
+  **Not yet measured on a phone.**
+
 - **The sun's shadow in a browser and on a phone.** The forward-only path drew no shadow map at all. It draws the sun's
   shadow now as a phone can afford: **one cascade** over the whole range (`csm::CASCADES_DRAWN`; 2048², one layer, 16 MiB,
   allocated the first frame that draws it), drawn through the same caster pipelines, and read by its lit and baked-lit
