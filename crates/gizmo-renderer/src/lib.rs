@@ -123,6 +123,7 @@ pub mod async_assets;
 pub mod backdrop;
 pub mod capture;
 pub mod routing;
+pub mod shader_graph;
 pub mod custom_material;
 pub mod irradiance;
 mod irradiance_bake;

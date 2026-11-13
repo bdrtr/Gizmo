@@ -50,6 +50,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A surface built from nodes: `gizmo_renderer::shader_graph`.** A `ShaderGraph` is nodes (`NodeKind`: what the fragment
+  knows, the instance's `Material`, the engine's own surface, the base texture, constants, component-wise math, vectors,
+  Fresnel, a checker and value noise) and links from an output to an input, `serde` so an editor can save it.
+  `ShaderGraph::to_wgsl` writes the `material_surface` a `SurfaceMaterial` is built from, so a graph is lit as a
+  hand-written surface is, deferred on the desktop and forward in a browser and on a phone; `Renderer::add_surface_graph`
+  and `SurfaceMaterial::from_graph` build and register it. An output input nothing is linked to keeps the engine's
+  material: `ShaderGraph::new()` draws the frame `MaterialType::Pbr` draws, byte for byte, on both paths. A link joins any
+  two widths (a float spreads, a longer vector is cut, a shorter one padded); a loop is refused by `connect` and is a
+  `GraphError` when it comes from a file. The node editor is the next piece.
+
 - **The local lights' shadows and the spots' cookies in a browser and on a phone.** The forward-only path drew the sun's
   shadow alone. A point, spot or rectangle light that casts (`casts_shadows`) casts there now, and a spot's cookie
   shows: its lit shaders read the layers and the cookies through group 0's bindings 11–13 (`LOCAL_LIGHT_MAPS`, placed by

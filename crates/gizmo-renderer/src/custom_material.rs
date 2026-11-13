@@ -327,17 +327,34 @@ pub enum SurfaceError {
     /// that collides with one of the engine's. The text is the shader compiler's, and names the shader
     /// it was composed into.
     Compose(String),
+    /// The [`ShaderGraph`](crate::shader_graph::ShaderGraph) it was built from is not one surface:
+    /// see [`GraphError`](crate::shader_graph::GraphError).
+    Graph(crate::shader_graph::GraphError),
 }
 
 impl std::fmt::Display for SurfaceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Compose(message) => write!(f, "a surface material's WGSL did not compose: {message}"),
+            Self::Graph(error) => write!(f, "a surface material's shader graph: {error}"),
         }
     }
 }
 
-impl std::error::Error for SurfaceError {}
+impl std::error::Error for SurfaceError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Compose(_) => None,
+            Self::Graph(error) => Some(error),
+        }
+    }
+}
+
+impl From<crate::shader_graph::GraphError> for SurfaceError {
+    fn from(error: crate::shader_graph::GraphError) -> Self {
+        Self::Graph(error)
+    }
+}
 
 /// A surface the game describes in WGSL and the engine lights — see the [module docs](self).
 ///
@@ -389,6 +406,28 @@ impl SurfaceMaterial {
     pub fn from_wgsl(renderer: &crate::Renderer, label: &str, wgsl: &str) -> Result<Self, SurfaceError> {
         let pipelines = SurfacePipelines::build(&renderer.device, &renderer.scene, renderer.deferred.as_ref(), label, wgsl)?;
         Ok(Self { label: label.to_string(), wgsl: wgsl.to_string(), pipelines })
+    }
+
+    /// [`from_wgsl`](Self::from_wgsl) with the WGSL a [`ShaderGraph`](crate::shader_graph::ShaderGraph)
+    /// is ([`to_wgsl`](crate::shader_graph::ShaderGraph::to_wgsl)).
+    ///
+    /// # Errors
+    ///
+    /// [`SurfaceError::Graph`] for a graph that is not one surface, [`SurfaceError::Compose`] as for
+    /// `from_wgsl`.
+    pub fn from_graph(
+        renderer: &crate::Renderer,
+        label: &str,
+        graph: &crate::shader_graph::ShaderGraph,
+    ) -> Result<Self, SurfaceError> {
+        Self::from_wgsl(renderer, label, &graph.to_wgsl()?)
+    }
+
+    /// The WGSL it was built from: a graph's, as [`to_wgsl`](crate::shader_graph::ShaderGraph::to_wgsl)
+    /// wrote it.
+    #[must_use]
+    pub fn wgsl(&self) -> &str {
+        &self.wgsl
     }
 
     /// The name it was built under, which is also what a validation error about it names.

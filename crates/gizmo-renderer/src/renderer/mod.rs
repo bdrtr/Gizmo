@@ -694,6 +694,24 @@ impl Renderer {
         Ok(self.custom_materials.register_surface(surface))
     }
 
+    /// [`add_surface_material`](Self::add_surface_material) for a surface built from nodes: the
+    /// graph's WGSL ([`ShaderGraph::to_wgsl`](crate::shader_graph::ShaderGraph::to_wgsl)), built and
+    /// registered.
+    ///
+    /// # Errors
+    ///
+    /// [`SurfaceError::Graph`](crate::custom_material::SurfaceError::Graph) for a graph that is not one
+    /// surface, [`SurfaceError::Compose`](crate::custom_material::SurfaceError::Compose) as for WGSL;
+    /// nothing is registered then.
+    pub fn add_surface_graph(
+        &mut self,
+        label: &str,
+        graph: &crate::shader_graph::ShaderGraph,
+    ) -> Result<crate::custom_material::SurfaceId, crate::custom_material::SurfaceError> {
+        let surface = crate::custom_material::SurfaceMaterial::from_graph(self, label, graph)?;
+        Ok(self.custom_materials.register_surface(surface))
+    }
+
     /// Recompiles every shader and rebuilds every pipeline — what the studio's file watcher calls
     /// when a `.wgsl` under `demo/assets` changes.
     pub fn rebuild_shaders(&mut self) {

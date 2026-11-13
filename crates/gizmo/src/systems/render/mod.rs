@@ -12762,6 +12762,45 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         });
     }
 
+    /// **A shader graph is drawn as the WGSL it stands for.** The empty graph — the output node and
+    /// nothing linked — draws the frame `MaterialType::Pbr` draws, to the byte, opaque and transparent,
+    /// and the same G-buffer: an unlinked output input keeps the engine's material. A graph that links
+    /// a colour into the albedo and 0 into the metalness draws what `RED_SURFACE_WGSL`, which says the
+    /// same in WGSL, draws, and writes that red into the G-buffer.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_shader_graph_is_drawn_as_the_surface_it_stands_for() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            for transparent in [false, true] {
+                let (pbr, pbr_albedo) = render_surface_cube(SurfaceCase::Pbr, transparent).await;
+                let (empty, empty_albedo) = render_surface_cube(SurfaceCase::EmptyGraph, transparent).await;
+                assert!(pbr == empty, "the empty graph drew another frame than Pbr (transparent: {transparent})");
+                assert_eq!(pbr_albedo, empty_albedo, "and another G-buffer (transparent: {transparent})");
+
+                let (wgsl, wgsl_albedo) = render_surface_cube(SurfaceCase::Red, transparent).await;
+                let (graph, graph_albedo) = render_surface_cube(SurfaceCase::RedGraph, transparent).await;
+                let (changed, total) = changed_pixels(&pbr, &graph, 128);
+                assert!(changed >= 300, "the red graph changed {changed}/{total} pixels (transparent: {transparent})");
+                assert!(wgsl == graph, "the red graph drew another frame than its WGSL (transparent: {transparent})");
+                assert_eq!(wgsl_albedo, graph_albedo, "and another G-buffer (transparent: {transparent})");
+            }
+            if let (_, Some(albedo)) = render_surface_cube(SurfaceCase::RedGraph, false).await {
+                let middle = (64 * 128 + 64) * 4;
+                let texel = &albedo[middle..middle + 4];
+                for (got, want) in texel.iter().zip([243u8, 63, 63, 0]) {
+                    assert!(got.abs_diff(want) <= 1, "the G-buffer holds {texel:?} where the graph wrote (243, 63, 63, 0)");
+                }
+            }
+        });
+    }
+
     /// Which material the cube in `render_surface_cube` carries.
     #[derive(Clone, Copy, PartialEq)]
     enum SurfaceCase {
@@ -12771,6 +12810,10 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         Standard,
         /// [`RED_SURFACE_WGSL`].
         Red,
+        /// A shader graph with nothing linked: `ShaderGraph::new()`.
+        EmptyGraph,
+        /// [`red_graph`]: what [`RED_SURFACE_WGSL`] writes, as nodes.
+        RedGraph,
         /// `MaterialType::CustomSurface` with an id nothing was registered under.
         Dangling,
         /// No cube at all — what "drew nothing" has to look like.
@@ -12798,6 +12841,18 @@ fn material_surface(input: SurfaceInput) -> Surface {
 }
 "#;
 
+    /// [`RED_SURFACE_WGSL`] as a shader graph: a colour into the albedo, 0 into the metalness.
+    fn red_graph() -> gizmo_renderer::shader_graph::ShaderGraph {
+        use gizmo_renderer::shader_graph::{NodeKind, ShaderGraph};
+        let mut graph = ShaderGraph::new();
+        let output = graph.output().expect("one output");
+        let red = graph.add(NodeKind::Color([0.9, 0.05, 0.05, 1.0]), [0.0, 0.0]);
+        let zero = graph.add(NodeKind::Float(0.0), [0.0, 0.0]);
+        graph.connect(red, 0, output, 0).expect("colour into albedo");
+        graph.connect(zero, 0, output, 3).expect("zero into metallic");
+        graph
+    }
+
     /// One cube in front of a camera, as the custom material test has it: the frame, and the G-buffer's
     /// albedo target after it where there is a G-buffer.
     async fn render_surface_cube(case: SurfaceCase, transparent: bool) -> (Vec<u8>, Option<Vec<u8>>) {
@@ -12814,6 +12869,10 @@ fn material_surface(input: SurfaceInput) -> Surface {
         );
         let standard = renderer.add_surface_material("standard", STANDARD_SURFACE_WGSL).expect("the standard surface composes");
         let red = renderer.add_surface_material("red", RED_SURFACE_WGSL).expect("the red surface composes");
+        let empty_graph = renderer
+            .add_surface_graph("empty graph", &gizmo_renderer::shader_graph::ShaderGraph::new())
+            .expect("the empty graph composes");
+        let red_graph = renderer.add_surface_graph("red graph", &red_graph()).expect("the red graph composes");
 
         if case != SurfaceCase::NoCube {
             use gizmo_renderer::components::MaterialType;
@@ -12829,8 +12888,10 @@ fn material_surface(input: SurfaceInput) -> Surface {
                 SurfaceCase::Pbr => MaterialType::Pbr,
                 SurfaceCase::Standard => MaterialType::CustomSurface(standard),
                 SurfaceCase::Red => MaterialType::CustomSurface(red),
+                SurfaceCase::EmptyGraph => MaterialType::CustomSurface(empty_graph),
+                SurfaceCase::RedGraph => MaterialType::CustomSurface(red_graph),
                 // One past the last: ids start at 0, so this resolves to nothing.
-                SurfaceCase::Dangling => MaterialType::CustomSurface(gizmo_renderer::custom_material::SurfaceId(red.0 + 1)),
+                SurfaceCase::Dangling => MaterialType::CustomSurface(gizmo_renderer::custom_material::SurfaceId(red_graph.0 + 1)),
                 SurfaceCase::NoCube => unreachable!(),
             };
             world.add_component(cube, mat);

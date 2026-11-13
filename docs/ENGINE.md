@@ -1501,7 +1501,14 @@ moved, not copied. What it *knew* is in §7 (measurements, refuted candidates, n
   the studio needed fixing: it has no cone primitive to be wrong about.
 
 - **Shader Graph.** A node editor plus WGSL generation. The largest item on the editor list and a
-  project on its own; the prototype has a tab for it, the engine has nothing.
+  project on its own. **The graph and its WGSL landed 2026-11-13** (`gizmo_renderer::shader_graph`):
+  it generates a `material_surface`, so it reuses everything `SurfaceMaterial` already is — composed
+  into the G-buffer and the lit forward shader, rebuilt with them on a hot reload or a tier change —
+  rather than a pipeline of its own. Every node kind and every output of each composes into all five
+  shaders a surface is drawn with (a unit test, no GPU); the empty graph draws `Pbr`'s frame to the
+  byte and a red graph the frame its hand-written WGSL draws, on the desktop and the forward-only
+  path (`a_shader_graph_is_drawn_as_the_surface_it_stands_for`). **Open:** the node editor in
+  `gizmo-editor`, and a graph as an asset an entity's material names, saved with the scene.
 
 
 ---
