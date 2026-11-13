@@ -1071,13 +1071,13 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
         .get_resource::<gizmo_core::time::Time>()
         .map(|t| t.dt())
         .unwrap_or(0.0);
+    // Posed every frame, the clock stopped or not: a paused game's playhead is still where the
+    // pose is read from, and the editor's timeline moves it while ⏸ holds dt at 0. Until 2026-11-13
+    // these ran only on a clock that ran, and scrubbing a paused game changed nothing on screen. At
+    // dt 0 a player's time does not move; only its pose is evaluated.
+    crate::renderer::animation_update_system(world, animation_dt, &renderer.queue);
+    crate::renderer::animation_state_machine_update_system(world, animation_dt, &renderer.queue);
     if animation_dt > 0.0 {
-        crate::renderer::animation_update_system(world, animation_dt, &renderer.queue);
-        crate::renderer::animation_state_machine_update_system(
-            world,
-            animation_dt,
-            &renderer.queue,
-        );
         // Sprite-sheet animation rides the same clock: `set_time_scale` and pause apply to it.
         crate::renderer::components::sprite_animation_system(world, animation_dt);
     }
@@ -13438,14 +13438,12 @@ fn material_surface(input: SurfaceInput) -> Surface {
         }
         let model = write_skinned_gltf();
         let scene_path = format!("{model}.scene");
-        // Held at `time`, and posed there: a frame advances the clips only on a clock that runs
-        // (`Time`), which a test world has none of, so the pose is evaluated once, at dt 0.
-        let hold = |world: &mut World, renderer: &Renderer, time: f32| {
+        // Held at `time`: the frame poses it there (a test world has no clock, so dt is 0 anyway).
+        let hold = |world: &mut World, time: f32| {
             for (_, mut player) in world.query_mut::<(gizmo_core::Entity, &mut AnimationPlayer)>().iter_mut() {
                 player.current_time = time;
                 player.speed = 0.0;
             }
-            crate::renderer::animation_update_system(world, 0.0, &renderer.queue);
         };
         pollster::block_on(async {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
@@ -13457,9 +13455,9 @@ fn material_surface(input: SurfaceInput) -> Surface {
             }
             world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
             world.spawn_bundle(DirectionalLightBundle::default());
-            hold(&mut world, &renderer, 0.0);
+            hold(&mut world, 0.0);
             let bind = render_world(&mut renderer, &mut world).await;
-            hold(&mut world, &renderer, 0.5);
+            hold(&mut world, 0.5);
             let posed = render_world(&mut renderer, &mut world).await;
             let (bent, total) = changed_pixels(&bind, &posed, 128);
             assert!(bent >= 200, "half way through the clip drew like the bind pose ({bent}/{total}): the fixture does not animate");
@@ -13480,15 +13478,58 @@ fn material_surface(input: SurfaceInput) -> Surface {
                     &mut assets,
                 );
             }
-            // The first frame gives the model its skeleton and its clips back; then it is posed where
-            // the file says it was.
-            render_world(&mut renderer, &mut world).await;
-            crate::renderer::animation_update_system(&mut world, 0.0, &renderer.queue);
+            // One frame gives the model its skeleton and its clips back and poses it where the file
+            // says it was.
             let reopened = render_world(&mut renderer, &mut world).await;
             let (changed, total) = changed_pixels(&posed, &reopened, 128);
             assert_eq!(changed, 0, "the reopened model stands otherwise: {changed}/{total} pixels differ");
         });
         let _ = std::fs::remove_file(&scene_path);
+    }
+
+    /// **A paused game's playhead, moved, moves the pose.** The editor's ⏸ holds the clock still
+    /// (`Time::set_paused`: dt is 0) and its timeline scrubs `AnimationPlayer::current_time`; the
+    /// frame has to show the pose at the new time. It did not: the clips were evaluated only on a
+    /// clock that ran, so scrubbing a paused game changed nothing on screen.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_paused_games_scrubbed_playhead_moves_the_pose() {
+        use gizmo_renderer::components::AnimationPlayer;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let model = write_skinned_gltf();
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let mut time = gizmo_core::time::Time::new();
+            time.set_paused(true);
+            world.insert_resource(time);
+            {
+                let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                commands.spawn_gltf(Vec3::ZERO, &model, false).expect("the model loads");
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            let scrub = |world: &mut World, t: f32| {
+                for (_, mut p) in world.query_mut::<(gizmo_core::Entity, &mut AnimationPlayer)>().iter_mut() {
+                    p.current_time = t;
+                }
+            };
+            scrub(&mut world, 0.0);
+            let start = render_world(&mut renderer, &mut world).await;
+            scrub(&mut world, 0.5);
+            let scrubbed = render_world(&mut renderer, &mut world).await;
+            let (changed, total) = changed_pixels(&start, &scrubbed, 128);
+            assert!(changed >= 200, "moving a paused playhead changed {changed}/{total} pixels: the pose did not follow it");
+            let time = world.query::<&AnimationPlayer>().iter().next().map(|p| p.current_time);
+            assert_eq!(time, Some(0.5), "a paused clock advanced the playhead");
+        });
     }
 
     /// Writes the test images the material-map tests name by path: ridges as a normal map (data,

@@ -88,6 +88,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **A paused game's playhead, moved, moves the pose.** Skeletal clips and state machines were evaluated only on a clock
+  that ran (`dt > 0`), while the editor's ⏸ holds dt at 0 and its timeline scrubs `AnimationPlayer::current_time`:
+  scrubbing a paused game changed nothing on screen. They are evaluated every prepared frame now; at dt 0 a player's
+  time stays where it is and only its pose is computed. Sprite-sheet animation still rides the running clock.
+
 - **An animated, skinned glTF model keeps its skeleton, its clips and its place in them through a save and a reopen.**
   A skeleton is a GPU buffer and a clip table is the file's data; neither was saved or rebuilt, and the player was not
   saved either, so a reopened character stood in its bind pose and never moved. The model's root carries
