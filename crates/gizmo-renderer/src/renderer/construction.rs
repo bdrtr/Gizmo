@@ -623,6 +623,7 @@ impl Renderer {
                 &device,
                 &post_res.hdr_texture_view,
                 &def.world_position_view,
+                &def.velocity_view,
                 size.width,
                 size.height,
             ))

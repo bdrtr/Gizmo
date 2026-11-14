@@ -93,6 +93,11 @@ GIZMO_SCREENSHOT=/tmp/frame.png GIZMO_SCREENSHOT_FRAME=180 GIZMO_SCREENSHOT_EXIT
 # measured this way showed 7.39 % — indistinguishable from doing nothing at all.
 # For a deterministic comparison use a fixed-timestep driver and compare a hash, which is what
 # `headless_stress_test` is.
+#
+# FLICKER is measurable, though — on consecutive frames of ONE run: `GIZMO_SCREENSHOT_COUNT=8` writes
+# frames FRAME..FRAME+7 as `frame_0.png`…`frame_7.png` (the TAA jitter cycle is 8). Frames from
+# separate runs differ in window size and timing and cannot be compared; that mistake cost an hour
+# on 2026-11-14 (`satranc`'s shimmer: 3508 pixels varying over a cycle before the TAA fixes, 62 after).
 
 # Benchmarks (criterion). CI runs each one once with `--test` as a smoke gate — it catches a
 # panicking or non-compiling bench, not a regression (see docs/ENGINE.md on why there is no

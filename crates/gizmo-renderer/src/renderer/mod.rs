@@ -1171,6 +1171,7 @@ impl Renderer {
                     &self.device,
                     &self.post.hdr_texture_view,
                     &def.world_position_view,
+                    &def.velocity_view,
                     new_size.width,
                     new_size.height,
                 );
@@ -1449,6 +1450,7 @@ impl Renderer {
                         &self.device,
                         &self.post.hdr_texture_view,
                         &def.world_position_view,
+                        &def.velocity_view,
                         w,
                         h,
                     ));

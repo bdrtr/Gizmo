@@ -118,6 +118,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **TAA follows moving objects: it reprojects through the G-buffer's velocity.** The history was found through the
+  previous view-projection alone, which knows the camera's motion and not an object's, so anything moving left a ghost
+  where it had been — the "black thing coming and going" behind a sliding chess piece. TAA now reads the velocity
+  target (camera and object motion, `crate::motion`): `history_uv = uv − velocity`, the jitter cancelling between the
+  two unjittered projections, with the nearest surface's velocity in the 3×3 around each pixel, so a pixel an object
+  has just uncovered reads its history from the floor behind and not from the object it was. A still pixel keeps 19/20
+  of its history, a moving one down to 4/5 (`moved` in texels), which halves the edge ripple of a still scene without
+  trailing. `TaaState::new`/`resize` take the velocity view; `update_params(queue, jitter, alpha)` lost the previous
+  matrix and camera position, which nothing reads any more (`store_prev_vp` and `prev_vp` are gone). Measured: a lit
+  cube crossing a dark floor, pixels off the frame without TAA 114 → 60 (velocity) → 49 (dilated); a still scene
+  29 → 8 pixels changing a frame; the chess board 3508 → 62 pixels varying over a jitter cycle. Test:
+  `taa_does_not_trail_a_moving_object` (fails with the camera-only reprojection or without the dilation).
+  **Breaks:** the `TaaState` signatures above.
+- **`GIZMO_SCREENSHOT_COUNT=n`** writes `n` consecutive frames of one run (`frame_0.png`…), which is what a flicker
+  can be measured on; frames from separate runs differ in window size and timing. `CaptureRequest::path_for`,
+  `is_last`; test `a_run_of_frames_is_numbered_and_bounded`.
+
 - **TAA settles on a still scene; it shimmered along every edge.** Two sign mistakes put the jitter back into
   every frame. The current frame was "un-jittered" by reading it at `uv − jitter`, but the jittered projection moves
   the picture by `+jitter`, so that doubled the jitter instead of removing it; and the history was reprojected from

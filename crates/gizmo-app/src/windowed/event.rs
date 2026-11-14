@@ -950,21 +950,17 @@ fn service_screenshot(renderer: &Renderer, output: &wgpu::SurfaceTexture) -> Dra
         return DrawReport::default();
     };
     // `fetch_add` returns the previous value, so the first presented frame is 0.
-    if FRAME.fetch_add(1, Ordering::Relaxed) != req.frame {
+    let frame = FRAME.fetch_add(1, Ordering::Relaxed);
+    let Some(path) = req.path_for(frame) else {
         return DrawReport::default();
-    }
+    };
 
-    match gizmo_renderer::capture::texture_to_png(
-        &renderer.device,
-        &renderer.queue,
-        &output.texture,
-        &req.path,
-    ) {
-        Ok(()) => tracing::info!(path = %req.path.display(), frame = req.frame, "screenshot written"),
+    match gizmo_renderer::capture::texture_to_png(&renderer.device, &renderer.queue, &output.texture, &path) {
+        Ok(()) => tracing::info!(path = %path.display(), frame, "screenshot written"),
         Err(e) => tracing::error!("{e}"),
     }
     // The exit is the loop's to make, at its next sync point: the draw may be on a render thread.
-    DrawReport { exit: req.exit_after, ..DrawReport::default() }
+    DrawReport { exit: req.exit_after && req.is_last(frame), ..DrawReport::default() }
 }
 
 /// Keeps `DisplayScale` and `SafeArea` true to the window, the frame and the platform. Called every

@@ -1641,12 +1641,12 @@ fn draw_camera_view(
         );
     }
 
-    // Upload TAA params (prev_vp from last frame, current jitter, blend alpha)
+    // Upload TAA params: this frame's jitter, and whether there is history to keep. Where each
+    // pixel's history is comes from the G-buffer's velocity target.
     if let Some(ref mut taa) = renderer.taa {
         if taa.enabled {
             let alpha = if taa.frame_index == 0 { 1.0f32 } else { 0.1f32 };
-            taa.update_params(&renderer.queue, frame_jitter, alpha, cam_pos.to_array());
-            taa.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
+            taa.update_params(&renderer.queue, frame_jitter, alpha);
         }
     }
 
@@ -1705,6 +1705,7 @@ fn draw_camera_view(
                     &renderer.device,
                     &renderer.post.hdr_texture_view,
                     &def.world_position_view,
+                    &def.velocity_view,
                     w,
                     h,
                 );
@@ -11162,6 +11163,78 @@ mod golden_render_tests {
             assert_eq!(untouched, default, "the defaults are the old literals");
             let (near, wide) = (band(&default), band(&wide));
             assert!(wide > near * 2 + 500, "a 2 m radius spreads the occlusion: band {near} → {wide}");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no TAA.
+    /// **TAA does not trail a moving object.** A white cube crossing a dark floor, a little each frame:
+    /// the last frame under TAA against the same frame without it. The history is found through the
+    /// G-buffer's velocity, which knows the cube moved — the previous view-projection alone knew only
+    /// the camera's motion, and a chess piece sliding across the board left a dark ghost where it had
+    /// been — and a pixel the cube has just uncovered takes the cube's velocity, the nearest surface's
+    /// around it, so it reads its history from the floor behind and not from the cube it was.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn taa_does_not_trail_a_moving_object() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            const W: usize = 128;
+            let mut renderer = crate::test_gpu::headless_renderer(W as u32, W as u32).await;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.05, 0.0)).with_scale(Vec3::new(4.0, 0.05, 4.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            // Lit, both: an unlit surface writes nothing to the G-buffer — no position, no velocity — and
+            // what TAA does with a moving one is not what this is about.
+            world.spawn_bundle((
+                Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_y(0.5) * gizmo_math::Quat::from_rotation_x(-0.9)),
+                GlobalTransform::default(),
+                crate::renderer::components::DirectionalLight::new(Vec3::ONE, 3.0, crate::renderer::components::LightRole::Sun),
+            ));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.05, 0.05, 0.05, 1.0), 0.8, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(-1.5, 0.3, 0.0)).with_scale(Vec3::splat(0.3)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex.clone()).with_pbr(Vec4::new(1.0, 1.0, 1.0, 1.0), 0.5, 0.0));
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 4.0, 4.5),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.7,
+                primary: true,
+                ..Default::default()
+            });
+            let mut frame = Vec::new();
+            for i in 0..30 {
+                if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(cube) {
+                    t.position.x = -1.5 + i as f32 * 0.1;
+                }
+                frame = render_world(&mut renderer, &mut world).await;
+            }
+            renderer.taa = None;
+            let truth = render_world(&mut renderer, &mut world).await;
+            let ghost = frame.chunks(4).zip(truth.chunks(4)).filter(|(p, q)| p[0].abs_diff(q[0]) > 30).count();
+            let cube_pixels = truth.chunks(4).filter(|p| p[0] > 128).count();
+            eprintln!("TAA, moving cube: {ghost} pixels off the frame without TAA ({cube_pixels} cube pixels)");
+            assert!(cube_pixels > 50, "the cube is in view: {cube_pixels}");
+            // 114 reprojected by the camera alone (2026-11-14), 60 through the velocity target, 49 with the
+            // nearest surface's velocity around each pixel.
+            assert!(ghost * 4 < cube_pixels, "a moving cube trails under TAA: {ghost} pixels against {cube_pixels}");
         });
     }
 

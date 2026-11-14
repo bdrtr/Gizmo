@@ -5,17 +5,9 @@ use crate::pipeline::load_shader;
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
 struct TaaParamsGpu {
-    prev_view_proj: [[f32; 4]; 4], // 64 bytes
-    jitter: [f32; 2],              // 8 bytes  (NDC-space subpixel offset)
-    alpha: f32,                    // 4 bytes  (blend: 0=full history, 1=full current)
-    _pad: f32,                     // 4 bytes
-    /// The camera position the world-position G-buffer was written relative to. That target holds
-    /// camera-relative coordinates, and reprojection multiplies by a *world* matrix, so this is
-    /// what puts them back. Without it the history is sampled from wherever the camera happens to
-    /// be away from the origin — which is exactly the regression a static-scene convergence probe
-    /// caught, at 3 400 bytes of a 65 536-byte frame moving every frame with the blend set to
-    /// pure history.
-    camera_pos: [f32; 4],          // 16 bytes (offset 80, already 16-aligned)
+    jitter: [f32; 2], // NDC-space subpixel offset of this frame's projection
+    alpha: f32,       // 1 = no history to keep (the first frame, after a reset); below, history is kept
+    _pad: f32,
 }
 
 // ── TaaState ──────────────────────────────────────────────────────────────────
@@ -23,8 +15,8 @@ struct TaaParamsGpu {
 /// Temporal anti-aliasing: this frame resolved against the last one.
 ///
 /// The camera is jittered by a sub-pixel Halton offset each frame, so successive frames sample
-/// different points inside each pixel; the resolve pass reprojects the previous frame through
-/// [`Self::prev_vp`] and blends. Hence the ping-pong: a frame cannot be both the history being read
+/// different points inside each pixel; the resolve pass finds each pixel's history through the
+/// G-buffer's velocity target (camera and object motion together, `crate::motion`) and blends. Hence the ping-pong: a frame cannot be both the history being read
 /// and the output being written, so the two textures swap roles every frame.
 pub struct TaaState {
     /// Which build of the effect this is — every `new` takes the next number. A split-screen
@@ -42,12 +34,6 @@ pub struct TaaState {
     frame_parity: bool,
     /// The frame counter driving the Halton jitter sequence.
     pub frame_index: u32,
-
-    // Unjittered view-proj from the previous frame (for reprojection)
-    /// The previous frame's **unjittered** view-projection, used to reproject the history. It
-    /// must be the unjittered one, or the reprojection would chase the jitter it is meant to
-    /// resolve.
-    pub prev_vp: [[f32; 4]; 4],
 
     // Samplers and uniform buffer (never recreated on resize)
     params_buffer: wgpu::Buffer,
@@ -83,10 +69,13 @@ pub struct TaaState {
 impl TaaState {
     /// Builds both history buffers, both pipelines and all four bind-group permutations for a
     /// target of the given size.
+    /// `velocity_view` is the G-buffer's velocity target (`DeferredState::velocity_view`): where each
+    /// pixel's surface was last frame, which is where its history is read.
     pub fn new(
         device: &wgpu::Device,
         hdr_view: &wgpu::TextureView,
         position_view: &wgpu::TextureView,
+        velocity_view: &wgpu::TextureView,
         width: u32,
         height: u32,
     ) -> Self {
@@ -134,6 +123,7 @@ impl TaaState {
             hdr_view,
             &history_a_view,
             position_view,
+            velocity_view,
             &linear_sampler,
             &nearest_sampler,
         );
@@ -144,6 +134,7 @@ impl TaaState {
             hdr_view,
             &history_b_view,
             position_view,
+            velocity_view,
             &linear_sampler,
             &nearest_sampler,
         );
@@ -153,13 +144,6 @@ impl TaaState {
         let resolve_pipeline = mk_resolve_pipeline(device, &resolve_bgl);
         let blit_pipeline = mk_blit_pipeline(device, &empty_bgl, &blit_bgl);
 
-        let identity: [[f32; 4]; 4] = [
-            [1.0, 0.0, 0.0, 0.0],
-            [0.0, 1.0, 0.0, 0.0],
-            [0.0, 0.0, 1.0, 0.0],
-            [0.0, 0.0, 0.0, 1.0],
-        ];
-
         Self {
             generation: crate::renderer::next_state_generation(),
             history_a,
@@ -168,7 +152,6 @@ impl TaaState {
             history_b_view,
             frame_parity: false,
             frame_index: 0,
-            prev_vp: identity,
             params_buffer,
             linear_sampler,
             nearest_sampler,
@@ -194,6 +177,7 @@ impl TaaState {
         device: &wgpu::Device,
         hdr_view: &wgpu::TextureView,
         position_view: &wgpu::TextureView,
+        velocity_view: &wgpu::TextureView,
         width: u32,
         height: u32,
     ) {
@@ -207,6 +191,7 @@ impl TaaState {
             hdr_view,
             &history_a_view,
             position_view,
+            velocity_view,
             &self.linear_sampler,
             &self.nearest_sampler,
         );
@@ -217,6 +202,7 @@ impl TaaState {
             hdr_view,
             &history_b_view,
             position_view,
+            velocity_view,
             &self.linear_sampler,
             &self.nearest_sampler,
         );
@@ -251,27 +237,10 @@ impl TaaState {
         [halton(i, 2) - 0.5, halton(i, 3) - 0.5]
     }
 
-    /// Upload TaaParams uniform: uses self.prev_vp for reprojection.
-    pub fn update_params(
-        &self,
-        queue: &wgpu::Queue,
-        jitter: [f32; 2],
-        alpha: f32,
-        camera_pos: [f32; 3],
-    ) {
-        let data = TaaParamsGpu {
-            prev_view_proj: self.prev_vp,
-            jitter,
-            alpha,
-            _pad: 0.0,
-            camera_pos: [camera_pos[0], camera_pos[1], camera_pos[2], 0.0],
-        };
+    /// Uploads this frame's jitter (NDC) and whether there is history to keep (`alpha` 1 = none).
+    pub fn update_params(&self, queue: &wgpu::Queue, jitter: [f32; 2], alpha: f32) {
+        let data = TaaParamsGpu { jitter, alpha, _pad: 0.0 };
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&data));
-    }
-
-    /// Store the current frame's unjittered view_proj for use next frame.
-    pub fn store_prev_vp(&mut self, vp: [[f32; 4]; 4]) {
-        self.prev_vp = vp;
     }
 
     /// Advance ping-pong and frame counter (call after both resolve and blit passes).
@@ -383,6 +352,7 @@ fn mk_resolve_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
             tex_nf(3), // t_position (G-buffer, textureLoad)
             sampler(4, wgpu::SamplerBindingType::Filtering), // s_linear
             sampler(5, wgpu::SamplerBindingType::NonFiltering), // s_nearest
+            tex_nf(6), // t_velocity (G-buffer, textureLoad)
         ],
     })
 }
@@ -421,6 +391,7 @@ fn mk_resolve_bg(
     current_view: &wgpu::TextureView,
     history_view: &wgpu::TextureView,
     position_view: &wgpu::TextureView,
+    velocity_view: &wgpu::TextureView,
     linear_sampler: &wgpu::Sampler,
     nearest_sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
@@ -451,6 +422,10 @@ fn mk_resolve_bg(
             wgpu::BindGroupEntry {
                 binding: 5,
                 resource: wgpu::BindingResource::Sampler(nearest_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::TextureView(velocity_view),
             },
         ],
     })

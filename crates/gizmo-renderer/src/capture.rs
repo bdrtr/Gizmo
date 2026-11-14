@@ -183,6 +183,10 @@ pub fn texture_to_png(
 /// - `GIZMO_SCREENSHOT_FRAME` — which frame to grab, default 90. The first frames of any scene are
 ///   not representative: assets stream in, TAA has not converged, and the editor's layout settles.
 /// - `GIZMO_SCREENSHOT_EXIT` — `1` to close the window after writing, which is what a script wants.
+/// - `GIZMO_SCREENSHOT_COUNT` — how many frames in a row to write, default 1. Above 1 each file is the
+///   path with `_<k>` before its extension (`frame_0.png`, `frame_1.png`, …). Consecutive frames of ONE
+///   run are what a flicker can be measured on: two runs differ in window size and timing, so frames
+///   from separate runs differ everywhere.
 #[derive(Debug, Clone)]
 pub struct CaptureRequest {
     /// Where the PNG is written.
@@ -193,6 +197,8 @@ pub struct CaptureRequest {
     /// Whether the process exits once the frame is written, which is what makes this usable from
     /// a script.
     pub exit_after: bool,
+    /// How many consecutive frames to write, from [`frame`](Self::frame) on. At least 1.
+    pub count: u64,
 }
 
 impl CaptureRequest {
@@ -204,13 +210,51 @@ impl CaptureRequest {
             .and_then(|v| v.parse().ok())
             .unwrap_or(90);
         let exit_after = std::env::var("GIZMO_SCREENSHOT_EXIT").is_ok_and(|v| v == "1");
-        Some(Self { path: path.into(), frame, exit_after })
+        let count = std::env::var("GIZMO_SCREENSHOT_COUNT").ok().and_then(|v| v.parse().ok()).unwrap_or(1u64).max(1);
+        Some(Self { path: path.into(), frame, exit_after, count })
+    }
+
+    /// The file for presented frame `frame`, or `None` if this request does not write that one.
+    #[must_use]
+    pub fn path_for(&self, frame: u64) -> Option<std::path::PathBuf> {
+        let k = frame.checked_sub(self.frame).filter(|k| *k < self.count)?;
+        if self.count == 1 {
+            return Some(self.path.clone());
+        }
+        let stem = self.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let name = match self.path.extension() {
+            Some(ext) => format!("{stem}_{k}.{}", ext.to_string_lossy()),
+            None => format!("{stem}_{k}"),
+        };
+        Some(self.path.with_file_name(name))
+    }
+
+    /// Whether `frame` is the last one this request writes.
+    #[must_use]
+    pub fn is_last(&self, frame: u64) -> bool {
+        frame == self.frame + self.count - 1
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One frame is the path as given; several are numbered from 0, and frames outside the run are
+    /// not written.
+    #[test]
+    fn a_run_of_frames_is_numbered_and_bounded() {
+        let one = CaptureRequest { path: "/tmp/f.png".into(), frame: 90, exit_after: true, count: 1 };
+        assert_eq!(one.path_for(90), Some("/tmp/f.png".into()));
+        assert_eq!(one.path_for(91), None);
+        assert!(one.is_last(90));
+        let run = CaptureRequest { path: "/tmp/f.png".into(), frame: 200, exit_after: true, count: 3 };
+        assert_eq!(run.path_for(199), None);
+        assert_eq!(run.path_for(200), Some("/tmp/f_0.png".into()));
+        assert_eq!(run.path_for(202), Some("/tmp/f_2.png".into()));
+        assert_eq!(run.path_for(203), None);
+        assert!(!run.is_last(201) && run.is_last(202));
+    }
 
     /// The red/blue decision, stated as a table so a new surface format cannot quietly default to
     /// "no swap" — the unsupported arm makes it a hard error instead of a miscoloured file.

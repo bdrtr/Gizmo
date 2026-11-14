@@ -5,15 +5,9 @@
 //   fs_blit    — copy taa output → hdr texture (so post-process is unchanged)
 
 struct TaaParams {
-    prev_view_proj: mat4x4<f32>,
     jitter:         vec2<f32>,   // current frame subpixel offset (NDC)
-    alpha:          f32,         // temporal blend weight (0=full history, 1=full current)
+    alpha:          f32,         // 1 = no history to keep (first frame, after a reset)
     _pad:           f32,
-    // The world-position G-buffer is stored **relative to the camera** (see gbuffer.wgsl), so it
-    // has to be put back into world space before a previous frame's view-projection can be applied
-    // to it. This binding is named `t_position_rel_camera` rather than `t_position_rel_camera`, which is how it
-    // was missed when that target's convention changed.
-    camera_pos:     vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> params:     TaaParams;
@@ -22,6 +16,9 @@ struct TaaParams {
 @group(0) @binding(3) var t_position_rel_camera: texture_2d<f32>;  // world-position G-buffer
 @group(0) @binding(4) var s_linear:   sampler;          // bilinear — for history
 @group(0) @binding(5) var s_nearest:  sampler;          // nearest — for current / position
+// Where each pixel's surface was last frame, in screen UV: now − before, camera and object motion
+// together (`gbuffer.wgsl`, `crate::motion`).
+@group(0) @binding(6) var t_velocity: texture_2d<f32>;
 
 // Shared fullscreen-triangle vertex shader
 @vertex
@@ -44,21 +41,29 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     let current_uv = uv + params.jitter * vec2<f32>(0.5, -0.5);
     let current = textureSample(t_current, s_linear, current_uv).rgb;
 
-    // ── Reproject: find where this world-space point was last frame ───────────
-    var history_uv = uv; // fallback: no movement
-    let pos_samp = textureLoad(t_position_rel_camera, iuv, 0);
-    if (pos_samp.w >= 0.5) {
-        let prev_clip =
-            params.prev_view_proj * vec4(pos_samp.xyz + params.camera_pos.xyz, 1.0);
-        if (prev_clip.w > 0.001) {
-            // The position here is the surface the JITTERED raster found at this pixel, which the
-            // unjittered projection puts at uv − jitter, not uv. What has moved is the difference of
-            // two unjittered projections of that one point — so the jitter goes back on: a still
-            // scene reads its history at uv, not one sub-pixel step off it every frame. Without it the
-            // history (nine tenths of every pixel) was resampled at a shifting offset, and a still
-            // scene shimmered along every edge whatever the blend weight.
-            let ndc = prev_clip.xy / prev_clip.w;
-            history_uv = vec2(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5) + params.jitter * vec2<f32>(0.5, -0.5);
+    // ── Reproject: where this pixel's surface was last frame ──────────────────
+    // The velocity is that of the surface the jittered raster found here, between two unjittered
+    // projections of it; the jitter offsets of "where it is" and "where it was" cancel, so the history
+    // is read at uv − velocity. It reprojected through the previous view-projection alone until
+    // 2026-11-14, which knows the camera's motion and not an object's: a piece sliding across the
+    // chess board left a dark ghost where it had been (`taa_does_not_trail_a_moving_object`).
+    //
+    // The velocity is the nearest surface's in the 3×3 around this pixel: where a moving object has
+    // just uncovered the floor, the floor pixel takes the object's motion and reads its history from
+    // behind where the object came from — the floor — instead of from its own place, which last frame
+    // was the object (a bright band trailing a moving piece).
+    let last_px = vec2<i32>(textureDimensions(t_current)) - vec2<i32>(1);
+    var history_uv = uv; // fallback: no surface here or around (the sky)
+    var nearest = 1e30;
+    for (var vy = -1; vy <= 1; vy++) {
+        for (var vx = -1; vx <= 1; vx++) {
+            let at = clamp(iuv + vec2(vx, vy), vec2<i32>(0), last_px);
+            let p = textureLoad(t_position_rel_camera, at, 0);
+            let d = dot(p.xyz, p.xyz);
+            if (p.w >= 0.5 && d < nearest) {
+                nearest = d;
+                history_uv = uv - textureLoad(t_velocity, at, 0).xy;
+            }
         }
     }
 
@@ -80,7 +85,13 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     history = clamp(history, c_min, c_max);
 
     // ── Temporal blend ────────────────────────────────────────────────────────
-    let resolved = mix(history, current, params.alpha);
+    // How much of this frame goes in follows how far the point moved: a still pixel keeps more of its
+    // history (1/20), so the jitter cycle's edge samples average out instead of showing through as a
+    // shimmer (at 1/10 an edge kept about an eighth of the cycle's swing); a moving one takes up to
+    // 1/5, so it does not trail. `params.alpha` is 1 when there is no history to keep.
+    let moved = length((history_uv - uv) * dims);
+    let weight = select(mix(0.05, 0.2, clamp(moved * 0.5, 0.0, 1.0)), 1.0, params.alpha >= 1.0);
+    let resolved = mix(history, current, weight);
     return vec4(resolved, 1.0);
 }
 
