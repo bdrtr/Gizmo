@@ -12,9 +12,8 @@
 //! - An [`AnimationStateMachine`] on an entity that has **no** `Skeleton` component is inert.
 //!   The driver bails out before advancing anything, so the playhead never moves and queued
 //!   triggers are never evaluated.
-//! - No engine-side plugin schedules that driver. `gizmo-studio` runs only the simple
-//!   [`super::AnimationPlayer`] system, so an app that wants the FSM has to call
-//!   `animation_state_machine_update_system` itself each frame with the frame's `dt`.
+//! - The engine's frame driver runs it (in the game's and the editor's draw paths alike), after
+//!   the [`super::AnimationPlayer`] driver; an entity carrying both is a caller error.
 //!
 //! Nothing here validates the graph, and nothing panics. An unknown
 //! [`AnimationStateMachine::current_state`] or an out-of-range [`AnimationState::clip_index`]
@@ -29,7 +28,7 @@ use super::clip::AnimationClip;
 use std::sync::Arc;
 
 /// A single state in the animation state machine — names one clip.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnimationState {
     /// The key this state is addressed by: [`AnimationTransition::from`],
     /// [`AnimationTransition::to`] and [`AnimationStateMachine::current_state`] all hold this
@@ -68,7 +67,7 @@ pub struct AnimationState {
 }
 
 /// A directed transition between two named states.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnimationTransition {
     /// Source state name (`"*"` matches any state).
     pub from: String,
@@ -86,7 +85,7 @@ pub struct AnimationTransition {
 }
 
 /// Per-entity state tracked while a cross-fade blend is in progress.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ActiveBlend {
     /// Index into [`AnimationStateMachine::clips`] of the outgoing clip, captured from
     /// [`AnimationStateMachine::current_clip_index`] when the blend started (falling back to
@@ -205,7 +204,7 @@ impl ActiveBlend {
 ///     Some("run")
 /// );
 /// ```
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct AnimationStateMachine {
     /// The clip pool every [`AnimationState::clip_index`] indexes into.
     ///
@@ -213,6 +212,13 @@ pub struct AnimationStateMachine {
     /// used by every entity playing that rig: cloning this component (which the ECS does)
     /// copies a refcount, not the animation data. An empty pool makes the driver skip the
     /// entity entirely — the playhead does not even advance.
+    ///
+    /// Not saved with a scene: the clips are the model's data, given back by what made the
+    /// machine's model — for a glTF model, `gizmo_renderer::gltf_model::resolve_gltf_models`, from
+    /// the file (with the scene's clip edits, if it has some), as for an `AnimationPlayer`.
+    /// Everything else here — the graph, the state, the playhead, a blend in flight, triggers not
+    /// yet read — is saved.
+    #[serde(skip)]
     pub clips: Arc<[AnimationClip]>,
 
     /// Every state the machine can occupy.
@@ -262,6 +268,7 @@ pub struct AnimationStateMachine {
     /// Triggers queued by [`trigger`](Self::trigger) since the last update, in call order.
     /// Neither merged nor de-duplicated — [`drain_triggers`](Self::drain_triggers) empties the
     /// whole batch once per update.
+    #[serde(default)]
     pending_triggers: Vec<String>,
 }
 

@@ -88,6 +88,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Tweens and animation state machines are saved where they had got to.** `Tween` keeps the start it took, the time
+  spent and the delay left, so a door half way open goes on along the same eased path after a reopen
+  (`a_tween_goes_on_along_the_same_path`, compared frame by frame with the original). `AnimationStateMachine` keeps its
+  graph, its state, its playhead, a cross-fade in flight and triggers not yet read; its clips are the model's, as an
+  `AnimationPlayer`'s are, and `resolve_gltf_models` gives them back — to the machine, without adding a player that
+  would fight it for the skeleton. `a_state_machine_reopens_in_the_middle_of_its_blend` draws a model a quarter of the
+  way through a blend, saves it, and draws it again byte for byte from a fresh renderer and world; it fails with the
+  registration taken out, with the clips not given back, and with the blend left out of the file.
+  `scene_fidelity`: 121 components, 23 open — `TwoBoneIkChain` (next: applied by the engine), UI.
+
 - **Behaviour trees are data: saved mid-run, and edited in the inspector** (decided 2026-11-14). A tree held closures
   (`Box<dyn BtNode>`), so a scene could not keep one: a save dropped every agent's behaviour, and the editor's ⏹ —
   which restores the world from a snapshot — emptied every agent it had; `Clone` gave an empty tree. Now:

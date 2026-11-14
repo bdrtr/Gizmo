@@ -67,7 +67,7 @@ impl Repeat {
 
 /// The parts of a `Transform` a tween drives. A part not set is left alone, so a tween of the
 /// position does not fight an animation of the rotation.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 struct Pose {
     position: Option<Vec3>,
     rotation: Option<Quat>,
@@ -79,7 +79,10 @@ struct Pose {
 /// The start is taken from the entity the first frame the tween runs, so a tween can be built
 /// before anyone knows where the entity will be (and replacing a running tween with a new one
 /// starts the new one from wherever the old one had got to — no jump).
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Saved with a scene, where it had got to included: the start it took, the time spent, the delay
+/// left — a tween reopened half way goes on from half way, along the same path.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Tween {
     from: Option<Pose>,
     to: Pose,

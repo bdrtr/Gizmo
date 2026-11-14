@@ -13512,6 +13512,121 @@ fn material_surface(input: SurfaceInput) -> Surface {
         let _ = std::fs::remove_file(&scene_path);
     }
 
+    /// **A model driven by a state machine reopens in the middle of its cross-fade.** The skinned
+    /// model's player is replaced by a machine with two states over its one clip — `rest` held at the
+    /// start, `bent` at the end — caught a quarter of the way through the blend between them (the
+    /// test world's clock is stopped, so it stays there). That pose is neither state's; saved,
+    /// reopened by a fresh renderer and world, it is drawn byte for byte. The clips are not in the
+    /// file: `resolve_gltf_models` gives them back to the machine, and gives the model no player to
+    /// fight it.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_state_machine_reopens_in_the_middle_of_its_blend() {
+        use gizmo_renderer::components::{
+            ActiveBlend, AnimationPlayer, AnimationState, AnimationStateMachine, AnimationTransition,
+        };
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let model = write_skinned_gltf();
+        let scene_path = format!("{model}.machine.scene");
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            {
+                let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                commands.spawn_gltf(Vec3::ZERO, &model, false).expect("the model loads");
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            let (root, clips) = {
+                let players = world.query::<(gizmo_core::Entity, &AnimationPlayer)>();
+                let (root, player) = players.iter().next().expect("the model has a player");
+                (root, player.animations.clone())
+            };
+            world.remove_component::<AnimationPlayer>(root);
+            let state = |name: &str| AnimationState { name: name.into(), clip_index: 0, looped: false, speed: 0.0 };
+            let mut machine = AnimationStateMachine::new(
+                "rest",
+                clips,
+                vec![state("rest"), state("bent")],
+                vec![AnimationTransition {
+                    from: "rest".into(),
+                    to: "bent".into(),
+                    blend_duration: 1.0,
+                    trigger: Some("bend".into()),
+                    has_exit_time: false,
+                }],
+            );
+            machine.active_blend = Some(ActiveBlend {
+                from_clip: 0,
+                to_clip: 0,
+                from_time: 0.0,
+                to_time: 1.0,
+                elapsed: 0.25,
+                duration: 1.0,
+                to_state: "bent".into(),
+                to_looped: false,
+                to_speed: 0.0,
+            });
+            world.add_component(root, machine);
+            let blending = render_world(&mut renderer, &mut world).await;
+            {
+                let mut machines = world.query_mut::<&mut AnimationStateMachine>();
+                let mut m = machines.get_mut(root).unwrap();
+                m.active_blend = None;
+            }
+            let rest = render_world(&mut renderer, &mut world).await;
+            let (between, total) = changed_pixels(&rest, &blending, 128);
+            assert!(between >= 50, "a quarter of the way to the bent pose drew like the rest pose ({between}/{total})");
+            {
+                let mut machines = world.query_mut::<&mut AnimationStateMachine>();
+                let mut m = machines.get_mut(root).unwrap();
+                m.active_blend = Some(ActiveBlend {
+                    from_clip: 0,
+                    to_clip: 0,
+                    from_time: 0.0,
+                    to_time: 1.0,
+                    elapsed: 0.25,
+                    duration: 1.0,
+                    to_state: "bent".into(),
+                    to_looped: false,
+                    to_speed: 0.0,
+                });
+            }
+            crate::scene::SceneData::save(&world, &scene_path, &crate::full_scene_registry()).expect("saves");
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &crate::full_scene_registry()).expect("loads");
+            {
+                let manager = renderer.asset_manager.clone();
+                let mut assets = manager.write().unwrap();
+                crate::renderer::asset_loading::run_asset_loading_system(
+                    &mut world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    &mut assets,
+                );
+            }
+            let reopened = render_world(&mut renderer, &mut world).await;
+            assert!(
+                world.query::<&AnimationPlayer>().iter().next().is_none(),
+                "the reopened model was given a player beside its state machine"
+            );
+            let (changed, total) = changed_pixels(&blending, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened model is not where its blend was: {changed}/{total} pixels differ");
+        });
+        let _ = std::fs::remove_file(&scene_path);
+    }
+
     /// **A model's clips, edited in the editor, are what a reopened scene plays.** The skinned model's
     /// clip turned the other way (its last rotation key mirrored, as a timeline edit leaves a clip),
     /// held half way and drawn; saved; reopened by a fresh renderer and world: the edited pose, byte for

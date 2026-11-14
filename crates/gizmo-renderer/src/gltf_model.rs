@@ -23,7 +23,7 @@ use std::sync::Arc;
 use gizmo_core::component::{Children, MeshSource};
 use gizmo_core::{Entity, World};
 
-use crate::components::{AnimationPlayer, Skeleton};
+use crate::components::{AnimationPlayer, AnimationStateMachine, Skeleton};
 use gizmo_animation::skeletal::AnimationClip;
 
 /// The file a glTF model was spawned from, on its root entity. Saved with a scene.
@@ -120,8 +120,9 @@ pub fn sync_clip_edits(world: &mut World) {
 
 /// Gives every [`GltfModel`] that has come back from a scene file what the file holds and the scene
 /// does not: a [`Skeleton`] on the root and on each skinned mesh (found by its `MeshSource`, among
-/// the root's descendants), and the clips of its [`AnimationPlayer`] — the saved player's, whose
-/// state is kept, or a new one when none was saved. Each model once; the file is imported once per
+/// the root's descendants), and its clips: to the saved [`AnimationPlayer`], whose state is kept, or
+/// to the saved [`AnimationStateMachine`], whose state is kept too, or to a new player when neither
+/// was saved. Each model once; the file is imported once per
 /// path ([`AssetManager::gltf_scene`](crate::asset::AssetManager::gltf_scene)). A file that will not
 /// load is warned about, and the model stays as it was.
 pub fn resolve_gltf_models(world: &mut World, renderer: &crate::Renderer) {
@@ -205,7 +206,14 @@ pub fn resolve_gltf_models(world: &mut World, renderer: &crate::Renderer) {
                     p.animations = plays.clone();
                 }
             });
-            if saved.is_none() {
+            // A model driven by a state machine plays the same table through it — and gets no
+            // player of its own, which would fight the machine for the skeleton.
+            let machine = world.query_mut::<&mut AnimationStateMachine>().get_mut(root).map(|mut m| {
+                if m.clips.is_empty() {
+                    m.clips = plays.clone();
+                }
+            });
+            if saved.is_none() && machine.is_none() {
                 world.add_component(root, AnimationPlayer { animations: plays.clone(), ..Default::default() });
             }
             world.add_component(root, FileClips(file));

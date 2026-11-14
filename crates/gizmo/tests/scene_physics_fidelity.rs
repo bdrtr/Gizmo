@@ -566,3 +566,33 @@ fn a_behaviour_tree_goes_on_from_where_it_was() {
     }
     assert_eq!(alarms.load(Ordering::SeqCst), 1, "1.03 s: the wait went on from 0.6 s, and the alarm went off");
 }
+
+/// A tween half way to its target — started from where the entity was, eased, after a delay — is
+/// saved and goes on along the same path: the start it took, the time it spent and the delay are
+/// the tween's, not the entity's, so a reopen that lost them would start over from wherever the
+/// entity stood.
+#[test]
+fn a_tween_goes_on_along_the_same_path() {
+    use gizmo::animation::tween::{tween_system, Ease, Tween};
+    let mut world = World::new();
+    let e = named(&mut world, "door");
+    world.add_component(e, Transform::new(Vec3::new(1.0, 0.0, 0.0)));
+    world.add_component(
+        e,
+        Tween::to_position(Vec3::new(1.0, 4.0, 0.0), 1.0).with_ease(Ease::InOutQuad).with_delay(0.2),
+    );
+    for _ in 0..30 {
+        tween_system(&mut world, DT);
+    }
+    let at_save = position(&world, "door").y;
+    assert!(at_save > 0.3 && at_save < 3.7, "half way at the save ({at_save})");
+
+    let mut reopened = reopen(&world, |_| {});
+    for frame in 0..50 {
+        tween_system(&mut world, DT);
+        tween_system(&mut reopened, DT);
+        let (a, b) = (position(&world, "door"), position(&reopened, "door"));
+        assert!((a - b).length() < 1e-5, "frame {frame} after the reopen: {a} against {b}");
+    }
+    assert_eq!(position(&reopened, "door"), Vec3::new(1.0, 4.0, 0.0), "and it arrives");
+}

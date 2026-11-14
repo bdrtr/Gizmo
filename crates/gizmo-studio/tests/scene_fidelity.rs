@@ -68,7 +68,7 @@ const OPEN: &[&str] = &[
     // they close with the fluid being driven by them.
     "FluidSimulation", "FluidInteractor",
     // Animation
-    "AnimationStateMachine", "Tween", "TwoBoneIkChain",
+    "TwoBoneIkChain",
     // UI
     "UiRoot", "Node", "Style", "BackgroundColor", "ZIndex", "ClipContent", "Scroll", "Drag", "DropTarget", "Dropdown",
     "ProgressBar", "Slider", "Toggle", "Tooltip", "TextInput", "UiTransform", "UiTween", "VirtualButton", "VirtualStick",

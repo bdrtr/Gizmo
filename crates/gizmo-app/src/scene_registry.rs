@@ -102,6 +102,10 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::components::NoWireframe, "NoWireframe");
         reg_or_warn!(gizmo_renderer::components::CameraShake, "CameraShake");
         reg_or_warn!(gizmo_renderer::components::ColorTween, "ColorTween");
+        // A transform eased to a target, where it had got to; and a state machine's graph, state,
+        // playhead and blend — its clips are the model's, given back by `resolve_gltf_models`.
+        reg_or_warn!(gizmo_renderer::tween::Tween, "Tween");
+        reg_or_warn!(gizmo_renderer::components::AnimationStateMachine, "AnimationStateMachine");
         reg_or_warn!(gizmo_renderer::components::SpriteAnimation, "SpriteAnimation");
         // Saved in its faces by name (`text_sync`): "default", a path, or a name a game loads it under.
         reg_or_warn!(gizmo_renderer::components::Text, "Text");
