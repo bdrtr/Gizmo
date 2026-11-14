@@ -178,6 +178,26 @@ pub fn render_overrides(world: &World) -> Vec<(Entity, Mat4)> {
     out
 }
 
+/// Where `entity` is **drawn** this frame, as a local `Transform`: its pose blended between the last
+/// two steps, or its `Transform` as it is when it is not blended (no history, a teleport, not a moving
+/// body). What a camera following a body reads: the raw `Transform` holds still for a frame or two and
+/// then jumps a step, so a camera on it shakes the whole picture around a body drawn smoothly.
+#[must_use]
+pub fn drawn_transform(world: &World, entity: Entity) -> Option<Transform> {
+    let t = *world.get::<Transform>(entity)?;
+    let Some(history) = world.get_resource::<InterpolationHistory>() else { return Some(t) };
+    let Some(entry) = history.current(entity) else { return Some(t) };
+    if Pose::of(&t) != entry.after {
+        return Some(t);
+    }
+    let a = history.alpha;
+    let mut drawn = t;
+    drawn.position = entry.before.position.lerp(entry.after.position, a);
+    drawn.rotation = entry.before.rotation.slerp(entry.after.rotation, a);
+    drawn.scale = entry.before.scale.lerp(entry.after.scale, a);
+    Some(drawn)
+}
+
 /// Writes `overrides` into the world's `GlobalTransform`s and returns what they replaced, for
 /// [`restore`] after the draw.
 pub fn apply_overrides(world: &mut World, overrides: &[(Entity, Mat4)]) -> Vec<(Entity, Mat4)> {
@@ -343,6 +363,28 @@ mod tests {
         sync_transforms(&mut world);
         assert!(render_overrides(&world).iter().all(|(e, _)| *e != body), "the teleported body was blended");
         assert_eq!(drawn_x(&world, body), 100.0);
+    }
+
+    /// A camera following a body reads where it is drawn: `drawn_transform` is the blended pose the draw
+    /// uses, and advances evenly at 144 Hz where the raw `Transform` holds and jumps.
+    #[test]
+    fn a_follower_reads_where_the_body_is_drawn() {
+        let (mut world, body) = moving_body(6.0);
+        let mut physics = FixedPhysics::new(60);
+        let mut xs = Vec::new();
+        for frame in 0..200 {
+            physics.advance(&mut world, 1.0 / 144.0);
+            sync_transforms(&mut world);
+            let drawn = drawn_transform(&world, body).unwrap();
+            if frame == 100 {
+                let overridden = render_overrides(&world).into_iter().find(|(e, _)| *e == body).unwrap().1;
+                assert!((overridden.w_axis.truncate() - drawn.position).length() < 1e-5, "the draw and the follower disagree");
+            }
+            xs.push(drawn.position.x);
+        }
+        let (max, min) = spread(&xs[30..]);
+        let even = 6.0 / 144.0;
+        assert!((max - even).abs() < even * 0.05 && (min - even).abs() < even * 0.05, "a follower would shake: {min}..{max}");
     }
 
     /// What is under a body moves with it: a child is drawn by the body's change, the hierarchy not
