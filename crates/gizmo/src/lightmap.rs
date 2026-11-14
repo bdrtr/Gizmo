@@ -15,9 +15,44 @@ use gizmo_core::{Entity, World};
 use gizmo_math::{Mat4, Vec3};
 use gizmo_physics_core::components::GlobalTransform;
 use gizmo_renderer::components::{
-    DirectionalLight, LightmapReceiver, Material, MaterialDesc, Mesh, MeshRenderer, PointLight, ShadowCasting, SpotLight,
+    DirectionalLight, LightmapReceiver, Material, MaterialDesc, Mesh, MeshData, MeshRenderer, PointLight, ShadowCasting, SpotLight,
 };
 use gizmo_renderer::lightmap_bake::{BakeLight, BakeMesh, LightmapBake, LightmapError};
+use gizmo_renderer::lightmap_uv::{UnwrapError, UnwrapSettings};
+
+/// Why [`bake_lightmaps`] stopped. Nothing in the world is changed when it does.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum BakeWorldError {
+    /// The bake itself — a receiver with no second UV set the bake could lay out, a file that would
+    /// not write.
+    Bake(LightmapError),
+    /// A receiver made from `MeshData` with no second UV set, which the bake lays out
+    /// ([`gizmo_renderer::lightmap_uv::unwrap`]), could not be laid out.
+    CannotUnwrap {
+        /// The receiver.
+        entity: Entity,
+        /// Why.
+        reason: UnwrapError,
+    },
+}
+
+impl std::fmt::Display for BakeWorldError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Bake(e) => e.fmt(f),
+            Self::CannotUnwrap { entity, reason } => write!(f, "entity {}'s second UV set could not be laid out: {reason}", entity.id()),
+        }
+    }
+}
+
+impl std::error::Error for BakeWorldError {}
+
+impl From<LightmapError> for BakeWorldError {
+    fn from(e: LightmapError) -> Self {
+        Self::Bake(e)
+    }
+}
 
 /// One receiver [`bake_lightmaps`] baked: the entity, the picture it wrote, and the intensity it
 /// set beside it.
@@ -47,16 +82,19 @@ pub struct BakedReceiver {
 /// * **The lights:** every `DirectionalLight`, `PointLight` and `SpotLight`, placed by their
 ///   transforms. They are in the scene at run time, so their direct light is added there, every
 ///   frame — the bake takes only their **bounces**.
-/// * **The receivers:** a receiver's mesh needs its second UV set (`Vertex::lightmap_uv`); without
-///   one the bake stops with [`LightmapError::NothingCovered`] and writes nothing. Its lightmap is
-///   `lightmap_<entity>_<hash>.png` — the hash of the picture, so a bake that changes the light is a
+/// * **The receivers:** a receiver's mesh needs its second UV set (`Vertex::lightmap_uv`). One made in
+///   code (`MeshData`) without one is given one ([`MeshData::with_lightmap_uvs`], at the receiver's
+///   resolution) and its `MeshData` replaced, so the loader uploads it again with the UVs; any other
+///   without one (a file with no `TEXCOORD_1`) stops the bake with [`LightmapError::NothingCovered`].
+///   Its lightmap is `lightmap_<entity>_<hash>.png` — the hash of the picture, so a bake that changes the light is a
 ///   new file the renderer loads rather than the one it has cached.
 ///
 /// Placement is where each entity is now, through its parents (`gizmo::systems::world_matrix`), so a
 /// scene baked before its first frame is where it will be drawn.
-pub fn bake_lightmaps(world: &mut World, mut bake: LightmapBake, dir: impl AsRef<Path>) -> Result<Vec<BakedReceiver>, LightmapError> {
+pub fn bake_lightmaps(world: &mut World, mut bake: LightmapBake, dir: impl AsRef<Path>) -> Result<Vec<BakedReceiver>, BakeWorldError> {
     let dir = dir.as_ref();
     let mut receivers = Vec::new();
+    let mut unwrapped: Vec<(Entity, MeshData)> = Vec::new();
     {
         // Where it is now, through its parents: a scene baked before its first frame has propagated
         // no `GlobalTransform` yet. An entity with no `Transform` is placed by its `GlobalTransform`.
@@ -67,6 +105,7 @@ pub fn bake_lightmaps(world: &mut World, mut bake: LightmapBake, dir: impl AsRef
         let descs = world.query::<&MaterialDesc>();
         let hidden = world.query::<&gizmo_core::component::IsHidden>();
         let receiving = world.query::<&LightmapReceiver>();
+        let mesh_data = world.query::<&MeshData>();
         #[cfg(feature = "physics")]
         let bodies = world.query::<&gizmo_physics_rigid::components::RigidBody>();
         let mut meshes: Vec<(Entity, Mesh, MeshRenderer)> =
@@ -87,10 +126,22 @@ pub fn bake_lightmaps(world: &mut World, mut bake: LightmapBake, dir: impl AsRef
                 (None, Some(d)) => (d.albedo.truncate(), d.emissive),
                 (None, None) => (Vec3::splat(0.8), Vec3::ZERO),
             };
-            let mut baked = BakeMesh::from_mesh(&mesh, at).with_albedo(albedo).with_emissive(emissive);
+            let mut baked = BakeMesh::from_mesh(&mesh, at);
             if let Some(r) = receiving.get(entity) {
+                // Made in code with no second UV set: laid out here, baked onto, and given back to
+                // the entity once the bake has worked, so the loader uploads it with the UVs.
+                if mesh.cpu_lightmap.is_none() {
+                    if let Some(data) = mesh_data.get(entity).filter(|d| !d.has_lightmap_uvs()) {
+                        let settings = UnwrapSettings::default().with_resolution(r.width.min(r.height));
+                        let laid_out =
+                            data.with_lightmap_uvs(&settings).map_err(|reason| BakeWorldError::CannotUnwrap { entity, reason })?;
+                        baked = BakeMesh::new(laid_out.vertices().to_vec(), at);
+                        unwrapped.push((entity, laid_out));
+                    }
+                }
                 baked = baked.receiving(r.width, r.height);
             }
+            let baked = baked.with_albedo(albedo).with_emissive(emissive);
             let id = bake.add_mesh(baked);
             if receiving.get(entity).is_some() {
                 receivers.push((entity, id));
@@ -116,6 +167,7 @@ pub fn bake_lightmaps(world: &mut World, mut bake: LightmapBake, dir: impl AsRef
     }
 
     let baked = bake.run()?;
+    // Every file first, the world after: a bake that cannot write leaves the scene as it was.
     std::fs::create_dir_all(dir).map_err(|e| LightmapError::Write(format!("{}: {e}", dir.display())))?;
     let mut out = Vec::with_capacity(receivers.len());
     for (entity, id) in receivers {
@@ -123,16 +175,21 @@ pub fn bake_lightmaps(world: &mut World, mut bake: LightmapBake, dir: impl AsRef
         let (bytes, _) = map.to_rgba8();
         let path = dir.join(format!("lightmap_{}_{:016x}.png", entity.id(), fnv1a(&bytes)));
         let intensity = map.save_png(&path)?;
-        let name = path.to_string_lossy().into_owned();
-        if let Some(mut m) = world.query_mut::<&mut Material>().get_mut(entity) {
-            m.maps.lightmap = Some(name.clone());
-            m.maps.lightmap_intensity = intensity;
-        }
-        if let Some(mut d) = world.query_mut::<&mut MaterialDesc>().get_mut(entity) {
-            d.maps.lightmap = Some(name.clone());
-            d.maps.lightmap_intensity = intensity;
-        }
         out.push(BakedReceiver { entity, path, intensity });
+    }
+    for (entity, data) in unwrapped {
+        world.add_component(entity, data);
+    }
+    for b in &out {
+        let name = b.path.to_string_lossy().into_owned();
+        if let Some(mut m) = world.query_mut::<&mut Material>().get_mut(b.entity) {
+            m.maps.lightmap = Some(name.clone());
+            m.maps.lightmap_intensity = b.intensity;
+        }
+        if let Some(mut d) = world.query_mut::<&mut MaterialDesc>().get_mut(b.entity) {
+            d.maps.lightmap = Some(name);
+            d.maps.lightmap_intensity = b.intensity;
+        }
     }
     Ok(out)
 }
@@ -282,6 +339,42 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// A receiver made in code with no second UV set is laid out by the bake: it bakes, its
+    /// `MeshData` is replaced by one with the UVs (for the loader to upload), and the floor beside a
+    /// cube on it is lit where the sky reaches and dark under the cube.
+    #[test]
+    fn a_receiver_made_in_code_is_given_its_uvs() {
+        let gpu = gpu();
+        let dir = std::env::temp_dir().join(format!("gizmo-lightmap-test-unwrap-{}", std::process::id()));
+        let mut world = World::new();
+        let data = MeshData::new(floor(false));
+        let ground = spawn(&mut world, &gpu, Mesh::from_vertices(&gpu.device, data.vertices(), "floor"), Transform::new(Vec3::ZERO));
+        world.add_component(ground, data);
+        world.add_component(ground, LightmapReceiver::new(32, 32));
+        spawn(
+            &mut world,
+            &gpu,
+            gizmo_renderer::asset::AssetManager::create_cube(&gpu.device),
+            Transform::new(Vec3::new(0.0, 0.5, 0.0)).with_scale(Vec3::splat(0.5)),
+        );
+        let b = bake_lightmaps(&mut world, bake(), &dir).expect("the bake lays the floor out").remove(0);
+        let laid_out = world.get::<MeshData>(ground).unwrap();
+        assert!(laid_out.has_lightmap_uvs(), "the entity's MeshData was not given the UVs");
+        // Where the floor's centre and a corner landed in the lightmap.
+        let at = |p: [f32; 3]| {
+            let v = laid_out.vertices().iter().find(|v| v.position == p).unwrap();
+            ((v.lightmap_uv[0] * 32.0) as u32, (v.lightmap_uv[1] * 32.0) as u32)
+        };
+        let (cx, cy) = at([-4.0, 0.0, -4.0]);
+        let image = image::open(&b.path).unwrap().to_rgba8();
+        let corner = f32::from(image.get_pixel(cx.min(31), cy.min(31))[0]) / 255.0 * b.intensity;
+        assert!(corner > 0.8, "the floor's open corner is {corner}");
+        // The floor's middle is under the cube: dark, somewhere inside the chart.
+        let all: Vec<f32> = image.pixels().map(|p| f32::from(p[0]) / 255.0 * b.intensity).collect();
+        assert!(all.iter().any(|&t| t < 0.05), "nothing under the cube was dark");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// A receiver whose mesh has no second UV set stops the bake with the error that says so.
     #[test]
     fn a_receiver_without_a_second_uv_set_is_an_error() {
@@ -290,7 +383,7 @@ mod tests {
         let ground = spawn(&mut world, &gpu, Mesh::from_vertices(&gpu.device, &floor(false), "floor"), Transform::new(Vec3::ZERO));
         world.add_component(ground, LightmapReceiver::new(8, 8));
         let err = bake_lightmaps(&mut world, bake(), std::env::temp_dir().join("gizmo-lightmap-unused")).unwrap_err();
-        assert!(matches!(err, LightmapError::NothingCovered { .. }), "{err:?}");
+        assert!(matches!(err, BakeWorldError::Bake(LightmapError::NothingCovered { .. })), "{err:?}");
         assert!(world.get::<Material>(ground).unwrap().maps.lightmap.is_none());
     }
 

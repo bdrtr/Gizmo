@@ -318,9 +318,10 @@ impl std::fmt::Display for LightmapError {
             Self::TooLarge { mesh } => write!(f, "mesh {} asked for a lightmap over {MAX_LIGHTMAP_SIZE} texels a side", mesh.0),
             Self::NothingCovered { mesh } => write!(
                 f,
-                "no texel of mesh {}'s lightmap lies on a triangle: its second UV set (Vertex::lightmap_uv) is missing or outside 0..1",
+                "no texel of mesh {}'s lightmap lies on a triangle: its second UV set (Vertex::lightmap_uv) is missing or outside 0..1 — lay one out with lightmap_uv::unwrap",
                 mesh.0
             ),
+
             Self::Write(e) => write!(f, "the lightmap could not be written: {e}"),
         }
     }
@@ -697,10 +698,8 @@ impl<'a> Scene<'a> {
             let p = origin + dir * t;
             let n = tri.shading_normal(u, v);
             let mut arriving = self.direct(p, n, tri.normal, false);
-            let next = cosine_sample(n, rng.next(), rng.next());
-            if next.dot(tri.normal) > 0.0 {
-                arriving += self.incoming(p + tri.normal * self.bias, next, depth + 1, bounces, rng);
-            }
+            let next = above(cosine_sample(n, rng.next(), rng.next()), tri.normal);
+            arriving += self.incoming(p + tri.normal * self.bias, next, depth + 1, bounces, rng);
             light += mesh.albedo * arriving;
         }
         light
@@ -792,6 +791,19 @@ fn cosine_sample(n: Vec3, a: f32, b: f32) -> Vec3 {
     let (x, y) = (r * phi.cos(), r * phi.sin());
     let z = (1.0 - a).max(0.0).sqrt();
     (t * x + bt * y + n * z).normalize_or(n)
+}
+
+/// `dir`, mirrored up through the surface's plane if it points below it. A smooth (vertex) normal
+/// leans off the face's, so some of the rays around it start into the surface; counted as black,
+/// they darkened every curved surface — a lone sphere under a uniform sky baked 15/16 of the sky at
+/// 16 rays. Mirrored, each still samples the sky the surface faces.
+fn above(dir: Vec3, geo: Vec3) -> Vec3 {
+    let d = dir.dot(geo);
+    if d > 1e-4 {
+        dir
+    } else {
+        (dir - geo * (2.0 * d - 1e-3)).normalize_or(geo)
+    }
 }
 
 /// A small, fast generator (SplitMix64), seeded per texel so the bake does not depend on threads.
@@ -921,10 +933,7 @@ fn trace_all(scene: &Scene<'_>, settings: &BakeSettings, mesh: u64, texels: &[Te
             } else {
                 (rng.next(), rng.next())
             };
-            let dir = cosine_sample(t.normal, a, b);
-            if dir.dot(t.geo) <= 0.0 {
-                continue;
-            }
+            let dir = above(cosine_sample(t.normal, a, b), t.geo);
             sum += scene.incoming(origin, dir, 0, settings.bounces, &mut rng);
         }
         sum / n as f32 + scene.direct(t.position, t.normal, t.geo, true)

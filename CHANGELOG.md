@@ -118,6 +118,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **Lightmap UVs made for a mesh** (`gizmo_renderer::lightmap_uv::unwrap`, `MeshData::with_lightmap_uvs`). Triangles
+  sharing an edge and facing within `max_angle` (66°) of a chart's first grow into one chart; each is projected along
+  that triangle's normal (none is turned over), split again at half the angle if it still lies over itself (a curling
+  strip, checked on a grid of strict-inside points; down to single triangles), turned to its smallest rectangle (rotating
+  calipers on the hull), and packed in rows on whole texels, `padding` texels apart, at one texel density over the mesh —
+  the largest that fits the resolution, or `UnwrapError::DoesNotFit`. `bake_lightmaps` lays out a receiver made in
+  code (`MeshData`) that has no second UV set at the receiver's resolution and gives the entity the new `MeshData`, which
+  the loader uploads; it now returns `BakeWorldError` (the bake's error, or `CannotUnwrap`), and changes the world only
+  after every file is written. **Fixed in the baker on the way:** a ray around a smooth normal that started into the
+  surface was counted as black, so every curved surface baked dark — a lone sphere under a uniform sky 15/16 of the sky
+  at 16 rays; it is mirrored up through the face's plane now. Tests: seven in `lightmap_uv` (a cube's six charts of one
+  density inside the padding, a cylinder's charts the padding apart, a sphere and a self-overlapping spiral with no texel
+  covered twice, the errors, and an unwrapped sphere that bakes the sky over every chart — the one that found the dark
+  rays), and `a_receiver_made_in_code_is_given_its_uvs`. **Breaks:** `bake_lightmaps` returns `BakeWorldError`.
+
 - **A scene's lightmaps baked from its world in one call** (`gizmo::lightmap::bake_lightmaps`, native). An entity with a
   `LightmapReceiver { width, height }` (saved with the scene) is baked, its PNG written to a directory and its
   material — `Material` and `MaterialDesc` alike — set to draw it, with the intensity. Everything drawn that casts takes

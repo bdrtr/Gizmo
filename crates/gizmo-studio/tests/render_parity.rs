@@ -1014,6 +1014,9 @@ fn every_capability_neither_path_names_is_accounted_for() {
         ("AnimationState", "a state machine's state; same guard."),
         ("AnimationTransition", "an edge between two of them; same guard."),
         ("SkeletonHierarchy", "the joint tree behind `Skeleton`, which both paths do name."),
+        // ── Read by the lightmap bake, not by a frame ────────────────────────────────────────
+        ("LightmapReceiver", "what `gizmo::lightmap::bake_lightmaps` bakes; the frame draws the map it sets on the material (`MaterialMaps::lightmap`), which both paths bind."),
+        ("LightmapCorner", "a `Mesh`'s CPU copy of its second UV set, for the bake; the GPU reads `Vertex::lightmap_uv` from the vertex buffer on both paths."),
         ("BoneAttachment", "read only inside `BoneAttachmentSystem` — which is precisely how it stayed editor-only until 2026-08-19. Both paths run that system now, and the driver guard is what holds them to it."),
 
         // ── Collected in `shared.rs`, which this scan excludes on purpose ──────────────────

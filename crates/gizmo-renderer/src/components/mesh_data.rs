@@ -63,6 +63,20 @@ impl MeshData {
         &self.vertices
     }
 
+    /// The same mesh with a second UV set laid out for a lightmap ([`crate::lightmap_uv::unwrap`]):
+    /// what a mesh made in code needs before it can be baked and drawn lightmapped.
+    pub fn with_lightmap_uvs(&self, settings: &crate::lightmap_uv::UnwrapSettings) -> Result<Self, crate::lightmap_uv::UnwrapError> {
+        let mut vertices = self.vertices.to_vec();
+        crate::lightmap_uv::unwrap(&mut vertices, settings)?;
+        Ok(Self::new(vertices))
+    }
+
+    /// Whether any vertex has a second UV set (`Vertex::lightmap_uv` not zero).
+    #[must_use]
+    pub fn has_lightmap_uvs(&self) -> bool {
+        self.vertices.iter().any(|v| v.lightmap_uv != [0.0, 0.0])
+    }
+
     /// The address the loader keys its shared upload on — the same for every clone. An address is a
     /// key only while its allocation lives, so whatever keeps one keeps a clone beside it: the
     /// upload cache does, and so does the loader's record of what an entity was uploaded from.

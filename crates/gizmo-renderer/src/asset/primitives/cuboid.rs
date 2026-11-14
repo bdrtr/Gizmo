@@ -132,6 +132,11 @@ impl crate::asset::AssetManager {
     /// Builds an ordinary cube mesh (outward-facing normals, correct for PBR lighting and
     /// shading).
     pub fn create_cube(device: &wgpu::Device) -> Mesh {
+        Mesh::new_indexed(device, &Self::cube_data(), Vec3::ZERO, "standard_cube".to_string())
+    }
+
+    /// [`create_cube`](Self::create_cube)'s triangle list, ±1 on every axis.
+    pub(crate) fn cube_data() -> Vec<Vertex> {
         let positions: [[f32; 3]; 8] = [
             [-1.0, -1.0, -1.0], // 0
             [1.0, -1.0, -1.0],  // 1
@@ -244,12 +249,7 @@ impl crate::asset::AssetManager {
             }
         }
 
-        Mesh::new_indexed(
-            device,
-            &vertices,
-            Vec3::ZERO,
-            "standard_cube".to_string(),
-        )
+        vertices
     }
 
     /// The translate gizmo's arrow — a shaft with a cone head, along +Y.
