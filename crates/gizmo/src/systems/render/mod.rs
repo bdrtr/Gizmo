@@ -14739,6 +14739,188 @@ fn material_surface(input: SurfaceInput) -> Surface {
         });
     }
 
+    /// A quad facing the camera whose second UV set spans its lightmap, with `desc` as its material
+    /// (a `MaterialDesc`, as a loaded scene has it), lit by nothing but the sky — so what it shows is
+    /// the ambient, or the lightmap in its place.
+    fn lightmapped_quad(world: &mut World, desc: gizmo_renderer::components::MaterialDesc) {
+        use gizmo_renderer::components::MeshData;
+        let corner = |x: f32, y: f32| gizmo_renderer::gpu_types::Vertex {
+            position: [x * 1.5, y * 1.5, 0.0],
+            normal: [0.0, 0.0, 1.0],
+            tex_coords: [x * 0.5 + 0.5, 0.5 - y * 0.5],
+            lightmap_uv: [x * 0.5 + 0.5, 0.5 - y * 0.5],
+            ..Default::default()
+        };
+        let quad = vec![corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        world.add_component(e, GlobalTransform::default());
+        world.add_component(e, MeshData::new(quad));
+        world.add_component(e, desc);
+        world.add_component(e, MeshRenderer::new());
+        world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+    }
+
+    /// A glTF quad facing +Z with two UV sets: the first left to right, the second **mirrored**
+    /// (right to left), as a baking tool lays a lightmap out its own way. Returns its path.
+    fn write_two_uv_gltf() -> String {
+        let dir = std::env::temp_dir().join(format!("gizmo-gltf-uv2-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let mut bin: Vec<u8> = Vec::new();
+        let f32s = |bin: &mut Vec<u8>, v: &[f32]| v.iter().for_each(|x| bin.extend_from_slice(&x.to_le_bytes()));
+        for p in [[-1.5f32, -1.5, 0.0], [1.5, -1.5, 0.0], [1.5, 1.5, 0.0], [-1.5, 1.5, 0.0]] {
+            f32s(&mut bin, &p); // 0..48
+        }
+        for _ in 0..4 {
+            f32s(&mut bin, &[0.0, 0.0, 1.0]); // 48..96
+        }
+        for uv in [[0.0f32, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]] {
+            f32s(&mut bin, &uv); // 96..128
+        }
+        for uv in [[1.0f32, 1.0], [0.0, 1.0], [0.0, 0.0], [1.0, 0.0]] {
+            f32s(&mut bin, &uv); // 128..160
+        }
+        for i in [0u16, 1, 2, 0, 2, 3] {
+            bin.extend_from_slice(&i.to_le_bytes()); // 160..172
+        }
+        std::fs::write(dir.join("quad.bin"), &bin).expect("bin");
+        let view = |offset: usize, length: usize| format!(r#"{{"buffer":0,"byteOffset":{offset},"byteLength":{length}}}"#);
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"Quad"}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,"TEXCOORD_1":3}},"indices":4,"material":0}}]}}],
+            "materials":[{{"pbrMetallicRoughness":{{"baseColorFactor":[0.9,0.9,0.9,1.0],"metallicFactor":0.0,"roughnessFactor":1.0}}}}],
+            "buffers":[{{"uri":"quad.bin","byteLength":{len}}}],
+            "bufferViews":[{v0},{v1},{v2},{v3},{v4}],
+            "accessors":[{{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[-1.5,-1.5,0.0],"max":[1.5,1.5,0.0]}},
+                         {{"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"}},
+                         {{"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"}},
+                         {{"bufferView":3,"componentType":5126,"count":4,"type":"VEC2"}},
+                         {{"bufferView":4,"componentType":5123,"count":6,"type":"SCALAR"}}]}}"#,
+            len = bin.len(),
+            v0 = view(0, 48), v1 = view(48, 48), v2 = view(96, 32), v3 = view(128, 32), v4 = view(160, 12),
+        );
+        let path = dir.join("quad.gltf");
+        std::fs::write(&path, json).expect("gltf");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// **A glTF model's second UV set is where its lightmap is read.** A quad whose second set
+    /// runs right to left, given the left-red lightmap on its material, is red on its **right**: the
+    /// lightmap is read at `TEXCOORD_1`, which the importer used to drop.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_gltf_models_second_uv_set_is_where_its_lightmap_is_read() {
+        use gizmo_renderer::components::MaterialMaps;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let model = write_two_uv_gltf();
+        let lightmap = write_lightmap();
+        let px = |f: &[u8], x: usize| {
+            let i = (64 * 128 + x) * 4;
+            [f[i] as i32, f[i + 1] as i32, f[i + 2] as i32]
+        };
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            {
+                let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                commands.spawn_gltf(Vec3::ZERO, &model, false).expect("the model loads");
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            render_world(&mut renderer, &mut world).await;
+            for mut m in world.query_mut::<&mut Material>().iter_mut() {
+                let mut maps: MaterialMaps = m.maps.clone();
+                maps.lightmap = Some(lightmap.clone());
+                m.maps = maps;
+            }
+            let frame = render_world(&mut renderer, &mut world).await;
+            let (l, r) = (px(&frame, 40), px(&frame, 88));
+            eprintln!("glTF quad: left {l:?} right {r:?}");
+            assert!(r[0] > r[1] + 60, "the right half, where the second UV set reads the red, is not red: {r:?}");
+            assert!(l.iter().sum::<i32>() < 80, "the left half, where the second set reads black, is lit: {l:?}");
+        });
+    }
+
+    /// A lightmap baked red on its left half and black on its right, read linear. Returns its path.
+    fn write_lightmap() -> String {
+        let dir = std::env::temp_dir().join(format!("gizmo-lightmap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let path = dir.join("baked.png");
+        image::RgbaImage::from_fn(64, 8, |x, _| if x < 32 { image::Rgba([230, 40, 40, 255]) } else { image::Rgba([0, 0, 0, 255]) })
+            .save(&path)
+            .expect("lightmap written");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// **A lightmap lights the surface with what was baked, in place of the ambient, on both paths,
+    /// and a scene keeps it.** A white quad lit by the sky alone is the same grey on both halves.
+    /// Given a lightmap red on the left and black on the right, read at its second UV set, the left is
+    /// red and the right goes dark — the baked light *replaces* the ambient, it is not added to it —
+    /// drawn deferred and drawn forward (a blended material) alike. Saved and reopened, the
+    /// lightmapped quad draws byte for byte: its material names the lightmap and its mesh keeps the
+    /// second UV set. Before 2026-11-14 the engine had no lightmap at all and dropped `TEXCOORD_1`.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_lightmap_lights_the_surface_with_what_was_baked() {
+        use gizmo_renderer::components::{BlendMode, MaterialDesc, MaterialMaps};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let lightmap = write_lightmap();
+        let white = MaterialDesc::default().with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 1.0, 0.0);
+        let baked = white.clone().with_maps(MaterialMaps::default().with_lightmap(lightmap.clone(), 1.0));
+        let px = |f: &[u8], x: usize| {
+            let i = (64 * 128 + x) * 4;
+            [f[i] as i32, f[i + 1] as i32, f[i + 2] as i32]
+        };
+        pollster::block_on(async {
+            let draw = |desc: MaterialDesc| async move {
+                draw_save_reopen(None, move |world, _| lightmapped_quad(world, desc)).await
+            };
+            let plain = draw(white.clone()).await;
+            let (l, r) = (px(&plain.drawn, 40), px(&plain.drawn, 88));
+            eprintln!("sky only: left {l:?} right {r:?}");
+            assert!(l.iter().sum::<i32>() > 60, "the sky does not light the quad — nothing for the lightmap to replace: {l:?}");
+            assert!((l[0] - r[0]).abs() < 8, "the sky lit the halves differently: {l:?} / {r:?}");
+
+            for (path, desc) in [("deferred", baked.clone()), ("forward", baked.clone().with_blend_mode(BlendMode::Alpha).with_transparent(true))] {
+                let lit = draw(desc).await;
+                let (bl, br) = (px(&lit.drawn, 40), px(&lit.drawn, 88));
+                eprintln!("{path}: left {bl:?} right {br:?}");
+                assert!(bl[0] > bl[1] + 60 && bl[0] > l[0], "{path}: the lightmap's red half is not drawn red: {bl:?} (sky only {l:?})");
+                assert!(
+                    br.iter().sum::<i32>() * 3 < r.iter().sum::<i32>(),
+                    "{path}: the black half kept the sky's light — the lightmap was added to the ambient, not put in its place: {br:?} (sky only {r:?})"
+                );
+                let (changed, total) = changed_pixels(&lit.drawn, &lit.reopened, 128);
+                assert_eq!(changed, 0, "{path}: the reopened lightmapped quad drew {changed}/{total} pixels otherwise");
+            }
+
+            // A baked-lit surface takes its light from the lightmap too, in place of its vertex
+            // colours (which are white here).
+            let baked_lit = MaterialDesc::default()
+                .with_baked_lit(Vec4::new(0.9, 0.9, 0.9, 1.0))
+                .with_maps(MaterialMaps::default().with_lightmap(lightmap.clone(), 1.0));
+            let unmapped = draw(MaterialDesc::default().with_baked_lit(Vec4::new(0.9, 0.9, 0.9, 1.0))).await;
+            let mapped = draw(baked_lit).await;
+            let (ul, ur) = (px(&unmapped.drawn, 40), px(&unmapped.drawn, 88));
+            let (ml, mr) = (px(&mapped.drawn, 40), px(&mapped.drawn, 88));
+            eprintln!("baked-lit: without {ul:?} / {ur:?}, with {ml:?} / {mr:?}");
+            assert!(ml[0] > ml[1] + 60, "a baked-lit surface's lightmap red half is not red: {ml:?}");
+            assert!(mr.iter().sum::<i32>() * 3 < ur.iter().sum::<i32>(), "a baked-lit surface's black half kept its vertex light: {mr:?} (without {ur:?})");
+        });
+    }
+
     /// One flat quad under a raking light. `mapped` binds a generated normal map through the
     /// builder; otherwise the two runs are identical, geometry included.
     async fn render_normal_mapped_quad(mapped: bool) -> Vec<u8> {

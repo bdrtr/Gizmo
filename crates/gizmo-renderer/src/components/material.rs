@@ -304,6 +304,17 @@ pub struct MaterialMaps {
     pub occlusion: Option<String>,
     /// How much of the occlusion map applies: 0 none, 1 all. glTF's `occlusionTexture.strength`.
     pub occlusion_strength: f32,
+    /// **Baked light**, as a picture: the light that reaches the surface from everything static —
+    /// the sun bouncing off the walls, the lamps that never move — worked out ahead of time, in a
+    /// baking tool, and laid over the mesh's **second** UV set (`Vertex::lightmap_uv`, glTF's
+    /// `TEXCOORD_1`). Read **linear** (it is a quantity of light, not a colour), and the surface's
+    /// albedo is lit by it in place of the ambient and the irradiance volume; the lights that are
+    /// on the scene still add their direct light and shadows, and reflections still show — so a
+    /// lightmap is what does not change, and the lights are what does.
+    pub lightmap: Option<String>,
+    /// How strong the lightmap is: 1 as baked. Its exposure, for a lightmap baked darker or
+    /// brighter than the scene is drawn.
+    pub lightmap_intensity: f32,
     /// The UV every texture of the material is read at, moved: scaled, then turned (radians), then
     /// offset. glTF's `KHR_texture_transform`. The identity by default.
     pub uv_scale: [f32; 2],
@@ -399,6 +410,8 @@ impl Default for MaterialMaps {
             emissive_factor: gizmo_math::Vec3::ONE,
             occlusion: None,
             occlusion_strength: 1.0,
+            lightmap: None,
+            lightmap_intensity: 1.0,
             uv_scale: [1.0, 1.0],
             uv_rotation: 0.0,
             uv_offset: [0.0, 0.0],
@@ -440,7 +453,11 @@ impl MaterialMaps {
     /// Whether no map is named: the material's bind group needs nothing but its base colour.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.normal.is_none() && self.metallic_roughness.is_none() && self.emissive.is_none() && self.occlusion.is_none()
+        self.normal.is_none()
+            && self.metallic_roughness.is_none()
+            && self.emissive.is_none()
+            && self.occlusion.is_none()
+            && self.lightmap.is_none()
     }
 
     /// The per-material constants the shader reads beside the maps: the strengths, with the emissive
@@ -455,6 +472,15 @@ impl MaterialMaps {
             crate::gpu_types::UvTransform { offset: self.uv_offset, rotation: self.uv_rotation, scale: self.uv_scale },
             0.0,
         )
+        .with_lightmap(if self.lightmap.is_some() { self.lightmap_intensity } else { 0.0 })
+    }
+
+    /// A lightmap, at `intensity` (1 as baked) — see [`lightmap`](Self::lightmap).
+    #[must_use]
+    pub fn with_lightmap(mut self, path: impl Into<String>, intensity: f32) -> Self {
+        self.lightmap = Some(path.into());
+        self.lightmap_intensity = intensity;
+        self
     }
 
     /// A normal map.

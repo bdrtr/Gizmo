@@ -117,6 +117,9 @@ impl crate::asset::AssetManager {
                     .map(|it| it.into_f32().collect())
                     .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
 
+                // The second set, for the lightmap (`Vertex::lightmap_uv`); none is zeroes.
+                let lightmap_uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(1).map(|it| it.into_f32().collect());
+
                 let joints: Option<Vec<[u16; 4]>> =
                     reader.read_joints(0).map(|it| it.into_u16().collect());
                 let weights: Option<Vec<[f32; 4]>> =
@@ -169,6 +172,7 @@ impl crate::asset::AssetManager {
                         joint_indices: j,
                         joint_weights: w,
                         tangent,
+                        lightmap_uv: lightmap_uvs.as_ref().and_then(|l| l.get(idx).copied()).unwrap_or([0.0; 2]),
                     }
                 };
 

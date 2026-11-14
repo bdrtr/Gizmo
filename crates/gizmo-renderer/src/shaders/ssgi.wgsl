@@ -48,8 +48,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let normal_roughness = textureLoad(t_normal_roughness, iuv, 0);
     let pos_sample = textureLoad(t_position_rel_camera, iuv, 0);
 
-    // Skip sky/unwritten pixels
-    if (pos_sample.w < 0.5) {
+    // Skip sky/unwritten pixels, and lightmapped ones (a negative roughness, `gbuffer.wgsl`): their
+    // bounced light is baked, and gathering it again here would count it twice.
+    if (pos_sample.w < 0.5 || normal_roughness.w < 0.0) {
         return vec4(0.0);
     }
 

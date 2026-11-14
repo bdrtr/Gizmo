@@ -253,7 +253,10 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let albedo    = albedo_metallic.rgb;
     let metallic  = albedo_metallic.a;
     let N         = normalize(normal_roughness.xyz);
-    let roughness = normal_roughness.a;
+    // Negative: the surface has a lightmap (`gbuffer.wgsl`), whose light is already in RT5 — no
+    // ambient and no irradiance volume for it here.
+    let lightmapped = normal_roughness.a < 0.0;
+    let roughness = abs(normal_roughness.a);
     // G-buffer position is camera-relative (see gbuffer.wgsl); put it back in world space.
     let world_pos = pos_sample.xyz + scene.camera_pos.xyz;
 
@@ -293,7 +296,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // 1. Diffuse IBL (Irradiance)
     let ambient_base = vec3<f32>(0.02, 0.02, 0.025);
     let irradiance = environment_irradiance(N, get_procedural_environment(N, 1.0)) + ambient_base;
-    var ambient = albedo * irradiance * (1.0 - metallic);
+    var ambient = select(albedo * irradiance * (1.0 - metallic), vec3<f32>(0.0), lightmapped);
     if (subsurface > 0.0) {
         ambient = subsurface_ambient(ambient, subsurface);
     }
@@ -506,7 +509,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // Added to `ambient` rather than replacing it: the constant ambient term is what a scene
     // without probes relies on, and taking it away would darken every existing scene the moment
     // this shipped. A scene that bakes GI is expected to lower its own ambient.
-    let indirect = gi_sample(world_pos, N) * albedo;
+    let indirect = select(gi_sample(world_pos, N) * albedo, vec3<f32>(0.0), lightmapped);
 
     // Emitted light: not lit, not clamped, fogged like the surface it leaves.
     let emitted = textureLoad(t_emissive_gbuf, iuv, 0).rgb;

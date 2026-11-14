@@ -197,6 +197,7 @@ fn spawn_chunks(world: &mut World, chunks: Vec<ProceduralChunk>, chunk_mat: &Mat
             max_pt = max_pt.max(local_pos);
             let n = chunk.normals[i];
             vertices.push(Vertex {
+                lightmap_uv: [0.0; 2],
                 position: [local_pos.x, local_pos.y, local_pos.z],
                 color: [0.8, 0.7, 0.6, 1.0],
                 normal: [n.x, n.y, n.z],

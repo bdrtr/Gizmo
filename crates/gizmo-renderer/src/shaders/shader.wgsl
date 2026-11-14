@@ -54,7 +54,7 @@
 #import gizmo::surface::{SurfaceInput}
 #import gizmo::custom_surface::{material_surface}
 #else
-#import gizmo::material::{evaluate_surface, surface_uv}
+#import gizmo::material::{evaluate_surface, surface_uv, baked_light}
 #endif
 #ifdef LOBES
 #import gizmo::surface::{surface_lobes}
@@ -180,13 +180,16 @@ struct VertexInput {
     @location(4) joint_indices: vec4<u32>,
     @location(5) joint_weights: vec4<f32>,
     @location(6) tangent: vec4<f32>,
+    @location(7) lightmap_uv: vec2<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec3<f32>,
     @location(1) normal: vec3<f32>,
-    @location(2) tex_coords: vec2<f32>,
+    // xy: the material's UV; zw: the lightmap's (`Vertex::lightmap_uv`), in one location — this
+    // shader's glass tier uses every location there is.
+    @location(2) tex_coords: vec4<f32>,
     @location(3) world_position: vec3<f32>,
     @location(4) inst_albedo: vec4<f32>,
     @location(5) inst_pbr: vec4<f32>,
@@ -225,9 +228,9 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
     out.color = input.color;
 #ifdef CUSTOM_SURFACE
     // What group 1 means is the game's: see `gbuffer.wgsl`.
-    out.tex_coords = input.tex_coords;
+    out.tex_coords = vec4<f32>(input.tex_coords, input.lightmap_uv);
 #else
-    out.tex_coords = surface_uv(input.tex_coords);
+    out.tex_coords = vec4<f32>(surface_uv(input.tex_coords), input.lightmap_uv);
 #endif
     
     let inst = instances[instance_idx];
@@ -336,7 +339,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
 #ifdef CUSTOM_SURFACE
     var input: SurfaceInput;
     input.world_position = in.world_position;
-    input.uv = in.tex_coords;
+    input.uv = in.tex_coords.xy;
     input.vertex_color = in.color;
     input.N = in.normal;
     input.T = in.tangent;
@@ -352,7 +355,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     return material_surface(input);
 #else
     return evaluate_surface(
-        in.tex_coords, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
+        in.tex_coords.xy, in.normal, in.tangent, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
     );
 #endif
 }
@@ -585,6 +588,16 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     irradiance = environment_irradiance(N, irradiance);
 #endif
     var ambient = albedo * (irradiance + ambient_base) * (1.0 - metallic);
+    // A lightmap's light (`MaterialMaps::lightmap`) stands in for the ambient and, below, the
+    // irradiance volume — as `deferred_lighting.wgsl` does with what `gbuffer.wgsl` hands it.
+#ifdef CUSTOM_SURFACE
+    let baked = vec4<f32>(0.0);
+#else
+    let baked = baked_light(in.tex_coords.zw);
+#endif
+    if (baked.w > 0.5) {
+        ambient = albedo * baked.rgb * (1.0 - metallic);
+    }
 #ifdef LOBES
     if (subsurface > 0.0) {
         ambient = subsurface_ambient(ambient, subsurface);
@@ -770,6 +783,9 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     // The baked probe grid, as the deferred shader adds it.
     indirect = gi_sample(in.world_position, N) * albedo;
 #endif
+    if (baked.w > 0.5) {
+        indirect = vec3<f32>(0.0);
+    }
     var final_color = ambient + indirect + total_lighting + specular_ibl + surface.emissive;
 
     // We render to an Rgba16Float HDR buffer. Tone mapping is handled in post_process.wgsl.

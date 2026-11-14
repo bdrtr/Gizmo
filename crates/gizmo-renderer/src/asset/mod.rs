@@ -420,6 +420,7 @@ impl AssetManager {
         mr_view: &wgpu::TextureView,
         emissive_view: &wgpu::TextureView,
         ao_view: &wgpu::TextureView,
+        lightmap_view: &wgpu::TextureView,
         params_buffer: &wgpu::Buffer,
         label: &str,
     ) -> Arc<wgpu::BindGroup> {
@@ -455,6 +456,10 @@ impl AssetManager {
                     binding: 6,
                     resource: params_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(lightmap_view),
+                },
             ],
         }))
     }
@@ -469,6 +474,7 @@ impl AssetManager {
     pub fn material<'a>() -> MaterialBuilder<'a> {
         MaterialBuilder {
             base: None,
+            lightmap: None,
             sampler: None,
             normal: None,
             metallic_roughness: None,
@@ -507,6 +513,7 @@ impl AssetManager {
             base_view,
             base_sampler,
             &d.flat_normal_view,
+            &d.white_view,
             &d.white_view,
             &d.white_view,
             &d.white_view,
@@ -1385,6 +1392,7 @@ pub struct MaterialBuilder<'a> {
     metallic_roughness: Option<&'a wgpu::TextureView>,
     emissive: Option<&'a wgpu::TextureView>,
     occlusion: Option<&'a wgpu::TextureView>,
+    lightmap: Option<&'a wgpu::TextureView>,
     params: Option<&'a wgpu::Buffer>,
     label: Option<&'a str>,
 }
@@ -1434,6 +1442,15 @@ impl<'a> MaterialBuilder<'a> {
     #[must_use]
     pub fn occlusion(mut self, view: &'a wgpu::TextureView) -> Self {
         self.occlusion = Some(view);
+        self
+    }
+
+    /// The lightmap: baked light in linear RGB, read at the mesh's second UV set
+    /// (`Vertex::lightmap_uv`). Shown only when the params say how strong it is
+    /// (`MaterialParams::with_lightmap`); unset, never read.
+    #[must_use]
+    pub fn lightmap(mut self, view: &'a wgpu::TextureView) -> Self {
+        self.lightmap = Some(view);
         self
     }
 
@@ -1498,6 +1515,7 @@ impl<'a> MaterialBuilder<'a> {
             self.metallic_roughness.unwrap_or(&d.white_view),
             self.emissive.unwrap_or(&d.white_view),
             self.occlusion.unwrap_or(&d.white_view),
+            self.lightmap.unwrap_or(&d.white_view),
             self.params.unwrap_or(&d.params_buffer),
             self.label.unwrap_or("material"),
         )

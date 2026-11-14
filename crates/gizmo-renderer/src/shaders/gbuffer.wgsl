@@ -12,7 +12,7 @@
 #import gizmo::surface::{SurfaceInput}
 #import gizmo::custom_surface::{material_surface}
 #else
-#import gizmo::material::{evaluate_surface, surface_uv}
+#import gizmo::material::{evaluate_surface, surface_uv, baked_light}
 #endif
 
 fn inverse_transpose_3x3(m: mat3x3<f32>) -> mat3x3<f32> {
@@ -65,13 +65,15 @@ struct VertexInput {
     @location(4) joint_indices: vec4<u32>,
     @location(5) joint_weights: vec4<f32>,
     @location(6) tangent:       vec4<f32>,
+    @location(7) lightmap_uv:   vec2<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color:         vec3<f32>,
     @location(1) normal:        vec3<f32>,
-    @location(2) tex_coords:    vec2<f32>,
+    // xy: the material's UV; zw: the lightmap's (`Vertex::lightmap_uv`), in one location.
+    @location(2) tex_coords:    vec4<f32>,
     @location(3) world_position: vec3<f32>,
     @location(4) inst_albedo:   vec4<f32>,
     @location(5) inst_pbr:      vec4<f32>,
@@ -110,9 +112,9 @@ fn vs_main(@builtin(instance_index) instance_idx: u32, input: VertexInput) -> Ve
 #ifdef CUSTOM_SURFACE
     // What group 1 means is the game's, so the material's UV transform is not applied here: a
     // surface that wants it calls `gizmo::material::standard_surface`, which does.
-    out.tex_coords = input.tex_coords;
+    out.tex_coords = vec4<f32>(input.tex_coords, input.lightmap_uv);
 #else
-    out.tex_coords = surface_uv(input.tex_coords);
+    out.tex_coords = vec4<f32>(surface_uv(input.tex_coords), input.lightmap_uv);
 #endif
 
     let inst  = instances[instance_idx];
@@ -192,7 +194,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
 #ifdef CUSTOM_SURFACE
     var input: SurfaceInput;
     input.world_position = in.world_position;
-    input.uv = in.tex_coords;
+    input.uv = in.tex_coords.xy;
     input.vertex_color = in.color;
     input.N = in.normal;
     input.T = in.world_tangent.xyz;
@@ -208,7 +210,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     return material_surface(input);
 #else
     return evaluate_surface(
-        in.tex_coords, in.normal, in.world_tangent.xyz, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
+        in.tex_coords.xy, in.normal, in.world_tangent.xyz, in.bitangent, in.color, in.inst_albedo, in.inst_pbr, in.inst_emissive.xyz,
     );
 #endif
 }
@@ -273,9 +275,20 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     let coat_rough_steps = round(clamp((in.inst_coat_roughness - 0.08) / 0.92, 0.0, 1.0) * 31.0);
     let packed_tangent_w = handedness * (1.0 + coat_steps * 32.0 + coat_rough_steps);
 
+    // **Baked light** (`MaterialMaps::lightmap`): what lands on the surface from everything static,
+    // so its diffuse share is light the surface gives back now — emitted, in RT5 — and the lighting
+    // pass must not add the ambient and the irradiance volume on top. It is told so by the
+    // roughness's sign: roughness is never below 0.05, so a negative one is free to mean "lightmapped".
+#ifdef CUSTOM_SURFACE
+    let baked = vec4<f32>(0.0);
+#else
+    let baked = baked_light(in.tex_coords.zw);
+#endif
+    let lightmapped = baked.w > 0.5;
+
     var out: GBufferOut;
     out.albedo_metallic  = vec4<f32>(albedo, metallic);
-    out.normal_roughness = vec4<f32>(N, roughness);
+    out.normal_roughness = vec4<f32>(N, select(roughness, -roughness, lightmapped));
     // **Stored relative to the camera, not in absolute world coordinates.** The four G-buffer
     // targets share a 32-byte-per-sample budget (4 + 8 + 8 + 8 = 28), so this one cannot be
     // Rgba32Float — but the budget is about the *bytes*, not about what goes in them. Absolute
@@ -307,6 +320,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) front: bool) -> GBufferOut {
     // .w: the F0 (`Material::reflectance`) times the tint's luminance, negative when
     // `MeshRenderer::receives_shadows == false`. The lighting pass reads both; see `dielectric_f0`.
     let f0 = dielectric_f0(in.inst_emissive.w) * tint_luminance;
-    out.emissive   = vec4<f32>(max(emissive, vec3<f32>(0.0)), select(f0, -f0, in.inst_emissive.w < 0.0));
+    let baked_diffuse = albedo * baked.rgb * (1.0 - metallic);
+    out.emissive   = vec4<f32>(max(emissive, vec3<f32>(0.0)) + baked_diffuse, select(f0, -f0, in.inst_emissive.w < 0.0));
     return out;
 }

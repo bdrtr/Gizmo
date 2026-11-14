@@ -245,7 +245,8 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
     // carries the scalar `MaterialParams` (emissive factor, normal scale, AO
     // strength). Forward/decal shaders that only reference bindings 0/1 remain
     // valid — wgpu permits a layout with more entries than a shader uses — but
-    // every bind group built against this layout MUST populate all seven entries
+    // every bind group built against this layout MUST populate all eight entries (binding 7 is
+    // the lightmap)
     // (see `AssetManager::assemble_material_bind_group`).
     let filterable_tex = |binding: u32| wgpu::BindGroupLayoutEntry {
         binding,
@@ -281,6 +282,8 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 },
                 count: None,
             },
+            // The lightmap: baked light, read at the vertex's second UV set (`Vertex::lightmap_uv`).
+            filterable_tex(7),
         ],
     });
 

@@ -99,6 +99,7 @@ fn push_tri(verts: &mut Vec<Vertex>, a: Vec3, b: Vec3, c: Vec3, col: [f32; 4]) {
         tex_coords: [0.0, 0.0],
         joint_indices: [0; 4],
         joint_weights: [0.0; 4],
+        lightmap_uv: [0.0; 2],
     };
     verts.push(mk(a, n));
     verts.push(mk(b, n));

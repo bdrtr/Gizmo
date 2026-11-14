@@ -234,6 +234,8 @@ impl super::AssetManager {
         let metallic_roughness = view(&maps.metallic_roughness, false, "metallic-roughness");
         let emissive = view(&maps.emissive, true, "emissive");
         let occlusion = view(&maps.occlusion, false, "occlusion");
+        // Baked light is a quantity of light, not a colour on a surface: read linear.
+        let lightmap = view(&maps.lightmap, false, "lightmap");
         let params = {
             use wgpu::util::DeviceExt;
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -273,6 +275,9 @@ impl super::AssetManager {
         }
         if let Some(v) = occlusion.as_deref() {
             builder = builder.occlusion(v);
+        }
+        if let Some(v) = lightmap.as_deref() {
+            builder = builder.lightmap(v);
         }
         let bind_group = builder.build(self, device, queue, layout);
         self.material_cache.insert(key, bind_group.clone());
@@ -385,6 +390,7 @@ impl super::AssetManager {
             &d.white_view,
             &d.sampler,
             &d.flat_normal_view,
+            &d.white_view,
             &d.white_view,
             &d.white_view,
             &d.white_view,

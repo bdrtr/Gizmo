@@ -14,7 +14,7 @@ struct MaterialParams {
     emissive_and_normal_scale: vec4<f32>,
     // x = occlusion (AO) strength; y = UV rotation (radians); zw = UV offset.
     occlusion_uv_rot_offset: vec4<f32>,
-    // xy = UV scale; z = alpha cutoff (glTF Mask; 0 = no cutout); w reserved.
+    // xy = UV scale; z = alpha cutoff (glTF Mask; 0 = no cutout); w = lightmap strength (0 = none).
     uv_scale: vec4<f32>,
 };
 
@@ -25,6 +25,19 @@ struct MaterialParams {
 @group(1) @binding(4) var t_emissive: texture_2d<f32>;
 @group(1) @binding(5) var t_ao:       texture_2d<f32>;  // r=occlusion
 @group(1) @binding(6) var<uniform> material: MaterialParams;
+@group(1) @binding(7) var t_lightmap: texture_2d<f32>; // baked light, linear, at the second UV set
+
+// The material's baked light where its lightmap puts `lightmap_uv` (the vertex's second UV set,
+// untransformed): rgb the light, times the material's strength, and `w` 1 when the material has a
+// lightmap at all. With one, that light stands in for the ambient and the irradiance volume — both
+// paths do the same with it (`gbuffer.wgsl` and `deferred_lighting.wgsl`, `shader.wgsl`).
+fn baked_light(lightmap_uv: vec2<f32>) -> vec4<f32> {
+    let strength = material.uv_scale.w;
+    if (strength <= 0.0) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(textureSample(t_lightmap, s_diffuse, lightmap_uv).rgb * strength, 1.0);
+}
 
 // KHR_texture_transform: scale, then rotate, then translate the UV (matrix = translation * rotation
 // * scale, per the extension's reference). For the VERTEX stage: it is linear, so it interpolates

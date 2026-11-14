@@ -448,6 +448,7 @@ fn fracture(world: &mut World, _state: &mut DemoState, _dt: f32, _input: &Input)
                     let pos = chunk.vertices[*idx as usize];
                     let normal = chunk.normals[*idx as usize];
                     gpu_vertices.push(gizmo::renderer::gpu_types::Vertex {
+                        lightmap_uv: [0.0; 2],
                         position: [pos.x, pos.y, pos.z],
                         color: [1.0, 1.0, 1.0, 1.0],
                         normal: [normal.x, normal.y, normal.z],

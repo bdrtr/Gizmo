@@ -361,6 +361,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> BeamNGState {
         tangent: [0.0, 0.0, 0.0, 1.0],
         joint_indices: [0; 4],
         joint_weights: [0.0; 4],
+        lightmap_uv: [0.0; 2],
     };
     let v1 = Vertex {
         position: [r, 0.0, r],
@@ -370,6 +371,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> BeamNGState {
         tangent: [0.0, 0.0, 0.0, 1.0],
         joint_indices: [0; 4],
         joint_weights: [0.0; 4],
+        lightmap_uv: [0.0; 2],
     };
     let v2 = Vertex {
         position: [r, 0.0, -r],
@@ -379,6 +381,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> BeamNGState {
         tangent: [0.0, 0.0, 0.0, 1.0],
         joint_indices: [0; 4],
         joint_weights: [0.0; 4],
+        lightmap_uv: [0.0; 2],
     };
     let v3 = Vertex {
         position: [-r, 0.0, -r],
@@ -388,6 +391,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> BeamNGState {
         tangent: [0.0, 0.0, 0.0, 1.0],
         joint_indices: [0; 4],
         joint_weights: [0.0; 4],
+        lightmap_uv: [0.0; 2],
     };
 
     ground_vertices.push(v0);

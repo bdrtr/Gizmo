@@ -53,7 +53,9 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     let iuv = vec2<i32>(i32(frag_coord.x) * 2, i32(frag_coord.y) * 2);
     let tex_dim = vec2<f32>(textureDimensions(t_hdr));
 
-    let normal_roughness = textureLoad(t_normal_roughness, iuv, 0);
+    // The roughness's sign marks a lightmapped surface (`gbuffer.wgsl`); SSR wants the roughness.
+    var normal_roughness = textureLoad(t_normal_roughness, iuv, 0);
+    normal_roughness.w = abs(normal_roughness.w);
     let pos_sample = textureLoad(t_position_rel_camera, iuv, 0);
 
     // Skip unwritten pixels or rough surfaces

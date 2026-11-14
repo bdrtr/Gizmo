@@ -150,6 +150,8 @@ struct MeshDataFile {
     weights: Vec<[f32; 4]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     tangents: Vec<[f32; 4]>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    lightmap_uvs: Vec<[f32; 2]>,
 }
 
 impl From<MeshData> for MeshDataFile {
@@ -172,6 +174,7 @@ impl From<MeshData> for MeshDataFile {
             joints: channel(v, d.joint_indices, |x| x.joint_indices),
             weights: channel(v, d.joint_weights, |x| x.joint_weights),
             tangents: channel(v, d.tangent, |x| x.tangent),
+            lightmap_uvs: channel(v, d.lightmap_uv, |x| x.lightmap_uv),
         }
     }
 }
@@ -188,6 +191,7 @@ impl TryFrom<MeshDataFile> for MeshData {
             ("joints", file.joints.len()),
             ("weights", file.weights.len()),
             ("tangents", file.tangents.len()),
+            ("lightmap_uvs", file.lightmap_uvs.len()),
         ] {
             if len != 0 && len != n {
                 return Err(format!("a MeshData's {name} hold {len} values for {n} positions"));
@@ -209,6 +213,7 @@ impl TryFrom<MeshDataFile> for MeshData {
                 joint_indices: pick(&file.joints, i, d.joint_indices),
                 joint_weights: pick(&file.weights, i, d.joint_weights),
                 tangent: pick(&file.tangents, i, d.tangent),
+                lightmap_uv: pick(&file.lightmap_uvs, i, d.lightmap_uv),
             })
             .collect();
         Ok(Self::new(vertices))
@@ -245,6 +250,7 @@ mod tests {
         vertices[1].joint_weights = [0.1, 0.2, 0.3, 0.4];
         vertices[2].tangent = [0.0, 0.0, 1.0, -1.0];
         vertices[3].position = [1.0e-7, -3.333_333_3, 1.0e9];
+        vertices[4].lightmap_uv = [0.125, 0.875];
         let data = MeshData::new(vertices);
         let text = ron::to_string(&data).expect("writes");
         let back: MeshData = ron::from_str(&text).expect("reads");
@@ -257,7 +263,7 @@ mod tests {
     fn a_channel_at_its_default_is_left_out() {
         let plain = star();
         let text = ron::to_string(&plain).expect("writes");
-        for absent in ["colors", "joints", "weights", "tangents"] {
+        for absent in ["colors", "joints", "weights", "tangents", "lightmap_uvs"] {
             assert!(!text.contains(absent), "{absent} written for a mesh that has none: {text}");
         }
         assert!(text.contains("positions") && text.contains("normals"));

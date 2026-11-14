@@ -7,9 +7,9 @@
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | ışık haritası bileşeni (doku + UV dikdörtgeni) | **yok** |
-//! | ayrı ışık haritası UV kanalı | **yok** — pişmiş ışık **köşe renginde** |
-//! | ışık haritası dokusu | **yok** |
+//! | ışık haritası dokusu | **var (2026-11-14)** — `MaterialMaps::lightmap`, bu demo hâlâ köşe rengini gösteriyor |
+//! | ayrı ışık haritası UV kanalı | **var (2026-11-14)** — `Vertex::lightmap_uv`, glTF'in `TEXCOORD_1`'i |
+//! | ışık haritası bileşeni (doku + UV dikdörtgeni) | **yok** — atlas UV'leri pişirme aracı ikinci kanala yazıyor |
 //! | pişmiş + gerçek zamanlı karışımı | **var** — `BakedLit` güneşin gölgesini de alıyor |
 //! | pişirme aracı | **yok** — köşe renklerini siz dolduracaksınız |
 //!

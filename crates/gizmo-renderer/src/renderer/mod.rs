@@ -1591,7 +1591,7 @@ mod tests {
         assert_eq!(std::mem::offset_of!(Vertex, joint_indices), 48);
         assert_eq!(std::mem::offset_of!(Vertex, joint_weights), 64);
         assert_eq!(std::mem::offset_of!(Vertex, tangent), 80);
-        assert_eq!(std::mem::size_of::<Vertex>(), 96, "Vertex size/layout shifted!");
+        assert_eq!(std::mem::size_of::<Vertex>(), 104, "Vertex size/layout shifted!");
     }
 
     /// Regression for M7.0a: the SSGI-apply pass runs at full-res but samples a

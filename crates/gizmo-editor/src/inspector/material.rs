@@ -146,6 +146,13 @@ pub fn draw_material_section(
                         if maps.occlusion.is_some() {
                             ui.add(egui::Slider::new(&mut maps.occlusion_strength, 0.0..=1.0).text("Occlusion strength"));
                         }
+                        // Baked light, read at the mesh's second UV set (`MaterialMaps::lightmap`).
+                        if let Some(path) = texture_slot(ui, _state, "Lightmap", maps.lightmap.as_deref()) {
+                            maps.lightmap = path;
+                        }
+                        if maps.lightmap.is_some() {
+                            ui.add(egui::Slider::new(&mut maps.lightmap_intensity, 0.0..=8.0).text("Lightmap intensity"));
+                        }
                         if maps != mat.maps {
                             mat.maps = maps;
                         }

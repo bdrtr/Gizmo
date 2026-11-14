@@ -30,8 +30,7 @@ pub struct Vertex {
     pub color: [f32; 4],
     /// Model-space normal, expected to be unit length.
     pub normal: [f32; 3],
-    /// The first UV set. The engine samples every map with these — a second UV set from the
-    /// source file is dropped at import.
+    /// The first UV set. Every map of the material is read at these, the lightmap excepted.
     pub tex_coords: [f32; 2],
     /// Up to four skin joints influencing this vertex, as indices into the skin's joint palette.
     /// Unskinned meshes carry zeroes here and zero weights, which the vertex shader's
@@ -44,6 +43,11 @@ pub struct Vertex {
     /// Normal mapping needs the sign: mirrored UV islands flip it, and taking it as +1 turns
     /// their normals inside out.
     pub tangent: [f32; 4],
+    /// The second UV set: where on the material's **lightmap** this vertex reads its baked light
+    /// ([`MaterialMaps::lightmap`](crate::components::MaterialMaps::lightmap)). A lightmap lays
+    /// every surface out once, without overlap, so it cannot share the first set, which tiles and
+    /// mirrors; glTF's `TEXCOORD_1`. Zero, and unread, on a mesh drawn without a lightmap.
+    pub lightmap_uv: [f32; 2],
 }
 
 impl Default for Vertex {
@@ -58,13 +62,14 @@ impl Default for Vertex {
             joint_indices: [0; 4],
             joint_weights: [0.0; 4],
             tangent: [1.0, 0.0, 0.0, 1.0],
+            lightmap_uv: [0.0; 2],
         }
     }
 }
 
 impl Vertex {
     /// This layout as wgpu describes it: the stride, and one attribute per field at
-    /// locations 0..=6.
+    /// locations 0..=7.
     ///
     /// Offsets are taken from `offset_of!` rather than written out, because a hand-maintained
     /// running sum is one arithmetic slip away from a pipeline that reads normals out of the
@@ -116,6 +121,11 @@ impl Vertex {
                     offset: std::mem::offset_of!(Vertex, tangent) as wgpu::BufferAddress,
                     shader_location: 6,
                     format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: std::mem::offset_of!(Vertex, lightmap_uv) as wgpu::BufferAddress,
+                    shader_location: 7,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
             ],
         }
@@ -706,7 +716,8 @@ pub struct MaterialParams {
     /// x = occlusion (AO) strength; y = UV rotation (radians); zw = UV offset.
     pub occlusion_uv_rot_offset: [f32; 4],
     /// xy = UV scale; z = alpha cutoff (glTF `AlphaMode::Mask`; 0.0 = no cutout,
-    /// the g-buffer hard-`discard`s texels with `alpha < cutoff`); w reserved (0.0).
+    /// the g-buffer hard-`discard`s texels with `alpha < cutoff`); w = the lightmap's strength,
+    /// 0 when the material has no lightmap ([`with_lightmap`](Self::with_lightmap)).
     pub uv_scale: [f32; 4],
 }
 
@@ -723,6 +734,14 @@ impl Default for MaterialParams {
 }
 
 impl MaterialParams {
+    /// With a lightmap of this strength: what the lightmap holds is multiplied by it and replaces
+    /// the surface's ambient and baked-volume light. 0 is no lightmap.
+    #[must_use]
+    pub fn with_lightmap(mut self, strength: f32) -> Self {
+        self.uv_scale[3] = strength.max(0.0);
+        self
+    }
+
     /// Packs the glTF factors into the three `vec4` slots the shader reads, in the order
     /// documented on the fields.
     pub fn new(
@@ -845,8 +864,8 @@ mod tests {
     // says which shader disagreed.
     #[test]
     fn gpu_struct_sizes_match_the_shader_layout() {
-        // 96 (was 92) since the vertex colour became RGBA.
-        assert_eq!(std::mem::size_of::<Vertex>(), 96, "Vertex stride");
+        // 96 (was 92) since the vertex colour became RGBA; 104 since the lightmap's UV set.
+        assert_eq!(std::mem::size_of::<Vertex>(), 104, "Vertex stride");
         assert_eq!(std::mem::size_of::<LightData>(), 64, "LightData = 4×vec4");
         // 128 (was 96) since `ambient` + `emissive` joined it. EVERY shader that indexes
         // `array<InstanceRaw>` must declare the same 8 vec4s or `instances[i]` reads the
@@ -872,7 +891,7 @@ mod tests {
         let d = Vertex::desc();
         assert_eq!(d.array_stride as usize, std::mem::size_of::<Vertex>());
 
-        // Offsets strictly increase, shader locations run 0..=6, everything fits.
+        // Offsets strictly increase, shader locations run 0..=7, everything fits.
         let mut prev: Option<u64> = None;
         for (i, a) in d.attributes.iter().enumerate() {
             assert_eq!(a.shader_location, i as u32, "attribute {i} shader_location");
@@ -882,11 +901,11 @@ mod tests {
             }
             prev = Some(a.offset);
         }
-        // Last attribute is the Float32x4 tangent (16 bytes) and must end exactly
+        // Last attribute is the Float32x2 lightmap UV (8 bytes) and must end exactly
         // at the stride — no hidden gap that would corrupt the next vertex.
         let last = d.attributes.last().unwrap();
-        assert_eq!(last.format, wgpu::VertexFormat::Float32x4);
-        assert_eq!(last.offset + 16, d.array_stride);
+        assert_eq!(last.format, wgpu::VertexFormat::Float32x2);
+        assert_eq!(last.offset + 8, d.array_stride);
     }
 
     // The Material lighting knobs are useless if they land in the wrong slot, and the wrong

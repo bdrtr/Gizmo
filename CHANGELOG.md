@@ -88,6 +88,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Lightmaps.** A material can carry baked light as a picture: `MaterialMaps::lightmap` (read linear, scaled by
+  `lightmap_intensity`; the inspector has the slot) at the mesh's second UV set, `Vertex::lightmap_uv` — new, at vertex
+  location 7, filled from glTF's `TEXCOORD_1` (which the importer used to drop) and saved in `MeshData`. The baked
+  light **replaces** the ambient and the irradiance volume rather than adding to them, while lights still add their
+  direct light and shadows and reflections still show: deferred (the baked diffuse goes into RT5, and a negative
+  roughness tells the lighting pass, SSR and SSGI the pixel is lightmapped), forward and forward-only alike, and
+  `BakedLit` takes lightmap × vertex colour. `MaterialParams::uv_scale.w` carries the strength (0 = none); the material
+  bind group has an eighth entry (binding 7). Measured on a white quad under the sky alone: 103 grey; with a left-red,
+  right-black lightmap (225, 126, 126) and (9, 10, 12), on every path. Tests:
+  `a_lightmap_lights_the_surface_with_what_was_baked` (deferred, forward, baked-lit, saved and reopened byte for
+  byte), `a_gltf_models_second_uv_set_is_where_its_lightmap_is_read`; each fails with its path's half taken out.
+  **Breaks:** `Vertex` is 104 bytes (a literal names `lightmap_uv`), `assemble_material_bind_group` takes the lightmap
+  view, a custom pipeline over the material layout binds eight entries. No baking tool: the lightmap is made elsewhere.
+
 - **Systems that take `Commands` spawn the same ids on every run.** `Commands` declared only a read of the command
   queue and the entity-id allocator, so two systems using it shared a batch, and the order their commands were
   queued — and the ids their spawns reserved — followed rayon's threads: eight spawning systems gave other ids on

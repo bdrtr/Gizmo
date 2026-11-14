@@ -26,6 +26,18 @@ var<uniform> scene: SceneUniforms;
 var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1)
 var s_diffuse: sampler;
+// The material's constants (`gpu_types::MaterialParams`; only the lightmap's strength, `uv_scale.w`,
+// is read here) and its lightmap: a baked-lit surface whose light is a picture rather than its
+// vertex colours.
+struct BakedMaterialParams {
+    emissive_and_normal_scale: vec4<f32>,
+    occlusion_uv_rot_offset: vec4<f32>,
+    uv_scale: vec4<f32>,
+};
+@group(1) @binding(6)
+var<uniform> material: BakedMaterialParams;
+@group(1) @binding(7)
+var t_lightmap: texture_2d<f32>;
 
 // The sun's cascades, where `shader.wgsl` reads them: the shadow group's on the desktop, group 0's on
 // the forward-only path while the scene has a sun that casts.
@@ -68,12 +80,14 @@ struct VertexInput {
     @location(4) joint_indices: vec4<u32>,
     @location(5) joint_weights: vec4<f32>,
     @location(6) tangent: vec4<f32>,
+    @location(7) lightmap_uv: vec2<f32>,
 };
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) color: vec4<f32>,
-    @location(1) tex_coords: vec2<f32>,
+    // xy: the material's UV; zw: the lightmap's (`Vertex::lightmap_uv`).
+    @location(1) tex_coords: vec4<f32>,
     @location(2) inst_albedo: vec4<f32>,
     @location(3) world_pos: vec3<f32>,
     @location(4) world_normal: vec3<f32>,
@@ -103,7 +117,7 @@ fn vs_main(input: VertexInput, @builtin(instance_index) i: u32) -> VertexOutput 
     out.world_pos = world.xyz;
     out.clip_position = scene.view_proj * world;
     out.color = input.color;
-    out.tex_coords = input.tex_coords;
+    out.tex_coords = vec4<f32>(input.tex_coords, input.lightmap_uv);
     out.inst_albedo = inst.albedo_color;
     out.inst_ambient = inst.ambient.rgb;
     out.inst_emissive = inst.emissive;
@@ -176,7 +190,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let surface_axes = receiver_axes(dpdx(in.world_pos), dpdy(in.world_pos), n);
 #endif
 #endif
-    let tex = textureSample(t_diffuse, s_diffuse, in.tex_coords);
+    let tex = textureSample(t_diffuse, s_diffuse, in.tex_coords.xy);
 
     // **Cut-outs.** Foliage on a quad, a chain-link fence, a pierced railing: opaque geometry
     // with holes in it. Discarding the holes keeps the draw in the opaque pass — depth written,
@@ -196,7 +210,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // of the vertex layout, not of a pixel value, and this layout always has it: a source with
     // no colours is normalised to opaque white at import (`gpu_types::Vertex::default`). Under
     // the old test a surface the author painted black came out white instead.
-    let baked = in.color.rgb;
+    // With a lightmap (`MaterialMaps::lightmap`) the baked light is the lightmap's, times the vertex
+    // colour — which an importer leaves white, so a lightmapped mesh is lit by its map alone.
+    var baked = in.color.rgb;
+    let lightmap_strength = material.uv_scale.w;
+    if (lightmap_strength > 0.0) {
+        baked = baked * textureSample(t_lightmap, s_diffuse, in.tex_coords.zw).rgb * lightmap_strength;
+    }
 
     // Distance along the camera's forward axis — the same measure `cascade_splits` is expressed
     // in, and what `select_cascade` and the fade both assume. (Radial `length(...)` overstates

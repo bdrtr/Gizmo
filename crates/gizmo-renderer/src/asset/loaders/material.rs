@@ -292,6 +292,7 @@ pub(super) fn build_gltf_materials(
                     mr_view,
                     emissive_view,
                     ao_view,
+                    &defaults.white_view,
                     &params_buffer,
                     &format!("gltf_material_{}", material.index().unwrap_or(usize::MAX)),
                 )
@@ -312,6 +313,9 @@ pub(super) fn build_gltf_materials(
                 emissive_factor: gizmo_math::Vec3::from(emissive),
                 occlusion: key(material.occlusion_texture().map(|t| t.texture().source().index())),
                 occlusion_strength,
+                // glTF has no lightmap of its own: a baking tool's goes on the material afterwards.
+                lightmap: None,
+                lightmap_intensity: 1.0,
                 uv_scale: uv_transform.scale,
                 uv_rotation: uv_transform.rotation,
                 uv_offset: uv_transform.offset,
