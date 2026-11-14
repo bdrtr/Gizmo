@@ -366,6 +366,11 @@ mod tests {
     /// rayon ran them — so a game spawning from two systems got its entities in a different order
     /// on every run, and so its bodies in a different order in the physics world.
     #[test]
+    // Not under Miri: what this checks is thread order — rayon's batch over eight systems, 200 times
+    // — which the interpreter's one thread cannot vary, and the parallel scheduler is outside the Miri
+    // job's scope on purpose (`ci.yml`). Interpreted, its 32 million spin iterations ran the job into
+    // its 45-minute limit on every push from 2026-11-14 (`1ece8cc6`) until this.
+    #[cfg_attr(miri, ignore = "a thread-order test: Miri runs one thread, and the spin takes hours interpreted")]
     fn spawns_from_many_systems_get_the_same_ids_every_run() {
         let one_run = || {
             let mut world = World::new();

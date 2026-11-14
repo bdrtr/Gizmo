@@ -118,6 +118,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **CI's Miri job finishes again.** From `1ece8cc6` on, every run ended in the job's 45-minute limit:
+  `spawns_from_many_systems_get_the_same_ids_every_run`, which the `commands::` filter reaches, spins 32 million
+  iterations over 200 runs of the parallel scheduler — instant natively, hours interpreted — and the filters after it
+  (archetype, blob, query, hierarchy, sparse, migration) never ran. It is a thread-order test, which Miri's one thread
+  cannot exercise, so it is `#[cfg_attr(miri, ignore)]` with that reason; every filter of the job was run locally
+  under Miri (Tree Borrows) and all pass, about five minutes in all.
+
 - **Depth of field's blur has a shape** (`DofBlur`, on `PostProcess::dof_blur` and, for a camera without one,
   `Renderer::dof_blur`): `Bokeh { blades, rotation }` — round (blades 0, the default and the look DoF always had) or an
   iris polygon, each gather tap pushed out to `cos(π/n) / cos(angle from the side's middle)` — or `Gaussian`, every tap
