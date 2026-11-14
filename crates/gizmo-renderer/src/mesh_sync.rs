@@ -85,12 +85,23 @@ pub fn undescribed_meshes(world: &World) -> Vec<Entity> {
     let data = world.query::<&crate::components::MeshData>();
     let markers = world.query::<&gizmo_core::component::EditorOnly>();
     let names = world.query::<&gizmo_core::EntityName>();
+    let lod_descs = world.query::<&crate::components::LodGroupDesc>();
     world
         .query::<(Entity, &Mesh)>()
         .iter()
         .map(|(e, _)| e)
         .filter(|e| sources.get(*e).is_none() && data.get(*e).is_none())
+        // A LOD group whose levels no key builds is lost the same way (`sync_lod_groups`).
+        .chain(
+            world
+                .query::<(Entity, &crate::components::LodGroup)>()
+                .iter()
+                .map(|(e, _)| e)
+                .filter(|e| lod_descs.get(*e).is_none()),
+        )
         .filter(|e| !gizmo_core::component::is_editor_only(markers.get(*e).is_some(), names.get(*e).map(|n| n.0.as_str())))
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 

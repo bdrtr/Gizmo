@@ -650,6 +650,60 @@ impl AssetManager {
         Some(self.mesh_cache.entry(cache_key).or_insert_with(|| shape.build(device)).clone())
     }
 
+    /// The mesh a `MeshSource` key names, built or read now: a primitive (bare or with its
+    /// parameters), a glTF sub-mesh (importing the file if it has not been), an OBJ file. What the
+    /// asset loader gives an entity that names one, and what a description that names meshes (a
+    /// `LodGroupDesc`) is built back from. A key that will not load is a placeholder mesh and a
+    /// warning, never a panic.
+    pub fn mesh_from_source(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        layout: &wgpu::BindGroupLayout,
+        key: &str,
+    ) -> Mesh {
+    if let Some(primitive) = self.primitive_mesh(device, key) {
+            primitive
+        } else if key.starts_with("gltf_mesh_") {
+            if let Some(cached) = self.get_cached_mesh(key) {
+                cached
+            } else {
+                // The one parse of this key shape in the workspace, shared with the scene
+                // format's identity repair — see `MeshSource::split_gltf_key`. Two copies of
+                // it is how the loader and the saver come to disagree about where the file
+                // name ends, which for a node called `wheel_front_left` is not hypothetical.
+                let file_path = gizmo_core::component::MeshSource::split_gltf_key(key)
+                    .map(|(path, _)| path);
+
+                if let Some(path) = file_path {
+                    let white = self.create_white_texture(device, queue, layout);
+                    if let Err(e) = self.load_gltf_scene(device, queue, layout, white, path) {
+                        // Previously swallowed with `let _`: on failure the mesh
+                        // silently became a placeholder with no explanation.
+                        tracing::warn!(
+                            path,
+                            mesh_source = %key,
+                            error = %e,
+                            "[AssetLoading] glTF scene load failed; using placeholder mesh"
+                        );
+                    }
+                    if let Some(cached) = self.get_cached_mesh(key) {
+                        cached
+                    } else {
+                        self.loading_placeholder_mesh(device)
+                    }
+                } else {
+                    self.loading_placeholder_mesh(device)
+                }
+            }
+        } else if key.starts_with("obj:") {
+            let path = key.trim_start_matches("obj:");
+            self.load_obj(device, path)
+        } else {
+            self.load_obj(device, key)
+        }
+    }
+
     /// Whether a mesh's [`source`](crate::components::Mesh::source) names geometry the engine can
     /// build again from the key alone: a primitive with its parameters (`sphere_0.5_16_16`, what
     /// `create_sphere(0.5, 16, 16)` names its mesh), a mesh inside a glTF file, or an OBJ file. Such

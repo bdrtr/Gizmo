@@ -439,7 +439,52 @@ pub struct CameraTarget {
     texture: std::sync::Arc<wgpu::Texture>,
     view: std::sync::Arc<wgpu::TextureView>,
 }
-gizmo_core::impl_component!(CameraTarget);
+gizmo_core::impl_component!(CameraTarget, CameraTargetDesc);
+
+/// What a [`CameraTarget`] is but its texture — its size — which a scene saves; the texture is made
+/// again from it ([`sync_camera_targets`]), and the camera draws into it as before.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct CameraTargetDesc {
+    /// Width in texels.
+    pub width: u32,
+    /// Height in texels.
+    pub height: u32,
+}
+
+/// Keeps every [`CameraTarget`] and its [`CameraTargetDesc`] together: the description follows the
+/// target's size, and a description with no target (a scene just opened) gets a new texture of it.
+pub fn sync_camera_targets(world: &mut gizmo_core::World, renderer: &crate::Renderer) {
+    use gizmo_core::Entity;
+    let (missing, stale): (Vec<(Entity, CameraTargetDesc)>, Vec<(Entity, CameraTargetDesc)>) = {
+        let targets = world.query::<&CameraTarget>();
+        let descs = world.query::<&CameraTargetDesc>();
+        let missing = world
+            .query::<(Entity, &CameraTargetDesc)>()
+            .iter()
+            .filter(|(e, _)| targets.get(*e).is_none())
+            .map(|(e, d)| (e, *d))
+            .collect();
+        let stale = world
+            .query::<(Entity, &CameraTarget)>()
+            .iter()
+            .filter_map(|(e, t)| {
+                let (width, height) = t.size();
+                let now = CameraTargetDesc { width, height };
+                (descs.get(e) != Some(&now)).then_some((e, now))
+            })
+            .collect();
+        (missing, stale)
+    };
+    if !missing.is_empty() {
+        let gpu = renderer.gpu_context();
+        for (entity, desc) in missing {
+            world.add_component(entity, CameraTarget::new(&gpu, desc.width, desc.height));
+        }
+    }
+    for (entity, desc) in stale {
+        world.add_component(entity, desc);
+    }
+}
 
 impl CameraTarget {
     /// A `width` × `height` target in the renderer's output format, made with the game side's GPU

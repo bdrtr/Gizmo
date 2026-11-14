@@ -270,6 +270,9 @@ pub struct Renderer {
     /// Loaded sprite images and the sprite pipelines — see [`crate::sprite`]. `Option` for the
     /// same ordering reason as [`text`](Self::text).
     pub sprites: Option<crate::sprite::SpriteRenderer>,
+    /// Atlases packed from named images, by their name, with their regions in the order asked —
+    /// what `load_sprite_atlas_named` hands back again, rather than packing a second copy.
+    named_atlases: std::collections::HashMap<crate::sprite::ImageName, Vec<crate::sprite::SpriteRegion>>,
 
     // === DAHİLİ ASSET YÖNETİCİSİ (Kolaylık metodları için cache) ===
     /// The texture/mesh cache behind the convenience loaders. Behind a lock because the
@@ -561,6 +564,58 @@ impl Renderer {
         sprites.load_named(&self.device, &self.queue, &name, bytes)
     }
 
+    /// Packs the images called `names` into one atlas — each found as
+    /// [`sprite_image_by_name`](Self::sprite_image_by_name) finds one: embedded bytes under its path,
+    /// else the file — and returns their regions in that order, as
+    /// [`load_sprite_atlas`](Self::load_sprite_atlas) does. The atlas is named after them
+    /// (`atlas:` and the names, `|` between), so a scene saves a sprite drawn from it and a reopen
+    /// packs the same images into the same regions: packing depends on their sizes alone. Asked for
+    /// again, the same atlas.
+    ///
+    /// # Errors
+    ///
+    /// [`SpriteError::Io`](crate::sprite::SpriteError::Io) or
+    /// [`SpriteError::Invalid`](crate::sprite::SpriteError::Invalid) for an image that will not
+    /// read or decode; otherwise as [`load_sprite_atlas`](Self::load_sprite_atlas).
+    pub fn load_sprite_atlas_named(
+        &mut self,
+        names: &[&str],
+        filter: crate::sprite::SpriteFilter,
+    ) -> Result<Vec<crate::sprite::SpriteRegion>, crate::sprite::SpriteError> {
+        let name = crate::sprite::ImageName { path: format!("{}{}", Self::ATLAS_PREFIX, names.join("|")), filter };
+        if let Some(regions) = self.named_atlases.get(&name) {
+            return Ok(regions.clone());
+        }
+        let mut decoded = Vec::with_capacity(names.len());
+        for member in names {
+            let embedded = self
+                .asset_manager
+                .read()
+                .unwrap_or_else(|p| p.into_inner())
+                .embedded_assets
+                .get(*member)
+                .map(|b| b.to_vec());
+            let bytes = match embedded {
+                Some(bytes) => bytes,
+                None => std::fs::read(member).map_err(crate::sprite::SpriteError::Io)?,
+            };
+            decoded.push(image::load_from_memory(&bytes).map_err(|_| crate::sprite::SpriteError::Invalid)?.to_rgba8());
+        }
+        let images: Vec<crate::sprite::AtlasImage<'_>> = decoded
+            .iter()
+            .map(|i| crate::sprite::AtlasImage { rgba: i.as_raw(), width: i.width(), height: i.height() })
+            .collect();
+        let regions = self.load_sprite_atlas(&images, filter)?;
+        if let (Some(first), Some(sprites)) = (regions.first(), self.sprites.as_mut()) {
+            sprites.name_image(first.image, name.clone());
+        }
+        self.named_atlases.insert(name, regions.clone());
+        Ok(regions)
+    }
+
+    /// What an atlas's name starts with — see [`load_sprite_atlas_named`](Self::load_sprite_atlas_named).
+    pub const ATLAS_PREFIX: &'static str = "atlas:";
+
     /// The name a sprite image goes by in a scene, `None` for pixels loaded without one.
     #[must_use]
     pub fn sprite_image_name(&self, image: crate::sprite::SpriteImageId) -> Option<&crate::sprite::ImageName> {
@@ -581,6 +636,11 @@ impl Renderer {
     ) -> Result<crate::sprite::SpriteImageId, crate::sprite::SpriteError> {
         if let Some(id) = self.sprites.as_ref().and_then(|s| s.by_name(name)) {
             return Ok(id);
+        }
+        if let Some(members) = name.path.strip_prefix(Self::ATLAS_PREFIX) {
+            let members: Vec<&str> = members.split('|').collect();
+            let regions = self.load_sprite_atlas_named(&members, name.filter)?;
+            return regions.first().map(|r| r.image).ok_or(crate::sprite::SpriteError::Empty);
         }
         let embedded = self
             .asset_manager

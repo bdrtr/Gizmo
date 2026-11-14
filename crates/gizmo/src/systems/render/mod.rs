@@ -1062,6 +1062,12 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     crate::renderer::text_sync::sync_text_fonts(world, renderer);
     // And every sprite and tilemap its image (`sprite_sync`).
     crate::renderer::sprite_sync::sync_sprite_images(world, renderer);
+    // And every decal its description, the texture by name (`sync_decals`).
+    crate::renderer::components::sync_decals(world, renderer);
+    // And every LOD group its description, its meshes by key (`sync_lod_groups`).
+    crate::renderer::components::sync_lod_groups(world, renderer);
+    // And every camera drawing into a texture its size (`sync_camera_targets`).
+    crate::renderer::components::sync_camera_targets(world, renderer);
 
     // **Advance skeletal animation.** `collect_draw_items` below reads `Skeleton` for its skinning
     // matrices, and until this call nothing in the engine ever advanced the pose it reads: the two
@@ -14006,6 +14012,205 @@ fn material_surface(input: SurfaceInput) -> Surface {
             assert_eq!(changed, 0, "the reopened sprites drew {changed}/{total} pixels otherwise");
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A sprite drawn from an atlas packed from named images is saved, region and all.** Two
+    /// images of different sizes packed by name; a sprite from the second region: the reopened frame
+    /// is the saved one — the reopen packs the same images into the same regions, which the sprite's
+    /// saved UV rect points at.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_sprite_from_a_named_atlas_is_saved() {
+        use gizmo_renderer::components::Sprite;
+        use gizmo_renderer::sprite::SpriteFilter;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("gizmo-atlas-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let a = dir.join("a.png");
+        let b = dir.join("b.png");
+        image::RgbaImage::from_pixel(24, 12, image::Rgba([240, 40, 40, 255])).save(&a).expect("png");
+        image::RgbaImage::from_fn(16, 16, |x, _| if x < 8 { image::Rgba([40, 200, 40, 255]) } else { image::Rgba([40, 40, 240, 255]) }).save(&b).expect("png");
+        let (a, b) = (a.to_string_lossy().into_owned(), b.to_string_lossy().into_owned());
+        pollster::block_on(async {
+            let seen = draw_save_reopen_with(
+                None,
+                |_| {},
+                |world, renderer| {
+                    let regions = renderer.load_sprite_atlas_named(&[&a, &b], SpriteFilter::Nearest).expect("the atlas packs");
+                    assert_eq!(regions.len(), 2);
+                    let e = world.spawn();
+                    world.add_component(e, Transform::new(Vec3::ZERO));
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(e, Sprite::from_region(regions[1], gizmo_math::Vec2::splat(2.0)));
+                    world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+                    world.spawn_bundle(DirectionalLightBundle::default());
+                },
+            )
+            .await;
+            let (changed, total) = changed_pixels(&seen.drawn, &seen.reopened, 128);
+            assert_eq!(changed, 0, "the reopened atlas sprite drew {changed}/{total} pixels otherwise");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Decals are saved, their textures by name.** A decal of a file's texture and one of the
+    /// generated checkerboard, both projected on a floor: the reopened frame is the saved one. A decal
+    /// owns a GPU bind group, so a scene saves its `DecalDesc`, and a decal is built from it again.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn decals_are_saved_with_their_textures() {
+        use gizmo_renderer::components::{Decal, MaterialDesc};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("gizmo-decals-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let stripes = dir.join("stripes.png");
+        image::RgbaImage::from_fn(8, 8, |x, _| if x % 4 < 2 { image::Rgba([240, 240, 30, 255]) } else { image::Rgba([30, 30, 30, 255]) })
+            .save(&stripes)
+            .expect("png");
+        let stripes = stripes.to_string_lossy().into_owned();
+        pollster::block_on(async {
+            let seen = draw_save_reopen(None, |world, renderer| {
+                let floor = world.spawn();
+                world.add_component(floor, Transform::new(Vec3::new(0.0, -1.0, 0.0)));
+                world.add_component(floor, GlobalTransform::default());
+                world.add_component(floor, gizmo_core::component::MeshSource("plane_8".to_string()));
+                world.add_component(floor, MaterialDesc::default().with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), 0.8, 0.0));
+                world.add_component(floor, MeshRenderer::new());
+                let file = renderer.load_texture(&stripes).expect("the stripes load");
+                let checker = renderer.asset_manager.write().unwrap().create_checkerboard_texture(
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                );
+                for (x, texture, tint) in [(-1.2, file, Vec4::ONE), (1.2, checker, Vec4::new(1.0, 0.3, 0.3, 1.0))] {
+                    let d = world.spawn();
+                    world.add_component(d, Transform::new(Vec3::new(x, -1.0, 0.0)).with_scale(Vec3::splat(1.0)));
+                    world.add_component(d, GlobalTransform::default());
+                    world.add_component(d, Decal::new(texture, tint));
+                }
+                world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 2.0, 4.0), yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.6, ..Default::default() });
+                world.spawn_bundle(DirectionalLightBundle::default());
+            })
+            .await;
+            let (changed, total) = changed_pixels(&seen.drawn, &seen.reopened, 128);
+            assert_eq!(changed, 0, "the reopened decals drew {changed}/{total} pixels otherwise");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **A LOD group is saved, its levels' meshes by key.** A cube whose group draws a sphere past
+    /// three metres, seen from six: the reopened frame is the saved one — the sphere, not the cube the
+    /// entity carries for near by. A group owns GPU meshes, so a scene saves its `LodGroupDesc`.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_lod_group_is_saved_with_its_levels() {
+        use gizmo_renderer::components::{LodGroup, LodLevel, MaterialDesc};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let seen = draw_save_reopen(None, |world, renderer| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, -6.0)).with_scale(Vec3::splat(1.5)));
+                world.add_component(e, GlobalTransform::default());
+                let cube = AssetManager::create_cube(&renderer.device);
+                world.add_component(e, cube.clone());
+                world.add_component(e, MaterialDesc::default().with_pbr(Vec4::new(0.2, 0.8, 0.3, 1.0), 0.5, 0.0));
+                world.add_component(e, MeshRenderer::new());
+                world.add_component(e, LodGroup::new(vec![LodLevel::new(cube, 3.0), LodLevel::new(AssetManager::create_sphere(&renderer.device, 1.0, 24, 24), 30.0)]));
+                world.spawn_bundle(CameraBundle { position: Vec3::ZERO, yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+                world.spawn_bundle(DirectionalLightBundle::default());
+            })
+            .await;
+            let (changed, total) = changed_pixels(&seen.drawn, &seen.reopened, 128);
+            assert_eq!(changed, 0, "the reopened LOD group drew {changed}/{total} pixels otherwise");
+        });
+    }
+
+    /// **A camera that draws into a texture still does after a reopen.** A second camera with a
+    /// 64×64 target, looking at a red cube the main camera does not: after the reopen the target is the
+    /// same size and holds the same picture, byte for byte. The texture is GPU state; a scene saves its
+    /// size (`CameraTargetDesc`) and the texture is made again.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_camera_target_is_saved_and_draws_again() {
+        use gizmo_renderer::components::{Camera, CameraTarget, MaterialDesc};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let scene_path = std::env::temp_dir().join(format!("gizmo-camera-target-{}.scene", std::process::id()));
+        let scene_path = scene_path.to_string_lossy().into_owned();
+        let registry = crate::full_scene_registry();
+        let target_bytes = |world: &World, renderer: &Renderer| -> Option<((u32, u32), Vec<u8>)> {
+            let target = world.query::<&CameraTarget>().iter().next().cloned()?;
+            Some((target.size(), super::frame_split_tests::texture_bytes(renderer, target.texture())))
+        };
+        let load = |world: &mut World, renderer: &Renderer| {
+            let manager = renderer.asset_manager.clone();
+            let mut assets = manager.write().unwrap();
+            crate::renderer::asset_loading::run_asset_loading_system(world, &renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout, &mut assets);
+        };
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(10.0, 0.0, 0.0)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, gizmo_core::component::MeshSource("standard_cube".to_string()));
+            world.add_component(cube, MaterialDesc::default().with_pbr(Vec4::new(0.9, 0.1, 0.1, 1.0), 0.5, 0.0));
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+            let watcher = world.spawn();
+            world.add_component(watcher, Transform::new(Vec3::new(10.0, 0.0, 4.0)));
+            world.add_component(watcher, GlobalTransform::default());
+            world.add_component(watcher, Camera::new(60_f32.to_radians(), 0.1, 100.0, -std::f32::consts::FRAC_PI_2, 0.0, false));
+            world.add_component(watcher, CameraTarget::new(&renderer.gpu_context(), 64, 64));
+            world.spawn_bundle(DirectionalLightBundle::default());
+            load(&mut world, &renderer);
+            for _ in 0..3 {
+                render_world(&mut renderer, &mut world).await;
+            }
+            let (size, before) = target_bytes(&world, &renderer).expect("a target");
+            // Red in either channel order: the target is in the output format, RGBA or BGRA.
+            let red = before.chunks(4).filter(|p| i32::from(p[0].max(p[2])) - i32::from(p[1]) > 60).count();
+            assert!(red > 200, "the target camera does not see the red cube to begin with ({red} red texels)");
+            crate::scene::SceneData::save(&world, &scene_path, &registry).expect("saves");
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &registry).expect("loads");
+            load(&mut world, &renderer);
+            for _ in 0..3 {
+                render_world(&mut renderer, &mut world).await;
+            }
+            let (size_after, after) = target_bytes(&world, &renderer).expect("the reopened camera has no target");
+            assert_eq!(size, size_after);
+            let differ = before.chunks(4).zip(after.chunks(4)).filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 8)).count();
+            assert_eq!(differ, 0, "the reopened target holds {differ} texels otherwise");
+        });
+        let _ = std::fs::remove_file(&scene_path);
     }
 
     /// **A tween saved half way carries on from where it was.** A cube's colour tween, a third of the

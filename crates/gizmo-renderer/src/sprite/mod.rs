@@ -489,6 +489,14 @@ impl SpriteRenderer {
         Ok(SpriteImageId(id))
     }
 
+    /// Names an image already loaded — what an atlas packed from named images is called once it is
+    /// (`Renderer::load_sprite_atlas_named`).
+    pub(crate) fn name_image(&mut self, image: SpriteImageId, name: ImageName) {
+        if let Some(i) = self.images.get_mut(image.0 as usize) {
+            i.name = Some(name);
+        }
+    }
+
     /// The image loaded under `name`, if one is.
     #[must_use]
     pub fn by_name(&self, name: &ImageName) -> Option<SpriteImageId> {

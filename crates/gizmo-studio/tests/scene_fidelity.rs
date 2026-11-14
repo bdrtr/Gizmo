@@ -30,6 +30,9 @@ const NOT_SAVED: &[(&str, &str)] = &[
     ("Mesh", "a GPU buffer; saved as its `MeshSource` key or its `MeshData` (`mesh_sync`)"),
     ("Material", "a GPU bind group; saved as its `MaterialDesc` (`material_sync`)"),
     ("Skeleton", "a GPU buffer; rebuilt from the model's file (`gltf_model`)"),
+    ("Decal", "a GPU bind group; saved as its `DecalDesc` (`sync_decals`)"),
+    ("LodGroup", "GPU meshes; saved as its `LodGroupDesc`, each level's mesh by its key (`sync_lod_groups`)"),
+    ("CameraTarget", "a GPU texture; saved as its `CameraTargetDesc` (its size), the texture made again (`sync_camera_targets`)"),
     ("GltfModelResolved", "the mark that a model has its skeletons and clips; left off a file so a reopened one is resolved"),
     ("Animated", "the transform animator's mark of what it is driving, set by the system each frame"),
     ("LodLevel", "one level inside a `LodGroup`, saved with it"),
@@ -57,9 +60,7 @@ const NOT_SAVED: &[(&str, &str)] = &[
 
 /// Should be saved, and is not yet — closed class by class (decided 2026-11-14). Only shrinks.
 const OPEN: &[&str] = &[
-    // Seen
-    "Decal", "LodGroup",
-    "CameraTarget", // Physics and play
+    // Physics and play
     "CollisionLayer", "PhysicsMaterial", "Breakable", "KinematicTarget", "ExternalForce", "CharacterController",
     "VehicleController", "Oxygen", "Cloth", "Rope", "SoftBodyMesh", "FluidSimulation", "FluidParticle", "FluidPhase",
     "FluidInteractor", "AutoBoxCollider", "DespawnAfter", "DespawnBelowY", "Spin", "FpsLook", "BehaviorTree", "Timer",

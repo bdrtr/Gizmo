@@ -88,6 +88,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Scene fidelity: everything seen is saved.** The rest of the class, each with a reopen test that each piece taken out
+  breaks:
+  - **Atlases packed from named images** (`Renderer::load_sprite_atlas_named(names, filter)`), named `atlas:` and their
+    members; a reopen packs the same images into the same regions, packing depending on their sizes alone.
+  - **Decals**, as `DecalDesc` — the texture by name, the tint — kept by `sync_decals`, a decal built back from it.
+  - **LOD groups**, as `LodGroupDesc` — each level's mesh by its key, its distance, the crossfade — kept by
+    `sync_lod_groups`, the meshes built back with `AssetManager::mesh_from_source` (the asset loader's own, now shared).
+    A group with a level no key builds is named by the studio at a save, as such a mesh is.
+  - **Cameras drawing into a texture**, as `CameraTargetDesc` (the size), the texture made again by
+    `sync_camera_targets`; the reopened target holds the saved picture texel for texel. A material sampling a target's
+    view is a reference between two things a scene holds, and is not covered yet.
+  `scene_fidelity`: 122 components, 45 open — physics and play, animation, UI.
+
 - **Sprites and tilemaps are saved, in their images** (by name, as faces are). An image is named by its path and its
   sampling (`sprite::ImageName`): the path for `load_sprite_image_file`, or what `Renderer::load_sprite_image_named(name,
   bytes, filter)` was given. `Sprite::image_name` and `Tilemap::tileset_name` carry it, `sprite_sync::sync_sprite_images`

@@ -730,6 +730,7 @@ impl Renderer {
             debug_renderer,
             text,
             sprites,
+            named_atlases: std::collections::HashMap::new(),
             asset_manager: std::sync::Arc::new(std::sync::RwLock::new(crate::asset::AssetManager::new())),
             web_profile: crate::web_profile::WebProfile::auto(),
             shading_mode: 0,

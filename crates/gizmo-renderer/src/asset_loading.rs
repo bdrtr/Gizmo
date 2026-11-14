@@ -132,52 +132,7 @@ pub fn run_asset_loading_system(
     // Eksik Mesh'leri yükle ve world'e ekle
     for (id, mesh_src) in missing_meshes {
         if let Some(entity) = world.live(id) {
-            // A built-in primitive is uploaded once and shared by every entity that names it.
-            let mesh = if let Some(primitive) = asset_manager.primitive_mesh(device, &mesh_src) {
-                primitive
-            } else if mesh_src.starts_with("gltf_mesh_") {
-                if let Some(cached) = asset_manager.get_cached_mesh(&mesh_src) {
-                    cached
-                } else {
-                    // The one parse of this key shape in the workspace, shared with the scene
-                    // format's identity repair — see `MeshSource::split_gltf_key`. Two copies of
-                    // it is how the loader and the saver come to disagree about where the file
-                    // name ends, which for a node called `wheel_front_left` is not hypothetical.
-                    let file_path = gizmo_core::component::MeshSource::split_gltf_key(&mesh_src)
-                        .map(|(path, _)| path);
-
-                    if let Some(path) = file_path {
-                        if let Err(e) = asset_manager.load_gltf_scene(
-                            device,
-                            queue,
-                            texture_bind_group_layout,
-                            default_texture_bind_group.clone(),
-                            path,
-                        ) {
-                            // Previously swallowed with `let _`: on failure the mesh
-                            // silently became a placeholder with no explanation.
-                            tracing::warn!(
-                                path,
-                                mesh_source = %mesh_src,
-                                error = %e,
-                                "[AssetLoading] glTF scene load failed; using placeholder mesh"
-                            );
-                        }
-                        if let Some(cached) = asset_manager.get_cached_mesh(&mesh_src) {
-                            cached
-                        } else {
-                            asset_manager.loading_placeholder_mesh(device)
-                        }
-                    } else {
-                        asset_manager.loading_placeholder_mesh(device)
-                    }
-                }
-            } else if mesh_src.starts_with("obj:") {
-                let path = mesh_src.trim_start_matches("obj:");
-                asset_manager.load_obj(device, path)
-            } else {
-                asset_manager.load_obj(device, &mesh_src)
-            };
+            let mesh = asset_manager.mesh_from_source(device, queue, texture_bind_group_layout, &mesh_src);
 
             world.add_component(entity, mesh);
         }
@@ -278,9 +233,15 @@ mod tests {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
-        assert!(code.contains("asset_manager.primitive_mesh(device,&mesh_src)"), "the loader no longer asks the primitive cache");
+        // The loader builds a key's mesh with `AssetManager::mesh_from_source` (shared, since
+        // 2026-11-14, with what builds a `LodGroupDesc` back), and that asks the primitive cache first.
+        assert!(code.contains("asset_manager.mesh_from_source(device,queue,texture_bind_group_layout,&mesh_src)"), "the loader no longer builds a key's mesh through `mesh_from_source`");
+        let builder: String = code_only(include_str!("asset/mod.rs")).chars().filter(|c| !c.is_whitespace()).collect();
+        let body = builder.split("pubfnmesh_from_source(").nth(1).expect("`mesh_from_source` exists");
+        let body = body.split("pubfnrebuilds_mesh(").next().unwrap_or(body);
+        assert!(body.contains("self.primitive_mesh(device,key)"), "`mesh_from_source` no longer asks the primitive cache");
         for direct in ["AssetManager::create_sphere(", "AssetManager::create_cube(", "AssetManager::create_plane("] {
-            assert!(!code.contains(direct), "the loader builds `{direct}..)` per entity again");
+            assert!(!code.contains(direct) && !body.contains(direct), "a key's mesh is built with `{direct}..)` per entity again");
         }
     }
 

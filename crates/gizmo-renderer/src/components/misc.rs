@@ -217,6 +217,91 @@ impl LodGroup {
     }
 }
 
+/// Everything a [`LodGroup`] is but its GPU meshes — what a scene saves one as: each level's mesh
+/// by the key that builds it again (`Mesh::source`: a primitive with its parameters, a glTF sub-mesh,
+/// an OBJ file) and the distance it reaches, and the crossfade. Kept by [`sync_lod_groups`].
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LodGroupDesc {
+    /// The levels, nearest first.
+    pub levels: Vec<LodLevelDesc>,
+    /// See [`LodGroup::crossfade`].
+    pub crossfade: f32,
+}
+
+/// One level of a [`LodGroupDesc`].
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct LodLevelDesc {
+    /// The key its mesh is built from.
+    pub mesh: String,
+    /// See [`LodLevel::max_distance`].
+    pub max_distance: f32,
+}
+
+/// Keeps every [`LodGroup`] and its [`LodGroupDesc`] together: the description follows the live
+/// group, and a description with no group (a scene just opened) gets one, its meshes built from their
+/// keys. A group with a level no key builds — a mesh made from points straight onto the GPU — is not
+/// described, and the editor names it at a save as it names such a mesh.
+pub fn sync_lod_groups(world: &mut gizmo_core::World, renderer: &crate::Renderer) {
+    use gizmo_core::Entity;
+    let describes = |group: &LodGroup, desc: Option<&LodGroupDesc>| -> Option<Option<LodGroupDesc>> {
+        let same = desc.is_some_and(|d| {
+            d.crossfade == group.crossfade
+                && d.levels.len() == group.levels.len()
+                && d.levels.iter().zip(&group.levels).all(|(a, b)| a.mesh == b.mesh.source && a.max_distance == b.max_distance)
+        });
+        if same {
+            return None;
+        }
+        if !group.levels.iter().all(|l| crate::asset::AssetManager::rebuilds_mesh(&l.mesh.source)) {
+            return Some(None);
+        }
+        Some(Some(LodGroupDesc {
+            levels: group.levels.iter().map(|l| LodLevelDesc { mesh: l.mesh.source.clone(), max_distance: l.max_distance }).collect(),
+            crossfade: group.crossfade,
+        }))
+    };
+    let (missing, stale): (Vec<(Entity, LodGroupDesc)>, Vec<(Entity, Option<LodGroupDesc>)>) = {
+        let groups = world.query::<&LodGroup>();
+        let descs = world.query::<&LodGroupDesc>();
+        let missing = world
+            .query::<(Entity, &LodGroupDesc)>()
+            .iter()
+            .filter(|(e, _)| groups.get(*e).is_none())
+            .map(|(e, d)| (e, d.clone()))
+            .collect();
+        let stale = world
+            .query::<(Entity, &LodGroup)>()
+            .iter()
+            .filter_map(|(e, g)| describes(g, descs.get(e)).map(|d| (e, d)))
+            .collect();
+        (missing, stale)
+    };
+    for (entity, desc) in missing {
+        let mut assets = renderer.asset_manager.write().unwrap_or_else(|p| p.into_inner());
+        let levels = desc
+            .levels
+            .iter()
+            .map(|l| {
+                LodLevel::new(
+                    assets.mesh_from_source(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout, &l.mesh),
+                    l.max_distance,
+                )
+            })
+            .collect();
+        drop(assets);
+        world.add_component(entity, LodGroup::new(levels).with_crossfade(desc.crossfade));
+    }
+    for (entity, desc) in stale {
+        match desc {
+            Some(desc) => world.add_component(entity, desc),
+            None => {
+                tracing::debug!(entity = entity.id(), "[LodGroup] a level's mesh has no key that builds it; not described");
+                world.remove_component::<LodGroupDesc>(entity);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod lod_tests {
     use super::*;

@@ -108,6 +108,12 @@ pub fn full_scene_registry() -> SceneRegistry {
         // Saved in their images by name and sampling (`sprite_sync`).
         reg_or_warn!(gizmo_renderer::components::Sprite, "Sprite");
         reg_or_warn!(gizmo_renderer::components::Tilemap, "Tilemap");
+        // A decal owns a GPU bind group; what travels is its description (`sync_decals`).
+        reg_or_warn!(gizmo_renderer::components::DecalDesc, "DecalDesc");
+        // A LOD group owns GPU meshes; what travels is its description (`sync_lod_groups`).
+        reg_or_warn!(gizmo_renderer::components::LodGroupDesc, "LodGroupDesc");
+        // A camera drawing into a texture: its size, the texture made again (`sync_camera_targets`).
+        reg_or_warn!(gizmo_renderer::components::CameraTargetDesc, "CameraTargetDesc");
     }
 
     #[cfg(feature = "audio")]

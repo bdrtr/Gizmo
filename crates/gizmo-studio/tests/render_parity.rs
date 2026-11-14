@@ -1036,6 +1036,10 @@ fn every_capability_neither_path_names_is_accounted_for() {
         ("MaterialMaps", "a `Material`'s map paths and strengths: data the bind group is built from, by `material_sync` inside `prepare_frame`, which both hosts run; both draw loops then bind the result as `Material::bind_group`, so neither has a reason to name the type. `a_materials_maps_are_saved_loaded_and_follow_their_sources` is the end-to-end check."),
         ("TextureWrap", "a member of `MaterialMaps`, read where the bind group is built, as it is."),
         ("TextureFilter", "the same."),
+        ("DecalDesc", "a `Decal` as a scene holds it; `sync_decals` inside `prepare_frame`, which both hosts run, turns it into the `Decal` both paths draw."),
+        ("LodGroupDesc", "a `LodGroup` as a scene holds it; `sync_lod_groups` inside `prepare_frame` turns it into the `LodGroup` both paths read."),
+        ("LodLevelDesc", "one level of a `LodGroupDesc`."),
+        ("CameraTargetDesc", "a `CameraTarget` as a scene holds it (its size); `sync_camera_targets` inside `prepare_frame` makes the texture both paths draw into."),
         ("RenderTarget", "an app-level render-to-texture handle (`gizmo-app`'s editor runtime), not a per-picture capability; the editor's own two are in EXCEPTIONS above."),
 
         // ── Genuinely one-sided, measured, and NOT a one-line fix ──────────────────────────
