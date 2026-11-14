@@ -88,6 +88,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Scene fidelity, first batch: what is seen is saved.** `IsHidden`, `ReflectionProbe`, `PlanarReflection`, `Occluder`,
+  `Wireframe`, `WireframeColor`, `NoWireframe`, `CameraShake`, `ColorTween`, `SpriteAnimation`, `Typewriter` and
+  `LocalizedLabel` are scene data (`Aabb`, `Ease` and `Repeat` are `serde` for it); the facade's own components go
+  through `gizmo::full_scene_registry` / `scene_registry_for`. A scene with a mirror floor, a probe a metal ball reflects,
+  a wireframe, an occluder and a hidden cube reopens as the saved frame, and the occluder hides as much; each
+  registration taken out breaks it (149 to 2976 pixels, or the hidden count). `gizmo-studio/tests/scene_fidelity.rs`:
+  119 components, 51 open.
+
+- **A soft-deleted entity is not saved.** The editor marks a delete and sweeps it seconds later; a save in between
+  wrote it, and the marker not being scene data, it came back undeleted.
+
+- **A reopened scene's colour tweens are where they were saved, not a frame behind.** `prepare_frame` advanced the
+  frame's clocks before it made the materials a loaded scene describes, so a tween over a material not made yet
+  skipped that frame — after a reopen or a ⏹, every colour tween ran a frame late (4622 of 16384 pixels in the test).
+  Described materials are made first now.
+
 - **A material over a texture it does not name keeps it through a save.** `Material::new(renderer.load_texture(path)?)`
   and a material over `create_uv_debug_texture` or `create_checkerboard_texture` named no texture, and were saved
   untextured: they reopened white. The bind group says which texture it is (`AssetManager::texture_source_of`, a file's

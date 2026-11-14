@@ -28,7 +28,7 @@ use gizmo_physics_core::Transform;
 pub use gizmo_math::Ease;
 
 /// What happens when a tween reaches its end.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Repeat {
     /// Stop at the end; [`Tween::is_finished`] turns true and the end pose stays.

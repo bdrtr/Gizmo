@@ -4,7 +4,7 @@
 ///
 /// Every curve starts at 0 and ends at 1. `OutBack` and `OutElastic` overshoot past 1 on the way
 /// — that is what they are for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Ease {
     /// Constant speed.

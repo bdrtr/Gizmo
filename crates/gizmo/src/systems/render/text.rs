@@ -264,7 +264,7 @@ fn text_input_display(_world: &World, _entity: Entity) -> Option<String> {
 /// string starts typing from the beginning.
 ///
 /// Advanced by both draw paths on the animation clock, so a paused game pauses it.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Typewriter {
     /// How fast it types.
     pub chars_per_second: f32,
@@ -387,7 +387,7 @@ fn typed_display(world: &World, entity: Entity, full: &str) -> Option<String> {
 /// Resolved in the preparation they are recorded where the game reads them, and the draw needs no
 /// `Locale` at all. Written only when the string changes, so a copy of the world takes it again on
 /// those frames and no others.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct LocalizedLabel(pub String);
 
 gizmo_core::impl_component!(LocalizedLabel);

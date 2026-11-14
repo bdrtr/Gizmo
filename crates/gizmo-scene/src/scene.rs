@@ -683,6 +683,7 @@ impl SceneData {
         let parents = world.query::<&Parent>();
         let children_store = world.query::<&Children>();
         let editor_only_markers = world.query::<&gizmo_core::component::EditorOnly>();
+        let deleted = world.query::<&gizmo_core::component::IsDeleted>();
 
         for &id in &entity_ids {
             let name = names.get(id).map(|n| n.0.clone());
@@ -692,6 +693,12 @@ impl SceneData {
                 editor_only_markers.get(id).is_some(),
                 name.as_deref(),
             ) {
+                continue;
+            }
+            // A soft-deleted entity is gone from the scene: the editor marks a delete and sweeps
+            // it a few seconds later, and a save in between wrote it — and, the marker not being
+            // scene data, it came back undeleted.
+            if deleted.get(id).is_some() {
                 continue;
             }
 
@@ -2410,7 +2417,25 @@ mod asset_identity_tests {
     /// Save with the asset at its old path, move the file (the registry now reports the new
     /// location for the same UUID), load — and the scene points at the new path. Without the
     /// identity stamp the reference would be exactly as stale as the path it was written from.
+        /// **A soft-deleted entity is not saved.** The editor marks a delete (`IsDeleted`) and sweeps
+    /// it seconds later; a save in between wrote the entity, and the marker not being scene data,
+    /// it came back undeleted.
     #[test]
+    fn a_soft_deleted_entity_is_not_saved() {
+        let mut world = gizmo_core::World::new();
+        let kept = world.spawn();
+        world.add_component(kept, gizmo_core::EntityName::new("kept"));
+        let gone = world.spawn();
+        world.add_component(gone, gizmo_core::EntityName::new("gone"));
+        world.add_component(gone, gizmo_core::component::IsDeleted);
+        let registry = crate::registry::default_scene_registry();
+        let ids = vec![kept, gone];
+        let data = SceneData::serialize_entities(&world, ids, &registry);
+        let names: Vec<Option<String>> = data.iter().map(|e| e.name.clone()).collect();
+        assert_eq!(names, vec![Some("kept".to_string())]);
+    }
+
+#[test]
     fn a_moved_asset_is_found_again_by_identity() {
         let at_save = Registry::new(&[
             ("demo/assets/old/tree.obj", "11111111-1111-1111-1111-111111111111"),

@@ -91,6 +91,18 @@ pub fn full_scene_registry() -> SceneRegistry {
         // Geometry made from points in code, vertices and all (decided 2026-11-14): saved, and
         // carried through the editor's Play/Stop snapshot, which re-creates what play destroyed.
         reg_or_warn!(gizmo_renderer::components::MeshData, "MeshData");
+        // What is seen, saved (scene fidelity, 2026-11-14): `gizmo-studio/tests/scene_fidelity.rs`
+        // holds every component to this list or to a reason it is not on it.
+        reg_or_warn!(gizmo_core::component::IsHidden, "IsHidden");
+        reg_or_warn!(gizmo_renderer::components::ReflectionProbe, "ReflectionProbe");
+        reg_or_warn!(gizmo_renderer::components::PlanarReflection, "PlanarReflection");
+        reg_or_warn!(gizmo_renderer::components::Occluder, "Occluder");
+        reg_or_warn!(gizmo_renderer::components::Wireframe, "Wireframe");
+        reg_or_warn!(gizmo_renderer::components::WireframeColor, "WireframeColor");
+        reg_or_warn!(gizmo_renderer::components::NoWireframe, "NoWireframe");
+        reg_or_warn!(gizmo_renderer::components::CameraShake, "CameraShake");
+        reg_or_warn!(gizmo_renderer::components::ColorTween, "ColorTween");
+        reg_or_warn!(gizmo_renderer::components::SpriteAnimation, "SpriteAnimation");
     }
 
     #[cfg(feature = "audio")]

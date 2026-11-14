@@ -25,7 +25,7 @@ use crate::components::{Material, Sprite, Text};
 /// ```
 ///
 /// Advanced by the draw path on the animation clock, in both the game's and the editor's.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ColorTween {
     from: Option<Vec4>,
     to: Vec4,

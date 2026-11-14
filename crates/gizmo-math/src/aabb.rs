@@ -4,7 +4,7 @@ use glam::{Mat4, Vec3A, Vec4Swizzles};
 ///
 /// Uses `Vec3A` (16-byte aligned SIMD vector) for performance.
 /// An "empty" AABB has min = +INF, max = -INF and represents no volume.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Aabb {
     /// Lower corner, in whatever frame the producer used — `Aabb` itself is
     /// frame-agnostic, so a local-space box and a world-space box are the same type

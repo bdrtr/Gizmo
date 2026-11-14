@@ -18,7 +18,7 @@ use gizmo_math::{Mat4, Vec3, Vec4};
 /// there is no blur: every mirror is perfectly sharp. Every view captures its own — a split-screen
 /// view and a camera drawing into a texture reflect for their own camera, one more scene draw each —
 /// and in the editor the surface draws as its plain colour.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct PlanarReflection {
     /// The surface's outward normal in the mesh's local space (default +Y, a floor or a pool).
     pub local_normal: Vec3,

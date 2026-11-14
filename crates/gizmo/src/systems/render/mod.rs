@@ -1019,6 +1019,12 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     #[cfg(feature = "physics-soft")]
     crate::systems::cloth::soft_body_mesh_system(world);
 
+    // **Materials that a scene describes are made before anything edits them.** A scene that has
+    // just loaded carries `MaterialDesc`s and no `Material`; the clocks below tween materials, and a
+    // tween over a material not made yet skipped that frame — a reopened scene, or ⏹, put every
+    // colour tween one frame behind the one that was saved (measured: 4622 of 16384 pixels).
+    crate::renderer::material_sync::resolve_material_descriptions(world, renderer);
+
     // **Tweens first**, before the transform pass below so a tweened `Transform` is drawn where it
     // is this frame.
     advance_frame_clocks(world);
@@ -1032,11 +1038,10 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     ensure_global_transforms(world);
 
     // **Materials, both directions.** A scene that has just loaded carries `MaterialDesc`s and no
-    // `Material` — descriptions are what a file can hold — so resolve first, building each one's
-    // bind group; then write a description back for every live material, so the next save has
+    // `Material` — descriptions are what a file can hold — so they were resolved above, before the
+    // clocks; here a description is written back for every live material, so the next save has
     // something to write. Until 2026-08-19 neither happened and a saved scene lost every material
     // a user had authored.
-    crate::renderer::material_sync::resolve_material_descriptions(world, renderer);
     // A material whose texture or maps changed since its bind group was built — in the editor, by
     // the game, by an undo — is built again from them.
     crate::renderer::material_sync::rebind_changed_materials(world, renderer);
@@ -13712,6 +13717,176 @@ fn material_surface(input: SurfaceInput) -> Surface {
             assert_eq!(changed, 0, "the reopened cubes drew {changed}/{total} pixels otherwise");
         });
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What [`draw_save_reopen`] saw on each side.
+    struct Reopened {
+        drawn: Vec<u8>,
+        reopened: Vec<u8>,
+        /// `renderer.occluded_objects` after the compared frame, saved side then reopened side.
+        occluded: (u32, u32),
+    }
+
+    /// Builds a scene with `build`, draws it, saves it, opens it with a fresh renderer and world, and
+    /// draws that. With `dt`, both worlds run a clock stepped by `dt` before every frame, and the saved
+    /// side keeps playing after the save for as many frames as the reopened side plays: what was in
+    /// motion at the save (a tween) has to carry on from where it was. Each side draws three frames
+    /// before the one compared, so what a frame captures on its first (a probe, a mirror) has been
+    /// captured on both. The temporal pass is off: two frames of one scene are the same frame.
+    async fn draw_save_reopen(dt: Option<f32>, build: impl FnOnce(&mut World, &Renderer)) -> Reopened {
+        let scene_path = std::env::temp_dir().join(format!(
+            "gizmo-fidelity-{}-{}.scene",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        ));
+        let scene_path = scene_path.to_string_lossy().into_owned();
+        let registry = crate::full_scene_registry();
+        let load = |world: &mut World, renderer: &Renderer| {
+            let manager = renderer.asset_manager.clone();
+            let mut assets = manager.write().unwrap();
+            crate::renderer::asset_loading::run_asset_loading_system(
+                world,
+                &renderer.device,
+                &renderer.queue,
+                &renderer.scene.texture_bind_group_layout,
+                &mut assets,
+            );
+        };
+        let step = |world: &mut World| {
+            if let (Some(dt), Some(mut time)) = (dt, world.get_resource_mut::<gizmo_core::time::Time>()) {
+                time.update(dt);
+            }
+        };
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        let mut world = World::new();
+        if dt.is_some() {
+            world.insert_resource(gizmo_core::time::Time::new());
+        }
+        build(&mut world, &renderer);
+        load(&mut world, &renderer);
+        let mut drawn = Vec::new();
+        for _ in 0..3 {
+            step(&mut world);
+            drawn = render_world(&mut renderer, &mut world).await;
+        }
+        crate::scene::SceneData::save(&world, &scene_path, &registry).expect("saves");
+        if dt.is_some() {
+            for _ in 0..3 {
+                step(&mut world);
+                drawn = render_world(&mut renderer, &mut world).await;
+            }
+        }
+        let occluded_saved = renderer.occluded_objects;
+
+        let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+        renderer.taa = None;
+        let mut world = World::new();
+        if dt.is_some() {
+            world.insert_resource(gizmo_core::time::Time::new());
+        }
+        crate::scene::SceneData::load_into(&scene_path, &mut world, &registry).expect("loads");
+        load(&mut world, &renderer);
+        let mut reopened = Vec::new();
+        for _ in 0..3 {
+            step(&mut world);
+            reopened = render_world(&mut renderer, &mut world).await;
+        }
+        let _ = std::fs::remove_file(&scene_path);
+        Reopened { drawn, reopened, occluded: (occluded_saved, renderer.occluded_objects) }
+    }
+
+    /// **What is seen is saved (scene fidelity, first batch).** A floor that mirrors, a reflection
+    /// probe a mirror-smooth ball reflects a red wall through, a wireframed cube, an occluder with a
+    /// cube behind it, and a hidden cube that must stay hidden: the reopened frame is the saved one,
+    /// and the occluder hides as much. Before 2026-11-14 none of these was scene data, and each came
+    /// back as a plain cube, or not at all. A tween is [`a_tween_saved_half_way_carries_on`]'s: a probe
+    /// captures once, and a probe over a changing colour captures whichever colour its first frame saw.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn what_is_seen_survives_a_save_first_batch() {
+        use gizmo_renderer::components::{MaterialDesc, Occluder, PlanarReflection, ReflectionProbe, Wireframe};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let shape = |world: &mut World, key: &str, at: Vec3, scale: Vec3, colour: Vec4| {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(at).with_scale(scale));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, gizmo_core::component::MeshSource(key.to_string()));
+            world.add_component(e, MaterialDesc::default().with_pbr(colour, 0.3, 0.0));
+            world.add_component(e, MeshRenderer::new());
+            e
+        };
+        pollster::block_on(async {
+            let seen = draw_save_reopen(None, |world, _| {
+                let floor = shape(world, "plane_8", Vec3::new(0.0, -1.0, 0.0), Vec3::ONE, Vec4::new(0.3, 0.3, 0.35, 1.0));
+                world.add_component(floor, PlanarReflection::new().with_reflectance(0.6));
+                // A probe a mirror-smooth metal ball reflects, beside a red wall the probe captures and
+                // the sky does not have.
+                let probe = world.spawn();
+                world.add_component(probe, Transform::new(Vec3::new(0.0, 0.0, 0.0)));
+                world.add_component(probe, GlobalTransform::default());
+                world.add_component(probe, ReflectionProbe::new().with_influence(Vec3::splat(4.0)));
+                let ball = shape(world, "sphere_0.6_32_32", Vec3::new(0.0, -0.3, 0.0), Vec3::ONE, Vec4::ONE);
+                world.add_component(ball, MaterialDesc::default().with_pbr(Vec4::ONE, 0.05, 1.0));
+                shape(world, "standard_cube", Vec3::new(0.0, 0.0, -2.0), Vec3::new(3.0, 2.0, 0.1), Vec4::new(0.9, 0.05, 0.05, 1.0));
+                let wired = shape(world, "standard_cube", Vec3::new(-1.6, 0.0, 0.0), Vec3::splat(0.4), Vec4::new(0.9, 0.2, 0.2, 1.0));
+                world.add_component(wired, Wireframe);
+                world.add_component(wired, gizmo_renderer::components::WireframeColor([0.1, 1.0, 0.3]));
+                // A wall with a cube behind it, from the camera: the cube is hidden, not drawn.
+                let wall = shape(world, "standard_cube", Vec3::new(1.4, 0.2, 2.0), Vec3::new(0.8, 1.0, 0.1), Vec4::new(0.9, 0.9, 0.2, 1.0));
+                world.add_component(wall, Occluder::new());
+                shape(world, "standard_cube", Vec3::new(2.0, 0.2, -1.5), Vec3::splat(0.15), Vec4::ONE);
+                let hidden = shape(world, "standard_cube", Vec3::new(0.0, 1.2, 0.0), Vec3::splat(0.4), Vec4::new(1.0, 0.0, 1.0, 1.0));
+                world.add_component(hidden, gizmo_core::component::IsHidden);
+                world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.5, 5.0), yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.1, ..Default::default() });
+                world.spawn_bundle(DirectionalLightBundle::default());
+            })
+            .await;
+            assert!(seen.occluded.0 > 0, "the occluder hid nothing to begin with: the scene does not test it");
+            assert_eq!(seen.occluded.0, seen.occluded.1, "the reopened occluder hides otherwise");
+            let (drawn, reopened) = (seen.drawn, seen.reopened);
+            let (changed, total) = changed_pixels(&drawn, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened scene drew {changed}/{total} pixels otherwise");
+        });
+    }
+
+    /// **A tween saved half way carries on from where it was.** A cube's colour tween, a third of the
+    /// way at the save; both sides then play the same three frames on the same clock: the reopened
+    /// frame is the saved side's. Its colour alone would not show it — the material keeps the colour
+    /// reached — so the frames compared are after the save, where an unsaved tween stops.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_tween_saved_half_way_carries_on() {
+        use gizmo_renderer::components::{ColorTween, MaterialDesc};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let seen = draw_save_reopen(Some(1.0 / 30.0), |world, _| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::ZERO).with_scale(Vec3::splat(1.2)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, gizmo_core::component::MeshSource("standard_cube".to_string()));
+                world.add_component(e, MaterialDesc::default().with_pbr(Vec4::new(0.2, 0.9, 0.2, 1.0), 0.5, 0.0));
+                world.add_component(e, MeshRenderer::new());
+                world.add_component(e, ColorTween::to(Vec4::new(0.1, 0.1, 0.9, 1.0), 0.3));
+                world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+                world.spawn_bundle(DirectionalLightBundle::default());
+            })
+            .await;
+            let (changed, total) = changed_pixels(&seen.drawn, &seen.reopened, 128);
+            assert_eq!(changed, 0, "the reopened tween drew {changed}/{total} pixels otherwise");
+        });
     }
 
     /// **A paused game's playhead, moved, moves the pose.** The editor's ⏸ holds the clock still

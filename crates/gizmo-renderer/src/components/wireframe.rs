@@ -6,15 +6,15 @@
 use gizmo_core::impl_component;
 
 /// Draws this entity's wireframe over it, whatever `WireframeConfig::global` says.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Wireframe;
 
 /// Leaves this entity out of `WireframeConfig::global`. It wins over [`Wireframe`] on one entity.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NoWireframe;
 
 /// The colour of this entity's lines (linear RGB, 0..1), over `WireframeConfig::color`.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct WireframeColor(pub [f32; 3]);
 
 impl_component!(Wireframe, NoWireframe, WireframeColor);

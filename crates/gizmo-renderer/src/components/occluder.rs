@@ -13,7 +13,7 @@ use gizmo_math::Aabb;
 ///
 /// It counts only while the entity draws solid: a hidden, transparent, pooled or `ShadowCasting::Only`
 /// occluder hides nothing. An object it hides still casts its shadow.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Occluder {
     pub(crate) inner: Option<Aabb>,
 }

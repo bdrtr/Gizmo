@@ -179,7 +179,28 @@ pub use gizmo_scene as scene;
 /// ```
 #[cfg(feature = "scene")]
 pub fn full_scene_registry() -> scene::registry::SceneRegistry {
-    app::scene_registry::full_scene_registry()
+    let mut reg = app::scene_registry::full_scene_registry();
+    register_facade_components(&mut reg);
+    reg
+}
+
+/// The components this crate defines itself, which `gizmo-app`'s registry cannot see.
+#[cfg(feature = "scene")]
+fn register_facade_components(reg: &mut scene::registry::SceneRegistry) {
+    #[allow(unused_macros)]
+    macro_rules! reg_or_warn {
+        ($ty:ty, $name:literal) => {
+            if let Err(e) = reg.register_serializable::<$ty>($name) {
+                tracing::warn!(component = $name, error = ?e, "[Scene] component registration failed");
+            }
+        };
+    }
+    #[cfg(feature = "render")]
+    {
+        reg_or_warn!(systems::render::Typewriter, "Typewriter");
+        reg_or_warn!(systems::render::LocalizedLabel, "LocalizedLabel");
+    }
+    let _ = reg;
 }
 
 /// [`full_scene_registry`] plus every component the game registered into `world` with
@@ -187,7 +208,9 @@ pub fn full_scene_registry() -> scene::registry::SceneRegistry {
 /// components of its own. The editor's save and load use exactly this.
 #[cfg(feature = "scene")]
 pub fn scene_registry_for(world: &core::World) -> scene::registry::SceneRegistry {
-    app::scene_registry::scene_registry_for_world(world)
+    let mut reg = app::scene_registry::scene_registry_for_world(world);
+    register_facade_components(&mut reg);
+    reg
 }
 
 /// Makes one of the game's own components a first-class citizen of the editor and of scene files.
