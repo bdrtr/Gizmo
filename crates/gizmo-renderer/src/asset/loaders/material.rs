@@ -324,6 +324,8 @@ pub(super) fn build_gltf_materials(
                 mag_filter: crate::components::TextureFilter::from_filter_mode(mat_sampler_key.mag),
                 min_filter: crate::components::TextureFilter::from_filter_mode(mat_sampler_key.min),
             };
+            // The bind group above holds these maps: not to be built again on the first frame.
+            mat.mark_maps_bound();
             mat.emissive = gizmo_math::Vec3::from(instance_emissive);
 
             let mat_name = material.name().unwrap_or("").to_lowercase();

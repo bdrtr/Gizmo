@@ -121,7 +121,10 @@ pub fn sync_material_descriptions(world: &mut World) {
                     let mut materials = world.query_mut::<&mut Material>();
                     match materials.get_mut(e) {
                         Some(mut m) if m.texture_source == desc.texture_source => {
+                            // Same bind group, so the same maps in it as before.
+                            let bound_maps = m.bound_maps().clone();
                             *m = desc.clone().into_material(m.bind_group.clone());
+                            m.set_bound_maps(bound_maps);
                             true
                         }
                         _ => false,
@@ -187,7 +190,10 @@ impl gizmo_core::component::Component for BoundSources {}
 ///
 /// A material seen for the first time is taken as it is: its bind group may hold what its fields do
 /// not name (the glTF loader's maps, a builder's views, a texture still streaming in), and only a
-/// change of a source is a reason to replace it.
+/// change of a source is a reason to replace it. The one exception is a material whose
+/// [`maps`](Material::maps) are not the ones its bind group was built from
+/// ([`Material::maps_are_bound`]) — made in code with a map set before its first frame: that is
+/// built again from what it names.
 pub fn rebind_changed_materials(world: &mut World, renderer: &crate::Renderer) {
     let (adopt, changed): (Vec<(Entity, BoundSources)>, Vec<(Entity, BoundSources)>) = {
         let bound = world.query::<&BoundSources>();
@@ -196,6 +202,8 @@ pub fn rebind_changed_materials(world: &mut World, renderer: &crate::Renderer) {
         for (entity, material) in world.query::<(Entity, &Material)>().iter() {
             let now = BoundSources { texture_source: material.texture_source.clone(), maps: material.maps.clone() };
             match bound.get(entity) {
+                // Seen for the first time with maps its bind group was not built from: built again.
+                None if !material.maps_are_bound() => changed.push((entity, now)),
                 None => adopt.push((entity, now)),
                 Some(before) if *before != now => changed.push((entity, now)),
                 Some(_) => {}
@@ -239,6 +247,8 @@ pub fn rebind_changed_materials(world: &mut World, renderer: &crate::Renderer) {
         let bind_group = renderer.material_bind_group(sources.texture_source.as_deref(), &sources.maps);
         if let Some(mut material) = world.query_mut::<&mut Material>().get_mut(entity) {
             material.bind_group = bind_group;
+            // A clone of it spawned elsewhere is then taken as it is, not built a second time.
+            material.mark_maps_bound();
         }
         world.add_component(entity, sources);
     }

@@ -14906,6 +14906,26 @@ fn material_surface(input: SurfaceInput) -> Surface {
                 assert_eq!(changed, 0, "{path}: the reopened lightmapped quad drew {changed}/{total} pixels otherwise");
             }
 
+            // A `Material` built in code — over a bind group made without the map — with the lightmap
+            // set before its first frame draws as the description does: the bind group is built
+            // again from the maps it names. It used to be taken as it was, and the map ignored.
+            let in_code = draw_save_reopen_with(None, |_| {}, {
+                let lightmap = lightmap.clone();
+                move |world, renderer| {
+                    lightmapped_quad(world, white.clone());
+                    let quad = world.query::<(gizmo_core::Entity, &MaterialDesc)>().iter().next().map(|(e, _)| e).unwrap();
+                    world.remove_component::<MaterialDesc>(quad);
+                    let mut m = Material::new(renderer.create_white_texture()).with_pbr(Vec4::new(0.9, 0.9, 0.9, 1.0), 1.0, 0.0);
+                    m.maps = MaterialMaps::default().with_lightmap(lightmap, 1.0);
+                    world.add_component(quad, m);
+                }
+            })
+            .await;
+            let (cl, cr) = (px(&in_code.drawn, 40), px(&in_code.drawn, 88));
+            eprintln!("in code: left {cl:?} right {cr:?}");
+            assert!(cl[0] > cl[1] + 60, "a Material made in code with a lightmap set before its first frame ignored it: {cl:?}");
+            assert!(cr.iter().sum::<i32>() * 3 < r.iter().sum::<i32>(), "a Material made in code kept the sky on its black half: {cr:?}");
+
             // A baked-lit surface takes its light from the lightmap too, in place of its vertex
             // colours (which are white here).
             let baked_lit = MaterialDesc::default()

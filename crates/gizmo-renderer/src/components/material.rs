@@ -189,12 +189,13 @@ pub struct Material {
     /// Where the albedo texture came from; `None` for an untextured material. Used for
     /// reloading and for recognising an already-loaded texture.
     pub texture_source: Option<String>,
-    /// The material's other maps — normal, metallic-roughness, emissive, occlusion — by where they
-    /// come from, with their strengths. Like [`texture_source`](Self::texture_source), data the
-    /// bind group is built from: change either and [`crate::material_sync`] builds the bind group
-    /// again. A material built by hand with maps the bind group holds but these do not name (the
-    /// glTF loader, [`AssetManager::material`](crate::asset::AssetManager::material)) keeps its bind
-    /// group until one of them changes.
+    /// The material's other maps — normal, metallic-roughness, emissive, occlusion, lightmap — by
+    /// where they come from, with their strengths. Like [`texture_source`](Self::texture_source), data
+    /// the bind group is built from: change either and [`crate::material_sync`] builds the bind group
+    /// again — and so does a material made in code whose maps were set before its first frame (see
+    /// `bound_maps`). A material built by hand with maps the bind group holds but these do not name
+    /// ([`AssetManager::material`](crate::asset::AssetManager::material)) keeps its bind group until
+    /// one of them changes.
     pub maps: MaterialMaps,
     /// The shading route — see [`MaterialType`].
     pub material_type: MaterialType,
@@ -257,6 +258,12 @@ pub struct Material {
     /// `specularColorFactor`. A metal's F0 is its albedo, so this fades out with
     /// [`metallic`](Self::metallic) as `reflectance` does.
     pub specular_tint: gizmo_math::Vec3,
+    /// The maps [`bind_group`](Self::bind_group) was built from. Set by whatever builds it: a
+    /// description, the glTF loader ([`Self::mark_maps_bound`]); [`Material::new`] takes it as none.
+    /// When [`maps`](Self::maps) differs from it the first time `material_sync` sees the material,
+    /// the bind group is built again from `maps` — a material made in code with a map set before its
+    /// first frame was taken as it was, and the map ignored.
+    bound_maps: MaterialMaps,
 }
 
 /// The smoothest a clear coat gets, and what one that says nothing is. Any smoother and the highlight is
@@ -608,6 +615,7 @@ impl From<&Material> for MaterialDesc {
     fn from(m: &Material) -> Self {
         let Material {
             bind_group: _,
+            bound_maps: _,
             albedo,
             roughness,
             metallic,
@@ -674,6 +682,7 @@ impl MaterialDesc {
             ambient: self.ambient,
             emissive: self.emissive,
             texture_source: self.texture_source,
+            bound_maps: self.maps.clone(),
             maps: self.maps,
             material_type: self.material_type,
             is_transparent: self.is_transparent,
@@ -984,6 +993,28 @@ impl Material {
     /// and every extra knob at zero — [`MaterialDesc::default`] over `bind_group`.
     pub fn new(bind_group: Arc<wgpu::BindGroup>) -> Self {
         MaterialDesc::default().into_material(bind_group)
+    }
+
+    /// Says that [`bind_group`](Self::bind_group) was built from [`maps`](Self::maps) as they are
+    /// now — for a loader that builds both itself (the glTF importer), so the material is not built
+    /// again on its first frame.
+    pub fn mark_maps_bound(&mut self) {
+        self.bound_maps = self.maps.clone();
+    }
+
+    /// The maps [`bind_group`](Self::bind_group) was built from.
+    pub(crate) fn bound_maps(&self) -> &MaterialMaps {
+        &self.bound_maps
+    }
+
+    pub(crate) fn set_bound_maps(&mut self, maps: MaterialMaps) {
+        self.bound_maps = maps;
+    }
+
+    /// Whether [`maps`](Self::maps) is what [`bind_group`](Self::bind_group) was built from.
+    #[must_use]
+    pub fn maps_are_bound(&self) -> bool {
+        self.maps == self.bound_maps
     }
 
     material_builders!();
