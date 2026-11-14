@@ -1785,6 +1785,7 @@ dependencies = [
  "bytemuck",
  "games",
  "gizmo-engine",
+ "image",
  "mimalloc",
  "pollster 1.0.1",
  "rand 0.10.2",
