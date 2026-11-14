@@ -451,12 +451,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9e1b586273c5702936fe7b7d6896644d8be71e6314cfe09d3167c95f712589e8"
 
 [[package]]
-name = "base64"
-version = "0.21.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9d297deb1925b89f2ccc13d7635fa0714f12c87adce1c75356b39ca9b7178567"
-
-[[package]]
 name = "bevy_android"
 version = "0.19.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -519,7 +513,7 @@ dependencies = [
  "futures-lite",
  "futures-util",
  "js-sys",
- "ron 0.12.2",
+ "ron",
  "serde",
  "stackfuture",
  "thiserror 2.0.20",
@@ -1598,7 +1592,7 @@ dependencies = [
  "gizmo-engine",
  "gizmo-math",
  "mimalloc",
- "pollster",
+ "pollster 1.0.1",
  "winit",
 ]
 
@@ -1613,32 +1607,6 @@ dependencies = [
 
 [[package]]
 name = "criterion"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f"
-dependencies = [
- "anes",
- "cast",
- "ciborium",
- "clap",
- "criterion-plot 0.5.0",
- "is-terminal",
- "itertools 0.10.5",
- "num-traits",
- "once_cell",
- "oorandom",
- "plotters",
- "rayon",
- "regex",
- "serde",
- "serde_derive",
- "serde_json",
- "tinytemplate",
- "walkdir",
-]
-
-[[package]]
-name = "criterion"
 version = "0.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "950046b2aa2492f9a536f5f4f9a3de7b9e2476e575e05bd6c333371add4d98f3"
@@ -1648,7 +1616,7 @@ dependencies = [
  "cast",
  "ciborium",
  "clap",
- "criterion-plot 0.8.2",
+ "criterion-plot",
  "itertools 0.13.0",
  "num-traits",
  "oorandom",
@@ -1660,16 +1628,6 @@ dependencies = [
  "serde_json",
  "tinytemplate",
  "walkdir",
-]
-
-[[package]]
-name = "criterion-plot"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
-dependencies = [
- "cast",
- "itertools 0.10.5",
 ]
 
 [[package]]
@@ -1828,7 +1786,7 @@ dependencies = [
  "games",
  "gizmo-engine",
  "mimalloc",
- "pollster",
+ "pollster 1.0.1",
  "rand 0.10.2",
  "serde",
  "tracing",
@@ -2819,7 +2777,7 @@ dependencies = [
  "image",
  "js-sys",
  "log",
- "pollster",
+ "pollster 1.0.1",
  "rfd",
  "serde",
  "serde_json",
@@ -2852,12 +2810,12 @@ dependencies = [
  "bevy_tasks",
  "chacha20 0.10.2",
  "chrono",
- "criterion 0.8.2",
+ "criterion",
  "crossbeam-queue",
  "proptest",
  "rand 0.10.2",
  "rayon",
- "ron 0.8.1",
+ "ron",
  "serde",
  "serde_json",
  "subsecond",
@@ -2896,7 +2854,7 @@ name = "gizmo-engine"
 version = "0.11.0"
 dependencies = [
  "bytemuck",
- "criterion 0.5.1",
+ "criterion",
  "egui",
  "gizmo-ai",
  "gizmo-analysis",
@@ -2917,7 +2875,7 @@ dependencies = [
  "gizmo-ui",
  "gizmo-window",
  "image",
- "pollster",
+ "pollster 1.0.1",
  "rayon",
  "rustc-hash 2.1.3",
  "serde",
@@ -2933,7 +2891,7 @@ dependencies = [
  "bevy_math",
  "bevy_mesh",
  "bevy_picking",
- "criterion 0.5.1",
+ "criterion",
  "getrandom 0.2.17",
  "glam",
  "rand 0.10.2",
@@ -2987,7 +2945,7 @@ name = "gizmo-physics-rigid"
 version = "0.11.0"
 dependencies = [
  "bevy_reflect",
- "criterion 0.8.2",
+ "criterion",
  "crossbeam-queue",
  "getrandom 0.4.3",
  "gizmo-core",
@@ -3014,7 +2972,7 @@ dependencies = [
  "gizmo-physics-core",
  "gizmo-physics-rigid",
  "naga",
- "pollster",
+ "pollster 1.0.1",
  "proptest",
  "rayon",
  "serde",
@@ -3028,7 +2986,7 @@ version = "0.11.0"
 dependencies = [
  "ab_glyph",
  "bytemuck",
- "criterion 0.8.2",
+ "criterion",
  "getrandom 0.3.4",
  "getrandom 0.4.3",
  "gizmo-animation",
@@ -3045,9 +3003,9 @@ dependencies = [
  "naga",
  "naga_oil",
  "notify",
- "pollster",
+ "pollster 1.0.1",
  "rand 0.10.2",
- "ron 0.12.2",
+ "ron",
  "serde",
  "tobj",
  "tracing",
@@ -3070,7 +3028,7 @@ dependencies = [
  "gizmo-math",
  "gizmo-physics-core",
  "gizmo-physics-rigid",
- "ron 0.12.2",
+ "ron",
  "serde",
  "tracing",
  "web-time",
@@ -3099,7 +3057,7 @@ dependencies = [
  "gizmo-engine",
  "image",
  "mimalloc",
- "pollster",
+ "pollster 1.0.1",
  "rand 0.10.2",
  "serde",
  "serde_json",
@@ -3182,7 +3140,7 @@ version = "1.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3ce1918195723ce6ac74e80542c5a96a40c2b26162c1957a5cd70799b8cacf7"
 dependencies = [
- "base64 0.13.1",
+ "base64",
  "byteorder",
  "gltf-json",
  "image",
@@ -3687,26 +3645,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "is-terminal"
-version = "0.4.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
-dependencies = [
- "hermit-abi",
- "libc",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
 name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4207,9 +4145,9 @@ dependencies = [
 
 [[package]]
 name = "naga"
-version = "30.0.0"
+version = "30.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23bf0a141a9ab6f07dbb492db53245e464bc9db42f407772d9ae03d83a2c1033"
+checksum = "fd0dd362bf26c0ffdd143df6da66a25d287e196eff482f117771010b207ad163"
 dependencies = [
  "arrayvec",
  "bit-set 0.10.0",
@@ -5082,6 +5020,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
+name = "pollster"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc6355899e1c9462875b6757c79f3caa011a1fdae12bbb1a2e72dd1f234f8336"
+
+[[package]]
 name = "poly1305"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5620,7 +5564,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "percent-encoding",
- "pollster",
+ "pollster 0.4.0",
  "raw-window-handle",
  "wasm-bindgen",
  "wasm-bindgen-futures",
@@ -5648,18 +5592,6 @@ dependencies = [
  "num-rational",
  "symphonia",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "ron"
-version = "0.8.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b91f7eff05f748767f183df4320a63d6936e9c6107d97c9e6bdd9784f4289c94"
-dependencies = [
- "base64 0.21.7",
- "bitflags 2.13.1",
- "serde",
- "serde_derive",
 ]
 
 [[package]]
@@ -6567,9 +6499,9 @@ dependencies = [
 
 [[package]]
 name = "transform-gizmo"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "24ce689c975cfc290813f5cf8dbd71296eb4d7e4930e4c21d15135921818aa30"
+checksum = "fcd9584531c33435ec2e9c2f194a27e60c65a36a2168f0519e1483e06934c8ec"
 dependencies = [
  "ahash",
  "ecolor",
@@ -6583,9 +6515,9 @@ dependencies = [
 
 [[package]]
 name = "transform-gizmo-egui"
-version = "0.10.0"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9dc2b430ae8d66919ef3c5f93693172b50ef7e0aede58332e79f9c364ae766b"
+checksum = "54832e69fb355472e05a768d88616459cd7cc321512a2f2d988bca201bdebc67"
 dependencies = [
  "egui",
  "transform-gizmo",
@@ -7090,9 +7022,9 @@ checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
 name = "wgpu"
-version = "30.0.0"
+version = "30.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8f4bd44d92da5270f03409dba9f952dab24f128e05d6a554926101d1bf9114"
+checksum = "146fc3d654250e6207921a66c87534c621bc886c70df83dcf466c1d66813810e"
 dependencies = [
  "arrayvec",
  "bitflags 2.13.1",
@@ -7297,9 +7229,9 @@ dependencies = [
 
 [[package]]
 name = "wide"
-version = "1.6.1"
+version = "1.7.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de2aaf408e58689c2096682331b1f42bb2d9f2ed6b11560407d023cd0a6c634e"
+checksum = "d920ac99c3c8edce110cb8d07dbb324d6d026011dce85b1e9355b70f0adacc4f"
 dependencies = [
  "bytemuck",
  "safe_arch",

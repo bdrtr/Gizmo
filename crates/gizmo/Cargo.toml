@@ -105,9 +105,9 @@ gizmo-animation = { version = "0.11.0", path = "../gizmo-animation", optional = 
 gizmo-net = { version = "0.11.0", path = "../gizmo-net", optional = true, default-features = false }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8.2"
 # Writes the image files the material-map tests load from disk, as a scene's paths would name them.
 image = { version = "0.25", default-features = false, features = ["png"] }
 rayon = "1.11.0"
-pollster = "0.4"
+pollster = "1.0"
 

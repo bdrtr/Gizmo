@@ -88,6 +88,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Dependencies brought up to date, and why egui stays at 0.36.** wgpu/naga 30.0.2 (Vulkan swapchain fence fix,
+  WebGPU adapter-failure panic fix), wide 1.7.1, pollster 1.0, criterion 0.8.2 in the two crates still on 0.5
+  (`gizmo-engine`, `gizmo-math`; `std::hint::black_box` replaces the deprecated `criterion::black_box`), ron 0.12 in
+  `gizmo-core` (the last crate on 0.8), transform-gizmo-egui 0.11. **egui 0.37 is not taken**: `egui_dock` 0.21.1,
+  its latest, and transform-gizmo-egui 0.11 both require egui ^0.36, so dependabot's grouped bump (#24) put two egui
+  versions in the graph — the reason its CI failed. Waiting on an `egui_dock` release.
+
 - **The water runs on the game's clock.** The GPU fluid stepped once for every frame drawn, so it ran on under ⏸,
   ignored `set_time_scale` and went twice as fast at 120 Hz as at 60. `GpuFluidSystem::advance` spends the clock's
   `dt` in whole steps of `FLUID_STEP` (1/60 s, also the solver's `dt`, which was 0.016), carrying the remainder and
