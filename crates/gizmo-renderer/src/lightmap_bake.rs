@@ -142,12 +142,16 @@ impl BakeMesh {
         Self::new(vertices, transform)
     }
 
-    /// A drawn [`Mesh`](crate::components::Mesh) as an occluder, from the triangles it keeps on the
-    /// CPU (`Mesh::cpu_vertices`) — the shape the scene draws, blocking and bouncing light. Its
-    /// `transform` is the entity's world matrix.
+    /// A drawn [`Mesh`](crate::components::Mesh), from the triangles it keeps on the CPU — the shape
+    /// the scene draws. A mesh with a second UV set keeps its normals and that set too
+    /// (`Mesh::cpu_lightmap`), so it can [`receive`](Self::receiving); any other blocks and bounces
+    /// light with its faces' normals. `transform` is the entity's world matrix.
     #[must_use]
     pub fn from_mesh(mesh: &crate::components::Mesh, transform: Mat4) -> Self {
-        Self::from_positions(&mesh.cpu_vertices, transform)
+        match mesh.lightmap_vertices() {
+            Some(vertices) => Self::new(vertices, transform),
+            None => Self::from_positions(&mesh.cpu_vertices, transform),
+        }
     }
 
     /// This mesh bouncing `albedo` of the light that reaches it (each channel clamped to 0..=1).

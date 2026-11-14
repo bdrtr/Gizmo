@@ -118,6 +118,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **A scene's lightmaps baked from its world in one call** (`gizmo::lightmap::bake_lightmaps`, native). An entity with a
+  `LightmapReceiver { width, height }` (saved with the scene) is baked, its PNG written to a directory and its
+  material — `Material` and `MaterialDesc` alike — set to draw it, with the intensity. Everything drawn that casts takes
+  part, in its material's albedo and emissive: hidden meshes, `ShadowCasting::Off` and (under `physics`) bodies that are
+  not static are left out, since a moving body's shadow would stay where it was baked. The scene's directional, point
+  and spot lights are placed by their transforms and give only their bounces — they light directly at run time. Entities
+  are placed where they are now, through their parents, so a scene baked before its first frame is right. A file is
+  named by its entity and the picture's hash, so a bake that changes the light is not hidden by the texture cache. To
+  make it possible a `Mesh` keeps its normals and second UV set on the CPU (`Mesh::cpu_lightmap`,
+  `Mesh::lightmap_vertices`) — only a mesh that has a second UV set, 20 bytes a corner — and
+  `BakeMesh::from_mesh` bakes onto it. Tests: five in `gizmo::lightmap` on the noop wgpu backend, so CI runs them (the
+  map written and named by the material; what casts no shadow and moving bodies left out, each failing with its rule
+  removed; a receiver without UVs an error; the scene's lights bounce only), and
+  `a_mesh_with_a_second_uv_set_keeps_it_for_baking` (flat and indexed). **Breaks:** a `Mesh { .. }` literal names
+  `cpu_lightmap`.
+
 - **A `Material` made in code draws the maps set before its first frame.** `rebind_changed_materials` took a material
   it saw for the first time as it was, so `Material::new(white)` with `maps.lightmap` set kept a bind group without
   the map and drew unlit. A `Material` records which maps its bind group was built from (a description and the glTF

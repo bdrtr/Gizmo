@@ -17,6 +17,8 @@ pub mod material;
 pub mod wireframe;
 /// Meshes and their per-entity render settings.
 pub mod mesh;
+/// Marks a static mesh as given a lightmap when the scene is baked — [`LightmapReceiver`].
+pub mod lightmap_receiver;
 /// A colour eased to a target — [`ColorTween`].
 pub mod color_tween;
 /// Trauma that shakes a camera — [`CameraShake`].
@@ -51,6 +53,7 @@ pub use mesh_data::MeshData;
 pub use color_tween::{color_tween_system, ColorTween};
 pub use camera_shake::CameraShake;
 pub use occluder::Occluder;
+pub use lightmap_receiver::LightmapReceiver;
 pub use wireframe::{draws_wireframe, NoWireframe, Wireframe, WireframeColor};
 pub use planar_reflection::PlanarReflection;
 pub use misc::*;

@@ -110,4 +110,7 @@ criterion = "0.8.2"
 image = { version = "0.25", default-features = false, features = ["png"] }
 rayon = "1.11.0"
 pollster = "1.0"
+# `lightmap`'s tests build `Mesh`es and `Material`s, which hold wgpu buffers and bind groups: the noop
+# backend makes them with no GPU, so they run in CI.
+wgpu = { version = "30", default-features = false, features = ["noop", "wgsl"] }
 

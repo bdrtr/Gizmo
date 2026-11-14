@@ -109,6 +109,8 @@ pub use gizmo_math as math;
 pub mod physics;
 #[cfg(feature = "render")]
 pub use gizmo_renderer as renderer;
+#[cfg(all(feature = "render", not(target_arch = "wasm32")))]
+pub mod lightmap;
 
 #[cfg(feature = "window")]
 pub use gizmo_window as window;

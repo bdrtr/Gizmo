@@ -97,6 +97,8 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::components::ReflectionProbe, "ReflectionProbe");
         reg_or_warn!(gizmo_renderer::components::PlanarReflection, "PlanarReflection");
         reg_or_warn!(gizmo_renderer::components::Occluder, "Occluder");
+        // A static mesh's lightmap size; the map it bakes into is the material's (`MaterialMaps`).
+        reg_or_warn!(gizmo_renderer::components::LightmapReceiver, "LightmapReceiver");
         reg_or_warn!(gizmo_renderer::components::Wireframe, "Wireframe");
         reg_or_warn!(gizmo_renderer::components::WireframeColor, "WireframeColor");
         reg_or_warn!(gizmo_renderer::components::NoWireframe, "NoWireframe");

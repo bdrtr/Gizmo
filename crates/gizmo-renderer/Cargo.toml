@@ -60,6 +60,8 @@ meshopt = "0.6.2"
 
 [dev-dependencies]
 pollster = "1.0"
+# Tests that build a `Mesh` (wgpu buffers) with no GPU, on the noop backend — they run in CI.
+wgpu = { version = "30", default-features = false, features = ["noop", "wgsl"] }
 criterion = "0.8.2"
 
 # CPU-only: builds `Frustum`/`Aabb`/`Mat4` scenes and runs the cull, no wgpu adapter.

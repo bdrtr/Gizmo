@@ -49,6 +49,12 @@ pub struct Mesh {
     /// That is the contract because consumers walk this in groups of three; a caller who wants
     /// the order matching the GPU buffer has to read `ibuf`.
     pub cpu_vertices: Arc<Vec<Vec3>>,
+    /// What a lightmap bake needs beyond the positions — each corner's normal and second UV set,
+    /// in [`Self::cpu_vertices`]'s order — kept only for a mesh **that has a second UV set** (a
+    /// non-zero [`Vertex::lightmap_uv`](crate::gpu_types::Vertex::lightmap_uv)): `None` for every
+    /// other, which most meshes are. [`Self::lightmap_vertices`] puts the two back together, and
+    /// `lightmap_bake::BakeMesh::from_mesh` bakes onto it.
+    pub cpu_lightmap: Option<Arc<[LightmapCorner]>>,
     /// Simplified vertex buffers, coarsest last, generated at load time for meshes above the
     /// decimation threshold. Flattened triangle lists — see [`Self::ibuf`] for why that matters.
     pub lod_vbufs: Vec<Arc<wgpu::Buffer>>,
@@ -64,6 +70,23 @@ pub struct Mesh {
     /// closed, and by its back faces: a plane facing the sun cast no shadow at all, and a solid's
     /// soft shadow was measured from its far side.
     pub closed: bool,
+}
+
+/// One corner of a mesh as a lightmap bake reads it, beside its position in `Mesh::cpu_vertices`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LightmapCorner {
+    /// The model-space normal.
+    pub normal: [f32; 3],
+    /// The second UV set, where the lightmap is read.
+    pub lightmap_uv: [f32; 2],
+}
+
+/// The corners' normals and second UV set, if any corner has a second UV set.
+fn lightmap_corners(vertices: &[crate::gpu_types::Vertex]) -> Option<Arc<[LightmapCorner]>> {
+    vertices
+        .iter()
+        .any(|v| v.lightmap_uv != [0.0, 0.0])
+        .then(|| vertices.iter().map(|v| LightmapCorner { normal: v.normal, lightmap_uv: v.lightmap_uv }).collect())
 }
 
 /// Whether a triangle list (every three positions one triangle) closes over a volume: every edge
@@ -209,6 +232,7 @@ impl Mesh {
         // Only a triangle list has edges to match; `new_indexed` hands in its unique vertices with
         // the LOD off and works this out from its own triangle list afterwards.
         let closed = generate_lod && triangles_close(&cpu_vertices);
+        let cpu_lightmap = lightmap_corners(vertices);
 
         let mut lod_vbufs = Vec::new();
         let mut lod_vertex_counts = Vec::new();
@@ -239,6 +263,7 @@ impl Mesh {
             source,
             bounds,
             cpu_vertices,
+            cpu_lightmap,
             lod_vbufs,
             lod_vertex_counts,
             closed,
@@ -352,9 +377,29 @@ impl Mesh {
         // tekilleştirilmiş bir dizide ardışık üçlüler artık üçgen DEĞİL. Bellek açısından
         // bu bir gerileme de değil: bu alan zaten tam listeyi tutuyordu.
         mesh.cpu_vertices = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
+        mesh.cpu_lightmap = lightmap_corners(vertices);
         mesh.closed = triangles_close(&mesh.cpu_vertices);
         mesh
         }
+    }
+
+    /// The triangle list a lightmap bake reads — positions, normals and the second UV set — or
+    /// `None` for a mesh with no second UV set ([`Self::cpu_lightmap`]).
+    #[must_use]
+    pub fn lightmap_vertices(&self) -> Option<Vec<crate::gpu_types::Vertex>> {
+        let corners = self.cpu_lightmap.as_ref()?;
+        Some(
+            self.cpu_vertices
+                .iter()
+                .zip(corners.iter())
+                .map(|(p, c)| crate::gpu_types::Vertex {
+                    position: p.to_array(),
+                    normal: c.normal,
+                    lightmap_uv: c.lightmap_uv,
+                    ..Default::default()
+                })
+                .collect(),
+        )
     }
 
     /// Creates an empty placeholder Mesh with 0 vertices, so that the engine does not crash
@@ -370,6 +415,7 @@ impl Mesh {
             source,
             bounds: gizmo_math::Aabb::empty(),
             cpu_vertices: Arc::new(Vec::new()),
+            cpu_lightmap: None,
             lod_vbufs: Vec::new(),
             lod_vertex_counts: Vec::new(),
             closed: false,
@@ -660,6 +706,41 @@ mod closed_tests {
             .filter(|(i, _)| Some(*i) != skip)
             .flat_map(|(_, [a, b, c, d])| [*a, *b, *c, *a, *c, *d])
             .collect()
+    }
+
+    /// A mesh with a second UV set keeps it, with its normals, in the order of its triangle list —
+    /// on the flat path and the indexed one, which hands the GPU deduplicated corners — and gives
+    /// back the vertices a lightmap bake reads. A mesh without one keeps nothing.
+    #[test]
+    fn a_mesh_with_a_second_uv_set_keeps_it_for_baking() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::NOOP,
+            backend_options: wgpu::BackendOptions {
+                noop: wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a noop device");
+
+        use super::Mesh;
+        let mut vertices = crate::asset::AssetManager::plane_subdivided_data(2.0, 3);
+        for (i, v) in vertices.iter_mut().enumerate() {
+            v.lightmap_uv = [v.tex_coords[0] * 0.5, 0.25 + i as f32 * 1e-3];
+        }
+        let flat = Mesh::from_vertices(&device, &vertices, "flat");
+        let indexed = Mesh::new_indexed(&device, &vertices, Vec3::ZERO, "indexed".into());
+        for mesh in [&flat, &indexed] {
+            let back = mesh.lightmap_vertices().expect("a second UV set");
+            assert_eq!(back.len(), vertices.len(), "{}", mesh.source);
+            for (b, v) in back.iter().zip(&vertices) {
+                assert_eq!((b.position, b.normal, b.lightmap_uv), (v.position, v.normal, v.lightmap_uv), "{}", mesh.source);
+            }
+        }
+        let plain = crate::asset::AssetManager::plane_data(2.0);
+        assert!(Mesh::from_vertices(&device, &plain, "plain").cpu_lightmap.is_none());
+        assert!(Mesh::new_indexed(&device, &plain, Vec3::ZERO, "plain".into()).lightmap_vertices().is_none());
     }
 
     /// The engine's solids close and its flat shapes do not; a cube closes with its corners split
