@@ -51,7 +51,7 @@ Ranked and measured in [`CAPABILITY_GAPS.md`](CAPABILITY_GAPS.md); the short ver
   covers camera and objects but not transparent ones (§A7c, `PostProcess::motion_blur`; auto exposure
   is `renderer.auto_exposure`). Split screen works on the game path (`Camera::viewport`, §A5b), and a camera draws into a texture of the game's own with `CameraTarget` (on both paths, §A5b); the studio previews a
   split-screen game through its primary camera. Transparent materials blend by
-  `Material::blend_mode` — alpha, additive, multiply, premultiplied (§B). Baked light is a lightmap (`MaterialMaps::lightmap`, at the second UV set, glTF `TEXCOORD_1`) or vertex colour (`BakedLit`); there is no baking tool (§B).
+  `Material::blend_mode` — alpha, additive, multiply, premultiplied (§B). Baked light is a lightmap (`MaterialMaps::lightmap`, at the second UV set, glTF `TEXCOORD_1`) or vertex colour (`BakedLit`), baked by the engine's CPU lightmapper (`lightmap_bake`: sky, emissive surfaces, bounces, baked-only lights, §B).
 - **Text:** in vertical text Latin lies on its side (`.upright()` stands it); `Renderer::load_system_font` finds the machine's font (`GIZMO_FONT`, then the platform's usual faces); the one font the engine carries is Noto Sans (OFL 1.1) behind the default-off `bundled-font` feature, for the browser, which lends none; and `add_font_fallback` chains faces per character (§A2).
 - **Extensibility:** a game's own material is a surface the engine lights (`Renderer::add_surface_material`,
   `MaterialType::CustomSurface`: its WGSL `material_surface` in the engine's G-buffer and lit shaders, so drawn deferred with

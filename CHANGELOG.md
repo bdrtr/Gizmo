@@ -102,6 +102,28 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **Breaks:** `Vertex` is 104 bytes (a literal names `lightmap_uv`), `assemble_material_bind_group` takes the lightmap
   view, a custom pipeline over the material layout binds eight entries. No baking tool: the lightmap is made elsewhere.
 
+- **A lightmap baker** (`gizmo_renderer::lightmap_bake`): `LightmapBake` traces a scene's static light on the CPU into
+  the picture `MaterialMaps::lightmap` reads — irradiance over π a texel, the unit the shaders' ambient is in, so an
+  open floor under a uniform sky bakes exactly the sky's colour. It holds the sky (`with_sky`, the `Sky` the scene
+  sets), emissive surfaces (`BakeMesh::with_emissive`: an area light is a glowing mesh), every light's bounces
+  (`BakeSettings::bounces`) and the direct light and shadow of a light only the bake has (`BakeLight::baked_only`) — a
+  light the scene keeps at run time adds its direct light there, so baking it too would count it twice. Direct light
+  uses the shaders' falloff and spot cone; the rest is path traced over a BVH, stratified, seeded per texel, so the
+  same scene bakes bit for bit on any number of threads (all cores on native, the calling thread on the web).
+  Receivers are rasterised in their second UV set, edge texels sampled on the surface, islands padded
+  (`BakeSettings::padding`); a receiver whose UVs were never filled is `LightmapError::NothingCovered`. A drawn `Mesh`
+  is an occluder through `BakeMesh::from_mesh`. `Lightmap::save_png` writes 8-bit and returns its scale, the
+  `with_lightmap` intensity. Measured: a 256×256 floor with four boxes, a panel and two lights at 128 rays a texel,
+  0.27 s on 16 threads. The `lightmaps` demo bakes this way in all three modes, its hand-written formula gone. Tests:
+  ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
+  against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
+
+- **A `Material` made in code draws the maps set before its first frame.** `rebind_changed_materials` took a material
+  it saw for the first time as it was, so `Material::new(white)` with `maps.lightmap` set kept a bind group without
+  the map and drew unlit. A `Material` records which maps its bind group was built from (a description and the glTF
+  loader say so, `Material::mark_maps_bound`; `Material::new` says none), and one whose `maps` differ is built again on
+  first sight. Test: the in-code quad in `a_lightmap_lights_the_surface_with_what_was_baked`, which fails without it.
+
 - **Systems that take `Commands` spawn the same ids on every run.** `Commands` declared only a read of the command
   queue and the entity-id allocator, so two systems using it shared a batch, and the order their commands were
   queued — and the ids their spawns reserved — followed rayon's threads: eight spawning systems gave other ids on

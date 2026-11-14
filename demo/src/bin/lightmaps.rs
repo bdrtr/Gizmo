@@ -7,11 +7,11 @@
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | ışık haritası dokusu | **var (2026-11-14)** — `MaterialMaps::lightmap`, bu demo hâlâ köşe rengini gösteriyor |
+//! | ışık haritası dokusu | **var (2026-11-14)** — `MaterialMaps::lightmap` (`GIZMO_LIGHTMAP_MODE=lightmap`) |
 //! | ayrı ışık haritası UV kanalı | **var (2026-11-14)** — `Vertex::lightmap_uv`, glTF'in `TEXCOORD_1`'i |
 //! | ışık haritası bileşeni (doku + UV dikdörtgeni) | **yok** — atlas UV'leri pişirme aracı ikinci kanala yazıyor |
 //! | pişmiş + gerçek zamanlı karışımı | **var** — `BakedLit` güneşin gölgesini de alıyor |
-//! | pişirme aracı | **yok** — köşe renklerini siz dolduracaksınız |
+//! | pişirme aracı | **var (2026-11-14)** — `gizmo::renderer::lightmap_bake`: gök, ışıyan yüzeyler, sekme, yalnız-pişmiş ışıklar |
 //!
 //! Yani "karıştırılmış aydınlatma" fikri motorda var, ama taşıyıcısı doku değil **köşe rengi**.
 //! Bunun bedeli çözünürlük: bir duvarın ışık haritası dokuda piksel piksel olur, köşe renginde
@@ -67,12 +67,22 @@
 //! yalnızca ortam ışığının yerini alıyor. Köşe rengi modunda 40×40 ızgaranın yaptığını burada
 //! dokunun pikselleri yapıyor.
 //!
+//! ## Pişirme motorun (2026-11-14)
+//!
+//! Üç mod da aynı pişirmeyi gösteriyor, ve artık elle yazılmış bir formül değil:
+//! `gizmo::renderer::lightmap_bake::LightmapBake` sahnenin kendisinden ışın izliyor. Zemin alıcı
+//! (256×256), dört kutu ışığı kesiyor ve sekiyor (`BakeMesh::from_mesh`, çizilen küpün üçgenleri),
+//! tavandaki panel **ışıyan bir dörtgen** — yalnız pişirmede var, sahnede yok. Güneş ve mavi nokta
+//! ışığı çalışma zamanında da var, o yüzden doğrudan ışıkları pişmiyor (iki kez sayılırdı), yalnız
+//! **sekmeleri** pişiyor. Köşe rengi modu aynı haritayı ızgaranın köşelerinde okuyor.
+//!
 //! ## Kontroller
 //!   * `GIZMO_LIGHTMAP_MODE=pbr|baked|lightmap` — malzeme türü
 //!   * **Sağ-tık + fare / WASDQE** — kamera
 
 use gizmo::prelude::*;
 use gizmo::renderer::gpu_types::Vertex;
+use gizmo::renderer::lightmap_bake;
 use gizmo::simple::{SimpleAppExt, SimpleSceneState};
 
 /// Zeminin nasıl aydınlandığı.
@@ -116,72 +126,69 @@ fn main() {
             let device = &scene.renderer.device;
 
             let floor_at = Transform::new(Vec3::new(0.0, -0.6, 0.0));
-            if mode == Mode::Lightmap {
-                // Tek dörtgen; ışık haritası ikinci UV kanalında. Malzeme bir açıklama olarak
-                // veriliyor: haritalarını adlarıyla taşıyan bir `MaterialDesc`, motor dokuları yükleyip
-                // bağlıyor.
-                let lightmap = write_lightmap();
-                scene.world.spawn_bundle((
-                    floor_at,
-                    GlobalTransform::default(),
-                    Mesh::from_vertices(device, &lightmapped_floor_vertices(), "lightmap::quad"),
-                    gizmo::renderer::components::MaterialDesc::default()
-                        .with_pbr(Vec4::new(0.72, 0.70, 0.66, 1.0), 0.85, 0.0)
-                        .with_maps(gizmo::renderer::components::MaterialMaps::default().with_lightmap(lightmap, 1.6)),
-                    MeshRenderer::new(),
-                ));
-            } else {
-                // "Pişmiş" ışık: köşe renklerine elle yazılmış, dokuda değil. Buradaki pişirme,
-                // sahte bir alan ışığından (tavandaki bir dikdörtgen) gelen katkının köşe başına
-                // analitik hesabı.
-                let base = Material::new(white.clone());
-                let material = if mode == Mode::Baked {
-                    // `BakedLit`: köşe rengi × doku, artı güneşin gölgesi. Nokta ışıkları YOK.
-                    base.with_baked_lit(Vec4::new(1.0, 1.0, 1.0, 1.0))
-                } else {
-                    base.with_pbr(Vec4::new(0.72, 0.70, 0.66, 1.0), 0.85, 0.0)
-                };
-                scene.world.spawn_bundle((
-                    floor_at,
-                    GlobalTransform::default(),
-                    Mesh::from_vertices(device, &baked_floor_vertices(), "lightmap::floor"),
-                    material,
-                    MeshRenderer::new(),
-                ));
-            }
 
             // Üstünde birkaç kutu: gölgeyi görünür kılıyorlar, ve `BakedLit` gölge ALDIĞI için
-            // karışım burada okunuyor.
+            // karışım burada okunuyor. Pişirme de onları görüyor: altlarında ve yanlarında zemin kararıyor.
             let cube = AssetManager::create_cube(device);
-            for i in 0..4 {
+            let boxes: Vec<Transform> = (0..4)
+                .map(|i| Transform::new(Vec3::new((i as f32 - 1.5) * 2.0, 0.1, 0.5)).with_scale(Vec3::new(0.5, 0.7, 0.5)))
+                .collect();
+            for at in &boxes {
                 scene.world.spawn_bundle((
-                    Transform::new(Vec3::new((i as f32 - 1.5) * 2.0, 0.1, 0.5))
-                        .with_scale(Vec3::new(0.5, 0.7, 0.5)),
+                    *at,
                     GlobalTransform::default(),
                     cube.clone(),
-                    Material::new(white.clone()).with_pbr(
-                        Vec4::new(0.85, 0.45, 0.30, 1.0),
-                        0.5,
-                        0.0,
-                    ),
+                    Material::new(white.clone()).with_pbr(BOX_ALBEDO.extend(1.0), 0.5, 0.0),
                     MeshRenderer::new(),
                 ));
             }
 
             // Gerçek zamanlı güneş — karışımın "gerçek zamanlı" yarısı.
-            scene.world.spawn_bundle(DirectionalLightBundle {
-                rotation: Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.8),
-                intensity: 2.2,
-                ..Default::default()
-            });
+            let sun_rotation = Quat::from_rotation_y(0.4) * Quat::from_rotation_x(-0.8);
+            scene.world.spawn_bundle(DirectionalLightBundle { rotation: sun_rotation, intensity: 2.2, ..Default::default() });
             // Nokta ışığı: `Pbr` bunu görür, `BakedLit` GÖRMEZ. Farkın bir yarısı bu.
+            let point = (Vec3::new(0.0, 1.8, 2.4), Vec3::new(0.3, 0.6, 1.0), 8.0, 8.0);
             scene.world.spawn_bundle(PointLightBundle {
-                position: Vec3::new(0.0, 1.8, 2.4),
-                color: Vec3::new(0.3, 0.6, 1.0),
-                intensity: 8.0,
-                radius: 8.0,
+                position: point.0,
+                color: point.1,
+                intensity: point.2,
+                radius: point.3,
                 casts_shadows: false,
             });
+
+            let boxes: Vec<(Transform, &Mesh)> = boxes.iter().map(|t| (*t, &cube)).collect();
+            let map = bake_floor(&floor_at, &boxes, sun_rotation * Vec3::NEG_Z, point);
+            if mode == Mode::Lightmap {
+                // Tek dörtgen; ışık haritası ikinci UV kanalında. Malzeme bir açıklama olarak
+                // veriliyor: haritalarını adlarıyla taşıyan bir `MaterialDesc`, motor dokuları yükleyip
+                // bağlıyor. Şiddet, 8 bitlik görüntünün ölçeği — `save_png` döndürüyor.
+                let (lightmap, intensity) = write_lightmap(&map);
+                scene.world.spawn_bundle((
+                    floor_at,
+                    GlobalTransform::default(),
+                    Mesh::from_vertices(device, &lightmapped_floor_vertices(), "lightmap::quad"),
+                    gizmo::renderer::components::MaterialDesc::default()
+                        .with_pbr(FLOOR_ALBEDO.extend(1.0), 0.85, 0.0)
+                        .with_maps(gizmo::renderer::components::MaterialMaps::default().with_lightmap(lightmap, intensity)),
+                    MeshRenderer::new(),
+                ));
+            } else {
+                // Aynı pişirme köşe renklerinde: 40×40 ızgara haritayı köşelerinde okuyor.
+                let base = Material::new(white.clone());
+                let material = if mode == Mode::Baked {
+                    // `BakedLit`: köşe rengi × doku, artı güneşin gölgesi. Nokta ışıkları YOK.
+                    base.with_baked_lit(FLOOR_ALBEDO.extend(1.0))
+                } else {
+                    base.with_pbr(FLOOR_ALBEDO.extend(1.0), 0.85, 0.0)
+                };
+                scene.world.spawn_bundle((
+                    floor_at,
+                    GlobalTransform::default(),
+                    Mesh::from_vertices(device, &baked_floor_vertices(&map), "lightmap::floor"),
+                    material,
+                    MeshRenderer::new(),
+                ));
+            }
 
             gizmo::gizmo_log!(Info, "zemin malzemesi: {}", mode.name());
             let _ = white;
@@ -208,7 +215,8 @@ fn main() {
                                 ui.label("ama nokta ışıklarını GÖRMÜYOR.");
                             }
                         }
-                        ui.label("Pişirme aracı: YOK — doku dışarıda üretilir.");
+                        ui.label("pişirme: motorun (lightmap_bake) — gök, tavandaki ışıyan panel,");
+                        ui.label("kutuların gölgesi, güneşin ve nokta ışığının sekmesi.");
                         ui.separator();
                         ui.label("çizim: yığın başına 11 yerine 1 (belge).");
                     });
@@ -218,56 +226,54 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-/// Zemin: köşe renklerine "pişmiş" bir alan ışığı katkısı yazılmış bir ızgara.
-///
-/// Bir ışık haritası dokusunun yerine geçen şey bu — ve çözünürlüğün neden mesh'e bağlı
-/// olduğunu da gösteriyor: katkı köşe başına, yani ızgara ne kadar sıksa o kadar yumuşak.
 /// Zeminin yarı genişliği, metre.
 const HALF: f32 = 7.0;
+/// Zeminin rengi.
+const FLOOR_ALBEDO: Vec3 = Vec3::new(0.72, 0.70, 0.66);
+/// Kutuların rengi.
+const BOX_ALBEDO: Vec3 = Vec3::new(0.85, 0.45, 0.30);
 
-/// Tavandaki sahte alan ışığının zeminde `(x, z)`'ye bıraktığı ışık — pişirmenin kendisi, köşe
-/// rengine de dokuya da aynısı.
-fn bake(x: f32, z: f32) -> [f32; 4] {
-    // Tavandaki sahte alan ışığı — pişirmenin kaynağı.
-    let panel_centre = Vec3::new(0.0, 3.0, 0.0);
-    let panel_half = Vec2::new(2.2, 1.2);
-    {
-        // Panelin üstünde birkaç örnek al ve katkılarını topla — kaba bir alan ışığı.
-        let mut sum = 0.0f32;
-        const S: i32 = 3;
-        for sx in -S..=S {
-            for sz in -S..=S {
-                let sample = panel_centre
-                    + Vec3::new(
-                        sx as f32 / S as f32 * panel_half.x,
-                        0.0,
-                        sz as f32 / S as f32 * panel_half.y,
-                    );
-                let to_light = sample - Vec3::new(x, 0.0, z);
-                let dist = to_light.length().max(0.15);
-                let cos = (to_light.y / dist).max(0.0);
-                sum += cos / (dist * dist);
-            }
-        }
-        let n = ((2 * S + 1) * (2 * S + 1)) as f32;
-        let v = (sum / n * 6.0).clamp(0.0, 1.0);
-        // Hafif sıcak bir renk — pişmiş ışığın kendi rengi.
-        [0.10 + v * 0.95, 0.10 + v * 0.88, 0.10 + v * 0.72, 1.0]
+/// Sahneyi pişiriyor: zeminin ışık haritası. Tavandaki panel yalnız burada var — pişmiş bir alan
+/// ışığı; güneş ve nokta ışığı sahnede de olduğu için yalnız sekmeleri pişiyor.
+fn bake_floor(floor_at: &Transform, boxes: &[(Transform, &Mesh)], sun: Vec3, point: (Vec3, Vec3, f32, f32)) -> lightmap_bake::Lightmap {
+    use lightmap_bake::{BakeLight, BakeMesh, BakeSettings, LightmapBake};
+    let matrix = |t: &Transform| Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
+    let mut bake = LightmapBake::new()
+        .with_sky(gizmo::renderer::frame_uniforms::Sky::uniform([0.10, 0.10, 0.11]))
+        .with_settings(BakeSettings::default());
+    let floor = bake.add_mesh(
+        BakeMesh::new(lightmapped_floor_vertices(), matrix(floor_at)).with_albedo(FLOOR_ALBEDO).receiving(256, 256),
+    );
+    for (at, mesh) in boxes {
+        bake.add_mesh(BakeMesh::from_mesh(mesh, matrix(at)).with_albedo(BOX_ALBEDO));
     }
+    // Tavandaki panel: 4,4 × 2,4 m, zeminin 3 m üstünde, aşağı bakıyor, sıcak.
+    bake.add_mesh(
+        BakeMesh::new(ceiling_panel_vertices(), Mat4::from_translation(floor_at.position + Vec3::Y * 3.0))
+            .with_emissive(Vec3::new(1.0, 0.93, 0.76) * 3.0),
+    );
+    bake.add_light(BakeLight::directional(sun, Vec3::ONE, 2.2));
+    let (position, color, intensity, radius) = point;
+    bake.add_light(BakeLight::point(position, color, intensity, radius));
+    let started = std::time::Instant::now();
+    let baked = bake.run().expect("ışık haritası pişirilemedi");
+    gizmo::gizmo_log!(Info, "ışık haritası pişti: 256×256, {:.2} s", started.elapsed().as_secs_f32());
+    baked.get(floor).expect("zemin alıcı").clone()
 }
 
-/// Aynı pişirme, 256×256'lık bir dokuya — doğrusal değerler, 8 bit. Yolunu döndürür.
-fn write_lightmap() -> String {
-    const SIZE: u32 = 256;
-    let image = image::RgbaImage::from_fn(SIZE, SIZE, |px, py| {
-        let x = -HALF + (px as f32 + 0.5) / SIZE as f32 * HALF * 2.0;
-        let z = -HALF + (py as f32 + 0.5) / SIZE as f32 * HALF * 2.0;
-        let c = bake(x, z);
-        image::Rgba([(c[0] * 255.0) as u8, (c[1] * 255.0) as u8, (c[2] * 255.0) as u8, 255])
-    });
+/// Tavandaki panelin iki üçgeni, aşağı bakan.
+fn ceiling_panel_vertices() -> Vec<Vertex> {
+    let (hx, hz) = (2.2, 1.2);
+    let corner = |x: f32, z: f32| Vertex { position: [x, 0.0, z], normal: [0.0, -1.0, 0.0], ..Default::default() };
+    let (a, b, c, d) = (corner(-hx, -hz), corner(-hx, hz), corner(hx, hz), corner(hx, -hz));
+    vec![a, c, b, a, d, c]
+}
+
+/// Haritayı geçici dizine yazıyor; yolunu ve `with_lightmap`'e verilecek şiddeti döndürüyor.
+fn write_lightmap(map: &lightmap_bake::Lightmap) -> (String, f32) {
     let path = std::env::temp_dir().join("gizmo-lightmaps-demo.png");
-    image.save(&path).expect("ışık haritası yazılamadı");
-    path.to_string_lossy().into_owned()
+    let intensity = map.save_png(&path).expect("ışık haritası yazılamadı");
+    (path.to_string_lossy().into_owned(), intensity)
 }
 
 /// Zemin, tek dörtgen: ikinci UV kanalı ışık haritasını baştan sona kaplıyor.
@@ -283,17 +289,22 @@ fn lightmapped_floor_vertices() -> Vec<Vertex> {
     vec![a, b, c, a, c, d]
 }
 
-fn baked_floor_vertices() -> Vec<Vertex> {
+fn baked_floor_vertices(map: &lightmap_bake::Lightmap) -> Vec<Vertex> {
     const N: usize = 40;
     let mut out = Vec::with_capacity(N * N * 6);
     let at = |i: usize, j: usize| -> Vertex {
-        let x = -HALF + i as f32 / N as f32 * HALF * 2.0;
-        let z = -HALF + j as f32 / N as f32 * HALF * 2.0;
+        let (u, v) = (i as f32 / N as f32, j as f32 / N as f32);
+        let x = -HALF + u * HALF * 2.0;
+        let z = -HALF + v * HALF * 2.0;
+        // Haritanın bu köşeye düşen texel'i: köşe rengi aynı pişirmeyi ızgaranın sıklığında taşıyor.
+        let px = ((u * map.width() as f32) as u32).min(map.width() - 1);
+        let py = ((v * map.height() as f32) as u32).min(map.height() - 1);
+        let light = map.texel(px, py);
         Vertex {
             position: [x, 0.0, z],
             normal: [0.0, 1.0, 0.0],
-            tex_coords: [i as f32 / N as f32, j as f32 / N as f32],
-            color: bake(x, z),
+            tex_coords: [u, v],
+            color: [light.x, light.y, light.z, 1.0],
             ..Default::default()
         }
     };

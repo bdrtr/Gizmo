@@ -131,6 +131,7 @@ pub mod gltf_model;
 pub mod custom_material;
 pub mod irradiance;
 mod irradiance_bake;
+pub mod lightmap_bake;
 pub mod luminance;
 /// Per-object motion: last frame's model matrices and the G-buffer velocity target.
 pub mod motion;
