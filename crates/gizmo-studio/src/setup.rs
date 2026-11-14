@@ -342,6 +342,9 @@ world.insert_resource(editor_state);
     // preparation, so adding one here is what puts water in the scene.
     let _ = component_registry.register::<gizmo::physics::components::FluidSimulation>("FluidSimulation");
     let _ = component_registry.register::<gizmo::renderer::components::FluidInteractor>("FluidInteractor");
+    // The limbs the engine bends: added from ➕ and edited in the inspector's generic rows — a
+    // chain's tip bone by name, its target and pole as world points, its weight.
+    let _ = component_registry.register::<gizmo::renderer::ik::IkChains>("IkChains");
     world.insert_resource(component_registry);
 
     // --- SCRIPT ENGINE & ASSET WATCHER BİRLEŞİMİ ---
