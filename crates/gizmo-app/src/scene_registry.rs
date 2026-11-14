@@ -113,6 +113,8 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::ik::IkChains, "IkChains");
         // A label by its key in the string table: relabelled in the language of the day.
         reg_or_warn!(crate::locale::LocalizedText, "LocalizedText");
+        // What something carries, slot by slot.
+        reg_or_warn!(crate::inventory::Inventory, "Inventory");
         // The scene's fluid (its dials, its box, how much of it) and what stands in it — both
         // handed to the GPU solver by the frame preparation (`gizmo::systems::render::fluid`).
         #[cfg(feature = "physics")]
