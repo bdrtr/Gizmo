@@ -41,6 +41,8 @@ pub fn run_asset_loading_system(
     asset_manager: &mut AssetManager,
 ) {
     let mut missing_meshes = Vec::new();
+    // Lightmap receivers whose mesh needs its second UV set: (entity, source, receiver, has no mesh).
+    let mut receivers: Vec<(Entity, String, crate::components::LightmapReceiver, bool)> = Vec::new();
     // Geometry made in code (`MeshData`) waiting for its upload — first time, or because the
     // entity's `MeshData` was replaced since.
     let mut missing_data: Vec<(u32, crate::components::MeshData)> = Vec::new();
@@ -77,12 +79,28 @@ pub fn run_asset_loading_system(
             }
         }
 
+        // A lightmap receiver drawn from a source with no second UV set — a file without
+        // `TEXCOORD_1`, a primitive — draws a copy laid out for its lightmap (`receiver_mesh`), so the
+        // map baked for it is read where it was baked. Before its first mesh, or once its plain one
+        // has been loaded (the receiver added later).
+        for (id, src, receiver) in world
+            .query_filtered::<(Entity, &MeshSource, &crate::components::LightmapReceiver), Without<crate::components::MeshData>>()
+            .iter()
+        {
+            if meshes.get(id).is_none_or(|m| m.cpu_lightmap.is_none()) {
+                receivers.push((id, src.0.clone(), *receiver, meshes.get(id).is_none()));
+            }
+        }
+
         // MeshSource var ama GPU Mesh yok mu? (Not when data is supplying the mesh.)
+        let receiving = world.query::<&crate::components::LightmapReceiver>();
         for (id, src) in world
             .query_filtered::<(Entity, &MeshSource), (Without<Mesh>, Without<crate::components::MeshData>)>()
             .iter()
         {
-            missing_meshes.push((id, src.0.clone()));
+            if receiving.get(id).is_none() {
+                missing_meshes.push((id, src.0.clone()));
+            }
         }
 
         // MaterialSource var ama GPU Material yok mu?
@@ -115,6 +133,16 @@ pub fn run_asset_loading_system(
         }
         world.add_component(entity, UploadedFrom(data));
     }
+    for (id, src, receiver, meshless) in receivers {
+        let Some(entity) = world.live(id) else { continue };
+        match asset_manager.receiver_mesh(device, &src, receiver.width, receiver.height) {
+            Some(mesh) => world.add_component(entity, mesh),
+            // Warned about in `receiver_mesh`: drawn as it is, without the lightmap's UVs.
+            None if meshless => missing_meshes.push((entity, src)),
+            None => {}
+        }
+    }
+
     // The uploads no entity's data names any more — replaced (a vision cone, a cloth rebuilt
     // every frame) or despawned. The game path never runs `garbage_collect`, so without this each
     // replaced frame's vertices and GPU buffers were kept for the rest of the run.
@@ -277,5 +305,135 @@ mod tests {
             "the check that defers to a description is gone; a `MaterialDesc` mentioned but not \
              consulted is the same defect with a comment on top"
         );
+    }
+}
+
+/// Lightmap receivers drawn from a `MeshSource`: the mesh read on the CPU, laid out, uploaded.
+#[cfg(test)]
+mod receiver_tests {
+    use super::*;
+    use crate::components::LightmapReceiver;
+
+    struct Gpu {
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        layout: wgpu::BindGroupLayout,
+    }
+
+    /// wgpu's noop backend: buffers with no GPU, so these run in CI.
+    fn gpu() -> Gpu {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::NOOP,
+            backend_options: wgpu::BackendOptions {
+                noop: wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a noop device");
+        let layout = crate::pipeline::layouts::build_layouts(&device).texture;
+        Gpu { device, queue, layout }
+    }
+
+    /// A one-UV-set glTF quad (no `TEXCOORD_1`) — a model a lightmap could not be read on.
+    fn write_one_uv_gltf() -> String {
+        let dir = std::env::temp_dir().join(format!("gizmo-gltf-uv1-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let mut bin: Vec<u8> = Vec::new();
+        let f32s = |bin: &mut Vec<u8>, v: &[f32]| v.iter().for_each(|x| bin.extend_from_slice(&x.to_le_bytes()));
+        for p in [[-1.5f32, -1.5, 0.0], [1.5, -1.5, 0.0], [1.5, 1.5, 0.0], [-1.5, 1.5, 0.0]] {
+            f32s(&mut bin, &p);
+        }
+        for _ in 0..4 {
+            f32s(&mut bin, &[0.0, 0.0, 1.0]);
+        }
+        for uv in [[0.0f32, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]] {
+            f32s(&mut bin, &uv);
+        }
+        for i in [0u16, 1, 2, 0, 2, 3] {
+            bin.extend_from_slice(&i.to_le_bytes());
+        }
+        std::fs::write(dir.join("quad.bin"), &bin).expect("bin");
+        let view = |offset: usize, length: usize| format!(r#"{{"buffer":0,"byteOffset":{offset},"byteLength":{length}}}"#);
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0]}}],"nodes":[{{"mesh":0,"name":"Quad"}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2}},"indices":3}}]}}],
+            "buffers":[{{"uri":"quad.bin","byteLength":{len}}}],
+            "bufferViews":[{v0},{v1},{v2},{v3}],
+            "accessors":[{{"bufferView":0,"componentType":5126,"count":4,"type":"VEC3","min":[-1.5,-1.5,0.0],"max":[1.5,1.5,0.0]}},
+                         {{"bufferView":1,"componentType":5126,"count":4,"type":"VEC3"}},
+                         {{"bufferView":2,"componentType":5126,"count":4,"type":"VEC2"}},
+                         {{"bufferView":3,"componentType":5123,"count":6,"type":"SCALAR"}}]}}"#,
+            len = bin.len(),
+            v0 = view(0, 48), v1 = view(48, 48), v2 = view(96, 32), v3 = view(128, 12),
+        );
+        let path = dir.join("quad.gltf");
+        std::fs::write(&path, json).expect("gltf");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// What `source_vertices` reads on the CPU is what the loader uploads, corner for corner: every
+    /// primitive key (bare and with numbers), a glTF sub-mesh, and nothing for a key that names
+    /// nothing.
+    #[test]
+    fn a_sources_vertices_on_the_cpu_are_the_ones_uploaded() {
+        let gpu = gpu();
+        let mut assets = AssetManager::new();
+        let model = write_one_uv_gltf();
+        let white = assets.create_white_texture(&gpu.device, &gpu.queue, &gpu.layout);
+        assets.load_gltf_scene(&gpu.device, &gpu.queue, &gpu.layout, white, &model).expect("the quad imports");
+        let mut keys: Vec<String> = AssetManager::PRIMITIVE_MESH_KEYS.iter().map(|k| k.to_string()).collect();
+        keys.extend(
+            ["plane_3", "plane_2_4", "circle_1_12", "sphere_0.5_8_12", "cylinder_1_2_8", "cone_1_2_8", "torus_1_0.3_8_12", "capsule_0.5_1_4_8", "sprite_quad_2_1", "tetrahedron_1", "conical_frustum_1_0.5_2_8"]
+                .map(String::from),
+        );
+        keys.push(format!("gltf_mesh_{model}_Quad_p0"));
+        for key in &keys {
+            let uploaded = assets.mesh_from_source(&gpu.device, &gpu.queue, &gpu.layout, key);
+            let read = assets.source_vertices(key).unwrap_or_else(|| panic!("{key} read nothing"));
+            let positions: Vec<gizmo_math::Vec3> = read.iter().map(|v| gizmo_math::Vec3::from(v.position)).collect();
+            assert_eq!(*uploaded.cpu_vertices, positions, "{key}");
+        }
+        assert!(assets.source_vertices("no_such_mesh.obj").is_none());
+    }
+
+    /// A receiver drawn from a primitive or from a glTF with no second UV set draws a copy laid out
+    /// for its lightmap: before its first mesh, and once a plain one is there (the receiver added
+    /// after). The UVs are the ones `receiver_vertices` gives — what a bake reads.
+    #[test]
+    fn a_receiver_is_drawn_with_the_uvs_its_lightmap_is_baked_at() {
+        let gpu = gpu();
+        let mut assets = AssetManager::new();
+        let model = write_one_uv_gltf();
+        let white = assets.create_white_texture(&gpu.device, &gpu.queue, &gpu.layout);
+        assets.load_gltf_scene(&gpu.device, &gpu.queue, &gpu.layout, white, &model).expect("the quad imports");
+        let gltf_key = format!("gltf_mesh_{model}_Quad_p0");
+
+        let mut world = World::new();
+        let cube = world.spawn_bundle((MeshSource("standard_cube".into()), LightmapReceiver::new(32, 32)));
+        let quad = world.spawn_bundle((MeshSource(gltf_key.clone()),));
+        let plain = world.spawn_bundle((MeshSource("sphere".into()),));
+        run_asset_loading_system(&mut world, &gpu.device, &gpu.queue, &gpu.layout, &mut assets);
+        assert!(world.get::<Mesh>(quad).unwrap().cpu_lightmap.is_none(), "a model that is not a receiver was laid out");
+        assert!(world.get::<Mesh>(plain).unwrap().cpu_lightmap.is_none());
+
+        // Receivers added after their plain mesh was loaded.
+        world.add_component(quad, LightmapReceiver::new(64, 64));
+        world.add_component(plain, LightmapReceiver::new(16, 16));
+        run_asset_loading_system(&mut world, &gpu.device, &gpu.queue, &gpu.layout, &mut assets);
+
+        for (entity, key, resolution) in [(cube, "standard_cube", 32), (quad, gltf_key.as_str(), 64), (plain, "sphere", 16)] {
+            let mesh = world.get::<Mesh>(entity).unwrap();
+            let drawn = mesh.lightmap_vertices().unwrap_or_else(|| panic!("{key}: drawn without a second UV set"));
+            let baked = AssetManager::receiver_vertices(assets.source_vertices(key), resolution).unwrap();
+            let uv = |v: &[crate::gpu_types::Vertex]| v.iter().map(|v| v.lightmap_uv).collect::<Vec<_>>();
+            assert_eq!(uv(&drawn), uv(&baked), "{key}: drawn at other UVs than it bakes at");
+            assert!(drawn.iter().any(|v| v.lightmap_uv != [0.0, 0.0]));
+        }
+        // Once laid out, left alone: the same upload the next frame.
+        let before = world.get::<Mesh>(cube).unwrap().vbuf.clone();
+        run_asset_loading_system(&mut world, &gpu.device, &gpu.queue, &gpu.layout, &mut assets);
+        assert!(std::sync::Arc::ptr_eq(&before, &world.get::<Mesh>(cube).unwrap().vbuf));
     }
 }

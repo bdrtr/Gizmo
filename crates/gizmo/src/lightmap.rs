@@ -27,6 +27,13 @@ pub enum BakeWorldError {
     /// The bake itself — a receiver with no second UV set the bake could lay out, a file that would
     /// not write.
     Bake(LightmapError),
+    /// A receiver whose mesh the asset loader has not loaded yet — or not yet with the second UV set
+    /// it lays out for a receiver (`AssetManager::receiver_mesh`, the frame after the
+    /// `LightmapReceiver` is added). Run a frame and bake again.
+    NotLoaded {
+        /// The receiver.
+        entity: Entity,
+    },
     /// A receiver made from `MeshData` with no second UV set, which the bake lays out
     /// ([`gizmo_renderer::lightmap_uv::unwrap`]), could not be laid out.
     CannotUnwrap {
@@ -41,6 +48,11 @@ impl std::fmt::Display for BakeWorldError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Bake(e) => e.fmt(f),
+            Self::NotLoaded { entity } => write!(
+                f,
+                "entity {}'s mesh is not loaded with its lightmap UVs yet: the asset loader lays them out on the next frame",
+                entity.id()
+            ),
             Self::CannotUnwrap { entity, reason } => write!(f, "entity {}'s second UV set could not be laid out: {reason}", entity.id()),
         }
     }
@@ -84,8 +96,10 @@ pub struct BakedReceiver {
 ///   frame — the bake takes only their **bounces**.
 /// * **The receivers:** a receiver's mesh needs its second UV set (`Vertex::lightmap_uv`). One made in
 ///   code (`MeshData`) without one is given one ([`MeshData::with_lightmap_uvs`], at the receiver's
-///   resolution) and its `MeshData` replaced, so the loader uploads it again with the UVs; any other
-///   without one (a file with no `TEXCOORD_1`) stops the bake with [`LightmapError::NothingCovered`].
+///   resolution) and its `MeshData` replaced, so the loader uploads it again with the UVs. One drawn
+///   from a `MeshSource` without one (a file with no `TEXCOORD_1`, a primitive) is laid out by the
+///   asset loader the frame after its `LightmapReceiver` is added (`AssetManager::receiver_mesh`);
+///   baked before that, or before its mesh is loaded at all, it is [`BakeWorldError::NotLoaded`].
 ///   Its lightmap is `lightmap_<entity>_<hash>.png` — the hash of the picture, so a bake that changes the light is a
 ///   new file the renderer loads rather than the one it has cached.
 ///
@@ -106,6 +120,7 @@ pub fn bake_lightmaps(world: &mut World, mut bake: LightmapBake, dir: impl AsRef
         let hidden = world.query::<&gizmo_core::component::IsHidden>();
         let receiving = world.query::<&LightmapReceiver>();
         let mesh_data = world.query::<&MeshData>();
+        let sources = world.query::<&gizmo_core::component::MeshSource>();
         #[cfg(feature = "physics")]
         let bodies = world.query::<&gizmo_physics_rigid::components::RigidBody>();
         let mut meshes: Vec<(Entity, Mesh, MeshRenderer)> =
@@ -127,6 +142,9 @@ pub fn bake_lightmaps(world: &mut World, mut bake: LightmapBake, dir: impl AsRef
                 (None, None) => (Vec3::splat(0.8), Vec3::ZERO),
             };
             let mut baked = BakeMesh::from_mesh(&mesh, at);
+            if receiving.get(entity).is_some() && mesh.cpu_lightmap.is_none() && sources.get(entity).is_some() && mesh_data.get(entity).is_none() {
+                return Err(BakeWorldError::NotLoaded { entity });
+            }
             if let Some(r) = receiving.get(entity) {
                 // Made in code with no second UV set: laid out here, baked onto, and given back to
                 // the entity once the bake has worked, so the loader uploads it with the UVs.
@@ -146,6 +164,12 @@ pub fn bake_lightmaps(world: &mut World, mut bake: LightmapBake, dir: impl AsRef
             if receiving.get(entity).is_some() {
                 receivers.push((entity, id));
             }
+        }
+
+        // A receiver with no mesh at all has not been loaded: baking without it would leave it out
+        // and say nothing.
+        if let Some((entity, _)) = world.query::<(Entity, &LightmapReceiver)>().iter().find(|(e, _)| !receivers.iter().any(|(r, _)| r == e) && world.query::<&Mesh>().get(*e).is_none()) {
+            return Err(BakeWorldError::NotLoaded { entity });
         }
 
         let place = |e: Entity| matrix(e).map(|m| m.to_scale_rotation_translation());
@@ -210,6 +234,7 @@ mod tests {
 
     struct Gpu {
         device: wgpu::Device,
+        queue: std::cell::RefCell<Option<wgpu::Queue>>,
         layout: wgpu::BindGroupLayout,
     }
 
@@ -224,12 +249,16 @@ mod tests {
             ..wgpu::InstanceDescriptor::new_without_display_handle()
         });
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
-        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a noop device");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a noop device");
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
-        Gpu { device, layout }
+        Gpu { device, queue: std::cell::RefCell::new(Some(queue)), layout }
     }
 
     impl Gpu {
+        fn queue(&self) -> wgpu::Queue {
+            self.queue.borrow_mut().take().expect("one queue a test")
+        }
+
         fn material(&self) -> Material {
             Material::new(Arc::new(self.device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &self.layout, entries: &[] })))
         }
@@ -372,6 +401,63 @@ mod tests {
         // The floor's middle is under the cube: dark, somewhere inside the chart.
         let all: Vec<f32> = image.pixels().map(|p| f32::from(p[0]) / 255.0 * b.intensity).collect();
         assert!(all.iter().any(|&t| t < 0.05), "nothing under the cube was dark");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A receiver drawn from a `MeshSource` with no second UV set — a primitive here, a glTF without
+    /// `TEXCOORD_1` alike — bakes once the loader has run: before, it is `NotLoaded` (without a mesh,
+    /// and with its plain one), after, the loader has laid it out and the bake reads those UVs.
+    #[test]
+    fn a_receiver_from_a_mesh_source_bakes_after_the_loader_lays_it_out() {
+        use gizmo_core::component::MeshSource;
+        use gizmo_renderer::asset::AssetManager;
+        let gpu = gpu();
+        let layout = {
+            // The material layout is the renderer's; any layout does for the loader's white texture.
+            gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            })
+        };
+        let dir = std::env::temp_dir().join(format!("gizmo-lightmap-test-source-{}", std::process::id()));
+        let mut world = World::new();
+        let ground = world.spawn_bundle((
+            Transform::new(Vec3::ZERO),
+            GlobalTransform::default(),
+            MeshSource("plane_8".into()),
+            gpu.material(),
+            MeshRenderer::new(),
+            LightmapReceiver::new(32, 32),
+        ));
+        assert_eq!(bake_lightmaps(&mut world, bake(), &dir).unwrap_err(), BakeWorldError::NotLoaded { entity: ground }, "no mesh yet");
+        // Its plain mesh, as a scene that had it before it became a receiver would have.
+        world.add_component(ground, gizmo_renderer::asset::AssetManager::create_plane(&gpu.device, 8.0));
+        assert_eq!(bake_lightmaps(&mut world, bake(), &dir).unwrap_err(), BakeWorldError::NotLoaded { entity: ground }, "plain mesh");
+
+        let mut assets = AssetManager::new();
+        let queue = gpu.queue();
+        gizmo_renderer::asset_loading::run_asset_loading_system(&mut world, &gpu.device, &queue, &layout, &mut assets);
+        let b = bake_lightmaps(&mut world, bake(), &dir).expect("laid out by the loader").remove(0);
+        let image = image::open(&b.path).unwrap().to_rgba8();
+        let lit = image.pixels().filter(|p| f32::from(p[0]) / 255.0 * b.intensity > 0.9).count();
+        assert!(lit > 32 * 32 / 4, "the plane's chart is not lit: {lit} texels");
         std::fs::remove_dir_all(&dir).ok();
     }
 

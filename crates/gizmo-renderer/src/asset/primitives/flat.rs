@@ -190,6 +190,11 @@ impl crate::asset::AssetManager {
     /// Builds a 2D sprite quad (in the XY plane, parallel to the camera).
     /// With an orthographic projection this is what makes 2D games possible.
     pub fn create_sprite_quad(device: &wgpu::Device, width: f32, height: f32) -> Mesh {
+        Mesh::new_indexed(device, &Self::sprite_quad_data(width, height), Vec3::ZERO, format!("sprite_quad_{width}_{height}"))
+    }
+
+    /// [`create_sprite_quad`](Self::create_sprite_quad)'s triangle list.
+    pub(crate) fn sprite_quad_data(width: f32, height: f32) -> Vec<Vertex> {
         let hw = width / 2.0;
         let hh = height / 2.0;
         let def_j = [0; 4];
@@ -247,11 +252,6 @@ impl crate::asset::AssetManager {
             },
         ];
 
-        Mesh::new_indexed(
-            device,
-            &vertices,
-            Vec3::ZERO,
-            format!("sprite_quad_{width}_{height}"),
-        )
+        vertices.to_vec()
     }
 }

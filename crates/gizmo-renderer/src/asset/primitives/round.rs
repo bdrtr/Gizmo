@@ -250,6 +250,12 @@ impl crate::asset::AssetManager {
 
     /// A torus: `radius` to the centre of the tube, `tube_radius` around it.
     pub fn create_torus(device: &wgpu::Device, radius: f32, tube_radius: f32, radial_segments: u32, tubular_segments: u32) -> Mesh {
+        let vertices = Self::torus_data(radius, tube_radius, radial_segments, tubular_segments);
+        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("torus_{radius}_{tube_radius}_{radial_segments}_{tubular_segments}"))
+    }
+
+    /// [`create_torus`](Self::create_torus)'s triangle list.
+    pub(crate) fn torus_data(radius: f32, tube_radius: f32, radial_segments: u32, tubular_segments: u32) -> Vec<Vertex> {
         let radial_segments = radial_segments.max(3);
         let tubular_segments = tubular_segments.max(3);
         let mut vertices = Vec::new();
@@ -292,7 +298,7 @@ impl crate::asset::AssetManager {
             }
         }
 
-        Mesh::new_indexed(device, &vertices, Vec3::ZERO, format!("torus_{radius}_{tube_radius}_{radial_segments}_{tubular_segments}"))
+        vertices
     }
 
     /// A capsule's vertices (tube + two hemispheres), CCW-wound on the outside. Pure data.

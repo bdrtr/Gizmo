@@ -7,6 +7,11 @@ impl crate::asset::AssetManager {
     /// The normals point inwards, so the faces are visible with the camera at the cube's centre
     /// looking out.
     pub fn create_inverted_cube(device: &wgpu::Device) -> Mesh {
+        Mesh::new_indexed(device, &Self::inverted_cube_data(), Vec3::ZERO, "inverted_cube".to_string())
+    }
+
+    /// [`create_inverted_cube`](Self::create_inverted_cube)'s triangle list.
+    pub(crate) fn inverted_cube_data() -> Vec<Vertex> {
         // 6 yüz × 2 üçgen × 3 köşe = 36 vertex
         // Her yüzün normali İÇE bakar (ters küp)
         let positions: [[f32; 3]; 8] = [
@@ -121,12 +126,7 @@ impl crate::asset::AssetManager {
             }
         }
 
-        Mesh::new_indexed(
-            device,
-            &vertices,
-            Vec3::ZERO,
-            "inverted_cube".to_string(),
-        )
+        vertices
     }
 
     /// Builds an ordinary cube mesh (outward-facing normals, correct for PBR lighting and

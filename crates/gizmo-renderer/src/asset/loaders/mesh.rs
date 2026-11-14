@@ -95,116 +95,7 @@ impl crate::asset::AssetManager {
                     continue;
                 }
 
-                let reader = primitive.reader(|buf| Some(&buffers[buf.index()]));
-
-                let positions: Vec<[f32; 3]> = reader
-                    .read_positions()
-                    .map(|it| it.collect())
-                    .unwrap_or_default();
-
-                if positions.is_empty() {
-                    continue; // nothing to upload
-                }
-
-                let supplied_normals: Option<Vec<[f32; 3]>> =
-                    reader.read_normals().map(|it| it.collect());
-
-                let supplied_tangents: Option<Vec<[f32; 4]>> =
-                    reader.read_tangents().map(|it| it.collect());
-
-                let tex_coords: Vec<[f32; 2]> = reader
-                    .read_tex_coords(0)
-                    .map(|it| it.into_f32().collect())
-                    .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
-
-                // The second set, for the lightmap (`Vertex::lightmap_uv`); none is zeroes.
-                let lightmap_uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(1).map(|it| it.into_f32().collect());
-
-                let joints: Option<Vec<[u16; 4]>> =
-                    reader.read_joints(0).map(|it| it.into_u16().collect());
-                let weights: Option<Vec<[f32; 4]>> =
-                    reader.read_weights(0).map(|it| it.into_f32().collect());
-
-                // Expand indexed geometry into a flat vertex list.
-                let mut all_vertices: Vec<Vertex> = Vec::new();
-                let mut aabb = gizmo_math::Aabb::empty();
-
-                let make_vertex = |idx: usize| -> Vertex {
-                    let pos = positions[idx];
-
-                    // Safe access — attribute arrays may be shorter than positions.
-                    let normal = supplied_normals
-                        .as_ref()
-                        .and_then(|n| n.get(idx).copied())
-                        .unwrap_or([0.0, 1.0, 0.0]);
-                    let uv = tex_coords.get(idx).copied().unwrap_or([0.0, 0.0]);
-                    let j = joints
-                        .as_ref()
-                        .and_then(|js| js.get(idx))
-                        .map(|&[a, b, c, d]| [a as u32, b as u32, c as u32, d as u32])
-                        .unwrap_or([0; 4]);
-                    let w = normalize_skin_weights(
-                        weights
-                            .as_ref()
-                            .and_then(|ws| ws.get(idx))
-                            .copied()
-                            .unwrap_or([0.0; 4]),
-                    );
-
-                    let tangent = if let Some(ref tangents) = supplied_tangents {
-                        tangents.get(idx).copied().unwrap_or([1.0, 0.0, 0.0, 1.0])
-                    } else {
-                        // Calculate a dynamic tangent orthogonal to normal
-                        let n = gizmo_math::Vec3::from(normal);
-                        let t = if n.x.abs() > 0.9 {
-                            gizmo_math::Vec3::new(0.0, 1.0, 0.0).cross(n).normalize()
-                        } else {
-                            gizmo_math::Vec3::new(1.0, 0.0, 0.0).cross(n).normalize()
-                        };
-                        [t.x, t.y, t.z, 1.0]
-                    };
-
-                    Vertex {
-                        position: pos,
-                        normal,
-                        tex_coords: uv,
-                        color: [1.0, 1.0, 1.0, 1.0],
-                        joint_indices: j,
-                        joint_weights: w,
-                        tangent,
-                        lightmap_uv: lightmap_uvs.as_ref().and_then(|l| l.get(idx).copied()).unwrap_or([0.0; 2]),
-                    }
-                };
-
-                if let Some(indices) = reader.read_indices() {
-                    // Triangle-list assembly: process indices in groups of 3 and
-                    // drop the WHOLE triangle if any index is out of bounds.
-                    // (Skipping a single OOB index would shift every later vertex
-                    // and corrupt the grouping of all following triangles.)
-                    let idx: Vec<u32> = indices.into_u32().collect();
-                    for tri in idx.as_chunks::<3>().0 {
-                        if tri.iter().any(|&t| (t as usize) >= positions.len()) {
-                            continue;
-                        }
-                        for &t in tri {
-                            let i = t as usize;
-                            let pos = positions[i];
-                            aabb.extend(Vec3::new(pos[0], pos[1], pos[2]));
-                            all_vertices.push(make_vertex(i));
-                        }
-                    }
-                } else {
-                    for (i, pos) in positions.iter().enumerate() {
-                        aabb.extend(Vec3::new(pos[0], pos[1], pos[2]));
-                        all_vertices.push(make_vertex(i));
-                    }
-                }
-
-                // Compute flat normals when the file did not supply any.
-                // We only do this for triangle lists (guaranteed above).
-                if supplied_normals.is_none() {
-                    compute_flat_normals(&mut all_vertices);
-                }
+                let Some(all_vertices) = gltf_primitive_vertices(&primitive, buffers) else { continue };
 
                 // Use a deterministic cache key that doesn't depend on Debug formatting.
                 let mesh_source = format!(
@@ -250,6 +141,119 @@ impl crate::asset::AssetManager {
             children,
         }
     }
+}
+
+
+/// A triangle primitive's corners as the engine's vertices, a flat triangle list — what the loader
+/// uploads and what [`AssetManager::source_vertices`](crate::asset::AssetManager::source_vertices)
+/// reads without a GPU. `None` for a primitive with no positions.
+pub(crate) fn gltf_primitive_vertices(primitive: &gltf::Primitive, buffers: &[gltf::buffer::Data]) -> Option<Vec<Vertex>> {
+    let reader = primitive.reader(|buf| Some(&buffers[buf.index()]));
+
+    let positions: Vec<[f32; 3]> = reader
+        .read_positions()
+        .map(|it| it.collect())
+        .unwrap_or_default();
+
+    if positions.is_empty() {
+        return None; // nothing to upload
+    }
+
+    let supplied_normals: Option<Vec<[f32; 3]>> =
+        reader.read_normals().map(|it| it.collect());
+
+    let supplied_tangents: Option<Vec<[f32; 4]>> =
+        reader.read_tangents().map(|it| it.collect());
+
+    let tex_coords: Vec<[f32; 2]> = reader
+        .read_tex_coords(0)
+        .map(|it| it.into_f32().collect())
+        .unwrap_or_else(|| vec![[0.0, 0.0]; positions.len()]);
+
+    // The second set, for the lightmap (`Vertex::lightmap_uv`); none is zeroes.
+    let lightmap_uvs: Option<Vec<[f32; 2]>> = reader.read_tex_coords(1).map(|it| it.into_f32().collect());
+
+    let joints: Option<Vec<[u16; 4]>> =
+        reader.read_joints(0).map(|it| it.into_u16().collect());
+    let weights: Option<Vec<[f32; 4]>> =
+        reader.read_weights(0).map(|it| it.into_f32().collect());
+
+    // Expand indexed geometry into a flat vertex list.
+    let mut all_vertices: Vec<Vertex> = Vec::new();
+
+    let make_vertex = |idx: usize| -> Vertex {
+        let pos = positions[idx];
+
+        // Safe access — attribute arrays may be shorter than positions.
+        let normal = supplied_normals
+            .as_ref()
+            .and_then(|n| n.get(idx).copied())
+            .unwrap_or([0.0, 1.0, 0.0]);
+        let uv = tex_coords.get(idx).copied().unwrap_or([0.0, 0.0]);
+        let j = joints
+            .as_ref()
+            .and_then(|js| js.get(idx))
+            .map(|&[a, b, c, d]| [a as u32, b as u32, c as u32, d as u32])
+            .unwrap_or([0; 4]);
+        let w = normalize_skin_weights(
+            weights
+                .as_ref()
+                .and_then(|ws| ws.get(idx))
+                .copied()
+                .unwrap_or([0.0; 4]),
+        );
+
+        let tangent = if let Some(ref tangents) = supplied_tangents {
+            tangents.get(idx).copied().unwrap_or([1.0, 0.0, 0.0, 1.0])
+        } else {
+            // Calculate a dynamic tangent orthogonal to normal
+            let n = gizmo_math::Vec3::from(normal);
+            let t = if n.x.abs() > 0.9 {
+                gizmo_math::Vec3::new(0.0, 1.0, 0.0).cross(n).normalize()
+            } else {
+                gizmo_math::Vec3::new(1.0, 0.0, 0.0).cross(n).normalize()
+            };
+            [t.x, t.y, t.z, 1.0]
+        };
+
+        Vertex {
+            position: pos,
+            normal,
+            tex_coords: uv,
+            color: [1.0, 1.0, 1.0, 1.0],
+            joint_indices: j,
+            joint_weights: w,
+            tangent,
+            lightmap_uv: lightmap_uvs.as_ref().and_then(|l| l.get(idx).copied()).unwrap_or([0.0; 2]),
+        }
+    };
+
+    if let Some(indices) = reader.read_indices() {
+        // Triangle-list assembly: process indices in groups of 3 and
+        // drop the WHOLE triangle if any index is out of bounds.
+        // (Skipping a single OOB index would shift every later vertex
+        // and corrupt the grouping of all following triangles.)
+        let idx: Vec<u32> = indices.into_u32().collect();
+        for tri in idx.as_chunks::<3>().0 {
+            if tri.iter().any(|&t| (t as usize) >= positions.len()) {
+                continue;
+            }
+            for &t in tri {
+                all_vertices.push(make_vertex(t as usize));
+            }
+        }
+    } else {
+        for i in 0..positions.len() {
+            all_vertices.push(make_vertex(i));
+        }
+    }
+
+    // Compute flat normals when the file did not supply any.
+    // We only do this for triangle lists (guaranteed above).
+    if supplied_normals.is_none() {
+        compute_flat_normals(&mut all_vertices);
+    }
+    Some(all_vertices)
 }
 
 #[cfg(test)]

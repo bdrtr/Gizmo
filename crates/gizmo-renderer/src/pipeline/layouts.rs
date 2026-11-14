@@ -4,7 +4,7 @@ pub(crate) struct Layouts {
     pub(crate) global: wgpu::BindGroupLayout,
     pub(super) shadow: wgpu::BindGroupLayout,
     pub(super) shadow_pass: wgpu::BindGroupLayout,
-    pub(super) texture: wgpu::BindGroupLayout,
+    pub(crate) texture: wgpu::BindGroupLayout,
     pub(super) skeleton: wgpu::BindGroupLayout,
     pub(super) instance: wgpu::BindGroupLayout,
 }

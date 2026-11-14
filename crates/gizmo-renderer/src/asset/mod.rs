@@ -234,6 +234,9 @@ pub(crate) struct MaterialDefaults {
 /// buffers rather than a second copy.
 pub struct AssetManager {
     mesh_cache: std::collections::HashMap<String, Mesh>,
+    /// `MeshSource` keys whose lightmap layout ([`Self::receiver_mesh`]) failed, with the resolution:
+    /// warned about once, not retried every frame.
+    receiver_failures: std::collections::HashSet<(String, u32)>,
     /// Uploads of [`MeshData`](crate::components::MeshData), keyed by the data's allocation. The
     /// held clone keeps that allocation alive, so its address cannot be reused by other data
     /// while the entry exists.
@@ -284,6 +287,7 @@ impl AssetManager {
     pub fn new() -> Self {
         Self {
             mesh_cache: std::collections::HashMap::new(),
+            receiver_failures: std::collections::HashSet::new(),
             data_meshes: std::collections::HashMap::new(),
             texture_cache: std::collections::HashMap::new(),
             view_cache: std::collections::HashMap::new(),
@@ -725,6 +729,98 @@ impl AssetManager {
     #[must_use]
     pub fn is_primitive_mesh_key(key: &str) -> bool {
         PrimitiveShape::parse(key).is_some()
+    }
+
+    /// The triangle list a `MeshSource` key names, read on the CPU with no GPU: a primitive's, a glTF
+    /// sub-mesh's (the file read again, the same code the import uploads through), an OBJ file's.
+    /// `None` for a key that names nothing that loads.
+    pub fn source_vertices(&self, key: &str) -> Option<Vec<Vertex>> {
+        if let Some(shape) = PrimitiveShape::parse(key) {
+            return Some(shape.data());
+        }
+        if key.starts_with("gltf_mesh_") {
+            let (file, _) = gizmo_core::component::MeshSource::split_gltf_key(key)?;
+            let path = self.resolve_path_from_meta_source(file).ok()?;
+            let (document, buffers, _) = match self.embedded_assets.get(&path) {
+                Some(data) => gltf::import_slice(data.as_ref()).ok()?,
+                None => gltf::import(&path).ok()?,
+            };
+            // The import's own walk (`load_gltf_from_import`, `parse_gltf_node`): each node once,
+            // depth first in scene order. Two nodes of one name share a key, and the import's cache
+            // keeps the later: so does this.
+            fn walk<'a>(node: gltf::Node<'a>, key: &str, file: &str, seen: &mut std::collections::HashSet<usize>, found: &mut Option<gltf::Primitive<'a>>) {
+                if let Some(mesh) = node.mesh() {
+                    for (i, primitive) in mesh.primitives().enumerate() {
+                        let name = format!("gltf_mesh_{file}_{}_p{i}", node.name().unwrap_or("<unnamed>"));
+                        if name == key && primitive.mode() == gltf::mesh::Mode::Triangles {
+                            *found = Some(primitive);
+                        }
+                    }
+                }
+                let children: Vec<_> = node.children().filter(|c| seen.insert(c.index())).collect();
+                for child in children {
+                    walk(child, key, file, seen, found);
+                }
+            }
+            let mut seen = std::collections::HashSet::new();
+            let mut found = None;
+            for scene in document.scenes() {
+                for node in scene.nodes() {
+                    if seen.insert(node.index()) {
+                        walk(node, key, file, &mut seen, &mut found);
+                    }
+                }
+            }
+            if let Some(primitive) = found {
+                return loaders::gltf_primitive_vertices(&primitive, &buffers);
+            }
+            return None;
+        }
+        let path = self.resolve_path_from_meta_source(key).ok()?;
+        decode_obj_vertices_for_async(&path).ok().map(|(v, _)| v)
+    }
+
+    /// The mesh `key` names with a second UV set laid out for a `width × height` lightmap
+    /// ([`crate::lightmap_uv::unwrap`] at the smaller side) — what an entity with a
+    /// [`LightmapReceiver`](crate::components::LightmapReceiver) draws when its file brings none, so
+    /// the lightmap baked for it has somewhere to be read. One upload per key and resolution; a source
+    /// that already has a second UV set is returned as it is. `None`, warned about once, for a key
+    /// that does not load or a layout that does not fit.
+    pub fn receiver_mesh(&mut self, device: &wgpu::Device, key: &str, width: u32, height: u32) -> Option<Mesh> {
+        let resolution = width.min(height);
+        let cache_key = format!("{key}#lightmap_uv:{resolution}");
+        if let Some(mesh) = self.mesh_cache.get(&cache_key) {
+            return Some(mesh.clone());
+        }
+        if self.receiver_failures.contains(&(key.to_string(), resolution)) {
+            return None;
+        }
+        let laid_out = Self::receiver_vertices(self.source_vertices(key), resolution);
+        match laid_out {
+            Ok(vertices) => {
+                let mesh = Mesh::new_indexed(device, &vertices, Vec3::ZERO, cache_key.clone());
+                self.mesh_cache.insert(cache_key, mesh.clone());
+                Some(mesh)
+            }
+            Err(reason) => {
+                tracing::warn!(mesh_source = key, %reason, "[Lightmap] a receiver's mesh could not be given a second UV set; it is drawn without its lightmap");
+                self.receiver_failures.insert((key.to_string(), resolution));
+                None
+            }
+        }
+    }
+
+    /// A receiver's vertices: the source's own second UV set if it has one, else one laid out at
+    /// `resolution`. The one rule [`Self::receiver_mesh`] uploads by and a bake reads by, so the UVs
+    /// drawn and the UVs baked are the same.
+    pub fn receiver_vertices(vertices: Option<Vec<Vertex>>, resolution: u32) -> Result<Vec<Vertex>, String> {
+        let mut vertices = vertices.ok_or_else(|| "the mesh source does not load".to_string())?;
+        if vertices.iter().any(|v| v.lightmap_uv != [0.0, 0.0]) {
+            return Ok(vertices);
+        }
+        crate::lightmap_uv::unwrap(&mut vertices, &crate::lightmap_uv::UnwrapSettings::default().with_resolution(resolution))
+            .map_err(|e| e.to_string())?;
+        Ok(vertices)
     }
 
     /// Return a cached mesh by its source ID without triggering a load.
@@ -1614,6 +1710,26 @@ impl PrimitiveShape {
             }
             _ => return None,
         })
+    }
+
+    /// The triangle list [`Self::build`] uploads, on the CPU.
+    fn data(self) -> Vec<Vertex> {
+        use PrimitiveShape::*;
+        match self {
+            Cube => AssetManager::cube_data(),
+            InvertedCube => AssetManager::inverted_cube_data(),
+            Plane(size) => AssetManager::plane_data(size),
+            PlaneSubdivided(size, segments) => AssetManager::plane_subdivided_data(size, segments),
+            Circle(radius, segments) => AssetManager::circle_data(radius, segments),
+            Sphere(radius, stacks, slices) => AssetManager::sphere_data(radius, stacks, slices),
+            Cylinder(radius, height, segments) => AssetManager::cylinder_data(radius, height, segments),
+            Cone(radius, height, segments) => AssetManager::cone_data(radius, height, segments),
+            Torus(radius, tube, radial, tubular) => AssetManager::torus_data(radius, tube, radial, tubular),
+            Capsule(radius, depth, latitudes, longitudes) => AssetManager::capsule_data(radius, depth, latitudes, longitudes),
+            SpriteQuad(width, height) => AssetManager::sprite_quad_data(width, height),
+            Tetrahedron(size) => AssetManager::tetrahedron_data(size),
+            Frustum(bottom, top, height, segments) => AssetManager::conical_frustum_data(bottom, top, height, segments),
+        }
     }
 
     fn build(self, device: &wgpu::Device) -> Mesh {

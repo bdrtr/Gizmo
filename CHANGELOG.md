@@ -118,6 +118,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **A model without a second UV set is a lightmap receiver too.** An entity drawn from a `MeshSource` — a glTF with no
+  `TEXCOORD_1`, an OBJ, a primitive — that carries a `LightmapReceiver` is drawn from a copy laid out for its lightmap:
+  the asset loader reads the source's vertices on the CPU (`AssetManager::source_vertices`: a primitive's data, the glTF
+  read again through the import's own vertex assembly, `gltf_primitive_vertices`, an OBJ decoded), unwraps them at the
+  receiver's resolution and uploads them once per key and resolution (`AssetManager::receiver_mesh`), before the
+  entity's first mesh or in place of a plain one it already has. `AssetManager::receiver_vertices` is the one rule both
+  the upload and a bake read, so the UVs drawn are the UVs baked; the unwrap is deterministic, so a scene that saves
+  only the `MeshSource`, the `LightmapReceiver` and the material's lightmap path reopens drawing the map where it was
+  baked. A source that will not lay out is warned about once and drawn as it is. `bake_lightmaps` says
+  `BakeWorldError::NotLoaded` for a receiver the loader has not reached yet (no mesh, or its plain one) instead of
+  leaving it out. To read primitives on the CPU, the torus, sprite quad and inverted cube have data functions like the
+  rest (`PrimitiveShape::data`). Tests: `a_sources_vertices_on_the_cpu_are_the_ones_uploaded` (every primitive key, bare
+  and with numbers, and a glTF sub-mesh, corner for corner), `a_receiver_is_drawn_with_the_uvs_its_lightmap_is_baked_at`
+  (a primitive and a one-UV glTF, before their first mesh and after; fails with the loader's rule removed), and
+  `a_receiver_from_a_mesh_source_bakes_after_the_loader_lays_it_out`, all on the noop backend.
+
 - **Lightmap UVs made for a mesh** (`gizmo_renderer::lightmap_uv::unwrap`, `MeshData::with_lightmap_uvs`). Triangles
   sharing an edge and facing within `max_angle` (66°) of a chart's first grow into one chart; each is projected along
   that triangle's normal (none is turned over), split again at half the angle if it still lies over itself (a curling

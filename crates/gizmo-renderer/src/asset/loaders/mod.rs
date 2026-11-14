@@ -19,6 +19,7 @@ mod images;
 mod material;
 pub use material::{gltf_image_key, split_gltf_image_key};
 mod mesh;
+pub(crate) use mesh::gltf_primitive_vertices;
 mod obj;
 mod skeleton;
 
