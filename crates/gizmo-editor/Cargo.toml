@@ -36,3 +36,9 @@ gizmo-scripting = { version = "0.11.0", path = "../gizmo-scripting" }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-time = "1"
+
+[dev-dependencies]
+# The inspector's material tests need a real `Material`, which holds a wgpu bind group: the noop
+# backend makes one with no GPU, so they run anywhere, CI included.
+wgpu = { version = "30", default-features = false, features = ["noop", "wgsl"] }
+pollster = "1.0"

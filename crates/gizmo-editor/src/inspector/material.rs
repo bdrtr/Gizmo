@@ -202,3 +202,98 @@ fn texture_slot(ui: &mut egui::Ui, state: &mut EditorState, label: &str, current
     });
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo_core::world::World;
+    use std::sync::Arc;
+
+    /// A `Material` over an empty bind group, made on wgpu's noop backend: no GPU needed.
+    fn material() -> Material {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::NOOP,
+            backend_options: wgpu::BackendOptions {
+                noop: wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a noop device");
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+        Material::new(Arc::new(device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[] })))
+    }
+
+    fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+        out
+    }
+
+    /// One frame of the material section, with the pointer at `pointer` (released there, if
+    /// `release`), and the texts it painted.
+    fn frame(ctx: &egui::Context, world: &World, entity: gizmo_core::entity::Entity, state: &mut EditorState, pointer: Option<egui::Pos2>, release: bool) -> (Vec<String>, Vec<(String, egui::Rect)>) {
+        let mut input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 2000.0))),
+            ..Default::default()
+        };
+        if let Some(p) = pointer {
+            input.events.push(egui::Event::PointerMoved(p));
+            if release {
+                input.events.push(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+            }
+        }
+        let mut slots = Vec::new();
+        let output = ctx.run_ui(input, |ui| {
+            draw_material_section(ui, world, entity, state);
+        });
+        fn walk(shape: &egui::Shape, out: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((t.galley.text().to_string(), shape.visual_bounding_rect())),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        output.shapes.iter().for_each(|c| walk(&c.shape, &mut slots));
+        let t = texts(&output.shapes);
+        output.drop_without_applying_deltas();
+        (t, slots)
+    }
+
+    /// **A texture dropped on the Lightmap slot is the material's lightmap, and its intensity is
+    /// offered then.** Every map slot is drawn, the lightmap's among them; before the drop there is
+    /// no intensity slider, after it the material names the dropped file as its lightmap and the
+    /// slider is there.
+    #[test]
+    fn a_texture_dropped_on_the_lightmap_slot_is_the_materials_lightmap() {
+        let mut world = World::new();
+        let entity = world.spawn();
+        world.add_component(entity, material());
+        let mut state = EditorState::default();
+        let ctx = egui::Context::default();
+        // A first frame to open the section (egui lays a collapsing header out over two frames).
+        frame(&ctx, &world, entity, &mut state, None, false);
+        let (before, slots) = frame(&ctx, &world, entity, &mut state, None, false);
+        for slot in ["Normal", "Metallic-Roughness", "Emissive", "Occlusion", "Lightmap"] {
+            assert!(before.iter().any(|t| t.starts_with(&format!("{slot}:"))), "no {slot} slot in the material section: {before:?}");
+        }
+        assert!(!before.iter().any(|t| t.contains("Lightmap intensity")), "an intensity for a lightmap the material has not got");
+
+        let at = slots.iter().find(|(t, _)| t.starts_with("Lightmap:")).map(|(_, r)| r.center()).expect("the lightmap slot");
+        state.dragged_asset = Some("demo/assets/baked/room_lightmap.png".into());
+        frame(&ctx, &world, entity, &mut state, Some(at), false);
+        frame(&ctx, &world, entity, &mut state, Some(at), true);
+        let maps = world.query::<&Material>().get(entity).unwrap().maps.clone();
+        assert_eq!(maps.lightmap.as_deref(), Some("demo/assets/baked/room_lightmap.png"), "the drop did not set the lightmap");
+        let (after, _) = frame(&ctx, &world, entity, &mut state, None, false);
+        assert!(after.iter().any(|t| t.contains("Lightmap intensity")), "no intensity for the lightmap the material has now: {after:?}");
+    }
+}

@@ -2840,6 +2840,7 @@ dependencies = [
  "gizmo-renderer",
  "gizmo-scene",
  "gizmo-scripting",
+ "pollster 1.0.1",
  "rfd",
  "serde",
  "serde_json",
@@ -2847,6 +2848,7 @@ dependencies = [
  "tracing",
  "transform-gizmo-egui",
  "web-time",
+ "wgpu",
 ]
 
 [[package]]
