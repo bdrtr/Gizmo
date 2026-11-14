@@ -265,7 +265,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     let (mx, my) = input.move_axis();
     let auto = std::env::var_os("ARAZI_OTO").is_some();
-    let (throttle, steer) = if auto { autopilot(world, game.car, checkpoint(world, game.next)) } else { (my, mx) };
+    // Direksiyonun artısı sola (`VehicleController::steering_input`), `move_axis`'te D +1: ters çevrilmeli.
+    // `(my, mx)` idi ve A ile D yer değiştirmişti.
+    let (throttle, steer) = if auto { autopilot(world, game.car, checkpoint(world, game.next)) } else { (my, -mx) };
     drive(world, game.car, if game.finished.is_some() { 0.0 } else { throttle }, steer);
     game.physics.advance(world, dt);
     sync_transforms(world);

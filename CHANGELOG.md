@@ -118,6 +118,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **An open world: `dunya`.** Endless generated terrain streamed in 100 m cells around the player (or the car they
+  drive) through `open_world_chunk_system`: a heightfield collider and a mesh coloured by height and slope (grass, dirt,
+  rock, snow) per cell, trees, rocks and crystals placed by the cell's own seed. Walk (`CharacterController`), get into
+  one of three cars (`VehicleController`, E), cut trees and break rocks for wood and stone (F), collect fifteen crystals;
+  a four-minute day and night (sun, sky, fog and clear colour from the hour, a moon at night). `dunya --test`: the
+  autopilot walks three minutes and drives one — 8 crystals, wood, 135 cells loaded and 110 unloaded, never below the
+  ground on foot or in the car. Writing it found: a follow camera on a body's raw `Transform` shakes the world around a
+  body drawn between its steps (→ `interpolation::drawn_transform`); `arazi` steered A/D the wrong way (`steering_input`
+  is positive to the left, `move_axis` positive to the right) — fixed there too; and four games (`arazi`, `jole`,
+  `kayik`, `topcu`) aim their cameras through `Transform::rotation`, which the camera does not read (`Camera::yaw`/
+  `pitch` is its aim) — open, the next item.
+- **An inventory** (`gizmo_app::inventory`): `Inventory`, a component of slots of `ItemStack`s (saved with the scene,
+  serialisable for `SaveData`), and `ItemCatalog` (an item's name and stack size, by string key). `add` tops up stacks
+  before taking empty slots and hands back what did not fit, `remove` is all or nothing, `move_stack` is a drop —
+  move, merge up to the stack size, or swap. Five tests and a doc example. `dunya` uses it: a 24-slot panel
+  (`Display::Grid` + `Drag` + `DropTarget`), dragging between slots, a stack dropped outside the panel lands on the
+  ground and is picked up again by walking over it, and the inventory and what was taken from the world are saved.
+  `gizmo-app` now asks serde for `derive` itself (it had it only through another crate's features).
+- **`interpolation::drawn_transform`**: where a body is drawn this frame, for a follow camera — the raw `Transform`
+  holds and jumps between steps. Test `a_follower_reads_where_the_body_is_drawn`.
+- **`sinama`, an engine stress bench**: four scenes (288 stacked boxes, two trampoline cloths with balls, twelve soft
+  blocks, 48 orbiting point lights with particles) with frame rate, frame time, worst frame and physics time on screen.
+  Its first numbers: cloth 13.4 ms and soft bodies 15.0 ms of physics a frame against 2.8 ms for the 288 boxes — open.
+
 - **Chess on a tablet** (`demo-android-satranc`, `scripts/android-apk.sh satranc run`). `satranc` moved into the
   `games` crate (`games::satranc::{app, self_test}`), so the desktop binary, the browser build's crate and an APK run
   one game; the desktop binary is a wrapper. For a screen with no keyboard: buttons for undo, new game and the engine

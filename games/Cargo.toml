@@ -16,6 +16,8 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     "render",
     "physics",
     "physics-dynamics",
+    # sinama's cloth and soft bodies; the browser build has them too.
+    "physics-soft",
     "ui",
     # nisanci's shots and hits are synthesised blips; the browser build has audio too.
     "audio",
