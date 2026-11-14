@@ -755,6 +755,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`VehicleController::steering_input`: positive now steers right.** It steered left, while everything that feeds it
+  — `move_axis`, a stick, the D key — is positive to the right, so every game had to negate it, and two (`arazi`,
+  `dunya`) did not and drove A/D backwards. Now input passes through: `pist`, `car_demo`, `vehicle_scene`, `arazi` and
+  `dunya` lost their negations, the AIs flipped their sign. `Wheel::steering_angle` stays a yaw about +Y (positive
+  left). **Breaks:** a game that negated its input now steers the wrong way — drop the minus. Test:
+  `a_four_wheeled_car_drives_forward_and_steers_right` (both signs).
+
 - **The forward-only path's lit shaders carry only the kinds of local light a scene has** (`pipeline::LightShape`:
   `LOCAL_LIGHTS`, `SIZED_LIGHTS`, `RECT_LIGHTS`, built in by `SceneState::set_forward_lights` as the probes and the
   shadows are). The local lights' loop and its cluster lookup ran in every lit fragment whether or not a scene had a

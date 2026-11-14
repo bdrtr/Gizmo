@@ -243,7 +243,8 @@ fn main() {
                     vehicle.throttle_input = throttle.abs().min(1.0);
                     vehicle.brake_input = brake;
                     let max_steer = state.config.steer_max_angle.max(0.01);
-                    vehicle.steering_input = (state.steer_angle / max_steer).clamp(-1.0, 1.0);
+                    // `steer_angle` tekerleğin çizimi için yaw (artısı sola); direksiyonun artısı sağa.
+                    vehicle.steering_input = (-state.steer_angle / max_steer).clamp(-1.0, 1.0);
 
                     // Tuning slider'larını CANLI uygula. ESKİDEN engine_power/brake/grip slider'ları
                     // yalnız state.config'i değiştirip araca HİÇ yansımıyordu (yanıltıcı ölü UI).

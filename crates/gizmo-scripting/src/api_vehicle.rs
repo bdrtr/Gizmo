@@ -57,7 +57,7 @@ mod tests {
     use mlua::Lua;
 
     /// vehicle.set_engine_force / set_steering / set_brake must queue the right commands,
-    /// preserving negative values (reverse gear, steering left).
+    /// preserving negative values (reverse gear, steering left — positive steers right).
     #[test]
     fn vehicle_calls_push_expected_commands() {
         let lua = Lua::new();

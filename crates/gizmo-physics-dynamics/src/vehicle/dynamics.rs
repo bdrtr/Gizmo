@@ -363,7 +363,9 @@ pub fn update_vehicle_with_query(
     // --------------------------------------------------------
     // 3. ACKERMANN DİREKSİYON
     // --------------------------------------------------------
-    let steer_angle = vehicle.steering_input * vehicle.max_steering_angle;
+    // The input's positive is right (what a stick or the D key gives); the geometry below works
+    // in yaw, where positive turns the wheels left about +Y — hence the sign.
+    let steer_angle = -vehicle.steering_input * vehicle.max_steering_angle;
     let turn_radius = if steer_angle.abs() > 0.01 {
         vehicle.tuning.wheelbase / steer_angle.tan()
     } else {
@@ -1204,10 +1206,10 @@ mod tests {
     }
 
     /// `four_wheeled` builds a car that drives the way the controller's conventions say: the
-    /// throttle takes it toward −Z, and a positive steering input turns it left (−X) — with the
+    /// throttle takes it toward −Z, and a positive steering input turns it right (+X) — with the
     /// tuning's track and wheelbase matching where the wheels are.
     #[test]
-    fn a_four_wheeled_car_drives_forward_and_steers_left() {
+    fn a_four_wheeled_car_drives_forward_and_steers_right() {
         let run = |steer: f32| {
             let mut rb = RigidBody::new(1200.0, true);
             rb.calculate_box_inertia(1.6, 0.6, 4.0);
@@ -1229,11 +1231,13 @@ mod tests {
             t.position
         };
         let straight = run(0.0);
-        let left = run(1.0);
+        let right = run(1.0);
+        let left = run(-1.0);
         // Not exactly straight: the corners update the chassis one after another (the wheel
         // vector's documented order dependence) — measured 0.55 m of drift over 51 m.
         assert!(straight.z < -10.0 && straight.x.abs() < 1.5, "straight ahead is −Z: {straight:?}");
-        assert!(left.x < straight.x - 2.0, "positive steering turns left (−X): {left:?} vs {straight:?}");
+        assert!(right.x > straight.x + 2.0, "positive steering turns right (+X): {right:?} vs {straight:?}");
+        assert!(left.x < straight.x - 2.0, "negative steering turns left (−X): {left:?} vs {straight:?}");
     }
 
     fn probe_ground() -> Vec<(BodyHandle, Transform, Collider)> {

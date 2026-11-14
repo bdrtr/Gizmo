@@ -121,7 +121,8 @@ fn autopilot(world: &World, car: Entity, target: Vec3) -> (f32, f32) {
     let f = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
     let angle = f.cross(to).y.atan2(f.dot(to));
     let throttle = if speed < 45.0 { 0.8 } else { 0.0 };
-    (throttle, (angle * 1.6).clamp(-1.0, 1.0))
+    // `angle` solda artı; direksiyonun artısı sağa.
+    (throttle, (-angle * 1.6).clamp(-1.0, 1.0))
 }
 
 fn drive(world: &mut World, car: Entity, throttle: f32, steer: f32) {
@@ -265,9 +266,8 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     let (mx, my) = input.move_axis();
     let auto = std::env::var_os("ARAZI_OTO").is_some();
-    // Direksiyonun artısı sola (`VehicleController::steering_input`), `move_axis`'te D +1: ters çevrilmeli.
-    // `(my, mx)` idi ve A ile D yer değiştirmişti.
-    let (throttle, steer) = if auto { autopilot(world, game.car, checkpoint(world, game.next)) } else { (my, -mx) };
+    // Direksiyonun artısı sağa (`VehicleController::steering_input`), `move_axis`'te D +1.
+    let (throttle, steer) = if auto { autopilot(world, game.car, checkpoint(world, game.next)) } else { (my, mx) };
     drive(world, game.car, if game.finished.is_some() { 0.0 } else { throttle }, steer);
     game.physics.advance(world, dt);
     sync_transforms(world);

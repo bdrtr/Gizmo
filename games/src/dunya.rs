@@ -940,8 +940,8 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
             if let Some(mut v) = world.query_mut::<&mut VehicleController>().get_mut(car) {
                 v.throttle_input = c.my.max(0.0);
                 v.brake_input = (-c.my).max(0.0);
-                // Motorun direksiyonunun artısı sola (`VehicleController::steering_input`), D tuşu +1.
-                v.steering_input = -c.mx;
+                // Direksiyonun artısı sağa (`VehicleController::steering_input`), D tuşu +1.
+                v.steering_input = c.mx;
             }
             // Kamera arabanın arkasına yavaşça dönüyor.
             if c.yaw == 0.0 {

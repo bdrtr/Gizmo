@@ -365,7 +365,7 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
             .collect()
     };
     for (id, racer, at, rotation, speed) in racers {
-        // Sağa açı (yerel +X), ileri yerel −Z. Direksiyonun artısı sola.
+        // Sağa açı (yerel +X), ileri yerel −Z. Direksiyonun artısı da sağa.
         let angle_to = |p: Vec3| {
             let local = rotation.inverse() * (p - at);
             local.x.atan2(-local.z)
@@ -382,16 +382,16 @@ fn drive(world: &mut World, game: &Game, input: &Input, racing: bool, dt: f32) {
             let limit = (110.0 * racer.pace - ahead * 150.0).clamp(28.0, 110.0);
             if racer.backing > 0.0 {
                 backing = true;
-                (1.0, 0.0, (angle * 1.5).clamp(-1.0, 1.0))
+                (1.0, 0.0, (-angle * 1.5).clamp(-1.0, 1.0))
             } else {
                 let throttle = if speed < limit { 1.0 } else { 0.0 };
                 let brake = if speed > limit + 12.0 { 0.7 } else { 0.0 };
                 // Hızlıyken direksiyon az: tam kırmak kaydırır.
                 let gain = (35.0 / speed.abs().max(1.0)).clamp(0.35, 1.3);
-                (throttle, brake, (-angle * gain).clamp(-1.0, 1.0))
+                (throttle, brake, (angle * gain).clamp(-1.0, 1.0))
             }
         } else {
-            (my.max(0.0), (-my).max(0.0), -mx)
+            (my.max(0.0), (-my).max(0.0), mx)
         };
         if racer.ai && racing {
             // Duvara dayanıp kalan yapay zekâ iki saniye tam gaz geri çıkıyor. (1,2 saniyelik, 0,6

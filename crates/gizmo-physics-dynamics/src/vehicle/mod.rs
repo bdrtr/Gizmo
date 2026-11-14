@@ -701,7 +701,10 @@ pub struct VehicleController {
     /// juddering backwards under heavy braking. Counts as driver input for the wake check.
     pub brake_input: f32,    // 0..1
     /// Steering, −1..1, multiplied by [`max_steering_angle`] to give the nominal steer angle.
-    /// Positive steers left under this engine's `−Z` forward / `+X` right convention.
+    /// Positive steers **right** under this engine's `−Z` forward / `+X` right convention — the
+    /// sign a stick, `move_axis` or the D key gives, so input passes through unchanged. (Until
+    /// 2026-11-15 positive steered left, and every game negated its input; two did not.)
+    /// [`Wheel::steering_angle`] is a yaw about `+Y` and keeps the opposite sign.
     ///
     /// Counts as driver input for the wake check. Not clamped, and there is no steering rate
     /// limit — snapping this from 0 to 1 in one frame snaps the front wheels with it.

@@ -194,9 +194,9 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
         0.0
     };
     let steering = if input.is_key_pressed(KeyCode::KeyJ as u32) {
-        1.0_f32
+        -1.0_f32
     } else if input.is_key_pressed(KeyCode::KeyL as u32) {
-        -1.0
+        1.0
     } else {
         0.0
     };
