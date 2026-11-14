@@ -88,6 +88,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Sprites and tilemaps are saved, in their images** (by name, as faces are). An image is named by its path and its
+  sampling (`sprite::ImageName`): the path for `load_sprite_image_file`, or what `Renderer::load_sprite_image_named(name,
+  bytes, filter)` was given. `Sprite::image_name` and `Tilemap::tileset_name` carry it, `sprite_sync::sync_sprite_images`
+  keeps them naming the image drawn and gives one read from a scene its image back (`Renderer::sprite_image_by_name`:
+  loaded, embedded bytes, then the file); `SpriteImageId::UNRESOLVED` is what it holds until then (placeholders moved one
+  down to leave it free). A world sprite from a file, an embedded sheet stepping frames and a nearest-sampled tilemap
+  reopen as the saved frame; each registration taken out, or no resolving, breaks it. Atlases are the next piece.
+
 - **Text is saved, in its faces** (decided 2026-11-14: by name). A `FontId` is an index into one run's font library;
   every face now has a name — `"default"` for `Renderer::default_font` (portable: not the path of whichever system face
   a machine had), the path for `load_font_file`, or what `Renderer::load_font_named(name, bytes)` was given (use the

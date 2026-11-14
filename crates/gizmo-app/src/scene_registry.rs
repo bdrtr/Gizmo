@@ -105,6 +105,9 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::components::SpriteAnimation, "SpriteAnimation");
         // Saved in its faces by name (`text_sync`): "default", a path, or a name a game loads it under.
         reg_or_warn!(gizmo_renderer::components::Text, "Text");
+        // Saved in their images by name and sampling (`sprite_sync`).
+        reg_or_warn!(gizmo_renderer::components::Sprite, "Sprite");
+        reg_or_warn!(gizmo_renderer::components::Tilemap, "Tilemap");
     }
 
     #[cfg(feature = "audio")]

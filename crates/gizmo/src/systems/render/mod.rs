@@ -1060,6 +1060,8 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // Every text names the face it draws in, and a text read from a scene finds its face by name
     // (`text_sync`).
     crate::renderer::text_sync::sync_text_fonts(world, renderer);
+    // And every sprite and tilemap its image (`sprite_sync`).
+    crate::renderer::sprite_sync::sync_sprite_images(world, renderer);
 
     // **Advance skeletal animation.** `collect_draw_items` below reads `Skeleton` for its skinning
     // matrices, and until this call nothing in the engine ever advanced the pose it reads: the two
@@ -13930,6 +13932,80 @@ fn material_surface(input: SurfaceInput) -> Surface {
             let (changed, total) = changed_pixels(&seen.drawn, &seen.reopened, 128);
             assert_eq!(changed, 0, "the reopened text drew {changed}/{total} pixels otherwise");
         });
+    }
+
+    /// **Sprites and tilemaps are saved, in their images.** A world sprite from a file, a screen
+    /// sprite from bytes loaded under a name (as a game embeds one) stepping through a sheet, and a
+    /// pixel-art tilemap read nearest: the reopened frame is the saved one. An image is saved by its
+    /// path and its sampling and found again by them — the embedded bytes when the game has
+    /// registered them (`setup`, both sides), else the file.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn sprites_and_tilemaps_are_saved_in_their_images() {
+        use gizmo_renderer::components::{Sprite, SpriteAnimation, Tilemap};
+        use gizmo_renderer::sprite::SpriteFilter;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("gizmo-sprites-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let quad = dir.join("quad.png");
+        image::RgbaImage::from_fn(16, 16, |x, y| image::Rgba([(x * 16) as u8, (y * 16) as u8, 200, 255])).save(&quad).expect("png");
+        let tiles = dir.join("tiles.png");
+        image::RgbaImage::from_fn(4, 2, |x, _| if x < 2 { image::Rgba([230, 40, 40, 255]) } else { image::Rgba([40, 40, 230, 255]) })
+            .save(&tiles)
+            .expect("png");
+        // A 2x2 sheet of four colours, embedded under a name.
+        let mut sheet = Vec::new();
+        image::RgbaImage::from_fn(8, 8, |x, y| match (x / 4, y / 4) {
+            (0, 0) => image::Rgba([250, 250, 0, 255]),
+            (1, 0) => image::Rgba([0, 250, 250, 255]),
+            (0, 1) => image::Rgba([250, 0, 250, 255]),
+            _ => image::Rgba([250, 250, 250, 255]),
+        })
+        .write_to(&mut std::io::Cursor::new(&mut sheet), image::ImageFormat::Png)
+        .expect("png in memory");
+        const NAME: &str = "ui/sheet-embedded-in-the-game.png";
+        let (quad, tiles) = (quad.to_string_lossy().into_owned(), tiles.to_string_lossy().into_owned());
+        pollster::block_on(async {
+            let seen = draw_save_reopen_with(
+                Some(1.0 / 8.0),
+                |renderer| renderer.asset_manager.write().unwrap().embed_asset(NAME, sheet.clone()),
+                |world, renderer| {
+                    let quad = renderer.load_sprite_image_file(&quad, SpriteFilter::Linear).expect("the quad loads");
+                    let sheet = renderer.load_sprite_image_named(NAME, &sheet, SpriteFilter::Nearest).expect("the sheet loads");
+                    let tiles = renderer.load_sprite_image_file(&tiles, SpriteFilter::Nearest).expect("the tiles load");
+                    let e = world.spawn();
+                    world.add_component(e, Transform::new(Vec3::new(-1.2, 0.5, 0.0)));
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(e, Sprite::world(quad, gizmo_math::Vec2::splat(1.4)));
+                    let e = world.spawn();
+                    world.add_component(e, Sprite::screen(sheet, gizmo_math::Vec2::splat(40.0), gizmo_math::Vec2::new(80.0, 8.0)));
+                    world.add_component(e, SpriteAnimation::new(2, 2, 0, 3, 8.0));
+                    let e = world.spawn();
+                    world.add_component(e, Transform::new(Vec3::new(0.0, -1.0, 0.0)));
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(
+                        e,
+                        Tilemap::from_rows(tiles, 2, 1, gizmo_math::Vec2::splat(0.5), &["abab", "baba"], |c| match c {
+                            'a' => Some(0),
+                            'b' => Some(1),
+                            _ => None,
+                        }),
+                    );
+                    world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+                    world.spawn_bundle(DirectionalLightBundle::default());
+                },
+            )
+            .await;
+            let (changed, total) = changed_pixels(&seen.drawn, &seen.reopened, 128);
+            assert_eq!(changed, 0, "the reopened sprites drew {changed}/{total} pixels otherwise");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// **A tween saved half way carries on from where it was.** A cube's colour tween, a third of the

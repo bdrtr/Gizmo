@@ -525,13 +525,74 @@ impl Renderer {
     ///
     /// See [`load_sprite_image`](Self::load_sprite_image); additionally
     /// [`SpriteError::Io`](crate::sprite::SpriteError::Io) if the file cannot be read.
+    ///
+    /// The image is named by its path, which is what a scene saves a sprite drawn from it as.
     pub fn load_sprite_image_file(
         &mut self,
         path: impl AsRef<std::path::Path>,
         filter: crate::sprite::SpriteFilter,
     ) -> Result<crate::sprite::SpriteImageId, crate::sprite::SpriteError> {
+        let name = crate::sprite::ImageName { path: path.as_ref().to_string_lossy().into_owned(), filter };
+        if let Some(id) = self.sprites.as_ref().and_then(|s| s.by_name(&name)) {
+            return Ok(id);
+        }
         let bytes = std::fs::read(path).map_err(crate::sprite::SpriteError::Io)?;
-        self.load_sprite_image(&bytes, filter)
+        self.load_sprite_image_named(&name.path, &bytes, filter)
+    }
+
+    /// Decodes an image and loads it under `name`, as a texture embedded in a game is named: a scene
+    /// saves a sprite drawn from it by that name, and finds it again when the game loads it under the
+    /// same name, or from the file at that path when the game is not there (the editor). Use the
+    /// asset's path as the name and both work. A name already loaded is that image again.
+    ///
+    /// # Errors
+    ///
+    /// As [`load_sprite_image`](Self::load_sprite_image).
+    pub fn load_sprite_image_named(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        filter: crate::sprite::SpriteFilter,
+    ) -> Result<crate::sprite::SpriteImageId, crate::sprite::SpriteError> {
+        let Some(sprites) = self.sprites.as_mut() else {
+            return Err(crate::sprite::SpriteError::Invalid);
+        };
+        let name = crate::sprite::ImageName { path: name.to_string(), filter };
+        sprites.load_named(&self.device, &self.queue, &name, bytes)
+    }
+
+    /// The name a sprite image goes by in a scene, `None` for pixels loaded without one.
+    #[must_use]
+    pub fn sprite_image_name(&self, image: crate::sprite::SpriteImageId) -> Option<&crate::sprite::ImageName> {
+        self.sprites.as_ref()?.name_of(image)
+    }
+
+    /// The image a scene names: one already loaded under that name, else bytes embedded under its
+    /// path ([`AssetManager::embed_asset`](crate::asset::AssetManager::embed_asset)), else the file
+    /// at it.
+    ///
+    /// # Errors
+    ///
+    /// As [`load_sprite_image_file`](Self::load_sprite_image_file), when the name is neither loaded,
+    /// embedded nor a readable image file.
+    pub fn sprite_image_by_name(
+        &mut self,
+        name: &crate::sprite::ImageName,
+    ) -> Result<crate::sprite::SpriteImageId, crate::sprite::SpriteError> {
+        if let Some(id) = self.sprites.as_ref().and_then(|s| s.by_name(name)) {
+            return Ok(id);
+        }
+        let embedded = self
+            .asset_manager
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .embedded_assets
+            .get(&name.path)
+            .map(|b| b.to_vec());
+        match embedded {
+            Some(bytes) => self.load_sprite_image_named(&name.path, &bytes, name.filter),
+            None => self.load_sprite_image_file(&name.path, name.filter),
+        }
     }
 
     /// Uploads raw `width × height` RGBA8 pixels (sRGB, straight alpha, top row first) — for

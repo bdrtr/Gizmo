@@ -28,10 +28,11 @@ use crate::sprite::SpriteImageId;
 /// are then painted back to front by distance from the camera; screen sprites on the same layer in
 /// entity order. World sprites test against the scene's depth and write none: a wall hides a
 /// sprite behind it, and sprites never hide each other except by being painted over.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Sprite {
     /// Which loaded image to draw.
+    #[serde(skip, default = "unresolved_image")]
     pub image: SpriteImageId,
     /// The quad's size: world units in [`SpriteSpace::World`], pixels in [`SpriteSpace::Screen`].
     pub size: Vec2,
@@ -55,6 +56,10 @@ pub struct Sprite {
     pub layer: i32,
     /// On the entity's plane in the world, or in window pixels.
     pub space: SpriteSpace,
+    /// [`image`](Self::image)'s name — its path and sampling — which a scene saves and finds the
+    /// image by again. Kept in step with `image` by the renderer (`sprite_sync`). `None` for pixels
+    /// loaded without a name, which a scene cannot hold.
+    pub image_name: Option<crate::sprite::ImageName>,
 }
 
 impl Sprite {
@@ -79,6 +84,7 @@ impl Sprite {
             anchor: Vec2::splat(0.5),
             layer: 0,
             space: SpriteSpace::World,
+            image_name: None,
         }
     }
 
@@ -308,7 +314,7 @@ pub fn sprite_animation_system(world: &mut gizmo_core::World, dt: f32) {
 }
 
 /// Where a [`Sprite`] is drawn.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum SpriteSpace {
     /// In the entity's local XY plane, placed by its `GlobalTransform`.
@@ -333,6 +339,11 @@ impl SpriteSpace {
             Self::Screen { .. } => false,
         }
     }
+}
+
+/// What a `Sprite` or `Tilemap` read from a scene holds until its image is found by name.
+pub(crate) fn unresolved_image() -> SpriteImageId {
+    SpriteImageId::UNRESOLVED
 }
 
 #[cfg(test)]

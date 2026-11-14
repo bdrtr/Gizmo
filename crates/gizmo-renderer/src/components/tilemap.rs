@@ -22,11 +22,12 @@ use super::sprite::{Sprite, SpriteSpace};
 /// entity's local XY plane, placed by its `GlobalTransform` like a world sprite.
 ///
 /// Within the world-sprite queue a tilemap sorts on its [`layer`](Self::layer) like a sprite.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Tilemap {
     /// The tileset image, from [`Renderer::load_sprite_image`](crate::Renderer::load_sprite_image)
     /// or its siblings.
+    #[serde(skip, default = "crate::components::sprite::unresolved_image")]
     pub tileset: SpriteImageId,
     /// Cells across the tileset image.
     pub tileset_columns: u32,
@@ -45,6 +46,9 @@ pub struct Tilemap {
     /// Per-tile tints, row-major — EMPTY until the first [`set_tint`](Self::set_tint), so a map
     /// that never tints a tile carries nothing for it.
     tints: Vec<Vec4>,
+    /// [`tileset`](Self::tileset)'s name, as [`Sprite::image_name`](crate::components::Sprite::image_name)
+    /// is a sprite's.
+    pub tileset_name: Option<crate::sprite::ImageName>,
 }
 
 impl Tilemap {
@@ -73,6 +77,7 @@ impl Tilemap {
             height,
             tiles: vec![Self::EMPTY; len],
             tints: Vec::new(),
+            tileset_name: None,
         }
     }
 
@@ -289,6 +294,8 @@ impl Tilemap {
             anchor: Vec2::ZERO,
             layer: self.layer,
             space: SpriteSpace::World,
+            // A drawn tile, not a component: the map carries the name.
+            image_name: None,
         };
         let sheet = self.tileset_columns.saturating_mul(self.tileset_rows);
         (y0..y1)

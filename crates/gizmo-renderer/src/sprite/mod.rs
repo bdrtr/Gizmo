@@ -54,12 +54,16 @@ impl SpriteImageId {
     /// its scene headlessly at all: `load_sprite_rgba` needs a GPU, and the id had no other way in.
     #[must_use]
     pub const fn placeholder(n: u32) -> Self {
-        Self(u32::MAX - n)
+        Self(u32::MAX - 1 - n)
     }
+
+    /// An image a scene names and this run has not found yet: what a `Sprite` or `Tilemap` read from
+    /// a scene file holds until the renderer resolves its name (`sprite_sync`). It draws nothing.
+    pub const UNRESOLVED: SpriteImageId = SpriteImageId(u32::MAX);
 }
 
 /// How an image is sampled between texels.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum SpriteFilter {
     /// Bilinear, with mipmaps — smooth when scaled, up or down. Photographs, painted art, UI.
@@ -177,6 +181,19 @@ struct Run {
 struct Image {
     bind_group: wgpu::BindGroup,
     size: [u32; 2],
+    /// The name a scene saves it by, `None` for pixels loaded without one.
+    name: Option<ImageName>,
+}
+
+/// What a loaded image is called: a path — a file's, or the name bytes were loaded under (as an
+/// embedded texture is named) — and how it is sampled, which makes it another image. What a scene
+/// saves a [`Sprite`]'s or a [`Tilemap`](crate::components::Tilemap)'s image as.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct ImageName {
+    /// The path, real or not.
+    pub path: String,
+    /// How it is sampled.
+    pub filter: SpriteFilter,
 }
 
 /// Loaded images, the sprite pipelines, and this frame's quads.
@@ -468,8 +485,44 @@ impl SpriteRenderer {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
             ],
         });
-        self.images.push(Image { bind_group, size: [width, height] });
+        self.images.push(Image { bind_group, size: [width, height], name: None });
         Ok(SpriteImageId(id))
+    }
+
+    /// The image loaded under `name`, if one is.
+    #[must_use]
+    pub fn by_name(&self, name: &ImageName) -> Option<SpriteImageId> {
+        self.images.iter().position(|i| i.name.as_ref() == Some(name)).map(|i| SpriteImageId(i as u32))
+    }
+
+    /// The name an image was loaded under, `None` for pixels loaded without one or an id from
+    /// elsewhere.
+    #[must_use]
+    pub fn name_of(&self, image: SpriteImageId) -> Option<&ImageName> {
+        self.images.get(image.0 as usize)?.name.as_ref()
+    }
+
+    /// Decodes `bytes` and loads them as the image called `name`; a name already loaded is that
+    /// image again.
+    ///
+    /// # Errors
+    ///
+    /// As [`load_encoded`](Self::load_encoded).
+    pub fn load_named(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        name: &ImageName,
+        bytes: &[u8],
+    ) -> Result<SpriteImageId, SpriteError> {
+        if let Some(id) = self.by_name(name) {
+            return Ok(id);
+        }
+        let id = self.load_encoded(device, queue, bytes, name.filter)?;
+        if let Some(image) = self.images.get_mut(id.0 as usize) {
+            image.name = Some(name.clone());
+        }
+        Ok(id)
     }
 
     /// Packs `images` into one texture and uploads it, so sprites drawn from them share a draw call however

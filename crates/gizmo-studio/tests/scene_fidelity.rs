@@ -58,7 +58,7 @@ const NOT_SAVED: &[(&str, &str)] = &[
 /// Should be saved, and is not yet — closed class by class (decided 2026-11-14). Only shrinks.
 const OPEN: &[&str] = &[
     // Seen
-    "Decal", "Sprite", "Tilemap", "LodGroup",
+    "Decal", "LodGroup",
     "CameraTarget", // Physics and play
     "CollisionLayer", "PhysicsMaterial", "Breakable", "KinematicTarget", "ExternalForce", "CharacterController",
     "VehicleController", "Oxygen", "Cloth", "Rope", "SoftBodyMesh", "FluidSimulation", "FluidParticle", "FluidPhase",
