@@ -305,6 +305,20 @@ impl TextRenderer {
         self.library.load_file(path)
     }
 
+    /// Gives a face the name a scene saves it by — see [`FontLibrary::rename`].
+    pub fn rename_font(&mut self, font: FontId, name: &str) {
+        self.library.rename(font, name);
+    }
+
+    /// Loads a face under a name — see [`FontLibrary::load_named`].
+    ///
+    /// # Errors
+    ///
+    /// See [`FontLibrary::load`].
+    pub fn load_font_named(&mut self, name: &str, bytes: Vec<u8>) -> Result<FontId, FontError> {
+        self.library.load_named(name, bytes)
+    }
+
     /// Adds a face to the fallback chain — see [`FontLibrary::add_fallback`].
     pub fn add_font_fallback(&mut self, font: FontId) {
         self.library.add_fallback(font);

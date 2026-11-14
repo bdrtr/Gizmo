@@ -116,6 +116,7 @@
 
 pub mod material_sync;
 pub mod mesh_sync;
+pub mod text_sync;
 /// Clustered light culling — which lights can reach which part of the frame.
 pub mod clustered;
 /// Loading, decoding and uploading meshes, textures and glTF scenes.

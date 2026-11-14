@@ -88,6 +88,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Text is saved, in its faces** (decided 2026-11-14: by name). A `FontId` is an index into one run's font library;
+  every face now has a name — `"default"` for `Renderer::default_font` (portable: not the path of whichever system face
+  a machine had), the path for `load_font_file`, or what `Renderer::load_font_named(name, bytes)` was given (use the
+  asset's path, as an embedded texture is named, and both the game and the editor find it). `Text::font_name` and each
+  span's carry it, `text_sync::sync_text_fonts` keeps them naming the face drawn and gives a text read from a scene its
+  faces back (`Renderer::font_by_name`: loaded, `"default"`, embedded bytes, then the file). `default_font`'s second
+  call is the first one's face, where each call loaded another. A world label, a line with a part in an embedded face and
+  a half-typed line reopen as the saved frame; a wrong face found, or none, fails it.
+
+- **An entity with a `Transform` and no `Mesh` gets its world position after a load.** `ensure_global_transforms` gave
+  a `GlobalTransform` only to entities with a mesh, and a scene does not save one (it is derived), so a world label, a
+  sprite, a light or a probe read from a file had a place and no world position — a world `Text` was skipped as
+  unplaced. Every `Transform` gets one now.
+
 - **Scene fidelity, first batch: what is seen is saved.** `IsHidden`, `ReflectionProbe`, `PlanarReflection`, `Occluder`,
   `Wireframe`, `WireframeColor`, `NoWireframe`, `CameraShake`, `ColorTween`, `SpriteAnimation`, `Typewriter` and
   `LocalizedLabel` are scene data (`Aabb`, `Ease` and `Repeat` are `serde` for it); the facade's own components go

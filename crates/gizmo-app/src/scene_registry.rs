@@ -103,6 +103,8 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::components::CameraShake, "CameraShake");
         reg_or_warn!(gizmo_renderer::components::ColorTween, "ColorTween");
         reg_or_warn!(gizmo_renderer::components::SpriteAnimation, "SpriteAnimation");
+        // Saved in its faces by name (`text_sync`): "default", a path, or a name a game loads it under.
+        reg_or_warn!(gizmo_renderer::components::Text, "Text");
     }
 
     #[cfg(feature = "audio")]

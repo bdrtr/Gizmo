@@ -580,9 +580,65 @@ impl Renderer {
         &mut self,
         path: impl AsRef<std::path::Path>,
     ) -> Result<crate::text::FontId, crate::text::FontError> {
-        let bytes = std::fs::read(path).map_err(crate::text::FontError::Io)?;
-        self.load_font(bytes)
+        let Some(text) = self.text.as_mut() else {
+            return Err(crate::text::FontError::Invalid);
+        };
+        text.load_font_file(path)
     }
+
+    /// Loads a face from bytes under `name`, as a texture embedded in a game is named: a scene saves a
+    /// `Text` in it by that name, and finds it again when the game loads it under the same name, or
+    /// from the file at that path when the game is not there (the editor). Use the asset's path as
+    /// the name and both work. A name already loaded is that face again.
+    ///
+    /// # Errors
+    ///
+    /// As [`load_font`](Self::load_font).
+    pub fn load_font_named(&mut self, name: &str, bytes: Vec<u8>) -> Result<crate::text::FontId, crate::text::FontError> {
+        let Some(text) = self.text.as_mut() else {
+            return Err(crate::text::FontError::Invalid);
+        };
+        text.load_font_named(name, bytes)
+    }
+
+    /// The name a face goes by in a scene — `"default"` for [`default_font`](Self::default_font)'s,
+    /// a path, or a name it was loaded under — or `None` for bytes loaded without one.
+    #[must_use]
+    pub fn font_name(&self, font: crate::text::FontId) -> Option<String> {
+        self.text.as_ref()?.library().name_of(font).map(str::to_string)
+    }
+
+    /// The face a scene names: one already loaded under that name; for `"default"`,
+    /// [`default_font`](Self::default_font); else bytes embedded under the name
+    /// ([`AssetManager::embed_asset`](crate::asset::AssetManager::embed_asset)); else the file at that
+    /// path.
+    ///
+    /// # Errors
+    ///
+    /// As [`load_font_file`](Self::load_font_file), when the name is neither loaded, embedded nor a
+    /// readable font file.
+    pub fn font_by_name(&mut self, name: &str) -> Result<crate::text::FontId, crate::text::FontError> {
+        if let Some(id) = self.text.as_ref().and_then(|t| t.library().by_name(name)) {
+            return Ok(id);
+        }
+        if name == Self::DEFAULT_FONT {
+            return Ok(self.default_font());
+        }
+        let embedded = self
+            .asset_manager
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .embedded_assets
+            .get(name)
+            .map(|b| b.to_vec());
+        match embedded {
+            Some(bytes) => self.load_font_named(name, bytes),
+            None => self.load_font_file(name),
+        }
+    }
+
+    /// The name [`default_font`](Self::default_font)'s face is saved by.
+    pub const DEFAULT_FONT: &'static str = "default";
 
     /// A font the machine already has: the file named by `GIZMO_FONT` if it is set, else the first
     /// readable one of the platform's usual sans faces — DejaVu, Noto, Liberation, Cantarell on
@@ -627,8 +683,20 @@ impl Renderer {
     /// hand, as one call that cannot fail the setup. In the browser there is never a machine font,
     /// so without the feature web text is ASCII-only.
     ///
-    /// Call it once and keep the id: each call loads the face again.
+    /// The face is named `"default"`, which is what a scene saves a `Text` in it as and what it finds
+    /// again on any machine; the second call is the first one's face, not another copy.
     pub fn default_font(&mut self) -> crate::text::FontId {
+        if let Some(id) = self.text.as_ref().and_then(|t| t.library().by_name(Self::DEFAULT_FONT)) {
+            return id;
+        }
+        let id = self.pick_default_font();
+        if let Some(text) = self.text.as_mut() {
+            text.rename_font(id, Self::DEFAULT_FONT);
+        }
+        id
+    }
+
+    fn pick_default_font(&mut self) -> crate::text::FontId {
         if let Ok(id) = self.load_system_font() {
             return id;
         }

@@ -18,12 +18,13 @@ use crate::text::FontId;
 /// [`crate::text`] for what that rules out. A `Text` with an unknown [`FontId`] draws nothing
 /// rather than falling back to another font: a silent substitution is how a missing asset stops
 /// looking like a missing asset.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Text {
     /// The string. `\n` breaks a line.
     pub content: String,
     /// Which loaded face to draw it with.
+    #[serde(skip, default = "unresolved_font")]
     pub font: FontId,
     /// Cap height in pixels — the size the glyphs are rasterised at.
     ///
@@ -57,6 +58,11 @@ pub struct Text {
     /// In columns, everything stands, Latin included, instead of Latin lying on its side.
     /// [`upright`](Self::upright) asks.
     pub upright: bool,
+    /// [`font`](Self::font)'s name — `"default"`, a path, or the name it was loaded under — which a
+    /// scene saves and finds the face by again. Kept in step with `font` by the renderer
+    /// (`text_sync`): set the face, and the name follows; read from a file, the face is found by it.
+    /// `None` for a face loaded from bytes with no name, which a scene cannot hold.
+    pub font_name: Option<String>,
 }
 
 /// One part of a [`Text::rich`]: `("Can: ", WHITE)`, or for more than a colour
@@ -105,7 +111,7 @@ impl<S: Into<String>> From<(S, Vec4)> for Span {
 }
 
 /// A part of a [`Text`] with a look of its own, from byte `start` to the next one.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct TextSpan {
     /// Byte offset it starts at.
@@ -113,9 +119,12 @@ pub struct TextSpan {
     /// Multiplied by [`Text::color`], so that still fades the whole string.
     pub color: Vec4,
     /// Its face, if not the text's.
+    #[serde(skip)]
     pub font: Option<FontId>,
     /// Its size, if not the text's.
     pub size_px: Option<f32>,
+    /// [`font`](Self::font)'s name, as [`Text::font_name`] is the text's.
+    pub font_name: Option<String>,
 }
 
 impl Text {
@@ -134,6 +143,7 @@ impl Text {
             spans: Vec::new(),
             vertical: false,
             upright: false,
+            font_name: None,
         }
     }
 
@@ -156,6 +166,7 @@ impl Text {
             spans: Vec::new(),
             vertical: false,
             upright: false,
+            font_name: None,
         }
     }
 
@@ -180,6 +191,7 @@ impl Text {
             spans: Vec::new(),
             vertical: false,
             upright: false,
+            font_name: None,
         }
     }
 
@@ -204,6 +216,7 @@ impl Text {
             spans: Vec::new(),
             vertical: false,
             upright: false,
+            font_name: None,
         }
     }
 
@@ -223,6 +236,7 @@ impl Text {
                 color: part.color,
                 font: part.font,
                 size_px: part.size_px,
+                font_name: None,
             });
             self.content.push_str(&part.text);
         }
@@ -299,7 +313,7 @@ impl Text {
 }
 
 /// How the lines of a multi-line [`Text`] line up with each other.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum TextAlign {
     /// On the side each line starts on: right for a right-to-left line, left for the rest.
@@ -329,7 +343,7 @@ impl TextAlign {
 }
 
 /// Where a [`Text`] is drawn.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum TextSpace {
     /// Window pixels, origin at the **top-left** — the same coordinates the mouse arrives in and
@@ -419,7 +433,7 @@ impl TextSpace {
 }
 
 /// Which corner or edge of a text's box sits on its anchor point.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum TextAnchor {
     /// The default: the anchor is the top-left of the box, which is how screen coordinates read.
@@ -463,6 +477,11 @@ impl TextAnchor {
         };
         Vec2::new(x, y)
     }
+}
+
+/// What a `Text` read from a scene holds until its face is found by name (`text_sync`).
+fn unresolved_font() -> FontId {
+    FontId::UNRESOLVED
 }
 
 #[cfg(test)]

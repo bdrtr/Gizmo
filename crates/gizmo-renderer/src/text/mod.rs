@@ -59,6 +59,11 @@ pub use render::TextRenderer;
 pub struct FontId(pub(crate) u32);
 
 impl FontId {
+    /// A face a scene names and this run has not found yet: what a `Text` read from a scene file
+    /// holds until the renderer resolves its [`font_name`](crate::components::Text::font_name). It
+    /// draws nothing, as an id from another library draws nothing.
+    pub const UNRESOLVED: FontId = FontId(u32::MAX);
+
     /// The raw index, for a caller that needs to key its own map by font.
     #[must_use]
     pub fn index(self) -> u32 {
@@ -214,6 +219,12 @@ impl TextLayout {
 #[derive(Default)]
 pub struct FontLibrary {
     fonts: Vec<ab_glyph::FontVec>,
+    /// Each face's name, by its index: the path it was read from, the name it was loaded under
+    /// ([`load_named`](Self::load_named)), or `None` for bytes given without one. What a scene saves
+    /// a `Text`'s face as.
+    names: Vec<Option<String>>,
+    /// Other names a face is found by — the path a face renamed `"default"` was read from.
+    aliases: HashMap<String, FontId>,
     /// Tried in order for a character the text's own face does not cover.
     fallbacks: Vec<FontId>,
     shaping: shape::Shaping,
@@ -365,9 +376,55 @@ impl FontLibrary {
             return Err(FontError::Invalid);
         }
         self.fonts.push(font);
+        self.names.push(None);
         // `len` is bounded by how many fonts a process loads; the cast is unreachable in practice
         // and saturating is the honest answer rather than a panic in a renderer.
-        Ok(FontId(u32::try_from(self.fonts.len() - 1).unwrap_or(u32::MAX)))
+        Ok(FontId(u32::try_from(self.fonts.len() - 1).unwrap_or(u32::MAX - 1)))
+    }
+
+    /// Loads a face from bytes under `name` — a path, real or not, as a texture embedded in a game is
+    /// named — so a scene can save a `Text` in it and find it again. A name already loaded is that
+    /// face again, not a second copy.
+    ///
+    /// # Errors
+    ///
+    /// As [`load`](Self::load).
+    pub fn load_named(&mut self, name: &str, bytes: Vec<u8>) -> Result<FontId, FontError> {
+        if let Some(id) = self.by_name(name) {
+            return Ok(id);
+        }
+        let id = self.load(bytes)?;
+        self.names[id.0 as usize] = Some(name.to_string());
+        Ok(id)
+    }
+
+    /// The face loaded under `name`, if one is.
+    #[must_use]
+    pub fn by_name(&self, name: &str) -> Option<FontId> {
+        self.names
+            .iter()
+            .position(|n| n.as_deref() == Some(name))
+            .map(|i| FontId(i as u32))
+            .or_else(|| self.aliases.get(name).copied())
+    }
+
+    /// Gives a loaded face the name a scene saves it by, keeping the one it had as another way to
+    /// find it. What makes `Renderer::default_font` portable: saved as `"default"`, not as the path
+    /// of whichever system face this machine had.
+    pub fn rename(&mut self, font: FontId, name: &str) {
+        let Some(slot) = self.names.get_mut(font.0 as usize) else { return };
+        if let Some(old) = slot.replace(name.to_string()) {
+            if old != name {
+                self.aliases.insert(old, font);
+            }
+        }
+    }
+
+    /// The name a face was loaded under, `None` for one loaded from bytes alone or from another
+    /// library.
+    #[must_use]
+    pub fn name_of(&self, font: FontId) -> Option<&str> {
+        self.names.get(font.0 as usize)?.as_deref()
     }
 
     /// Loads a face from a file.
@@ -376,8 +433,12 @@ impl FontLibrary {
     ///
     /// [`FontError::Io`] if the file cannot be read, [`FontError::Invalid`] if it is not a font.
     pub fn load_file(&mut self, path: impl AsRef<std::path::Path>) -> Result<FontId, FontError> {
+        let name = path.as_ref().to_string_lossy().into_owned();
+        if let Some(id) = self.by_name(&name) {
+            return Ok(id);
+        }
         let bytes = std::fs::read(path).map_err(FontError::Io)?;
-        self.load(bytes)
+        self.load_named(&name, bytes)
     }
 
     /// The face behind an id, or `None` if the id came from another library.

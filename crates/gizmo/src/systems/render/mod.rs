@@ -118,9 +118,13 @@ pub fn ensure_global_transforms(world: &mut World) {
 
     // Collect first: `add_component` is a structural change and can't run while a
     // query borrow is live.
+    //
+    // Every entity with a `Transform`, not only those with a `Mesh`: a `GlobalTransform` is derived
+    // and a scene does not save one, so a world label, a sprite, a light or a probe read from a file
+    // had a place and no world position — a world `Text` loaded that way was skipped as unplaced.
     let mut missing = Vec::new();
     {
-        let q = world.query_filtered::<(Entity, &Mesh, &Transform), Without<GlobalTransform>>();
+        let q = world.query_filtered::<(Entity, &Transform), Without<GlobalTransform>>();
         for (entity, ..) in q.iter() {
             missing.push(entity);
         }
@@ -1053,6 +1057,9 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // And every mesh built in code that a key can build again names itself as its `MeshSource`, so
     // a save writes it (`mesh_sync`).
     crate::renderer::mesh_sync::describe_meshes(world);
+    // Every text names the face it draws in, and a text read from a scene finds its face by name
+    // (`text_sync`).
+    crate::renderer::text_sync::sync_text_fonts(world, renderer);
 
     // **Advance skeletal animation.** `collect_draw_items` below reads `Skeleton` for its skinning
     // matrices, and until this call nothing in the engine ever advanced the pose it reads: the two
@@ -13734,6 +13741,16 @@ fn material_surface(input: SurfaceInput) -> Surface {
     /// before the one compared, so what a frame captures on its first (a probe, a mirror) has been
     /// captured on both. The temporal pass is off: two frames of one scene are the same frame.
     async fn draw_save_reopen(dt: Option<f32>, build: impl FnOnce(&mut World, &Renderer)) -> Reopened {
+        draw_save_reopen_with(dt, |_| {}, |world, renderer| build(world, renderer)).await
+    }
+
+    /// [`draw_save_reopen`] with `setup` run on each side's renderer first — what a game's own start
+    /// does before a scene is opened (embedding its assets, say).
+    async fn draw_save_reopen_with(
+        dt: Option<f32>,
+        setup: impl Fn(&mut Renderer),
+        build: impl FnOnce(&mut World, &mut Renderer),
+    ) -> Reopened {
         let scene_path = std::env::temp_dir().join(format!(
             "gizmo-fidelity-{}-{}.scene",
             std::process::id(),
@@ -13759,11 +13776,12 @@ fn material_surface(input: SurfaceInput) -> Surface {
         };
         let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
         renderer.taa = None;
+        setup(&mut renderer);
         let mut world = World::new();
         if dt.is_some() {
             world.insert_resource(gizmo_core::time::Time::new());
         }
-        build(&mut world, &renderer);
+        build(&mut world, &mut renderer);
         load(&mut world, &renderer);
         let mut drawn = Vec::new();
         for _ in 0..3 {
@@ -13781,6 +13799,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
 
         let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
         renderer.taa = None;
+        setup(&mut renderer);
         let mut world = World::new();
         if dt.is_some() {
             world.insert_resource(gizmo_core::time::Time::new());
@@ -13853,6 +13872,63 @@ fn material_surface(input: SurfaceInput) -> Surface {
             let (drawn, reopened) = (seen.drawn, seen.reopened);
             let (changed, total) = changed_pixels(&drawn, &reopened, 128);
             assert_eq!(changed, 0, "the reopened scene drew {changed}/{total} pixels otherwise");
+        });
+    }
+
+    /// **Text is saved, in its faces.** A world label in the default face, a screen line with a
+    /// part in a face loaded from bytes under a name (as a game embeds one), and a line half typed
+    /// out: the reopened frame is the saved one. A face is saved by its name (`"default"`, portable
+    /// across machines, not the path of whichever system face this one had) and found again by it
+    /// — the embedded bytes when the game has registered them, which `setup` does on both sides.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn text_is_saved_in_its_faces() {
+        use gizmo_renderer::components::{Text, TextAnchor};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // A face other than the default one, so finding the wrong face would show: the default is
+        // the first system face that reads, the embedded one the last.
+        let readable: Vec<Vec<u8>> = gizmo_renderer::renderer::SYSTEM_FONT_PATHS.iter().filter_map(|p| std::fs::read(p).ok()).collect();
+        if readable.len() < 2 || std::env::var("GIZMO_FONT").is_ok() {
+            eprintln!("skipping: needs two system faces, and no GIZMO_FONT, to tell an embedded face from the default");
+            return;
+        }
+        let face = readable.last().expect("two").clone();
+        const NAME: &str = "fonts/embedded-in-the-game.ttf";
+        pollster::block_on(async {
+            let seen = draw_save_reopen_with(
+                Some(1.0 / 30.0),
+                |renderer| {
+                    renderer.asset_manager.write().unwrap().embed_asset(NAME, face.clone());
+                },
+                |world, renderer| {
+                    let default = renderer.default_font();
+                    let embedded = renderer.load_font_named(NAME, face.clone()).expect("the face loads");
+                    let label = world.spawn();
+                    world.add_component(label, Transform::new(Vec3::new(0.0, 0.6, 0.0)));
+                    world.add_component(label, GlobalTransform::default());
+                    world.add_component(label, Text::world("GIZMO", default, 64.0, 80.0).with_color(Vec4::new(1.0, 0.8, 0.2, 1.0)).with_anchor(TextAnchor::Center));
+                    let line = world.spawn();
+                    world.add_component(
+                        line,
+                        Text::screen("", default, 20.0, gizmo_math::Vec2::new(6.0, 100.0))
+                            .rich([gizmo_renderer::components::Span::new("Can: "), gizmo_renderer::components::Span::new("5").font(embedded).size(30.0)]),
+                    );
+                    let typed = world.spawn();
+                    world.add_component(typed, Text::screen("typed out, a letter at a time", default, 14.0, gizmo_math::Vec2::new(6.0, 20.0)));
+                    world.add_component(typed, crate::systems::render::Typewriter::new(30.0));
+                    world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+                    world.spawn_bundle(DirectionalLightBundle::default());
+                },
+            )
+            .await;
+            let (changed, total) = changed_pixels(&seen.drawn, &seen.reopened, 128);
+            assert_eq!(changed, 0, "the reopened text drew {changed}/{total} pixels otherwise");
         });
     }
 
