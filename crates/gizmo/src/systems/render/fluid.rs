@@ -453,7 +453,8 @@ mod tests {
     /// **The water lifts what stands in it, as much as its buoyancy says.** Three 1 kg balls are let
     /// go under the surface of one pool: with a factor of 0 the water does not lift it and it sinks
     /// to the floor; with 3 it is lifted three times its weight when under and rises until about a
-    /// third of it is wet, floating at the surface; 1 stays between. Before 2026-11-14
+    /// third of it is wet, floating at the surface; 1 is held at its weight once under (measured: a
+    /// lift of 9.8–10.0 N on 9.81) and stays where the water's slosh leaves it, between. Before 2026-11-14
     /// `buoyancy_factor` was read by nothing.
     #[test]
     #[ignore = "requires a GPU adapter"]
