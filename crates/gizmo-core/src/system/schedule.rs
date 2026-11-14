@@ -855,9 +855,9 @@ impl Schedule {
     /// and the systems of one batch **concurrently, in an unspecified order** (rayon on
     /// native targets, a sequential shim on `wasm32`). Co-batched systems are guaranteed to
     /// have no conflicting declared access, so their interleaving is normally unobservable —
-    /// but side effects outside the access declaration are not ordered. In particular two
-    /// systems taking `Commands` declare only a *read* of the command-queue resource, so
-    /// they may share a batch and enqueue in a non-reproducible order.
+    /// but side effects outside the access declaration are not ordered. Two systems taking
+    /// `Commands` never share a batch (it declares a write of the queue and the id allocator),
+    /// so commands and spawned ids keep the schedule's order.
     ///
     /// The deferred `CommandQueue` is drained and applied **after each batch**, on this
     /// thread. Structural changes requested by a batch are therefore visible to the next

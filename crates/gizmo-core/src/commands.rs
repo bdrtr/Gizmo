@@ -11,12 +11,10 @@
 //! * Nothing enqueued is observable until the flush — not even to the system that queued it.
 //! * Within one flush, commands are applied in push order, which is why
 //!   `spawn().insert(..)` works.
-//! * Two systems co-scheduled in the same batch hold only a *shared* borrow of the queue —
-//!   that is exactly what lets them share a batch (see [`Commands::queue`]) — so their
-//!   pushes interleave in thread-scheduling order. Anything whose outcome depends on which
-//!   of them landed first is not reproducible run to run and must be split across batches.
-//! * Entity ids from [`Commands::spawn`] are reserved eagerly, from the same shared
-//!   allocator, and carry the same caveat.
+//! * Two systems that take `Commands` never share a batch: the parameter declares a write of the
+//!   queue and of the id allocator, so commands are queued, and entity ids from
+//!   [`Commands::spawn`] reserved, in the schedule's order — the same on every run. Until
+//!   2026-11-14 it declared reads, and both came out in thread-scheduling order.
 
 use crate::component::Component;
 use crate::entity::Entity;
@@ -135,19 +133,20 @@ pub struct Commands<'w> {
     /// Shared borrow of the world's [`CommandQueue`] resource — the sink every method on
     /// `Commands`/[`EntityCommands`] pushes into.
     ///
-    /// A *shared* borrow is enough because [`CommandQueue::push`] only needs `&self`; that
-    /// is why several systems can each hold a `Commands` and why the scheduler is free to
-    /// run them in one batch (they declare a read, not a write, of this resource).
+    /// A *shared* borrow is enough because [`CommandQueue::push`] only needs `&self`; the
+    /// parameter still declares a write, so two systems with `Commands` are not run side by
+    /// side and their pushes keep the schedule's order.
     pub queue: Res<'w, CommandQueue>,
     /// Shared borrow of the entity-id allocator, used by [`Commands::spawn`] to reserve an
     /// id immediately (the allocator locks internally, so `&self` suffices).
     ///
-    /// The allocator is global to the world, so concurrent reservations are safe — but they
-    /// carry the reproducibility caveat in the [module docs](crate::commands).
+    /// The allocator is global to the world; the write `Commands` declares keeps two systems from
+    /// reserving at once, so ids come out in the schedule's order (see the [module docs](crate::commands)).
     pub entities: Res<'w, crate::entity::allocator::Entities>,
 }
 
-// SAFETY: it reads the `CommandQueue` and `Entities` resources, and declares both reads.
+// SAFETY: it reads the `CommandQueue` and `Entities` resources through shared borrows, and declares
+// a write of both (more than it touches, which is always sound): see `get_access_info`.
 unsafe impl SystemParam for Commands<'static> {
     type Item<'w> = Commands<'w>;
 
@@ -163,9 +162,15 @@ unsafe impl SystemParam for Commands<'static> {
         Ok(Commands { queue, entities })
     }
 
+    /// **A write of both**, though the borrows are shared: what a system pushes and which ids it
+    /// reserves depend on which other system got there first, so two systems that take `Commands`
+    /// must not run side by side. Declared as reads (until 2026-11-14), they shared a batch, and the
+    /// commands and spawned ids of one run came out in another order on the next
+    /// (`spawns_from_many_systems_get_the_same_ids_every_run`). A system with `Commands` still runs
+    /// beside any system without one.
     fn get_access_info(info: &mut crate::system::AccessInfo) {
-        <Res<'static, CommandQueue> as SystemParam>::get_access_info(info);
-        <Res<'static, crate::entity::allocator::Entities> as SystemParam>::get_access_info(info);
+        <crate::system::ResMut<'static, CommandQueue> as SystemParam>::get_access_info(info);
+        <crate::system::ResMut<'static, crate::entity::allocator::Entities> as SystemParam>::get_access_info(info);
     }
 }
 
@@ -352,6 +357,41 @@ mod tests {
             }
         }
         assert_eq!(count, 1);
+    }
+
+    /// **Which entity a system's spawn gets does not depend on the threads.** Eight systems that
+    /// touch nothing else each spawn one entity tagged with their number; across 200 runs the id
+    /// each tag lands on is the same every time. While `Commands` declared only a *read* of the
+    /// queue and the id allocator, the eight shared one batch and reserved ids in whatever order
+    /// rayon ran them — so a game spawning from two systems got its entities in a different order
+    /// on every run, and so its bodies in a different order in the physics world.
+    #[test]
+    fn spawns_from_many_systems_get_the_same_ids_every_run() {
+        let one_run = || {
+            let mut world = World::new();
+            world.register_component_type::<ComponentA>();
+            let mut schedule = Schedule::new();
+            for tag in 0..8i32 {
+                schedule.add_di_system::<(Commands<'static>,), _>(move |mut commands: Commands| {
+                    // Enough work that rayon spreads the batch over its threads.
+                    let mut x = 0u64;
+                    for i in 0..20_000u64 {
+                        x = std::hint::black_box(x.wrapping_mul(31).wrapping_add(i));
+                    }
+                    std::hint::black_box(x);
+                    commands.spawn().insert(ComponentA(tag));
+                });
+            }
+            schedule.run(&mut world, 0.1);
+            let mut by_id: Vec<(u32, i32)> = world.query::<(crate::entity::Entity, &ComponentA)>().iter().map(|(e, a)| (e.id(), a.0)).collect();
+            by_id.sort();
+            by_id
+        };
+        let first = one_run();
+        assert_eq!(first.len(), 8);
+        for run in 1..200 {
+            assert_eq!(one_run(), first, "run {run} gave the systems' entities other ids");
+        }
     }
 
     #[test]

@@ -1721,10 +1721,14 @@ Two things that *do* work with no engine support at all: a **closure** as a syst
 carrying state across 89 calls, 7 → 96 characters) and a **generic** system registered per type
 (`report_pool::<Health>` and `::<Mana>` both counting correctly).
 
-**In-batch order is genuinely nondeterministic.** Batch *layout* is deterministic — insertion
-order is the documented tie-break — but a batch runs concurrently under rayon, and two systems
-taking `Commands` declare only a *read* of the queue, so they can share a batch and enqueue in
-non-reproducible order. Measured over 600 frames: **78 distinct orderings** in one run, **54** in
+**In-batch order is genuinely nondeterministic** — for what the access declaration does not
+cover. Batch *layout* is deterministic — insertion order is the documented tie-break — but a batch
+runs concurrently under rayon. ~~Two systems taking `Commands` declare only a *read* of the queue,
+so they can share a batch and enqueue in non-reproducible order.~~ **Closed 2026-11-14:** `Commands`
+declares a write of the queue and the id allocator, so two such systems never share a batch, and
+commands and spawned ids keep the schedule's order (`spawns_from_many_systems_get_the_same_ids_every_run`:
+eight spawning systems gave other ids on the second of 200 runs before, the same on all 200 after).
+The measurement below was of systems pushing into the queue, before that change. Measured over 600 frames: **78 distinct orderings** in one run, **54** in
 another; the insertion order appeared barely half the time.
 
 > **Measurement note, kept because it is the more useful half.** The first attempt used *two*

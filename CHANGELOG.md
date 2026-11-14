@@ -88,6 +88,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Systems that take `Commands` spawn the same ids on every run.** `Commands` declared only a read of the command
+  queue and the entity-id allocator, so two systems using it shared a batch, and the order their commands were
+  queued — and the ids their spawns reserved — followed rayon's threads: eight spawning systems gave other ids on
+  the second of 200 runs. Spawned ids decide the order bodies enter the physics world, so a game spawning from two
+  systems did not replay. It now declares a write of both: two systems with `Commands` run one after the other, in
+  the schedule's order, each still in parallel with systems that have none
+  (`spawns_from_many_systems_get_the_same_ids_every_run`). **Changes:** fewer systems share a batch.
+
 - **Dependencies brought up to date, and why egui stays at 0.36.** wgpu/naga 30.0.2 (Vulkan swapchain fence fix,
   WebGPU adapter-failure panic fix), wide 1.7.1, pollster 1.0, criterion 0.8.2 in the two crates still on 0.5
   (`gizmo-engine`, `gizmo-math`; `std::hint::black_box` replaces the deprecated `criterion::black_box`), ron 0.12 in
