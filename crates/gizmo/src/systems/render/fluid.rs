@@ -21,6 +21,9 @@ struct FluidSceneState {
     last_position: std::collections::HashMap<Entity, gizmo_math::Vec3>,
     warned_second_fluid: bool,
     warned_too_many_interactors: bool,
+    /// The bodies the water pushed last frame: one it no longer pushes has its push taken off.
+    #[cfg(feature = "physics")]
+    pushed: Vec<Entity>,
 }
 
 /// The solver's settings for `sim`.
@@ -104,6 +107,7 @@ pub fn fluid_scene_system(world: &mut World, renderer: &mut Renderer, dt: f32) {
     }
     let mut colliders = Vec::with_capacity(interactors.len().min(MAX_FLUID_COLLIDERS));
     let mut seen = std::collections::HashMap::with_capacity(interactors.len());
+    let mut in_water: Vec<(Entity, FluidInteractor, gizmo_math::Vec3)> = Vec::with_capacity(colliders.capacity());
     for (entity, interactor, at, moving) in interactors.into_iter().take(MAX_FLUID_COLLIDERS) {
         let velocity = moving.unwrap_or_else(|| match state.last_position.get(&entity) {
             Some(was) if dt > 0.0 => (at - *was) / dt,
@@ -111,12 +115,67 @@ pub fn fluid_scene_system(world: &mut World, renderer: &mut Renderer, dt: f32) {
         });
         seen.insert(entity, at);
         colliders.push(FluidCollider::of(&interactor.shape, at, velocity));
+        in_water.push((entity, interactor, velocity));
     }
     state.last_position = seen;
     drop(state);
-    if let Some(fluid) = renderer.gpu_fluid.as_ref() {
-        fluid.set_colliders(&renderer.queue, &colliders);
+    let Some(fluid) = renderer.gpu_fluid.as_ref() else { return };
+    fluid.set_colliders(&renderer.queue, &colliders);
+    #[cfg(feature = "physics")]
+    {
+        let pushed = lift(world, renderer, &colliders, &in_water);
+        let before = std::mem::replace(&mut world.get_resource_mut_or_default::<FluidSceneState>().pushed, pushed.clone());
+        let mut forces = world.query_mut::<&mut gizmo_physics_rigid::components::EnvironmentForce>();
+        for gone in before.into_iter().filter(|e| !pushed.contains(e)) {
+            if let Some(mut f) = forces.get_mut(gone) {
+                *f = gizmo_physics_rigid::components::EnvironmentForce::default();
+            }
+        }
     }
+    #[cfg(not(feature = "physics"))]
+    let _ = in_water;
+}
+
+/// How hard the water drags on a body it closes over, per second: a fully wetted body loses this
+/// share of its velocity's momentum each second, so a floating one settles rather than bobbing for
+/// ever.
+#[cfg(feature = "physics")]
+pub const FLUID_DRAG_PER_SECOND: f32 = 2.0;
+
+/// **The water lifts what stands in it.** For every interactor on a moving body, how much of it the
+/// water is against (`GpuFluidSystem::count_wetting`, counted from the water as it is now) gives an
+/// `EnvironmentForce`: `buoyancy_factor` × its weight × that share, upwards, and a drag of
+/// [`FLUID_DRAG_PER_SECOND`] × its mass × its velocity × the share against its motion. A factor of 0
+/// is a body the water does not lift at all, and has no force; one out of the water has none.
+#[cfg(feature = "physics")]
+fn lift(world: &mut World, renderer: &Renderer, colliders: &[FluidCollider], in_water: &[(Entity, FluidInteractor, gizmo_math::Vec3)]) -> Vec<Entity> {
+    use gizmo_physics_rigid::components::{EnvironmentForce, RigidBody};
+    let Some(fluid) = renderer.gpu_fluid.as_ref() else { return Vec::new() };
+    let bodies: Vec<Option<f32>> = {
+        let rbs = world.query::<&RigidBody>();
+        in_water.iter().map(|(e, i, _)| rbs.get(*e).filter(|rb| rb.is_dynamic() && i.buoyancy_factor != 0.0).map(|rb| rb.mass)).collect()
+    };
+    if bodies.iter().all(Option::is_none) {
+        return Vec::new();
+    }
+    let Some(wet) = fluid.count_wetting(&renderer.device, &renderer.queue, colliders) else { return Vec::new() };
+    let mut pushed = Vec::new();
+    let g = fluid.settings().gravity;
+    for (((entity, interactor, velocity), mass), share) in in_water.iter().zip(&bodies).zip(&wet) {
+        let Some(mass) = *mass else { continue };
+        let force = gizmo_math::Vec3::Y * (interactor.buoyancy_factor * mass * g * share) - *velocity * (FLUID_DRAG_PER_SECOND * mass * share);
+        let push = EnvironmentForce { force, torque: gizmo_math::Vec3::ZERO };
+        pushed.push(*entity);
+        let mut forces = world.query_mut::<&mut EnvironmentForce>();
+        match forces.get_mut(*entity) {
+            Some(mut f) => *f = push,
+            None => {
+                drop(forces);
+                world.add_component(*entity, push);
+            }
+        }
+    }
+    pushed
 }
 
 #[cfg(test)]
@@ -375,6 +434,67 @@ mod tests {
             }
             let top = a[3].iter().map(|p| p.position[1]).fold(0.0f32, f32::max);
             assert!(top < 3.0 && a[3].iter().any(|p| p.position[0] > 0.0), "the dam did not break — the water did not move");
+        });
+    }
+
+    /// **The water lifts what stands in it, as much as its buoyancy says.** Three 1 kg balls are let
+    /// go under the surface of one pool: with a factor of 0 the water does not lift it and it sinks
+    /// to the floor; with 3 it is lifted three times its weight when under and rises until about a
+    /// third of it is wet, floating at the surface; 1 stays between. Before 2026-11-14
+    /// `buoyancy_factor` was read by nothing.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    #[cfg(feature = "physics")]
+    fn the_water_lifts_a_body_as_much_as_its_buoyancy_says() {
+        use gizmo_physics_core::Collider;
+        use gizmo_physics_rigid::components::{RigidBody, Velocity};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !usable_gpu() {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = renderer_with_pool(8_000).await;
+            let mut world = World::new();
+            world.insert_resource(gizmo_physics_rigid::world::PhysicsWorld::new());
+            world.insert_resource(gizmo_core::commands::CommandQueue::default());
+            let mut sim = FluidSimulation::default();
+            sim.bounds_min = Vec3::new(-1.0, 0.0, -1.0);
+            sim.bounds_max = Vec3::new(1.0, 2.5, 1.0);
+            sim.particles = 8_000;
+            world.spawn_bundle((sim,));
+            world.spawn_bundle((Transform::new(Vec3::ZERO), GlobalTransform::default(), RigidBody::new(0.0, false), Velocity::default(), Collider::plane(Vec3::Y, 0.0)));
+            let ball = |world: &mut World, x: f32, factor: f32| {
+                let col = Collider::sphere(0.15);
+                let mut rb = RigidBody::new(1.0, true);
+                rb.update_inertia_from_collider(&col);
+                world.spawn_bundle((
+                    Transform::new(Vec3::new(x, 0.6, 0.0)),
+                    GlobalTransform::default(),
+                    rb,
+                    Velocity::default(),
+                    col,
+                    FluidInteractor::sphere(0.15).with_buoyancy(factor),
+                ))
+            };
+            let balls = [ball(&mut world, -0.55, 0.0), ball(&mut world, 0.0, 1.0), ball(&mut world, 0.55, 3.0)];
+            let surface = |r: &Renderer| {
+                let mut ys: Vec<f32> = particles(r).iter().map(|p| p.position[1]).collect();
+                ys.sort_by(f32::total_cmp);
+                ys[ys.len() * 98 / 100]
+            };
+            step(&mut world, &mut renderer, 1);
+            for _ in 0..180 {
+                gizmo_physics_rigid::system::physics_step_system(&world, 1.0 / 60.0);
+                step(&mut world, &mut renderer, 1);
+            }
+            let y = |e| world.query::<&Transform>().get(e).unwrap().position.y;
+            let (sunk, neutral, floating) = (y(balls[0]), y(balls[1]), y(balls[2]));
+            let top = surface(&renderer);
+            eprintln!("surface {top}, balls at {sunk} / {neutral} / {floating}");
+            assert!(sunk < 0.25, "the ball the water does not lift is not on the floor: {sunk}");
+            assert!(floating > top - 0.2, "the buoyant ball does not float at the surface ({top}): {floating}");
+            assert!(sunk < neutral && neutral < floating, "the three are not in buoyancy order: {sunk} / {neutral} / {floating}");
         });
     }
 }

@@ -585,3 +585,34 @@ fn classify_particles(@builtin(global_invocation_id) global_id: vec3<u32>) {
     
     particles[index] = pi;
 }
+
+
+// ════════════════════════════════════════════════════════════════════════
+//  WETTING — how much of each obstacle the water is against
+// ════════════════════════════════════════════════════════════════════════
+// Counts, per collider, the particles in the shell around its shape: from where the collider pushes
+// the water back to (half a particle out) to two particles out. A body the water closes over has the
+// shell full; one above the surface has it empty. The collider keeps the water out of its own volume,
+// so the particles *inside* it would say nothing.
+@compute @workgroup_size(64)
+fn count_wetting(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+    if (index >= params.num_particles) { return; }
+    let pi = particles[index];
+    if (pi.phase == 0xFFFFFFFFu) { return; }
+    let inner = params.smoothing_radius * 0.5;
+    let outer = params.smoothing_radius * 2.0;
+    for (var c = 0u; c < params.num_colliders; c = c + 1u) {
+        let col = colliders[c];
+        var gap = 0.0;
+        if (col.shape_type == 0u) {
+            gap = length(pi.position - col.position) - col.radius;
+        } else {
+            let q = abs(pi.position - col.position) - col.half_extents;
+            gap = length(max(q, vec3<f32>(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+        }
+        if (gap >= inner && gap < outer) {
+            atomicAdd(&wetting[c], 1u);
+        }
+    }
+}

@@ -51,4 +51,21 @@ impl ExternalForce {
     }
 }
 
-gizmo_core::impl_component!(ExternalForce);
+/// A force the **engine** keeps on a body, every physics step, the way [`ExternalForce`] keeps the
+/// game's: what its environment does to it — the scene's fluid lifting and dragging a body that
+/// stands in it. Written by the engine's own systems (each frame, from what the environment is
+/// doing now) and added to `ExternalForce`, never in its place, so a boat's engine and the water
+/// under it both push.
+///
+/// Saved with a scene, like `ExternalForce`: it is the push the body is under, and a reopened body
+/// is under the same one until the engine writes the next.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "reflect", derive(Reflect))]
+pub struct EnvironmentForce {
+    /// Newtons, world space, through the centre of mass.
+    pub force: Vec3,
+    /// Newton-metres, world space.
+    pub torque: Vec3,
+}
+
+gizmo_core::impl_component!(ExternalForce, EnvironmentForce);

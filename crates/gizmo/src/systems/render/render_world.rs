@@ -335,6 +335,7 @@ mod render_world_tests {
         ("FluidSimulation", "handed to the GPU solver as its settings by `fluid_scene_system`; the draw reads the solver"),
         ("FluidInteractor", "handed to the GPU solver as an obstacle by `fluid_scene_system`"),
         ("Velocity", "how fast a `FluidInteractor` moves, read by `fluid_scene_system`"),
+        ("RigidBody", "the mass the fluid's lift is worked out from, read by `fluid_scene_system`"),
         ("FluidSceneState", "that pass's own memory of where each interactor was"),
         ("FluidState", "the water's link to the solver, kept by `fluid_scene_system` for a save to read; the draw reads the solver"),
     ];

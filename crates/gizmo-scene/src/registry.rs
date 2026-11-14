@@ -49,6 +49,7 @@ pub fn default_scene_registry() -> SceneRegistry {
     builtin!(gizmo_physics_rigid::components::Breakable, "Breakable");
     builtin!(gizmo_physics_rigid::components::KinematicTarget, "KinematicTarget");
     builtin!(gizmo_physics_rigid::components::ExternalForce, "ExternalForce");
+    builtin!(gizmo_physics_rigid::components::EnvironmentForce, "EnvironmentForce");
 
     // NOTE: scripting's `Script` component is registered separately by the layer
     // that owns both scenes and scripting (app / editor / facade), via
@@ -86,16 +87,17 @@ mod tests {
             "Breakable",
             "KinematicTarget",
             "ExternalForce",
+            "EnvironmentForce",
         ] {
             assert!(
                 reg.contains_name(name),
                 "built-in component '{name}' must be in the default scene registry"
             );
         }
-        // Exactly these twelve — a stray extra registration is as much a regression as a
+        // Exactly these thirteen — a stray extra registration is as much a regression as a
         // missing one (identical under both `reflect` on/off: reflect swaps HOW three of
         // them (de)serialize, not how many names are registered).
-        assert_eq!(reg.len(), 12, "default registry component count drifted");
+        assert_eq!(reg.len(), 13, "default registry component count drifted");
     }
 
     // `gizmo-scene` deliberately does NOT depend on `gizmo-scripting` (that would drag the

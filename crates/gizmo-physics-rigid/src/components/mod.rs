@@ -29,7 +29,7 @@ pub mod velocity;
 
 pub use breakable::{Breakable, Debris};
 pub use explosion::{Explosion, ExplosionFalloff};
-pub use external_force::ExternalForce;
+pub use external_force::{EnvironmentForce, ExternalForce};
 pub use kinematic_target::KinematicTarget;
 pub use rigid_body::{BodyType, RigidBody};
 pub use velocity::Velocity;

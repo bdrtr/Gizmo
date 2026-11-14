@@ -87,4 +87,7 @@ struct SortParams {
 // and the same water stepped twice went two ways (70 cm apart after 36 steps, measured
 // 2026-11-14).
 @group(0) @binding(6) var<storage, read_write> scratch: array<vec4<f32>>;
+// Per obstacle: how many particles stand in the shell around it — what the fluid's lift on it is
+// worked out from (`count_wetting`). Integer sums, so the order the threads add in does not matter.
+@group(0) @binding(7) var<storage, read_write> wetting: array<atomic<u32>>;
 @group(0) @binding(5) var<uniform> sort_params: SortParams;

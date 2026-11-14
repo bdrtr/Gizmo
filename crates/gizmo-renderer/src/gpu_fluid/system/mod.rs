@@ -39,6 +39,8 @@ pub struct GpuFluidSystem {
     /// One `vec4` per particle a pass computes from its neighbours and a commit pass copies in —
     /// so no pass writes what its neighbours are still reading (see `fluid_bindings.wgsl`).
     pub scratch_buffer: wgpu::Buffer,
+    /// Per obstacle, the particles against it — see [`Self::count_wetting`].
+    pub wetting_buffer: wgpu::Buffer,
     /// The `(hash, index)` pairs the bitonic sort orders.
     pub sort_buffer: wgpu::Buffer,
     /// Which stage of that sort the next dispatch runs.
@@ -210,6 +212,12 @@ impl GpuFluidSystem {
             usage: wgpu::BufferUsages::STORAGE,
             mapped_at_creation: false,
         });
+        let wetting_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid Wetting Buffer"),
+            size: (MAX_FLUID_COLLIDERS * 4) as u64,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let pipelines = create_fluid_pipelines(
             device,
             global_bind_group_layout,
@@ -221,6 +229,7 @@ impl GpuFluidSystem {
             &sort_buffer,
             &sort_params_buffer,
             &scratch_buffer,
+            &wetting_buffer,
         );
 
         // Simple Sphere for rendering (Smaller)
@@ -254,6 +263,7 @@ impl GpuFluidSystem {
             colliders_buffer,
             settings,
             scratch_buffer,
+            wetting_buffer,
             sort_buffer,
             sort_params_buffer,
             pipelines,
@@ -347,6 +357,7 @@ impl GpuFluidSystem {
                 &self.sort_buffer,
                 &self.sort_params_buffer,
                 &self.scratch_buffer,
+                &self.wetting_buffer,
             );
         }
         if refill {
@@ -382,6 +393,46 @@ impl GpuFluidSystem {
         if n > 0 {
             queue.write_buffer(&self.particles_buffer, 0, bytemuck::cast_slice(&particles[..n]));
         }
+    }
+
+    /// For each of the first `colliders` obstacles, how much of it the water is against, `0..=1`:
+    /// the particles in the shell around it (half a particle to two particles out) over how many a
+    /// shell the water closes over holds at rest. Counted from the water as it is now, and
+    /// **waits** for the GPU — once a frame, by the engine's fluid pass, and only when something in
+    /// the water is lifted by it. `None` when the counts could not be read back.
+    pub fn count_wetting(&self, device: &wgpu::Device, queue: &wgpu::Queue, colliders: &[FluidCollider]) -> Option<Vec<f32>> {
+        let n = colliders.len().min(MAX_FLUID_COLLIDERS);
+        if n == 0 || self.settings.particles == 0 {
+            return Some(vec![0.0; n]);
+        }
+        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Fluid Wetting") });
+        encoder.clear_buffer(&self.wetting_buffer, 0, None);
+        self.dispatch(&mut encoder, "Fluid Count Wetting", &self.pipelines.pipeline_count_wetting, self.num_particles.div_ceil(64));
+        queue.submit(Some(encoder.finish()));
+        let bytes = read_buffer(device, queue, &self.wetting_buffer, (n * 4) as u64)?;
+        let counts: &[u32] = bytemuck::cast_slice(&bytes);
+        let h = self.settings.particle_radius;
+        let (inner, outer) = (h * 0.5, h * 2.0);
+        let per_particle = self.settings.spacing().powi(3);
+        Some(
+            colliders[..n]
+                .iter()
+                .zip(counts)
+                .map(|(c, &count)| {
+                    let shell = match c.shape_type {
+                        0 => {
+                            let ball = |r: f32| 4.0 / 3.0 * std::f32::consts::PI * r.powi(3);
+                            ball(c.radius + outer) - ball(c.radius + inner)
+                        }
+                        _ => {
+                            let cube = |g: f32| c.half_extents.iter().map(|e| 2.0 * (e + g)).product::<f32>();
+                            cube(outer) - cube(inner)
+                        }
+                    };
+                    (count as f32 * per_particle / shell.max(1e-9)).clamp(0.0, 1.0)
+                })
+                .collect(),
+        )
     }
 
     /// The obstacles for the next step — at most [`MAX_FLUID_COLLIDERS`], the rest dropped.

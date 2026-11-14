@@ -109,7 +109,7 @@ pub mod system;
 pub mod world;
 
 pub use gizmo_physics_core::BodyHandle;
-pub use components::{Breakable, Explosion, ExternalForce, KinematicTarget, RigidBody, Velocity, BodyType};
+pub use components::{Breakable, EnvironmentForce, Explosion, ExternalForce, KinematicTarget, RigidBody, Velocity, BodyType};
 pub use destruction::*;
 pub use fracture::{generate_fracture_chunks, voronoi_shatter, PreFracturedCache};
 pub use integrator::Integrator;

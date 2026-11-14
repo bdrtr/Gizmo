@@ -88,6 +88,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **The water lifts what stands in it** (`FluidInteractor::buoyancy_factor` was read by nothing). Each frame the
+  fluid pass counts, per interactor, the particles in the shell around its shape (`GpuFluidSystem::count_wetting`,
+  an integer count on the GPU, from the water as it is) — how much of it the water is against — and gives its body
+  an `EnvironmentForce`: the factor × its weight × that share upwards, and a drag of 2/s × mass × velocity × share.
+  `EnvironmentForce` is new in `gizmo-physics-rigid`: the engine's push from a body's surroundings, added to the
+  game's `ExternalForce` on every step rather than written over it, and saved like it. A body that leaves the water
+  or its interactor has its push taken off. `the_water_lifts_a_body_as_much_as_its_buoyancy_says`: balls of factor
+  0, 1 and 3 in one pool end on the floor, between, and floating at the surface; fails with the force not applied.
+  `an_environment_force_adds_to_the_games_force`.
+
 - **The scene's fluid is the fluid that runs, its water is saved, and the solver is deterministic** (decided
   2026-11-14). `FluidSimulation` steered nothing — the inspector was its only reader — and whether any fluid ran was
   `Renderer::fluid_enabled`, set by two demos. Now:
@@ -110,7 +120,7 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `the_same_water_stepped_twice_goes_the_same_way`, `the_water_reopens_where_it_was_and_goes_on_the_same` (exact),
   each failing with its piece taken out. **Breaks:** `Renderer::fluid_enabled`, `FluidSimulation`'s fields,
   `FluidInteractor`'s fields, `gpu_fluid_coupling_system`, `FluidParams::{gas_constant, viscosity}` (now
-  `relaxation`, `_reserved`). `scene_fidelity`: nothing open. Buoyancy (`buoyancy_factor`) is the next change.
+  `relaxation`, `_reserved`). `scene_fidelity`: nothing open.
 
 - **A UI is saved as it stands, and is used the same way after a reopen** (decided 2026-11-14). No UI component was
   registered: a saved menu came back as named entities with no boxes, colours or controls, and the editor's ⏹ emptied

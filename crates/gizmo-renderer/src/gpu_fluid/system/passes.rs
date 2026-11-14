@@ -2,7 +2,7 @@ use super::*;
 
 impl GpuFluidSystem {
     /// One compute pass of `pipeline` over `workgroups` groups, with the solver's bind group.
-    fn dispatch(&self, encoder: &mut wgpu::CommandEncoder, label: &str, pipeline: &wgpu::ComputePipeline, workgroups: u32) {
+    pub(crate) fn dispatch(&self, encoder: &mut wgpu::CommandEncoder, label: &str, pipeline: &wgpu::ComputePipeline, workgroups: u32) {
         let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(label), timestamp_writes: None });
         cpass.set_bind_group(0, &self.pipelines.compute_bind_group, &[0]);
         cpass.set_pipeline(pipeline);

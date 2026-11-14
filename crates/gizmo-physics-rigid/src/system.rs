@@ -187,6 +187,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
     let target_query = world.query::<&crate::components::KinematicTarget>();
     // Forces that push on every step, not once a frame — see `ExternalForce`.
     let force_query = world.query::<&crate::components::ExternalForce>();
+    // And the engine's own, from the body's surroundings — see `EnvironmentForce`.
+    let environment_query = world.query::<&crate::components::EnvironmentForce>();
     {
         // SAFETY: physics_step_system runs as a scheduled system; the scheduler guarantees
         // no other system mutably aliases these components while it runs (see `query_unchecked`).
@@ -210,6 +212,12 @@ pub fn physics_step_system(world: &World, dt: f32) {
                     rb.update_inertia_from_collider(&final_collider);
                 }
                 if let Some(push) = force_query.get(id) {
+                    if rb.is_dynamic() {
+                        rb.force_accumulator += push.force;
+                        rb.torque_accumulator += push.torque;
+                    }
+                }
+                if let Some(push) = environment_query.get(id) {
                     if rb.is_dynamic() {
                         rb.force_accumulator += push.force;
                         rb.torque_accumulator += push.torque;

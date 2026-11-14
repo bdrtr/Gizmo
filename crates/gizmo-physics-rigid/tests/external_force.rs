@@ -77,3 +77,35 @@ fn a_force_off_centre_turns_the_body() {
     assert_eq!(push.force, Vec3::new(0.0, 0.0, -10.0));
     assert_eq!(push.torque, Vec3::new(0.0, 10.0, 0.0));
 }
+
+/// **The engine's push and the game's push both push.** A body under a 10 N `ExternalForce` (the
+/// game's) and a 5 N `EnvironmentForce` (what the engine's fluid writes) is under 15 N; either alone
+/// is under its own.
+#[test]
+fn an_environment_force_adds_to_the_games_force() {
+    use gizmo_physics_rigid::components::EnvironmentForce;
+    let run = |game: Option<f32>, engine: Option<f32>| {
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::ZERO));
+        let col = Collider::sphere(0.5);
+        let mut rb = RigidBody::new(1.0, false);
+        rb.linear_damping = 0.0;
+        rb.update_inertia_from_collider(&col);
+        let body = world.spawn_bundle((Transform::new(Vec3::ZERO), rb, Velocity::default(), col));
+        let e = world.live(body).unwrap();
+        if let Some(f) = game {
+            world.add_component(e, ExternalForce::new(Vec3::new(f, 0.0, 0.0)));
+        }
+        if let Some(f) = engine {
+            world.add_component(e, EnvironmentForce { force: Vec3::new(f, 0.0, 0.0), torque: Vec3::ZERO });
+        }
+        for _ in 0..60 {
+            gizmo_physics_rigid::system::physics_step_system(&world, STEP);
+        }
+        world.query::<&Velocity>().get(body).unwrap().linear.x
+    };
+    for (game, engine, want) in [(Some(10.0), Some(5.0), 15.0), (Some(10.0), None, 10.0), (None, Some(5.0), 5.0)] {
+        let v = run(game, engine);
+        assert!((v - want).abs() < 0.2, "game {game:?} N + engine {engine:?} N on 1 kg for 1 s gave {v:.2} m/s, not {want}");
+    }
+}

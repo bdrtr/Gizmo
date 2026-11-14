@@ -33,6 +33,8 @@ pub struct FluidPipelines {
     pub pipeline_derive_velocity: wgpu::ComputePipeline,
     /// Copies the new velocities in and takes the step.
     pub pipeline_commit_velocity: wgpu::ComputePipeline,
+    /// Counts, per obstacle, the water against it (`count_wetting`).
+    pub pipeline_count_wetting: wgpu::ComputePipeline,
     // AAA: Vorticity Confinement — computes curl of velocity field
     /// Computes the curl of the velocity field, for vorticity confinement.
     pub pipeline_compute_vorticity: wgpu::ComputePipeline,
@@ -76,6 +78,7 @@ pub fn create_fluid_pipelines(
     sort_buffer: &wgpu::Buffer,
     sort_params_buffer: &wgpu::Buffer,
     scratch_buffer: &wgpu::Buffer,
+    wetting_buffer: &wgpu::Buffer,
 ) -> FluidPipelines {
     let compute_bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -150,6 +153,16 @@ pub fn create_fluid_pipelines(
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
             label: Some("fluid_compute_layout"),
         });
@@ -164,6 +177,7 @@ pub fn create_fluid_pipelines(
         sort_buffer,
         sort_params_buffer,
         scratch_buffer,
+        wetting_buffer,
     );
 
     let shader_src = format!(
@@ -272,6 +286,7 @@ pub fn create_fluid_pipelines(
     let pipeline_commit_positions = simple("Fluid Commit Positions", "commit_positions");
     let pipeline_derive_velocity = simple("Fluid Derive Velocity", "derive_velocity");
     let pipeline_commit_velocity = simple("Fluid Commit Velocity", "commit_velocity");
+    let pipeline_count_wetting = simple("Fluid Count Wetting", "count_wetting");
     // AAA: Foam/Spray classification pipeline
     let pipeline_classify = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Fluid Classify Particles"),
@@ -600,6 +615,7 @@ pub fn create_fluid_pipelines(
         pipeline_commit_positions,
         pipeline_derive_velocity,
         pipeline_commit_velocity,
+        pipeline_count_wetting,
         pipeline_compute_vorticity,
         pipeline_update_velocity,
         pipeline_classify,
@@ -627,6 +643,7 @@ pub(crate) fn create_compute_bind_group(
     sort_buffer: &wgpu::Buffer,
     sort_params_buffer: &wgpu::Buffer,
     scratch_buffer: &wgpu::Buffer,
+    wetting_buffer: &wgpu::Buffer,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout,
@@ -662,6 +679,10 @@ pub(crate) fn create_compute_bind_group(
             wgpu::BindGroupEntry {
                 binding: 6,
                 resource: scratch_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wetting_buffer.as_entire_binding(),
             },
         ],
         label: Some("fluid_compute_bg"),
