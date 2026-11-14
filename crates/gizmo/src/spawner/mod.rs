@@ -175,7 +175,7 @@ impl<'a> Commands<'a> {
     // ── Kamera ────────────────────────────────────────────────────────────────
 
     /// Spawns the primary 3D perspective camera.
-    /// `yaw = -π/2` (looking towards −X), `pitch = 0` (level).
+    /// Unrotated: looking down `−Z`, level.
     pub fn spawn_camera(&mut self, pos: Vec3) -> EntityBuilder<'_, 'a> {
         {
             let mut cameras = self.world.query_mut::<&mut Camera>();
@@ -193,8 +193,6 @@ impl<'a> Commands<'a> {
                 fov: 60.0_f32.to_radians(),
                 near: 0.1,
                 far: 1000.0,
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: 0.0,
                 exposure: 1.0,
                 primary: true,
                 projection: Default::default(),
@@ -233,8 +231,6 @@ impl<'a> Commands<'a> {
                 fov: fov_deg.to_radians(),
                 near,
                 far,
-                yaw: -std::f32::consts::FRAC_PI_2,
-                pitch: 0.0,
                 exposure: 1.0,
                 primary: true,
                 projection: Default::default(),

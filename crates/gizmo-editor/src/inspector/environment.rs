@@ -231,7 +231,7 @@ mod tests {
     fn panel(blur: DofBlur) -> Vec<String> {
         let mut world = World::new();
         let camera = world.spawn();
-        world.add_component(camera, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+        world.add_component(camera, Camera::new(1.0, 0.1, 100.0, true));
         world.add_component(camera, PostProcess::new().with_dof_blur(blur));
         let mut state = EditorState::default();
         let ctx = egui::Context::default();

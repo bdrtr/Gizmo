@@ -50,9 +50,10 @@ struct DestructionGame {
     shattered: bool,
 }
 
-/// Yaw/pitch'ten bu demonun kamera dönüşü — motorun `Camera::forward_from`'undan FARKLI bir
-/// konvansiyon (yaw+X yerine yaw ekseni). Görüş+hareket+atış yönü hepsi bunu paylaşır, o yüzden
-/// davranışı korumak için olduğu gibi bırakıyoruz.
+/// Yaw/pitch'ten bu demonun kamera dönüşü — motorun `Camera::rotation_from`'undan FARKLI bir
+/// konvansiyon (yaw=0 → −Z; `rotation_from(-yaw - π/2, pitch)` ile aynı dönüş). Görüş+hareket+atış
+/// yönü hepsi bunu paylaşır: kameranın bakışı artık Transform'un dönüşü olduğu için bu dönüş
+/// görüşün kendisi (eskiden görüş `Camera.yaw/pitch`'ten okunuyor ve +X'e, binanın yanına bakıyordu).
 fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {
     let q_yaw = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), yaw);
     let q_pitch = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), pitch);
@@ -82,13 +83,13 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> DestructionGame {
     // motorun yükleyicisi onunla GPU'ya koyuyor.
     world.insert_resource(assets);
 
-    // Kamera (WASD ile uçan; görüş yönü Camera bileşeninin yaw/pitch'inden okunur).
+    // Kamera (WASD ile uçan; görüş yönü Transform'un dönüşü — `pitch_yaw_quat`).
     let cam_yaw = 0.0_f32;
     let cam_pitch = -0.2_f32;
     let cam_pos = Vec3::new(0.0, 50.0, 150.0);
     let cam = world.spawn_bundle((
         Transform::new(cam_pos).with_rotation(pitch_yaw_quat(cam_pitch, cam_yaw)),
-        Camera::new(FRAC_PI_3, 0.1, 500.0, cam_yaw, cam_pitch, true),
+        Camera::new(FRAC_PI_3, 0.1, 500.0, true),
         EntityName("Kamera".into()),
     ));
 

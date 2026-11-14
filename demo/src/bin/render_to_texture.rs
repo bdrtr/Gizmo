@@ -225,10 +225,10 @@ fn main() {
             if let Some(id) = front.and_then(|id| scene.world.live(id)) {
                 scene.world.add_component(id, CameraTag(0));
             }
-            let mut top = Camera::new(55_f32.to_radians(), 0.1, 300.0, TOP_YAW, TOP_PITCH, false);
+            let mut top = Camera::new(55_f32.to_radians(), 0.1, 300.0, false);
             top.exposure = 1.0;
             scene.world.spawn_bundle((
-                Transform::new(TOP_POS),
+                Transform::new(TOP_POS).with_rotation(Camera::rotation_from(TOP_YAW, TOP_PITCH)),
                 GlobalTransform::default(),
                 top,
                 CameraTag(1),

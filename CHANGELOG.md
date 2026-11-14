@@ -126,9 +126,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   autopilot walks three minutes and drives one — 8 crystals, wood, 135 cells loaded and 110 unloaded, never below the
   ground on foot or in the car. Writing it found: a follow camera on a body's raw `Transform` shakes the world around a
   body drawn between its steps (→ `interpolation::drawn_transform`); `arazi` steered A/D the wrong way (`steering_input`
-  is positive to the left, `move_axis` positive to the right) — fixed there too; and four games (`arazi`, `jole`,
-  `kayik`, `topcu`) aim their cameras through `Transform::rotation`, which the camera does not read (`Camera::yaw`/
-  `pitch` is its aim) — open, the next item.
+  was positive to the left, `move_axis` positive to the right) — fixed there too; and four games (`arazi`, `jole`,
+  `kayik`, `topcu`) aimed their cameras through `Transform::rotation`, which the camera did not read — closed by the
+  next two entries under *Changed*.
 - **An inventory** (`gizmo_app::inventory`): `Inventory`, a component of slots of `ItemStack`s (saved with the scene,
   serialisable for `SaveData`), and `ItemCatalog` (an item's name and stack size, by string key). `add` tops up stacks
   before taking empty slots and hands back what did not fit, `remove` is all or nothing, `move_stack` is a drop —
@@ -754,6 +754,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the crate, since nobody could implement it; `system_param!` still needs no `unsafe`.
 
 ### Changed
+
+- **A camera looks where its transform points.** Its aim was the `yaw`/`pitch` on its `Camera`, and
+  `Transform::rotation` was ignored — so four games (`arazi`, `jole`, `kayik`, `topcu`) that turned their cameras by
+  the rotation never turned them, and the tree wrote that ignored rotation in three conventions of its own, none the
+  camera's (the simple scene's fly camera wrote the mirror image of its aim). Now the aim is the entity's world
+  rotation — `GlobalTransform`, else `Transform`; unrotated looks down −Z with +Y up — so a camera on a car's child
+  turns with the car, and a weapon parented to an FPS camera turns with the view. `Camera::view(position, rotation)`,
+  `Camera::front`/`right`, `Camera::rotation_from(yaw, pitch)` for a controller that thinks in angles (its front is
+  `forward_from`, so a view is the view the fields gave, to 1e-5), `Camera::yaw_pitch_of` back, and
+  `Camera::looking_at(position, target)`. `FpsLook`, the studio's editor camera, the simple fly camera, `CameraBundle`
+  (its `yaw`/`pitch` become the rotation), the pointer's ray, the audio listener (now through the camera's parents
+  too) and the shake all read and write the rotation. The studio's orbit placed the camera off its pivot (it built
+  `R_y(yaw)·R_x(pitch)·Z`, not the aim); it orbits the pivot now. Scenes are **version 2**: loading a version-1 scene
+  turns each camera's `yaw`/`pitch` into its rotation (through its parent's, for one under a turned parent), and
+  prefab loading now migrates too — it did not at all. **Breaks:** `Camera::{yaw, pitch}` are gone,
+  `Camera::new(fov, near, far, primary)`, `get_view`/`get_front`/`get_right`/`sanitize_angles` are gone,
+  `screen_to_ray`/`world_to_screen` take the rotation, `shake_view(world, id, position, rotation) -> (Vec3, Quat)`.
+  Tests: `rotation_from_aims_like_the_angles_and_reads_back`, `looking_at_aims_at_the_target`,
+  `an_old_camera_s_yaw_and_pitch_become_its_rotation`, `the_scene_migration_aims_a_camera_as_the_renderer_does`.
 
 - **`VehicleController::steering_input`: positive now steers right.** It steered left, while everything that feeds it
   — `move_axis`, a stick, the D key — is positive to the right, so every game had to negate it, and two (`arazi`,

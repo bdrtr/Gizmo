@@ -103,8 +103,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) {
         let yaw = dir.z.atan2(dir.x);
         let pitch = dir.y.clamp(-1.0, 1.0).asin();
         world.spawn_bundle((
-            placed(Transform::new(pos)),
-            Camera::new(1.0, 0.1, 500.0, yaw, pitch, true),
+            placed(Transform::new(pos).with_rotation(Camera::rotation_from(yaw, pitch))),
+            Camera::new(1.0, 0.1, 500.0, true),
         ));
     }
 

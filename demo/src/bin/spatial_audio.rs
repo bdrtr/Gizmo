@@ -41,7 +41,7 @@
 //!
 //! ## Bu demo bir hata buldu: kulaklar terstiydi
 //!
-//! Demo dinleyicinin kullandığı sağ vektörünü motorun kendi `Camera::get_right()`'ıyla
+//! Demo dinleyicinin kullandığı sağ vektörünü motorun kendi `Camera::right(rotation)`'ıyla
 //! karşılaştırıyor. İlk ölçüm **her karede `−1,00`** verdi: tam ters. Sonucu doğrudan da
 //! sınadım — kameranın kendi sağına konan bir ses **sol kulağa** daha yakın çıkıyordu. Yani
 //! basit sahne üzerine kurulu her oyunda stereo yönlendirme **aynalıydı**.
@@ -52,9 +52,13 @@
 //! `rotation_y(-yaw + π/2)`'si tam ters bir vektör, `FpsLook`'un `rotation_y(-yaw)`'ı ise
 //! kameranın **ileri** vektörünü veriyordu (kulaklar yan yana değil arka arkaya).
 //!
-//! Düzeltildi: dinleyici artık `Camera::get_right()` okuyor, ve `gizmo-engine`'e bir gerileme
+//! Düzeltildi: dinleyici artık kameranın sağını okuyor (bugün `Camera::right(dönüş)`), ve `gizmo-engine`'e bir gerileme
 //! testi eklendi. Bu demonun ölçümü aynı şeyi uçtan uca doğruluyor — HUD `+1,00` ve "sağ (doğru)"
 //! yazıyorsa kulaklar ekrana diktir.
+//!
+//! Sonradan: kameranın bakışı artık `Camera`'daki yaw/pitch'te değil, varlığın kendi dönüşünde
+//! (`Transform.rotation`) duruyor — iki gelenek tek bir kaynağa indi. Karşılaştırma bu yüzden
+//! `Camera::right(rotation)` ile yapılıyor.
 //!
 //! ## Doğrulama
 //!
@@ -97,7 +101,7 @@ struct AudioDemo {
     /// Kulakların dünya konumu.
     left_ear: Vec3,
     right_ear: Vec3,
-    /// Dinleyicinin kullandığı sağ vektör ile kameranın kendi `get_right()`'ı arasındaki
+    /// Dinleyicinin kullandığı sağ vektör ile kameranın kendi `Camera::right(rotation)`'ı arasındaki
     /// nokta çarpımı. +1 uyumlu, −1 ters, 0 dik demek.
     right_agreement: f32,
     /// Kaynak kameranın sağındayken hangi kulak daha yakın.
@@ -241,7 +245,7 @@ fn main() {
                     ui.label("kulak aralığı sabit: 0,20 m");
                     ui.separator();
                     ui.label(format!(
-                        "listener.right . Camera::get_right() = {:+.2}",
+                        "listener.right . Camera::right(rot) = {:+.2}",
                         demo.right_agreement
                     ));
                     ui.label(format!(
@@ -301,14 +305,14 @@ fn measure_listener(world: &mut gizmo::core::World) {
     };
     let Some(emitter) = emitter else { return };
 
-    // Kameranın KENDİ sağ vektörü — motorun `Camera::right_from(yaw)`'ı, görüş matrisini kuran
-    // fonksiyonun ta kendisi. Dinleyicinin kullandığıyla karşılaştırılıyor.
+    // Kameranın KENDİ sağ vektörü — motorun `Camera::right(rotation)`'ı, görüş matrisini kuran
+    // dönüşün ta kendisi. Dinleyicinin kullandığıyla karşılaştırılıyor.
     let camera_right = {
  let q = world
         .query::<(&Camera, &Transform)>();
             q.iter()
                 .find(|(camera, _)| camera.primary)
-                .map(|(camera, _)| camera.get_right())
+                .map(|(_, transform)| Camera::right(transform.rotation))
         }
         .unwrap_or(Vec3::X);
     let right_agreement = listener.right.dot(camera_right);
@@ -345,7 +349,7 @@ fn measure_listener(world: &mut gizmo::core::World) {
     if std::env::var("GIZMO_AUDIO_SELFTEST").is_ok() && demo.frame.is_multiple_of(PROBE_PERIOD) {
         gizmo::gizmo_log!(
             Info,
-            "kare {} · mesafe {:.2} m · duyulan {:.3} · sink {:.1} · right·get_right {:+.2} · yakın kulak {} · aygıt {}",
+            "kare {} · mesafe {:.2} m · duyulan {:.3} · sink {:.1} · right·cam_right {:+.2} · yakın kulak {} · aygıt {}",
             demo.frame,
             distance,
             heard,

@@ -9,8 +9,8 @@ use crate::physics::world::PhysicsWorld;
 use crate::renderer::asset::AssetManager;
 use crate::renderer::components::{Camera, Material, MeshRenderer};
 use crate::renderer::Renderer;
-use std::f32::consts::{FRAC_PI_2, PI};
-use crate::math::{Quat, Vec3, Vec4};
+use std::f32::consts::PI;
+use crate::math::{Vec3, Vec4};
 use crate::systems;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -533,18 +533,12 @@ pub fn simple_scene_update(
     // the one the fly controls.
     let target = crate::renderer::components::active_camera(world);
     if let Some(target) = target {
-        let mut q = world.query_mut::<(
-            &mut Transform,
-            &mut Camera,
-        )>();
-        let rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2)
-            * Quat::from_rotation_x(state.camera_pitch);
-
-        if let Some((mut trans, mut cam)) = q.get_mut(target) {
+        // The aim is the rotation. (This wrote `R_y(π/2 − yaw)` here — the mirror image of the aim —
+        // next to the yaw/pitch fields the renderer read instead, so nothing showed it.)
+        let mut q = world.query_mut::<&mut Transform>();
+        if let Some(mut trans) = q.get_mut(target) {
             trans.position = state.camera_pos;
-            trans.rotation = rot;
-            cam.yaw = state.camera_yaw;
-            cam.pitch = state.camera_pitch;
+            trans.rotation = Camera::rotation_from(state.camera_yaw, state.camera_pitch);
         }
     }
 
@@ -1015,6 +1009,7 @@ fn ring_extrusion_collider(inner: &[[f32; 2]], outer: &[[f32; 2]], depth: f32) -
 #[cfg(test)]
 mod extrusion_collider_tests {
     use super::*;
+    use crate::math::Quat;
     use crate::physics::components::ColliderShape;
 
     fn square() -> Vec<[f32; 2]> {
@@ -1172,13 +1167,13 @@ mod fly_camera_tests {
         // The scene's camera: marked primary, so `active_camera` names it.
         let primary = world.spawn_bundle((
             Transform::new(Vec3::ZERO),
-            Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true),
+            Camera::new(1.0, 0.1, 100.0, true),
         ));
         // A second camera with a pose of its own that nothing should touch.
         let other_pose = Vec3::new(0.0, 7.0, 0.2);
         let other = world.spawn_bundle((
-            Transform::new(other_pose),
-            Camera::new(1.0, 0.1, 100.0, 0.0, -1.15, false),
+            Transform::new(other_pose).with_rotation(Camera::rotation_from(0.0, -1.15)),
+            Camera::new(1.0, 0.1, 100.0, false),
         ));
 
         let mut state = SimpleSceneState {
@@ -1194,7 +1189,7 @@ mod fly_camera_tests {
                 .query::<(Entity, &Transform, &Camera)>();
             q.iter()
                 .find(|(id, ..)| (*id).id() == entity.id())
-                .map(|(_, t, c)| (t.position, c.pitch))
+                .map(|(_, t, _)| (t.position, Camera::yaw_pitch_of(t.rotation).1))
                 .expect("camera still present")
         };
 
@@ -1204,7 +1199,7 @@ mod fly_camera_tests {
             "the rendered camera must follow the fly state"
         );
         assert!(
-            (primary_pitch - state.camera_pitch).abs() < 1e-6,
+            (primary_pitch - state.camera_pitch).abs() < 1e-5,
             "the rendered camera must take the fly pitch, got {primary_pitch}"
         );
 
@@ -1214,7 +1209,7 @@ mod fly_camera_tests {
             "a second camera must keep its own position, got {other_pos:?}"
         );
         assert!(
-            (other_pitch - (-1.15)).abs() < 1e-6,
+            (other_pitch - (-1.15)).abs() < 1e-5,
             "a second camera must keep its own pitch, got {other_pitch}"
         );
     }
@@ -1309,6 +1304,7 @@ mod tests {
 #[cfg(test)]
 mod fixed_physics_tests {
     use super::*;
+    use crate::math::Quat;
 
     /// The step count is fixed by the time spent, not by how it was split into frames: 1 s at
     /// 120 Hz is 120 steps whether it arrives as 60 frames, 144 frames or 37 uneven ones.

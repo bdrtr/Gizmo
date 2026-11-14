@@ -298,8 +298,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     if let Some(mut c) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         let want = Vec3::new(follow.x * 0.6 + 4.0, 7.0, 24.0);
         c.position = c.position.lerp(want, (dt * 1.5).min(1.0));
-        let look = (Vec3::new(follow.x * 0.7 + 4.0, 1.0, 0.0) - c.position).normalize_or_zero();
-        c.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, look);
+        if let Some(aim) = Camera::looking_at(c.position, Vec3::new(follow.x * 0.7 + 4.0, 1.0, 0.0)) {
+            c.rotation = aim;
+        }
     }
     set_text(
         world,

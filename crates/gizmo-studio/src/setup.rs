@@ -223,11 +223,10 @@ pub fn setup_studio_scene(
         cam,
         gizmo::core::component::EntityName("Editor Camera".to_string()),
     );
-    let q_yaw = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), -std::f32::consts::FRAC_PI_2);
-    let q_pitch = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), -0.4);
     world.add_component(
         cam,
-        Transform::new(Vec3::new(0.0, 8.0, 18.0)).with_rotation(q_yaw * q_pitch),
+        Transform::new(Vec3::new(0.0, 8.0, 18.0))
+            .with_rotation(gizmo::renderer::components::Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.4)),
     );
     world.add_component(cam, gizmo::physics::components::GlobalTransform::default());
     world.add_component(
@@ -236,10 +235,7 @@ pub fn setup_studio_scene(
             60.0_f32.to_radians(),
             0.1,
             1000.0,
-            -std::f32::consts::FRAC_PI_2,
-            -0.4,
-            true,
-        ),
+            true),
     );
 
     // --- GIZMO HANDLES (TRANSLATE) EGUI-GIZMO İÇİN İPTAL EDİLDİ ---
@@ -259,7 +255,8 @@ pub fn setup_studio_scene(
             .unwrap_or((0.0, 0.0));
     world.add_component(
         game_cam,
-        Transform::new(game_cam_pos),
+        Transform::new(game_cam_pos)
+            .with_rotation(gizmo::renderer::components::Camera::rotation_from(game_cam_yaw, game_cam_pitch)),
     );
     world.add_component(game_cam, gizmo::physics::components::GlobalTransform::default());
     world.add_component(
@@ -268,8 +265,6 @@ pub fn setup_studio_scene(
             50.0_f32.to_radians(), // Biraz daha dar FOV (sinematik)
             0.1,
             500.0,
-            game_cam_yaw,
-            game_cam_pitch,
             false, // Editör kamerası DEĞİL
         ),
     );

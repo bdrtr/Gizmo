@@ -283,7 +283,7 @@ mod tests {
         let mut world = World::new();
 
         let cam = world.spawn();
-        world.add_component(cam, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+        world.add_component(cam, Camera::new(1.0, 0.1, 100.0, true));
         world.add_component(cam, Transform::new(Vec3::ZERO));
 
         let ent = world.spawn();

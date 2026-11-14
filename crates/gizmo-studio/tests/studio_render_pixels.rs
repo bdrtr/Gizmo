@@ -184,7 +184,7 @@ fn render_scene(albedo: Vec4) -> Option<Frame> {
 
         // The editor camera, on -X looking toward +X (yaw 0 → front = +X).
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
+        world.add_component(cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(0.0, 0.0)));
         world.add_component(cam, GlobalTransform::default());
         world.add_component(
             cam,
@@ -192,10 +192,7 @@ fn render_scene(albedo: Vec4) -> Option<Frame> {
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                0.0,
-                0.0,
-                true,
-            ),
+                true),
         );
 
         // A sun, so the cube is lit rather than ambient-only.
@@ -417,17 +414,14 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
         world.add_component(cube, MeshRenderer::new());
 
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(0.0, 10.0, 10.0)));
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 10.0, 10.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.6)));
         world.add_component(
             cam,
             gizmo::renderer::components::Camera::new(
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                -std::f32::consts::FRAC_PI_2,
-                -0.6,
-                true,
-            ),
+                true),
         );
 
         // Tilted so the shadow lands beside the cube rather than under it, where the cube's own
@@ -579,23 +573,21 @@ fn render_with_editor(
 
         // Editor camera: looking AT the cube from -X.
         let editor_cam = world.spawn();
-        world.add_component(editor_cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
+        world.add_component(editor_cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(0.0, 0.0)));
         world.add_component(
             editor_cam,
             gizmo::renderer::components::Camera::new(
-                std::f32::consts::FRAC_PI_4, 0.1, 1000.0, 0.0, 0.0, true,
-            ),
+                std::f32::consts::FRAC_PI_4, 0.1, 1000.0, true),
         );
 
         // Game camera: same direction, four times further back, so the cube it sees is a
         // fraction of the size — a difference no shared render can produce.
         let game_cam = world.spawn();
-        world.add_component(game_cam, Transform::new(Vec3::new(-25.0, 0.0, 0.0)));
+        world.add_component(game_cam, Transform::new(Vec3::new(-25.0, 0.0, 0.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(0.0, 0.0)));
         world.add_component(
             game_cam,
             gizmo::renderer::components::Camera::new(
-                std::f32::consts::FRAC_PI_4, 0.1, 1000.0, 0.0, 0.0, false,
-            ),
+                std::f32::consts::FRAC_PI_4, 0.1, 1000.0, false),
         );
 
         world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
@@ -859,17 +851,14 @@ fn render_grid_scene(show_grid: bool) -> Option<Vec<u8>> {
 
         // Looking down at the grid from above, so it fills the frame.
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(0.0, 6.0, 6.0)));
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 6.0, 6.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.7)));
         world.add_component(
             cam,
             gizmo::renderer::components::Camera::new(
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                -std::f32::consts::FRAC_PI_2,
-                -0.7,
-                true,
-            ),
+                true),
         );
         world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
 
@@ -1128,17 +1117,14 @@ fn shadow_scene_with(
         world.add_component(cube, MeshRenderer::new().with_shadows(mode));
 
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(0.0, 10.0, 10.0)));
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 10.0, 10.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.6)));
         world.add_component(
             cam,
             gizmo::renderer::components::Camera::new(
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                -std::f32::consts::FRAC_PI_2,
-                -0.6,
-                true,
-            ),
+                true),
         );
         world.spawn_bundle(gizmo::prelude::DirectionalLightBundle {
             rotation: gizmo::math::Quat::from_rotation_z(-0.9)
@@ -1253,17 +1239,14 @@ fn sun_viewport(angular_radius: f32, cube: bool) -> Vec<u8> {
         world.add_component(sun, DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun).with_angular_radius(angular_radius));
         // The shadow falls about (0.6, 0, 0.4).
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(0.6, 5.0, 0.4)));
+        world.add_component(cam, Transform::new(Vec3::new(0.6, 5.0, 0.4)).with_rotation(gizmo::renderer::components::Camera::rotation_from(-std::f32::consts::FRAC_PI_2, 0.002 - std::f32::consts::FRAC_PI_2)));
         world.add_component(
             cam,
             gizmo::renderer::components::Camera::new(
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                -std::f32::consts::FRAC_PI_2,
-                0.002 - std::f32::consts::FRAC_PI_2,
-                true,
-            ),
+                true),
         );
         viewport_frame(&mut world, &mut renderer, cam, S)
     })
@@ -1336,10 +1319,10 @@ fn local_light_viewport(kind: u8, casts: bool, cube: bool) -> (Vec<u8>, u32) {
             ),
         }
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(0.0, 8.0, 8.0)));
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 8.0, 8.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.8)));
         world.add_component(
             cam,
-            gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, -std::f32::consts::FRAC_PI_2, -0.8, true),
+            gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, true),
         );
         let frame = viewport_frame(&mut world, &mut renderer, cam, S);
         (frame, renderer.render_stats.expect("the viewport records its stats").shadow_passes)
@@ -1566,7 +1549,7 @@ fn render_decal_frame(with_decal: bool) -> Option<Vec<u8>> {
         }
 
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(-5.0, 2.0, 0.0)));
+        world.add_component(cam, Transform::new(Vec3::new(-5.0, 2.0, 0.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(0.0, -0.35)));
         world.add_component(cam, GlobalTransform::default());
         world.add_component(
             cam,
@@ -1574,10 +1557,7 @@ fn render_decal_frame(with_decal: bool) -> Option<Vec<u8>> {
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                0.0,
-                -0.35,
-                true,
-            ),
+                true),
         );
         world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
 
@@ -1775,7 +1755,7 @@ fn render_water_frame(water: bool, elapsed: f32) -> Option<Vec<u8>> {
         world.add_component(surface, MeshRenderer::new());
 
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(0.0, 3.0, 16.0)));
+        world.add_component(cam, Transform::new(Vec3::new(0.0, 3.0, 16.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.22)));
         world.add_component(cam, GlobalTransform::default());
         world.add_component(
             cam,
@@ -1783,10 +1763,7 @@ fn render_water_frame(water: bool, elapsed: f32) -> Option<Vec<u8>> {
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                -std::f32::consts::FRAC_PI_2,
-                -0.22,
-                true,
-            ),
+                true),
         );
         world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
 
@@ -2062,10 +2039,7 @@ fn render_pane_frame_with(
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                -std::f32::consts::FRAC_PI_2,
-                0.0,
-                true,
-            ),
+                true),
         );
         let state = StudioState {
             current_fps: 60.0,
@@ -2186,10 +2160,7 @@ fn render_cutout_frame(cutoff: Option<f32>) -> Option<Vec<u8>> {
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                -std::f32::consts::FRAC_PI_2,
-                0.0,
-                true,
-            ),
+                true),
         );
         world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
 
@@ -2343,10 +2314,7 @@ fn the_editor_viewport_reflects_a_probe_captured_without_furniture() {
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                -std::f32::consts::FRAC_PI_2,
-                0.0,
-                true,
-            ),
+                true),
         );
         let state = StudioState {
             current_fps: 60.0,
@@ -2495,10 +2463,7 @@ fn blend_scene(mode: Option<gizmo::renderer::components::BlendMode>) -> Option<V
                 std::f32::consts::FRAC_PI_4,
                 0.1,
                 1000.0,
-                -std::f32::consts::FRAC_PI_2,
-                0.0,
-                true,
-            ),
+                true),
         );
         let state = StudioState {
             current_fps: 60.0,
@@ -2588,11 +2553,11 @@ fn render_gpu_body_frame(with_body: bool) -> Option<Vec<u8>> {
             ));
         }
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
+        world.add_component(cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(0.0, 0.0)));
         world.add_component(cam, GlobalTransform::default());
         world.add_component(
             cam,
-            gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, 0.0, 0.0, true),
+            gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, true),
         );
         world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
         let state = StudioState {
@@ -2763,11 +2728,11 @@ fn render_cube_frame(
             world.add_component(cube, MeshRenderer::new().with_shadows(shadows));
         }
         let cam = world.spawn();
-        world.add_component(cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)));
+        world.add_component(cam, Transform::new(Vec3::new(-6.0, 0.0, 0.0)).with_rotation(gizmo::renderer::components::Camera::rotation_from(0.0, 0.0)));
         world.add_component(cam, GlobalTransform::default());
         world.add_component(
             cam,
-            gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, 0.0, 0.0, true),
+            gizmo::renderer::components::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 1000.0, true),
         );
         world.spawn_bundle(gizmo::prelude::DirectionalLightBundle::default());
         let state = StudioState {

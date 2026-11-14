@@ -1037,20 +1037,13 @@ fn place_lights_and_camera(world: &mut World, game: &Game, dt: f32) {
     want.y = want.y.max(height(want.x, want.z) + 1.0);
     if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
         t.position = t.position.lerp(want, (dt * 8.0).min(1.0));
-        let look = (target - t.position).normalize_or_zero();
-        if look != Vec3::ZERO {
-            t.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, look);
+        // The aim is the rotation; `looking_at` keeps +Y up (an arc rotation from −Z rolls).
+        if let Some(aim) = Camera::looking_at(t.position, target) {
+            t.rotation = aim;
         }
     }
-    // Kameranın baktığı yön `Camera`'nın yaw/pitch'inden okunuyor, `Transform`'un dönüşünden değil
-    // (`Camera::get_front`): ikisi de aynı yöne.
-    let look = world.get::<Transform>(game.camera).map(|t| (target - t.position).normalize_or_zero()).unwrap_or(Vec3::NEG_Z);
     if let Some(mut cam) = world.query_mut::<&mut Camera>().get_mut(game.camera) {
         cam.clear_color = Some(Vec3::from(horizon));
-        if look != Vec3::ZERO {
-            cam.yaw = look.z.atan2(look.x);
-            cam.pitch = look.y.clamp(-1.0, 1.0).asin();
-        }
     }
 }
 

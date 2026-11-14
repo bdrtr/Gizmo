@@ -85,12 +85,12 @@ fn draw_cursor(
     let mut cam_data = None;
     for (trans, cam) in q_cam.iter() {
         if cam.primary {
-            cam_data = Some((trans.position, cam));
+            cam_data = Some((trans.position, trans.rotation, cam));
             break;
         }
     }
 
-    let (cam_pos, cam) = match cam_data {
+    let (cam_pos, cam_rot, cam) = match cam_data {
         Some(data) => data,
         None => return, // Birincil kamera yoksa çık
     };
@@ -100,7 +100,7 @@ fn draw_cursor(
 
     let aspect = win_info.aspect_ratio();
     let proj = cam.get_projection(aspect);
-    let view = cam.get_view(cam_pos);
+    let view = gizmo::renderer::components::Camera::view(cam_pos, cam_rot);
     let view_proj_inv = (proj * view).inverse();
 
     let near_ndc = Vec4::new(ndc_x, ndc_y, 0.0, 1.0);

@@ -469,7 +469,7 @@ fn measure(
     let cam = cameras
         .iter_mut()
         .next()
-        .map(|(c, t)| (c.get_projection(16.0 / 9.0), c.get_view(t.position)));
+        .map(|(c, t)| (c.get_projection(16.0 / 9.0), Camera::view(t.position, t.rotation)));
     if let Some((proj, view)) = cam {
         let frustum = gizmo::math::Frustum::from_matrix(&(proj * view));
         let unit = gizmo::math::Aabb {

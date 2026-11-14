@@ -462,9 +462,8 @@ fn chase_camera(world: &mut World, game: &Game, dt: f32) {
     }
     let from = world.query::<&Transform>().get(game.camera).map(|t| t.position).unwrap_or(want);
     let look = (at + Vec3::Y * 1.0 - from).normalize_or_zero();
-    if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(game.camera) {
-        c.yaw = look.z.atan2(look.x);
-        c.pitch = look.y.asin();
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
+        t.rotation = Camera::rotation_from(look.z.atan2(look.x), look.y.asin());
     }
 }
 

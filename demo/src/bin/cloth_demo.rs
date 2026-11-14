@@ -155,8 +155,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> ClothDemo {
         DirectionalLight::new(Vec3::new(1.0, 0.97, 0.9), 3.2, LightRole::Sun),
     ));
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 3.2, 7.0)),
-        Camera::new(FRAC_PI_3, 0.1, 500.0, -FRAC_PI_2, -0.28, true),
+        Transform::new(Vec3::new(0.0, 3.2, 7.0)).with_rotation(Camera::rotation_from(-FRAC_PI_2, -0.28)),
+        Camera::new(FRAC_PI_3, 0.1, 500.0, true),
     ));
     world.spawn_bundle((
         Transform::new(Vec3::new(0.0, -0.25, 0.0)).with_scale(Vec3::new(20.0, 0.25, 20.0)),

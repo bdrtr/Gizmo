@@ -304,7 +304,7 @@ fn a_graded_camera_survives_the_file_with_its_look_and_its_exposure() {
     let mut world = World::new();
     let e = world.spawn();
     world.add_component(e, Transform::new(Vec3::ZERO));
-    let mut cam = Camera::new(60.0_f32.to_radians(), 0.1, 1000.0, 0.0, 0.0, false);
+    let mut cam = Camera::new(60.0_f32.to_radians(), 0.1, 1000.0, false);
     cam.primary = true;
     cam.exposure = 2.25;
     world.add_component(e, cam);

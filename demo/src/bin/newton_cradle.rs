@@ -76,6 +76,7 @@ struct Cradle {
     homes: Vec<Transform>, // topların kuruluş pozu — R ile buraya dönülür
     cam: Camera,
     cam_pos: Vec3,
+    cam_rot: Quat,
     dragging: Option<usize>, // balls içindeki index
     /// Şimdiye kadar görülen en derin top-top girişimi (metre).
     ///
@@ -112,9 +113,10 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Cradle {
     ));
 
     // Sabit ön-görünüm kamerası
-    let cam = Camera::new(FRAC_PI_3, 0.1, 500.0, -FRAC_PI_2, -0.05, true);
+    let cam = Camera::new(FRAC_PI_3, 0.1, 500.0, true);
     let cam_pos = Vec3::new(0.0, PIVOT_Y - L + 1.0, 11.0);
-    world.spawn_bundle((Transform::new(cam_pos), cam));
+    let cam_rot = Camera::rotation_from(-FRAC_PI_2, -0.05);
+    world.spawn_bundle((Transform::new(cam_pos).with_rotation(cam_rot), cam));
 
     let spacing = 2.0 * R + GAP;
     let start_x = -((N as f32 - 1.0) / 2.0) * spacing;
@@ -199,6 +201,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Cradle {
         homes,
         cam,
         cam_pos,
+        cam_rot,
         dragging: None,
         worst_overlap: 0.0,
         history: std::collections::VecDeque::new(),
@@ -253,7 +256,7 @@ fn update(world: &mut World, state: &mut Cradle, _dt: f32, input: &Input) {
     // Ekran pikselinden dünya ışını (unproject).
     let ray = state
         .cam
-        .screen_to_ray(input.mouse_position(), viewport, state.cam_pos);
+        .screen_to_ray(input.mouse_position(), viewport, state.cam_pos, state.cam_rot);
     // screen_to_ray SIMD `Ray` döner; fizik Ray/matematik Vec3 ister → dönüştür.
     let (ro, rd) = (Vec3::from(ray.origin), Vec3::from(ray.direction));
     let lmb = input.is_mouse_button_pressed(mouse::LEFT);

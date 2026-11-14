@@ -153,15 +153,12 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> PlatformerState {
 
     // --- KAMERA ---
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 5.0, -10.0)),
+        Transform::new(Vec3::new(0.0, 5.0, -10.0)).with_rotation(Camera::rotation_from(0.0, -PI / 8.0)),
         Camera::new(
             std::f32::consts::FRAC_PI_3,
             0.1,
             1500.0,
-            0.0,
-            -PI / 8.0,
-            true,
-        ),
+            true),
     ));
 
     // --- GÜNEŞ ---
@@ -272,12 +269,10 @@ fn update(world: &mut World, state: &mut PlatformerState, dt: f32, input: &Input
     // 4. Kamerayı oyuncuya takip ettir
     let cam_pos = player_pos - forward * 8.0 + Vec3::new(0.0, 2.0, 0.0);
     {
-        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
-        for (mut trans, mut cam) in q.iter_mut() {
+        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
+        for (mut trans, _cam) in q.iter_mut() {
             trans.position = cam_pos;
-            trans.rotation = Quat::from_rotation_y(-state.camera_yaw);
-            cam.yaw = state.camera_yaw;
-            cam.pitch = state.camera_pitch;
+            trans.rotation = Camera::rotation_from(state.camera_yaw, state.camera_pitch);
         }
     }
 }

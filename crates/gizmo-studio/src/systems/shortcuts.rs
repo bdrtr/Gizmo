@@ -278,12 +278,12 @@ fn focus_on_selection(
         let mut t_mut = unsafe { world.query_unchecked::<&mut Transform>() };
         // SAFETY: as above — Camera is a distinct component type from Transform.
         let mut cam_mut = unsafe { world.query_unchecked::<&mut gizmo::renderer::components::Camera>() };
-        if let (Some(mut cam_t), Some(cam)) = (
+        if let (Some(mut cam_t), Some(_)) = (
             t_mut.get_mut(state.editor_camera),
             cam_mut.get_mut(state.editor_camera),
         ) {
             editor_state.prefs.camera_focus_distance = 10.0;
-            let offset = cam.get_front() * -editor_state.prefs.camera_focus_distance;
+            let offset = gizmo::renderer::components::Camera::front(cam_t.rotation) * -editor_state.prefs.camera_focus_distance;
             cam_t.position = target_pos + offset;
             cam_t.update_local_matrix();
         }

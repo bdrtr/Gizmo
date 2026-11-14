@@ -175,15 +175,12 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RpgState {
 
     // --- KAMERA ---
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 5.0, 10.0)),
+        Transform::new(Vec3::new(0.0, 5.0, 10.0)).with_rotation(Camera::rotation_from(0.0, -PI / 8.0)),
         Camera::new(
             std::f32::consts::FRAC_PI_3,
             0.1,
             1500.0,
-            0.0,
-            -PI / 8.0,
-            true,
-        ),
+            true),
     ));
 
     // --- GÜNEŞ (DIRECTIONAL LIGHT) ---
@@ -257,7 +254,7 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
     let mut move_right = right;
     move_right.y = 0.0;
     move_right = move_right.normalize_or_zero();
-    let cam_rot = Quat::from_rotation_y(-state.camera_yaw);
+    let cam_rot = Camera::rotation_from(state.camera_yaw, state.camera_pitch);
 
     // --- KARAKTER HAREKETİ ---
     let mut char_pos = Vec3::ZERO;
@@ -417,13 +414,11 @@ fn update(world: &mut World, state: &mut RpgState, dt: f32, input: &gizmo::core:
     {
         let mut q = world.query_mut::<(
         &mut Transform,
-        &mut Camera,
+        &Camera,
     )>();
-        for (mut trans, mut cam) in q.iter_mut() {
+        for (mut trans, _cam) in q.iter_mut() {
             trans.position = cam_pos;
             trans.rotation = cam_rot;
-            cam.yaw = state.camera_yaw;
-            cam.pitch = state.camera_pitch;
         }
     }
 }

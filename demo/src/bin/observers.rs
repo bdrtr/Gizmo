@@ -372,18 +372,18 @@ fn aim_at_ground(
     let mut camera_data = None;
     for (camera, transform) in cameras.iter() {
         if camera.primary {
-            camera_data = Some((*camera, transform.position));
+            camera_data = Some((*camera, transform.position, transform.rotation));
             break;
         }
     }
-    let Some((camera, camera_pos)) = camera_data else {
+    let Some((camera, camera_pos, camera_rot)) = camera_data else {
         return;
     };
     let (mx, my) = input.mouse_position();
     if mx < 0.0 || my < 0.0 || mx > window.width || my > window.height {
         return;
     }
-    let ray = camera.screen_to_ray((mx, my), (window.width, window.height), camera_pos);
+    let ray = camera.screen_to_ray((mx, my), (window.width, window.height), camera_pos, camera_rot);
     let origin = Vec3::from(ray.origin);
     let direction = Vec3::from(ray.direction);
     if direction.y.abs() < 1e-5 {

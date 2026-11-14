@@ -341,8 +341,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Game {
     ));
     // Kamera (sabit topçu)
     world.spawn_bundle((
-        Transform::new(CANNON),
-        Camera::new(FRAC_PI_3, 0.1, 4000.0, FRAC_PI_2, 0.08, true),
+        Transform::new(CANNON).with_rotation(Camera::rotation_from(FRAC_PI_2, 0.08)),
+        Camera::new(FRAC_PI_3, 0.1, 4000.0, true),
     ));
 
     let mut g = Game {
@@ -468,12 +468,10 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
 
     // --- kamerayı nişana göre güncelle ---
     {
-        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
-        for (mut tr, mut cam) in q.iter_mut() {
+        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
+        for (mut tr, _cam) in q.iter_mut() {
             tr.position = CANNON;
-            tr.rotation = Quat::from_rotation_y(-g.yaw);
-            cam.yaw = g.yaw;
-            cam.pitch = g.pitch;
+            tr.rotation = Camera::rotation_from(g.yaw, g.pitch);
         }
     }
 }

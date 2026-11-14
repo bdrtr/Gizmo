@@ -52,10 +52,7 @@ fn main() {
                     std::f32::consts::FRAC_PI_3,
                     0.1,
                     500.0,
-                    game.cam_yaw,
-                    game.cam_pitch,
-                    true,
-                ),
+                    true),
             );
             game.cam_id = cam_entity;
 
@@ -282,6 +279,8 @@ fn load_cloth_joints(game: &World, renderer: &mut Renderer) {
     physics.update_params(&renderer.queue, 1.0 / 60.0, [0.0, -9.81, 0.0]);
 }
 
+/// Kameranın bakışı bu dönüş (yaw=0 → −Z; `Camera::rotation_from(-yaw - π/2, pitch)` ile aynı).
+/// Eskiden görüş `Camera.yaw/pitch`'ten okunuyor ve kumaşın tersine bakıyordu.
 fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {
     let q_yaw = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), yaw);
     let q_pitch = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), pitch);

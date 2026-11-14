@@ -23,11 +23,12 @@ use std::collections::HashMap;
 /// | version | meaning |
 /// |---|---|
 /// | `0` | pre-versioning. Files written before this field existed; `serde(default)` maps them here. |
-/// | `1` | current. |
+/// | `1` | `version` itself. |
+/// | `2` | current. A camera's aim is its `Transform`'s rotation; the `yaw`/`pitch` its `Camera` carried are turned into that rotation on load ([`migrate_camera_aim`]). |
 ///
 /// Bump this when the on-disk shape changes, and add the migration to
 /// [`SceneData::migrate`].
-pub const CURRENT_SCENE_VERSION: u32 = 1;
+pub const CURRENT_SCENE_VERSION: u32 = 2;
 
 /// Full scene data — all entities together with their components.
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -343,10 +344,89 @@ impl SceneData {
                 "[Scene] eski sürüm sahne dosyası geçirildi (migrate)",
             );
             // 0 → 1 is a pure field addition: `version` itself. Nothing to rewrite.
-            // Later bumps add their transforms here, in order.
+            // 1 → 2: a camera's aim moved from its yaw/pitch fields into its rotation.
+            if self.version < 2 {
+                migrate_camera_aim(&mut self.entities);
+            }
             self.version = CURRENT_SCENE_VERSION;
         }
         Ok(())
+    }
+}
+
+impl PrefabData {
+    /// [`SceneData::migrate`] for a prefab: the same numbering and the same transforms, and the
+    /// same refusal of a file from a newer engine. Prefab loading did not migrate at all until
+    /// 2026-11-15 — harmless while every bump was a field addition, and wrong the first time one
+    /// was not (a camera prefab would have lost its aim).
+    ///
+    /// # Errors
+    /// [`SceneError::UnsupportedVersion`] for a prefab newer than this build.
+    pub fn migrate(&mut self, source: &str) -> Result<(), SceneError> {
+        if self.version > CURRENT_SCENE_VERSION {
+            return Err(SceneError::UnsupportedVersion {
+                path: source.to_string(),
+                found: self.version,
+                supported: CURRENT_SCENE_VERSION,
+            });
+        }
+        if self.version < 2 {
+            migrate_camera_aim(&mut self.entities);
+        }
+        self.version = CURRENT_SCENE_VERSION;
+        Ok(())
+    }
+}
+
+/// Version 1 → 2: the aim of every saved camera moves from the `yaw`/`pitch` fields its `Camera`
+/// carried into its `Transform`'s rotation, which is where a camera's aim has lived since
+/// 2026-11-15 (`gizmo_renderer::Camera`). Before, the rotation was ignored, so it is replaced, not
+/// composed with.
+///
+/// The old aim was in **world** space whatever the hierarchy; the rotation is local, so a camera
+/// under a parent gets `parent_world⁻¹ · aim` — it looks where it looked. The rotation is
+/// `Camera::rotation_from(yaw, pitch)`, written out here because this crate does not depend on the
+/// renderer (`R_y(−yaw − π/2) · R_x(pitch)`; a test in the facade holds the two equal). The
+/// `yaw`/`pitch` left in the camera's own text are ignored on load and gone at the next save.
+pub fn migrate_camera_aim(entities: &mut [EntityData]) {
+    use gizmo_math::Quat;
+    use gizmo_physics_core::components::Transform;
+    let transform_of = |e: &EntityData| -> Option<Transform> { ron::from_str(e.components.get("Transform")?).ok() };
+    let by_id: HashMap<u32, usize> = entities.iter().enumerate().map(|(i, e)| (e.original_id, i)).collect();
+    let world_rotation = |mut index: Option<usize>| -> Quat {
+        let mut rotation = Quat::IDENTITY;
+        for _ in 0..1024 {
+            let Some(i) = index else { break };
+            if let Some(t) = transform_of(&entities[i]) {
+                rotation = t.rotation * rotation;
+            }
+            index = entities[i].parent_id.and_then(|p| by_id.get(&p).copied());
+        }
+        rotation
+    };
+    let mut aims = Vec::new();
+    for (i, e) in entities.iter().enumerate() {
+        let Some(camera) = e.components.get("Camera") else { continue };
+        let Ok(ron::Value::Map(fields)) = ron::from_str::<ron::Value>(camera) else { continue };
+        let angle = |name: &str| match fields.get(&ron::Value::String(name.to_string())) {
+            Some(ron::Value::Number(n)) => Some(n.into_f64() as f32),
+            _ => None,
+        };
+        let (Some(yaw), Some(pitch)) = (angle("yaw"), angle("pitch")) else { continue };
+        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2 + 0.001, std::f32::consts::FRAC_PI_2 - 0.001);
+        let aim = Quat::from_rotation_y(-yaw - std::f32::consts::FRAC_PI_2) * Quat::from_rotation_x(pitch);
+        let parent = e.parent_id.and_then(|p| by_id.get(&p).copied());
+        aims.push((i, (world_rotation(parent).inverse() * aim).normalize()));
+    }
+    for (i, rotation) in aims {
+        let mut t = transform_of(&entities[i]).unwrap_or_default();
+        t.rotation = rotation;
+        match ron::to_string(&t) {
+            Ok(text) => {
+                entities[i].components.insert("Transform".to_string(), text);
+            }
+            Err(e) => tracing::warn!(error = %e, "[Scene] kameranın dönüşü yazılamadı"),
+        }
     }
 }
 
@@ -1343,13 +1423,12 @@ impl SceneData {
     /// [`instantiate_entities`](Self::instantiate_entities) may already have added it while
     /// resolving `root_parent`, and pushing unconditionally used to list the child twice.
     ///
-    /// Note the asymmetry with [`load_into`](Self::load_into): prefab loading does **not** run
-    /// [`migrate`](Self::migrate), so a prefab from a newer engine is not rejected the way a
-    /// scene is.
+    /// Like [`load_into`](Self::load_into) it runs the migrations ([`PrefabData::migrate`]), so a
+    /// prefab from an older engine is brought up to date and one from a newer engine is refused.
     ///
     /// # Errors
     /// [`SceneError::Io`] if the file cannot be read, [`SceneError::Parse`] if it is not valid
-    /// RON.
+    /// RON, [`SceneError::UnsupportedVersion`] for a prefab newer than this build.
     pub fn load_prefab(
         file_path: &str,
         parent_entity: Option<Entity>,
@@ -1402,6 +1481,7 @@ impl SceneData {
             e
         })?;
 
+        prefab.migrate(file_path)?;
         let repaired = prefab.repair_asset_paths(identity);
         if repaired > 0 {
             tracing::info!(
@@ -2554,6 +2634,50 @@ mod asset_identity_tests {
         // And the identity-blind resolver is the same no-op, which is what `save`/`load_into` use.
         assert_eq!(scene.repair_asset_paths(&NoAssetIdentity), 0);
         assert_eq!(scene.stamp_asset_identity(&NoAssetIdentity), 0);
+    }
+
+    /// **Version 1 → 2: a saved camera keeps looking where it looked.** Its aim was the `yaw`/
+    /// `pitch` in its `Camera` text, in world space; it becomes its `Transform`'s rotation —
+    /// through its parent's rotation for one under a turned parent — and the rest of the
+    /// transform stays.
+    #[test]
+    fn an_old_camera_s_yaw_and_pitch_become_its_rotation() {
+        use gizmo_math::{Quat, Vec3};
+        use gizmo_physics_core::components::Transform;
+        let old = r#"(version: 1, entities: [
+            (original_id: 1, components: {
+                "Camera": "(fov:1.0,near:0.1,far:100.0,yaw:0.0,pitch:-0.3,exposure:1.0,primary:true,projection:Perspective)",
+                "Transform": "(position:(-7.0,3.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+            }),
+            (original_id: 2, components: {
+                "Transform": "(position:(0.0,0.0,0.0),rotation:(0.0,0.38268346,0.0,0.9238795),scale:(1.0,1.0,1.0))",
+            }),
+            (original_id: 3, parent_id: Some(2), components: {
+                "Camera": "(fov:1.0,near:0.1,far:100.0,yaw:2.0,pitch:0.4,exposure:1.0,primary:false)",
+            }),
+            (original_id: 4, components: {
+                "Camera": "(fov:1.0,near:0.1,far:100.0,exposure:1.0,primary:false)",
+                "Transform": "(position:(0.0,0.0,0.0),rotation:(0.0,0.0,0.0,1.0),scale:(1.0,1.0,1.0))",
+            }),
+        ])"#;
+        let scene = SceneData::from_ron_str(old).expect("a version-1 scene loads");
+        assert_eq!(scene.version, crate::scene::CURRENT_SCENE_VERSION);
+        let transform = |id: u32| -> Transform {
+            let e = scene.entities.iter().find(|e| e.original_id == id).unwrap();
+            ron::from_str(e.components.get("Transform").expect("a transform")).unwrap()
+        };
+        // `Camera::forward_from` — where the old fields pointed.
+        let forward = |yaw: f32, pitch: f32| Vec3::new(yaw.cos() * pitch.cos(), pitch.sin(), yaw.sin() * pitch.cos());
+        let root = transform(1);
+        assert_eq!(root.position, Vec3::new(-7.0, 3.0, 0.0), "the position stays");
+        assert!((root.rotation * Vec3::NEG_Z - forward(0.0, -0.3)).length() < 1e-5, "{:?}", root.rotation * Vec3::NEG_Z);
+        assert!((root.rotation * Vec3::X).y.abs() < 1e-5, "no roll");
+        // Under a parent turned 45° about Y: the world aim is what the fields said.
+        let parent = transform(2).rotation;
+        let child = transform(3).rotation;
+        assert!(((parent * child) * Vec3::NEG_Z - forward(2.0, 0.4)).length() < 1e-5);
+        // A camera written without the fields keeps its rotation.
+        assert_eq!(transform(4).rotation, Quat::IDENTITY);
     }
 
     /// A scene written before the fields existed loads with `None` and is untouched by both passes.

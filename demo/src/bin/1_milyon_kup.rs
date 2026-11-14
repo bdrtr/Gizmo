@@ -54,7 +54,7 @@ fn run(cube_count: u32) {
             world.add_component(
                 cam_entity,
                 Transform::new(game.cam_pos)
-                    .with_rotation(pitch_yaw_quat(game.cam_pitch, game.cam_yaw)),
+                    .with_rotation(Camera::rotation_from(game.cam_yaw, game.cam_pitch)),
             );
             world.add_component(
                 cam_entity,
@@ -62,10 +62,7 @@ fn run(cube_count: u32) {
                     std::f32::consts::FRAC_PI_3,
                     0.1,
                     500.0,
-                    game.cam_yaw,
-                    game.cam_pitch,
-                    true,
-                ),
+                    true),
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
 
@@ -137,7 +134,7 @@ fn run(cube_count: u32) {
 
             // Transformu Güncelle
             if let Some(mut tr) = world.query_mut::<&mut Transform>().get_mut(state.cam_id) {
-                let rot = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
+                let rot = Camera::rotation_from(state.cam_yaw, state.cam_pitch);
                 tr.rotation = rot;
 
                 let forward = rot * Vec3::new(0.0, 0.0, -1.0);
@@ -165,10 +162,4 @@ fn run(cube_count: u32) {
         .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
-}
-
-fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {
-    let q_yaw = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), yaw);
-    let q_pitch = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), pitch);
-    q_yaw * q_pitch
 }

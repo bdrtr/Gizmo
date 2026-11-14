@@ -340,9 +340,8 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
             t.position = head;
         }
     }
-    if let Some(mut cam) = world.query_mut::<&mut Camera>().get_mut(game.camera) {
-        cam.yaw = game.yaw;
-        cam.pitch = game.pitch;
+    if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
+        t.rotation = Camera::rotation_from(game.yaw, game.pitch);
     }
 
     draw_hud(world, &game);

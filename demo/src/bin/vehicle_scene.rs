@@ -163,8 +163,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> VehicleState {
 
     // --- KAMERA ---
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 8.0, 15.0)).with_rotation(Quat::from_rotation_x(-0.3)),
-        Camera::new(FRAC_PI_3, 0.1, 5000.0, 0.0, -0.3, true),
+        Transform::new(Vec3::new(0.0, 8.0, 15.0)).with_rotation(Camera::rotation_from(0.0, -0.3)),
+        Camera::new(FRAC_PI_3, 0.1, 5000.0, true),
     ));
 
     world.insert_resource(phys_world);
@@ -281,12 +281,10 @@ fn update(world: &mut World, state: &mut VehicleState, dt: f32, input: &Input) {
     state.camera_pos = car_pos + Vec3::new(0.0, 4.0, 0.0) + offset;
 
     {
-        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
-        for (mut trans, mut cam) in q.iter_mut() {
+        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
+        for (mut trans, _cam) in q.iter_mut() {
             trans.position = state.camera_pos;
-            trans.rotation = rot;
-            cam.yaw = state.camera_yaw;
-            cam.pitch = state.camera_pitch;
+            trans.rotation = Camera::rotation_from(state.camera_yaw, state.camera_pitch);
         }
     }
 

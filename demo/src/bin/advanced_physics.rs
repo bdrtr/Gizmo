@@ -59,15 +59,13 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
 
     // Kamera — Transform + Camera + isim tek spawn_bundle'da.
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 5.0, 15.0)).with_rotation(Quat::from_rotation_x(-0.2)),
+        Transform::new(Vec3::new(0.0, 5.0, 15.0))
+            .with_rotation(Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.2)),
         Camera::new(
             std::f32::consts::FRAC_PI_3,
             0.1,
             5000.0,
-            -std::f32::consts::FRAC_PI_2,
-            -0.2,
-            true,
-        ),
+            true),
         EntityName("Main Camera".into()),
     ));
 
@@ -228,8 +226,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
 
     // --- serbest-uçuş kamera (sağ-tık basılıyken fare-look) ---
     {
-        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
-        for (mut transform, mut camera) in q.iter_mut() {
+        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
+        for (mut transform, _camera) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
 
@@ -246,9 +244,7 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
             let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
             let up = Vec3::new(0.0, 1.0, 0.0);
 
-            let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + std::f32::consts::FRAC_PI_2);
-            let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
-            transform.rotation = yaw_rot * pitch_rot;
+            transform.rotation = Camera::rotation_from(state.camera_yaw, state.camera_pitch);
 
             let speed = state.camera_speed
                 * dt
@@ -269,9 +265,6 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
 
             transform.position = state.camera_pos;
             transform.update_local_matrix();
-
-            camera.yaw = state.camera_yaw;
-            camera.pitch = state.camera_pitch;
 
             cam_forward = forward;
             cam_pos = transform.position;

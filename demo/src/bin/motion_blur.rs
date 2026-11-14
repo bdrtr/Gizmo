@@ -244,13 +244,14 @@ fn main() {
             if let Some(m) = world.get_resource::<Motion>().map(|m| *m) {
                 if !m.spin_object {
                     let pos = Vec3::new(m.angle.cos() * ORBIT_RADIUS, 1.2, m.angle.sin() * ORBIT_RADIUS);
-                    let dir = (-pos).normalize();
+                    let aim = Camera::looking_at(pos, Vec3::ZERO);
                     {
-                        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
-                        for (mut t, mut cam) in q.iter_mut() {
+                        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
+                        for (mut t, _cam) in q.iter_mut() {
                             t.position = pos;
-                            cam.yaw = dir.z.atan2(dir.x);
-                            cam.pitch = dir.y.asin();
+                            if let Some(aim) = aim {
+                                t.rotation = aim;
+                            }
                         }
                     }
                 }

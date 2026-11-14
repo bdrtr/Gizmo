@@ -367,8 +367,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         let back = t.rotation * Vec3::Z;
         let want = t.position + Vec3::new(back.x, 0.0, back.z).normalize_or_zero() * 10.0 + Vec3::Y * 4.5;
         c.position = c.position.lerp(want, (dt * 2.5).min(1.0));
-        let look = (t.position - c.position).normalize_or_zero();
-        c.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, look);
+        if let Some(aim) = Camera::looking_at(c.position, t.position) {
+            c.rotation = aim;
+        }
     }
     let speed = world.query::<&Velocity>().get(game.boat).map_or(0.0, |v| Vec2::new(v.linear.x, v.linear.z).length());
     let target = gate_centre(game.next);

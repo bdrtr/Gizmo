@@ -73,8 +73,8 @@ fn main() {
             state.cam_id = world
                 .spawn_bundle((
                     Transform::new(state.cam_pos)
-                        .with_rotation(pitch_yaw_quat(state.cam_pitch, state.cam_yaw)),
-                    Camera::new(FRAC_PI_3, 0.1, 500.0, state.cam_yaw, state.cam_pitch, true),
+                        .with_rotation(Camera::rotation_from(state.cam_yaw, state.cam_pitch)),
+                    Camera::new(FRAC_PI_3, 0.1, 500.0, true),
                     EntityName("Kamera".into()),
                 ))
                 ;
@@ -170,7 +170,7 @@ fn main() {
             }
 
             if let Some(mut tr) = world.query_mut::<&mut Transform>().get_mut(state.cam_id) {
-                tr.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
+                tr.rotation = Camera::rotation_from(state.cam_yaw, state.cam_pitch);
 
                 // İleri yön paylaşılan kamera yardımcısından; sağ/yukarı ondan türetilir.
                 let forward = Camera::forward_from(state.cam_yaw, state.cam_pitch);
@@ -196,11 +196,6 @@ fn main() {
                 m_pos.y = m_pos.y.clamp(0.5, 9.5);
                 m_pos.z = m_pos.z.clamp(-1.8, 1.8);
                 state.mouse_pos = m_pos;
-            }
-
-            if let Some(mut cam) = world.query_mut::<&mut Camera>().get_mut(state.cam_id) {
-                cam.yaw = state.cam_yaw;
-                cam.pitch = state.cam_pitch;
             }
 
             // Tank sınırlarını Gizmo ile çiz
@@ -242,12 +237,6 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {
-    let q_yaw = Quat::from_axis_angle(Vec3::Y, yaw);
-    let q_pitch = Quat::from_axis_angle(Vec3::X, pitch);
-    q_yaw * q_pitch
-}
-
 /// Sadece sıvı simülasyonunu çalıştıran özel render pass — fizik küpleri devre dışı.
 fn fluid_only_render_pass(
     world: &mut gizmo::core::World,
@@ -276,9 +265,9 @@ fn fluid_only_render_pass(
             if let (Some(cam), Some(trans)) = (cameras.get(active_cam), transforms.get(active_cam))
             {
                 proj = cam.get_projection(aspect);
-                view_mat = cam.get_view(trans.position);
+                view_mat = Camera::view(trans.position, trans.rotation);
                 cam_pos = trans.position;
-                cam_forward = trans.rotation * Vec3::new(0.0, 0.0, -1.0);
+                cam_forward = Camera::front(trans.rotation);
             }
         }
     }

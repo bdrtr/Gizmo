@@ -83,10 +83,7 @@ pub(super) fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
             std::f32::consts::FRAC_PI_4,
             0.1,
             1000.0,
-            -std::f32::consts::FRAC_PI_2, // Look at -Z
-            0.0,
-            true,
-        ),
+            true),
     );
     world.add_component(camera_ent, gizmo::core::EntityName("Main Camera".into()));
 

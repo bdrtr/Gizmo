@@ -419,8 +419,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Game {
 
     // --- kamera (birinci-şahıs topçu) ---
     world.spawn_bundle((
-        Transform::new(CANNON_POS),
-        Camera::new(FRAC_PI_3_LOCAL, 0.1, 4000.0, FRAC_PI_2, 0.08, true),
+        Transform::new(CANNON_POS).with_rotation(Camera::rotation_from(FRAC_PI_2, 0.08)),
+        Camera::new(FRAC_PI_3_LOCAL, 0.1, 4000.0, true),
     ));
 
     let mut g = Game {
@@ -568,7 +568,7 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
     }
 
     // --- nişan (fare + klavye) ---
-    // Bu kamerada "sağ" = dünya -X (get_right=(-sin yaw,0,cos yaw)); yaw ARTINCA
+    // Bu kamerada "sağ" = dünya -X (Camera::right_from=(-sin yaw,0,cos yaw)); yaw ARTINCA
     // bakış sağa döner. Bu yüzden: fare-sağ/D → yaw+=, fare-sol/A → yaw-=.
     let md = input.mouse_delta();
     g.yaw += md.0 * 0.0042; // fare sağ → sağa bak
@@ -746,12 +746,10 @@ fn update(world: &mut World, g: &mut Game, dt: f32, input: &Input) {
 
     // --- kamerayı nişana göre güncelle ---
     {
-        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
-        for (mut tr, mut cam) in q.iter_mut() {
+        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
+        for (mut tr, _cam) in q.iter_mut() {
             tr.position = CANNON_POS;
-            tr.rotation = Quat::from_rotation_y(-g.yaw);
-            cam.yaw = g.yaw;
-            cam.pitch = g.pitch;
+            tr.rotation = Camera::rotation_from(g.yaw, g.pitch);
         }
     }
 }

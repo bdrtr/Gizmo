@@ -50,7 +50,8 @@ pub fn cursor_ray(world: &World) -> Option<Ray> {
     };
     let camera = *cameras.get(id)?;
     drop(cameras);
-    Some(camera.screen_to_ray(screen, size, camera_position(world, id)?))
+    let (at, turn) = camera_pose(world, id)?;
+    Some(camera.screen_to_ray(screen, size, at, turn))
 }
 
 /// Where the ray under the cursor meets the plane through `point` with normal `normal` — the
@@ -95,16 +96,18 @@ pub fn world_to_screen(world: &World, point: Vec3) -> Option<crate::math::Vec2> 
         Some(v) => ((v.x * window.0, v.y * window.1), (v.width * window.0, v.height * window.1)),
         None => ((0.0, 0.0), window),
     };
-    let (x, y) = camera.world_to_screen(point, size, camera_position(world, id)?)?;
+    let (at, turn) = camera_pose(world, id)?;
+    let (x, y) = camera.world_to_screen(point, size, at, turn)?;
     Some(crate::math::Vec2::new(origin.0 + x, origin.1 + y))
 }
 
-/// Where the camera is **this frame** — through its parents, from this frame's `Transform`s
-/// ([`world_position`](crate::systems::transform::world_position)). It used to read
-/// `GlobalTransform` first, which in game code is a frame behind: a camera spawned this frame read
-/// as the origin, and one following a player was a frame late against the frame it renders.
-fn camera_position(world: &World, id: Entity) -> Option<Vec3> {
-    crate::systems::transform::world_position(world, world.live(id)?)
+/// Where the camera is and how it is turned **this frame** — through its parents, from this
+/// frame's `Transform`s ([`world_matrix`](crate::systems::transform::world_matrix)). It used to
+/// read `GlobalTransform` first, which in game code is a frame behind: a camera spawned this frame
+/// read as the origin, and one following a player was a frame late against the frame it renders.
+fn camera_pose(world: &World, id: Entity) -> Option<(Vec3, crate::math::Quat)> {
+    let (_, rotation, at) = crate::systems::transform::world_matrix(world, world.live(id)?)?.to_scale_rotation_translation();
+    Some((at, rotation))
 }
 
 #[cfg(test)]

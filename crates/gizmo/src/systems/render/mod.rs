@@ -839,11 +839,11 @@ fn capture_planar_reflections(
     renderer.planar.retain(&owners.iter().map(|e| e.id()).collect::<Vec<_>>());
     let Some(camera) = camera.filter(|_| !mirrors.is_empty()) else { return };
     // The camera as this frame draws it — shaken, if it shakes — so the mirror shakes with the view.
-    let Some((cam, eye)) = drawn_camera(world, camera) else { return };
+    let Some((cam, eye, turn)) = drawn_camera(world, camera) else { return };
     let projection = cam.get_projection(aspect);
-    let forward = cam.get_front();
-    let up = cam.get_right().cross(forward);
-    let frustum = crate::math::Frustum::from_matrix(&(projection * cam.get_view(eye)));
+    let forward = Camera::front(turn);
+    let up = Camera::right(turn).cross(forward);
+    let frustum = crate::math::Frustum::from_matrix(&(projection * Camera::view(eye, turn)));
 
     // Which mirrors, decided before anything is drawn.
     let visible: Vec<(Entity, gizmo_math::Vec4)> = {
@@ -946,36 +946,43 @@ fn camera_world_position(world: &World, camera: Option<Entity>) -> Vec3 {
     let Some(camera) = camera else {
         return Vec3::ZERO;
     };
-    drawn_camera(world, camera).map_or_else(|| placed_at(world, camera), |(_, at)| at)
+    drawn_camera(world, camera).map_or_else(|| placed_at(world, camera).0, |(_, at, _)| at)
 }
 
-/// The camera `id` as this frame draws it — its `Camera` and where it stands, with this instant's
-/// [`CameraShake`](crate::renderer::components::CameraShake) applied to both ([`shake_view`]).
+/// The camera `id` as this frame draws it — its `Camera`, where it stands and how it is turned,
+/// with this instant's [`CameraShake`](crate::renderer::components::CameraShake) applied to the
+/// pose ([`shake_view`]).
 /// `None` when `id` is not a camera. Every view of a camera is built from this, and it writes
 /// nothing: the camera the game owns stays where the game put it.
-fn drawn_camera(world: &World, id: Entity) -> Option<(Camera, Vec3)> {
+fn drawn_camera(world: &World, id: Entity) -> Option<(Camera, Vec3, gizmo_math::Quat)> {
     let camera = world.query::<&Camera>().get(id).copied()?;
-    Some(shake_view(world, id, &camera, placed_at(world, id)))
+    let (at, turn) = placed_at(world, id);
+    let (at, turn) = shake_view(world, id, at, turn);
+    Some((camera, at, turn))
 }
 
-/// Where entity `id` is: its synced `GlobalTransform`, else its own `Transform`, else the origin.
+/// Where entity `id` is and how it is turned: its synced `GlobalTransform`, else its own
+/// `Transform`, else the origin, unrotated. A camera's aim is this rotation.
 ///
 /// The `Transform` fallback matters: a hand-built camera that only got a Transform + Camera (no
 /// GlobalTransform) was silently skipped and the view stuck at the origin — nothing read the
 /// Transform that gameplay/WASD moved. A custom App may not register the transform systems at all,
 /// so a camera's GlobalTransform is easily missing or a frame stale.
-fn placed_at(world: &World, id: Entity) -> Vec3 {
+fn placed_at(world: &World, id: Entity) -> (Vec3, gizmo_math::Quat) {
     world
         .query::<&gizmo_physics_core::components::GlobalTransform>()
         .get(id)
-        .map(|g| g.matrix.to_scale_rotation_translation().2)
+        .map(|g| {
+            let (_, rotation, at) = g.matrix.to_scale_rotation_translation();
+            (at, rotation)
+        })
         .or_else(|| {
             world
                 .query::<&gizmo_physics_core::components::Transform>()
                 .get(id)
-                .map(|t| t.position)
+                .map(|t| (t.position, t.rotation))
         })
-        .unwrap_or(Vec3::ZERO)
+        .unwrap_or((Vec3::ZERO, gizmo_math::Quat::IDENTITY))
 }
 
 /// The per-frame clocks a game can see, advanced once a frame: tweens, colour tweens, typewriters
@@ -1386,11 +1393,11 @@ fn draw_camera_view(
     // that costs. Where it stands and how it looks come from `drawn_camera`: its synced
     // `GlobalTransform`, else its `Transform` (a camera with no `GlobalTransform` was silently
     // stuck at the origin), with this instant's shake — read, never written into the camera.
-    if let Some((cam, pos)) = camera.and_then(|id| drawn_camera(world, id)) {
+    if let Some((cam, pos, turn)) = camera.and_then(|id| drawn_camera(world, id)) {
         proj = cam.get_projection(aspect);
-        view_mat = cam.get_view(pos);
+        view_mat = Camera::view(pos, turn);
         cam_pos = pos;
-        cam_forward = cam.get_front();
+        cam_forward = Camera::front(turn);
         cam_exposure = cam.exposure;
         cam_near = cam.near;
         cam_far = cam.far;
@@ -6667,8 +6674,8 @@ mod golden_render_tests {
             grade.motion_blur = shutter;
             world.add_component(cam, grade);
             let first = render_world(&mut renderer, &mut world).await;
-            if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(cam) {
-                c.yaw += turn;
+            if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(cam) {
+                t.rotation = Camera::rotation_from(-std::f32::consts::FRAC_PI_2 + turn, 0.0);
             }
             let second = render_world(&mut renderer, &mut world).await;
             (first, second)
@@ -14725,7 +14732,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
             let watcher = world.spawn();
             world.add_component(watcher, Transform::new(Vec3::new(10.0, 0.0, 4.0)));
             world.add_component(watcher, GlobalTransform::default());
-            world.add_component(watcher, Camera::new(60_f32.to_radians(), 0.1, 100.0, -std::f32::consts::FRAC_PI_2, 0.0, false));
+            world.add_component(watcher, Camera::new(60_f32.to_radians(), 0.1, 100.0, false));
             world.add_component(watcher, CameraTarget::new(&renderer.gpu_context(), 64, 64));
             world.spawn_bundle(DirectionalLightBundle::default());
             load(&mut world, &renderer);

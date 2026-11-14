@@ -296,8 +296,9 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
         let back = t.rotation * Vec3::new(0.0, 0.0, 1.0);
         let want = t.position + Vec3::new(back.x, 0.0, back.z).normalize_or_zero() * 11.0 + Vec3::Y * 5.0;
         c.position = c.position.lerp(want, (dt * 3.0).min(1.0));
-        let look = (t.position - c.position).normalize_or_zero();
-        c.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, look);
+        if let Some(aim) = Camera::looking_at(c.position, t.position) {
+            c.rotation = aim;
+        }
     }
     let speed = world.query::<&VehicleController>().get(game.car).map_or(0.0, |c| c.current_speed_kmh);
     let dist = Vec2::new(t.position.x - target.x, t.position.z - target.z).length();

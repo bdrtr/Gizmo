@@ -69,15 +69,12 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
 
     // Kamera
     world.spawn_bundle((
-        Transform::new(Vec3::new(8.0, 6.0, 12.0)).with_rotation(Quat::from_rotation_x(-0.3)),
+        Transform::new(Vec3::new(8.0, 6.0, 12.0)).with_rotation(Camera::rotation_from(-PI / 4.0, -0.3)),
         Camera::new(
             std::f32::consts::FRAC_PI_3,
             0.1,
             5000.0,
-            -PI / 4.0,
-            -0.3,
-            true,
-        ),
+            true),
         gizmo::core::EntityName("Main Camera".into()),
     ));
 
@@ -276,8 +273,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
     let mut cam_forward = Vec3::new(0.0, 0.0, -1.0);
 
     {
-        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
-        for (mut transform, mut camera) in q.iter_mut() {
+        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
+        for (mut transform, _camera) in q.iter_mut() {
             let sensitivity = 0.002;
             let (dx, dy) = input.mouse_delta();
 
@@ -293,14 +290,8 @@ fn update(world: &mut World, state: &mut DemoState, dt: f32, input: &Input) {
             let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
             let up = Vec3::new(0.0, 1.0, 0.0);
 
-            // Quaternion oluştur
-            let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + std::f32::consts::FRAC_PI_2);
-            let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
-            transform.rotation = yaw_rot * pitch_rot;
-
-            // DİKKAT: Gizmo renderer view matrix'ini Camera objesinden alıyor. Bu yüzden Camera yaw ve pitch değerlerini güncellemeliyiz!
-            camera.yaw = state.camera_yaw;
-            camera.pitch = state.camera_pitch;
+            // Kameranın bakışı Transform'un dönüşü — görüş matrisi oradan kuruluyor.
+            transform.rotation = Camera::rotation_from(state.camera_yaw, state.camera_pitch);
 
             let speed = state.camera_speed
                 * dt

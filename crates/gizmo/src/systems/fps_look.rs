@@ -15,7 +15,7 @@
 //! let mut world = World::new();
 //! let cam = world.spawn();
 //! world.add_component(cam, Transform::new(Vec3::ZERO));
-//! world.add_component(cam, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+//! world.add_component(cam, Camera::new(1.0, 0.1, 100.0, true));
 //! world.add_component(cam, FpsLook::new().with_move_speed(8.0)); // mouse-look + WASD flight
 //!
 //! // In an application `app.add_plugin(FpsLookPlugin)` drives the system every frame; here
@@ -28,9 +28,10 @@
 //! let looks = world.query::<&FpsLook>();
 //! let look = looks.get(cam).unwrap();
 //! assert!((look.yaw - 100.0 * look.sensitivity).abs() < 1e-6); // mouse right -> yaw+
-//! // The camera view stays in sync: the renderer uses `Camera.yaw/pitch`.
-//! let cams = world.query::<&Camera>();
-//! assert_eq!(cams.get(cam).unwrap().yaw, look.yaw);
+//! // The camera looks where the controller does: its aim is the Transform's rotation.
+//! let transforms = world.query::<&Transform>();
+//! let front = Camera::front(transforms.get(cam).unwrap().rotation);
+//! assert!((front - look.forward()).length() < 1e-5);
 //!
 //! // when firing:
 //! let dir = look.forward();
@@ -39,14 +40,14 @@
 
 use gizmo_core::input::Input;
 use gizmo_core::world::World;
-use gizmo_math::{Quat, Vec3};
+use gizmo_math::Vec3;
 use gizmo_physics_core::Transform;
 use gizmo_renderer::components::Camera;
 use winit::keyboard::KeyCode;
 
 /// The mouse-look controller added to a camera entity. `yaw`/`pitch` are HELD in this
-/// component (the single source of truth); every frame the system processes the mouse/WASD
-/// and writes to `Camera` + `Transform`. The aim direction is read with
+/// component; every frame the system processes the mouse/WASD and writes the entity's
+/// `Transform` — its position and the rotation that aims it ([`Camera::rotation_from`]). The aim direction is read with
 /// [`forward`](Self::forward).
 #[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct FpsLook {
@@ -265,13 +266,9 @@ impl gizmo_core::system::System for FpsLookSystem {
         {
             // SAFETY: exclusive sistem; scheduler disjoint mutable erişim garanti eder.
             let mut q = unsafe {
-            world.query_unchecked::<(
-                &mut FpsLook,
-                &mut Camera,
-                &mut Transform,
-            )>()
+            world.query_unchecked::<(&mut FpsLook, &mut Transform)>()
         };
-            for (mut look, mut cam, mut t) in q.iter_mut() {
+            for (mut look, mut t) in q.iter_mut() {
                 if look.enabled {
                     // The gate covers the MOUSE only. A stick has no cursor to fight with, so
                     // requiring a held button of it would be a restriction with nothing behind
@@ -306,12 +303,8 @@ impl gizmo_core::system::System for FpsLookSystem {
                     }
                 }
 
-                // Kamera görüşünün doğruluk kaynağı: Camera.yaw/pitch (renderer get_view
-                // bunları kullanır). Transform.rotation görüşü ETKİLEMEZ ama tutarlılık +
-                // çocuk-entity bağlama için yaw'a göre ayarlanır.
-                cam.yaw = look.yaw;
-                cam.pitch = look.pitch;
-                t.rotation = Quat::from_rotation_y(-look.yaw);
+                // The camera's aim is its rotation — and a child (a weapon in hand) turns with it.
+                t.rotation = Camera::rotation_from(look.yaw, look.pitch);
                 t.update_local_matrix();
             }
         }
@@ -412,7 +405,7 @@ mod tests {
             let mut world = World::new();
             let cam = world.spawn();
             world.add_component(cam, Transform::new(Vec3::ZERO));
-            world.add_component(cam, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+            world.add_component(cam, Camera::new(1.0, 0.1, 100.0, true));
             world.add_component(cam, FpsLook::new().with_move_speed(10.0));
 
             let mut input = Input::new();
@@ -445,7 +438,7 @@ mod tests {
             let mut world = World::new();
             let cam = world.spawn();
             world.add_component(cam, Transform::new(Vec3::ZERO));
-            world.add_component(cam, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+            world.add_component(cam, Camera::new(1.0, 0.1, 100.0, true));
             world.add_component(cam, look);
 
             let mut input = Input::new();
@@ -491,7 +484,7 @@ mod tests {
             let mut world = World::new();
             let cam = world.spawn();
             world.add_component(cam, Transform::new(Vec3::ZERO));
-            world.add_component(cam, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+            world.add_component(cam, Camera::new(1.0, 0.1, 100.0, true));
             world.add_component(cam, look);
             let mut input = Input::new();
             input.on_key_pressed(MoveKeys::WASD.forward);
@@ -545,15 +538,14 @@ mod tests {
         let mut world = World::new();
         let e = world.spawn();
         world.add_component(e, Transform::new(Vec3::ZERO));
-        world.add_component(e, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+        world.add_component(e, Camera::new(1.0, 0.1, 100.0, true));
         world.add_component(e, FpsLook::new().looking(1.2, 0.4));
 
         // Input resource'u yok → mouse-delta 0; sistem yalnız senkron yapar.
         let mut sys = FpsLookSystem;
         sys.run(&world, 1.0 / 60.0);
 
-        let cams = world.query::<&Camera>();
-        let cam = cams.get(e).unwrap();
-        assert!((cam.yaw - 1.2).abs() < 1e-5 && (cam.pitch - 0.4).abs() < 1e-5);
+        let (yaw, pitch) = Camera::yaw_pitch_of(world.query::<&Transform>().get(e).unwrap().rotation);
+        assert!((yaw - 1.2).abs() < 1e-5 && (pitch - 0.4).abs() < 1e-5, "{yaw} {pitch}");
     }
 }

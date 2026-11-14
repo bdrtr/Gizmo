@@ -349,7 +349,7 @@ fn camera_controls(world: &mut World, input: &Input) {
     if zoom == 1.0 && pan.is_none() {
         return;
     }
-    let Some(cam) = world.query::<(Entity, &Camera)>().iter().next().map(|(entity, c)| (entity, c.get_front())) else { return };
+    let Some(cam) = world.query::<(Entity, &Transform, &Camera)>().iter().next().map(|(entity, t, _)| (entity, Camera::front(t.rotation))) else { return };
     let (id, forward) = cam;
     let mut transforms = world.query_mut::<&mut Transform>();
     let Some(mut t) = transforms.get_mut(id) else { return };

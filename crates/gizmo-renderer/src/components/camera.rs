@@ -1,4 +1,4 @@
-use gizmo_math::Vec3;
+use gizmo_math::{Quat, Vec3};
 
 /// How a [`Camera`] projects the scene onto the screen.
 #[non_exhaustive]
@@ -58,10 +58,16 @@ impl ProjectionMode {
 
 /// A 3-D camera: where it looks, how far it sees, and how the result is projected.
 ///
-/// The camera's **position** is not here — it comes from the entity's `Transform`, which is why
-/// [`Camera::get_view`] takes one. Its orientation, though, is: yaw and pitch rather than a
-/// quaternion, because the controllers that drive a camera all think in those two angles and
-/// round-tripping them through a quaternion loses the roll-free invariant.
+/// Where the camera **is and where it looks** are not here: both come from the entity's
+/// transform — its `GlobalTransform` once synced, else its `Transform` — which is why
+/// [`Camera::view`] takes a position and a rotation. An unrotated camera looks down `−Z` with `+Y`
+/// up, and a camera on a car's child entity turns with the car.
+///
+/// Until 2026-11-15 the aim was this component's own `yaw`/`pitch` and the transform's rotation
+/// was ignored, so writing `Transform::rotation` on a camera (four games did) silently aimed
+/// nothing. A controller that thinks in those two angles keeps them itself and writes
+/// [`Camera::rotation_from`]`(yaw, pitch)` into the rotation; [`Camera::yaw_pitch_of`] reads them
+/// back.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Camera {
     /// Vertical field of view, in radians. Perspective only.
@@ -71,11 +77,6 @@ pub struct Camera {
     /// The far clip plane. The near/far ratio is what depth precision costs, so a near plane of
     /// 0.001 with a far of 10 000 will z-fight.
     pub far: f32,
-    /// Rotation about the world Y axis, in radians.
-    pub yaw: f32,
-    /// Rotation above/below the horizon, in radians, clamped just short of ±90° — at exactly
-    /// vertical the view basis is degenerate.
-    pub pitch: f32,
     /// Exposure multiplier applied to the whole frame, before tone mapping.
     pub exposure: f32,
     /// Whether this is the camera the frame is rendered from. With several primaries the first
@@ -189,8 +190,8 @@ impl Default for Viewport {
 
 impl Camera {
     /// A perspective camera, with every argument corrected into a usable range: a non-positive
-    /// FOV or near plane becomes 0.001, a far plane is pushed to at least `near + 0.1`, yaw is
-    /// wrapped into one turn and pitch clamped just short of vertical.
+    /// FOV or near plane becomes 0.001, and a far plane is pushed to at least `near + 0.1`. Where
+    /// it looks is its transform's rotation — see [`Camera::rotation_from`].
     ///
     /// Corrected rather than rejected because these come from scene files and editor fields as
     /// often as from code, and a camera that renders nothing is a harder thing to diagnose than
@@ -199,25 +200,16 @@ impl Camera {
         mut fov: f32,
         mut near: f32,
         mut far: f32,
-        mut yaw: f32,
-        mut pitch: f32,
         primary: bool,
     ) -> Self {
         fov = fov.max(0.001);
         near = near.max(0.001);
         far = far.max(near + 0.1);
-        yaw %= std::f32::consts::TAU;
-        pitch = pitch.clamp(
-            -std::f32::consts::PI / 2.0 + 0.001,
-            std::f32::consts::PI / 2.0 - 0.001,
-        );
 
         Self {
             fov,
             near,
             far,
-            yaw,
-            pitch,
             exposure: 1.0, // Varsayılan pozlama 1.0
             primary,
             projection: ProjectionMode::Perspective,
@@ -265,18 +257,6 @@ impl Camera {
         };
     }
 
-    /// Tidies the angles to stop them accumulating without bound: yaw modulo TAU, pitch
-    /// clamped.
-    /// Wraps yaw into one turn and clamps pitch away from vertical — the same correction
-    /// [`Camera::new`] applies, for callers that have written the fields directly.
-    pub fn sanitize_angles(&mut self) {
-        self.yaw %= std::f32::consts::TAU;
-        self.pitch = self.pitch.clamp(
-            -std::f32::consts::PI / 2.0 + 0.001,
-            std::f32::consts::PI / 2.0 - 0.001,
-        );
-    }
-
     /// The projection matrix for a viewport of the given aspect ratio (width / height),
     /// perspective or orthographic according to [`Self::projection`].
     pub fn get_projection(&self, aspect: f32) -> gizmo_math::Mat4 {
@@ -301,16 +281,55 @@ impl Camera {
         }
     }
 
-    /// The view matrix for a camera at `position` looking along its yaw/pitch. The position is
-    /// taken as an argument because it lives on the entity's `Transform`, not here.
-    pub fn get_view(&self, position: Vec3) -> gizmo_math::Mat4 {
-        let front = self.get_front();
-        let right = self.get_right();
-        let up = right.cross(front);
-        gizmo_math::Mat4::look_at_rh(position, position + front, up)
+    /// The view matrix of a camera at `position` turned by `rotation` — its transform's. An
+    /// unrotated camera looks down `−Z` with `+Y` up.
+    #[must_use]
+    pub fn view(position: Vec3, rotation: Quat) -> gizmo_math::Mat4 {
+        let rotation = rotation.normalize();
+        gizmo_math::Mat4::look_at_rh(position, position + Self::front(rotation), rotation * Vec3::Y)
     }
 
-    /// The world-space forward (aim) vector from yaw/pitch. [`get_front`](Self::get_front) AND the first-person
+    /// The direction a camera turned by `rotation` looks: `rotation · −Z`.
+    #[must_use]
+    pub fn front(rotation: Quat) -> Vec3 {
+        (rotation * Vec3::NEG_Z).normalize()
+    }
+
+    /// The right of a camera turned by `rotation`: `rotation · +X` — horizontal when the
+    /// rotation came from [`rotation_from`](Self::rotation_from).
+    #[must_use]
+    pub fn right(rotation: Quat) -> Vec3 {
+        (rotation * Vec3::X).normalize()
+    }
+
+    /// The rotation that aims a camera at `yaw`/`pitch` with no roll — what a controller that
+    /// thinks in those angles writes into the camera's `Transform::rotation`. Its front is
+    /// [`forward_from`](Self::forward_from)`(yaw, pitch)` and its right
+    /// [`right_from`](Self::right_from)`(yaw)`; pitch is kept just short of vertical.
+    #[must_use]
+    pub fn rotation_from(yaw: f32, pitch: f32) -> Quat {
+        let pitch = pitch.clamp(-std::f32::consts::FRAC_PI_2 + 0.001, std::f32::consts::FRAC_PI_2 - 0.001);
+        Quat::from_rotation_y(-yaw - std::f32::consts::FRAC_PI_2) * Quat::from_rotation_x(pitch)
+    }
+
+    /// The rotation that aims a camera at `position` toward `target`, `+Y` kept up — `None` when
+    /// the two are the same point. Straight up or down keeps the yaw of `−Z`.
+    #[must_use]
+    pub fn looking_at(position: Vec3, target: Vec3) -> Option<Quat> {
+        let (yaw, pitch) = Self::yaw_pitch_from_forward(target - position, -std::f32::consts::FRAC_PI_2)?;
+        Some(Self::rotation_from(yaw, pitch))
+    }
+
+    /// The yaw and pitch a rotation aims at — [`rotation_from`](Self::rotation_from)'s inverse,
+    /// with any roll dropped. Looking straight up or down, the yaw comes from the camera's right.
+    #[must_use]
+    pub fn yaw_pitch_of(rotation: Quat) -> (f32, f32) {
+        let right = Self::right(rotation);
+        let fallback = (-right.x).atan2(right.z);
+        Self::yaw_pitch_from_forward(Self::front(rotation), fallback).unwrap_or((fallback, 0.0))
+    }
+
+    /// The world-space forward (aim) vector from yaw/pitch. [`rotation_from`](Self::rotation_from) AND the first-person
     /// camera controller (`FpsLook`, gizmo-engine::systems) share it, so the "aim direction"
     /// maths is not re-written BY HAND in every demo and game.
     pub fn forward_from(yaw: f32, pitch: f32) -> Vec3 {
@@ -366,16 +385,6 @@ impl Camera {
         Vec3::new(-yaw.sin(), 0.0, yaw.cos())
     }
 
-    /// The world-space direction this camera is aimed.
-    pub fn get_front(&self) -> Vec3 {
-        Self::forward_from(self.yaw, self.pitch)
-    }
-
-    /// The world-space right vector, horizontal regardless of pitch.
-    pub fn get_right(&self) -> Vec3 {
-        Self::right_from(self.yaw)
-    }
-
     /// Build a world-space picking ray from a screen/cursor pixel through this
     /// camera — the engine's screen→world unproject. Combine with
     /// `PhysicsWorld::raycast` (or a plane intersection) to pick / drag the object
@@ -384,8 +393,7 @@ impl Camera {
     /// * `screen` — cursor position in pixels, origin **top-left** (matches
     ///   [`gizmo_core`]'s `Input::mouse_position`).
     /// * `viewport` — framebuffer size in the same pixels (e.g. `WindowInfo`).
-    /// * `world_pos` — the camera's world position (its `Transform.position`,
-    ///   since the view matrix takes the position separately).
+    /// * `world_pos`, `rotation` — the camera's world pose (its transform's; see [`Camera`]).
     ///
     /// The heavy lifting (NDC → world via the inverse view-projection, with
     /// singular-matrix / degenerate-direction guards) is [`gizmo_math::Ray::from_ndc`].
@@ -394,23 +402,25 @@ impl Camera {
         screen: (f32, f32),
         viewport: (f32, f32),
         world_pos: Vec3,
+        rotation: Quat,
     ) -> gizmo_math::Ray {
         let (w, h) = (viewport.0.max(1.0), viewport.1.max(1.0));
         // Pixel → NDC: x∈[-1,1] rightward, y∈[-1,1] UPward (flip the top-left screen y).
         let ndc = gizmo_math::Vec2::new((screen.0 / w) * 2.0 - 1.0, 1.0 - (screen.1 / h) * 2.0);
-        let view_proj_inv = (self.get_projection(w / h) * self.get_view(world_pos)).inverse();
+        let view_proj_inv = (self.get_projection(w / h) * Self::view(world_pos, rotation)).inverse();
         gizmo_math::Ray::from_ndc(ndc, view_proj_inv)
     }
 
     /// The other way: the pixel a world-space `point` lands on — [`screen_to_ray`](Self::screen_to_ray)'s
-    /// inverse, with the same `viewport` and `world_pos` arguments and the same top-left origin.
+    /// inverse, with the same `viewport`, `world_pos` and `rotation` arguments and the same top-left
+    /// origin.
     ///
     /// `None` when the point is behind the camera (or on its plane), where no pixel shows it. A
     /// point in front but outside the view gets a pixel outside `0..viewport`, which is what an
     /// off-screen marker wants; test the bounds for "is it on screen".
-    pub fn world_to_screen(&self, point: Vec3, viewport: (f32, f32), world_pos: Vec3) -> Option<(f32, f32)> {
+    pub fn world_to_screen(&self, point: Vec3, viewport: (f32, f32), world_pos: Vec3, rotation: Quat) -> Option<(f32, f32)> {
         let (w, h) = (viewport.0.max(1.0), viewport.1.max(1.0));
-        let clip = self.get_projection(w / h) * self.get_view(world_pos) * point.extend(1.0);
+        let clip = self.get_projection(w / h) * Self::view(world_pos, rotation) * point.extend(1.0);
         if clip.w <= 1e-6 {
             return None;
         }
@@ -554,18 +564,11 @@ mod tests {
 
     #[test]
     fn screen_to_ray_center_points_along_camera_front() {
-        // Camera at (0,0,10) looking down -Z (yaw = -90°, pitch = 0 → front = (0,0,-1)).
-        let cam = Camera::new(
-            std::f32::consts::FRAC_PI_2,
-            0.1,
-            100.0,
-            -std::f32::consts::FRAC_PI_2,
-            0.0,
-            true,
-        );
+        // Camera at (0,0,10), unrotated: looking down -Z.
+        let cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, true);
         let pos = Vec3::new(0.0, 0.0, 10.0);
         // Centre pixel of a 200x100 viewport → NDC (0,0) → ray along the camera front.
-        let ray = cam.screen_to_ray((100.0, 50.0), (200.0, 100.0), pos);
+        let ray = cam.screen_to_ray((100.0, 50.0), (200.0, 100.0), pos, Quat::IDENTITY);
         assert!((ray.direction.z - (-1.0)).abs() < 1e-4, "centre ray looks -Z, got {:?}", ray.direction);
         assert!(ray.direction.x.abs() < 1e-4 && ray.direction.y.abs() < 1e-4);
         assert!((ray.direction.length() - 1.0).abs() < 1e-5, "direction normalized");
@@ -573,42 +576,56 @@ mod tests {
 
     #[test]
     fn screen_to_ray_offset_pixels_tilt_the_ray() {
-        let cam = Camera::new(
-            std::f32::consts::FRAC_PI_2,
-            0.1,
-            100.0,
-            -std::f32::consts::FRAC_PI_2,
-            0.0,
-            true,
-        );
+        let cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, true);
         let pos = Vec3::new(0.0, 0.0, 10.0);
         // Right of centre → ray tilts +X; below centre (larger screen-y) → ray tilts -Y.
-        let right = cam.screen_to_ray((150.0, 50.0), (200.0, 100.0), pos);
+        let right = cam.screen_to_ray((150.0, 50.0), (200.0, 100.0), pos, Quat::IDENTITY);
         assert!(right.direction.x > 0.05, "right pixel tilts +X, got {:?}", right.direction);
-        let down = cam.screen_to_ray((100.0, 90.0), (200.0, 100.0), pos);
+        let down = cam.screen_to_ray((100.0, 90.0), (200.0, 100.0), pos, Quat::IDENTITY);
         assert!(down.direction.y < -0.05, "lower pixel tilts -Y, got {:?}", down.direction);
     }
 
     #[test]
     fn new_sanitizes_out_of_range_inputs() {
-        // Degenerate fov/near, far ≤ near, huge yaw, over-vertical pitch.
-        let cam = Camera::new(
-            -1.0,
-            -1.0,
-            -5.0,
-            10.0 * std::f32::consts::TAU + 0.5,
-            5.0,
-            true,
-        );
+        // Degenerate fov/near, far ≤ near.
+        let cam = Camera::new(-1.0, -1.0, -5.0, true);
         assert!(cam.fov >= 0.001);
         assert!(cam.near >= 0.001);
         assert!(cam.far >= cam.near + 0.1, "far must sit past near, got {}", cam.far);
-        assert!(cam.yaw.abs() <= std::f32::consts::TAU, "yaw wrapped, got {}", cam.yaw);
-        assert!(
-            cam.pitch < std::f32::consts::FRAC_PI_2 && cam.pitch > -std::f32::consts::FRAC_PI_2,
-            "pitch clamped below vertical, got {}",
-            cam.pitch
-        );
+    }
+
+    /// The rotation a yaw/pitch controller writes aims where `forward_from` says, keeps its right
+    /// where `right_from` says (no roll), and reads back as the same angles — so the view a
+    /// rotation gives is the view the old yaw/pitch fields gave.
+    #[test]
+    fn rotation_from_aims_like_the_angles_and_reads_back() {
+        for (yaw, pitch) in [(0.0, 0.0), (-std::f32::consts::FRAC_PI_2, 0.0), (0.7, 0.3), (2.9, -1.2), (-2.0, 1.4)] {
+            let r = Camera::rotation_from(yaw, pitch);
+            let f = Camera::forward_from(yaw, pitch);
+            assert!((Camera::front(r) - f).length() < 1e-5, "front at {yaw},{pitch}: {:?} vs {f:?}", Camera::front(r));
+            assert!((Camera::right(r) - Camera::right_from(yaw)).length() < 1e-5, "right at {yaw},{pitch}");
+            let (y2, p2) = Camera::yaw_pitch_of(r);
+            assert!((Camera::forward_from(y2, p2) - f).length() < 1e-4, "round trip at {yaw},{pitch}: {y2},{p2}");
+            // The old `get_view`: look_at along forward_from with up = right × front.
+            let old = gizmo_math::Mat4::look_at_rh(Vec3::ONE, Vec3::ONE + f, Camera::right_from(yaw).cross(f));
+            let new = Camera::view(Vec3::ONE, r);
+            assert!(old.abs_diff_eq(new, 1e-5), "view at {yaw},{pitch}");
+        }
+        assert!(Camera::rotation_from(0.0, 0.0).y.is_finite());
+        assert!(Camera::rotation_from(-std::f32::consts::FRAC_PI_2, 0.0).angle_between(Quat::IDENTITY) < 1e-3, "yaw −90° is unrotated");
+    }
+
+    /// `looking_at` aims at the target, straight down keeps a usable rotation, and no direction is
+    /// `None`.
+    #[test]
+    fn looking_at_aims_at_the_target() {
+        let at = Vec3::new(1.0, 2.0, 3.0);
+        for target in [Vec3::ZERO, Vec3::new(5.0, 2.0, 3.0), Vec3::new(1.0, -10.0, 3.0)] {
+            let r = Camera::looking_at(at, target).unwrap();
+            assert!((Camera::front(r) - (target - at).normalize()).length() < 1e-2, "{target:?}");
+            assert!(Camera::right(r).y.abs() < 1e-5, "no roll");
+        }
+        assert!(Camera::looking_at(at, at).is_none());
     }
 
     #[test]
@@ -634,7 +651,7 @@ mod tests {
 
     #[test]
     fn toggle_projection_is_an_involution_matching_the_fov_framing() {
-        let mut cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, 0.0, 0.0, true);
+        let mut cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, true);
         assert!(matches!(cam.projection, ProjectionMode::Perspective));
 
         cam.toggle_projection(10.0);
@@ -650,22 +667,12 @@ mod tests {
         assert!(matches!(cam.projection, ProjectionMode::Perspective));
     }
 
-    #[test]
-    fn sanitize_angles_wraps_yaw_and_clamps_pitch() {
-        let mut cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, 0.0, 0.0, true);
-        cam.yaw = 100.0;
-        cam.pitch = 5.0;
-        cam.sanitize_angles();
-        assert!(cam.yaw.abs() <= std::f32::consts::TAU);
-        assert!(cam.pitch < std::f32::consts::FRAC_PI_2 && cam.pitch > -std::f32::consts::FRAC_PI_2);
-    }
-
     /// The 3-D camera's projection is finite in both modes — and orthographic is the mode a 2-D
     /// view uses, which is why the separate `Camera2D` type could go: it re-implemented this with
     /// a zoom instead of a height, and no draw path ever read it.
     #[test]
     fn projections_are_finite_in_both_modes() {
-        let mut cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, 0.0, 0.0, true);
+        let mut cam = Camera::new(std::f32::consts::FRAC_PI_2, 0.1, 100.0, true);
         assert!(cam.get_projection(1.777).to_cols_array().iter().all(|v| v.is_finite()));
 
         cam.toggle_projection(10.0); // the distance the ortho height is derived from
@@ -690,7 +697,7 @@ mod tests {
             assert!((e.x - 30.0).abs() < 1e-3 || (e.y - 16.0).abs() < 1e-3, "{e:?}");
         }
         // The projection agrees with the extent: the box corner lands on the NDC edge or inside.
-        let mut cam = Camera::new(1.0, 0.1, 100.0, -std::f32::consts::FRAC_PI_2, 0.0, true);
+        let mut cam = Camera::new(1.0, 0.1, 100.0, true);
         cam.projection = mode;
         let tall = 948.0 / 1028.0;
         let p = cam.get_projection(tall) * gizmo_math::Vec4::new(15.0, 8.0, -1.0, 1.0);
@@ -706,7 +713,7 @@ mod tests {
     /// The fit mode toggles back to perspective like the plain one, and survives a scene round trip.
     #[test]
     fn orthographic_fit_toggles_and_serializes() {
-        let mut cam = Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true);
+        let mut cam = Camera::new(1.0, 0.1, 100.0, true);
         cam.projection = ProjectionMode::OrthographicFit { width: 4.0, height: 3.0 };
         let text = ron::to_string(&cam).unwrap();
         assert_eq!(ron::from_str::<Camera>(&text).unwrap(), cam);

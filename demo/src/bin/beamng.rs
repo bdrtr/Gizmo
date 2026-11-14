@@ -29,7 +29,7 @@ use gizmo::renderer::gpu_physics::fem::{
     GpuFemCollider, GpuFemParams, GpuFemSystem, GpuSoftBodyNode, GpuTetrahedron,
 };
 use gizmo::renderer::gpu_types::Vertex;
-use std::f32::consts::{FRAC_PI_2, FRAC_PI_3, PI};
+use std::f32::consts::{FRAC_PI_3, PI};
 use wgpu::util::DeviceExt;
 
 struct BeamNGState {
@@ -345,8 +345,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> BeamNGState {
 
     // Kamera (serbest uçuş)
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 5.0, 15.0)),
-        Camera::new(FRAC_PI_3, 0.1, 5000.0, 0.0, 0.0, true),
+        Transform::new(Vec3::new(0.0, 5.0, 15.0)).with_rotation(Camera::rotation_from(0.0, 0.0)),
+        Camera::new(FRAC_PI_3, 0.1, 5000.0, true),
     ));
 
     // Zemin (tek büyük quad, elle kurulu vertex tamponu + damalı doku)
@@ -635,16 +635,12 @@ fn update(world: &mut World, state: &mut BeamNGState, dt: f32, input: &Input) {
     state.camera_pos += cam_move * speed * dt;
 
     {
-        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
-        let yaw_rot = Quat::from_rotation_y(-state.camera_yaw + FRAC_PI_2);
-        let pitch_rot = Quat::from_rotation_x(state.camera_pitch);
-        let rot = yaw_rot * pitch_rot;
+        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
+        let rot = Camera::rotation_from(state.camera_yaw, state.camera_pitch);
 
-        for (mut trans, mut cam) in q.iter_mut() {
+        for (mut trans, _cam) in q.iter_mut() {
             trans.position = state.camera_pos;
             trans.rotation = rot;
-            cam.yaw = state.camera_yaw;
-            cam.pitch = state.camera_pitch;
         }
     }
 }

@@ -25,7 +25,7 @@ use gizmo::physics::world::PhysicsWorld;
 use gizmo::prelude::*;
 use gizmo::simple::{SceneBuilder, SimpleSceneState};
 use gizmo::systems;
-use std::f32::consts::{FRAC_PI_2, PI};
+use std::f32::consts::PI;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Row {
@@ -417,7 +417,7 @@ fn rotate_shapes(
 }
 
 fn camera_movement(
-    mut q: Query<(&mut Transform, &mut gizmo::renderer::components::Camera)>,
+    mut q: Query<(&mut Transform, &gizmo::renderer::components::Camera)>,
     mut state: ResMut<DemoState>,
     input: Res<Input>,
     time: Res<gizmo::core::time::Time>,
@@ -464,15 +464,11 @@ fn camera_movement(
     }
     state.simple.camera_pos += cam_move * speed * dt;
 
-    let yaw_rot = Quat::from_rotation_y(-state.simple.camera_yaw + FRAC_PI_2);
-    let pitch_rot = Quat::from_rotation_x(state.simple.camera_pitch);
-    let rot = yaw_rot * pitch_rot;
+    let rot = Camera::rotation_from(state.simple.camera_yaw, state.simple.camera_pitch);
 
-    for (mut trans, mut cam) in q.iter_mut() {
+    for (mut trans, _cam) in q.iter_mut() {
         trans.position = state.simple.camera_pos;
         trans.rotation = rot;
-        cam.yaw = state.simple.camera_yaw;
-        cam.pitch = state.simple.camera_pitch;
     }
 }
 
@@ -522,18 +518,18 @@ fn draw_cursor(
     let mut cam_data = None;
     for (trans, cam) in q_cam.iter() {
         if cam.primary {
-            cam_data = Some((trans.position, cam));
+            cam_data = Some((trans.position, trans.rotation, cam));
             break;
         }
     }
 
-    if let Some((cam_pos, cam)) = cam_data {
+    if let Some((cam_pos, cam_rot, cam)) = cam_data {
         let ndc_x = (mouse_x / win_info.width) * 2.0 - 1.0;
         let ndc_y = 1.0 - (mouse_y / win_info.height) * 2.0;
 
         let aspect = win_info.aspect_ratio();
         let proj = cam.get_projection(aspect);
-        let view = cam.get_view(cam_pos);
+        let view = Camera::view(cam_pos, cam_rot);
         let view_proj_inv = (proj * view).inverse();
 
         let near_ndc = Vec4::new(ndc_x, ndc_y, 0.0, 1.0);

@@ -89,8 +89,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
     // burada elle yazılıydı — ve `FpsLook` motorun sunduğu, hiç kimsenin kullanmadığı bileşendi.
     // Sağ tık kapısı ile koşma, tam da uymadığı için 2026-08-18'de kontrolcüye eklendi.
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 10.0, 20.0)).with_rotation(Quat::from_rotation_x(-0.2)),
-        Camera::new(FRAC_PI_3, 0.1, 5000.0, -FRAC_PI_2, -0.2, true),
+        Transform::new(Vec3::new(0.0, 10.0, 20.0)).with_rotation(Camera::rotation_from(-FRAC_PI_2, -0.2)),
+        Camera::new(FRAC_PI_3, 0.1, 5000.0, true),
         FpsLook::new()
             .looking(-FRAC_PI_2, -0.2)
             .with_sensitivity(0.002)

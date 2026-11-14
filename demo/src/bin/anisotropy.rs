@@ -858,15 +858,11 @@ fn camera_orbit(
         camera_settings.pos += cam_move * speed * dt;
     }
 
-    let yaw_rot = Quat::from_rotation_y(-camera_settings.yaw + std::f32::consts::FRAC_PI_2);
-    let pitch_rot = Quat::from_rotation_x(camera_settings.pitch);
-    let rot = yaw_rot * pitch_rot;
+    let rot = Camera::rotation_from(camera_settings.yaw, camera_settings.pitch);
 
-    for (mut trans, mut cam) in q_cam.iter_mut() {
+    for (mut trans, _cam) in q_cam.iter_mut() {
         trans.position = camera_settings.pos;
         trans.rotation = rot;
-        cam.yaw = camera_settings.yaw;
-        cam.pitch = camera_settings.pitch;
     }
 }
 

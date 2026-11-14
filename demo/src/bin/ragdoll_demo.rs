@@ -62,8 +62,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> RagdollDemo {
 
     // Kamera
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 4.5, 13.0)),
-        Camera::new(FRAC_PI_3, 0.1, 500.0, -FRAC_PI_2, -0.25, true),
+        Transform::new(Vec3::new(0.0, 4.5, 13.0)).with_rotation(Camera::rotation_from(-FRAC_PI_2, -0.25)),
+        Camera::new(FRAC_PI_3, 0.1, 500.0, true),
     ));
 
     // Zemin (tek statik kutu; üst yüzü y=0) — tekrar eden nesne değil → Prefab yerine spawn_bundle.

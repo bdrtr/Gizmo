@@ -303,7 +303,7 @@ fn main() {
                 GlobalTransform::default(),
                 DirectionalLight::new(Vec3::new(1.0, 0.96, 0.9), 2.2, LightRole::Sun),
             ));
-            scene.world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 7.5, 6.0), pitch: -0.9, primary: true, ..Default::default() });
+            scene.world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 7.5, 6.0), yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.9, primary: true, ..Default::default() });
             let arm = spawn_arm(scene.world, true);
             let balls = spawn_balls(scene.world, true);
             let hud = scene.world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));

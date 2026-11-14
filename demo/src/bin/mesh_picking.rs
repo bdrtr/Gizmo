@@ -182,11 +182,11 @@ fn pick_under_cursor(
     let mut camera_data = None;
     for (camera, transform) in cameras.iter() {
         if camera.primary {
-            camera_data = Some((*camera, transform.position));
+            camera_data = Some((*camera, transform.position, transform.rotation));
             break;
         }
     }
-    let Some((camera, camera_pos)) = camera_data else {
+    let Some((camera, camera_pos, camera_rot)) = camera_data else {
         return;
     };
 
@@ -202,7 +202,7 @@ fn pick_under_cursor(
     if mx < 0.0 || my < 0.0 || mx > window.width || my > window.height {
         return;
     }
-    let ray = camera.screen_to_ray((mx, my), (window.width, window.height), camera_pos);
+    let ray = camera.screen_to_ray((mx, my), (window.width, window.height), camera_pos, camera_rot);
 
     // 3) Işını çarpışma dünyasına at.
     //

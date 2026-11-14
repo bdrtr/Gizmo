@@ -323,7 +323,7 @@ pub fn build_ray(
     let cam_t = transforms.get(player_id)?;
     let cam = cameras.get(player_id)?;
 
-    let view = cam.get_view(cam_t.position);
+    let view = gizmo::renderer::components::Camera::view(cam_t.position, cam_t.rotation);
     let proj = cam.get_projection(aspect);
     let inv_vp = (proj * view).inverse();
 
@@ -354,14 +354,14 @@ mod tests {
 
     const FRAC_PI_2: f32 = std::f32::consts::FRAC_PI_2;
 
-    fn make_camera(yaw: f32, pitch: f32) -> Camera {
-        Camera::new(90.0_f32.to_radians(), 0.1, 100.0, yaw, pitch, true)
+    fn make_camera() -> Camera {
+        Camera::new(90.0_f32.to_radians(), 0.1, 100.0, true)
     }
 
     fn spawn_camera(world: &mut World, pos: Vec3, yaw: f32, pitch: f32) -> Entity {
         let e = world.spawn();
-        world.add_component(e, Transform::new(pos));
-        world.add_component(e, make_camera(yaw, pitch));
+        world.add_component(e, Transform::new(pos).with_rotation(Camera::rotation_from(yaw, pitch)));
+        world.add_component(e, make_camera());
         e
     }
 
@@ -379,7 +379,7 @@ mod tests {
         assert!(ray.is_valid(), "ray direction must be unit-length and finite");
         assert!(ray.origin.is_finite());
 
-        let forward = make_camera(-FRAC_PI_2, 0.0).get_front();
+        let forward = Camera::forward_from(-FRAC_PI_2, 0.0);
         let d = ray.direction;
         assert!((d.x - forward.x).abs() < 1e-3, "dir.x={} fwd.x={}", d.x, forward.x);
         assert!((d.y - forward.y).abs() < 1e-3, "dir.y={} fwd.y={}", d.y, forward.y);
@@ -415,7 +415,7 @@ mod tests {
         assert!(build_ray(&world, no_cam, 0.0, 0.0, 1.0, 1.0).is_none());
 
         let no_tf = world.spawn();
-        world.add_component(no_tf, make_camera(0.0, 0.0));
+        world.add_component(no_tf, make_camera());
         assert!(build_ray(&world, no_tf, 0.0, 0.0, 1.0, 1.0).is_none());
 
         // Entirely unknown id.
@@ -579,8 +579,8 @@ mod tests {
     /// and projection it projects with, and the viewport rect it maps into.
     fn box_select_state(rect_w: f32, rect_h: f32) -> gizmo::editor::EditorState {
         let mut ed = gizmo::editor::EditorState::default();
-        let cam = make_camera(-FRAC_PI_2, 0.0);
-        ed.camera.view = Some(cam.get_view(Vec3::ZERO));
+        let cam = make_camera();
+        ed.camera.view = Some(Camera::view(Vec3::ZERO, Camera::rotation_from(-FRAC_PI_2, 0.0)));
         ed.camera.proj = Some(cam.get_projection(rect_w / rect_h));
         ed.scene_view_rect = Some(gizmo::egui::Rect::from_min_size(
             gizmo::egui::pos2(0.0, 0.0),

@@ -37,17 +37,20 @@ pub fn handle_camera(
     // SAFETY: as above — Camera is a distinct component type from Transform.
     let mut cameras = unsafe { world.query_unchecked::<&mut gizmo::renderer::components::Camera>() };
     {
-        if let (Some(mut t), Some(mut cam)) = (
+        if let (Some(mut t), Some(_)) = (
             transforms.get_mut(state.editor_camera),
             cameras.get_mut(state.editor_camera),
         ) {
+            // The editor camera thinks in yaw/pitch; its aim is the rotation, read here and written
+            // back at the end.
+            let (mut yaw, mut pitch) = gizmo::renderer::components::Camera::yaw_pitch_of(t.rotation);
             // 1. Mouse Look (Egui üzerinden gelen delta okuması)
             if !is_playing {
                 if let Some(delta) = look_delta {
                     let sensitivity = 0.003;
 
-                    cam.yaw += delta.x * sensitivity;
-                    cam.pitch -= delta.y * sensitivity;
+                    yaw += delta.x * sensitivity;
+                    pitch -= delta.y * sensitivity;
                     // Pitch sınırlaması fonksiyonun sonunda yapılıyor
                 }
             }
@@ -59,7 +62,7 @@ pub fn handle_camera(
                 camera_speed
             };
 
-            let forward = cam.get_front();
+            let forward = gizmo::renderer::components::Camera::forward_from(yaw, pitch);
             let right = forward
                 .cross(gizmo::math::Vec3::new(0.0, 1.0, 0.0))
                 .normalize();
@@ -143,26 +146,26 @@ pub fn handle_camera(
                 // Hedef tam tepedeyse yaw belirsiz; mevcut yaw devralınıyor, ki odaklanma nesneyi
                 // ortalarken sahneyi bir de kendi etrafında döndürmesin.
                 let (desired_yaw, desired_pitch) =
-                    gizmo::renderer::components::Camera::yaw_pitch_from_forward(dir, cam.yaw)
-                        .unwrap_or((cam.yaw, cam.pitch));
+                    gizmo::renderer::components::Camera::yaw_pitch_from_forward(dir, yaw)
+                        .unwrap_or((yaw, pitch));
 
 
-                let mut yaw_diff = desired_yaw - cam.yaw;
+                let mut yaw_diff = desired_yaw - yaw;
                 while yaw_diff > std::f32::consts::PI { yaw_diff -= std::f32::consts::TAU; }
                 while yaw_diff < -std::f32::consts::PI { yaw_diff += std::f32::consts::TAU; }
                 
                 // Yumuşak kamera dönüşü
-                cam.yaw += yaw_diff * (8.0 * dt).clamp(0.0, 1.0);
-                cam.pitch += (desired_pitch - cam.pitch) * (8.0 * dt).clamp(0.0, 1.0);
+                yaw += yaw_diff * (8.0 * dt).clamp(0.0, 1.0);
+                pitch += (desired_pitch - pitch) * (8.0 * dt).clamp(0.0, 1.0);
                 
                 // Güncel bakış açısına göre hedef noktayı belirle
-                let current_forward = cam.get_front();
+                let current_forward = gizmo::renderer::components::Camera::forward_from(yaw, pitch);
                 let desired_pos = target - current_forward * camera_focus_distance;
                 
                 // Pozisyonu yumuşakça lerple
                 t.position = t.position.lerp(desired_pos, 8.0 * dt);
                 
-                if t.position.distance(desired_pos) < 0.1 && yaw_diff.abs() < 0.05 && (desired_pitch - cam.pitch).abs() < 0.05 {
+                if t.position.distance(desired_pos) < 0.1 && yaw_diff.abs() < 0.05 && (desired_pitch - pitch).abs() < 0.05 {
                     if let Some(mut es) = world.get_resource_mut::<EditorState>() {
                         es.camera.focus_target = None;
                     }
@@ -193,24 +196,16 @@ pub fn handle_camera(
                 // Pivot noktasını dinamik odak mesafesinden bul
                 let pivot = t.position + forward * camera_focus_distance;
 
-                cam.yaw += orbit.x * orbit_speed;
-                cam.pitch -= orbit.y * orbit_speed;
+                yaw += orbit.x * orbit_speed;
+                pitch -= orbit.y * orbit_speed;
                 // Pitch sınırlaması fonksiyonun sonunda yapılıyor
 
-                // Quaternion'u güncelle (orbit hesaplaması için gerekli)
-                let q_yaw = gizmo::math::Quat::from_axis_angle(
-                    gizmo::math::Vec3::new(0.0, 1.0, 0.0),
-                    cam.yaw,
-                );
-                let q_pitch = gizmo::math::Quat::from_axis_angle(
-                    gizmo::math::Vec3::new(1.0, 0.0, 0.0),
-                    cam.pitch,
-                );
-                t.rotation = q_yaw * q_pitch;
-
-                // Yeni pozisyonu pivota göre konumlandır
+                // Yeni pozisyon: pivotun, yeni bakış yönünde odak mesafesi gerisi. (Bu,
+                // `R_y(yaw)·R_x(pitch)·Z` ile kuruluyordu — kameranın bakışı değil — ve yörünge
+                // pivotun etrafında dönmüyordu.)
                 t.position = pivot
-                    - (t.rotation * gizmo::math::Vec3::new(0.0, 0.0, 1.0)) * camera_focus_distance;
+                    - gizmo::renderer::components::Camera::forward_from(yaw, pitch.clamp(-89.0_f32.to_radians(), 89.0_f32.to_radians()))
+                        * camera_focus_distance;
             }
 
             // 4.5 Viewport eksen gizmo'sundan gelen bakış isteği.
@@ -219,18 +214,18 @@ pub fn handle_camera(
             // değişiyor — orbit'in yaptığının aynısı, deltayla değil hedef yönle. Yerinde dönseydi
             // bakmakta olduğun nesne ekrandan çıkardı, ve bir bakış küpünün tek işi ona bakmaktır.
             if let Some(dir) = view_request {
-                if let Some((yaw, pitch)) =
-                    gizmo::renderer::components::Camera::yaw_pitch_from_forward(dir, cam.yaw)
+                if let Some((new_yaw, new_pitch)) =
+                    gizmo::renderer::components::Camera::yaw_pitch_from_forward(dir, yaw)
                 {
                     let max_pitch = 89.0_f32.to_radians();
-                    let pitch = pitch.clamp(-max_pitch, max_pitch);
+                    let new_pitch = new_pitch.clamp(-max_pitch, max_pitch);
                     // Pivot güncel yaw/pitch'ten kuruluyor, fonksiyonun başındaki `forward`dan
                     // değil: orbit bu kareyi çoktan döndürmüş olabilir.
                     let pivot = t.position
-                        + gizmo::renderer::components::Camera::forward_from(cam.yaw, cam.pitch)
+                        + gizmo::renderer::components::Camera::forward_from(yaw, pitch)
                             * camera_focus_distance;
-                    cam.yaw = yaw;
-                    cam.pitch = pitch;
+                    yaw = new_yaw;
+                    pitch = new_pitch;
                     t.position = pivot
                         - gizmo::renderer::components::Camera::forward_from(yaw, pitch)
                             * camera_focus_distance;
@@ -255,16 +250,16 @@ pub fn handle_camera(
 
             // 6. Ortografik / Sabit Bakış Açıları (Numpad 1, 3, 7)
             if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad1 as u32) {
-                cam.yaw = 0.0;
-                cam.pitch = 0.0;
+                yaw = 0.0;
+                pitch = 0.0;
             }
             if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad3 as u32) {
-                cam.yaw = -std::f32::consts::FRAC_PI_2;
-                cam.pitch = 0.0;
+                yaw = -std::f32::consts::FRAC_PI_2;
+                pitch = 0.0;
             }
             if input.is_key_just_pressed(gizmo::winit::keyboard::KeyCode::Numpad7 as u32) {
-                cam.yaw = 0.0;
-                cam.pitch = -std::f32::consts::FRAC_PI_2;
+                yaw = 0.0;
+                pitch = -std::f32::consts::FRAC_PI_2;
             }
 
             // 7. Bookmark Kaydet / Yükle (Ctrl + 0..9)
@@ -287,16 +282,16 @@ pub fn handle_camera(
                     if ctrl {
                         // Bookmark Save
                         if let Some(mut es) = world.get_resource_mut::<EditorState>() {
-                            es.camera.bookmarks[i] = Some((t.position, cam.yaw, cam.pitch));
+                            es.camera.bookmarks[i] = Some((t.position, yaw, pitch));
                             es.log_info(&format!("Kamera #{} kaydedildi.", i));
                         }
                     } else {
                         // Bookmark Load
                         if let Some(mut es) = world.get_resource_mut::<EditorState>() {
-                            if let Some((pos, yaw, pitch)) = es.camera.bookmarks[i] {
+                            if let Some((pos, saved_yaw, saved_pitch)) = es.camera.bookmarks[i] {
                                 t.position = pos;
-                                cam.yaw = yaw;
-                                cam.pitch = pitch;
+                                yaw = saved_yaw;
+                                pitch = saved_pitch;
                                 es.log_info(&format!("Kamera #{} yüklendi.", i));
                             }
                         }
@@ -306,15 +301,9 @@ pub fn handle_camera(
 
             // Gimbal Lock sınırlaması ve yansıtması
             let max_pitch = 89.0_f32.to_radians();
-            cam.pitch = cam.pitch.clamp(-max_pitch, max_pitch);
+            pitch = pitch.clamp(-max_pitch, max_pitch);
 
-            let q_yaw =
-                gizmo::math::Quat::from_axis_angle(gizmo::math::Vec3::new(0.0, 1.0, 0.0), cam.yaw);
-            let q_pitch = gizmo::math::Quat::from_axis_angle(
-                gizmo::math::Vec3::new(1.0, 0.0, 0.0),
-                cam.pitch,
-            );
-            t.rotation = q_yaw * q_pitch;
+            t.rotation = gizmo::renderer::components::Camera::rotation_from(yaw, pitch);
         }
     }
 

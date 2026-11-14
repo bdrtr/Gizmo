@@ -1092,17 +1092,19 @@ fn setup_scene(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> C
 
     // 3. KAMERA
     let camera_ent = world.spawn();
-    add_transform(world, camera_ent, Transform::new(Vec3::new(0.0, 5.0, 15.0)));
+    add_transform(
+        world,
+        camera_ent,
+        Transform::new(Vec3::new(0.0, 5.0, 15.0))
+            .with_rotation(Camera::rotation_from(-std::f32::consts::FRAC_PI_2, -0.4)),
+    );
     world.add_component(
         camera_ent,
         Camera::new(
             std::f32::consts::FRAC_PI_4,
             0.1,
             1000.0,
-            -std::f32::consts::FRAC_PI_2,
-            -0.4,
-            true,
-        ),
+            true),
     );
 
     // Commands kullanabilmek için asset_manager'i world'e ekleyelim
@@ -1412,23 +1414,19 @@ fn update_camera(world: &mut World, state: &mut CarDemoState, input: &Input, dt:
         std::f32::consts::FRAC_PI_2 - 0.1,
     );
 
-    // Kamera entity'sini güncelle (hem Transform, hem Camera, hem GlobalTransform)
+    // Kamera entity'sini güncelle (Transform — bakış dönüşü dahil — ve GlobalTransform)
     {
         let cam_id = state.camera_entity_id;
         let mut transforms = unsafe { world.query_unchecked::<&mut Transform>() }; // SAFETY: distinct component types
         let mut globals = unsafe { world.query_unchecked::<&mut GlobalTransform>() };
-        let mut cameras = unsafe { world.query_unchecked::<&mut Camera>() };
 
         if let Some(mut t) = transforms.get_mut(cam_id) {
             t.position = state.cam_pos;
+            t.rotation = Camera::rotation_from(state.cam_yaw, state.cam_pitch);
             t.update_local_matrix();
             if let Some(mut g) = globals.get_mut(cam_id) {
                 g.matrix = t.local_matrix;
             }
-        }
-        if let Some(mut cam) = cameras.get_mut(cam_id) {
-            cam.yaw = state.cam_yaw;
-            cam.pitch = state.cam_pitch;
         }
     }
 }

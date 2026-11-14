@@ -26,7 +26,7 @@ fn camera_with_pending_mouse_motion(world: &mut World) -> gizmo::core::entity::E
     world.add_component(e, FpsLook::new().with_sensitivity(0.01));
     // `FpsLookSystem` queries (FpsLook, Camera, Transform) together — without the camera the
     // entity simply does not match and the test would pass for the wrong reason.
-    world.add_component(e, Camera::new(60.0_f32.to_radians(), 0.1, 1000.0, 0.0, 0.0, true));
+    world.add_component(e, Camera::new(60.0_f32.to_radians(), 0.1, 1000.0, true));
 
     let mut input = gizmo::core::input::Input::new();
     input.on_mouse_delta(200.0, 0.0);

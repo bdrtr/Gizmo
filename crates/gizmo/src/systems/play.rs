@@ -837,7 +837,7 @@ mod tests {
         let eye = world.spawn();
         world.add_component(
             eye,
-            crate::renderer::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 100.0, 0.0, 0.0, true),
+            crate::renderer::Camera::new(std::f32::consts::FRAC_PI_4, 0.1, 100.0, true),
         );
 
         apply_script_camera(&mut world, vec![Cmd::SetCameraFov(60.0)]);

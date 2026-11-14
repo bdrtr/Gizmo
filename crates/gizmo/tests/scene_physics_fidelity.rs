@@ -510,13 +510,14 @@ fn an_fps_camera_looks_where_it_looked() {
     let mut world = World::new();
     let e = named(&mut world, "eye");
     world.add_component(e, Transform::new(Vec3::new(0.0, 1.7, 0.0)));
-    world.add_component(e, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+    world.add_component(e, Camera::new(1.0, 0.1, 100.0, true));
     world.add_component(e, FpsLook::new().looking(1.0, -0.3));
     let world = reopen(&world, |_| {});
     FpsLookSystem.run(&world, DT);
     let eye = entity(&world, "eye");
-    let cam = world.query::<&Camera>().get(eye).cloned().expect("the camera");
-    assert!((cam.yaw - 1.0).abs() < 1e-5 && (cam.pitch + 0.3).abs() < 1e-5, "looking at {} / {}", cam.yaw, cam.pitch);
+    assert!(world.query::<&Camera>().get(eye).is_some(), "the camera");
+    let (yaw, pitch) = Camera::yaw_pitch_of(world.query::<&Transform>().get(eye).expect("its transform").rotation);
+    assert!((yaw - 1.0).abs() < 1e-5 && (pitch + 0.3).abs() < 1e-5, "looking at {yaw} / {pitch}");
 }
 
 /// A guard's behaviour tree, saved halfway through a wait, finishes the wait after the reopen and

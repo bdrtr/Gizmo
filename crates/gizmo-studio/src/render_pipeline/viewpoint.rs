@@ -25,8 +25,8 @@ use gizmo::renderer::{CameraFrame, Frustum};
 /// nothing — the camera the game owns is never moved to draw it. Every camera this file builds a
 /// matrix from goes through here, so the viewport, the Game panel and the culling frustum shake
 /// together, as they did when the shake was applied to the camera itself.
-fn shaken(world: &World, id: Entity, camera: &Camera, transform: &Transform) -> (Camera, Vec3) {
-    gizmo::systems::render::shake_view(world, id, camera, transform.position)
+fn shaken(world: &World, id: Entity, transform: &Transform) -> (Vec3, Quat) {
+    gizmo::systems::render::shake_view(world, id, transform.position, transform.rotation)
 }
 
 /// The camera this frame is drawn from, plus what the rest of the pipeline needs from it.
@@ -76,14 +76,14 @@ pub(super) fn resolve(
     let mut forward = Vec3::new(0.0, 0.0, -1.0);
 
     if let (Some(cam), Some(trans)) = (cameras.get(active), transforms.get(active)) {
-        let (cam, at) = shaken(world, active, cam, trans);
+        let (at, turn) = shaken(world, active, trans);
         proj = cam.get_projection(aspect);
-        view_mat = cam.get_view(at);
+        view_mat = Camera::view(at, turn);
         position = at;
         near = cam.near;
         far = cam.far;
         fov = cam.fov;
-        forward = cam.get_front();
+        forward = Camera::front(turn);
     }
 
     Viewpoint {
@@ -107,11 +107,12 @@ pub(super) fn camera_frame(
 ) -> Option<CameraFrame> {
     let cameras = world.query::<&Camera>();
     let transforms = world.query::<&Transform>();
-    let (cam, at) = shaken(world, entity, cameras.get(entity)?, transforms.get(entity)?);
+    let cam = cameras.get(entity)?;
+    let (at, turn) = shaken(world, entity, transforms.get(entity)?);
     Some(CameraFrame {
-        view_proj: cam.get_projection(aspect) * cam.get_view(at),
+        view_proj: cam.get_projection(aspect) * Camera::view(at, turn),
         position: at,
-        forward: cam.get_front(),
+        forward: Camera::front(turn),
         near: cam.near,
         far: cam.far,
         exposure,
@@ -138,8 +139,8 @@ pub(super) fn culling_frustum(
     let transforms = world.query::<&Transform>();
     match (cameras.get(game_camera), transforms.get(game_camera)) {
         (Some(cam), Some(trans)) => {
-            let (cam, at) = shaken(world, game_camera, cam, trans);
-            let vp = cam.get_projection(aspect) * cam.get_view(at);
+            let (at, turn) = shaken(world, game_camera, trans);
+            let vp = cam.get_projection(aspect) * Camera::view(at, turn);
             Frustum::from_matrix(&vp)
         }
         _ => drawn,
@@ -161,8 +162,8 @@ pub(super) fn game_view_proj(
     let transforms = world.query::<&Transform>();
     match (cameras.get(game_camera), transforms.get(game_camera)) {
         (Some(cam), Some(trans)) => {
-            let (cam, at) = shaken(world, game_camera, cam, trans);
-            Some(cam.get_projection(aspect) * cam.get_view(at))
+            let (at, turn) = shaken(world, game_camera, trans);
+            Some(cam.get_projection(aspect) * Camera::view(at, turn))
         }
         _ => None,
     }
@@ -181,7 +182,7 @@ mod tests {
         world.add_component(e, Transform::new(pos));
         world.add_component(
             e,
-            Camera::new(std::f32::consts::FRAC_PI_4, 0.1, far, -std::f32::consts::FRAC_PI_2, 0.0, false),
+            Camera::new(std::f32::consts::FRAC_PI_4, 0.1, far, false),
         );
         e
     }

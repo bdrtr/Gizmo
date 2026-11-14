@@ -68,8 +68,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> Showcase {
         DirectionalLight::new(Vec3::new(1.0, 0.97, 0.9), 3.2, LightRole::Sun),
     ));
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 3.0, 15.0)),
-        Camera::new(FRAC_PI_3, 0.1, 500.0, -FRAC_PI_2, -0.12, true),
+        Transform::new(Vec3::new(0.0, 3.0, 15.0)).with_rotation(Camera::rotation_from(-FRAC_PI_2, -0.12)),
+        Camera::new(FRAC_PI_3, 0.1, 500.0, true),
     ));
     world.spawn_bundle((
         Transform::new(Vec3::new(0.0, -1.5, 0.0)).with_scale(Vec3::new(30.0, 0.5, 30.0)),

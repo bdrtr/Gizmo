@@ -135,3 +135,27 @@ fn a_saved_scene_comes_back_with_its_meshes_lights_and_camera() {
         assert_eq!(m.roughness, 0.9);
     }
 }
+
+/// The scene migration writes a camera's old `yaw`/`pitch` as a rotation by its own copy of
+/// `Camera::rotation_from` (the scene crate does not depend on the renderer); this holds the copy
+/// to the original, over a spread of angles.
+#[test]
+fn the_scene_migration_aims_a_camera_as_the_renderer_does() {
+    for (yaw, pitch) in [(0.0f32, -0.3f32), (-std::f32::consts::FRAC_PI_2, 0.0), (2.5, 1.2), (-1.0, -1.4)] {
+        let old = format!(
+            "(version: 1, entities: [(original_id: 1, components: {{ \
+             \"Camera\": \"(fov:1.0,near:0.1,far:100.0,yaw:{yaw:?},pitch:{pitch:?},exposure:1.0,primary:true)\" }})])"
+        );
+        let scene = SceneData::from_ron_str(&old).expect("a version-1 scene");
+        let mut world = World::new();
+        scene.instantiate(&mut world, &gizmo::full_scene_registry());
+        let t = *world.query::<&Transform>().iter().next().expect("the camera got a transform");
+        assert!(world.query::<&Camera>().iter().next().is_some(), "the camera loaded");
+        assert!(
+            t.rotation.angle_between(Camera::rotation_from(yaw, pitch)) < 1e-5,
+            "yaw {yaw}, pitch {pitch}: {:?} vs {:?}",
+            t.rotation,
+            Camera::rotation_from(yaw, pitch)
+        );
+    }
+}

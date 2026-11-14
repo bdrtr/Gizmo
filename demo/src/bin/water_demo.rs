@@ -197,7 +197,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> WaterState {
     // ── KAMERA (FPS: dalgıcın kafasında) ─────────────────────────────────────
     world.spawn_bundle((
         Transform::new(Vec3::new(0.0, 0.0, 10.0)),
-        Camera::new(std::f32::consts::FRAC_PI_3, 0.1, 2000.0, 0.0, 0.0, true),
+        Camera::new(std::f32::consts::FRAC_PI_3, 0.1, 2000.0, true),
     ));
 
     // ── AMBIENT SES ──────────────────────────────────────────────────────────
@@ -306,7 +306,7 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
         let pitch = -0.30;
         (
             pos,
-            Quat::from_rotation_y(-yaw) * Quat::from_rotation_x(pitch),
+            Camera::rotation_from(yaw, pitch),
         )
     } else {
         let h = world
@@ -316,7 +316,7 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
             .unwrap_or(Vec3::new(0.0, 0.7, 8.0));
         (
             h,
-            Quat::from_rotation_y(-state.cam_yaw) * Quat::from_rotation_x(state.cam_pitch),
+            Camera::rotation_from(state.cam_yaw, state.cam_pitch),
         )
     };
 
@@ -332,14 +332,12 @@ fn update(world: &mut World, state: &mut WaterState, dt: f32, input: &gizmo::cor
     {
         let mut q = world.query_mut::<(
         &mut Transform,
-        &mut Camera,
+        &Camera,
     )>();
-        for (mut t, mut c) in q.iter_mut() {
+        for (mut t, _c) in q.iter_mut() {
             t.position = head;
             t.rotation = cam_rot;
             t.update_local_matrix();
-            c.yaw = state.cam_yaw;
-            c.pitch = state.cam_pitch;
         }
     }
 }

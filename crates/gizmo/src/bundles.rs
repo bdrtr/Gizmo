@@ -223,10 +223,12 @@ pub struct CameraBundle {
     pub near: f32,
     /// Far clip plane, in metres.
     pub far: f32,
-    /// Yaw, in radians — rotation about world +Y.
+    /// Yaw, in radians, about world +Y: 0 looks along `+X`, −90° along `−Z`. The bundle turns it
+    /// and [`pitch`](Self::pitch) into the `Transform`'s rotation ([`Camera::rotation_from`]) —
+    /// where a camera's aim lives.
     pub yaw: f32,
-    /// Pitch, in radians. Kept just short of vertical by the camera helpers, because a pitch of
-    /// exactly ±90° leaves yaw undefined.
+    /// Pitch, in radians. Kept just short of vertical, because a pitch of exactly ±90° leaves yaw
+    /// undefined.
     pub pitch: f32,
     /// Exposure, applied at tone-mapping. 1.0 leaves the HDR scene as rendered.
     pub exposure: f32,
@@ -256,16 +258,10 @@ impl Bundle for CameraBundle {
     fn get_infos() -> Vec<gizmo_core::archetype::ComponentInfo> { vec![] }
     unsafe fn write_to_archetype(self, _arch: &mut gizmo_core::archetype::Archetype, _row: usize, _tick: u32) {}
     fn apply(self, world: &mut World, entity: Entity) {
-        world.add_component(entity, Transform::new(self.position));
+        let rotation = Camera::rotation_from(self.yaw, self.pitch);
+        world.add_component(entity, Transform::new(self.position).with_rotation(rotation));
         world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
-        let mut cam = Camera::new(
-            self.fov,
-            self.near,
-            self.far,
-            self.yaw,
-            self.pitch,
-            self.primary,
-        );
+        let mut cam = Camera::new(self.fov, self.near, self.far, self.primary);
         cam.exposure = self.exposure;
         world.add_component(entity, cam);
     }

@@ -101,11 +101,12 @@ fn main() {
             //
             // Bilinen bir kamera kur, ekranın tam ortasından bir ışın at, ve ışının kameranın
             // kendi ileri yönüyle ne kadar örtüştüğünü ölç. Örtüşme tam olmalı.
-            let camera = Camera::new(60_f32.to_radians(), 0.1, 500.0, 0.0, 0.0, true);
+            let camera = Camera::new(60_f32.to_radians(), 0.1, 500.0, true);
             let eye = Vec3::new(0.0, 0.0, 6.0);
+            let eye_rot = Camera::rotation_from(0.0, 0.0);
             let viewport = (1280.0f32, 720.0f32);
-            let centre_ray = camera.screen_to_ray((viewport.0 * 0.5, viewport.1 * 0.5), viewport, eye);
-            let forward = camera.get_front();
+            let centre_ray = camera.screen_to_ray((viewport.0 * 0.5, viewport.1 * 0.5), viewport, eye, eye_rot);
+            let forward = Camera::front(eye_rot);
             // `Ray::direction` `Vec3A`; karşılaştırmadan önce `Vec3`'e indiriliyor.
             let ray_dir = Vec3::from(centre_ray.direction).normalize();
             let centre_dot = ray_dir.dot(forward.normalize());
@@ -114,8 +115,8 @@ fn main() {
             ));
 
             // Köşelerden atılan ışınlar: yatay açı gerçekten fov'a uyuyor mu.
-            let left_ray = camera.screen_to_ray((0.0, viewport.1 * 0.5), viewport, eye);
-            let right_ray = camera.screen_to_ray((viewport.0, viewport.1 * 0.5), viewport, eye);
+            let left_ray = camera.screen_to_ray((0.0, viewport.1 * 0.5), viewport, eye, eye_rot);
+            let right_ray = camera.screen_to_ray((viewport.0, viewport.1 * 0.5), viewport, eye, eye_rot);
             let span = Vec3::from(left_ray.direction)
                 .normalize()
                 .dot(Vec3::from(right_ray.direction).normalize())

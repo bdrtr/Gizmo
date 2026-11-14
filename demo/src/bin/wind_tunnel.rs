@@ -176,14 +176,14 @@ fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) -> WindTun
         let look = (target - cam_pos).normalize();
         let yaw = look.z.atan2(look.x);
         let pitch = look.y.clamp(-1.0, 1.0).asin();
-        let t = Transform::new(cam_pos);
+        let t = Transform::new(cam_pos).with_rotation(Camera::rotation_from(yaw, pitch));
         world
             .spawn_bundle((
                 t,
                 GlobalTransform {
                     matrix: t.local_matrix,
                 },
-                Camera::new(1.05, 0.1, 500.0, yaw, pitch, true),
+                Camera::new(1.05, 0.1, 500.0, true),
             ))
     };
 

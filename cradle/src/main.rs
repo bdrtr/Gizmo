@@ -68,7 +68,7 @@ fn main() {
             world.add_component(
                 cam_entity,
                 Transform::new(game.cam_pos)
-                    .with_rotation(pitch_yaw_quat(game.cam_pitch, game.cam_yaw)),
+                    .with_rotation(Camera::rotation_from(game.cam_yaw, game.cam_pitch)),
             );
             world.add_component(
                 cam_entity,
@@ -76,10 +76,7 @@ fn main() {
                     std::f32::consts::FRAC_PI_3,
                     0.1,
                     500.0,
-                    game.cam_yaw,
-                    game.cam_pitch,
-                    true,
-                ),
+                    true),
             );
             world.add_component(cam_entity, EntityName("Kamera".into()));
 
@@ -495,21 +492,9 @@ fn update_camera(
     {
         if let Some(mut t) = trans.get_mut(state.cam_id) {
             t.position = state.cam_pos;
-            t.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
+            t.rotation = Camera::rotation_from(state.cam_yaw, state.cam_pitch);
             t.update_local_matrix();
-        }
-    }
-    let mut cams = world.query_mut::<&mut Camera>();
-    {
-        if let Some(mut c) = cams.get_mut(state.cam_id) {
-            c.yaw = state.cam_yaw;
-            c.pitch = state.cam_pitch;
         }
     }
 }
 
-fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {
-    let q_yaw = Quat::from_axis_angle(Vec3::new(0.0, 1.0, 0.0), yaw);
-    let q_pitch = Quat::from_axis_angle(Vec3::new(1.0, 0.0, 0.0), pitch);
-    q_yaw * q_pitch
-}

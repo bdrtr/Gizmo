@@ -36,10 +36,7 @@ pub fn handle_scene_operations(
                         60.0_f32.to_radians(),
                         0.1,
                         1000.0,
-                        0.0,
-                        0.0,
-                        false,
-                    ),
+                        false),
                 ),
                 "PointLight" => world.add_component(
                     ent,
@@ -423,11 +420,8 @@ pub fn handle_scene_operations(
                         60.0_f32.to_radians(),
                         0.1,
                         500.0,
-                        0.0,
-                        0.0,
                         // NOT primary: adding a camera to a scene must not hijack the view.
-                        false,
-                    ),
+                        false),
                 );
                 Some(())
             }

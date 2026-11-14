@@ -125,8 +125,8 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> KccState {
 
     // --- Kamera (update'te her kare karakterin başına taşınır; bu yalnız ilk kare) ---
     world.spawn_bundle((
-        Transform::new(Vec3::new(0.0, 5.0, 10.0)),
-        Camera::new(FRAC_PI_3, 0.1, 1000.0, 0.0, -PI / 8.0, true),
+        Transform::new(Vec3::new(0.0, 5.0, 10.0)).with_rotation(Camera::rotation_from(0.0, -PI / 8.0)),
+        Camera::new(FRAC_PI_3, 0.1, 1000.0, true),
     ));
 
     // --- Güneş ---
@@ -156,7 +156,7 @@ fn update(world: &mut World, state: &mut KccState, dt: f32, input: &Input) {
     let forward = Camera::forward_from(state.yaw, state.pitch);
     let move_forward = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
     let move_right = Vec3::new(-state.yaw.sin(), 0.0, state.yaw.cos()).normalize_or_zero();
-    let cam_rot = Quat::from_rotation_y(-state.yaw);
+    let cam_rot = Camera::rotation_from(state.yaw, state.pitch);
 
     // --- Karakter kontrolü (WASD → hedef hız, SPACE → zıplama tamponu) ---
     if let Some(mut kcc) = world
@@ -194,12 +194,10 @@ fn update(world: &mut World, state: &mut KccState, dt: f32, input: &Input) {
     // --- FPS kamerası: karakterin baş hizasında ---
     let cam_pos = char_pos + Vec3::new(0.0, 0.8, 0.0);
     {
-        let mut q = world.query_mut::<(&mut Transform, &mut Camera)>();
-        for (mut tr, mut cam) in q.iter_mut() {
+        let mut q = world.query_mut::<(&mut Transform, &Camera)>();
+        for (mut tr, _cam) in q.iter_mut() {
             tr.position = cam_pos;
             tr.rotation = cam_rot;
-            cam.yaw = state.yaw;
-            cam.pitch = state.pitch;
         }
     }
 }

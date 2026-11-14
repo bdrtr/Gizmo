@@ -35,7 +35,7 @@ pub fn handle_input_and_scene_view(
             transforms.get(state.editor_camera),
             cameras.get(state.editor_camera),
         ) {
-            editor_state.camera.view = Some(cam.get_view(t.position));
+            editor_state.camera.view = Some(gizmo::renderer::components::Camera::view(t.position, t.rotation));
             editor_state.camera.proj = Some(cam.get_projection(aspect));
         }
     }

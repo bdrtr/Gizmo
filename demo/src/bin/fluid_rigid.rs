@@ -55,7 +55,7 @@ fn main() {
             world.add_component(
                 cam,
                 Transform::new(state.cam_pos)
-                    .with_rotation(pitch_yaw_quat(state.cam_pitch, state.cam_yaw)),
+                    .with_rotation(Camera::rotation_from(state.cam_yaw, state.cam_pitch)),
             );
             world.add_component(
                 cam,
@@ -63,10 +63,7 @@ fn main() {
                     std::f32::consts::FRAC_PI_3,
                     0.1,
                     500.0,
-                    state.cam_yaw,
-                    state.cam_pitch,
-                    true,
-                ),
+                    true),
             );
             state.cam_id = cam;
 
@@ -185,8 +182,8 @@ fn main() {
             }
 
             if let Some(mut tr) = world.query_mut::<&mut Transform>().get_mut(state.cam_id) {
-                tr.rotation = pitch_yaw_quat(state.cam_pitch, state.cam_yaw);
-                let forward = tr.rotation * Vec3::new(0.0, 0.0, -1.0);
+                tr.rotation = Camera::rotation_from(state.cam_yaw, state.cam_pitch);
+                let forward = Camera::front(tr.rotation);
                 let right = forward.cross(Vec3::new(0.0, 1.0, 0.0)).normalize();
                 let up = right.cross(forward).normalize();
 
@@ -206,11 +203,6 @@ fn main() {
                 state.mouse_pos = m_pos;
             }
 
-            if let Some(mut cam) = world.query_mut::<&mut Camera>().get_mut(state.cam_id) {
-                cam.yaw = state.cam_yaw;
-                cam.pitch = state.cam_pitch;
-            }
-
             if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
                 gizmos.draw_box(
                     Vec3::new(-2.0, 0.0, -2.0),
@@ -226,10 +218,4 @@ fn main() {
         .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
-}
-
-fn pitch_yaw_quat(pitch: f32, yaw: f32) -> Quat {
-    let q_yaw = Quat::from_axis_angle(Vec3::Y, yaw);
-    let q_pitch = Quat::from_axis_angle(Vec3::X, pitch);
-    q_yaw * q_pitch
 }
