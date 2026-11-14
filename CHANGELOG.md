@@ -118,6 +118,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **The thirty-seventh game: chess** (`demo/src/bin/satranc.rs`). Full rules — castling, en passant, promotion (queen,
+  or rook/bishop/knight with R/B/N held), check, mate, stalemate, the fifty-move rule, threefold repetition,
+  insufficient material — against the file's own engine: alpha-beta negamax with a captures-only quiescence search,
+  MVV-LVA ordering, material and square tables; depth 3 by default (`SATRANC_DERINLIK`), both sides with `A` or
+  `SATRANC_OTO`, take back with `U`. Pieces are built from primitives under a parent (`MeshSource` + hierarchy), moves
+  are tweens, squares are picked with `cursor_on_plane`. `satranc --test` checks the move generator by perft against
+  the published counts — the start position to depth 4 (197 281), Kiwipete to 3 (97 862), positions 3 and 4 —
+  finds a mate in one, and plays the engine against itself headless, the scene's pieces matching the board square for
+  square; removing en passant from the generator turns five of the counts red. The engine needed nothing new.
+
 - **CI's Miri job finishes again.** From `1ece8cc6` on, every run ended in the job's 45-minute limit:
   `spawns_from_many_systems_get_the_same_ids_every_run`, which the `commands::` filter reaches, spins 32 million
   iterations over 200 runs of the parallel scheduler — instant natively, hours interpreted — and the filters after it
