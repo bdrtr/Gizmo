@@ -88,6 +88,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **The water runs on the game's clock.** The GPU fluid stepped once for every frame drawn, so it ran on under ⏸,
+  ignored `set_time_scale` and went twice as fast at 120 Hz as at 60. `GpuFluidSystem::advance` spends the clock's
+  `dt` in whole steps of `FLUID_STEP` (1/60 s, also the solver's `dt`, which was 0.016), carrying the remainder and
+  dropping past eight steps, as the GPU bodies already did; a world with no clock steps once. The remainder is saved
+  in `FluidState`, so a scene saved part way through a step reopens owing the same part.
+  `the_water_runs_on_the_games_clock`: still under pause, and a frame of 1/30 s is two of 1/60 s bit for bit.
+  `PhysicsTime::set_accumulator` puts owed time back.
+
 - **The water lifts what stands in it** (`FluidInteractor::buoyancy_factor` was read by nothing). Each frame the
   fluid pass counts, per interactor, the particles in the shell around its shape (`GpuFluidSystem::count_wetting`,
   an integer count on the GPU, from the water as it is) — how much of it the water is against — and gives its body

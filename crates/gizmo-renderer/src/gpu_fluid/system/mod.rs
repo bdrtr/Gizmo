@@ -36,6 +36,10 @@ pub struct GpuFluidSystem {
     pub colliders_buffer: wgpu::Buffer,
     /// What the fluid is — set with [`Self::apply_settings`], read back with [`Self::settings`].
     settings: FluidSettings,
+    /// The fluid's own clock: game time in, whole steps of [`FLUID_STEP`] out (see [`Self::advance`]).
+    clock: gizmo_core::time::PhysicsTime,
+    /// The clock's time still owed, shared with the scene's `FluidState` so a save holds it too.
+    leftover: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// One `vec4` per particle a pass computes from its neighbours and a commit pass copies in —
     /// so no pass writes what its neighbours are still reading (see `fluid_bindings.wgsl`).
     pub scratch_buffer: wgpu::Buffer,
@@ -262,6 +266,12 @@ impl GpuFluidSystem {
             grid_buffer,
             colliders_buffer,
             settings,
+            clock: {
+                let mut clock = gizmo_core::time::PhysicsTime::default();
+                clock.set_fixed_dt(FLUID_STEP);
+                clock
+            },
+            leftover: Default::default(),
             scratch_buffer,
             wetting_buffer,
             sort_buffer,
@@ -317,6 +327,49 @@ impl GpuFluidSystem {
         self.thickness_texture_view = ssfr.thickness_texture_view;
         self.opaque_bg_texture = ssfr.opaque_bg_texture;
         self.opaque_bg_texture_view = ssfr.opaque_bg_texture_view;
+    }
+
+    /// **Steps the water by `elapsed` seconds of the game's time**, in whole steps of
+    /// [`FLUID_STEP`]: none while the game is paused, two in a frame of 1/30 s, at half the rate
+    /// under a time scale of ½, and the remainder carried to the next frame — at most eight in one
+    /// frame, the rest dropped, as the bodies' clocks do. `None` (a world with no clock) is one
+    /// step. Each step simulates `active` particles. Returns how many steps it recorded.
+    ///
+    /// It stepped once for every frame drawn: the water ran on under ⏸ and twice as fast at 120 Hz.
+    pub fn advance(&mut self, encoder: &mut wgpu::CommandEncoder, queue: &wgpu::Queue, elapsed: Option<f32>, active: u32) -> u32 {
+        let steps = match elapsed {
+            None => 1,
+            Some(dt) => {
+                self.clock.accumulate(dt);
+                let mut n = 0;
+                while self.clock.should_step() {
+                    self.clock.consume_step();
+                    n += 1;
+                }
+                n
+            }
+        };
+        self.leftover.store(self.clock.accumulator().to_bits(), std::sync::atomic::Ordering::Relaxed);
+        for _ in 0..steps {
+            self.compute_pass(encoder, queue, true, active);
+        }
+        steps
+    }
+
+    /// The game time the clock still owes the water, seconds.
+    pub fn leftover(&self) -> f32 {
+        self.clock.accumulator()
+    }
+
+    /// Puts back the time owed — the water's saved clock, on reopening it.
+    pub fn set_leftover(&mut self, seconds: f32) {
+        self.clock.set_accumulator(seconds);
+        self.leftover.store(self.clock.accumulator().to_bits(), std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// The shared cell the clock's owed time is mirrored into after every advance.
+    pub fn leftover_cell(&self) -> std::sync::Arc<std::sync::atomic::AtomicU32> {
+        self.leftover.clone()
     }
 
     /// What the fluid is now.
@@ -522,6 +575,10 @@ impl GpuFluidSystem {
     }
 }
 
+/// One step of the water, seconds — the solver's `dt`, and what [`GpuFluidSystem::advance`] spends
+/// the game's time in.
+pub const FLUID_STEP: f32 = 1.0 / 60.0;
+
 /// The first `size` bytes of `buffer`, copied out and waited for.
 pub(crate) fn read_buffer(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer, size: u64) -> Option<Vec<u8>> {
     let staging = device.create_buffer(&wgpu::BufferDescriptor {
@@ -553,7 +610,7 @@ pub(crate) fn read_buffer(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &w
 fn params_for(settings: &FluidSettings, pool: u32) -> FluidParams {
     let [grid_size_x, grid_size_y, grid_size_z] = settings.grid_size();
     FluidParams {
-        dt: 0.016,
+        dt: FLUID_STEP,
         gravity: settings.gravity,
         rest_density: settings.rest_density,
         relaxation: settings.relaxation,

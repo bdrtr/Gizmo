@@ -66,13 +66,14 @@ pub fn fluid_scene_system(world: &mut World, renderer: &mut Renderer, dt: f32) {
         }
         let mut states = world.query_mut::<&mut FluidState>();
         if let Some(mut state) = states.get_mut(water) {
-            if let Some(saved) = state.take_saved(settings.rest_density) {
+            if let Some((saved, leftover)) = state.take_saved(settings.rest_density) {
+                fluid.set_leftover(leftover);
                 if saved.len() != count as usize {
                     tracing::warn!(saved = saved.len(), particles = count, "[Fluid] the saved water has another particle count than its FluidSimulation; what fits is used");
                 }
                 fluid.write_particles(&renderer.queue, &saved[..saved.len().min(count as usize)]);
             }
-            state.link(&renderer.device, &renderer.queue, &fluid.particles_buffer, count);
+            state.link(&renderer.device, &renderer.queue, fluid, count);
         }
     }
     if sims.is_empty() && world.get_resource::<FluidSceneState>().is_none() {
@@ -204,8 +205,12 @@ mod tests {
         renderer
     }
 
+    /// `frames` frames: the clock (when the world has one) moved by 0.025 s, the preparation, the step.
     fn step(world: &mut World, renderer: &mut Renderer, frames: usize) {
         for _ in 0..frames {
+            if let Some(mut t) = world.get_resource_mut::<gizmo_core::time::Time>() {
+                t.update(0.025);
+            }
             prepare_frame(world, renderer);
             draw_ahead_of_views(world, renderer, SimulationDetail::Full);
         }
@@ -346,6 +351,9 @@ mod tests {
             sim.particles = 4_000;
             let mut renderer = renderer_with_pool(4_000).await;
             let mut world = World::new();
+            // Frames of 1.5 steps: the save falls part way through one, and the reopened water has
+            // to owe the same half step.
+            world.insert_resource(gizmo_core::time::Time::new());
             world.spawn_bundle((sim.clone(),));
             step(&mut world, &mut renderer, 1);
             // A dam: the water stacked against the left wall, then let go.
@@ -366,6 +374,7 @@ mod tests {
 
             let mut reopened_renderer = renderer_with_pool(4_000).await;
             let mut reopened = World::new();
+            reopened.insert_resource(gizmo_core::time::Time::new());
             crate::scene::SceneData::load_into(&path, &mut reopened, &crate::full_scene_registry()).expect("loads");
             prepare_frame(&mut reopened, &mut reopened_renderer);
             let back = particles(&reopened_renderer);
@@ -375,8 +384,12 @@ mod tests {
             let spread = |ps: &[crate::renderer::gpu_fluid::FluidParticle]| ps.iter().map(|p| p.position[1]).fold(0.0f32, f32::max);
             assert!(spread(&caught) > 0.6, "the water was not caught in motion (top {})", spread(&caught));
 
-            draw_ahead_of_views(&reopened, &mut reopened_renderer, SimulationDetail::Full);
-            draw_ahead_of_views(&world, &mut renderer, SimulationDetail::Full);
+            assert_eq!(
+                reopened_renderer.gpu_fluid.as_ref().unwrap().leftover(),
+                renderer.gpu_fluid.as_ref().unwrap().leftover(),
+                "the reopened water's clock owes another part of a step"
+            );
+            assert!(renderer.gpu_fluid.as_ref().unwrap().leftover() > 0.0, "the save did not fall part way through a step");
             step(&mut world, &mut renderer, 10);
             step(&mut reopened, &mut reopened_renderer, 10);
             let (a, b) = (particles(&renderer), particles(&reopened_renderer));
@@ -495,6 +508,61 @@ mod tests {
             assert!(sunk < 0.25, "the ball the water does not lift is not on the floor: {sunk}");
             assert!(floating > top - 0.2, "the buoyant ball does not float at the surface ({top}): {floating}");
             assert!(sunk < neutral && neutral < floating, "the three are not in buoyancy order: {sunk} / {neutral} / {floating}");
+        });
+    }
+
+    /// **The water runs on the game's clock.** Under ⏸ it does not move; a frame of 1/30 s is two
+    /// steps, the same water as two frames of 1/60 s, bit for bit. It stepped once for every frame
+    /// drawn, so it ran on under ⏸ and twice as fast at 120 Hz.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_water_runs_on_the_games_clock() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !usable_gpu() {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut sim = FluidSimulation::default();
+            sim.bounds_min = Vec3::new(-1.0, 0.0, -0.5);
+            sim.bounds_max = Vec3::new(1.0, 2.0, 0.5);
+            sim.particles = 3_000;
+            // Water let go a little above the floor, so every step moves it.
+            let run = |frames: &'static [(f32, bool)]| {
+                let sim = sim.clone();
+                async move {
+                    let mut renderer = renderer_with_pool(3_000).await;
+                    let mut world = World::new();
+                    world.insert_resource(gizmo_core::time::Time::new());
+                    world.spawn_bundle((sim,));
+                    prepare_frame(&mut world, &mut renderer);
+                    let lifted: Vec<_> = particles(&renderer).into_iter().map(|mut p| {
+                        p.position[1] += 0.3;
+                        p.predicted_position = p.position;
+                        p
+                    }).collect();
+                    renderer.gpu_fluid.as_ref().unwrap().write_particles(&renderer.queue, &lifted);
+                    for &(dt, paused) in frames {
+                        {
+                            let mut t = world.get_resource_mut::<gizmo_core::time::Time>().unwrap();
+                            t.set_paused(paused);
+                            t.update(dt);
+                        }
+                        prepare_frame(&mut world, &mut renderer);
+                        draw_ahead_of_views(&world, &mut renderer, SimulationDetail::Full);
+                    }
+                    (lifted, particles(&renderer))
+                }
+            };
+            let (start, paused) = run(&[(1.0 / 60.0, true), (1.0 / 60.0, true), (1.0 / 30.0, true)]).await;
+            assert!(start.iter().zip(&paused).all(|(a, b)| a.position == b.position), "the water moved under pause");
+            let (_, one_long) = run(&[(1.0 / 30.0, false)]).await;
+            let (_, two_short) = run(&[(1.0 / 60.0, false), (1.0 / 60.0, false)]).await;
+            assert!(start.iter().zip(&one_long).any(|(a, b)| a.position != b.position), "the water did not move at all");
+            assert!(
+                one_long.iter().zip(&two_short).all(|(a, b)| a.position == b.position),
+                "a frame of 1/30 s is not the same water as two of 1/60 s"
+            );
         });
     }
 }

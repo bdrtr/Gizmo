@@ -1254,9 +1254,11 @@ fn step_gpu_simulations(
     // then, and a zero count makes both the step and `render_ssfr` return at once — the default
     // pool's SSFR surface once rendered over every scene as a mottled overlay that read like broken
     // shadows.
+    // On the game's clock, as the GPU bodies are: no step under ⏸, slower under a time scale.
     if let Some(fluid) = renderer.gpu_fluid.as_mut() {
         fluid.active_particles = (fluid.settings().particles as f32 * fluid_share) as u32;
-        fluid.compute_pass(encoder, &renderer.queue, true, fluid.active_particles);
+        let elapsed = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt());
+        fluid.advance(encoder, &renderer.queue, elapsed, fluid.active_particles);
     }
 
     if let Some(particles) = renderer.gpu_particles.as_mut() {

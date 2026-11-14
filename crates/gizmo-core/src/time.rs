@@ -385,10 +385,17 @@ impl PhysicsTime {
         self.physics_elapsed
     }
 
-    /// Accumulated time (for debugging purposes).
+    /// Time accumulated and not yet spent as a step — what a simulation saved part way through a
+    /// step carries into the next frame.
     #[inline]
     pub fn accumulator(&self) -> f32 {
         self.accumulator
+    }
+
+    /// Puts back time owed — a saved simulation's [`accumulator`](Self::accumulator), on reopening
+    /// it. Held to `0..` the eight steps a clock ever carries.
+    pub fn set_accumulator(&mut self, seconds: f32) {
+        self.accumulator = if seconds.is_finite() { seconds.clamp(0.0, self.max_accumulator) } else { 0.0 };
     }
 
     // ──── Setter'lar ────

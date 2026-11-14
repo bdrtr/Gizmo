@@ -30,6 +30,7 @@ struct FluidLink {
     queue: wgpu::Queue,
     buffer: wgpu::Buffer,
     count: u32,
+    leftover: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 /// The water as a scene file holds it: one list per channel, the phases left out while every
@@ -40,15 +41,19 @@ struct SavedFluid {
     velocities: Vec<[f32; 3]>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     phases: Vec<u32>,
+    /// The fluid clock's time still owed, seconds — part of a step, carried to the next frame.
+    #[serde(default)]
+    leftover: f32,
 }
 
 impl SavedFluid {
-    fn of(particles: &[FluidParticle]) -> Self {
+    fn of(particles: &[FluidParticle], leftover: f32) -> Self {
         let phases: Vec<u32> = particles.iter().map(|p| p.phase).collect();
         Self {
             positions: particles.iter().map(|p| p.position).collect(),
             velocities: particles.iter().map(|p| p.velocity).collect(),
             phases: if phases.iter().all(|&p| p == 0) { Vec::new() } else { phases },
+            leftover,
         }
     }
 
@@ -71,18 +76,24 @@ impl SavedFluid {
 }
 
 impl FluidState {
-    /// Links it to the solver's particles: `count` of them, from the start of `buffer`.
-    pub fn link(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer, count: u32) {
-        let same = self.link.as_ref().is_some_and(|l| l.count == count && l.buffer == *buffer);
+    /// Links it to `fluid`'s particles, the first `count` of them, and its clock.
+    pub fn link(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, fluid: &super::GpuFluidSystem, count: u32) {
+        let same = self.link.as_ref().is_some_and(|l| l.count == count && l.buffer == fluid.particles_buffer);
         if !same {
-            self.link = Some(FluidLink { device: device.clone(), queue: queue.clone(), buffer: buffer.clone(), count });
+            self.link = Some(FluidLink {
+                device: device.clone(),
+                queue: queue.clone(),
+                buffer: fluid.particles_buffer.clone(),
+                count,
+                leftover: fluid.leftover_cell(),
+            });
         }
     }
 
     /// The water a scene file brought, taken once — to be given to the solver — as particles at
-    /// `rest_density`. `None` when there is none waiting.
-    pub fn take_saved(&mut self, rest_density: f32) -> Option<Vec<FluidParticle>> {
-        self.saved.take().map(|s| s.particles(rest_density))
+    /// `rest_density`, and the time its clock still owed. `None` when there is none waiting.
+    pub fn take_saved(&mut self, rest_density: f32) -> Option<(Vec<FluidParticle>, f32)> {
+        self.saved.take().map(|s| (s.particles(rest_density), s.leftover))
     }
 
     /// Whether water from a scene file is waiting to be given to the solver.
@@ -95,12 +106,13 @@ impl FluidState {
         match &self.link {
             Some(l) => {
                 let size = l.count as u64 * std::mem::size_of::<FluidParticle>() as u64;
+                let leftover = f32::from_bits(l.leftover.load(std::sync::atomic::Ordering::Relaxed));
                 if size == 0 {
-                    return Ok(Some(Arc::new(SavedFluid::of(&[]))));
+                    return Ok(Some(Arc::new(SavedFluid::of(&[], leftover))));
                 }
                 let bytes = super::system::read_buffer(&l.device, &l.queue, &l.buffer, size)
                     .ok_or_else(|| "the fluid's particles could not be read back from the GPU".to_string())?;
-                Ok(Some(Arc::new(SavedFluid::of(bytemuck::cast_slice(&bytes)))))
+                Ok(Some(Arc::new(SavedFluid::of(bytemuck::cast_slice(&bytes), leftover))))
             }
             None => Ok(self.saved.clone()),
         }
@@ -111,7 +123,7 @@ impl serde::Serialize for FluidState {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         match self.current().map_err(serde::ser::Error::custom)? {
             Some(water) => water.serialize(serializer),
-            None => SavedFluid::of(&[]).serialize(serializer),
+            None => SavedFluid::of(&[], 0.0).serialize(serializer),
         }
     }
 }
@@ -152,16 +164,17 @@ mod tests {
                 _pad_vort: 0.0,
             })
             .collect();
-        let text = ron::to_string(&SavedFluid::of(&ps)).unwrap();
+        let text = ron::to_string(&SavedFluid::of(&ps, 0.004)).unwrap();
         let mut state: FluidState = ron::from_str(&text).unwrap();
         assert!(state.has_saved());
-        let back = state.take_saved(1000.0).unwrap();
+        let (back, leftover) = state.take_saved(1000.0).unwrap();
+        assert_eq!(leftover, 0.004, "the clock's owed time");
         assert_eq!(back.len(), 5);
         for (a, b) in ps.iter().zip(&back) {
             assert_eq!((a.position, a.velocity, a.phase), (b.position, b.velocity, b.phase));
         }
         assert!(!state.has_saved(), "the saved water is given once");
-        let plain = ron::to_string(&SavedFluid::of(&ps[..2])).unwrap();
+        let plain = ron::to_string(&SavedFluid::of(&ps[..2], 0.0)).unwrap();
         assert!(!plain.contains("phases"), "all-water phases are left out: {plain}");
     }
 }
