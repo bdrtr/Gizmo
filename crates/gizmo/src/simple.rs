@@ -711,7 +711,14 @@ impl FixedPhysics {
         } else {
             Vec::new()
         };
+        // Bodies drawn between the steps (`systems::interpolation`): the poses either side of each.
+        if world.get_resource::<crate::systems::interpolation::InterpolationHistory>().is_none() {
+            world.insert_resource(crate::systems::interpolation::InterpolationHistory::default());
+        }
         for step in 0..steps {
+            if let Some(mut history) = world.get_resource_mut::<crate::systems::interpolation::InterpolationHistory>() {
+                history.begin_step(world);
+            }
             if !driven.is_empty() {
                 let f = (step + 1) as f32 / steps as f32;
                 let mut targets = world.query_mut::<&mut KinematicTarget>();
@@ -733,6 +740,13 @@ impl FixedPhysics {
                 gizmo_physics_dynamics::hit_detection_system(world, self.step);
             }
             systems::cpu_physics_step_system(world, self.step);
+            if let Some(mut history) = world.get_resource_mut::<crate::systems::interpolation::InterpolationHistory>() {
+                history.end_step(world);
+            }
+        }
+        let alpha = self.accumulator / self.step;
+        if let Some(mut history) = world.get_resource_mut::<crate::systems::interpolation::InterpolationHistory>() {
+            history.set_alpha(alpha);
         }
         steps
     }

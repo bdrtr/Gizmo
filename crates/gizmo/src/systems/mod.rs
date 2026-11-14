@@ -21,6 +21,9 @@ pub mod physics;
 /// what makes "the export behaves like Play" a fact rather than a promise.
 #[cfg(feature = "physics")]
 pub mod play;
+// Drawing physics between its steps — the pose before and after each fixed step, blended at draw.
+#[cfg(feature = "physics")]
+pub mod interpolation;
 #[cfg(feature = "scene")]
 /// Fulfilling a `PrefabRequest` — the resolver `gizmo-core` says the application must supply, and
 /// which Lua's `entity.spawn_prefab` had been producing requests for with nothing to answer them.

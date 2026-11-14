@@ -73,6 +73,23 @@ impl Plugin for PhysicsPlugin {
             .label("auto_box_collider")
             .before("physics_step"),
         );
+        // Bodies drawn between their steps (`systems::interpolation`): the poses either side of each
+        // step, and the frame's coefficient once a frame after the steps. After `physics_step` is
+        // registered, for the same reason as the collider above: the edges bind to a label that exists.
+        app.world.insert_resource(crate::systems::interpolation::InterpolationHistory::default());
+        app.schedule.add_di_system(
+            gizmo_core::system::SystemConfig::new(Box::new(crate::systems::interpolation::InterpolationBeginSystem))
+                .label("interpolation_begin")
+                .before("physics_step"),
+        );
+        app.schedule.add_di_system(
+            gizmo_core::system::SystemConfig::new(Box::new(crate::systems::interpolation::InterpolationEndSystem))
+                .label("interpolation_end")
+                .after("physics_step"),
+        );
+        app.update_schedule.add_di_system(gizmo_core::system::SystemConfig::new(Box::new(
+            crate::systems::interpolation::InterpolationAlphaSystem,
+        )));
     }
 }
 

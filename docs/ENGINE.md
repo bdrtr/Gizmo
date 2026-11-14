@@ -3828,6 +3828,19 @@ Bir önceki oturumun bıraktığı **iki iz de kapandı** — biri kod, biri öl
   kuruluyor (melez GPU'lu bir dizüstünde, Wayland altında vsync'siz sunum ara sıra siyah kare
   gösteriyordu, `satranc`). 60 Hz'lik bir ekranda bu, fizik adımıyla karenin hizalanması demek;
   144/165 Hz'de titreme vsync'siz modda da vardı ve aynen duruyor. (i)-(iii) bu yüzden sıradaki iş.
+  **(a) yazıldı, aynı gün** (`gizmo::systems::interpolation`). (i) Saklanan şey bir bileşen değil,
+  varlık kimliğine göre indeksli bir kaynak (`InterpolationHistory`, `MotionHistory` gibi): her
+  hareketli gövdenin adımdan önceki ve sonraki pozu. Bileşen olsaydı her gövde yeni bir arketipe
+  taşınır, fizik adımının gövdeleri gördüğü sıra — dolayısıyla simülasyon — değişirdi. Sürücü
+  kaydediyor: `PhysicsPlugin` `physics_step`'in iki yanındaki sistemlerle, `FixedPhysics::advance`
+  kendi döngüsünde; `simple_scene_update` kare süresiyle adımladığı için çizdiği zaten simüle ettiği,
+  geçmiş tutmuyor. (ii) Hiyerarşi ikinci kez yayılmıyor: gövdenin karıştırılmış dünya matrisinin
+  gerçeğine oranı (delta) torunlarına da uygulanıyor — katı bir hiyerarşi için kesin. (iii) Karıştırılmış
+  poz yalnız çizim süresince `GlobalTransform`'a yazılıyor ve sonra geri alınıyor (render kopyasında,
+  ya da `default_render_pass`'te dünyanın kendisinde); `Transform`'a hiç yazılmıyor, adım dışında
+  taşınmış bir gövde (ışınlama, rollback) karıştırılmadan çiziliyor. Ölçüldü: 60 Hz fizik, 144 Hz
+  kare, 6 m/s — ham poz kare başına 0 ile 0,0998 m arası sıçrıyor, çizilen 0,0409–0,0416 m (eşit
+  0,0417). Simülasyon geçmişle ve geçmişsiz bit bit aynı (`the_history_leaves_the_simulation_alone`).
 
 Saat yazılırken aynı taramanın çıkardığı, **ölçülmüş ama düzeltilmemiş** yedi şey — hepsi dövüş
 altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:

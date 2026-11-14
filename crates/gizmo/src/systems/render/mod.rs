@@ -270,7 +270,15 @@ pub fn default_render_pass(
     renderer: &mut Renderer,
 ) {
     prepare_frame(world, renderer);
+    // Bodies drawn between their physics steps, for this draw alone (`systems::interpolation`).
+    #[cfg(feature = "physics")]
+    let replaced = {
+        let overrides = crate::systems::interpolation::render_overrides(world);
+        crate::systems::interpolation::apply_overrides(world, &overrides)
+    };
     draw_frame(world, encoder, view, renderer);
+    #[cfg(feature = "physics")]
+    crate::systems::interpolation::restore(world, &replaced);
     publish_render_stats(world, renderer);
 }
 

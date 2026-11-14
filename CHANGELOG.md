@@ -118,6 +118,20 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **Physics is drawn between its steps** (`gizmo::systems::interpolation`). A game stepping physics at a fixed rate
+  (`PhysicsPlugin`, `FixedPhysics`) on a screen faster than it held each pose for two or three frames: at 144 Hz a
+  body moving evenly advanced by amounts 50 % apart from frame to frame, and `PhysicsTime::alpha`, computed every frame,
+  was read by nothing — nothing kept the pose before the step. `InterpolationHistory`, a resource keyed by entity id
+  (a component would have moved every body to a new archetype and changed the order the step meets them), keeps each
+  moving body's pose before and after the last step; the draw blends them by the frame's coefficient and moves the
+  body's descendants by the same change, writing `GlobalTransform` for the draw alone and putting it back after — on
+  the render world's copy, and on the world itself in `default_render_pass`. `Transform` is never written; a body moved
+  outside the step (a teleport, a rollback) is drawn where it is. `simple_scene_update` steps by the frame's own time
+  and needs none. Measured, 60 Hz physics at 144 Hz, 6 m/s: the raw pose advances 0 to 0.0998 m a frame, the drawn
+  one 0.0409–0.0416 (even: 0.0417). Tests: six in `systems::interpolation` — even motion through `FixedPhysics` and
+  through `PhysicsPlugin`, a teleport drawn where it is, a child drawn with its body, every matrix put back, and the
+  simulation bit-identical with the history and without.
+
 - **Windows present in step with the display (`AutoVsync`) by default.** The engine built every window's surface with
   `AutoNoVsync`, for its own frame-time measurements, and a game paid for it: hundreds of frames a second for a 60 Hz
   screen, and on a laptop drawing on its NVIDIA GPU and showing through the AMD one, under Wayland, a black flash at

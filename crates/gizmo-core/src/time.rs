@@ -350,13 +350,12 @@ impl PhysicsTime {
 
     /// Interpolation coefficient (0.0 .. 1.0): `render_pos = lerp(prev_pos, curr_pos, alpha)`.
     ///
-    /// **The engine does not do that lerp, and cannot.** Nothing in this workspace keeps a
-    /// previous `Transform` to interpolate against — the renderer draws the pose the last fixed
-    /// step left behind, unchanged, for however many frames pass before the next one. So `prev`
-    /// in that formula is the embedding game's to keep: snapshot the poses you draw at each
-    /// fixed step, and this is the coefficient to blend them with.
+    /// **The engine does that lerp since 2026-11-14** (`gizmo::systems::interpolation`): the
+    /// facade's `PhysicsPlugin` keeps every moving body's pose before and after each fixed step and
+    /// draws it this far between them, for the draw alone. It drew the pose the last step left
+    /// behind, unchanged, until then — nothing kept a previous `Transform` to blend from.
     ///
-    /// **What that costs, measured** (see this module's tests): at 60 Hz physics on a 60 Hz
+    /// **What not doing it cost, measured** (see this module's tests): at 60 Hz physics on a 60 Hz
     /// display nothing at all — every pose is drawn exactly once and this stays `0.0`. At 144 Hz
     /// each pose is held for two or three frames in a 3,2,3,2,3,2,2… pattern, so a body moving at
     /// a constant speed appears to advance by different amounts on neighbouring frames. And

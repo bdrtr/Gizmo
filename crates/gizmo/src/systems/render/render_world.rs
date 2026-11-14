@@ -74,6 +74,11 @@ pub struct RenderWorld {
     settings: Vec<Box<dyn Settings>>,
     /// The game's own passes, drawn over the frame in the order added.
     passes: Vec<Box<dyn Pass>>,
+    /// Where the bodies physics moves are drawn this frame, between their steps
+    /// (`systems::interpolation`): worked out from the game world at the sync point, written into
+    /// the copy for the draw and taken back out after it.
+    #[cfg(feature = "physics")]
+    interpolated: Vec<(gizmo_core::Entity, crate::math::Mat4)>,
 }
 
 /// A [`RenderWorld::with_settings`] closure: the game world to read, the renderer to set.
@@ -109,7 +114,14 @@ impl std::fmt::Debug for RenderWorld {
 impl RenderWorld {
     /// An empty copy, kept by [`render_extractor`].
     pub fn new() -> Self {
-        Self { world: World::new(), extractor: render_extractor(), settings: Vec::new(), passes: Vec::new() }
+        Self {
+            world: World::new(),
+            extractor: render_extractor(),
+            settings: Vec::new(),
+            passes: Vec::new(),
+            #[cfg(feature = "physics")]
+            interpolated: Vec::new(),
+        }
     }
 
     /// Runs `settings` at every sync point, with the game world to read and the renderer to set:
@@ -194,14 +206,24 @@ impl RenderWorld {
         }
         prepare_frame(game, renderer);
         self.extract(game);
+        #[cfg(feature = "physics")]
+        {
+            self.interpolated = crate::systems::interpolation::render_overrides(game);
+        }
     }
 
     /// The draw: the frame from the copy, then the game's passes over it.
     fn draw_copy(&mut self, encoder: &mut wgpu::CommandEncoder, view: &wgpu::TextureView, renderer: &mut Renderer) {
+        // The bodies between their steps, in the copy for this draw only: the copy keeps a value until
+        // the game writes it again, so it goes back out after.
+        #[cfg(feature = "physics")]
+        let replaced = crate::systems::interpolation::apply_overrides(&mut self.world, &self.interpolated);
         draw_frame(&self.world, encoder, view, renderer);
         for pass in &mut self.passes {
             pass(&self.world, encoder, view, renderer);
         }
+        #[cfg(feature = "physics")]
+        crate::systems::interpolation::restore(&mut self.world, &replaced);
     }
 }
 
