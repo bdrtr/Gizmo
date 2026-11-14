@@ -134,8 +134,9 @@ impl CollisionLayer {
     }
 }
 
-#[cfg(feature = "ecs")]
-gizmo_core::impl_component!(CollisionLayer);
+// Deliberately NOT a component (2026-11-14). It lives in `Collider::collision_layer`, which is
+// the only place the pipeline reads it; attached on its own it changed nothing and said nothing,
+// and a scene saving it would have kept a setting that was never in effect.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Tests

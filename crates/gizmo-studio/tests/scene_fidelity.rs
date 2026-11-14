@@ -3,8 +3,8 @@
 //! here with the reason it is not.
 //!
 //! Decided 2026-11-14: "saved = seen" is a guarantee, closed class by class. Until then a component
-//! nobody registered was simply not written and nothing said so: a decal, a sprite, a collision
-//! layer, a whole UI, were gone after a save — and after ⏹, for an entity play had destroyed.
+//! nobody registered was simply not written and nothing said so: a decal, a sprite, a cloth, a
+//! whole UI, were gone after a save — and after ⏹, for an entity play had destroyed.
 //!
 //! Two lists, and the test holds them both to the source:
 //!
@@ -38,6 +38,8 @@ const NOT_SAVED: &[(&str, &str)] = &[
     ("LodLevel", "one level inside a `LodGroup`, saved with it"),
     ("VisibilityIndex", "the renderer's culling cache"),
     ("FluidHandle", "the GPU fluid simulation's handle, made when the simulation is"),
+    ("FluidParticle", "marks an entity as one slot of the GPU fluid buffer; the particle itself (where it is, how fast) lives in that buffer and is never read back, so a saved marker would bring back nothing"),
+    ("FluidPhase", "the phase of that slot, the same"),
     ("GpuPhysicsLink", "an entity's slot in the GPU rigid-body table, given when the body is uploaded"),
     // ── Only while a game runs ──────────────────────────────────────────────────────────────────
     ("IsDeleted", "an editor soft delete: the entity is not written at all"),
@@ -61,9 +63,12 @@ const NOT_SAVED: &[(&str, &str)] = &[
 /// Should be saved, and is not yet — closed class by class (decided 2026-11-14). Only shrinks.
 const OPEN: &[&str] = &[
     // Physics and play
-    "CollisionLayer", "PhysicsMaterial", "Breakable", "KinematicTarget", "ExternalForce", "CharacterController",
-    "VehicleController", "Oxygen", "Cloth", "Rope", "SoftBodyMesh", "FluidSimulation", "FluidParticle", "FluidPhase",
-    "FluidInteractor", "AutoBoxCollider", "DespawnAfter", "DespawnBelowY", "Spin", "FpsLook", "BehaviorTree", "Timer",
+    "BehaviorTree",
+    // The GPU fluid, which nothing in the engine drives from the ECS yet: `FluidSimulation` is read
+    // by the inspector alone and `FluidInteractor` by the fluid demos alone. Saving them would keep
+    // knobs that steer nothing (`addable_components_round_trip` refuses the first for that reason);
+    // they close with the fluid being driven by them.
+    "FluidSimulation", "FluidInteractor",
     // Animation
     "AnimationStateMachine", "Tween", "TwoBoneIkChain",
     // UI

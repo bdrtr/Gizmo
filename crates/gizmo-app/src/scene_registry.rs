@@ -116,6 +116,21 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::components::CameraTargetDesc, "CameraTargetDesc");
     }
 
+    // A game timer, wherever it is ticking.
+    if let Err(e) = reg.register_serializable::<gizmo_core::Timer>("Timer") {
+        tracing::warn!(error = ?e, "[Scene] Timer registration failed");
+    }
+    // Vehicles and drowning, the dynamics layer's.
+    #[cfg(feature = "physics")]
+    {
+        if let Err(e) = reg.register_serializable::<gizmo_physics_dynamics::vehicle::VehicleController>("VehicleController") {
+            tracing::warn!(error = ?e, "[Scene] VehicleController registration failed");
+        }
+        if let Err(e) = reg.register_serializable::<gizmo_physics_dynamics::oxygen::Oxygen>("Oxygen") {
+            tracing::warn!(error = ?e, "[Scene] Oxygen registration failed");
+        }
+    }
+
     #[cfg(feature = "audio")]
     if let Err(e) = reg.register_serializable::<gizmo_audio::AudioSource>("AudioSource") {
         tracing::warn!(error = ?e, "[Scene] AudioSource registration failed");

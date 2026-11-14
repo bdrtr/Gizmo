@@ -1,7 +1,7 @@
 use gizmo_math::Vec3;
 
 /// Represents a single particle in the rope or chain.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RopeNode {
     /// Current world-space position, in metres.
     pub position: Vec3,
@@ -32,7 +32,7 @@ pub struct RopeNode {
 }
 
 /// A rope or chain simulated using Position Based Dynamics (PBD).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Rope {
     /// Particles ordered from the start of the rope to its end. Every consecutive pair

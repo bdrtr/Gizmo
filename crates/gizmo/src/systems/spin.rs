@@ -32,7 +32,7 @@ use gizmo_physics_core::Transform;
 /// Rotates a `Transform` about the `axis` axis at `angular_velocity` (rad/s).
 /// The rotation rides ON TOP OF `rest_rotation` (the model's authored pose).
 /// `angular_velocity` can be changed every frame (e.g. tie wheel speed to vehicle speed).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct Spin {
     /// Rotation axis (body-local), gets normalized.
     pub axis: Vec3,

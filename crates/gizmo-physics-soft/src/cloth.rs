@@ -199,7 +199,7 @@ fn seg_point_dist_sq(a: Vec3, b: Vec3, p: Vec3) -> f32 {
 }
 
 /// A single particle (mass point) in the cloth simulation.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ClothNode {
     /// Current world-space position.
     pub position: Vec3,
@@ -212,7 +212,7 @@ pub struct ClothNode {
 }
 
 /// A distance (stretch/bend/shear) constraint between two cloth nodes, solved with XPBD.
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct DistanceConstraint {
     /// Index of the first endpoint into [`Cloth::nodes`]. Never bounds-checked: an index
@@ -255,7 +255,7 @@ pub struct DistanceConstraint {
 ///
 /// Built as a regular grid of [`ClothNode`]s linked by structural, bend and shear
 /// [`DistanceConstraint`]s. Step the simulation with [`Cloth::step`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Cloth {
     /// All particles of the cloth, laid out row-major (`idx = y * width + x`).

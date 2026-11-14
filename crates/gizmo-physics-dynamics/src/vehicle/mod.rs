@@ -25,7 +25,7 @@ use gizmo_math::{Quat, Vec3};
 /// the invariant [`pacejka_combined`]'s friction circle is built on top of.
 ///
 /// Coefficients are not validated. Negative or NaN values are evaluated as given.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PacejkaParams {
     /// Stiffness factor B — scales slip on the way into the formula, so it sets the slope of
     /// the curve at zero slip (the tyre's cornering / longitudinal stiffness, together with
@@ -173,7 +173,7 @@ fn combined(
 /// ([`Drivetrain::drives`]), the brake bias, the steering overwrite and the anti-roll bar
 /// pairing all key off it — see the two variants for what each does. There is no third axle,
 /// so a six-wheeler has to be modelled as two of these groups.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Axle {
     /// The steered axle. `update_vehicle` overwrites [`Wheel::steering_angle`] on these wheels
     /// every step from the Ackermann geometry, so any value written by hand is discarded, and
@@ -187,7 +187,7 @@ pub enum Axle {
 
 /// The drivetrain layout: which axle the engine's torque goes to, and which wheels the engine
 /// RPM is derived from.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Drivetrain {
     /// Front-wheel drive
     Fwd,
@@ -231,7 +231,7 @@ impl Drivetrain {
 /// [`drive_torque`]: Wheel::drive_torque
 /// [`brake_torque`]: Wheel::brake_torque
 /// [`steering_angle`]: Wheel::steering_angle
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Wheel {
     /// Where the strut is anchored to the chassis, in metres, in chassis-local space, relative
     /// to the `Transform` origin. The suspension ray starts here (offset 0.5 m back along the
@@ -355,6 +355,8 @@ pub struct Wheel {
     /// and the tyre sits on the end of the strut, so it overstates the strut length by
     /// `0.5 + radius` before the travel clamp — 0.85 m with the default 0.35 m wheel. Use
     /// [`suspension_length`](Wheel::suspension_length) for the strut, not this.
+    /// This step's ray hit, rebuilt every step; not saved.
+    #[serde(skip)]
     pub ground_hit: Option<RaycastHit>,
     /// Output: current strut length in metres, clamped to
     /// `suspension_rest_length ± suspension_max_travel`. Snapped back to the rest length (and
@@ -450,7 +452,7 @@ impl Wheel {
 }
 
 /// Aerodinamik paket
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct AeroPackage {
     /// Dimensionless drag coefficient Cd. Drag is `½ · ρ · Cd · A · v²` with ρ fixed at
     /// 1.225 kg/m³ (sea-level air; there is no altitude model), directed against the chassis'
@@ -526,7 +528,7 @@ impl Default for AeroPackage {
 ///
 /// [`wheelbase`]: VehicleTuning::wheelbase
 /// [`track_width`]: VehicleTuning::track_width
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VehicleTuning {
     /// Lower bound of the engine speed band, in rpm. The engine speed is clamped into
     /// `[idle_rpm, max_rpm]` every step, so it never reads below this even with the car
@@ -666,7 +668,7 @@ impl Default for VehicleTuning {
 /// The three pedal/wheel inputs are yours to set each frame; `engine_rpm`,
 /// `current_speed_kmh` and (with auto-shift on) `current_gear` are outputs recomputed from
 /// the simulation and writing them achieves nothing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VehicleController {
     /// Every suspension corner. A wheel's *role* comes from its [`Wheel::axle_type`] and
     /// [`Wheel::is_left`] rather than from its index, but the order is still load-bearing:

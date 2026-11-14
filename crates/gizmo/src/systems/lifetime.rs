@@ -51,7 +51,7 @@ use gizmo_physics_core::Transform;
 /// with and without the plugin grew 5 → 10 → 15 live entities in one case and drained correctly
 /// in the other. It was caught only because that demo ran a hand-built delay queue beside the
 /// engine's and could see the two diverge.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DespawnAfter {
     /// Remaining lifetime (seconds). Can be changed at runtime (e.g. extend the lifetime).
     pub remaining: f32,
@@ -69,7 +69,7 @@ gizmo_core::impl_component!(DespawnAfter);
 /// Automatically despawns once the entity's world-y position drops BELOW `y` (kill-plane).
 /// Use it instead of hand-tracking cannonballs falling into a chasm/the void, or scattered
 /// debris.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct DespawnBelowY {
     /// An entity that drops below this y value is deleted.
     pub y: f32,

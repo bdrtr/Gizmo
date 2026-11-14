@@ -48,7 +48,7 @@ use winit::keyboard::KeyCode;
 /// component (the single source of truth); every frame the system processes the mouse/WASD
 /// and writes to `Camera` + `Transform`. The aim direction is read with
 /// [`forward`](Self::forward).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct FpsLook {
     /// Horizontal look angle (rad).
     pub yaw: f32,

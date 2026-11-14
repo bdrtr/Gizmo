@@ -199,6 +199,18 @@ fn register_facade_components(reg: &mut scene::registry::SceneRegistry) {
     {
         reg_or_warn!(systems::render::Typewriter, "Typewriter");
         reg_or_warn!(systems::render::LocalizedLabel, "LocalizedLabel");
+        reg_or_warn!(systems::fps_look::FpsLook, "FpsLook");
+    }
+    #[cfg(feature = "physics")]
+    reg_or_warn!(systems::auto_collider::AutoBoxCollider, "AutoBoxCollider");
+    reg_or_warn!(systems::lifetime::DespawnAfter, "DespawnAfter");
+    reg_or_warn!(systems::lifetime::DespawnBelowY, "DespawnBelowY");
+    reg_or_warn!(systems::spin::Spin, "Spin");
+    #[cfg(feature = "physics-soft")]
+    {
+        reg_or_warn!(gizmo_physics_soft::Cloth, "Cloth");
+        reg_or_warn!(gizmo_physics_soft::Rope, "Rope");
+        reg_or_warn!(gizmo_physics_soft::SoftBodyMesh, "SoftBodyMesh");
     }
     let _ = reg;
 }

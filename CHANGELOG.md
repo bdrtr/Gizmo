@@ -88,6 +88,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Scene fidelity: physics and play are saved, and go on after a reopen the way they were going.** A scene saved in
+  the middle of play — a file, or the editor's ▶/⏹ snapshot — kept the bodies and lost what drove them:
+  - **How bodies behave:** `PhysicsMaterial` (the per-entity override of a collider's material), `ExternalForce`,
+    `KinematicTarget`, `Breakable` (its health too — damage taken before a save still counts).
+  - **Who moves:** `CharacterController`, `VehicleController` (wheels, tuning, drivetrain, gear; a wheel's last ground
+    hit is not saved, the next raycast finds it), `Oxygen`.
+  - **Soft bodies:** `Cloth`, `Rope`, `SoftBodyMesh`, every node where it was and how fast.
+  - **Gameplay helpers:** `Timer`, `DespawnAfter`, `DespawnBelowY`, `Spin`, `FpsLook`, and an `AutoBoxCollider` not yet
+    resolved (a scene saved before its first frame).
+  `tests/scene_physics_fidelity.rs` checks each **by what happens next**: run, save mid-motion, reopen, keep running —
+  the bouncy ball bounces, the pushed body accelerates, the car drives on, the cloth swings on node for node with the
+  original. Each test was checked to fail with its registration taken out.
+  - **`CollisionLayer` is no longer a component** (**Breaks** `add_component(e, CollisionLayer { .. })`): it lives in
+    `Collider::collision_layer`, the only place the pipeline reads it, and attached on its own it changed nothing — so
+    saving it would have kept a setting never in effect. Nothing in the workspace attached it.
+  - **Not saved, with why:** `FluidParticle` and `FluidPhase` mark a slot of the GPU fluid buffer, whose particles are
+    never read back. `FluidSimulation` and `FluidInteractor` stay open: nothing in the engine drives the GPU fluid from
+    them yet (the inspector reads the first, the fluid demos the second), and saving a knob that steers nothing would
+    read as a closed gap.
+  `scene_fidelity`: 121 components, 26 open — the behaviour tree, the GPU fluid, animation, UI.
+
 - **Scene fidelity: everything seen is saved.** The rest of the class, each with a reopen test that each piece taken out
   breaks:
   - **Atlases packed from named images** (`Renderer::load_sprite_atlas_named(names, filter)`), named `atlas:` and their

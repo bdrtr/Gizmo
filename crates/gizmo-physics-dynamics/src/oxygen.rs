@@ -12,7 +12,7 @@ use gizmo_math::Vec3;
 use gizmo_physics_core::Transform;
 
 /// Bir entity'nin hava/oksijen deposu.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Oxygen {
     /// Kalan hava (saniye).
     pub current: f32,

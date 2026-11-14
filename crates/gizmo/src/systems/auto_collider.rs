@@ -80,7 +80,7 @@ pub fn derived_box_half_extents(scale: Vec3, base: Vec3) -> Vec3 {
 /// Resolved once by [`AutoBoxColliderSystem`] through the `Added<T>` gate, wherever the marker was
 /// spawned: in setup, in a system, or in the update hook, which runs after the physics schedule. The last
 /// was missed until 2026-11-07, and `marker_spawned_after_schedule_run_is_resolved` is why it no longer is.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub struct AutoBoxCollider {
     /// Per-axis base factor multiplied by the scale (usually `Vec3::ONE`).
     pub base: Vec3,

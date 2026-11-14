@@ -4,7 +4,7 @@ use gizmo_physics_core::BodyHandle;
 use crate::coupling::{accumulate_impulse, reaction_for, NodeCollision, NodeImpact, RigidImpulse, RigidReaction};
 
 /// Represents a single vertex/node in the FEM soft body mesh.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SoftBodyNode {
     /// Current world-space position, in metres.
     pub position: Vec3,
@@ -25,7 +25,7 @@ pub struct SoftBodyNode {
 }
 
 /// A 3D Tetrahedron (4 nodes) used as the fundamental finite element.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Tetrahedron {
     /// Indices into the nodes array of the parent SoftBody
     pub node_indices: [u32; 4],
@@ -61,7 +61,7 @@ impl Tetrahedron {
 
 /// The main CPU-side structure for an FEM-based Soft Body.
 /// It contains the geometry and material properties needed to upload to the GPU.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct SoftBodyMesh {
     /// The FEM vertices. A node's position in this vector *is* its identity: it is the index
