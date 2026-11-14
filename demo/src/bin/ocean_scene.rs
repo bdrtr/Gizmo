@@ -11,7 +11,7 @@
 //!     splat(1.0) → gerçek kutu ataleti), bu da devrilme dinamiğini görünür biçimde
 //!     değiştirirdi. `spawn_bundle` yalnız `spawn()+add_component` yığınını sadeleştirir,
 //!     davranışı bit-bit korur. Mafsallar entity id'ye kilitli → spawn SIRASI sabit kalır.
-//!   * **Render = çıplak `RenderWorld`** — `renderer.fluid_enabled = true` (GPU sıvı okyanus,
+//!   * **Render = çıplak `RenderWorld`** — sahnede bir `FluidSimulation` (GPU sıvı okyanus,
 //!     varsayılan kapalı) setup'ta bir kez açılır; X-tuşuyla Voronoi parçalama fizik adımından
 //!     sonraki `fracture` update kancasında yapılır, parça mesh'leri veri olarak (`MeshData`,
 //!     GPU'ya motorun yükleyicisi koyuyor). Kare oyun dünyasının kopyasından render thread'inde
@@ -56,8 +56,8 @@ pub struct FractureQueue {
 }
 
 fn setup(world: &mut World, renderer: &mut Renderer) -> DemoState {
-    // Bu sahne AKICI okyanusun kendisi → GPU sıvı render'ını aç (varsayılan kapalı).
-    renderer.fluid_enabled = true;
+    // Bu sahne AKICI okyanusun kendisi: sahnedeki `FluidSimulation` GPU sıvısını açıyor.
+    world.spawn_bundle((gizmo::physics::components::FluidSimulation::default(),));
 
     let mut asset_manager = AssetManager::new();
 

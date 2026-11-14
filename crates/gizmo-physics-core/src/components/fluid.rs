@@ -1,53 +1,76 @@
-//! Authoring parameters for a smoothed-particle-hydrodynamics (SPH) fluid volume.
+//! A particle fluid in the scene: what the engine's GPU fluid solver simulates.
 
 use gizmo_math::Vec3;
 
-/// The tunables of an SPH fluid volume attached to an entity.
+/// **The scene's fluid.** An entity carrying one turns the GPU fluid on and says what it is; with
+/// none, there is no water. `gizmo`'s frame preparation hands it to the solver every frame, so an
+/// edit — in code or in the inspector — takes effect on the next step.
 ///
-/// The defaults describe water at rest: 1000 kg/m³, 0.1 m particles, a light viscosity, and a
-/// 20 × 10 × 20 m box whose floor sits on the `y = 0` plane. Nothing here is validated or
-/// clamped — the type is a parameter block, not a guard.
+/// The fields are the solver's own dials (a position-based fluid, Macklin & Müller 2013), named
+/// for what they do. Until 2026-11-14 this type carried an SPH vocabulary — a "pressure multiplier"
+/// and a viscosity the solver has no term for — that nothing read: the inspector was its only
+/// reader, and whether a fluid ran at all was a renderer flag two demos set.
 ///
-/// This is authoring data at the moment: in this workspace the editor's inspector is the only
-/// code that reads these fields, so changing them does not steer a running solver.
+/// A new box, particle size or count lays the water out again, at rest on the floor of the box;
+/// the other dials change the water that is there. One fluid per scene: a second is ignored, and
+/// said so once.
 ///
-/// Being `#[non_exhaustive]`, downstream crates cannot build it with a struct literal (not
-/// even with `..Default::default()`); start from [`FluidSimulation::default()`](Default) and
-/// assign the fields you care about.
-#[derive(Debug, Clone)]
+/// Being `#[non_exhaustive]`, it is built from [`FluidSimulation::default()`](Default) with the
+/// fields set that matter.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 #[non_exhaustive]
 pub struct FluidSimulation {
-    /// Rest density ρ₀ in kg/m³ — the density the fluid is meant to settle at, and the zero
-    /// point that pressure is measured against rather than a cap. 1000 is fresh water.
+    /// Rest density ρ₀ in kg/m³ — what every particle is driven towards. 1000 is fresh water; it
+    /// also sets a particle's mass, so particles at rest spacing are at it.
     pub target_density: f32,
-    /// Stiffness scaling the pressure response to a density error. Higher values resist
-    /// compression harder at the cost of a stiffer system that needs smaller steps to stay
-    /// stable. A tuning knob, not a physical constant in Pa.
-    pub pressure_multiplier: f32,
-    /// Viscosity coefficient — a tuning knob, not a dynamic viscosity calibrated in Pa·s.
-    /// `0.0` is inviscid: neighbouring particles never exchange momentum through shear.
+    /// The density constraint's relaxation ε. **Lower is stiffer**: less squash under its own
+    /// weight, and less stable when stepped hard. 600 by default.
+    pub relaxation: f32,
+    /// Viscosity μ — how much neighbouring particles share their motion. Honey is high.
     pub viscosity: f32,
-    /// Radius of a single particle, in metres, and so the resolution knob: halving it
-    /// multiplies the particle count needed to fill the same volume by roughly eight.
+    /// XSPH smoothing — how far each particle's velocity is pulled towards its neighbours'.
+    pub xsph: f32,
+    /// Vorticity confinement — how much of the swirl the solver's damping took is given back.
+    pub vorticity: f32,
+    /// Surface tension — what rounds a droplet.
+    pub surface_tension: f32,
+    /// Cohesion — what holds a stream together.
+    pub cohesion: f32,
+    /// Density-constraint iterations per step; more is stiffer and slower.
+    pub solver_iterations: u32,
+    /// Downward acceleration, m/s².
+    pub gravity: f32,
+    /// A particle's radius in metres, and so the resolution: halving it needs roughly eight times
+    /// the particles for the same volume.
     pub particle_radius: f32,
-    /// Lower corner, in metres, of the world-space AABB the fluid is confined to. The
-    /// default `y` of 0 puts the floor of the domain on the ground plane.
+    /// Lower corner, in metres, of the world-space box the fluid is held in.
     pub bounds_min: Vec3,
-    /// Upper corner of that same AABB. Expected to be componentwise ≥
-    /// [`bounds_min`](Self::bounds_min); an inverted or flat box describes an empty domain
-    /// and is neither rejected nor normalised here.
+    /// Upper corner of that box.
     pub bounds_max: Vec3,
+    /// How many particles — at most the renderer's pool (a hundred thousand on the desktop), and
+    /// laid out from the floor of the box up.
+    pub particles: u32,
 }
 
 impl Default for FluidSimulation {
+    /// Water standing in a 10 × 10 × 10 m tank whose floor is the ground: a hundred thousand
+    /// particles of 0.1 m, about half a metre deep.
     fn default() -> Self {
         Self {
             target_density: 1000.0,
-            pressure_multiplier: 100.0,
-            viscosity: 0.01,
+            relaxation: 600.0,
+            viscosity: 0.005,
+            xsph: 0.05,
+            vorticity: 0.35,
+            surface_tension: 0.5,
+            cohesion: 0.008,
+            solver_iterations: 6,
+            gravity: 9.81,
             particle_radius: 0.1,
-            bounds_min: Vec3::new(-10.0, 0.0, -10.0),
-            bounds_max: Vec3::new(10.0, 10.0, 10.0),
+            bounds_min: Vec3::new(-5.0, 0.0, -5.0),
+            bounds_max: Vec3::new(5.0, 10.0, 5.0),
+            particles: 100_000,
         }
     }
 }

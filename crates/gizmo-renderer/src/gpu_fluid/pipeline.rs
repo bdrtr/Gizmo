@@ -24,9 +24,15 @@ pub struct FluidPipelines {
     pub pipeline_predict: wgpu::ComputePipeline,
     /// Computes each particle's density constraint multiplier.
     pub pipeline_calc_lambda: wgpu::ComputePipeline,
-    /// Applies the resulting position correction. It and the stage above run once per solver
-    /// iteration.
+    /// Computes the resulting position correction into the scratch buffer. It, the stage above and
+    /// [`Self::pipeline_commit_positions`] run once per solver iteration.
     pub pipeline_apply_delta_p: wgpu::ComputePipeline,
+    /// Copies the corrected positions in, once every particle has read its neighbours'.
+    pub pipeline_commit_positions: wgpu::ComputePipeline,
+    /// Stores each particle's velocity from its correction, for its neighbours to read.
+    pub pipeline_derive_velocity: wgpu::ComputePipeline,
+    /// Copies the new velocities in and takes the step.
+    pub pipeline_commit_velocity: wgpu::ComputePipeline,
     // AAA: Vorticity Confinement — computes curl of velocity field
     /// Computes the curl of the velocity field, for vorticity confinement.
     pub pipeline_compute_vorticity: wgpu::ComputePipeline,
@@ -69,6 +75,7 @@ pub fn create_fluid_pipelines(
     colliders_buffer: &wgpu::Buffer,
     sort_buffer: &wgpu::Buffer,
     sort_params_buffer: &wgpu::Buffer,
+    scratch_buffer: &wgpu::Buffer,
 ) -> FluidPipelines {
     let compute_bind_group_layout =
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -133,44 +140,31 @@ pub fn create_fluid_pipelines(
                     },
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
             ],
             label: Some("fluid_compute_layout"),
         });
 
-    let compute_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-        layout: &compute_bind_group_layout,
-        entries: &[
-            wgpu::BindGroupEntry {
-                binding: 0,
-                resource: params_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 1,
-                resource: particles_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 2,
-                resource: grid_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 3,
-                resource: colliders_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 4,
-                resource: sort_buffer.as_entire_binding(),
-            },
-            wgpu::BindGroupEntry {
-                binding: 5,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: sort_params_buffer,
-                    offset: 0,
-                    size: Some(wgpu::BufferSize::new(16).unwrap()),
-                }),
-            },
-        ],
-        label: Some("fluid_compute_bg"),
-    });
+    let compute_bind_group = create_compute_bind_group(
+        device,
+        &compute_bind_group_layout,
+        params_buffer,
+        particles_buffer,
+        grid_buffer,
+        colliders_buffer,
+        sort_buffer,
+        sort_params_buffer,
+        scratch_buffer,
+    );
 
     let shader_src = format!(
         "{}\n{}\n{}\n{}",
@@ -265,6 +259,19 @@ pub fn create_fluid_pipelines(
             compilation_options: Default::default(),
             cache: None,
         });
+    let simple = |label: &str, entry: &str| {
+        device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some(label),
+            layout: Some(&pipeline_layout),
+            module: &compute_shader,
+            entry_point: Some(entry),
+            compilation_options: Default::default(),
+            cache: None,
+        })
+    };
+    let pipeline_commit_positions = simple("Fluid Commit Positions", "commit_positions");
+    let pipeline_derive_velocity = simple("Fluid Derive Velocity", "derive_velocity");
+    let pipeline_commit_velocity = simple("Fluid Commit Velocity", "commit_velocity");
     // AAA: Foam/Spray classification pipeline
     let pipeline_classify = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
         label: Some("Fluid Classify Particles"),
@@ -590,6 +597,9 @@ pub fn create_fluid_pipelines(
         pipeline_predict,
         pipeline_calc_lambda,
         pipeline_apply_delta_p,
+        pipeline_commit_positions,
+        pipeline_derive_velocity,
+        pipeline_commit_velocity,
         pipeline_compute_vorticity,
         pipeline_update_velocity,
         pipeline_classify,
@@ -602,4 +612,58 @@ pub fn create_fluid_pipelines(
         blur_bind_group_layout,
         composite_bind_group_layout,
     }
+}
+
+/// The group every compute pass binds, over these buffers — made again when one of them is (the
+/// grid, for a new box).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn create_compute_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    params_buffer: &wgpu::Buffer,
+    particles_buffer: &wgpu::Buffer,
+    grid_buffer: &wgpu::Buffer,
+    colliders_buffer: &wgpu::Buffer,
+    sort_buffer: &wgpu::Buffer,
+    sort_params_buffer: &wgpu::Buffer,
+    scratch_buffer: &wgpu::Buffer,
+) -> wgpu::BindGroup {
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: params_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: particles_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: grid_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: colliders_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: sort_buffer.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: sort_params_buffer,
+                    offset: 0,
+                    size: Some(wgpu::BufferSize::new(16).unwrap()),
+                }),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: scratch_buffer.as_entire_binding(),
+            },
+        ],
+        label: Some("fluid_compute_bg"),
+    })
 }

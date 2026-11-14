@@ -354,18 +354,7 @@ fn fluid_only_render_pass(
 
             for (ent, interactor) in world.query::<(Entity, &gizmo::renderer::components::FluidInteractor)>().iter() {
                 if let Some(trans) = transforms.get(ent) {
-                    colliders.push(gizmo::renderer::gpu_fluid::FluidCollider {
-                        position: [trans.position.x, trans.position.y, trans.position.z],
-                        radius: interactor.radius,
-                        velocity: [
-                            interactor.velocity.x,
-                            interactor.velocity.y,
-                            interactor.velocity.z,
-                        ],
-                        shape_type: 0,
-                        half_extents: [0.0; 3],
-                        _pad: 0.0,
-                    });
+                    colliders.push(gizmo::renderer::gpu_fluid::FluidCollider::of(&interactor.shape, trans.position, Vec3::ZERO));
                 }
             }
         }

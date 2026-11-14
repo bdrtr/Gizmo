@@ -601,19 +601,58 @@ pub struct FluidPhase {
     pub phase: FluidPhaseType,
 }
 
-/// Makes an entity interact with the fluid: it displaces particles, and they push back.
+/// The volume a [`FluidInteractor`] pushes the fluid out of, centred on the entity.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum FluidShape {
+    /// A sphere of this radius, metres.
+    Sphere(f32),
+    /// An axis-aligned box of these half extents, metres (the entity's rotation is not followed).
+    Box(gizmo_math::Vec3),
+}
+
+/// Makes an entity part of the scene's fluid: the water is pushed out of its [`shape`](Self::shape),
+/// dragged along as it moves, and lifts it back.
 ///
-/// Both directions, which is what separates this from a plain collider — the entity is pushed out
-/// of the fluid by [`Self::buoyancy_factor`] while pushing the fluid out of its own volume.
-#[derive(Clone)]
+/// `gizmo`'s frame preparation sends every one to the solver each frame — where it is (its
+/// `GlobalTransform`) and how fast it moves (its `Velocity` when it has one, else how far it went
+/// since the last frame), so nothing here is kept in step by hand. Until 2026-11-14 the solver's
+/// slot and the velocity were fields the game had to fill, and only the `fluid` demo's own draw
+/// loop read the component.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct FluidInteractor {
-    /// This entity's slot in the fluid solver's collider buffer.
-    pub collider_gpu_index: u32,
-    /// How strongly the fluid lifts this entity. 0 = sinks, 1 = neutral, above = floats up.
+    /// What it displaces.
+    pub shape: FluidShape,
+    /// How strongly the fluid lifts it, as a share of its weight when fully under: 0 sinks as if
+    /// the water were not there, 1 floats neutrally, above rises.
     pub buoyancy_factor: f32,
-    /// The radius of the sphere the fluid is pushed out of.
-    pub radius: f32,
-    /// How fast the interactor is moving, so it drags the fluid along instead of teleporting
-    /// through it.
-    pub velocity: gizmo_math::Vec3,
+}
+
+impl Default for FluidInteractor {
+    /// A half-metre ball that floats neutrally.
+    fn default() -> Self {
+        Self { shape: FluidShape::Sphere(0.5), buoyancy_factor: 1.0 }
+    }
+}
+
+impl FluidInteractor {
+    /// A ball of `radius` metres.
+    #[must_use]
+    pub fn sphere(radius: f32) -> Self {
+        Self { shape: FluidShape::Sphere(radius), ..Self::default() }
+    }
+
+    /// A box of `half_extents` metres.
+    #[must_use]
+    pub fn cuboid(half_extents: gizmo_math::Vec3) -> Self {
+        Self { shape: FluidShape::Box(half_extents), ..Self::default() }
+    }
+
+    /// With another buoyancy factor.
+    #[must_use]
+    pub fn with_buoyancy(mut self, factor: f32) -> Self {
+        self.buoyancy_factor = factor;
+        self
+    }
 }

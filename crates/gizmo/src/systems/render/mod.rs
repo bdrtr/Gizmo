@@ -326,7 +326,7 @@ pub enum SimulationDetail<'a> {
 ///    view whose camera is gone dropped ([`Renderer::retain_view_histories`]);
 /// 3. the GPU simulations, stepped once for every view and in a submission of their own — the
 ///    volumetric smoke, the GPU rigid bodies (and the request for their readback), the fluid
-///    (only with [`Renderer::fluid_enabled`]) and the particles, each to the share `detail` asks
+///    (as many particles as its settings hold — none without a `FluidSimulation`) and the particles, each to the share `detail` asks
 ///    for. The share is written to the system, and it is what every view of the frame draws;
 /// 4. every camera that draws into a texture ([`CameraTarget`](crate::renderer::components::CameraTarget)),
 ///    each with its mirrors and in a submission of its own.
@@ -1123,6 +1123,10 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
         gizmo_core::system::System::run(&mut bone_attachment, world, animation_dt);
     }
 
+    // **The scene's fluid**, and what stands in it: the solver is given the `FluidSimulation` (no
+    // water without one) and every `FluidInteractor` where its transform now is (`fluid`).
+    fluid_scene_system(world, renderer, animation_dt);
+
     // ECS veri GPU'ya basılır ve GPU verisi ECS'ye alınır (GPU-fizik yolu — `physics` ister)
     #[cfg(feature = "physics")]
     {
@@ -1246,14 +1250,12 @@ fn step_gpu_simulations(
             .map(|&p| detail_from(p))
             .fold((0.0f32, 0.0f32), |(p0, f0), (p1, f1)| (p0.max(p1), f0.max(f1))),
     };
-    // No fluid unless the scene turned it on, whoever asks for how much: a zero count makes both
-    // the step and `render_ssfr` return at once, so a scene that never opted in neither simulates
-    // nor composites the default 100k-particle ocean — its SSFR surface once rendered over every
-    // scene as a mottled overlay that read like broken shadows.
-    let fluid_share = if renderer.fluid_enabled { fluid_share } else { 0.0 };
-
+    // No fluid unless the scene has one, whoever asks for how much: its settings hold no particles
+    // then, and a zero count makes both the step and `render_ssfr` return at once — the default
+    // pool's SSFR surface once rendered over every scene as a mottled overlay that read like broken
+    // shadows.
     if let Some(fluid) = renderer.gpu_fluid.as_mut() {
-        fluid.active_particles = (fluid.num_particles as f32 * fluid_share) as u32;
+        fluid.active_particles = (fluid.settings().particles as f32 * fluid_share) as u32;
         fluid.compute_pass(encoder, &renderer.queue, true, fluid.active_particles);
     }
 
@@ -1828,6 +1830,9 @@ pub use shake::{advance_camera_shakes, shake_view};
 
 mod ik;
 pub use ik::apply_ik_chains_system;
+
+mod fluid;
+pub use fluid::{fluid_scene_system, fluid_settings};
 #[cfg(feature = "physics")]
 pub mod water;
 #[cfg(feature = "physics")]
@@ -9183,7 +9188,7 @@ mod golden_render_tests {
     /// What the fog tests below draw: a wall behind everything, the thing itself around y = 8, and a
     /// camera at that height. One renderer per test: a device apiece is what this driver does not
     /// survive, and each new renderer allocates a whole fluid simulation.
-    async fn fog_wall_frame(renderer: &mut Renderer, density: f32, wall_z: f32, emitter: bool, frames: u32) -> Vec<u8> {
+    async fn fog_wall_frame(renderer: &mut Renderer, density: f32, wall_z: f32, emitter: bool, water: bool, frames: u32) -> Vec<u8> {
         use crate::renderer::components::ParticleEmitter;
         renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.6, 0.0], density));
         let mut world = World::new();
@@ -9203,6 +9208,14 @@ mod golden_render_tests {
             let mut source = ParticleEmitter::with_rate(400.0);
             source.size_start = 0.6;
             world.add_component(e, source);
+        }
+        if water {
+            // A pool standing on a raised floor, a metre or two under the camera's eye.
+            let mut fluid = gizmo_physics_core::components::FluidSimulation::default();
+            fluid.bounds_min = Vec3::new(-5.0, 6.0, -5.0);
+            fluid.bounds_max = Vec3::new(5.0, 10.0, 5.0);
+            let e = world.spawn();
+            world.add_component(e, fluid);
         }
         world.spawn_bundle(DirectionalLightBundle { intensity: 3.0, ..Default::default() });
         world.spawn_bundle(CameraBundle {
@@ -9243,11 +9256,11 @@ mod golden_render_tests {
             renderer.ssao = None;
             renderer.volumetric = None;
             renderer.gpu_fluid = None;
-            let clear_wall = fog_wall_frame(&mut renderer, 0.0, -8.0, false, 20).await;
-            let thick_wall = fog_wall_frame(&mut renderer, 5.0, -8.0, false, 20).await;
+            let clear_wall = fog_wall_frame(&mut renderer, 0.0, -8.0, false, false, 20).await;
+            let thick_wall = fog_wall_frame(&mut renderer, 5.0, -8.0, false, false, 20).await;
 
-            let seen = changed_pixels(&fog_wall_frame(&mut renderer, 0.0, -8.0, true, 20).await, &clear_wall, 128).0;
-            let left = changed_pixels(&fog_wall_frame(&mut renderer, 5.0, -8.0, true, 20).await, &thick_wall, 128).0;
+            let seen = changed_pixels(&fog_wall_frame(&mut renderer, 0.0, -8.0, true, false, 20).await, &clear_wall, 128).0;
+            let left = changed_pixels(&fog_wall_frame(&mut renderer, 5.0, -8.0, true, false, 20).await, &thick_wall, 128).0;
             assert!(seen >= 40, "particles do not show without fog: {seen} pixels");
             assert!(left * 10 <= seen, "particles stand out of thick fog: {left} pixels, {seen} without fog");
 
@@ -9259,8 +9272,8 @@ mod golden_render_tests {
             smoke.source_radius = 1.5;
             smoke.inject = 8.0;
             renderer.smoke = Some(smoke);
-            let seen = changed_pixels(&fog_wall_frame(&mut renderer, 0.0, -8.0, false, 20).await, &clear_wall, 128).0;
-            let left = changed_pixels(&fog_wall_frame(&mut renderer, 5.0, -8.0, false, 20).await, &thick_wall, 128).0;
+            let seen = changed_pixels(&fog_wall_frame(&mut renderer, 0.0, -8.0, false, false, 20).await, &clear_wall, 128).0;
+            let left = changed_pixels(&fog_wall_frame(&mut renderer, 5.0, -8.0, false, false, 20).await, &thick_wall, 128).0;
             assert!(seen >= 40, "smoke does not show without fog: {seen} pixels");
             assert!(left * 10 <= seen, "smoke stands out of thick fog: {left} pixels, {seen} without fog");
         });
@@ -9299,23 +9312,21 @@ mod golden_render_tests {
                 height,
             ));
 
-            renderer.fluid_enabled = false;
-            let clear_wall = fog_wall_frame(&mut renderer, 0.0, -8.0, false, 1).await;
-            let thick_wall = fog_wall_frame(&mut renderer, 5.0, -8.0, false, 1).await;
-            let near_wall = fog_wall_frame(&mut renderer, 0.0, 6.0, false, 1).await;
+            let clear_wall = fog_wall_frame(&mut renderer, 0.0, -8.0, false, false, 1).await;
+            let thick_wall = fog_wall_frame(&mut renderer, 5.0, -8.0, false, false, 1).await;
+            let near_wall = fog_wall_frame(&mut renderer, 0.0, 6.0, false, false, 1).await;
 
-            renderer.fluid_enabled = true;
-            let water = fog_wall_frame(&mut renderer, 0.0, -8.0, false, 2).await;
+            let water = fog_wall_frame(&mut renderer, 0.0, -8.0, false, true, 2).await;
             let seen = changed_pixels(&water, &clear_wall, 128).0;
             assert!(seen >= 40, "the water does not show without fog: {seen} pixels");
             let high_up = |f: &[u8]| f[..128 * 4 * 20].to_vec();
             assert_eq!(high_up(&water), high_up(&clear_wall), "the top of the frame has no water in it");
 
-            let in_fog = fog_wall_frame(&mut renderer, 5.0, -8.0, false, 2).await;
+            let in_fog = fog_wall_frame(&mut renderer, 5.0, -8.0, false, true, 2).await;
             let left = changed_pixels(&in_fog, &thick_wall, 128).0;
             assert!(left * 10 <= seen, "the water stands out of thick fog: {left} pixels, {seen} without fog");
 
-            let behind = fog_wall_frame(&mut renderer, 0.0, 6.0, false, 2).await;
+            let behind = fog_wall_frame(&mut renderer, 0.0, 6.0, false, true, 2).await;
             assert_eq!(changed_pixels(&behind, &near_wall, 128).0, 0, "water shows through a wall in front of it");
         });
     }

@@ -403,6 +403,7 @@ fn every_component_the_inspector_edits_survives_a_save() {
         ("draw_collider_section", "Collider"),
         ("draw_directional_light_section", "DirectionalLight"),
         ("draw_fighter_controller_section", "FighterController"),
+        ("draw_fluid_section", "FluidSimulation"),
         ("draw_hitbox_section", "Hitbox"),
         ("draw_hurtbox_section", "Hurtbox"),
         ("draw_mesh_renderer_section", "MeshRenderer"),
@@ -448,15 +449,6 @@ fn every_component_the_inspector_edits_survives_a_save() {
             "draw_reflection_section",
             "not one component: it is the generic fallback that draws every registered component \
              the sections above do not claim, through `ComponentRegistry`'s JSON hooks.",
-        ),
-        (
-            "draw_fluid_section",
-            "`FluidSimulation` is not registered ON PURPOSE while nothing consumes it. Measured \
-             2026-08-19: the inspector is the only code in the workspace that reads its fields \
-             (the component's own doc says so), and `Renderer::fluid_enabled` — the flag that \
-             decides whether a single particle is simulated — is set by two demo binaries and by \
-             nothing in the engine or the editor. Registering it would make a knob that steers \
-             nothing persist, which reads as a closed gap and is not one. See docs/ENGINE.md.",
         ),
     ];
 

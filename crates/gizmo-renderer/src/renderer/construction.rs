@@ -774,7 +774,6 @@ impl Renderer {
             // The 100k-particle fluid system above is allocated but idle: its SSFR
             // water surface only composites when a scene opts in. Otherwise every
             // non-fluid scene got a stray mottled ocean drawn over it.
-            fluid_enabled: false,
         };
         // The deferred passes that are built at start, through the one way to build each: a game
         // that switched one off with `= None` gets it back through the same call.

@@ -49,7 +49,9 @@ fn predict(@builtin(global_invocation_id) global_id: vec3<u32>) {
             pi.position = params.mouse_pos + jitter * 0.5;
             pi.velocity = params.mouse_dir * 5.0;
         } else {
-            pi.position = vec3<f32>(0.0, 8.0, 0.0) + jitter * 2.0;
+            // Near the top of the fluid's box, over its middle.
+            let mid = (params.bounds_min + params.bounds_max) * 0.5;
+            pi.position = vec3<f32>(mid.x, mix(params.bounds_min.y, params.bounds_max.y, 0.8), mid.z) + jitter * 2.0;
             pi.velocity = vec3<f32>(0.0);
         }
         
@@ -177,7 +179,7 @@ fn calc_lambda(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let constraint_C = max((density / params.rest_density) - 1.0, 0.0);
     
     // Relaxation parameter ε prevents division instability at boundaries
-    let eps = 600.0;
+    let eps = params.relaxation;
     particles[index].lambda = -constraint_C / (grad_c_sum_sq + eps);
 }
 
@@ -272,8 +274,34 @@ fn apply_delta_p(@builtin(global_invocation_id) global_id: vec3<u32>) {
     if (new_pos.z < b_min.z + padding) { new_pos.z = b_min.z + padding + jitter; }
     if (new_pos.z > b_max.z - padding) { new_pos.z = b_max.z - padding - jitter; }
     
-    pi.predicted_position = new_pos;
-    particles[index] = pi;
+    scratch[index] = vec4<f32>(new_pos, 0.0);
+}
+
+// The corrected positions, in — after every particle has read its neighbours' last ones.
+@compute @workgroup_size(64)
+fn commit_positions(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+    if (index >= params.num_particles) { return; }
+    particles[index].predicted_position = scratch[index].xyz;
+}
+
+// Each particle's velocity from its correction, v = (p* - p) / dt — what its neighbours'
+// viscosity and XSPH read in the next pass.
+@compute @workgroup_size(64)
+fn derive_velocity(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+    if (index >= params.num_particles) { return; }
+    let pi = particles[index];
+    particles[index].velocity = (pi.predicted_position - pi.position) / params.dt;
+}
+
+// The new velocities, in, and the step taken: position = predicted.
+@compute @workgroup_size(64)
+fn commit_velocity(@builtin(global_invocation_id) global_id: vec3<u32>) {
+    let index = global_id.x;
+    if (index >= params.num_particles) { return; }
+    particles[index].velocity = scratch[index].xyz;
+    particles[index].position = particles[index].predicted_position;
 }
 
 // ════════════════════════════════════════════════════════════════════════
@@ -484,8 +512,7 @@ fn update_velocity(@builtin(global_invocation_id) global_id: vec3<u32>) {
         pi.velocity = (pi.velocity / speed) * final_max_speed;
     }
     
-    pi.position = pi.predicted_position;
-    particles[index] = pi;
+    scratch[index] = vec4<f32>(pi.velocity, 0.0);
 }
 
 // ════════════════════════════════════════════════════════════════════════

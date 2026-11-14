@@ -2451,18 +2451,16 @@ after an add, where a queue of edits is true for none of them.
   game's fixed step on the strength of a public function existing. The open question is a policy
   one — does the engine's default frame own destruction, or is it opt-in like the gameplay
   systems `gameplay.rs` registers? — and it should be answered together with the surface.
-- **The GPU fluid is disconnected at both ends.** `Renderer::fluid_enabled` is `false` by default
-  (`gizmo-renderer/src/renderer/construction.rs:685`) and set `true` by exactly two demo binaries
-  (`ocean_scene.rs:499`, `fluid_rigid.rs:230`); nothing in the engine or the editor sets it. While
-  it is false the active particle count is zeroed at both gates (`gizmo/src/systems/render/mod.rs`,
-  `gizmo-studio/src/render_pipeline/mod.rs:24`), so the compute pass returns on its first line and
-  the SSFR surface is never composited. At the other end, `FluidSimulation`'s own doc already says
-  the inspector is the only code that reads its fields. Registering it for save/load was
-  considered and rejected on purpose: it would make a knob that steers nothing persist, which
-  *reads* as a closed gap. The real question is where the flag should come from — the presence of
-  a `FluidSimulation`, or a project setting with a checkbox — and today there is no surface to
-  constrain the answer. `every_component_the_inspector_edits_survives_a_save` carries this reason
-  as its exemption entry, so the decision cannot be forgotten silently.
+- **~~The GPU fluid is disconnected at both ends.~~ Closed 2026-11-14.** The flag came from the
+  presence of a `FluidSimulation`: `Renderer::fluid_enabled` is gone, and the frame preparation
+  (`gizmo/src/systems/render/fluid.rs`, `fluid_scene_system`) hands the solver the scene's
+  `FluidSimulation` — reshaped to the PBF solver's real dials (rest density, relaxation ε, viscosity,
+  XSPH, vorticity, surface tension, cohesion, iterations, gravity, particle radius, box, count) —
+  and every `FluidInteractor` as an obstacle. The water itself is saved by `FluidState`, which reads
+  the GPU at the moment it is serialised. On the way: the solver was **not deterministic** (its
+  position correction and velocity update wrote in place while neighbours read; two runs from one
+  state were 70 cm apart after 36 steps) and now goes through a scratch buffer and commit passes,
+  bit-for-bit (`the_same_water_stepped_twice_goes_the_same_way`).
 - **No host opens a network session**, and that is the design rather than the gap.
   `RollbackManager::new` appears only in `gizmo-net`'s own tests; nothing in the engine inserts one
   as a resource, so the windowed App's rollback code is unreachable as shipped and no host opens a

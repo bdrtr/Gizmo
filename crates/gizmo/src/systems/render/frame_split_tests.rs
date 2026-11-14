@@ -1409,8 +1409,7 @@ fn a_view_draws_what_the_frames_step_simulated() {
         let mut game = World::new();
         game.insert_resource(clock(1.0 / 60.0));
         game.spawn_bundle(crate::bundles::DirectionalLightBundle::default());
-        // The particles start as a sheet on the floor of a 10 m tank and the first step gathers them
-        // round (0, 8, 0): from here the camera sees both.
+        // The water stands as a sheet on the floor of a 10 m tank: from here the camera sees it.
         let monitor = game.spawn_bundle(crate::bundles::CameraBundle {
             position: Vec3::new(-12.0, 8.0, 0.0),
             pitch: -0.35,
@@ -1434,7 +1433,8 @@ fn a_view_draws_what_the_frames_step_simulated() {
         renderer.gpu_fluid = pool;
         assert_eq!(differ(&off, &no_system), 0, "the monitor drew a fluid the scene never turned on");
 
-        renderer.fluid_enabled = true;
+        game.spawn_bundle((gizmo_physics_core::components::FluidSimulation::default(),));
+        prepare_frame(&mut game, &mut renderer);
         draw_ahead_of_views(&game, &mut renderer, SimulationDetail::Full);
         let (active, all) = fluid(&renderer);
         assert_eq!(active, all, "full detail ran {active} of the fluid's {all} particles");

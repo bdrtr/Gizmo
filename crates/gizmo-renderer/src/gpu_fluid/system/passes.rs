@@ -1,10 +1,19 @@
 use super::*;
 
 impl GpuFluidSystem {
+    /// One compute pass of `pipeline` over `workgroups` groups, with the solver's bind group.
+    fn dispatch(&self, encoder: &mut wgpu::CommandEncoder, label: &str, pipeline: &wgpu::ComputePipeline, workgroups: u32) {
+        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some(label), timestamp_writes: None });
+        cpass.set_bind_group(0, &self.pipelines.compute_bind_group, &[0]);
+        cpass.set_pipeline(pipeline);
+        cpass.dispatch_workgroups(workgroups, 1, 1);
+    }
+
     #[tracing::instrument(skip_all, level = "trace")]
     /// Records one whole simulation step: hash and sort, then the predict/solve/update stages,
-    /// with the density constraint iterated [`FluidParams::solver_iterations`](crate::gpu_fluid::types::FluidParams::solver_iterations)
-    /// times.
+    /// with the density constraint iterated [`FluidSettings::solver_iterations`](crate::gpu_fluid::types::FluidSettings::solver_iterations)
+    /// times. Every pass reads what the pass before it wrote and writes only what no particle
+    /// reads in the same pass, so the same water stepped twice goes the same way.
     pub fn compute_pass(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -19,7 +28,7 @@ impl GpuFluidSystem {
         tracing::trace!(
             active_particles,
             update_grid,
-            solver_iterations = 6,
+            solver_iterations = self.settings.solver_iterations,
             "[GpuFluid] recording PBF solve"
         );
 
@@ -110,7 +119,7 @@ impl GpuFluidSystem {
         }
 
         // 3. PBF SOLVER ITERATIONS (AAA: increased from 4 to 6 for better convergence)
-        for _ in 0..6 {
+        for _ in 0..self.settings.solver_iterations.max(1) {
             {
                 let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                     label: Some("Fluid Calc Lambda"),
@@ -129,7 +138,9 @@ impl GpuFluidSystem {
                 cpass.set_pipeline(&self.pipelines.pipeline_apply_delta_p);
                 cpass.dispatch_workgroups(workgroups_parts, 1, 1);
             }
+            self.dispatch(encoder, "Fluid Commit Positions", &self.pipelines.pipeline_commit_positions, workgroups_parts);
         }
+        self.dispatch(encoder, "Fluid Derive Velocity", &self.pipelines.pipeline_derive_velocity, workgroups_parts);
 
         // 4. AAA: VORTICITY CONFINEMENT — ω = ∇ × v (curl of velocity)
         {
@@ -152,6 +163,7 @@ impl GpuFluidSystem {
             cpass.set_pipeline(&self.pipelines.pipeline_update_velocity);
             cpass.dispatch_workgroups(workgroups_parts, 1, 1);
         }
+        self.dispatch(encoder, "Fluid Commit Velocity", &self.pipelines.pipeline_commit_velocity, workgroups_parts);
 
         // 6. AAA: CLASSIFY PARTICLES — Foam / Spray / Droplet detection
         {

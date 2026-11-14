@@ -38,8 +38,8 @@ const NOT_SAVED: &[(&str, &str)] = &[
     ("LodLevel", "one level inside a `LodGroup`, saved with it"),
     ("VisibilityIndex", "the renderer's culling cache"),
     ("FluidHandle", "the GPU fluid simulation's handle, made when the simulation is"),
-    ("FluidParticle", "marks an entity as one slot of the GPU fluid buffer; the particle itself (where it is, how fast) lives in that buffer and is never read back, so a saved marker would bring back nothing"),
-    ("FluidPhase", "the phase of that slot, the same"),
+    ("FluidParticle", "marks an entity as one slot of the GPU fluid buffer; the water is saved whole, read from that buffer, by `FluidState`, and a marker would bring back nothing of its own"),
+    ("FluidPhase", "the phase of that slot, the same: saved in `FluidState`"),
     ("GpuPhysicsLink", "an entity's slot in the GPU rigid-body table, given when the body is uploaded"),
     // ── Only while a game runs ──────────────────────────────────────────────────────────────────
     ("IsDeleted", "an editor soft delete: the entity is not written at all"),
@@ -60,11 +60,6 @@ const NOT_SAVED: &[(&str, &str)] = &[
 
 /// Should be saved, and is not yet — closed class by class (decided 2026-11-14). Only shrinks.
 const OPEN: &[&str] = &[
-    // The GPU fluid, which nothing in the engine drives from the ECS yet: `FluidSimulation` is read
-    // by the inspector alone and `FluidInteractor` by the fluid demos alone. Saving them would keep
-    // knobs that steer nothing (`addable_components_round_trip` refuses the first for that reason);
-    // they close with the fluid being driven by them.
-    "FluidSimulation", "FluidInteractor",
 ];
 
 fn workspace() -> PathBuf {

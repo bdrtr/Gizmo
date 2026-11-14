@@ -111,6 +111,13 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::ik::IkChains, "IkChains");
         // A label by its key in the string table: relabelled in the language of the day.
         reg_or_warn!(crate::locale::LocalizedText, "LocalizedText");
+        // The scene's fluid (its dials, its box, how much of it) and what stands in it — both
+        // handed to the GPU solver by the frame preparation (`gizmo::systems::render::fluid`).
+        #[cfg(feature = "physics")]
+        reg_or_warn!(gizmo_physics_core::components::FluidSimulation, "FluidSimulation");
+        reg_or_warn!(gizmo_renderer::components::FluidInteractor, "FluidInteractor");
+        // And the water itself, read from the GPU as it is saved.
+        reg_or_warn!(gizmo_renderer::gpu_fluid::FluidState, "FluidState");
         reg_or_warn!(gizmo_renderer::components::SpriteAnimation, "SpriteAnimation");
         // Saved in its faces by name (`text_sync`): "default", a path, or a name a game loads it under.
         reg_or_warn!(gizmo_renderer::components::Text, "Text");

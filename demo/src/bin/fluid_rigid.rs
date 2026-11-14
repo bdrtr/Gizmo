@@ -42,7 +42,8 @@ fn main() {
             // GPU fiziği ve GPU sıvısı varsayılan kapalı: bu demo ikisini de istiyor. Bir kez,
             // kurulumda — `resize` var olanı yeniden boyutluyor, kapalıyı açmıyor ya da tersi.
             renderer.enable_gpu_physics();
-            renderer.fluid_enabled = true;
+            // The scene's water: a FluidSimulation is what turns the GPU fluid on.
+            world.spawn_bundle((gizmo::physics::components::FluidSimulation::default(),));
             println!("══════════════════════════════════════════");
             println!("   🌊 SPH Sıvı ve Katı Cisim Etkileşimi");
             println!("══════════════════════════════════════════");
@@ -123,6 +124,7 @@ fn main() {
             world.add_component(ground, Transform::new(Vec3::new(0.0, 0.0, 0.0)));
             world.add_component(ground, Collider::box_collider(Vec3::new(2.5, 0.1, 2.5))); // Su tankının altı
             world.add_component(ground, RigidBody::new(0.0, false));
+            world.add_component(ground, gizmo::renderer::components::FluidInteractor::cuboid(Vec3::new(2.5, 0.1, 2.5)));
 
             // Havada dönen/sallanan birkaç küp ekleyelim
             for i in 0..5 {
@@ -133,6 +135,7 @@ fn main() {
                 );
                 world.add_component(box_ent, Collider::box_collider(Vec3::new(0.3, 0.3, 0.3)));
                 world.add_component(box_ent, RigidBody::new(1.0, true));
+                world.add_component(box_ent, gizmo::renderer::components::FluidInteractor::cuboid(Vec3::new(0.3, 0.3, 0.3)));
             }
 
             state
@@ -218,10 +221,9 @@ fn main() {
 
             gizmo::systems::physics_debug_system(world);
         })
-        // Sıvı–cisim bağlantısı: sahnenin çarpıştırıcıları her senkron noktasında GPU sıvısının
-        // çarpıştırıcı tamponuna yazılıyor (oyun dünyası okunuyor, renderer yazılıyor). GPU fiziğinin
-        // gönderimi ve geri okuması karenin hazırlığında (`prepare_frame`) zaten koşuyor.
-        .set_render_stage(RenderWorld::new().with_settings(gizmo::systems::gpu_fluid_coupling_system))
+        // Sıvı–cisim bağlantısı: her cismin `FluidInteractor`'ı karenin hazırlığında (`prepare_frame`)
+        // GPU sıvısına gidiyor, GPU fiziğinin gönderimi ve geri okuması gibi.
+        .set_render_stage(RenderWorld::new())
         .run()
         .expect("uygulama çalıştırılamadı");
 }

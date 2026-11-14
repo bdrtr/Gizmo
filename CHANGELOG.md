@@ -88,6 +88,30 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **The scene's fluid is the fluid that runs, its water is saved, and the solver is deterministic** (decided
+  2026-11-14). `FluidSimulation` steered nothing — the inspector was its only reader — and whether any fluid ran was
+  `Renderer::fluid_enabled`, set by two demos. Now:
+  - **`Renderer::fluid_enabled` is gone.** The frame preparation (`fluid_scene_system`, in `prepare_frame`) gives the
+    GPU solver the scene's `FluidSimulation`, and no fluid without one. `FluidSimulation` is reshaped to the PBF
+    solver's real dials — rest density, relaxation ε (was a constant 600 in the shader), viscosity, XSPH, vorticity,
+    surface tension, cohesion, iterations (was a constant 6), gravity, particle radius (mass and grid follow), box,
+    particle count; the SPH `pressure_multiplier` and the unused `gas_constant` slot are gone. A new box, size or
+    count lays the water out at rest on the floor of its box, rebuilding the neighbour grid for the box.
+  - **`FluidInteractor` reaches the solver from its transform**: `shape` (`FluidShape::Sphere`/`Box`) and
+    `buoyancy_factor`; the solver's slot and the velocity the game had to fill are gone (the velocity is the body's
+    `Velocity`, or how far it went). `gpu_fluid_coupling_system` is removed — `fluid_rigid` gives its bodies
+    interactors.
+  - **The water is saved.** `FluidState`, beside the `FluidSimulation`, reads the particles from the GPU at the
+    moment it is serialised (positions, velocities, phases), and a reopened scene's water goes on from there.
+  - **The solver was not deterministic**: its position correction and velocity update wrote in place while each
+    particle's neighbours were still reading, so two runs from one state were 1.3 mm apart after one step and 70 cm
+    after 36. They now write a scratch buffer that commit passes copy in; bit for bit.
+  Tests: `a_fluid_simulation_is_the_fluid_that_runs`, `a_fluid_interactor_pushes_the_water_out_of_itself`,
+  `the_same_water_stepped_twice_goes_the_same_way`, `the_water_reopens_where_it_was_and_goes_on_the_same` (exact),
+  each failing with its piece taken out. **Breaks:** `Renderer::fluid_enabled`, `FluidSimulation`'s fields,
+  `FluidInteractor`'s fields, `gpu_fluid_coupling_system`, `FluidParams::{gas_constant, viscosity}` (now
+  `relaxation`, `_reserved`). `scene_fidelity`: nothing open. Buoyancy (`buoyancy_factor`) is the next change.
+
 - **A UI is saved as it stands, and is used the same way after a reopen** (decided 2026-11-14). No UI component was
   registered: a saved menu came back as named entities with no boxes, colours or controls, and the editor's ⏹ emptied
   every UI a game built in play. All twenty `gizmo-ui` components and `LocalizedText` are now in

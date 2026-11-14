@@ -338,6 +338,10 @@ world.insert_resource(editor_state);
     let _ = component_registry.register::<gizmo::physics::components::fighter::FighterController>("FighterController");
     let _ = component_registry.register::<gizmo::ai::components::NavAgent>("NavAgent");
     let _ = component_registry.register::<gizmo::ai::BehaviorTree>("BehaviorTree");
+    // The scene's fluid and what stands in it: both reach the GPU solver through the frame
+    // preparation, so adding one here is what puts water in the scene.
+    let _ = component_registry.register::<gizmo::physics::components::FluidSimulation>("FluidSimulation");
+    let _ = component_registry.register::<gizmo::renderer::components::FluidInteractor>("FluidInteractor");
     world.insert_resource(component_registry);
 
     // --- SCRIPT ENGINE & ASSET WATCHER BİRLEŞİMİ ---

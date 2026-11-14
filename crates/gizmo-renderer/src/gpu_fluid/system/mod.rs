@@ -13,16 +13,16 @@ use ssfr::create_ssfr_sized;
 /// A GPU SPH fluid: the solver's buffers, its pipelines, and the screen-space surface it is drawn
 /// as.
 ///
-/// A renderer allocates one of these but does **not** composite it unless
-/// [`Renderer::fluid_enabled`](crate::Renderer::fluid_enabled) is set — an ocean surface over every
-/// scene is not a sensible default.
+/// A renderer allocates one of these, holding **no fluid** until it is given one: its settings'
+/// particle count starts at zero, and `gizmo`'s frame preparation sets them from the scene's
+/// `FluidSimulation` — a scene without one has no water over it.
 pub struct GpuFluidSystem {
     /// How many particles the simulation can run — its buffers' size.
     pub num_particles: u32,
     /// How many of them this frame's step simulated, and so how many every view of the frame
-    /// draws. Written by the step (the game path's, once a frame and ahead of every view): 0
-    /// unless [`Renderer::fluid_enabled`](crate::Renderer::fluid_enabled), the share the
-    /// frame's level of detail asks for when it is, and 0 before the first step.
+    /// draws. Written by the step (the game path's, once a frame and ahead of every view): the
+    /// share of [`FluidSettings::particles`] the frame's level of detail asks for, and 0 before the
+    /// first step.
     pub active_particles: u32,
     /// How many cells the neighbour-search grid has.
     pub total_cells: u32,
@@ -34,6 +34,11 @@ pub struct GpuFluidSystem {
     pub grid_buffer: wgpu::Buffer,
     /// The obstacles.
     pub colliders_buffer: wgpu::Buffer,
+    /// What the fluid is — set with [`Self::apply_settings`], read back with [`Self::settings`].
+    settings: FluidSettings,
+    /// One `vec4` per particle a pass computes from its neighbours and a commit pass copies in —
+    /// so no pass writes what its neighbours are still reading (see `fluid_bindings.wgsl`).
+    pub scratch_buffer: wgpu::Buffer,
     /// The `(hash, index)` pairs the bitonic sort orders.
     pub sort_buffer: wgpu::Buffer,
     /// Which stage of that sort the next dispatch runs.
@@ -105,51 +110,17 @@ impl GpuFluidSystem {
         width: u32,
         height: u32,
     ) -> Self {
-        let n = num_particles as usize;
-        // Okyanus için geniş ve sığ bir spawn alanı (10x10 metre)
-        let spacing = 0.077_f32;
-        let nx = ((10.0 - 0.2) / spacing).floor() as usize; // 10 metrelik havuz (-5..5), biraz pay bırakıyoruz
-        let nz = ((10.0 - 0.2) / spacing).floor() as usize;
-
-        let mut initial_particles = Vec::with_capacity(n);
-        for i in 0..n {
-            let xi = (i % nx) as f32;
-            let zi = ((i / nx) % nz) as f32;
-            let yi = (i / (nx * nz)) as f32;
-
-            let offset_x = -4.9; // Havuzun sol köşesinden başla
-            let offset_z = -4.9;
-
-            let x = offset_x + xi * spacing;
-            let y = 0.1 + yi * spacing; // Suları dipten başlat
-            let z = offset_z + zi * spacing;
-
-            initial_particles.push(FluidParticle {
-                position: [x, y, z],
-                density: 1000.0,
-                velocity: [0.0, 0.0, 0.0],
-                lambda: 0.0,
-                predicted_position: [x, y, z],
-                phase: 0xFFFFFFFF, // Marked as uninitialized
-                vorticity: [0.0, 0.0, 0.0],
-                _pad_vort: 0.0,
-            });
-        }
-
+        // Holding no fluid until it is given one: every particle not yet placed (see [`lattice`]).
+        let settings = FluidSettings { particles: 0, ..FluidSettings::default() };
+        let initial_particles = lattice(&settings, num_particles);
         let particles_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fluid Particles Buffer"),
             contents: bytemuck::cast_slice(&initial_particles),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            // COPY_SRC: read back to be saved with a scene (`read_particles`).
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
         });
 
-        // Domain'i büyütelim, Ocean simülasyonu için daha geniş bir alan
-        let bounds_min = [-5.0, 0.0, -5.0];
-        let bounds_max = [5.0, 10.0, 5.0];
-        let cell_size = 0.1_f32; // DİKKAT: Bunu değiştirmek SPH Kernel formüllerini bozuyordu, 0.1'de kalmalı!
-
-        let grid_size_x = f32::ceil((bounds_max[0] - bounds_min[0]) / cell_size) as u32 + 1;
-        let grid_size_y = f32::ceil((bounds_max[1] - bounds_min[1]) / cell_size) as u32 + 1;
-        let grid_size_z = f32::ceil((bounds_max[2] - bounds_min[2]) / cell_size) as u32 + 1;
+        let [grid_size_x, grid_size_y, grid_size_z] = settings.grid_size();
         let total_cells = grid_size_x * grid_size_y * grid_size_z;
 
         // Initialize grid buffer (2 x u32 per cell: start_index, count)
@@ -206,37 +177,7 @@ impl GpuFluidSystem {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
-        let params = FluidParams {
-            dt: 0.016, // PBF timestep (1/60 sec)
-            gravity: 9.81,
-            rest_density: 1000.0,
-            gas_constant: 10000.0,
-            viscosity: 1.0,
-            mass: 0.457,
-            smoothing_radius: cell_size,
-            num_particles,
-            grid_size_x,
-            grid_size_y,
-            grid_size_z,
-            cell_size,
-            bounds_min,
-            bounds_padding1: 0.0,
-            bounds_max,
-            bounds_padding2: 0.0,
-            mouse_pos: [0.0; 3],
-            mouse_active: 0.0,
-            mouse_dir: [0.0; 3],
-            mouse_radius: 5.0,
-            num_colliders: 0,
-            cohesion: 0.008,
-            time: 0.0,
-            // AAA Physics Parameters
-            vorticity_strength: 0.35,   // Vorticity Confinement epsilon
-            surface_tension: 0.5,       // Akinci surface tension gamma
-            viscosity_laplacian: 0.005, // Laplacian viscosity mu
-            xsph_factor: 0.05,          // XSPH smoothing factor
-            solver_iterations: 6,       // PBF solver iterations
-        };
+        let params = params_for(&settings, num_particles);
         let params_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Fluid Params Buffer"),
             contents: bytemuck::cast_slice(&[params]),
@@ -263,6 +204,12 @@ impl GpuFluidSystem {
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
 
+        let scratch_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Fluid Scratch Buffer"),
+            size: (num_particles.max(1) as u64) * 16,
+            usage: wgpu::BufferUsages::STORAGE,
+            mapped_at_creation: false,
+        });
         let pipelines = create_fluid_pipelines(
             device,
             global_bind_group_layout,
@@ -273,6 +220,7 @@ impl GpuFluidSystem {
             &colliders_buffer,
             &sort_buffer,
             &sort_params_buffer,
+            &scratch_buffer,
         );
 
         // Simple Sphere for rendering (Smaller)
@@ -304,6 +252,8 @@ impl GpuFluidSystem {
             params_buffer,
             grid_buffer,
             colliders_buffer,
+            settings,
+            scratch_buffer,
             sort_buffer,
             sort_params_buffer,
             pipelines,
@@ -359,11 +309,95 @@ impl GpuFluidSystem {
         self.opaque_bg_texture_view = ssfr.opaque_bg_texture_view;
     }
 
+    /// What the fluid is now.
+    pub fn settings(&self) -> FluidSettings {
+        self.settings
+    }
+
+    /// Makes the fluid `settings`: the solver's dials take effect on the next step, and a new box
+    /// or particle size rebuilds the neighbour grid over it. A new box, particle size or count also
+    /// lays the water out again, at rest at the bottom of the box ([`lattice`]) — the particles that
+    /// were there belonged to another fluid. `particles` past the pool is held to the pool.
+    pub fn apply_settings(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, settings: FluidSettings) {
+        let settings = FluidSettings { particles: settings.particles.min(self.num_particles), ..settings };
+        if settings == self.settings {
+            return;
+        }
+        let old = self.settings;
+        self.settings = settings;
+        let refill = old.bounds_min != settings.bounds_min
+            || old.bounds_max != settings.bounds_max
+            || old.particle_radius != settings.particle_radius
+            || old.particles != settings.particles;
+        if old.grid_size() != settings.grid_size() {
+            let [x, y, z] = settings.grid_size();
+            self.total_cells = x * y * z;
+            self.grid_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Fluid Grid Buffer"),
+                contents: bytemuck::cast_slice(&vec![0_u32; (self.total_cells * 2) as usize]),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            });
+            self.pipelines.compute_bind_group = super::pipeline::create_compute_bind_group(
+                device,
+                &self.pipelines.compute_bind_group_layout,
+                &self.params_buffer,
+                &self.particles_buffer,
+                &self.grid_buffer,
+                &self.colliders_buffer,
+                &self.sort_buffer,
+                &self.sort_params_buffer,
+                &self.scratch_buffer,
+            );
+        }
+        if refill {
+            queue.write_buffer(&self.particles_buffer, 0, bytemuck::cast_slice(&lattice(&settings, self.num_particles)));
+        }
+        // Everything but the per-step block (pointer, colliders, time) the step writes itself.
+        let params = params_for(&settings, self.num_particles);
+        queue.write_buffer(&self.params_buffer, 0, &bytemuck::bytes_of(&params)[..80]);
+        queue.write_buffer(&self.params_buffer, 116, &bytemuck::bytes_of(&params)[116..]);
+    }
+
+    /// The first `count` particles as they are on the GPU now — **waits** for the GPU to finish
+    /// what it was given. For saving the water with a scene, and for tests; not for every frame.
+    /// `None` when the GPU would not give the buffer back.
+    pub fn read_particles(&self, device: &wgpu::Device, queue: &wgpu::Queue, count: u32) -> Option<Vec<FluidParticle>> {
+        let size = (count.min(self.num_particles) as u64) * std::mem::size_of::<FluidParticle>() as u64;
+        if size == 0 {
+            return Some(Vec::new());
+        }
+        Some(bytemuck::cast_slice(&read_buffer(device, queue, &self.particles_buffer, size)?).to_vec())
+    }
+
+    /// The solver's parameter block as the GPU holds it — waits, like [`Self::read_particles`].
+    pub fn read_params(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<FluidParams> {
+        Some(bytemuck::pod_read_unaligned(&read_buffer(device, queue, &self.params_buffer, std::mem::size_of::<FluidParams>() as u64)?))
+    }
+
+    /// Puts `particles` in the pool from its start — water saved with a scene, come back where it
+    /// was. The settings must already be the fluid's (a later change of box, size or count lays the
+    /// water out again over these).
+    pub fn write_particles(&self, queue: &wgpu::Queue, particles: &[FluidParticle]) {
+        let n = particles.len().min(self.num_particles as usize);
+        if n > 0 {
+            queue.write_buffer(&self.particles_buffer, 0, bytemuck::cast_slice(&particles[..n]));
+        }
+    }
+
+    /// The obstacles for the next step — at most [`MAX_FLUID_COLLIDERS`], the rest dropped.
+    pub fn set_colliders(&self, queue: &wgpu::Queue, colliders: &[FluidCollider]) {
+        let n = colliders.len().min(MAX_FLUID_COLLIDERS);
+        if n > 0 {
+            queue.write_buffer(&self.colliders_buffer, 0, bytemuck::cast_slice(&colliders[..n]));
+        }
+        self.update_colliders_count(queue, n as u32);
+    }
+
     /// Sets how many entries of the collider buffer are live.
     pub fn update_colliders_count(&self, queue: &wgpu::Queue, count: u32) {
         // num_colliders offset is 108:
         // params layout:
-        // dt(0), gravity(4), rest_density(8), gas_constant(12), viscosity(16), mass(20), smoothing_radius(24), num_particles(28)
+        // dt(0), gravity(4), rest_density(8), relaxation(12), _reserved(16), mass(20), smoothing_radius(24), num_particles(28)
         // grid_size_x(32), grid_size_y(36), grid_size_z(40), cell_size(44)
         // bounds_min(48,52,56), padding1(60)
         // bounds_max(64,68,72), padding2(76)
@@ -419,13 +453,13 @@ impl GpuFluidSystem {
             mouse_dir,
             mouse_radius: 10.0, // Large mouse influence
             num_colliders,
-            cohesion: 0.008, // Cohesion coefficient (surface tension molecular)
+            cohesion: self.settings.cohesion,
             time,
-            vorticity_strength: 0.35,   // Vorticity Confinement epsilon
-            surface_tension: 0.5,       // Akinci surface tension gamma
-            viscosity_laplacian: 0.005, // Laplacian viscosity mu
-            xsph_factor: 0.05,          // XSPH smoothing factor
-            solver_iterations: 6,       // PBF solver iterations per frame
+            vorticity_strength: self.settings.vorticity,
+            surface_tension: self.settings.surface_tension,
+            viscosity_laplacian: self.settings.viscosity,
+            xsph_factor: self.settings.xsph,
+            solver_iterations: self.settings.solver_iterations,
         };
 
         queue.write_buffer(&self.params_buffer, 80, bytemuck::cast_slice(&[dyn_params]));
@@ -435,6 +469,99 @@ impl GpuFluidSystem {
             bytemuck::cast_slice(&[active_particles]),
         );
     }
+}
+
+/// The first `size` bytes of `buffer`, copied out and waited for.
+pub(crate) fn read_buffer(device: &wgpu::Device, queue: &wgpu::Queue, buffer: &wgpu::Buffer, size: u64) -> Option<Vec<u8>> {
+    let staging = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Fluid Readback"),
+        size,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("Fluid Readback") });
+    encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, size);
+    queue.submit(Some(encoder.finish()));
+    let slice = staging.slice(..);
+    let (tx, rx) = std::sync::mpsc::channel();
+    slice.map_async(wgpu::MapMode::Read, move |v| {
+        let _ = tx.send(v);
+    });
+    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+    if !matches!(rx.recv(), Ok(Ok(()))) {
+        tracing::warn!(size, "[GpuFluid] a fluid buffer could not be read back");
+        return None;
+    }
+    let out = slice.get_mapped_range().ok().map(|d| d.to_vec());
+    staging.unmap();
+    out
+}
+
+/// The solver's block for `settings`, over a pool of `pool` particles, with no pointer and no
+/// colliders.
+fn params_for(settings: &FluidSettings, pool: u32) -> FluidParams {
+    let [grid_size_x, grid_size_y, grid_size_z] = settings.grid_size();
+    FluidParams {
+        dt: 0.016,
+        gravity: settings.gravity,
+        rest_density: settings.rest_density,
+        relaxation: settings.relaxation,
+        _reserved: 0.0,
+        mass: settings.particle_mass(),
+        smoothing_radius: settings.particle_radius,
+        num_particles: pool,
+        grid_size_x,
+        grid_size_y,
+        grid_size_z,
+        cell_size: settings.particle_radius,
+        bounds_min: settings.bounds_min,
+        bounds_padding1: 0.0,
+        bounds_max: settings.bounds_max,
+        bounds_padding2: 0.0,
+        mouse_pos: [0.0; 3],
+        mouse_active: 0.0,
+        mouse_dir: [0.0; 3],
+        mouse_radius: 5.0,
+        num_colliders: 0,
+        cohesion: settings.cohesion,
+        time: 0.0,
+        vorticity_strength: settings.vorticity,
+        surface_tension: settings.surface_tension,
+        viscosity_laplacian: settings.viscosity,
+        xsph_factor: settings.xsph,
+        solver_iterations: settings.solver_iterations,
+    }
+}
+
+/// `pool` particles of `settings`' fluid, at rest: the first [`FluidSettings::particles`] laid
+/// out at the rest spacing from the bottom of the box up, filling it side to side — water standing
+/// in its tank. The rest of the pool is **not yet placed** (`phase` `0xFFFFFFFF`): a caller that
+/// steps more particles than the settings hold — the `fluid` demo pours that way — has the solver
+/// place each on its first step, at the pointer while it is pushing, else over the middle of the
+/// box near its top.
+pub fn lattice(settings: &FluidSettings, pool: u32) -> Vec<FluidParticle> {
+    let spacing = settings.spacing().max(1e-4);
+    let pad = settings.particle_radius * 0.5 + spacing * 0.5;
+    let (min, max) = (settings.bounds_min, settings.bounds_max);
+    let across = |i: usize| (((max[i] - min[i]) - 2.0 * pad) / spacing).floor().max(1.0) as usize;
+    let (nx, nz) = (across(0), across(2));
+    (0..pool as usize)
+        .map(|i| {
+            let (xi, zi, yi) = (i % nx, (i / nx) % nz, i / (nx * nz));
+            let p = [min[0] + pad + xi as f32 * spacing, min[1] + pad + yi as f32 * spacing, min[2] + pad + zi as f32 * spacing];
+            let p = [p[0], p[1].min(max[1] - pad), p[2]];
+            FluidParticle {
+                position: p,
+                density: settings.rest_density,
+                velocity: [0.0; 3],
+                lambda: 0.0,
+                predicted_position: p,
+                phase: if (i as u32) < settings.particles { 0 } else { 0xFFFF_FFFF },
+                vorticity: [0.0; 3],
+                _pad_vort: 0.0,
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]

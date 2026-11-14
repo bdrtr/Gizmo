@@ -86,6 +86,17 @@ pub struct FluidCollider {
     pub _pad: f32,
 }
 
+impl FluidCollider {
+    /// An obstacle of `shape` at `position`, moving at `velocity` (world space, metres).
+    pub fn of(shape: &crate::components::FluidShape, position: gizmo_math::Vec3, velocity: gizmo_math::Vec3) -> Self {
+        let (shape_type, radius, half_extents) = match *shape {
+            crate::components::FluidShape::Sphere(r) => (0, r, [0.0; 3]),
+            crate::components::FluidShape::Box(h) => (1, 0.0, h.to_array()),
+        };
+        Self { position: position.to_array(), radius, velocity: velocity.to_array(), shape_type, half_extents, _pad: 0.0 }
+    }
+}
+
 /// Every dial the fluid solver reads, in the one uniform block each of its passes binds.
 ///
 /// The passes (predict, hash, sort, density, solve, viscosity, integrate) all bind this same
@@ -99,10 +110,12 @@ pub struct FluidParams {
     pub gravity: f32,
     /// The density the fluid relaxes towards; the PBF constraint drives every particle here.
     pub rest_density: f32,
-    /// Stiffness relating a density error to a pressure.
-    pub gas_constant: f32,
-    /// Velocity-diffusion strength — how much a particle is dragged along by its neighbours.
-    pub viscosity: f32,
+    /// The density constraint's relaxation ε (Macklin & Müller 2013): added to the constraint
+    /// gradient's norm, so a particle with few neighbours is not shot away. **Lower is stiffer** —
+    /// less give under compression, and less stable at large steps.
+    pub relaxation: f32,
+    /// Unused by every pass; a slot kept so the block's layout stays where the shaders read it.
+    pub _reserved: f32,
     /// The mass of a single particle.
     pub mass: f32,
     /// The SPH kernel's support radius: past this, particles do not see each other. It is also
@@ -156,6 +169,79 @@ pub struct FluidParams {
     pub xsph_factor: f32,
     /// How many times the density constraint is solved per step. More is stiffer and slower.
     pub solver_iterations: u32,
+}
+
+/// What a fluid is: what the solver relaxes it towards and how, where it is held, and how much of
+/// it there is. [`GpuFluidSystem::apply_settings`](crate::gpu_fluid::GpuFluidSystem::apply_settings)
+/// takes one; `gizmo`'s frame preparation gives it the scene's `FluidSimulation`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FluidSettings {
+    /// The density every particle is driven towards, kg/m³.
+    pub rest_density: f32,
+    /// The density constraint's relaxation ε — lower is stiffer (see [`FluidParams::relaxation`]).
+    pub relaxation: f32,
+    /// Laplacian viscosity μ — how much neighbouring particles share their motion.
+    pub viscosity: f32,
+    /// XSPH velocity smoothing — how far a particle's velocity is pulled to its neighbours'.
+    pub xsph: f32,
+    /// Vorticity confinement ε — how much of the swirl numerical damping took is given back.
+    pub vorticity: f32,
+    /// Surface tension γ — what rounds a droplet.
+    pub surface_tension: f32,
+    /// Cohesion — what holds a stream together.
+    pub cohesion: f32,
+    /// Density-constraint iterations per step; more is stiffer and slower.
+    pub solver_iterations: u32,
+    /// Downward acceleration, m/s².
+    pub gravity: f32,
+    /// A particle's radius in metres — the kernel's support and the neighbour grid's cell. Half
+    /// it and the same volume needs eight times the particles.
+    pub particle_radius: f32,
+    /// The box the fluid is held in, metres: lower corner.
+    pub bounds_min: [f32; 3],
+    /// Upper corner.
+    pub bounds_max: [f32; 3],
+    /// How many particles: at most the pool the renderer allocated, and `0` is no fluid.
+    pub particles: u32,
+}
+
+impl Default for FluidSettings {
+    /// Water in a 10 × 10 × 10 m tank on the ground, a hundred thousand particles of 0.1 m.
+    fn default() -> Self {
+        Self {
+            rest_density: 1000.0,
+            relaxation: 600.0,
+            viscosity: 0.005,
+            xsph: 0.05,
+            vorticity: 0.35,
+            surface_tension: 0.5,
+            cohesion: 0.008,
+            solver_iterations: 6,
+            gravity: 9.81,
+            particle_radius: 0.1,
+            bounds_min: [-5.0, 0.0, -5.0],
+            bounds_max: [5.0, 10.0, 5.0],
+            particles: 100_000,
+        }
+    }
+}
+
+impl FluidSettings {
+    /// The rest spacing of particles: what a lattice at rest density is laid out with.
+    pub fn spacing(&self) -> f32 {
+        self.particle_radius * 0.77
+    }
+
+    /// One particle's mass, so that particles at [`spacing`](Self::spacing) are at rest density.
+    pub fn particle_mass(&self) -> f32 {
+        self.rest_density * self.spacing().powi(3)
+    }
+
+    /// The neighbour grid's cells along each axis.
+    pub fn grid_size(&self) -> [u32; 3] {
+        let h = self.particle_radius.max(1e-3);
+        std::array::from_fn(|i| ((self.bounds_max[i] - self.bounds_min[i]).max(h) / h).ceil() as u32 + 1)
+    }
 }
 
 /// The collider buffer's fixed capacity. [`FluidParams::num_colliders`] says how much of it is

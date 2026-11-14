@@ -904,6 +904,7 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         "animation_state_machine_update_system(",
         "sprite_animation_system(",
         "apply_ik_chains_system(",
+        "fluid_scene_system(",
         "BoneAttachmentSystem",
         "gpu_physics_submit_system(",
         "gpu_physics_readback_system(",
@@ -1045,7 +1046,7 @@ fn every_capability_neither_path_names_is_accounted_for() {
 
         // ── Genuinely one-sided, measured, and NOT a one-line fix ──────────────────────────
         ("FluidHandle", FLUID),
-        ("FluidInteractor", FLUID),
+        ("FluidShape", "a `FluidInteractor`'s volume, handed to the GPU solver by `fluid_scene_system` inside `prepare_frame`, which both hosts run."),
         ("FluidParticle", FLUID),
         ("FluidPhase", FLUID),
         ("FluidPhaseType", FLUID),

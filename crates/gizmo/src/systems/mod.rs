@@ -10,9 +10,6 @@ pub mod audio;
 pub mod auto_collider;
 /// World streaming by chunk: which square of the world is loaded around the player.
 pub mod chunk_system;
-#[cfg(all(feature = "render", feature = "physics"))]
-/// Feeding the scene's colliders into the GPU fluid simulation.
-pub mod fluid;
 #[cfg(feature = "render")]
 pub mod fps_look;
 /// Entities that despawn themselves after a set time — particles, decals, debris.
@@ -49,7 +46,6 @@ pub use audio::*;
 pub use auto_collider::*;
 pub use chunk_system::*;
 #[cfg(all(feature = "render", feature = "physics"))]
-pub use fluid::*;
 #[cfg(feature = "render")]
 pub use fps_look::*;
 pub use lifetime::*;

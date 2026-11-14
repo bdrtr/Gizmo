@@ -332,6 +332,11 @@ mod render_world_tests {
         ("Locale", "read by `resolve_localized_texts`, which records missing keys in the game's locale"),
         ("IkChains", "applied to the `Skeleton`'s drawn pose by `apply_ik_chains_system`; the draw reads the skeleton"),
         ("UnresolvedIkChains", "that pass's own note of chains already warned about"),
+        ("FluidSimulation", "handed to the GPU solver as its settings by `fluid_scene_system`; the draw reads the solver"),
+        ("FluidInteractor", "handed to the GPU solver as an obstacle by `fluid_scene_system`"),
+        ("Velocity", "how fast a `FluidInteractor` moves, read by `fluid_scene_system`"),
+        ("FluidSceneState", "that pass's own memory of where each interactor was"),
+        ("FluidState", "the water's link to the solver, kept by `fluid_scene_system` for a save to read; the draw reads the solver"),
     ];
 
     /// Every `.rs` file under `dir`, the files that are test modules as a whole left out, each other

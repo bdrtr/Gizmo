@@ -280,60 +280,57 @@ pub fn draw_terrain_section(
 }
 
 
-/// The fluid rows: which phase the entity is, and how it couples to the simulation.
+/// The fluid rows: the scene's fluid, every dial the solver reads.
 pub fn draw_fluid_section(
     ui: &mut egui::Ui,
     world: &World,
     entity_id: gizmo_core::entity::Entity,
-    _state: &mut EditorState,
+    state: &mut EditorState,
 ) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut fluids = unsafe { world.query_unchecked::<&mut FluidSimulation>() };
-    {
-        if let Some(mut fluid) = fluids.get_mut(entity_id) {
-            egui::CollapsingHeader::new(crate::theme::section_title("SPH Fluid Simulation (GPU)"))
-                .default_open(true)
-                .show(ui, |ui| {
-                    ui.label("GPU SPH Engine Aktif (ECS Üzerinden Yönetilir)");
-                    ui.horizontal(|ui| {
-                        ui.label("Hedef Yoğunluk:");
-                        ui.add(
-                            egui::DragValue::new(&mut fluid.target_density)
-                                .speed(1.0)
-                                .range(100.0..=2000.0),
-                        );
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("Basınç Çarpanı:");
-                        ui.add(
-                            egui::DragValue::new(&mut fluid.pressure_multiplier)
-                                .speed(1.0)
-                                .range(1.0..=1000.0),
-                        );
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("Viskozite:");
-                        ui.add(
-                            egui::DragValue::new(&mut fluid.viscosity)
-                                .speed(0.01)
-                                .range(0.001..=1.0),
-                        );
-                    });
-
-                    ui.horizontal(|ui| {
-                        ui.label("Parçacık Yarıçapı:");
-                        ui.add(
-                            egui::DragValue::new(&mut fluid.particle_radius)
-                                .speed(0.01)
-                                .range(0.01..=1.0),
-                        );
-                    });
+    let Some(mut fluid) = fluids.get_mut(entity_id) else { return };
+    let fluid = &mut *fluid;
+    egui::CollapsingHeader::new(crate::theme::section_title("Fluid (GPU)"))
+        .default_open(true)
+        .show(ui, |ui| {
+            let row = |ui: &mut egui::Ui, label: &str, value: &mut f32, speed: f64, range: std::ops::RangeInclusive<f32>| {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    ui.add(egui::DragValue::new(value).speed(speed).range(range));
                 });
-            ui.separator();
-        }
-    }
+            };
+            row(ui, "Rest density (kg/m³):", &mut fluid.target_density, 1.0, 100.0..=3000.0);
+            row(ui, "Relaxation ε (lower = stiffer):", &mut fluid.relaxation, 10.0, 1.0..=10_000.0);
+            row(ui, "Viscosity:", &mut fluid.viscosity, 0.001, 0.0..=1.0);
+            row(ui, "XSPH:", &mut fluid.xsph, 0.005, 0.0..=1.0);
+            row(ui, "Vorticity:", &mut fluid.vorticity, 0.01, 0.0..=5.0);
+            row(ui, "Surface tension:", &mut fluid.surface_tension, 0.01, 0.0..=5.0);
+            row(ui, "Cohesion:", &mut fluid.cohesion, 0.001, 0.0..=1.0);
+            row(ui, "Gravity (m/s²):", &mut fluid.gravity, 0.1, -50.0..=50.0);
+            row(ui, "Particle radius (m):", &mut fluid.particle_radius, 0.005, 0.02..=1.0);
+            ui.horizontal(|ui| {
+                ui.label("Solver iterations:");
+                ui.add(egui::DragValue::new(&mut fluid.solver_iterations).range(1..=32));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Particles:");
+                ui.add(egui::DragValue::new(&mut fluid.particles).speed(100.0).range(0..=1_000_000));
+            });
+            for (label, v) in [("Box min:", &mut fluid.bounds_min), ("Box max:", &mut fluid.bounds_max)] {
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    ui.add(egui::DragValue::new(&mut v.x).speed(0.1).prefix("X: "));
+                    ui.add(egui::DragValue::new(&mut v.y).speed(0.1).prefix("Y: "));
+                    ui.add(egui::DragValue::new(&mut v.z).speed(0.1).prefix("Z: "));
+                });
+            }
+            ui.label("A new box, particle size or count lays the water out again.");
+            if ui.button("🗑 Bileşeni Sil").clicked() {
+                state.remove_component_request = Some((entity_id, "FluidSimulation".to_string()));
+            }
+        });
+    ui.separator();
 }
 
 

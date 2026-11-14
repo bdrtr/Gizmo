@@ -153,8 +153,9 @@ pub struct Renderer {
     pub gpu_physics: Option<crate::gpu_physics::GpuPhysicsSystem>,
 
     // === GPU SIVI SİSTEMİ ===
-    /// The SPH fluid solver and its surface. Allocated by the windowed path, but only composited
-    /// when [`fluid_enabled`](Renderer::fluid_enabled) is set.
+    /// The SPH fluid solver and its surface. Allocated by the windowed path; simulated and drawn
+    /// only while its [`FluidSettings::particles`](crate::gpu_fluid::FluidSettings::particles) is
+    /// above zero — which `gizmo` sets from the scene's `FluidSimulation`, and nothing else.
     pub gpu_fluid: Option<crate::gpu_fluid::GpuFluidSystem>,
     /// Volumetrik duman (T6, raymarch). Default None; demo `Some(SmokeVolume::new(..))` verir.
     pub smoke: Option<crate::gpu_smoke::SmokeVolume>,
@@ -366,12 +367,6 @@ pub struct Renderer {
     pub vignette_intensity: f32,
     /// Strength of the animated film grain. 0 = off.
     pub film_grain_intensity: f32,
-    /// Whether the GPU SPH fluid "ocean" is simulated and composited this frame.
-    /// A renderer always allocates a 100k-particle fluid system, but its water
-    /// surface must NOT render over every scene — only scenes that actually want
-    /// fluid opt in (`ocean_scene`, `fluid_rigid`, …). Off by default so a plain
-    /// scene isn't covered by a stray mottled water surface.
-    pub fluid_enabled: bool,
 }
 
 /// Where [`Renderer::load_system_font`] looks, in order, after `GIZMO_FONT`.

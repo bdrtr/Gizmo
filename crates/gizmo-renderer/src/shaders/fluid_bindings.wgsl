@@ -28,9 +28,9 @@ struct FluidParams {
     dt: f32,
     gravity: f32,
     rest_density: f32,
-    gas_constant: f32,
-    
-    viscosity: f32,
+    relaxation: f32,
+
+    _reserved: f32,
     mass: f32,
     smoothing_radius: f32,
     num_particles: u32,
@@ -81,4 +81,10 @@ struct SortParams {
 @group(0) @binding(2) var<storage, read_write> grid: array<u32>;
 @group(0) @binding(3) var<storage, read> colliders: array<FluidCollider>;
 @group(0) @binding(4) var<storage, read_write> sort_buffer: array<ParticleHash>;
+// One value per particle that a pass computes from its neighbours and must not write back while
+// they are still reading: the corrected position, then the new velocity. A commit pass copies it
+// in. Written in place, a particle's neighbours read it half-updated in an order the GPU chose,
+// and the same water stepped twice went two ways (70 cm apart after 36 steps, measured
+// 2026-11-14).
+@group(0) @binding(6) var<storage, read_write> scratch: array<vec4<f32>>;
 @group(0) @binding(5) var<uniform> sort_params: SortParams;

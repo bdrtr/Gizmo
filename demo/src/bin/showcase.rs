@@ -741,7 +741,6 @@ struct GpuControls {
     request_force_pull: bool,
     request_grab: bool,
     gravity_y: f32,
-    time: f32,
     particle_spawn_rate: usize,
     particle_color_r: f32,
     particle_color_g: f32,
@@ -759,7 +758,6 @@ impl GpuControls {
             request_force_pull: state.request_force_pull,
             request_grab: state.request_grab,
             gravity_y: state.gravity_y,
-            time: state.time,
             particle_spawn_rate: state.particle_spawn_rate,
             particle_color_r: state.particle_color_r,
             particle_color_g: state.particle_color_g,
@@ -972,19 +970,8 @@ fn showcase_gpu() -> impl FnMut(&World, &mut Renderer) + Send + 'static {
             grabbed = new_grabbed_id;
         }
 
-        // SPH Sıvı Simülasyonu
-        if let Some(fluid) = &mut renderer.gpu_fluid {
-            fluid.update_parameters(
-                &renderer.queue,
-                [0.0, 0.0, 0.0], // mouse_pos
-                [0.0, 0.0, 0.0], // mouse_dir
-                false,           // mouse_active
-                &[],             // colliders (will be updated by gpu_fluid_coupling_system)
-                controls.time,
-                fluid.num_particles,
-            );
-        }
-        gizmo::systems::gpu_fluid_coupling_system(game, renderer);
+        // SPH sıvısı: sahnenin `FluidSimulation`'ı ve `FluidInteractor`'ları karenin hazırlığında
+        // (`prepare_frame`) GPU sıvısına gidiyor.
 
         // --- GPU Particle Spawner (Ateş / Sihir Şelalesi) ---
         if let Some(particles) = &renderer.gpu_particles {
