@@ -7,3 +7,4 @@
 
 pub mod nisanci;
 pub mod pinbol;
+pub mod satranc;

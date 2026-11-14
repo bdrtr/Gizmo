@@ -1,0 +1,49 @@
+[package]
+name = "demo-android-satranc"
+description = "satranc as an Android app: chess against the engine's own search, in an APK (see demo-android/README.md)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "lib"]
+
+[dependencies]
+games = { path = "../games" }
+gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features = false, features = [
+    "window",
+    "render",
+    "physics",
+    "physics-dynamics",
+    "ui",
+    "audio",
+    "bundled-font",
+] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+tracing = { version = "0.1", features = ["log"] }
+log = "0.4"
+android_logger = "0.14"
+
+[package.metadata.android]
+package = "com.bdrtr.gizmo.satranc"
+apk_name = "gizmo-satranc"
+build_targets = ["aarch64-linux-android"]
+# The same launcher icon as the pinbol APK.
+resources = "../demo-android/res"
+
+[package.metadata.android.sdk]
+min_sdk_version = 26
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "Gizmo Satranç"
+icon = "@mipmap/ic_launcher"
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+
+[package.metadata.android.application.activity]
+# Either way up: the camera pulls back on a narrow screen so the board fits (`fit_camera`).
+config_changes = "orientation|keyboardHidden|screenSize|screenLayout|uiMode"

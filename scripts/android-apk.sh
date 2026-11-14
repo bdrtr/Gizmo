@@ -14,6 +14,7 @@
 #   scripts/android-apk.sh                # pinbol → target/release/apk/gizmo-pinbol.apk
 #   scripts/android-apk.sh nisanci        # → target/release/apk/gizmo-nisanci.apk
 #   scripts/android-apk.sh nisanci run    # build, install over adb, start; logs: adb logcat -s gizmo
+#   scripts/android-apk.sh satranc run    # chess, the same way
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -44,8 +45,9 @@ fi
 case "${1:-pinbol}" in
     pinbol) package=demo-android ;;
     nisanci) package=demo-android-nisanci ;;
+    satranc) package=demo-android-satranc ;;
     run) package=demo-android; set -- pinbol run ;;
-    *) echo "unknown game '$1' (pinbol, nisanci)" >&2; exit 2 ;;
+    *) echo "unknown game '$1' (pinbol, nisanci, satranc)" >&2; exit 2 ;;
 esac
 
 if [ "${2:-}" = "run" ]; then

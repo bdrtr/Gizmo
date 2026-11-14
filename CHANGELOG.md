@@ -118,6 +118,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **Chess on a tablet** (`demo-android-satranc`, `scripts/android-apk.sh satranc run`). `satranc` moved into the
+  `games` crate (`games::satranc::{app, self_test}`), so the desktop binary, the browser build's crate and an APK run
+  one game; the desktop binary is a wrapper. For a screen with no keyboard: buttons for undo, new game and the engine
+  (`ButtonBundle`, top right; a tap on one does not reach the board, `pointer_over_ui`), the font is the bundled one
+  (`default_font`), and the camera pulls back on a narrow screen so the board fits held either way. Played on a Galaxy
+  Tab S9 FE (Mali-G68, Vulkan — the first Mali the engine has run on; Pinbol drew there unchanged): a tap on e2 and
+  on e4 played the move, the engine answered d7–d5, "Geri al" took both back. CI's Android job builds and lints it.
+
 - **Physics is drawn between its steps** (`gizmo::systems::interpolation`). A game stepping physics at a fixed rate
   (`PhysicsPlugin`, `FixedPhysics`) on a screen faster than it held each pose for two or three frames: at 144 Hz a
   body moving evenly advanced by amounts 50 % apart from frame to frame, and `PhysicsTime::alpha`, computed every frame,
