@@ -124,9 +124,12 @@ fn main() {
 
     let app = App::<SimpleSceneState>::new("Gizmo Engine - Render Thread", 1280, 720)
         .with_simple_scene(move |scene, state| {
-            if args.vsync {
-                scene.renderer.set_present_mode(gizmo::wgpu::PresentMode::AutoVsync);
-            }
+            // A frame-time measurement: uncapped unless asked, since the engine's default is vsync.
+            scene.renderer.set_present_mode(if args.vsync {
+                gizmo::wgpu::PresentMode::AutoVsync
+            } else {
+                gizmo::wgpu::PresentMode::AutoNoVsync
+            });
             let white = scene.asset_manager.create_white_texture(
                 &scene.renderer.device,
                 &scene.renderer.queue,

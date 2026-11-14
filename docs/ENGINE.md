@@ -3824,6 +3824,10 @@ Bir önceki oturumun bıraktığı **iki iz de kapandı** — biri kod, biri öl
   lerp. Tetikleyici: 60 Hz'in katı olmayan bir ekranda (144/165 Hz) titremenin şikâyet konusu
   olması, ya da motorun varsayılan `PresentMode::AutoNoVsync`'inin vsync'e çekilmesi kararı —
   ikisinden biri olduğunda (i)-(iii) sırayla yanıtlanıp opt-in bir özellik olarak yazılır.
+  **İkinci tetikleyici 2026-11-14'te gerçekleşti:** pencereli yüzeyler artık `AutoVsync` ile
+  kuruluyor (melez GPU'lu bir dizüstünde, Wayland altında vsync'siz sunum ara sıra siyah kare
+  gösteriyordu, `satranc`). 60 Hz'lik bir ekranda bu, fizik adımıyla karenin hizalanması demek;
+  144/165 Hz'de titreme vsync'siz modda da vardı ve aynen duruyor. (i)-(iii) bu yüzden sıradaki iş.
 
 Saat yazılırken aynı taramanın çıkardığı, **ölçülmüş ama düzeltilmemiş** yedi şey — hepsi dövüş
 altsisteminin geri kalanı, ve hiçbiri saatin kapsamında değil:

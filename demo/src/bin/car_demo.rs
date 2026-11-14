@@ -192,8 +192,8 @@ fn main() {
             }
             let throttle = throttle.clamp(-1.0, 1.0);
 
-            // FPS (yumuşatılmış). NOT: present_mode AutoNoVsync = FPS sınırsız, sahne yüküyle
-            // dalgalanır; sayının inip çıkması normaldir, hata değil.
+            // FPS (yumuşatılmış). Motor varsayılan olarak vsync'li sunuyor (2026-11-14'ten beri),
+            // yani sayı ekranın tazelenme hızında durur; altına düşmesi sahnenin yükü demek.
             if dt > 0.0 {
                 let inst = 1.0 / dt;
                 state.fps_smooth = if state.fps_smooth <= 0.0 {
@@ -554,8 +554,8 @@ fn main() {
                             .color(egui::Color32::WHITE)
                             .strong(),
                     );
-                    // FPS göstergesi (yeşil>50, sarı 30-50, kırmızı<30). AutoNoVsync olduğu için
-                    // uncapped; sahne yüküyle dalgalanır. Debug build'de release'in ~yarısı olur.
+                    // FPS göstergesi (yeşil>50, sarı 30-50, kırmızı<30). Vsync'li: ekranın
+                    // tazelenme hızını aşmaz. Debug build'de release'in ~yarısı olur.
                     let fps = state.fps_smooth;
                     let fps_col = if fps >= 50.0 {
                         egui::Color32::from_rgb(80, 220, 100)

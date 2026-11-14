@@ -948,12 +948,13 @@ impl Renderer {
 
     /// Switches the swapchain's present mode — vsync on or off — at runtime.
     ///
-    /// The engine builds its surface with [`wgpu::PresentMode::AutoNoVsync`], i.e. frames are
-    /// presented as fast as they are produced. That is the right default for a benchmark and the
-    /// wrong one for a laptop on battery, and until now it was not reachable at all: the value
-    /// was hard-coded at construction (the campaign record, now ENGINE.md §3).
+    /// The engine builds its surface with [`wgpu::PresentMode::AutoVsync`], frames in step with the
+    /// display. It was `AutoNoVsync` — as fast as they are produced — until 2026-11-14: right for a
+    /// frame-time measurement, wrong for a game, which drew hundreds of frames for a 60 Hz screen and
+    /// on a hybrid-GPU laptop under Wayland flashed black now and then. A measurement asks for
+    /// `AutoNoVsync` here.
     ///
-    /// `AutoVsync` is the usual opposite choice. Anything the surface does not support falls back
+    /// `AutoNoVsync` is the usual opposite choice. Anything the surface does not support falls back
     /// inside wgpu rather than failing here, so this cannot make the swapchain invalid.
     ///
     /// Headless renderers have no surface; the call updates the stored config and returns without

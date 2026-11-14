@@ -4,9 +4,10 @@
 //!
 //! Until 0.9 the windowed runtime had exactly one [`Schedule`](gizmo_core::system::Schedule), and it ran **only** inside
 //! the fixed-timestep loop. That loop executes zero or more times per rendered frame,
-//! depending on how much simulated time has accumulated — so with the renderer's default
+//! depending on how much simulated time has accumulated — so with the renderer's then-default
 //! `PresentMode::AutoNoVsync` pushing several hundred frames per second against a 60 Hz
-//! accumulator, the *majority* of rendered frames ran no systems at all.
+//! accumulator, the *majority* of rendered frames ran no systems at all. (The default is
+//! `AutoVsync` since 2026-11-14; a display above 60 Hz still renders frames with no fixed step.)
 //!
 //! That is fine for physics, which is what the loop is for. It is wrong for everything
 //! else, and it broke input in a way that is hard to see and easy to blame on hardware:

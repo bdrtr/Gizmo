@@ -118,6 +118,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **Windows present in step with the display (`AutoVsync`) by default.** The engine built every window's surface with
+  `AutoNoVsync`, for its own frame-time measurements, and a game paid for it: hundreds of frames a second for a 60 Hz
+  screen, and on a laptop drawing on its NVIDIA GPU and showing through the AMD one, under Wayland, a black flash at
+  random — the compositor showing a frame that had not arrived (`satranc`; the engine's own frames were read back,
+  5 400 of them, and none was black; with vsync the flashes stopped). A measurement asks for uncapped frames with
+  `Renderer::set_present_mode(AutoNoVsync)`, as the `render_thread` demo now does unless `--vsync`. The documented
+  trigger for render-side physics interpolation (ENGINE.md, "neden yazılmadı ve tetikleyicisi ne") has fired.
+
 - **TAA follows moving objects: it reprojects through the G-buffer's velocity.** The history was found through the
   previous view-projection alone, which knows the camera's motion and not an object's, so anything moving left a ghost
   where it had been — the "black thing coming and going" behind a sliding chess piece. TAA now reads the velocity

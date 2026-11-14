@@ -87,6 +87,22 @@ pub fn texture_to_png(
     texture: &wgpu::Texture,
     path: &Path,
 ) -> Result<(), CaptureError> {
+    let (width, height, pixels) = texture_pixels(device, queue, texture)?;
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(|e| CaptureError::Write(e.to_string()))?;
+        }
+    }
+    image::RgbaImage::from_raw(width, height, pixels)
+        .ok_or_else(|| CaptureError::Write("pixel buffer size did not match the image".into()))?
+        .save(path)
+        .map_err(|e| CaptureError::Write(e.to_string()))
+}
+
+/// A texture's pixels read back to the CPU as tightly packed RGBA8, rows from the top, with its
+/// width and height — what [`texture_to_png`] writes, for a caller that wants to look at the frame
+/// rather than keep it.
+pub fn texture_pixels(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Result<(u32, u32, Vec<u8>), CaptureError> {
     let format = texture.format();
     let swap_rb = channel_order(format).ok_or(CaptureError::UnsupportedFormat(format))?;
     if !texture.usage().contains(wgpu::TextureUsages::COPY_SRC) {
@@ -161,16 +177,7 @@ pub fn texture_to_png(
         }
     }
     staging.unmap();
-
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| CaptureError::Write(e.to_string()))?;
-        }
-    }
-    image::RgbaImage::from_raw(width, height, pixels)
-        .ok_or_else(|| CaptureError::Write("pixel buffer size did not match the image".into()))?
-        .save(path)
-        .map_err(|e| CaptureError::Write(e.to_string()))
+    Ok((width, height, pixels))
 }
 
 /// The environment-driven capture request the windowed loop honours.

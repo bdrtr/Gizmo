@@ -269,15 +269,14 @@ impl Renderer {
             format: surface_format,
             width: size.width,
             height: size.height,
-            // Uncapped presentation by default. The comment here used to claim "use Mailbox if
-            // available, otherwise Fifo" — the code has never done that; it picks `AutoNoVsync`
-            // unconditionally and lets wgpu resolve it against what the surface supports.
-            //
-            // This is a DEFAULT, not a fixed property: `Renderer::set_present_mode` switches it
-            // at runtime (the campaign record, now ENGINE.md §3). It stays uncapped here because the engine's own
-            // benchmarks and the `full_step_mixed` frame-pacing work assume frames are not
-            // waiting on the display; a game that wants vsync asks for it.
-            present_mode: wgpu::PresentMode::AutoNoVsync,
+            // In step with the display by default. It was uncapped (`AutoNoVsync`) until 2026-11-14,
+            // for the engine's own frame-time measurements, and a game paid for that: hundreds of
+            // frames a second for a 60 Hz screen, and on a laptop that draws on its NVIDIA GPU and
+            // shows through the AMD one, under Wayland, the compositor now and then showed a frame
+            // that had not arrived — a black flash, at random, in `satranc` (gone with vsync; the
+            // engine's frames were measured and none was black). A measurement that needs uncapped
+            // frames asks for them (`Renderer::set_present_mode`, as `render_thread` does).
+            present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: surface_caps.alpha_modes[0],
             // wgpu 30 made the surface's colour space explicit. `Auto` is the variant documented
             // as "reproducing wgpu's historical behavior", which is exactly what this upgrade
