@@ -280,6 +280,9 @@ pub struct PostProcessUniforms {
     /// The colour look-up table's `[mode, min_ev, max_ev]` (`LutDomain::params`); mode 0 is none. See
     /// [`crate::color_lut`].
     pub color_lut: [f32; 3],
+    /// How an out-of-focus point spreads (`PostProcess::dof_blur`, [`crate::components::DofBlur`]): `x` 0 a
+    /// bokeh of `y` blades (0 = round) turned by `z` radians, 1 a gaussian. `w` unused.
+    pub dof_shape: [f32; 4],
 }
 
 /// Which curve maps HDR to the display range.
@@ -846,7 +849,7 @@ mod tonemap_default_tests {
     #[test]
     fn the_block_is_still_a_whole_number_of_vec4s() {
         assert_eq!(std::mem::size_of::<PostProcessUniforms>() % 16, 0);
-        assert_eq!(std::mem::size_of::<PostProcessUniforms>(), 176);
+        assert_eq!(std::mem::size_of::<PostProcessUniforms>(), 192);
         assert_eq!(std::mem::offset_of!(PostProcessUniforms, reproject), 96, "the matrix must start on a vec4 boundary");
     }
 }

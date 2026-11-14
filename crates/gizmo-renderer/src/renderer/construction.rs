@@ -762,6 +762,7 @@ impl Renderer {
             dof_focus_dist: 4.5,
             dof_focus_range: 2.0,
             dof_blur_size: 4.0,
+            dof_blur: crate::components::DofBlur::default(),
             // Off by default: chromatic aberration splits the R/B channels at every
             // high-contrast edge, so plain geometry (e.g. the ground plane against
             // the sky) got out-of-place red/blue fringes. Opt-in artistic effect,

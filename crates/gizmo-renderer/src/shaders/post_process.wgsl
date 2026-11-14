@@ -234,12 +234,25 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             // A disc of taps on the golden angle, so a wide blur does not show as eight copies of the
             // picture. In texels of this frame: these were fractions of a 1920x1080 one, so the blur
             // was narrower the smaller the frame, and wider across than tall on any other shape.
+            // The blur's shape (`DofBlur`): a bokeh is the aperture — each tap as heavy as the next, out
+            // to a disc or to a polygon of `blades` sides — and a gaussian weighs the near taps most.
+            let gaussian = params.dof_shape.x > 0.5;
+            let blades = params.dof_shape.y;
             var blurred = vec3<f32>(0.0);
             var kept = 0.0;
             for (var i = 0; i < DOF_TAPS; i++) {
                 let t = (f32(i) + 0.5) / f32(DOF_TAPS);
                 let angle = f32(i) * 2.399963;
-                let reach = sqrt(t) * gather;
+                var reach = sqrt(t) * gather;
+                if (!gaussian && blades >= 3.0) {
+                    // The polygon's radius toward this tap, its corners on the disc: cos(π/n) over the
+                    // cosine of the angle from the middle of the nearest side.
+                    let side = 6.2831853 / blades;
+                    let a = angle - params.dof_shape.z;
+                    let from_side = a - side * floor(a / side) - side * 0.5;
+                    reach *= cos(side * 0.5) / cos(from_side);
+                }
+                let weight = select(1.0, exp(-4.5 * t), gaussian);
                 let uv = clamp(in.uv + vec2<f32>(cos(angle), sin(angle)) * reach * texel, vec2<f32>(0.0), vec2<f32>(1.0));
                 let tap_dist = (n * f) / (f - textureLoad(t_depth, min(vec2<i32>(uv * tap_scale), last_depth), 0) * (f - n));
                 let tap_reaches = dof_radius_at(tap_dist).x >= reach;
@@ -249,15 +262,15 @@ fn fs_composite(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
                     if (!tap_reaches) {
                         continue;
                     }
-                    blurred += textureSampleLevel(t_source, s_source, uv, 0.0).rgb;
+                    blurred += textureSampleLevel(t_source, s_source, uv, 0.0).rgb * weight;
                 } else if (reach <= dof.x) {
-                    blurred += textureSampleLevel(t_source, s_source, uv, 0.0).rgb;
+                    blurred += textureSampleLevel(t_source, s_source, uv, 0.0).rgb * weight;
                 } else {
                     // Further than this pixel's own blur, and only here for the sake of what is in
                     // front: what is behind stays as sharp as this pixel is.
-                    blurred += hdr_color;
+                    blurred += hdr_color * weight;
                 }
-                kept += 1.0;
+                kept += weight;
             }
             if (kept > 0.0) {
                 let amount = max(dof.y, gather / params.dof_blur_size);

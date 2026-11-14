@@ -68,6 +68,59 @@ pub struct PostProcess {
     /// interval. Only the camera's own motion blurs; objects moving in a still view do not (no
     /// per-object velocity exists). `#[serde(default)]`.
     pub motion_blur: f32,
+    /// How an out-of-focus point spreads — the shape of the blur depth of field draws. A round
+    /// bokeh by default, which is what it always drew. `#[serde(default)]`.
+    pub dof_blur: DofBlur,
+}
+
+/// How an out-of-focus point spreads under depth of field: [`PostProcess::dof_blur`].
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum DofBlur {
+    /// A lens's: each point becomes the aperture's shape, as bright at its edge as in its middle — a
+    /// highlight out of focus is a disc, or a polygon of `blades` sides (a real iris has five to nine)
+    /// turned by `rotation` radians. `blades` 0 (or under 3) is round.
+    Bokeh {
+        /// The iris's blades: 0 for a round aperture, else 3 or more.
+        blades: u32,
+        /// How far the polygon is turned, radians. Ignored for a round one.
+        rotation: f32,
+    },
+    /// A soft spread with no edge, most of it near the point: less like a lens, easier on the eye.
+    Gaussian,
+}
+
+impl Default for DofBlur {
+    /// A round bokeh.
+    fn default() -> Self {
+        Self::Bokeh { blades: 0, rotation: 0.0 }
+    }
+}
+
+impl DofBlur {
+    /// A round aperture.
+    #[must_use]
+    pub fn round() -> Self {
+        Self::default()
+    }
+
+    /// An iris of `blades` blades (3 or more), turned by `rotation` radians.
+    #[must_use]
+    pub fn blades(blades: u32, rotation: f32) -> Self {
+        Self::Bokeh { blades, rotation: if rotation.is_finite() { rotation } else { 0.0 } }
+    }
+
+    /// What the shader reads: `[mode, blades, rotation, 0]`.
+    #[must_use]
+    pub fn uniform(self) -> [f32; 4] {
+        match self {
+            Self::Bokeh { blades, rotation } => {
+                let blades = if blades >= 3 { blades.min(64) } else { 0 };
+                [0.0, blades as f32, if blades == 0 { 0.0 } else { rotation }, 0.0]
+            }
+            Self::Gaussian => [1.0, 0.0, 0.0, 0.0],
+        }
+    }
 }
 
 impl Default for PostProcess {
@@ -87,6 +140,7 @@ impl Default for PostProcess {
             dof_max_depth: 0.0,
             film_grain: 0.012,
             motion_blur: 0.0,
+            dof_blur: DofBlur::default(),
         }
     }
 }
@@ -122,6 +176,12 @@ impl PostProcess {
         self.dof_focus_dist = focus_dist.max(0.0);
         self.dof_f_stops = f_stops.max(0.0);
         self.dof_blur_size = max_blur.max(0.0);
+        self
+    }
+
+    /// Builder: the shape of depth of field's blur (see [`DofBlur`]).
+    pub fn with_dof_blur(mut self, blur: DofBlur) -> Self {
+        self.dof_blur = blur;
         self
     }
 
@@ -164,6 +224,13 @@ impl PostProcess {
         self.dof_focus_dist = self.dof_focus_dist.clamp(0.0, 10_000.0);
         self.dof_focus_range = self.dof_focus_range.clamp(0.001, 10_000.0);
         self.dof_blur_size = self.dof_blur_size.clamp(0.0, 32.0);
+        self.dof_f_stops = self.dof_f_stops.clamp(0.0, 64.0);
+        self.dof_sensor_height = self.dof_sensor_height.clamp(0.001, 0.1);
+        self.dof_max_depth = self.dof_max_depth.clamp(0.0, 100_000.0);
+        if let DofBlur::Bokeh { blades, rotation } = &mut self.dof_blur {
+            *blades = if *blades >= 3 { (*blades).min(64) } else { 0 };
+            *rotation = if rotation.is_finite() { rotation.rem_euclid(std::f32::consts::TAU) } else { 0.0 };
+        }
         self.film_grain = self.film_grain.clamp(0.0, 1.0);
         self
     }

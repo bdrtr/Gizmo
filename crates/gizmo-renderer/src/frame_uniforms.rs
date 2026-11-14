@@ -531,6 +531,8 @@ impl Default for PostProcessUniforms {
             reproject: gizmo_math::Mat4::IDENTITY.to_cols_array_2d(),
             bloom_energy_conserving: 0.0,
             color_lut: [0.0; 3],
+            // A round bokeh: what depth of field always drew.
+            dof_shape: [0.0; 4],
         }
     }
 }

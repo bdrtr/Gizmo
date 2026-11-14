@@ -62,6 +62,7 @@ pub(super) fn sync_editor_settings(
             dof_focus_dist: g.dof_focus_dist,
             dof_focus_range: g.dof_focus_range,
             dof_blur_size: g.dof_blur_size,
+            dof_shape: g.dof_blur.uniform(),
             ..Default::default()
         },
         None => gizmo::renderer::PostProcessUniforms {
@@ -72,6 +73,7 @@ pub(super) fn sync_editor_settings(
             dof_focus_dist: renderer.dof_focus_dist,
             dof_focus_range: renderer.dof_focus_range,
             dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
+            dof_shape: renderer.dof_blur.uniform(),
             ..Default::default()
         },
     };

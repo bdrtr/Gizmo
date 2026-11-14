@@ -118,6 +118,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **Depth of field's blur has a shape** (`DofBlur`, on `PostProcess::dof_blur` and, for a camera without one,
+  `Renderer::dof_blur`): `Bokeh { blades, rotation }` — round (blades 0, the default and the look DoF always had) or an
+  iris polygon, each gather tap pushed out to `cos(π/n) / cos(angle from the side's middle)` — or `Gaussian`, every tap
+  weighted `exp(−4.5 r²/R²)`. One `vec4` appended to `PostProcessUniforms` (176 → 192 bytes). Measured on a bright
+  square 16 m out of focus on black: the gaussian keeps 4× the light near the middle (10.6 against 2.7, linear), a
+  hexagon turned a whole side draws the same frame byte for byte, half a side 24000 apart, round ignores the turn.
+  The editor's Depth of Field section sets it, and the aperture and farthest-distance fields added on 2026-11-07,
+  which had no slider until now; `PostProcess::clamped` bounds them too. The `depth_of_field` demo cycles the shapes
+  with `B`. Tests: `depth_of_fields_blur_has_the_shape_it_is_given` (GPU; fails with the polygon or the weight taken
+  out of the shader) and `the_panel_sets_the_lens_and_the_blurs_shape` (headless editor).
+
 - **A model without a second UV set is a lightmap receiver too.** An entity drawn from a `MeshSource` — a glTF with no
   `TEXCOORD_1`, an OBJ, a primitive — that carries a `LightmapReceiver` is drawn from a copy laid out for its lightmap:
   the asset loader reads the source's vertices on the CPU (`AssetManager::source_vertices`: a primitive's data, the glTF

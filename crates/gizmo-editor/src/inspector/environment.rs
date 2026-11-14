@@ -2,7 +2,7 @@
 use crate::editor_state::EditorState;
 use egui;
 use gizmo_core::World;
-use gizmo_renderer::components::{active_camera, Camera, PostProcess};
+use gizmo_renderer::components::{active_camera, Camera, DofBlur, PostProcess};
 
 /// One labelled slider, sized to the panel it is in.
 ///
@@ -17,6 +17,35 @@ use gizmo_renderer::components::{active_camera, Camera, PostProcess};
 /// The label goes above the slider instead of beside it — a vertical layout wraps, and the slider
 /// is then given the whole remaining width. The suffix text is gone with it: it was a second name
 /// for a control that already had one ("Bloom Yoğunluğu:" … "Glow").
+/// The shape of depth of field's blur: a lens's bokeh (round, or an iris of so many blades and its turn)
+/// or a gaussian.
+fn dof_blur_row(ui: &mut egui::Ui, blur: &mut DofBlur) {
+    ui.label("Bulanıklık Biçimi");
+    let gaussian = matches!(blur, DofBlur::Gaussian);
+    egui::ComboBox::from_id_salt("dof_blur_kind")
+        .selected_text(if gaussian { "Gauss (yumuşak)" } else { "Bokeh (diyafram)" })
+        .show_ui(ui, |ui| {
+            if ui.selectable_label(!gaussian, "Bokeh (diyafram)").clicked() && gaussian {
+                *blur = DofBlur::round();
+            }
+            if ui.selectable_label(gaussian, "Gauss (yumuşak)").clicked() {
+                *blur = DofBlur::Gaussian;
+            }
+        });
+    ui.add_space(6.0);
+    if let DofBlur::Bokeh { blades, rotation } = blur {
+        ui.label("Diyafram Kanatları (0 = yuvarlak)");
+        ui.add(egui::Slider::new(blades, 0..=9));
+        if *blades > 0 && *blades < 3 {
+            *blades = 3;
+        }
+        ui.add_space(6.0);
+        if *blades >= 3 {
+            slider_row(ui, "Kanat Dönüşü (radyan)", rotation, 0.0..=std::f32::consts::TAU);
+        }
+    }
+}
+
 fn slider_row(
     ui: &mut egui::Ui,
     label: &str,
@@ -133,6 +162,11 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
                     slider_row(ui, "Odak Uzaklığı (metre)", &mut grade.dof_focus_dist, 0.1..=100.0);
                     slider_row(ui, "Odak Aralığı (Net Alan)", &mut grade.dof_focus_range, 0.1..=50.0);
                     slider_row(ui, "Arka Plan Bulanıklığı (0 = kapalı)", &mut grade.dof_blur_size, 0.0..=10.0);
+                    // A lens: the f-number takes the focus band's place (0 keeps the band), and what
+                    // lies past the farthest distance counts as that far (0 = no limit).
+                    slider_row(ui, "Diyafram f/ (0 = odak aralığı)", &mut grade.dof_f_stops, 0.0..=22.0);
+                    slider_row(ui, "En Uzak Mesafe (0 = sınırsız)", &mut grade.dof_max_depth, 0.0..=1000.0);
+                    dof_blur_row(ui, &mut grade.dof_blur);
                 });
 
             egui::CollapsingHeader::new(crate::theme::section_title("Motion Blur (Hareket)"))
@@ -174,4 +208,53 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
             .color(egui::Color32::from_rgb(180, 180, 180)),
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn texts(shapes: &[egui::epaint::ClippedShape]) -> Vec<String> {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        shapes.iter().for_each(|c| walk(&c.shape, &mut out));
+        out
+    }
+
+    /// What the panel shows of a camera graded with `blur`.
+    fn panel(blur: DofBlur) -> Vec<String> {
+        let mut world = World::new();
+        let camera = world.spawn();
+        world.add_component(camera, Camera::new(1.0, 0.1, 100.0, 0.0, 0.0, true));
+        world.add_component(camera, PostProcess::new().with_dof_blur(blur));
+        let mut state = EditorState::default();
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| draw_environment_settings(ui, &world, &mut state));
+        let shown = texts(&output.shapes);
+        output.drop_without_applying_deltas();
+        shown
+    }
+
+    /// The lens's dials are on the panel — the aperture, the farthest distance, the blur's shape — and an
+    /// iris's blades and turn show for a bokeh of blades, the turn not for a round one, neither for a
+    /// gaussian.
+    #[test]
+    fn the_panel_sets_the_lens_and_the_blurs_shape() {
+        let hexagon = panel(DofBlur::blades(6, 0.5));
+        for label in ["Diyafram f/ (0 = odak aralığı)", "En Uzak Mesafe (0 = sınırsız)", "Bulanıklık Biçimi", "Bokeh (diyafram)", "Diyafram Kanatları (0 = yuvarlak)", "Kanat Dönüşü (radyan)"] {
+            assert!(hexagon.iter().any(|t| t == label), "{label} is not on the panel: {hexagon:?}");
+        }
+        let round = panel(DofBlur::round());
+        assert!(round.iter().any(|t| t == "Diyafram Kanatları (0 = yuvarlak)"));
+        assert!(!round.iter().any(|t| t == "Kanat Dönüşü (radyan)"), "a round iris shows a turn");
+        let gaussian = panel(DofBlur::Gaussian);
+        assert!(gaussian.iter().any(|t| t == "Gauss (yumuşak)"));
+        assert!(!gaussian.iter().any(|t| t.starts_with("Diyafram Kanat")), "a gaussian shows blades");
+    }
 }

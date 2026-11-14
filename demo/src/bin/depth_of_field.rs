@@ -6,7 +6,7 @@
 //!
 //! | yetenek | Gizmo |
 //! |---------|-------|
-//! | bulanıklık kipi seçimi (gauss / bokeh) | **yok** — tek bulanıklık |
+//! | bulanıklık kipi seçimi (gauss / bokeh) | **var (2026-11-14)** — `DofBlur::{Bokeh { blades, rotation }, Gaussian}`, `PostProcess::dof_blur` / `Renderer::dof_blur`; `B` tuşu dolaştırıyor |
 //! | odak uzaklığı | [`Renderer::dof_focus_dist`] |
 //! | diyafram (f-değeri) | `PostProcess::with_lens(odak, f, azami)` (2026-11-07) |
 //! | sensör yüksekliği | `PostProcess::dof_sensor_height` |
@@ -91,7 +91,16 @@ struct Dof {
     focus: f32,
     range: f32,
     blur: f32,
+    /// Bulanıklığın biçimi: yuvarlak bokeh, altı kanatlı diyafram, gauss.
+    shape: usize,
 }
+
+/// `B`'nin dolaştırdığı biçimler.
+const SHAPES: [(&str, fn() -> gizmo::renderer::components::DofBlur); 3] = [
+    ("bokeh, yuvarlak", gizmo::renderer::components::DofBlur::round),
+    ("bokeh, altı kanat", || gizmo::renderer::components::DofBlur::blades(6, 0.0)),
+    ("gauss", || gizmo::renderer::components::DofBlur::Gaussian),
+];
 
 impl Default for Dof {
     fn default() -> Self {
@@ -105,6 +114,7 @@ impl Default for Dof {
             // Motorun kendi varsayılanları: menzil 2,0 ve bulanıklık 4,0.
             range: std::env::var("GIZMO_DOF_RANGE").ok().and_then(|v| v.parse().ok()).unwrap_or(6.0f32),
             blur: 6.0,
+            shape: 0,
         }
     }
 }
@@ -186,6 +196,7 @@ fn main() {
                 renderer.dof_focus_dist = dof.focus;
                 renderer.dof_focus_range = dof.range;
                 renderer.dof_blur_size = dof.blur;
+                renderer.dof_blur = (SHAPES[dof.shape].1)();
             }
         }))
         .set_ui(|world, _state, ctx| {
@@ -211,10 +222,10 @@ fn main() {
                         ui.label("coc = clamp(|mesafe − odak| / menzil, 0, 1)");
                         ui.label("sonuç = mix(keskin, bulanık, coc)");
                         ui.separator();
-                        ui.label("diyafram, sensör yüksekliği ve bokeh kipi YOK");
+                        ui.label(format!("biçim: {}", SHAPES[dof.shape].0));
                         ui.label("odak bandı: üç sayı; mercek için with_lens");
                         ui.separator();
-                        ui.label("1/2/3/4 — odak 4/10/16/24 m · 0 — kapalı");
+                        ui.label("1/2/3/4 — odak 4/10/16/24 m · 0 — kapalı · B — biçim");
                     });
                 });
         })
@@ -227,6 +238,9 @@ fn dof_input(mut dof: ResMut<Dof>, input: Res<Input>) {
     use gizmo::winit::keyboard::KeyCode;
     if input.is_key_just_pressed(KeyCode::Digit0 as u32) {
         dof.enabled = false;
+    }
+    if input.is_key_just_pressed(KeyCode::KeyB as u32) {
+        dof.shape = (dof.shape + 1) % SHAPES.len();
     }
     for (key, focus) in [
         (KeyCode::Digit1, 4.0),

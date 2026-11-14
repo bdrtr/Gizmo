@@ -29,6 +29,9 @@ struct PostProcessParams {
     // x: 1 = bloom replaces light rather than adding it. y: the colour look-up table's mode (0 none, 1 a
     // grade, 2 Reinhard, 3 log2), z and w: its log2 range (`crate::color_lut`).
     bloom_and_lut: vec4<f32>,
+    // How an out-of-focus point spreads (`DofBlur`): x 0 = a bokeh of y blades (0 = round) turned by z
+    // radians, 1 = a gaussian.
+    dof_shape: vec4<f32>,
 };
 
 @group(2) @binding(0)

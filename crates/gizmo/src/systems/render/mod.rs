@@ -1481,6 +1481,7 @@ fn draw_camera_view(
             dof_blur_size: g.dof_blur_size,
             dof_lens: g.dof_lens_factor(cam_fov, renderer.size.height),
             dof_max_depth: g.dof_max_depth,
+            dof_shape: g.dof_blur.uniform(),
             motion_blur: g.motion_blur,
             ..Default::default()
         },
@@ -1497,6 +1498,7 @@ fn draw_camera_view(
             dof_focus_dist: renderer.dof_focus_dist,
             dof_focus_range: renderer.dof_focus_range,
             dof_blur_size: if renderer.dof_enabled { renderer.dof_blur_size } else { 0.0 },
+            dof_shape: renderer.dof_blur.uniform(),
             ..Default::default()
         },
     };
@@ -11294,6 +11296,93 @@ mod golden_render_tests {
             // each tap asked whether it may reach this far: 11944 and 2315 in the middle third.
             assert!(wide[0] > wide[1] * 4, "what is in focus does not glow on what is behind it: {wide:?}");
             assert!(capped[2] * 4 < wide[2], "past the limit it counts as the limit: {capped:?} and {wide:?}");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no depth of field.
+    /// **Depth of field's blur has the shape it is given** (`DofBlur`). A bright square far out of focus on
+    /// black: an iris of six blades turned a sixth of a turn is the same hexagon, turned half that it is
+    /// not; a round iris ignores the turn; a hexagon is not the disc; and a gaussian keeps more of the
+    /// light near the point than a bokeh, whose taps weigh alike.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn depth_of_fields_blur_has_the_shape_it_is_given() {
+        use crate::renderer::components::{DofBlur, PostProcess};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        const W: usize = 128;
+        async fn frame(blur: DofBlur) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(W as u32, W as u32).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
+            renderer.fog = Some(gizmo_renderer::frame_uniforms::Fog::new([0.0, 0.0, 0.0], 0.0));
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            // A square half a metre across 16 m off — 6.5 texels at this field of view — with nothing behind it.
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::new(0.0, 0.0, -16.0)).with_scale(Vec3::splat(0.25)));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, Material::new(tex.clone()).with_unlit(Vec4::new(1.0, 1.0, 1.0, 1.0)));
+            world.add_component(e, MeshRenderer::new());
+            let camera = world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                fov: 0.6,
+                primary: true,
+                ..Default::default()
+            });
+            // In focus at 2 m: the square is as blurred as the largest blur, 20 texels.
+            world.add_component(camera, PostProcess::new().with_depth_of_field(2.0, 0.5, 20.0).with_bloom(0.0, 10.0).with_dof_blur(blur));
+            render_world(&mut renderer, &mut world).await
+        }
+        let diff = |a: &[u8], b: &[u8]| -> u64 { a.iter().zip(b).map(|(x, y)| u64::from(x.abs_diff(*y))).sum() };
+        // Over the background (the clear colour, the corner's): the square's own light, in the 8×8
+        // texels around where it was.
+        // In linear light (the bytes are sRGB), so a ratio is a ratio of light.
+        let linear = |b: u8| ((f64::from(b) / 255.0 + 0.055) / 1.055).powf(2.4);
+        let near_middle = |f: &[u8]| -> f64 {
+            let background = linear(f[0]);
+            let mut sum = 0.0;
+            for y in W / 2 - 4..W / 2 + 4 {
+                for x in W / 2 - 4..W / 2 + 4 {
+                    sum += (linear(f[(y * W + x) * 4]) - background).max(0.0);
+                }
+            }
+            sum
+        };
+        let lit = |f: &[u8]| f.chunks(4).filter(|p| p[0] > f[0].saturating_add(8)).count();
+        pollster::block_on(async {
+            let round = frame(DofBlur::round()).await;
+            let round_turned = frame(DofBlur::blades(0, 1.0)).await;
+            let hex = frame(DofBlur::blades(6, 0.0)).await;
+            let hex_sixth = frame(DofBlur::blades(6, std::f32::consts::TAU / 6.0)).await;
+            let hex_twelfth = frame(DofBlur::blades(6, std::f32::consts::TAU / 12.0)).await;
+            let gauss = frame(DofBlur::Gaussian).await;
+            let (same_turn, half_turn, round_vs_hex) = (diff(&hex, &hex_sixth), diff(&hex, &hex_twelfth), diff(&round, &hex));
+            eprintln!(
+                "hexagon vs turned a sixth {same_turn}, a twelfth {half_turn}; round vs hexagon {round_vs_hex}; middle: bokeh {:.3} gaussian {:.3}; lit: bokeh {} gaussian {}",
+                near_middle(&round),
+                near_middle(&gauss),
+                lit(&round),
+                lit(&gauss)
+            );
+            assert_eq!(diff(&round, &round_turned), 0, "a round iris was turned");
+            assert!(half_turn > 2000, "turning the hexagon half a side changed nothing: {half_turn}");
+            assert!(same_turn * 20 < half_turn, "a hexagon turned a whole side is not the same hexagon: {same_turn} against {half_turn}");
+            assert!(round_vs_hex > 2000, "six blades drew the disc: {round_vs_hex}");
+            assert!(near_middle(&gauss) > near_middle(&round) * 2.0, "the gaussian does not keep its light near the point");
+            assert!(lit(&gauss) < lit(&round), "the gaussian spread as far as the bokeh");
         });
     }
 

@@ -350,6 +350,9 @@ pub struct Renderer {
     pub dof_focus_range: f32,
     /// The maximum blur radius outside that range, in texels.
     pub dof_blur_size: f32,
+    /// The blur's shape — a lens's bokeh or a gaussian — for a camera that carries no
+    /// [`PostProcess`](crate::components::PostProcess) (whose own `dof_blur` wins).
+    pub dof_blur: crate::components::DofBlur,
     /// Per-channel radial offset, in screen fractions. 0 = off.
     pub chromatic_aberration: f32,
     /// How dark the frame's corners get, for a camera that carries no
@@ -1568,7 +1571,7 @@ mod tests {
         // so that the *next* field also has to be a deliberate change to this line.
         // 160 since 2026-11-01: camera motion blur, a vec4 (shutter, max, pad) and the reprojection
         // matrix. 176 since 2026-11-07: bloom's composite mode.
-        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 176, "PostProcessUniforms size shifted from target 160 bytes (motion blur eklendi)!");
+        assert_eq!(std::mem::size_of::<crate::gpu_types::PostProcessUniforms>(), 192, "PostProcessUniforms is 192 bytes since the bokeh shape (`dof_shape`) joined it");
         // 144 since 2026-11-08: `optics`, the specular tint and the glass volume.
         assert_eq!(std::mem::size_of::<crate::gpu_types::InstanceRaw>(), 144, "InstanceRaw size shifted from target 144 bytes!");
         // Textured-PBR per-material params: three std140 vec4 slots.
