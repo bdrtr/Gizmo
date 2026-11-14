@@ -518,3 +518,51 @@ fn an_fps_camera_looks_where_it_looked() {
     let cam = world.query::<&Camera>().get(eye).cloned().expect("the camera");
     assert!((cam.yaw - 1.0).abs() < 1e-5 && (cam.pitch + 0.3).abs() < 1e-5, "looking at {} / {}", cam.yaw, cam.pitch);
 }
+
+/// A guard's behaviour tree, saved halfway through a wait, finishes the wait after the reopen and
+/// does what comes next — the tree is data, its running state with it, and the leaves are names
+/// the reopened world's `BtLibrary` resolves.
+#[test]
+fn a_behaviour_tree_goes_on_from_where_it_was() {
+    use gizmo::ai::{behavior_tree_system, BehaviorTree, BtLibrary, BtNode, BtStatus};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+    let alarms = Arc::new(AtomicUsize::new(0));
+    let library = |alarms: Arc<AtomicUsize>| {
+        move |world: &mut World| {
+            let alarms = alarms.clone();
+            world.insert_resource(
+                BtLibrary::new()
+                    .with_condition("on_duty", |_, _| true)
+                    .with_action("raise_alarm", move |_, _, _| {
+                        alarms.fetch_add(1, Ordering::SeqCst);
+                        BtStatus::Success
+                    }),
+            );
+        }
+    };
+    let mut world = World::new();
+    library(Arc::new(AtomicUsize::new(0)))(&mut world);
+    let e = named(&mut world, "guard");
+    world.add_component(
+        e,
+        BehaviorTree::new(BtNode::sequence([
+            BtNode::condition("on_duty"),
+            BtNode::wait(1.0),
+            BtNode::action("raise_alarm"),
+        ])),
+    );
+    for _ in 0..36 {
+        behavior_tree_system(&mut world, DT);
+    }
+
+    let mut world = reopen(&world, library(alarms.clone()));
+    for _ in 0..20 {
+        behavior_tree_system(&mut world, DT);
+    }
+    assert_eq!(alarms.load(Ordering::SeqCst), 0, "0.93 s of a 1 s wait: not yet");
+    for _ in 0..6 {
+        behavior_tree_system(&mut world, DT);
+    }
+    assert_eq!(alarms.load(Ordering::SeqCst), 1, "1.03 s: the wait went on from 0.6 s, and the alarm went off");
+}

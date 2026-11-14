@@ -467,6 +467,7 @@ pub fn draw_reflection_section(
         "Script",
         "FluidSimulation",
         "NavAgent",
+        "BehaviorTree",
     ];
 
     if let Some(registry) = world.get_resource::<gizmo_core::ComponentRegistry>() {

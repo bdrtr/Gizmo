@@ -141,6 +141,8 @@ pub fn handle_scene_operations(
                 // not in the scene format either. `NavAgent::default()` is the human-scale walker
                 // (5 m/s, 10 m/s², 0.5 m) — tuning is what the inspector is for.
                 "NavAgent" => world.add_component(ent, gizmo::ai::components::NavAgent::default()),
+                // An empty tree: its section offers the root, and every node after it.
+                "BehaviorTree" => world.add_component(ent, gizmo::ai::BehaviorTree::default()),
 
                 // Not a built-in: a type registered with `register_editable` — a game's own
                 // component — can still be added, by the registry's own default-insert.
@@ -165,6 +167,7 @@ pub fn handle_scene_operations(
                 // now pins all four together rather than each on its own.
                 "FighterController" => { world.remove_component::<gizmo::physics::components::fighter::FighterController>(ent); }
                 "NavAgent" => { world.remove_component::<gizmo::ai::components::NavAgent>(ent); }
+                "BehaviorTree" => { world.remove_component::<gizmo::ai::BehaviorTree>(ent); }
                 other => {
                     if !gizmo::editor::component_requests::remove_registered_component(world, ent, other) {
                         editor_state.log_warning(&format!("Component turu silinemiyor: {}", comp_name));
@@ -1082,7 +1085,7 @@ mod tests {
     /// misses one.
     #[test]
     fn every_delete_button_in_the_inspector_removes_its_component() {
-        for name in ["Hitbox", "Hurtbox", "BoneAttachment", "FighterController", "NavAgent"] {
+        for name in ["Hitbox", "Hurtbox", "BoneAttachment", "FighterController", "NavAgent", "BehaviorTree"] {
             let mut world = World::new();
             let ent = world.spawn();
             let mut ed = EditorState::default();
@@ -1197,6 +1200,7 @@ mod tests {
                 .get(id)
                 .is_some(),
             "NavAgent" => world.query::<&gizmo::ai::components::NavAgent>().get(id).is_some(),
+            "BehaviorTree" => world.query::<&gizmo::ai::BehaviorTree>().get(id).is_some(),
             other => panic!("test bilinmeyen bileşen adı kullandı: {other}"),
         }
     }

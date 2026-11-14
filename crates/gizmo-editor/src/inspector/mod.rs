@@ -18,6 +18,8 @@ pub mod script;
 pub mod environment;
 /// The `➕ Add component` menu, and what each entry adds.
 pub mod menu;
+/// The behaviour tree rows: the tree as a tree, edited in place.
+pub mod behavior_tree;
 
 use crate::editor_state::EditorState;
 use gizmo_core::World;
@@ -99,6 +101,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         misc::draw_script_section(ui, world, entity_id, state);
         misc::draw_fluid_section(ui, world, entity_id, state);
         misc::draw_ai_section(ui, world, entity_id, state);
+        behavior_tree::draw_behavior_tree_section(ui, world, entity_id, state);
         misc::draw_reflection_section(ui, world, entity_id, state);
         misc::draw_animation_player_section(ui, world, entity_id, state);
         misc::draw_bone_attachment_section(ui, world, entity_id, state);

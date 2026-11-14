@@ -14,8 +14,9 @@
 //! This crate provides the decision-making and navigation building blocks used by
 //! ECS-driven agents:
 //!
-//! - [`behavior_tree`]: composable behavior trees (sequence, selector, inverter,
-//!   action and condition nodes) plus a system that ticks them.
+//! - [`behavior_tree`]: behaviour trees as data (sequence, selector, decorators, wait, and leaves
+//!   that name an action or condition the game registers in a [`BtLibrary`]) plus a system that
+//!   ticks them; a tree is saved with its scene, running state included.
 //! - [`goap`]: goal-oriented action planning (GOAP).
 //! - [`utility_ai`]: utility-based decision making with scoring curves.
 //! - [`steering`]: steering and flocking forces (seek, arrive, obstacle
@@ -38,10 +39,7 @@ pub mod steering;
 pub mod system;
 pub mod utility_ai;
 
-pub use behavior_tree::{
-    behavior_tree_system, Action, BehaviorTree, BtNode, BtStatus, Condition, Inverter, Selector,
-    Sequence,
-};
+pub use behavior_tree::{behavior_tree_system, BehaviorTree, BtLibrary, BtNode, BtStatus};
 pub use components::{NavAgent, NavAgentState};
 pub use goap::{GoapAction, GoapGoal, GoapPlanner, GoapState};
 pub use navmesh::{NavMesh, NavMeshConfig, NavMeshStats, NavPoly};
@@ -70,9 +68,8 @@ pub use utility_ai::{
 pub mod prelude {
     pub use super::{
         ai_navigation_system, alignment, arrive, avoid_obstacles, behavior_tree_system, cohesion,
-        combined_steering, seek, separate, Action, BehaviorTree, BtNode, BtStatus, Condition,
-        ContextScorer, GoapAction, GoapGoal, GoapPlanner, GoapState, Inverter, LinearCurve,
-        LogisticCurve, NavAgent, NavAgentState, NavGrid, NavMesh, NavMeshConfig, Selector,
-        Sequence, SteeringWeights, UtilityAction, UtilityBrain, UtilityConsideration, UtilityCurve,
+        combined_steering, seek, separate, BehaviorTree, BtLibrary, BtNode, BtStatus,
+        ContextScorer, GoapAction, GoapGoal, GoapPlanner, GoapState, LinearCurve,
+        LogisticCurve, NavAgent, NavAgentState, NavGrid, NavMesh, NavMeshConfig, SteeringWeights, UtilityAction, UtilityBrain, UtilityConsideration, UtilityCurve,
     };
 }

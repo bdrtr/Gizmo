@@ -146,6 +146,12 @@ pub fn full_scene_registry() -> SceneRegistry {
     if let Err(e) = reg.register_serializable::<gizmo_ai::components::NavAgent>("NavAgent") {
         tracing::warn!(error = ?e, "[Scene] NavAgent registration failed");
     }
+    // An agent's behaviour tree, mid-run state included: its leaves are names the game's
+    // `BtLibrary` resolves, so the tree is data (decided 2026-11-14).
+    #[cfg(feature = "ai")]
+    if let Err(e) = reg.register_serializable::<gizmo_ai::BehaviorTree>("BehaviorTree") {
+        tracing::warn!(error = ?e, "[Scene] BehaviorTree registration failed");
+    }
 
     tracing::debug!(
         component_count = reg.len(),

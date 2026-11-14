@@ -62,8 +62,6 @@ const NOT_SAVED: &[(&str, &str)] = &[
 
 /// Should be saved, and is not yet — closed class by class (decided 2026-11-14). Only shrinks.
 const OPEN: &[&str] = &[
-    // Physics and play
-    "BehaviorTree",
     // The GPU fluid, which nothing in the engine drives from the ECS yet: `FluidSimulation` is read
     // by the inspector alone and `FluidInteractor` by the fluid demos alone. Saving them would keep
     // knobs that steer nothing (`addable_components_round_trip` refuses the first for that reason);

@@ -2758,8 +2758,10 @@ including one made by whoever is doing the measuring.**
 **Small known limits (left open on purpose):**
 - Nothing raises `NavGrid::needs_rebuild` when static geometry changes; the scene's owner or the
   editor's "Rebuild NavMesh" button raises it.
-- `BehaviorTree` can only be built from Rust (`Box<dyn BtNode>`) and does not serialise, so a scene
-  cannot carry one. `ai_frame` ticks it every frame now, but there is nobody to put one there.
+- ~~`BehaviorTree` can only be built from Rust (`Box<dyn BtNode>`) and does not serialise, so a scene
+  cannot carry one.~~ **Closed 2026-11-14:** a tree is data (`BtNode`: composites, decorators, a wait,
+  and leaves that name an action or condition the game registers in a `BtLibrary` resource), saved
+  with its running state, added from ➕ and edited in the inspector as a tree.
 - `AnimationPlayer` cannot round-trip either, and for a structural reason: it holds an
   `Arc<AnimationClip>` — a loaded asset, like `Mesh` — and a `HashMap<String, Entity>` cache whose
   ids do not survive a reload. What could travel is a description (clip name, speed, looping); the

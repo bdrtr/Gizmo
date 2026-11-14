@@ -88,6 +88,27 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Behaviour trees are data: saved mid-run, and edited in the inspector** (decided 2026-11-14). A tree held closures
+  (`Box<dyn BtNode>`), so a scene could not keep one: a save dropped every agent's behaviour, and the editor's ⏹ —
+  which restores the world from a snapshot — emptied every agent it had; `Clone` gave an empty tree. Now:
+  - **`BtNode` is an enum**: `Sequence`, `Selector`, `Inverter`, `Succeeder`, `Repeat` (a count, or forever), `Wait`
+    (seconds of `dt`), and leaves that **name** what they do, `Action("chase")` / `Condition("sees_player")`. The
+    running state — a composite's current child, a repeat's count, a wait's elapsed time — is part of the data, so a
+    tree saved halfway through a wait finishes it after the reopen. `BtNode::reset` starts one afresh.
+  - **`BtLibrary`**, a resource the game fills once (`with_action`, `with_condition`): what each name means. A leaf
+    naming nothing it holds fails, with one warning per name; `BehaviorTree::unresolved` says which, without ticking.
+    What a leaf remembers between ticks belongs in a component, which is saved — not in the function, which every
+    tree naming it shares.
+  - **The inspector draws the tree as a tree**: every node's kind (convertible, keeping its children or its name),
+    a leaf's name from the library's list, a wait's seconds and a repeat's count; nodes added, moved and removed;
+    while the game runs, the step a sequence is on and how far a wait has got; a leaf the library lacks marked in
+    red. ➕ adds a tree, 🗑 removes it.
+  `BehaviorTree` is registered for scenes; `a_behaviour_tree_goes_on_from_where_it_was` fails with the registration
+  taken out, and with a wait's progress left out of the file. **Breaks:** `Action::new(closure)`,
+  `Condition::new(closure)`, `Sequence`/`Selector`/`Inverter` structs and the `BtNode` trait (a custom node is a
+  registered action now). Nothing outside `gizmo-ai`'s tests used them.
+  `scene_fidelity`: 121 components, 25 open — the GPU fluid, animation, UI.
+
 - **Scene fidelity: physics and play are saved, and go on after a reopen the way they were going.** A scene saved in
   the middle of play — a file, or the editor's ▶/⏹ snapshot — kept the bodies and lost what drove them:
   - **How bodies behave:** `PhysicsMaterial` (the per-entity override of a collider's material), `ExternalForce`,

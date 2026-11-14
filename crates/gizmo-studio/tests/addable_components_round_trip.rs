@@ -416,6 +416,7 @@ fn every_component_the_inspector_edits_survives_a_save() {
         ("draw_transform_section", "Transform"),
         ("draw_velocity_section", "Velocity"),
         ("draw_ai_section", "NavAgent"),
+        ("draw_behavior_tree_section", "BehaviorTree"),
     ];
 
     /// (section fn, why the registry is not where its answer lives).
