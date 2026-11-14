@@ -242,7 +242,8 @@ fn flatten(prefix: &str, value: &serde_json::Value, out: &mut HashMap<String, St
 /// [`Locale::format`] of `key` and `args`, the frame it is drawn — so switching
 /// [`Locale::set_language`] relabels every one at once. Without a [`Locale`] resource the `Text`
 /// shows as authored.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct LocalizedText {
     /// The string's key, dotted (`"menu.start"`).
     pub key: String,

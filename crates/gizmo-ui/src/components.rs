@@ -8,7 +8,7 @@ use gizmo_math::{Vec2, Vec4};
 ///
 /// `Percent` uses the **CSS scale**, `0.0..=100.0`, not the `0.0..=1.0` fraction
 /// `taffy` uses internally. `Val::Percent(50.0)` is half of the parent.
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Val {
     /// The layout algorithm decides. What "auto" means depends on the property:
@@ -34,7 +34,8 @@ impl Val {
 /// [`Default`] is [`UiRect::ZERO`], matching the CSS initial value of margin,
 /// padding and border. `inset` is the exception and defaults to
 /// [`UiRect::AUTO`]; [`Style::DEFAULT`] sets it explicitly.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct UiRect {
     /// Left edge.
     pub left: Val,
@@ -75,7 +76,7 @@ impl Default for UiRect {
 }
 
 /// Which layout algorithm lays out an element's children.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Display {
     /// Flexbox. The default, and the layout mode this crate is built around.
@@ -93,7 +94,7 @@ pub enum Display {
 }
 
 /// One column's or row's size in a [`Display::Grid`] container.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum GridTrack {
     /// Exactly this many layout pixels.
@@ -116,7 +117,8 @@ pub enum GridTrack {
 /// assert_eq!(inventory.len(), 6);
 /// assert_eq!(sidebar.as_slice()[1], GridTrack::Fr(1.0));
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(into = "Vec<GridTrack>", try_from = "Vec<GridTrack>")]
 pub struct GridTracks {
     tracks: [GridTrack; GridTracks::MAX],
     len: u8,
@@ -159,6 +161,22 @@ impl GridTracks {
     }
 }
 
+impl From<GridTracks> for Vec<GridTrack> {
+    fn from(tracks: GridTracks) -> Self {
+        tracks.as_slice().to_vec()
+    }
+}
+
+impl TryFrom<Vec<GridTrack>> for GridTracks {
+    type Error = String;
+    fn try_from(tracks: Vec<GridTrack>) -> Result<Self, String> {
+        if tracks.len() > Self::MAX {
+            return Err(format!("{} grid tracks, the most is {}", tracks.len(), Self::MAX));
+        }
+        Ok(Self::new(&tracks))
+    }
+}
+
 impl Default for GridTracks {
     fn default() -> Self {
         Self::NONE
@@ -167,7 +185,7 @@ impl Default for GridTracks {
 
 /// Where a grid item goes along one axis. Lines are numbered from 1, as in CSS; negative lines
 /// count from the end (`-1` is the last line).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum GridPlacement {
     /// The next free cell, in order — the default.
@@ -182,7 +200,7 @@ pub enum GridPlacement {
 }
 
 /// How an element's `inset` is interpreted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum PositionType {
     /// Laid out in flow; `inset` nudges the element afterwards without moving
@@ -195,7 +213,7 @@ pub enum PositionType {
 }
 
 /// Direction of the flexbox main axis.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum FlexDirection {
     /// Left to right.
@@ -210,7 +228,7 @@ pub enum FlexDirection {
 }
 
 /// Whether flex items may wrap onto more than one line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum FlexWrap {
     /// Everything on a single line.
@@ -225,7 +243,7 @@ pub enum FlexWrap {
 /// Alignment of items along the cross axis.
 ///
 /// Also used for `align_self` via the [`AlignSelf`] alias.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum AlignItems {
     /// Packed toward the start of the axis.
@@ -252,7 +270,7 @@ pub type AlignSelf = AlignItems;
 /// Distribution of free space between and around items.
 ///
 /// Also used for `justify_content` via the [`JustifyContent`] alias.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum AlignContent {
     /// Packed toward the start of the axis.
@@ -327,7 +345,8 @@ pub type JustifyContent = AlignContent;
 /// };
 /// assert_eq!(style.flex_shrink, 1.0); // CSS default, not 0.0
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Style {
     /// Layout algorithm used for this element's children.
     pub display: Display,
@@ -455,7 +474,8 @@ impl Default for Style {
 ///
 /// `size` is the element's width/height and `position` is its top-left corner,
 /// both in window pixel coordinates.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Node {
     /// Computed width and height in pixels.
     pub size: Vec2,
@@ -474,7 +494,13 @@ impl Default for Node {
 
 /// Current pointer interaction state of a UI element, updated each frame by the
 /// interaction system.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+///
+/// **Saved as being there, not as its state.** The component is what makes a node answer the
+/// pointer, so a scene keeps it; the state is the pointer's, and is given again on the next frame.
+/// A reopened `Pressed` would be worse than lost: let go over the element on the first frame, it
+/// would click it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "InteractiveNode", into = "InteractiveNode")]
 #[derive(Default)]
 #[non_exhaustive]
 pub enum Interaction {
@@ -488,6 +514,22 @@ pub enum Interaction {
 }
 
 
+/// How a scene file writes an [`Interaction`]: that there is one.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InteractiveNode;
+
+impl From<Interaction> for InteractiveNode {
+    fn from(_: Interaction) -> Self {
+        InteractiveNode
+    }
+}
+
+impl From<InteractiveNode> for Interaction {
+    fn from(_: InteractiveNode) -> Self {
+        Interaction::None
+    }
+}
+
 /// Whether the element was **clicked** this frame — `Clicked(true)` for exactly the frame the
 /// primary button is released over it after being pressed on it, `false` otherwise.
 ///
@@ -498,8 +540,12 @@ pub enum Interaction {
 ///
 /// Part of [`ButtonBundle`](crate::ButtonBundle); an element without one simply has no click
 /// signal, and its `Interaction` works as before.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Clicked(pub bool);
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Clicked(
+    /// A pulse for one frame, so not saved: a reopened element has not been clicked.
+    #[serde(skip)]
+    pub bool,
+);
 
 /// Makes an element draggable, and says how the drag is going — a slider's knob, an inventory
 /// item, a window's title bar. Add it to any element that has an [`Interaction`].
@@ -511,14 +557,26 @@ pub struct Clicked(pub bool);
 ///
 /// The element is not moved for you — read [`delta`](Self::delta) or
 /// [`position`](Self::position) and move or set what you like.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Drag {
+    // **A gesture is not saved.** A drag lives between a press and a release of a pointer that a
+    // reopened scene does not hold: brought back under way, the first frame would end it and drop
+    // the element wherever the pointer happens to be. The element stays draggable — the component
+    // is what says so.
+    #[serde(skip)]
     active: bool,
+    #[serde(skip)]
     start: Vec2,
+    #[serde(skip)]
     position: Vec2,
+    #[serde(skip)]
     just_started: bool,
+    #[serde(skip)]
     just_ended: bool,
+    #[serde(skip)]
     over: Option<Entity>,
+    #[serde(skip)]
     dropped_on: Option<Entity>,
 }
 
@@ -614,9 +672,14 @@ impl Drag {
 /// [`ClipContent`] / [`Scroll`] ancestor, one with no size (hidden, not laid out), and the dragged
 /// element itself and everything under it — an item can be a target for other items and still be
 /// dragged without dropping onto itself.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct DropTarget {
+    // This frame's answers, given again by the drop system every frame; what is saved is that the
+    // element is a target.
+    #[serde(skip)]
     hovered_by: Option<Entity>,
+    #[serde(skip)]
     dropped: Option<Entity>,
 }
 
@@ -653,13 +716,17 @@ impl DropTarget {
 /// font of the element's own `Text` at that `Text`'s size, light on a dark box, `\n` for lines,
 /// wrapped at 320 layout pixels, and kept inside the window. An element with no `Text` has no
 /// font to draw it in, and its tooltip is not drawn — as a `Dropdown`'s list borrows its button's.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Tooltip {
     /// What it says. Change it whenever; an empty string shows nothing.
     pub text: String,
     /// Seconds of resting before it appears.
     pub delay: f32,
+    // Where the pointer rests: not the scene's (a reopened tooltip waits for the pointer again).
+    #[serde(skip)]
     rested: f32,
+    #[serde(skip)]
     shown_at: Option<Vec2>,
 }
 
@@ -716,7 +783,8 @@ impl Tooltip {
 /// Every menu with a volume setting had to build this from a drag, a child node for the fill and
 /// two `ZIndex` layers to keep the fill under the label — about forty lines in `menu`, and none
 /// of it reachable from the keyboard.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Slider {
     /// The value, `0.0..=1.0`. Set it to move the slider; the system clamps it.
     pub value: f32,
@@ -724,7 +792,10 @@ pub struct Slider {
     pub step: f32,
     /// The colour of the filled part (default a light blue).
     pub fill: Vec4,
+    // The drag along the track and this frame's change: a gesture and a pulse, not saved.
+    #[serde(skip)]
     drag: Drag,
+    #[serde(skip)]
     changed: bool,
 }
 
@@ -801,7 +872,8 @@ impl Default for Slider {
 /// progress. Not interactive: set `value` and it shows it. Under `gizmo-engine` the
 /// [`fill`](Self::fill) is painted over the element's background, under its label, like a
 /// [`Slider`]'s.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct ProgressBar {
     /// How full, `0.0..=1.0` (clamped when drawn).
     pub value: f32,
@@ -834,10 +906,13 @@ impl Default for ProgressBar {
 /// finger, Enter and the gamepad's south button all flip it, through the same click a button
 /// gets. Put it on a [`ButtonBundle`](crate::ButtonBundle). Under `gizmo-engine` a check box is
 /// drawn at the element's left edge, filled while on.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Toggle {
     /// On or off. Set it to change it without a click (it does not count as a change then).
     pub on: bool,
+    /// This frame's flip — a pulse, not saved.
+    #[serde(skip)]
     changed: bool,
 }
 
@@ -873,14 +948,19 @@ impl Toggle {
 ///   options without opening it, as they step a [`Slider`].
 /// - Under `gizmo-engine` the label shows the selected option, and the open list is drawn above
 ///   every UI layer.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Dropdown {
     /// The options, in order.
     pub options: Vec<String>,
     /// Which one is selected (clamped into range when used).
     pub selected: usize,
+    /// Whether the list is open — seen, so saved.
     open: bool,
+    // The option under the pointer and this frame's change: given again every frame.
+    #[serde(skip)]
     hovered: Option<usize>,
+    #[serde(skip)]
     changed: bool,
 }
 
@@ -977,7 +1057,7 @@ impl Dropdown {
 
 /// Fill color of a UI element, stored as a linear RGBA vector with each
 /// channel in the `0.0..=1.0` range.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BackgroundColor(pub Vec4);
 
 impl Default for BackgroundColor {
@@ -993,7 +1073,7 @@ impl Default for BackgroundColor {
 /// sits in — `gizmo-ui` had no clipping at all, and `ui_layout`'s fourth button overflowed on
 /// purpose to show it. The trimming happens on the CPU per glyph and per background quad, so it
 /// costs no extra draw call.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ClipContent;
 
 /// Which layer a UI node — and everything under it that does not set its own — is painted and
@@ -1004,7 +1084,7 @@ pub struct ClipContent;
 /// clicks reach the buttons beneath. Now layers paint low to high (backgrounds, then labels, per
 /// layer) and only the highest layer under the cursor is hovered. Within one layer the old rule
 /// holds — overlapping nodes on the same layer are the author's to separate.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ZIndex(pub i32);
 
 /// Scrolls a node's children: they are laid out as usual, then moved up (and left) by
@@ -1018,20 +1098,26 @@ pub struct ZIndex(pub i32);
 ///
 /// A list longer than its panel could be clipped since `ClipContent`, but not reached; a
 /// leaderboard or an inventory needs this.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Scroll {
     /// How far the content is scrolled, in pixels: `y` down, `x` right. Set it to jump; the
     /// layout clamps it.
     pub offset: Vec2,
     /// Pixels per mouse-wheel notch.
     pub speed: f32,
+    /// Measured again by every layout.
+    #[serde(skip)]
     max: Vec2,
-    /// While the scrollbar's thumb is held: where on the thumb the pointer took it.
+    /// While the scrollbar's thumb is held: where on the thumb the pointer took it. A gesture.
+    #[serde(skip)]
     grab: Option<f32>,
     /// A finger on the content: where it came down, where it was last frame, and whether it has
-    /// travelled far enough to be a scroll rather than a tap.
+    /// travelled far enough to be a scroll rather than a tap. A gesture.
+    #[serde(skip)]
     flick: Option<Flick>,
-    /// Pixels per second the content keeps sliding after a flick, decaying.
+    /// Pixels per second the content keeps sliding after a flick, decaying — motion the content
+    /// has, saved like a body's velocity, so a list let go of goes on sliding after a reopen.
     velocity: f32,
 }
 
@@ -1182,7 +1268,7 @@ impl Scroll {
 }
 
 /// Marker component for the root of a UI tree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct UiRoot;
 gizmo_core::impl_component!(Style, Node, Interaction, Clicked, BackgroundColor, UiRoot, ClipContent, ZIndex, Scroll, Drag, DropTarget, Slider, ProgressBar, Toggle, Dropdown, Tooltip);
 

@@ -88,6 +88,25 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **A UI is saved as it stands, and is used the same way after a reopen** (decided 2026-11-14). No UI component was
+  registered: a saved menu came back as named entities with no boxes, colours or controls, and the editor's ⏹ emptied
+  every UI a game built in play. All twenty `gizmo-ui` components and `LocalizedText` are now in
+  `full_scene_registry` (`gizmo-ui` gains `serde`): the tree and its look, the boxes the last layout gave it (`Node`,
+  laid out again the next frame), and each control's value — a slider's, a switch's, a list's selection and whether it
+  is open, a scroll's offset and the slide a flick left it with, what was typed and whether the field has the keyboard,
+  a `UiTween` where it had got to. **Not** the pointer's: a drag, a held thumb or stick, a press, a click and this
+  frame's "changed" are a gesture under way and come back at rest — brought back held, the first frame would let go of
+  them and drop or click something. `Interaction` and `Clicked` were on the "not saved" list as pointer state; the
+  component is what makes a node answer the pointer, so a reopened button could never be clicked again. They are saved
+  as being there (`Interaction` reads `None`, `Clicked` `false`). `crates/gizmo/tests/scene_ui_fidelity.rs`: a menu
+  reopens laid out box for box with every value, a tween goes on frame for frame, a reopened switch and slider answer
+  the pointer, and a drag and a press saved under way let go of nothing; `a_ui_draws_the_same_after_a_save_and_reopen`
+  draws a panel byte for byte. Each fails with its registration taken out (Interaction, Clicked, Node, Dropdown,
+  Scroll, TextInput, UiTween, Slider, UiTransform) and with a gesture saved. `VirtualStick` gains a `Default` (60 px).
+  `scene_fidelity`: 2 open — the GPU fluid's two, which wait for the fluid to be driven by them.
+  Also: the render world's copy test now lists `IkChains` as prepared (the IK pass bends the skeleton the draw reads);
+  the previous change left it red.
+
 - **Inverse kinematics is applied by the engine, and saved** (decided 2026-11-14). The solver existed and
   `TwoBoneIkChain` held its parameters, and nothing applied either: the component's docs told the caller to write the
   joint rotations back themselves, nobody did, and no scene could hold one. Now an `IkChains` on a skeleton's entity

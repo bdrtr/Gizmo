@@ -330,6 +330,8 @@ mod render_world_tests {
         ("PhysicsWorld", "its fluid zones handed over as `WaterVolumes`"),
         ("LocalizedText", "resolved into `LocalizedLabel` by `resolve_localized_texts`"),
         ("Locale", "read by `resolve_localized_texts`, which records missing keys in the game's locale"),
+        ("IkChains", "applied to the `Skeleton`'s drawn pose by `apply_ik_chains_system`; the draw reads the skeleton"),
+        ("UnresolvedIkChains", "that pass's own note of chains already warned about"),
     ];
 
     /// Every `.rs` file under `dir`, the files that are test modules as a whole left out, each other

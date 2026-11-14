@@ -17104,6 +17104,107 @@ fn material_surface(input: SurfaceInput) -> Surface {
         });
     }
 
+    /// **A UI is drawn the same after a save and a reopen.** A panel on a layer, clipping a list
+    /// scrolled part way down (its thumb drawn), a slider's fill, a switch's box, a progress bar and
+    /// a faded, moved card — laid out by the UI's own systems on both sides, against a 128² window.
+    /// Saved, opened by a fresh renderer and world, laid out again: byte for byte. Before 2026-11-14
+    /// no UI component was registered, and a reopened menu drew nothing.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    #[cfg(feature = "ui")]
+    fn a_ui_draws_the_same_after_a_save_and_reopen() {
+        use crate::ui::{BackgroundColor, ClipContent, FlexDirection, Node, ProgressBar, Scroll, Slider, Style, Toggle, UiTransform, Val, ZIndex};
+        use gizmo_core::component::{Children, Parent};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let ui_world = || {
+            let mut world = World::new();
+            let mut schedule = gizmo_core::system::Schedule::new();
+            crate::ui::register(&mut world, &mut schedule);
+            world.register_component_type::<Parent>();
+            world.register_component_type::<Children>();
+            world.insert_resource(gizmo_core::input::Input::new());
+            *world.get_resource_mut::<gizmo_core::window::WindowInfo>().unwrap() = gizmo_core::window::WindowInfo::new(128.0, 128.0);
+            schedule.build();
+            (world, schedule)
+        };
+        let px = |w: f32, h: f32| Style { width: Val::Px(w), height: Val::Px(h), flex_shrink: 0.0, ..Default::default() };
+        let scene_path = std::env::temp_dir().join(format!("gizmo-ui-reopen-{}.scene", std::process::id()));
+        let scene_path = scene_path.to_string_lossy().into_owned();
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let (mut world, mut schedule) = ui_world();
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            let spawn = |world: &mut World, parent: Option<gizmo_core::Entity>, style: Style, colour: Vec4| {
+                let e = world.spawn();
+                world.add_component(e, style);
+                world.add_component(e, Node::default());
+                world.add_component(e, BackgroundColor(colour));
+                if let Some(p) = parent {
+                    world.add_component(e, Parent(p));
+                    let mut kids = world.query::<&Children>().get(p).map(|c| c.0.clone()).unwrap_or_default();
+                    kids.push(e);
+                    world.add_component(p, Children(kids));
+                }
+                e
+            };
+            let panel = spawn(
+                &mut world,
+                None,
+                Style { flex_direction: FlexDirection::Column, row_gap: Val::Px(4.0), padding: crate::ui::UiRect::all(Val::Px(4.0)), ..px(120.0, 120.0) },
+                Vec4::new(0.1, 0.1, 0.2, 1.0),
+            );
+            world.add_component(panel, ZIndex(2));
+            world.add_component(panel, ClipContent);
+            let list = spawn(&mut world, Some(panel), Style { flex_direction: FlexDirection::Column, ..px(100.0, 30.0) }, Vec4::new(0.3, 0.3, 0.3, 1.0));
+            let mut scroll = Scroll::default();
+            scroll.offset.y = 14.0;
+            world.add_component(list, scroll);
+            for i in 0..4 {
+                spawn(&mut world, Some(list), px(90.0, 12.0), Vec4::new(0.2 * i as f32, 0.8, 0.3, 1.0));
+            }
+            let slider = spawn(&mut world, Some(panel), px(100.0, 14.0), Vec4::new(0.2, 0.2, 0.2, 1.0));
+            world.add_component(slider, crate::ui::Interaction::None);
+            world.add_component(slider, Slider::new(0.7).with_fill(Vec4::new(0.95, 0.6, 0.1, 1.0)));
+            let switch = spawn(&mut world, Some(panel), px(40.0, 14.0), Vec4::new(0.2, 0.2, 0.2, 1.0));
+            world.add_component(switch, crate::ui::Interaction::None);
+            world.add_component(switch, crate::ui::Clicked(false));
+            world.add_component(switch, Toggle::new(true));
+            let bar = spawn(&mut world, Some(panel), px(100.0, 10.0), Vec4::new(0.15, 0.15, 0.15, 1.0));
+            world.add_component(bar, ProgressBar::new(0.4));
+            let card = spawn(&mut world, Some(panel), px(50.0, 20.0), Vec4::new(0.9, 0.2, 0.6, 1.0));
+            world.add_component(card, UiTransform { translation: gizmo_math::Vec2::new(30.0, 0.0), opacity: 0.5 });
+            schedule.run(&mut world, 0.0);
+            let drawn = render_world(&mut renderer, &mut world).await;
+            crate::scene::SceneData::save(&world, &scene_path, &crate::full_scene_registry()).expect("saves");
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let (mut world, mut schedule) = ui_world();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &crate::full_scene_registry()).expect("loads");
+            schedule.run(&mut world, 0.0);
+            let reopened = render_world(&mut renderer, &mut world).await;
+            let blank = {
+                let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+                renderer.taa = None;
+                let mut world = World::new();
+                world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+                render_world(&mut renderer, &mut world).await
+            };
+            let (shown, total) = changed_pixels(&blank, &drawn, 128);
+            assert!(shown > 5000, "the UI drew almost nothing ({shown}/{total}) — the comparison would prove little");
+            let (changed, total) = changed_pixels(&drawn, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened UI drew {changed}/{total} pixels otherwise");
+        });
+        let _ = std::fs::remove_file(&scene_path);
+    }
+
     async fn render_ui_scene(ui_box: bool, label: bool) -> Vec<u8> {
         const W: u32 = 128;
         let mut renderer = crate::test_gpu::headless_renderer(W, W).await;

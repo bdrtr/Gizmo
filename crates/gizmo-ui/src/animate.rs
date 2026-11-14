@@ -20,7 +20,8 @@ use gizmo_math::{Ease, Vec2};
 ///   read the moved [`Node`](crate::Node). Siblings do not move to fill the gap.
 /// - `opacity`, `0..=1`: multiplies the alpha of the box's background and text and of everything
 ///   under it — a whole card fades, not only its face. Applied by `gizmo-engine`'s draw path.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct UiTransform {
     /// The offset from the laid-out place, in layout pixels.
     pub translation: Vec2,
@@ -50,7 +51,10 @@ impl Default for UiTransform {
 /// let away = UiTween::translation(Vec2::new(300.0, -200.0), 0.35).and_opacity(0.0);
 /// assert!(!home.is_finished() && !away.is_finished());
 /// ```
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// Saved where it had got to — the start it took, the time spent, the delay left — so a reopened
+/// tween goes on along the same path.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct UiTween {
     translation: Option<Vec2>,
     opacity: Option<f32>,

@@ -47,8 +47,6 @@ const NOT_SAVED: &[(&str, &str)] = &[
     ("PrefabRequest", "a request the prefab system consumes in the frame it is made"),
     ("Explosion", "a blast applied once and despawned with its entity in the same step"),
     ("Debris", "a piece a fracture makes during play; ⏹ removes what play made"),
-    ("Clicked", "this frame's click on a UI node"),
-    ("Interaction", "this frame's pointer state over a UI node"),
     ("RenderStats", "the last frame's draw counts, written by the renderer"),
     // ── Generic over a game's own type ──────────────────────────────────────────────────────────
     ("Handle", "`Handle<T>` is an id into a game's `Assets<T>` in memory; a game that saves one registers its own `T`'s"),
@@ -67,10 +65,6 @@ const OPEN: &[&str] = &[
     // knobs that steer nothing (`addable_components_round_trip` refuses the first for that reason);
     // they close with the fluid being driven by them.
     "FluidSimulation", "FluidInteractor",
-    // UI
-    "UiRoot", "Node", "Style", "BackgroundColor", "ZIndex", "ClipContent", "Scroll", "Drag", "DropTarget", "Dropdown",
-    "ProgressBar", "Slider", "Toggle", "Tooltip", "TextInput", "UiTransform", "UiTween", "VirtualButton", "VirtualStick",
-    "LocalizedText",
 ];
 
 fn workspace() -> PathBuf {

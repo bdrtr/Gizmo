@@ -28,16 +28,24 @@ const MOUSE: u64 = u64::MAX;
 ///
 /// The stick is centred where the finger lands (a "floating" stick): a thumb that comes down a
 /// little off the drawn centre does not start with a push it did not mean.
-#[derive(Clone, Copy, Debug, PartialEq)]
+///
+/// Saved as its radius and colour. Where it points is the finger holding it, which a reopened
+/// scene does not have: it comes back at rest.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct VirtualStick {
     /// How far, in logical pixels, the finger travels for a full push.
     pub radius: f32,
     /// The knob's colour (under `gizmo-engine`).
     pub knob: Vec4,
+    #[serde(skip)]
     value: Vec2,
+    #[serde(skip)]
     finger: Option<u64>,
+    #[serde(skip)]
     centre: Vec2,
     /// Whether it has had a box yet — see [`touch_controls_system`] for what that changes.
+    #[serde(skip)]
     laid_out: bool,
 }
 
@@ -68,13 +76,27 @@ impl VirtualStick {
     }
 }
 
+impl Default for VirtualStick {
+    /// A stick at rest, 60 pixels for a full push.
+    fn default() -> Self {
+        Self::new(60.0)
+    }
+}
+
 /// A button drawn on the screen that any finger can hold, independently of the others.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+///
+/// Saved as being there: whether it is held is the finger's, and a reopened one is not.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct VirtualButton {
+    #[serde(skip)]
     finger: Option<u64>,
+    #[serde(skip)]
     just_pressed: bool,
+    #[serde(skip)]
     just_released: bool,
     /// Whether it has had a box yet — see [`touch_controls_system`] for what that changes.
+    #[serde(skip)]
     laid_out: bool,
 }
 

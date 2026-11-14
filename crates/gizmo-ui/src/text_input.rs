@@ -19,13 +19,17 @@ use crate::components::{Clicked, Interaction};
 /// [`submitted`](Self::is_submitted) for that frame.
 ///
 /// Before this a game had no way to ask for a name: the input layer reported physical keys only.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct TextInput {
     /// What has been typed.
     pub value: String,
     /// The most characters it takes; `0` is no limit.
     pub max_chars: usize,
+    /// Whether it has the keyboard — seen (the caret), so saved.
     focused: bool,
+    /// This frame's Enter — a pulse, not saved.
+    #[serde(skip)]
     submitted: bool,
 }
 

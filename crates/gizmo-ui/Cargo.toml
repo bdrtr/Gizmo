@@ -31,6 +31,9 @@ rustdoc-args = ["--cfg", "docsrs"]
 gizmo-app = { version = "0.11.0", path = "../gizmo-app", default-features = false, optional = true }
 gizmo-core = { version = "0.11.0", path = "../gizmo-core" }
 gizmo-math = { path = "../gizmo-math", version = "0.11.0" }
+# Every component is saved with a scene (`gizmo::full_scene_registry`); serde is an accepted
+# public dependency (docs/ENGINE.md §4).
+serde = { version = "1", features = ["derive"] }
 # taffy bir İMPLEMENTASYON DETAYIDIR: public API'de hiçbir taffy tipi görünmez.
 # `Style` artık kendi POD tipimiz (components.rs); taffy'ye çeviri yalnızca
 # `UiContext::to_taffy_style` içinde yapılır (layout.rs). A3-followup, 2026-08-08.

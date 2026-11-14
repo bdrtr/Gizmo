@@ -201,6 +201,36 @@ fn register_facade_components(reg: &mut scene::registry::SceneRegistry) {
         reg_or_warn!(systems::render::LocalizedLabel, "LocalizedLabel");
         reg_or_warn!(systems::fps_look::FpsLook, "FpsLook");
     }
+    // **A UI is saved as it stands.** Its tree and look (`Style`, `BackgroundColor`, `ZIndex`, …),
+    // the boxes the last layout gave it (`Node`, laid out again the next frame), and each control's
+    // value — a slider's, a switch's, a list's selection and whether it is open, a scroll's offset,
+    // what was typed, a tween where it had got to. Not the pointer's: a drag, a press, a finger on
+    // a stick, a click and this frame's "changed" are a gesture under way, and come back at rest
+    // (see each type) — brought back held, the first frame would let go of them.
+    #[cfg(feature = "ui")]
+    {
+        reg_or_warn!(gizmo_ui::UiRoot, "UiRoot");
+        reg_or_warn!(gizmo_ui::Node, "Node");
+        reg_or_warn!(gizmo_ui::Style, "Style");
+        reg_or_warn!(gizmo_ui::BackgroundColor, "BackgroundColor");
+        reg_or_warn!(gizmo_ui::ZIndex, "ZIndex");
+        reg_or_warn!(gizmo_ui::ClipContent, "ClipContent");
+        reg_or_warn!(gizmo_ui::Interaction, "Interaction");
+        reg_or_warn!(gizmo_ui::Clicked, "Clicked");
+        reg_or_warn!(gizmo_ui::Scroll, "Scroll");
+        reg_or_warn!(gizmo_ui::Drag, "Drag");
+        reg_or_warn!(gizmo_ui::DropTarget, "DropTarget");
+        reg_or_warn!(gizmo_ui::Tooltip, "Tooltip");
+        reg_or_warn!(gizmo_ui::Slider, "Slider");
+        reg_or_warn!(gizmo_ui::ProgressBar, "ProgressBar");
+        reg_or_warn!(gizmo_ui::Toggle, "Toggle");
+        reg_or_warn!(gizmo_ui::Dropdown, "Dropdown");
+        reg_or_warn!(gizmo_ui::text_input::TextInput, "TextInput");
+        reg_or_warn!(gizmo_ui::UiTransform, "UiTransform");
+        reg_or_warn!(gizmo_ui::UiTween, "UiTween");
+        reg_or_warn!(gizmo_ui::VirtualStick, "VirtualStick");
+        reg_or_warn!(gizmo_ui::VirtualButton, "VirtualButton");
+    }
     #[cfg(feature = "physics")]
     reg_or_warn!(systems::auto_collider::AutoBoxCollider, "AutoBoxCollider");
     reg_or_warn!(systems::lifetime::DespawnAfter, "DespawnAfter");

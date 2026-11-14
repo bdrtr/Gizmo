@@ -109,6 +109,8 @@ pub fn full_scene_registry() -> SceneRegistry {
         // The limbs the engine bends: each chain's tip bone by name, its target and pole as world
         // points, its weight (`gizmo_renderer::ik`).
         reg_or_warn!(gizmo_renderer::ik::IkChains, "IkChains");
+        // A label by its key in the string table: relabelled in the language of the day.
+        reg_or_warn!(crate::locale::LocalizedText, "LocalizedText");
         reg_or_warn!(gizmo_renderer::components::SpriteAnimation, "SpriteAnimation");
         // Saved in its faces by name (`text_sync`): "default", a path, or a name a game loads it under.
         reg_or_warn!(gizmo_renderer::components::Text, "Text");
