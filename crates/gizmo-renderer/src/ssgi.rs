@@ -10,6 +10,9 @@ struct SsgiTemporalParams {
     alpha: f32,
     /// The camera the world-position G-buffer was written relative to — see the WGSL mirror.
     camera_pos: [f32; 3],
+    /// This frame's TAA jitter in NDC, which the reprojection puts back; `[0, 0]` without TAA.
+    jitter: [f32; 2],
+    _pad: [f32; 2],
 }
 
 /// Screen-space global illumination: light bounced off what is already on screen.
@@ -287,11 +290,15 @@ impl SsgiState {
     /// Upload the temporal-resolve uniform: `self.prev_vp` (last frame's unjittered
     /// view-proj) drives reprojection; `alpha` is the blend weight (1.0 = ignore
     /// history, used on the first frame / after a reset).
-    pub fn update_params(&self, queue: &wgpu::Queue, alpha: f32, camera_pos: [f32; 3]) {
+    /// `jitter` is this frame's TAA projection offset in NDC (`[0, 0]` without TAA): the G-buffer
+    /// position the history is reprojected from was found by the jittered raster.
+    pub fn update_params(&self, queue: &wgpu::Queue, alpha: f32, camera_pos: [f32; 3], jitter: [f32; 2]) {
         let data = SsgiTemporalParams {
             prev_view_proj: self.prev_vp,
             alpha,
             camera_pos,
+            jitter,
+            _pad: [0.0; 2],
         };
         queue.write_buffer(&self.temporal_params_buffer, 0, bytemuck::bytes_of(&data));
     }

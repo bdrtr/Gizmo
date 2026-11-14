@@ -21,6 +21,13 @@ struct SsgiTemporalParams {
     camera_x:       f32,
     camera_y:       f32,
     camera_z:       f32,
+    // This frame's TAA jitter in NDC (0 without TAA), and two pads: scalars for the reason above
+    // (96 bytes both sides). The G-buffer's position is the surface the jittered raster found, so
+    // the reprojection puts the jitter back, as `taa.wgsl` does.
+    jitter_x:       f32,
+    jitter_y:       f32,
+    _pad0:          f32,
+    _pad1:          f32,
 };
 
 @group(0) @binding(0) var<uniform> params: SsgiTemporalParams;
@@ -57,7 +64,9 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     let prev_clip = params.prev_view_proj * vec4(pos_samp.xyz + camera_pos, 1.0);
     if (prev_clip.w > 0.001) {
         let ndc = prev_clip.xy / prev_clip.w;
-        history_uv = vec2(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
+        // + the jitter: the position is where the jittered raster sampled, which the unjittered
+        // projection puts one sub-pixel step off this pixel (see `taa.wgsl`).
+        history_uv = vec2(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5) + vec2<f32>(params.jitter_x, params.jitter_y) * vec2<f32>(0.5, -0.5);
     } else {
         history_valid = false;                    // behind previous camera
     }

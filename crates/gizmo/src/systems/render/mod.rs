@@ -1424,6 +1424,9 @@ fn draw_camera_view(
     let unjittered_proj = proj;
 
     // ── TAA Halton jitter: subpixel offset applied to the projection ──
+    // Kept: TAA and SSGI's temporal pass both reproject from the G-buffer the jittered raster wrote,
+    // and both put this back.
+    let mut frame_jitter = [0.0f32; 2];
     if let Some(ref taa) = renderer.taa {
         if taa.enabled {
             let jp = crate::renderer::taa::TaaState::get_jitter(taa.frame_index);
@@ -1431,6 +1434,7 @@ fn draw_camera_view(
             let jx = jp[0] * 2.0 / renderer.size.width as f32;
             let jy = jp[1] * 2.0 / renderer.size.height as f32;
             proj = jitter_projection(proj, jx, jy);
+            frame_jitter = [jx, jy];
         }
     }
 
@@ -1640,11 +1644,8 @@ fn draw_camera_view(
     // Upload TAA params (prev_vp from last frame, current jitter, blend alpha)
     if let Some(ref mut taa) = renderer.taa {
         if taa.enabled {
-            let jp = crate::renderer::taa::TaaState::get_jitter(taa.frame_index);
-            let jx = jp[0] * 2.0 / renderer.size.width as f32;
-            let jy = jp[1] * 2.0 / renderer.size.height as f32;
             let alpha = if taa.frame_index == 0 { 1.0f32 } else { 0.1f32 };
-            taa.update_params(&renderer.queue, [jx, jy], alpha, cam_pos.to_array());
+            taa.update_params(&renderer.queue, frame_jitter, alpha, cam_pos.to_array());
             taa.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
         }
     }
@@ -1654,7 +1655,7 @@ fn draw_camera_view(
     // reset so there is no stale history to reproject. Denoises the 1-spp raymarch grain.
     if let Some(ref mut ssgi) = renderer.ssgi {
         let alpha = if ssgi.frame_index == 0 { 1.0f32 } else { 0.1f32 };
-        ssgi.update_params(&renderer.queue, alpha, cam_pos.to_array());
+        ssgi.update_params(&renderer.queue, alpha, cam_pos.to_array(), frame_jitter);
         ssgi.store_prev_vp(unjittered_view_proj.to_cols_array_2d());
     }
 
@@ -11161,6 +11162,85 @@ mod golden_render_tests {
             assert_eq!(untouched, default, "the defaults are the old literals");
             let (near, wide) = (band(&default), band(&wide));
             assert!(wide > near * 2 + 500, "a 2 m radius spreads the occlusion: band {near} → {wide}");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no TAA.
+    /// **TAA settles on a still scene.** Sunlit white cubes on a dark floor, the camera still: after the
+    /// history has filled, a whole jitter cycle (8 frames) changes almost nothing from frame to frame,
+    /// and the settled frame lies where the frame without TAA does — its edges not moved a pixel.
+    /// Two mistakes put the jitter back into every frame: the current frame was "un-jittered" by reading it
+    /// at `uv − jitter`, the wrong way, and the history was reprojected from the position the jittered
+    /// raster found, so it was read one sub-pixel step off every frame. A still chess board shimmered
+    /// along every edge (`satranc`, 2026-11-14).
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn taa_settles_on_a_still_scene() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            const W: usize = 128;
+            let mut renderer = crate::test_gpu::headless_renderer(W as u32, W as u32).await;
+            assert!(renderer.taa.is_some());
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            world.spawn_bundle((
+                Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_y(0.5) * gizmo_math::Quat::from_rotation_x(-0.9)),
+                GlobalTransform::default(),
+                crate::renderer::components::DirectionalLight::new(Vec3::ONE, 3.0, crate::renderer::components::LightRole::Sun),
+            ));
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.05, 0.0)).with_scale(Vec3::new(4.0, 0.05, 4.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.1, 0.08, 0.06, 1.0), 0.7, 0.0));
+            world.add_component(floor, MeshRenderer::new());
+            for (x, z) in [(-1.3f32, 0.4f32), (0.0, -0.6), (1.2, 0.8), (0.4, 1.6)] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(x, 0.3, z)).with_scale(Vec3::splat(0.3)));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::new(0.92, 0.88, 0.8, 1.0), 0.35, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 4.0, 4.5),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                pitch: -0.7,
+                primary: true,
+                ..Default::default()
+            });
+            for _ in 0..40 {
+                render_world(&mut renderer, &mut world).await;
+            }
+            let mut frames = Vec::new();
+            for _ in 0..9 {
+                frames.push(render_world(&mut renderer, &mut world).await);
+            }
+            let changed = |a: &[u8], b: &[u8]| a.chunks(4).zip(b.chunks(4)).filter(|(p, q)| (0..3).any(|i| p[i].abs_diff(q[i]) > 6)).count();
+            let per_frame = frames.windows(2).map(|w| changed(&w[0], &w[1])).sum::<usize>() / 8;
+            renderer.taa = None;
+            let still = render_world(&mut renderer, &mut world).await;
+            let off: u64 = frames[8].iter().zip(&still).map(|(a, b)| u64::from(a.abs_diff(*b))).sum::<u64>() / (W * W) as u64;
+            let edge_pixels = (1..W - 1)
+                .flat_map(|y| (1..W - 1).map(move |x| (x, y)))
+                .filter(|&(x, y)| still[(y * W + x) * 4].abs_diff(still[(y * W + x + 1) * 4]) > 30)
+                .count();
+            eprintln!("TAA, still camera: {per_frame} pixels change a frame over a jitter cycle ({edge_pixels} edge pixels); settled vs no TAA, mean byte difference {off}");
+            assert!(edge_pixels > 200, "the scene has edges to shimmer: {edge_pixels}");
+            // 490 a frame with the two jitter mistakes, 162 with only the history fixed, 29 with both.
+            assert!(per_frame * 5 < edge_pixels, "a still scene shimmers under TAA: {per_frame} pixels a frame against {edge_pixels} edge pixels");
+            assert!(off < 3, "the settled frame is not where the frame without TAA is: {off}");
         });
     }
 

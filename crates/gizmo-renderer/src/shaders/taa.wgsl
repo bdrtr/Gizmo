@@ -37,8 +37,11 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
     let iuv      = vec2<i32>(i32(frag_coord.x), i32(frag_coord.y));
     let uv       = frag_coord.xy / dims;
 
-    // Un-jitter the current frame sample to restore perfect pixel alignment and remove screen shaking
-    let current_uv = uv - params.jitter * vec2<f32>(0.5, -0.5);
+    // Un-jitter the current frame: the jittered projection moved the picture by +jitter in NDC (half
+    // that in UV, y flipped), so texel q holds what belongs at q − jitter, and what belongs here is
+    // read at uv + jitter. It was read at uv − jitter, which put twice the jitter into every frame
+    // instead of none: a still scene shimmered along every edge (`taa_settles_on_a_still_scene`).
+    let current_uv = uv + params.jitter * vec2<f32>(0.5, -0.5);
     let current = textureSample(t_current, s_linear, current_uv).rgb;
 
     // ── Reproject: find where this world-space point was last frame ───────────
@@ -48,8 +51,14 @@ fn fs_resolve(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32
         let prev_clip =
             params.prev_view_proj * vec4(pos_samp.xyz + params.camera_pos.xyz, 1.0);
         if (prev_clip.w > 0.001) {
+            // The position here is the surface the JITTERED raster found at this pixel, which the
+            // unjittered projection puts at uv − jitter, not uv. What has moved is the difference of
+            // two unjittered projections of that one point — so the jitter goes back on: a still
+            // scene reads its history at uv, not one sub-pixel step off it every frame. Without it the
+            // history (nine tenths of every pixel) was resampled at a shifting offset, and a still
+            // scene shimmered along every edge whatever the blend weight.
             let ndc = prev_clip.xy / prev_clip.w;
-            history_uv = vec2(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5);
+            history_uv = vec2(ndc.x * 0.5 + 0.5, ndc.y * -0.5 + 0.5) + params.jitter * vec2<f32>(0.5, -0.5);
         }
     }
 
