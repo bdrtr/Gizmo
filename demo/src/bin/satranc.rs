@@ -9,7 +9,7 @@
 //! |---|---|
 //! | **tıkla** kendi taşına, sonra hedef kareye | hamle (terfi vezire; terfiden önce **R**/**B**/**N** basılıysa kale, fil, at) |
 //! | **U** | son hamle çiftini geri al |
-//! | **A** | motor iki taraf için de oynasın / bıraksın |
+//! | **M** | motor iki taraf için de oynasın / bıraksın (WASD kameranın) |
 //! | **Y** | yeniden başla |
 //!
 //! ## Kurallar doğru mu: perft
@@ -584,8 +584,9 @@ fn square_pos(s: Sq) -> Vec3 {
 
 fn piece_colour(side: Side) -> Vec4 {
     match side {
-        Side::White => Vec4::new(0.92, 0.88, 0.80, 1.0),
-        Side::Black => Vec4::new(0.13, 0.12, 0.14, 1.0),
+        // Krem ve kömür: açık karelerden de koyu karelerden de ayrı dursunlar.
+        Side::White => Vec4::new(0.80, 0.72, 0.58, 1.0),
+        Side::Black => Vec4::new(0.07, 0.065, 0.07, 1.0),
     }
 }
 
@@ -601,13 +602,13 @@ fn piece_parts(kind: Kind) -> Vec<(&'static str, Vec3, Vec3)> {
         Kind::Rook => vec![
             base,
             ("cylinder", Vec3::new(0.0, 0.34, 0.0), Vec3::new(0.22, 0.24, 0.22)),
-            ("standard_cube", Vec3::new(0.0, 0.64, 0.0), Vec3::new(0.26, 0.07, 0.26)),
+            ("standard_cube", Vec3::new(0.0, 0.64, 0.0), Vec3::new(0.13, 0.035, 0.13)),
         ],
         Kind::Knight => vec![
             base,
             ("cylinder", Vec3::new(0.0, 0.26, 0.0), Vec3::new(0.18, 0.16, 0.18)),
-            ("standard_cube", Vec3::new(0.0, 0.56, 0.06), Vec3::new(0.1, 0.2, 0.2)),
-            ("standard_cube", Vec3::new(0.0, 0.66, -0.14), Vec3::new(0.09, 0.08, 0.16)),
+            ("standard_cube", Vec3::new(0.0, 0.56, 0.06), Vec3::new(0.05, 0.1, 0.1)),
+            ("standard_cube", Vec3::new(0.0, 0.66, -0.14), Vec3::new(0.045, 0.04, 0.08)),
         ],
         Kind::Bishop => vec![
             base,
@@ -625,8 +626,8 @@ fn piece_parts(kind: Kind) -> Vec<(&'static str, Vec3, Vec3)> {
             base,
             ("cylinder", Vec3::new(0.0, 0.46, 0.0), Vec3::new(0.2, 0.36, 0.2)),
             ("cylinder", Vec3::new(0.0, 0.86, 0.0), Vec3::new(0.24, 0.05, 0.24)),
-            ("standard_cube", Vec3::new(0.0, 1.04, 0.0), Vec3::new(0.035, 0.13, 0.035)),
-            ("standard_cube", Vec3::new(0.0, 1.06, 0.0), Vec3::new(0.1, 0.035, 0.035)),
+            ("standard_cube", Vec3::new(0.0, 1.04, 0.0), Vec3::new(0.0175, 0.065, 0.0175)),
+            ("standard_cube", Vec3::new(0.0, 1.06, 0.0), Vec3::new(0.05, 0.0175, 0.0175)),
         ],
     }
 }
@@ -644,7 +645,8 @@ fn spawn_piece(world: &mut World, piece: Piece, at: Sq) -> Entity {
             Transform::new(offset).with_scale(scale),
             GlobalTransform::default(),
             MeshSource(shape.into()),
-            MaterialDesc::new().with_pbr(colour, 0.35, 0.0),
+            // Mat bir cila: parlak bir taş güneşte beyaz bir lekeye dönüşüyordu.
+            MaterialDesc::new().with_pbr(colour, 0.6, 0.0),
             MeshRenderer::new(),
         ));
         world.add_child(parent, part);
@@ -657,7 +659,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
     world.spawn_bundle((
         Transform::new(Vec3::ZERO).with_rotation(Quat::from_rotation_y(0.5) * Quat::from_rotation_x(-0.9)),
         GlobalTransform::default(),
-        DirectionalLight::new(Vec3::ONE, 3.0, LightRole::Sun),
+        DirectionalLight::new(Vec3::new(1.0, 0.97, 0.92), 1.8, LightRole::Sun),
     ));
     // Çerçeve ve kareler.
     world.spawn_bundle((
@@ -669,7 +671,7 @@ fn setup(world: &mut World, font: FontId) -> Game {
     ));
     for s in 0..64u8 {
         let light = (file_of(s) + rank_of(s)) % 2 == 1;
-        let colour = if light { Vec4::new(0.86, 0.76, 0.6, 1.0) } else { Vec4::new(0.42, 0.27, 0.16, 1.0) };
+        let colour = if light { Vec4::new(0.52, 0.40, 0.26, 1.0) } else { Vec4::new(0.24, 0.14, 0.08, 1.0) };
         world.spawn_bundle((
             Transform::new(square_pos(s) - Vec3::Y * 0.03).with_scale(Vec3::new(0.5, 0.03, 0.5)),
             GlobalTransform::default(),
@@ -853,7 +855,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     if input.is_key_just_pressed(KeyCode::KeyY as u32) {
         reset(world, &mut game);
     }
-    if input.is_key_just_pressed(KeyCode::KeyA as u32) {
+    if input.is_key_just_pressed(KeyCode::KeyM as u32) {
         let both = !game.engine[0];
         game.engine = [both, true];
     }
@@ -918,7 +920,7 @@ fn draw_hud(world: &mut World, game: &Game) {
     let turn = if game.pos.turn == Side::White { "Beyaz" } else { "Siyah" };
     let who = |s: Side| if game.engine[side_index(s)] { "motor" } else { "sen" };
     let hud = format!(
-        "Hamle {}   Sıra: {turn}   (beyaz: {}, siyah: {}, derinlik {})\n{}\nTıkla: seç ve oyna · U geri al · A motor/sen · Y yeni oyun",
+        "Hamle {}   Sıra: {turn}   (beyaz: {}, siyah: {}, derinlik {})\n{}\nTıkla: seç ve oyna · U geri al · M motor/sen · Y yeni oyun",
         game.plies / 2 + 1,
         who(Side::White),
         who(Side::Black),

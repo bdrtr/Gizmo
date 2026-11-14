@@ -118,10 +118,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ten in `lightmap_bake` (the sky's colour, a box's shadow and contact darkening, a baked-only light's direct value
   against the shader's formula and its shadow, an emissive panel, a bounce, determinism, padding, the 8-bit scale).
 
+- **TAA settles on a still scene; it shimmered along every edge.** Two sign mistakes put the jitter back into
+  every frame. The current frame was "un-jittered" by reading it at `uv − jitter`, but the jittered projection moves
+  the picture by `+jitter`, so that doubled the jitter instead of removing it; and the history was reprojected from
+  the G-buffer position, which is the surface the *jittered* raster found, so even a still scene read its history
+  one sub-pixel step off every frame — nine tenths of every pixel resampled at a shifting offset, whatever the blend
+  weight (0.1 and 0.04 measured the same). Both now put the jitter back. SSGI's temporal pass reprojected the same
+  way and now takes the frame's jitter too (`SsgiState::update_params(.., jitter)`, its uniform 80 → 96 bytes).
+  Measured: a still scene of sunlit cubes, 490 pixels changing a frame over a jitter cycle → 29 (162 with only the
+  history fixed); the chess board in its window, 16 525 → 312 a frame. Found because `satranc` shimmered. Test:
+  `taa_settles_on_a_still_scene` (fails on either half of the fix); 199 desktop and 144 forward-only GPU tests pass.
+
 - **The thirty-seventh game: chess** (`demo/src/bin/satranc.rs`). Full rules — castling, en passant, promotion (queen,
   or rook/bishop/knight with R/B/N held), check, mate, stalemate, the fifty-move rule, threefold repetition,
   insufficient material — against the file's own engine: alpha-beta negamax with a captures-only quiescence search,
-  MVV-LVA ordering, material and square tables; depth 3 by default (`SATRANC_DERINLIK`), both sides with `A` or
+  MVV-LVA ordering, material and square tables; depth 3 by default (`SATRANC_DERINLIK`), both sides with `M` or
   `SATRANC_OTO`, take back with `U`. Pieces are built from primitives under a parent (`MeshSource` + hierarchy), moves
   are tweens, squares are picked with `cursor_on_plane`. `satranc --test` checks the move generator by perft against
   the published counts — the start position to depth 4 (197 281), Kiwipete to 3 (97 862), positions 3 and 4 —
