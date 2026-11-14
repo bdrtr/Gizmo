@@ -388,9 +388,12 @@ mod receiver_tests {
             ["plane_3", "plane_2_4", "circle_1_12", "sphere_0.5_8_12", "cylinder_1_2_8", "cone_1_2_8", "torus_1_0.3_8_12", "capsule_0.5_1_4_8", "sprite_quad_2_1", "tetrahedron_1", "conical_frustum_1_0.5_2_8"]
                 .map(String::from),
         );
-        keys.push(format!("gltf_mesh_{model}_Quad_p0"));
+        // The key as the import spells it: the path normalised (`/`, not Windows' `\`), as every key a
+        // scene holds came from the import.
+        keys.push(format!("gltf_mesh_{}_Quad_p0", AssetManager::normalize_path(&model)));
         for key in &keys {
             let uploaded = assets.mesh_from_source(&gpu.device, &gpu.queue, &gpu.layout, key);
+            assert_ne!(uploaded.source, "__async_loading__", "{key} loaded the placeholder, not the mesh");
             let read = assets.source_vertices(key).unwrap_or_else(|| panic!("{key} read nothing"));
             let positions: Vec<gizmo_math::Vec3> = read.iter().map(|v| gizmo_math::Vec3::from(v.position)).collect();
             assert_eq!(*uploaded.cpu_vertices, positions, "{key}");
@@ -408,7 +411,7 @@ mod receiver_tests {
         let model = write_one_uv_gltf();
         let white = assets.create_white_texture(&gpu.device, &gpu.queue, &gpu.layout);
         assets.load_gltf_scene(&gpu.device, &gpu.queue, &gpu.layout, white, &model).expect("the quad imports");
-        let gltf_key = format!("gltf_mesh_{model}_Quad_p0");
+        let gltf_key = format!("gltf_mesh_{}_Quad_p0", AssetManager::normalize_path(&model));
 
         let mut world = World::new();
         let cube = world.spawn_bundle((MeshSource("standard_cube".into()), LightmapReceiver::new(32, 32)));
