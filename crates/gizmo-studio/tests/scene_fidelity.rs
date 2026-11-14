@@ -67,8 +67,6 @@ const OPEN: &[&str] = &[
     // knobs that steer nothing (`addable_components_round_trip` refuses the first for that reason);
     // they close with the fluid being driven by them.
     "FluidSimulation", "FluidInteractor",
-    // Animation
-    "TwoBoneIkChain",
     // UI
     "UiRoot", "Node", "Style", "BackgroundColor", "ZIndex", "ClipContent", "Scroll", "Drag", "DropTarget", "Dropdown",
     "ProgressBar", "Slider", "Toggle", "Tooltip", "TextInput", "UiTransform", "UiTween", "VirtualButton", "VirtualStick",

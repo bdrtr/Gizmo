@@ -88,6 +88,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   Texture streaming leaves a material with maps alone: its result is a bind group over the base colour alone, and would
   have taken them. **Breaks:** a `MaterialDesc { .. }` literal names `maps` (`MaterialMaps::default()`).
 
+- **Inverse kinematics is applied by the engine, and saved** (decided 2026-11-14). The solver existed and
+  `TwoBoneIkChain` held its parameters, and nothing applied either: the component's docs told the caller to write the
+  joint rotations back themselves, nobody did, and no scene could hold one. Now an `IkChains` on a skeleton's entity
+  lists `TwoBoneIkChain`s — the tip bone **by name** (its parent and grandparent are the chain, the lengths the
+  skeleton's own), the target and the pole as **world points**, a weight — and the frame preparation
+  (`apply_ik_chains_system`, in `prepare_frame`) bends the drawn pose after both animation drivers and before bone
+  attachments, so a sword in a reaching hand goes with it. The bend is computed afresh each frame from the animated
+  pose (`gizmo_animation::ik::apply_ik_chains`), which stays as the animation wrote it, so a weight below one does not
+  creep toward the target. A tip bone the skeleton has not got is said once. `IkChains` is in `full_scene_registry`.
+  `an_ik_chain_bends_the_limb_and_a_reopened_scene_bends_it_the_same` draws a strip nothing animates straight, bent,
+  and bent again after a reopen byte for byte; it fails without the pass, with the pass after the attachments, without
+  the registration, and with the bend written into the animated pose. **Breaks:** `TwoBoneIkChain` is no longer a
+  component and lost `upper_len`, `lower_len` and `solve` (no user had it); `solve_two_bone_ik` is unchanged.
+  `scene_fidelity`: 121 components, 22 open — the GPU fluid and UI.
+
 - **Tweens and animation state machines are saved where they had got to.** `Tween` keeps the start it took, the time
   spent and the delay left, so a door half way open goes on along the same eased path after a reopen
   (`a_tween_goes_on_along_the_same_path`, compared frame by frame with the original). `AnimationStateMachine` keeps its

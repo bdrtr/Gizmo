@@ -32,7 +32,8 @@
 //!
 //! Both sample keyframes through the same cubic-Hermite core (`crate::hermite`),
 //! so a fix in one interpolation path reaches the other. [`ik`] adds analytic /
-//! FABRIK inverse kinematics usable by either.
+//! FABRIK inverse kinematics, and [`ik::IkChains`] — two-bone chains on a skeleton that `gizmo`'s
+//! frame preparation applies every frame.
 //!
 //! Register the transform-track components + system with [`register`] (the
 //! dependency-light entry point) on a [`World`]/[`Schedule`] directly.
@@ -90,7 +91,7 @@ use gizmo_core::system::{IntoSystemConfig, Schedule};
 use gizmo_core::world::World;
 
 /// Registers the animation components ([`player::AnimationPlayer`],
-/// [`player::Animated`], [`ik::TwoBoneIkChain`]) and schedules
+/// [`player::Animated`], [`ik::IkChains`]) and schedules
 /// [`system::animation_system`] to run before transform propagation, on a
 /// [`World`]/[`Schedule`] directly.
 ///
@@ -99,7 +100,7 @@ use gizmo_core::world::World;
 pub fn register(world: &mut World, schedule: &mut Schedule) {
     world.register_component_type::<player::AnimationPlayer>();
     world.register_component_type::<player::Animated>();
-    world.register_component_type::<ik::TwoBoneIkChain>();
+    world.register_component_type::<ik::IkChains>();
     schedule.add_di_system(
         system::animation_system
             .into_config()

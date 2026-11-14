@@ -11,10 +11,13 @@
 //!
 //! All solvers operate on positions expressed in a single common space (world
 //! or model space — the solver does not care, as long as `root`, `target` and
-//! `pole` share it). Converting the resulting bone directions into per-joint
-//! local rotations is the caller's responsibility; [`TwoBoneIkResult`] exposes
-//! helpers ([`TwoBoneIkResult::upper_dir`], [`TwoBoneIkResult::lower_dir`],
-//! [`TwoBoneIkResult::swing_rotations`]) to make that easy.
+//! `pole` share it). [`TwoBoneIkResult`] exposes helpers
+//! ([`TwoBoneIkResult::upper_dir`], [`TwoBoneIkResult::lower_dir`],
+//! [`TwoBoneIkResult::swing_rotations`]) for a caller that poses its own bones.
+//!
+//! On a skeleton the engine does it: an [`IkChains`] component lists [`TwoBoneIkChain`]s by tip
+//! bone, and [`apply_ik_chains`] — run every frame by `gizmo`'s frame preparation — turns each
+//! solve into joint rotations on the drawn pose.
 
 use gizmo_math::{Quat, Vec3};
 
@@ -198,50 +201,141 @@ pub fn solve_fabrik(
     (joints[n - 1] - target).length()
 }
 
-/// A two-bone IK chain as a component: stores the solve parameters so callers
-/// can drive the analytic solver from their own system.
+/// One two-bone limb the engine bends every frame: the bone at its end reaches for [`target`],
+/// and the joint between bends toward [`pole`].
 ///
-/// This is a plain data holder — it does not itself mutate transforms (applying
-/// the result requires world-space joint positions from the transform
-/// hierarchy). Read `root` from the resolved skeleton, call [`Self::solve`], then
-/// write the joint rotations back yourself.
-#[derive(Clone, Copy, Debug, PartialEq)]
+/// A chain is named by its **tip** — the wrist, the ankle — as a [`SkeletonJoint::name`]; the
+/// middle joint is the tip's parent and the root joint the middle one's parent, so a chain is three
+/// bones in a row and the two lengths are the skeleton's own (measured on the pose being bent, so a
+/// clip that stretches a limb is bent at the length it has). Lives inside [`IkChains`], on the
+/// entity that carries the skeleton.
+///
+/// [`target`]: Self::target
+/// [`pole`]: Self::pole
+/// [`SkeletonJoint::name`]: crate::skeletal::SkeletonJoint::name
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct TwoBoneIkChain {
-    /// Length of the upper bone (root → mid).
-    pub upper_len: f32,
-    /// Length of the lower bone (mid → end).
-    pub lower_len: f32,
-    /// Desired end-effector position (in the solve space).
+    /// The name of the bone that reaches — the end of the limb. The first joint of that name is
+    /// used; a name the skeleton does not have, or a bone without two ancestors, bends nothing
+    /// (and is said once, see `gizmo`'s IK pass).
+    pub tip_bone: String,
+    /// Where the tip reaches for, a **world-space point**. Out of reach, the limb straightens
+    /// toward it; too close, it folds as far as its two lengths allow.
     pub target: Vec3,
-    /// Pole/hint controlling the bend plane of the middle joint.
+    /// A **world-space point** the middle joint bends toward — in front of a knee, behind an elbow.
+    /// A point, not a direction (see [`solve_two_bone_ik`]).
     pub pole: Vec3,
-    /// Blend weight in `[0, 1]` for callers that want to fade IK in/out.
+    /// How much of the bend is applied, `0` (the pose as animated) to `1` (the tip on the target);
+    /// clamped into that range. Each frame starts again from the animated pose, so a weight below
+    /// one is that fraction of the bend, every frame — it does not creep toward the target.
     pub weight: f32,
 }
 
 impl Default for TwoBoneIkChain {
     fn default() -> Self {
-        Self {
-            upper_len: 1.0,
-            lower_len: 1.0,
-            target: Vec3::ZERO,
-            pole: Vec3::Y,
-            weight: 1.0,
-        }
+        Self { tip_bone: String::new(), target: Vec3::ZERO, pole: Vec3::new(0.0, 0.0, 1.0), weight: 1.0 }
     }
 }
 
-impl TwoBoneIkChain {
-    /// Solve this chain for the given (fixed) root joint position.
-    pub fn solve(&self, root: Vec3) -> TwoBoneIkResult {
-        solve_two_bone_ik(root, self.upper_len, self.lower_len, self.target, self.pole)
-    }
+/// The IK chains of one skeleton, **applied by the engine**: `gizmo`'s frame preparation solves
+/// them after the skeletal animation drivers and before bone attachments, on top of the pose this
+/// frame's animation produced (the bind pose when nothing animates the skeleton), in list order —
+/// a chain sees the bends of the chains before it.
+///
+/// Put it on the entity that carries the skeleton (a glTF model's root). The animated pose itself
+/// is left as it is; only the drawn pose, and what bone attachments follow, are bent.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub struct IkChains {
+    /// The chains, solved in this order.
+    pub chains: Vec<TwoBoneIkChain>,
 }
 
-impl gizmo_core::component::Component for TwoBoneIkChain {
+impl gizmo_core::component::Component for IkChains {
     fn storage_type() -> gizmo_core::component::StorageType {
         gizmo_core::component::StorageType::Table
     }
+}
+
+/// The three joints of a chain whose tip is called `tip_bone`: `(root, mid, tip)`, or `None` when
+/// the skeleton has no such bone or it has fewer than two ancestors.
+pub fn resolve_chain(hierarchy: &crate::skeletal::SkeletonHierarchy, tip_bone: &str) -> Option<(usize, usize, usize)> {
+    let n = hierarchy.joints.len();
+    let tip = hierarchy.joints.iter().position(|j| j.name == tip_bone)?;
+    let mid = hierarchy.joints[tip].parent_index.filter(|&p| p < n)?;
+    let root = hierarchy.joints[mid].parent_index.filter(|&p| p < n)?;
+    (root != tip && root != mid).then_some((root, mid, tip))
+}
+
+/// What [`apply_ik_chains`] made of a skeleton's chains.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct IkOutcome {
+    /// The bent pose in model space, one matrix per joint — what skinning and bone attachments read.
+    pub global_poses: Vec<gizmo_math::Mat4>,
+    /// The chains (by index into the list) that bent nothing because their tip bone was not found.
+    pub unresolved: Vec<usize>,
+}
+
+/// Bends `local_poses` by `chains` and returns the resulting **model-space** pose.
+///
+/// `model_from_world` maps the chains' world-space targets and poles into the skeleton's model
+/// space — the inverse of the skinned entity's world matrix. `local_poses` is not changed: the bend
+/// is computed from it afresh on every call, which is what keeps a weight from compounding frame
+/// after frame. Each chain rotates its root and middle joints only (swing, about the joint's own
+/// position, so bone lengths and the tip's orientation relative to its parent are kept); what hangs
+/// below the tip — fingers, a held sword — follows it.
+pub fn apply_ik_chains(
+    hierarchy: &crate::skeletal::SkeletonHierarchy,
+    local_poses: &[gizmo_math::Mat4],
+    model_from_world: gizmo_math::Mat4,
+    chains: &[TwoBoneIkChain],
+) -> IkOutcome {
+    use gizmo_math::Mat4;
+    let mut locals = local_poses.to_vec();
+    let mut globals = hierarchy.calculate_global_matrices(&locals);
+    let mut unresolved = Vec::new();
+    // The rotation `q` about the point `pivot`, applied to a model-space matrix.
+    let about = |pivot: Vec3, q: Quat| Mat4::from_translation(pivot) * Mat4::from_quat(q) * Mat4::from_translation(-pivot);
+    let parent_global = |globals: &[Mat4], joint: usize| -> Mat4 {
+        match hierarchy.joints[joint].parent_index.filter(|&p| p < globals.len()) {
+            Some(p) => globals[p],
+            None => hierarchy.root_transform,
+        }
+    };
+    for (index, chain) in chains.iter().enumerate() {
+        let Some((root, mid, tip)) = resolve_chain(hierarchy, &chain.tip_bone) else {
+            unresolved.push(index);
+            continue;
+        };
+        let weight = if chain.weight.is_finite() { chain.weight.clamp(0.0, 1.0) } else { 0.0 };
+        if weight <= 0.0 {
+            continue;
+        }
+        let target = model_from_world.transform_point3(chain.target);
+        let pole = model_from_world.transform_point3(chain.pole);
+        let (p_root, p_mid, p_tip) =
+            (globals[root].w_axis.truncate(), globals[mid].w_axis.truncate(), globals[tip].w_axis.truncate());
+        let solved = solve_two_bone_ik(p_root, (p_mid - p_root).length(), (p_tip - p_mid).length(), target, pole);
+
+        // The upper bone swung from where it points onto where the solve put it.
+        let swing = |from: Vec3, to: Vec3| -> Quat {
+            match (from.try_normalize(), to.try_normalize()) {
+                (Some(a), Some(b)) => Quat::IDENTITY.slerp(Quat::from_rotation_arc(a, b), weight),
+                _ => Quat::IDENTITY,
+            }
+        };
+        let root_global = about(p_root, swing(p_mid - p_root, solved.mid - p_root)) * globals[root];
+        locals[root] = parent_global(&globals, root).inverse() * root_global;
+        // The middle joint where that leaves it, then the lower bone swung onto the solve's.
+        let mid_global = root_global * locals[mid];
+        let tip_global = mid_global * locals[tip];
+        let p_mid = mid_global.w_axis.truncate();
+        let mid_global = about(p_mid, swing(tip_global.w_axis.truncate() - p_mid, solved.end - p_mid)) * mid_global;
+        locals[mid] = root_global.inverse() * mid_global;
+        globals = hierarchy.calculate_global_matrices(&locals);
+    }
+    IkOutcome { global_poses: globals, unresolved }
 }
 
 #[cfg(test)]
@@ -424,21 +518,6 @@ mod tests {
     }
 
     #[test]
-    fn two_bone_ik_chain_solve_matches_free_function() {
-        // The component wrapper must delegate to the free function with its stored params.
-        let root = Vec3::new(0.0, 1.0, 0.0);
-        let chain = TwoBoneIkChain {
-            upper_len: 1.5,
-            lower_len: 0.8,
-            target: Vec3::new(1.2, 0.6, 0.0),
-            pole: Vec3::new(0.0, 2.0, 0.0),
-            weight: 1.0,
-        };
-        let expected = solve_two_bone_ik(root, 1.5, 0.8, chain.target, chain.pole);
-        assert_eq!(chain.solve(root), expected);
-    }
-
-    #[test]
     fn fabrik_reaches_target_at_exact_full_reach() {
         // Target exactly at total reach (not strictly greater) exercises the
         // iterative path (the `> total` shortcut is skipped) and must still converge.
@@ -449,5 +528,109 @@ mod tests {
         assert!(residual < 1e-3, "must reach a just-reachable target, residual {residual}");
         assert!(len(joints[1], Vec3::new(1.0, 0.0, 0.0)) < 1e-3, "chain straight, got {:?}", joints[1]);
         assert!(len(joints[2], target) < 1e-3);
+    }
+
+    // ── Chains applied to a skeleton ───────────────────────────────────
+
+    /// root at the origin → mid one up → tip one further up → a finger half a unit above the tip.
+    fn arm() -> (crate::skeletal::SkeletonHierarchy, Vec<gizmo_math::Mat4>) {
+        use crate::skeletal::{SkeletonHierarchy, SkeletonJoint};
+        use gizmo_math::Mat4;
+        let joint = |name: &str, parent: Option<usize>, up: f32| SkeletonJoint {
+            name: name.into(),
+            node_index: 0,
+            inverse_bind_matrix: Mat4::IDENTITY,
+            parent_index: parent,
+            local_bind_transform: Mat4::from_translation(Vec3::Y * up),
+            bind_translation: Vec3::Y * up,
+            bind_rotation: Quat::IDENTITY,
+            bind_scale: Vec3::ONE,
+        };
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![joint("Shoulder", None, 0.0), joint("Elbow", Some(0), 1.0), joint("Hand", Some(1), 1.0), joint("Finger", Some(2), 0.5)],
+            root_transform: Mat4::IDENTITY,
+        };
+        let locals = hierarchy.joints.iter().map(|j| j.local_bind_transform).collect();
+        (hierarchy, locals)
+    }
+
+    fn at(m: &gizmo_math::Mat4) -> Vec3 {
+        m.w_axis.truncate()
+    }
+
+    #[test]
+    fn a_chain_puts_its_tip_on_the_target_and_keeps_the_rig() {
+        let (h, locals) = arm();
+        let chain = TwoBoneIkChain { tip_bone: "Hand".into(), target: Vec3::new(1.2, 0.8, 0.0), pole: Vec3::new(0.0, 1.0, 1.0), weight: 1.0 };
+        let out = apply_ik_chains(&h, &locals, gizmo_math::Mat4::IDENTITY, std::slice::from_ref(&chain));
+        let g = &out.global_poses;
+        assert!(out.unresolved.is_empty());
+        assert!(len(at(&g[2]), chain.target) < TOL, "the hand reaches the target, it is at {:?}", at(&g[2]));
+        assert!(len(at(&g[0]), Vec3::ZERO) < TOL, "the shoulder stays where it is");
+        assert!((len(at(&g[0]), at(&g[1])) - 1.0).abs() < TOL, "upper arm length kept");
+        assert!((len(at(&g[1]), at(&g[2])) - 1.0).abs() < TOL, "forearm length kept");
+        assert!((len(at(&g[2]), at(&g[3])) - 0.5).abs() < TOL, "the finger hangs where it did off the hand");
+        assert!(at(&g[1]).z > 0.1, "the elbow bends toward the pole (+Z), it is at {:?}", at(&g[1]));
+    }
+
+    #[test]
+    fn a_weight_is_that_fraction_of_the_bend_and_zero_is_the_pose_untouched() {
+        let (h, locals) = arm();
+        let plain = h.calculate_global_matrices(&locals);
+        let mut chain = TwoBoneIkChain { tip_bone: "Hand".into(), target: Vec3::new(1.5, 0.5, 0.0), pole: Vec3::new(0.0, 1.0, 1.0), weight: 0.0 };
+        let none = apply_ik_chains(&h, &locals, gizmo_math::Mat4::IDENTITY, &[chain.clone()]);
+        assert_eq!(none.global_poses, plain, "weight 0 bends nothing");
+        chain.weight = 1.0;
+        let full = apply_ik_chains(&h, &locals, gizmo_math::Mat4::IDENTITY, &[chain.clone()]);
+        chain.weight = 0.5;
+        let half = apply_ik_chains(&h, &locals, gizmo_math::Mat4::IDENTITY, &[chain.clone()]);
+        let (rest, bent, between) = (at(&plain[2]), at(&full.global_poses[2]), at(&half.global_poses[2]));
+        assert!(len(between, rest) > 0.2 && len(between, bent) > 0.2, "half way is neither end: {between:?}");
+        // The same input gives the same pose: nothing is carried from one call to the next.
+        let again = apply_ik_chains(&h, &locals, gizmo_math::Mat4::IDENTITY, &[chain]);
+        assert_eq!(again, half);
+    }
+
+    #[test]
+    fn targets_are_world_points_mapped_into_the_model() {
+        let (h, locals) = arm();
+        let world_from_model = gizmo_math::Mat4::from_rotation_translation(Quat::from_rotation_y(0.7), Vec3::new(5.0, 2.0, -1.0));
+        let target_model = Vec3::new(1.0, 1.0, 0.0);
+        let chain = TwoBoneIkChain {
+            tip_bone: "Hand".into(),
+            target: world_from_model.transform_point3(target_model),
+            pole: world_from_model.transform_point3(Vec3::new(0.0, 1.0, 1.0)),
+            weight: 1.0,
+        };
+        let out = apply_ik_chains(&h, &locals, world_from_model.inverse(), &[chain]);
+        assert!(len(at(&out.global_poses[2]), target_model) < TOL, "hand at {:?}", at(&out.global_poses[2]));
+    }
+
+    #[test]
+    fn a_bone_the_skeleton_has_not_got_bends_nothing_and_is_named() {
+        let (h, locals) = arm();
+        let plain = h.calculate_global_matrices(&locals);
+        let chains = [
+            TwoBoneIkChain { tip_bone: "Hnad".into(), target: Vec3::X, ..Default::default() },
+            // The elbow's grandparent does not exist: not a chain either.
+            TwoBoneIkChain { tip_bone: "Elbow".into(), target: Vec3::X, ..Default::default() },
+        ];
+        let out = apply_ik_chains(&h, &locals, gizmo_math::Mat4::IDENTITY, &chains);
+        assert_eq!(out.unresolved, vec![0, 1]);
+        assert_eq!(out.global_poses, plain);
+    }
+
+    #[test]
+    fn chains_bend_in_order_each_on_the_last() {
+        let (h, locals) = arm();
+        // The finger's chain (elbow → hand → finger) after the hand's: the hand's bend moves the
+        // elbow the finger's chain starts from, and the finger still lands on its own target.
+        let hand = TwoBoneIkChain { tip_bone: "Hand".into(), target: Vec3::new(1.2, 0.8, 0.0), pole: Vec3::new(0.0, 1.0, 1.0), weight: 1.0 };
+        let elbow = apply_ik_chains(&h, &locals, gizmo_math::Mat4::IDENTITY, std::slice::from_ref(&hand)).global_poses[1];
+        let finger_target = at(&elbow) + Vec3::new(0.0, 1.2, 0.0);
+        let finger = TwoBoneIkChain { tip_bone: "Finger".into(), target: finger_target, pole: Vec3::new(2.0, 2.0, 0.0), weight: 1.0 };
+        let out = apply_ik_chains(&h, &locals, gizmo_math::Mat4::IDENTITY, &[hand, finger]);
+        assert!(len(at(&out.global_poses[1]), at(&elbow)) < TOL, "the second chain's root stays where the first put it");
+        assert!(len(at(&out.global_poses[3]), finger_target) < TOL, "finger at {:?}", at(&out.global_poses[3]));
     }
 }

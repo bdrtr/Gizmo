@@ -240,11 +240,14 @@ pub use gizmo_animation::skeletal::{
 };
 /// The ECS systems that advance animation players and write their poses into skeletons.
 pub mod animation_system;
-pub use animation_system::{animation_state_machine_update_system, animation_update_system};
+pub use animation_system::{animation_state_machine_update_system, animation_update_system, upload_skin_poses};
 pub use gizmo_animation::skeletal::decompose_mat4;
 /// Tweens — re-exported because the draw path drives them (`tween::tween_system`), the same way
 /// it drives skeletal animation.
 pub use gizmo_animation::tween;
+/// Inverse kinematics — re-exported for the same reason: the frame preparation applies every
+/// `ik::IkChains` to the skeleton beside it.
+pub use gizmo_animation::ik;
 pub use asset::{
     decode_obj_vertices_for_async, decode_rgba_image_file, AssetError, AssetManager, GltfNodeData,
     ObjIndexKind,

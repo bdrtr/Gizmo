@@ -293,16 +293,18 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 // `gizmo_animation::skeletal::sample` and are imported above.
 
 fn upload_skin_matrices(skeleton: &mut Skeleton, queue: &wgpu::Queue) {
-    let global_matrices = skeleton
-        .hierarchy
-        .calculate_global_matrices(&skeleton.local_poses);
-    skeleton.global_poses = global_matrices.clone();
+    skeleton.global_poses = skeleton.hierarchy.calculate_global_matrices(&skeleton.local_poses);
+    upload_skin_poses(skeleton, queue);
+}
 
-
+/// Uploads the skinning matrices of `skeleton.global_poses` **as they are** — for a pass that has
+/// written the drawn pose itself rather than from the local poses (the engine's IK pass, which
+/// bends the drawn pose and leaves the animated one alone).
+pub fn upload_skin_poses(skeleton: &Skeleton, queue: &wgpu::Queue) {
     let mut joint_matrices = vec![Mat4::IDENTITY; 128];
-    for (i, joint) in skeleton.hierarchy.joints.iter().enumerate() {
-        if i < 128 {
-            joint_matrices[i] = global_matrices[i] * joint.inverse_bind_matrix;
+    for (i, joint) in skeleton.hierarchy.joints.iter().enumerate().take(128) {
+        if let Some(global) = skeleton.global_poses.get(i) {
+            joint_matrices[i] = *global * joint.inverse_bind_matrix;
         }
     }
     queue.write_buffer(&skeleton.buffer, 0, bytemuck::cast_slice(&joint_matrices));

@@ -1107,6 +1107,11 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
         crate::renderer::components::sprite_animation_system(world, animation_dt);
     }
 
+    // **Limbs reach for their targets.** Every `IkChains` bends its skeleton's drawn pose, on top of
+    // what the two drivers above made of it this frame and before anything follows a bone — a
+    // sword in a reaching hand goes where the hand went (`ik`).
+    apply_ik_chains_system(world, &renderer.queue);
+
     // **Bones carry what is attached to them.** `BoneAttachmentSystem` places every entity
     // parented to a joint — a sword in a hand, a hat on a head — onto the pose the animation
     // systems just wrote, so it belongs immediately after them and before anything reads a
@@ -1820,6 +1825,9 @@ pub use sprite::record_sprites;
 
 mod shake;
 pub use shake::{advance_camera_shakes, shake_view};
+
+mod ik;
+pub use ik::apply_ik_chains_system;
 #[cfg(feature = "physics")]
 pub mod water;
 #[cfg(feature = "physics")]
@@ -13623,6 +13631,161 @@ fn material_surface(input: SurfaceInput) -> Surface {
             );
             let (changed, total) = changed_pixels(&blending, &reopened, 128);
             assert_eq!(changed, 0, "the reopened model is not where its blend was: {changed}/{total} pixels differ");
+        });
+        let _ = std::fs::remove_file(&scene_path);
+    }
+
+    /// A skinned strip with three joints in a row — `Root` at the bottom (y = −1.5), `Mid` in the
+    /// middle, `Tip` at the top (y = +1.5) — each row of vertices bound to the joint at its height.
+    /// No clips: nothing animates it, so it stands in its bind pose unless something bends it.
+    fn write_skinned_arm_gltf() -> String {
+        let dir = std::env::temp_dir().join(format!("gizmo-gltf-arm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        image::RgbaImage::from_pixel(4, 4, image::Rgba([230, 20, 20, 255])).save(dir.join("red.png")).expect("png");
+        let mut bin: Vec<u8> = Vec::new();
+        let f32s = |bin: &mut Vec<u8>, v: &[f32]| v.iter().for_each(|x| bin.extend_from_slice(&x.to_le_bytes()));
+        let rows = [(-1.5f32, 0u16), (0.0, 1), (1.5, 2)];
+        for (y, _) in rows {
+            f32s(&mut bin, &[-0.3, y, 0.0]);
+            f32s(&mut bin, &[0.3, y, 0.0]); // 0..72
+        }
+        for _ in 0..6 {
+            f32s(&mut bin, &[0.0, 0.0, 1.0]); // 72..144
+        }
+        for (y, _) in rows {
+            let v = (1.5 - y) / 3.0;
+            f32s(&mut bin, &[0.0, v, 1.0, v]); // 144..192
+        }
+        for (_, joint) in rows {
+            for _ in 0..2 {
+                for j in [joint, 0, 0, 0] {
+                    bin.extend_from_slice(&j.to_le_bytes()); // 192..240
+                }
+            }
+        }
+        for _ in 0..6 {
+            f32s(&mut bin, &[1.0, 0.0, 0.0, 0.0]); // 240..336
+        }
+        for i in [0u16, 1, 3, 0, 3, 2, 2, 3, 5, 2, 5, 4] {
+            bin.extend_from_slice(&i.to_le_bytes()); // 336..360
+        }
+        for y in [-1.5f32, 0.0, 1.5] {
+            f32s(&mut bin, &gizmo_math::Mat4::from_translation(Vec3::new(0.0, -y, 0.0)).to_cols_array()); // 360..552
+        }
+        std::fs::write(dir.join("arm.bin"), &bin).expect("bin");
+        let view = |offset: usize, length: usize| format!(r#"{{"buffer":0,"byteOffset":{offset},"byteLength":{length}}}"#);
+        let json = format!(
+            r#"{{"asset":{{"version":"2.0"}},"scene":0,"scenes":[{{"nodes":[0,1]}}],
+            "nodes":[{{"mesh":0,"skin":0,"name":"Body"}},{{"name":"Root","translation":[0.0,-1.5,0.0],"children":[2]}},
+                     {{"name":"Mid","translation":[0.0,1.5,0.0],"children":[3]}},{{"name":"Tip","translation":[0.0,1.5,0.0]}}],
+            "skins":[{{"joints":[1,2,3],"inverseBindMatrices":6}}],
+            "meshes":[{{"primitives":[{{"attributes":{{"POSITION":0,"NORMAL":1,"TEXCOORD_0":2,"JOINTS_0":3,"WEIGHTS_0":4}},"indices":5,"material":0}}]}}],
+            "materials":[{{"pbrMetallicRoughness":{{"baseColorTexture":{{"index":0}},"metallicFactor":0.0,"roughnessFactor":0.6}},"doubleSided":true}}],
+            "textures":[{{"source":0}}],"images":[{{"uri":"red.png"}}],
+            "buffers":[{{"uri":"arm.bin","byteLength":{len}}}],
+            "bufferViews":[{v0},{v1},{v2},{v3},{v4},{v5},{v6}],
+            "accessors":[{{"bufferView":0,"componentType":5126,"count":6,"type":"VEC3","min":[-0.3,-1.5,0.0],"max":[0.3,1.5,0.0]}},
+                         {{"bufferView":1,"componentType":5126,"count":6,"type":"VEC3"}},
+                         {{"bufferView":2,"componentType":5126,"count":6,"type":"VEC2"}},
+                         {{"bufferView":3,"componentType":5123,"count":6,"type":"VEC4"}},
+                         {{"bufferView":4,"componentType":5126,"count":6,"type":"VEC4"}},
+                         {{"bufferView":5,"componentType":5123,"count":12,"type":"SCALAR"}},
+                         {{"bufferView":6,"componentType":5126,"count":3,"type":"MAT4"}}]}}"#,
+            len = bin.len(),
+            v0 = view(0, 72), v1 = view(72, 72), v2 = view(144, 48), v3 = view(192, 48), v4 = view(240, 96),
+            v5 = view(336, 24), v6 = view(360, 192),
+        );
+        let path = dir.join("arm.gltf");
+        std::fs::write(&path, json).expect("gltf");
+        path.to_string_lossy().into_owned()
+    }
+
+    /// **The engine bends a limb it is given an IK chain for, and a reopened scene bends it the
+    /// same.** A three-joint strip that nothing animates is drawn straight; given `IkChains` whose
+    /// tip is `Tip`, reaching up and to the side with the elbow pushed left, it is drawn bent, the
+    /// tip on the target and a bone attachment on the tip with it. At weight ½ two frames are
+    /// the same frame — each starts again from the unbent pose, so a weight does not creep toward
+    /// the target on a skeleton nothing animates. Bent fully, saved, reopened by a fresh renderer
+    /// and world: drawn byte for byte. Before 2026-11-14 nothing applied a chain at all and no scene
+    /// could hold one.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn an_ik_chain_bends_the_limb_and_a_reopened_scene_bends_it_the_same() {
+        use gizmo_renderer::components::{BoneAttachment, Skeleton};
+        use gizmo_renderer::ik::{IkChains, TwoBoneIkChain};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let model = write_skinned_arm_gltf();
+        let scene_path = format!("{model}.ik.scene");
+        let target = Vec3::new(1.4, 0.4, 0.0);
+        let chain = |weight: f32| IkChains {
+            chains: vec![TwoBoneIkChain { tip_bone: "Tip".into(), target, pole: Vec3::new(-2.0, -0.5, 0.0), weight }],
+        };
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            {
+                let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                commands.spawn_gltf(Vec3::ZERO, &model, false).expect("the model loads");
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            let (root, tip) = {
+                let skeletons = world.query::<(gizmo_core::Entity, &Skeleton)>();
+                let parents = world.query::<&gizmo_core::component::Parent>();
+                let (root, skeleton) = skeletons.iter().find(|(e, _)| parents.get(*e).is_none()).expect("the model's root has the skeleton");
+                (root, skeleton.hierarchy.joints.iter().position(|j| j.name == "Tip").expect("a Tip joint"))
+            };
+            let sword = world.spawn();
+            world.add_component(sword, Transform::new(Vec3::ZERO));
+            world.add_component(sword, BoneAttachment { target_entity: root, bone_index: tip, offset: gizmo_math::Mat4::IDENTITY });
+
+            let straight = render_world(&mut renderer, &mut world).await;
+            world.add_component(root, chain(0.5));
+            let half = render_world(&mut renderer, &mut world).await;
+            let half_again = render_world(&mut renderer, &mut world).await;
+            let (crept, total) = changed_pixels(&half, &half_again, 128);
+            assert_eq!(crept, 0, "a weight of ½ crept on from one frame to the next ({crept}/{total} pixels)");
+            world.add_component(root, chain(1.0));
+            let bent = render_world(&mut renderer, &mut world).await;
+            let (moved, total) = changed_pixels(&straight, &bent, 128);
+            assert!(moved >= 50, "the IK chain did not bend the limb ({moved}/{total} pixels)");
+            let (halfway, _) = changed_pixels(&half, &bent, 128);
+            assert!(halfway >= 20, "weight ½ drew the full bend ({halfway}/{total} pixels)");
+            {
+                let skeletons = world.query::<&Skeleton>();
+                let at = skeletons.get(root).unwrap().global_poses[tip].w_axis.truncate();
+                assert!((at - target).length() < 1e-3, "the tip is at {at:?}, not on the target {target:?}");
+                let transforms = world.query::<&Transform>();
+                let held = transforms.get(sword).unwrap().position;
+                assert!((held - target).length() < 1e-3, "the attachment on the tip is at {held:?}, not with the tip");
+            }
+            crate::scene::SceneData::save(&world, &scene_path, &crate::full_scene_registry()).expect("saves");
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            crate::scene::SceneData::load_into(&scene_path, &mut world, &crate::full_scene_registry()).expect("loads");
+            {
+                let manager = renderer.asset_manager.clone();
+                let mut assets = manager.write().unwrap();
+                crate::renderer::asset_loading::run_asset_loading_system(
+                    &mut world,
+                    &renderer.device,
+                    &renderer.queue,
+                    &renderer.scene.texture_bind_group_layout,
+                    &mut assets,
+                );
+            }
+            let reopened = render_world(&mut renderer, &mut world).await;
+            let (changed, total) = changed_pixels(&bent, &reopened, 128);
+            assert_eq!(changed, 0, "the reopened limb is not bent as it was: {changed}/{total} pixels differ");
         });
         let _ = std::fs::remove_file(&scene_path);
     }

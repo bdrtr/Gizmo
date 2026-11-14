@@ -903,6 +903,7 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         "animation_update_system(",
         "animation_state_machine_update_system(",
         "sprite_animation_system(",
+        "apply_ik_chains_system(",
         "BoneAttachmentSystem",
         "gpu_physics_submit_system(",
         "gpu_physics_readback_system(",
