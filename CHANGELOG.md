@@ -62,6 +62,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   walk, run, in the air) at a rate matched to it, and gathering, talking and building play their own. Trees, rocks,
   village houses and a well are KayKit's *Medieval Hexagon Pack* models. Trimmed and packed copies (3.6 MB in all) are
   in `games/assets/`, each folder with its licence and what was done to the files.
+- **`dunya`: lakes that ripple.** The water is the game's own transparent `SurfaceMaterial` (`su.wgsl`): flat in its
+  geometry, so boats and swimmers float where they always did, with ripples in its normal — four drifting waves, faded
+  with distance — and the engine's lighting giving the sky's and the sun's reflection, dark at night rather than the
+  fixed blue a sky colour baked into a shader would give. Opaque where the view grazes it (Fresnel).
 - **`dunya`: animated animals.** Sheep and deer are Quaternius's skinned, animated models (CC0): each kind has its
   own gait table, so a sheep walks (faster when it flees), a deer walks, gallops away and, standing, grazes or looks
   up by turns. The character module now dresses any walker — person or animal — from a model and its gait.

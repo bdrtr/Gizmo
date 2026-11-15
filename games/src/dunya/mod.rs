@@ -1256,6 +1256,8 @@ pub fn app() -> App<SimpleSceneState> {
             // `modeller::tests::the_ground_shader_composes`.
             let surface = scene.renderer.add_surface_material("dunya_arazi", modeller::GROUND_WGSL).unwrap_or_else(|e| panic!("{e}"));
             scene.world.insert_resource(modeller::ground_look(surface));
+            let water = scene.renderer.add_surface_material("dunya_su", modeller::WATER_WGSL).unwrap_or_else(|e| panic!("{e}"));
+            scene.world.insert_resource(modeller::water_look(water));
             let game = setup(scene.world, font, true);
             scene.world.insert_resource(game);
         })

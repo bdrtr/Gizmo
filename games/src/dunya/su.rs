@@ -61,7 +61,8 @@ pub(super) fn surface(world: &mut World, coord: ChunkCoord, lowest: f32, visual:
         Transform::new(Vec3::new(centre.x, WATER, centre.z)),
         GlobalTransform::default(),
         MeshSource("plane_100".into()),
-        MaterialDesc::new().with_pbr(Vec4::new(0.16, 0.42, 0.55, 0.72), 0.06, 0.0).with_transparent(true),
+        // Dalgacıklı, saydam su (`su.wgsl`): pencereli oyun gölgelendiricisini kurarken kaydetti.
+        world.get_resource::<super::modeller::WaterLook>().map(|w| w.0.clone()).expect("the windowed game registers the water's surface first"),
         MeshRenderer::new(),
     )))
 }

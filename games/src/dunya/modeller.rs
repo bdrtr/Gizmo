@@ -47,6 +47,18 @@ pub(super) const GROUND: [&str; 5] =
 /// Arazinin gölgelendiricisi (`arazi.wgsl`'in başı neyin nerede olduğunu anlatıyor).
 pub(super) const GROUND_WGSL: &str = include_str!("arazi.wgsl");
 
+/// Göllerin gölgelendiricisi (`su.wgsl`).
+pub(super) const WATER_WGSL: &str = include_str!("su.wgsl");
+
+/// Göllerin materyali: saydam, `surface`'ta kayıtlı su yüzeyiyle.
+pub(super) struct WaterLook(pub(super) MaterialDesc);
+
+pub(super) fn water_look(surface: gizmo::renderer::custom_material::SurfaceId) -> WaterLook {
+    let mut look = MaterialDesc::new().with_pbr(Vec4::new(1.0, 1.0, 1.0, 0.8), 0.05, 0.0).with_transparent(true);
+    look.material_type = gizmo::renderer::components::MaterialType::CustomSurface(surface);
+    WaterLook(look)
+}
+
 /// Arazinin materyali, motorun özel yüzeyi kaydedilmişse: hücreler bununla çiziliyor.
 pub(super) struct GroundLook(pub(super) MaterialDesc);
 
@@ -100,7 +112,7 @@ mod tests {
     use super::*;
     use gizmo::renderer::Renderer;
 
-    /// The terrain's shader composes into the engine's: the windowed game panics at start-up when it
+    /// The terrain's and the lakes' shaders compose into the engine's: the windowed game panics at start-up when it
     /// does not, and nothing headless would notice. Also the model and texture table: every path is
     /// one the game asks for, every file decodes.
     #[test]
@@ -112,8 +124,10 @@ mod tests {
                 return;
             }
             let mut renderer = Renderer::new_headless(64, 64, None).await;
-            if let Err(e) = renderer.add_surface_material("dunya_arazi", GROUND_WGSL) {
-                panic!("{e}");
+            for (label, wgsl) in [("dunya_arazi", GROUND_WGSL), ("dunya_su", WATER_WGSL)] {
+                if let Err(e) = renderer.add_surface_material(label, wgsl) {
+                    panic!("{label}: {e}");
+                }
             }
         });
     }
