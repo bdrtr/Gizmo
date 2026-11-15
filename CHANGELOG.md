@@ -951,6 +951,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A character climbs only what `step_height` allows.** The step probe was cast from `step_height` above the bottom
+  sphere's *centre*, not the feet, and accepted a ledge up to twice that far below it, so a capsule of radius 0.35
+  stepped onto anything up to ~0.65 m with the default 0.3 — in `dunya` the player walked over a bridge's railing and
+  into the lake. It is cast from `step_height` above the feet now, and the field's docs say exactly that instead of
+  "approximate". `dunya`'s bridge railings are solid too (only the deck was), and its self-test walks sideways into one.
 - **The physics crates build without their `ecs` feature again.** `gizmo-physics-core`, `-rigid` and `-dynamics` all
   declare `ecs` as an optional default ("OFF drops `gizmo-core`"), and none of them built with it off: `HitEvent`
   (which reports entities), two `impl_component!` lines and a sync-only method used `gizmo_core` ungated. CI's

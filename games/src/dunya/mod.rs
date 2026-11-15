@@ -1342,6 +1342,12 @@ pub fn self_test() -> bool {
     let mut pushed_through = f32::MIN;
     let mut build_report = String::new();
     let mut build_ok = false;
+    // Köprünün korkuluğu: köprünün ortasından 1,7 saniye yana yürü (3,2 s sonra, araba aşamasından
+    // önce biter); köprüde kalmalı.
+    let rail_at = build_at + 190;
+    let mut rail: Option<(Vec3, Quat, f32)> = None;
+    let mut rail_report = String::from("köprü aşaması çalışmadı");
+    let mut rail_ok = false;
     // Karakter: oyuncunun karakterinin bu koşuda istediği klipler; köylülerin hepsi giydirilmiş mi.
     let mut clips_seen: HashSet<&'static str> = HashSet::new();
     let mut villagers_dressed = (0usize, 0usize);
@@ -1531,6 +1537,32 @@ pub fn self_test() -> bool {
                 let ok = fire && hut && bridge && structures == 4 && lights == 1 && spent == [1, 0, 1, 1] && same;
                 built_check = Some((ok, format!("4 yapı kuruldu {}, ateş ışığı {lights}, harcanan {spent:?}, kayıttan geri {}", structures == 4, same)));
             }
+            if frame == rail_at {
+                let bridge = w
+                    .query::<(&insa::Structure, &Transform)>()
+                    .iter()
+                    .find(|(s, _)| s.kind == insa::Build::Bridge)
+                    .map(|(_, t)| (t.position, t.rotation));
+                if let Some((base, turn)) = bridge {
+                    let middle = base + turn * Vec3::new(0.0, 0.0, -4.0);
+                    if let Some(mut t) = w.query_mut::<&mut Transform>().get_mut(game.player) {
+                        t.position = middle + Vec3::Y * 1.1;
+                    }
+                    if let Some(mut v) = w.query_mut::<&mut Velocity>().get_mut(game.player) {
+                        v.linear = Vec3::ZERO;
+                    }
+                    rail = Some((middle, turn, base.y));
+                }
+            }
+            if frame == rail_at + 100 {
+                if let Some((middle, turn, deck)) = rail {
+                    let me = focus(w, &game);
+                    let local = turn.inverse() * (me - middle);
+                    // Korkuluk ±0,72'de, kapsül 0,35: içeride en çok ~0,4.
+                    rail_ok = local.x.abs() < 0.6 && me.y > deck;
+                    rail_report = format!("köprüde yana 1,7 saniye: ortadan {:.2} m, zeminin {:.2} m üstünde", local.x, me.y - deck);
+                }
+            }
             if driving_phase && game.driving.is_none() {
                 // Arabaya: en yakını yanına getir, bin.
                 let me = focus(w, &game);
@@ -1555,6 +1587,11 @@ pub fn self_test() -> bool {
             } else if boating {
                 // Tam gaz: burnu açık suya bakıyor.
                 Controls { my: 1.0, ..Default::default() }
+            } else if let (true, Some((_, turn, _))) = ((rail_at..rail_at + 100).contains(&frame), rail) {
+                // Köprünün sağına, korkuluğa doğru.
+                let (forward, right) = camera_axes(&game);
+                let d = turn * Vec3::X;
+                Controls { mx: d.dot(right), my: d.dot(forward), ..Default::default() }
             } else if walking_into_fence {
                 Controls { my: 1.0, ..Default::default() }
             } else if standing {
@@ -1643,7 +1680,8 @@ pub fn self_test() -> bool {
         // Çit 2,6 m önde, 0,1 m kalın: yüzü 2,5 m'de. Kapsülün yarıçapı 0,35 ama yamaçta biraz daha
         // yaklaşıyor (ölçülen 2,29 m); 2,5 m'yi geçen çitin içinden geçmiştir. Çitsiz üç saniye 18 m.
         && pushed_through < 2.5
-        && clips_ok;
+        && clips_ok
+        && rail_ok;
     println!("dunya --test: canlılar: {village_report}; {animals_seen} hayvan, en yakını üç saniyede {fled:.1} m kaçtı; bırakılan arabalar yerinde: {parked_ok}");
     println!("dunya --test: su: {boat_report}; {swim_report}; yüzerken zeminin en çok {:.2} m altında", -deepest_swim.min(0.0));
     println!("dunya --test: hava: {weather_report}; harita köyde {map_marks} işaret, köy görünüyor: {map_village}");
@@ -1655,6 +1693,7 @@ pub fn self_test() -> bool {
         "dunya --test: karakter: istenen klipler {seen:?}; giydirilen köylü {}/{}, hayvan {}/{}; kaçan hayvanın klipleri {fled_clips:?}",
         villagers_dressed.0, villagers_dressed.1, animals_dressed.0, animals_dressed.1
     );
+    println!("dunya --test: köprü: {rail_report}");
     println!("dunya --test: inşa: {build_report}; çite yürüyüş en çok {pushed_through:.2} m (çit 2,6 m önde)");
     println!(
         "dunya --test: envanterde {} kristal (dünyadan {crystals_taken} alındı), {wood} odun, {stone} taş; hücre {} yüklendi, {} silindi; yürüyüşte başlangıçtan {:.0} m, arabayla {:.0} m; zeminin altına en çok yayada {:.2} m, arabada {:.2} m → {}",

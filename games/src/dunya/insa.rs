@@ -203,6 +203,11 @@ fn parts(kind: Build) -> Vec<Part> {
                 }
             }
             p.push(Part { at: Vec3::new(0.0, -0.02, -4.0), half: Vec3::new(0.78, 0.1, 4.0), turn: Quat::IDENTITY, mesh: "", look: Look::Wood, solid: true });
+            // Korkuluklar da katı: direklerin ve tırabzanın boyunda, iki yanda birer görünmez duvar.
+            // Yalnız zemin katıyken insan korkuluğun içinden yürüyüp suya düşüyordu.
+            for x in [-0.72f32, 0.72] {
+                p.push(Part { at: Vec3::new(x, 0.32, -4.0), half: Vec3::new(0.06, 0.3, 4.0), turn: Quat::IDENTITY, mesh: "", look: Look::DarkWood, solid: true });
+            }
         }
         Build::Hut => {
             for (x, z) in [(-1.5f32, -1.5f32), (1.5, -1.5), (-1.5, 1.5), (1.5, 1.5)] {

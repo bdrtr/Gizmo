@@ -347,9 +347,15 @@ pub fn update_character_with_hits(
                 // Determine if the hit normal represents a wall
                 let wall_angle = closest_n.angle_between(Vec3::new(0.0, 1.0, 0.0));
                 if wall_angle > kcc.max_slope_angle {
-                    // Start raycast from above the step height, slightly forward into the obstacle
+                    // Cast down from `step_height` above the bottom of the collider, slightly
+                    // forward into the obstacle: a ledge is a step only when its top is between
+                    // the feet and that height. This was cast from `step_height` above the
+                    // bottom sphere's *centre* and accepted twice that distance, so a capsule of
+                    // radius 0.35 climbed anything up to ~0.65 m with `step_height` 0.3 — a
+                    // bridge's railing among them (`dunya`, 2026-11-16).
+                    const STEP_SKIN: f32 = 0.01;
                     let step_check_origin = current_pos
-                        + Vec3::new(0.0, -height * 0.5 + radius + kcc.step_height, 0.0)
+                        + Vec3::new(0.0, -height * 0.5 + kcc.step_height + STEP_SKIN, 0.0)
                         + move_dir * (radius + 0.05); // Push forward into the wall
 
                     let step_down_ray = Ray::new(step_check_origin, Vec3::new(0.0, -1.0, 0.0));
@@ -371,7 +377,7 @@ pub fn update_character_with_hits(
                     }
 
                     // If we found a surface within step_height bounds and it's walkable
-                    if step_dist <= kcc.step_height * 2.0 {
+                    if step_dist <= kcc.step_height + STEP_SKIN {
                         let step_slope_angle = step_normal.angle_between(Vec3::new(0.0, 1.0, 0.0));
                         if step_slope_angle <= kcc.max_slope_angle {
                             // Calculate new Y position
@@ -619,6 +625,36 @@ mod tests {
             "step-up overshoot: advanced {advanced} > intended {intended} (×1.2 tol)"
         );
         assert!(advanced > 0.0, "character should still move forward, got {advanced}");
+    }
+
+    /// **`step_height` is the tallest ledge climbed, measured from the feet.** A capsule (radius
+    /// 0.35, as `dunya`'s player) steps onto a 0.25 m ledge and is stopped by a 0.54 m one — a
+    /// bridge's railing, which until 2026-11-16 it climbed onto and walked over: the probe was cast
+    /// from `step_height` above the bottom sphere's centre, not the feet, and accepted twice that.
+    #[test]
+    fn step_height_is_measured_from_the_feet() {
+        let walk = |ledge: f32| {
+            let entity = BodyHandle::from_id(0);
+            let collider = Collider::capsule(0.35, 0.55);
+            let ground = box_collider(50.0, 0.5, 50.0);
+            // Thick enough that the probe, cast a little ahead of the character, lands on its top.
+            let block = box_collider(0.3, ledge * 0.5, 5.0);
+            let colliders = vec![
+                (BodyHandle::from_id(1), Transform::new(Vec3::new(0.0, -0.5, 0.0)), ground),
+                (BodyHandle::from_id(2), Transform::new(Vec3::new(1.5, ledge * 0.5, 0.0)), block),
+            ];
+            let mut transform = Transform::new(Vec3::new(0.5, 0.9, 0.0));
+            let mut vel = Velocity::new(Vec3::ZERO);
+            let mut kcc = CharacterController { target_velocity: Vec3::new(3.0, 0.0, 0.0), is_grounded: true, ..Default::default() };
+            for _ in 0..90 {
+                update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, None, 1.0 / 60.0);
+            }
+            transform.position
+        };
+        let kerb = walk(0.25);
+        assert!(kerb.x > 2.2, "a 0.25 m ledge (under step_height 0.3) is stepped over: centre at {kerb:?}");
+        let railing = walk(0.54);
+        assert!(railing.x < 1.2 && railing.y < 1.0, "a 0.54 m railing stops the character: centre at {railing:?}");
     }
 
     /// A character walking into a solid wall must be stopped at its surface, not let

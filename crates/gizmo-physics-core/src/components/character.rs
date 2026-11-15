@@ -72,14 +72,13 @@ pub struct CharacterController {
     /// so input still steers during a slide. `0.0` disables sliding, leaving the character
     /// standing on the steep face.
     pub slope_slide_speed: f32,
-    /// Roughly the tallest ledge the character climbs onto instead of being stopped by, in
-    /// metres (`0.3` by default).
+    /// The tallest ledge the character climbs onto instead of being stopped by, in metres above
+    /// the bottom of its collider (`0.3` by default).
     ///
     /// Climbing is attempted only while grounded and only when this is greater than `0.0`, so
-    /// `0.0` turns every kerb into a wall. The probe is cast from around this height above the
-    /// feet and the ledge top must itself be walkable under `max_slope_angle`, so treat the
-    /// limit as approximate — the collider's own radius shifts it — rather than an exact
-    /// cutoff.
+    /// `0.0` turns every kerb into a wall. The probe is cast down from this height above the feet
+    /// and the ledge top must itself be walkable under `max_slope_angle`. A ledge lower than the
+    /// collider's radius is not a step at all: the rounded bottom rides over it.
     pub step_height: f32,
 
     /// Whether the character was resting on something at the end of the last step.
