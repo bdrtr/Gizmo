@@ -19,7 +19,11 @@
 //! in one slot. The inventory is a component (saved with the scene) and serialises on its own, so a
 //! game keeps a player's between runs with [`SaveData`](crate::save::SaveData) as it is.
 //!
-//! What it does not decide: what an item *does* (eating, equipping, crafting are the game's), and
+//! Making one thing out of others is a [`Recipe`]: [`Inventory::craft`] takes the inputs and adds
+//! the output, all or nothing — nothing is spent when an input is short or the output would not
+//! fit.
+//!
+//! What it does not decide: what an item *does* (eating, equipping, building are the game's), and
 //! how it is drawn — `gizmo-ui`'s `Display::Grid`, `Drag` and `DropTarget` are what a slot grid is
 //! built from, and [`Inventory::move_stack`] is what a drop does.
 
@@ -224,6 +228,115 @@ impl Inventory {
 
 gizmo_core::impl_component!(Inventory);
 
+/// How to make something: what goes in and what comes out.
+///
+/// ```
+/// use gizmo_app::inventory::{Inventory, ItemCatalog, Recipe};
+///
+/// let catalog = ItemCatalog::default();
+/// let campfire = Recipe::new("campfire", 1).needs("wood", 4).needs("stone", 2);
+/// let mut bag = Inventory::new(8);
+/// bag.add(&catalog, "wood", 5);
+/// assert!(bag.craft(&catalog, &campfire).is_err()); // no stone
+/// bag.add(&catalog, "stone", 2);
+/// assert!(bag.craft(&catalog, &campfire).is_ok());
+/// assert_eq!((bag.count("wood"), bag.count("stone"), bag.count("campfire")), (1, 0, 1));
+/// ```
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub struct Recipe {
+    /// What is used up; an item named twice needs both counts.
+    pub inputs: Vec<ItemStack>,
+    /// What is made.
+    pub output: ItemStack,
+}
+
+impl Recipe {
+    /// A recipe making `count` of `item` out of nothing yet — add inputs with [`needs`](Self::needs).
+    #[must_use]
+    pub fn new(item: impl Into<String>, count: u32) -> Self {
+        Self { inputs: Vec::new(), output: ItemStack::new(item, count) }
+    }
+
+    /// This recipe, also using up `count` of `item`.
+    #[must_use]
+    pub fn needs(mut self, item: impl Into<String>, count: u32) -> Self {
+        self.inputs.push(ItemStack::new(item, count));
+        self
+    }
+
+    /// How many of `item` the recipe uses up, over all its inputs.
+    #[must_use]
+    pub fn needed(&self, item: &str) -> u32 {
+        self.inputs.iter().filter(|s| s.item == item).map(|s| s.count).sum()
+    }
+}
+
+/// Why [`Inventory::craft`] made nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum CraftError {
+    /// An input is short: the inventory holds `have` of `item`, the recipe needs `need`.
+    Missing {
+        /// The item.
+        item: String,
+        /// How many there are.
+        have: u32,
+        /// How many the recipe uses.
+        need: u32,
+    },
+    /// The inputs are there, but the output would not fit once they were taken.
+    NoRoom,
+}
+
+impl std::fmt::Display for CraftError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Missing { item, have, need } => write!(f, "{need} {item} needed, {have} held"),
+            Self::NoRoom => write!(f, "no room for what it makes"),
+        }
+    }
+}
+
+impl std::error::Error for CraftError {}
+
+impl Inventory {
+    /// What [`craft`](Self::craft) would say, without making anything.
+    ///
+    /// # Errors
+    /// The same as `craft`.
+    pub fn check_craft(&self, catalog: &ItemCatalog, recipe: &Recipe) -> Result<(), CraftError> {
+        let mut trial = self.clone();
+        trial.craft(catalog, recipe)
+    }
+
+    /// Makes `recipe`: takes its inputs out and puts its output in — or, when an input is short
+    /// or the output would not fit in what the inputs leave free, changes nothing and says why.
+    /// The output stacks like any [`add`](Self::add), so it may land in a slot an input emptied.
+    ///
+    /// # Errors
+    /// [`CraftError::Missing`] for the first input that is short, [`CraftError::NoRoom`] when
+    /// the output does not fit.
+    pub fn craft(&mut self, catalog: &ItemCatalog, recipe: &Recipe) -> Result<(), CraftError> {
+        for input in &recipe.inputs {
+            let need = recipe.needed(&input.item);
+            let have = self.count(&input.item);
+            if have < need {
+                return Err(CraftError::Missing { item: input.item.clone(), have, need });
+            }
+        }
+        let mut after = self.clone();
+        for input in &recipe.inputs {
+            after.remove(&input.item, input.count);
+        }
+        if after.add(catalog, &recipe.output.item, recipe.output.count) > 0 {
+            return Err(CraftError::NoRoom);
+        }
+        *self = after;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -298,6 +411,32 @@ mod tests {
         assert_eq!(bag.slot(0).unwrap().count, ItemCatalog::DEFAULT_MAX_STACK);
         assert_eq!(c.name("pebble"), "pebble");
         assert_eq!(c.name("wood"), "Wood");
+    }
+
+    /// A recipe takes its inputs and gives its output — and with an input short, or no room for
+    /// the output, takes nothing.
+    #[test]
+    fn crafting_is_all_or_nothing() {
+        let c = catalog(); // wood stacks to 20, swords to 1
+        let sword = Recipe::new("sword", 1).needs("wood", 3).needs("wood", 2);
+        assert_eq!(sword.needed("wood"), 5);
+        let mut bag = Inventory::new(2);
+        bag.add(&c, "wood", 4);
+        assert_eq!(bag.craft(&c, &sword), Err(CraftError::Missing { item: "wood".into(), have: 4, need: 5 }));
+        assert_eq!(bag.count("wood"), 4, "a failed craft spent wood");
+        bag.add(&c, "wood", 21); // 20 + 5: both slots taken
+        bag.add(&c, "sword", 0);
+        assert_eq!(bag.check_craft(&c, &sword), Ok(()), "five of 25 wood leave the second slot free");
+        assert!(bag.craft(&c, &sword).is_ok());
+        assert_eq!((bag.count("wood"), bag.count("sword")), (20, 1));
+        // Now both slots hold something the next sword cannot share: no room.
+        assert_eq!(bag.craft(&c, &sword), Err(CraftError::NoRoom));
+        assert_eq!((bag.count("wood"), bag.count("sword")), (20, 1), "a craft with no room spent wood");
+        // The output may take the slot an input emptied.
+        let mut tight = Inventory::new(1);
+        tight.add(&c, "wood", 5);
+        assert!(tight.craft(&c, &sword).is_ok());
+        assert_eq!(tight.slot(0), Some(&ItemStack::new("sword", 1)));
     }
 
     /// It round-trips through JSON, which is what `SaveData` keeps.

@@ -11,7 +11,8 @@
 //! | **Boşluk** | zıpla (yayayken) |
 //! | **E** | arabaya bin / in |
 //! | **F** | yakındaki ağacı kes (odun), kayayı kır (taş) |
-//! | **I · Tab** | envanter: eşyayı yuvadan yuvaya sürükle, panelin dışına bırakırsan yere düşer |
+//! | **I · Tab** | envanter: eşyayı yuvadan yuvaya sürükle, panelin dışına bırakırsan yere düşer; alttaki tariflerle üret |
+//! | **B** | inşa: kamp ateşi, çit, köprü, barınak (envanterdekiler) — **G · sol tık** koy, **Q** döndür, **B** sonraki |
 //! | **sağ tık + fare · ← →** | kamerayı döndür |
 //! | **↑ ↓** | kamerayı yükselt / alçalt |
 //! | **R** | başlangıca dön |
@@ -33,12 +34,16 @@
 //!   kaydediliyor: oyunu kapatıp açınca yerinde.
 //! - **Alınan** kristal, kesilen ağaç, kırılan kaya bir daha çıkmıyor: hücre silinip yeniden
 //!   kurulduğunda da.
+//! - **Üretim ve inşa** (`insa`): odun ve taştan kamp ateşi, çit, köprü, barınak — motorun
+//!   `Recipe` ve `Inventory::craft`'ı; kurulan yapılar katı, kamp ateşi titreyen bir ışık, hepsi kayıtta.
 //! - **Gece-gündüz** dört dakikada bir tur: güneş dönüyor, gök, sis ve arka plan rengi ona göre;
 //!   geceleri ay ışığı ve kristallerin kendi ışıltısı.
 //!
 //! `dunya --test` pencere açmaz: yaya otomatik pilot iki dakika en yakın kristale yürür, sonra
 //! arabaya binip hücre sınırlarının üstünden bir dakika sürer. Hiçbir an oyuncu ya da araba
 //! arazinin içine düşmemeli, hücreler yüklenip silinmeli ve kristal toplanmalı.
+
+mod insa;
 
 use std::collections::HashSet;
 
@@ -185,10 +190,14 @@ fn catalog() -> ItemCatalog {
     c.register("kristal", ItemInfo::new("Kristal", 99));
     c.register("odun", ItemInfo::new("Odun", 20));
     c.register("tas", ItemInfo::new("Taş", 20));
+    insa::register_items(&mut c);
     c
 }
 
 fn item_colour(item: &str) -> Vec4 {
+    if let Some(c) = insa::item_colour(item) {
+        return c;
+    }
     match item {
         "kristal" => Vec4::new(0.3, 0.85, 1.0, 1.0),
         "odun" => Vec4::new(0.62, 0.42, 0.24, 1.0),
@@ -464,6 +473,7 @@ fn build_panel(world: &mut World, font: FontId) -> (Option<Entity>, Vec<Entity>,
         ..Default::default()
     });
     world.add_child(root, grid);
+    insa::build_recipes(world, root, font);
     let mut cells = Vec::with_capacity(SLOTS);
     let mut views = Vec::with_capacity(SLOTS);
     for _ in 0..SLOTS {
@@ -508,6 +518,7 @@ fn update_panel(world: &mut World, game: &mut Game, toggle: bool) {
     if !open {
         return;
     }
+    insa::update_recipes(world, game);
     // Bırakılanlar: bir yuvaya (taşı, birleştir, yer değiştir), ya da panelin dışına (yere at).
     let mut drops: Vec<(usize, Option<Entity>, f32)> = Vec::new();
     {
@@ -584,6 +595,7 @@ fn autosave(world: &World, game: &mut Game, dt: f32) {
     }
     let taken: Vec<(i32, i32, u8)> = game.collected.iter().copied().collect();
     let _ = save.set("alinan", &taken);
+    let _ = save.set("yapilar", &insa::saved(world));
     if let Err(e) = save.save() {
         game.note = (format!("Kayıt yazılamadı: {e}"), 3.0);
     }
@@ -624,6 +636,8 @@ struct Game {
     /// Bir sonraki kayda kalan süre; değişiklik olunca kısalıyor.
     save_in: f32,
     dirty: bool,
+    /// İnşa kipi (B), açıksa.
+    building: Option<insa::Building>,
 }
 
 fn start_point() -> Vec3 {
@@ -762,6 +776,9 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
         if let Some(taken) = save.get::<Vec<(i32, i32, u8)>>("alinan") {
             collected.extend(taken);
         }
+        if let Some(built) = save.get::<Vec<(u8, f32, f32, f32, f32)>>("yapilar") {
+            insa::restore(world, &built, true);
+        }
     }
     let (panel, cells, views) = if visual { build_panel(world, font) } else { (None, Vec::new(), Vec::new()) };
     // Ekran görüntüsü için: panel açık, içinde birkaç eşya.
@@ -802,6 +819,7 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
         note: (String::new(), 0.0),
         save_in: 5.0,
         dirty: false,
+        building: None,
     };
     stream_chunks(world, &mut game);
     for (k, (x, z)) in [(6.0f32, 3.0f32), (-7.0, 5.0), (3.0, -8.0)].into_iter().enumerate() {
@@ -877,6 +895,9 @@ struct Controls {
     yaw: f32,
     pitch: f32,
     reset: bool,
+    build: bool,
+    place: bool,
+    rotate: bool,
 }
 
 fn read_controls(input: &Input) -> Controls {
@@ -907,6 +928,9 @@ fn read_controls(input: &Input) -> Controls {
         yaw,
         pitch,
         reset: input.is_key_just_pressed(KeyCode::KeyR as u32),
+        build: input.is_key_just_pressed(KeyCode::KeyB as u32),
+        place: input.is_key_just_pressed(KeyCode::KeyG as u32) || input.is_mouse_button_just_pressed(0),
+        rotate: input.is_key_just_pressed(KeyCode::KeyQ as u32),
     }
 }
 
@@ -934,6 +958,11 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
     if c.gather && game.driving.is_none() {
         gather(world, game);
     }
+    if c.build && game.driving.is_none() {
+        insa::cycle_build(world, game);
+    }
+    insa::update_building(world, game, c.rotate, c.place);
+    insa::flicker(world, game.clock);
     let (forward, right) = camera_axes(game);
     match game.driving {
         Some(car) => {
@@ -1072,7 +1101,7 @@ fn draw_hud(world: &mut World, game: &Game) {
         world,
         game.hud,
         &format!(
-            "Kristal {}/{GOAL}   odun {}   taş {}   en yakın kristal: {pointer}   saat {:02}:{:02}\n{mode}\nWASD: yürü/sür · boşluk: zıpla · F: kes/kır · I: envanter · sağ tık+fare / oklar: kamera · R: başlangıç",
+            "Kristal {}/{GOAL}   odun {}   taş {}   en yakın kristal: {pointer}   saat {:02}:{:02}\n{mode}\nWASD: yürü/sür · boşluk: zıpla · F: kes/kır · I: envanter ve üretim · B: inşa · sağ tık+fare / oklar: kamera · R: başlangıç",
             crystals(world, game),
             world.get::<Inventory>(game.player).map_or(0, |b| b.count("odun")),
             world.get::<Inventory>(game.player).map_or(0, |b| b.count("tas")),
@@ -1091,7 +1120,10 @@ fn draw_hud(world: &mut World, game: &Game) {
 fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Input) {
     let Some(mut game) = world.remove_resource::<Game>() else { return };
     let dt = dt.min(0.05);
-    step(world, &mut game, dt, read_controls(input));
+    let mut controls = read_controls(input);
+    // Bir düğmeye (tarif, yuva) tıklamak yapı koymasın.
+    controls.place &= !gizmo::ui::pointer_over_ui(world);
+    step(world, &mut game, dt, controls);
     let toggle = input.is_key_just_pressed(KeyCode::KeyI as u32) || input.is_key_just_pressed(KeyCode::Tab as u32);
     update_panel(world, &mut game, toggle);
     autosave(world, &mut game, dt);
@@ -1157,10 +1189,51 @@ pub fn self_test() -> bool {
     let mut deepest_drive = f32::MAX;
     let mut walked_far = 0.0f32;
     let mut drove_far = 0.0f32;
+    // İnşa aşaması: 115. saniyede malzeme, dört tarif, önüne bir çit; üç saniye çite yürü.
+    let build_at = 60 * 115;
+    let mut fence: Option<(Vec3, Vec3)> = None;
+    let mut pushed_through = f32::MIN;
+    let mut build_report = String::new();
+    let mut build_ok = false;
     for frame in 0..(60 * 180) {
         let driving_phase = frame >= 60 * 120;
+        let walking_into_fence = (build_at..build_at + 180).contains(&frame);
+        let mut built_check: Option<(bool, String)> = None;
         run.frame(dt, |w, _s, dt, _i| {
             let Some(mut game) = w.remove_resource::<Game>() else { return };
+            if frame == build_at {
+                let before = w.get::<Inventory>(game.player).cloned().unwrap_or_default();
+                give(w, &mut game, "odun", 30);
+                give(w, &mut game, "tas", 10);
+                let crafted = insa::Build::ALL.iter().all(|k| insa::craft(w, &mut game, *k));
+                let bag = w.get::<Inventory>(game.player).cloned().unwrap_or_default();
+                let spent_right = bag.count("odun") + 27 == before.count("odun") + 30 && bag.count("tas") + 8 == before.count("tas") + 10 && bag.count("cit") == 2;
+                let (at, yaw) = insa::placement(w, &game, insa::Build::Fence, 0.0);
+                let placed = insa::place_structure(w, &mut game, insa::Build::Fence, at, yaw);
+                let me = focus(w, &game);
+                let (forward, _) = camera_axes(&game);
+                fence = Some((me, forward));
+                built_check = Some((crafted && spent_right && placed, format!("4 tarif üretildi {crafted}, harcanan doğru {spent_right}")));
+            }
+            if frame == build_at + 180 {
+                let me = focus(w, &game);
+                let (forward, right) = camera_axes(&game);
+                let fire = insa::place_structure(w, &mut game, insa::Build::Fire, me + right * 4.0, 0.0);
+                let hut = insa::place_structure(w, &mut game, insa::Build::Hut, me - forward * 7.0 - right * 3.0, 0.4);
+                let bridge = insa::place_structure(w, &mut game, insa::Build::Bridge, me - right * 4.0, 1.2);
+                let structures = w.query::<&insa::Structure>().iter().count();
+                let lights = w.query::<(&insa::FireLight, &PointLight)>().iter().count();
+                let bag = w.get::<Inventory>(game.player).cloned().unwrap_or_default();
+                let left = insa::Build::ALL.iter().map(|k| bag.count(k.item())).collect::<Vec<_>>();
+                // Kayıt: yapılar aynen geri geliyor.
+                let saved = insa::saved(w);
+                let mut fresh = World::new();
+                insa::restore(&mut fresh, &saved, false);
+                let back = insa::saved(&fresh);
+                let same = back.len() == saved.len() && back.iter().zip(&saved).all(|(a, b)| a.0 == b.0 && (a.1 - b.1).abs() < 1e-4 && (a.3 - b.3).abs() < 1e-4);
+                let ok = fire && hut && bridge && structures == 4 && lights == 1 && left == [0, 1, 0, 0] && same;
+                built_check = Some((ok, format!("4 yapı kuruldu {}, ateş ışığı {lights}, elde kalan {left:?}, kayıttan geri {}", structures == 4, same)));
+            }
             if driving_phase && game.driving.is_none() {
                 // Arabaya: en yakını yanına getir, bin.
                 let me = focus(w, &game);
@@ -1171,12 +1244,21 @@ pub fn self_test() -> bool {
                 }
                 enter_or_leave(w, &mut game);
             }
-            let controls = autopilot(w, &game, driving_phase);
+            let controls = if walking_into_fence { Controls { my: 1.0, ..Default::default() } } else { autopilot(w, &game, driving_phase) };
             step(w, &mut game, dt, controls);
             w.insert_resource(game);
         });
+        if let Some((ok, text)) = built_check {
+            build_ok = if frame == build_at { ok } else { build_ok && ok };
+            build_report = if build_report.is_empty() { text } else { format!("{build_report}; {text}") };
+        }
         let game = run.world.get_resource::<Game>().expect("oyun");
         let p = focus(&run.world, &game);
+        if walking_into_fence {
+            if let Some((start, forward)) = fence {
+                pushed_through = pushed_through.max((p - start).dot(forward));
+            }
+        }
         if !p.is_finite() {
             deepest_walk = f32::MIN;
             break;
@@ -1202,7 +1284,12 @@ pub fn self_test() -> bool {
         && bag.count("kristal") == crystals_taken
         && wood + stone > 0
         && game.unloads > 0
-        && game.driving.is_some();
+        && game.driving.is_some()
+        && build_ok
+        // Çit 2,6 m önde, 0,1 m kalın: yüzü 2,5 m'de. Kapsülün yarıçapı 0,35 ama yamaçta biraz daha
+        // yaklaşıyor (ölçülen 2,29 m); 2,5 m'yi geçen çitin içinden geçmiştir. Çitsiz üç saniye 18 m.
+        && pushed_through < 2.5;
+    println!("dunya --test: inşa: {build_report}; çite yürüyüş en çok {pushed_through:.2} m (çit 2,6 m önde)");
     println!(
         "dunya --test: envanterde {} kristal (dünyadan {crystals_taken} alındı), {wood} odun, {stone} taş; hücre {} yüklendi, {} silindi; yürüyüşte başlangıçtan {:.0} m, arabayla {:.0} m; zeminin altına en çok yayada {:.2} m, arabada {:.2} m → {}",
         bag.count("kristal"),

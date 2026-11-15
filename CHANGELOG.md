@@ -129,6 +129,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was positive to the left, `move_axis` positive to the right) — fixed there too; and four games (`arazi`, `jole`,
   `kayik`, `topcu`) aimed their cameras through `Transform::rotation`, which the camera did not read — closed by the
   next two entries under *Changed*.
+- **Crafting** (`gizmo_app::inventory::Recipe`, `Inventory::craft`): what goes in, what comes out, all or nothing —
+  nothing is spent when an input is short (`CraftError::Missing`, with what is held and needed) or the output would
+  not fit in what the inputs leave free (`CraftError::NoRoom`); `check_craft` asks without making. In `dunya`:
+  odun and taş make a campfire, fences, a bridge and a shelter from recipe buttons in the inventory panel, and **B**
+  builds them — a translucent ghost on the ground in front (red where it is too steep), **G**/click places, **Q**
+  turns. They are static boxes (a fence stops you, a shelter's roof and a bridge's deck carry you), a campfire is a
+  flickering point light, and they are saved. `dunya --test` crafts all four, walks into a fence for three seconds
+  (2.29 m of the 2.5 m to its face) and reloads what it built. Test: `crafting_is_all_or_nothing`.
 - **An inventory** (`gizmo_app::inventory`): `Inventory`, a component of slots of `ItemStack`s (saved with the scene,
   serialisable for `SaveData`), and `ItemCatalog` (an item's name and stack size, by string key). `add` tops up stacks
   before taking empty slots and hands back what did not fit, `remove` is all or nothing, `move_stack` is a drop —
