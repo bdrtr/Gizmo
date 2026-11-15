@@ -17,6 +17,7 @@
 //! | **sağ tık + fare · ← →** | kamerayı döndür |
 //! | **↑ ↓** | kamerayı yükselt / alçalt |
 //! | **M** | küçük haritayı aç / kapat |
+//! | **H** | havayı değiştir (açık → bulutlu → yağmurlu → sisli…) |
 //! | **R** | başlangıca dön |
 //!
 //! `DUNYA_ENVANTER_ACIK=1` envanteri açık ve içinde birkaç eşyayla başlatır (ekran görüntüsü için).
@@ -1034,8 +1035,8 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
         }
         Some(car) => {
             if let Some(mut v) = world.query_mut::<&mut VehicleController>().get_mut(car) {
-                v.throttle_input = c.my.max(0.0);
-                v.brake_input = (-c.my).max(0.0);
+                // W/S: gaz, fren, durunca geri vites (motorun `drive`'ı).
+                v.drive(c.my);
                 // Direksiyonun artısı sağa (`VehicleController::steering_input`), D tuşu +1.
                 v.steering_input = c.mx;
             }
@@ -1193,7 +1194,7 @@ fn draw_hud(world: &mut World, game: &Game) {
         world,
         game.hud,
         &format!(
-            "Kristal {}/{GOAL}   odun {}   taş {}   en yakın kristal: {pointer}   saat {:02}:{:02} ({sky})\n{mode}\nWASD: yürü/sür · boşluk: zıpla · F: kes/kır · I: envanter ve üretim · B: inşa · sağ tık+fare / oklar: kamera · R: başlangıç",
+            "Kristal {}/{GOAL}   odun {}   taş {}   en yakın kristal: {pointer}   saat {:02}:{:02} ({sky})\n{mode}\nWASD: yürü/sür · boşluk: zıpla · F: kes/kır · I: envanter ve üretim · B: inşa · M: harita · H: hava · sağ tık+fare / oklar: kamera · R: başlangıç",
             crystals(world, game),
             world.get::<Inventory>(game.player).map_or(0, |b| b.count("odun")),
             world.get::<Inventory>(game.player).map_or(0, |b| b.count("tas")),
@@ -1219,6 +1220,10 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     let toggle = input.is_key_just_pressed(KeyCode::KeyI as u32) || input.is_key_just_pressed(KeyCode::Tab as u32);
     update_panel(world, &mut game, toggle);
     update_map(world, &mut game, input.is_key_just_pressed(KeyCode::KeyM as u32));
+    if input.is_key_just_pressed(KeyCode::KeyH as u32) {
+        game.weather.turn();
+        game.note = (format!("Hava: {}", game.weather.now.name()), 2.0);
+    }
     let engine = game.driving.map(|v| {
         let speed = world.get::<Velocity>(v).map_or(0.0, |v| v.linear.length());
         let throttle = world
@@ -1268,8 +1273,8 @@ pub fn app() -> App<SimpleSceneState> {
                 renderer.fog = Some(Fog::new(horizon, w.fog_density(0.0016)).with_height(0.03, 0.0));
                 // Yağmur: kameranın çevresine bu karenin damlaları.
                 if w.rain > 0.02 {
-                    let eye = game.get::<Transform>(g.camera).map_or(Vec3::ZERO, |t| t.position);
-                    let drops = hava::raindrops(eye, w.rain, g.clock);
+                    let (eye, ahead) = game.get::<Transform>(g.camera).map_or((Vec3::ZERO, Vec3::NEG_Z), |t| (t.position, Camera::front(t.rotation)));
+                    let drops = hava::raindrops(eye, ahead, w.rain, g.clock);
                     if let Some(particles) = &renderer.gpu_particles {
                         particles.spawn_particles(&renderer.queue, &drops);
                     }
@@ -1373,7 +1378,10 @@ pub fn self_test() -> bool {
             if frame == rain_at + 600 {
                 let grip = w.get_resource::<PhysicsWorld>().map(|p| p.weather);
                 let eye = w.get::<Transform>(game.camera).map_or(Vec3::ZERO, |t| t.position);
-                let drops = hava::raindrops(eye, game.weather.rain, game.clock).len();
+                let drops = hava::raindrops(eye, Vec3::NEG_Z, game.weather.rain, game.clock);
+                // Doğarken canlı (yaş sıfır, ömrü var): `life = max_life` ile hepsi ölü doğuyordu.
+                let alive = drops.iter().filter(|d| d.life < d.max_life && d.max_life > 0.0).count();
+                let drops = drops.len().min(alive);
                 weather_ok = game.weather.rain > 0.8 && grip == Some(gizmo::physics::world::Weather::Rain) && drops > 30 && game.weather.light() < 0.6;
                 weather_report = format!("yağmur {:.2}, yol {:?}, bu kare {drops} damla, ışık ×{:.2}", game.weather.rain, grip, game.weather.light());
             }

@@ -111,23 +111,27 @@ impl Weather {
     }
 }
 
-/// Kameranın çevresine bu karenin yağmur damlaları: yağmurun şiddetiyle, kameranın 18 m üstünden,
-/// biraz rüzgârla.
-pub(super) fn raindrops(eye: Vec3, rain: f32, clock: f32) -> Vec<GpuParticle> {
-    let count = (rain * 70.0) as u32;
+/// Kameranın çevresine bu karenin yağmur damlaları: yağmurun şiddetiyle, kameranın 14–22 m
+/// üstünden, baktığı yöne doğru kaydırılmış (`ahead`), biraz rüzgârla. Motorun parçacıkları
+/// yerçekimi ve sürtünmeyle ~12 m/s'lik son hıza oturuyor; hıza göre uzayan billboard'lar çizgi
+/// gibi düşüyor.
+pub(super) fn raindrops(eye: Vec3, ahead: Vec3, rain: f32, clock: f32) -> Vec<GpuParticle> {
+    let count = (rain * 140.0) as u32;
+    let centre = eye + Vec3::new(ahead.x, 0.0, ahead.z).normalize_or_zero() * 10.0;
     let seed = (clock * 1000.0) as i32;
     (0..count)
         .map(|k| {
             let r = |n: u32| unit(hash(seed, k as i32, n));
-            let at = eye + Vec3::new((r(1) - 0.5) * 40.0, 14.0 + r(2) * 8.0, (r(3) - 0.5) * 40.0);
+            let at = centre + Vec3::new((r(1) - 0.5) * 36.0, 14.0 + r(2) * 8.0, (r(3) - 0.5) * 36.0);
             GpuParticle {
                 position: at.to_array(),
-                life: 1.5,
-                velocity: [1.5, -15.0 - r(4) * 3.0, 0.4],
-                max_life: 1.5,
-                color: [0.7, 0.75, 0.85, 0.35],
-                size_start: 0.035,
-                size_end: 0.035,
+                // Yaş: sıfırdan doğup `max_life`'ta ölüyor.
+                life: 0.0,
+                velocity: [1.5, -12.0 - r(4) * 3.0, 0.4],
+                max_life: 1.9,
+                color: [0.78, 0.82, 0.92, 0.6],
+                size_start: 0.06,
+                size_end: 0.06,
                 _padding: [0.0; 2],
             }
         })
@@ -144,13 +148,16 @@ pub(super) fn install(world: &mut World) -> Option<Sounds> {
     let mut audio = AudioManager::new().ok()?;
     for (name, blip) in [
         ("kristal", Blip::new(Wave::Sine, 880.0, 0.35).with_slide(1760.0).with_volume(0.18)),
-        ("odun", Blip::new(Wave::Noise, 260.0, 0.12).with_slide(120.0).with_volume(0.3)),
-        ("tas", Blip::new(Wave::Square, 520.0, 0.06).with_slide(300.0).with_volume(0.12)),
-        ("kur", Blip::new(Wave::Triangle, 180.0, 0.18).with_slide(90.0).with_volume(0.35)),
+        ("odun", Blip::new(Wave::Noise, 200.0, 0.12).with_slide(110.0).with_volume(0.15)),
+        ("tas", Blip::new(Wave::Triangle, 520.0, 0.06).with_slide(300.0).with_volume(0.12)),
+        ("kur", Blip::new(Wave::Triangle, 180.0, 0.18).with_slide(90.0).with_volume(0.2)),
         ("uret", Blip::new(Wave::Triangle, 440.0, 0.15).with_slide(660.0).with_volume(0.2)),
         ("is", Blip::new(Wave::Sine, 523.0, 0.5).with_slide(1046.0).with_volume(0.2)),
-        ("yagmur", Blip::new(Wave::Noise, 900.0, 2.0).with_volume(0.25).sustained()),
-        ("motor", Blip::new(Wave::Saw, 70.0, 1.0).with_volume(0.2).sustained()),
+        // Döngüler yumuşak: yağmur alçak bir hışırtı (gürültünün yenilenmesi 900 Hz'te sert bir
+        // cızırtıydı), motor üçgen dalgalı bir uğultu (testere dalgası vızıldıyordu); 55 Hz'in
+        // bir saniyede tam 55 dönüşü var, döngü tıklamadan kapanıyor.
+        ("yagmur", Blip::new(Wave::Noise, 320.0, 2.0).with_volume(0.5).sustained()),
+        ("motor", Blip::new(Wave::Triangle, 55.0, 1.0).with_volume(0.5).sustained()),
     ] {
         audio.load_sound_bytes(name, blip.wav());
     }
@@ -173,11 +180,11 @@ pub(super) fn play(world: &mut World, sounds: &Sounds, queued: &mut Vec<&'static
         let _ = audio.play(name);
     }
     if let Some(id) = sounds.rain {
-        audio.set_volume(id, rain * 0.6);
+        audio.set_volume(id, rain * 0.12);
     }
     if let Some(id) = sounds.engine {
         let (throttle, speed) = engine.unwrap_or((0.0, 0.0));
-        audio.set_volume(id, if engine.is_some() { 0.08 + 0.3 * throttle.abs() } else { 0.0 });
-        audio.set_pitch(id, 0.7 + (speed / 30.0).min(1.5));
+        audio.set_volume(id, if engine.is_some() { 0.04 + 0.1 * throttle.abs() } else { 0.0 });
+        audio.set_pitch(id, 0.8 + (speed / 40.0).min(0.9));
     }
 }

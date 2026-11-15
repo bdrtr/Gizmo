@@ -127,8 +127,8 @@ fn autopilot(world: &World, car: Entity, target: Vec3) -> (f32, f32) {
 
 fn drive(world: &mut World, car: Entity, throttle: f32, steer: f32) {
     if let Some(mut c) = world.query_mut::<&mut VehicleController>().get_mut(car) {
-        c.throttle_input = throttle.max(0.0);
-        c.brake_input = (-throttle).max(0.0);
+        // Gaz, fren, durunca geri vites.
+        c.drive(throttle);
         c.steering_input = steer;
     }
 }

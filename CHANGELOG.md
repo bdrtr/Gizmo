@@ -918,6 +918,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A walking character is drawn between the physics steps too.** The interpolation history recorded only rigid
+  bodies, so a `CharacterController` — the player on foot, `dunya`'s animals and villagers — was drawn holding and
+  jumping at the step rate (60 Hz under a 144 Hz display) while a car beside it glided, and a camera following it
+  juddered: "a burst of speed, a lunge forward". It records every character now. Test:
+  `a_walking_character_is_drawn_evenly_at_144`.
+- **`VehicleController::drive(axis)`: one axis drives, brakes and reverses** — W/S or a stick with an automatic
+  box: against the way the car rolls it brakes, nearly still it engages reverse (or comes out of it) and goes.
+  Games wrote it themselves and two (`dunya`, `arazi`) wrote only the braking half, so S stopped the car and it
+  never backed up. Test: `one_axis_drives_brakes_and_reverses`.
+- **`GpuParticle::life` is the particle's age**, as the shaders have always treated it — spawned at 0, dead at
+  `max_life`. Its documentation said "seconds of life left, dead at or below zero", and a particle spawned by that
+  reading was born dead: `dunya`'s rain, every drop, which is why no rain was seen.
+- `dunya`: the rain and engine loops are a soft hiss and a low hum instead of a harsh 900 Hz noise and a buzzing saw,
+  and quieter; **H** turns the weather.
+
 - **A car pulls away properly.** Two drivetrain bookkeeping errors held every car back off the line, worst at
   low speed, and neither was the tyre model: the force put on the chassis was the tyre's at the slip from *before*
   the step's spin update, a one-step lag that — through the implicit spin stiffness — acted as `K·r²·dt/ref_vel` of

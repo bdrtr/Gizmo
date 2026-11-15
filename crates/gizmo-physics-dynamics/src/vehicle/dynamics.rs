@@ -1297,6 +1297,47 @@ mod tests {
         assert!(kmh < 60.0, "faster than its tyres can push it: {kmh:.1} km/h");
     }
 
+    /// **One axis drives, brakes and reverses.** Held back from rest, `drive(-1)` backs the car up;
+    /// held back while it rolls ahead it brakes first and then backs up; pushed ahead again it
+    /// brakes the reverse out and drives off. (A car that only braked on S never went back.)
+    #[test]
+    fn one_axis_drives_brakes_and_reverses() {
+        let collider = Collider::box_collider(Vec3::new(0.9, 0.35, 2.0));
+        let mut rb = RigidBody::new(900.0, true);
+        rb.update_inertia_from_collider(&collider);
+        rb.wake_up();
+        let mut vc = VehicleController::four_wheeled(1.7, 2.8, 0.38);
+        let ground = probe_ground();
+        let mut t = Transform::new(Vec3::new(0.0, 0.9, 0.0));
+        let mut vel = Velocity::default();
+        let dt = 1.0 / 120.0;
+        let mut run = |vc: &mut VehicleController, axis: f32, seconds: f32| {
+            for _ in 0..(seconds * 120.0) as usize {
+                vc.drive(axis);
+                update_vehicle(BodyHandle::from_id(2), vc, &mut rb, &t, &mut vel, &ground, 1.0, dt);
+                vel.linear.y -= 9.81 * dt;
+                t.position += vel.linear * dt;
+                let w = vel.angular * dt;
+                if w.length() > 0.0 {
+                    t.rotation = (gizmo_math::Quat::from_scaled_axis(w) * t.rotation).normalize();
+                }
+            }
+            (t.position.z, vc.current_speed_kmh)
+        };
+        let (_, settled) = run(&mut vc, 0.0, 0.5);
+        assert!(settled.abs() < 1.0);
+        let (z, kmh) = run(&mut vc, -1.0, 3.0);
+        assert!(z > 3.0 && kmh < -5.0, "held back from rest it reverses (+Z): z {z}, {kmh} km/h");
+        assert!(vc.current_gear == 0);
+        // Ahead while rolling back: brakes, then drives off forwards (−Z).
+        let (_, kmh) = run(&mut vc, 1.0, 4.0);
+        assert!(kmh > 10.0, "pushed ahead it stops the reverse and drives: {kmh} km/h");
+        assert!(vc.current_gear >= 2);
+        // Back while rolling ahead: the brake, not reverse.
+        vc.drive(-1.0);
+        assert!(vc.brake_input > 0.9 && vc.throttle_input == 0.0 && vc.current_gear >= 2);
+    }
+
     fn probe_ground() -> Vec<(BodyHandle, Transform, Collider)> {
         vec![(
             BodyHandle::from_id(1),

@@ -2,19 +2,24 @@
 /// no copy in between, as the instance data [`GpuParticle::desc`] describes.
 ///
 /// A particle is respawned rather than removed — the buffer's length never changes, and a dead
-/// particle is one whose [`Self::life`] has run out. That is what keeps the whole system to one
+/// particle is one whose [`Self::life`] has reached its [`Self::max_life`]. That is what keeps the whole system to one
 /// dispatch and one draw with no CPU readback.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuParticle {
     /// World-space position.
     pub position: [f32; 3],
-    /// Seconds of life left. At or below zero the particle is dead and eligible for respawn.
+    /// Its **age**, in seconds: spawn it at `0.0`. The compute pass adds each step's `dt`, and at
+    /// [`max_life`](Self::max_life) or over the particle is dead and its slot free.
+    ///
+    /// This said "seconds of life left, dead at or below zero" until 2026-11-15 — the opposite of
+    /// what the shaders do — and a particle spawned by that reading (`life = max_life`) was born
+    /// dead: `dunya`'s rain, every drop of it.
     pub life: f32,
     /// Velocity, m/s.
     pub velocity: [f32; 3],
-    /// The life this particle was spawned with; `life / max_life` is the 1→0 age the shader fades
-    /// and scales by.
+    /// How long it lives, in seconds; `life / max_life` is the 0→1 age the shader fades and scales
+    /// by. `0` is never drawn.
     pub max_life: f32,
     /// Tint, RGBA.
     pub color: [f32; 4],

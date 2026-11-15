@@ -121,17 +121,34 @@ impl InterpolationHistory {
 }
 
 /// The bodies the physics step moves: a `RigidBody` that is not static, drawn and not pooled.
+///
+/// Every non-static rigid body, and every character moved by a `CharacterController`, which the fixed step moves as surely as the solver moves a body. The
+/// characters were left out until 2026-11-15: a walking player was drawn at 60 Hz steps while
+/// the car beside it glided, and a camera following the player shook with it (`dunya`: smooth
+/// in the car, juddering on foot).
 fn moving_bodies(world: &World) -> Vec<(Entity, Transform)> {
     use gizmo_physics_rigid::components::RigidBody;
-    world
-        .query_filtered::<(Entity, &RigidBody, &Transform), (
-            gizmo_core::query::Without<gizmo_core::pool::Pooled>,
-            gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
-        )>()
+    type Live = (
+        gizmo_core::query::Without<gizmo_core::pool::Pooled>,
+        gizmo_core::query::Without<gizmo_core::component::IsDeleted>,
+    );
+    let mut moving: Vec<(Entity, Transform)> = world
+        .query_filtered::<(Entity, &RigidBody, &Transform), Live>()
         .iter()
         .filter(|(_, body, _)| !body.is_static())
         .map(|(e, _, t)| (e, *t))
-        .collect()
+        .collect();
+    {
+        let bodies = world.query::<&RigidBody>();
+        moving.extend(
+            world
+                .query_filtered::<(Entity, &gizmo_physics_core::components::CharacterController, &Transform), Live>()
+                .iter()
+                .filter(|(e, _, _)| bodies.get(*e).is_none())
+                .map(|(e, _, t)| (e, *t)),
+        );
+    }
+    moving
 }
 
 /// The world matrix each recorded body, and everything under it, is drawn with this frame. Empty
@@ -348,6 +365,41 @@ mod tests {
         let even = 6.0 / 144.0;
         eprintln!("plugin, per-frame advance: drawn {min:.4}..{max:.4} (even {even:.4})");
         assert!((max - even).abs() < even * 0.05 && (min - even).abs() < even * 0.05, "drawn unevenly: {min}..{max} against {even}");
+    }
+
+    /// **A walking character is drawn evenly too.** A `CharacterController` has no `RigidBody`, and
+    /// the history only recorded bodies, so a player walking at 60 Hz steps was drawn holding and
+    /// jumping at 144 Hz — and the camera following it juddered (`dunya`, on foot).
+    #[cfg(feature = "physics-dynamics")] // what moves the character in the step
+    #[test]
+    fn a_walking_character_is_drawn_evenly_at_144() {
+        let mut world = World::new();
+        world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::ZERO));
+        let ground = world.spawn();
+        world.add_component(ground, Transform::new(Vec3::new(0.0, -0.5, 0.0)));
+        world.add_component(ground, GlobalTransform::default());
+        world.add_component(ground, RigidBody::new_static());
+        world.add_component(ground, Collider::box_collider(Vec3::new(500.0, 0.5, 500.0)));
+        let walker = world.spawn();
+        world.add_component(walker, Transform::new(Vec3::new(0.0, 0.9, 0.0)));
+        world.add_component(walker, GlobalTransform::default());
+        world.add_component(walker, Velocity::default());
+        world.add_component(walker, Collider::capsule(0.35, 0.55));
+        world.add_component(
+            walker,
+            gizmo_physics_core::components::CharacterController { target_velocity: Vec3::new(6.0, 0.0, 0.0), speed: 6.0, ..Default::default() },
+        );
+        let mut physics = FixedPhysics::new(60);
+        let mut drawn = Vec::new();
+        for _ in 0..288 {
+            physics.advance(&mut world, 1.0 / 144.0);
+            sync_transforms(&mut world);
+            drawn.push(drawn_transform(&world, walker).unwrap().position.x);
+        }
+        let (max, min) = spread(&drawn[60..]);
+        let even = 6.0 / 144.0;
+        assert!(drawn[287] > 10.0, "it walked: {}", drawn[287]);
+        assert!((max - even).abs() < even * 0.1 && (min - even).abs() < even * 0.1, "drawn unevenly: {min}..{max} against {even}");
     }
 
     /// A body moved outside the step — a teleport in the update — is drawn where it is, not swept

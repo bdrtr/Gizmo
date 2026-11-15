@@ -927,6 +927,33 @@ impl VehicleController {
         }
     }
 
+    /// The pedals from one axis, the way a game's W/S or a stick's forward drives a car with an
+    /// automatic box: `axis` 1 is full ahead, −1 full back. Pushed against the way the car is
+    /// rolling it **brakes**; once the car is nearly still (under 2 km/h, by
+    /// [`current_speed_kmh`](Self::current_speed_kmh)) it engages reverse and backs up, and pushed
+    /// ahead again it comes out of reverse the same way. Sets the throttle, the brake and
+    /// [`set_reverse`](Self::set_reverse); call it every frame.
+    ///
+    /// Each game wrote this itself, and two (`dunya`, `arazi`) wrote only the half that brakes:
+    /// holding S stopped the car and stayed stopped.
+    pub fn drive(&mut self, axis: f32) {
+        const STILL_KMH: f32 = 2.0;
+        let axis = axis.clamp(-1.0, 1.0);
+        let speed = self.current_speed_kmh;
+        let (throttle, brake, reverse) = if axis > 0.0 {
+            // Ahead: brake first if rolling back.
+            if speed < -STILL_KMH { (0.0, axis, true) } else { (axis, 0.0, false) }
+        } else if axis < 0.0 {
+            // Back: brake first if rolling ahead.
+            if speed > STILL_KMH { (0.0, -axis, false) } else { (-axis, 0.0, true) }
+        } else {
+            (0.0, 0.0, self.reverse_input)
+        };
+        self.set_reverse(reverse);
+        self.throttle_input = throttle;
+        self.brake_input = brake;
+    }
+
     /// The automatic gearbox — upshift/downshift against the RPM thresholds
     pub fn auto_shift_tick(&mut self, dt: f32) {
         if !self.auto_shift || self.reverse_input {
