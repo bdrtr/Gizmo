@@ -99,13 +99,16 @@ pub struct Blip {
     pub attack: f32,
     /// Peak amplitude, `0..=1`.
     pub volume: f32,
+    /// Holds its level to the end instead of decaying — a sound made to loop (rain, an engine's
+    /// hum); see [`sustained`](Self::sustained).
+    pub sustain: bool,
 }
 
 impl Blip {
     /// A `seconds`-long `wave` at `hz`, no slide, at half volume with a 5 ms attack.
     #[must_use]
     pub fn new(wave: Wave, hz: f32, seconds: f32) -> Self {
-        Self { wave, start_hz: hz, end_hz: hz, seconds, attack: 0.005, volume: 0.5 }
+        Self { wave, start_hz: hz, end_hz: hz, seconds, attack: 0.005, volume: 0.5, sustain: false }
     }
 
     /// Slides the pitch to `end_hz` over the sound.
@@ -129,6 +132,16 @@ impl Blip {
         self
     }
 
+    /// A sound to loop: no fade in, no decay, so the end meets the start. A decaying blip played
+    /// with `play_looped` throbs once a turn. For a tone to meet itself without a click, give it a
+    /// whole number of cycles in its length (70 Hz for 1 s, say) and no slide; noise always does.
+    #[must_use]
+    pub fn sustained(mut self) -> Self {
+        self.sustain = true;
+        self.attack = 0.0;
+        self
+    }
+
     /// Renders the sound at `sample_rate`: `seconds × sample_rate` samples in
     /// `[-volume, volume]`.
     #[must_use]
@@ -138,6 +151,7 @@ impl Blip {
         let start = self.start_hz.max(1.0);
         let end = self.end_hz.max(1.0);
         let attack = (self.attack * rate).max(1.0);
+        let sustain = self.sustain;
         let mut phase = 0.0f32;
         let mut noise_state: u32 = 0x9E37_79B9;
         let mut noise_value = 0.0f32;
@@ -171,7 +185,7 @@ impl Blip {
                 }
             };
             let rise = ((i as f32 + 1.0) / attack).min(1.0);
-            let fall = 1.0 - t;
+            let fall = if sustain { 1.0 } else { 1.0 - t };
             out.push(raw * self.volume * rise * fall);
         }
         out
@@ -188,6 +202,19 @@ impl Blip {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A sustained sound holds its level to its last sample, and a whole number of cycles meets
+    /// its own start — what a loop needs; the default decays to silence.
+    #[test]
+    fn a_sustained_blip_holds_its_level_and_loops_cleanly() {
+        let held = Blip::new(Wave::Saw, 70.0, 1.0).with_volume(0.5).sustained().samples(7_000);
+        let tail = held[held.len() - 100..].iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(tail > 0.45, "the end of a sustained sound is still loud: {tail}");
+        // 70 cycles in a second at 7 kHz: a cycle is exactly 100 samples, the loop seamless.
+        assert!((held[50] - held[150]).abs() < 1e-3 && (held[50] - held[6950]).abs() < 1e-3, "{} {} {}", held[50], held[150], held[6950]);
+        let decayed = Blip::new(Wave::Saw, 70.0, 1.0).with_volume(0.5).samples(7_000);
+        assert!(decayed[decayed.len() - 100..].iter().all(|s| s.abs() < 0.01), "a plain blip fades out");
+    }
     use rodio::{Decoder, Source};
     use std::io::Cursor;
 

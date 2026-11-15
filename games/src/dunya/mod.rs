@@ -16,6 +16,7 @@
 //! | **B** | inşa: kamp ateşi, çit, köprü, barınak (envanterdekiler) — **G · sol tık** koy, **Q** döndür, **B** sonraki |
 //! | **sağ tık + fare · ← →** | kamerayı döndür |
 //! | **↑ ↓** | kamerayı yükselt / alçalt |
+//! | **M** | küçük haritayı aç / kapat |
 //! | **R** | başlangıca dön |
 //!
 //! `DUNYA_ENVANTER_ACIK=1` envanteri açık ve içinde birkaç eşyayla başlatır (ekran görüntüsü için).
@@ -41,6 +42,9 @@
 //!   hücrelerde üç barınaklı bir köy ve iş isteyen iki köylü — hepsi motorun davranış ağaçlarıyla.
 //! - **Göller ve kayık** (`su`): arazideki alçak çanaklar su seviyesinin altında kalınca göl; su
 //!   motorun tek bir `FluidZone`'u, kayık motorun `BoatController`'ı, oyuncu suda yüzüyor.
+//! - **Harita, hava, ses** (`harita`, `hava`): sağ üstte yukarıdan bakan ikinci bir kamera ve
+//!   üstünde kristal, köy, kayık işaretleri; açık / bulutlu / yağmurlu / sisli gök, yağmur GPU
+//!   parçacıkları ve kaygan yol; sentezlenmiş sesler, yağmurun ve motorun döngüleri.
 //! - **Gece-gündüz** dört dakikada bir tur: güneş dönüyor, gök, sis ve arka plan rengi ona göre;
 //!   geceleri ay ışığı ve kristallerin kendi ışıltısı.
 //!
@@ -49,6 +53,8 @@
 //! arazinin içine düşmemeli, hücreler yüklenip silinmeli ve kristal toplanmalı.
 
 mod canli;
+mod harita;
+mod hava;
 mod insa;
 mod su;
 
@@ -403,6 +409,7 @@ fn gather(world: &mut World, game: &mut Game) {
         return;
     };
     if give(world, game, g.item, g.amount) {
+        game.sounds.push(if g.item == "tas" { "tas" } else { "odun" });
         game.collected.insert(g.id);
         world.despawn_recursive(entity);
     }
@@ -655,6 +662,11 @@ struct Game {
     /// Göllerin kayıkları, ve hangi hücrelere kayık kondu.
     boats: Vec<Entity>,
     boat_chunks: HashSet<ChunkCoord>,
+    weather: hava::Weather,
+    map: harita::Map,
+    /// Bu kare çalınacak sesler (adlarıyla), ve sesler (pencereli oyunda).
+    sounds: Vec<&'static str>,
+    audio: Option<hava::Sounds>,
 }
 
 fn start_point() -> Vec3 {
@@ -810,6 +822,8 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
         }
     }
     let (panel, cells, views) = if visual { build_panel(world, font) } else { (None, Vec::new(), Vec::new()) };
+    let map = harita::build(world, font);
+    let audio = if visual { hava::install(world) } else { None };
     // Ekran görüntüsü için: panel açık, içinde birkaç eşya.
     if let (Some(root), true) = (panel, std::env::var_os("DUNYA_ENVANTER_ACIK").is_some()) {
         if let Some(mut style) = world.query_mut::<&mut Style>().get_mut(root) {
@@ -852,6 +866,10 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
         quests,
         boats: Vec::new(),
         boat_chunks: HashSet::new(),
+        weather: hava::Weather::new(),
+        map,
+        sounds: Vec::new(),
+        audio,
     };
     stream_chunks(world, &mut game);
     for (k, (x, z)) in [(6.0f32, 3.0f32), (-7.0, 5.0), (3.0, -8.0)].into_iter().enumerate() {
@@ -972,6 +990,10 @@ fn read_controls(input: &Input) -> Controls {
 
 fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
     game.clock += dt;
+    game.weather.step(dt);
+    if let Some(mut physics) = world.get_resource_mut::<PhysicsWorld>() {
+        physics.weather = game.weather.grip();
+    }
     game.time_of_day = (game.time_of_day + dt / DAY_LENGTH).fract();
     game.cam_yaw += c.yaw;
     game.cam_pitch = (game.cam_pitch + c.pitch).clamp(0.05, 1.2);
@@ -1061,6 +1083,7 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
     }
     for (e, id) in taken {
         if give(world, game, "kristal", 1) {
+            game.sounds.push("kristal");
             game.collected.insert(id);
             world.despawn_recursive(e);
         }
@@ -1094,13 +1117,13 @@ fn place_lights_and_camera(world: &mut World, game: &Game, dt: f32) {
         t.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, shines);
     }
     if let Some(mut l) = world.query_mut::<&mut DirectionalLight>().get_mut(game.sun) {
-        l.intensity = sun_i;
+        l.intensity = sun_i * game.weather.light();
     }
     if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.moon) {
         t.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, Vec3::new(0.3, -0.8, 0.5).normalize());
     }
     if let Some(mut l) = world.query_mut::<&mut DirectionalLight>().get_mut(game.moon) {
-        l.intensity = moon_i;
+        l.intensity = moon_i * game.weather.light();
     }
     // Üçüncü şahıs kamera: odağın arkasında, arazinin üstünde.
     let target = drawn_focus(world, game).position + Vec3::Y * 1.4;
@@ -1116,7 +1139,7 @@ fn place_lights_and_camera(world: &mut World, game: &Game, dt: f32) {
         }
     }
     if let Some(mut cam) = world.query_mut::<&mut Camera>().get_mut(game.camera) {
-        cam.clear_color = Some(Vec3::from(horizon));
+        cam.clear_color = Some(Vec3::from(game.weather.grade(horizon)));
     }
 }
 
@@ -1136,6 +1159,7 @@ fn draw_hud(world: &mut World, game: &Game) {
         format!("{} {:.0} m", arrows[k], d.length())
     });
     let hours = game.time_of_day * 24.0;
+    let sky = game.weather.now.name();
     let speed = game.driving.map(|c| {
         let kmh = world.get::<VehicleController>(c).map_or_else(|| world.get::<Velocity>(c).map_or(0.0, |v| v.linear.length() * 3.6), |v| v.current_speed_kmh);
         (kmh, if su::is_boat(world, c) { "kayıkta" } else { "arabada" })
@@ -1155,7 +1179,7 @@ fn draw_hud(world: &mut World, game: &Game) {
         world,
         game.hud,
         &format!(
-            "Kristal {}/{GOAL}   odun {}   taş {}   en yakın kristal: {pointer}   saat {:02}:{:02}\n{mode}\nWASD: yürü/sür · boşluk: zıpla · F: kes/kır · I: envanter ve üretim · B: inşa · sağ tık+fare / oklar: kamera · R: başlangıç",
+            "Kristal {}/{GOAL}   odun {}   taş {}   en yakın kristal: {pointer}   saat {:02}:{:02} ({sky})\n{mode}\nWASD: yürü/sür · boşluk: zıpla · F: kes/kır · I: envanter ve üretim · B: inşa · sağ tık+fare / oklar: kamera · R: başlangıç",
             crystals(world, game),
             world.get::<Inventory>(game.player).map_or(0, |b| b.count("odun")),
             world.get::<Inventory>(game.player).map_or(0, |b| b.count("tas")),
@@ -1180,10 +1204,34 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     step(world, &mut game, dt, controls);
     let toggle = input.is_key_just_pressed(KeyCode::KeyI as u32) || input.is_key_just_pressed(KeyCode::Tab as u32);
     update_panel(world, &mut game, toggle);
+    update_map(world, &mut game, input.is_key_just_pressed(KeyCode::KeyM as u32));
+    let engine = game.driving.map(|v| {
+        let speed = world.get::<Velocity>(v).map_or(0.0, |v| v.linear.length());
+        let throttle = world
+            .get::<VehicleController>(v)
+            .map(|c| c.throttle_input - c.brake_input)
+            .or_else(|| world.get::<gizmo::physics::BoatController>(v).map(|b| b.throttle_input))
+            .unwrap_or(0.0);
+        (throttle, speed)
+    });
+    if let Some(sounds) = game.audio.take() {
+        let rain = game.weather.rain;
+        hava::play(world, &sounds, &mut game.sounds, rain, engine);
+        game.audio = Some(sounds);
+    }
+    game.sounds.clear();
     autosave(world, &mut game, dt);
     place_lights_and_camera(world, &game, dt);
     draw_hud(world, &game);
     world.insert_resource(game);
+}
+
+/// Küçük harita: odağın üstünde, yürünen (ya da sürülen) yönün okuyla.
+fn update_map(world: &mut World, game: &mut Game, toggle: bool) {
+    let me = focus(world, game);
+    let body = game.driving.unwrap_or(game.player);
+    let heading = world.get::<Transform>(body).map_or(Vec3::NEG_Z, |t| t.rotation * Vec3::NEG_Z);
+    harita::update(world, &mut game.map, me, heading, toggle);
 }
 
 /// Oyunun tamamı bir `App` olarak.
@@ -1200,8 +1248,18 @@ pub fn app() -> App<SimpleSceneState> {
         .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
             if let Some(g) = game.get_resource::<Game>() {
                 let (_, _, _, zenith, horizon, ground) = sky_at(g.time_of_day);
+                let w = &g.weather;
+                let (zenith, horizon, ground) = (w.grade(zenith), w.grade(horizon), w.grade(ground));
                 renderer.sky = Some(Sky::gradient(zenith, horizon, ground));
-                renderer.fog = Some(Fog::new(horizon, 0.0016).with_height(0.03, 0.0));
+                renderer.fog = Some(Fog::new(horizon, w.fog_density(0.0016)).with_height(0.03, 0.0));
+                // Yağmur: kameranın çevresine bu karenin damlaları.
+                if w.rain > 0.02 {
+                    let eye = game.get::<Transform>(g.camera).map_or(Vec3::ZERO, |t| t.position);
+                    let drops = hava::raindrops(eye, w.rain, g.clock);
+                    if let Some(particles) = &renderer.gpu_particles {
+                        particles.spawn_particles(&renderer.queue, &drops);
+                    }
+                }
             }
         }))
 }
@@ -1237,6 +1295,8 @@ pub fn self_test() -> bool {
     let mut world = World::new();
     let game = setup(&mut world, HeadlessFrames::font(), false);
     world.insert_resource(game);
+    // Haritanın işaretleri pencerenin boyuyla yerleşiyor: sınamanın da bir penceresi varmış gibi.
+    world.insert_resource(gizmo::core::window::WindowInfo { width: 1280.0, height: 800.0 });
     let mut run = HeadlessFrames::new(world);
     let dt = 1.0 / 60.0;
     let mut deepest_walk = f32::MAX;
@@ -1251,6 +1311,12 @@ pub fn self_test() -> bool {
     let mut flee: Option<(Entity, f32)> = None;
     let mut fled = 0.0f32;
     let mut animals_seen = 0usize;
+    // Hava: 60. saniyede yağmur; on saniye sonra yağıyor, yol kaygan, damlalar düşüyor.
+    let rain_at = 60 * 60;
+    let mut weather_report = String::from("hava aşaması çalışmadı");
+    let mut weather_ok = false;
+    let mut map_village = false;
+    let mut map_marks = 0usize;
     // Kayık aşaması: 106. saniyede en yakın gölün kayığına bin, altı saniye tam gaz sür, in.
     let boat_at = 60 * 106;
     let mut boat_start: Option<(Entity, Vec3)> = None;
@@ -1279,6 +1345,23 @@ pub fn self_test() -> bool {
                     v.linear = Vec3::ZERO;
                 }
             };
+            if frame == rain_at {
+                while game.weather.now != hava::Sky::Rain {
+                    game.weather.turn();
+                }
+            }
+            if frame == rain_at + 600 {
+                let grip = w.get_resource::<PhysicsWorld>().map(|p| p.weather);
+                let eye = w.get::<Transform>(game.camera).map_or(Vec3::ZERO, |t| t.position);
+                let drops = hava::raindrops(eye, game.weather.rain, game.clock).len();
+                weather_ok = game.weather.rain > 0.8 && grip == Some(gizmo::physics::world::Weather::Rain) && drops > 30 && game.weather.light() < 0.6;
+                weather_report = format!("yağmur {:.2}, yol {:?}, bu kare {drops} damla, ışık ×{:.2}", game.weather.rain, grip, game.weather.light());
+            }
+            if frame == village_at + 30 {
+                update_map(w, &mut game, false);
+                map_marks = harita::shown_marks(w, &game.map);
+                map_village = w.query::<&Text>().iter().any(|t| t.content == "ev");
+            }
             if frame == village_at {
                 let near = (-6..=6).flat_map(|x| (-6..=6).map(move |z| (x, z))).filter_map(canli::village_at).min_by(|a, b| a.length().total_cmp(&b.length()));
                 if let Some(v) = near {
@@ -1481,6 +1564,8 @@ pub fn self_test() -> bool {
         && game.driving.is_some()
         && build_ok
         && village_ok
+        && weather_ok
+        && map_village
         && boat_ok
         && parked_ok
         && animals_seen > 0
@@ -1490,6 +1575,7 @@ pub fn self_test() -> bool {
         && pushed_through < 2.5;
     println!("dunya --test: canlılar: {village_report}; {animals_seen} hayvan, en yakını üç saniyede {fled:.1} m kaçtı; bırakılan arabalar yerinde: {parked_ok}");
     println!("dunya --test: su: {boat_report}");
+    println!("dunya --test: hava: {weather_report}; harita köyde {map_marks} işaret, köy görünüyor: {map_village}");
     println!("dunya --test: inşa: {build_report}; çite yürüyüş en çok {pushed_through:.2} m (çit 2,6 m önde)");
     println!(
         "dunya --test: envanterde {} kristal (dünyadan {crystals_taken} alındı), {wood} odun, {stone} taş; hücre {} yüklendi, {} silindi; yürüyüşte başlangıçtan {:.0} m, arabayla {:.0} m; zeminin altına en çok yayada {:.2} m, arabada {:.2} m → {}",

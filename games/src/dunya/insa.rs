@@ -339,6 +339,7 @@ pub(super) fn craft(world: &mut World, game: &mut Game, kind: Build) -> bool {
     };
     match result {
         Ok(()) => {
+            game.sounds.push("uret");
             game.dirty = true;
             game.note = (format!("+{} {}", recipe.output.count, kind.name()), 1.5);
             true
@@ -435,6 +436,7 @@ pub(super) fn place_structure(world: &mut World, game: &mut Game, kind: Build, a
         return false;
     }
     spawn_structure(world, kind, at, yaw, game.visual, true);
+    game.sounds.push("kur");
     game.dirty = true;
     game.note = (format!("{} kuruldu", kind.name()), 1.5);
     true

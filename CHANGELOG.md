@@ -129,6 +129,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was positive to the left, `move_axis` positive to the right) — fixed there too; and four games (`arazi`, `jole`,
   `kayik`, `topcu`) aimed their cameras through `Transform::rotation`, which the camera did not read — closed by the
   next two entries under *Changed*.
+- **`dunya`: a map, weather and sound.** A minimap top right (**M**): a second camera with a `viewport`, an
+  orthographic view from 160 m over the player, north up, the world in its own colours; over it, on the UI, the
+  player's heading at the centre and crystals, villages and boats placed with the map camera's own
+  `world_to_screen`. The sky turns every one and a half to two and a half minutes — clear, cloudy, rain, fog — over a
+  few seconds: clouds dim the sun and moon and grey the sky, fog and rain close the view, rain falls as the engine's
+  GPU particles round the camera and makes the road slippery (`PhysicsWorld::weather`, which the car model's grip
+  reads). Sounds are synthesised — a crystal's chime, wood's thud, stone's click, building, crafting, a finished
+  job — with rain and an engine hum looping, louder with the rain, the throttle and the speed. `dunya --test` turns
+  the sky to rain (0.81 ten seconds later, the road wet, 56 drops that frame) and finds the village on the map.
+- **`Blip::sustained`** (`gizmo::audio::synth`): a synthesised sound that holds its level to the end instead of
+  decaying, so it loops — every `Blip` faded linearly to silence, and one played with `play_looped` throbbed once a
+  turn. Test: `a_sustained_blip_holds_its_level_and_loops_cleanly`.
 - **A motor boat in the engine** (`gizmo::physics::BoatController`, `boat_controller_system`): throttle and rudder
   (positive turns right, the steering convention) give thrust along the hull's level forward at a propeller under
   the stern — only while the propeller is in the water, so a beached boat stays beached — a rudder that turns in

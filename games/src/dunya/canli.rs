@@ -369,6 +369,7 @@ pub(super) fn talk(world: &mut World, game: &mut Game) -> bool {
                 };
                 if taken && give(world, game, quest.reward.0, quest.reward.1) {
                     game.quests.insert(villager.id, 2);
+                    game.sounds.push("is");
                     game.dirty = true;
                     format!("{}: Sağ ol! Al bakalım: {}.", villager.name, item_name(game, quest.reward.0, quest.reward.1))
                 } else {
