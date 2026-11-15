@@ -260,20 +260,26 @@ fn site_ok(kind: Build, at: Vec3, rotation: Quat) -> bool {
 }
 
 /// Bir yapıyı kurar: her katı parça kendi dünyadaki konumunda bir statik cisim, görünen parçalar
-/// ilk cismin çocukları. İlk cisim `Structure` taşıyor.
-pub(super) fn spawn_structure(world: &mut World, kind: Build, at: Vec3, yaw: f32, visual: bool) -> Entity {
+/// kökün çocukları. Oyuncunun kurduğu (`persist`) kökü `Structure` taşıyor — kayda o giriyor; bir
+/// köyün evleri taşımıyor, hücreleriyle gelip gidiyorlar. Dönen ilki kök, ötekiler katı parçalar.
+pub(super) fn spawn_structure(world: &mut World, kind: Build, at: Vec3, yaw: f32, visual: bool, persist: bool) -> Vec<Entity> {
     let rotation = Quat::from_rotation_y(yaw);
     let base = Vec3::new(at.x, ground_y(kind, at, rotation), at.z);
-    let root = world.spawn_bundle((Transform::new(base).with_rotation(rotation), GlobalTransform::default(), Structure { kind, yaw }));
+    let root = world.spawn_bundle((Transform::new(base).with_rotation(rotation), GlobalTransform::default()));
+    if persist {
+        world.add_component(root, Structure { kind, yaw });
+    }
+    let mut spawned = vec![root];
     for part in parts(kind) {
         if part.solid {
-            world.spawn_bundle((
+            let body = world.spawn_bundle((
                 Transform::new(base + rotation * part.at).with_rotation(rotation * part.turn),
                 GlobalTransform::default(),
                 RigidBody::new_static(),
                 Velocity::default(),
                 Collider::box_collider(part.half),
             ));
+            spawned.push(body);
         }
         if visual && !part.mesh.is_empty() {
             let piece = world.spawn_bundle((
@@ -295,7 +301,7 @@ pub(super) fn spawn_structure(world: &mut World, kind: Build, at: Vec3, yaw: f32
         ));
         world.add_child(root, light);
     }
-    root
+    spawned
 }
 
 fn spawn_ghost(world: &mut World, kind: Build) -> Entity {
@@ -428,7 +434,7 @@ pub(super) fn place_structure(world: &mut World, game: &mut Game, kind: Build, a
     if !spent {
         return false;
     }
-    spawn_structure(world, kind, at, yaw, game.visual);
+    spawn_structure(world, kind, at, yaw, game.visual, true);
     game.dirty = true;
     game.note = (format!("{} kuruldu", kind.name()), 1.5);
     true
@@ -454,7 +460,7 @@ pub(super) fn saved(world: &World) -> Vec<(u8, f32, f32, f32, f32)> {
 pub(super) fn restore(world: &mut World, list: &[(u8, f32, f32, f32, f32)], visual: bool) {
     for &(code, x, y, z, yaw) in list {
         if let Some(kind) = Build::from_code(code) {
-            spawn_structure(world, kind, Vec3::new(x, y, z), yaw, visual);
+            spawn_structure(world, kind, Vec3::new(x, y, z), yaw, visual, true);
         }
     }
 }

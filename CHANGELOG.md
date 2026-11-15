@@ -129,6 +129,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was positive to the left, `move_axis` positive to the right) — fixed there too; and four games (`arazi`, `jole`,
   `kayik`, `topcu`) aimed their cameras through `Transform::rotation`, which the camera did not read — closed by the
   next two entries under *Changed*.
+- **`dunya`: animals and villages.** Sheep and deer graze in herds on the grass of each cell and run when you come
+  near (a sheep at 6 m, a deer at 12 m and faster), each a `gizmo::ai::BehaviorTree` over a `CharacterController`:
+  flee if scared, else walk somewhere near home and graze — the walking and grazing actions fail when scared, so the
+  memory selector goes back to fleeing. One cell in four, on flat ground, has a village: three shelters round a
+  campfire and two villagers who wander it and turn to face you. **T** talks: the first time a villager asks for
+  something (six wood, four stone…), the next time, if you have it, takes it and pays (a crystal, a campfire,
+  fences); the jobs are saved. `dunya --test` goes to the nearest village, takes and finishes a job, and stands
+  next to an animal (9.2 m away three seconds later).
 - **Crafting** (`gizmo_app::inventory::Recipe`, `Inventory::craft`): what goes in, what comes out, all or nothing —
   nothing is spent when an input is short (`CraftError::Missing`, with what is held and needed) or the output would
   not fit in what the inputs leave free (`CraftError::NoRoom`); `check_craft` asks without making. In `dunya`:
@@ -882,6 +890,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `local_shadow_pass_bind_groups`, with `ensure_local_shadow_layers`.
 
 ### Fixed
+
+- **A body left in the open world no longer falls out of it.** `open_world_chunk_system` despawns what a chunk owns,
+  and the ground is a chunk's — but a car the player left, or a crate that rolled to the edge, belongs to no chunk:
+  when its chunk unloaded it fell, and went on falling (measured in `dunya`: a car parked at the start, 6.9 km below
+  the world two minutes after the player walked off; found by its `--test`, which drove it later and fell with it).
+  With the `physics` feature, a dynamic body over a chunk that is not loaded is held — made kinematic at rest and
+  marked `ChunkFrozen`, kept at rest while it waits — and gets its body type back, awake, when its chunk loads.
+  Tests: `a_body_over_an_unloaded_chunk_is_held_until_the_chunk_is_back`, and `dunya --test` checks the two cars
+  never driven are still on the ground at the end (fails without the hold).
 
 - **A scene with no sun held the sun's cascades all the same.** They are a texel a layer until a frame draws them
   (`SceneState::ensure_sun_shadow_maps`, beside the local layers' growth, on the game path and both of the editor's), where

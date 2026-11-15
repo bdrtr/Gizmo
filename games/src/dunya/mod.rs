@@ -12,6 +12,7 @@
 //! | **E** | arabaya bin / in |
 //! | **F** | yakındaki ağacı kes (odun), kayayı kır (taş) |
 //! | **I · Tab** | envanter: eşyayı yuvadan yuvaya sürükle, panelin dışına bırakırsan yere düşer; alttaki tariflerle üret |
+//! | **T** | yakındaki köylüyle konuş: iş al, getirdiğini teslim et |
 //! | **B** | inşa: kamp ateşi, çit, köprü, barınak (envanterdekiler) — **G · sol tık** koy, **Q** döndür, **B** sonraki |
 //! | **sağ tık + fare · ← →** | kamerayı döndür |
 //! | **↑ ↓** | kamerayı yükselt / alçalt |
@@ -36,6 +37,8 @@
 //!   kurulduğunda da.
 //! - **Üretim ve inşa** (`insa`): odun ve taştan kamp ateşi, çit, köprü, barınak — motorun
 //!   `Recipe` ve `Inventory::craft`'ı; kurulan yapılar katı, kamp ateşi titreyen bir ışık, hepsi kayıtta.
+//! - **Canlılar ve köyler** (`canli`): koyunlar ve geyikler otluyor, yaklaşınca kaçıyor; bazı
+//!   hücrelerde üç barınaklı bir köy ve iş isteyen iki köylü — hepsi motorun davranış ağaçlarıyla.
 //! - **Gece-gündüz** dört dakikada bir tur: güneş dönüyor, gök, sis ve arka plan rengi ona göre;
 //!   geceleri ay ışığı ve kristallerin kendi ışıltısı.
 //!
@@ -43,6 +46,7 @@
 //! arabaya binip hücre sınırlarının üstünden bir dakika sürer. Hiçbir an oyuncu ya da araba
 //! arazinin içine düşmemeli, hücreler yüklenip silinmeli ve kristal toplanmalı.
 
+mod canli;
 mod insa;
 
 use std::collections::HashSet;
@@ -301,6 +305,7 @@ fn load_chunk(world: &mut World, coord: ChunkCoord, collected: &HashSet<(i32, i3
         }
     }
 
+    canli::populate_chunk(world, coord, visual, &mut spawned);
     if let Some(mut manager) = world.get_resource_mut::<ChunkManager>() {
         for e in spawned {
             manager.register_entity(coord, e.to_bits());
@@ -596,6 +601,8 @@ fn autosave(world: &World, game: &mut Game, dt: f32) {
     let taken: Vec<(i32, i32, u8)> = game.collected.iter().copied().collect();
     let _ = save.set("alinan", &taken);
     let _ = save.set("yapilar", &insa::saved(world));
+    let quests: Vec<((i32, i32, u8), u8)> = game.quests.iter().map(|(k, v)| (*k, *v)).collect();
+    let _ = save.set("isler", &quests);
     if let Err(e) = save.save() {
         game.note = (format!("Kayıt yazılamadı: {e}"), 3.0);
     }
@@ -638,6 +645,8 @@ struct Game {
     dirty: bool,
     /// İnşa kipi (B), açıksa.
     building: Option<insa::Building>,
+    /// Köylülerin işleri: 1 verildi, 2 bitti.
+    quests: std::collections::HashMap<(i32, i32, u8), u8>,
 }
 
 fn start_point() -> Vec3 {
@@ -750,6 +759,7 @@ fn stream_chunks(world: &mut World, game: &mut Game) {
 
 fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
     world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    canli::install(world);
     let sun = world.spawn_bundle((
         Transform::new(Vec3::ZERO),
         GlobalTransform::default(),
@@ -768,6 +778,7 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
     let player = spawn_player(world, start_point(), visual);
     // Kayıtlı oyun: envanter ve dünyadan alınanlar (yalnız pencereli oyunda; sınama kayda dokunmuyor).
     let mut collected = HashSet::new();
+    let mut quests = std::collections::HashMap::new();
     if visual {
         let save = SaveData::open("dunya");
         if let Some(bag) = save.get::<Inventory>("envanter") {
@@ -778,6 +789,9 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
         }
         if let Some(built) = save.get::<Vec<(u8, f32, f32, f32, f32)>>("yapilar") {
             insa::restore(world, &built, true);
+        }
+        if let Some(saved) = save.get::<Vec<((i32, i32, u8), u8)>>("isler") {
+            quests.extend(saved);
         }
     }
     let (panel, cells, views) = if visual { build_panel(world, font) } else { (None, Vec::new(), Vec::new()) };
@@ -820,6 +834,7 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
         save_in: 5.0,
         dirty: false,
         building: None,
+        quests,
     };
     stream_chunks(world, &mut game);
     for (k, (x, z)) in [(6.0f32, 3.0f32), (-7.0, 5.0), (3.0, -8.0)].into_iter().enumerate() {
@@ -898,6 +913,7 @@ struct Controls {
     build: bool,
     place: bool,
     rotate: bool,
+    talk: bool,
 }
 
 fn read_controls(input: &Input) -> Controls {
@@ -931,6 +947,7 @@ fn read_controls(input: &Input) -> Controls {
         build: input.is_key_just_pressed(KeyCode::KeyB as u32),
         place: input.is_key_just_pressed(KeyCode::KeyG as u32) || input.is_mouse_button_just_pressed(0),
         rotate: input.is_key_just_pressed(KeyCode::KeyQ as u32),
+        talk: input.is_key_just_pressed(KeyCode::KeyT as u32),
     }
 }
 
@@ -963,6 +980,9 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
     }
     insa::update_building(world, game, c.rotate, c.place);
     insa::flicker(world, game.clock);
+    if c.talk && game.driving.is_none() {
+        canli::talk(world, game);
+    }
     let (forward, right) = camera_axes(game);
     match game.driving {
         Some(car) => {
@@ -1000,6 +1020,8 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
         }
     }
     stream_chunks(world, game);
+    let me = focus(world, game);
+    canli::tick(world, me, dt);
     game.physics.advance(world, dt.min(0.1));
     world.apply_commands();
     // Kristaller dönüyor; yaklaşan topluyor.
@@ -1093,10 +1115,17 @@ fn draw_hud(world: &mut World, game: &Game) {
     });
     let hours = game.time_of_day * 24.0;
     let speed = game.driving.and_then(|c| world.get::<VehicleController>(c).map(|v| v.current_speed_kmh));
-    let mode = match speed {
+    let mut mode = match speed {
         Some(s) => format!("arabada, {s:.0} km/s · E: in"),
-        None => "yaya · E: arabaya bin (yakındaysa)".to_string(),
+        None => match canli::nearest_villager(world, me) {
+            Some((_, v)) => format!("yaya · T: {} ile konuş", v.name),
+            None => "yaya · E: arabaya bin (yakındaysa)".to_string(),
+        },
     };
+    let quests = canli::quest_lines(world, game);
+    if !quests.is_empty() {
+        mode = format!("{mode}   {quests}");
+    }
     set_text(
         world,
         game.hud,
@@ -1189,6 +1218,14 @@ pub fn self_test() -> bool {
     let mut deepest_drive = f32::MAX;
     let mut walked_far = 0.0f32;
     let mut drove_far = 0.0f32;
+    // Köy ve hayvan aşaması: 100. saniyede en yakın köye; bir köylüden iş al ve teslim et; bir
+    // hayvanın yanına git, üç saniyede kaçmış olmalı.
+    let village_at = 60 * 100;
+    let mut village_report = String::from("köy aşaması çalışmadı");
+    let mut village_ok = false;
+    let mut flee: Option<(Entity, f32)> = None;
+    let mut fled = 0.0f32;
+    let mut animals_seen = 0usize;
     // İnşa aşaması: 115. saniyede malzeme, dört tarif, önüne bir çit; üç saniye çite yürü.
     let build_at = 60 * 115;
     let mut fence: Option<(Vec3, Vec3)> = None;
@@ -1198,9 +1235,61 @@ pub fn self_test() -> bool {
     for frame in 0..(60 * 180) {
         let driving_phase = frame >= 60 * 120;
         let walking_into_fence = (build_at..build_at + 180).contains(&frame);
+        // Hayvanın yanında dur, kovalamadan: kaçıyorsa kendi kaçıyor.
+        let standing = (village_at..village_at + 300).contains(&frame);
         let mut built_check: Option<(bool, String)> = None;
         run.frame(dt, |w, _s, dt, _i| {
             let Some(mut game) = w.remove_resource::<Game>() else { return };
+            let teleport = |w: &mut World, game: &Game, x: f32, z: f32| {
+                if let Some(mut t) = w.query_mut::<&mut Transform>().get_mut(game.player) {
+                    t.position = Vec3::new(x, height(x, z) + 1.6, z);
+                }
+                if let Some(mut v) = w.query_mut::<&mut Velocity>().get_mut(game.player) {
+                    v.linear = Vec3::ZERO;
+                }
+            };
+            if frame == village_at {
+                let near = (-6..=6).flat_map(|x| (-6..=6).map(move |z| (x, z))).filter_map(canli::village_at).min_by(|a, b| a.length().total_cmp(&b.length()));
+                if let Some(v) = near {
+                    teleport(w, &game, v.x, v.z + 6.0);
+                    village_report = format!("köy {:.0} m ötede", Vec2::new(v.x, v.z).length());
+                } else {
+                    village_report = "yakında köy yok".to_string();
+                }
+            }
+            if frame == village_at + 60 {
+                let me = focus(w, &game);
+                let nearest = w.query::<(&canli::Villager, &Transform)>().iter().map(|(v, t)| (*v, t.position)).min_by(|a, b| a.1.distance(me).total_cmp(&b.1.distance(me)));
+                if let Some((villager, at)) = nearest {
+                    teleport(w, &game, at.x + 1.5, at.z);
+                    sync_transforms(w);
+                    let q = canli::quest_of(villager.id);
+                    let talked = canli::talk(w, &mut game);
+                    let offered = game.quests.get(&villager.id) == Some(&1);
+                    let before = w.get::<Inventory>(game.player).map_or(0, |b| b.count(q.reward.0));
+                    give(w, &mut game, q.want.0, q.want.1);
+                    canli::talk(w, &mut game);
+                    let after = w.get::<Inventory>(game.player).map_or(0, |b| b.count(q.reward.0));
+                    let done = game.quests.get(&villager.id) == Some(&2);
+                    village_ok = talked && offered && done && after == before + q.reward.1;
+                    village_report = format!("{village_report}; {} {} {} istedi, {} {} verdi ({})", villager.name, q.want.1, q.want.0, q.reward.1, q.reward.0, if village_ok { "tamam" } else { "olmadı" });
+                }
+            }
+            if frame == village_at + 120 {
+                let me = focus(w, &game);
+                animals_seen = w.query::<&canli::Animal>().iter().count();
+                let nearest = w.query::<(Entity, &canli::Animal, &Transform)>().iter().map(|(e, _, t)| (e, t.position)).min_by(|a, b| a.1.distance(me).total_cmp(&b.1.distance(me)));
+                if let Some((animal, at)) = nearest {
+                    teleport(w, &game, at.x + 2.5, at.z);
+                    flee = Some((animal, 2.5));
+                }
+            }
+            if frame == village_at + 300 {
+                if let Some((animal, d0)) = flee {
+                    let me = focus(w, &game);
+                    fled = w.get::<Transform>(animal).map_or(0.0, |t| Vec2::new(t.position.x - me.x, t.position.z - me.z).length() - d0);
+                }
+            }
             if frame == build_at {
                 let before = w.get::<Inventory>(game.player).cloned().unwrap_or_default();
                 give(w, &mut game, "odun", 30);
@@ -1218,21 +1307,29 @@ pub fn self_test() -> bool {
             if frame == build_at + 180 {
                 let me = focus(w, &game);
                 let (forward, right) = camera_axes(&game);
+                let player = game.player;
+                let held = |w: &World| insa::Build::ALL.map(|k| w.get::<Inventory>(player).map_or(0, |b| b.count(k.item())));
+                let before = held(w);
                 let fire = insa::place_structure(w, &mut game, insa::Build::Fire, me + right * 4.0, 0.0);
                 let hut = insa::place_structure(w, &mut game, insa::Build::Hut, me - forward * 7.0 - right * 3.0, 0.4);
                 let bridge = insa::place_structure(w, &mut game, insa::Build::Bridge, me - right * 4.0, 1.2);
                 let structures = w.query::<&insa::Structure>().iter().count();
-                let lights = w.query::<(&insa::FireLight, &PointLight)>().iter().count();
-                let bag = w.get::<Inventory>(game.player).cloned().unwrap_or_default();
-                let left = insa::Build::ALL.iter().map(|k| bag.count(k.item())).collect::<Vec<_>>();
+                // Oyuncunun ateşinin ışığı (köylerin ateşleri kayda girmiyor, `Structure` taşımıyor).
+                let lights = w
+                    .query::<(&insa::FireLight, &gizmo::core::component::Parent)>()
+                    .iter()
+                    .filter(|(_, parent)| w.get::<insa::Structure>(parent.0).is_some())
+                    .count();
+                let after = held(w);
+                let spent: Vec<u32> = before.iter().zip(&after).map(|(b, a)| b - a).collect();
                 // Kayıt: yapılar aynen geri geliyor.
                 let saved = insa::saved(w);
                 let mut fresh = World::new();
                 insa::restore(&mut fresh, &saved, false);
                 let back = insa::saved(&fresh);
                 let same = back.len() == saved.len() && back.iter().zip(&saved).all(|(a, b)| a.0 == b.0 && (a.1 - b.1).abs() < 1e-4 && (a.3 - b.3).abs() < 1e-4);
-                let ok = fire && hut && bridge && structures == 4 && lights == 1 && left == [0, 1, 0, 0] && same;
-                built_check = Some((ok, format!("4 yapı kuruldu {}, ateş ışığı {lights}, elde kalan {left:?}, kayıttan geri {}", structures == 4, same)));
+                let ok = fire && hut && bridge && structures == 4 && lights == 1 && spent == [1, 0, 1, 1] && same;
+                built_check = Some((ok, format!("4 yapı kuruldu {}, ateş ışığı {lights}, harcanan {spent:?}, kayıttan geri {}", structures == 4, same)));
             }
             if driving_phase && game.driving.is_none() {
                 // Arabaya: en yakını yanına getir, bin.
@@ -1242,9 +1339,19 @@ pub fn self_test() -> bool {
                     t.position = Vec3::new(me.x + 2.0, height(me.x + 2.0, me.z) + 1.4, me.z);
                     t.rotation = Quat::IDENTITY;
                 }
+                if let Some(mut v) = w.query_mut::<&mut Velocity>().get_mut(car) {
+                    v.linear = Vec3::ZERO;
+                    v.angular = Vec3::ZERO;
+                }
                 enter_or_leave(w, &mut game);
             }
-            let controls = if walking_into_fence { Controls { my: 1.0, ..Default::default() } } else { autopilot(w, &game, driving_phase) };
+            let controls = if walking_into_fence {
+                Controls { my: 1.0, ..Default::default() }
+            } else if standing {
+                Controls::default()
+            } else {
+                autopilot(w, &game, driving_phase)
+            };
             step(w, &mut game, dt, controls);
             w.insert_resource(game);
         });
@@ -1277,6 +1384,11 @@ pub fn self_test() -> bool {
     let game = run.world.get_resource::<Game>().expect("oyun");
     let bag = run.world.get::<Inventory>(game.player).cloned().unwrap_or_default();
     let crystals_taken = game.collected.iter().filter(|id| id.2 == 0).count() as u32;
+    // Başlangıçta bırakılan, hiç sürülmeyen arabalar: hücreleri silinince düşüyorlardı (6,9 km);
+    // şimdi hücre yokken bekletiliyorlar, yerlerinde.
+    let parked_ok = game.cars[1..].iter().all(|&car| {
+        run.world.get::<Transform>(car).is_some_and(|t| t.position.y > height(t.position.x, t.position.z) - 0.5)
+    });
     let (wood, stone) = (bag.count("odun"), bag.count("tas"));
     let ok = deepest_walk > -0.5
         && deepest_drive > -0.5
@@ -1286,9 +1398,14 @@ pub fn self_test() -> bool {
         && game.unloads > 0
         && game.driving.is_some()
         && build_ok
+        && village_ok
+        && parked_ok
+        && animals_seen > 0
+        && fled > 3.0
         // Çit 2,6 m önde, 0,1 m kalın: yüzü 2,5 m'de. Kapsülün yarıçapı 0,35 ama yamaçta biraz daha
         // yaklaşıyor (ölçülen 2,29 m); 2,5 m'yi geçen çitin içinden geçmiştir. Çitsiz üç saniye 18 m.
         && pushed_through < 2.5;
+    println!("dunya --test: canlılar: {village_report}; {animals_seen} hayvan, en yakını üç saniyede {fled:.1} m kaçtı; bırakılan arabalar yerinde: {parked_ok}");
     println!("dunya --test: inşa: {build_report}; çite yürüyüş en çok {pushed_through:.2} m (çit 2,6 m önde)");
     println!(
         "dunya --test: envanterde {} kristal (dünyadan {crystals_taken} alındı), {wood} odun, {stone} taş; hücre {} yüklendi, {} silindi; yürüyüşte başlangıçtan {:.0} m, arabayla {:.0} m; zeminin altına en çok yayada {:.2} m, arabada {:.2} m → {}",
