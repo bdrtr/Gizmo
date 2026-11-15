@@ -918,6 +918,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A CCD body bounces.** An island holding a CCD body is solved on the split-impulse path (TGS-soft lets a
+  1753 m/s bullet through a 0.59 m wall), and that path solved the speculative contacts CCD makes without
+  restitution: the body arrived touching at almost no speed and the next step's real contact had nothing to bounce
+  with — an elastic hit landed as a thud (a Newton's cradle with CCD on: 2.475 / 2.475 m/s instead of 0 / 4.95), a
+  bullet died at any wall. Each speculative contact's closing speed is now kept from before the solve, and every
+  one that meets within the step gets its normal speed set to `−e·v₀` — Box2D v3's restitution pass, with the change
+  handed back and added **after** position integration (a CCD contact spans the whole sweep; reversed in the solve,
+  a 1200 m/s bullet turned 4.7 m short of the wall), kept out of the warm start, and on a contact already touching
+  only when the bounce clears the threshold (`golf`'s ball bounced at every terrain crease otherwise). It only
+  separates, so it cannot tunnel: `prop_ccd_never_tunnels` passes 5000 cases, and the `headless_stress_test` hash
+  is unchanged. `ccd_makes_a_bounce_a_thud` — the one test in the tree waiting for this — is un-ignored and green;
+  new `ccd_bullet_bounces_off_a_wall`. Three tests had asserted the old behaviour and were made inelastic or
+  rewritten to the bounce.
+- `gamepad_virtual_device` now says why it cannot run when the virtual pad's event node is unreadable (a
+  `/dev/uinput` ACL without the `input` group) and skips, instead of failing on "face button" with nothing pressed —
+  a permission that read as a mapping bug.
+
 - **A UI node inside a hidden panel is hidden** (`gizmo_ui::Node::visible`). A `Display::None` subtree is not laid
   out, so its boxes kept the window's top-left corner — and their labels still drew there: `dunya`'s closed
   inventory leaked its title into the corner of every frame. The layout pass now marks a node invisible when it or

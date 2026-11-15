@@ -54,6 +54,15 @@ fn add_bullet(world: &mut PhysicsWorld, id: u32, pos: Vec3, vel: Vec3, radius: f
     );
 }
 
+/// Makes every collider in `world` inelastic, for a test about where a body **stops**: since
+/// 2026-11-15 a CCD body bounces like any other (restitution 0.3 by default), where it used to
+/// stop dead at the wall whatever its material.
+fn inelastic(world: &mut PhysicsWorld) {
+    for c in &mut world.colliders {
+        c.material.restitution = 0.0;
+    }
+}
+
 /// Head-on impacts across a wide speed range never tunnel and never freeze short.
 #[test]
 fn fast_bullet_never_tunnels_thin_wall() {
@@ -65,6 +74,7 @@ fn fast_bullet_never_tunnels_thin_wall() {
     for &speed in &[200.0_f32, 600.0, 1200.0, 3000.0] {
         let mut world = wall_world(half);
         add_bullet(&mut world, 1, Vec3::new(-5.0, 0.0, 0.0), Vec3::new(speed, 0.0, 0.0), radius);
+        inelastic(&mut world);
 
         let mut max_x = f32::MIN;
         for _ in 0..240 {
@@ -118,7 +128,9 @@ fn ccd_does_not_hold_separating_body() {
     assert!(x < -100.0, "separating CCD body was wrongly held near the wall: x = {x}");
 }
 
-/// Two CCD bodies closing head-on at high speed meet but never pass through.
+/// Two CCD bodies closing head-on at high speed meet but never pass through — and bounce: the
+/// collision lands inside one substep, so meeting is read off the velocities (each turned
+/// round, at about the restitution's 0.3 of its speed) rather than off a per-frame gap.
 #[test]
 fn two_fast_ccd_bodies_do_not_pass_through() {
     let mut world = PhysicsWorld::new();
@@ -126,17 +138,17 @@ fn two_fast_ccd_bodies_do_not_pass_through() {
     add_bullet(&mut world, 1, Vec3::new(-5.0, 0.0, 0.0), Vec3::new(400.0, 0.0, 0.0), 0.2); // index 0
     add_bullet(&mut world, 2, Vec3::new(5.0, 0.0, 0.0), Vec3::new(-400.0, 0.0, 0.0), 0.2); // index 1
 
-    let mut min_gap = f32::MAX;
     for _ in 0..240 {
         let _ = world.step(DT);
         let xa = world.transforms[0].position.x;
         let xb = world.transforms[1].position.x;
         // A starts left of B and must never swap sides.
         assert!(xa <= xb + 0.05, "bodies passed through each other: xa={xa} xb={xb}");
-        min_gap = min_gap.min(xb - xa);
     }
-    // They must actually have met (centres within ~2·r + skin), not stopped early.
-    assert!(min_gap < 0.6, "bodies never met — min centre gap {min_gap}");
+    // They met and bounced apart (not stopped early, not passed through).
+    let (va, vb) = (world.velocities[0].linear.x, world.velocities[1].linear.x);
+    assert!(va < -60.0 && vb > 60.0, "they never met and bounced: va {va}, vb {vb}");
+    assert!(va > -200.0 && vb < 200.0, "a bounce faster than the restitution allows: va {va}, vb {vb}");
 }
 
 /// An off-centre, angled high-speed impact still cannot tunnel (the normal comes

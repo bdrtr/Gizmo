@@ -200,8 +200,12 @@ fn the_cradle_keeps_its_balls_apart() {
 /// was a remembered sentence and is now a recorded counterexample. The other route —
 /// restitution on speculative contacts in the split-impulse path — is untouched by this
 /// experiment and remains the open candidate.
+/// **Fixed 2026-11-15** by the other route: the split-impulse path keeps each speculative
+/// contact's closing speed from before the solve and, after the velocity iterations, sets the
+/// normal speed of every one the solve engaged to `−e·v₀` (Box2D v3's restitution pass). It only
+/// ever separates a pair, so `prop_ccd_never_tunnels` — the 1753 m/s bullet included — still
+/// passes. The name keeps the history; the test now asserts the bounce.
 #[test]
-#[ignore = "documents the CCD-loses-restitution limitation; un-ignore when it is fixed"]
 fn ccd_makes_a_bounce_a_thud() {
     let v = 5.0f32;
     let mut world = PhysicsWorld::new();

@@ -3140,7 +3140,7 @@ the *slope* gate is the one that guards it.
   it (2026-08-19).** `cargo test --workspace --no-fail-fast -- --ignored`: **65 pass, 3 fail**, and
   all three failures are deliberate. `ccd_makes_a_bounce_a_thud` carries
   *"documents the CCD-loses-restitution limitation; un-ignore when it is fixed"* and still
-  documents it; `q1b_warm_start_at_the_acceptance_horizon` is a measurement whose own doc explains
+  documents it (fixed and un-ignored 2026-11-15 — see the solver-gate entry below); `q1b_warm_start_at_the_acceptance_horizon` is a measurement whose own doc explains
   the ringing it prints; `negative_control_starved_pile_must_fail_the_gate` is marked
   *"retired — its premise was refuted"*. Exactly one test in the tree promises to be un-ignored
   when something is fixed, and that something is not fixed. So there is no second
@@ -3186,6 +3186,26 @@ the *slope* gate is the one that guards it.
   The general point: an ignored test that documents a limitation is worth more than a comment,
   because it can be *un-ignored experimentally*. That is what turned this from folklore into a
   number in an afternoon.
+
+  **Closed 2026-11-15 by that other route.** The split-impulse path keeps each speculative
+  contact's closing speed from before the solve and, for every one that meets within the step
+  (`gap ≤ |v₀|·dt`), sets the normal speed to `−e·v₀` — Box2D v3's restitution pass, with one
+  difference a CCD contact forces: the change is handed back and added **after** position
+  integration (`constraint_solve_step` returns it, `apply_bounces` adds it). A CCD speculative
+  contact spans the whole sweep, and a velocity reversed inside the solve turned a 1200 m/s bullet
+  4.7 m short of the wall; correcting the position through the pseudo-velocity channel instead was
+  tried and is wrong too — that correction lands before integration, and the CCD sweep from there
+  stopped the bullet on the wall's far side. `ccd_makes_a_bounce_a_thud` is un-ignored and green,
+  `prop_ccd_never_tunnels` passes 5000 cases, and the `headless_stress_test` hash is unchanged (no
+  CCD there). Three tests had asserted the bug — a CCD bullet *stopping* at a wall of default
+  material (restitution 0.3, combine `Max`) — and were made inelastic or rewritten to the bounce.
+  One more rule, found by `golf --test` (28 strokes, a hole never finished): a contact already
+  touching (`gap ≤ slop`) bounces only when the bounce itself clears the restitution threshold
+  (`e·|v₀|`). A CCD golf ball rolling over a trimesh meets a fresh contact at every crease at 1–2
+  m/s, and bouncing each at e = 0.1 — a micro-bounce — sent it into a different basin of the course
+  every time. With the rule: 13 strokes (17 with CCD off), and a cradle's touching ball at 5 m/s,
+  e = 1, still bounces, as it must on this path: the speculative contact has already taken its
+  approach speed, so the next step's real contact has nothing left to bounce with.
 - **"No production caller and no test" is a defect class, not a tidiness question.** The
   frame-rate-dependent force channel (§3) was found by writing a measurement for something else,
   and it had survived because nothing in the workspace wrote to `force_accumulator`. Sweeping the

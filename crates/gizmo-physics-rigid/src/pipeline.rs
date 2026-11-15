@@ -724,7 +724,10 @@ current_cache.insert(pair, (false, Some(cached)));
     /// Solve collision constraints (via island-parallel PGS) and explicit
     /// joints (hinges, springs, …).
     #[tracing::instrument(skip_all, name = "constraint_solve")]
-    pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, dt: f32) {
+    /// Solves the contacts and joints of the substep. Returns the bounces of speculative contacts
+    /// (`solve_contacts`' `bounces`), which the step adds after integrating positions.
+    pub(crate) fn constraint_solve_step(&mut self, manifolds: Vec<ContactManifold>, dt: f32) -> Vec<(BodyHandle, Vec3, Vec3)> {
+        let mut bounces: Vec<(BodyHandle, Vec3, Vec3)> = Vec::new();
         let entity_map = &self.entity_index_map;
 
         // Dynamic bodies the island sleep rule got to decide about this substep. Declared out
@@ -757,6 +760,7 @@ current_cache.insert(pair, (false, Some(cached)));
                 Vec<BodyHandle>,                  // entities to wake up
                 Vec<gizmo_physics_core::FractureEvent>,
                 Vec<(BodyHandle, Vec3, Vec3)>,    // split-impulse position corrections (Δlin, Δscaled-axis)
+                Vec<(BodyHandle, Vec3, Vec3)>,    // speculative bounces, for after position integration
                 crate::solver::SolveStats,        // adaptive sweep count + support depth
                 bool,                             // every dynamic member is eligible to sleep
             );
@@ -795,6 +799,7 @@ current_cache.insert(pair, (false, Some(cached)));
                         return (
                             Vec::new(),
                             island_manifolds,
+                            Vec::new(),
                             Vec::new(),
                             Vec::new(),
                             Vec::new(),
@@ -842,15 +847,22 @@ current_cache.insert(pair, (false, Some(cached)));
                             const { std::cell::RefCell::new(Vec::new()) };
                         static POS_CACHE: std::cell::RefCell<Vec<(Vec3, Vec3)>> =
                             const { std::cell::RefCell::new(Vec::new()) };
+                        static BOUNCE_CACHE: std::cell::RefCell<Vec<(Vec3, Vec3)>> =
+                            const { std::cell::RefCell::new(Vec::new()) };
                     }
 
                     let mut velocity_updates = Vec::with_capacity(island_indices.len());
                     let mut position_updates = Vec::with_capacity(island_indices.len());
+                    let mut bounce_updates = Vec::new();
 
                     let solve_stats = VEL_CACHE.with(|cache| {
-                        POS_CACHE.with(|pos_cache| {
+                        POS_CACHE.with(|pos_cache| { BOUNCE_CACHE.with(|bounce_cache| {
                             let mut buf = cache.borrow_mut();
                             let mut pos_buf = pos_cache.borrow_mut();
+                            let mut bounce_buf = bounce_cache.borrow_mut();
+                            if bounce_buf.len() < velocities.len() {
+                                bounce_buf.resize(velocities.len(), (Vec3::ZERO, Vec3::ZERO));
+                            }
 
                             // Grow to fit the full velocity array if needed.
                             if buf.len() < velocities.len() {
@@ -876,6 +888,7 @@ current_cache.insert(pair, (false, Some(cached)));
                                 transforms,
                                 &mut buf,
                                 &mut pos_buf,
+                                &mut bounce_buf,
                                 entity_map,
                                 &island_body_vec,
                                 dt,
@@ -889,10 +902,14 @@ current_cache.insert(pair, (false, Some(cached)));
                                     if dlin != Vec3::ZERO || dang != Vec3::ZERO {
                                         position_updates.push((entities_arr[idx], dlin, dang));
                                     }
+                                    let (blin, bang) = bounce_buf[idx];
+                                    if blin != Vec3::ZERO || bang != Vec3::ZERO {
+                                        bounce_updates.push((entities_arr[idx], blin, bang));
+                                    }
                                 }
                             }
                             stats
-                        })
+                        }) })
                     });
 
                     // Fracture detection. Its own function: it is a question about the solved
@@ -921,6 +938,7 @@ current_cache.insert(pair, (false, Some(cached)));
                         wake_updates,
                         fractures,
                         position_updates,
+                        bounce_updates,
                         solve_stats,
                         island_can_sleep,
                     )
@@ -944,10 +962,12 @@ current_cache.insert(pair, (false, Some(cached)));
                 wake_ups,
                 local_fractures,
                 pos_corrections,
+                island_bounces,
                 stats,
                 island_can_sleep,
             ) in results
             {
+                bounces.extend(island_bounces);
                 // Captured before `island_vels` is consumed below; empty unless the whole island
                 // qualifies, so this allocates only on the substep a pile actually settles.
                 let sleepers: Vec<BodyHandle> = if island_can_sleep {
@@ -1181,6 +1201,23 @@ current_cache.insert(pair, (false, Some(cached)));
         // Sync pre-velocities with the solver-corrected velocities so that Heun's method
         // integrates the corrected state without uncorrected gravity/force drift.
         for vel in &mut self.velocities {
+            vel.pre_linear = vel.linear;
+            vel.pre_angular = vel.angular;
+        }
+        bounces
+    }
+
+    /// Adds the speculative contacts' bounces (from [`constraint_solve_step`](Self::constraint_solve_step))
+    /// once positions are integrated: the bodies have reached each other, and leave from there.
+    pub(crate) fn apply_bounces(&mut self, bounces: &[(BodyHandle, Vec3, Vec3)]) {
+        for &(entity, linear, angular) in bounces {
+            let Some(&idx) = self.entity_index_map.get(&entity.id()) else { continue };
+            if self.rigid_bodies[idx].is_sleeping || !self.rigid_bodies[idx].is_dynamic() {
+                continue;
+            }
+            let vel = &mut self.velocities[idx];
+            vel.linear += linear;
+            vel.angular += angular;
             vel.pre_linear = vel.linear;
             vel.pre_angular = vel.angular;
         }

@@ -536,6 +536,10 @@ impl ConstraintSolver {
         transforms: &[Transform],
         velocities: &mut [Velocity],
         pos_corrections: &mut [(Vec3, Vec3)],
+        // The bounces of speculative contacts, `(Δlinear, Δangular)` per body, for the caller to
+        // add **after** it integrates positions — see the restitution pass. Same indexing and
+        // same island-only clearing as `pos_corrections`.
+        bounces: &mut [(Vec3, Vec3)],
         entity_index_map: &crate::world::EntityIndexMap,
         // Distinct GLOBAL body indices in this island. The shared `pos_corrections`
         // buffer is thread-local-reused across islands, so we clear only THIS island's
@@ -547,6 +551,7 @@ impl ConstraintSolver {
         // tarafından adalar arası yeniden kullanılıyor; full-world sıfırlama O(n_islands×n_bodies)'ti).
         for &i in island_bodies {
             pos_corrections[i] = (Vec3::ZERO, Vec3::ZERO);
+            bounces[i] = (Vec3::ZERO, Vec3::ZERO);
         }
         if manifolds.is_empty() {
             return SolveStats::default();
@@ -648,8 +653,8 @@ impl ConstraintSolver {
         //
         // Yani takas gerçek ve kapı kalıyor. Fark şu: itiraz artık `ccd.proptest-regressions`'a
         // yazılmış bir karşı örnek (sevkiyattaki çözücü onu geçiyor, dolayısıyla bedava ek
-        // kapsam), hatırlanan bir cümle değil. Açık kalan öbür yol, split-impulse yolunda
-        // speculative temaslara restitution vermek — bu deney onun hakkında bir şey söylemiyor.
+        // kapsam), hatırlanan bir cümle değil. Öbür yol — split-impulse yolunda speculative
+        // temaslara restitution — 2026-11-15'te açıldı: aşağıdaki "Restitution pass".
         let has_ccd = manifolds.iter().any(|m| {
             [m.entity_a, m.entity_b].iter().any(|e| {
                 entity_index_map
@@ -698,6 +703,43 @@ impl ConstraintSolver {
         // Pozisyon düzeltmesi asıl velocity'den ayrılır, böylece resting
         // contact'larda jitter engellenir ve stacking stabilitesi artar.
         let mut pseudo_vel: Vec<(Vec3, Vec3)> = vec![(Vec3::ZERO, Vec3::ZERO); velocities.len()];
+
+        // ── Restitution of speculative contacts: the closing speed before the solve ──────────
+        // A speculative contact (a gap still open, `penetration < 0`) is solved without
+        // restitution below — it is a limit that closes the gap, and a bounce mixed into it upsets
+        // the bias (`e` is zero for it in the loop). So the body arrived touching at almost no
+        // speed and the next step's real contact was under the restitution threshold: with CCD on
+        // — which puts the island on this path — an elastic hit was a thud (a Newton's cradle
+        // stopped dead). The bounce is given afterwards instead, as Box2D v3 does: the closing
+        // speed here, before warm-starting, is kept for every speculative contact of a bouncy
+        // pair, and once the velocity iterations are done each one the solve engaged (it pushed:
+        // the bodies will meet this step) has its normal speed set to `−e·v₀`. That only ever
+        // separates the pair, so it cannot carry a body through anything — the objection the
+        // other route (TGS for CCD islands) met in `prop_ccd_never_tunnels`.
+        let mut spec_off: Vec<usize> = Vec::with_capacity(manifolds.len() + 1);
+        spec_off.push(0);
+        for m in manifolds.iter() {
+            spec_off.push(spec_off[spec_off.len() - 1] + m.contacts.len());
+        }
+        let mut spec_vn0 = vec![f32::NAN; spec_off[manifolds.len()]];
+        for (mid, m) in manifolds.iter().enumerate() {
+            if m.restitution <= 0.0 {
+                continue;
+            }
+            let (Some(&idx_a), Some(&idx_b)) = (entity_index_map.get(&m.entity_a.id()), entity_index_map.get(&m.entity_b.id())) else {
+                continue;
+            };
+            let com_a = transforms[idx_a].position + transforms[idx_a].rotation.mul_vec3(rigid_bodies[idx_a].center_of_mass);
+            let com_b = transforms[idx_b].position + transforms[idx_b].rotation.mul_vec3(rigid_bodies[idx_b].center_of_mass);
+            for (cid, c) in m.contacts.iter().enumerate() {
+                if c.penetration >= 0.0 {
+                    continue;
+                }
+                let va = velocities[idx_a].linear + velocities[idx_a].angular.cross(c.point - com_a);
+                let vb = velocities[idx_b].linear + velocities[idx_b].angular.cross(c.point - com_b);
+                spec_vn0[spec_off[mid] + cid] = (vb - va).dot(c.normal);
+            }
+        }
 
         // ── Warm-starting ────────────────────────────────────────────────────
         for mid in 0..manifolds.len() {
@@ -963,6 +1005,99 @@ impl ConstraintSolver {
                     }
                 }
             }
+        }
+
+        // ── Restitution pass (speculative contacts — see where `spec_vn0` is filled) ─────────
+        //
+        // The bounce is handed back for after position integration (`bounces`), not left in the
+        // velocities: a CCD contact spans the whole sweep — a bullet 4.7 m short of a wall at
+        // 1200 m/s is speculative — and a velocity reversed now would send the body back from
+        // where it stands without reaching the wall (measured: it turned at x = −11 before a wall
+        // at 0). Kept out of this step's velocity, the body travels at the speed the speculative
+        // contact allowed and ends the step touching; the bounce is added then, and it leaves
+        // from the wall. (Putting the position right through the pseudo-velocity channel instead
+        // was tried: that correction lands before integration, and the CCD sweep from there
+        // stopped the bullet on the wall's far side.)
+        let speculative = spec_vn0.iter().any(|v| !v.is_nan());
+        let before: Vec<(usize, Velocity)> =
+            if speculative { island_bodies.iter().map(|&i| (i, velocities[i])).collect() } else { Vec::new() };
+        for mid in 0..manifolds.len() {
+            if !speculative {
+                break;
+            }
+            let e = manifolds[mid].restitution;
+            if e <= 0.0 {
+                continue;
+            }
+            let (Some(&idx_a), Some(&idx_b)) =
+                (entity_index_map.get(&manifolds[mid].entity_a.id()), entity_index_map.get(&manifolds[mid].entity_b.id()))
+            else {
+                continue;
+            };
+            let (dyn_a, dyn_b) = (rigid_bodies[idx_a].is_dynamic(), rigid_bodies[idx_b].is_dynamic());
+            if !dyn_a && !dyn_b {
+                continue;
+            }
+            let inv_m_a = rigid_bodies[idx_a].inv_mass();
+            let inv_m_b = rigid_bodies[idx_b].inv_mass();
+            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+            let com_a = transforms[idx_a].position + transforms[idx_a].rotation.mul_vec3(rigid_bodies[idx_a].center_of_mass);
+            let com_b = transforms[idx_b].position + transforms[idx_b].rotation.mul_vec3(rigid_bodies[idx_b].center_of_mass);
+            for cid in 0..manifolds[mid].contacts.len() {
+                let vn0 = spec_vn0[spec_off[mid] + cid];
+                // An impact meeting within this step at the speed it had (`gap ≤ |v₀|·dt`),
+                // faster than the threshold. Asking whether the solve pushed is not that question
+                // — a warm-started impulse is positive before anything closes, and the bullet
+                // turned 4.7 m short of the wall on it.
+                //
+                // A contact already touching (`gap ≤ slop`) bounces only when the bounce itself
+                // clears the threshold (`e·|v₀|`): a CCD golf ball rolling over the terrain's
+                // facets meets a fresh one at every crease at 1–2 m/s, and bouncing each at
+                // e = 0.1 — 0.1–0.2 m/s, the micro-bounce the threshold exists to suppress — sent
+                // it into another basin of the course every time (`golf --test`: 28 strokes and a
+                // hole it never finished; 17 with CCD off, 13 with this rule). A cradle's touching
+                // ball at 5 m/s and e = 1 does clear it, and has to bounce here: the speculative
+                // contact has already taken its approach speed, so the real contact next step
+                // has nothing left to bounce with.
+                let gap = -manifolds[mid].contacts[cid].penetration;
+                let impact = !vn0.is_nan()
+                    && -vn0 > self.restitution_velocity_threshold
+                    && gap <= -vn0 * dt
+                    && (gap > self.slop || e * -vn0 > self.restitution_velocity_threshold);
+                if !impact {
+                    continue;
+                }
+                let acc_n = manifolds[mid].contacts[cid].normal_impulse;
+                let c = &manifolds[mid].contacts[cid];
+                let (normal, r_a, r_b) = (c.normal, c.point - com_a, c.point - com_b);
+                let va = velocities[idx_a].linear + velocities[idx_a].angular.cross(r_a);
+                let vb = velocities[idx_b].linear + velocities[idx_b].angular.cross(r_b);
+                let vn = (vb - va).dot(normal);
+                let (rna, rnb) = (r_a.cross(normal), r_b.cross(normal));
+                let k_n = inv_m_a + inv_m_b + inv_i_a.mul_vec3(rna).dot(rna) + inv_i_b.mul_vec3(rnb).dot(rnb);
+                if k_n < 1e-8 {
+                    continue;
+                }
+                // The bounce goes into the velocity only, never into the contact's accumulated
+                // impulse: that is the warm start of the next step, and a bounce kept there was
+                // pushed again at the start of every step after — a golf ball rolling over the
+                // terrain's facets hopped 8 cm at each crease and ran off the course.
+                let new_acc = (acc_n - (vn + e * vn0) / k_n).max(0.0);
+                let imp_n = normal * (new_acc - acc_n);
+                if dyn_a {
+                    velocities[idx_a].linear -= imp_n * inv_m_a;
+                    velocities[idx_a].angular -= inv_i_a.mul_vec3(r_a.cross(imp_n));
+                }
+                if dyn_b {
+                    velocities[idx_b].linear += imp_n * inv_m_b;
+                    velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_n));
+                }
+            }
+        }
+        for (i, kept) in before {
+            bounces[i] = (velocities[i].linear - kept.linear, velocities[i].angular - kept.angular);
+            velocities[i] = kept;
         }
 
         // ── Split Impulse: Pozisyon Düzeltme Pass ────────────────────────────

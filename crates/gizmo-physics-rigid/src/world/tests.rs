@@ -161,35 +161,55 @@ fn test_high_stack_stability() {
     );
 }
 
-#[test]
-fn test_ccd_tunneling_prevention() {
+/// A fast bullet against a thin wall, the CCD bullet's bounce in [`ccd_bullet_bounces_off_a_wall`]
+/// below: this one is inelastic (restitution 0 on both), so it must come to rest at the wall's face.
+fn ccd_bullet_world(restitution: Option<f32>) -> PhysicsWorld {
+    let material = |c: Collider| match restitution {
+        Some(e) => c.with_material(gizmo_physics_core::PhysicsMaterial { restitution: e, ..Default::default() }),
+        None => c,
+    };
     let mut world = PhysicsWorld::new();
-    // Gravity kapalı ki tam düz uçsun.
     world.integrator.gravity = Vec3::ZERO;
-
-    // İnce statik duvar: kalınlık 0.2 m, x=0 merkezli → ön yüz x=-0.1, arka yüz x=+0.1.
     let mut wall_rb = RigidBody::new_static();
     wall_rb.wake_up();
-    world.add_body(
-        BodyHandle::from_id(0),
-        wall_rb,
-        Transform::new(Vec3::ZERO),
-        Velocity::default(),
-        Collider::box_collider(Vec3::new(0.1, 5.0, 5.0)),
-    );
-
-    // Mermi (CCD açık): r=0.2, saniyede 1200 m (mach ~3.5). Bir karede (1/60 s)
-    // 20 m yol alır; duvar 0.2 m → CCD olmadan kesin tünelleme olurdu.
+    world.add_body(BodyHandle::from_id(0), wall_rb, Transform::new(Vec3::ZERO), Velocity::default(), material(Collider::box_collider(Vec3::new(0.1, 5.0, 5.0))));
     let mut bullet_rb = RigidBody::new(1.0, false);
     bullet_rb.ccd_enabled = true;
     bullet_rb.wake_up();
-    world.add_body(
-        BodyHandle::from_id(1),
-        bullet_rb,
-        Transform::new(Vec3::new(-5.0, 0.0, 0.0)),
-        Velocity::new(Vec3::new(1200.0, 0.0, 0.0)),
-        Collider::sphere(0.2),
-    );
+    world.add_body(BodyHandle::from_id(1), bullet_rb, Transform::new(Vec3::new(-5.0, 0.0, 0.0)), Velocity::new(Vec3::new(1200.0, 0.0, 0.0)), material(Collider::sphere(0.2)));
+    world
+}
+
+/// **A CCD bullet bounces like any body.** The split-impulse path that CCD islands take solved
+/// the speculative contact that stops a bullet without restitution, so a bullet died at the wall
+/// whatever its material — fixed 2026-11-15 (the speculative restitution pass). With the default
+/// materials (restitution 0.3) it now flies back at about 0.3 × 1200 m/s, and still never passes
+/// the wall.
+#[test]
+fn ccd_bullet_bounces_off_a_wall() {
+    let mut world = ccd_bullet_world(None);
+    // One frame: the bullet covers the 4.7 m to the wall (x = −0.3 at contact) in 3.9 ms of the
+    // frame's 16.7, bounces at 0.3 × 1200 m/s, and spends the rest going back — about 4.6 m,
+    // ending near x = −4.9 (−4.8 at this world's substeps). Turning where it stood instead of at
+    // the wall would end it near −11, which is what a velocity reversed at the start of the step
+    // did.
+    let _ = world.step(1.0 / 60.0);
+    let (x, v) = (world.transforms[1].position.x, world.velocities[1].linear.x);
+    assert!((-1200.0 * 0.4..-1200.0 * 0.2).contains(&v), "bounced at {v} m/s, expected about −360");
+    assert!((-5.6..-4.2).contains(&x), "after the bounce frame at x = {x}: it did not turn at the wall");
+    let mut max_x = x;
+    for _ in 0..30 {
+        let _ = world.step(1.0 / 60.0);
+        max_x = max_x.max(world.transforms[1].position.x);
+    }
+    assert!(max_x < 0.0, "TUNNELING! peak x = {max_x}");
+    assert!(world.velocities[1].linear.x < -300.0, "it keeps flying back");
+}
+
+#[test]
+fn test_ccd_tunneling_prevention() {
+    // Inelastic: the bullet must stop at the wall (the bounce has its own test above).
+    let mut world = ccd_bullet_world(Some(0.0));
 
     // Birden çok kare simüle et: speculative CCD merminin yolunu o kareye izin
     // verilen boşlukla SINIRLAR; mermi duvara varır, ertesi karede tam durur.

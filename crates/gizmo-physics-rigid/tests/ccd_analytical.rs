@@ -44,12 +44,17 @@ fn sticky() -> PhysicsMaterial {
 }
 
 /// x=cx merkezli, yarı-kalınlığı half_thick olan statik duvar (ön yüz x=cx-half_thick).
+///
+/// Yapışkan (`sticky`), mermiler gibi: bu dosya cismin NEREDE DURDUĞUNU soruyor. Varsayılan
+/// malzemenin sekme kipi `Max` ve `Min`'e üstün geliyor, yani yapışkan bir mermi varsayılan bir
+/// duvardan 0,3 ile seker — 2026-11-15'ten beri CCD'li bir cisim de (öncesinde CCD sekmeyi
+/// siliyordu ve bu testler o hatanın üstünde duruyordu).
 fn wall(world: &mut World, cx: f32, half_thick: f32) -> u32 {
     let e = world.spawn();
     world.add_component(e, Transform::new(Vec3::new(cx, 0.0, 0.0)));
     world.add_component(e, RigidBody::new_static());
     world.add_component(e, Velocity::default());
-    world.add_component(e, Collider::box_collider(Vec3::new(half_thick, 5.0, 5.0)));
+    world.add_component(e, Collider::box_collider(Vec3::new(half_thick, 5.0, 5.0)).with_material(sticky()));
     e.id()
 }
 

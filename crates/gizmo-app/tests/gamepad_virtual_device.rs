@@ -11,8 +11,10 @@
 //! sequence of inputs into it, and asserts on what the engine ends up believing.
 //!
 //! It is `#[ignore]`d, because it needs three things CI does not have: `/dev/uinput` writable by
-//! the test user (a udev ACL, or the `input` group), Python with `python-evdev` installed, and a
-//! session where creating an input device is allowed. Run it by hand:
+//! the test user (a udev ACL, or the `input` group) **and the event nodes readable** (the `input`
+//! group — an ACL on `/dev/uinput` alone creates a pad the engine sees connect and never move;
+//! the test says so and skips), Python with `python-evdev` installed, and a session where
+//! creating an input device is allowed. Run it by hand:
 //!
 //! ```text
 //! cargo test -p gizmo-app --test gamepad_virtual_device -- --ignored --nocapture
@@ -258,6 +260,19 @@ fn spawn_virtual_pad() -> Option<Child> {
         return None;
     }
     println!("[virtual pad] {}", first.trim());
+    // The engine reads the pad through the event node the device gets, not through uinput: a
+    // user who may write `/dev/uinput` (a udev ACL) but is not in the `input` group sees the
+    // pad appear and its name, and none of its events — the run then failed on "face button"
+    // with nothing pressed in the log, which reads as a mapping bug and is a permission.
+    let node = first.trim().trim_start_matches("device:").trim().to_string();
+    if let Err(e) = std::fs::File::open(&node) {
+        println!(
+            "[skip] the virtual pad's event node {node} cannot be read ({e}); the engine would see              the pad connect and never see it move. Join the `input` group (or add a udev ACL for              event nodes) and log in again."
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        return None;
+    }
     // Keep draining the script's progress lines so it never blocks on a full pipe.
     std::thread::spawn(move || {
         for line in reader.lines().map_while(Result::ok) {

@@ -364,29 +364,21 @@ impl RigidBody {
     /// Enables Continuous Collision Detection (CCD) — fast or thin bodies stop tunnelling.
     /// Chainable.
     ///
-    /// **It has a price, and the price is measured: a CCD body loses its bounce.** A head-on
-    /// collision between equal masses at `restitution = 1` behaves correctly with CCD off (the
-    /// striker stops, the struck body takes the velocity: 0.000 / 4.950 m/s) but gives
-    /// **2.475 / 2.475** with CCD on — a perfectly elastic collision turned inelastic. The cause
-    /// has two steps: (1) if any body in the island has CCD, the `use_tgs_soft && !has_ccd`
-    /// condition drops the solver from the modern TGS-soft path **back to the old split-impulse
-    /// path**, and (2) that path does not apply restitution on a speculative contact — which is
-    /// exactly the kind of contact CCD produces. The speculative constraint eats the approach
-    /// velocity, and by the time the real contact forms there is nothing left to bounce back.
+    /// A CCD body bounces like any other (fixed 2026-11-15). Any island holding one is solved on
+    /// the split-impulse path rather than TGS-soft (the TGS route lets a 1753 m/s bullet through a
+    /// 0.59 m wall — `prop_ccd_never_tunnels` keeps that case), and that path treats the
+    /// speculative contacts CCD makes as gap limits without restitution, so an elastic hit used
+    /// to land as a thud: a Newton's cradle with CCD on stopped dead (2.475 / 2.475 m/s where
+    /// 0 / 4.95 is right). Each speculative contact's closing speed is now kept from before the
+    /// solve, and every one that meets within the step gets its normal speed set to `−e·v₀` —
+    /// added after positions are integrated, so the body reaches what it hits before it leaves.
+    /// It only ever separates a pair, so it cannot carry anything through a wall.
     ///
-    /// This is not an oversight but **a consequence of the body the design had in mind**: the
-    /// rationale next to that exception says "CCD bodies (bullets) are rare and usually
-    /// isolated". CCD was designed for a bullet — a single, lonely object that is *not expected
-    /// to bounce*. A Newton's cradle violates all three assumptions: all five bodies have CCD,
-    /// they all meet in one island, and every one of them is expected to bounce.
+    /// CCD is still not free: if tunnelling is suspected, **measure it first** — 0.5 m balls do
+    /// not tunnel even at 320 m/s with a 1/240 s substep.
     ///
-    /// So reaching for this to cure tunnelling on bodies that are *supposed* to bounce (a
-    /// billiard ball, a Newton's cradle) silently destroys the scene's actual behaviour — and
-    /// usually for nothing: 0.5 m radius balls do not tunnel even at 320 m/s with a 1/240 s
-    /// substep (measured in the test below). If tunnelling is suspected, **measure it first**;
-    /// turning CCD on as a precaution is not free.
-    ///
-    /// The measurement: `gizmo-physics-rigid/tests/cradle_passthrough.rs::ccd_makes_a_bounce_a_thud`.
+    /// The tests: `tests/cradle_passthrough.rs::ccd_makes_a_bounce_a_thud`, and
+    /// `world::tests::ccd_bullet_bounces_off_a_wall`.
     pub fn with_ccd(mut self) -> Self {
         self.ccd_enabled = true;
         self

@@ -244,7 +244,7 @@ impl PhysicsWorld {
 
         // 4-4.5 Kısıt çözücü (çarpışma + eklem)
         let t3 = Instant::now();
-        self.constraint_solve_step(manifolds, dt);
+        let bounces = self.constraint_solve_step(manifolds, dt);
         self.metrics.solver_ms += ms(t3);
 
         // 5-6. Pozisyon entegrasyonu ve uyku durumu
@@ -254,6 +254,8 @@ impl PhysicsWorld {
         // dejenere olduğunda hızlı bir cismin tünellemesini engelle (yalnız hızlı CCD
         // cisimlerini etkiler; yavaş/dinlenen cisimler dokunulmaz → determinizm nötr).
         self.ccd_resolve_step(dt);
+        // Speculative contacts' bounces, now that the bodies have travelled to each other.
+        self.apply_bounces(&bounces);
         self.metrics.integration_ms += ms(t4);
 
         // Energy Conservation Check: Validate energy bounds (Zero-cost in release mode)
