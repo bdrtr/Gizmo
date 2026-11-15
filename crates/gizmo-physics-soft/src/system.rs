@@ -58,13 +58,19 @@ pub fn soft_body_step_system(world: &World, dt: f32, gravity: Vec3) {
         // jelly fell through it.
         let n = bodies.iter().map(|b| b.stable_substeps(dt)).max().unwrap_or(1);
         let sub = dt / n as f32;
+        // Each body's surface, found once for the frame's sub-steps (`resolve_soft_contacts_with`).
+        let faces: Vec<Vec<[u32; 3]>> = if bodies.len() > 1 {
+            bodies.iter().map(|b| crate::soft_contact::surface_faces(b)).collect()
+        } else {
+            Vec::new()
+        };
         for _ in 0..n {
             for body in bodies.iter_mut() {
                 body.step_coupled(sub, gravity, &rigid_colliders, &reactions, &mut impulses);
             }
             if bodies.len() > 1 {
                 let mut views: Vec<&mut SoftBodyMesh> = bodies.iter_mut().map(|b| &mut **b).collect();
-                crate::soft_contact::resolve_soft_contacts(&mut views);
+                crate::soft_contact::resolve_soft_contacts_with(&mut views, &faces);
             }
         }
     }

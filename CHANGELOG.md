@@ -755,6 +755,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Cloth and soft bodies are four times faster, with the same results bit for bit.** Measured in `sinama`: two
+  24×24 cloths under ten balls 12.5 → 3.4 ms a frame, twelve stacked jellies 12.6 → 3.8 ms. Three costs, none of them
+  the physics: the cloth's edge pass bounded each collider by a sphere round its centre — 17 m for the 24 m floor box
+  under the cloths, so every edge was tested eight times against the floor every sub-step (12 of the 12.5 ms); it
+  and the node pass now skip a collider whose own box, grown by the reach, is clear of the node or edge. The soft
+  contacts found every body's surface — a hash map of every face — every sub-step, 36 times a frame; the surface is
+  topology and does not change within a frame, so the ECS step finds it once (`soft_contact::resolve_soft_contacts_with`).
+  And a soft body's element forces went through the thread pool for 48 elements, where the hand-off cost more than
+  the work; under 512 elements they are summed in place, in the same order. `jole --test` 3.0 → 0.7 s. Tests:
+  `a_collider_out_of_reach_is_never_narrow_tested` (68 580 narrow tests against the floor without the skip, 0 with),
+  `surfaces_found_once_a_frame_resolve_as_found_every_sub_step`.
+
 - **A camera looks where its transform points.** Its aim was the `yaw`/`pitch` on its `Camera`, and
   `Transform::rotation` was ignored — so four games (`arazi`, `jole`, `kayik`, `topcu`) that turned their cameras by
   the rotation never turned them, and the tree wrote that ignored rotation in three conventions of its own, none the

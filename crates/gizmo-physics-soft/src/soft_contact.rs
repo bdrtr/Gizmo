@@ -247,11 +247,33 @@ fn push_out(a: &mut SoftBodyMesh, a_faces: &[[u32; 3]], b: &mut SoftBodyMesh) ->
 
 /// Resolves every contact between the soft bodies in `bodies`, both ways round for each
 /// overlapping pair. Returns how many nodes were pushed out.
+///
+/// Finds each body's surface first ([`surface_faces`]); a caller resolving the same bodies many
+/// times over — every sub-step of a frame — finds them once and calls
+/// [`resolve_soft_contacts_with`].
 pub fn resolve_soft_contacts(bodies: &mut [&mut SoftBodyMesh]) -> usize {
     if bodies.len() < 2 {
         return 0;
     }
     let faces: Vec<Vec<[u32; 3]>> = bodies.iter().map(|b| surface_faces(b)).collect();
+    resolve_soft_contacts_with(bodies, &faces)
+}
+
+/// [`resolve_soft_contacts`] with each body's surface already found: `faces[i]` is
+/// [`surface_faces`] of `bodies[i]`.
+///
+/// The surface is the body's topology — which faces belong to one tetrahedron — and a face's
+/// winding, which turns only if its tetrahedron turns inside out. Neither changes over the
+/// sub-steps of one frame, so `soft_body_step_system` finds it once a frame: finding it every
+/// sub-step was a hash map of every face of every body, 36 times a frame, and 3.1 ms of
+/// `sinama`'s twelve stacked jellies.
+///
+/// # Panics
+/// If `faces` is shorter than `bodies`.
+pub fn resolve_soft_contacts_with(bodies: &mut [&mut SoftBodyMesh], faces: &[Vec<[u32; 3]>]) -> usize {
+    if bodies.len() < 2 {
+        return 0;
+    }
     let mut pushed = 0;
     for i in 0..bodies.len() {
         for j in 0..bodies.len() {

@@ -17,7 +17,7 @@ use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 use gizmo_physics_rigid::world::PhysicsWorld;
-use gizmo_physics_soft::soft_contact::{resolve_soft_contacts, surface_faces};
+use gizmo_physics_soft::soft_contact::{resolve_soft_contacts, resolve_soft_contacts_with, surface_faces};
 use gizmo_physics_soft::SoftBodyMesh;
 
 const G: Vec3 = Vec3::new(0.0, -9.81, 0.0);
@@ -171,4 +171,36 @@ fn an_off_centre_stack_does_not_blow_up() {
         fastest_seen = fastest_seen.max(world.query::<&SoftBodyMesh>().iter().map(fastest).fold(0.0, f32::max));
     }
     assert!(fastest_seen < 15.0, "the stack blew up: a node reached {fastest_seen:.0} m/s");
+}
+
+/// **A frame's surfaces found once resolve exactly as found every sub-step.** The ECS step finds
+/// each body's surface once a frame (`resolve_soft_contacts_with`) — finding it every sub-step
+/// was 3.1 ms of `sinama`'s twelve jellies. A stack of three, dropped and run two seconds with
+/// the contacts busy, ends bit for bit where the per-sub-step version ends.
+#[test]
+fn surfaces_found_once_a_frame_resolve_as_found_every_sub_step() {
+    let floor = vec![(gizmo_physics_core::BodyHandle::from_id(9), Transform::new(Vec3::new(0.0, -0.5, 0.0)), Collider::box_collider(Vec3::new(5.0, 0.5, 5.0)))];
+    let run = |once: bool| -> (Vec<SoftBodyMesh>, usize) {
+        let mut bodies: Vec<SoftBodyMesh> = (0..3).map(|k| jelly(Vec3::new(k as f32 * 0.2, 0.05 + k as f32 * 1.1, 0.1 * k as f32), 15_000.0)).collect();
+        let mut touched = 0;
+        for _ in 0..120 {
+            let n = bodies.iter().map(|b| b.stable_substeps(DT)).max().unwrap();
+            let faces: Vec<Vec<[u32; 3]>> = bodies.iter().map(surface_faces).collect();
+            for _ in 0..n {
+                for b in bodies.iter_mut() {
+                    b.step(DT / n as f32, G, &floor);
+                }
+                let mut views: Vec<&mut SoftBodyMesh> = bodies.iter_mut().collect();
+                touched += if once { resolve_soft_contacts_with(&mut views, &faces) } else { resolve_soft_contacts(&mut views) };
+            }
+        }
+        (bodies, touched)
+    };
+    let (every, touched) = run(false);
+    let (once, touched_once) = run(true);
+    assert!(touched > 100, "the stack barely touched: {touched}");
+    assert_eq!(touched_once, touched);
+    for (a, b) in every.iter().zip(&once) {
+        assert_eq!(a.nodes, b.nodes);
+    }
 }

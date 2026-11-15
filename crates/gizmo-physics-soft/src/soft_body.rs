@@ -748,10 +748,7 @@ impl SoftBodyMesh {
         // Her tetrahedronun düğüm kuvvetlerini PARALEL hesapla, sonra DETERMİNİSTİK
         // (eleman sırasında) topla. (Paralel `reduce` float toplamı sırayı bozup
         // lockstep determinizmini kırıyordu — float toplaması birleşmeli değil.)
-        let elem_forces: Vec<Option<([usize; 4], [Vec3; 4])>> = self
-            .elements
-            .par_iter()
-            .map(|elem| {
+        let element_force = |elem: &Tetrahedron| {
                 let idx = [
                     elem.node_indices[0] as usize,
                     elem.node_indices[1] as usize,
@@ -781,8 +778,17 @@ impl SoftBodyMesh {
                     return None;
                 }
                 Some((idx, [f0, f1, f2, f3]))
-            })
-            .collect();
+            };
+        // In parallel only where there is enough to share: a thread pool's hand-off costs more
+        // than a few dozen elements take — `sinama`'s twelve 48-element jellies, 36 sub-steps a
+        // frame, spent most of their 6 ms of stepping in it. Either way the forces are collected
+        // in element order, so the sum below — and the result — is the same.
+        const PARALLEL_FROM: usize = 512;
+        let elem_forces: Vec<Option<([usize; 4], [Vec3; 4])>> = if self.elements.len() >= PARALLEL_FROM {
+            self.elements.par_iter().map(element_force).collect()
+        } else {
+            self.elements.iter().map(element_force).collect()
+        };
 
         for (idx, f) in elem_forces.into_iter().flatten() {
             forces[idx[0]] += f[0];

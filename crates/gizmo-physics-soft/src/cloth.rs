@@ -36,6 +36,8 @@ pub(crate) fn project_point_out(
     shape: &ColliderShape,
     trans: &Transform,
 ) -> Option<(Vec3, Vec3)> {
+    #[cfg(test)]
+    NARROW_TESTS.with(|n| n.set(n.get() + 1));
     match shape {
         ColliderShape::Sphere(s) => {
             let d = pos - trans.position;
@@ -196,6 +198,13 @@ fn seg_point_dist_sq(a: Vec3, b: Vec3, p: Vec3) -> f32 {
         0.0
     };
     (a + ab * t - p).length_squared()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many times this thread has called [`project_point_out`] — what the broad phase is
+    /// there to save.
+    static NARROW_TESTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A single particle (mass point) in the cloth simulation.
@@ -476,6 +485,27 @@ impl Cloth {
         // so a node shared by many edges is not shoved once per incident edge (compounding).
         let mut edge_push: Vec<Vec3> = Vec::new();
         let mut edge_cnt: Vec<u32> = Vec::new();
+        // Where each collider can touch the cloth at all: its world box, grown by the widest reach
+        // any pass below tests with (the edge gate's `2 · thickness`). A node or an edge wholly
+        // outside it cannot be within reach of the shape, so every test below would return
+        // nothing for it — skipping the pair changes no result, it only stops paying for it. The
+        // edge pass's own broad phase was a sphere round the collider's centre, which for a
+        // floor — a 24 × 1 × 24 m box under `sinama`'s cloths — was 17 m wide and let every edge
+        // through to eight samples against the floor, every sub-step: 12 of the scene's 12.5 ms.
+        let reach = Vec3::splat(self.thickness * 2.0 + 1e-4);
+        let collider_box: Vec<(Vec3, Vec3)> = colliders
+            .iter()
+            .map(|(_, t, c)| {
+                let b = c.compute_aabb(t.position, t.rotation);
+                (Vec3::from(b.min) - reach, Vec3::from(b.max) + reach)
+            })
+            .collect();
+        // `false` only when the box `lo..hi` is certainly clear of collider `ci`'s; a NaN anywhere
+        // compares false and keeps the pair.
+        let clear = |lo: Vec3, hi: Vec3, ci: usize| {
+            let (clo, chi) = collider_box[ci];
+            hi.cmplt(clo).any() || lo.cmpgt(chi).any()
+        };
         if !colliders.is_empty() {
             impact_vel = vec![Vec3::ZERO; self.nodes.len()];
             contact_normal = vec![None; self.nodes.len()];
@@ -567,7 +597,10 @@ impl Cloth {
                     if node.inv_mass == 0.0 {
                         continue;
                     }
-                    for (handle, ctrans, col) in colliders {
+                    for (ci, (handle, ctrans, col)) in colliders.iter().enumerate() {
+                        if clear(node.position, node.position, ci) {
+                            continue;
+                        }
                         if let Some((new_pos, n)) =
                             project_point_out(node.position, thickness, &col.shape, ctrans)
                         {
@@ -606,13 +639,16 @@ impl Cloth {
                     if ma == 0.0 && mb == 0.0 {
                         continue;
                     }
-                    for (handle, ctrans, col) in colliders {
+                    for (ci, (handle, ctrans, col)) in colliders.iter().enumerate() {
                         let Some(bound) = collider_bound(&col.shape) else {
                             continue;
                         };
                         // Re-read per collider: an earlier collider may have moved the nodes.
                         let pa = self.nodes[a_idx].position;
                         let pb = self.nodes[b_idx].position;
+                        if clear(pa.min(pb), pa.max(pb), ci) {
+                            continue;
+                        }
                         // Broad phase: skip unless the segment comes within reach of the collider.
                         let reach = bound + thickness;
                         if seg_point_dist_sq(pa, pb, ctrans.position) > reach * reach {
@@ -766,6 +802,40 @@ impl gizmo_core::Component for Cloth {}
 
 #[cfg(test)]
 mod tests {
+    /// **A floor far below the cloth costs nothing.** `sinama`'s two cloths hang 2.5 m over a
+    /// 24 × 1 × 24 m box: the edge pass's broad phase was a sphere round the box's centre, 17 m
+    /// wide, so every edge went to eight narrow tests against the floor every sub-step — 12 of
+    /// the scene's 12.5 ms. Against each collider's own box, the floor is passed over; and the
+    /// ball the cloth is touching still is not — the skip changes no result.
+    #[test]
+    fn a_collider_out_of_reach_is_never_narrow_tested() {
+        use super::*;
+        let floor = (BodyHandle::from_id(1), Transform::new(Vec3::new(0.0, -0.5, 0.0)), Collider::box_collider(Vec3::new(12.0, 0.5, 12.0)));
+        let ball = (BodyHandle::from_id(2), Transform::new(Vec3::new(0.8, 2.75, -0.8)), Collider::sphere(0.35));
+        let make = || {
+            let mut c = Cloth::new(12, 12, 0.15, 0.05);
+            for node in &mut c.nodes {
+                let p = Vec3::new(node.position.x, 2.5, -node.position.y);
+                node.position = p;
+                node.prev_position = p;
+            }
+            c
+        };
+        let tests_for = |colliders: &[(BodyHandle, Transform, Collider)]| {
+            let mut c = make();
+            NARROW_TESTS.with(|n| n.set(0));
+            c.step_coupled(1.0 / 60.0, Vec3::new(0.0, -9.81, 0.0), 10, colliders, &[], &mut Vec::new());
+            (NARROW_TESTS.with(|n| n.get()), c)
+        };
+        let (floor_only, _) = tests_for(std::slice::from_ref(&floor));
+        assert_eq!(floor_only, 0, "the floor 2.5 m below was narrow-tested {floor_only} times");
+        let (with_ball, draped) = tests_for(&[floor.clone(), ball.clone()]);
+        let (ball_only, alone) = tests_for(std::slice::from_ref(&ball));
+        assert!(ball_only > 0, "the ball the cloth touches must be tested");
+        assert_eq!(with_ball, ball_only, "the floor added narrow tests");
+        assert_eq!(draped.nodes, alone.nodes, "the floor out of reach changed the cloth");
+    }
+
     use super::*;
 
     /// The impact velocity of a node hitting the ground must be computed BEFORE its position is
