@@ -755,6 +755,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Android: a game fills the screen — the system bars, a tablet's taskbar among them, are hidden.** `WindowMode` did
+  nothing there (winit's fullscreen is a no-op on Android), so the taskbar covered the bottom of every game on the
+  tablet. Now `Fullscreen` hides the status and navigation bars (a swipe from the edge shows them for a moment),
+  `Windowed` shows them, the app starts with `Fullscreen` inserted, and the mode is applied again when the app
+  gets focus back (Android brings the bars back after a dialog or the recent-apps screen). The bars are views only
+  the UI thread may touch, so the engine hands the activity a `Runnable` for `runOnUiThread`: one small Java class,
+  `crates/gizmo-app/android/SystemBars.java` (`WindowInsetsController` on API 30+, `setSystemUiVisibility` below),
+  committed as 1.6 kB of dex and loaded from memory (`InMemoryDexClassLoader`, API 26 — the apps' minimum);
+  `scripts/android-dex.sh` rebuilds it. A failure is logged and the game runs on with the bars.
+
 - **Cloth and soft bodies are four times faster, with the same results bit for bit.** Measured in `sinama`: two
   24×24 cloths under ten balls 12.5 → 3.4 ms a frame, twelve stacked jellies 12.6 → 3.8 ms. Three costs, none of them
   the physics: the cloth's edge pass bounded each collider by a sphere round its centre — 17 m for the 24 m floor box

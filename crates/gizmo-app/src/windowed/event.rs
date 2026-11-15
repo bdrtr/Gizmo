@@ -208,18 +208,26 @@ impl<State: 'static> App<State> {
     }
 
     /// Applies the world's [`WindowMode`](gizmo_core::window::WindowMode) when it differs from what
-    /// was last applied. Fullscreen is borderless, on the window's current monitor.
+    /// was last applied. Fullscreen is borderless, on the window's current monitor; on Android,
+    /// where the window is always the screen, it is the system bars hidden
+    /// (`android::set_system_bars`) — winit's fullscreen does nothing there.
     fn apply_window_mode(&mut self, window: &winit::window::Window) {
         use gizmo_core::window::WindowMode;
         let wanted = self.world.get_resource::<WindowMode>().map(|m| *m).unwrap_or_default();
-        if wanted == self.applied_mode {
+        if self.applied_mode == Some(wanted) {
             return;
         }
+        #[cfg(target_os = "android")]
+        {
+            let _ = window;
+            crate::android::set_system_bars(wanted != WindowMode::Fullscreen);
+        }
+        #[cfg(not(target_os = "android"))]
         window.set_fullscreen(match wanted {
             WindowMode::Fullscreen => Some(winit::window::Fullscreen::Borderless(None)),
             _ => None,
         });
-        self.applied_mode = wanted;
+        self.applied_mode = Some(wanted);
     }
 
     /// Run one pass of the lazy asset loader.
@@ -448,10 +456,16 @@ impl<State: 'static> App<State> {
                             // dropped that state; this is what restores it, and without it a
                             // player holding the throttle across an Alt-Tab comes back to a
                             // dead pad until they let go.
-                            #[cfg(feature = "gamepad")]
                             WindowEvent::Focused(true) => {
+                                #[cfg(feature = "gamepad")]
                                 if let Some(backend) = self.gamepad_backend.as_mut() {
                                     backend.resync(&mut self.input);
+                                }
+                                // Android shows the bars again when the app comes back (a dialog,
+                                // the recent-apps screen); the mode is applied again next frame.
+                                #[cfg(target_os = "android")]
+                                {
+                                    self.applied_mode = None;
                                 }
                             }
                             _ => {}

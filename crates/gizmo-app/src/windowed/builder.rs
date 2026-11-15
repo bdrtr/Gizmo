@@ -46,7 +46,9 @@ impl<State: 'static> App<State> {
             frame_ended_at: None,
             next_frame_at: None,
             applied_cursor: gizmo_core::window::CursorOptions::free(),
-            applied_mode: gizmo_core::window::WindowMode::Windowed,
+            // A desktop window is made windowed. Android's mode is applied on the first frame: there
+            // the bars are the system's, and `Fullscreen` is the default (`App::run`).
+            applied_mode: if cfg!(target_os = "android") { None } else { Some(gizmo_core::window::WindowMode::Windowed) },
             #[cfg(feature = "egui")]
             editor: None,
             app_state: None,

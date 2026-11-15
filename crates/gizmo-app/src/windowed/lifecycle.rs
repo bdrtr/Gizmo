@@ -54,6 +54,13 @@ impl<State: 'static> App<State> {
             }
             builder.build().map_err(crate::AppError::EventLoopCreation)?
         };
+        // A game on a phone or a tablet fills the screen: the system bars (a tablet's taskbar
+        // among them) are hidden unless the game asks for `Windowed`. Inserted, not assumed, so a
+        // game that reads the mode to toggle it reads what the screen shows.
+        #[cfg(target_os = "android")]
+        if self.world.get_resource::<gizmo_core::window::WindowMode>().is_none() {
+            self.world.insert_resource(gizmo_core::window::WindowMode::Fullscreen);
+        }
         let mut builder = WindowAttributes::default().with_title(&self.window_title);
         // In the browser the page decides the canvas's size: it is styled 100 % of the page below,
         // and winit reports that size as the window's. Asking for an inner size there set the

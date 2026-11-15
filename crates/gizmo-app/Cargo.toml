@@ -49,7 +49,7 @@ image = { version = "0.25", optional = true }
 default = ["window", "render", "audio", "physics", "scene", "editor", "network", "gamepad"]
 headless = ["physics", "network"]
 network = ["dep:gizmo-net", "gizmo-net/rollback"]
-window = ["dep:winit"]
+window = ["dep:winit", "dep:jni"]
 render = ["dep:wgpu", "dep:gizmo-renderer", "dep:pollster", "dep:image", "window"]
 audio = ["dep:gizmo-audio"]
 # Navigation components in the scene format. Nothing else in this crate uses `gizmo-ai`.
@@ -109,6 +109,9 @@ rfd = "0.17.2"
 # activity's handle (`gizmo_app::android::set_app`). Same optional dependency as above — `window`
 # turns both on — with the one feature the platform needs.
 winit = { version = "0.30", optional = true, features = ["android-native-activity"] }
+# The system bars (`android::set_system_bars`): a call into the activity's Java side. The version
+# android-activity itself uses, so it adds nothing to the tree.
+jni = { version = "0.21", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser's gamepads, through gilrs's wasm backend (web-sys + the Web Gamepad API).

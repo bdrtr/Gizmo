@@ -211,6 +211,10 @@ pub enum CursorGrab {
 /// windowed and stayed so. The windowed app applies this resource whenever it changes, like
 /// [`CursorOptions`]; no resource reads as [`Windowed`](Self::Windowed).
 ///
+/// **On Android** the window is always the screen, and the mode is the system bars: `Fullscreen`
+/// hides the status and navigation bars (a tablet's taskbar too — a swipe from the edge shows them
+/// for a moment), `Windowed` shows them. There the app starts with `Fullscreen` inserted.
+///
 /// ```
 /// use gizmo_core::window::WindowMode;
 /// # let mut world = gizmo_core::World::new();
@@ -228,7 +232,7 @@ pub enum WindowMode {
     #[default]
     Windowed,
     /// Borderless fullscreen on the monitor the window is on — the desktop's resolution, no mode
-    /// switch, so Alt+Tab is instant.
+    /// switch, so Alt+Tab is instant. On Android: the system bars hidden.
     Fullscreen,
 }
 

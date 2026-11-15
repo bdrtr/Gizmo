@@ -161,8 +161,9 @@ pub struct App<State: 'static = ()> {
     next_frame_at: Option<FrameInstant>,
     /// The cursor behaviour last applied to `window` — see `apply_cursor_options`.
     applied_cursor: gizmo_core::window::CursorOptions,
-    /// The window mode last applied — see `apply_window_mode`.
-    applied_mode: gizmo_core::window::WindowMode,
+    /// The window mode last applied — see `apply_window_mode`; `None` applies the next one whatever
+    /// it is (Android, where the system can bring the bars back behind the app's back).
+    applied_mode: Option<gizmo_core::window::WindowMode>,
     #[cfg(feature = "egui")]
     editor: Option<EguiContext>,
     app_state: Option<State>,

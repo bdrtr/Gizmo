@@ -2787,6 +2787,7 @@ dependencies = [
  "icu_plurals",
  "icu_provider",
  "image",
+ "jni 0.21.1",
  "js-sys",
  "log",
  "pollster 1.0.1",
