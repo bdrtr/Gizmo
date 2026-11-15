@@ -918,6 +918,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A UI node inside a hidden panel is hidden** (`gizmo_ui::Node::visible`). A `Display::None` subtree is not laid
+  out, so its boxes kept the window's top-left corner — and their labels still drew there: `dunya`'s closed
+  inventory leaked its title into the corner of every frame. The layout pass now marks a node invisible when it or
+  an ancestor is `Display::None`, and the draw (backgrounds, `Text` on the node, dropdown rows) and the hit tests
+  (`Interaction`, `pointer_over_ui`) pass it over. `Node` gains a field (default `true`). Test:
+  `a_hidden_panel_hides_its_children`.
+- **`dunya` looks less washed out.** Its sky lit the scene as strongly as the sun, in blue: a shadow on the grass was
+  the colour of the sunlit grass beside it (150,194,160 against 150,186,154) and everything drifted to a pale pastel.
+  The sky's light is cut to a third by day (`Sky::with_intensity`; the visible sky is the camera's clear colour, and
+  stays), the ground's bounce is the grass's colour instead of the sky's, the sun is 3.0 instead of 2.2; the terrain
+  mesh is twice as fine (1.56 m) and its grass varies — lush and pale patches, dry streaks, bare earth.
+
 - **A walking character is drawn between the physics steps too.** The interpolation history recorded only rigid
   bodies, so a `CharacterController` — the player on foot, `dunya`'s animals and villagers — was drawn holding and
   jumping at the step rate (60 Hz under a 144 Hz display) while a car beside it glided, and a camera following it

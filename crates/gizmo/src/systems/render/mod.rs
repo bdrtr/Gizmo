@@ -17423,7 +17423,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
             (gizmo_math::Vec2::new(40.0, 40.0), Vec4::new(0.0, 0.0, 1.0, 1.0), blue_z),
         ] {
             let e = world.spawn_bundle((
-                crate::ui::Node { position: pos, size: gizmo_math::Vec2::new(60.0, 60.0) },
+                crate::ui::Node { position: pos, size: gizmo_math::Vec2::new(60.0, 60.0), visible: true },
                 crate::ui::BackgroundColor(colour),
             ));
             if let Some(z) = z {
@@ -17485,7 +17485,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
             let mut world = World::new();
             world.spawn_bundle(CameraBundle { primary: true, ..Default::default() });
             world.spawn_bundle((
-                crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(64.0) },
+                crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(64.0), visible: true },
                 crate::ui::BackgroundColor(Vec4::new(1.0, 0.0, 0.0, 1.0)),
                 crate::ui::ZIndex(1000),
             ));
@@ -17538,7 +17538,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
             input.set_mouse_position(10.0, 10.0);
             world.insert_resource(input);
             world.spawn_bundle((
-                crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(20.0) },
+                crate::ui::Node { position: gizmo_math::Vec2::ZERO, size: gizmo_math::Vec2::splat(20.0), visible: true },
                 crate::ui::Interaction::Hovered,
                 crate::ui::Tooltip::new(tip).with_delay(0.0),
                 gizmo_renderer::components::Text::screen("", font, 14.0, gizmo_math::Vec2::ZERO),
@@ -17721,8 +17721,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
                 e,
                 crate::ui::Node {
                     position: gizmo_math::Vec2::new(10.0, 10.0),
-                    size: gizmo_math::Vec2::new(60.0, 30.0),
-                },
+                    size: gizmo_math::Vec2::new(60.0, 30.0), visible: true },
             );
             world.add_component(
                 e,

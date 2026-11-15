@@ -52,6 +52,9 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
     let mut out = Vec::new();
     for id in tree_order(world) {
         let Some(node) = nodes.get(id) else { continue };
+        if !node.visible {
+            continue;
+        }
         let start = out.len();
         out.push((id, node.position, node.size, backgrounds.get(id).map(|c| c.0)));
         if let Some(s) = sliders.get(id) {
@@ -177,6 +180,17 @@ fn ui_text_scale(world: &World) -> Option<f32> {
 #[cfg(not(feature = "ui"))]
 fn ui_text_scale(_world: &World) -> Option<f32> {
     None
+}
+
+/// Whether `entity` is a UI node in a hidden part of the tree (`Node::visible`).
+#[cfg(feature = "ui")]
+fn ui_hidden(world: &World, entity: Entity) -> bool {
+    world.query::<&crate::ui::Node>().get(entity).is_some_and(|n| !n.visible)
+}
+
+#[cfg(not(feature = "ui"))]
+fn ui_hidden(_world: &World, _entity: Entity) -> bool {
+    false
 }
 
 /// Frame pixels per logical pixel (`DisplayScale`, 1 without one).
@@ -459,7 +473,7 @@ fn dropdown_lists(world: &World) -> Vec<(Entity, Vec<(Vec2, Vec2, Vec4, String)>
     world.query::<(Entity, &crate::ui::Dropdown)>().iter()
         .filter(|(_, d)| d.is_open())
         .filter_map(|(entity, d)| {
-            let node = nodes.get(entity)?;
+            let node = nodes.get(entity).filter(|n| n.visible)?;
             let rows = d
                 .options
                 .iter()
@@ -594,6 +608,11 @@ pub fn record_text(
     }
 
     for (id, item) in world.query::<(Entity, &Text)>().iter() {
+        // A label in a hidden panel (`Node::visible`) is not drawn — at its authored position it
+        // would sit at the window's corner, which is where it was.
+        if ui_hidden(world, id) {
+            continue;
+        }
         // `TextSpace::needs_world_position` rather than a `match` here: the enum is
         // `#[non_exhaustive]`, so this file could only match it with a wildcard, and a wildcard is
         // where a third space would quietly become a HUD element. The decision lives beside the
@@ -734,7 +753,7 @@ mod clip_tests {
     use crate::ui::{ClipContent, Node};
 
     fn node(x: f32, y: f32, w: f32, h: f32) -> Node {
-        Node { position: Vec2::new(x, y), size: Vec2::new(w, h) }
+        Node { position: Vec2::new(x, y), size: Vec2::new(w, h), visible: true }
     }
 
     /// A clipping panel cuts what is under it to its box; a nested one narrows it to the

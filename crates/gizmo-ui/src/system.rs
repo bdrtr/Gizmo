@@ -212,17 +212,22 @@ pub fn ui_layout_system(
     // its `inset` places it in the window (taffy always puts the root it lays out at the origin,
     // so this is the one place that can).
     let window_size = ctx.window_size;
-    let mut stack: Vec<(Entity, gizmo_math::Vec2)> = roots
+    // Each entry carries whether the parent is shown: a `Display::None` node hides its subtree,
+    // which taffy does not lay out (its boxes keep whatever they held, the window's corner for
+    // one never shown), and `Node::visible` is how the draw and the hit tests know.
+    let shown = |e: Entity| styles.get(e).is_none_or(|(_, style)| style.display != crate::components::Display::None);
+    let mut stack: Vec<(Entity, gizmo_math::Vec2, bool)> = roots
         .iter()
         .map(|&e| {
             let origin = match (styles.get(e), ctx.relative_layout(e)) {
                 (Some((_, style)), Some((size, _))) => root_origin(style, size, window_size),
                 _ => gizmo_math::Vec2::ZERO,
             };
-            (e, origin)
+            (e, origin, true)
         })
         .collect();
-    while let Some((entity, parent_origin)) = stack.pop() {
+    while let Some((entity, parent_origin, parent_visible)) = stack.pop() {
+        let visible = parent_visible && shown(entity);
         let Some((size, local)) = ctx.relative_layout(entity) else {
             continue;
         };
@@ -231,6 +236,9 @@ pub fn ui_layout_system(
         if let Some(mut node) = nodes.get_mut(entity) {
             node.size = size * s;
             node.position = abs * s;
+            if node.visible != visible {
+                node.visible = visible;
+            }
         }
         // No `visited` set: the mirror gives every node exactly one parent and never names a
         // root as anyone's child, so `mirrored_children` is a forest by construction and this
@@ -256,7 +264,7 @@ pub fn ui_layout_system(
                 origin = abs - scroll.offset / s;
             }
             for &child_id in kids {
-                stack.push((child_id, origin));
+                stack.push((child_id, origin, visible));
             }
         }
     }
@@ -337,6 +345,32 @@ mod tests {
     /// `Display::Grid`: tracks in pixels and shares, a gap, implicit rows of a fixed height, an
     /// item spanning two columns and one placed on a line. A 330 px container, columns
     /// `100px 1fr 2fr` and a 10 px gap leave 210 px for three shares: 70 and 140.
+    /// **A closed panel's children are hidden** — not drawn, not hit — and shown again when it
+    /// opens. The label inside `dunya`'s closed inventory drew at the window's top-left corner,
+    /// where its never-laid-out box sat, and a button there could have been hit.
+    #[test]
+    fn a_hidden_panel_hides_its_children() {
+        use crate::components::Display;
+        let (mut world, mut schedule) = make_world();
+        set_window(&mut world, 800.0, 600.0);
+        let panel = world.spawn();
+        world.add_component(panel, Style { display: Display::None, ..column_style(300.0, 200.0) });
+        world.add_component(panel, Node::default());
+        let label = world.spawn();
+        world.add_component(label, sized_style(100.0, 40.0));
+        world.add_component(label, Node::default());
+        world.add_component(label, Parent(panel));
+        world.add_component(panel, Children(vec![label]));
+        schedule.run(&mut world, 0.016);
+        assert!(!node_of(&world, panel).visible && !node_of(&world, label).visible, "a closed panel shows nothing");
+        world.get_resource_mut::<Input>().unwrap().set_mouse_position(5.0, 5.0);
+        assert!(!crate::interaction::pointer_over_ui(&world), "the window's corner is not over a hidden box");
+        world.query_mut::<&mut Style>().get_mut(panel).unwrap().display = Display::Flex;
+        schedule.run(&mut world, 0.016);
+        assert!(node_of(&world, panel).visible && node_of(&world, label).visible, "opened, it shows again");
+        assert!(crate::interaction::pointer_over_ui(&world));
+    }
+
     #[test]
     fn a_grid_places_its_children_in_tracks() {
         use crate::components::{Display, GridPlacement, GridTrack, GridTracks};
@@ -915,7 +949,7 @@ mod tests {
         let btn = world.spawn();
         world.add_component(
             btn,
-            Node { position: Vec2::new(100.0, 100.0), size: Vec2::new(50.0, 30.0) },
+            Node { position: Vec2::new(100.0, 100.0), size: Vec2::new(50.0, 30.0), visible: true },
         );
         world.add_component(btn, Interaction::None);
 
@@ -958,14 +992,14 @@ mod tests {
         let a = world.spawn();
         world.add_component(
             a,
-            Node { position: Vec2::new(0.0, 0.0), size: Vec2::new(50.0, 50.0) },
+            Node { position: Vec2::new(0.0, 0.0), size: Vec2::new(50.0, 50.0), visible: true },
         );
         world.add_component(a, Interaction::None);
 
         let b = world.spawn();
         world.add_component(
             b,
-            Node { position: Vec2::new(100.0, 0.0), size: Vec2::new(50.0, 50.0) },
+            Node { position: Vec2::new(100.0, 0.0), size: Vec2::new(50.0, 50.0), visible: true },
         );
         world.add_component(b, Interaction::None);
 

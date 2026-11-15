@@ -253,7 +253,7 @@ mod tests {
     use gizmo_core::system::{IntoSystemConfig, Schedule};
 
     fn node(x: f32, y: f32, w: f32, h: f32) -> Node {
-        Node { position: Vec2::new(x, y), size: Vec2::new(w, h) }
+        Node { position: Vec2::new(x, y), size: Vec2::new(w, h), visible: true }
     }
 
     fn run(world: &mut gizmo_core::World) {

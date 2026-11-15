@@ -107,7 +107,8 @@ fn key(name: &str) -> u32 {
 /// `[position, position + size)` on each axis, so that a point on the shared
 /// edge of two adjacent elements belongs to exactly one of them.
 fn point_in_node(point: (f32, f32), node: &Node) -> bool {
-    point.0 >= node.position.x
+    node.visible
+        && point.0 >= node.position.x
         && point.0 < node.position.x + node.size.x
         && point.1 >= node.position.y
         && point.1 < node.position.y + node.size.y
@@ -618,8 +619,7 @@ mod tests {
     fn node(pos: (f32, f32), size: (f32, f32)) -> Node {
         Node {
             position: Vec2::new(pos.0, pos.1),
-            size: Vec2::new(size.0, size.1),
-        }
+            size: Vec2::new(size.0, size.1), visible: true }
     }
 
     /// One frame of the real system over `world`, with the mouse at `at` and the primary button

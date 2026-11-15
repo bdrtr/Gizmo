@@ -82,8 +82,9 @@ use gizmo::ui::{
     Style, UiPlugin, UiRect, UiTransform, Val, ZIndex,
 };
 
-/// Bir hücrenin kenarındaki örnek sayısı: 32 aralık, 3,125 m'de bir.
-const SAMPLES: u32 = 33;
+/// Bir hücrenin kenarındaki örnek sayısı: 64 aralık, 1,5625 m'de bir. (32 aralıkta, 3 m'lik
+/// üçgenlerin her biri tek bir renkti; yakından bakınca zemin düz ve bulanık görünüyordu.)
+const SAMPLES: u32 = 65;
 /// Arazinin en yüksek noktası, metre.
 const MAX_HEIGHT: f32 = 42.0;
 /// Kazanmak için.
@@ -148,8 +149,18 @@ fn slope(x: f32, z: f32) -> f32 {
 }
 
 /// Yüksekliğe ve eğime göre arazinin rengi.
-fn ground_colour(h: f32, s: f32) -> [f32; 4] {
-    let grass = Vec3::new(0.32, 0.5, 0.2);
+fn ground_colour(h: f32, s: f32, x: f32, z: f32) -> [f32; 4] {
+    // Çim tek bir renk değil: metrelerce genişlikte açık ve koyu yamalar, arada kuru, sarımsı
+    // lekeler ve yer yer çıplak toprak — gürültüden, her yerde aynı.
+    let patch = value_noise(x / 7.0, z / 7.0, 61);
+    let fine = value_noise(x / 2.2, z / 2.2, 62);
+    let dry = value_noise(x / 23.0, z / 23.0, 63);
+    let lush = Vec3::new(0.2, 0.4, 0.12);
+    let pale = Vec3::new(0.38, 0.52, 0.2);
+    let straw = Vec3::new(0.55, 0.52, 0.27);
+    let mut grass = lush.lerp(pale, patch * 0.8 + fine * 0.2);
+    grass = grass.lerp(straw, ((dry - 0.62) / 0.2).clamp(0.0, 1.0) * 0.7);
+    grass = grass.lerp(Vec3::new(0.4, 0.32, 0.2), ((fine * patch - 0.55) / 0.15).clamp(0.0, 1.0));
     let dirt = Vec3::new(0.45, 0.36, 0.24);
     let rock = Vec3::new(0.42, 0.41, 0.4);
     let snow = Vec3::new(0.92, 0.93, 0.96);
@@ -248,7 +259,7 @@ fn load_chunk(world: &mut World, coord: ChunkCoord, collected: &HashSet<(i32, i3
         let mut triangles = AssetManager::terrain_triangles(&heights, SAMPLES, SAMPLES, CHUNK_SIZE, CHUNK_SIZE, MAX_HEIGHT);
         for v in &mut triangles {
             let (wx, wz) = (v.position[0] + centre.x, v.position[2] + centre.z);
-            v.color = ground_colour(v.position[1], slope(wx, wz));
+            v.color = ground_colour(v.position[1], slope(wx, wz), wx, wz);
         }
         world.add_component(ground, MeshData::new(triangles));
         world.add_component(ground, MaterialDesc::new().with_pbr(Vec4::ONE, 0.95, 0.0));
@@ -1111,8 +1122,9 @@ fn sky_at(time_of_day: f32) -> (Vec3, f32, f32, [f32; 3], [f32; 3], [f32; 3]) {
     let zenith = Vec3::new(0.02, 0.03, 0.08).lerp(Vec3::new(0.25, 0.45, 0.85), day);
     let mut horizon = Vec3::new(0.03, 0.04, 0.09).lerp(Vec3::new(0.52, 0.66, 0.86), day);
     horizon = horizon.lerp(Vec3::new(0.95, 0.5, 0.25), dusk * 0.7);
-    let ground = horizon * 0.35;
-    (shines, 2.2 * day, 0.35 * (1.0 - day), zenith.to_array(), horizon.to_array(), ground.to_array())
+    // Yerden yansıyan: çimin rengi, gökten değil (mavi yansıma gölgeleri de maviye boyuyordu).
+    let ground = Vec3::new(0.32, 0.45, 0.22) * (0.05 + 0.3 * day);
+    (shines, 3.0 * day, 0.35 * (1.0 - day), zenith.to_array(), horizon.to_array(), ground.to_array())
 }
 
 fn place_lights_and_camera(world: &mut World, game: &mut Game, dt: f32) {
@@ -1269,7 +1281,12 @@ pub fn app() -> App<SimpleSceneState> {
                 let (_, _, _, zenith, horizon, ground) = sky_at(g.time_of_day);
                 let w = &g.weather;
                 let (zenith, horizon, ground) = (w.grade(zenith), w.grade(horizon), w.grade(ground));
-                renderer.sky = Some(Sky::gradient(zenith, horizon, ground));
+                // Göğün ışığı güneşin yanında kısık: tam şiddette güneşe denk geliyordu, gölgeler
+                // kayboluyor ve her şey mavimsi bir pastele dönüyordu (gölgedeki çim güneştekiyle
+                // aynı renkteydi). Gerçek bir açık gökte gökten gelen, güneşinkinin beşte biri
+                // kadar. Gece, ışığın hepsi gökten olduğu için kısılmıyor.
+                let day = ((g.time_of_day - 0.25) * std::f32::consts::TAU).sin().clamp(0.0, 1.0);
+                renderer.sky = Some(Sky::gradient(zenith, horizon, ground).with_intensity(1.0 - 0.68 * day.sqrt()));
                 renderer.fog = Some(Fog::new(horizon, w.fog_density(0.0016)).with_height(0.03, 0.0));
                 // Yağmur: kameranın çevresine bu karenin damlaları.
                 if w.rain > 0.02 {

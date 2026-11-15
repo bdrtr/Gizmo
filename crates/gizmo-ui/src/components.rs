@@ -481,6 +481,13 @@ pub struct Node {
     pub size: Vec2,
     /// Computed top-left position in window pixel coordinates.
     pub position: Vec2,
+    /// Whether it is shown: `false` when it or an ancestor has [`Display::None`]. A hidden node is
+    /// neither drawn — its background, its `Text` — nor hit: its box is not laid out, so the
+    /// position it holds means nothing.
+    ///
+    /// Added 2026-11-15. Before it, the label of a node inside a closed panel still drew — at the
+    /// window's top-left corner, where its never-laid-out box sat (`dunya`'s inventory title).
+    pub visible: bool,
 }
 
 impl Default for Node {
@@ -488,6 +495,7 @@ impl Default for Node {
         Self {
             size: Vec2::ZERO,
             position: Vec2::ZERO,
+            visible: true,
         }
     }
 }
