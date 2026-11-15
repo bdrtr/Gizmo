@@ -1,0 +1,19 @@
+KayKit : Character Pack : Adventurers (1.0)
+
+Created/distributed by Kay Lousberg (www.kaylousberg.com)
+Source: https://github.com/KayKit-Game-Assets/KayKit-Character-Pack-Adventures-1.0
+
+License: (Creative Commons Zero, CC0)
+http://creativecommons.org/publicdomain/zero/1.0/
+
+This content is free to use in personal, educational and commercial projects.
+Support by crediting 'Kay Lousberg' or 'www.kaylousberg.com' (this is not mandatory).
+
+---
+
+The four .glb files here (Knight, Rogue, Mage, Barbarian) are the pack's character files
+trimmed for Gizmo's `dunya` game: each keeps only the character's own body parts (weapons and
+shields removed) and thirteen of the pack's 76 animation clips (Idle, Unarmed_Idle, Walking_A,
+Walking_C, Running_A, Jump_Start, Jump_Idle, Jump_Land, PickUp, Interact, Cheer, Use_Item,
+Sit_Floor_Idle), with the binary buffer repacked. Geometry, skin, texture and the kept clips are
+unchanged.

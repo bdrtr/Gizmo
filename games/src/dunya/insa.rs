@@ -437,6 +437,7 @@ pub(super) fn place_structure(world: &mut World, game: &mut Game, kind: Build, a
     }
     spawn_structure(world, kind, at, yaw, game.visual, true);
     game.sounds.push("kur");
+    super::karakter::act(world, game.player, "Use_Item");
     game.dirty = true;
     game.note = (format!("{} kuruldu", kind.name()), 1.5);
     true

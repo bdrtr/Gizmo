@@ -1,0 +1,17 @@
+KayKit : Medieval Hexagon Pack (1.0)
+
+Created/distributed by Kay Lousberg (www.kaylousberg.com)
+Source: https://github.com/KayKit-Game-Assets/KayKit-Medieval-Hexagon-Pack-1.0
+
+License: (Creative Commons Zero, CC0)
+http://creativecommons.org/publicdomain/zero/1.0/
+
+This content is free to use in personal, educational and commercial projects.
+Support by crediting Kay Lousberg, www.kaylousberg.com (this is not mandatory).
+
+---
+
+The .glb files here are eight of the pack's glTF models (tree_single_A/B, rock_single_A/B/C,
+building_home_A_red, building_home_B_blue, building_well_blue), each packed with its .bin and the
+pack's shared texture (hexagons_medieval.png) into one binary glTF for embedding in Gizmo's
+`dunya` game. Nothing else is changed.

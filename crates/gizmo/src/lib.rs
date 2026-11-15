@@ -87,6 +87,9 @@ pub mod color;
 pub mod plugins;
 /// `use gizmo::prelude::*` — the one import a game is expected to need.
 pub mod prelude;
+// Building a glTF file's nodes into entities, for the spawner and for a `GltfModel` placed by name.
+#[cfg(feature = "render")]
+pub(crate) mod gltf_build;
 /// Entity spawning helpers built on the renderer's mesh/material pipeline. They also spawn
 /// rigid bodies, hence the `physics` half of the gate.
 #[cfg(all(feature = "render", feature = "physics"))]

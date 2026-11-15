@@ -1103,7 +1103,9 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // ever touched through a system is invisible otherwise. The studio's pipeline drives both
     // as well; it drove only the player until 2026-08-19.
     // A glTF model read from a scene file gets its skeletons and clips back from the model's file
-    // before anything poses it.
+    // before anything poses it — and a model asked for by name alone (a `GltfModel` with nothing
+    // under it) is built from its file first, so the resolver finds its meshes.
+    crate::gltf_build::build_requested_gltf_models(world, renderer);
     crate::renderer::gltf_model::resolve_gltf_models(world, renderer);
     // A model whose clips the editor has changed keeps those clips for the save to write.
     crate::renderer::gltf_model::sync_clip_edits(world);
@@ -13590,6 +13592,99 @@ fn material_surface(input: SurfaceInput) -> Surface {
             assert_eq!(changed, 0, "the reopened model drew {changed}/{total} pixels otherwise");
         });
         let _ = std::fs::remove_file(&scene_path);
+    }
+
+    /// **A glTF model asked for by name is built from its file.** A root with only a `Transform`
+    /// and a `GltfModel` draws what `spawn_gltf` draws at the same place, pixel for pixel — what
+    /// lets code that holds only the world (a game's update) place a model. And a skinned, animated
+    /// file asked for that way gets its skeleton on every skinned mesh and its clips on the player
+    /// the game had put there, the clip the game chose kept. Until 2026-11-15 a bare `GltfModel`
+    /// was given skeletons and clips for meshes it did not have, and drew nothing.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_gltf_model_asked_for_by_name_is_built_from_its_file() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        let model = write_red_gltf_quad();
+        let setup = |world: &mut World| {
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+        };
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            {
+                let mut commands = crate::spawner::Commands::new(&mut world, &renderer);
+                commands.spawn_gltf(Vec3::new(0.3, 0.0, 0.0), &model, false).expect("the model loads");
+            }
+            setup(&mut world);
+            let spawned = render_world(&mut renderer, &mut world).await;
+
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            let root = world.spawn_bundle((
+                Transform::new(Vec3::new(0.3, 0.0, 0.0)),
+                GlobalTransform::default(),
+                crate::renderer::gltf_model::GltfModel::new(model.clone()),
+            ));
+            setup(&mut world);
+            let named = render_world(&mut renderer, &mut world).await;
+            assert!(world.get::<gizmo_core::component::Children>(root).is_some_and(|c| !c.0.is_empty()), "nothing was built");
+            let (changed, total) = changed_pixels(&spawned, &named, 128);
+            assert_eq!(changed, 0, "the model asked for by name drew {changed}/{total} pixels otherwise");
+            // Built once: a second frame adds nothing.
+            let before = world.query::<&MeshRenderer>().iter().count();
+            render_world(&mut renderer, &mut world).await;
+            assert_eq!(world.query::<&MeshRenderer>().iter().count(), before, "the model was built twice");
+
+            // Skinned and animated: the games' KayKit knight, when the tree has it.
+            let knight = concat!(env!("CARGO_MANIFEST_DIR"), "/../../games/assets/kaykit/Knight.glb");
+            if !std::path::Path::new(knight).exists() {
+                eprintln!("skipping the skinned half: {knight} is not here");
+                return;
+            }
+            let mut world = World::new();
+            let root = world.spawn_bundle((
+                Transform::new(Vec3::new(0.0, -1.0, 0.0)),
+                GlobalTransform::default(),
+                crate::renderer::gltf_model::GltfModel::new(knight),
+                // The game's choice of clip, before the model has any.
+                crate::renderer::components::AnimationPlayer { active_animation: 3, ..Default::default() },
+            ));
+            setup(&mut world);
+            render_world(&mut renderer, &mut world).await;
+            let player = world.get::<crate::renderer::components::AnimationPlayer>(root).expect("a player").clone();
+            assert!(player.animations.len() > 3 && player.active_animation == 3, "clips {} active {}", player.animations.len(), player.active_animation);
+            let meshes: Vec<Entity> = world.query::<(Entity, &MeshRenderer)>().iter().map(|(e, _)| e).collect();
+            let skinned = meshes.iter().filter(|e| world.get::<crate::renderer::components::Skeleton>(**e).is_some()).count();
+            assert_eq!(skinned, 6, "the knight's six skinned parts each have a skeleton");
+            // The helmet and the cape hang on bones (head, chest) without being skinned: each
+            // follows its bone, from the model's root, drawn where that bone is this frame, and the
+            // helmet is where a head is.
+            let named = |name: &str| {
+                world.query::<(Entity, &gizmo_core::EntityName)>().iter().find(|(_, n)| n.0 == name).map(|(e, _)| e).expect(name)
+            };
+            for part in ["Knight_Helmet", "Knight_Cape"] {
+                let e = named(part);
+                let a = world.get::<crate::renderer::components::BoneAttachment>(e).unwrap_or_else(|| panic!("{part} follows no bone"));
+                assert_eq!(a.target_entity, root, "{part} follows another model's skeleton");
+                // Drawn where the bone is this frame, not where propagation last left it.
+                let sk = world.get::<crate::renderer::components::Skeleton>(root).expect("the root's skeleton");
+                let want = crate::math::Mat4::from_translation(Vec3::new(0.0, -1.0, 0.0)) * sk.global_poses[a.bone_index] * a.offset;
+                let drawn = world.get::<GlobalTransform>(e).expect("placed").matrix;
+                assert!(drawn.abs_diff_eq(want, 1e-4), "{part} is drawn at {:?}, its bone is at {:?}", drawn.w_axis, want.w_axis);
+                assert_eq!(world.get::<gizmo_core::component::Parent>(e).map(|p| p.0), Some(root), "{part} hangs from its bone entity");
+            }
+            let helmet = world.get::<GlobalTransform>(named("Knight_Helmet")).map(|g| g.matrix.w_axis.truncate()).expect("placed");
+            assert!(helmet.y > -1.0 + 1.1, "the helmet is not on the head: {helmet:?} over feet at y = -1");
+        });
     }
 
     /// **A glTF model's sampler survives a save and a reopen.** A 2×2 checker magnified over the

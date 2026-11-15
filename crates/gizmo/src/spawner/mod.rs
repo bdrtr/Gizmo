@@ -18,7 +18,7 @@
 
 use crate::color::Color;
 use gizmo_core::{Entity, EntityName, World};
-use gizmo_math::{Quat, Vec3};
+use gizmo_math::Vec3;
 use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 use gizmo_renderer::{

@@ -57,6 +57,8 @@ mod canli;
 mod harita;
 mod hava;
 mod insa;
+mod karakter;
+mod modeller;
 mod su;
 
 use std::collections::HashSet;
@@ -300,9 +302,11 @@ fn load_chunk(world: &mut World, coord: ChunkCoord, collected: &HashSet<(i32, i3
             Gatherable { id, item: "tas", amount: 2 },
         ));
         if visual {
-            world.add_component(rock, MeshSource("standard_cube".into()));
-            world.add_component(rock, MaterialDesc::new().with_pbr(Vec4::new(0.45, 0.44, 0.43, 1.0), 0.9, 0.0));
-            world.add_component(rock, MeshRenderer::new());
+            // Kaya modeli çarpıştırıcının kutusunu dolduruyor: kayanın kendi uzayı ±1 (ölçeği
+            // `size`), modelin dibi kutunun dibinde.
+            let (model, half) = modeller::ROCKS[(hash(coord.0, coord.1, 700 + k as u32) % 3) as usize];
+            let fit = Vec3::new(1.0 / half.x, 2.0 / half.y, 1.0 / half.z);
+            modeller::place(world, rock, model, Vec3::Y * -1.0, Quat::IDENTITY, fit);
         }
         spawned.push(rock);
     }
@@ -346,26 +350,12 @@ fn spawn_tree(world: &mut World, at: Vec3, scale: f32, kind: f32, visual: bool) 
         Collider::cylinder(0.22 * scale, trunk_h * 0.5),
     ));
     if visual {
-        // Gövde: motorun silindiri 1 m yarıçaplı ve 2 m boyunda, ölçek yarıçap ve yarı boy.
-        let trunk = world.spawn_bundle((
-            Transform::new(Vec3::ZERO).with_scale(Vec3::new(0.22 * scale, trunk_h * 0.5, 0.22 * scale)),
-            GlobalTransform::default(),
-            MeshSource("cylinder".into()),
-            MaterialDesc::new().with_pbr(Vec4::new(0.36, 0.25, 0.16, 1.0), 0.9, 0.0),
-            MeshRenderer::new(),
-        ));
-        world.add_child(tree, trunk);
-        // Yaprakları: koni (çam) ya da küre (yapraklı), gövdenin çocuğu; gövdenin ölçeği yok, yerel uzay metre.
-        let pine = kind < 0.5;
-        let canopy = world.spawn_bundle((
-            Transform::new(Vec3::Y * (trunk_h * 0.5 + if pine { 1.5 } else { 1.1 } * scale))
-                .with_scale(if pine { Vec3::new(1.1, 1.8, 1.1) * scale } else { Vec3::splat(1.3 * scale) }),
-            GlobalTransform::default(),
-            MeshSource(if pine { "cone".into() } else { "sphere".into() }),
-            MaterialDesc::new().with_pbr(if pine { Vec4::new(0.13, 0.33, 0.17, 1.0) } else { Vec4::new(0.27, 0.48, 0.18, 1.0) }, 0.85, 0.0),
-            MeshRenderer::new(),
-        ));
-        world.add_child(tree, canopy);
+        // Modeli: iki çeşit, 4–6,5 m boyunda (`scale` 0,8–1,5), dibi toprakta, her biri kendi
+        // yönüne dönük. Çarpıştırıcı gövde, silindir.
+        let model = modeller::TREES[usize::from(kind >= 0.5)];
+        let size = 4.4 * scale / modeller::TREE_HEIGHT;
+        let turn = Quat::from_rotation_y(kind * 37.0);
+        modeller::place(world, tree, model, Vec3::Y * -(trunk_h * 0.5), turn, Vec3::splat(size));
     }
     tree
 }
@@ -422,6 +412,7 @@ fn gather(world: &mut World, game: &mut Game) {
     };
     if give(world, game, g.item, g.amount) {
         game.sounds.push(if g.item == "tas" { "tas" } else { "odun" });
+        karakter::act(world, game.player, "PickUp");
         game.collected.insert(g.id);
         world.despawn_recursive(entity);
     }
@@ -696,25 +687,10 @@ fn spawn_player(world: &mut World, at: Vec3, visual: bool) -> Entity {
         Collider::capsule(0.35, 0.55),
         Inventory::new(SLOTS),
     ));
-    if visual {
-        let body = world.spawn_bundle((
-            // Çarpıştırıcıyla aynı kapsül: yarıçap 0,35, gövdesi 1,1 m.
-            Transform::new(Vec3::ZERO),
-            GlobalTransform::default(),
-            MeshSource("capsule_0.35_1.1_6_16".into()),
-            MaterialDesc::new().with_pbr(Vec4::new(0.85, 0.35, 0.2, 1.0), 0.5, 0.0),
-            MeshRenderer::new(),
-        ));
-        let face = world.spawn_bundle((
-            Transform::new(Vec3::new(0.0, 0.55, -0.3)).with_scale(Vec3::new(0.18, 0.08, 0.06)),
-            GlobalTransform::default(),
-            MeshSource("standard_cube".into()),
-            MaterialDesc::new().with_unlit(Vec4::new(0.1, 0.1, 0.12, 1.0)),
-            MeshRenderer::new(),
-        ));
-        world.add_child(player, body);
-        world.add_child(player, face);
-    }
+    // Şövalye: ayakları kapsülün dibinde (yarıçap 0,35 + yarı boy 0,55), boyu 1,8 m. Penceresiz
+    // sınamada da giydiriliyor — yalnızca veri; model kurulmuyor, klip seçimi yine sınanıyor.
+    let _ = visual;
+    karakter::dress(world, player, karakter::KNIGHT, 0.9, 1.8);
     player
 }
 
@@ -940,13 +916,18 @@ fn enter_or_leave(world: &mut World, game: &mut Game) {
     }
 }
 
+/// `parent`'ın altındaki her şeyi gizle ya da göster — torunları da: karakterin modeli birkaç kat
+/// derin.
 fn hide_children(world: &mut World, parent: Entity, hidden: bool) {
-    let children: Vec<Entity> = world.get::<gizmo::core::component::Children>(parent).map(|c| c.0.clone()).unwrap_or_default();
-    for c in children {
+    let mut stack: Vec<Entity> = world.get::<gizmo::core::component::Children>(parent).map(|c| c.0.clone()).unwrap_or_default();
+    while let Some(c) = stack.pop() {
         if hidden {
             world.add_component(c, IsHidden);
         } else {
             world.remove_component::<IsHidden>(c);
+        }
+        if let Some(more) = world.get::<gizmo::core::component::Children>(c) {
+            stack.extend(more.0.iter().copied());
         }
     }
 }
@@ -1083,6 +1064,7 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
     canli::tick(world, me, dt);
     game.physics.advance(world, dt.min(0.1));
     world.apply_commands();
+    karakter::animate(world, dt);
     // Kristaller dönüyor; yaklaşan topluyor.
     let me = focus(world, game);
     let mut taken = Vec::new();
@@ -1106,6 +1088,7 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
     pick_up(world, game, dt);
     if game.won.is_none() && crystals(world, game) >= GOAL as u32 {
         game.won = Some(game.clock);
+        karakter::act(world, game.player, "Cheer");
     }
     game.note.1 -= dt;
     sync_transforms(world);
@@ -1267,8 +1250,11 @@ fn update_map(world: &mut World, game: &mut Game, toggle: bool) {
 
 /// Oyunun tamamı bir `App` olarak.
 pub fn app() -> App<SimpleSceneState> {
-    App::<SimpleSceneState>::new("Gizmo Engine - Dünya", 1280, 800)
-        .add_plugin(UiPlugin)
+    let mut app = App::<SimpleSceneState>::new("Gizmo Engine - Dünya", 1280, 800);
+    for (path, bytes) in modeller::EMBEDDED {
+        app = app.add_embedded_asset(path, std::borrow::Cow::Borrowed(bytes));
+    }
+    app.add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
             let font = scene.renderer.default_font();
             let game = setup(scene.world, font, true);
@@ -1371,6 +1357,9 @@ pub fn self_test() -> bool {
     let mut pushed_through = f32::MIN;
     let mut build_report = String::new();
     let mut build_ok = false;
+    // Karakter: oyuncunun karakterinin bu koşuda istediği klipler; köylülerin hepsi giydirilmiş mi.
+    let mut clips_seen: HashSet<&'static str> = HashSet::new();
+    let mut villagers_dressed = (0usize, 0usize);
     for frame in 0..(60 * 180) {
         let driving_phase = frame >= 60 * 120;
         let walking_into_fence = (build_at..build_at + 180).contains(&frame);
@@ -1423,6 +1412,8 @@ pub fn self_test() -> bool {
                     teleport(w, &game, at.x + 1.5, at.z);
                     sync_transforms(w);
                     let q = canli::quest_of(villager.id);
+                    let villagers: Vec<Entity> = w.query::<(Entity, &canli::Villager)>().iter().map(|(e, _)| e).collect();
+                    villagers_dressed = (villagers.iter().filter(|v| karakter::wanted_clip(w, **v).is_some()).count(), villagers.len());
                     let talked = canli::talk(w, &mut game);
                     let offered = game.quests.get(&villager.id) == Some(&1);
                     let before = w.get::<Inventory>(game.player).map_or(0, |b| b.count(q.reward.0));
@@ -1589,6 +1580,9 @@ pub fn self_test() -> bool {
             build_report = if build_report.is_empty() { text } else { format!("{build_report}; {text}") };
         }
         let game = run.world.get_resource::<Game>().expect("oyun");
+        if game.driving.is_none() {
+            clips_seen.extend(karakter::wanted_clip(&run.world, game.player));
+        }
         let p = focus(&run.world, &game);
         if let (Some((boat, _)), true) = (boat_start, (boat_at + 90..boat_at + 60 * 7).contains(&frame)) {
             if let Some(t) = run.world.get::<Transform>(boat) {
@@ -1627,6 +1621,12 @@ pub fn self_test() -> bool {
         run.world.get::<Transform>(car).is_some_and(|t| t.position.y > height(t.position.x, t.position.z) - 0.5)
     });
     let (wood, stone) = (bag.count("odun"), bag.count("tas"));
+    // Yürüdü, durdu, konuştu, kurdu, topladı: her birinin klibi istendi; köylülerin hepsinde karakter.
+    // (Otomatik pilot tam hızda, 6 m/s: koşuyor.)
+    let clips_ok = ["Idle", "Interact", "Use_Item", "PickUp"].iter().all(|c| clips_seen.contains(c))
+        && (clips_seen.contains("Walking_A") || clips_seen.contains("Running_A"))
+        && villagers_dressed.1 > 0
+        && villagers_dressed.0 == villagers_dressed.1;
     let ok = deepest_walk > -0.5
         && deepest_drive > -0.5
         && crystals_taken >= 2
@@ -1646,10 +1646,14 @@ pub fn self_test() -> bool {
         && fled > 3.0
         // Çit 2,6 m önde, 0,1 m kalın: yüzü 2,5 m'de. Kapsülün yarıçapı 0,35 ama yamaçta biraz daha
         // yaklaşıyor (ölçülen 2,29 m); 2,5 m'yi geçen çitin içinden geçmiştir. Çitsiz üç saniye 18 m.
-        && pushed_through < 2.5;
+        && pushed_through < 2.5
+        && clips_ok;
     println!("dunya --test: canlılar: {village_report}; {animals_seen} hayvan, en yakını üç saniyede {fled:.1} m kaçtı; bırakılan arabalar yerinde: {parked_ok}");
     println!("dunya --test: su: {boat_report}; {swim_report}; yüzerken zeminin en çok {:.2} m altında", -deepest_swim.min(0.0));
     println!("dunya --test: hava: {weather_report}; harita köyde {map_marks} işaret, köy görünüyor: {map_village}");
+    let mut seen: Vec<&str> = clips_seen.iter().copied().collect();
+    seen.sort_unstable();
+    println!("dunya --test: karakter: istenen klipler {seen:?}; giydirilen köylü {}/{}", villagers_dressed.0, villagers_dressed.1);
     println!("dunya --test: inşa: {build_report}; çite yürüyüş en çok {pushed_through:.2} m (çit 2,6 m önde)");
     println!(
         "dunya --test: envanterde {} kristal (dünyadan {crystals_taken} alındı), {wood} odun, {stone} taş; hücre {} yüklendi, {} silindi; yürüyüşte başlangıçtan {:.0} m, arabayla {:.0} m; zeminin altına en çok yayada {:.2} m, arabada {:.2} m → {}",

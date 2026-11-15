@@ -161,13 +161,36 @@ fn spawn_villager(world: &mut World, at: Vec3, id: (i32, i32, u8), home: Vec3, v
     world.add_component(e, Wanderer { home, radius: 9.0, speed: 1.4, wary: 4.0, flee_speed: 0.0, goal: None, timer: 0.0, seed: hash(id.0, id.1, id.2 as u32) });
     world.add_component(e, Villager { id, name });
     world.add_component(e, BehaviorTree::new(villager_tree()));
+    // Bir maceracı: ayakları kapsülün dibinde (0,33 + 0,5), boyu 1,66 m.
+    let _ = visual;
+    super::karakter::dress(world, e, super::karakter::villager_model(id), 0.83, 1.66);
+    e
+}
+
+/// Bir köy yapısı (ev, kuyu): `model` `scale` kat büyük, modelin kutusu kadar katı bir kutu; dibi
+/// ayak izinin en alçak köşesinde, toprağa biraz gömük, ki yamaçta havada kalmasın.
+fn spawn_building(world: &mut World, at: Vec3, yaw: f32, model: (&str, Vec3), scale: f32, visual: bool) -> Entity {
+    let (path, half) = model;
+    let turn = Quat::from_rotation_y(yaw);
+    let foot = Vec3::new(half.x, 0.0, half.z) * scale;
+    let ground = [(-1.0f32, -1.0f32), (1.0, -1.0), (-1.0, 1.0), (1.0, 1.0), (0.0, 0.0)]
+        .iter()
+        .map(|(sx, sz)| {
+            let p = at + turn * Vec3::new(foot.x * sx, 0.0, foot.z * sz);
+            height(p.x, p.z)
+        })
+        .fold(f32::MAX, f32::min)
+        - 0.15;
+    let size = Vec3::new(half.x, half.y * 0.5, half.z) * scale;
+    let e = world.spawn_bundle((
+        Transform::new(Vec3::new(at.x, ground + size.y, at.z)).with_rotation(turn),
+        GlobalTransform::default(),
+        RigidBody::new_static(),
+        Velocity::default(),
+        Collider::box_collider(size),
+    ));
     if visual {
-        let h = (hash(id.0, id.1, 500 + id.2 as u32) % 1000) as f32 / 1000.0 * std::f32::consts::TAU;
-        let shirt = material(Vec4::new(0.5 + 0.4 * h.cos(), 0.5 + 0.4 * (h + 2.1).cos(), 0.5 + 0.4 * (h + 4.2).cos(), 1.0));
-        piece(world, e, Vec3::ZERO, Vec3::ONE, Quat::IDENTITY, "capsule_0.33_1.0_6_16", shirt);
-        piece(world, e, Vec3::new(0.0, 0.95, 0.0), Vec3::splat(0.22), Quat::IDENTITY, "sphere", material(Vec4::new(0.88, 0.7, 0.55, 1.0)));
-        piece(world, e, Vec3::new(0.0, 1.22, 0.0), Vec3::new(0.3, 0.14, 0.3), Quat::IDENTITY, "cone", material(Vec4::new(0.75, 0.62, 0.3, 1.0)));
-        piece(world, e, Vec3::new(0.0, 0.95, -0.2), Vec3::new(0.14, 0.04, 0.03), Quat::IDENTITY, "standard_cube", MaterialDesc::new().with_unlit(Vec4::new(0.1, 0.1, 0.12, 1.0)));
+        super::modeller::place(world, e, path, Vec3::Y * -size.y, Quat::IDENTITY, Vec3::splat(scale));
     }
     e
 }
@@ -195,12 +218,14 @@ pub(super) fn populate_chunk(world: &mut World, coord: ChunkCoord, visual: bool,
     let Some(at) = village_at(coord) else { return };
     for k in 0..3 {
         let a = k as f32 / 3.0 * std::f32::consts::TAU + 0.4;
-        let house = at + Vec3::new(a.cos(), 0.0, a.sin()) * 8.0;
-        // Kapısı (açık önü, +Z) köyün ortasına baksın.
-        let yaw = (house.x - at.x).atan2(house.z - at.z) + std::f32::consts::PI;
-        spawned.extend(super::insa::spawn_structure(world, super::insa::Build::Hut, house, yaw, visual, false));
+        let house = at + Vec3::new(a.cos(), 0.0, a.sin()) * 10.0;
+        // Önü (+Z) köyün ortasına baksın.
+        let yaw = (at.x - house.x).atan2(at.z - house.z);
+        let model = super::modeller::HOUSES[(hash(coord.0, coord.1, 800 + k) % 2) as usize];
+        spawned.push(spawn_building(world, house, yaw, model, 6.0, visual));
     }
     spawned.extend(super::insa::spawn_structure(world, super::insa::Build::Fire, at, 0.0, visual, false));
+    spawned.push(spawn_building(world, at + Vec3::new(-4.5, 0.0, -3.5), 0.6, super::modeller::WELL, 3.2, visual));
     for k in 0..2u8 {
         let p = at + Vec3::new(if k == 0 { 3.0 } else { -3.0 }, 0.0, 2.0);
         spawned.push(spawn_villager(world, Vec3::new(p.x, height(p.x, p.z), p.z), (coord.0, coord.1, k), at, visual));
@@ -348,7 +373,10 @@ fn item_name(game: &Game, item: &str, count: u32) -> String {
 /// T: en yakın köylüyle konuş — iş al, getirdiğini ver, ya da selam.
 pub(super) fn talk(world: &mut World, game: &mut Game) -> bool {
     let me = focus(world, game);
-    let Some((_, villager)) = nearest_villager(world, me) else { return false };
+    let Some((who, villager)) = nearest_villager(world, me) else { return false };
+    // İkisi de el sallıyor.
+    super::karakter::act(world, game.player, "Interact");
+    super::karakter::act(world, who, "Interact");
     let quest = quest_of(villager.id);
     let state = game.quests.get(&villager.id).copied().unwrap_or(0);
     let (item, need) = quest.want;

@@ -50,6 +50,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A glTF model placed by name: a `GltfModel` alone is built from its file.** A root carrying only a `Transform` and
+  `GltfModel::new(path)` gets the file's nodes, meshes and materials as its descendants on the next frame, exactly as
+  `Commands::spawn_gltf` makes them (its `Transform` kept), then its skeletons and clips from `resolve_gltf_models` — to
+  an `AnimationPlayer` already on the root if there is one, so a clip chosen before the model existed is the one it
+  starts in. Code that holds only the `World` (a game's update, a chunk being loaded) can now place a model; the file
+  is imported once per path and every later instance, each with its own skeleton, comes from the cache. Until now a
+  bare `GltfModel` was given skeletons and clips for meshes it did not have and drew nothing.
+- **`dunya`: real characters, trees and houses.** The player is a skinned, animated KayKit knight and the villagers are
+  its rogue, mage and barbarian (CC0, Kay Lousberg), embedded in the binary: the clip follows the body's speed (idle,
+  walk, run, in the air) at a rate matched to it, and gathering, talking and building play their own. Trees, rocks,
+  village houses and a well are KayKit's *Medieval Hexagon Pack* models. Trimmed and packed copies (3.6 MB in all) are
+  in `games/assets/`, each folder with its licence and what was done to the files.
+
 - **A surface built from nodes: `gizmo_renderer::shader_graph`.** A `ShaderGraph` is nodes (`NodeKind`: what the fragment
   knows, the instance's `Material`, the engine's own surface, the base texture, constants, component-wise math, vectors,
   Fresnel, a checker and value noise) and links from an output to an input, `serde` so an editor can save it.
@@ -918,6 +931,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A mesh hung on a bone follows it.** A glTF node with a mesh that is not skinned but sits under a joint — a
+  helmet on the head, a cape on the chest, a sword in a hand — was spawned under that joint's entity, which nothing
+  poses (the skeleton is posed, not the bone entities), so it stayed where the bind pose left it while the body moved.
+  The spawner now hangs it from the model's root with a `BoneAttachment` to that bone and its offset from it.
+- **A bone attachment is drawn where its bone is this frame.** `BoneAttachmentSystem` runs after the animation, which is
+  after the frame's transform propagation, so every attachment was drawn a frame behind its bone. The system now
+  writes the world matrix of each attached entity and of everything under it.
 - **A CCD body bounces.** An island holding a CCD body is solved on the split-impulse path (TGS-soft lets a
   1753 m/s bullet through a 0.59 m wall), and that path solved the speculative contacts CCD makes without
   restitution: the body arrived touching at almost no speed and the next step's real contact had nothing to bounce

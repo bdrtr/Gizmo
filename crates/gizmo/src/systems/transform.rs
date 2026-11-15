@@ -283,7 +283,49 @@ impl gizmo_core::system::System for BoneAttachmentSystem {
             }
         }
         if attached > 0 {
+            refresh_attached_world_matrices(world);
             tracing::trace!(attached, "bone_attachment: kemiğe bağlı varlıklar güncellendi");
+        }
+    }
+}
+
+/// The world matrices of every bone-attached entity and of everything under it, from the pose
+/// [`BoneAttachmentSystem`] has just written. That system runs after the animation, which is after
+/// the frame's transform propagation, so without this an attachment was drawn where the bone had
+/// been the frame before — a sword a frame behind its hand, and a model's helmet left at its bind
+/// pose on the frame the model appeared (until 2026-11-15).
+#[cfg(feature = "render")]
+fn refresh_attached_world_matrices(world: &gizmo_core::world::World) {
+    use gizmo_core::component::Children;
+    use gizmo_physics_core::components::GlobalTransform;
+    use gizmo_physics_core::Transform;
+    let local = |t: &Transform| crate::math::Mat4::from_scale_rotation_translation(t.scale, t.rotation, t.position);
+    let mut stack: Vec<(Entity, crate::math::Mat4)> = world
+        .query::<(Entity, &gizmo_renderer::components::BoneAttachment)>()
+        .iter()
+        .filter_map(|(e, _)| world_matrix(world, e).map(|m| (e, m)))
+        .collect();
+    let children = world.query::<&Children>();
+    let transforms = world.query::<&Transform>();
+    // SAFETY: called from an exclusive system's `run`; nothing else holds a view of
+    // `GlobalTransform`, and the read views above are of other components.
+    let mut globals = unsafe { world.query_unchecked::<&mut GlobalTransform>() };
+    // A hierarchy is a tree, but a bad `Parent`/`Children` pair should not loop forever.
+    let mut budget = 1 << 20;
+    while let Some((e, m)) = stack.pop() {
+        budget -= 1;
+        if budget == 0 {
+            break;
+        }
+        if let Some(mut g) = globals.get_mut(e) {
+            g.matrix = m;
+        }
+        if let Some(c) = children.get(e) {
+            for &child in &c.0 {
+                if let Some(t) = transforms.get(child) {
+                    stack.push((child, m * local(t)));
+                }
+            }
         }
     }
 }
@@ -297,6 +339,73 @@ mod tests {
     use gizmo_core::world::World;
     use gizmo_physics_core::components::GlobalTransform;
     use gizmo_physics_core::Transform;
+
+    /// **An attachment is drawn where its bone is this frame.** The attachment system runs after
+    /// the animation, which is after the frame's propagation; it now writes the attached entity's
+    /// world matrix, and its children's, itself. Until 2026-11-15 a sword was drawn a frame behind
+    /// its hand. No propagation runs here: what the system leaves is what the frame draws.
+    #[cfg(feature = "render")]
+    #[test]
+    fn an_attachment_is_drawn_where_its_bone_is_this_frame() {
+        use crate::math::{Mat4, Quat, Vec3};
+        use gizmo_renderer::{SkeletonHierarchy, SkeletonJoint};
+        use gizmo_core::component::Parent;
+        use gizmo_renderer::components::{BoneAttachment, Skeleton};
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::NOOP,
+            backend_options: wgpu::BackendOptions {
+                noop: wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a noop device");
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+        let buffer = device.create_buffer(&wgpu::BufferDescriptor { label: None, size: 64, usage: wgpu::BufferUsages::UNIFORM, mapped_at_creation: false });
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[] });
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![SkeletonJoint {
+                name: "Hand".into(),
+                node_index: 0,
+                inverse_bind_matrix: Mat4::IDENTITY,
+                parent_index: None,
+                local_bind_transform: Mat4::IDENTITY,
+                bind_translation: Vec3::ZERO,
+                bind_rotation: Quat::IDENTITY,
+                bind_scale: Vec3::ONE,
+            }],
+            root_transform: Mat4::IDENTITY,
+        };
+        let mut skeleton = Skeleton::new(std::sync::Arc::new(bind_group), std::sync::Arc::new(buffer), std::sync::Arc::new(hierarchy), vec![Mat4::IDENTITY]);
+        // The pose the animation wrote this frame: the hand raised and turned.
+        let pose = Mat4::from_rotation_translation(Quat::from_rotation_z(0.7), Vec3::new(0.5, 1.4, 0.0));
+        skeleton.global_poses = vec![pose];
+
+        let mut world = World::new();
+        let model = world.spawn_bundle((Transform::new(Vec3::new(10.0, 0.0, 0.0)), GlobalTransform::default(), skeleton));
+        let offset = Mat4::from_translation(Vec3::new(0.0, 0.3, 0.0));
+        let sword = world.spawn_bundle((
+            Transform::new(Vec3::ZERO),
+            GlobalTransform::default(),
+            Parent(model),
+            BoneAttachment { target_entity: model, bone_index: 0, offset },
+        ));
+        let gem = world.spawn_bundle((Transform::new(Vec3::new(0.0, 0.8, 0.0)), GlobalTransform::default(), Parent(sword)));
+        world.add_component(model, Children(vec![sword]));
+        world.add_component(sword, Children(vec![gem]));
+        // Last frame's propagation: the model where it is, the sword and the gem not yet anywhere.
+        world.add_component(model, GlobalTransform { matrix: Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)) });
+
+        BoneAttachmentSystem.run(&world, 1.0 / 60.0);
+
+        let want = Mat4::from_translation(Vec3::new(10.0, 0.0, 0.0)) * pose * offset;
+        let drawn = world.get::<GlobalTransform>(sword).unwrap().matrix;
+        assert!(drawn.abs_diff_eq(want, 1e-5), "the sword is drawn at {:?}, its hand at {:?}", drawn.w_axis, want.w_axis);
+        let gem_want = want * Mat4::from_translation(Vec3::new(0.0, 0.8, 0.0));
+        let gem_drawn = world.get::<GlobalTransform>(gem).unwrap().matrix;
+        assert!(gem_drawn.abs_diff_eq(gem_want, 1e-5), "the gem on the sword is drawn at {:?}, not {:?}", gem_drawn.w_axis, gem_want.w_axis);
+    }
 
     /// The world matrix through the parents, before any propagation has run: a child spawned
     /// this frame under a moved, turned, scaled parent is where propagation will put it — and

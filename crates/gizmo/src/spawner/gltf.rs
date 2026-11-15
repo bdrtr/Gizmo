@@ -4,6 +4,7 @@
 //! component/renderer imports.
 
 use super::*;
+use crate::gltf_build::{spawn_gltf_node_flat, Joints, Place};
 
 impl<'a> Commands<'a> {
     // ── GLTF Yükleme ─────────────────────────────────────────────────────────────────────────────
@@ -48,11 +49,14 @@ impl<'a> Commands<'a> {
                     skeletons.push(self.renderer.create_skeleton(std::sync::Arc::new(skel_data.clone())));
                 }
 
+                let joints = Joints::of(&asset.skeletons);
                 for node in &asset.roots {
                     spawn_gltf_node_flat(
                         self.world,
                         node,
                         root,
+                        Place { root, bone: None },
+                        &joints,
                         default_mat.clone(),
                         attach_colliders,
                         &skeletons,
@@ -151,11 +155,14 @@ impl<'a> Commands<'a> {
                     skeletons.push(self.renderer.create_skeleton(std::sync::Arc::new(skel_data.clone())));
                 }
 
+                let joints = Joints::of(&asset.skeletons);
                 for node in &asset.roots {
                     spawn_gltf_node_flat(
                         self.world,
                         node,
                         root,
+                        Place { root, bone: None },
+                        &joints,
                         default_mat.clone(),
                         attach_colliders,
                         &skeletons,
@@ -212,140 +219,3 @@ impl<'a> Commands<'a> {
         }
     }
 }
-
-fn spawn_gltf_node_flat(
-    world: &mut World,
-    node: &gizmo_renderer::asset::GltfNodeData,
-    parent_id: Entity,
-    default_mat: Material,
-    attach_colliders: bool,
-    skeletons: &[gizmo_renderer::components::Skeleton],
-) {
-    use gizmo_core::component::{Children, Parent};
-    let entity = world.spawn();
-    let name = node.name.clone().unwrap_or_else(|| "GLTF_Node".to_string());
-    world.add_component(entity, EntityName(name));
-    if let Some(parent) = world.live(parent_id) {
-        world.add_component(entity, Parent(parent));
-    }
-    world.add_component(entity, Children(Vec::new()));
-
-    {
-        let mut ch_store = world.query_mut::<&mut Children>();
-        // Safe to push since entity just spawned and didn't trigger any complex re-borrow updates
-        if let Some(mut parent_ch) = ch_store.get_mut(parent_id) {
-            parent_ch.0.push(entity);
-        }
-    }
-
-    let raw_rot = Quat::from_xyzw(
-        node.rotation[0],
-        node.rotation[1],
-        node.rotation[2],
-        node.rotation[3],
-    );
-    let rot = if raw_rot.is_nan() || raw_rot.length() < 0.0001 {
-        Quat::IDENTITY
-    } else {
-        raw_rot.normalize()
-    };
-
-    let mut t = Transform::new(Vec3::new(
-        node.translation[0],
-        node.translation[1],
-        node.translation[2],
-    ))
-    .with_rotation(rot)
-    .with_scale(Vec3::new(node.scale[0], node.scale[1], node.scale[2]));
-    t.update_local_matrix();
-
-    if node.skin_index.is_some() || node.name.as_deref() == Some("Armature") {
-        t = Transform::default();
-        t.update_local_matrix();
-    }
-    
-    world.add_component(entity, t);
-    world.add_component(entity, gizmo_physics_core::components::GlobalTransform::default());
-
-    // Per-node/per-primitive → iç-döngü/özyineleme detayı, bu yüzden trace! (bir glTF yüzlerce
-    // node içerebilir; aggregate özet çağıran `spawn_gltf`'in info! satırında verilir).
-    tracing::trace!(
-        entity = entity.id(),
-        name = ?node.name,
-        primitives = node.primitives.len(),
-        children = node.children.len(),
-        "glTF node spawn'lanıyor"
-    );
-    let mut newly_added_prims = Vec::new();
-    for (mesh, mat_opt) in node.primitives.iter() {
-        tracing::trace!(
-            source = %mesh.source,
-            bounds_min = ?mesh.bounds.min,
-            bounds_max = ?mesh.bounds.max,
-            "glTF primitive spawn'lanıyor"
-        );
-        let prim = world.spawn();
-        let mut prim_t = Transform::new(Vec3::ZERO);
-        prim_t.update_local_matrix();
-        world.add_component(prim, prim_t);
-        world.add_component(prim, gizmo_physics_core::components::GlobalTransform::default());
-        world.add_component(prim, Parent(entity));
-        world.add_component(prim, Children(Vec::new()));
-
-        newly_added_prims.push(prim);
-
-        world.add_component(prim, mesh.clone());
-        // The mesh's cache key (`gltf_mesh_<file>_<node>_p<n>`) as its source, so a scene saves the
-        // model and the loader reads the file again when it opens. Without it a saved model
-        // reopened with no geometry at all.
-        world.add_component(prim, gizmo_core::component::MeshSource(mesh.source.clone()));
-        world.add_component(prim, mat_opt.clone().unwrap_or_else(|| default_mat.clone()));
-        world.add_component(prim, MeshRenderer::new());
-
-        if let Some(skin_idx) = node.skin_index {
-            if skin_idx < skeletons.len() {
-                world.add_component(prim, skeletons[skin_idx].clone());
-            }
-        }
-
-        if attach_colliders {
-            let extents = (mesh.bounds.max - mesh.bounds.min) / 2.0;
-            let center_offset = (mesh.bounds.max + mesh.bounds.min) / 2.0;
-            let cx = extents.x.max(0.01);
-            let cy = extents.y.max(0.01);
-            let cz = extents.z.max(0.01);
-            
-            // Eğer merkeze tam oturmuyorsa Compound(offset_box) kullanarak hizala
-            if center_offset.length_squared() > 0.0001 {
-                world.add_component(
-                    prim,
-                    gizmo_physics_core::Collider::offset_box(center_offset.into(), gizmo_math::Vec3::new(cx, cy, cz)),
-                );
-            } else {
-                world.add_component(prim, gizmo_physics_core::Collider::new_aabb(cx, cy, cz));
-            }
-        }
-    }
-
-    // Pulling query_mut OUTSIDE the loop avoiding multiple overlapping mutable queries
-    if !newly_added_prims.is_empty() {
-        {
-            let mut ch_store = world.query_mut::<&mut Children>();
-            if let Some(mut parent_ch) = ch_store.get_mut(entity) {
-                parent_ch.0.extend(newly_added_prims);
-            }
-        }
-    }
-
-    for child_node in &node.children {
-        spawn_gltf_node_flat(
-            world,
-            child_node,
-            entity,
-            default_mat.clone(),
-            attach_colliders,
-            skeletons,
-        );
-    }
-}
-
