@@ -144,11 +144,39 @@ pub fn update_character_with_hits(
         }
     }
 
+    let dropping = kcc.drop_through_timer > 0.0;
+    for (_col_ent, col_trans, col) in &near_colliders {
+        if let Some((d, n)) = Raycast::ray_shape(&ray, &col.shape, col_trans) {
+            if d < ground_dist && blocks(col, col_trans, d, n, radius, vel.linear, true, dropping) {
+                ground_dist = d;
+                ground_normal = n;
+            }
+        }
+    }
+
+    // **Shallow water is waded, not swum.** The swim mode holds the character at the surface,
+    // so with its centre in the water it could never rise out of it: at a shore whose bottom
+    // climbs gently it swam against the slope for ever, and the player was stuck in the lake.
+    // Where the ground under the feet is near and the water over it is under chest height
+    // (`WADE_DEPTH` of the character's height), the character walks — land gravity, ground
+    // snap, steps — and so walks out. It is also what keeps a swimmer out of the ground: the swim
+    // step holds the centre at the surface, and over a bottom higher than half the character's
+    // height under it that pushed the feet into the lake bed (measured in `dunya`: 0.95 m into
+    // the shore, "stuck inside the map"). `WADE_DEPTH` above one half means the swim mode is only
+    // ever used where the feet clear the bottom.
+    const WADE_DEPTH: f32 = 0.7;
+    let water_surface_y = water_surface_y.filter(|surface_y| {
+        let ground_near = ground_dist <= radius + 0.6;
+        let ground_y = foot_pos.y - ground_dist;
+        !(ground_near && surface_y - ground_y < height * WADE_DEPTH)
+    });
+
     // ── SU / YÜZME ──────────────────────────────────────────
     // Karakter bir su hacmindeyse (merkez zone içinde → water_surface_y = Some) buoyant 6DOF
     // yüzme moduna geç: kara yerçekimi/ground-snap/step YOK; onun yerine kaldırma + su drag +
     // 3D itiş (target_velocity Y dahil yukarı/aşağı) + duvar/teren kayması. Merkez su yüzeyini
-    // aşınca (veya zone'dan çıkınca) çağıran None geçer → kara moduna döner.
+    // aşınca (veya zone'dan çıkınca) çağıran None geçer → kara moduna döner. Sığ suda (yukarıda)
+    // kara modu.
     if let Some(surface_y) = water_surface_y {
         if !kcc.is_submerged {
             tracing::debug!(
@@ -169,18 +197,8 @@ pub fn update_character_with_hits(
     }
     kcc.is_submerged = false;
 
-    let dropping = kcc.drop_through_timer > 0.0;
     if dropping {
         kcc.drop_through_timer -= dt;
-    }
-
-    for (_col_ent, col_trans, col) in &near_colliders {
-        if let Some((d, n)) = Raycast::ray_shape(&ray, &col.shape, col_trans) {
-            if d < ground_dist && blocks(col, col_trans, d, n, radius, vel.linear, true, dropping) {
-                ground_dist = d;
-                ground_normal = n;
-            }
-        }
     }
 
     let was_grounded = kcc.is_grounded;
@@ -829,6 +847,39 @@ mod tests {
             "yüzücü duvardan geçmemeli: merkez x={} (≲1.7 beklenir)",
             transform.position.x
         );
+    }
+
+    /// **A swimmer walks out of the lake.** A shore whose bottom climbs gently out of the water:
+    /// swimming toward it, the character used to stay in swim mode — its centre in the water,
+    /// held at the surface — and pushed against the slope for ever (`dunya`'s player was stuck in
+    /// a lake). Where the water over the ground drops under chest height it wades, and walks out.
+    #[test]
+    fn a_swimmer_walks_out_of_the_water_up_a_shore() {
+        let entity = BodyHandle::from_id(0);
+        let collider = box_collider(0.3, 0.9, 0.3);
+        // The lake bed, rising 1 in 5 toward +X: its top crosses the surface (y = 0) near x = 2.5.
+        let tilt = (4.0f32 / 20.0).atan();
+        let shore = Transform::new(Vec3::new(0.0, -1.0, 0.0)).with_rotation(gizmo_math::Quat::from_rotation_z(tilt));
+        let colliders = vec![(BodyHandle::from_id(1), shore, box_collider(12.0, 0.5, 5.0))];
+        let surface_y = 0.0;
+        let mut transform = Transform::new(Vec3::new(-6.0, -0.5, 0.0));
+        let mut vel = Velocity::new(Vec3::ZERO);
+        let mut kcc = CharacterController { target_velocity: Vec3::new(3.0, 0.0, 0.0), ..Default::default() };
+        let dt = 1.0 / 60.0;
+        let mut swam = false;
+        for _ in 0..(60 * 10) {
+            // What `character_controller_system` passes: the surface while the centre is in the water.
+            let water = (transform.position.y < surface_y).then_some(surface_y);
+            // Stop on the beach (the slope ends at x ≈ 11.8).
+            if transform.position.x > 7.0 {
+                kcc.target_velocity = Vec3::ZERO;
+            }
+            update_character(entity, &mut kcc, &mut transform, &mut vel, &collider, &colliders, water, dt);
+            swam |= kcc.is_submerged;
+        }
+        assert!(swam, "it started out swimming in deep water");
+        assert!(transform.position.x > 6.0 && transform.position.y > surface_y, "still in the lake at {:?}", transform.position);
+        assert!(!kcc.is_submerged);
     }
 
     /// A 2D side-on scene: ground with its top at y = 0, and a thin platform (top at y = 2.6,

@@ -663,6 +663,8 @@ struct Game {
     boats: Vec<Entity>,
     boat_chunks: HashSet<ChunkCoord>,
     weather: hava::Weather,
+    /// Kameranın izlediği yükseklik, yumuşatılmış.
+    cam_focus_y: Option<f32>,
     map: harita::Map,
     /// Bu kare çalınacak sesler (adlarıyla), ve sesler (pencereli oyunda).
     sounds: Vec<&'static str>,
@@ -867,6 +869,7 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
         boats: Vec::new(),
         boat_chunks: HashSet::new(),
         weather: hava::Weather::new(),
+        cam_focus_y: None,
         map,
         sounds: Vec::new(),
         audio,
@@ -1111,7 +1114,7 @@ fn sky_at(time_of_day: f32) -> (Vec3, f32, f32, [f32; 3], [f32; 3], [f32; 3]) {
     (shines, 2.2 * day, 0.35 * (1.0 - day), zenith.to_array(), horizon.to_array(), ground.to_array())
 }
 
-fn place_lights_and_camera(world: &mut World, game: &Game, dt: f32) {
+fn place_lights_and_camera(world: &mut World, game: &mut Game, dt: f32) {
     let (shines, sun_i, moon_i, _, horizon, _) = sky_at(game.time_of_day);
     if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.sun) {
         t.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, shines);
@@ -1125,14 +1128,25 @@ fn place_lights_and_camera(world: &mut World, game: &Game, dt: f32) {
     if let Some(mut l) = world.query_mut::<&mut DirectionalLight>().get_mut(game.moon) {
         l.intensity = moon_i * game.weather.light();
     }
-    // Üçüncü şahıs kamera: odağın arkasında, arazinin üstünde.
-    let target = drawn_focus(world, game).position + Vec3::Y * 1.4;
+    // Üçüncü şahıs kamera: odağın arkasında, arazinin üstünde. Yüksekliği ayrı ve yumuşak
+    // izliyor: arazi 3 m'lik üçgenlerden, yürüyüş her kırılmada yön değiştiriyor, zıplama ve
+    // süspansiyon gövdeyi oynatıyor — hepsini aynen izleyen kamera ilerledikçe aşağı yukarı
+    // çalkalanıyordu. Yatayda sıkı (dönüşte geride kalmasın), dikeyde ~0,3 s'lik bir gecikmeyle.
+    let raw = drawn_focus(world, game).position + Vec3::Y * 1.4;
+    let follow = |k: f32| 1.0 - (-dt * k).exp();
+    let smooth_y = match game.cam_focus_y {
+        Some(y) if (raw.y - y).abs() < 6.0 => y + (raw.y - y) * follow(3.5),
+        _ => raw.y,
+    };
+    game.cam_focus_y = Some(smooth_y);
+    let target = Vec3::new(raw.x, smooth_y, raw.z);
     let distance = if game.driving.is_some() { 11.0 } else { 7.0 };
     let back = Vec3::new(game.cam_yaw.sin() * game.cam_pitch.cos(), game.cam_pitch.sin(), game.cam_yaw.cos() * game.cam_pitch.cos());
     let mut want = target + back * distance;
     want.y = want.y.max(height(want.x, want.z) + 1.0);
     if let Some(mut t) = world.query_mut::<&mut Transform>().get_mut(game.camera) {
-        t.position = t.position.lerp(want, (dt * 8.0).min(1.0));
+        let to = want - t.position;
+        t.position += Vec3::new(to.x * follow(9.0), to.y * follow(5.0), to.z * follow(9.0));
         // The aim is the rotation; `looking_at` keeps +Y up (an arc rotation from −Z rolls).
         if let Some(aim) = Camera::looking_at(t.position, target) {
             t.rotation = aim;
@@ -1221,7 +1235,7 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     }
     game.sounds.clear();
     autosave(world, &mut game, dt);
-    place_lights_and_camera(world, &game, dt);
+    place_lights_and_camera(world, &mut game, dt);
     draw_hud(world, &game);
     world.insert_resource(game);
 }
@@ -1317,12 +1331,18 @@ pub fn self_test() -> bool {
     let mut weather_ok = false;
     let mut map_village = false;
     let mut map_marks = 0usize;
-    // Kayık aşaması: 106. saniyede en yakın gölün kayığına bin, altı saniye tam gaz sür, in.
-    let boat_at = 60 * 106;
+    // Kayık aşaması: 85. saniyede en yakın gölün kayığına bin, altı saniye tam gaz sür, in, ve
+    // yedi saniye kıyıya yüz (köy aşamasından önce bitiyor).
+    let boat_at = 60 * 85;
     let mut boat_start: Option<(Entity, Vec3)> = None;
     let mut boat_report = String::from("kayık aşaması çalışmadı");
     let mut boat_ok = false;
     let mut boat_y = (f32::MAX, f32::MIN);
+    // Kayıktan inince kıyıya yüz: 7. ve 14. saniyeler arası.
+    let mut shore_target: Option<Vec3> = None;
+    let mut swim_report = String::new();
+    let mut swim_ok = false;
+    let mut deepest_swim = f32::MAX;
     // İnşa aşaması: 115. saniyede malzeme, dört tarif, önüne bir çit; üç saniye çite yürü.
     let build_at = 60 * 115;
     let mut fence: Option<(Vec3, Vec3)> = None;
@@ -1439,8 +1459,26 @@ pub fn self_test() -> bool {
                     enter_or_leave(w, &mut game);
                     let afloat = boat_y.0 > su::WATER - 1.0 && boat_y.1 < su::WATER + 1.0;
                     boat_ok = moved > 10.0 && afloat && game.driving.is_none();
+                    // En yakın kuru yer: kıyı.
+                    let me = focus(w, &game);
+                    shore_target = (1..60)
+                        .flat_map(|r| (0..16).map(move |k| (r as f32 * 2.0, k as f32 / 16.0 * std::f32::consts::TAU)))
+                        .map(|(r, a)| Vec3::new(me.x + a.cos() * r, 0.0, me.z + a.sin() * r))
+                        .find(|p| height(p.x, p.z) > su::WATER + 0.8);
                     boat_report = format!("{boat_report}; kayık 6 s'de {moved:.0} m gitti, su yüzünden {:.2}…{:.2} m", boat_y.0 - su::WATER, boat_y.1 - su::WATER);
                 }
+            }
+            if frame == boat_at + 60 * 7 + 60 * 7 {
+                let me = focus(w, &game);
+                let ground = height(me.x, me.z);
+                swim_ok = me.y > su::WATER && me.y > ground - 0.2;
+                swim_report = format!(
+                    "kıyıya yüzdü: {:.1} m kaldı, su yüzünden {:.2} m, zeminden {:.2} m, yüzüyor mu {}",
+                    shore_target.map_or(f32::NAN, |s| Vec2::new(s.x - me.x, s.z - me.z).length()),
+                    me.y - su::WATER,
+                    me.y - ground,
+                    w.get::<CharacterController>(game.player).is_some_and(|k| k.is_submerged)
+                );
             }
             if frame == build_at - 60 {
                 // Kuru, düz yere: başlangıcın düzlüğü (kayıktan göle inmişti).
@@ -1502,7 +1540,13 @@ pub fn self_test() -> bool {
                 enter_or_leave(w, &mut game);
             }
             let boating = boat_start.is_some() && (boat_at + 60..boat_at + 60 * 7).contains(&frame);
-            let controls = if boating {
+            let swimming = (boat_at + 60 * 7..boat_at + 60 * 14).contains(&frame);
+            let controls = if let (true, Some(target)) = (swimming, shore_target) {
+                let me = focus(w, &game);
+                let (forward, right) = camera_axes(&game);
+                let d = Vec3::new(target.x - me.x, 0.0, target.z - me.z).normalize_or_zero();
+                Controls { mx: d.dot(right), my: d.dot(forward), ..Default::default() }
+            } else if boating {
                 // Tam gaz: burnu açık suya bakıyor.
                 Controls { my: 1.0, ..Default::default() }
             } else if walking_into_fence {
@@ -1525,6 +1569,9 @@ pub fn self_test() -> bool {
             if let Some(t) = run.world.get::<Transform>(boat) {
                 boat_y = (boat_y.0.min(t.position.y), boat_y.1.max(t.position.y));
             }
+        }
+        if (boat_at + 60 * 7..boat_at + 60 * 14).contains(&frame) {
+            deepest_swim = deepest_swim.min(p.y - height(p.x, p.z));
         }
         if walking_into_fence {
             if let Some((start, forward)) = fence {
@@ -1567,6 +1614,8 @@ pub fn self_test() -> bool {
         && weather_ok
         && map_village
         && boat_ok
+        && swim_ok
+        && deepest_swim > -0.5
         && parked_ok
         && animals_seen > 0
         && fled > 3.0
@@ -1574,7 +1623,7 @@ pub fn self_test() -> bool {
         // yaklaşıyor (ölçülen 2,29 m); 2,5 m'yi geçen çitin içinden geçmiştir. Çitsiz üç saniye 18 m.
         && pushed_through < 2.5;
     println!("dunya --test: canlılar: {village_report}; {animals_seen} hayvan, en yakını üç saniyede {fled:.1} m kaçtı; bırakılan arabalar yerinde: {parked_ok}");
-    println!("dunya --test: su: {boat_report}");
+    println!("dunya --test: su: {boat_report}; {swim_report}; yüzerken zeminin en çok {:.2} m altında", -deepest_swim.min(0.0));
     println!("dunya --test: hava: {weather_report}; harita köyde {map_marks} işaret, köy görünüyor: {map_village}");
     println!("dunya --test: inşa: {build_report}; çite yürüyüş en çok {pushed_through:.2} m (çit 2,6 m önde)");
     println!(

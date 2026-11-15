@@ -509,8 +509,13 @@ pub fn update_vehicle_with_query(
         // yalnız kendi minik ataletiyle (~0.8) anında redline'a fırlıyordu = kalkışta
         // patinaj + tüm vitesleri geçme. Yansıyan atalet (düşük viteste ~30 kg·m²) motoru
         // gerçekçi biçimde kademeli döndürür; yüksek viteste ratio küçülür → daha çevik.
+        //
+        // Shared, like the torque: one engine turns every driven wheel, so each carries its
+        // `1/driven` share of the reflected inertia — the engine's `½·I·R²·ω²` split over the
+        // wheels. Each carried all of it until 2026-11-15: a two-wheel-drive car spun up two
+        // engines, ~31 kg·m² too much on each rear wheel in first gear, ~1.3 kN of the launch.
         let effective_inertia = if drivetrain.drives(&wheel.axle_type) {
-            wheel_inertia + flywheel_inertia * total_ratio * total_ratio
+            wheel_inertia + flywheel_inertia * total_ratio * total_ratio / driven_count_f
         } else {
             wheel_inertia
         };
@@ -611,7 +616,7 @@ pub fn update_vehicle_with_query(
                 let normal_load = wheel.suspension_force;
 
                 // Kombine Pacejka MF — sürtünme çemberi dahilinde
-                let (final_long, final_lat) = pacejka_combined_with_floor(
+                let (final_long, _) = pacejka_combined_with_floor(
                     &wheel.pacejka_long,
                     &wheel.pacejka_lat,
                     slip_ratio,
@@ -626,20 +631,6 @@ pub fn update_vehicle_with_query(
                 let grip = (wheel.surface_friction / PhysicsMaterial::ASPHALT.dynamic_friction)
                     * weather_grip;
                 let final_long = final_long * grip;
-                let final_lat = final_lat * grip;
-
-                // Lastik kuvvetini temas noktasından uygula
-                let tire_force = wheel_forward * final_long + wheel_right * final_lat;
-                let contact_pt = hit.point;
-                apply_force_at_point(
-                    vehicle_rb,
-                    vehicle_vel,
-                    com,
-                    vehicle_transform.rotation,
-                    tire_force,
-                    contact_pt,
-                    dt,
-                );
 
                 // 6.3 Tekerlek angular_velocity entegrasyonu (Semi-implicit Euler)
                 // Reaksiyon torku lastikten gelen geri tepme
@@ -706,6 +697,36 @@ pub fn update_vehicle_with_query(
                 if vehicle.brake_input > 0.01 && wheel.angular_velocity.abs() < max_brake_decel {
                     wheel.angular_velocity = 0.0;
                 }
+
+                // The force on the chassis is the tyre's at the slip the wheel has **after** this
+                // step's spin update — the same force the implicit update above balances the
+                // wheel against (in the linear range `I·Δω/dt = T − F·r` exactly), so wheel and
+                // chassis agree on it. It was the force at the slip *before* the update: the
+                // chassis gained `a·dt` of speed each step that the wheel only caught a step
+                // later, and that one-step lag, through the implicit stiffness, acted as an extra
+                // inertia of `K·r²·dt/ref_vel` — measured on `dunya`'s car at 120 Hz, ~30 kg·m²
+                // per free-rolling wheel at launch (a real one is ~1), so the front wheels dragged
+                // ~1 kN each and the car crept off the line (0.4 → 2.7 m/s in the first 1.4 s).
+                // The lateral slip angle is the chassis's and does not change with the spin.
+                let slip_ratio = (wheel.angular_velocity * wheel.radius - v_long) / ref_vel;
+                let (final_long, final_lat) = pacejka_combined_with_floor(
+                    &wheel.pacejka_long,
+                    &wheel.pacejka_lat,
+                    slip_ratio,
+                    slip_angle,
+                    normal_load,
+                    wheel.sliding_grip_floor,
+                );
+                let tire_force = wheel_forward * (final_long * grip) + wheel_right * (final_lat * grip);
+                apply_force_at_point(
+                    vehicle_rb,
+                    vehicle_vel,
+                    com,
+                    vehicle_transform.rotation,
+                    tire_force,
+                    hit.point,
+                    dt,
+                );
             }
         } else {
             // Havada: sadece motor + fren, yay kuvveti yok
@@ -1238,6 +1259,42 @@ mod tests {
         assert!(straight.z < -10.0 && straight.x.abs() < 1.5, "straight ahead is −Z: {straight:?}");
         assert!(right.x > straight.x + 2.0, "positive steering turns right (+X): {right:?} vs {straight:?}");
         assert!(left.x < straight.x - 2.0, "negative steering turns left (−X): {left:?} vs {straight:?}");
+    }
+
+    /// **A car pulls away at the grip its driven wheels have.** Two things held a 900 kg car back
+    /// off the line, both drivetrain bookkeeping and neither the tyre: the force on the chassis was
+    /// the tyre's at the slip from *before* the step's spin update, a one-step lag that acted as
+    /// ~30 kg·m² of extra inertia on every free-rolling wheel at launch; and each driven wheel
+    /// carried the whole engine's reflected inertia instead of its share. Measured on `dunya`'s
+    /// car, 3 s of full throttle from rest: 32 km/h before, 40 after (0–100 km/h ~7.5 s → ~6.3 s).
+    #[test]
+    fn a_car_pulls_away_at_the_grip_it_has() {
+        let collider = Collider::box_collider(Vec3::new(0.9, 0.35, 2.0));
+        let mut rb = RigidBody::new(900.0, true);
+        rb.update_inertia_from_collider(&collider);
+        rb.wake_up();
+        let mut vc = VehicleController::four_wheeled(1.7, 2.8, 0.38);
+        for w in &mut vc.wheels {
+            w.suspension_rest_length = 0.45;
+            w.suspension_max_travel = 0.35;
+        }
+        let ground = probe_ground();
+        let mut t = Transform::new(Vec3::new(0.0, 0.9, 0.0));
+        let mut vel = Velocity::default();
+        let dt = 1.0 / 120.0;
+        for _ in 0..(120 * 3) {
+            vc.throttle_input = 1.0;
+            update_vehicle(BodyHandle::from_id(2), &mut vc, &mut rb, &t, &mut vel, &ground, 1.0, dt);
+            vel.linear.y -= 9.81 * dt;
+            t.position += vel.linear * dt;
+            let w = vel.angular * dt;
+            if w.length() > 0.0 {
+                t.rotation = (gizmo_math::Quat::from_scaled_axis(w) * t.rotation).normalize();
+            }
+        }
+        let kmh = Vec3::new(vel.linear.x, 0.0, vel.linear.z).length() * 3.6;
+        assert!(kmh > 37.0, "3 s of full throttle reached only {kmh:.1} km/h");
+        assert!(kmh < 60.0, "faster than its tyres can push it: {kmh:.1} km/h");
     }
 
     fn probe_ground() -> Vec<(BodyHandle, Transform, Collider)> {

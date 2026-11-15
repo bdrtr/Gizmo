@@ -918,6 +918,26 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A car pulls away properly.** Two drivetrain bookkeeping errors held every car back off the line, worst at
+  low speed, and neither was the tyre model: the force put on the chassis was the tyre's at the slip from *before*
+  the step's spin update, a one-step lag that — through the implicit spin stiffness — acted as `K·r²·dt/ref_vel` of
+  extra inertia on every wheel (~30 kg·m² per free-rolling wheel at launch, a real one ~1, so the front wheels
+  dragged ~1 kN each); and each driven wheel carried the whole engine's reflected inertia instead of its share.
+  Now the chassis gets the force at the slip after the update — wheel and chassis agree on it, `I·Δω/dt = T − F·r` —
+  and the reflected inertia is split over the driven wheels like the torque. `dunya`'s car, full throttle from rest:
+  32 → 40 km/h at 3 s, 0–100 km/h ~7.5 → ~6.3 s, at the grip of its rear tyres. Test:
+  `a_car_pulls_away_at_the_grip_it_has`.
+- **A swimmer walks out of a lake, and never into its bed.** The character controller swam whenever its centre was
+  in the water, and the swim step holds the centre at the surface: at a shore it could never climb out, and over a
+  bottom higher than half its height under the surface it pushed the feet into the ground — in `dunya`, a player
+  0.95 m inside the shore, stuck. Water under chest height over the ground (`WADE_DEPTH`, 0.7 of the height) is
+  now waded in the land mode, which climbs out; since that is more than half the height, swimming only happens
+  where the feet clear the bottom. Tests: `a_swimmer_walks_out_of_the_water_up_a_shore`, and `dunya --test`
+  swims from the boat to the shore and checks it is on land and never under the ground (0.95 m under without it).
+- **`dunya`'s camera no longer bobs.** It followed the body's height rigidly — the walk breaking at every 3 m
+  terrain triangle, jumps, the car's suspension — and shook up and down as it went; the height is now followed
+  apart from the rest and softer (~0.3 s), the follow frame-rate independent.
+
 - **A body left in the open world no longer falls out of it.** `open_world_chunk_system` despawns what a chunk owns,
   and the ground is a chunk's — but a car the player left, or a crate that rolled to the edge, belongs to no chunk:
   when its chunk unloaded it fell, and went on falling (measured in `dunya`: a car parked at the start, 6.9 km below
