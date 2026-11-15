@@ -59,6 +59,9 @@ editor_prefs.toml
 # ($GIZMO_ASSETS, then <repo>/assets/) and fall back to procedural geometry when it is
 # absent, so a fresh clone runs everything. See assets/README.md.
 *.glb
+# …except the games' own models: small (3.6 MB in all), CC0, and embedded with `include_bytes!`,
+# so the build needs them. Each folder has its LICENSE.txt.
+!games/assets/**/*.glb
 assets/*.crdownload
 
 # Environment variables
