@@ -50,6 +50,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`FixedPhysics` times its parts.** With a `FrameProfiler` in the world, each step records `physics.vehicles`,
+  `physics.characters`, `physics.step` and `physics.history` — what a game needs to see which part of its physics a
+  frame went to.
+- **`Raycast::ray_shape_within`** (and `ray_heightfield_within`): a ray no further than a reach, the heightfield's cell
+  walk stopping there instead of at the field's far side.
+- **`dunya`: an FPS meter.** F3 shows FPS, the mean and worst frame, the loop's update/render/draw, the game's costliest
+  steps, the physics parts and the frame's draw counts; `GIZMO_PROFILE=1` prints the same every five seconds. The
+  headless self-test prints it too.
 - **A surface over a volume: `Surface::absorption` and `SurfaceInput::behind_distance`.** The frame behind glass
   now keeps its depth too (`BehindSurface` copies the depth buffer with the colour; group 0 binding 14), and a game's
   surface drawn through it is told how far behind it the opaque world is — the depth of water under a lake. A surface
@@ -960,6 +968,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **Character controllers no longer scale with the size of the world.** Two passes cast every grounded character's
+  floor ray at every collider in the world, unbounded: `platform_carry` with no box test at all — each terrain tile
+  walked cell by cell to its far side, for each of `dunya`'s hundred animals — and the step's own prefilter computing
+  every collider's world box again for every character. The boxes are computed once a step now, the floor ray only
+  meets colliders whose box holds it, and the controller's rays stop at their reach. `dunya`'s characters went from
+  2.7 ms a step to 0.4, its whole frame from 5.2 ms to 2.8 (headless, driving).
 - **A game's surface can let light through.** `SurfaceMaterial` built a glass pipeline, and the draw loops would have
   used it, but `Material::is_transmissive` answered `true` only for `MaterialType::Pbr`, so a surface with
   `transmission` was drawn as an ordinary one and nothing behind it ever showed.

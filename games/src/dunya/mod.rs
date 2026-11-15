@@ -59,6 +59,7 @@ mod hava;
 mod insa;
 mod karakter;
 mod modeller;
+mod olcum;
 mod su;
 
 use std::collections::HashSet;
@@ -632,6 +633,8 @@ struct Game {
     sun: Entity,
     moon: Entity,
     hud: Entity,
+    /// FPS göstergesi ve darboğaz dökümü (F3).
+    meter: olcum::Meter,
     banner: Entity,
     collected: HashSet<(i32, i32, u8)>,
     /// Gece-gündüz: 0 gece yarısı, 0,25 sabah, 0,5 öğle.
@@ -768,6 +771,7 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
     ));
     let camera = world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 12.0, 14.0), primary: true, fov: 1.0, far: 600.0, ..Default::default() });
     let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
+    let meter = olcum::install(world, font);
     let banner = world.spawn_bundle((Text::pinned_at("", font, 46.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
         .with_anchor(TextAnchor::Center)
         .with_align(TextAlign::Center),));
@@ -814,6 +818,7 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
         sun,
         moon,
         hud,
+        meter,
         banner,
         collected,
         time_of_day: 0.3,
@@ -1037,13 +1042,18 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
             }
         }
     }
-    stream_chunks(world, game);
+    olcum::timed(world, "hücreler", |w| stream_chunks(w, game));
     let me = focus(world, game);
-    canli::tick(world, me, dt);
-    game.physics.advance(world, dt.min(0.1));
-    world.apply_commands();
-    karakter::animate(world, dt);
-    modeller::bind_wheels(world);
+    olcum::timed(world, "canlılar", |w| canli::tick(w, me, dt));
+    olcum::timed(world, "fizik", |w| {
+        game.physics.advance(w, dt.min(0.1));
+        w.apply_commands();
+    });
+    olcum::timed(world, "beden", |w| {
+        karakter::animate(w, dt);
+        modeller::bind_wheels(w);
+    });
+    let crystal_start = std::time::Instant::now();
     // Kristaller dönüyor; yaklaşan topluyor.
     let me = focus(world, game);
     let mut taken = Vec::new();
@@ -1065,6 +1075,9 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
         }
     }
     pick_up(world, game, dt);
+    if let Some(mut p) = world.get_resource_mut::<gizmo::core::profiler::FrameProfiler>() {
+        p.record_scope("kristal", crystal_start.elapsed());
+    }
     if game.won.is_none() && crystals(world, game) >= GOAL as u32 {
         game.won = Some(game.clock);
         karakter::act(world, game.player, "Cheer");
@@ -1192,8 +1205,8 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     controls.place &= !gizmo::ui::pointer_over_ui(world);
     step(world, &mut game, dt, controls);
     let toggle = input.is_key_just_pressed(KeyCode::KeyI as u32) || input.is_key_just_pressed(KeyCode::Tab as u32);
-    update_panel(world, &mut game, toggle);
-    update_map(world, &mut game, input.is_key_just_pressed(KeyCode::KeyM as u32));
+    olcum::timed(world, "panel", |w| update_panel(w, &mut game, toggle));
+    olcum::timed(world, "harita", |w| update_map(w, &mut game, input.is_key_just_pressed(KeyCode::KeyM as u32)));
     if input.is_key_just_pressed(KeyCode::KeyH as u32) {
         game.weather.turn();
         game.note = (format!("Hava: {}", game.weather.now.name()), 2.0);
@@ -1209,13 +1222,14 @@ fn update(world: &mut World, _state: &mut SimpleSceneState, dt: f32, input: &Inp
     });
     if let Some(sounds) = game.audio.take() {
         let rain = game.weather.rain;
-        hava::play(world, &sounds, &mut game.sounds, rain, engine);
+        olcum::timed(world, "ses", |w| hava::play(w, &sounds, &mut game.sounds, rain, engine));
         game.audio = Some(sounds);
     }
     game.sounds.clear();
     autosave(world, &mut game, dt);
     place_lights_and_camera(world, &mut game, dt);
-    draw_hud(world, &game);
+    olcum::timed(world, "hud", |w| draw_hud(w, &game));
+    olcum::update(world, &mut game.meter, input.is_key_just_pressed(KeyCode::F3 as u32), dt);
     world.insert_resource(game);
 }
 
@@ -1601,6 +1615,9 @@ pub fn self_test() -> bool {
             };
             step(w, &mut game, dt, controls);
             w.insert_resource(game);
+            if let Some(mut p) = w.get_resource_mut::<gizmo::core::profiler::FrameProfiler>() {
+                p.end_frame();
+            }
         });
         if let Some((ok, text)) = built_check {
             build_ok = if frame == build_at { ok } else { build_ok && ok };
@@ -1694,6 +1711,9 @@ pub fn self_test() -> bool {
         villagers_dressed.0, villagers_dressed.1, animals_dressed.0, animals_dressed.1
     );
     println!("dunya --test: köprü: {rail_report}");
+    if let Some(r) = olcum::report(&run.world) {
+        println!("dunya --test: ölçüm (son iki saniye, penceresiz): {}", r.replace('\n', " | "));
+    }
     println!("dunya --test: inşa: {build_report}; çite yürüyüş en çok {pushed_through:.2} m (çit 2,6 m önde)");
     println!(
         "dunya --test: envanterde {} kristal (dünyadan {crystals_taken} alındı), {wood} odun, {stone} taş; hücre {} yüklendi, {} silindi; yürüyüşte başlangıçtan {:.0} m, arabayla {:.0} m; zeminin altına en çok yayada {:.2} m, arabada {:.2} m → {}",

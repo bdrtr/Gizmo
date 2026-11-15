@@ -41,7 +41,7 @@ use gizmo_physics_core::components::{CharacterController, FighterController};
 use gizmo_physics_core::{BodyHandle, Collider, Transform};
 use gizmo_physics_rigid::components::{RigidBody, Velocity};
 
-use crate::character::update_character_with_hits;
+use crate::character::update_character_prefiltered;
 use crate::vehicle::{
     update_vehicle_with_query, weather_grip_factor, ColliderListQuery, VehicleController,
     WheelGroundQuery,
@@ -224,7 +224,9 @@ pub fn character_controller_system(world: &World, dt: f32) {
     }
 
     let all_colliders = gather_colliders(world);
-    let carried = platform_carry(world, &all_colliders, dt);
+    // Every collider's world box once for the step, not once per character.
+    let boxes: Vec<gizmo_math::Aabb> = all_colliders.iter().map(|(_, t, c)| c.compute_aabb(t.position, t.rotation)).collect();
+    let carried = platform_carry(world, &all_colliders, &boxes, dt);
 
     // Yüzme modu için sahnenin PhysicsWorld'ünden fluid-zone batık sorgusu (yoksa hiç su → kara).
     // Copy olmayan bir referans; aşağıdaki unsafe component query'siyle çakışmaz (resource ayrı
@@ -253,13 +255,14 @@ pub fn character_controller_system(world: &World, dt: f32) {
                 .and_then(|pw| pw.water_at(transform.position).map(|s| s.surface_y));
             let walk_speed = gizmo_math::Vec3::new(kcc.target_velocity.x, 0.0, kcc.target_velocity.z).length();
             hits.clear();
-            update_character_with_hits(
+            update_character_prefiltered(
                 BodyHandle::from_id(entity.id()),
                 &mut kcc,
                 &mut transform,
                 &mut vel,
                 collider,
                 &all_colliders,
+                &boxes,
                 water_surface_y,
                 dt,
                 &mut hits,
@@ -327,7 +330,17 @@ fn push_bodies(world: &World, pushes: &[(BodyHandle, gizmo_math::Vec3, f32, f32)
 /// carry anything: a platform moved by writing its `Transform` alone has no motion to inherit, so
 /// set its `Velocity` to match (a kinematic body does). Run before the step, which then snaps the
 /// feet to the floor where it now is.
-fn platform_carry(world: &World, colliders: &[(BodyHandle, Transform, Collider)], dt: f32) -> Vec<(u32, gizmo_math::Vec3)> {
+///
+/// Only a collider whose box (`boxes[i]`, `colliders[i]`'s) holds the short ray under the feet is
+/// cast against, and the ray goes no further than the grounded threshold. It was cast, unbounded,
+/// against every collider in the world — each terrain tile walked cell by cell to its far side —
+/// for every grounded character: `dunya`'s hundred animals spent 1.1 ms a step here (2026-11-16).
+fn platform_carry(
+    world: &World,
+    colliders: &[(BodyHandle, Transform, Collider)],
+    boxes: &[gizmo_math::Aabb],
+    dt: f32,
+) -> Vec<(u32, gizmo_math::Vec3)> {
     use gizmo_physics_core::raycast::{Ray, Raycast};
     use gizmo_math::Vec3;
     let mut out = Vec::new();
@@ -340,13 +353,15 @@ fn platform_carry(world: &World, colliders: &[(BodyHandle, Transform, Collider)]
         let (height, radius) = crate::character::character_dims(collider);
         let feet = transform.position - Vec3::new(0.0, height * 0.5 - radius, 0.0);
         let ray = Ray::new(feet, Vec3::NEG_Y);
+        let reach = radius + 0.1;
+        let segment = gizmo_math::Aabb { min: (feet - Vec3::Y * reach).into(), max: feet.into() };
         let mut floor: Option<(f32, BodyHandle, Vec3)> = None;
-        for (handle, t, c) in colliders {
-            if handle.id() == entity.id() || c.is_trigger {
+        for ((handle, t, c), aabb) in colliders.iter().zip(boxes) {
+            if handle.id() == entity.id() || c.is_trigger || !segment.intersects(*aabb) {
                 continue;
             }
-            if let Some((d, _)) = Raycast::ray_shape(&ray, &c.shape, t) {
-                if d <= radius + 0.1 && floor.is_none_or(|(best, ..)| d < best) {
+            if let Some((d, _)) = Raycast::ray_shape_within(&ray, &c.shape, t, reach) {
+                if floor.is_none_or(|(best, ..)| d < best) {
                     floor = Some((d, *handle, t.position));
                 }
             }

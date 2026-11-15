@@ -354,6 +354,20 @@ impl Raycast {
         rotation: gizmo_math::Quat,
         hf: &crate::components::HeightfieldShape,
     ) -> Option<(f32, Vec3)> {
+        Self::ray_heightfield_within(ray, center, rotation, hf, f32::INFINITY)
+    }
+
+    /// [`ray_heightfield`](Self::ray_heightfield) no further than `max_distance` along the ray:
+    /// the cell walk stops there instead of at the far side of the field, which is what makes a
+    /// short ray over a large field cheap — a character's sweep looks a step ahead, not across the
+    /// whole terrain.
+    pub fn ray_heightfield_within(
+        ray: &Ray,
+        center: Vec3,
+        rotation: gizmo_math::Quat,
+        hf: &crate::components::HeightfieldShape,
+        max_distance: f32,
+    ) -> Option<(f32, Vec3)> {
         let (cells_x, cells_z) = hf.cell_counts();
         if cells_x == 0 || cells_z == 0 || hf.scale.x <= 0.0 || hf.scale.z <= 0.0 {
             return None;
@@ -367,7 +381,7 @@ impl Raycast {
         // starts and the exit is what bounds it.
         let (lo, hi) = (hf.local_aabb.min, hf.local_aabb.max);
         let mut t_enter = 0.0_f32;
-        let mut t_exit = f32::INFINITY;
+        let mut t_exit = max_distance;
         for axis in 0..3 {
             let (oa, da, loa, hia) = match axis {
                 0 => (o.x, d.x, lo.x, hi.x),
@@ -699,6 +713,23 @@ impl Raycast {
         }
     }
 
+    /// [`ray_shape`](Self::ray_shape), keeping only a hit no further than `max_distance` along the
+    /// ray. Cheaper than filtering afterwards where the shape is walked — a heightfield
+    /// ([`ray_heightfield_within`](Self::ray_heightfield_within)) — and the same answer elsewhere.
+    pub fn ray_shape_within(
+        ray: &Ray,
+        shape: &ColliderShape,
+        transform: &Transform,
+        max_distance: f32,
+    ) -> Option<(f32, Vec3)> {
+        match shape {
+            ColliderShape::Heightfield(hf) => {
+                Self::ray_heightfield_within(ray, transform.position, transform.rotation, hf, max_distance)
+            }
+            _ => Self::ray_shape(ray, shape, transform).filter(|(t, _)| *t <= max_distance),
+        }
+    }
+
     /// Test ray against collider shape
     ///
     /// Returns the parameter of the nearest hit and a world-space unit normal, or
@@ -933,6 +964,31 @@ mod tests {
     use super::*;
     use crate::components::{Collider, CylinderShape};
     use gizmo_math::Quat;
+
+    /// **`ray_shape_within` keeps a hit inside its reach and drops one past it**, on a walked
+    /// heightfield and on a primitive alike, and with no reach it answers as `ray_shape` does. A
+    /// character's rays (the step's sweep, its floor) are bounded so, and stopped walking the whole
+    /// terrain (2026-11-16).
+    #[test]
+    fn ray_shape_within_stops_at_its_reach() {
+        let heights = vec![0.0; 9];
+        let field = match Collider::heightfield(heights, 3, 3, Vec3::new(2.0, 1.0, 2.0)).shape {
+            ColliderShape::Heightfield(hf) => ColliderShape::Heightfield(hf),
+            _ => unreachable!(),
+        };
+        let at = Transform::new(Vec3::ZERO);
+        let down = Ray::new(Vec3::new(0.5, 3.0, 0.5), Vec3::NEG_Y);
+        let full = Raycast::ray_shape(&down, &field, &at).expect("the field is under the ray");
+        assert!((full.0 - 3.0).abs() < 1e-4, "{full:?}");
+        assert_eq!(Raycast::ray_shape_within(&down, &field, &at, f32::INFINITY), Some(full));
+        assert!(Raycast::ray_shape_within(&down, &field, &at, 3.1).is_some(), "within reach");
+        assert!(Raycast::ray_shape_within(&down, &field, &at, 2.9).is_none(), "past reach");
+        let ball = ColliderShape::Sphere(crate::components::SphereShape { radius: 1.0 });
+        let towards = Ray::new(Vec3::new(0.0, 0.0, 5.0), Vec3::NEG_Z);
+        let centre = Transform::new(Vec3::ZERO);
+        assert!(Raycast::ray_shape_within(&towards, &ball, &centre, 4.1).is_some());
+        assert!(Raycast::ray_shape_within(&towards, &ball, &centre, 3.9).is_none());
+    }
 
     /// A ray down onto a slope lands on the surface, at the height the samples describe — and
     /// the walk finds the right cell rather than the first one.

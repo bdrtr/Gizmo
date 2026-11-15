@@ -610,6 +610,16 @@ pub fn sync_transforms(world: &mut crate::core::World) {
     systems::transform::TransformPropagateSystem.run(world, 0.0);
 }
 
+/// Runs `f`, adding its time to the world's [`FrameProfiler`](crate::core::profiler::FrameProfiler)
+/// as `name` when the world has one; costs one clock read otherwise.
+fn timed(world: &mut crate::core::World, name: &'static str, f: impl FnOnce(&mut crate::core::World)) {
+    let start = std::time::Instant::now();
+    f(world);
+    if let Some(mut profiler) = world.get_resource_mut::<crate::core::profiler::FrameProfiler>() {
+        profiler.record_scope(name, start.elapsed());
+    }
+}
+
 /// A fixed-step physics driver for a game that runs its own update hook — one that owns its
 /// camera, and so cannot use [`simple_scene_update`], which also flies the camera with WASD and
 /// the mouse.
@@ -726,19 +736,27 @@ impl FixedPhysics {
                     }
                 }
             }
+            // Each part timed into the world's `FrameProfiler` when there is one, a scope per step:
+            // `physics.vehicles`, `physics.characters`, `physics.step`, `physics.history`.
             #[cfg(feature = "physics-dynamics")]
             {
-                gizmo_physics_dynamics::vehicle_controller_system(world, self.step);
-                gizmo_physics_dynamics::wheel_visual_system(world, self.step);
-                gizmo_physics_dynamics::boat_controller_system(world, self.step);
-                gizmo_physics_dynamics::character_controller_system(world, self.step);
-                gizmo_physics_dynamics::fighter_frame_system(world, self.step);
-                gizmo_physics_dynamics::hit_detection_system(world, self.step);
+                timed(world, "physics.vehicles", |world| {
+                    gizmo_physics_dynamics::vehicle_controller_system(world, self.step);
+                    gizmo_physics_dynamics::wheel_visual_system(world, self.step);
+                    gizmo_physics_dynamics::boat_controller_system(world, self.step);
+                });
+                timed(world, "physics.characters", |world| {
+                    gizmo_physics_dynamics::character_controller_system(world, self.step);
+                    gizmo_physics_dynamics::fighter_frame_system(world, self.step);
+                    gizmo_physics_dynamics::hit_detection_system(world, self.step);
+                });
             }
-            systems::cpu_physics_step_system(world, self.step);
-            if let Some(mut history) = world.get_resource_mut::<crate::systems::interpolation::InterpolationHistory>() {
-                history.end_step(world);
-            }
+            timed(world, "physics.step", |world| systems::cpu_physics_step_system(world, self.step));
+            timed(world, "physics.history", |world| {
+                if let Some(mut history) = world.get_resource_mut::<crate::systems::interpolation::InterpolationHistory>() {
+                    history.end_step(world);
+                }
+            });
         }
         let alpha = self.accumulator / self.step;
         if let Some(mut history) = world.get_resource_mut::<crate::systems::interpolation::InterpolationHistory>() {

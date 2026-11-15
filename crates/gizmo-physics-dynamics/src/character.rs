@@ -102,6 +102,45 @@ pub fn update_character_with_hits(
     dt: f32,
     hits: &mut Vec<(BodyHandle, Vec3)>,
 ) {
+    step_character(_entity, kcc, transform, vel, collider, colliders, None, water_surface_y, dt, hits);
+}
+
+/// [`update_character_with_hits`] with each collider's world box given (`aabbs[i]` is
+/// `colliders[i]`'s), as `character_controller_system` computes them once a step for every
+/// character instead of each character computing every box again: with a hundred characters in a
+/// world of a thousand colliders that was 100 000 boxes a step, and the larger part of `dunya`'s
+/// physics time (measured 2026-11-16: 2.7 ms of 4.3).
+#[cfg(feature = "ecs")]
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn update_character_prefiltered(
+    entity: BodyHandle,
+    kcc: &mut CharacterController,
+    transform: &mut Transform,
+    vel: &mut Velocity,
+    collider: &Collider,
+    colliders: &[(BodyHandle, Transform, Collider)],
+    aabbs: &[gizmo_math::Aabb],
+    water_surface_y: Option<f32>,
+    dt: f32,
+    hits: &mut Vec<(BodyHandle, Vec3)>,
+) {
+    debug_assert_eq!(colliders.len(), aabbs.len());
+    step_character(entity, kcc, transform, vel, collider, colliders, Some(aabbs), water_surface_y, dt, hits);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn step_character(
+    _entity: BodyHandle,
+    kcc: &mut CharacterController,
+    transform: &mut Transform,
+    vel: &mut Velocity,
+    collider: &Collider,
+    colliders: &[(BodyHandle, Transform, Collider)],
+    aabbs: Option<&[gizmo_math::Aabb]>,
+    water_surface_y: Option<f32>,
+    dt: f32,
+    hits: &mut Vec<(BodyHandle, Vec3)>,
+) {
     let (height, radius) = character_dims(collider);
 
     // NOTE: KCC entities should NOT have a RigidBody component (or they must be kinematic).
@@ -128,13 +167,14 @@ pub fn update_character_with_hits(
     // read only to report what the character ends the step inside (`CharacterController::triggers`).
     let mut near_colliders = Vec::new();
     let mut near_triggers = Vec::new();
-    for col_data in colliders {
+    for (i, col_data) in colliders.iter().enumerate() {
         if col_data.0 == _entity {
             continue;
         }
-        let aabb = col_data
-            .2
-            .compute_aabb(col_data.1.position, col_data.1.rotation);
+        let aabb = match aabbs {
+            Some(boxes) => boxes[i],
+            None => col_data.2.compute_aabb(col_data.1.position, col_data.1.rotation),
+        };
         if char_aabb.intersects(aabb) {
             if col_data.2.is_trigger {
                 near_triggers.push(col_data);
@@ -145,8 +185,11 @@ pub fn update_character_with_hits(
     }
 
     let dropping = kcc.drop_through_timer > 0.0;
+    // The ground is only ever wanted this far below the feet: grounded within `radius + 0.1`, the
+    // wading test within `radius + 0.6`. A ray not bounded by it walked the whole terrain.
+    let ground_reach = radius + 0.7;
     for (_col_ent, col_trans, col) in &near_colliders {
-        if let Some((d, n)) = Raycast::ray_shape(&ray, &col.shape, col_trans) {
+        if let Some((d, n)) = Raycast::ray_shape_within(&ray, &col.shape, col_trans, ground_reach) {
             if d < ground_dist && blocks(col, col_trans, d, n, radius, vel.linear, true, dropping) {
                 ground_dist = d;
                 ground_normal = n;
@@ -312,8 +355,10 @@ pub fn update_character_with_hits(
             let origin = current_pos + Vec3::new(0.0, h_offset, 0.0);
             let move_ray = Ray::new(origin, move_dir);
 
+            // A hit further than this step's move past the character's surface stops nothing.
+            let reach = move_dist + radius + 0.05;
             for (col_ent, col_trans, col) in &near_colliders {
-                if let Some((d, n)) = Raycast::ray_shape(&move_ray, &col.shape, col_trans) {
+                if let Some((d, n)) = Raycast::ray_shape_within(&move_ray, &col.shape, col_trans, reach) {
                     // The character's surface sits `radius` ahead of its center. Clamp
                     // the surface distance to 0 so a contact or slightly-penetrating hit
                     // (`d - radius <= 0`, common exactly at contact where FP rounding
@@ -365,7 +410,7 @@ pub fn update_character_with_hits(
 
                     for (_col_ent, col_trans, col) in &near_colliders {
                         if let Some((d, n)) =
-                            Raycast::ray_shape(&step_down_ray, &col.shape, col_trans)
+                            Raycast::ray_shape_within(&step_down_ray, &col.shape, col_trans, kcc.step_height + STEP_SKIN)
                         {
                             if d < step_dist
                                 && blocks(col, col_trans, d, n, 0.0, vel.linear, true, dropping)
