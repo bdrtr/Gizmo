@@ -111,6 +111,10 @@ pub struct SceneState {
     pub behind_fallback: wgpu::TextureView,
     /// What group 0 offers now: that, or [`Renderer::behind`](crate::Renderer::behind)'s view.
     pub behind_view: wgpu::TextureView,
+    /// The depth of the frame behind glass until something draws glass: one texel at the far plane.
+    pub behind_depth_fallback: wgpu::TextureView,
+    /// What group 0 offers now as that depth: the fallback, or [`Renderer::behind`](crate::Renderer::behind)'s.
+    pub behind_depth_view: wgpu::TextureView,
     /// How the glass shader reads that frame.
     pub behind_sampler: wgpu::Sampler,
     /// The environment drawn into a cube, which the forward-only path's lit shader reads (`env_cube`).
@@ -339,7 +343,7 @@ impl SceneView {
             &scene.global_bind_group_layout,
             label,
             [&uniform_buffer, &cluster_table_buffer, &cluster_index_buffer],
-            &scene.behind_view,
+            (&scene.behind_view, &scene.behind_depth_view),
             &scene.behind_sampler,
             scene.env_cube.view(),
             &scene.forward_probes,
@@ -453,9 +457,11 @@ impl SceneState {
 
     /// Points every view's group 0 at this frame behind glass, or back at the black texel. Group 0
     /// is the one bind group every pass uses, so this is the only place that has to know.
-    pub fn set_behind_view(&mut self, device: &wgpu::Device, behind: Option<&wgpu::TextureView>) {
-        self.behind_view = behind.unwrap_or(&self.behind_fallback).clone();
-        let view = &self.behind_view;
+    pub fn set_behind_view(&mut self, device: &wgpu::Device, behind: Option<(&wgpu::TextureView, &wgpu::TextureView)>) {
+        let (colour, depth) = behind.unwrap_or((&self.behind_fallback, &self.behind_depth_fallback));
+        self.behind_view = colour.clone();
+        self.behind_depth_view = depth.clone();
+        let view = (&self.behind_view, &self.behind_depth_view);
         let build = |uniform: &wgpu::Buffer, table: &wgpu::Buffer, indices: &wgpu::Buffer| {
             global_group(
                 device,
@@ -498,8 +504,8 @@ impl SceneState {
         let shape = set.as_ref().map_or(ProbeShape::default(), |s| ProbeShape::of(&s.probes));
         // Called when the probes change, which is rare, so every view's group 0 is simply built again.
         self.forward_probes.view = set.map(|s| s.view.clone());
-        let behind = self.behind_view.clone();
-        self.set_behind_view(device, Some(&behind));
+        let behind = (self.behind_view.clone(), self.behind_depth_view.clone());
+        self.set_behind_view(device, Some((&behind.0, &behind.1)));
         let changed = shape != self.forward_probes.shape;
         self.forward_probes.shape = shape;
         changed
@@ -558,8 +564,8 @@ impl SceneState {
         map: Option<&crate::environment::EnvironmentMap>,
     ) {
         if self.env_cube.set_map(device, queue, encoder, &self.global_bind_group_layout, map) {
-            let behind = self.behind_view.clone();
-            self.set_behind_view(device, Some(&behind));
+            let behind = (self.behind_view.clone(), self.behind_depth_view.clone());
+            self.set_behind_view(device, Some((&behind.0, &behind.1)));
         }
     }
 
@@ -749,7 +755,7 @@ fn global_group(
     layout: &wgpu::BindGroupLayout,
     label: &str,
     [uniform, table, indices]: [&wgpu::Buffer; 3],
-    behind: &wgpu::TextureView,
+    (behind, behind_depth): (&wgpu::TextureView, &wgpu::TextureView),
     sampler: &wgpu::Sampler,
     environment: &wgpu::TextureView,
     probes: &ForwardProbes,
@@ -772,6 +778,7 @@ fn global_group(
             wgpu::BindGroupEntry { binding: 8, resource: probes.uniform.as_entire_binding() },
             wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(sun_shadow) },
             wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(sun_shadow_sampler) },
+            wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(behind_depth) },
     ];
     // The local lights' layers and cookies: the forward-only path's only (see `build_layouts`).
     #[cfg(gizmo_forward_only)]
@@ -954,8 +961,8 @@ impl SceneState {
             &self.local_shadow_maps.view,
             &self.cookies,
         );
-        let behind = self.behind_view.clone();
-        self.set_behind_view(device, Some(&behind));
+        let behind = (self.behind_view.clone(), self.behind_depth_view.clone());
+        self.set_behind_view(device, Some((&behind.0, &behind.1)));
     }
 
     /// Grows the active view's instance buffer — the frame's own when no view is active — to hold
@@ -1118,6 +1125,20 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
             view_formats: &[],
         })
         .create_view(&wgpu::TextureViewDescriptor::default());
+    // A texel at the far plane: nothing behind, which `behind_distance` reads as sky.
+    let behind_depth_fallback = {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("nothing behind glass yet (depth)"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
+    };
     let behind_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
         label: Some("behind glass"),
         address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -1134,7 +1155,7 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         &layouts.global,
         "global_bind_group",
         [&global_uniform_buffer, &cluster_table_buffer, &cluster_index_buffer],
-        &behind_fallback,
+        (&behind_fallback, &behind_depth_fallback),
         &behind_sampler,
         env_cube.view(),
         &forward_probes,
@@ -1274,6 +1295,8 @@ pub fn build_scene_pipelines(device: &wgpu::Device) -> SceneState {
         wire_colors: std::collections::HashMap::new(),
         transmissive: core_pipelines.transmissive,
         behind_view: behind_fallback.clone(),
+        behind_depth_view: behind_depth_fallback.clone(),
+        behind_depth_fallback,
         env_cube,
         forward_probes,
         forward_sun_shadows: false,

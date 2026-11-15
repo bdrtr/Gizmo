@@ -18,6 +18,14 @@ struct Surface {
     metallic: f32,
     // Added unlit, in linear HDR.
     emissive: vec3<f32>,
+    // For a surface that lets light through (`Material::transmission`): how much of it the medium
+    // behind the surface takes out per metre, a channel at a time — water, murky glass. Zero (the
+    // default) is a thin pane: what is behind comes through tinted by `albedo`, as glass always
+    // has. Non-zero makes the surface the top of a volume that reaches the opaque world behind it:
+    // what shows through is dimmed by `exp(-absorption · depth)` over the depth of that volume
+    // (`SurfaceInput::behind_distance`), and `albedo` is the colour the volume scatters where it is
+    // too deep to see through — lit, so dark at night. Read only where there is a frame behind.
+    absorption: vec3<f32>,
 };
 
 // What a game's `material_surface` is handed: everything the engine's own material reads at a
@@ -50,6 +58,11 @@ struct SurfaceInput {
     time: f32,
     // Where the camera is.
     camera_position: vec3<f32>,
+    // How far behind this fragment, along the view ray, the opaque world is, in metres — the depth
+    // of water under a lake's surface. Known only to a surface drawn with the frame behind it (one
+    // whose material lets light through, `Material::transmission`); `-1.0` everywhere else, and a
+    // very large number where there is nothing behind but sky.
+    behind_distance: f32,
 };
 
 struct TangentFrame {

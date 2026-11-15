@@ -151,6 +151,7 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     input.frag_coord = in.clip_position;
     input.time = shadow_vs.params.x;
     input.camera_position = shadow_vs.camera_position.xyz;
+    input.behind_distance = -1.0;
     return material_surface(input);
 #else
     return evaluate_surface(

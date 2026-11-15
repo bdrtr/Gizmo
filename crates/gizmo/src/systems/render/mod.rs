@@ -16548,6 +16548,79 @@ fn material_surface(input: SurfaceInput) -> Surface {
         (sum, if weight > 0.0 { at / weight } else { -1.0 })
     }
 
+    /// **A surface over a volume darkens with the depth behind it.** Two red cubes behind one pane,
+    /// one 0.3 m behind it and one 3 m: through a thin pane (no `absorption`) both show alike; through
+    /// a pane whose surface absorbs 1.2 a metre, the near one still shows and the far one is drowned
+    /// in the volume's colour — `exp(-1.2 · 0.3)` against `exp(-1.2 · 3)`. And `behind_distance` is
+    /// that depth: a surface that glows by it glows brighter over the far cube. Until
+    /// 2026-11-16 a surface knew nothing of what was behind it, and water could only be one flat tint.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_surface_over_a_volume_darkens_with_the_depth_behind_it() {
+        use crate::renderer::components::MaterialType;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        const THIN: &str = "#import gizmo::surface::{Surface, SurfaceInput}\n#import gizmo::material::{standard_surface}\nfn material_surface(input: SurfaceInput) -> Surface { return standard_surface(input); }";
+        const WATER: &str = "#import gizmo::surface::{Surface, SurfaceInput}\n#import gizmo::material::{standard_surface}\nfn material_surface(input: SurfaceInput) -> Surface { var s = standard_surface(input); s.albedo = vec3<f32>(0.0, 0.0, 0.3); s.base_color = s.albedo; s.absorption = vec3<f32>(1.2); return s; }";
+        const DEPTH: &str = "#import gizmo::surface::{Surface, SurfaceInput}\n#import gizmo::material::{standard_surface}\nfn material_surface(input: SurfaceInput) -> Surface { var s = standard_surface(input); s.albedo = vec3<f32>(0.0); s.base_color = s.albedo; s.absorption = vec3<f32>(50.0); s.emissive = vec3<f32>(max(input.behind_distance, 0.0) * 0.25); return s; }";
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.sky = Some(gizmo_renderer::frame_uniforms::Sky::uniform([0.0, 0.0, 0.0]));
+            let mut frames = Vec::new();
+            for (label, wgsl) in [("thin", THIN), ("water", WATER), ("depth", DEPTH)] {
+                let id = renderer.add_surface_material(label, wgsl).unwrap_or_else(|e| panic!("{label}: {e}"));
+                let mut assets = AssetManager::new();
+                let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+                let mut world = World::new();
+                for (x, z) in [(-1.3f32, -0.8f32), (1.3, -3.5)] {
+                    let cube = world.spawn();
+                    world.add_component(cube, Transform::new(Vec3::new(x, 0.0, z)).with_scale(Vec3::splat(0.5)));
+                    world.add_component(cube, GlobalTransform::default());
+                    world.add_component(cube, AssetManager::create_cube(&renderer.device));
+                    world.add_component(cube, Material::new(tex.clone()).with_unlit(Vec4::new(3.0, 0.0, 0.0, 1.0)));
+                    world.add_component(cube, MeshRenderer::new());
+                }
+                let plane = world.spawn();
+                world.add_component(plane, Transform::new(Vec3::ZERO).with_rotation(gizmo_math::Quat::from_rotation_x(std::f32::consts::FRAC_PI_2)));
+                world.add_component(plane, GlobalTransform::default());
+                world.add_component(plane, AssetManager::create_plane(&renderer.device, 8.0));
+                let mut pane = Material::new(tex).with_pbr(Vec4::ONE, 0.0, 0.0).with_double_sided(true).with_transmission(1.0);
+                pane.material_type = MaterialType::CustomSurface(id);
+                world.add_component(plane, pane);
+                world.add_component(plane, MeshRenderer::new());
+                world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 4.0), yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+                frames.push(render_world(&mut renderer, &mut world).await);
+            }
+            const W: usize = 128;
+            let red = |f: &[u8], i: usize| (f32::from(f[i * 4]) - f32::from(f[i * 4 + 1])).max(0.0);
+            let bright = |f: &[u8], i: usize| f32::from(f[i * 4]) + f32::from(f[i * 4 + 1]) + f32::from(f[i * 4 + 2]);
+            // Each cube's pixels, from the thin pane's frame: left half the near cube, right half the far.
+            let (mut near, mut far) = (Vec::new(), Vec::new());
+            for i in 0..W * W {
+                if red(&frames[0], i) > 60.0 {
+                    if i % W < W / 2 { near.push(i) } else { far.push(i) }
+                }
+            }
+            assert!(near.len() > 20 && far.len() > 10, "both cubes show through a thin pane: {} and {} pixels", near.len(), far.len());
+            let mean = |f: &[u8], px: &[usize], m: &dyn Fn(&[u8], usize) -> f32| px.iter().map(|&i| m(f, i)).sum::<f32>() / px.len() as f32;
+            let kept = |px: &[usize]| mean(&frames[1], px, &red) / mean(&frames[0], px, &red).max(1.0);
+            let (near_kept, far_kept) = (kept(&near), kept(&far));
+            // In linear light 0.70 and 0.027 of a red of 3.0; on screen, through the tone curve, the
+            // near one stays saturated and the far one falls to about a third (measured 0.98, 0.32).
+            assert!(near_kept > 0.8 && far_kept < 0.45 && near_kept > far_kept * 2.0, "through the water the near cube keeps {near_kept:.2} of its red, the far one {far_kept:.2}");
+            let (near_glow, far_glow) = (mean(&frames[2], &near, &bright), mean(&frames[2], &far, &bright));
+            // Ten times the glow in linear light; through the tone curve about 1.4 times the bytes
+            // (measured 744 and 517). A depth that were constant, or -1, would glow alike.
+            assert!(far_glow > near_glow * 1.3, "behind_distance: the far cube's depth glows {far_glow:.1}, the near one's {near_glow:.1}");
+        });
+    }
+
     /// **Glass shows what is behind it**, tinted by its colour, displaced by its thickness and its
     /// index of refraction, blurred by its roughness. A white pane with no transmission hides the
     /// cube; with full transmission the cube shows, each of the rest then moves what shows.

@@ -1071,7 +1071,7 @@ impl Renderer {
         if self.behind.is_none() {
             let behind =
                 crate::transmission::BehindSurface::new(&self.device, self.size.width, self.size.height);
-            self.scene.set_behind_view(&self.device, Some(behind.view()));
+            self.scene.set_behind_view(&self.device, Some((behind.view(), behind.depth_view())));
             self.behind = Some(behind);
         }
     }
@@ -1514,7 +1514,8 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            // COPY_SRC: the frame behind glass copies it (`transmission::BehindSurface::capture`).
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         tex.create_view(&wgpu::TextureViewDescriptor::default())

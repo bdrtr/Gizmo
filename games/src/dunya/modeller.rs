@@ -57,11 +57,12 @@ pub(super) const GROUND_WGSL: &str = include_str!("arazi.wgsl");
 /// Göllerin gölgelendiricisi (`su.wgsl`).
 pub(super) const WATER_WGSL: &str = include_str!("su.wgsl");
 
-/// Göllerin materyali: saydam, `surface`'ta kayıtlı su yüzeyiyle.
+/// Göllerin materyali: ışık geçiren (motor altını kırarak gösteriyor, derinliğe göre karartıyor),
+/// suyun kırma indisiyle, `surface`'ta kayıtlı su yüzeyiyle.
 pub(super) struct WaterLook(pub(super) MaterialDesc);
 
 pub(super) fn water_look(surface: gizmo::renderer::custom_material::SurfaceId) -> WaterLook {
-    let mut look = MaterialDesc::new().with_pbr(Vec4::new(1.0, 1.0, 1.0, 0.8), 0.05, 0.0).with_transparent(true);
+    let mut look = MaterialDesc::new().with_pbr(Vec4::ONE, 0.04, 0.0).with_transmission(1.0).with_ior(1.33).with_thickness(0.4);
     look.material_type = gizmo::renderer::components::MaterialType::CustomSurface(surface);
     WaterLook(look)
 }

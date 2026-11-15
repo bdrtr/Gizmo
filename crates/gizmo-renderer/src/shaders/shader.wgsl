@@ -107,6 +107,9 @@ var<uniform> wire_color: vec4<f32>;
 // The frame as it stood before any glass was drawn, with its mip chain (`transmission.rs`).
 @group(0) @binding(3)
 var t_behind: texture_2d<f32>;
+// Its depth: how far behind a surface the opaque world is (`SurfaceInput::behind_distance`).
+@group(0) @binding(14)
+var t_behind_depth: texture_depth_2d;
 #endif
 // Linear, with linear mips: it reads the frame behind glass, and the environment cube.
 @group(0) @binding(4)
@@ -334,6 +337,22 @@ fn get_procedural_environment(dir: vec3<f32>, roughness: f32) -> vec3<f32> {
 }
 #endif
 
+#ifdef TRANSMISSION
+// How far the opaque world behind `world_position` is along the view ray, from the depth the frame
+// had before any glass was drawn; a very large number where only sky is behind.
+fn behind_distance(pixel: vec2<f32>, world_position: vec3<f32>) -> f32 {
+    let dims = vec2<f32>(textureDimensions(t_behind_depth));
+    let p = clamp(vec2<i32>(pixel), vec2<i32>(0), vec2<i32>(dims) - vec2<i32>(1));
+    let d = textureLoad(t_behind_depth, p, 0);
+    if (d >= 1.0) {
+        return 1.0e6;
+    }
+    let uv = (vec2<f32>(p) + 0.5) / dims;
+    let h = scene.inv_view_proj * vec4<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, d, 1.0);
+    return max(distance(h.xyz / h.w, world_position), 0.0);
+}
+#endif
+
 // What the material is at this fragment: the engine's own, or the game's `material_surface`.
 fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
 #ifdef CUSTOM_SURFACE
@@ -352,6 +371,11 @@ fn fragment_surface(in: VertexOutput, front: bool) -> Surface {
     input.frag_coord = in.clip_position;
     input.time = scene.cascade_params.z;
     input.camera_position = scene.camera_pos.xyz;
+#ifdef TRANSMISSION
+    input.behind_distance = behind_distance(in.clip_position.xy, in.world_position);
+#else
+    input.behind_distance = -1.0;
+#endif
     return material_surface(input);
 #else
     return evaluate_surface(
@@ -458,7 +482,15 @@ fn shade(in: VertexOutput) -> vec4<f32> {
     // Light that goes through does not also scatter: the diffuse gets what is left. A metal lets
     // nothing through.
     let glass = in.inst_glass.x * (1.0 - metallic);
-    let albedo = surface.albedo * (1.0 - glass);
+    // A surface over a volume (`Surface::absorption`): what comes through is dimmed by the depth of
+    // the volume behind it, and the volume's own colour scatters where the light does not reach
+    // through. A thin pane (no absorption) lets all of it through, tinted by its colour.
+    let volume = any(surface.absorption > vec3<f32>(0.0));
+    var through = vec3<f32>(1.0);
+    if (volume) {
+        through = exp(-surface.absorption * min(behind_distance(in.clip_position.xy, in.world_position), 1.0e3));
+    }
+    let albedo = surface.albedo * (vec3<f32>(1.0) - glass * through);
 #else
     let albedo = surface.albedo;
 #endif
@@ -814,7 +846,8 @@ fn shade(in: VertexOutput) -> vec4<f32> {
 
 #ifdef TRANSMISSION
     // After the fog: the frame behind has its own up to that surface.
-    final_color += transmitted_light(in.world_position, N, view_dir, NdV, surface.albedo, f0, surface.roughness, dielectric_f0(in.inst_emissive.w), in.inst_glass.y) * glass * volume_transmittance(in.inst_volume);
+    let tint = select(surface.albedo, through, volume);
+    final_color += transmitted_light(in.world_position, N, view_dir, NdV, tint, f0, surface.roughness, dielectric_f0(in.inst_emissive.w), in.inst_glass.y) * glass * volume_transmittance(in.inst_volume);
 #endif
 
 #ifdef DETAILS

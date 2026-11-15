@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A surface over a volume: `Surface::absorption` and `SurfaceInput::behind_distance`.** The frame behind glass
+  now keeps its depth too (`BehindSurface` copies the depth buffer with the colour; group 0 binding 14), and a game's
+  surface drawn through it is told how far behind it the opaque world is — the depth of water under a lake. A surface
+  that sets `absorption` (per metre, a channel at a time) becomes the top of a volume reaching that world: what shows
+  through is dimmed by `exp(-absorption · depth)`, and its `albedo` is the colour the volume scatters where it is too
+  deep to see through, lit like any surface. Zero absorption is the thin pane glass always was.
+- **`dunya`: real water.** The lakes are a transmissive surface over that volume: the bottom shows through near the
+  shore, refracted by the ripples, and the water turns teal and then dark green as it deepens; a band of foam breaks
+  along the shore where the bottom is within 30 cm of the surface; the sky and the sun reflect by Fresnel.
 - **`WheelVisual`: a drawn wheel that follows a `VehicleController`'s wheel.** On a wheel's entity it names which of its
   vehicle's wheels it is (the vehicle being its nearest ancestor with a controller — nothing names an entity, so a
   saved scene reopens whole), and `wheel_visual_system` puts it at the end of its strut, steered, and rolling the way
@@ -951,6 +960,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A game's surface can let light through.** `SurfaceMaterial` built a glass pipeline, and the draw loops would have
+  used it, but `Material::is_transmissive` answered `true` only for `MaterialType::Pbr`, so a surface with
+  `transmission` was drawn as an ordinary one and nothing behind it ever showed.
 - **A character climbs only what `step_height` allows.** The step probe was cast from `step_height` above the bottom
   sphere's *centre*, not the feet, and accepted a ledge up to twice that far below it, so a capsule of radius 0.35
   stepped onto anything up to ~0.65 m with the default 0.3 — in `dunya` the player walked over a bridge's railing and

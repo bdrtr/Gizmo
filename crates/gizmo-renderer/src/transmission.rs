@@ -18,6 +18,9 @@
 pub struct BehindSurface {
     texture: wgpu::Texture,
     view: wgpu::TextureView,
+    /// The frame's depth as it stood with the colour: how far behind a surface the world is.
+    depth: wgpu::Texture,
+    depth_view: wgpu::TextureView,
     pipeline: wgpu::RenderPipeline,
     /// Per level from the second down: the target, and the bind group that reads the level above.
     levels: Vec<(wgpu::TextureView, wgpu::BindGroup)>,
@@ -44,6 +47,17 @@ impl BehindSurface {
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let depth = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("behind glass depth"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("behind glass downsample"),
             entries: &[
@@ -130,7 +144,7 @@ impl BehindSurface {
                 (level_view(level), bind_group)
             })
             .collect();
-        Self { texture, view, pipeline, levels }
+        Self { texture, view, depth, depth_view, pipeline, levels }
     }
 
     /// The view group 0 offers the glass shader: every level.
@@ -139,13 +153,18 @@ impl BehindSurface {
         &self.view
     }
 
-    /// Copies the frame as it stands and rebuilds the mip chain.
-    pub fn capture(&self, encoder: &mut wgpu::CommandEncoder, frame: &wgpu::Texture) {
-        encoder.copy_texture_to_texture(
-            frame.as_image_copy(),
-            self.texture.as_image_copy(),
-            wgpu::Extent3d { width: frame.width(), height: frame.height(), depth_or_array_layers: 1 },
-        );
+    /// The depth view group 0 offers the glass shader (`SurfaceInput::behind_distance`).
+    #[must_use]
+    pub fn depth_view(&self) -> &wgpu::TextureView {
+        &self.depth_view
+    }
+
+    /// Copies the frame and its depth as they stand and rebuilds the mip chain. `depth` is the
+    /// frame's depth buffer, the size of `frame`.
+    pub fn capture(&self, encoder: &mut wgpu::CommandEncoder, frame: &wgpu::Texture, depth: &wgpu::Texture) {
+        let extent = wgpu::Extent3d { width: frame.width(), height: frame.height(), depth_or_array_layers: 1 };
+        encoder.copy_texture_to_texture(frame.as_image_copy(), self.texture.as_image_copy(), extent);
+        encoder.copy_texture_to_texture(depth.as_image_copy(), self.depth.as_image_copy(), extent);
         for (target, source) in &self.levels {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("behind glass downsample"),

@@ -238,7 +238,9 @@ pub struct Material {
     /// [`roughness`](Self::roughness) and bent by [`reflectance`](Self::reflectance) over
     /// [`thickness`](Self::thickness); the highlight and the reflection stay. Alpha plays no part
     /// and the surface writes depth. A metal lets nothing through. Only a
-    /// [`MaterialType::Pbr`] material reads this.
+    /// [`MaterialType::Pbr`] material and a game's surface ([`MaterialType::CustomSurface`]) read
+    /// this; a surface over a volume (water) sets `Surface::absorption` and is dimmed by the depth
+    /// behind it.
     ///
     /// It looks at the frame, so only what is on screen shows through, and what is itself
     /// transparent does not: see [`crate::transmission`].
@@ -840,10 +842,14 @@ macro_rules! material_builders {
         gizmo_math::Vec3::new(c.x.powf(k), c.y.powf(k), c.z.powf(k))
     }
 
-    /// Whether the draw loops send this to the glass pass.
+    /// Whether the draw loops send this to the glass pass: the engine's own material or a game's
+    /// surface ([`MaterialType::CustomSurface`]), which has a glass pipeline of its own. The surface
+    /// had one and was never sent to it until 2026-11-16, so a surface could not let light through.
     #[must_use]
     pub fn is_transmissive(&self) -> bool {
-        self.transmission > 0.0 && self.is_transparent && self.material_type == MaterialType::Pbr
+        self.transmission > 0.0
+            && self.is_transparent
+            && matches!(self.material_type, MaterialType::Pbr | MaterialType::CustomSurface(_))
     }
 
     /// Sets transparency by hand.

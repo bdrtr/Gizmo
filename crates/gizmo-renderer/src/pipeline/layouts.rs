@@ -132,6 +132,20 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
+            // The depth of the frame under the glass (`crate::transmission`): how far behind a
+            // surface the opaque world is, which a surface over a volume (water) reads for its depth.
+            // One sampled texture more: the desktop's deferred lighting layout holds 16 with it, the
+            // forward-only lit layout 12 — of WebGPU's 16 a stage.
+            wgpu::BindGroupLayoutEntry {
+                binding: 14,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Depth,
+                },
+                count: None,
+            },
     ];
     // The local lights' shadow layers and cookies, with the cookies' sampler, for the forward-only path's lit
     // shaders (`LOCAL_LIGHT_MAPS`), which have no shadow group: there the lit pipeline layout holds 11

@@ -623,7 +623,7 @@ pub(super) fn record_studio_main_pass(
                 None => render_pass,
                 Some(behind) => {
                     drop(render_pass);
-                    behind.capture(encoder, &renderer.post.hdr_texture);
+                    behind.capture(encoder, &renderer.post.hdr_texture, renderer.depth_texture_view.texture());
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Main Render Pass, glass and after (HDR)"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {

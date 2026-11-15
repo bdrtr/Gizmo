@@ -83,7 +83,7 @@ pub fn record_forward_and_fluid(
             super::screen_space::record_volumetric_march(encoder, renderer);
         }
         if let Some(behind) = renderer.behind.as_ref().filter(|_| has_glass) {
-            behind.capture(encoder, &renderer.post.hdr_texture);
+            behind.capture(encoder, &renderer.post.hdr_texture, renderer.depth_texture_view.texture());
         }
         if world_end < draw_items.len() {
             let mut render_pass = begin_forward_pass(encoder, renderer, wgpu::LoadOp::Load, wgpu::LoadOp::Load);

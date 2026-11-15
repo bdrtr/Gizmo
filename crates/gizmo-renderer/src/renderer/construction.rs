@@ -563,6 +563,8 @@ impl Renderer {
             transmissive: scene.transmissive,
             behind_fallback: scene.behind_fallback,
             behind_view: scene.behind_view,
+            behind_depth_view: scene.behind_depth_view,
+            behind_depth_fallback: scene.behind_depth_fallback,
             behind_sampler: scene.behind_sampler,
             env_cube: scene.env_cube,
             forward_probes: scene.forward_probes,
