@@ -146,6 +146,9 @@ pub fn full_scene_registry() -> SceneRegistry {
         if let Err(e) = reg.register_serializable::<gizmo_physics_dynamics::vehicle::VehicleController>("VehicleController") {
             tracing::warn!(error = ?e, "[Scene] VehicleController registration failed");
         }
+        if let Err(e) = reg.register_serializable::<gizmo_physics_dynamics::boat::BoatController>("BoatController") {
+            tracing::warn!(error = ?e, "[Scene] BoatController registration failed");
+        }
         if let Err(e) = reg.register_serializable::<gizmo_physics_dynamics::oxygen::Oxygen>("Oxygen") {
             tracing::warn!(error = ?e, "[Scene] Oxygen registration failed");
         }

@@ -53,6 +53,9 @@
 /// `Some(surface_y)` takes a buoyant swim step instead and returns immediately — none of the
 /// land gravity, ground-snap or step-climb logic runs in that branch.
 pub mod character;
+// A motor boat in a fluid zone (requires the `ecs` feature).
+#[cfg(feature = "ecs")]
+pub mod boat;
 /// Requires the `ecs` feature.
 #[cfg(feature = "ecs")]
 pub mod oxygen;
@@ -72,6 +75,8 @@ pub mod vehicle;
 
 // Re-export common traits and structs
 pub use character::*;
+#[cfg(feature = "ecs")]
+pub use boat::*;
 #[cfg(feature = "ecs")]
 pub use oxygen::*;
 #[cfg(feature = "ecs")]

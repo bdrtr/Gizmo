@@ -9,7 +9,7 @@
 //! |---|---|
 //! | **W A S D · sol çubuk** | yürü / sür |
 //! | **Boşluk** | zıpla (yayayken) |
-//! | **E** | arabaya bin / in |
+//! | **E** | arabaya ya da kayığa bin / in |
 //! | **F** | yakındaki ağacı kes (odun), kayayı kır (taş) |
 //! | **I · Tab** | envanter: eşyayı yuvadan yuvaya sürükle, panelin dışına bırakırsan yere düşer; alttaki tariflerle üret |
 //! | **T** | yakındaki köylüyle konuş: iş al, getirdiğini teslim et |
@@ -39,6 +39,8 @@
 //!   `Recipe` ve `Inventory::craft`'ı; kurulan yapılar katı, kamp ateşi titreyen bir ışık, hepsi kayıtta.
 //! - **Canlılar ve köyler** (`canli`): koyunlar ve geyikler otluyor, yaklaşınca kaçıyor; bazı
 //!   hücrelerde üç barınaklı bir köy ve iş isteyen iki köylü — hepsi motorun davranış ağaçlarıyla.
+//! - **Göller ve kayık** (`su`): arazideki alçak çanaklar su seviyesinin altında kalınca göl; su
+//!   motorun tek bir `FluidZone`'u, kayık motorun `BoatController`'ı, oyuncu suda yüzüyor.
 //! - **Gece-gündüz** dört dakikada bir tur: güneş dönüyor, gök, sis ve arka plan rengi ona göre;
 //!   geceleri ay ışığı ve kristallerin kendi ışıltısı.
 //!
@@ -48,6 +50,7 @@
 
 mod canli;
 mod insa;
+mod su;
 
 use std::collections::HashSet;
 
@@ -128,7 +131,7 @@ fn height(x: f32, z: f32) -> f32 {
     let mountains = (ridge.powi(3) - 0.15).max(0.0) * 1.2;
     // Başlangıcın çevresi düzlük: ilk adımlar bir dağın yamacında olmasın.
     let calm = (Vec2::new(x, z).length() / 120.0).clamp(0.25, 1.0);
-    ((hills * 14.0 + mountains * 34.0 * calm) + 2.0).clamp(0.0, MAX_HEIGHT)
+    ((hills * 14.0 + mountains * 34.0 * calm) + 2.0 - su::basin(x, z)).clamp(0.0, MAX_HEIGHT)
 }
 
 /// Eğim: yüksekliğin değişimi, metrede metre.
@@ -223,6 +226,8 @@ fn load_chunk(world: &mut World, coord: ChunkCoord, collected: &HashSet<(i32, i3
         }
     }
     let mut spawned = Vec::new();
+    let lowest = heights.iter().fold(f32::MAX, |a, h| a.min(*h)) * MAX_HEIGHT;
+    spawned.extend(su::surface(world, coord, lowest, visual));
     let ground = world.spawn_bundle((
         Transform::new(centre),
         GlobalTransform::default(),
@@ -252,7 +257,7 @@ fn load_chunk(world: &mut World, coord: ChunkCoord, collected: &HashSet<(i32, i3
         let scale = 0.8 + rng.next() * 0.7;
         let kind = rng.next();
         let id = (coord.0, coord.1, 1 + k);
-        if s > 0.5 || h > 26.0 || Vec2::new(x, z).length() < 12.0 || collected.contains(&id) {
+        if s > 0.5 || h > 26.0 || su::wet(x, z, 0.4) || Vec2::new(x, z).length() < 12.0 || collected.contains(&id) {
             continue;
         }
         let tree = spawn_tree(world, Vec3::new(x, h, z), scale, kind, visual);
@@ -265,7 +270,7 @@ fn load_chunk(world: &mut World, coord: ChunkCoord, collected: &HashSet<(i32, i3
         let id = (coord.0, coord.1, 100 + k);
         let size = Vec3::new(0.6 + rng.next() * 1.4, 0.4 + rng.next() * 0.9, 0.6 + rng.next() * 1.4);
         let turn = Quat::from_rotation_y(rng.next() * std::f32::consts::TAU) * Quat::from_rotation_x(rng.next() * 0.4 - 0.2);
-        if Vec2::new(x, z).length() < 12.0 || collected.contains(&id) {
+        if Vec2::new(x, z).length() < 12.0 || su::wet(x, z, 0.0) || collected.contains(&id) {
             continue;
         }
         let rock = world.spawn_bundle((
@@ -287,7 +292,7 @@ fn load_chunk(world: &mut World, coord: ChunkCoord, collected: &HashSet<(i32, i3
     if rng.next() < 0.55 {
         let id = (coord.0, coord.1, 0u8);
         let (x, z) = (origin.x + 15.0 + rng.next() * (CHUNK_SIZE - 30.0), origin.y + 15.0 + rng.next() * (CHUNK_SIZE - 30.0));
-        if !collected.contains(&id) && Vec2::new(x, z).length() > 8.0 {
+        if !collected.contains(&id) && Vec2::new(x, z).length() > 8.0 && !su::wet(x, z, 0.3) {
             let crystal = world.spawn_bundle((
                 Transform::new(Vec3::new(x, height(x, z) + 1.3, z)).with_scale(Vec3::new(0.35, 0.8, 0.35)),
                 GlobalTransform::default(),
@@ -647,6 +652,9 @@ struct Game {
     building: Option<insa::Building>,
     /// Köylülerin işleri: 1 verildi, 2 bitti.
     quests: std::collections::HashMap<(i32, i32, u8), u8>,
+    /// Göllerin kayıkları, ve hangi hücrelere kayık kondu.
+    boats: Vec<Entity>,
+    boat_chunks: HashSet<ChunkCoord>,
 }
 
 fn start_point() -> Vec3 {
@@ -738,6 +746,11 @@ fn drawn_focus(world: &World, game: &Game) -> Transform {
 
 /// Odak noktası değiştiyse hücreleri yükler, silinmesi gerekenleri siler.
 fn stream_chunks(world: &mut World, game: &mut Game) {
+    stream_chunks_only(world, game);
+    su::place_boats(world, game);
+}
+
+fn stream_chunks_only(world: &mut World, game: &mut Game) {
     let at = focus(world, game);
     let (collected, visual) = (game.collected.clone(), game.visual);
     let (mut loads, mut unloads) = (0, 0);
@@ -758,7 +771,9 @@ fn stream_chunks(world: &mut World, game: &mut Game) {
 }
 
 fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
-    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    let mut physics = PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0));
+    su::install(&mut physics);
+    world.insert_resource(physics);
     canli::install(world);
     let sun = world.spawn_bundle((
         Transform::new(Vec3::ZERO),
@@ -835,6 +850,8 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
         dirty: false,
         building: None,
         quests,
+        boats: Vec::new(),
+        boat_chunks: HashSet::new(),
     };
     stream_chunks(world, &mut game);
     for (k, (x, z)) in [(6.0f32, 3.0f32), (-7.0, 5.0), (3.0, -8.0)].into_iter().enumerate() {
@@ -852,11 +869,12 @@ fn camera_axes(game: &Game) -> (Vec3, Vec3) {
 
 fn enter_or_leave(world: &mut World, game: &mut Game) {
     if let Some(car) = game.driving.take() {
-        // İn: arabanın soluna, arazinin üstüne.
+        // İn: aracın soluna, arazinin (ya da suyun) üstüne.
         let t = world.get::<Transform>(car).copied().unwrap_or_default();
         let side = t.rotation * Vec3::new(-2.2, 0.0, 0.0);
         let at = Vec3::new(t.position.x + side.x, 0.0, t.position.z + side.z);
-        let at = Vec3::new(at.x, height(at.x, at.z) + 1.4, at.z);
+        let at = Vec3::new(at.x, height(at.x, at.z).max(su::WATER) + 1.4, at.z);
+        su::drive(world, car, 0.0, 0.0);
         if let Some(mut p) = world.query_mut::<&mut Transform>().get_mut(game.player) {
             p.position = at;
         }
@@ -875,6 +893,7 @@ fn enter_or_leave(world: &mut World, game: &mut Game) {
     let near = game
         .cars
         .iter()
+        .chain(&game.boats)
         .copied()
         .filter_map(|c| world.get::<Transform>(c).map(|t| (c, t.position.distance(me))))
         .filter(|(_, d)| *d < 3.5)
@@ -985,6 +1004,9 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
     }
     let (forward, right) = camera_axes(game);
     match game.driving {
+        Some(boat) if su::is_boat(world, boat) => {
+            su::drive(world, boat, c.my, c.mx);
+        }
         Some(car) => {
             if let Some(mut v) = world.query_mut::<&mut VehicleController>().get_mut(car) {
                 v.throttle_input = c.my.max(0.0);
@@ -1114,9 +1136,12 @@ fn draw_hud(world: &mut World, game: &Game) {
         format!("{} {:.0} m", arrows[k], d.length())
     });
     let hours = game.time_of_day * 24.0;
-    let speed = game.driving.and_then(|c| world.get::<VehicleController>(c).map(|v| v.current_speed_kmh));
+    let speed = game.driving.map(|c| {
+        let kmh = world.get::<VehicleController>(c).map_or_else(|| world.get::<Velocity>(c).map_or(0.0, |v| v.linear.length() * 3.6), |v| v.current_speed_kmh);
+        (kmh, if su::is_boat(world, c) { "kayıkta" } else { "arabada" })
+    });
     let mut mode = match speed {
-        Some(s) => format!("arabada, {s:.0} km/s · E: in"),
+        Some((s, what)) => format!("{what}, {s:.0} km/s · E: in"),
         None => match canli::nearest_villager(world, me) {
             Some((_, v)) => format!("yaya · T: {} ile konuş", v.name),
             None => "yaya · E: arabaya bin (yakındaysa)".to_string(),
@@ -1226,6 +1251,12 @@ pub fn self_test() -> bool {
     let mut flee: Option<(Entity, f32)> = None;
     let mut fled = 0.0f32;
     let mut animals_seen = 0usize;
+    // Kayık aşaması: 106. saniyede en yakın gölün kayığına bin, altı saniye tam gaz sür, in.
+    let boat_at = 60 * 106;
+    let mut boat_start: Option<(Entity, Vec3)> = None;
+    let mut boat_report = String::from("kayık aşaması çalışmadı");
+    let mut boat_ok = false;
+    let mut boat_y = (f32::MAX, f32::MIN);
     // İnşa aşaması: 115. saniyede malzeme, dört tarif, önüne bir çit; üç saniye çite yürü.
     let build_at = 60 * 115;
     let mut fence: Option<(Vec3, Vec3)> = None;
@@ -1290,6 +1321,48 @@ pub fn self_test() -> bool {
                     fled = w.get::<Transform>(animal).map_or(0.0, |t| Vec2::new(t.position.x - me.x, t.position.z - me.z).length() - d0);
                 }
             }
+            if frame == boat_at {
+                let lake = (-6..=6).flat_map(|x| (-6..=6).map(move |z| (x, z))).filter_map(su::boat_spot).min_by(|a, b| a.length().total_cmp(&b.length()));
+                match lake {
+                    Some(spot) => {
+                        // Kıyıya: kayık yerinin yanındaki kuru yer.
+                        let shore = [(4.0f32, 0.0f32), (-4.0, 0.0), (0.0, 4.0), (0.0, -4.0)]
+                            .into_iter()
+                            .map(|(dx, dz)| Vec2::new(spot.x + dx, spot.z + dz))
+                            .find(|p| !su::wet(p.x, p.y, 0.0))
+                            .unwrap_or(Vec2::new(spot.x, spot.z));
+                        teleport(w, &game, shore.x, shore.y);
+                        boat_report = format!("göl {:.0} m ötede", Vec2::new(spot.x, spot.z).length());
+                    }
+                    None => boat_report = "yakında göl yok".to_string(),
+                }
+            }
+            if frame == boat_at + 60 {
+                let me = focus(w, &game);
+                let nearest = game.boats.iter().copied().filter_map(|b| w.get::<Transform>(b).map(|t| (b, t.position))).min_by(|a, b| a.1.distance(me).total_cmp(&b.1.distance(me)));
+                if let Some((boat, at)) = nearest {
+                    teleport(w, &game, at.x + 1.5, at.z);
+                    sync_transforms(w);
+                    enter_or_leave(w, &mut game);
+                    if game.driving == Some(boat) {
+                        boat_start = Some((boat, at));
+                    }
+                }
+            }
+            if frame == boat_at + 60 * 7 {
+                if let Some((boat, start)) = boat_start {
+                    let at = w.get::<Transform>(boat).map_or(start, |t| t.position);
+                    let moved = Vec2::new(at.x - start.x, at.z - start.z).length();
+                    enter_or_leave(w, &mut game);
+                    let afloat = boat_y.0 > su::WATER - 1.0 && boat_y.1 < su::WATER + 1.0;
+                    boat_ok = moved > 10.0 && afloat && game.driving.is_none();
+                    boat_report = format!("{boat_report}; kayık 6 s'de {moved:.0} m gitti, su yüzünden {:.2}…{:.2} m", boat_y.0 - su::WATER, boat_y.1 - su::WATER);
+                }
+            }
+            if frame == build_at - 60 {
+                // Kuru, düz yere: başlangıcın düzlüğü (kayıktan göle inmişti).
+                teleport(w, &game, 6.0, -6.0);
+            }
             if frame == build_at {
                 let before = w.get::<Inventory>(game.player).cloned().unwrap_or_default();
                 give(w, &mut game, "odun", 30);
@@ -1345,7 +1418,11 @@ pub fn self_test() -> bool {
                 }
                 enter_or_leave(w, &mut game);
             }
-            let controls = if walking_into_fence {
+            let boating = boat_start.is_some() && (boat_at + 60..boat_at + 60 * 7).contains(&frame);
+            let controls = if boating {
+                // Tam gaz: burnu açık suya bakıyor.
+                Controls { my: 1.0, ..Default::default() }
+            } else if walking_into_fence {
                 Controls { my: 1.0, ..Default::default() }
             } else if standing {
                 Controls::default()
@@ -1361,6 +1438,11 @@ pub fn self_test() -> bool {
         }
         let game = run.world.get_resource::<Game>().expect("oyun");
         let p = focus(&run.world, &game);
+        if let (Some((boat, _)), true) = (boat_start, (boat_at + 90..boat_at + 60 * 7).contains(&frame)) {
+            if let Some(t) = run.world.get::<Transform>(boat) {
+                boat_y = (boat_y.0.min(t.position.y), boat_y.1.max(t.position.y));
+            }
+        }
         if walking_into_fence {
             if let Some((start, forward)) = fence {
                 pushed_through = pushed_through.max((p - start).dot(forward));
@@ -1399,6 +1481,7 @@ pub fn self_test() -> bool {
         && game.driving.is_some()
         && build_ok
         && village_ok
+        && boat_ok
         && parked_ok
         && animals_seen > 0
         && fled > 3.0
@@ -1406,6 +1489,7 @@ pub fn self_test() -> bool {
         // yaklaşıyor (ölçülen 2,29 m); 2,5 m'yi geçen çitin içinden geçmiştir. Çitsiz üç saniye 18 m.
         && pushed_through < 2.5;
     println!("dunya --test: canlılar: {village_report}; {animals_seen} hayvan, en yakını üç saniyede {fled:.1} m kaçtı; bırakılan arabalar yerinde: {parked_ok}");
+    println!("dunya --test: su: {boat_report}");
     println!("dunya --test: inşa: {build_report}; çite yürüyüş en çok {pushed_through:.2} m (çit 2,6 m önde)");
     println!(
         "dunya --test: envanterde {} kristal (dünyadan {crystals_taken} alındı), {wood} odun, {stone} taş; hücre {} yüklendi, {} silindi; yürüyüşte başlangıçtan {:.0} m, arabayla {:.0} m; zeminin altına en çok yayada {:.2} m, arabada {:.2} m → {}",

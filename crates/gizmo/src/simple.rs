@@ -729,6 +729,7 @@ impl FixedPhysics {
             #[cfg(feature = "physics-dynamics")]
             {
                 gizmo_physics_dynamics::vehicle_controller_system(world, self.step);
+                gizmo_physics_dynamics::boat_controller_system(world, self.step);
                 gizmo_physics_dynamics::character_controller_system(world, self.step);
                 gizmo_physics_dynamics::fighter_frame_system(world, self.step);
                 gizmo_physics_dynamics::hit_detection_system(world, self.step);

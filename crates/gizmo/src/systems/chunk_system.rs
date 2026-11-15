@@ -70,7 +70,7 @@ impl ChunkManager {
 /// [`open_world_chunk_system`]. Carries the body type it had, which it gets back when its chunk
 /// loads again.
 #[cfg(feature = "physics")]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ChunkFrozen {
     /// What the body was before it was held.
     pub body_type: gizmo_physics_rigid::components::BodyType,

@@ -26,7 +26,7 @@
 
 use gizmo_core::system::{Phase, Schedule, SystemConfig};
 
-/// Add `vehicle_controller_system`, `character_controller_system`, `fighter_frame_system` and
+/// Add `vehicle_controller_system`, `boat_controller_system`, `character_controller_system`, `fighter_frame_system` and
 /// `hit_detection_system` to `schedule` in the physics phase, ordered before
 /// `"physics_step_system"` (and hit detection after the fight clock).
 pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
@@ -34,6 +34,12 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
         SystemConfig::new(Box::new(gizmo_physics_dynamics::vehicle_controller_system))
             .in_phase(Phase::Physics)
             .label("vehicle_controller_system")
+            .before("physics_step_system"),
+    );
+    schedule.add_di_system(
+        SystemConfig::new(Box::new(gizmo_physics_dynamics::boat_controller_system))
+            .in_phase(Phase::Physics)
+            .label("boat_controller_system")
             .before("physics_step_system"),
     );
     schedule.add_di_system(
@@ -57,7 +63,7 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
             .before("physics_step_system"),
     );
     tracing::info!(
-        "[Gameplay] registered vehicle_controller_system + character_controller_system + fighter_frame_system + hit_detection_system (Phase::Physics, before physics_step_system)"
+        "[Gameplay] registered vehicle_controller_system + boat_controller_system + character_controller_system + fighter_frame_system + hit_detection_system (Phase::Physics, before physics_step_system)"
     );
 }
 

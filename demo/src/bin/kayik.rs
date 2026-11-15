@@ -28,7 +28,7 @@
 //!   adımda.
 
 use gizmo::core::input::Input;
-use gizmo::physics::components::ExternalForce;
+use gizmo::physics::BoatController;
 use gizmo::physics::world::{FluidZone, PhysicsWorld, ZoneShape};
 use gizmo::physics::{Collider, RigidBody, Velocity};
 use gizmo::prelude::*;
@@ -64,7 +64,7 @@ fn spawn_boat(world: &mut World, visual: bool) -> Entity {
     let mut body = RigidBody::new(hull_mass(), true);
     body.update_inertia_from_collider(&collider);
     let id = world
-        .spawn_bundle((Transform::new(Vec3::new(0.0, 0.1, 0.0)), body, Velocity::default(), collider, ExternalForce::default()))
+        .spawn_bundle((Transform::new(Vec3::new(0.0, 0.1, 0.0)), body, Velocity::default(), collider, BoatController::new(THRUST, HULL.z)))
         ;
     if visual {
         if let Some(e) = world.live(id) {
@@ -129,33 +129,13 @@ fn gate_centre(k: usize) -> Vec3 {
     Vec3::new(x, 0.0, z)
 }
 
-/// Motor ve dümen: `throttle` −1…1, `rudder` −1…1. Kuvvet kıçta, suyun altında; dümen, hızla
-/// orantılı bir sapma momenti; omurga yana kaymayı söndürür.
+/// Motor ve dümen: `throttle` −1…1, `rudder` −1…1 (artısı sağa) — motorun `BoatController`'ı:
+/// kıçta, suyun altında bir pervane, hızla orantılı dümen, yana kaymayı söndüren bir omurga.
+/// (Bu oyunun kendi kodu olarak doğdu; `dunya`'nın göllerine de gerekince motora taşındı.)
 fn steer(world: &mut World, boat: Entity, throttle: f32, rudder: f32) {
-    let (t, v, w) = {
-        let ts = world.query::<&Transform>();
-        let vs = world.query::<&Velocity>();
-        let Some(t) = ts.get(boat).copied() else { return };
-        let vel = vs.get(boat).copied().unwrap_or_default();
-        (t, vel.linear, vel.angular)
-    };
-    let forward = t.rotation * Vec3::NEG_Z;
-    let side = t.rotation * Vec3::X;
-    let stern = t.position + t.rotation * Vec3::new(0.0, -0.25, HULL.z);
-    let flat_forward = Vec3::new(forward.x, 0.0, forward.z).normalize_or_zero();
-    let speed = v.dot(flat_forward);
-    let thrust = flat_forward * (throttle * THRUST);
-    // Omurga: yana kaymanın büyük kısmını alır, ki dümen kayığı döndürsün, kaydırmasın. Yatay:
-    // yatmış bir kayıkta bordanın doğrultusu eğik, ve eğik bir kuvvet kayığı sudan kaldırırdı.
-    let flat_side = Vec3::new(side.x, 0.0, side.z).normalize_or_zero();
-    let keel = -flat_side * (v.dot(flat_side) * hull_mass() * 2.0);
-    let yaw = Vec3::Y * (-rudder * speed.clamp(-6.0, 6.0) * 900.0 - w.y * 1500.0);
-    // Sintine omurgası: yalpayı söndürür. `FluidZone`'un sürüklenmesi her yönde aynı ve bir
-    // tekne gövdesinin yalpaya karşı koyan biçimini bilmiyor; o payı gövdenin kendisi veriyor.
-    let roll = -forward * (w.dot(forward) * 2500.0) - side * (w.dot(side) * 2500.0);
-    if let Some(mut push) = world.query_mut::<&mut ExternalForce>().get_mut(boat) {
-        *push = ExternalForce::at_point(thrust, stern, t.position).with_torque(yaw + roll);
-        push.force += keel;
+    if let Some(mut b) = world.query_mut::<&mut BoatController>().get_mut(boat) {
+        b.throttle_input = throttle;
+        b.rudder_input = rudder;
     }
 }
 

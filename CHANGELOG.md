@@ -129,6 +129,21 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was positive to the left, `move_axis` positive to the right) — fixed there too; and four games (`arazi`, `jole`,
   `kayik`, `topcu`) aimed their cameras through `Transform::rotation`, which the camera did not read — closed by the
   next two entries under *Changed*.
+- **A motor boat in the engine** (`gizmo::physics::BoatController`, `boat_controller_system`): throttle and rudder
+  (positive turns right, the steering convention) give thrust along the hull's level forward at a propeller under
+  the stern — only while the propeller is in the water, so a beached boat stays beached — a rudder that turns in
+  proportion to the speed through the water, a keel that takes out most of the sideways speed, and roll, pitch and
+  yaw damping; the `FluidZone` does the floating and the drag. Applied to the `Velocity` as impulses, so a game's
+  `ExternalForce` (a gust) still adds. It was `kayik`'s own code; `kayik` drives the engine's now (6 / 6 gates, as
+  before) and `dunya` drives the same boat. Runs where `vehicle_controller_system` does (the gameplay schedule and
+  `FixedPhysics`), and is saved with a scene. Tests: `thrust_rudder_and_keel_push_the_right_way`,
+  `the_system_drives_a_boat_in_water_and_not_on_land`.
+- **`dunya`: lakes and boats.** The terrain has wide, soft-edged basins, and wherever the ground is under the water
+  level there is a lake: one world-wide `FluidZone` up to that level (dry ground is above it, so nothing on it is in
+  water), a translucent surface in every cell with water, no trees, rocks or crystals under it. The player swims (the
+  character controller's swim mode), a car that drives in floats, and each lake has a boat at its shore, bow to the
+  open water, boarded with **E** like a car. `dunya --test` boards the nearest lake's boat and runs six seconds at
+  full throttle (57 m, riding 8–10 cm above the surface).
 - **`dunya`: animals and villages.** Sheep and deer graze in herds on the grass of each cell and run when you come
   near (a sheep at 6 m, a deer at 12 m and faster), each a `gizmo::ai::BehaviorTree` over a `CharacterController`:
   flee if scared, else walk somewhere near home and graze — the walking and grazing actions fail when scared, so the
@@ -897,6 +912,8 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the world two minutes after the player walked off; found by its `--test`, which drove it later and fell with it).
   With the `physics` feature, a dynamic body over a chunk that is not loaded is held — made kinematic at rest and
   marked `ChunkFrozen`, kept at rest while it waits — and gets its body type back, awake, when its chunk loads.
+  `ChunkFrozen` is saved with the body (its `RigidBody` is saved kinematic while it waits, and only this says what to
+  give back) — `scene_fidelity` caught it unsaved.
   Tests: `a_body_over_an_unloaded_chunk_is_held_until_the_chunk_is_back`, and `dunya --test` checks the two cars
   never driven are still on the ground at the end (fails without the hold).
 

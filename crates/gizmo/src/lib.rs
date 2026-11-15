@@ -235,6 +235,10 @@ fn register_facade_components(reg: &mut scene::registry::SceneRegistry) {
     }
     #[cfg(feature = "physics")]
     reg_or_warn!(systems::auto_collider::AutoBoxCollider, "AutoBoxCollider");
+    // Saved with the body it holds: the body's `RigidBody` is saved kinematic while it waits, and
+    // only this says what to give it back.
+    #[cfg(feature = "physics")]
+    reg_or_warn!(systems::chunk_system::ChunkFrozen, "ChunkFrozen");
     reg_or_warn!(systems::lifetime::DespawnAfter, "DespawnAfter");
     reg_or_warn!(systems::lifetime::DespawnBelowY, "DespawnBelowY");
     reg_or_warn!(systems::spin::Spin, "Spin");

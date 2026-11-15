@@ -90,8 +90,8 @@ pub use system::{apply_impulse, physics_fracture_system, physics_explosion_syste
 // stepping physics by hand calls it the way the demos above call theirs.
 #[cfg(feature = "physics-dynamics")]
 pub use gizmo_physics_dynamics::{
-    character_controller_system, fighter_frame_system, hit_detection_system, oxygen_system,
-    vehicle_controller_system, Oxygen,
+    boat_controller_system, character_controller_system, fighter_frame_system, hit_detection_system, oxygen_system,
+    vehicle_controller_system, BoatController, Oxygen,
 };
 
 /// A box collider that covers a world-space [`Sprite`](crate::renderer::components::Sprite)

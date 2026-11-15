@@ -87,7 +87,7 @@ pub(super) fn village_at(coord: ChunkCoord) -> Option<Vec3> {
         }
     }
     let (s, at) = best?;
-    (s < 0.18 && at.y < 24.0).then_some(at)
+    (s < 0.18 && at.y < 24.0 && at.y > super::su::WATER + 1.0).then_some(at)
 }
 
 fn material(c: Vec4) -> MaterialDesc {
@@ -181,7 +181,7 @@ pub(super) fn populate_chunk(world: &mut World, coord: ChunkCoord, visual: bool,
         let (x, z) = (centre.x + (rng.next() - 0.5) * 70.0, centre.z + (rng.next() - 0.5) * 70.0);
         let deer = rng.next() < 0.35;
         let count = if deer { 2 } else { 3 + (rng.next() * 2.0) as u32 };
-        if slope(x, z) > 0.35 || height(x, z) > 20.0 || Vec2::new(x, z).length() < 15.0 {
+        if slope(x, z) > 0.35 || height(x, z) > 20.0 || super::su::wet(x, z, 0.5) || Vec2::new(x, z).length() < 15.0 {
             continue;
         }
         for k in 0..count {
