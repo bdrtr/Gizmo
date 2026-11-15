@@ -56,6 +56,7 @@ impl KinematicTarget {
     }
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(KinematicTarget);
 
 #[cfg(test)]

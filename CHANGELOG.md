@@ -50,6 +50,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`WheelVisual`: a drawn wheel that follows a `VehicleController`'s wheel.** On a wheel's entity it names which of its
+  vehicle's wheels it is (the vehicle being its nearest ancestor with a controller — nothing names an entity, so a
+  saved scene reopens whole), and `wheel_visual_system` puts it at the end of its strut, steered, and rolling the way
+  the car goes. The entity can be deep inside a loaded model: the pose is worked out through every ancestor down from
+  the chassis, and the wheel keeps the axis and size its model gave it. Runs after the vehicle controller in the
+  gameplay schedule and in `FixedPhysics`; registered for scenes. Every car demo did this by hand.
+- **`dunya`: real cars and a boat.** The cars are KayKit's sedan, hatchback and taxi (CC0), their physics set to the
+  models' wheels (track 1.62 m, wheelbase 2.3 m, radius 0.33 m) so the wheels turn in their arches, drop with the
+  suspension and steer — through `WheelVisual`. The boat is Kenney's speedboat (CC0), its hull sized to the model.
 - **A glTF model placed by name: a `GltfModel` alone is built from its file.** A root carrying only a `Transform` and
   `GltfModel::new(path)` gets the file's nodes, meshes and materials as its descendants on the next frame, exactly as
   `Commands::spawn_gltf` makes them (its `Transform` kept), then its skeletons and clips from `resolve_gltf_models` — to
@@ -942,6 +951,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The physics crates build without their `ecs` feature again.** `gizmo-physics-core`, `-rigid` and `-dynamics` all
+  declare `ecs` as an optional default ("OFF drops `gizmo-core`"), and none of them built with it off: `HitEvent`
+  (which reports entities), two `impl_component!` lines and a sync-only method used `gizmo_core` ungated. CI's
+  powerset gate covers only `gizmo-app` and `gizmo-engine`, so nothing saw it; all three pass a depth-2 powerset now.
 - **A mesh hung on a bone follows it.** A glTF node with a mesh that is not skinned but sits under a joint — a
   helmet on the head, a cape on the chest, a sword in a hand — was spawned under that joint's entity, which nothing
   poses (the skeleton is posed, not the bone entities), so it stayed where the bind pose left it while the body moved.

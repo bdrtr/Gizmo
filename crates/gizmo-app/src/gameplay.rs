@@ -36,6 +36,14 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
             .label("vehicle_controller_system")
             .before("physics_step_system"),
     );
+    // The drawn wheels from the controller's, right after it has moved them.
+    schedule.add_di_system(
+        SystemConfig::new(Box::new(gizmo_physics_dynamics::wheel_visual_system))
+            .in_phase(Phase::Physics)
+            .label("wheel_visual_system")
+            .after("vehicle_controller_system")
+            .before("physics_step_system"),
+    );
     schedule.add_di_system(
         SystemConfig::new(Box::new(gizmo_physics_dynamics::boat_controller_system))
             .in_phase(Phase::Physics)
@@ -63,7 +71,7 @@ pub fn register_gameplay_physics_systems(schedule: &mut Schedule) {
             .before("physics_step_system"),
     );
     tracing::info!(
-        "[Gameplay] registered vehicle_controller_system + boat_controller_system + character_controller_system + fighter_frame_system + hit_detection_system (Phase::Physics, before physics_step_system)"
+        "[Gameplay] registered vehicle_controller_system + wheel_visual_system + boat_controller_system + character_controller_system + fighter_frame_system + hit_detection_system (Phase::Physics, before physics_step_system)"
     );
 }
 

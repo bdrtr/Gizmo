@@ -1,0 +1,12 @@
+Watercraft Kit (2.1) — created/distributed by Kenney (www.kenney.nl)
+
+License: (Creative Commons Zero, CC0)
+http://creativecommons.org/publicdomain/zero/1.0/
+Support by crediting 'Kenney' or 'www.kenney.nl' (this is not a requirement).
+
+---
+
+boat-speed-a.glb: the kit's GLB model with its external texture (Textures/colormap.png) embedded
+into the binary chunk, for Gizmo's `dunya` game. Nothing else is changed. Fetched from a mirror of
+the kit (github.com/series-ai/jam-ready-assets, kenney-watercraft-pack), whose License.txt is the
+one above.

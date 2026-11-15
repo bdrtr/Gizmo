@@ -91,7 +91,7 @@ pub use system::{apply_impulse, physics_fracture_system, physics_explosion_syste
 #[cfg(feature = "physics-dynamics")]
 pub use gizmo_physics_dynamics::{
     boat_controller_system, character_controller_system, fighter_frame_system, hit_detection_system, oxygen_system,
-    vehicle_controller_system, BoatController, Oxygen,
+    vehicle_controller_system, wheel_visual_system, BoatController, Oxygen, WheelVisual,
 };
 
 /// A box collider that covers a world-space [`Sprite`](crate::renderer::components::Sprite)

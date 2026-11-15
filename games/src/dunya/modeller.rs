@@ -3,7 +3,10 @@
 //!
 //! - `games/assets/kaykit/` — *Character Pack: Adventurers*: oyuncu ve köylüler, derili ve
 //!   animasyonlu ([`super::karakter`]);
-//! - `games/assets/kaykit-medieval/` — *Medieval Hexagon Pack*: ağaçlar, kayalar, köy evleri, kuyu.
+//! - `games/assets/kaykit-medieval/` — *Medieval Hexagon Pack*: ağaçlar, kayalar, köy evleri, kuyu;
+//! - `games/assets/kaykit-city/` — *City Builder Bits*: arabalar.
+//!
+//! Kayık Kenney'nin CC0 *Watercraft Kit*'inden (<https://kenney.nl>): `games/assets/kenney/`.
 //!
 //! Hayvanlar Quaternius'un CC0 paketlerinden (<https://quaternius.com>): `games/assets/quaternius/`.
 //!
@@ -18,13 +21,17 @@ use super::*;
 use gizmo::renderer::gltf_model::GltfModel;
 
 /// Gömülü modeller: oyunun onları çağırdığı yol, ve baytları.
-pub(super) const EMBEDDED: [(&str, &[u8]); 19] = [
+pub(super) const EMBEDDED: [(&str, &[u8]); 23] = [
     (KNIGHT.0, include_bytes!("../../assets/kaykit/Knight.glb")),
     (VILLAGERS[0].0, include_bytes!("../../assets/kaykit/Rogue.glb")),
     (VILLAGERS[1].0, include_bytes!("../../assets/kaykit/Mage.glb")),
     (VILLAGERS[2].0, include_bytes!("../../assets/kaykit/Barbarian.glb")),
     (SHEEP.0, include_bytes!("../../assets/quaternius/Sheep.glb")),
     (DEER.0, include_bytes!("../../assets/quaternius/Deer.glb")),
+    (CARS[0], include_bytes!("../../assets/kaykit-city/car_sedan.glb")),
+    (CARS[1], include_bytes!("../../assets/kaykit-city/car_hatchback.glb")),
+    (CARS[2], include_bytes!("../../assets/kaykit-city/car_taxi.glb")),
+    (BOAT, include_bytes!("../../assets/kenney/boat-speed-a.glb")),
     (TREES[0], include_bytes!("../../assets/kaykit-medieval/tree_single_A.glb")),
     (TREES[1], include_bytes!("../../assets/kaykit-medieval/tree_single_B.glb")),
     (ROCKS[0].0, include_bytes!("../../assets/kaykit-medieval/rock_single_A.glb")),
@@ -84,6 +91,30 @@ pub(super) const VILLAGERS: [(&str, f32); 3] =
 /// Hayvanlar, ve kendi birimlerindeki boyları (yürürken, ayaktan başın tepesine; ölçülen).
 pub(super) const SHEEP: (&str, f32) = ("dunya/quaternius/Sheep.glb", 4.2);
 pub(super) const DEER: (&str, f32) = ("dunya/quaternius/Deer.glb", 4.26);
+/// Arabalar: aynı tekerlek düzeni (iz 0,352, dingil arası 0,5, yarıçap 0,072, kendi biriminde).
+pub(super) const CARS: [&str; 3] = ["dunya/city/car_sedan.glb", "dunya/city/car_hatchback.glb", "dunya/city/car_taxi.glb"];
+/// Kayık: 1,78 × 3,38 birimlik sürat teknesi.
+pub(super) const BOAT: &str = "dunya/kenney/boat-speed-a.glb";
+/// Arabaların büyütmesi: 0,94 birimlik sedan 4,3 m.
+pub(super) const CAR_SCALE: f32 = 4.6;
+
+/// Bir araba modelinin tekerlek düğümlerini aracın tekerleklerine bağlar, model kurulduğunda:
+/// adlarının sonu (`_wheel_front_left` …) motorun `four_wheeled` sırası (ön sol, ön sağ, arka sol,
+/// arka sağ). Model 180° dönük; onun solu aracın solu, önü aracın önü.
+pub(super) fn bind_wheels(world: &mut World) {
+    use gizmo::physics::WheelVisual;
+    const ORDER: [&str; 4] = ["_wheel_front_left", "_wheel_front_right", "_wheel_rear_left", "_wheel_rear_right"];
+    let found: Vec<(Entity, usize)> = world
+        .query::<(Entity, &gizmo::core::EntityName)>()
+        .iter()
+        .filter_map(|(e, n)| ORDER.iter().position(|suffix| n.0.ends_with(suffix)).map(|i| (e, i)))
+        .filter(|(e, _)| world.get::<WheelVisual>(*e).is_none())
+        .collect();
+    for (e, i) in found {
+        world.add_component(e, WheelVisual::new(i));
+    }
+}
+
 /// Ağaçlar: kendi birimlerinde 1,1 boyunda (dibi 0,1 toprağın altında).
 pub(super) const TREES: [&str; 2] = ["dunya/medieval/tree_single_A.glb", "dunya/medieval/tree_single_B.glb"];
 pub(super) const TREE_HEIGHT: f32 = 1.1;

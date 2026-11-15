@@ -18,8 +18,9 @@ use gizmo::physics::BoatController;
 /// Su seviyesi, metre.
 pub(super) const WATER: f32 = 3.5;
 
-/// Kayığın gövdesi (yarı boyutlar) ve yoğunluğu: `kayik`'inki.
-const HULL: Vec3 = Vec3::new(0.8, 0.3, 2.2);
+/// Kayığın gövdesi (yarı boyutlar) ve yoğunluğu: modelin (Kenney'nin sürat teknesi, 1,15 kat)
+/// teknesi — 2,05 m eninde, 3,9 m boyunda.
+const HULL: Vec3 = Vec3::new(0.95, 0.3, 1.9);
 const HULL_DENSITY: f32 = 350.0;
 const THRUST: f32 = 9000.0;
 
@@ -116,20 +117,8 @@ pub(super) fn spawn_boat(world: &mut World, at: Vec3, yaw: f32, visual: bool) ->
         BoatController::new(THRUST, HULL.z),
     ));
     if visual {
-        for (offset, half, c) in [
-            (Vec3::ZERO, HULL, Vec4::new(0.92, 0.94, 0.95, 1.0)),
-            (Vec3::new(0.0, 0.3, 0.4), Vec3::new(0.6, 0.25, 0.7), Vec4::new(0.75, 0.22, 0.17, 1.0)),
-            (Vec3::new(0.0, 0.05, -1.9), Vec3::new(0.5, 0.25, 0.35), Vec4::new(0.85, 0.87, 0.88, 1.0)),
-        ] {
-            let part = world.spawn_bundle((
-                Transform::new(offset).with_scale(half),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(c, 0.5, 0.1),
-                MeshRenderer::new(),
-            ));
-            world.add_child(boat, part);
-        }
+        // Modelin dibi gövdenin dibinde; burnu modelde +Z, kayığın önü −Z.
+        super::modeller::place(world, boat, super::modeller::BOAT, Vec3::new(0.0, -HULL.y, 0.0), Quat::from_rotation_y(std::f32::consts::PI), Vec3::splat(1.15));
     }
     boat
 }

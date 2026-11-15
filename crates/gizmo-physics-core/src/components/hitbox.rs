@@ -1,3 +1,4 @@
+#[cfg(feature = "ecs")]
 use gizmo_core::Entity;
 use gizmo_math::{Quat, Vec3};
 
@@ -196,6 +197,9 @@ pub fn hit_volumes_overlap(
 /// A move connects with a given victim **once**: the attacker records who it has hit and the
 /// record is cleared when the move ends or is cancelled ([`FighterController::start_move`](crate::components::FighterController::start_move)).
 /// Without that a three-frame active window would report three hits.
+///
+/// Requires the `ecs` feature: what it reports is entities.
+#[cfg(feature = "ecs")]
 #[derive(Debug, Clone)]
 pub struct HitEvent {
     /// The fighter that landed it — the owner of the hitbox, which is the entity

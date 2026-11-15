@@ -1,0 +1,15 @@
+KayKit : City Builder Bits (1.0)
+
+Created/distributed by Kay Lousberg (www.kaylousberg.com)
+Source: https://github.com/KayKit-Game-Assets/KayKit-City-Builder-Bits-1.0
+
+License: (Creative Commons Zero, CC0)
+http://creativecommons.org/publicdomain/zero/1.0/
+Support by crediting Kay Lousberg, www.kaylousberg.com (this is not mandatory).
+
+---
+
+car_sedan, car_hatchback, car_taxi: the pack's glTF models, each
+packed with its .bin and the pack's shared texture (citybits_texture.png) into one binary glTF for
+embedding in Gizmo's `dunya` game. Nothing else is changed; the wheels stay separate nodes, which
+the game drives with the engine's `WheelVisual`.

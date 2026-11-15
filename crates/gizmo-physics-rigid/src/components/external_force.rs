@@ -68,4 +68,5 @@ pub struct EnvironmentForce {
     pub torque: Vec3,
 }
 
+#[cfg(feature = "ecs")]
 gizmo_core::impl_component!(ExternalForce, EnvironmentForce);

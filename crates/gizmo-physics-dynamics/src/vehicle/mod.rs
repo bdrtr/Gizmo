@@ -1003,6 +1003,13 @@ pub use dynamics::*;
 mod ground_query;
 pub use ground_query::{ColliderListQuery, WheelGroundHit, WheelGroundQuery};
 
+// A drawn wheel following a controller's wheel (`WheelVisual`, `wheel_visual_system`); requires the
+// `ecs` feature.
+#[cfg(feature = "ecs")]
+pub mod wheel_visual;
+#[cfg(feature = "ecs")]
+pub use wheel_visual::{wheel_pose, wheel_visual_system, WheelVisual};
+
 #[cfg(test)]
 mod tests {
     //! Pure unit tests for the vehicle *data types* (torque curve, reverse/auto-shift

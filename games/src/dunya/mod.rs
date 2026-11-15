@@ -689,11 +689,15 @@ fn spawn_player(world: &mut World, at: Vec3) -> Entity {
     player
 }
 
-fn spawn_car(world: &mut World, at: Vec3, colour: Vec4, visual: bool) -> Entity {
+/// Bir araba: KayKit'in arabalarından biri (`model`), 4,6 kat büyük — 4,3 m boyunda. Fizik modelin
+/// tekerleklerine göre: iz 1,62 m, dingil arası 2,3 m, tekerlek yarıçapı 0,33 m; böylece tekerlekler
+/// çamurluklarının içinde dönüyor, süspansiyonla iniyor, direksiyonla kırılıyor (motorun
+/// `WheelVisual`'ı, model kurulunca [`modeller::bind_wheels`] bağlıyor).
+fn spawn_car(world: &mut World, at: Vec3, model: &str, visual: bool) -> Entity {
     let collider = Collider::box_collider(Vec3::new(0.9, 0.35, 2.0));
     let mut body = RigidBody::new(900.0, true);
     body.update_inertia_from_collider(&collider);
-    let mut car = VehicleController::four_wheeled(1.7, 2.8, 0.38);
+    let mut car = VehicleController::four_wheeled(1.62, 2.3, 0.33);
     for wheel in &mut car.wheels {
         wheel.suspension_rest_length = 0.45;
         wheel.suspension_max_travel = 0.35;
@@ -701,29 +705,9 @@ fn spawn_car(world: &mut World, at: Vec3, colour: Vec4, visual: bool) -> Entity 
     car.max_steering_angle = 0.55;
     let id = world.spawn_bundle((Transform::new(at), GlobalTransform::default(), body, Velocity::default(), collider, car));
     if visual {
-        for (offset, half, c) in [
-            (Vec3::ZERO, Vec3::new(0.9, 0.35, 2.0), colour),
-            (Vec3::new(0.0, 0.55, 0.3), Vec3::new(0.75, 0.25, 1.0), Vec4::new(0.15, 0.17, 0.22, 1.0)),
-        ] {
-            let part = world.spawn_bundle((
-                Transform::new(offset).with_scale(half),
-                GlobalTransform::default(),
-                MeshSource("standard_cube".into()),
-                MaterialDesc::new().with_pbr(c, 0.4, 0.3),
-                MeshRenderer::new(),
-            ));
-            world.add_child(id, part);
-        }
-        for (x, z) in [(-0.9f32, -1.4f32), (0.9, -1.4), (-0.9, 1.4), (0.9, 1.4)] {
-            let wheel = world.spawn_bundle((
-                Transform::new(Vec3::new(x, -0.35, z)).with_rotation(Quat::from_rotation_z(std::f32::consts::FRAC_PI_2)).with_scale(Vec3::new(0.38, 0.12, 0.38)),
-                GlobalTransform::default(),
-                MeshSource("cylinder".into()),
-                MaterialDesc::new().with_pbr(Vec4::new(0.08, 0.08, 0.08, 1.0), 0.8, 0.0),
-                MeshRenderer::new(),
-            ));
-            world.add_child(id, wheel);
-        }
+        // Modelin tekerlek merkezi kendi biriminde 0,011 yukarıda; süspansiyon dinlenirken tekerlek
+        // gövde merkezinin 0,45 m altında: modelin kökü −0,45 − 0,05.
+        modeller::place(world, id, model, Vec3::new(0.0, -0.5, 0.0), Quat::from_rotation_y(std::f32::consts::PI), Vec3::splat(modeller::CAR_SCALE));
     }
     id
 }
@@ -859,8 +843,7 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
     };
     stream_chunks(world, &mut game);
     for (k, (x, z)) in [(6.0f32, 3.0f32), (-7.0, 5.0), (3.0, -8.0)].into_iter().enumerate() {
-        let colour = [Vec4::new(0.85, 0.3, 0.1, 1.0), Vec4::new(0.15, 0.45, 0.85, 1.0), Vec4::new(0.9, 0.8, 0.2, 1.0)][k];
-        game.cars.push(spawn_car(world, Vec3::new(x, height(x, z) + 1.4, z), colour, visual));
+        game.cars.push(spawn_car(world, Vec3::new(x, height(x, z) + 1.4, z), modeller::CARS[k], visual));
     }
     game
 }
@@ -1060,6 +1043,7 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
     game.physics.advance(world, dt.min(0.1));
     world.apply_commands();
     karakter::animate(world, dt);
+    modeller::bind_wheels(world);
     // Kristaller dönüyor; yaklaşan topluyor.
     let me = focus(world, game);
     let mut taken = Vec::new();

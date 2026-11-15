@@ -34,6 +34,8 @@ pub use fluid::FluidSimulation;
 pub use character::CharacterController;
 #[cfg(feature = "ecs")]
 pub use fighter::FighterController;
-pub use hitbox::{hit_volumes_overlap, HitEvent, Hitbox, Hurtbox};
+pub use hitbox::{hit_volumes_overlap, Hitbox, Hurtbox};
+#[cfg(feature = "ecs")]
+pub use hitbox::HitEvent;
 pub mod gpu_physics_link;
 pub use gpu_physics_link::GpuPhysicsLink;

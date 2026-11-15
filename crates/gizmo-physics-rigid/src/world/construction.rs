@@ -247,6 +247,8 @@ impl PhysicsWorld {
     /// Records that body `id` is, on the ECS side, the entity of `generation`. If the id was
     /// last synced under a different generation it now names a different entity: the old body
     /// is removed — its joints with it — and the sync that follows adds the new one fresh.
+    /// Only the ECS sync (`system.rs`, `ecs` feature) calls it.
+    #[cfg(feature = "ecs")]
     pub(crate) fn note_ecs_generation(&mut self, id: u32, generation: u32) {
         match self.ecs_generations.get(&id) {
             Some(&g) if g == generation => {}
