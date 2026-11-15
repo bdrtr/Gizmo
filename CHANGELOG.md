@@ -62,6 +62,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   walk, run, in the air) at a rate matched to it, and gathering, talking and building play their own. Trees, rocks,
   village houses and a well are KayKit's *Medieval Hexagon Pack* models. Trimmed and packed copies (3.6 MB in all) are
   in `games/assets/`, each folder with its licence and what was done to the files.
+- **`dunya`: animated animals.** Sheep and deer are Quaternius's skinned, animated models (CC0): each kind has its
+  own gait table, so a sheep walks (faster when it flees), a deer walks, gallops away and, standing, grazes or looks
+  up by turns. The character module now dresses any walker — person or animal — from a model and its gait.
 - **`dunya`: a textured terrain.** The ground is drawn by the game's own `SurfaceMaterial` (`arazi.wgsl`): grass, dirt,
   rock, snow and sand photographs (ambientCG, CC0) blended by weights the terrain's vertex colours carry, sand from the
   water line, each texture read at two scales to break up the tiling and rock read triplanar on cliffs. The material

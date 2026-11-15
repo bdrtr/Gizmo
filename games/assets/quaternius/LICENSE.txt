@@ -1,0 +1,15 @@
+Animals by Quaternius (https://quaternius.com) — CC0 1.0 Universal (public domain).
+https://creativecommons.org/publicdomain/zero/1.0/ — credit not necessary.
+
+| file       | pack                                   | source                                                                 |
+|------------|----------------------------------------|------------------------------------------------------------------------|
+| Sheep.glb  | LowPoly Animated Farm Animal Pack      | https://opengameart.org/content/lowpoly-animated-farm-animal-pack (CC0) |
+| Deer.glb   | Ultimate Animated Animal Pack          | https://quaternius.com (CC0)                                            |
+
+Sheep: the pack ships FBX/Blend only; this is the glTF conversion published with
+threejsfundamentals (gfxfundamentals/threejsfundamentals, resources/models/animals/Sheep.gltf),
+packed into one binary glTF with four of its clips (Idle, Walk, WalkSlow, Jump).
+
+Deer: the pack's Deer.gltf, its embedded buffer unpacked into a binary glTF, keeping six of its
+thirteen clips (Idle, Idle_2, Idle_Headlow, Eating, Walk, Gallop). Geometry, skin, vertex colours
+and the kept clips are unchanged.

@@ -90,22 +90,6 @@ pub(super) fn village_at(coord: ChunkCoord) -> Option<Vec3> {
     (s < 0.18 && at.y < 24.0 && at.y > super::su::WATER + 1.0).then_some(at)
 }
 
-fn material(c: Vec4) -> MaterialDesc {
-    MaterialDesc::new().with_pbr(c, 0.85, 0.0)
-}
-
-/// Bir görünen parçayı `parent`'ın çocuğu yapar (motorun küpü ±1, silindiri yarıçap 1 ve yarı boyu 1).
-fn piece(world: &mut World, parent: Entity, at: Vec3, scale: Vec3, turn: Quat, mesh: &str, look: MaterialDesc) {
-    let e = world.spawn_bundle((
-        Transform::new(at).with_rotation(turn).with_scale(scale),
-        GlobalTransform::default(),
-        MeshSource(mesh.into()),
-        look,
-        MeshRenderer::new(),
-    ));
-    world.add_child(parent, e);
-}
-
 /// Bir canlının gövdesi: kapsül çarpıştırıcı, oyuncununki gibi yürüyüş.
 fn walker(world: &mut World, at: Vec3, radius: f32, half_height: f32, speed: f32) -> Entity {
     world.spawn_bundle((
@@ -117,53 +101,34 @@ fn walker(world: &mut World, at: Vec3, radius: f32, half_height: f32, speed: f32
     ))
 }
 
-fn spawn_sheep(world: &mut World, at: Vec3, seed: u32, visual: bool) -> Entity {
+fn spawn_sheep(world: &mut World, at: Vec3, seed: u32) -> Entity {
     let e = walker(world, at, 0.3, 0.15, 1.2);
     world.add_component(e, Wanderer { home: at, radius: 14.0, speed: 1.2, wary: 6.0, flee_speed: 3.8, goal: None, timer: 0.0, seed });
     world.add_component(e, Animal);
     world.add_component(e, BehaviorTree::new(animal_tree()));
-    if visual {
-        let wool = material(Vec4::new(0.92, 0.9, 0.86, 1.0));
-        let dark = material(Vec4::new(0.18, 0.16, 0.15, 1.0));
-        piece(world, e, Vec3::new(0.0, 0.05, 0.0), Vec3::new(0.38, 0.32, 0.52), Quat::IDENTITY, "sphere", wool);
-        piece(world, e, Vec3::new(0.0, 0.2, -0.55), Vec3::new(0.16, 0.16, 0.2), Quat::IDENTITY, "sphere", dark.clone());
-        for (x, z) in [(-0.18f32, -0.28f32), (0.18, -0.28), (-0.18, 0.28), (0.18, 0.28)] {
-            piece(world, e, Vec3::new(x, -0.3, z), Vec3::new(0.05, 0.18, 0.05), Quat::IDENTITY, "cylinder", dark.clone());
-        }
-    }
+    // Ayakları kapsülün dibinde (0,3 + 0,15), boyu 0,95 m.
+    super::karakter::dress(world, e, super::modeller::SHEEP, 0.45, 0.95, &super::karakter::SHEEP);
     e
 }
 
-fn spawn_deer(world: &mut World, at: Vec3, seed: u32, visual: bool) -> Entity {
+fn spawn_deer(world: &mut World, at: Vec3, seed: u32) -> Entity {
     let e = walker(world, at, 0.35, 0.3, 1.8);
     world.add_component(e, Wanderer { home: at, radius: 22.0, speed: 1.8, wary: 12.0, flee_speed: 6.5, goal: None, timer: 0.0, seed });
     world.add_component(e, Animal);
     world.add_component(e, BehaviorTree::new(animal_tree()));
-    if visual {
-        let coat = material(Vec4::new(0.55, 0.36, 0.2, 1.0));
-        let dark = material(Vec4::new(0.25, 0.17, 0.1, 1.0));
-        piece(world, e, Vec3::new(0.0, 0.15, 0.0), Vec3::new(0.24, 0.26, 0.62), Quat::IDENTITY, "standard_cube", coat.clone());
-        piece(world, e, Vec3::new(0.0, 0.62, -0.62), Vec3::new(0.09, 0.32, 0.09), Quat::from_rotation_x(0.45), "standard_cube", coat.clone());
-        piece(world, e, Vec3::new(0.0, 0.95, -0.82), Vec3::new(0.12, 0.12, 0.2), Quat::IDENTITY, "standard_cube", coat);
-        for x in [-0.12f32, 0.12] {
-            piece(world, e, Vec3::new(x, 1.22, -0.78), Vec3::new(0.025, 0.2, 0.025), Quat::from_rotation_z(x * 3.0), "cylinder", dark.clone());
-        }
-        for (x, z) in [(-0.16f32, -0.48f32), (0.16, -0.48), (-0.16, 0.48), (0.16, 0.48)] {
-            piece(world, e, Vec3::new(x, -0.3, z), Vec3::new(0.05, 0.35, 0.05), Quat::IDENTITY, "cylinder", dark.clone());
-        }
-    }
+    // Ayakları kapsülün dibinde (0,35 + 0,3), başıyla 1,6 m.
+    super::karakter::dress(world, e, super::modeller::DEER, 0.65, 1.6, &super::karakter::DEER);
     e
 }
 
-fn spawn_villager(world: &mut World, at: Vec3, id: (i32, i32, u8), home: Vec3, visual: bool) -> Entity {
+fn spawn_villager(world: &mut World, at: Vec3, id: (i32, i32, u8), home: Vec3) -> Entity {
     let name = NAMES[(hash(id.0, id.1, 400 + id.2 as u32) % NAMES.len() as u32) as usize];
     let e = walker(world, at, 0.33, 0.5, 1.4);
     world.add_component(e, Wanderer { home, radius: 9.0, speed: 1.4, wary: 4.0, flee_speed: 0.0, goal: None, timer: 0.0, seed: hash(id.0, id.1, id.2 as u32) });
     world.add_component(e, Villager { id, name });
     world.add_component(e, BehaviorTree::new(villager_tree()));
     // Bir maceracı: ayakları kapsülün dibinde (0,33 + 0,5), boyu 1,66 m.
-    let _ = visual;
-    super::karakter::dress(world, e, super::karakter::villager_model(id), 0.83, 1.66);
+    super::karakter::dress(world, e, super::karakter::villager_model(id), 0.83, 1.66, &super::karakter::PERSON);
     e
 }
 
@@ -211,7 +176,7 @@ pub(super) fn populate_chunk(world: &mut World, coord: ChunkCoord, visual: bool,
             let (ax, az) = (x + (rng.next() - 0.5) * 6.0, z + (rng.next() - 0.5) * 6.0);
             let at = Vec3::new(ax, height(ax, az), az);
             let seed = hash(coord.0, coord.1, 600 + herd * 10 + k);
-            spawned.push(if deer { spawn_deer(world, at, seed, visual) } else { spawn_sheep(world, at, seed, visual) });
+            spawned.push(if deer { spawn_deer(world, at, seed) } else { spawn_sheep(world, at, seed) });
         }
     }
     // Köy.
@@ -228,7 +193,7 @@ pub(super) fn populate_chunk(world: &mut World, coord: ChunkCoord, visual: bool,
     spawned.push(spawn_building(world, at + Vec3::new(-4.5, 0.0, -3.5), 0.6, super::modeller::WELL, 3.2, visual));
     for k in 0..2u8 {
         let p = at + Vec3::new(if k == 0 { 3.0 } else { -3.0 }, 0.0, 2.0);
-        spawned.push(spawn_villager(world, Vec3::new(p.x, height(p.x, p.z), p.z), (coord.0, coord.1, k), at, visual));
+        spawned.push(spawn_villager(world, Vec3::new(p.x, height(p.x, p.z), p.z), (coord.0, coord.1, k), at));
     }
 }
 

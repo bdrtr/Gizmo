@@ -674,7 +674,7 @@ fn start_point() -> Vec3 {
     Vec3::new(0.0, height(0.0, 0.0) + 1.6, 0.0)
 }
 
-fn spawn_player(world: &mut World, at: Vec3, visual: bool) -> Entity {
+fn spawn_player(world: &mut World, at: Vec3) -> Entity {
     let player = world.spawn_bundle((
         Transform::new(at),
         GlobalTransform::default(),
@@ -685,8 +685,7 @@ fn spawn_player(world: &mut World, at: Vec3, visual: bool) -> Entity {
     ));
     // Şövalye: ayakları kapsülün dibinde (yarıçap 0,35 + yarı boy 0,55), boyu 1,8 m. Penceresiz
     // sınamada da giydiriliyor — yalnızca veri; model kurulmuyor, klip seçimi yine sınanıyor.
-    let _ = visual;
-    karakter::dress(world, player, karakter::KNIGHT, 0.9, 1.8);
+    karakter::dress(world, player, karakter::KNIGHT, 0.9, 1.8, &karakter::PERSON);
     player
 }
 
@@ -788,7 +787,7 @@ fn setup(world: &mut World, font: FontId, visual: bool) -> Game {
     let banner = world.spawn_bundle((Text::pinned_at("", font, 46.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
         .with_anchor(TextAnchor::Center)
         .with_align(TextAlign::Center),));
-    let player = spawn_player(world, start_point(), visual);
+    let player = spawn_player(world, start_point());
     // Kayıtlı oyun: envanter ve dünyadan alınanlar (yalnız pencereli oyunda; sınama kayda dokunmuyor).
     let mut collected = HashSet::new();
     let mut quests = std::collections::HashMap::new();
@@ -1360,6 +1359,9 @@ pub fn self_test() -> bool {
     // Karakter: oyuncunun karakterinin bu koşuda istediği klipler; köylülerin hepsi giydirilmiş mi.
     let mut clips_seen: HashSet<&'static str> = HashSet::new();
     let mut villagers_dressed = (0usize, 0usize);
+    // Hayvanlar: hepsi giydirilmiş mi; kaçan hayvanın istediği klipler.
+    let mut animals_dressed = (0usize, 0usize);
+    let mut flee_clips: HashSet<&'static str> = HashSet::new();
     for frame in 0..(60 * 180) {
         let driving_phase = frame >= 60 * 120;
         let walking_into_fence = (build_at..build_at + 180).contains(&frame);
@@ -1428,6 +1430,8 @@ pub fn self_test() -> bool {
             if frame == village_at + 120 {
                 let me = focus(w, &game);
                 animals_seen = w.query::<&canli::Animal>().iter().count();
+                let animals: Vec<Entity> = w.query::<(Entity, &canli::Animal)>().iter().map(|(e, _)| e).collect();
+                animals_dressed = (animals.iter().filter(|a| karakter::wanted_clip(w, **a).is_some()).count(), animals.len());
                 let nearest = w.query::<(Entity, &canli::Animal, &Transform)>().iter().map(|(e, _, t)| (e, t.position)).min_by(|a, b| a.1.distance(me).total_cmp(&b.1.distance(me)));
                 if let Some((animal, at)) = nearest {
                     teleport(w, &game, at.x + 2.5, at.z);
@@ -1583,6 +1587,9 @@ pub fn self_test() -> bool {
         if game.driving.is_none() {
             clips_seen.extend(karakter::wanted_clip(&run.world, game.player));
         }
+        if let (Some((animal, _)), true) = (flee, (village_at + 130..village_at + 300).contains(&frame)) {
+            flee_clips.extend(karakter::wanted_clip(&run.world, animal));
+        }
         let p = focus(&run.world, &game);
         if let (Some((boat, _)), true) = (boat_start, (boat_at + 90..boat_at + 60 * 7).contains(&frame)) {
             if let Some(t) = run.world.get::<Transform>(boat) {
@@ -1626,7 +1633,10 @@ pub fn self_test() -> bool {
     let clips_ok = ["Idle", "Interact", "Use_Item", "PickUp"].iter().all(|c| clips_seen.contains(c))
         && (clips_seen.contains("Walking_A") || clips_seen.contains("Running_A"))
         && villagers_dressed.1 > 0
-        && villagers_dressed.0 == villagers_dressed.1;
+        && villagers_dressed.0 == villagers_dressed.1
+        && animals_dressed.1 > 0
+        && animals_dressed.0 == animals_dressed.1
+        && (flee_clips.contains("Walk") || flee_clips.contains("Gallop"));
     let ok = deepest_walk > -0.5
         && deepest_drive > -0.5
         && crystals_taken >= 2
@@ -1653,7 +1663,12 @@ pub fn self_test() -> bool {
     println!("dunya --test: hava: {weather_report}; harita köyde {map_marks} işaret, köy görünüyor: {map_village}");
     let mut seen: Vec<&str> = clips_seen.iter().copied().collect();
     seen.sort_unstable();
-    println!("dunya --test: karakter: istenen klipler {seen:?}; giydirilen köylü {}/{}", villagers_dressed.0, villagers_dressed.1);
+    let mut fled_clips: Vec<&str> = flee_clips.iter().copied().collect();
+    fled_clips.sort_unstable();
+    println!(
+        "dunya --test: karakter: istenen klipler {seen:?}; giydirilen köylü {}/{}, hayvan {}/{}; kaçan hayvanın klipleri {fled_clips:?}",
+        villagers_dressed.0, villagers_dressed.1, animals_dressed.0, animals_dressed.1
+    );
     println!("dunya --test: inşa: {build_report}; çite yürüyüş en çok {pushed_through:.2} m (çit 2,6 m önde)");
     println!(
         "dunya --test: envanterde {} kristal (dünyadan {crystals_taken} alındı), {wood} odun, {stone} taş; hücre {} yüklendi, {} silindi; yürüyüşte başlangıçtan {:.0} m, arabayla {:.0} m; zeminin altına en çok yayada {:.2} m, arabada {:.2} m → {}",

@@ -5,6 +5,8 @@
 //!   animasyonlu ([`super::karakter`]);
 //! - `games/assets/kaykit-medieval/` — *Medieval Hexagon Pack*: ağaçlar, kayalar, köy evleri, kuyu.
 //!
+//! Hayvanlar Quaternius'un CC0 paketlerinden (<https://quaternius.com>): `games/assets/quaternius/`.
+//!
 //! Arazinin dokuları ambientCG'den (<https://ambientcg.com>, CC0): `games/assets/ambientcg/`.
 //!
 //! Her birinin klasöründe `LICENSE.txt` ve dosyalara ne yapıldığı.
@@ -16,11 +18,13 @@ use super::*;
 use gizmo::renderer::gltf_model::GltfModel;
 
 /// Gömülü modeller: oyunun onları çağırdığı yol, ve baytları.
-pub(super) const EMBEDDED: [(&str, &[u8]); 17] = [
-    (KNIGHT, include_bytes!("../../assets/kaykit/Knight.glb")),
-    (VILLAGERS[0], include_bytes!("../../assets/kaykit/Rogue.glb")),
-    (VILLAGERS[1], include_bytes!("../../assets/kaykit/Mage.glb")),
-    (VILLAGERS[2], include_bytes!("../../assets/kaykit/Barbarian.glb")),
+pub(super) const EMBEDDED: [(&str, &[u8]); 19] = [
+    (KNIGHT.0, include_bytes!("../../assets/kaykit/Knight.glb")),
+    (VILLAGERS[0].0, include_bytes!("../../assets/kaykit/Rogue.glb")),
+    (VILLAGERS[1].0, include_bytes!("../../assets/kaykit/Mage.glb")),
+    (VILLAGERS[2].0, include_bytes!("../../assets/kaykit/Barbarian.glb")),
+    (SHEEP.0, include_bytes!("../../assets/quaternius/Sheep.glb")),
+    (DEER.0, include_bytes!("../../assets/quaternius/Deer.glb")),
     (TREES[0], include_bytes!("../../assets/kaykit-medieval/tree_single_A.glb")),
     (TREES[1], include_bytes!("../../assets/kaykit-medieval/tree_single_B.glb")),
     (ROCKS[0].0, include_bytes!("../../assets/kaykit-medieval/rock_single_A.glb")),
@@ -59,10 +63,15 @@ pub(super) fn ground_look(surface: gizmo::renderer::custom_material::SurfaceId) 
     GroundLook(look)
 }
 
-/// Oyuncunun modeli.
-pub(super) const KNIGHT: &str = "dunya/kaykit/Knight.glb";
+/// Oyuncunun modeli, ve kendi birimindeki boyu (ayaktan başın tepesine): KayKit'in iri başlı
+/// karakterleri.
+pub(super) const KNIGHT: (&str, f32) = ("dunya/kaykit/Knight.glb", 2.31);
 /// Köylülerin modelleri.
-pub(super) const VILLAGERS: [&str; 3] = ["dunya/kaykit/Rogue.glb", "dunya/kaykit/Mage.glb", "dunya/kaykit/Barbarian.glb"];
+pub(super) const VILLAGERS: [(&str, f32); 3] =
+    [("dunya/kaykit/Rogue.glb", 2.31), ("dunya/kaykit/Mage.glb", 2.31), ("dunya/kaykit/Barbarian.glb", 2.31)];
+/// Hayvanlar, ve kendi birimlerindeki boyları (yürürken, ayaktan başın tepesine; ölçülen).
+pub(super) const SHEEP: (&str, f32) = ("dunya/quaternius/Sheep.glb", 4.2);
+pub(super) const DEER: (&str, f32) = ("dunya/quaternius/Deer.glb", 4.26);
 /// Ağaçlar: kendi birimlerinde 1,1 boyunda (dibi 0,1 toprağın altında).
 pub(super) const TREES: [&str; 2] = ["dunya/medieval/tree_single_A.glb", "dunya/medieval/tree_single_B.glb"];
 pub(super) const TREE_HEIGHT: f32 = 1.1;
