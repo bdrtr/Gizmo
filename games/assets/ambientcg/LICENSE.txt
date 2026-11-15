@@ -1,0 +1,15 @@
+Terrain textures from ambientCG (https://ambientcg.com), by Lennart Demes.
+
+License: Creative Commons CC0 1.0 Universal
+https://docs.ambientcg.com/license/ — free for any use, no attribution required.
+
+| file      | ambientCG asset | source                                  |
+|-----------|-----------------|-----------------------------------------|
+| grass.jpg | Grass004        | https://ambientcg.com/view?id=Grass004  |
+| dirt.jpg  | Ground037       | https://ambientcg.com/view?id=Ground037 |
+| rock.jpg  | Rock030         | https://ambientcg.com/view?id=Rock030   |
+| snow.jpg  | Snow006         | https://ambientcg.com/view?id=Snow006   |
+| sand.jpg  | Ground054       | https://ambientcg.com/view?id=Ground054 |
+
+Each is the asset's 1K colour map, downscaled to 512×512 and saved as JPEG (quality 85) for
+embedding in Gizmo's `dunya` game. The other maps (normal, roughness, AO, displacement) are not used.

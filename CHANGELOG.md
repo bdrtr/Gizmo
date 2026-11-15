@@ -62,6 +62,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   walk, run, in the air) at a rate matched to it, and gathering, talking and building play their own. Trees, rocks,
   village houses and a well are KayKit's *Medieval Hexagon Pack* models. Trimmed and packed copies (3.6 MB in all) are
   in `games/assets/`, each folder with its licence and what was done to the files.
+- **`dunya`: a textured terrain.** The ground is drawn by the game's own `SurfaceMaterial` (`arazi.wgsl`): grass, dirt,
+  rock, snow and sand photographs (ambientCG, CC0) blended by weights the terrain's vertex colours carry, sand from the
+  water line, each texture read at two scales to break up the tiling and rock read triplanar on cliffs. The material
+  group's five texture slots hold the five layers — the room a surface has, with no bind group of its own.
 
 - **A surface built from nodes: `gizmo_renderer::shader_graph`.** A `ShaderGraph` is nodes (`NodeKind`: what the fragment
   knows, the instance's `Material`, the engine's own surface, the base texture, constants, component-wise math, vectors,

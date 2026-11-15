@@ -150,26 +150,20 @@ fn slope(x: f32, z: f32) -> f32 {
     Vec2::new(height(x + e, z) - height(x - e, z), height(x, z + e) - height(x, z - e)).length() / (2.0 * e)
 }
 
-/// Yüksekliğe ve eğime göre arazinin rengi.
-fn ground_colour(h: f32, s: f32, x: f32, z: f32) -> [f32; 4] {
-    // Çim tek bir renk değil: metrelerce genişlikte açık ve koyu yamalar, arada kuru, sarımsı
-    // lekeler ve yer yer çıplak toprak — gürültüden, her yerde aynı.
+/// Dokulu arazinin köşe rengi: dokuların ağırlıkları — kırmızı toprak, yeşil kaya, mavi kar; kalanı
+/// çim (`arazi.wgsl`): yükseldikçe toprak, dik yamaçta ve yüksekte kaya, en tepede kar; çimin içinde
+/// yer yer çıplak toprak lekeleri. Kıyının kumu gölgelendiricide, su seviyesinden.
+fn ground_weights(h: f32, s: f32, x: f32, z: f32) -> [f32; 4] {
     let patch = value_noise(x / 7.0, z / 7.0, 61);
     let fine = value_noise(x / 2.2, z / 2.2, 62);
-    let dry = value_noise(x / 23.0, z / 23.0, 63);
-    let lush = Vec3::new(0.2, 0.4, 0.12);
-    let pale = Vec3::new(0.38, 0.52, 0.2);
-    let straw = Vec3::new(0.55, 0.52, 0.27);
-    let mut grass = lush.lerp(pale, patch * 0.8 + fine * 0.2);
-    grass = grass.lerp(straw, ((dry - 0.62) / 0.2).clamp(0.0, 1.0) * 0.7);
-    grass = grass.lerp(Vec3::new(0.4, 0.32, 0.2), ((fine * patch - 0.55) / 0.15).clamp(0.0, 1.0));
-    let dirt = Vec3::new(0.45, 0.36, 0.24);
-    let rock = Vec3::new(0.42, 0.41, 0.4);
-    let snow = Vec3::new(0.92, 0.93, 0.96);
-    let mut c = grass.lerp(dirt, ((h - 14.0) / 8.0).clamp(0.0, 1.0));
-    c = c.lerp(rock, ((s - 0.45) / 0.35).clamp(0.0, 1.0).max(((h - 24.0) / 6.0).clamp(0.0, 1.0)));
-    c = c.lerp(snow, ((h - 33.0) / 4.0).clamp(0.0, 1.0));
-    [c.x, c.y, c.z, 1.0]
+    let bare = ((fine * patch - 0.5) / 0.15).clamp(0.0, 1.0);
+    let mut dirt = ((h - 14.0) / 8.0).clamp(0.0, 1.0).max(bare);
+    let rock = ((s - 0.45) / 0.35).clamp(0.0, 1.0).max(((h - 24.0) / 6.0).clamp(0.0, 1.0));
+    let snow = ((h - 33.0) / 4.0).clamp(0.0, 1.0);
+    // Kar kayanın, kaya toprağın üstüne: ağırlıklar toplamda bir.
+    let rock = rock * (1.0 - snow);
+    dirt *= 1.0 - snow - rock;
+    [dirt, rock, snow, 1.0]
 }
 
 /// Bir hücrenin kendi tohumuyla bir sayı üreteci: aynı hücre her yüklendiğinde aynı dizilim.
@@ -261,10 +255,12 @@ fn load_chunk(world: &mut World, coord: ChunkCoord, collected: &HashSet<(i32, i3
         let mut triangles = AssetManager::terrain_triangles(&heights, SAMPLES, SAMPLES, CHUNK_SIZE, CHUNK_SIZE, MAX_HEIGHT);
         for v in &mut triangles {
             let (wx, wz) = (v.position[0] + centre.x, v.position[2] + centre.z);
-            v.color = ground_colour(v.position[1], slope(wx, wz), wx, wz);
+            v.color = ground_weights(v.position[1], slope(wx, wz), wx, wz);
         }
         world.add_component(ground, MeshData::new(triangles));
-        world.add_component(ground, MaterialDesc::new().with_pbr(Vec4::ONE, 0.95, 0.0));
+        // Dokulu arazi (köşe rengi dokuların ağırlığı): pencereli oyun gölgelendiricisini kurarken kaydetti.
+        let look = world.get_resource::<modeller::GroundLook>().map(|g| g.0.clone()).expect("the windowed game registers the ground's surface first");
+        world.add_component(ground, look);
         world.add_component(ground, MeshRenderer::new());
     }
 
@@ -1257,6 +1253,10 @@ pub fn app() -> App<SimpleSceneState> {
     app.add_plugin(UiPlugin)
         .with_simple_scene(|scene, _state| {
             let font = scene.renderer.default_font();
+            // Arazinin dokulu gölgelendiricisi. Derlenmemesi oyunun bir hatası — sınaması
+            // `modeller::tests::the_ground_shader_composes`.
+            let surface = scene.renderer.add_surface_material("dunya_arazi", modeller::GROUND_WGSL).unwrap_or_else(|e| panic!("{e}"));
+            scene.world.insert_resource(modeller::ground_look(surface));
             let game = setup(scene.world, font, true);
             scene.world.insert_resource(game);
         })

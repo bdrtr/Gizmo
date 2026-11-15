@@ -1,9 +1,11 @@
-//! Oyunun modelleri: hepsi ikilinin içine gömülü (`add_embedded_asset`), dosya aramıyor — telefonda
+//! Oyunun modelleri ve dokuları: hepsi ikilinin içine gömülü (`add_embedded_asset`), dosya aramıyor — telefonda
 //! da aynı. Hepsi Kay Lousberg'in CC0 paketlerinden (<https://kaylousberg.com>, atıf zorunlu değil):
 //!
 //! - `games/assets/kaykit/` — *Character Pack: Adventurers*: oyuncu ve köylüler, derili ve
 //!   animasyonlu ([`super::karakter`]);
 //! - `games/assets/kaykit-medieval/` — *Medieval Hexagon Pack*: ağaçlar, kayalar, köy evleri, kuyu.
+//!
+//! Arazinin dokuları ambientCG'den (<https://ambientcg.com>, CC0): `games/assets/ambientcg/`.
 //!
 //! Her birinin klasöründe `LICENSE.txt` ve dosyalara ne yapıldığı.
 //!
@@ -14,7 +16,7 @@ use super::*;
 use gizmo::renderer::gltf_model::GltfModel;
 
 /// Gömülü modeller: oyunun onları çağırdığı yol, ve baytları.
-pub(super) const EMBEDDED: [(&str, &[u8]); 12] = [
+pub(super) const EMBEDDED: [(&str, &[u8]); 17] = [
     (KNIGHT, include_bytes!("../../assets/kaykit/Knight.glb")),
     (VILLAGERS[0], include_bytes!("../../assets/kaykit/Rogue.glb")),
     (VILLAGERS[1], include_bytes!("../../assets/kaykit/Mage.glb")),
@@ -27,7 +29,35 @@ pub(super) const EMBEDDED: [(&str, &[u8]); 12] = [
     (HOUSES[0].0, include_bytes!("../../assets/kaykit-medieval/building_home_A_red.glb")),
     (HOUSES[1].0, include_bytes!("../../assets/kaykit-medieval/building_home_B_blue.glb")),
     (WELL.0, include_bytes!("../../assets/kaykit-medieval/building_well_blue.glb")),
+    (GROUND[0], include_bytes!("../../assets/ambientcg/grass.jpg")),
+    (GROUND[1], include_bytes!("../../assets/ambientcg/dirt.jpg")),
+    (GROUND[2], include_bytes!("../../assets/ambientcg/rock.jpg")),
+    (GROUND[3], include_bytes!("../../assets/ambientcg/snow.jpg")),
+    (GROUND[4], include_bytes!("../../assets/ambientcg/sand.jpg")),
 ];
+
+/// Arazinin dokuları: çim, toprak, kaya, kar, kum.
+pub(super) const GROUND: [&str; 5] =
+    ["dunya/zemin/grass.jpg", "dunya/zemin/dirt.jpg", "dunya/zemin/rock.jpg", "dunya/zemin/snow.jpg", "dunya/zemin/sand.jpg"];
+
+/// Arazinin gölgelendiricisi (`arazi.wgsl`'in başı neyin nerede olduğunu anlatıyor).
+pub(super) const GROUND_WGSL: &str = include_str!("arazi.wgsl");
+
+/// Arazinin materyali, motorun özel yüzeyi kaydedilmişse: hücreler bununla çiziliyor.
+pub(super) struct GroundLook(pub(super) MaterialDesc);
+
+/// `surface`'ta kayıtlı arazi gölgelendiricisi için materyal: yuvalara dokular, gölgelendiricinin
+/// beklediği sırayla.
+pub(super) fn ground_look(surface: gizmo::renderer::custom_material::SurfaceId) -> GroundLook {
+    let maps = gizmo::renderer::components::MaterialMaps::default()
+        .with_normal(GROUND[1], 1.0)
+        .with_metallic_roughness(GROUND[3])
+        .with_emissive(GROUND[2], Vec3::ONE)
+        .with_occlusion(GROUND[4], 1.0);
+    let mut look = MaterialDesc::new().with_pbr(Vec4::ONE, 0.95, 0.0).with_texture_source(GROUND[0].to_string()).with_maps(maps);
+    look.material_type = gizmo::renderer::components::MaterialType::CustomSurface(surface);
+    GroundLook(look)
+}
 
 /// Oyuncunun modeli.
 pub(super) const KNIGHT: &str = "dunya/kaykit/Knight.glb";
@@ -54,4 +84,57 @@ pub(super) fn place(world: &mut World, parent: Entity, model: &str, at: Vec3, tu
     let e = world.spawn_bundle((Transform::new(at).with_rotation(turn).with_scale(scale), GlobalTransform::default(), GltfModel::new(model)));
     world.add_child(parent, e);
     e
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gizmo::renderer::Renderer;
+
+    /// The terrain's shader composes into the engine's: the windowed game panics at start-up when it
+    /// does not, and nothing headless would notice. Also the model and texture table: every path is
+    /// one the game asks for, every file decodes.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn the_ground_shader_composes() {
+        pollster::block_on(async {
+            if !Renderer::headless_adapter_available().await {
+                eprintln!("skipping: no GPU adapter");
+                return;
+            }
+            let mut renderer = Renderer::new_headless(64, 64, None).await;
+            if let Err(e) = renderer.add_surface_material("dunya_arazi", GROUND_WGSL) {
+                panic!("{e}");
+            }
+        });
+    }
+
+    /// Every embedded texture decodes, and is a square power of two (mipmaps, tiling).
+    #[test]
+    fn the_ground_textures_decode() {
+        for path in GROUND {
+            let bytes = EMBEDDED.iter().find(|(p, _)| *p == path).map(|(_, b)| *b).unwrap_or_else(|| panic!("{path} is not embedded"));
+            let image = image_size(bytes).unwrap_or_else(|| panic!("{path} is not a JPEG"));
+            assert!(image.0 == image.1 && image.0.is_power_of_two(), "{path} is {image:?}");
+        }
+    }
+
+    /// A JPEG's size from its SOF marker — the crate has no image decoder of its own.
+    fn image_size(b: &[u8]) -> Option<(u32, u32)> {
+        let mut i = 2;
+        while i + 9 < b.len() {
+            if b[i] != 0xFF {
+                return None;
+            }
+            let marker = b[i + 1];
+            let len = u16::from_be_bytes([b[i + 2], b[i + 3]]) as usize;
+            if (0xC0..=0xC2).contains(&marker) {
+                let h = u16::from_be_bytes([b[i + 5], b[i + 6]]) as u32;
+                let w = u16::from_be_bytes([b[i + 7], b[i + 8]]) as u32;
+                return Some((w, h));
+            }
+            i += 2 + len;
+        }
+        None
+    }
 }

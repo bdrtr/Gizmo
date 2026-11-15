@@ -22,3 +22,7 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     # nisanci's shots and hits are synthesised blips; the browser build has audio too.
     "audio",
 ] }
+
+[dev-dependencies]
+# The GPU tests' one async call (a headless renderer).
+pollster = "1.0"

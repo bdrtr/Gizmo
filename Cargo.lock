@@ -2582,6 +2582,7 @@ name = "games"
 version = "0.11.0"
 dependencies = [
  "gizmo-engine",
+ "pollster 1.0.1",
 ]
 
 [[package]]
