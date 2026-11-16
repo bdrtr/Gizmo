@@ -28,3 +28,7 @@ gizmo-math = { version = "0.11.0", path = "../gizmo-math" }
 gizmo-physics-core = { version = "0.11.0", path = "../gizmo-physics-core" }
 serde = { version = "1", features = ["derive", "rc"] }
 tracing = "0.1.44"
+
+[dev-dependencies]
+# Clip round trips in the format a scene saves them in (gizmo-scene writes RON).
+ron = "0.12.1"

@@ -63,6 +63,8 @@ pollster = "1.0"
 # Tests that build a `Mesh` (wgpu buffers) with no GPU, on the noop backend — they run in CI.
 wgpu = { version = "30", default-features = false, features = ["noop", "wgsl"] }
 criterion = "0.8.2"
+# The animatable-property completeness test reads components' serialised numeric fields.
+serde_json = "1.0.149"
 
 # CPU-only: builds `Frustum`/`Aabb`/`Mat4` scenes and runs the cull, no wgpu adapter.
 [[bench]]

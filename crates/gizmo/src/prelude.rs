@@ -64,6 +64,12 @@ pub use gizmo_math::Rng;
 pub use crate::app::locale::{Locale, LocalizedText};
 #[cfg(feature = "render")]
 pub use crate::renderer::tween::{Ease, Tween};
+// Keyed property tracks: which component fields a clip may animate (`"PointLight.intensity"`), and
+// the world's registry of them with the engine's in it — where a game registers its own.
+#[cfg(feature = "render")]
+pub use crate::renderer::keyed_animation::{
+    animatable_properties, PropertyError, PropertyKind, PropertyRegistry, PropertyValue, PropertyVector,
+};
 
 // === Renderer Bileşenleri ===
 #[cfg(feature = "render")]

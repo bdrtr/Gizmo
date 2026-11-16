@@ -2756,6 +2756,7 @@ dependencies = [
  "gizmo-core",
  "gizmo-math",
  "gizmo-physics-core",
+ "ron",
  "serde",
  "tracing",
 ]
@@ -3024,6 +3025,7 @@ dependencies = [
  "rand 0.10.2",
  "ron",
  "serde",
+ "serde_json",
  "tobj",
  "tracing",
  "unicode-bidi",

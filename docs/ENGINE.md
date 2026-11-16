@@ -44,6 +44,57 @@ hash did not change. OPEN (optional, behavior-adjacent, not a pure move): splitt
 still-large functions such as `update_vehicle` / `execute_render_pipeline` — as needed.
 <!-- TRANSLATOR NOTE: "davranış-bitişik" is a coinage; read as "adjacent to behavior", i.e. such a split can alter behavior and therefore falls outside the pure-move contract above. -->
 
+### Keyed property tracks: the naming contract (2026-11-16)
+
+A clip's track animates either a `Transform` (`Track::property == None`) or **one component field
+by name**: `Track::property("lamp", "PointLight.intensity", …)`. The contract:
+
+- **A name is `"<Component>.<field>[.<lane>]"`**, the component named as the scene registry names
+  it (`PointLight`, `Material`, `Sprite`), so a clip reads the way a scene file does. A vector
+  registered with lanes (`register_lanes`) also answers to `.x/.y/.z/.w` one lane at a time —
+  `"Sprite.color.w"` fades the alpha alone, Godot's `modulate:a`.
+- **The names live in one space, the world's `PropertyRegistry`** (`gizmo_animation::property`).
+  `gizmo_renderer::property_animation::engine_properties` registers the engine's; a game registers
+  its own the same way (`gizmo::animatable_properties(world).register::<Health, f32>(…)`).
+  Re-registering a name for the same component and kind is a no-op (the studio and a game's setup
+  both run); any other collision is `PropertyError::NameTaken`.
+- **The engine registers only what both draw paths re-read every frame**: a material's
+  per-instance factors (what `InstanceRaw::new` + `with_alpha_cutoff` / `with_reflectance` /
+  `with_lit_extras_of` upload, in both batchers), light colours/intensities/shapes, the camera's
+  projection and exposure, sprite and text colour and size, every `PostProcess` float. Not
+  `MaterialMaps` (its GPU parameters are cached per distinct maps value and never evicted — an
+  animated value would leak a buffer per value), not `MaterialDesc` (the saved description,
+  which `sync_material_descriptions` derives from the live `Material` every frame — so a save
+  stores the value at the playhead), not an `Option` or an enum variant's field.
+  `property_animation::tests::every_numeric_field_is_registered_or_excluded` fails on a new numeric
+  field until someone puts it on one list or the other.
+- **Order: the keyed driver runs after `color_tween_system`** in `advance_frame_clocks`, so a keyed
+  track wins over a `ColorTween` on the same field — deliberately: what an animator keyed is what
+  is drawn. Two players keying one field: the later in query order wins, as with transforms, and
+  only its value is written. A whole-vector track and a lane track (`Sprite.color` and
+  `Sprite.color.w`) are the same field: their samples fold in player order into one value of the
+  whole vector, written once — so the later player wins whichever of the two it keys. An engine
+  name a game registered first costs the engine that name alone (`engine_properties` registers
+  each on its own and returns every collision).
+- **Writes are typed and quiet**: each entry is a monomorphised `fn(&C) -> V` / `fn(&mut C, V)`,
+  applied through one `query_mut::<&mut C>()` per property per frame, written through `Mut` only
+  when the value differs — so `Changed<C>` (and the render world's extract) sees real changes and
+  only those, on the frame they happen.
+
+**Rejected: a JSON or `bevy_reflect` path.** The obvious generic design serialises the component,
+patches a field of the `serde_json::Value`, and deserialises it back. It loses every
+`#[serde(skip)]` field on the way — a `Sprite`'s resolved image comes back as "not found yet" and
+the sprite vanishes the frame a colour track touches it (`sprite_color_track_keeps_image` pins
+this) — costs an allocation per field per frame, and stamps a change every frame whatever the
+value. `bevy_reflect` would fix the round trip but is behind the default-off `reflect` feature and
+is a 0.x dependency §4 keeps off the default surface. What survived from the generic design is its
+completeness check, run as a test over the serialised form instead of as the write path.
+
+Separate work, named: writing the `MaterialMaps` parameter buffer in place so its floats can be
+keyed; `Handle<Material>` assets (the studio draws only the `Material` component); a per-field ◆
+in the inspector; and moving the keyed driver out of `systems::render`, so a `headless` build
+(no `render`) animates.
+
 ---
 
 ## 3. Roadmap (LIVE — remaining work only)

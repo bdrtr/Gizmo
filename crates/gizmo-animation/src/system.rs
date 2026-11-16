@@ -2,8 +2,11 @@ use gizmo_core::component::{Children, EntityName};
 use gizmo_core::entity::Entity;
 use gizmo_core::World;
 use gizmo_physics_core::Transform;
+use std::sync::Arc;
+
+use crate::clip::{AnimationClip, InterpolatedValue};
 use crate::player::AnimationPlayer;
-use crate::clip::InterpolatedValue;
+use crate::property::PropertyRegistry;
 
 /// Write a sampled [`InterpolatedValue`] onto a [`Transform`]. Each channel maps
 /// to its own TRS field; scale is applied just like translation and rotation
@@ -13,13 +16,19 @@ pub fn apply_interpolated(transform: &mut Transform, value: InterpolatedValue) {
         InterpolatedValue::Translation(v) => transform.position = v,
         InterpolatedValue::Rotation(q) => transform.rotation = q,
         InterpolatedValue::Scale(s) => transform.scale = s,
-        InterpolatedValue::None => {}
+        // A value channel belongs to a property track, which the driver hands to the
+        // `PropertyRegistry`, never to a `Transform`.
+        InterpolatedValue::None
+        | InterpolatedValue::Scalar(_)
+        | InterpolatedValue::Vector2(_)
+        | InterpolatedValue::Vector3(_)
+        | InterpolatedValue::Vector4(_) => {}
     }
 }
 
-/// The transform-track animation driver: every [`AnimationPlayer`] advanced by `dt` while it plays,
-/// and its clip's tracks sampled at its playhead onto the `Transform`s they target — **playing or
-/// not**, so an editor scrubbing a paused player's `elapsed_time` moves what it animates.
+/// The keyed animation driver: every [`AnimationPlayer`] advanced by `dt` while it plays, and its
+/// clip's tracks sampled at its playhead onto what they target — **playing or not**, so an editor
+/// scrubbing a paused player's `elapsed_time` moves what it animates.
 ///
 /// A track targets the player's own entity when its `target_name` is empty, and otherwise the
 /// first entity of that [`EntityName`] in the player's hierarchy (the player's entity and its
@@ -27,10 +36,25 @@ pub fn apply_interpolated(transform: &mut Transform, value: InterpolatedValue) {
 /// has gone). The walk is guarded against a `Children` cycle — a scene file writes parent edges
 /// verbatim — which until 2026-08-30 froze the frame.
 ///
-/// The engine's frame runs it (`gizmo::systems::render::prepare_frame`, beside the tweens and the
-/// skeletal drivers), on the game clock, in both the game's and the editor's draw paths.
-pub fn transform_animation_system(world: &mut World, dt: f32) {
+/// A transform track ([`Track::property`](crate::clip::Track::property) `None`) writes the target's
+/// `Transform`. A property track writes the component field its name registers in the world's
+/// [`PropertyRegistry`]: those are gathered across **all** players and written after the
+/// transforms, one query per property, a field written only when its value moves. Two players
+/// keying the same field: the later one wins, as with transforms. A name the registry does not
+/// know, or keyframes of another kind than the property, is warned about once per clip and
+/// property and skipped; a target without the component is skipped silently, as one without a
+/// `Transform` is. With no registry in the world an empty one is inserted, so such a track warns
+/// rather than vanishing.
+///
+/// The engine's frame runs it (`gizmo::systems::render::advance_frame_clocks`, beside the tweens),
+/// on the game clock, in both the game's and the editor's draw paths — **after
+/// `color_tween_system`**: a keyed track wins over a `ColorTween` on the same field, deliberately.
+pub fn keyed_animation_system(world: &mut World, dt: f32) {
     let players: Vec<Entity> = world.query::<(Entity, &AnimationPlayer)>().iter().map(|(e, _)| e).collect();
+    // Property samples, in player order then track order: (clip, track index, target, value).
+    let mut properties: Vec<(Arc<AnimationClip>, usize, Entity, InterpolatedValue)> = Vec::new();
+    // Transform tracks holding value keyframes (a hand-edited or deserialised clip).
+    let mut misfiled: Vec<(Arc<AnimationClip>, usize)> = Vec::new();
     for root in players {
         let Some((clip, time, mut targets)) = ({
             let mut q = world.query_mut::<&mut AnimationPlayer>();
@@ -53,9 +77,17 @@ pub fn transform_animation_system(world: &mut World, dt: f32) {
         }
 
         let mut transforms = world.query_mut::<&mut Transform>();
-        for track in &clip.tracks {
+        for (i, track) in clip.tracks.iter().enumerate() {
             let target = if track.target_name.is_empty() { Some(root) } else { targets.get(&track.target_name).copied() };
-            if let Some(mut transform) = target.and_then(|e| transforms.get_mut(e)) {
+            let Some(target) = target else { continue };
+            if track.property.is_some() {
+                match track.sample(time) {
+                    InterpolatedValue::None => {}
+                    value => properties.push((clip.clone(), i, target, value)),
+                }
+            } else if track.keyframes.kind().is_some() {
+                misfiled.push((clip.clone(), i));
+            } else if let Some(mut transform) = transforms.get_mut(target) {
                 apply_interpolated(&mut transform, track.sample(time));
             }
         }
@@ -64,6 +96,90 @@ pub fn transform_animation_system(world: &mut World, dt: f32) {
             player.target_entities = targets;
         }
     }
+    if properties.is_empty() && misfiled.is_empty() {
+        return;
+    }
+    if world.get_resource::<PropertyRegistry>().is_none() {
+        world.insert_resource(PropertyRegistry::default());
+    }
+    world.resource_scope::<PropertyRegistry, _, _>(|world, registry| {
+        for (clip, i) in &misfiled {
+            registry.warn_once(
+                &format!("{}/#{i}", clip.name),
+                format_args!("clip `{}`: transform track {i} holds value keyframes; skipped", clip.name),
+            );
+        }
+        // Each sample to its registry entry; what does not resolve warns once and is dropped.
+        let mut resolved: Vec<(usize, Entity, InterpolatedValue)> = Vec::with_capacity(properties.len());
+        for (clip, i, target, value) in &properties {
+            let track = &clip.tracks[*i];
+            let name = track.property.as_deref().unwrap_or_default();
+            match registry.lookup(name) {
+                Some((entry, kind)) if track.keyframes.kind() == Some(kind) => resolved.push((entry, *target, *value)),
+                Some((_, kind)) => {
+                    registry.warn_once(
+                        &format!("{}/{name}", clip.name),
+                        format_args!("clip `{}`: `{name}` is a {kind} property, keyed with other keyframes; skipped", clip.name),
+                    );
+                }
+                None => {
+                    registry.warn_once(
+                        &format!("{}/{name}", clip.name),
+                        format_args!("clip `{}`: no animatable property `{name}` is registered; skipped", clip.name),
+                    );
+                }
+            }
+        }
+        // Grouped by field and target, keeping player order within a group (a stable sort). A lane
+        // track (`Sprite.color.w`) and a whole-vector track (`Sprite.color`) are one field: their
+        // samples fold, in player order, into one value of the whole vector — so the later player
+        // wins whichever of the two it keys, and the field is written, and stamped as a change,
+        // once. Of plain samples only the last is kept, for the same reason.
+        let mut fields: Vec<(usize, Entity, Option<usize>, InterpolatedValue)> = resolved
+            .iter()
+            .map(|&(entry, target, value)| {
+                let (field, lane) = registry.field_of(entry);
+                (field, target, lane, value)
+            })
+            .collect();
+        fields.sort_by_key(|&(field, target, _, _)| (field, target));
+        let mut entries: Vec<usize> = Vec::with_capacity(fields.len());
+        let mut items: Vec<(Entity, InterpolatedValue)> = Vec::with_capacity(fields.len());
+        let mut start = 0;
+        while start < fields.len() {
+            let (field, target, _, _) = fields[start];
+            let end = start + fields[start..].iter().take_while(|s| s.0 == field && s.1 == target).count();
+            let group = &fields[start..end];
+            start = end;
+            let value = if group.iter().all(|s| s.2.is_none()) {
+                Some(group[group.len() - 1].3)
+            } else {
+                // Only what follows the last whole-vector sample matters; lanes before it are
+                // overwritten by it.
+                let from = group.iter().rposition(|s| s.2.is_none());
+                let mut value = match from {
+                    Some(k) => Some(group[k].3),
+                    None => registry.get_at(field, world, target),
+                };
+                for s in &group[from.map_or(0, |k| k + 1)..] {
+                    if let (Some(lane), InterpolatedValue::Scalar(v)) = (s.2, s.3) {
+                        value = value.and_then(|whole| crate::property::with_lane(whole, lane, v));
+                    }
+                }
+                value
+            };
+            if let Some(value) = value {
+                entries.push(field);
+                items.push((target, value));
+            }
+        }
+        let mut start = 0;
+        while start < entries.len() {
+            let end = start + entries[start..].iter().take_while(|&&e| e == entries[start]).count();
+            registry.apply_at(entries[start], world, &items[start..end]);
+            start = end;
+        }
+    });
 }
 
 /// Each named track's target in `root`'s hierarchy: a walk of `Children` from `root`, every entity
@@ -178,7 +294,7 @@ mod tests {
             world.add_component(loop_a, Children(vec![loop_b]));
             world.add_component(loop_b, Children(vec![loop_a]));
 
-            transform_animation_system(&mut world, 0.016);
+            keyed_animation_system(&mut world, 0.016);
 
             let players = world.query::<&AnimationPlayer>();
             let player = players.get(root).expect("the player is still there");
@@ -216,6 +332,205 @@ mod tests {
             "non-uniform scale must reach the transform, got {:?}",
             transform.scale
         );
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    struct Glow {
+        power: f32,
+        tint: gizmo_math::Vec4,
+    }
+    gizmo_core::impl_component!(Glow);
+
+    fn glow_registry() -> PropertyRegistry {
+        let mut r = PropertyRegistry::default();
+        r.register::<Glow, f32>("Glow.power", |g| g.power, |g, v| g.power = v).unwrap();
+        r.register_lanes::<Glow, gizmo_math::Vec4>("Glow.tint", |g| g.tint, |g, v| g.tint = v).unwrap();
+        r
+    }
+
+    fn glow() -> Glow {
+        Glow { power: 0.0, tint: gizmo_math::Vec4::ONE }
+    }
+
+    fn player_of(tracks: Vec<Track>, playing: bool) -> AnimationPlayer {
+        AnimationPlayer {
+            clip: Some(std::sync::Arc::new(AnimationClip { name: "clip".into(), tracks })),
+            playing,
+            looping: false,
+            ..Default::default()
+        }
+    }
+
+    fn power_track(target: &str, from: f32, to: f32) -> Track {
+        Track::property(target, "Glow.power", vec![0.0, 1.0], Keyframes::Scalar(vec![from, to])).expect("valid")
+    }
+
+    fn power(world: &World, e: Entity) -> f32 {
+        world.get::<Glow>(e).expect("has Glow").power
+    }
+
+    /// A property track writes its field while the player plays, and — paused — wherever the
+    /// playhead is put, as a transform track does: what an editor's scrub relies on.
+    #[test]
+    fn property_track_drives_component_while_playing_and_paused_scrub() {
+        let mut world = World::new();
+        world.insert_resource(glow_registry());
+        let e = world.spawn();
+        world.add_component(e, glow());
+        let alpha = Track::property("", "Glow.tint.w", vec![0.0, 1.0], Keyframes::Scalar(vec![1.0, 0.0])).unwrap();
+        world.add_component(e, player_of(vec![power_track("", 0.0, 10.0), alpha], true));
+
+        keyed_animation_system(&mut world, 0.25);
+        assert_eq!(power(&world, e), 2.5);
+        assert_eq!(world.get::<Glow>(e).unwrap().tint, gizmo_math::Vec4::new(1.0, 1.0, 1.0, 0.75), "the lane alone");
+
+        if let Some(mut p) = world.query_mut::<&mut AnimationPlayer>().get_mut(e) {
+            p.playing = false;
+            p.elapsed_time = 0.8;
+        }
+        keyed_animation_system(&mut world, 0.25);
+        assert_eq!(power(&world, e), 8.0, "paused, the scrubbed playhead is sampled");
+        keyed_animation_system(&mut world, 0.25);
+        assert_eq!(power(&world, e), 8.0, "and it stays");
+    }
+
+    #[test]
+    fn named_child_property_target_resolves() {
+        let mut world = World::new();
+        world.insert_resource(glow_registry());
+        let root = world.spawn();
+        let lamp = world.spawn();
+        world.add_component(lamp, EntityName("lamp".into()));
+        world.add_component(lamp, glow());
+        world.add_component(root, glow());
+        world.add_component(root, Children(vec![lamp]));
+        world.add_component(root, player_of(vec![power_track("lamp", 2.0, 4.0)], false));
+        keyed_animation_system(&mut world, 0.0);
+        assert_eq!(power(&world, lamp), 2.0);
+        assert_eq!(power(&world, root), 0.0, "the root is not the target");
+    }
+
+    /// A property nothing registered is skipped (warned once) and the clip's transform tracks still
+    /// play — with a registry, and with none in the world at all.
+    #[test]
+    fn unknown_property_skipped_and_transform_tracks_still_apply() {
+        for with_registry in [true, false] {
+            let mut world = World::new();
+            if with_registry {
+                world.insert_resource(glow_registry());
+            }
+            let e = world.spawn();
+            world.add_component(e, glow());
+            world.add_component(e, Transform::default());
+            let unknown = Track::property("", "Glow.nope", vec![0.0, 1.0], Keyframes::Scalar(vec![1.0, 2.0])).unwrap();
+            // A property track keyed with another kind than the property's.
+            let wrong_kind = Track::property("", "Glow.power", vec![0.0, 1.0], Keyframes::Vector2(vec![gizmo_math::Vec2::ONE; 2])).unwrap();
+            // A transform track holding value keys, as only a hand-edited file can build.
+            let mut misfiled = Track::new("", vec![0.0, 1.0], Keyframes::Scale(vec![Vec3::ONE; 2])).unwrap();
+            misfiled.keyframes = Keyframes::Scalar(vec![3.0, 3.0]);
+            let moved = Track::new("", vec![0.0, 1.0], Keyframes::Translation(vec![Vec3::ZERO, Vec3::X])).unwrap();
+            world.add_component(e, player_of(vec![unknown, wrong_kind, misfiled, moved], true));
+            keyed_animation_system(&mut world, 0.5);
+            keyed_animation_system(&mut world, 0.25);
+            assert_eq!(world.get::<Transform>(e).unwrap().position, Vec3::X * 0.75, "registry: {with_registry}");
+            assert_eq!(power(&world, e), 0.0, "nothing wrote the field");
+            let mut registry = world.get_resource_mut::<PropertyRegistry>().expect("there is a registry afterwards");
+            assert!(!registry.warn_once("clip/Glow.nope", ""), "the unknown name was warned about already");
+            assert!(!registry.warn_once("clip/#2", ""), "the misfiled track too");
+            if with_registry {
+                assert!(!registry.warn_once("clip/Glow.power", ""), "and the kind mismatch");
+            }
+        }
+    }
+
+    /// Two players keying one field: the later one in the players' query order wins, as it does for
+    /// transforms, and the earlier one's value is never written.
+    #[test]
+    fn two_players_same_field_later_wins() {
+        let mut world = World::new();
+        world.insert_resource(glow_registry());
+        let lamp = world.spawn();
+        world.add_component(lamp, EntityName("lamp".into()));
+        world.add_component(lamp, glow());
+        let a = world.spawn();
+        let b = world.spawn();
+        world.add_component(a, Children(vec![lamp]));
+        world.add_component(b, Children(vec![lamp]));
+        world.add_component(a, player_of(vec![power_track("lamp", 1.0, 1.0)], false));
+        world.add_component(b, player_of(vec![power_track("lamp", 7.0, 7.0)], false));
+        let order: Vec<Entity> = world.query::<(Entity, &AnimationPlayer)>().iter().map(|(e, _)| e).collect();
+        let last = *order.last().unwrap();
+        let t1 = world.begin_change_frame(0);
+        world.begin_change_frame(t1);
+        keyed_animation_system(&mut world, 0.0);
+        assert_eq!(power(&world, lamp), if last == b { 7.0 } else { 1.0 });
+        world.begin_change_frame(t1 + 1);
+        keyed_animation_system(&mut world, 0.0);
+        let changed = world.query_filtered::<&Glow, gizmo_core::query::Changed<Glow>>().iter().count();
+        assert_eq!(changed, 0, "held at the winner's value, the field is not rewritten every frame");
+    }
+
+    fn tint_track(target: &str, tint: gizmo_math::Vec4) -> Track {
+        Track::property(target, "Glow.tint", vec![0.0], Keyframes::Vector4(vec![tint])).expect("valid")
+    }
+
+    fn alpha_track(target: &str, a: f32) -> Track {
+        Track::property(target, "Glow.tint.w", vec![0.0], Keyframes::Scalar(vec![a])).expect("valid")
+    }
+
+    /// A whole-vector track and a lane track on one field are one field: the later player wins
+    /// whichever of the two it keys — not the one registered last — and a held value is written
+    /// once, not once by each and stamped as a change every frame.
+    #[test]
+    fn vector_and_lane_tracks_on_one_field_compose_in_player_order() {
+        use gizmo_math::Vec4;
+        for lane_is_later in [false, true] {
+            let mut world = World::new();
+            world.insert_resource(glow_registry());
+            let lamp = world.spawn();
+            world.add_component(lamp, EntityName("lamp".into()));
+            world.add_component(lamp, glow());
+            let a = world.spawn();
+            let b = world.spawn();
+            world.add_component(a, Children(vec![lamp]));
+            world.add_component(b, Children(vec![lamp]));
+            world.add_component(a, player_of(vec![], false));
+            world.add_component(b, player_of(vec![], false));
+            let queried: Vec<Entity> = world.query::<(Entity, &AnimationPlayer)>().iter().map(|(e, _)| e).collect();
+            assert_eq!(queried.len(), 2);
+            let (first, last) = (queried[0], queried[1]);
+            let whole = tint_track("lamp", Vec4::new(0.5, 0.5, 0.5, 1.0));
+            let lane = alpha_track("lamp", 0.2);
+            let (early, late) = if lane_is_later { (whole, lane) } else { (lane, whole) };
+            world.add_component(first, player_of(vec![early], false));
+            world.add_component(last, player_of(vec![late], false));
+
+            let t1 = world.begin_change_frame(0);
+            world.begin_change_frame(t1);
+            keyed_animation_system(&mut world, 0.0);
+            let tint = world.get::<Glow>(lamp).unwrap().tint;
+            let expected = if lane_is_later { Vec4::new(0.5, 0.5, 0.5, 0.2) } else { Vec4::new(0.5, 0.5, 0.5, 1.0) };
+            assert_eq!(tint, expected, "the later player wins (lane later: {lane_is_later})");
+
+            world.begin_change_frame(t1 + 1);
+            keyed_animation_system(&mut world, 0.0);
+            let changed = world.query_filtered::<&Glow, gizmo_core::query::Changed<Glow>>().iter().count();
+            assert_eq!(changed, 0, "a held composition is not rewritten every frame (lane later: {lane_is_later})");
+        }
+    }
+
+    /// Lane tracks alone on one field keep the other lanes and both reach it.
+    #[test]
+    fn two_lane_tracks_on_one_field_both_apply() {
+        use gizmo_math::Vec4;
+        let mut world = World::new();
+        world.insert_resource(glow_registry());
+        let e = world.spawn();
+        world.add_component(e, glow());
+        let red = Track::property("", "Glow.tint.x", vec![0.0], Keyframes::Scalar(vec![0.25])).unwrap();
+        world.add_component(e, player_of(vec![red, alpha_track("", 0.5)], false));
+        keyed_animation_system(&mut world, 0.0);
+        assert_eq!(world.get::<Glow>(e).unwrap().tint, Vec4::new(0.25, 1.0, 1.0, 0.5));
     }
 
     #[test]

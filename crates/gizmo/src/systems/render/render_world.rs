@@ -452,6 +452,35 @@ mod render_world_tests {
         send::<crate::renderer::GpuContext>();
     }
 
+    /// **A keyed light reaches the copy on the frame it moved.** The keyed driver writes the game
+    /// world during the preparation, before the extract, and only through `Mut` — so the extract's
+    /// `Changed<PointLight>` sees it and the copy the draw reads has this frame's intensity, not
+    /// last frame's.
+    #[test]
+    fn animated_light_reaches_the_copy_same_frame() {
+        use crate::renderer::components::PointLight;
+        use crate::renderer::keyed_animation::{AnimationClip, Keyframes, KeyedAnimationPlayer, Track};
+        let mut game = World::new();
+        let mut time = crate::core::time::Time::new();
+        time.update(0.05);
+        game.insert_resource(time);
+        let mut clip = AnimationClip::default();
+        clip.tracks.push(Track::property("", "PointLight.intensity", vec![0.0, 1.0], Keyframes::Scalar(vec![0.0, 10.0])).unwrap());
+        let mut player = KeyedAnimationPlayer::new();
+        player.play(std::sync::Arc::new(clip));
+        let lamp = game.spawn();
+        game.add_component(lamp, PointLight::new(gizmo_math::Vec3::ONE, 0.0, 5.0));
+        game.add_component(lamp, player);
+        let mut copy = World::new();
+        let mut extractor = render_extractor();
+        for frame in 1..=3 {
+            super::super::advance_frame_clocks(&mut game);
+            extractor.run(&mut game, &mut copy);
+            let drawn = copy.get::<PointLight>(lamp).expect("the light is copied").intensity;
+            assert!((drawn - frame as f32 * 0.5).abs() < 1.0e-4, "frame {frame}: the copy has {drawn}");
+        }
+    }
+
     /// **The copy holds every type the draw reads.** The draw path's source (`systems/render`,
     /// tests left out) is read for the types named in its `query` / `get` / `get_resource` calls;
     /// each must be copied by [`render_extractor`] or be one the preparation hands over in another

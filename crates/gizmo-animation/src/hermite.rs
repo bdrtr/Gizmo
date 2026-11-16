@@ -16,7 +16,29 @@
 //! caller applies that scaling before calling in, because the two subsystems
 //! store their segment duration differently.
 
+use std::ops::{Add, Mul};
+
 use gizmo_math::{Quat, Vec3, Vec4};
+
+/// The cubic-Hermite basis for any value that adds and scales — `f32`, `Vec2`, `Vec3`, `Vec4`.
+/// `m0` / `m1` are the already-scaled in/out tangents.
+///
+/// Used only by the value channels (`Keyframes::Scalar` … `Keyframes::Vector4`). The transform
+/// channels keep [`hermite_vec3`] / [`hermite_quat`], which go through a `Vec4`: the same
+/// arithmetic in a different association, and a translation or scale track's samples must stay
+/// bit-identical to what they were (the determinism contract).
+pub(crate) fn hermite<T>(p0: T, m0: T, p1: T, m1: T, t: f32) -> T
+where
+    T: Copy + Add<Output = T> + Mul<f32, Output = T>,
+{
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+    let h10 = t3 - 2.0 * t2 + t;
+    let h01 = -2.0 * t3 + 3.0 * t2;
+    let h11 = t3 - t2;
+    p0 * h00 + m0 * h10 + p1 * h01 + m1 * h11
+}
 
 /// Scalar cubic-Hermite basis applied to a [`Vec4`] (also reused for [`Vec3`]
 /// via a zero `w`). `m0` / `m1` are the already-scaled in/out tangents.
@@ -60,6 +82,17 @@ mod tests {
     use super::*;
 
     const TOL: f32 = 1e-5;
+
+    /// The generic basis agrees with the `Vec4` one it mirrors, lane for lane, and works on a bare
+    /// `f32`.
+    #[test]
+    fn generic_hermite_matches_vec4_and_scalar() {
+        let (p0, m0, p1, m1) = (Vec4::new(1.0, -2.0, 3.0, 0.5), Vec4::splat(0.7), Vec4::new(-4.0, 5.0, 6.0, -0.5), Vec4::splat(-1.3));
+        for t in [0.0_f32, 0.2, 0.5, 0.9, 1.0] {
+            assert_eq!(hermite(p0, m0, p1, m1, t), hermite_vec4(p0, m0, p1, m1, t));
+            assert_eq!(hermite(p0.x, m0.x, p1.x, m1.x, t), hermite_vec4(p0, m0, p1, m1, t).x);
+        }
+    }
 
     #[test]
     fn hermite_vec3_flat_tangents_is_smooth_ease() {

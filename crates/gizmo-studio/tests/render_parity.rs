@@ -832,12 +832,13 @@ fn with_its_preparation(editor: String, workspace: &std::path::Path) -> String {
         body("pub fn advance_frame_clocks("),
         body("pub fn apply_root_motion(")
     );
-    // The game path's shared passes the editor calls for itself: their files are code it runs.
-    for (call, file) in [("record_sprites(", "crates/gizmo/src/systems/render/sprite.rs")] {
-        if code_only(&sources).contains(call) {
-            sources.push('\n');
-            sources.push_str(&std::fs::read_to_string(workspace.join(file)).expect("the shared pass's source"));
-        }
+    // The game path's shared pass the editor calls for itself: its file is code it runs.
+    if code_only(&sources).contains("record_sprites(") {
+        sources.push('\n');
+        sources.push_str(
+            &std::fs::read_to_string(workspace.join("crates/gizmo/src/systems/render/sprite.rs"))
+                .expect("the shared pass's source"),
+        );
     }
     sources
 }
@@ -933,7 +934,9 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         "resolve_material_descriptions(",
         "sync_material_descriptions(",
         "tween_system(",
-        "transform_animation_system(",
+        "keyed_animation_system(",
+        // The registry of animatable fields the keyed driver writes through.
+        "animatable_properties(",
         "color_tween_system(",
         "advance_camera_shakes(",
         "screen_fade_system(",

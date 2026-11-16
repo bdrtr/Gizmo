@@ -44,12 +44,12 @@ pub enum EditorAction {
     /// The selected entity's transform-track clip, before and after a timeline edit — keyed, moved
     /// or deleted — whole, for the reasons `AnimationClipsChanged` gives. `None`: no clip.
     TransformClipChanged {
-        /// The entity whose `TransformAnimationPlayer` was edited.
+        /// The entity whose `KeyedAnimationPlayer` was edited.
         entity: gizmo_core::entity::Entity,
         /// Its clip before the edit.
-        before: Option<std::sync::Arc<gizmo_renderer::transform_animation::AnimationClip>>,
+        before: Option<std::sync::Arc<gizmo_renderer::keyed_animation::AnimationClip>>,
         /// Its clip after it.
-        after: Option<std::sync::Arc<gizmo_renderer::transform_animation::AnimationClip>>,
+        after: Option<std::sync::Arc<gizmo_renderer::keyed_animation::AnimationClip>>,
     },
     /// The Shader Graph tab's "Apply": each entity's `SurfaceGraph` before and after, `None` where it
     /// had none. Only "Apply" is recorded: the edits that follow it reach the entities as the tab's
@@ -80,10 +80,10 @@ pub enum EditorAction {
 fn set_transform_clip(
     world: &mut World,
     entity: gizmo_core::entity::Entity,
-    clip: Option<std::sync::Arc<gizmo_renderer::transform_animation::AnimationClip>>,
+    clip: Option<std::sync::Arc<gizmo_renderer::keyed_animation::AnimationClip>>,
 ) {
     if world.is_alive(entity) {
-        if let Some(mut p) = world.query_mut::<&mut gizmo_renderer::transform_animation::TransformAnimationPlayer>().get_mut(entity) {
+        if let Some(mut p) = world.query_mut::<&mut gizmo_renderer::keyed_animation::KeyedAnimationPlayer>().get_mut(entity) {
             p.clip = clip;
             p.target_entities.clear();
         }

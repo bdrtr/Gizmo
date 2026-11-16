@@ -59,15 +59,32 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
-- **Keyed transform animation, driven by the engine and keyed in the editor: `TransformAnimationPlayer`.** A door, a
+- **Keyed property tracks: a clip animates component fields by name.** `Track::property("lamp",
+  "PointLight.intensity", …)` keys one field of an entity's component — or one lane of a vector,
+  `"Sprite.color.w"` — with new value channels (`Keyframes::Scalar` / `Vector2` / `Vector3` / `Vector4`, linear,
+  step or cubic). The names are the world's `PropertyRegistry` (`gizmo_animation::property`): typed getter/setter
+  pairs, written through `Mut` only when the value moves, so `Changed<T>` and the render world's copy see the change
+  on its frame. The engine's fields (`gizmo_renderer::property_animation::engine_properties`) are what both draw paths
+  re-read every frame — material per-instance factors, lights, the camera's projection and exposure, sprite and text
+  colour and size, post-processing — and a game adds its own (`gizmo::animatable_properties(world).register(…)`). The
+  driver runs after the colour tweens, so a keyed field wins over a `ColorTween`; an unknown name or wrong kind warns
+  once and is skipped. A clip saved before this loads unchanged (`property` is omitted for a transform track). The
+  ANIMATION tab gains **+ Property** (the entity's animatable fields, grouped by component), a ◆ per property row, and
+  ◆ Key now keys the entity's property tracks too; a row that cannot play is drawn in the warning colour with the
+  reason. `animated_transform` pulses a lamp and fades its satellite, and has a `--test`. `TrackError` gains
+  `ChannelMismatch` and `InvalidPropertyName`; `Track` gains `property`. The player it plays on is renamed for what it
+  now does: `KeyedAnimationPlayer` in `gizmo_renderer::keyed_animation`, driven by `keyed_animation_system`, saved in a
+  scene as `KeyedAnimationPlayer` (it was `TransformAnimationPlayer` / `transform_animation` /
+  `transform_animation_system`, never released and in no saved scene, so there is no alias).
+- **Keyed transform animation, driven by the engine and keyed in the editor: `KeyedAnimationPlayer`.** A door, a
   platform, a camera move: a clip of position/rotation/scale tracks on an entity (an empty target name) or on named
-  entities below it. The engine's frame now drives it (`transform_animation_system`, in `advance_frame_clocks` beside
+  entities below it. The engine's frame now drives it (`keyed_animation_system`, in `advance_frame_clocks` beside
   the tweens — windowed and headless alike), and a paused player follows its playhead; until now nothing drove it
   unless a game scheduled `animation_system` by hand (removed, with `player::Animated`; `gizmo_animation::register`
   only registers types). Saved with a scene (`serde` on the clip types). The ANIMATION tab keys it as Godot does:
   ＋ Dönüşüm animasyonu adds the player, ◆ Key records the selected entity's transform at the playhead, keys drag and
   delete, ▶ plays, one undo entry per edit (`EditorAction::TransformClipChanged`). `Track::set_key` / `remove_key` /
-  `retime_key` keep the keys sorted. Reached as `gizmo_renderer::transform_animation`.
+  `retime_key` keep the keys sorted. Reached as `gizmo_renderer::keyed_animation`.
 - **Reciprocal collision avoidance for navigation agents: `gizmo_ai::avoidance` (ORCA).** A `NavAgent` now picks,
   after following its route, the velocity nearest the one it wants that runs into none of its ten nearest neighbours
   over the next `time_horizon` seconds, each pair sharing the change — RVO2's algorithm, as Godot's and Unity's agent

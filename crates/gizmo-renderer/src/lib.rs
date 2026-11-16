@@ -115,6 +115,8 @@
 //! [`visibility`] holds the index.
 
 pub mod material_sync;
+// Which engine fields a keyed property track may animate, and the world's registry of them.
+pub mod property_animation;
 pub mod mesh_sync;
 pub mod text_sync;
 pub mod sprite_sync;
@@ -253,15 +255,23 @@ pub use animation_system::{
 };
 pub use gizmo_animation::skeletal::decompose_mat4;
 
-/// Transform-track animation — a door, a platform, a cutscene camera, keyed by position, rotation
-/// and scale: [`TransformAnimationPlayer`](transform_animation::TransformAnimationPlayer) plays an
-/// [`AnimationClip`](transform_animation::AnimationClip) of [`Track`](transform_animation::Track)s,
-/// and the engine's frame drives it ([`transform_animation_system`](transform_animation::transform_animation_system)).
+/// Keyed animation — a door, a platform, a cutscene camera keyed by position, rotation and scale; a
+/// lamp, a material, a sprite keyed by a field:
+/// [`KeyedAnimationPlayer`](keyed_animation::KeyedAnimationPlayer) plays an
+/// [`AnimationClip`](keyed_animation::AnimationClip) of [`Track`](keyed_animation::Track)s —
+/// transform tracks and property tracks, whose names the world's
+/// [`PropertyRegistry`](keyed_animation::PropertyRegistry) holds (the engine's fields:
+/// [`property_animation`]) — and the engine's frame drives it
+/// ([`keyed_animation_system`](keyed_animation::keyed_animation_system)).
 /// Named apart from the skeletal [`AnimationPlayer`] and [`AnimationClip`], which play a skin.
-pub mod transform_animation {
-    pub use gizmo_animation::clip::{AnimationClip, CubicTangents, InterpolatedValue, Interpolation, Keyframes, Track, TrackError};
-    pub use gizmo_animation::player::AnimationPlayer as TransformAnimationPlayer;
-    pub use gizmo_animation::system::{apply_interpolated, transform_animation_system};
+pub mod keyed_animation {
+    pub use gizmo_animation::clip::{
+        AnimationClip, CubicTangents, InterpolatedValue, Interpolation, Keyframes, PropertyKind, Track, TrackError,
+    };
+    pub use gizmo_animation::player::AnimationPlayer as KeyedAnimationPlayer;
+    pub use gizmo_animation::property::{PropertyError, PropertyRegistry, PropertyValue, PropertyVector};
+    pub use gizmo_animation::system::{apply_interpolated, keyed_animation_system};
+    pub use crate::property_animation::{animatable_properties, engine_properties};
 }
 /// Tweens — re-exported because the draw path drives them (`tween::tween_system`), the same way
 /// it drives skeletal animation.

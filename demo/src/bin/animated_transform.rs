@@ -1,8 +1,8 @@
 //! # Kodla kurulmuş animasyon
 //!
 //! Kodla kurulmuş bir animasyon: bir gezegen kare bir yörünge çiziyor, çevresinde bir uydu
-//! dönüyor, ve uydu bir yandan büyüyüp küçülüyor. Dosyadan hiçbir şey yüklenmiyor — dört eğri de
-//! elle yazılıyor. **Seride animasyon çalan ilk demo**, ve bunun bir gerekçesi var: animasyon
+//! dönüyor, ve uydu bir yandan büyüyüp küçülüyor, saydamlaşıp geri geliyor; gezegenin üstündeki
+//! lamba nabız gibi atıyor. Dosyadan hiçbir şey yüklenmiyor — altı eğri de elle yazılıyor. **Seride animasyon çalan ilk demo**, ve bunun bir gerekçesi var: animasyon
 //! demolarının çoğu deponun taşımadığı bir glTF istiyor, bu demo ise istemiyor.
 //!
 //! ## Animasyon modelinin şekli
@@ -11,7 +11,7 @@
 //! |---|---|
 //! | klip | [`AnimationClip`] + [`Track`] |
 //! | hedefleme | [`Track::target_name`] — düz **ad** dizesi, yolun karması **değil** |
-//! | ne animasyonlanır | yalnız üç kanal: [`Keyframes`]'in `Translation`/`Rotation`/`Scale`'i; herhangi bir alan animasyonlanamıyor |
+//! | ne animasyonlanır | dönüşümün üç kanalı (`Translation`/`Rotation`/`Scale`), ve kayıtlı her bileşen alanı: [`Track::property`] ile `"PointLight.intensity"`, `"Material.albedo.w"` — motorun alanları `PropertyRegistry`'de, oyun kendininkini ekler |
 //! | çalıcı | [`AnimationPlayer`], tek klip — ağırlıklı düğümlerden kurulu bir karışım grafiği **yok** |
 //! | ara değer | [`Interpolation`]: `Linear` / `Step` / `CubicSpline` |
 //!
@@ -29,14 +29,23 @@
 //!
 //! Uydu hem dönüyor hem ölçekleniyor, yani tek bir hedefe iki kanal gerekiyor. `Keyframes` kanal
 //! başına bir varyant olduğu için iki kanal iki [`Track`] demek, ikisi de aynı `target_name`'i
-//! taşıyor. Demo dört izin dördünü de kuruyor.
+//! taşıyor. Demo dört dönüşüm izini kuruyor; üstüne iki **özellik izi**: lambanın
+//! `PointLight.intensity`'si (`"lamp"`, gezegenin çocuğu — adlı hedef, dönüşüm izi gibi çözülür)
+//! ve uydunun malzemesinin alfası, `Material.albedo.w` (yalnız o şerit; renk olduğu gibi kalır —
+//! malzeme saydam olmalı ki alfa görünsün).
 //!
 //! ## Kim sürüyor
 //!
 //! Motorun karesi: `advance_frame_clocks` (tween'lerle aynı saatle, hem çizilen hem penceresiz
-//! karede) her `TransformAnimationPlayer`'ı ilerletip izlerini dönüşümlere yazıyor. Demo hiçbir
-//! sistem eklemiyor. HUD, gezegenin yerel konumu ile dünya matrisinin aynı karede ne kadar ayrı
+//! karede) her `KeyedAnimationPlayer`'ı ilerletip izlerini dönüşümlere ve alanlara yazıyor. Demo
+//! hiçbir sistem eklemiyor. HUD, gezegenin yerel konumu ile dünya matrisinin aynı karede ne kadar ayrı
 //! olduğunu ölçmeyi sürdürüyor.
+//!
+//! ## Sınama
+//!
+//! `animated_transform --test` pencere açmaz: sahneyi meshsiz, malzemesiz kurar (penceresiz kare
+//! GPU istemez), `HeadlessFrames` ile 0,05 s'lik karelerle oynatır ve lambanın parlaklığını sabit
+//! karelerde eğrinin değeriyle, gezegenin yerini de çeviri iziyle karşılaştırır.
 //!
 //! ## Kontroller
 //!   * **Boşluk** — duraklat/sürdür · **1/2/3** — hız ×0,25 / ×1 / ×3
@@ -74,8 +83,15 @@ gizmo::core::impl_component!(Playback);
 const PLANET: &str = "planet";
 const ORBIT: &str = "orbit_controller";
 const SATELLITE: &str = "satellite";
+const LAMP: &str = "lamp";
+
+/// Lambanın parlaklık anahtarları, saniye başına bir: nabız.
+const PULSE: [f32; 5] = [0.5, 6.0, 0.5, 6.0, 0.5];
 
 fn main() {
+    if std::env::args().any(|a| a == "--test") {
+        gizmo::simple::run_self_test(self_test);
+    }
     App::<SimpleSceneState>::new("Gizmo Engine - Animated Transform", 1280, 720)
         .with_simple_scene(|scene, state| {
             let white = scene.asset_manager.create_white_texture(
@@ -112,11 +128,23 @@ fn main() {
                 // parametresi almıyor ve **2 birim** (köşeleri ±1), yani dört kat büyük olurdu;
                 // ölçek anahtarlarını bozmamak için küp elle kuruluyor.
                 Mesh::from_vertices(device, &cube_vertices(0.5), "animated_transform::sat"),
-                Material::new(white.clone()).with_pbr(Vec4::new(0.95, 0.55, 0.20, 1.0), 0.4, 0.0),
+                // Saydam: alfa izi (`Material.albedo.w`) ancak saydam bir malzemede görünür.
+                Material::new(white.clone()).with_pbr(Vec4::new(0.95, 0.55, 0.20, 1.0), 0.4, 0.0).with_transparent(true),
                 MeshRenderer::new(),
                 EntityName(SATELLITE.to_string()),
             ));
             scene.world.add_child(orbit, satellite);
+
+            // Gezegenin üstünde, onunla gezen lamba; parlaklığını klip sürüyor.
+            let lamp = scene.world.spawn_bundle(PointLightBundle {
+                position: Vec3::new(0.0, 0.9, 0.0),
+                color: Vec3::new(1.0, 0.8, 0.5),
+                intensity: PULSE[0],
+                radius: 4.0,
+                ..Default::default()
+            });
+            scene.world.add_component(lamp, EntityName(LAMP.to_string()));
+            scene.world.add_child(planet, lamp);
 
             let clip = Arc::new(build_clip());
             let duration = clip.duration();
@@ -191,10 +219,11 @@ fn main() {
         .expect("uygulama çalıştırılamadı");
 }
 
-/// Klibin dört eğrisi.
+/// Klibin altı eğrisi.
 ///
 /// Uydunun iki kanalı var (ölçek ve dönüş), yani iki ayrı [`Track`], ikisi de `"satellite"`'i
 /// hedefliyor. `Keyframes` kanal başına bir varyant olduğu için başka türlüsü zaten yazılamaz.
+/// Son ikisi özellik izi: lambanın parlaklığı ve uydu malzemesinin alfası.
 fn build_clip() -> AnimationClip {
     let quarter_turns = vec![
         Quat::IDENTITY,
@@ -252,8 +281,55 @@ fn build_clip() -> AnimationClip {
             Keyframes::Rotation(quarter_turns),
         )
         .expect("uydu dönüş izi geçerli"),
+        // Lamba nabız gibi atıyor: bir bileşen alanı, adıyla.
+        Track::property(LAMP, "PointLight.intensity", vec![0.0, 1.0, 2.0, 3.0, 4.0], Keyframes::Scalar(PULSE.to_vec()))
+            .expect("lamba izi geçerli"),
+        // Uydu saydamlaşıp geri geliyor: albedonun yalnız alfa şeridi.
+        Track::property(SATELLITE, "Material.albedo.w", vec![0.0, 2.0, 4.0], Keyframes::Scalar(vec![1.0, 0.25, 1.0]))
+            .expect("uydu alfa izi geçerli"),
     ];
     clip
+}
+
+/// `--test`: aynı hiyerarşi ve aynı klip, mesh ve malzeme olmadan (onlar GPU ister), penceresiz
+/// karelerle. Lambanın parlaklığı sabit karelerde eğrinin kendisi olmalı, gezegen de çeviri izinin
+/// dediği yerde. Malzemenin alfası burada sınanamaz — malzeme yok —; onu motorun kendi testleri
+/// (`advance_frame_clocks_animates_point_light_and_material`) tutuyor.
+fn self_test() -> bool {
+    let mut world = World::new();
+    gizmo::animation::register(&mut world);
+    let planet = world.spawn_bundle((Transform::new(Vec3::new(1.0, 0.0, 1.0)), GlobalTransform::default(), EntityName(PLANET.to_string())));
+    let lamp = world.spawn_bundle(PointLightBundle { position: Vec3::new(0.0, 0.9, 0.0), intensity: PULSE[0], ..Default::default() });
+    world.add_component(lamp, EntityName(LAMP.to_string()));
+    world.add_child(planet, lamp);
+    let clip = Arc::new(build_clip());
+    let mut player = AnimationPlayer::new().looping(true);
+    player.play(clip.clone());
+    world.add_component(planet, player);
+
+    let mut run = gizmo::simple::HeadlessFrames::new(world);
+    let mut ok = true;
+    for frame in 1..=60 {
+        run.frame(0.05, |_, _, _, _| {});
+        if frame % 10 != 0 {
+            continue;
+        }
+        let t = frame as f32 * 0.05;
+        let want = match clip.tracks.iter().find(|tr| tr.property.is_some()).map(|tr| tr.sample(t)) {
+            Some(gizmo::animation::clip::InterpolatedValue::Scalar(v)) => v,
+            _ => f32::NAN,
+        };
+        let got = run.world.get::<PointLight>(lamp).map_or(f32::NAN, |l| l.intensity);
+        let at = run.world.get::<Transform>(planet).map_or(Vec3::NAN, |p| p.position);
+        let want_at = match clip.tracks[0].sample(t) {
+            gizmo::animation::clip::InterpolatedValue::Translation(v) => v,
+            _ => Vec3::NAN,
+        };
+        let good = (got - want).abs() < 1.0e-3 && (at - want_at).length() < 1.0e-3;
+        println!("animated_transform --test: kare {frame} ({t:.2} s) lamba {got:.4} (eğri {want:.4}), gezegen {at:?} → {}", if good { "tamam" } else { "YANLIŞ" });
+        ok &= good;
+    }
+    ok
 }
 
 /// Duraklatma, hız, ve defterin doldurulması.

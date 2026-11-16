@@ -3,16 +3,18 @@ use crate::clip::AnimationClip;
 use std::collections::HashMap;
 use gizmo_core::entity::Entity;
 
-/// Component that drives an [`AnimationClip`] of transform tracks over time — Godot's
-/// `AnimationPlayer` for a node's position, rotation and scale: a door that swings, a platform
-/// that rides, a camera that sweeps through a cutscene.
+/// Component that drives an [`AnimationClip`] of keyed tracks over time — Godot's
+/// `AnimationPlayer` for a node's position, rotation and scale and for its components' fields: a
+/// door that swings, a platform that rides, a camera that sweeps through a cutscene, a lamp that
+/// pulses, a sprite that fades.
 ///
 /// Attach this to the root entity of a hierarchy; the engine's frame
-/// ([`transform_animation_system`](crate::system::transform_animation_system)) advances
+/// ([`keyed_animation_system`](crate::system::keyed_animation_system)) advances
 /// [`Self::elapsed_time`] while it plays, resolves each track's `target_name` to the root (an empty
 /// name) or a named entity below it (caching the result in [`Self::target_entities`]), and writes the
-/// sampled values to their transforms. Saved with a scene, the clip with it; the editor's timeline
-/// keys it.
+/// sampled values to their transforms — and a property track's to the component field it names
+/// (see [`PropertyRegistry`](crate::property::PropertyRegistry)). Saved with a scene, the clip
+/// with it; the editor's timeline keys it.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 #[non_exhaustive]
@@ -65,7 +67,7 @@ impl AnimationPlayer {
             clip = %clip.name,
             tracks = clip.tracks.len(),
             duration = clip.duration(),
-            "[Animation] starting transform-track clip"
+            "[Animation] starting keyed-track clip"
         );
         self.clip = Some(clip);
         self.elapsed_time = 0.0;

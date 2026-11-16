@@ -87,12 +87,12 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         unsafe { world.query_unchecked::<&mut gizmo_renderer::components::AnimationPlayer>() };
     let Some(mut player) = players.get_mut(entity) else {
         // No skin to play: its keyed transforms, if it has a player for them.
-        if crate::transform_timeline::ui_transform_animation(ui, world, state, entity) {
+        if crate::keyed_timeline::ui_keyed_animation(ui, world, state, entity) {
             return;
         }
         empty(ui, "Seçili varlıkta animasyon oynatıcısı yok.");
         if ui.button("＋ Dönüşüm animasyonu").on_hover_text("Bu varlığın konumunu, dönüşünü ve ölçeğini anahtarla").clicked() {
-            state.add_component_request = Some((entity, "TransformAnimationPlayer".into()));
+            state.add_component_request = Some((entity, "KeyedAnimationPlayer".into()));
         }
         return;
     };

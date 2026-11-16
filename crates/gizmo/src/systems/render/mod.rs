@@ -1041,8 +1041,14 @@ pub fn advance_frame_clocks(world: &mut World) {
     let tween_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
     crate::renderer::tween::tween_system(world, tween_dt);
     crate::renderer::components::color_tween_system(world, tween_dt);
-    // Keyed transforms — a door, a platform, a cutscene camera — on the same clock as the tweens.
-    crate::renderer::transform_animation::transform_animation_system(world, tween_dt);
+    // Keyed transforms — a door, a platform, a cutscene camera — and keyed fields — a lamp that
+    // pulses, a sprite that fades — on the same clock as the tweens, AFTER the colour tweens: a
+    // keyed track wins over a colour tween on the same field, deliberately. The registry of
+    // animatable fields is made (with the engine's in it) before the driver looks for it. No
+    // turbofish here on purpose: the draw-read scan in `render_world` reads `::<` calls in this
+    // directory as reads the draw makes, and the registry is the game world's alone.
+    crate::renderer::property_animation::animatable_properties(world);
+    crate::renderer::keyed_animation::keyed_animation_system(world, tween_dt);
     typewriter_system(world, tween_dt);
     // The trauma wearing off is game state (`CameraShake::trauma`); the shaken view is the draw's.
     advance_camera_shakes(world, tween_dt);
@@ -2030,14 +2036,14 @@ pub use shared::{
 mod frame_split_tests;
 
 #[cfg(test)]
-mod transform_animation_tests {
+mod keyed_animation_tests {
     //! The transform-track player, driven by the engine's frame (`advance_frame_clocks`).
 
     use super::advance_frame_clocks;
     use crate::core::World;
     use crate::math::Vec3;
     use crate::physics::components::Transform;
-    use crate::renderer::transform_animation::{AnimationClip, Keyframes, TransformAnimationPlayer, Track};
+    use crate::renderer::keyed_animation::{AnimationClip, Keyframes, KeyedAnimationPlayer, Track};
 
     /// A door sliding 10 m along x over a second, on its own entity (an empty target name).
     fn door() -> (World, gizmo_core::Entity) {
@@ -2049,7 +2055,7 @@ mod transform_animation_tests {
         let mut clip = AnimationClip::default();
         clip.name = "open".into();
         clip.tracks.push(track);
-        let mut player = TransformAnimationPlayer::new().looping(false);
+        let mut player = KeyedAnimationPlayer::new().looping(false);
         player.play(std::sync::Arc::new(clip));
         let e = world.spawn();
         world.add_component(e, Transform::new(Vec3::ZERO));
@@ -2071,13 +2077,13 @@ mod transform_animation_tests {
             advance_frame_clocks(&mut world);
         }
         assert!((x(&world, door) - 2.0).abs() < 1.0e-4, "four frames of 0.05 s: {}", x(&world, door));
-        if let Some(mut p) = world.query_mut::<&mut TransformAnimationPlayer>().get_mut(door) {
+        if let Some(mut p) = world.query_mut::<&mut KeyedAnimationPlayer>().get_mut(door) {
             p.pause();
             p.elapsed_time = 0.75;
         }
         advance_frame_clocks(&mut world);
         assert!((x(&world, door) - 7.5).abs() < 1.0e-4, "scrubbed to 0.75 s: {}", x(&world, door));
-        assert_eq!(world.get::<TransformAnimationPlayer>(door).map(|p| p.elapsed_time), Some(0.75), "paused, it stays");
+        assert_eq!(world.get::<KeyedAnimationPlayer>(door).map(|p| p.elapsed_time), Some(0.75), "paused, it stays");
     }
 
     /// **A scene keeps the clip and the playhead.** Saved and reopened, the door plays on from where
@@ -2091,15 +2097,158 @@ mod transform_animation_tests {
         }
         let registry = crate::full_scene_registry();
         let text = crate::scene::SceneData::of_entities(&world, vec![door], &registry).to_ron_string().expect("saves");
+        // Saved under the player's own name, the one the scene registry and the studio register.
+        assert!(text.contains("\"KeyedAnimationPlayer\""), "saved as `KeyedAnimationPlayer`: {text}");
         let mut reopened = World::new();
         let mut time = gizmo_core::time::Time::new();
         time.update(0.05);
         reopened.insert_resource(time);
         let ids = crate::scene::SceneData::from_ron_str(&text).expect("reads").instantiate(&mut reopened, &registry);
         let copy = *ids.get(&door.id()).expect("the door came back");
-        assert_eq!(reopened.get::<TransformAnimationPlayer>(copy).map(|p| (p.elapsed_time * 100.0).round()), Some(20.0));
+        assert_eq!(reopened.get::<KeyedAnimationPlayer>(copy).map(|p| (p.elapsed_time * 100.0).round()), Some(20.0));
         advance_frame_clocks(&mut reopened);
         assert!((x(&reopened, copy) - 2.5).abs() < 1.0e-4, "it plays on from 0.2 s: {}", x(&reopened, copy));
+    }
+
+    // ── Property tracks: a keyed field of a component, through the engine's registry. ──
+
+    /// A material over an empty bind group on wgpu's noop backend: no GPU, runs in CI.
+    pub(crate) fn noop_material() -> crate::renderer::components::Material {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::NOOP,
+            backend_options: wgpu::BackendOptions {
+                noop: wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a noop device");
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: None, entries: &[] });
+        crate::renderer::components::Material::new(std::sync::Arc::new(
+            device.create_bind_group(&wgpu::BindGroupDescriptor { label: None, layout: &layout, entries: &[] }),
+        ))
+    }
+
+    /// A world on a 0.05 s clock with one entity playing `tracks` (looping off) from its own player.
+    pub(crate) fn playing(tracks: Vec<Track>) -> (World, gizmo_core::Entity) {
+        let mut world = World::new();
+        let mut time = gizmo_core::time::Time::new();
+        time.update(0.05);
+        world.insert_resource(time);
+        let mut clip = AnimationClip::default();
+        clip.name = "keyed".into();
+        clip.tracks = tracks;
+        let mut player = KeyedAnimationPlayer::new().looping(false);
+        player.play(std::sync::Arc::new(clip));
+        let e = world.spawn();
+        world.add_component(e, player);
+        (world, e)
+    }
+
+    pub(crate) fn scalar(property: &str, from: f32, to: f32) -> Track {
+        Track::property("", property, vec![0.0, 1.0], Keyframes::Scalar(vec![from, to])).expect("valid")
+    }
+
+    /// **The frame animates a light and a material** — with no registry made by the game: the frame
+    /// makes it, with the engine's fields in it. Four frames of 0.05 s are 0.2 s of the clip.
+    #[test]
+    fn advance_frame_clocks_animates_point_light_and_material() {
+        use crate::renderer::components::{Material, PointLight};
+        let (mut world, e) = playing(vec![scalar("PointLight.intensity", 0.0, 10.0), scalar("Material.albedo.w", 1.0, 0.0)]);
+        world.add_component(e, PointLight::new(Vec3::ONE, 1.0, 5.0));
+        world.add_component(e, noop_material());
+        for _ in 0..4 {
+            advance_frame_clocks(&mut world);
+        }
+        let intensity = world.get::<PointLight>(e).unwrap().intensity;
+        assert!((intensity - 2.0).abs() < 1.0e-4, "{intensity}");
+        let m = world.get::<Material>(e).unwrap();
+        assert!((m.albedo.w - 0.8).abs() < 1.0e-4, "{}", m.albedo.w);
+        assert_eq!(m.albedo.x, 1.0, "the alpha lane alone");
+    }
+
+    /// **A keyed track wins over a `ColorTween` on the same field** — the driver runs after the
+    /// colour tweens, deliberately: what an animator keyed is what is drawn.
+    #[test]
+    fn keyed_track_wins_over_color_tween_on_sprite_color() {
+        use crate::math::{Vec2, Vec4};
+        use crate::renderer::components::{ColorTween, Sprite};
+        let keyed = Vec4::new(0.2, 0.4, 0.6, 1.0);
+        let track = Track::property("", "Sprite.color", vec![0.0, 1.0], Keyframes::Vector4(vec![keyed, keyed])).expect("valid");
+        let (mut world, e) = playing(vec![track]);
+        world.add_component(e, Sprite::world(crate::renderer::sprite::SpriteImageId::placeholder(0), Vec2::ONE));
+        world.add_component(e, ColorTween::to(Vec4::ZERO, 1.0));
+        for _ in 0..3 {
+            advance_frame_clocks(&mut world);
+            assert_eq!(world.get::<Sprite>(e).unwrap().color, keyed);
+        }
+    }
+
+    /// **The saved description follows the animated material**: `sync_material_descriptions`, after
+    /// the clocks, writes the keyed value into the `MaterialDesc`, so a save stores the value at the
+    /// playhead rather than fighting it.
+    #[test]
+    fn material_desc_follows_animated_material() {
+        use crate::renderer::components::MaterialDesc;
+        use crate::renderer::material_sync::sync_material_descriptions;
+        let (mut world, e) = playing(vec![scalar("Material.roughness", 0.0, 1.0)]);
+        world.add_component(e, noop_material());
+        sync_material_descriptions(&mut world);
+        for _ in 0..4 {
+            advance_frame_clocks(&mut world);
+            sync_material_descriptions(&mut world);
+        }
+        let desc = world.get::<MaterialDesc>(e).expect("described").roughness;
+        assert!((desc - 0.2).abs() < 1.0e-4, "{desc}");
+    }
+
+    /// **A scene keeps a clip that mixes a transform track and a property track**, and the reopened
+    /// one plays on bit for bit: the same frame after it, the same position and intensity.
+    #[cfg(feature = "scene")]
+    #[test]
+    fn a_scene_keeps_a_clip_with_a_property_track() {
+        use crate::renderer::components::PointLight;
+        let slide = Track::new("", vec![0.0, 1.0], Keyframes::Translation(vec![Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)])).expect("valid");
+        let (mut world, e) = playing(vec![slide, scalar("PointLight.intensity", 1.0, 3.0)]);
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        world.add_component(e, PointLight::new(Vec3::ONE, 1.0, 5.0));
+        for _ in 0..3 {
+            advance_frame_clocks(&mut world);
+        }
+        let registry = crate::full_scene_registry();
+        let text = crate::scene::SceneData::of_entities(&world, vec![e], &registry).to_ron_string().expect("saves");
+        assert!(text.contains("PointLight.intensity"), "the property track is in the file");
+        let mut reopened = World::new();
+        let mut time = gizmo_core::time::Time::new();
+        time.update(0.05);
+        reopened.insert_resource(time);
+        let ids = crate::scene::SceneData::from_ron_str(&text).expect("reads").instantiate(&mut reopened, &registry);
+        let copy = *ids.get(&e.id()).expect("it came back");
+        advance_frame_clocks(&mut world);
+        advance_frame_clocks(&mut reopened);
+        let bits = |w: &World, id| {
+            (w.get::<Transform>(id).unwrap().position.x.to_bits(), w.get::<PointLight>(id).unwrap().intensity.to_bits())
+        };
+        assert_eq!(bits(&reopened, copy), bits(&world, e));
+        assert!((world.get::<PointLight>(e).unwrap().intensity - 1.4).abs() < 1.0e-4);
+    }
+
+    /// **A headless frame animates a property track** too: `HeadlessFrames` runs the same clocks, so
+    /// a game's `--test` sees what its window would.
+    #[cfg(all(feature = "window", feature = "physics"))]
+    #[test]
+    fn a_headless_frame_advances_a_property_track() {
+        use crate::renderer::components::PointLight;
+        let (mut world, e) = playing(vec![scalar("PointLight.intensity", 0.0, 10.0)]);
+        world.remove_resource::<gizmo_core::time::Time>();
+        world.add_component(e, PointLight::new(Vec3::ONE, 1.0, 5.0));
+        let mut run = crate::simple::HeadlessFrames::new(world);
+        for _ in 0..5 {
+            run.frame(0.05, |_, _, _, _| {});
+        }
+        let intensity = run.world.get::<PointLight>(e).unwrap().intensity;
+        assert!((intensity - 2.5).abs() < 1.0e-3, "five frames of 0.05 s: {intensity}");
     }
 }
 

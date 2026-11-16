@@ -1,6 +1,6 @@
-use gizmo_math::{Quat, Vec3};
+use gizmo_math::{Quat, Vec2, Vec3, Vec4};
 
-use crate::hermite::{hermite_quat, hermite_vec3};
+use crate::hermite::{hermite, hermite_quat, hermite_vec3};
 
 /// Error returned when constructing a [`Track`] with inconsistent keyframe data.
 ///
@@ -30,6 +30,19 @@ pub enum TrackError {
         /// Index of the timestamp that was smaller than its predecessor.
         index: usize,
     },
+    /// The keyframes are of the wrong kind for the track: a transform track ([`Track::new`])
+    /// was given value keyframes, or a property track ([`Track::property`]) was given
+    /// translation/rotation/scale ones.
+    ChannelMismatch {
+        /// The property the track was to animate, `None` for a transform track.
+        property: Option<String>,
+    },
+    /// A property track's name is not `"Component.field"` (optionally `"Component.field.lane"`):
+    /// it has no dot, or an empty part.
+    InvalidPropertyName {
+        /// The name as given.
+        name: String,
+    },
 }
 
 impl std::fmt::Display for TrackError {
@@ -46,17 +59,56 @@ impl std::fmt::Display for TrackError {
                 f,
                 "keyframe timestamp at index {index} is not in ascending order"
             ),
+            TrackError::ChannelMismatch { property: None } => {
+                write!(f, "a transform track takes translation, rotation or scale keyframes, not value keyframes")
+            }
+            TrackError::ChannelMismatch { property: Some(p) } => write!(
+                f,
+                "property track `{p}` takes scalar or vector keyframes, not translation, rotation or scale ones"
+            ),
+            TrackError::InvalidPropertyName { name } => {
+                write!(f, "property name `{name}` is not of the form `Component.field`")
+            }
         }
     }
 }
 
 impl std::error::Error for TrackError {}
 
-/// The keyframe data for a [`Track`], one variant per animated transform channel.
+/// What a value channel holds: the kind of a property's value, and of the [`Keyframes`] that
+/// animate it. The transform channels (translation, rotation, scale) have no kind — they are
+/// not properties.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum PropertyKind {
+    /// One `f32`.
+    Scalar,
+    /// A `Vec2`.
+    Vector2,
+    /// A `Vec3`.
+    Vector3,
+    /// A `Vec4` (a colour with alpha, say).
+    Vector4,
+}
+
+impl std::fmt::Display for PropertyKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            PropertyKind::Scalar => "scalar",
+            PropertyKind::Vector2 => "vector2",
+            PropertyKind::Vector3 => "vector3",
+            PropertyKind::Vector4 => "vector4",
+        })
+    }
+}
+
+/// The keyframe data for a [`Track`]: the transform channels, and the value channels a
+/// property track animates.
 ///
-/// Each vector is parallel to [`Track::keyframe_timestamps`]. Scale is a
-/// first-class channel: it is sampled and applied to the target's `Transform`
-/// just like translation and rotation.
+/// Each vector is parallel to [`Track::keyframe_timestamps`]. Translation, rotation and scale
+/// are written to the target's `Transform`; scale is a first-class channel, sampled and
+/// applied just like the other two. `Scalar` … `Vector4` belong to a property track
+/// ([`Track::property`]), whose value goes to the component field it names.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Keyframes {
@@ -66,6 +118,14 @@ pub enum Keyframes {
     Rotation(Vec<Quat>),
     /// Scale keyframes (linearly interpolated).
     Scale(Vec<Vec3>),
+    /// One-number property keyframes (linearly interpolated).
+    Scalar(Vec<f32>),
+    /// Two-number property keyframes (linearly interpolated).
+    Vector2(Vec<Vec2>),
+    /// Three-number property keyframes (linearly interpolated).
+    Vector3(Vec<Vec3>),
+    /// Four-number property keyframes — a colour, say (linearly interpolated).
+    Vector4(Vec<Vec4>),
 }
 
 impl Keyframes {
@@ -76,6 +136,33 @@ impl Keyframes {
             Keyframes::Translation(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Translation(*x)),
             Keyframes::Rotation(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Rotation(*x)),
             Keyframes::Scale(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Scale(*x)),
+            Keyframes::Scalar(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Scalar(*x)),
+            Keyframes::Vector2(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Vector2(*x)),
+            Keyframes::Vector3(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Vector3(*x)),
+            Keyframes::Vector4(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Vector4(*x)),
+        }
+    }
+
+    /// The kind of value this channel holds, `None` for a transform channel.
+    #[must_use]
+    pub fn kind(&self) -> Option<PropertyKind> {
+        match self {
+            Keyframes::Translation(_) | Keyframes::Rotation(_) | Keyframes::Scale(_) => None,
+            Keyframes::Scalar(_) => Some(PropertyKind::Scalar),
+            Keyframes::Vector2(_) => Some(PropertyKind::Vector2),
+            Keyframes::Vector3(_) => Some(PropertyKind::Vector3),
+            Keyframes::Vector4(_) => Some(PropertyKind::Vector4),
+        }
+    }
+
+    /// A value channel of `kind` with no keys.
+    #[must_use]
+    pub fn empty(kind: PropertyKind) -> Self {
+        match kind {
+            PropertyKind::Scalar => Keyframes::Scalar(Vec::new()),
+            PropertyKind::Vector2 => Keyframes::Vector2(Vec::new()),
+            PropertyKind::Vector3 => Keyframes::Vector3(Vec::new()),
+            PropertyKind::Vector4 => Keyframes::Vector4(Vec::new()),
         }
     }
 
@@ -90,6 +177,22 @@ impl Keyframes {
                 v.insert(index, x);
                 true
             }
+            (Keyframes::Scalar(v), InterpolatedValue::Scalar(x)) => {
+                v.insert(index, x);
+                true
+            }
+            (Keyframes::Vector2(v), InterpolatedValue::Vector2(x)) => {
+                v.insert(index, x);
+                true
+            }
+            (Keyframes::Vector3(v), InterpolatedValue::Vector3(x)) => {
+                v.insert(index, x);
+                true
+            }
+            (Keyframes::Vector4(v), InterpolatedValue::Vector4(x)) => {
+                v.insert(index, x);
+                true
+            }
             _ => false,
         }
     }
@@ -101,18 +204,28 @@ impl Keyframes {
                 v.get_mut(index).map(|slot| *slot = x).is_some()
             }
             (Keyframes::Rotation(v), InterpolatedValue::Rotation(x)) => v.get_mut(index).map(|slot| *slot = x).is_some(),
+            (Keyframes::Scalar(v), InterpolatedValue::Scalar(x)) => v.get_mut(index).map(|slot| *slot = x).is_some(),
+            (Keyframes::Vector2(v), InterpolatedValue::Vector2(x)) => v.get_mut(index).map(|slot| *slot = x).is_some(),
+            (Keyframes::Vector3(v), InterpolatedValue::Vector3(x)) => v.get_mut(index).map(|slot| *slot = x).is_some(),
+            (Keyframes::Vector4(v), InterpolatedValue::Vector4(x)) => v.get_mut(index).map(|slot| *slot = x).is_some(),
             _ => false,
         }
     }
 
     fn remove(&mut self, index: usize) {
+        // Bounds-checked like every other access here: the fields are public, so a channel can be
+        // shorter than the track's timestamps.
+        fn take<T>(v: &mut Vec<T>, index: usize) {
+            if index < v.len() {
+                v.remove(index);
+            }
+        }
         match self {
-            Keyframes::Translation(v) | Keyframes::Scale(v) => {
-                v.remove(index);
-            }
-            Keyframes::Rotation(v) => {
-                v.remove(index);
-            }
+            Keyframes::Translation(v) | Keyframes::Scale(v) | Keyframes::Vector3(v) => take(v, index),
+            Keyframes::Rotation(v) => take(v, index),
+            Keyframes::Scalar(v) => take(v, index),
+            Keyframes::Vector2(v) => take(v, index),
+            Keyframes::Vector4(v) => take(v, index),
         }
     }
 
@@ -122,6 +235,10 @@ impl Keyframes {
             Keyframes::Translation(_) => InterpolatedValue::Translation(Vec3::ZERO),
             Keyframes::Rotation(_) => InterpolatedValue::Rotation(Quat::from_xyzw(0.0, 0.0, 0.0, 0.0)),
             Keyframes::Scale(_) => InterpolatedValue::Scale(Vec3::ZERO),
+            Keyframes::Scalar(_) => InterpolatedValue::Scalar(0.0),
+            Keyframes::Vector2(_) => InterpolatedValue::Vector2(Vec2::ZERO),
+            Keyframes::Vector3(_) => InterpolatedValue::Vector3(Vec3::ZERO),
+            Keyframes::Vector4(_) => InterpolatedValue::Vector4(Vec4::ZERO),
         }
     }
 
@@ -131,6 +248,10 @@ impl Keyframes {
             Keyframes::Translation(v) => v.len(),
             Keyframes::Rotation(v) => v.len(),
             Keyframes::Scale(v) => v.len(),
+            Keyframes::Scalar(v) => v.len(),
+            Keyframes::Vector2(v) => v.len(),
+            Keyframes::Vector3(v) => v.len(),
+            Keyframes::Vector4(v) => v.len(),
         }
     }
 
@@ -169,12 +290,20 @@ pub struct CubicTangents {
     pub out_tangents: Keyframes,
 }
 
-/// A single animated channel targeting one named entity.
+/// A single animated channel targeting one named entity: its transform ([`Track::new`]), or
+/// one property of one of its components ([`Track::property`]).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Track {
     /// Name of the entity this track animates (resolved at runtime).
     pub target_name: String,
+    /// The property this track animates — `"PointLight.intensity"`, `"Material.albedo.w"` — or
+    /// `None` for a transform track. The name is `"<component>.<field>[.<lane>]"`, the component
+    /// named as the scene registry names it; the driver looks it up in the world's
+    /// `PropertyRegistry` (`gizmo_animation::property`). Absent from a saved transform track,
+    /// so a clip saved before property tracks existed loads unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub property: Option<String>,
     /// Keyframe times in seconds; must be sorted ascending and match `keyframes` in length.
     pub keyframe_timestamps: Vec<f32>,
     /// The keyframe values for this track.
@@ -243,8 +372,8 @@ impl Track {
         Some(landed)
     }
 
-    /// Creates a new linearly-interpolated track targeting `target_name` with the
-    /// given keyframe timestamps and values.
+    /// Creates a new linearly-interpolated transform track targeting `target_name` with the
+    /// given keyframe timestamps and translation, rotation or scale values.
     ///
     /// # Errors
     ///
@@ -253,8 +382,52 @@ impl Track {
     /// or if the timestamps are not sorted in ascending order. Enforcing these
     /// invariants here guarantees that [`Track::sample`] cannot panic or emit
     /// `NaN` values for a track built through this constructor.
+    /// [`TrackError::ChannelMismatch`] for value keyframes, which belong to [`Track::property`].
     pub fn new(
         target_name: impl Into<String>,
+        keyframe_timestamps: Vec<f32>,
+        keyframes: Keyframes,
+    ) -> Result<Self, TrackError> {
+        if keyframes.kind().is_some() {
+            return Err(TrackError::ChannelMismatch { property: None });
+        }
+        Self::checked(target_name.into(), None, keyframe_timestamps, keyframes)
+    }
+
+    /// Creates a new linearly-interpolated property track: `property` (`"PointLight.intensity"`,
+    /// `"Sprite.color.w"`) of the entity `target_name` names, keyed with scalar or vector values.
+    ///
+    /// Nothing here knows which properties exist — the driver looks the name up in the world's
+    /// `PropertyRegistry` when it plays, and skips (warning once) a name it does not know or one
+    /// whose kind is not the keyframes' kind.
+    ///
+    /// # Errors
+    ///
+    /// Everything [`Track::new`] checks about the timestamps; [`TrackError::ChannelMismatch`] for
+    /// translation, rotation or scale keyframes; [`TrackError::InvalidPropertyName`] for a name
+    /// that is not `"Component.field"`.
+    pub fn property(
+        target_name: impl Into<String>,
+        property: impl Into<String>,
+        keyframe_timestamps: Vec<f32>,
+        keyframes: Keyframes,
+    ) -> Result<Self, TrackError> {
+        let property = property.into();
+        let mut parts = property.split('.');
+        let well_formed = parts.clone().count() >= 2 && parts.all(|p| !p.is_empty());
+        if !well_formed {
+            return Err(TrackError::InvalidPropertyName { name: property });
+        }
+        if keyframes.kind().is_none() {
+            return Err(TrackError::ChannelMismatch { property: Some(property) });
+        }
+        Self::checked(target_name.into(), Some(property), keyframe_timestamps, keyframes)
+    }
+
+    /// The timestamp checks both constructors share.
+    fn checked(
+        target_name: String,
+        property: Option<String>,
         keyframe_timestamps: Vec<f32>,
         keyframes: Keyframes,
     ) -> Result<Self, TrackError> {
@@ -278,7 +451,8 @@ impl Track {
         }
 
         Ok(Self {
-            target_name: target_name.into(),
+            target_name,
+            property,
             keyframe_timestamps,
             keyframes,
             interpolation: Interpolation::Linear,
@@ -383,6 +557,9 @@ impl Track {
                 Some(&val) => InterpolatedValue::Scale(val),
                 None => InterpolatedValue::None,
             },
+            Keyframes::Scalar(_) | Keyframes::Vector2(_) | Keyframes::Vector3(_) | Keyframes::Vector4(_) => {
+                self.keyframes.value(index)
+            }
         }
     }
 
@@ -400,6 +577,25 @@ impl Track {
             },
             Keyframes::Scale(v) => match (v.get(idx0), v.get(idx1)) {
                 (Some(&v0), Some(&v1)) => InterpolatedValue::Scale(v0.lerp(v1, factor)),
+                _ => InterpolatedValue::None,
+            },
+            // The value channels blend as `v0 + (v1 - v0) * t`, not glam's `lerp`
+            // (`v0 * (1 - t) + v1 * t`): a segment between two equal keys then holds the key
+            // exactly, so a field held at a keyed value reads back as that value.
+            Keyframes::Scalar(v) => match (v.get(idx0), v.get(idx1)) {
+                (Some(&v0), Some(&v1)) => InterpolatedValue::Scalar(v0 + (v1 - v0) * factor),
+                _ => InterpolatedValue::None,
+            },
+            Keyframes::Vector2(v) => match (v.get(idx0), v.get(idx1)) {
+                (Some(&v0), Some(&v1)) => InterpolatedValue::Vector2(v0 + (v1 - v0) * factor),
+                _ => InterpolatedValue::None,
+            },
+            Keyframes::Vector3(v) => match (v.get(idx0), v.get(idx1)) {
+                (Some(&v0), Some(&v1)) => InterpolatedValue::Vector3(v0 + (v1 - v0) * factor),
+                _ => InterpolatedValue::None,
+            },
+            Keyframes::Vector4(v) => match (v.get(idx0), v.get(idx1)) {
+                (Some(&v0), Some(&v1)) => InterpolatedValue::Vector4(v0 + (v1 - v0) * factor),
                 _ => InterpolatedValue::None,
             },
         }
@@ -447,15 +643,42 @@ impl Track {
                     _ => self.interpolate_linear(idx0, idx1, factor),
                 }
             }
+            (Keyframes::Scalar(v), Keyframes::Scalar(in_t), Keyframes::Scalar(out_t)) => {
+                Self::cubic_value(v, in_t, out_t, idx0, idx1, factor, segment)
+                    .map_or_else(|| self.interpolate_linear(idx0, idx1, factor), InterpolatedValue::Scalar)
+            }
+            (Keyframes::Vector2(v), Keyframes::Vector2(in_t), Keyframes::Vector2(out_t)) => {
+                Self::cubic_value(v, in_t, out_t, idx0, idx1, factor, segment)
+                    .map_or_else(|| self.interpolate_linear(idx0, idx1, factor), InterpolatedValue::Vector2)
+            }
+            (Keyframes::Vector3(v), Keyframes::Vector3(in_t), Keyframes::Vector3(out_t)) => {
+                Self::cubic_value(v, in_t, out_t, idx0, idx1, factor, segment)
+                    .map_or_else(|| self.interpolate_linear(idx0, idx1, factor), InterpolatedValue::Vector3)
+            }
+            (Keyframes::Vector4(v), Keyframes::Vector4(in_t), Keyframes::Vector4(out_t)) => {
+                Self::cubic_value(v, in_t, out_t, idx0, idx1, factor, segment)
+                    .map_or_else(|| self.interpolate_linear(idx0, idx1, factor), InterpolatedValue::Vector4)
+            }
             // Mismatched value/tangent variants: fall back to linear rather than panic.
             _ => self.interpolate_linear(idx0, idx1, factor),
         }
+    }
+
+    /// One value channel's cubic segment, through the generic Hermite basis; `None` when a value
+    /// or tangent is missing (the caller falls back to linear).
+    fn cubic_value<T>(v: &[T], in_t: &[T], out_t: &[T], idx0: usize, idx1: usize, factor: f32, segment: f32) -> Option<T>
+    where
+        T: Copy + std::ops::Add<Output = T> + std::ops::Mul<f32, Output = T>,
+    {
+        let (p0, m0, p1, m1) = (*v.get(idx0)?, *out_t.get(idx0)?, *v.get(idx1)?, *in_t.get(idx1)?);
+        Some(hermite(p0, m0 * segment, p1, m1 * segment, factor))
     }
 }
 
 /// A value sampled from a [`Track`] at a specific time.
 ///
-/// The variant indicates which transform channel the value belongs to.
+/// The variant is the channel the value belongs to: a transform channel (translation,
+/// rotation, scale) or a value channel (scalar, vector), as [`Keyframes`] has them.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[non_exhaustive]
 pub enum InterpolatedValue {
@@ -467,6 +690,31 @@ pub enum InterpolatedValue {
     Rotation(Quat),
     /// A sampled scale.
     Scale(Vec3),
+    /// A sampled one-number property value.
+    Scalar(f32),
+    /// A sampled two-number property value.
+    Vector2(Vec2),
+    /// A sampled three-number property value.
+    Vector3(Vec3),
+    /// A sampled four-number property value.
+    Vector4(Vec4),
+}
+
+impl InterpolatedValue {
+    /// The kind of a value-channel sample, `None` for a transform channel or no value.
+    #[must_use]
+    pub fn kind(&self) -> Option<PropertyKind> {
+        match self {
+            InterpolatedValue::Scalar(_) => Some(PropertyKind::Scalar),
+            InterpolatedValue::Vector2(_) => Some(PropertyKind::Vector2),
+            InterpolatedValue::Vector3(_) => Some(PropertyKind::Vector3),
+            InterpolatedValue::Vector4(_) => Some(PropertyKind::Vector4),
+            InterpolatedValue::None
+            | InterpolatedValue::Translation(_)
+            | InterpolatedValue::Rotation(_)
+            | InterpolatedValue::Scale(_) => None,
+        }
+    }
 }
 
 /// Represents an animation sequence: a named collection of [`Track`]s.
@@ -810,6 +1058,168 @@ mod tests {
 }
 
 
+/// Value channels (property tracks): sampling, the constructors' checks, editing and the saved form.
+#[cfg(test)]
+mod value_channels {
+    use super::*;
+
+    fn scalar(interp: Interpolation) -> Track {
+        Track::property("", "PointLight.intensity", vec![0.0, 2.0], Keyframes::Scalar(vec![1.0, 5.0]))
+            .expect("valid")
+            .with_interpolation(interp)
+    }
+
+    /// Linear is a lerp, step holds the previous key, and the ends clamp.
+    #[test]
+    fn scalar_track_lerps_and_steps() {
+        let t = scalar(Interpolation::Linear);
+        assert_eq!(t.sample(0.5), InterpolatedValue::Scalar(2.0));
+        assert_eq!(t.sample(-1.0), InterpolatedValue::Scalar(1.0));
+        assert_eq!(t.sample(9.0), InterpolatedValue::Scalar(5.0));
+        assert_eq!(scalar(Interpolation::Step).sample(1.9), InterpolatedValue::Scalar(1.0));
+        let v = Track::property("", "Sprite.size", vec![0.0, 1.0], Keyframes::Vector2(vec![Vec2::ZERO, Vec2::new(2.0, 4.0)]))
+            .expect("valid");
+        assert_eq!(v.sample(0.25), InterpolatedValue::Vector2(Vec2::new(0.5, 1.0)));
+        // Between two equal keys the key itself, exactly (glam's `lerp` would give 0.19999999).
+        let c = Vec4::new(0.2, 0.4, 0.6, 1.0);
+        let held = Track::property("", "Sprite.color", vec![0.0, 1.0], Keyframes::Vector4(vec![c, c])).expect("valid");
+        assert_eq!(held.sample(0.37), InterpolatedValue::Vector4(c));
+    }
+
+    /// A cubic `Vector4` segment is the closed-form Hermite polynomial, lane by lane, with the
+    /// tangents scaled by the segment's length (glTF's convention, as the transform channels).
+    #[test]
+    fn vector4_cubic_matches_closed_form_hermite() {
+        let (p0, p1) = (Vec4::new(0.0, 1.0, -2.0, 0.5), Vec4::new(4.0, -1.0, 2.0, 1.0));
+        let (m0, m1) = (Vec4::new(1.0, 0.0, 3.0, -2.0), Vec4::new(-1.0, 2.0, 0.0, 0.5));
+        let t = Track::property("", "Material.albedo", vec![1.0, 3.0], Keyframes::Vector4(vec![p0, p1]))
+            .expect("valid")
+            .with_cubic_tangents(Keyframes::Vector4(vec![Vec4::ZERO, m1]), Keyframes::Vector4(vec![m0, Vec4::ZERO]));
+        let (dt, s) = (2.0_f32, 0.3_f32);
+        let InterpolatedValue::Vector4(got) = t.sample(1.0 + s * dt) else { panic!("a Vector4 sample") };
+        for lane in 0..4 {
+            let h00 = 2.0 * s.powi(3) - 3.0 * s * s + 1.0;
+            let h10 = s.powi(3) - 2.0 * s * s + s;
+            let h01 = -2.0 * s.powi(3) + 3.0 * s * s;
+            let h11 = s.powi(3) - s * s;
+            let want = h00 * p0[lane] + h10 * m0[lane] * dt + h01 * p1[lane] + h11 * m1[lane] * dt;
+            assert!((got[lane] - want).abs() < 1e-5, "lane {lane}: {} vs {want}", got[lane]);
+        }
+        // A cubic track missing a tangent degrades to linear, as the transform channels do.
+        let mut broken = t.clone();
+        broken.tangents.as_mut().unwrap().in_tangents = Keyframes::Vector4(vec![]);
+        assert_eq!(broken.sample(2.0), InterpolatedValue::Vector4(p0 + (p1 - p0) * 0.5));
+    }
+
+    /// Adding value channels must not move a single bit of a translation track's cubic samples:
+    /// these are `to_bits` captured from the sampler before the value channels existed.
+    #[test]
+    fn translation_cubic_is_bit_identical() {
+        let values = Keyframes::Translation(vec![Vec3::new(1.0, -2.0, 0.5), Vec3::new(4.0, 3.0, -1.5)]);
+        let in_t = Keyframes::Translation(vec![Vec3::ZERO, Vec3::new(0.3, -1.1, 2.0)]);
+        let out_t = Keyframes::Translation(vec![Vec3::new(2.5, 0.7, -0.9), Vec3::ZERO]);
+        let track = Track::new("", vec![0.0, 1.7], values).unwrap().with_cubic_tangents(in_t, out_t);
+        let expected: [(f32, [u32; 3]); 3] = [
+            (0.3, [0x3fdf167e, 0xbfb2df8f, 0x3d84c043]),
+            (0.85, [0x403deb85, 0x3f61eb86, 0xbf8ee148]),
+            (1.4, [0x40733def, 0x4035e5d5, 0xbfe40152]),
+        ];
+        for (t, bits) in expected {
+            let InterpolatedValue::Translation(v) = track.sample(t) else { panic!("a Translation sample") };
+            assert_eq!([v.x.to_bits(), v.y.to_bits(), v.z.to_bits()], bits, "t = {t}");
+        }
+    }
+
+    #[test]
+    fn property_track_rejects_transform_keyframes() {
+        let err = Track::property("", "PointLight.intensity", vec![0.0], Keyframes::Translation(vec![Vec3::ZERO])).unwrap_err();
+        assert_eq!(err, TrackError::ChannelMismatch { property: Some("PointLight.intensity".into()) });
+        for bad in ["intensity", "PointLight.", ".intensity", "A..b", ""] {
+            let err = Track::property("", bad, vec![0.0], Keyframes::Scalar(vec![1.0])).unwrap_err();
+            assert_eq!(err, TrackError::InvalidPropertyName { name: bad.into() }, "{bad:?}");
+        }
+        assert!(Track::property("", "Sprite.color.w", vec![0.0], Keyframes::Scalar(vec![1.0])).is_ok());
+        // The timestamp checks still run.
+        let err = Track::property("", "A.b", vec![0.0, 1.0], Keyframes::Scalar(vec![1.0])).unwrap_err();
+        assert_eq!(err, TrackError::LengthMismatch { timestamps: 2, values: 1 });
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn transform_track_rejects_value_keyframes() {
+        let err = Track::new("", vec![0.0], Keyframes::Scalar(vec![1.0])).unwrap_err();
+        assert_eq!(err, TrackError::ChannelMismatch { property: None });
+        assert!(err.to_string().contains("transform track"));
+    }
+
+    /// `set_key`, `retime_key` and `remove_key` work on value channels as on transform ones, and a
+    /// cubic track's new key gets zero tangents of the track's own kind.
+    #[test]
+    fn set_key_retime_remove_on_property_tracks() {
+        let mut t = Track::property("", "Text.color", vec![0.0, 1.0], Keyframes::Vector4(vec![Vec4::ZERO, Vec4::ONE]))
+            .expect("valid")
+            .with_cubic_tangents(Keyframes::Vector4(vec![Vec4::ONE; 2]), Keyframes::Vector4(vec![Vec4::ONE; 2]));
+        assert_eq!(t.set_key(0.5, InterpolatedValue::Vector4(Vec4::splat(0.5))), Some(1));
+        assert_eq!(t.set_key(0.5, InterpolatedValue::Scalar(1.0)), None, "another kind is refused");
+        let tan = t.tangents.as_ref().unwrap();
+        assert_eq!(tan.in_tangents.value(1), InterpolatedValue::Vector4(Vec4::ZERO));
+        assert_eq!(tan.out_tangents.value(1), InterpolatedValue::Vector4(Vec4::ZERO));
+        assert_eq!(tan.in_tangents.len(), 3);
+        assert_eq!(t.retime_key(0, 2.0), Some(2));
+        assert_eq!(t.keyframe_timestamps, vec![0.5, 1.0, 2.0]);
+        assert_eq!(t.keyframes.value(2), InterpolatedValue::Vector4(Vec4::ZERO));
+        assert_eq!(t.tangents.as_ref().unwrap().in_tangents.value(2), InterpolatedValue::Vector4(Vec4::ONE), "its tangents moved with it");
+        assert!(t.remove_key(0));
+        assert_eq!(t.keyframes.len(), 2);
+        assert_eq!(t.tangents.as_ref().unwrap().out_tangents.len(), 2);
+
+        let mut s = Track::property("", "Camera.fov", vec![], Keyframes::empty(PropertyKind::Scalar)).expect("valid");
+        assert_eq!(s.set_key(1.0, InterpolatedValue::Scalar(60.0)), Some(0));
+        assert_eq!(s.keyframes.kind(), Some(PropertyKind::Scalar));
+        assert_eq!(s.sample(3.0), InterpolatedValue::Scalar(60.0));
+        assert_eq!(Keyframes::Translation(vec![]).kind(), None);
+    }
+
+    /// A clip saved before property tracks existed (the commit 76841f86 format: no `property`
+    /// field) loads as a transform track, and saves again without the field.
+    #[test]
+    fn old_transform_clip_ron_still_loads_and_resaves_without_property() {
+        let old = r#"(name: "door", tracks: [(target_name: "", keyframe_timestamps: [0.0, 1.0], keyframes: Translation([(0.0, 0.0, 0.0), (10.0, 0.0, 0.0)]), interpolation: Linear, tangents: None)])"#;
+        let clip: AnimationClip = ron::from_str(old).expect("the old format loads");
+        assert_eq!(clip.tracks[0].property, None);
+        assert_eq!(clip.tracks[0].sample(0.5), InterpolatedValue::Translation(Vec3::new(5.0, 0.0, 0.0)));
+        let again = ron::to_string(&clip).expect("saves");
+        assert!(!again.contains("property"), "{again}");
+        let back: AnimationClip = ron::from_str(&again).expect("reloads");
+        assert_eq!(back.tracks[0].sample(0.5), clip.tracks[0].sample(0.5));
+    }
+
+    #[test]
+    fn property_clip_ron_roundtrip() {
+        let clip = AnimationClip {
+            name: "pulse".into(),
+            tracks: vec![
+                Track::new("", vec![0.0, 1.0], Keyframes::Translation(vec![Vec3::ZERO, Vec3::X])).unwrap(),
+                Track::property("lamp", "PointLight.intensity", vec![0.0, 1.0], Keyframes::Scalar(vec![1.0, 3.0]))
+                    .unwrap()
+                    .with_cubic_tangents(Keyframes::Scalar(vec![0.0, 2.0]), Keyframes::Scalar(vec![1.0, 0.0])),
+                Track::property("", "Material.albedo", vec![0.0, 2.0], Keyframes::Vector4(vec![Vec4::ONE, Vec4::ZERO])).unwrap(),
+            ],
+        };
+        let text = ron::to_string(&clip).expect("saves");
+        let back: AnimationClip = ron::from_str(&text).expect("loads");
+        assert_eq!(back.tracks.len(), 3);
+        assert_eq!(back.tracks[0].property, None);
+        assert_eq!(back.tracks[1].property.as_deref(), Some("PointLight.intensity"));
+        assert_eq!(back.tracks[1].target_name, "lamp");
+        for (a, b) in clip.tracks.iter().zip(&back.tracks) {
+            for t in [0.0, 0.3, 0.77, 1.5] {
+                assert_eq!(a.sample(t), b.sample(t), "t = {t}");
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod nan_sampling {
     use super::*;
@@ -819,6 +1229,7 @@ mod nan_sampling {
         let n = timestamps.len();
         Track {
             target_name: "probe".into(),
+            property: None,
             keyframe_timestamps: timestamps,
             keyframes: Keyframes::Translation(vec![Vec3::ZERO; n]),
             interpolation: Interpolation::Linear,

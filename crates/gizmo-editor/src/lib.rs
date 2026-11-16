@@ -23,8 +23,8 @@
 
 /// The ANIMATION timeline panel.
 pub mod animation_panel;
-// The ANIMATION tab for keyed transforms: see its module docs.
-pub mod transform_timeline;
+// The ANIMATION tab for keyed transforms and properties: see its module docs.
+pub mod keyed_timeline;
 /// The editor's visual design (palette, geometry, type scale).
 pub mod theme;
 pub mod asset_browser;

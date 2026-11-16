@@ -112,6 +112,10 @@ pub use gizmo_math as math;
 pub mod physics;
 #[cfg(feature = "render")]
 pub use gizmo_renderer as renderer;
+/// The world's registry of animatable fields, with the engine's in it — see
+/// [`renderer::property_animation`]. Where a game registers a field of its own for keyed tracks.
+#[cfg(feature = "render")]
+pub use gizmo_renderer::property_animation::animatable_properties;
 #[cfg(all(feature = "render", not(target_arch = "wasm32")))]
 pub mod lightmap;
 

@@ -16,16 +16,18 @@
 //! collide (see [`skeletal`]) — but they share one keyframe-sampling core so
 //! their interpolation can never silently diverge:
 //!
-//! 1. **Transform-track animation** ([`clip`] / [`player`] / [`system`]) — keyed
-//!    `Transform`s, an entity's own or named ones below it:
+//! 1. **Keyed-track animation** ([`clip`] / [`player`] / [`property`] / [`system`]) — keyed
+//!    `Transform`s and component fields, an entity's own or named ones below it:
 //!    - [`clip`]: the data model. An [`clip::AnimationClip`] is a collection of
 //!      [`clip::Track`]s, each targeting an entity by name (empty: the player's own)
 //!      and holding keyframe timestamps plus per-channel [`clip::Keyframes`]
-//!      (translation/rotation/scale).
+//!      (translation/rotation/scale, or a scalar/vector value for a property track).
 //!    - [`player`]: the [`player::AnimationPlayer`] component tracking playback state.
-//!    - [`system`]: [`system::transform_animation_system`], which the engine's frame
+//!    - [`property`]: the [`property::PropertyRegistry`] — which component fields a property
+//!      track may name (`"PointLight.intensity"`), each a typed getter and setter.
+//!    - [`system`]: [`system::keyed_animation_system`], which the engine's frame
 //!      runs: it advances players, resolves each track's target in the player's
-//!      hierarchy, and writes sampled values to the targeted transforms.
+//!      hierarchy, and writes sampled values to the targeted transforms and fields.
 //!
 //! 2. **Skeletal (GPU-skinning) animation** ([`skeletal`]) — the pure-data bone
 //!    model the renderer drives to produce per-bone TRS and skinning matrices.
@@ -38,9 +40,9 @@
 //! Register the component types with [`register`] (the dependency-light entry point) on a
 //! [`World`] directly; the engine's frame runs the transform player.
 
-/// Transform-track data model: [`clip::AnimationClip`], the [`clip::Track`]s it is
-/// made of, and the per-channel [`clip::Keyframes`] / [`clip::InterpolatedValue`]
-/// they sample into.
+/// Keyed-track data model: [`clip::AnimationClip`], the [`clip::Track`]s it is
+/// made of — transform tracks and property tracks — and the per-channel
+/// [`clip::Keyframes`] / [`clip::InterpolatedValue`] they sample into.
 ///
 /// Tracks here are validated up front — [`clip::Track::new`] returns
 /// [`clip::TrackError`] for mismatched, unsorted or non-finite timestamps. The fields
@@ -62,21 +64,24 @@ pub mod clip;
 /// skeletal animation subsystems (crate-internal).
 mod hermite;
 pub mod ik;
-/// Playback state for transform-track animation: the [`player::AnimationPlayer`]
-/// component, which [`system::transform_animation_system`] advances and applies.
+/// Playback state for keyed-track animation: the [`player::AnimationPlayer`]
+/// component, which [`system::keyed_animation_system`] advances and applies.
 ///
 /// The player owns the playhead, the loop/speed flags and a name→entity resolution
 /// cache; it samples nothing itself. [`player::AnimationPlayer::play`] clears that
 /// cache, because a new clip's target names have to be resolved against the hierarchy
 /// again.
 pub mod player;
+// Which component fields a keyed track may animate, by name: `PropertyRegistry` (module docs).
+pub mod property;
 pub mod skeletal;
-/// The ECS half of transform-track animation.
+/// The ECS half of keyed-track animation.
 ///
-/// [`system::transform_animation_system`] advances every *playing* player, then — once
+/// [`system::keyed_animation_system`] advances every *playing* player, then — once
 /// per clip, cached — walks that entity's subtree to map each track's `target_name` onto
 /// a named entity (an empty name is the player's own), and writes the sampled TRS values
-/// to those entities' `Transform`s, playing or paused. The engine's frame runs it.
+/// to those entities' `Transform`s — and a property track's to the field the world's
+/// [`property::PropertyRegistry`] names — playing or paused. The engine's frame runs it.
 ///
 /// Failure is quiet by design: a track naming nothing in the hierarchy resolves to
 /// no entity and animates nothing, rather than erroring.
@@ -90,7 +95,7 @@ use gizmo_core::world::World;
 /// [`World`] directly — the **dependency-light** entry point, needing only `gizmo-core`.
 ///
 /// It schedules nothing: the engine's frame drives the transform player
-/// ([`system::transform_animation_system`], from `gizmo::systems::render::prepare_frame`) with the
+/// ([`system::keyed_animation_system`], from `gizmo::systems::render::prepare_frame`) with the
 /// skeletal players and the tweens, in the game's and the editor's draw paths alike. It used to add
 /// a scheduled `animation_system` too — a second driver nothing called, which a game calling it as
 /// well as the frame would have advanced twice.
