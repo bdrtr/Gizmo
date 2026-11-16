@@ -141,10 +141,11 @@ completeness check, run as a test over the serialised form instead of as the wri
   picking and the selection box ask `gizmo_studio::drawn_mesh::DrawnMeshes`, which answers from
   the component or the handle.
 
-A decision rather than a defect, still open: a property track on a `Handle<Material>`
-entity — the asset is shared by every entity that holds the handle, so a per-entity track on it
-would move them all; whether a track may name an asset, and how, is a design question the clip
-format does not answer yet.
+**Decided 2026-11-16 (the owner): a track animates components, never a shared asset** — Bevy's
+rule. A property track on a `Handle<Material>` entity does nothing to the asset, which every entity
+holding the handle shares; an entity whose material is to be animated is given a `Material` of its
+own. Rejected: a track naming the asset (Godot's — every holder moves with it) and a copy made on
+the first write (Unity's material instance — a hidden un-sharing).
 
 ---
 
