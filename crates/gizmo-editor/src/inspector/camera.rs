@@ -10,8 +10,11 @@ pub fn draw_camera_section(
     ui: &mut egui::Ui,
     world: &World,
     entity_id: gizmo_core::entity::Entity,
-    _state: &mut EditorState,
+    state: &mut EditorState,
 ) {
+    let key = |ui: &mut egui::Ui, state: &mut EditorState, field: &str| {
+        super::key::diamond(ui, world, state, entity_id, &format!("Camera.{field}"));
+    };
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut cameras = unsafe { world.query_unchecked::<&mut Camera>() };
     {
@@ -19,7 +22,8 @@ pub fn draw_camera_section(
             egui::CollapsingHeader::new(crate::theme::section_title("Camera"))
                 .default_open(true)
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        key(ui, state, "fov");
                         ui.label("FOV:");
                         let mut fov_deg = cam.fov.to_degrees();
                         if ui
@@ -34,7 +38,8 @@ pub fn draw_camera_section(
                             cam.fov = fov_deg.to_radians();
                         }
                     });
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        key(ui, state, "near");
                         ui.label("Near:");
                         ui.add(
                             egui::DragValue::new(&mut cam.near)
@@ -42,13 +47,22 @@ pub fn draw_camera_section(
                                 .range(0.001..=10.0),
                         );
                     });
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        key(ui, state, "far");
                         ui.label("Far:");
                         ui.add(
                             egui::DragValue::new(&mut cam.far)
                                 .speed(10.0)
                                 .range(10.0..=50000.0),
                         );
+                    });
+                    // The whole frame's brightness before tone mapping — what a fade-in from a
+                    // dark cutscene keys. Had no row until 2026-11-16.
+                    ui.horizontal_wrapped(|ui| {
+                        key(ui, state, "exposure");
+                        ui.label("Pozlama:");
+                        ui.add(egui::DragValue::new(&mut cam.exposure).speed(0.01).range(0.0..=16.0))
+                            .on_hover_text("Tüm karenin ton eşlemeden önceki çarpanı. 1 = olduğu gibi.");
                     });
                     ui.checkbox(&mut cam.primary, "Ana Kamera");
                     // `Camera::clear_color`: off is the one default background

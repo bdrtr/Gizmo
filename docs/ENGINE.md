@@ -111,8 +111,20 @@ completeness check, run as a test over the serialised form instead of as the wri
   `Material` copies), so an in-place write would move all of them, and telling a sole owner apart
   rests on `Arc` counts the render thread's copy makes unreliable.
 
+- **The inspector keys a field where it shows it** (2026-11-16): on an entity with a
+  `KeyedAnimationPlayer`, every animatable field's row has a ◆ that keys it at the playhead (its
+  track made by the first click), as Godot's property key icon does — the engine's rows and a game
+  component's (`"Health.hp"`, when the game registered it) alike. A click is a request
+  (`EditorState::key_property_requests`), applied when the rows have let go of their components.
+  `inspector::key::tests::every_animatable_field_shown_in_the_inspector_has_a_key` fails on a
+  registered field with no ◆; it found that the material had no row at all for thirteen of its
+  fields (emission, ambient, anisotropy, the clear coat, subsurface, the alpha cutoff, reflectance,
+  transmission, thickness, the volume's tint and distance, the specular tint, the UV transform), the
+  camera none for its exposure and the look none for its sensor height — all added. `Sprite` and
+  `Text` have no inspector section in the studio, so no ◆: that is the open part.
+
 Separate work, named: `Handle<Material>` assets (the studio draws only the `Material` component);
-a per-field ◆ in the inspector.
+inspector sections for `Sprite` and `Text` (an image and a font to pick, not only numbers).
 
 ---
 

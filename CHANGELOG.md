@@ -59,6 +59,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **The inspector keys a field where it shows it: a ◆ beside every animatable field.** On an entity with a
+  `KeyedAnimationPlayer`, a click keys the field at its value now at the playhead — its track made by the first click —
+  as Godot's property key icon does; one undo entry per key. The engine's rows and a game component's registered
+  field (`"Health.hp"`) alike. A test now fails for an animatable field with no ◆, and found thirteen material fields
+  with no inspector row at all — emission, ambient, anisotropy, clear coat and its roughness, subsurface, alpha
+  cutoff, reflectance, transmission, thickness, absorption tint and distance, specular tint — plus the UV transform,
+  the camera's exposure and the lens's sensor height: all have rows now. Sliders in these sections size to the row
+  they are in (`inspector::key::fit_slider`), so the sections fit a 260 px inspector, which they did not.
 - **Material maps' strengths and UV transform are animatable: a scrolling surface is a keyed `Material.maps.uv_offset.x`.**
   `normal_scale`, `emissive_factor`, `occlusion_strength`, `lightmap_intensity`, `uv_scale`, `uv_rotation` and
   `uv_offset` (the vectors lane by lane) join the engine's animatable fields. They were left out because the material

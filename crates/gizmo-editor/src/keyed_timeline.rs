@@ -356,6 +356,21 @@ pub(crate) fn add_property_track(clip: Option<&AnimationClip>, time: f32, proper
     Some(clip)
 }
 
+/// `clip` (a new one when there is none) with `property` of the player's own entity keyed at `time`
+/// to `value`: into its track when it has one, into a new track when not. `None` when `value` is not
+/// a property value or not of the track's kind.
+pub(crate) fn key_property(clip: Option<&AnimationClip>, time: f32, property: &str, value: InterpolatedValue) -> Option<AnimationClip> {
+    let tracked = clip.and_then(|c| c.tracks.iter().position(|t| t.target_name.is_empty() && t.property.as_deref() == Some(property)));
+    match (clip, tracked) {
+        (Some(clip), Some(i)) => {
+            let mut clip = clip.clone();
+            clip.tracks[i].set_key(time, value)?;
+            Some(clip)
+        }
+        _ => add_property_track(clip, time, property, value),
+    }
+}
+
 fn new_clip() -> AnimationClip {
     let mut c = AnimationClip::default();
     c.name = "animation".into();

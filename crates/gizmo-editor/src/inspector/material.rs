@@ -4,15 +4,57 @@ use egui;
 use gizmo_core::World;
 use gizmo_math::Vec4;
 use gizmo_renderer::components::Material;
+use super::key::RowKey;
 
 
-/// The material rows: albedo, metallic, roughness, emissive and the texture slots.
+/// A colour in linear HDR — emission, ambient — which a colour picker would clamp to 1: a channel
+/// at a time.
+fn hdr_row(ui: &mut egui::Ui, key: RowKey<'_>, field: &str, label: &str, value: &mut gizmo_math::Vec3) {
+    ui.horizontal_wrapped(|ui| {
+        key.diamond(ui, field);
+        ui.label(label);
+        for (channel, v) in ["R", "G", "B"].into_iter().zip([&mut value.x, &mut value.y, &mut value.z]) {
+            ui.add(egui::DragValue::new(v).speed(0.01).range(0.0..=f32::MAX).prefix(channel));
+        }
+    });
+}
+
+/// A colour that is a fraction of the light passing — a tint: picked.
+fn tint_row(ui: &mut egui::Ui, key: RowKey<'_>, field: &str, label: &str, value: &mut gizmo_math::Vec3) {
+    ui.horizontal_wrapped(|ui| {
+        key.diamond(ui, field);
+        ui.label(label);
+        let mut rgb = value.to_array();
+        if ui.color_edit_button_rgb(&mut rgb).changed() {
+            *value = gizmo_math::Vec3::from_array(rgb);
+        }
+    });
+}
+
+/// One number on a slider.
+fn slider(ui: &mut egui::Ui, key: RowKey<'_>, field: &str, label: &str, value: &mut f32, range: std::ops::RangeInclusive<f32>, hint: &str) {
+    ui.horizontal_wrapped(|ui| {
+        key.diamond(ui, field);
+        ui.label(label);
+        super::key::fit_slider(ui);
+        ui.add(egui::Slider::new(value, range)).on_hover_text(hint);
+    });
+}
+
+/// The material rows: its shading mode, every factor it draws with, its blending, the texture slots
+/// with their strengths and the UV transform — each animatable one with its ◆. (Emission, ambient,
+/// anisotropy, the clear coat, subsurface, the alpha cutoff, reflectance, transmission, the volume's
+/// thickness and tint, the specular tint and the UV transform had no rows until 2026-11-16: set in
+/// code, saved in a scene, keyed in a clip — and nowhere in the editor.)
 pub fn draw_material_section(
     ui: &mut egui::Ui,
     world: &World,
     entity_id: gizmo_core::entity::Entity,
-    _state: &mut EditorState,
+    state: &mut EditorState,
 ) {
+    let state = std::cell::RefCell::new(state);
+    let key = RowKey { world, state: &state, entity: entity_id, component: "Material" };
+    let maps_key = key.of("Material.maps");
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut materials = unsafe { world.query_unchecked::<&mut Material>() };
     {
@@ -45,7 +87,8 @@ pub fn draw_material_section(
                         ui.separator();
                         
                         // --- Albedo Color ---
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
+                            key.diamond(ui, "albedo");
                             ui.label("Base Color (Albedo):");
                             let mut color = [mat.albedo.x, mat.albedo.y, mat.albedo.z, mat.albedo.w];
                             if ui.color_edit_button_rgba_premultiplied(&mut color).changed() {
@@ -61,25 +104,39 @@ pub fn draw_material_section(
 
                         // --- PBR Sliders ---
                         if mat.material_type == gizmo_renderer::components::MaterialType::Pbr {
-                            ui.horizontal(|ui| {
-                                ui.label("Metallic:  ");
-                                ui.add(
-                                    egui::Slider::new(&mut mat.metallic, 0.0..=1.0)
-                                        .text("Metal")
-                                        .show_value(true)
-                                );
+                            ui.horizontal_wrapped(|ui| {
+                                key.diamond(ui, "metallic");
+                                ui.label("Metallic:");
+                                super::key::fit_slider(ui);
+                                ui.add(egui::Slider::new(&mut mat.metallic, 0.0..=1.0));
                             });
                             
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                key.diamond(ui, "roughness");
                                 ui.label("Roughness:");
-                                ui.add(
-                                    egui::Slider::new(&mut mat.roughness, 0.0..=1.0)
-                                        .text("Pürüz")
-                                        .show_value(true)
-                                );
+                                super::key::fit_slider(ui);
+                                ui.add(egui::Slider::new(&mut mat.roughness, 0.0..=1.0));
                             });
                         }
-                        
+
+                        // --- Light: what the surface gives off, and what lifts a baked one ---
+                        hdr_row(ui, key, "emissive", "Emissive:", &mut mat.emissive);
+                        hdr_row(ui, key, "ambient", "Ambient (BakedLit):", &mut mat.ambient);
+
+                        // --- The rest of the surface model ---
+                        let min_coat = gizmo_renderer::components::MIN_COAT_ROUGHNESS;
+                        slider(ui, key, "anisotropy", "Anisotropy:", &mut mat.anisotropy, -1.0..=1.0, "Fırçalanmış metal, saç, plak: parlamanın bir yönde uzaması. 0 = yönsüz.");
+                        slider(ui, key, "clear_coat", "Clear coat:", &mut mat.clear_coat, 0.0..=1.0, "Yüzeyin üstünde ikinci, daha pürüzsüz bir parlak katman — araba boyası, cila. 0 = yok.");
+                        slider(ui, key, "clear_coat_roughness", "Coat roughness:", &mut mat.clear_coat_roughness, min_coat..=1.0, "O katmanın pürüzü: sert cilâdan aşınmış boyaya.");
+                        slider(ui, key, "subsurface", "Subsurface:", &mut mat.subsurface, 0.0..=1.0, "Işığın yüzeyin içinden saçılması — deri, mum, yaprak. 0 = opak.");
+                        slider(ui, key, "reflectance", "Reflectance:", &mut mat.reflectance, gizmo_renderer::components::MIN_REFLECTANCE..=0.2, "Metal olmayan bir yüzeyin dik bakıştaki yansıması (F0). Su 0.02, plastik 0.04, mücevher 0.1+.");
+                        tint_row(ui, key, "specular_tint", "Specular tint:", &mut mat.specular_tint);
+                        slider(ui, key, "alpha_cutoff", "Alpha cutoff:", &mut mat.alpha_cutoff, 0.0..=1.0, "Alfası bunun altındaki pikseller kesilir (yaprak, çit). 0 = kesme yok.");
+                        slider(ui, key, "transmission", "Transmission:", &mut mat.transmission, 0.0..=1.0, "Arkasındaki görüntünün yüzeyden geçen kısmı — cam, su. 0 = geçirmez.");
+                        slider(ui, key, "thickness", "Thickness (m):", &mut mat.thickness, 0.0..=2.0, "Işığın içinde aldığı yol: arkadaki görüntü bu kadar kırılır. 0 = ince cam.");
+                        tint_row(ui, key, "attenuation_color", "Absorption tint:", &mut mat.attenuation_color);
+                        slider(ui, key, "attenuation_distance", "Absorption distance (m):", &mut mat.attenuation_distance, 0.0..=20.0, "Işığın bu mesafede soğurma rengine indiği uzaklık. 0 = soğurma yok.");
+
                         ui.separator();
 
                         // --- Render Flags ---
@@ -114,25 +171,31 @@ pub fn draw_material_section(
                         // A change to any of them is all it takes: `material_sync` builds the bind
                         // group again from the new sources the next frame.
                         ui.label(egui::RichText::new("Textures").strong());
-                        if let Some(path) = texture_slot(ui, _state, "Base Color", mat.texture_source.as_deref()) {
+                        if let Some(path) = texture_slot(ui, &mut state.borrow_mut(), "Base Color", mat.texture_source.as_deref()) {
                             mat.texture_source = path;
                             mat.material_type = gizmo_renderer::components::MaterialType::Pbr;
                         }
                         let mut maps = mat.maps.clone();
-                        if let Some(path) = texture_slot(ui, _state, "Normal", maps.normal.as_deref()) {
+                        if let Some(path) = texture_slot(ui, &mut state.borrow_mut(), "Normal", maps.normal.as_deref()) {
                             maps.normal = path;
                         }
                         if maps.normal.is_some() {
-                            ui.add(egui::Slider::new(&mut maps.normal_scale, 0.0..=2.0).text("Normal strength"));
+                            ui.horizontal_wrapped(|ui| {
+                                maps_key.diamond(ui, "normal_scale");
+                                ui.label("Normal strength:");
+                                super::key::fit_slider(ui);
+                                ui.add(egui::Slider::new(&mut maps.normal_scale, 0.0..=2.0));
+                            });
                         }
-                        if let Some(path) = texture_slot(ui, _state, "Metallic-Roughness", maps.metallic_roughness.as_deref()) {
+                        if let Some(path) = texture_slot(ui, &mut state.borrow_mut(), "Metallic-Roughness", maps.metallic_roughness.as_deref()) {
                             maps.metallic_roughness = path;
                         }
-                        if let Some(path) = texture_slot(ui, _state, "Emissive", maps.emissive.as_deref()) {
+                        if let Some(path) = texture_slot(ui, &mut state.borrow_mut(), "Emissive", maps.emissive.as_deref()) {
                             maps.emissive = path;
                         }
                         if maps.emissive.is_some() {
-                            ui.horizontal(|ui| {
+                            ui.horizontal_wrapped(|ui| {
+                                maps_key.diamond(ui, "emissive_factor");
                                 ui.label("Emissive factor:");
                                 let mut factor = maps.emissive_factor.to_array();
                                 if ui.color_edit_button_rgb(&mut factor).changed() {
@@ -140,19 +203,52 @@ pub fn draw_material_section(
                                 }
                             });
                         }
-                        if let Some(path) = texture_slot(ui, _state, "Occlusion", maps.occlusion.as_deref()) {
+                        if let Some(path) = texture_slot(ui, &mut state.borrow_mut(), "Occlusion", maps.occlusion.as_deref()) {
                             maps.occlusion = path;
                         }
                         if maps.occlusion.is_some() {
-                            ui.add(egui::Slider::new(&mut maps.occlusion_strength, 0.0..=1.0).text("Occlusion strength"));
+                            ui.horizontal_wrapped(|ui| {
+                                maps_key.diamond(ui, "occlusion_strength");
+                                ui.label("Occlusion strength:");
+                                super::key::fit_slider(ui);
+                                ui.add(egui::Slider::new(&mut maps.occlusion_strength, 0.0..=1.0));
+                            });
                         }
                         // Baked light, read at the mesh's second UV set (`MaterialMaps::lightmap`).
-                        if let Some(path) = texture_slot(ui, _state, "Lightmap", maps.lightmap.as_deref()) {
+                        if let Some(path) = texture_slot(ui, &mut state.borrow_mut(), "Lightmap", maps.lightmap.as_deref()) {
                             maps.lightmap = path;
                         }
                         if maps.lightmap.is_some() {
-                            ui.add(egui::Slider::new(&mut maps.lightmap_intensity, 0.0..=8.0).text("Lightmap intensity"));
+                            ui.horizontal_wrapped(|ui| {
+                                maps_key.diamond(ui, "lightmap_intensity");
+                                ui.label("Lightmap intensity:");
+                                super::key::fit_slider(ui);
+                                ui.add(egui::Slider::new(&mut maps.lightmap_intensity, 0.0..=8.0));
+                            });
                         }
+                        // Every texture of the material is read through it: scale, then rotation,
+                        // then offset. A scrolling surface keys the offset.
+                        ui.label(egui::RichText::new("UV").strong());
+                        ui.horizontal_wrapped(|ui| {
+                            maps_key.diamond(ui, "uv_scale");
+                            ui.label("Scale:");
+                            ui.add(egui::DragValue::new(&mut maps.uv_scale[0]).speed(0.01).prefix("u "));
+                            ui.add(egui::DragValue::new(&mut maps.uv_scale[1]).speed(0.01).prefix("v "));
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            maps_key.diamond(ui, "uv_rotation");
+                            ui.label("Rotation:");
+                            let mut degrees = maps.uv_rotation.to_degrees();
+                            if ui.add(egui::DragValue::new(&mut degrees).speed(1.0).suffix("°")).changed() {
+                                maps.uv_rotation = degrees.to_radians();
+                            }
+                        });
+                        ui.horizontal_wrapped(|ui| {
+                            maps_key.diamond(ui, "uv_offset");
+                            ui.label("Offset:");
+                            ui.add(egui::DragValue::new(&mut maps.uv_offset[0]).speed(0.01).prefix("u "));
+                            ui.add(egui::DragValue::new(&mut maps.uv_offset[1]).speed(0.01).prefix("v "));
+                        });
                         if maps != mat.maps {
                             mat.maps = maps;
                         }

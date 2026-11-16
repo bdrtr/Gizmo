@@ -5,9 +5,12 @@ use gizmo_core::World;
 use gizmo_math::Vec3;
 use gizmo_renderer::components::{DirectionalLight, LightRole, PointLight, RectLight, SpotLight};
 
+use super::key::RowKey as Key;
+
 /// How far toward the light each pixel looks for a contact shadow, in metres.
-fn contact_shadow_row(ui: &mut egui::Ui, metres: &mut f32) {
-    ui.horizontal(|ui| {
+fn contact_shadow_row(ui: &mut egui::Ui, key: Key<'_>, metres: &mut f32) {
+    ui.horizontal_wrapped(|ui| {
+        key.diamond(ui, "contact_shadow_length");
         ui.label("Temas gölgesi:");
         ui.add(egui::DragValue::new(metres).speed(0.01).range(0.0..=5.0).suffix(" m"))
             .on_hover_text("Her pikselin ışığa doğru ekranda baktığı mesafe: gölge haritasının kaçırdığı küçük temasları (bir bozuk para, bir basamağın ilk santimetreleri) yakalar; gölge düşürmeyen bir ışığa da temas gölgesi verir. 0 = kapalı. Yalnız ertelenmiş (deferred) yolda.");
@@ -15,8 +18,9 @@ fn contact_shadow_row(ui: &mut egui::Ui, metres: &mut f32) {
 }
 
 /// A source's size, in metres: what softens its shadow and widens its highlight.
-fn source_radius_row(ui: &mut egui::Ui, radius: &mut f32) {
-    ui.horizontal(|ui| {
+fn source_radius_row(ui: &mut egui::Ui, key: Key<'_>, radius: &mut f32) {
+    ui.horizontal_wrapped(|ui| {
+        key.diamond(ui, "source_radius");
         ui.label("Kaynak yarıçapı:");
         ui.add(egui::DragValue::new(radius).speed(0.01).range(0.0..=5.0).suffix(" m"))
             .on_hover_text("Işığın kaynağının büyüklüğü — menzili değil. Büyüdükçe gölgesinin kenarı yumuşar ve parlak yüzeylerdeki yansıması genişler. 0 = nokta kaynak.");
@@ -31,8 +35,10 @@ pub fn draw_point_light_section(
     ui: &mut egui::Ui,
     world: &World,
     entity_id: gizmo_core::entity::Entity,
-    _state: &mut EditorState,
+    state: &mut EditorState,
 ) {
+    let state = std::cell::RefCell::new(state);
+    let key = Key { world, state: &state, entity: entity_id, component: "PointLight" };
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut lights = unsafe { world.query_unchecked::<&mut PointLight>() };
     {
@@ -40,14 +46,16 @@ pub fn draw_point_light_section(
             egui::CollapsingHeader::new(crate::theme::section_title("PointLight"))
                 .default_open(true)
                 .show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        key.diamond(ui, "color");
                         ui.label("Renk:");
                         let mut color = [light.color.x, light.color.y, light.color.z];
                         if ui.color_edit_button_rgb(&mut color).changed() {
                             light.color = Vec3::new(color[0], color[1], color[2]);
                         }
                     });
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        key.diamond(ui, "intensity");
                         ui.label("Yoğunluk:");
                         ui.add(
                             egui::DragValue::new(&mut light.intensity)
@@ -55,7 +63,8 @@ pub fn draw_point_light_section(
                                 .range(0.0..=100.0),
                         );
                     });
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        key.diamond(ui, "radius");
                         ui.label("Menzil:");
                         ui.add(
                             egui::DragValue::new(&mut light.radius)
@@ -64,14 +73,15 @@ pub fn draw_point_light_section(
                                 .suffix(" m"),
                         );
                     });
-                    source_radius_row(ui, &mut light.source_radius);
-                    ui.horizontal(|ui| {
+                    source_radius_row(ui, key, &mut light.source_radius);
+                    ui.horizontal_wrapped(|ui| {
+                        key.diamond(ui, "source_length");
                         ui.label("Tüp uzunluğu:");
                         ui.add(egui::DragValue::new(&mut light.source_length).speed(0.01).range(0.0..=50.0).suffix(" m"))
                             .on_hover_text("Floresan tüp gibi uzun bir kaynak: varlığın yerel X ekseni boyunca bu uzunlukta. 0 = küre.");
                     });
                     ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
-                    contact_shadow_row(ui, &mut light.contact_shadow_length);
+                    contact_shadow_row(ui, key, &mut light.contact_shadow_length);
                 });
             ui.separator();
         }
@@ -87,27 +97,29 @@ pub fn draw_directional_light_section(
     ui: &mut egui::Ui,
     world: &World,
     entity_id: gizmo_core::entity::Entity,
-    _state: &mut EditorState,
+    state: &mut EditorState,
 ) {
+    let state = std::cell::RefCell::new(state);
+    let key = Key { world, state: &state, entity: entity_id, component: "DirectionalLight" };
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut lights = unsafe { world.query_unchecked::<&mut DirectionalLight>() };
     if let Some(mut light) = lights.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Directional Light (Güneş)"))
             .default_open(true)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "color");
                     ui.label("Güneş Rengi:");
                     let mut color = [light.color.x, light.color.y, light.color.z];
                     if ui.color_edit_button_rgb(&mut color).changed() {
                         light.color = Vec3::new(color[0], color[1], color[2]);
                     }
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "intensity");
                     ui.label("Işık Şiddeti (Intensity):");
-                    ui.add(
-                        egui::Slider::new(&mut light.intensity, 0.0..=500.0)
-                            .text("Lümen")
-                    );
+                    super::key::fit_slider(ui);
+                    ui.add(egui::Slider::new(&mut light.intensity, 0.0..=500.0));
                 });
                 ui.horizontal(|ui| {
                     ui.label("Rol:");
@@ -119,8 +131,10 @@ pub fn draw_directional_light_section(
                         });
                 });
                 let mut degrees = light.angular_radius.to_degrees();
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "angular_radius");
                     ui.label("Açısal yarıçap:");
+                    super::key::fit_slider(ui);
                     if ui
                         .add(egui::Slider::new(&mut degrees, 0.0..=28.6).suffix("°"))
                         .on_hover_text("Güneş diskinin gökyüzündeki büyüklüğü: gölgelerin kenarı, gölgeyi düşürenden uzaklaştıkça bu açıyla yumuşar. Gerçek güneş ~0.27°; 0 = boyutsuz güneş, keskin gölge.")
@@ -129,7 +143,7 @@ pub fn draw_directional_light_section(
                         light.angular_radius = degrees.to_radians().clamp(0.0, 0.5);
                     }
                 });
-                contact_shadow_row(ui, &mut light.contact_shadow_length);
+                contact_shadow_row(ui, key, &mut light.contact_shadow_length);
                 ui.label(egui::RichText::new("Güneşin açısını (gölge yönünü) değiştirmek için üst kısımdaki 'Transform' altından Rotasyon X, Y, Z değerlerini döndürün.").weak().small());
             });
         ui.separator();
@@ -155,22 +169,26 @@ pub fn draw_spot_light_section(
     ui: &mut egui::Ui,
     world: &World,
     entity_id: gizmo_core::entity::Entity,
-    _state: &mut EditorState,
+    state: &mut EditorState,
 ) {
+    let state = std::cell::RefCell::new(state);
+    let key = Key { world, state: &state, entity: entity_id, component: "SpotLight" };
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut lights = unsafe { world.query_unchecked::<&mut SpotLight>() };
     if let Some(mut light) = lights.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Spot Light"))
             .default_open(true)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "color");
                     ui.label("Renk:");
                     let mut color = [light.color.x, light.color.y, light.color.z];
                     if ui.color_edit_button_rgb(&mut color).changed() {
                         light.color = Vec3::new(color[0], color[1], color[2]);
                     }
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "intensity");
                     ui.label("Yoğunluk:");
                     ui.add(
                         egui::DragValue::new(&mut light.intensity)
@@ -178,7 +196,8 @@ pub fn draw_spot_light_section(
                             .range(0.0..=100.0),
                     );
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "radius");
                     ui.label("Menzil:");
                     ui.add(
                         egui::DragValue::new(&mut light.radius)
@@ -191,14 +210,18 @@ pub fn draw_spot_light_section(
                 let mut inner_deg = light.inner_angle.to_degrees();
                 let mut outer_deg = light.outer_angle.to_degrees();
                 let mut changed = false;
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "inner_angle");
                     ui.label("İç koni:");
+                    super::key::fit_slider(ui);
                     changed |= ui
                         .add(egui::Slider::new(&mut inner_deg, 0.0..=89.0).suffix("°"))
                         .changed();
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "outer_angle");
                     ui.label("Dış koni:");
+                    super::key::fit_slider(ui);
                     changed |= ui
                         .add(egui::Slider::new(&mut outer_deg, 0.0..=89.0).suffix("°"))
                         .changed();
@@ -208,7 +231,7 @@ pub fn draw_spot_light_section(
                     light.outer_angle = outer_deg.to_radians();
                     light.inner_angle = inner_deg.min(outer_deg).to_radians();
                 }
-                source_radius_row(ui, &mut light.source_radius);
+                source_radius_row(ui, key, &mut light.source_radius);
 
                 // Cookie: a name registered in code, or a path read from disk on first use.
                 // Empty is no cookie.
@@ -224,7 +247,7 @@ pub fn draw_spot_light_section(
                     }
                 });
                 ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
-                contact_shadow_row(ui, &mut light.contact_shadow_length);
+                contact_shadow_row(ui, key, &mut light.contact_shadow_length);
                 ui.label(egui::RichText::new("Koninin baktığı yön varlığın 'Transform' rotasyonundan gelir.").weak().small());
             });
         ui.separator();
@@ -238,26 +261,31 @@ pub fn draw_rect_light_section(
     ui: &mut egui::Ui,
     world: &World,
     entity_id: gizmo_core::entity::Entity,
-    _state: &mut EditorState,
+    state: &mut EditorState,
 ) {
+    let state = std::cell::RefCell::new(state);
+    let key = Key { world, state: &state, entity: entity_id, component: "RectLight" };
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut lights = unsafe { world.query_unchecked::<&mut RectLight>() };
     if let Some(mut light) = lights.get_mut(entity_id) {
         egui::CollapsingHeader::new(crate::theme::section_title("Rect Light"))
             .default_open(true)
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "color");
                     ui.label("Renk:");
                     let mut color = [light.color.x, light.color.y, light.color.z];
                     if ui.color_edit_button_rgb(&mut color).changed() {
                         light.color = Vec3::new(color[0], color[1], color[2]);
                     }
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "intensity");
                     ui.label("Yoğunluk:");
                     ui.add(egui::DragValue::new(&mut light.intensity).speed(0.1).range(0.0..=100.0));
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "radius");
                     ui.label("Menzil:");
                     ui.add(
                         egui::DragValue::new(&mut light.radius)
@@ -266,7 +294,8 @@ pub fn draw_rect_light_section(
                             .suffix(" m"),
                     );
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "width");
                     ui.label("Genişlik:");
                     ui.add(
                         egui::DragValue::new(&mut light.width)
@@ -275,7 +304,8 @@ pub fn draw_rect_light_section(
                             .suffix(" m"),
                     );
                 });
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
+                    key.diamond(ui, "height");
                     ui.label("Yükseklik:");
                     ui.add(
                         egui::DragValue::new(&mut light.height)
@@ -285,7 +315,7 @@ pub fn draw_rect_light_section(
                     );
                 });
                 ui.checkbox(&mut light.casts_shadows, "Cast shadows").on_hover_text("Işık, gölge düşürmesi istenen nesnelerin gölgesini düşürür. Kapalıyken (varsayılan) gölge haritası çizilmez.");
-                contact_shadow_row(ui, &mut light.contact_shadow_length);
+                contact_shadow_row(ui, key, &mut light.contact_shadow_length);
                 ui.label(egui::RichText::new("Panel, varlığın 'Transform' rotasyonunun ileri ekseni (−Z) yönünde, tek yüzünden ışık verir.").weak().small());
             });
         ui.separator();

@@ -491,7 +491,17 @@ pub fn draw_reflection_section(
                                     // so its fields are drawn directly.
                                     if let serde_json::Value::Object(map) = &mut val {
                                         for (k, v) in map.iter_mut() {
-                                            changed |= draw_json_value(ui, k, v);
+                                            // A field the game registered as animatable
+                                            // (`"Health.hp"`) gets its ◆, as an engine field does.
+                                            let property = format!("{}.{k}", reg.name);
+                                            if super::key::keyable(world, entity_id, &property) {
+                                                ui.horizontal(|ui| {
+                                                    super::key::diamond(ui, world, state, entity_id, &property);
+                                                    ui.vertical(|ui| changed |= draw_json_value(ui, k, v));
+                                                });
+                                            } else {
+                                                changed |= draw_json_value(ui, k, v);
+                                            }
                                         }
                                     } else {
                                         changed |= draw_json_value(ui, "değer", &mut val);

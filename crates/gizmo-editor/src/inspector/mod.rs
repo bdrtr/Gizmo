@@ -20,6 +20,8 @@ pub mod environment;
 pub mod menu;
 /// The behaviour tree rows: the tree as a tree, edited in place.
 pub mod behavior_tree;
+// The ◆ beside an animatable field's row, and the keying it asks for.
+pub(crate) mod key;
 
 use crate::editor_state::EditorState;
 use gizmo_core::World;
@@ -30,6 +32,7 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     let sel_len = state.selection.entities.len();
     if sel_len == 0 {
         environment::draw_environment_settings(ui, world, state);
+        key::apply_key_requests(world, state);
         return;
     }
 
@@ -132,6 +135,8 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         }
     });
     });
+    // What a row's ◆ asked for, now that no row holds its component.
+    key::apply_key_requests(world, state);
 }
 
 #[cfg(test)]

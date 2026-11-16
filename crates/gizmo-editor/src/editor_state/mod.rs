@@ -164,6 +164,10 @@ pub struct EditorState {
     pub add_component_request: Option<(gizmo_core::entity::Entity, String)>,
     /// "Remove this component, by name, from this entity."
     pub remove_component_request: Option<(gizmo_core::entity::Entity, String)>,
+    /// "Key this field of this entity at its player's playhead" — an inspector row's ◆, by the
+    /// field's animatable name (`"PointLight.intensity"`). Applied once the inspector's rows have
+    /// let go of their components (`inspector::key::apply_key_requests`).
+    pub key_property_requests: Vec<(gizmo_core::entity::Entity, String)>,
 
     // The two viewports. Each panel reports where and how big it is, and the host renders into a
     // texture of that size — which is why a size of `None` means "not laid out yet", not "zero".
@@ -271,6 +275,7 @@ impl EditorState {
         self.unparent_request = None;
         self.add_component_request = None;
         self.remove_component_request = None;
+        self.key_property_requests.clear();
         self.despawn_requests.clear();
         self.generate_terrain_requests.clear();
         self.duplicate_requests.clear();
@@ -354,6 +359,7 @@ impl EditorState {
             unparent_request: None,
             add_component_request: None,
             remove_component_request: None,
+            key_property_requests: Vec::new(),
 
             scene_view_visible: true,
             game_view_visible: false,

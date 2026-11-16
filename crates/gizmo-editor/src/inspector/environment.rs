@@ -41,18 +41,24 @@ fn dof_blur_row(ui: &mut egui::Ui, blur: &mut DofBlur) {
         }
         ui.add_space(6.0);
         if *blades >= 3 {
-            slider_row(ui, "Kanat Dönüşü (radyan)", rotation, 0.0..=std::f32::consts::TAU);
+            slider_row(ui, None, "Kanat Dönüşü (radyan)", rotation, 0.0..=std::f32::consts::TAU);
         }
     }
 }
 
 fn slider_row(
     ui: &mut egui::Ui,
+    key: Option<(super::key::RowKey<'_>, &str)>,
     label: &str,
     value: &mut f32,
     range: std::ops::RangeInclusive<f32>,
 ) {
-    ui.label(label);
+    ui.horizontal(|ui| {
+        if let Some((key, field)) = key {
+            key.diamond(ui, field);
+        }
+        ui.label(label);
+    });
     // The value box and the frame's own padding come out of the panel; the rest is the track.
     // Floored so a panel dragged very narrow degrades into a small slider rather than a negative
     // width, which egui would round up to something wider than the panel — the defect again.
@@ -129,6 +135,8 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
         return;
     }
 
+    let state = std::cell::RefCell::new(state);
+    let look = super::key::RowKey { world, state: &state, entity: cam_id, component: "PostProcess" };
     egui::ScrollArea::vertical().show(ui, |ui| {
         // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
         // The same pattern every other inspector section uses.
@@ -139,19 +147,16 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
             egui::CollapsingHeader::new(crate::theme::section_title("Post-Processing / Bloom"))
                 .default_open(true)
                 .show(ui, |ui| {
-                    slider_row(ui, "Bloom Yoğunluğu", &mut grade.bloom_intensity, 0.0..=5.0);
-                    slider_row(ui, "Bloom Eşiği (Threshold)", &mut grade.bloom_threshold, 0.0..=2.0);
-                    slider_row(ui, "Film Greni (Grain)", &mut grade.film_grain, 0.0..=1.0);
+                    slider_row(ui, Some((look, "bloom_intensity")), "Bloom Yoğunluğu", &mut grade.bloom_intensity, 0.0..=5.0);
+                    slider_row(ui, Some((look, "bloom_threshold")), "Bloom Eşiği (Threshold)", &mut grade.bloom_threshold, 0.0..=2.0);
+                    slider_row(ui, Some((look, "film_grain")), "Film Greni (Grain)", &mut grade.film_grain, 0.0..=1.0);
                 });
 
             egui::CollapsingHeader::new(crate::theme::section_title("Camera Lens Effects"))
                 .default_open(true)
                 .show(ui, |ui| {
-                    slider_row(ui, "Köşe Karartması (Vignette)", &mut grade.vignette, 0.0..=1.0);
-                    slider_row(
-                        ui,
-                        "Kromatik Sapma (Aberration)",
-                        &mut grade.chromatic_aberration,
+                    slider_row(ui, Some((look, "vignette")), "Köşe Karartması (Vignette)", &mut grade.vignette, 0.0..=1.0);
+                    slider_row(ui, Some((look, "chromatic_aberration")), "Kromatik Sapma (Aberration)", &mut grade.chromatic_aberration,
                         0.0..=0.05,
                     );
                 });
@@ -159,20 +164,23 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
             egui::CollapsingHeader::new(crate::theme::section_title("Depth of Field (Odak)"))
                 .default_open(true)
                 .show(ui, |ui| {
-                    slider_row(ui, "Odak Uzaklığı (metre)", &mut grade.dof_focus_dist, 0.1..=100.0);
-                    slider_row(ui, "Odak Aralığı (Net Alan)", &mut grade.dof_focus_range, 0.1..=50.0);
-                    slider_row(ui, "Arka Plan Bulanıklığı (0 = kapalı)", &mut grade.dof_blur_size, 0.0..=10.0);
+                    slider_row(ui, Some((look, "dof_focus_dist")), "Odak Uzaklığı (metre)", &mut grade.dof_focus_dist, 0.1..=100.0);
+                    slider_row(ui, Some((look, "dof_focus_range")), "Odak Aralığı (Net Alan)", &mut grade.dof_focus_range, 0.1..=50.0);
+                    slider_row(ui, Some((look, "dof_blur_size")), "Arka Plan Bulanıklığı (0 = kapalı)", &mut grade.dof_blur_size, 0.0..=10.0);
                     // A lens: the f-number takes the focus band's place (0 keeps the band), and what
                     // lies past the farthest distance counts as that far (0 = no limit).
-                    slider_row(ui, "Diyafram f/ (0 = odak aralığı)", &mut grade.dof_f_stops, 0.0..=22.0);
-                    slider_row(ui, "En Uzak Mesafe (0 = sınırsız)", &mut grade.dof_max_depth, 0.0..=1000.0);
+                    slider_row(ui, Some((look, "dof_f_stops")), "Diyafram f/ (0 = odak aralığı)", &mut grade.dof_f_stops, 0.0..=22.0);
+                    // With the field of view, the focal length a lens's blur is worked out from.
+                    // Had no row until 2026-11-16.
+                    slider_row(ui, Some((look, "dof_sensor_height")), "Sensör Yüksekliği (metre)", &mut grade.dof_sensor_height, 0.001..=0.1);
+                    slider_row(ui, Some((look, "dof_max_depth")), "En Uzak Mesafe (0 = sınırsız)", &mut grade.dof_max_depth, 0.0..=1000.0);
                     dof_blur_row(ui, &mut grade.dof_blur);
                 });
 
             egui::CollapsingHeader::new(crate::theme::section_title("Motion Blur (Hareket)"))
                 .default_open(true)
                 .show(ui, |ui| {
-                    slider_row(ui, "Deklanşör (0 = kapalı, 0.5 = 180°)", &mut grade.motion_blur, 0.0..=1.0);
+                    slider_row(ui, Some((look, "motion_blur")), "Deklanşör (0 = kapalı, 0.5 = 180°)", &mut grade.motion_blur, 0.0..=1.0);
                 });
 
             // Clamped only when something moved, and only then: a file can carry values no slider
@@ -195,7 +203,7 @@ pub fn draw_environment_settings(ui: &mut egui::Ui, world: &World, state: &mut E
                 // SAFETY: as above.
                 let mut cameras = unsafe { world.query_unchecked::<&mut Camera>() };
                 if let Some(mut cam) = cameras.get_mut(cam_id) {
-                    slider_row(ui, "Kamera Pozlaması (Exposure)", &mut cam.exposure, 0.1..=5.0);
+                    slider_row(ui, Some((look.of("Camera"), "exposure")), "Kamera Pozlaması (Exposure)", &mut cam.exposure, 0.1..=5.0);
                     cam.exposure = cam.exposure.clamp(0.01, 20.0);
                 }
             });
