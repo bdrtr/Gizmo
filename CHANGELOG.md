@@ -59,6 +59,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **A view is drawn at its own size: `Renderer::with_view_targets`.** A camera with a viewport (a minimap, a player of a
+  split screen) or a texture of its own was drawn at the window's size and its picture squeezed into its rectangle,
+  paying for every pixel of the window. Now its screen targets — depth, G-buffer, HDR, SSAO/SSR/volumetric, the edge
+  filters, the fluid's — are its own, made once per size (1 ms) by the same code as a window resize and swapped in for
+  its draw; the renderer's states, settings and pipelines stay shared (`gizmo_renderer::view_targets`). A view of a
+  size of its own keeps its own temporal history, the first split-screen view included. `dunya`'s map on a Radeon
+  780M: the frame's GPU time 16.8 ms → 11.6. FXAA reads its texel size from its input rather than a uniform.
 - **`ShadowSettings::resolution`, and integrated GPUs start at 2048.** The sun's cascades' size is a setting, made
   again the next frame it changes (`ShadowSettings::for_device` is what `Renderer` starts with): an integrated GPU's
   four cascades are 2048² rather than 3072², which took `dunya`'s shadow pass on a Radeon 780M from 5.1 ms to 2.8.

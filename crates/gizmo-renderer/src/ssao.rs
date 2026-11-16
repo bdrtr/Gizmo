@@ -769,3 +769,18 @@ fn mk_apply_pipeline(device: &wgpu::Device, bgl: &wgpu::BindGroupLayout) -> wgpu
             cache: None,
     })
 }
+
+crate::view_targets::screen_targets! {
+    SsaoState => SsaoTargets {
+        key blur_bgl: wgpu::BindGroupLayout;
+        ao_texture: wgpu::Texture,
+        ao_view: wgpu::TextureView,
+        ao_blurred_texture: wgpu::Texture,
+        ao_blurred_view: wgpu::TextureView,
+        apply_bind_group: wgpu::BindGroup,
+        blur_bind_group: wgpu::BindGroup,
+        ssao_gbuf_bind_group: wgpu::BindGroup,
+        width: u32,
+        height: u32,
+    }
+}

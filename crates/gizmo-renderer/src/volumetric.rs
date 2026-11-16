@@ -509,3 +509,20 @@ impl VolumetricState {
         })
     }
 }
+
+crate::view_targets::screen_targets! {
+    VolumetricState => VolumetricTargets {
+        key apply_bgl: wgpu::BindGroupLayout;
+        apply_bind_group: wgpu::BindGroup,
+        behind_apply_bind_group: wgpu::BindGroup,
+        behind_texture: wgpu::Texture,
+        behind_view: wgpu::TextureView,
+        veil_depth_texture: wgpu::Texture,
+        veil_depth_view: wgpu::TextureView,
+        volumetric_bind_group: wgpu::BindGroup,
+        volumetric_texture: wgpu::Texture,
+        volumetric_view: wgpu::TextureView,
+        width: u32,
+        height: u32,
+    }
+}

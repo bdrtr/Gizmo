@@ -360,3 +360,10 @@ impl DecalState {
         });
     }
 }
+
+crate::view_targets::screen_targets! {
+    DecalState => DecalTargets {
+        key world_pos_bgl: wgpu::BindGroupLayout;
+        world_pos_bg: wgpu::BindGroup,
+    }
+}

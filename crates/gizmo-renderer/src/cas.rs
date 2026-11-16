@@ -309,6 +309,18 @@ fn create_bind_group(
     })
 }
 
+
+crate::view_targets::screen_targets! {
+    CasState => CasTargets {
+        key bind_group_layout: wgpu::BindGroupLayout;
+        format: wgpu::TextureFormat,
+        size: (u32, u32),
+        bind_group: wgpu::BindGroup,
+        input_texture: wgpu::Texture,
+        input_texture_view: wgpu::TextureView,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -723,6 +723,8 @@ impl Renderer {
             motion_history: Default::default(),
             light_cookies: Default::default(),
             shadow_settings: crate::csm::ShadowSettings::for_device(device_type),
+            view_targets: Vec::new(),
+            view_targets_frame: 0,
             scene_extent: Default::default(),
             fog: None,
             sky: None,

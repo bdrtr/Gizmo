@@ -26,7 +26,9 @@ fn vs_main(@builtin(vertex_index) idx: u32) -> VertexOutput {
 @group(0) @binding(2) var<uniform> params: FxaaParams;
 
 struct FxaaParams {
-    inv_screen_size: vec2<f32>,  // 1.0 / vec2(width, height)
+    // Unused: the texel size is the input's own (`textureDimensions`), so one buffer serves inputs of
+    // every size — a view drawn at its own size has its own input (`crate::view_targets`).
+    inv_screen_size: vec2<f32>,
     fxaa_enabled: f32,           // 1.0 = açık, 0.0 = kapalı (bypass)
     quality: f32,                // FxaaQuality: 0 Low, 1 Medium, 2 High (default), 3 Ultra
 };
@@ -43,7 +45,7 @@ fn luma(c: vec3<f32>) -> f32 {
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let uv = in.uv;
-    let inv = params.inv_screen_size;
+    let inv = 1.0 / vec2<f32>(textureDimensions(input_tex));
 
     // Bypass modu
     if (params.fxaa_enabled < 0.5) {

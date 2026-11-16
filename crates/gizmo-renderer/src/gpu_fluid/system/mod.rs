@@ -672,6 +672,24 @@ pub fn lattice(settings: &FluidSettings, pool: u32) -> Vec<FluidParticle> {
         .collect()
 }
 
+
+crate::view_targets::screen_targets! {
+    GpuFluidSystem => FluidTargets {
+        key particles_buffer: wgpu::Buffer;
+        blur_texture_view: wgpu::TextureView,
+        depth_texture_view: wgpu::TextureView,
+        opaque_bg_texture: wgpu::Texture,
+        opaque_bg_texture_view: wgpu::TextureView,
+        raw_depth_texture: wgpu::Texture,
+        raw_depth_texture_view: wgpu::TextureView,
+        ssfr_blur_x_bg: wgpu::BindGroup,
+        ssfr_blur_y_bg: wgpu::BindGroup,
+        ssfr_composite_bg: wgpu::BindGroup,
+        ssfr_particle_bg: wgpu::BindGroup,
+        thickness_texture_view: wgpu::TextureView,
+    }
+}
+
 #[cfg(test)]
 mod gpu_dispatch_tests {
     use super::*;

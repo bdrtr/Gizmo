@@ -374,6 +374,7 @@ pub fn draw_ahead_of_views(world: &World, renderer: &mut Renderer, detail: Simul
     capture_reflection_probes(world, renderer);
     renderer.planar.begin_frame();
     renderer.retain_view_histories(|camera| world.get::<Camera>(camera).is_some());
+    renderer.retain_view_targets();
     let mut cameras = Vec::new();
     let detail = match detail {
         SimulationDetail::NearestOf(views) => {
@@ -430,18 +431,21 @@ fn draw_camera_targets(world: &World, renderer: &mut Renderer) {
         let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("camera_target"),
         });
-        renderer.with_view_history(Some(camera), |renderer| {
-            draw_camera_view(
-                world,
-                &mut encoder,
-                target.view(),
-                renderer,
-                Some(camera),
-                true,
-                Some([0.0, 0.0, width as f32, height as f32]),
-                false,
-                None,
-            );
+        // At the texture's size (`Renderer::with_view_targets`).
+        renderer.with_view_targets((width, height), |renderer| {
+            renderer.with_view_history(Some(camera), |renderer| {
+                draw_camera_view(
+                    world,
+                    &mut encoder,
+                    target.view(),
+                    renderer,
+                    Some(camera),
+                    true,
+                    Some([0.0, 0.0, width as f32, height as f32]),
+                    false,
+                    None,
+                );
+            });
         });
         renderer.queue.submit(std::iter::once(encoder.finish()));
     }
@@ -564,10 +568,15 @@ pub fn draw_viewports(
         if !simple {
             capture_planar_reflections(world, renderer, Some(camera), region[2] / region[3].max(1.0));
         }
-        // The first view is the frame's own and draws with the renderer's temporal state; every
-        // other one with its camera's.
-        renderer.with_view_history((index > 0).then_some(camera), |renderer| {
-            draw_camera_view(world, &mut frame, view, renderer, Some(camera), true, Some(region), false, None);
+        // Drawn at its rectangle's size, into targets of that size (`Renderer::with_view_targets`).
+        // The first view is the frame's own and draws with the renderer's temporal state when it
+        // fills the frame; every other one — and a first one of a size of its own — with its camera's.
+        let shown = rectangle_size(region);
+        let own_size = shown != (renderer.size.width, renderer.size.height);
+        renderer.with_view_targets(shown, |renderer| {
+            renderer.with_view_history((index > 0 || own_size).then_some(camera), |renderer| {
+                draw_camera_view(world, &mut frame, view, renderer, Some(camera), true, Some(region), false, None);
+            });
         });
         let done = std::mem::replace(&mut frame, new_encoder(renderer));
         renderer.queue.submit(std::iter::once(done.finish()));
@@ -1392,6 +1401,11 @@ struct FixedView {
     /// An irradiance volume's capture: the light bounced off the scene alone, the sky left out —
     /// the background black, no environment map, skybox or backdrop (`Renderer::skip_sky`).
     bounce: bool,
+}
+
+/// The size, in whole pixels, of a view's rectangle `[x, y, w, h]` — what it is drawn at.
+fn rectangle_size(region: [f32; 4]) -> (u32, u32) {
+    (region[2].round().max(1.0) as u32, region[3].round().max(1.0) as u32)
 }
 
 /// The shape a view is drawn at: a capture's own, else its rectangle's (a split-screen view, a
@@ -6341,8 +6355,10 @@ mod golden_render_tests {
     /// history between the two, every frame blends the other camera's picture into this one —
     /// measured, though, TAA's neighbourhood clamp hides most of that (the left half's red count
     /// drops 2067 → 1933, too close to threshold reliably), so the test pins the cause instead:
-    /// the renderer's own TAA has stepped once per frame. Shared, both views step it — twice per
-    /// frame — which is also what sends each view's jitter through every other Halton sample.
+    /// each half has a history of its own. Since 2026-11-16 each half is also drawn at its own
+    /// size (`Renderer::with_view_targets`), so neither steps the window-sized TAA: shared, the
+    /// views stepped it twice per frame, which is also what sent each view's jitter through every
+    /// other Halton sample.
     #[test]
     #[ignore = "requires a GPU adapter"]
     fn split_screen_draws_each_camera_into_its_own_half() {
@@ -6388,14 +6404,130 @@ mod golden_render_tests {
             }
             let (left_red, left_blue, _) = split_colours(&frame, 0, 64);
             let (right_red, right_blue, _) = split_colours(&frame, 64, 128);
+            // Each half is drawn at its own size (64 × 128, one set of targets the two share), so each
+            // has a history of its own and the window-sized one is not stepped by either.
+            assert_eq!(renderer.view_target_sizes(), vec![(64, 128)], "the halves' own targets");
+            assert_eq!(renderer.view_history_cameras().len(), 2, "a history each");
             let steps = renderer.taa.as_ref().map(|t| t.frame_index);
-            assert_eq!(steps, Some(4), "four split-screen frames stepped view 0's TAA {steps:?} times — the views share it");
+            assert_eq!(steps, Some(0), "the window-sized TAA was stepped {steps:?} times by views of another size");
             assert!(left_red >= 150 && right_blue >= 150, "with TAA: {left_red} red left, {right_blue} blue right");
             assert!(
                 left_blue <= 5 && right_red <= 5,
                 "with TAA the views bleed into each other ({left_blue} blue left, {right_red} red \
                  right) — they share one history",
             );
+        });
+    }
+
+    /// **A viewport is drawn at its own size.** A frame-filling camera and a second one in a quarter of
+    /// the frame (a minimap): the quarter is drawn into targets of its own 64 × 64
+    /// (`Renderer::with_view_targets`) while the renderer's own stay the frame's 128 × 128, and what it
+    /// shows is what the same camera draws filling a 64 × 64 frame of its own. Without a viewport any
+    /// more, its targets are dropped a frame later. Until 2026-11-16 a viewport was drawn at the
+    /// window's size and squeezed into its rectangle: `dunya`'s map, 6 % of the frame, cost as many
+    /// pixels as the frame itself — 3.5 ms of a 17 ms frame on a Radeon 780M.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_viewport_is_drawn_at_its_own_size() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        use crate::renderer::components::Viewport;
+        let quarter = Viewport::new(0.5, 0.5, 0.5, 0.5);
+        pollster::block_on(async {
+            let plain = |renderer: &mut Renderer| {
+                renderer.taa = None;
+                renderer.ssgi = None;
+                renderer.ssr = None;
+            };
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            plain(&mut renderer);
+            let mut world = World::new();
+            split_screen_scene(&renderer, &mut world);
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(-20.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            split_camera(&mut world, 20.0, quarter, false);
+            let frame = render_world(&mut renderer, &mut world).await;
+            assert_eq!(renderer.view_target_sizes(), vec![(64, 64)], "the quarter's own targets");
+            assert_eq!((renderer.size.width, renderer.size.height), (128, 128), "the renderer's own size is the frame's");
+            let hdr = renderer.post.hdr_texture.size();
+            assert_eq!((hdr.width, hdr.height), (128, 128), "and so is its HDR target");
+
+            // The same camera filling a frame of its own (128 × 128: `render_world` reads that back),
+            // taken down to 64 × 64 two by two.
+            let mut alone = crate::test_gpu::headless_renderer(128, 128).await;
+            plain(&mut alone);
+            let mut solo = World::new();
+            split_screen_scene(&alone, &mut solo);
+            world_camera(&mut solo, 20.0);
+            let full = render_world(&mut alone, &mut solo).await;
+            let own: Vec<u8> = (0..64 * 64)
+                .flat_map(|i| {
+                    let (x, y) = (i % 64 * 2, i / 64 * 2);
+                    let at = |dx: usize, dy: usize, c: usize| u32::from(full[((y + dy) * 128 + x + dx) * 4 + c]);
+                    [0, 1, 2, 3].map(|c| ((at(0, 0, c) + at(1, 0, c) + at(0, 1, c) + at(1, 1, c) + 2) / 4) as u8)
+                })
+                .collect();
+            let [x0, y0, _, _] = quarter.to_pixels(128, 128).map(|v| v as usize);
+            let mut diff = 0u64;
+            let mut blue = 0;
+            for y in 0..64 {
+                for x in 0..64 {
+                    let a = &frame[((y0 + y) * 128 + x0 + x) * 4..][..3];
+                    let b = &own[(y * 64 + x) * 4..][..3];
+                    diff += a.iter().zip(b).map(|(&p, &q)| u64::from(p.abs_diff(q))).sum::<u64>();
+                    blue += usize::from(a[2] as i32 > a[0] as i32 + 40);
+                }
+            }
+            let mean = diff as f64 / (64.0 * 64.0 * 3.0);
+            if let Ok(dir) = std::env::var("GIZMO_DUMP_VIEWPORT") {
+                let ppm = |name: &str, w: usize, h: usize, px: &dyn Fn(usize, usize) -> [u8; 3]| {
+                    let mut out = format!("P6 {w} {h} 255\n").into_bytes();
+                    for y in 0..h {
+                        for x in 0..w {
+                            out.extend_from_slice(&px(x, y));
+                        }
+                    }
+                    std::fs::write(format!("{dir}/{name}.ppm"), out).unwrap();
+                };
+                ppm("frame", 128, 128, &|x, y| frame[(y * 128 + x) * 4..][..3].try_into().unwrap());
+                ppm("own", 64, 64, &|x, y| own[(y * 64 + x) * 4..][..3].try_into().unwrap());
+            }
+            assert!(blue > 300, "the quarter shows its camera's blue cube: {blue} pixels");
+            assert!(mean < 3.0, "the quarter differs from its camera's own 64 × 64 frame by {mean:.2} a channel");
+
+            // No viewport: its targets go.
+            let map: Vec<Entity> = world
+                .query::<(Entity, &crate::renderer::components::Camera)>()
+                .iter()
+                .filter(|(_, c)| c.viewport.is_some())
+                .map(|(e, _)| e)
+                .collect();
+            for e in map {
+                world.despawn(e);
+            }
+            for _ in 0..2 {
+                render_world(&mut renderer, &mut world).await;
+            }
+            assert!(renderer.view_target_sizes().is_empty(), "kept {:?} with no view of that size", renderer.view_target_sizes());
+        });
+    }
+
+    /// A camera at `x`, looking down −z at the cube there, filling the frame.
+    fn world_camera(world: &mut World, x: f32) {
+        world.spawn_bundle(CameraBundle {
+            position: Vec3::new(x, 0.0, 6.0),
+            yaw: -std::f32::consts::FRAC_PI_2,
+            primary: true,
+            ..Default::default()
         });
     }
 

@@ -989,6 +989,25 @@ fn composite_constants(_surface_format: wgpu::TextureFormat, _variant: Composite
     Vec::new()
 }
 
+
+crate::view_targets::screen_targets! {
+    PostProcessState => PostTargets {
+        key post_bind_group_layout: wgpu::BindGroupLayout;
+        hdr_texture: wgpu::Texture,
+        hdr_texture_view: wgpu::TextureView,
+        hdr_bind_group: wgpu::BindGroup,
+        bloom_extract_texture_view: wgpu::TextureView,
+        bloom_extract_bind_group: wgpu::BindGroup,
+        bloom_blur_texture_view: wgpu::TextureView,
+        bloom_blur_bind_group: wgpu::BindGroup,
+        composite_bloom_bind_group: wgpu::BindGroup,
+        blur_params_buffer: wgpu::Buffer,
+        blur_v_params_buffer: wgpu::Buffer,
+        blur_h_bind_group: wgpu::BindGroup,
+        blur_v_bind_group: wgpu::BindGroup,
+    }
+}
+
 #[cfg(test)]
 mod srgb_tests {
     /// A browser canvas (`bgra8unorm`, `rgba8unorm`) gets the encode; an sRGB surface (Android's

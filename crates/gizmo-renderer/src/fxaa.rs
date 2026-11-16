@@ -234,13 +234,8 @@ impl FxaaState {
         self.input_texture = tex;
         self.input_texture_view = view;
 
-        // Params güncelle
-        let params = FxaaParams {
-            inv_screen_size: [1.0 / width as f32, 1.0 / height as f32],
-            fxaa_enabled: if self.enabled { 1.0 } else { 0.0 },
-            quality: self.quality.index(),
-        };
-        queue.write_buffer(&self.params_buffer, 0, bytemuck::cast_slice(&[params]));
+        // The texel size is the input's own (`textureDimensions` in the shader): nothing to upload.
+        let _ = queue;
 
         // Bind group yeniden oluştur (yeni texture view)
         self.bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -349,6 +344,16 @@ fn create_fxaa_texture(
     });
     let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
     (tex, view)
+}
+
+
+crate::view_targets::screen_targets! {
+    FxaaState => FxaaTargets {
+        key bind_group_layout: wgpu::BindGroupLayout;
+        input_texture: wgpu::Texture,
+        input_texture_view: wgpu::TextureView,
+        bind_group: wgpu::BindGroup,
+    }
 }
 
 #[cfg(test)]

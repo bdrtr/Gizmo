@@ -193,6 +193,11 @@ pub struct Renderer {
     /// The frame under the glass. `None` until a frame draws glass, and again after a resize: see
     /// [`crate::transmission`].
     pub behind: Option<crate::transmission::BehindSurface>,
+    /// The screen targets of views drawn at a size of their own, by size — see
+    /// [`with_view_targets`](Self::with_view_targets).
+    pub(crate) view_targets: Vec<crate::view_targets::ViewTargets>,
+    /// The frame [`retain_view_targets`](Self::retain_view_targets) counts.
+    view_targets_frame: u64,
 
     // === SSGI — Screen-Space Global Illumination ===
     /// Screen-space global illumination. Requires [`deferred`](Renderer::deferred).
@@ -1127,133 +1132,156 @@ impl Renderer {
             }
             return;
         }
-        {
-            self.size = new_size;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
-            if let Some(ref surface) = self.surface {
-                surface.configure(&self.device, &self.config);
-            }
+        self.config.width = new_size.width;
+        self.config.height = new_size.height;
+        if let Some(ref surface) = self.surface {
+            surface.configure(&self.device, &self.config);
+        }
+        if self.behind.take().is_some() {
+            self.scene.set_behind_view(&self.device, None);
+        }
+        self.resize_screen_targets(new_size);
+        // The other views' own histories and targets were built at the old size; they rebuild on use.
+        self.view_history.clear();
+        self.view_targets.clear();
 
-            self.depth_texture_view =
-                Self::create_depth_texture(&self.device, new_size.width, new_size.height);
+        let (w, h) = (new_size.width, new_size.height);
+        // TAA history textures + bind groups (needs fresh hdr_view + position_view)
+        if let (Some(ref mut taa), Some(ref def)) = (&mut self.taa, &self.deferred) {
+            taa.resize(&self.device, &self.post.hdr_texture_view, &def.world_position_view, &def.velocity_view, w, h);
+        }
+        if let (Some(ref mut ssgi), Some(ref def)) = (&mut self.ssgi, &self.deferred) {
+            ssgi.resize(&self.device, def, &self.post.hdr_texture_view, w, h);
+        }
+        if let Some(ref mut ae) = self.auto_exposure {
+            ae.resize(&self.device, &self.queue, &self.post.hdr_texture_view, w, h);
+        }
+    }
 
-            if self.behind.take().is_some() {
-                self.scene.set_behind_view(&self.device, None);
-            }
-
-            if let Some(ref mut def) = self.deferred {
-                def.resize(&self.device, &self.depth_texture_view, new_size.width, new_size.height);
-                if let Some(ref mut decal) = self.decal {
-                    decal.resize(&self.device, def);
-                }
-            }
-
-            let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::ClampToEdge,
-                address_mode_v: wgpu::AddressMode::ClampToEdge,
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            });
-            let (hdr_t, hdr_tv, hdr_bg, be_tv, be_bg, bb_tv, bb_bg, cb_bg) =
-                crate::post_process::create_post_textures(
-                    &self.device,
-                    &self.post.post_bind_group_layout,
-                    &self.post.composite_bloom_bind_group_layout,
-                    &sampler,
-                    new_size.width,
-                    new_size.height,
-                    &self.depth_texture_view,
-                    &self.post.lut_view,
-                );
-            self.post.hdr_texture = hdr_t;
-            self.post.hdr_texture_view = hdr_tv;
-            self.post.hdr_bind_group = hdr_bg;
-            self.post.bloom_extract_texture_view = be_tv;
-            self.post.bloom_extract_bind_group = be_bg;
-            self.post.bloom_blur_texture_view = bb_tv;
-            self.post.bloom_blur_bind_group = bb_bg;
-            self.post.composite_bloom_bind_group = cb_bg;
-
-            let (buf, v_buf, h_bg, v_bg) = crate::post_process::create_blur_buffers(
-                &self.device,
-                &self.post.blur_params_bind_group_layout,
-                new_size.width,
-                new_size.height,
-            );
-            self.post.blur_params_buffer = buf;
-            self.post.blur_v_params_buffer = v_buf;
-            self.post.blur_h_bind_group = h_bg;
-            self.post.blur_v_bind_group = v_bg;
-
-            // The other views' own histories were built at the old size; they rebuild on use.
-            self.view_history.clear();
-
-            // TAA history textures + bind groups (needs fresh hdr_view + position_view)
-            if let (Some(ref mut taa), Some(ref def)) = (&mut self.taa, &self.deferred) {
-                taa.resize(
-                    &self.device,
-                    &self.post.hdr_texture_view,
-                    &def.world_position_view,
-                    &def.velocity_view,
-                    new_size.width,
-                    new_size.height,
-                );
-            }
-            if let (Some(ref mut ssgi), Some(ref def)) = (&mut self.ssgi, &self.deferred) {
-                ssgi.resize(
-                    &self.device,
-                    def,
-                    &self.post.hdr_texture_view,
-                    new_size.width,
-                    new_size.height,
-                );
-            }
-            // SSR samples the HDR target and the G-buffer, both rebuilt above. It was left to the
-            // draw, which rebuilds it only when its size differs from the renderer's — so a resize
-            // that ended at SSR's own size before a frame was drawn left it reading the dropped HDR
-            // texture, and the reflections froze on the last frame before the resize.
-            if let (Some(ref mut ssr), Some(ref def)) = (&mut self.ssr, &self.deferred) {
-                ssr.resize(&self.device, def, &self.post.hdr_texture_view, new_size.width, new_size.height);
-            }
-            if let (Some(ref mut ssao), Some(ref def)) = (&mut self.ssao, &self.deferred) {
-                ssao.resize(
-                    &self.device,
-                    def,
-                    new_size.width,
-                    new_size.height,
-                );
-            }
-            if let (Some(ref mut vol), Some(ref def)) = (&mut self.volumetric, &self.deferred) {
-                vol.resize(
-                    &self.device,
-                    def,
-                    new_size.width,
-                    new_size.height,
-                );
-            }
-            // FXAA resize
-            if let Some(ref mut fxaa) = self.fxaa {
-                fxaa.resize(&self.device, &self.queue, self.config.format, new_size.width, new_size.height);
-            }
-            if let Some(ref mut smaa) = self.smaa {
-                smaa.resize(&self.device, &self.queue, self.config.format, new_size.width, new_size.height);
-            }
-            if let Some(ref mut cas) = self.cas {
-                cas.resize(&self.device, self.config.format, new_size.width, new_size.height);
-            }
-            if let Some(ref mut ae) = self.auto_exposure {
-                ae.resize(&self.device, &self.queue, &self.post.hdr_texture_view, new_size.width, new_size.height);
-            }
-            // GPU fluid SSFR render targets. Previously never rebuilt, so after any
-            // resize the fluid rendered into a stale sub-rectangle / the composite
-            // copied the wrong extent. Fluid composites into the HDR target.
-            let fluid_fmt = self.post.hdr_texture.format();
-            if let Some(ref mut fluid) = self.gpu_fluid {
-                fluid.resize(&self.device, fluid_fmt, new_size.width, new_size.height);
+    /// Makes every **screen target** at `size` — the depth buffer, the G-buffer and the decals over it,
+    /// the HDR and bloom targets, SSR, SSAO, the volumetric light, the edge filters, the fluid's — and
+    /// sets `size`. What a window resize and a view's own targets ([`crate::view_targets`]) both make;
+    /// the temporal effects (TAA, SSGI, auto exposure) are a view's history, not its targets.
+    fn resize_screen_targets(&mut self, size: winit::dpi::PhysicalSize<u32>) {
+        let (width, height) = (size.width, size.height);
+        self.size = size;
+        self.depth_texture_view = Self::create_depth_texture(&self.device, width, height);
+        if let Some(ref mut def) = self.deferred {
+            def.resize(&self.device, &self.depth_texture_view, width, height);
+            if let Some(ref mut decal) = self.decal {
+                decal.resize(&self.device, def);
             }
         }
+
+        let sampler = self.device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let (hdr_t, hdr_tv, hdr_bg, be_tv, be_bg, bb_tv, bb_bg, cb_bg) = crate::post_process::create_post_textures(
+            &self.device,
+            &self.post.post_bind_group_layout,
+            &self.post.composite_bloom_bind_group_layout,
+            &sampler,
+            width,
+            height,
+            &self.depth_texture_view,
+            &self.post.lut_view,
+        );
+        self.post.hdr_texture = hdr_t;
+        self.post.hdr_texture_view = hdr_tv;
+        self.post.hdr_bind_group = hdr_bg;
+        self.post.bloom_extract_texture_view = be_tv;
+        self.post.bloom_extract_bind_group = be_bg;
+        self.post.bloom_blur_texture_view = bb_tv;
+        self.post.bloom_blur_bind_group = bb_bg;
+        self.post.composite_bloom_bind_group = cb_bg;
+
+        let (buf, v_buf, h_bg, v_bg) =
+            crate::post_process::create_blur_buffers(&self.device, &self.post.blur_params_bind_group_layout, width, height);
+        self.post.blur_params_buffer = buf;
+        self.post.blur_v_params_buffer = v_buf;
+        self.post.blur_h_bind_group = h_bg;
+        self.post.blur_v_bind_group = v_bg;
+
+        // SSR samples the HDR target and the G-buffer, both rebuilt above. It was left to the
+        // draw, which rebuilds it only when its size differs from the renderer's — so a resize
+        // that ended at SSR's own size before a frame was drawn left it reading the dropped HDR
+        // texture, and the reflections froze on the last frame before the resize.
+        if let (Some(ref mut ssr), Some(ref def)) = (&mut self.ssr, &self.deferred) {
+            ssr.resize(&self.device, def, &self.post.hdr_texture_view, width, height);
+        }
+        if let (Some(ref mut ssao), Some(ref def)) = (&mut self.ssao, &self.deferred) {
+            ssao.resize(&self.device, def, width, height);
+        }
+        if let (Some(ref mut vol), Some(ref def)) = (&mut self.volumetric, &self.deferred) {
+            vol.resize(&self.device, def, width, height);
+        }
+        if let Some(ref mut fxaa) = self.fxaa {
+            fxaa.resize(&self.device, &self.queue, self.config.format, width, height);
+        }
+        if let Some(ref mut smaa) = self.smaa {
+            smaa.resize(&self.device, &self.queue, self.config.format, width, height);
+        }
+        if let Some(ref mut cas) = self.cas {
+            cas.resize(&self.device, self.config.format, width, height);
+        }
+        // GPU fluid SSFR render targets. Previously never rebuilt, so after any
+        // resize the fluid rendered into a stale sub-rectangle / the composite
+        // copied the wrong extent. Fluid composites into the HDR target.
+        let fluid_fmt = self.post.hdr_texture.format();
+        if let Some(ref mut fluid) = self.gpu_fluid {
+            fluid.resize(&self.device, fluid_fmt, width, height);
+        }
+    }
+
+    /// Runs `f` with the screen targets at `size` in place of the renderer's own — its `size` too —
+    /// or with the renderer's own when `size` is theirs: a camera with a viewport or a texture of
+    /// its own is drawn at the size it is shown at, not the window's. See [`crate::view_targets`].
+    /// Each size's are made on first use and kept while a view of that size is drawn
+    /// ([`retain_view_targets`](Self::retain_view_targets)); a [`resize`](Self::resize) drops them.
+    pub fn with_view_targets<R>(&mut self, (width, height): (u32, u32), f: impl FnOnce(&mut Self) -> R) -> R {
+        let size = winit::dpi::PhysicalSize::new(width, height);
+        if size == self.size || width == 0 || height == 0 {
+            return f(self);
+        }
+        let found = self.view_targets.iter().position(|t| t.size == size);
+        let mut targets = match found.map(|i| self.view_targets.swap_remove(i)) {
+            Some(targets) if targets.fits(self) => targets,
+            _ => self.make_view_targets(size),
+        };
+        targets.last_used = self.view_targets_frame;
+        targets.swap(self);
+        let out = f(self);
+        targets.swap(self);
+        self.view_targets.push(targets);
+        out
+    }
+
+    /// The screen targets at `size`, made by the renderer's own resize and taken, the renderer's own
+    /// put back.
+    fn make_view_targets(&mut self, size: winit::dpi::PhysicalSize<u32>) -> crate::view_targets::ViewTargets {
+        let mut own = crate::view_targets::ViewTargets::take(self);
+        self.resize_screen_targets(size);
+        let made = crate::view_targets::ViewTargets::take(self);
+        own.swap(self);
+        made
+    }
+
+    /// Starts a frame for the views' own targets: a size no view was drawn at in the frame before
+    /// this one has its targets dropped. The game path calls it once a frame, as it does
+    /// [`retain_view_histories`](Self::retain_view_histories).
+    pub fn retain_view_targets(&mut self) {
+        self.view_targets_frame += 1;
+        let frame = self.view_targets_frame;
+        self.view_targets.retain(|t| t.last_used + 1 >= frame);
+    }
+
+    /// The sizes the views' own screen targets are kept at ([`with_view_targets`](Self::with_view_targets)).
+    pub fn view_target_sizes(&self) -> Vec<(u32, u32)> {
+        self.view_targets.iter().map(|t| (t.size.width, t.size.height)).collect()
     }
 
     /// Runs the post-process chain into `output_view`.
@@ -1476,6 +1504,14 @@ impl Renderer {
     /// again kept its old accumulation.
     fn reconcile_view_history(&self, history: &mut ViewHistory) {
         let (w, h) = (self.size.width, self.size.height);
+        // Built at another size — the view is drawn at its own (`with_view_targets`), and that changed:
+        // made again, over the targets it is drawn with now.
+        if history.size != (w, h) {
+            history.taa = None;
+            history.ssgi = None;
+            history.auto_exposure = None;
+            history.size = (w, h);
+        }
         match (&self.taa, &self.deferred) {
             (Some(own), Some(def)) => {
                 if history.taa.is_none() || history.paired.taa != own.generation {
@@ -1872,6 +1908,8 @@ pub(crate) struct ViewHistory {
     ssgi: Option<crate::ssgi::SsgiState>,
     auto_exposure: Option<crate::auto_exposure::AutoExposureState>,
     previous_view_proj: Option<[[f32; 4]; 4]>,
+    /// The size its states were built at: the view's (`Renderer::with_view_targets`).
+    size: (u32, u32),
     /// The `generation` of the renderer's own state each of the three was built beside — see
     /// [`Renderer::with_view_history`]. 0 for none.
     paired: PairedGenerations,

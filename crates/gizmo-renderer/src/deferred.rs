@@ -1088,6 +1088,33 @@ impl DeferredState {
     }
 }
 
+
+crate::view_targets::screen_targets! {
+    DeferredState => DeferredTargets {
+        key gbuffer_bind_group_layout: wgpu::BindGroupLayout;
+        albedo_metallic_tex: wgpu::Texture,
+        albedo_metallic_view: wgpu::TextureView,
+        normal_roughness_tex: wgpu::Texture,
+        normal_roughness_view: wgpu::TextureView,
+        world_position_tex: wgpu::Texture,
+        world_position_view: wgpu::TextureView,
+        world_tangent_tex: wgpu::Texture,
+        world_tangent_view: wgpu::TextureView,
+        emissive_tex: wgpu::Texture,
+        emissive_view: wgpu::TextureView,
+        velocity_tex: wgpu::Texture,
+        velocity_view: wgpu::TextureView,
+        gbuf_sampler: wgpu::Sampler,
+        gbuffer_bind_group: wgpu::BindGroup,
+        seen_texture: wgpu::Texture,
+        seen_view: wgpu::TextureView,
+        seen_bind_group: wgpu::BindGroup,
+        depth_view: wgpu::TextureView,
+        width: u32,
+        height: u32,
+    }
+}
+
 #[cfg(test)]
 mod gbuffer_packing_tests {
     /// Mirror of `gbuffer.wgsl`'s `packed_ss_aniso`.

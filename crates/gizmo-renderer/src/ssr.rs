@@ -539,3 +539,15 @@ impl SsrState {
         })
     }
 }
+
+crate::view_targets::screen_targets! {
+    SsrState => SsrTargets {
+        key apply_bgl: wgpu::BindGroupLayout;
+        apply_bind_group: wgpu::BindGroup,
+        ssr_bind_group: wgpu::BindGroup,
+        ssr_texture: wgpu::Texture,
+        ssr_view: wgpu::TextureView,
+        width: u32,
+        height: u32,
+    }
+}

@@ -62,6 +62,7 @@ pub struct SmaaState {
 }
 
 /// The bind groups that hold the size-dependent views, built again on a resize.
+#[derive(Clone)]
 struct Groups {
     /// The input as stored (display-encoded), for edge detection.
     encoded: wgpu::BindGroup,
@@ -102,12 +103,7 @@ impl SmaaState {
             min_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
-        let info = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("SMAA info"),
-            size: 16,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let info = info_buffer(device);
         let texture = |binding| wgpu::BindGroupLayoutEntry {
             binding,
             visibility: wgpu::ShaderStages::FRAGMENT,
@@ -210,6 +206,8 @@ impl SmaaState {
         self.input_texture_view = input_texture_view;
         self.edges = edges;
         self.weights = weights;
+        // Its own: a view drawn at its own size keeps the size it was made for (`crate::view_targets`).
+        self.info = info_buffer(device);
         self.rebind(device, queue, width, height);
     }
 
@@ -236,6 +234,16 @@ struct Views<'a> {
 }
 
 /// The bind groups for a frame of `width` × `height`, and its size in the info uniform.
+/// The `rt_metrics` uniform: the targets' texel size, written by `groups`.
+fn info_buffer(device: &wgpu::Device) -> wgpu::Buffer {
+    device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("SMAA info"),
+        size: 16,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    })
+}
+
 fn groups(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -426,6 +434,21 @@ pub fn run_smaa_pass(smaa: &SmaaState, encoder: &mut wgpu::CommandEncoder, outpu
     p.set_bind_group(0, &smaa.groups.linear, &[]);
     p.set_bind_group(1, &smaa.groups.blend, &[]);
     p.draw(0..3, 0..1);
+}
+
+
+crate::view_targets::screen_targets! {
+    SmaaState => SmaaTargets {
+        key colour_layout: wgpu::BindGroupLayout;
+        format: wgpu::TextureFormat,
+        pipelines: [wgpu::RenderPipeline; 3],
+        input_texture: wgpu::Texture,
+        input_texture_view: wgpu::TextureView,
+        edges: wgpu::TextureView,
+        weights: wgpu::TextureView,
+        groups: Groups,
+        info: wgpu::Buffer,
+    }
 }
 
 #[cfg(test)]
