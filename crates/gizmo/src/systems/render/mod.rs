@@ -17002,6 +17002,70 @@ fn material_surface(input: SurfaceInput) -> Surface {
         });
     }
 
+    /// **A lit sprite is lit by the scene's own lights; an unlit one is not.** Two white world sprites
+    /// side by side under a dark `SpriteAmbient`, no sun, and a point light by the left one's left
+    /// edge: the lit sprite is bright by the light and dark across from it — its ambient — while the
+    /// unlit one beside it is the white it always was, light or none. Before, a sprite had no way to be
+    /// lit at all: a 2D night scene could only be painted dark by hand.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_lit_sprite_is_lit_by_the_scenes_lights() {
+        use gizmo_renderer::components::{PointLight, Sprite};
+        use gizmo_renderer::sprite::{SpriteAmbient, SpriteFilter};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(with_light: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            world.insert_resource(SpriteAmbient(Vec3::splat(0.05)));
+            let white = renderer.load_sprite_rgba(&[255; 4], 1, 1, SpriteFilter::Nearest).expect("a 1×1 image");
+            for (x, lit) in [(-1.3, true), (1.3, false)] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(Vec3::new(x, 0.0, 0.0)));
+                world.add_component(e, GlobalTransform::default());
+                let sprite = Sprite::world(white, gizmo_math::Vec2::new(2.0, 1.5));
+                world.add_component(e, if lit { sprite.lit() } else { sprite });
+            }
+            if with_light {
+                let light = world.spawn();
+                world.add_component(light, Transform::new(Vec3::new(-2.3, 0.0, 0.4)));
+                world.add_component(light, GlobalTransform::default());
+                world.add_component(light, PointLight::new(Vec3::ONE, 8.0, 3.0));
+            }
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let lit = frame(true).await;
+            let dark = frame(false).await;
+            let luma = |f: &[u8], x: usize, y: usize| {
+                let p = &f[(y * 128 + x) * 4..][..3];
+                (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3
+            };
+            // The lit sprite spans about x 20–60, the unlit one 68–107, both about y 50–78.
+            let (near, far) = (luma(&lit, 24, 64), luma(&lit, 56, 64));
+            assert!(near > far + 40, "the lit sprite is brightest by the light: {near} there, {far} across from it");
+            let (unlit_sprite, background) = (luma(&dark, 40, 64), luma(&dark, 40, 20));
+            assert!(
+                unlit_sprite < background + 20,
+                "with no light the lit sprite is only its dark ambient: {unlit_sprite} against the background's {background}"
+            );
+            let (beside_lit, beside_dark) = (luma(&lit, 88, 64), luma(&dark, 88, 64));
+            assert!(beside_lit > 150 && beside_lit.abs_diff(beside_dark) <= 3, "the unlit sprite is its own white either way: {beside_lit}, {beside_dark}");
+        });
+    }
+
     /// **The back of a double-sided surface is lit like the front.** A pale panel with the sun behind the
     /// camera, seen from each side. Both faces carried the front's normal until 2026-11-07, so the back read
     /// as turned away from the light that was shining straight on it.

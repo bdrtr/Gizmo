@@ -59,6 +59,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Lit sprites: `Sprite::lit()`, `Tilemap::lit()`, `SpriteAmbient`.** A lit world sprite is lit by the scene's own
+  point, spot and directional lights and its sun — read from the view's scene uniforms, the same ranked array and the
+  same falloff and cone (`gizmo::common`) as a 3D surface's, Lambert over the sprite's plane facing the camera — over
+  an ambient that is white unless a `SpriteAmbient` resource darkens it (Godot's `CanvasModulate`): a 2D night scene
+  with torches. Unlit, the default, draws as before; screen sprites are never lit. Rectangle lights light 3D surfaces
+  only.
 - **Gizmo Studio on a game, and ▶ in a world of its own.** `gizmo_studio::run(Some(StudioGame::new(name, setup,
   update)))` opens the studio on a game written in Rust (`with_components`, `with_render_settings`, `with_app` for its
   plugins and embedded files); `demo/src/bin/dunya_studio.rs` opens it on `dunya`. ▶ builds a fresh world from the

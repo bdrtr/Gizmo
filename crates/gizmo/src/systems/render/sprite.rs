@@ -51,10 +51,13 @@ pub fn record_sprites(
     let transforms = world.query::<&crate::prelude::GlobalTransform>();
     let screen = Vec2::new(renderer.config.width as f32, renderer.config.height as f32);
 
-    let Renderer { sprites: pass_state, queue, device, post, depth_texture_view, .. } = renderer;
+    let ambient = world.get_resource::<gizmo_renderer::sprite::SpriteAmbient>().map_or(gizmo_math::Vec3::ONE, |a| a.0);
+    let Renderer { sprites: pass_state, queue, device, post, depth_texture_view, scene, .. } = renderer;
     let Some(state) = pass_state.as_mut() else {
         return;
     };
+    // Lit sprites read this view's lights — its scene uniforms, written before this pass.
+    state.set_lighting(device, queue, scene.view_uniform_buffer(), ambient);
 
     state.begin_frame();
     for (entity, sprite) in world.query::<(Entity, &Sprite)>().iter() {

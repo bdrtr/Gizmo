@@ -32,7 +32,7 @@
 //! - **Packing is asked for.** One image is one texture and one bind group, so loaded apart they cost a draw
 //!   call per change of image. [`SpriteRenderer::load_atlas`](crate::sprite::SpriteRenderer::load_atlas) packs a set into one.
 
-use gizmo_math::{Mat4, Vec2, Vec4};
+use gizmo_math::{Mat4, Vec2, Vec3, Vec4};
 
 use crate::components::{Sprite, SpriteSpace};
 
@@ -137,16 +137,24 @@ struct SpriteInstance {
     /// `(u0, v0, u1, v1)` — `u0, v0` at the top-left corner. Flips are already applied.
     uv: [f32; 4],
     color: [f32; 4],
+    /// The top-left corner in world space, `w` = 1 for a lit sprite (`Sprite::lit`); then the edges
+    /// to the top-right and bottom-left corners. Zero for a screen sprite.
+    world_origin: [f32; 4],
+    world_u: [f32; 4],
+    world_v: [f32; 4],
 }
 
 impl SpriteInstance {
-    const ATTRS: [wgpu::VertexAttribute; 6] = [
+    const ATTRS: [wgpu::VertexAttribute; 9] = [
         wgpu::VertexAttribute { offset: 0, shader_location: 0, format: wgpu::VertexFormat::Float32x4 },
         wgpu::VertexAttribute { offset: 16, shader_location: 1, format: wgpu::VertexFormat::Float32x4 },
         wgpu::VertexAttribute { offset: 32, shader_location: 2, format: wgpu::VertexFormat::Float32x4 },
         wgpu::VertexAttribute { offset: 48, shader_location: 3, format: wgpu::VertexFormat::Float32x4 },
         wgpu::VertexAttribute { offset: 64, shader_location: 4, format: wgpu::VertexFormat::Float32x4 },
         wgpu::VertexAttribute { offset: 80, shader_location: 5, format: wgpu::VertexFormat::Float32x4 },
+        wgpu::VertexAttribute { offset: 96, shader_location: 6, format: wgpu::VertexFormat::Float32x4 },
+        wgpu::VertexAttribute { offset: 112, shader_location: 7, format: wgpu::VertexFormat::Float32x4 },
+        wgpu::VertexAttribute { offset: 128, shader_location: 8, format: wgpu::VertexFormat::Float32x4 },
     ];
 
     fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
@@ -196,9 +204,22 @@ pub struct ImageName {
     pub filter: SpriteFilter,
 }
 
+/// The light every **lit** sprite ([`Sprite::lit`]) gets before any light reaches it — Godot's
+/// `CanvasModulate`. A world resource; white when there is none, so a lit sprite with no light near
+/// it looks as an unlit one does and lights only add. A night scene sets it dark.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SpriteAmbient(pub Vec3);
+
 /// Loaded images, the sprite pipelines, and this frame's quads.
 pub struct SpriteRenderer {
     layout: wgpu::BindGroupLayout,
+    /// Group 1 of the world pipeline: the view's scene uniforms and the ambient (`fs_lit`).
+    lights_layout: wgpu::BindGroupLayout,
+    /// [`SpriteAmbient`], as the shader reads it.
+    ambient: wgpu::Buffer,
+    /// Group 1 over the scene uniforms it was made for (by identity), and a fallback over a
+    /// zeroed one — no lights, no sun — until [`set_lighting`](Self::set_lighting) is called.
+    lights: (wgpu::Buffer, wgpu::BindGroup),
     linear: wgpu::Sampler,
     nearest: wgpu::Sampler,
     images: Vec<Image>,
@@ -272,11 +293,36 @@ impl SpriteRenderer {
         };
         let linear = sampler("Sprite Sampler (linear)", wgpu::FilterMode::Linear);
         let nearest = sampler("Sprite Sampler (nearest)", wgpu::FilterMode::Nearest);
+        let uniform = |binding: u32| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer { ty: wgpu::BufferBindingType::Uniform, has_dynamic_offset: false, min_binding_size: None },
+            count: None,
+        };
+        let lights_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Sprite Lights Layout"),
+            entries: &[uniform(0), uniform(1)],
+        });
+        let ambient = wgpu::util::DeviceExt::create_buffer_init(device, &wgpu::util::BufferInitDescriptor {
+            label: Some("Sprite Ambient"),
+            contents: bytemuck::cast_slice(&[1.0f32, 1.0, 1.0, 1.0]),
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        });
+        let no_lights = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Sprite Scene (none)"),
+            size: std::mem::size_of::<crate::gpu_types::SceneUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM,
+            mapped_at_creation: false,
+        });
+        let lights = (no_lights.clone(), Self::lights_group(device, &lights_layout, &no_lights, &ambient));
         let (pipeline_world, overlay) =
-            Self::build_pipelines(device, &layout, color_format, depth_format);
+            Self::build_pipelines(device, &layout, &lights_layout, color_format, depth_format);
         let buffer = Self::instance_buffer(device, INITIAL_CAPACITY);
         Self {
             layout,
+            lights_layout,
+            ambient,
+            lights,
             linear,
             nearest,
             images: Vec::new(),
@@ -305,6 +351,7 @@ impl SpriteRenderer {
     fn build_pipelines(
         device: &wgpu::Device,
         image_layout: &wgpu::BindGroupLayout,
+        lights_layout: &wgpu::BindGroupLayout,
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) -> (wgpu::RenderPipeline, crate::overlay::OverlayPipelines) {
@@ -327,11 +374,17 @@ impl SpriteRenderer {
             bind_group_layouts: &[Some(image_layout)],
             immediate_size: 0,
         });
+        // The world pipeline's: the image, and the lights `fs_lit` reads.
+        let lit_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Sprite Pipeline Layout (lit)"),
+            bind_group_layouts: &[Some(image_layout), Some(lights_layout)],
+            immediate_size: 0,
+        });
 
         let make = |label: &str, depth_compare: wgpu::CompareFunction| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
-                layout: Some(&layout),
+                layout: Some(&lit_layout),
                 vertex: wgpu::VertexState {
                     module: &shader,
                     entry_point: Some("vs_main"),
@@ -340,7 +393,7 @@ impl SpriteRenderer {
                 },
                 fragment: Some(wgpu::FragmentState {
                     module: &shader,
-                    entry_point: Some("fs_main"),
+                    entry_point: Some("fs_lit"),
                     compilation_options: Default::default(),
                     targets: &[Some(wgpu::ColorTargetState {
                         format: color_format,
@@ -389,7 +442,7 @@ impl SpriteRenderer {
         color_format: wgpu::TextureFormat,
         depth_format: wgpu::TextureFormat,
     ) {
-        let (world, overlay) = Self::build_pipelines(device, &self.layout, color_format, depth_format);
+        let (world, overlay) = Self::build_pipelines(device, &self.layout, &self.lights_layout, color_format, depth_format);
         self.pipeline_world = world;
         self.overlay = overlay;
     }
@@ -658,7 +711,28 @@ impl SpriteRenderer {
         }
         pass.set_vertex_buffer(0, self.buffer.slice(..));
         pass.set_pipeline(&self.pipeline_world);
+        pass.set_bind_group(1, &self.lights.1, &[]);
         self.draw_runs(pass, &self.runs_world);
+    }
+
+    /// What lit sprites are lit by this view: `scene` — the view's scene uniforms, the buffer its 3D
+    /// passes read the lights, the sun and the camera from — and the ambient ([`SpriteAmbient`]).
+    pub fn set_lighting(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &wgpu::Buffer, ambient: Vec3) {
+        queue.write_buffer(&self.ambient, 0, bytemuck::cast_slice(&[ambient.x, ambient.y, ambient.z, 1.0]));
+        if self.lights.0 != *scene {
+            self.lights = (scene.clone(), Self::lights_group(device, &self.lights_layout, scene, &self.ambient));
+        }
+    }
+
+    fn lights_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, scene: &wgpu::Buffer, ambient: &wgpu::Buffer) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Sprite Lights"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: scene.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: ambient.as_entire_binding() },
+            ],
+        })
     }
 
     fn draw_runs(&self, pass: &mut wgpu::RenderPass<'_>, list: &[Run]) {
@@ -713,14 +787,23 @@ fn place(sprite: &Sprite, model: Mat4, view_proj: Mat4, screen_size: Vec2) -> Op
     const CORNERS: [Vec2; 4] =
         [Vec2::new(0.0, 0.0), Vec2::new(1.0, 0.0), Vec2::new(0.0, 1.0), Vec2::new(1.0, 1.0)];
     let mut corners = [[0.0f32; 4]; 4];
+    let mut plane = [[0.0f32; 4]; 3];
     let depth = match sprite.space {
         SpriteSpace::World => {
             let mvp = view_proj * model;
-            for (out, c) in corners.iter_mut().zip(CORNERS) {
+            let mut world = [Vec3::ZERO; 4];
+            for ((out, c), w) in corners.iter_mut().zip(CORNERS).zip(world.iter_mut()) {
                 // Image y grows down; the entity's local y grows up. This is the one flip.
                 let local = (c - sprite.anchor) * Vec2::new(sprite.size.x, -sprite.size.y);
                 *out = (mvp * Vec4::new(local.x, local.y, 0.0, 1.0)).to_array();
+                *w = model.transform_point3(Vec3::new(local.x, local.y, 0.0));
             }
+            // Where a lit sprite is, for its lights: a corner and the edges to its neighbours.
+            plane = [
+                world[0].extend(if sprite.lit { 1.0 } else { 0.0 }).to_array(),
+                (world[1] - world[0]).extend(0.0).to_array(),
+                (world[2] - world[0]).extend(0.0).to_array(),
+            ];
             let anchor = mvp * Vec4::new(0.0, 0.0, 0.0, 1.0);
             // NDC depth grows with distance under both of the engine's projections, so one key
             // serves perspective AND orthographic — where clip `w` is a constant 1 and would sort
@@ -746,7 +829,8 @@ fn place(sprite: &Sprite, model: Mat4, view_proj: Mat4, screen_size: Vec2) -> Op
     if sprite.flip_y {
         std::mem::swap(&mut v0, &mut v1);
     }
-    Some((SpriteInstance { corners, uv: [u0, v0, u1, v1], color: sprite.color.to_array() }, depth))
+    let [world_origin, world_u, world_v] = plane;
+    Some((SpriteInstance { corners, uv: [u0, v0, u1, v1], color: sprite.color.to_array(), world_origin, world_u, world_v }, depth))
 }
 
 /// Layer, then far to near, then queue order.
@@ -1170,9 +1254,16 @@ mod tests {
     }
 
     #[test]
-    fn the_instance_is_the_six_vec4s_the_shader_reads() {
-        assert_eq!(std::mem::size_of::<SpriteInstance>(), 96);
+    fn the_instance_is_the_nine_vec4s_the_shader_reads() {
+        assert_eq!(std::mem::size_of::<SpriteInstance>(), 144);
         assert_eq!(std::mem::offset_of!(SpriteInstance, uv), 64);
         assert_eq!(std::mem::offset_of!(SpriteInstance, color), 80);
+        assert_eq!(std::mem::offset_of!(SpriteInstance, world_origin), 96);
+        assert_eq!(std::mem::offset_of!(SpriteInstance, world_u), 112);
+        assert_eq!(std::mem::offset_of!(SpriteInstance, world_v), 128);
+        // The vertex layout says the same, attribute by attribute.
+        for (i, attr) in SpriteInstance::ATTRS.iter().enumerate() {
+            assert_eq!((attr.offset, attr.shader_location), (16 * i as u64, i as u32));
+        }
     }
 }

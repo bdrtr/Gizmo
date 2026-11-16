@@ -49,6 +49,9 @@ pub struct Tilemap {
     /// [`tileset`](Self::tileset)'s name, as [`Sprite::image_name`](crate::components::Sprite::image_name)
     /// is a sprite's.
     pub tileset_name: Option<crate::sprite::ImageName>,
+    /// Its tiles lit by the scene's lights, as a [`Sprite::lit`](crate::components::Sprite::lit) one is.
+    #[serde(default)]
+    pub lit: bool,
 }
 
 impl Tilemap {
@@ -78,6 +81,7 @@ impl Tilemap {
             tiles: vec![Self::EMPTY; len],
             tints: Vec::new(),
             tileset_name: None,
+            lit: false,
         }
     }
 
@@ -121,7 +125,14 @@ impl Tilemap {
         self
     }
 
-    /// Replaces the layer.
+    /// The same map, its tiles lit by the scene's lights ([`lit`](Self::lit)).
+    #[must_use]
+    pub fn lit(mut self) -> Self {
+        self.lit = true;
+        self
+    }
+
+    /// The same map on `layer`.
     #[must_use]
     pub fn with_layer(mut self, layer: i32) -> Self {
         self.layer = layer;
@@ -296,6 +307,7 @@ impl Tilemap {
             space: SpriteSpace::World,
             // A drawn tile, not a component: the map carries the name.
             image_name: None,
+            lit: self.lit,
         };
         let sheet = self.tileset_columns.saturating_mul(self.tileset_rows);
         (y0..y1)

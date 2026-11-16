@@ -309,7 +309,9 @@ pub fn render_extractor() -> Extractor {
         .resource::<super::WireframeConfig>()
         .resource::<super::visibility_index::VisibilityIndex>()
         .resource::<crate::renderer::screen_fade::ScreenFade>()
-        .resource::<crate::core::window::DisplayScale>();
+        .resource::<crate::core::window::DisplayScale>()
+        // The light every lit sprite starts from (`Sprite::lit`).
+        .resource::<crate::renderer::sprite::SpriteAmbient>();
     #[cfg(feature = "physics")]
     extractor.resource::<super::WaterVolumes>();
     #[cfg(feature = "ui")]

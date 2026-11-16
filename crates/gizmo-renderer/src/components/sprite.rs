@@ -60,6 +60,12 @@ pub struct Sprite {
     /// image by again. Kept in step with `image` by the renderer (`sprite_sync`). `None` for pixels
     /// loaded without a name, which a scene cannot hold.
     pub image_name: Option<crate::sprite::ImageName>,
+    /// Lit by the scene's lights (a world sprite only): its colour times the ambient
+    /// ([`SpriteAmbient`](crate::sprite::SpriteAmbient), white unless a game darkens it), plus what each
+    /// point, spot and directional light gives the sprite's plane — the same lights, falloff and cone
+    /// as a 3D surface's. `false`, the default: drawn in its own colours, as it always was.
+    #[serde(default)]
+    pub lit: bool,
 }
 
 impl Sprite {
@@ -85,6 +91,7 @@ impl Sprite {
             layer: 0,
             space: SpriteSpace::World,
             image_name: None,
+            lit: false,
         }
     }
 
@@ -100,6 +107,13 @@ impl Sprite {
             space: SpriteSpace::Screen { position },
             ..Self::world(image, size)
         }
+    }
+
+    /// The same sprite, lit by the scene's lights ([`lit`](Self::lit)).
+    #[must_use]
+    pub fn lit(mut self) -> Self {
+        self.lit = true;
+        self
     }
 
     /// Replaces the tint.
