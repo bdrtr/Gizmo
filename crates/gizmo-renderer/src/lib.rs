@@ -270,7 +270,7 @@ pub mod keyed_animation {
     };
     pub use gizmo_animation::player::AnimationPlayer as KeyedAnimationPlayer;
     pub use gizmo_animation::property::{PropertyError, PropertyRegistry, PropertyValue, PropertyVector};
-    pub use gizmo_animation::system::{apply_interpolated, keyed_animation_system};
+    pub use gizmo_animation::system::{advance_animation, apply_interpolated, keyed_animation_system};
     pub use crate::property_animation::{animatable_properties, engine_properties};
 }
 /// Tweens — re-exported because the draw path drives them (`tween::tween_system`), the same way

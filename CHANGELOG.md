@@ -59,6 +59,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **A headless build plays tweens and keyed clips.** `gizmo_app`'s headless loop — a server, a build without
+  `render` — now advances the animation clock after each frame's commands: `Tween`s and `KeyedAnimationPlayer`s move,
+  on the simulated delta. Until now only the draw path ran them, so on a server a tween never moved and a keyed door
+  never opened. Both drivers call one function, `gizmo_animation::system::advance_animation` (tweens, then keyed
+  players), so they cannot drift; `gizmo-app` depends on `gizmo-animation`, the facade's `headless` feature turns on
+  `animation`, and `full_scene_registry` saves `Tween` and `KeyedAnimationPlayer` without `render`.
 - **Keyed property tracks: a clip animates component fields by name.** `Track::property("lamp",
   "PointLight.intensity", …)` keys one field of an entity's component — or one lane of a vector,
   `"Sprite.color.w"` — with new value channels (`Keyframes::Scalar` / `Vector2` / `Vector3` / `Vector4`, linear,

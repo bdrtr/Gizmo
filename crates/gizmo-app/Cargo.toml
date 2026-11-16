@@ -18,6 +18,9 @@ icu_locale_core = "2"
 icu_provider = { version = "2", features = ["sync"] }
 gizmo-core = { path = "../gizmo-core" , version = "0.11.0" }
 gizmo-math = { path = "../gizmo-math" , version = "0.11.0" }
+# The animation clock (`gizmo_animation::system::advance_animation`): tweens and keyed players,
+# which the headless loop drives — a server moves its doors and platforms without a renderer.
+gizmo-animation = { path = "../gizmo-animation", version = "0.11.0", default-features = false }
 tracing = "0.1.44"
 # `save::SaveData` — a game's values as JSON (serde/serde_json are accepted public deps, ENGINE.md §4).
 # `derive`: `locale::LocalizedText` and `inventory::Inventory` derive it, and the crate built on its own

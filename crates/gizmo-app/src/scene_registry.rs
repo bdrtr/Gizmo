@@ -104,14 +104,11 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::components::NoWireframe, "NoWireframe");
         reg_or_warn!(gizmo_renderer::components::CameraShake, "CameraShake");
         reg_or_warn!(gizmo_renderer::components::ColorTween, "ColorTween");
-        // A transform eased to a target, where it had got to; and a state machine's graph, state,
-        // playhead and blend — its clips are the model's, given back by `resolve_gltf_models`.
-        reg_or_warn!(gizmo_renderer::tween::Tween, "Tween");
+        // A state machine's graph, state, playhead and blend — its clips are the model's, given
+        // back by `resolve_gltf_models`.
         reg_or_warn!(gizmo_renderer::components::AnimationStateMachine, "AnimationStateMachine");
         // The layers over either: their clips, masks, playheads and fades.
         reg_or_warn!(gizmo_renderer::components::AnimationLayers, "AnimationLayers");
-        // A clip of keyed transforms and where its playhead is: what the timeline keys.
-        reg_or_warn!(gizmo_renderer::keyed_animation::KeyedAnimationPlayer, "KeyedAnimationPlayer");
         // Which joint's travel moves the entity, and whether the engine moves it (the delta is a frame's).
         reg_or_warn!(gizmo_renderer::components::RootMotion, "RootMotion");
         // The limbs the engine bends: each chain's tip bone by name, its target and pole as world
@@ -144,6 +141,15 @@ pub fn full_scene_registry() -> SceneRegistry {
         reg_or_warn!(gizmo_renderer::components::CameraTargetDesc, "CameraTargetDesc");
     }
 
+    // A transform eased to a target, where it had got to; a clip of keyed transforms and fields and
+    // where its playhead is (what the timeline keys). Not behind `render`: the headless loop plays
+    // them too, so a server's scene keeps them.
+    if let Err(e) = reg.register_serializable::<gizmo_animation::tween::Tween>("Tween") {
+        tracing::warn!(error = ?e, "[Scene] Tween registration failed");
+    }
+    if let Err(e) = reg.register_serializable::<gizmo_animation::player::AnimationPlayer>("KeyedAnimationPlayer") {
+        tracing::warn!(error = ?e, "[Scene] KeyedAnimationPlayer registration failed");
+    }
     // A game timer, wherever it is ticking.
     if let Err(e) = reg.register_serializable::<gizmo_core::Timer>("Timer") {
         tracing::warn!(error = ?e, "[Scene] Timer registration failed");

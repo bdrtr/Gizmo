@@ -90,10 +90,17 @@ value. `bevy_reflect` would fix the round trip but is behind the default-off `re
 is a 0.x dependency §4 keeps off the default surface. What survived from the generic design is its
 completeness check, run as a test over the serialised form instead of as the write path.
 
+- **Every frame driver runs the same animation clock**: `gizmo_animation::system::advance_animation`
+  (tweens, then keyed players) is called by `advance_frame_clocks` (windowed, `HeadlessFrames`) and
+  by `gizmo_app`'s headless loop, so a build without `render` — a server — moves its tweened and
+  keyed transforms too (2026-11-16; before, only the draw path ran either, and a door keyed to open
+  stayed shut on a server). There the registry holds only what the game registers: the engine's
+  fields are renderer components and do not exist without one. `Tween` and `KeyedAnimationPlayer`
+  are saved by `full_scene_registry` outside its `render` block for the same reason.
+
 Separate work, named: writing the `MaterialMaps` parameter buffer in place so its floats can be
 keyed; `Handle<Material>` assets (the studio draws only the `Material` component); a per-field ◆
-in the inspector; and moving the keyed driver out of `systems::render`, so a `headless` build
-(no `render`) animates.
+in the inspector.
 
 ---
 

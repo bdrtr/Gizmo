@@ -26,6 +26,22 @@ pub fn apply_interpolated(transform: &mut Transform, value: InterpolatedValue) {
     }
 }
 
+/// One frame of the animation clock, as every frame driver runs it: the [`Tween`](crate::tween::Tween)s
+/// ([`tween_system`](crate::tween::tween_system)), then the keyed players
+/// ([`keyed_animation_system`]) — so a keyed `Transform` wins over a tween on the same entity.
+///
+/// It is the part of the frame's clocks that needs no renderer, kept in one function so the drivers
+/// cannot drift apart: `gizmo`'s `advance_frame_clocks` (the windowed frame and `HeadlessFrames`)
+/// calls it after the colour tweens, and `gizmo_app`'s headless loop — a server, a build without
+/// `render` — calls it after each frame's commands. Until 2026-11-16 only the first existed, and a
+/// headless build moved no tween and played no clip: a door keyed to open stayed shut on a server.
+///
+/// `dt` is the game clock's (`Time::dt`), so time scale and pause apply.
+pub fn advance_animation(world: &mut World, dt: f32) {
+    crate::tween::tween_system(world, dt);
+    keyed_animation_system(world, dt);
+}
+
 /// The keyed animation driver: every [`AnimationPlayer`] advanced by `dt` while it plays, and its
 /// clip's tracks sampled at its playhead onto what they target — **playing or not**, so an editor
 /// scrubbing a paused player's `elapsed_time` moves what it animates.
@@ -46,9 +62,10 @@ pub fn apply_interpolated(transform: &mut Transform, value: InterpolatedValue) {
 /// `Transform` is. With no registry in the world an empty one is inserted, so such a track warns
 /// rather than vanishing.
 ///
-/// The engine's frame runs it (`gizmo::systems::render::advance_frame_clocks`, beside the tweens),
-/// on the game clock, in both the game's and the editor's draw paths — **after
-/// `color_tween_system`**: a keyed track wins over a `ColorTween` on the same field, deliberately.
+/// Every frame driver runs it through [`advance_animation`], on the game clock: the game's and the
+/// editor's draw paths (`gizmo::systems::render::advance_frame_clocks`) **after
+/// `color_tween_system`** — a keyed track wins over a `ColorTween` on the same field, deliberately —
+/// and `gizmo_app`'s headless loop.
 pub fn keyed_animation_system(world: &mut World, dt: f32) {
     let players: Vec<Entity> = world.query::<(Entity, &AnimationPlayer)>().iter().map(|(e, _)| e).collect();
     // Property samples, in player order then track order: (clip, track index, target, value).

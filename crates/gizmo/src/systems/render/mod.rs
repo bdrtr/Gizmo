@@ -1039,16 +1039,16 @@ pub fn advance_frame_clocks(world: &mut World) {
     // Labels first: a typewriter types what its `LocalizedText` resolves to this frame.
     resolve_localized_texts(world);
     let tween_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
-    crate::renderer::tween::tween_system(world, tween_dt);
     crate::renderer::components::color_tween_system(world, tween_dt);
-    // Keyed transforms — a door, a platform, a cutscene camera — and keyed fields — a lamp that
-    // pulses, a sprite that fades — on the same clock as the tweens, AFTER the colour tweens: a
-    // keyed track wins over a colour tween on the same field, deliberately. The registry of
-    // animatable fields is made (with the engine's in it) before the driver looks for it. No
-    // turbofish here on purpose: the draw-read scan in `render_world` reads `::<` calls in this
-    // directory as reads the draw makes, and the registry is the game world's alone.
+    // The animation clock — tweens, then keyed transforms (a door, a platform, a cutscene camera)
+    // and keyed fields (a lamp that pulses, a sprite that fades) — AFTER the colour tweens: a keyed
+    // track wins over a colour tween on the same field, deliberately. One function, which the
+    // headless loop of a build without `render` runs too. The registry of animatable fields is
+    // made (with the engine's in it) before the driver looks for it. No turbofish here on purpose:
+    // the draw-read scan in `render_world` reads `::<` calls in this directory as reads the draw
+    // makes, and the registry is the game world's alone.
     crate::renderer::property_animation::animatable_properties(world);
-    crate::renderer::keyed_animation::keyed_animation_system(world, tween_dt);
+    crate::renderer::keyed_animation::advance_animation(world, tween_dt);
     typewriter_system(world, tween_dt);
     // The trauma wearing off is game state (`CameraShake::trauma`); the shaken view is the draw's.
     advance_camera_shakes(world, tween_dt);

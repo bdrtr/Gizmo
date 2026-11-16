@@ -933,8 +933,9 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         "gpu_physics_readback_system(",
         "resolve_material_descriptions(",
         "sync_material_descriptions(",
-        "tween_system(",
-        "keyed_animation_system(",
+        // The animation clock: tweens and keyed players (`gizmo_animation::system`), the one
+        // function the headless loop runs too.
+        "advance_animation(",
         // The registry of animatable fields the keyed driver writes through.
         "animatable_properties(",
         "color_tween_system(",

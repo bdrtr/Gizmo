@@ -287,6 +287,12 @@ impl<State: 'static> App<State> {
             // update hook's spawns/despawns would never take effect.
             self.world.apply_commands();
 
+            // The animation clock, as the windowed frame advances it (`gizmo`'s
+            // `advance_frame_clocks`): tweens and keyed players on the simulated delta. Until
+            // 2026-11-16 only the draw path ran it, so on a server — a build without `render` — a
+            // tween never moved and a clip never played.
+            gizmo_animation::system::advance_animation(&mut self.world, sim_dt);
+
             if self.world.get_resource::<gizmo_core::window::AppExit>().is_some() {
                 tracing::info!("[App:headless] AppExit requested; leaving the update loop");
                 return Ok(());
@@ -372,6 +378,55 @@ mod exit_tests {
             .run();
         assert!(result.is_ok());
         assert_eq!(&seen.lock().unwrap()[..5], ["startup", "first", "second", "first", "second"]);
+    }
+
+    /// **A headless app plays the animation clock.** A door keyed to slide along x and a crate
+    /// tweened along z both move under the headless loop — a build without a renderer, a server.
+    /// Until 2026-11-16 only the draw path advanced them, and neither moved here at all.
+    #[cfg(feature = "physics")]
+    #[test]
+    fn the_headless_loop_plays_tweens_and_keyed_clips() {
+        use gizmo_animation::clip::{AnimationClip, Keyframes, Track};
+        use gizmo_animation::player::AnimationPlayer;
+        use gizmo_animation::tween::Tween;
+        use gizmo_math::Vec3;
+        use gizmo_physics_core::Transform;
+        use std::sync::{Arc, Mutex};
+
+        let moved = Arc::new(Mutex::new((0.0_f32, 0.0_f32)));
+        let out = moved.clone();
+        let frames = std::sync::atomic::AtomicU32::new(0);
+        let result = super::App::<(gizmo_core::Entity, gizmo_core::Entity)>::new("clock", 1, 1)
+            .set_setup(|world| {
+                let mut clip = AnimationClip::default();
+                clip.tracks.push(
+                    Track::new("", vec![0.0, 1.0], Keyframes::Translation(vec![Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)]))
+                        .expect("a valid track"),
+                );
+                let mut player = AnimationPlayer::new().looping(false);
+                player.play(Arc::new(clip));
+                let door = world.spawn();
+                world.add_component(door, Transform::new(Vec3::ZERO));
+                world.add_component(door, player);
+                let crate_ = world.spawn();
+                world.add_component(crate_, Transform::new(Vec3::ZERO));
+                world.add_component(crate_, Tween::to_position(Vec3::new(0.0, 0.0, 10.0), 1.0));
+                (door, crate_)
+            })
+            .set_update(move |world, &mut (door, crate_), _| {
+                let x = world.get::<Transform>(door).map_or(0.0, |t| t.position.x);
+                let z = world.get::<Transform>(crate_).map_or(0.0, |t| t.position.z);
+                *out.lock().unwrap() = (x, z);
+                let n = frames.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if (x > 0.0 && z > 0.0) || n > 5000 {
+                    world.insert_resource(gizmo_core::window::AppExit);
+                }
+            })
+            .run();
+        assert!(result.is_ok());
+        let (x, z) = *moved.lock().unwrap();
+        assert!(x > 0.0, "the keyed door never moved on the headless loop (x = {x})");
+        assert!(z > 0.0, "the tweened crate never moved on the headless loop (z = {z})");
     }
 
     /// A headless app whose game inserts `AppExit` on its third frame returns from `run` — the

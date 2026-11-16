@@ -26,7 +26,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = ["window", "render", "audio", "physics", "physics-dynamics", "physics-soft", "scene", "editor", "ui", "animation", "network", "gamepad"]
-headless = ["physics", "network", "gizmo-app/headless"]
+headless = ["physics", "network", "animation", "gizmo-app/headless"]
 network = ["dep:gizmo-net", "gizmo-app/network"]
 # The authoritative-server half of the netcode (`gizmo::net::client_server`, on renet). `network`
 # alone brings only rollback, and until 2026-11-04 nothing in the facade could reach this half.

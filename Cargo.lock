@@ -2775,6 +2775,7 @@ dependencies = [
  "egui-winit",
  "gilrs",
  "gizmo-ai",
+ "gizmo-animation",
  "gizmo-audio",
  "gizmo-core",
  "gizmo-editor",
