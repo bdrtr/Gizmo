@@ -636,9 +636,11 @@ impl Renderer {
         self.sprites.as_ref()?.name_of(image)
     }
 
-    /// The image a scene names: one already loaded under that name, else bytes embedded under its
-    /// path ([`AssetManager::embed_asset`](crate::asset::AssetManager::embed_asset)), else the file
-    /// at it.
+    /// The image a scene names: one already loaded under that name, else the white the engine makes
+    /// itself when the name is [`AssetManager::WHITE_TEXTURE`](crate::asset::AssetManager::WHITE_TEXTURE)
+    /// (a sprite tinted by its colour alone — what the editor gives a new sprite, as a material's
+    /// white is made, not looked for on disk), else bytes embedded under its path
+    /// ([`AssetManager::embed_asset`](crate::asset::AssetManager::embed_asset)), else the file at it.
     ///
     /// # Errors
     ///
@@ -649,6 +651,14 @@ impl Renderer {
         name: &crate::sprite::ImageName,
     ) -> Result<crate::sprite::SpriteImageId, crate::sprite::SpriteError> {
         if let Some(id) = self.sprites.as_ref().and_then(|s| s.by_name(name)) {
+            return Ok(id);
+        }
+        if name.path == crate::asset::AssetManager::WHITE_TEXTURE && name.normal_map.is_none() {
+            let Some(sprites) = self.sprites.as_mut() else {
+                return Err(crate::sprite::SpriteError::Invalid);
+            };
+            let id = sprites.load_rgba(&self.device, &self.queue, &[255; 16], 2, 2, name.filter)?;
+            sprites.name_image(id, name.clone());
             return Ok(id);
         }
         // With a normal map: a copy of its own, so the sprites drawing the image without one keep

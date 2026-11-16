@@ -264,14 +264,20 @@ pub fn draw_material_section(
 /// One texture slot: its name and path, a drop target for an image dragged from the asset browser,
 /// and a button that clears it. `Some(new)` when the slot changed this frame.
 fn texture_slot(ui: &mut egui::Ui, state: &mut EditorState, label: &str, current: Option<&str>) -> Option<Option<String>> {
+    asset_slot(ui, state, label, current, &[".png", ".jpg", ".jpeg"])
+}
+
+/// One asset slot: its name and path, a drop target for a file of one of `extensions` dragged from
+/// the asset browser, and a button that clears it. `Some(new)` when the slot changed this frame.
+pub(crate) fn asset_slot(ui: &mut egui::Ui, state: &mut EditorState, label: &str, current: Option<&str>, extensions: &[&str]) -> Option<Option<String>> {
     let mut result = None;
     ui.horizontal(|ui| {
         let width = (ui.available_width() - 28.0).max(60.0);
         let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
         let mut stroke = egui::Color32::from_rgb(50, 50, 50);
         if let Some(dragged) = state.dragged_asset.clone() {
-            let image = [".png", ".jpg", ".jpeg"].iter().any(|ext| dragged.to_lowercase().ends_with(ext));
-            if image && response.hovered() {
+            let accepted = extensions.iter().any(|ext| dragged.to_lowercase().ends_with(ext));
+            if accepted && response.hovered() {
                 stroke = egui::Color32::YELLOW;
                 if ui.input(|i| i.pointer.any_released()) {
                     state.log_info(&format!("{label} dokusu atandı: {dragged}"));

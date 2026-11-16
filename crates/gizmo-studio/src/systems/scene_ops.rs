@@ -118,6 +118,30 @@ pub fn handle_scene_operations(
                     editor_state.generate_terrain_requests.push(ent_id);
                 }
 
+                // A metre-wide square of the engine's own white, tinted by its colour, until an image
+                // is dropped on it: something to see and to save, with no file behind it.
+                "Sprite" => {
+                    let mut sprite = gizmo::renderer::components::Sprite::world(
+                        gizmo::renderer::sprite::SpriteImageId::UNRESOLVED,
+                        Vec2::ONE,
+                    );
+                    sprite.image_name = Some(gizmo::renderer::sprite::ImageName::new(
+                        gizmo::renderer::asset::AssetManager::WHITE_TEXTURE,
+                        gizmo::renderer::sprite::SpriteFilter::Linear,
+                    ));
+                    world.add_component(ent, sprite);
+                }
+                // A world label in the engine's default face (`text_sync` finds it by that name).
+                "Text" => {
+                    let mut text = gizmo::renderer::components::Text::world(
+                        "Text",
+                        gizmo::renderer::text::FontId::UNRESOLVED,
+                        32.0,
+                        64.0,
+                    );
+                    text.font_name = Some(gizmo::renderer::Renderer::DEFAULT_FONT.to_string());
+                    world.add_component(ent, text);
+                }
                 "Hitbox" => world.add_component(ent, gizmo::physics::components::Hitbox::default()),
                 "Hurtbox" => world.add_component(ent, gizmo::physics::components::Hurtbox::default()),
                 "BoneAttachment" => world.add_component(ent, gizmo::renderer::components::BoneAttachment::default()),
@@ -1137,6 +1161,25 @@ mod tests {
         ed.remove_component_request = Some((ent, "Health".to_string()));
         handle_scene_operations(&mut world, &mut ed, &mut studio_state());
         assert!(world.query::<&Health>().get(ent).is_none(), "🗑 left the game component in place");
+    }
+
+    /// **A sprite and a text can be added in the editor**, each something to see at once and to save:
+    /// the sprite named after the engine's own white, the text after the default face — names, not
+    /// ids, so `sprite_sync` and `text_sync` resolve them and a scene keeps them.
+    #[test]
+    fn a_sprite_and_a_text_can_be_added_in_the_editor() {
+        use gizmo::renderer::components::{Sprite, Text};
+        let mut world = World::new();
+        let ent = spawn(&mut world);
+        let mut ed = EditorState::default();
+        for name in ["Sprite", "Text"] {
+            ed.add_component_request = Some((ent, name.to_string()));
+            handle_scene_operations(&mut world, &mut ed, &mut studio_state());
+        }
+        let sprite = world.get::<Sprite>(ent).expect("➕ Sprite added nothing");
+        assert_eq!(sprite.image_name.as_ref().map(|n| n.path.as_str()), Some(gizmo::renderer::asset::AssetManager::WHITE_TEXTURE));
+        let text = world.get::<Text>(ent).expect("➕ Text added nothing");
+        assert_eq!(text.font_name.as_deref(), Some(gizmo::renderer::Renderer::DEFAULT_FONT));
     }
 
     /// **Every light type the engine draws can be created in the editor.**

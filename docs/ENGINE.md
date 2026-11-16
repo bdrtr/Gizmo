@@ -121,7 +121,13 @@ completeness check, run as a test over the serialised form instead of as the wri
   fields (emission, ambient, anisotropy, the clear coat, subsurface, the alpha cutoff, reflectance,
   transmission, thickness, the volume's tint and distance, the specular tint, the UV transform), the
   camera none for its exposure and the look none for its sensor height — all added. `Sprite` and
-  `Text` have no inspector section in the studio, so no ◆: that is the open part.
+  `Text` had no inspector section in the studio at all; they have one now
+  (`gizmo_editor::inspector::two_d`), with their ◆s, and both are in the ➕ menu: a new sprite is
+  named after the engine's own white (`AssetManager::WHITE_TEXTURE`, which
+  `Renderer::sprite_image_by_name` makes rather than looks for on disk, as a material's white is),
+  a new text after the default face — names a scene keeps. An image or a face dropped from the
+  asset browser renames the sprite or the text, and `sprite_sync` / `text_sync` load it. Rich text
+  (`Text::spans`) is counted in the section, not edited.
 
 - **A mesh held by handle is drawn, clicked and boxed in the studio** (2026-11-16). `MeshBundle`
   — the documented way to spawn a mesh — puts `Handle<Mesh>` and `Handle<Material>` on the entity;
@@ -132,8 +138,8 @@ completeness check, run as a test over the serialised form instead of as the wri
   picking and the selection box ask `gizmo_studio::drawn_mesh::DrawnMeshes`, which answers from
   the component or the handle.
 
-Separate work, named: inspector sections for `Sprite` and `Text` (an image and a font to pick, not
-only numbers). And a decision rather than a defect: a property track on a `Handle<Material>`
+Separate work, named: editing rich text (`Text::spans`) in the inspector. And a decision rather
+than a defect: a property track on a `Handle<Material>`
 entity — the asset is shared by every entity that holds the handle, so a per-entity track on it
 would move them all; whether a track may name an asset, and how, is a design question the clip
 format does not answer yet.

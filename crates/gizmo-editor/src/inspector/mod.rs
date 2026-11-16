@@ -8,6 +8,8 @@ pub mod light;
 pub mod camera;
 /// The material rows: albedo, metallic, roughness and the texture slots.
 pub mod material;
+/// The sprite and text rows — what a 2D game and a HUD are made of.
+pub mod two_d;
 /// Everything else the inspector can edit, one `draw_*_section` per component family.
 pub mod misc;
 /// The SCRIPT section's property rows. Native-only: `gizmo-scripting` is a
@@ -96,6 +98,8 @@ pub fn ui_inspector(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
         light::draw_spot_light_section(ui, world, entity_id, state);
         light::draw_rect_light_section(ui, world, entity_id, state);
         material::draw_material_section(ui, world, entity_id, state);
+        two_d::draw_sprite_section(ui, world, entity_id, state);
+        two_d::draw_text_section(ui, world, entity_id, state);
 
         misc::draw_particle_emitter_section(ui, world, entity_id, state);
         misc::draw_hitbox_section(ui, world, entity_id, state);

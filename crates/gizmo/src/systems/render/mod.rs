@@ -15789,6 +15789,44 @@ fn material_surface(input: SurfaceInput) -> Surface {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **A sprite of the engine's own white draws, and is saved by that name.** What the studio gives
+    /// a new sprite: no file, the name `AssetManager::WHITE_TEXTURE`, which the renderer makes itself
+    /// as it makes a material's white. The sprite is drawn white at the centre of the frame, and the
+    /// reopened frame is the saved one.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_sprite_of_the_engines_white_draws_and_is_saved() {
+        use gizmo_renderer::components::Sprite;
+        use gizmo_renderer::sprite::{ImageName, SpriteFilter, SpriteImageId};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let seen = draw_save_reopen_with(
+                None,
+                |_| {},
+                |world, _| {
+                    let mut sprite = Sprite::world(SpriteImageId::UNRESOLVED, gizmo_math::Vec2::splat(2.0));
+                    sprite.image_name = Some(ImageName::new(gizmo_renderer::asset::AssetManager::WHITE_TEXTURE, SpriteFilter::Linear));
+                    let e = world.spawn();
+                    world.add_component(e, Transform::new(Vec3::ZERO));
+                    world.add_component(e, GlobalTransform::default());
+                    world.add_component(e, sprite);
+                    world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 5.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+                },
+            )
+            .await;
+            let centre = &seen.drawn[(64 * 128 + 64) * 4..][..3];
+            assert!(centre.iter().all(|&c| c > 200), "the white sprite is not drawn at the centre: {centre:?}");
+            let (changed, total) = changed_pixels(&seen.drawn, &seen.reopened, 128);
+            assert_eq!(changed, 0, "the reopened white sprite drew {changed}/{total} pixels otherwise");
+        });
+    }
+
     /// **Decals are saved, their textures by name.** A decal of a file's texture and one of the
     /// generated checkerboard, both projected on a floor: the reopened frame is the saved one. A decal
     /// owns a GPU bind group, so a scene saves its `DecalDesc`, and a decal is built from it again.

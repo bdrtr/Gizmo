@@ -126,10 +126,7 @@ pub(crate) mod tests {
 
     /// The engine's animatable fields that have no inspector row to put a ◆ on, and why. Short on
     /// purpose: a field a clip can key and the inspector cannot show is a field nobody can key there.
-    const NO_ROW: &[(&str, &str)] = &[
-        ("Sprite.", "no Sprite section in the studio's inspector (it is not registered for editing)"),
-        ("Text.", "no Text section in the studio's inspector (it is not registered for editing)"),
-    ];
+    const NO_ROW: &[(&str, &str)] = &[];
 
     pub(crate) fn material() -> Material {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -247,6 +244,8 @@ pub(crate) mod tests {
             .with_lightmap("l.png", 1.0);
         m.maps.occlusion = Some("o.png".into());
         world.add_component(e, m);
+        world.add_component(e, gizmo_renderer::components::Sprite::world(gizmo_renderer::sprite::SpriteImageId::UNRESOLVED, gizmo_math::Vec2::ONE));
+        world.add_component(e, gizmo_renderer::components::Text::world("hi", gizmo_renderer::text::FontId::UNRESOLVED, 32.0, 64.0));
         e
     }
 

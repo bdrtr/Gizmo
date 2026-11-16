@@ -59,6 +59,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Sprites and texts in the studio's inspector and ➕ menu.** Both were loaded from a scene and drawn, and neither
+  could be added or changed in the editor. Their sections (`gizmo_editor::inspector::two_d`) edit every field — a
+  sprite's image and normal map dropped from the asset browser, its filter, size, colour, anchor, UV rect, flips,
+  layer, lighting and space; a text's content, face (a `.ttf`/`.otf` dropped), size, colour, anchor, alignment, wrap
+  width, vertical layout and space — with a ◆ on each animatable one. A new sprite is a square of the engine's own white
+  (`AssetManager::WHITE_TEXTURE`, now a sprite image name `Renderer::sprite_image_by_name` makes, as a material's white
+  is made), a new text is in the default face: names a scene keeps.
 - **Fixed: a mesh spawned with `MeshBundle` was invisible in the studio.** `MeshBundle` puts `Handle<Mesh>` and
   `Handle<Material>` on the entity; the game's draw looked them up in `Assets`, the studio's viewport asked for `Mesh`
   and `Material` components only — so the mesh was in the game and not in the editor (a whole cube missing,

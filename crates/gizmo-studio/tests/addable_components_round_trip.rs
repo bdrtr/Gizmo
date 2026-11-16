@@ -418,6 +418,9 @@ fn every_component_the_inspector_edits_survives_a_save() {
         ("draw_velocity_section", "Velocity"),
         ("draw_ai_section", "NavAgent"),
         ("draw_behavior_tree_section", "BehaviorTree"),
+        // Saved with their image and face by name (`sprite_sync`, `text_sync`).
+        ("draw_sprite_section", "Sprite"),
+        ("draw_text_section", "Text"),
     ];
 
     /// (section fn, why the registry is not where its answer lives).

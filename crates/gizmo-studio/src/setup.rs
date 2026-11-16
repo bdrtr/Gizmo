@@ -323,6 +323,10 @@ world.insert_resource(editor_state);
     // "the" camera. Its default is the engine's no-component behaviour, so adding one is safe.
     let _ = component_registry.register::<gizmo::renderer::components::PostProcess>("PostProcess");
     let _ = component_registry.register::<gizmo::prelude::Material>("Material");
+    // What a 2D game and a HUD are made of. Loaded from a scene and drawn all along, and neither
+    // addable nor editable here until 2026-11-16 (`gizmo_editor::inspector::two_d`).
+    let _ = component_registry.register::<gizmo::renderer::components::Sprite>("Sprite");
+    let _ = component_registry.register::<gizmo::renderer::components::Text>("Text");
     let _ = component_registry.register::<gizmo::scripting::Script>("Script");
     let _ = component_registry.register::<gizmo::renderer::components::ParticleEmitter>("ParticleEmitter");
     let _ = component_registry.register::<gizmo::prelude::AudioSource>("AudioSource");
