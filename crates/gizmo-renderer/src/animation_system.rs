@@ -1,7 +1,7 @@
 use gizmo_core::Entity;
 use crate::components::Skeleton;
 use gizmo_animation::skeletal::{
-    blend_poses, evaluate_clip, ActiveBlend, AnimationPlayer, AnimationStateMachine,
+    blend_poses, evaluate_bound, ActiveBlend, AnimationPlayer, AnimationStateMachine,
 };
 use gizmo_core::World;
 use gizmo_math::Mat4;
@@ -64,7 +64,7 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                 player.current_time = player.current_time.max(0.0);
             }
 
-            let poses_trs = evaluate_clip(anim, player.current_time, &skeleton.hierarchy);
+            let poses_trs = sample_clip(&mut skeleton, &animations, player.active_animation, player.current_time);
 
             let final_trs = if let Some(prev_idx) = player.prev_animation {
                 if player.blend_time < player.blend_duration {
@@ -84,8 +84,7 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                             prev_anim.duration,
                             looped,
                         );
-                        let prev_poses_trs =
-                            evaluate_clip(prev_anim, prev_sample, &skeleton.hierarchy);
+                        let prev_poses_trs = sample_clip(&mut skeleton, &animations, prev_idx, prev_sample);
                         let alpha = (player.blend_time / player.blend_duration).clamp(0.0, 1.0);
                         blend_poses(&prev_poses_trs, &poses_trs, alpha)
                     } else {
@@ -253,27 +252,23 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 
         // --- Compute blended poses ---
         let poses_trs = if let Some(ref blend) = machine.active_blend {
-            let clip_a = match machine.clips.get(blend.from_clip) {
-                Some(c) => c,
-                None => continue,
-            };
-            let clip_b = match machine.clips.get(blend.to_clip) {
-                Some(c) => c,
-                None => continue,
-            };
-            let poses_a = evaluate_clip(clip_a, blend.from_time, &skeleton.hierarchy);
-            let poses_b = evaluate_clip(clip_b, blend.to_time, &skeleton.hierarchy);
+            if machine.clips.get(blend.from_clip).is_none() || machine.clips.get(blend.to_clip).is_none() {
+                continue;
+            }
+            let clips = machine.clips.clone();
+            let poses_a = sample_clip(skeleton, &clips, blend.from_clip, blend.from_time);
+            let poses_b = sample_clip(skeleton, &clips, blend.to_clip, blend.to_time);
             blend_poses(&poses_a, &poses_b, blend.alpha())
         } else {
             let clip_idx = match machine.current_clip_index() {
                 Some(i) => i,
                 None => continue,
             };
-            let clip = match machine.clips.get(clip_idx) {
-                Some(c) => c,
-                None => continue,
-            };
-            evaluate_clip(clip, machine.current_time, &skeleton.hierarchy)
+            if machine.clips.get(clip_idx).is_none() {
+                continue;
+            }
+            let clips = machine.clips.clone();
+            sample_clip(skeleton, &clips, clip_idx, machine.current_time)
         };
 
         // Convert TRS to Mat4
@@ -288,6 +283,17 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Clip `index` of `clips` at `time`, on `skeleton`, with the skeleton's kept binding of that clip
+/// (`Skeleton::bindings`) — matched to the joints once, not every frame. The caller has checked the
+/// index.
+fn sample_clip(skeleton: &mut Skeleton, clips: &Arc<[gizmo_animation::skeletal::AnimationClip]>, index: usize, time: f32) -> Vec<(gizmo_math::Vec3, gizmo_math::Quat, gizmo_math::Vec3)> {
+    let hierarchy = skeleton.hierarchy.clone();
+    match skeleton.bindings.get(clips, index, &hierarchy) {
+        Some(binding) => evaluate_bound(&clips[index], &binding, time, &hierarchy),
+        None => Vec::new(),
+    }
+}
 //
 // `evaluate_clip`, `blend_poses`, and `decompose_mat4` now live in
 // `gizmo_animation::skeletal::sample` and are imported above.
@@ -301,13 +307,20 @@ fn upload_skin_matrices(skeleton: &mut Skeleton, queue: &wgpu::Queue) {
 /// written the drawn pose itself rather than from the local poses (the engine's IK pass, which
 /// bends the drawn pose and leaves the animated one alone).
 pub fn upload_skin_poses(skeleton: &Skeleton, queue: &wgpu::Queue) {
-    let mut joint_matrices = vec![Mat4::IDENTITY; 128];
-    for (i, joint) in skeleton.hierarchy.joints.iter().enumerate().take(128) {
-        if let Some(global) = skeleton.global_poses.get(i) {
-            joint_matrices[i] = *global * joint.inverse_bind_matrix;
-        }
+    // The skeleton's own joints only: the buffer holds 128 slots, and a model's vertices index only
+    // its joints, so writing all 128 every frame (8 KiB a skeleton) uploaded three times what a
+    // 40-joint character uses.
+    let joint_matrices: Vec<Mat4> = skeleton
+        .hierarchy
+        .joints
+        .iter()
+        .take(128)
+        .enumerate()
+        .map(|(i, joint)| skeleton.global_poses.get(i).map_or(Mat4::IDENTITY, |global| *global * joint.inverse_bind_matrix))
+        .collect();
+    if !joint_matrices.is_empty() {
+        queue.write_buffer(&skeleton.buffer, 0, bytemuck::cast_slice(&joint_matrices));
     }
-    queue.write_buffer(&skeleton.buffer, 0, bytemuck::cast_slice(&joint_matrices));
 }
 
 // find_joint_for_node artik kullanilmiyor

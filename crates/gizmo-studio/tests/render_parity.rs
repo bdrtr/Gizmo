@@ -614,6 +614,15 @@ fn every_render_capability_is_known_to_both_draw_paths() {
              split when run.",
         ),
         (
+            "CameraDetail",
+            Path::GameOnly,
+            "how much of the pipeline draws a secondary view (a minimap, a monitor), read by the game \
+             path's own view code (`draw_camera_view`) for the split-screen and texture cameras it \
+             composes. The studio draws no secondary view (see `Viewport` above): its Game panel \
+             previews the primary camera, and a primary camera set to `Simple` shows there in full \
+             and simple when run.",
+        ),
+        (
             "specular_tint",
             Path::GameOnly,
             "known to both: `InstanceRaw::with_lit_extras_of` reads it, and both paths build their instances \

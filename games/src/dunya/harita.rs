@@ -40,6 +40,9 @@ pub(super) fn build(world: &mut World, font: FontId) -> Map {
         c.order = 1;
         c.projection = ProjectionMode::Orthographic { height: SPAN };
         c.clear_color = Some(Vec3::new(0.1, 0.12, 0.1));
+        // Yukarıdan bir harita gölge, ortam örtüşmesi, bloom istemiyor: sade çizim, tam bir ikinci
+        // kare kadar pahalı değil.
+        c.detail = gizmo::renderer::components::CameraDetail::Simple;
     }
     let at = |dx: f32, dy: f32| Vec2::new(VIEW.x + VIEW.width * dx, VIEW.y + VIEW.height * dy);
     let me = world.spawn_bundle((Text::pinned_at("↑", font, 24.0, at(0.5, 0.5), Vec2::ZERO)

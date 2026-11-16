@@ -340,6 +340,11 @@ pub struct Renderer {
     /// the background, an environment map, a skybox or backdrop — is left out of it, as the lighting
     /// pass adds the sky to every surface itself.
     pub skip_sky: bool,
+    /// How long the parts of the last draw took on whichever thread drew it, `(name, time)` — the
+    /// draw's half of the frame profile. The draw runs on a copy of the world (often on a thread of
+    /// its own), which has no profiler, so it writes here and the next frame's preparation, which
+    /// holds both the world and the renderer, moves it into the world's `FrameProfiler`.
+    pub draw_laps: Vec<(&'static str, std::time::Duration)>,
     /// Linear exposure multiplier applied before tone mapping.
     pub exposure: f32,
     /// Whether depth of field runs.

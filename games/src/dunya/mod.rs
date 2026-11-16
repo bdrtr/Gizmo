@@ -53,6 +53,8 @@
 //! arabaya binip hücre sınırlarının üstünden bir dakika sürer. Hiçbir an oyuncu ya da araba
 //! arazinin içine düşmemeli, hücreler yüklenip silinmeli ve kristal toplanmalı.
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod bench;
 mod canli;
 mod harita;
 mod hava;
@@ -1053,7 +1055,7 @@ fn step(world: &mut World, game: &mut Game, dt: f32, c: Controls) {
         karakter::animate(w, dt);
         modeller::bind_wheels(w);
     });
-    let crystal_start = std::time::Instant::now();
+    let crystal_start = gizmo::core::time::Instant::now();
     // Kristaller dönüyor; yaklaşan topluyor.
     let me = focus(world, game);
     let mut taken = Vec::new();
@@ -1261,28 +1263,32 @@ pub fn app() -> App<SimpleSceneState> {
         })
         .replace_update(update)
         // Gök, sis: günün saatine göre, oyunun kaynağından her senkron noktasında.
-        .set_render_stage(RenderWorld::new().with_settings(|game, renderer| {
-            if let Some(g) = game.get_resource::<Game>() {
-                let (_, _, _, zenith, horizon, ground) = sky_at(g.time_of_day);
-                let w = &g.weather;
-                let (zenith, horizon, ground) = (w.grade(zenith), w.grade(horizon), w.grade(ground));
-                // Göğün ışığı güneşin yanında kısık: tam şiddette güneşe denk geliyordu, gölgeler
-                // kayboluyor ve her şey mavimsi bir pastele dönüyordu (gölgedeki çim güneştekiyle
-                // aynı renkteydi). Gerçek bir açık gökte gökten gelen, güneşinkinin beşte biri
-                // kadar. Gece, ışığın hepsi gökten olduğu için kısılmıyor.
-                let day = ((g.time_of_day - 0.25) * std::f32::consts::TAU).sin().clamp(0.0, 1.0);
-                renderer.sky = Some(Sky::gradient(zenith, horizon, ground).with_intensity(1.0 - 0.68 * day.sqrt()));
-                renderer.fog = Some(Fog::new(horizon, w.fog_density(0.0016)).with_height(0.03, 0.0));
-                // Yağmur: kameranın çevresine bu karenin damlaları.
-                if w.rain > 0.02 {
-                    let (eye, ahead) = game.get::<Transform>(g.camera).map_or((Vec3::ZERO, Vec3::NEG_Z), |t| (t.position, Camera::front(t.rotation)));
-                    let drops = hava::raindrops(eye, ahead, w.rain, g.clock);
-                    if let Some(particles) = &renderer.gpu_particles {
-                        particles.spawn_particles(&renderer.queue, &drops);
-                    }
-                }
+        .set_render_stage(RenderWorld::new().with_settings(frame_settings))
+}
+
+/// Gök, sis, yağmur: günün saatine ve havaya göre, oyunun kaynağından — her senkron noktasında
+/// (pencereli oyun) ya da ölçüm kipinin her karesinde.
+fn frame_settings(game: &World, renderer: &mut gizmo::renderer::Renderer) {
+    if let Some(g) = game.get_resource::<Game>() {
+        let (_, _, _, zenith, horizon, ground) = sky_at(g.time_of_day);
+        let w = &g.weather;
+        let (zenith, horizon, ground) = (w.grade(zenith), w.grade(horizon), w.grade(ground));
+        // Göğün ışığı güneşin yanında kısık: tam şiddette güneşe denk geliyordu, gölgeler
+        // kayboluyor ve her şey mavimsi bir pastele dönüyordu (gölgedeki çim güneştekiyle
+        // aynı renkteydi). Gerçek bir açık gökte gökten gelen, güneşinkinin beşte biri
+        // kadar. Gece, ışığın hepsi gökten olduğu için kısılmıyor.
+        let day = ((g.time_of_day - 0.25) * std::f32::consts::TAU).sin().clamp(0.0, 1.0);
+        renderer.sky = Some(Sky::gradient(zenith, horizon, ground).with_intensity(1.0 - 0.68 * day.sqrt()));
+        renderer.fog = Some(Fog::new(horizon, w.fog_density(0.0016)).with_height(0.03, 0.0));
+        // Yağmur: kameranın çevresine bu karenin damlaları.
+        if w.rain > 0.02 {
+            let (eye, ahead) = game.get::<Transform>(g.camera).map_or((Vec3::ZERO, Vec3::NEG_Z), |t| (t.position, Camera::front(t.rotation)));
+            let drops = hava::raindrops(eye, ahead, w.rain, g.clock);
+            if let Some(particles) = &renderer.gpu_particles {
+                particles.spawn_particles(&renderer.queue, &drops);
             }
-        }))
+        }
+    }
 }
 
 // =============================================================================================

@@ -151,7 +151,7 @@ pub use components::*;
 pub use bundles::*;
 pub use layout::*;
 pub use interaction::{
-    pointer_over_ui, ui_drag_system, ui_drop_system, ui_dropdown_system, ui_tooltip_system, ui_layer, ui_scroll_system, ui_slider_system, ui_toggle_system,
+    layer_with, pointer_over_ui, ui_drag_system, ui_drop_system, ui_dropdown_system, ui_tooltip_system, ui_layer, ui_scroll_system, ui_slider_system, ui_toggle_system,
     UiNavigation,
 };
 pub use text_input::{text_input_system, TextInput};

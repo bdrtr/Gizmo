@@ -11,6 +11,18 @@
 //! capped at `max_dt` — or an independently measured one is the caller's choice, not
 //! something decided here.
 
+/// A moment of the monotonic clock, on every target: `std`'s on the desktop and a phone, the
+/// browser's (`web_time`) on wasm, where `std::time::Instant::now` panics. What engine code that
+/// times its own work (the frame profiler's scopes) reads the clock with.
+#[cfg(target_arch = "wasm32")]
+pub use web_time::Instant;
+/// A moment of the monotonic clock, on every target: `std`'s on the desktop and a phone, the
+/// browser's (`web_time`) on wasm, where `std::time::Instant::now` panics. What engine code that
+/// times its own work (the frame profiler's scopes) reads the clock with.
+#[cfg(not(target_arch = "wasm32"))]
+pub use std::time::Instant;
+
+
 /// Wall-clock time: seconds since the Unix epoch, fractional — for what happens while a game is
 /// closed (crops that grew, energy that refilled), a daily reward, a timestamp in a save.
 ///

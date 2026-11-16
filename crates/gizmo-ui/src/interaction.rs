@@ -7,8 +7,10 @@ use crate::components::{
 };
 use gizmo_core::component::Parent;
 
-/// The layer `entity` is on: its own [`ZIndex`], or the nearest one up its parents, or `0`.
-fn layer_with(entity: Entity, z: impl Fn(Entity) -> Option<i32>, parent: impl Fn(Entity) -> Option<Entity>) -> i32 {
+/// The layer `entity` is on: its own [`ZIndex`], or the nearest one up its parents, or `0` — with
+/// the two lookups given, for a caller that asks it of many entities and builds them once
+/// ([`ui_layer`] builds both per call).
+pub fn layer_with(entity: Entity, z: impl Fn(Entity) -> Option<i32>, parent: impl Fn(Entity) -> Option<Entity>) -> i32 {
     let mut at = Some(entity);
     // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
     for _ in 0..256 {

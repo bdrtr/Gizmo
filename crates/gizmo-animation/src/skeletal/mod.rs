@@ -51,7 +51,7 @@ pub mod state_machine;
 pub use clip::AnimationClip;
 pub use component::{AnimationPlayer, BoneAttachment};
 pub use keyframe::{InterpolationMode, Keyframe, Track};
-pub use sample::{blend_poses, decompose_mat4, evaluate_clip};
+pub use sample::{blend_poses, decompose_mat4, evaluate_bound, evaluate_clip, ClipBinding};
 pub use skeleton::{SkeletonHierarchy, SkeletonJoint};
 pub use state_machine::{
     ActiveBlend, AnimationState, AnimationStateMachine, AnimationTransition,

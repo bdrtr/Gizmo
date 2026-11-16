@@ -551,7 +551,10 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
             num_lights: lights.num_lights,
             shadows: crate::renderer::ShadowFrame {
                 cascade_view_projs,
-                cascade_splits: cascades.splits,
+                // A view that draws no cascades says it has no shadow range, which every lookup reads
+                // as "past the shadows, lit" — instead of reading whatever the maps held from the last
+                // view that drew them.
+                cascade_splits: if inputs.sun_shadow_maps { cascades.splits } else { [0.0; 4] },
                 local: local_shadows,
                 bias_scale: [inputs.shadow_settings.depth_bias, inputs.shadow_settings.normal_offset],
             },

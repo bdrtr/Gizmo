@@ -54,84 +54,123 @@ pub fn evaluate_clip(
     time: f32,
     hierarchy: &SkeletonHierarchy,
 ) -> Vec<(Vec3, Quat, Vec3)> {
-    // Start with all None
-    let mut changes = vec![(None, None, None); hierarchy.joints.len()];
+    evaluate_bound(clip, &ClipBinding::new(clip, hierarchy), time, hierarchy)
+}
 
-    // Count tracks that resolve to no joint (bad retarget) so the silent drop is
-    // observable. Aggregated over the whole clip and reported once below.
-    let mut missed_targets = 0usize;
+/// Which joint each of a clip's tracks drives on one skeleton — the matching
+/// [`evaluate_clip`] does, done once.
+///
+/// Matching a track to its joint is a search by name over the skeleton's joints, loosely when the
+/// exact name is missing (which allocates a cleaned copy of every joint's name), then by node index.
+/// The answer depends only on the clip and the skeleton, so a player that keeps its binding
+/// ([`evaluate_bound`]) pays for it once instead of every frame. Measured in `dunya` before
+/// (2026-11-16): 5.1 ms a frame to pose 117 characters, most of it in this matching.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClipBinding {
+    translations: Vec<Option<usize>>,
+    rotations: Vec<Option<usize>>,
+    scales: Vec<Option<usize>>,
+    /// Per translation track: whether it moves the hips — the one translation applied.
+    hips: Vec<bool>,
+    /// Tracks that matched no joint, for the report.
+    missed: usize,
+}
 
-    let get_joint_idx = |target_node: usize, target_node_name: &Option<String>| -> Option<usize> {
-        if let Some(name) = target_node_name {
-            // Tam eşleşme
-            if let Some(idx) = hierarchy.joints.iter().position(|j| &j.name == name) {
-                return Some(idx);
-            }
-            // Gevşek eşleşme (mixamorig: vs mixamorig_ ve /RootNode/ gibi fbx2gltf eklentileri)
-            let clean = |n: &str| {
-                n.replace("/RootNode/", "")
-                    .replace("mixamorig:", "")
-                    .replace("mixamorig_", "")
-                    .to_lowercase()
-            };
-            let clean_name = clean(name);
-            if let Some(idx) = hierarchy
-                .joints
-                .iter()
-                .position(|j| clean(&j.name) == clean_name)
-            {
-                return Some(idx);
-            }
-        }
-        // Fallback: `target_node` is the GLTF *global node index* (channel.target().
-        // node().index()), NOT a bone index. Map it to the bone that was built from that
-        // node — joints record their source `node_index` exactly for this. The old code
-        // used `target_node` directly as a bone index (and only if it happened to be <
-        // joint count), which silently mis-targeted or dropped the track whenever the
-        // armature wasn't the first nodes in the document (common in Blender exports).
-        // This also now recovers a track whose name was present but didn't match a joint.
-        hierarchy
-            .joints
-            .iter()
-            .position(|j| j.node_index == target_node)
-    };
-
-    for track in &clip.translations {
-        if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
-            if let Some(v) = sample_vec3(track, time) {
-                // Sadece Hips (kök) kemiğinin hareketine izin ver, diğerlerini yoksay. Mixamo animasyonlarında root motion buradadır.
-                // Kök tespiti yalnızca isim tabanlıdır: hard-coded bir düğüm indeksi (eskiden 66),
-                // Hips'i farklı indekste olan iskeletlerde root motion'ı sessizce bozuyordu.
-                let is_hips = track
-                    .target_node_name
-                    .as_deref()
-                    .is_some_and(|n| n.contains("Hips"));
-                if is_hips {
-                    changes[joint_idx].0 = Some(v);
+impl ClipBinding {
+    /// Matches every track of `clip` to its joint in `hierarchy`: by name exactly, then loosely —
+    /// tolerating the `mixamorig:` / `mixamorig_` prefixes and `/RootNode/` segments fbx2gltf
+    /// emits — then by node index.
+    #[must_use]
+    pub fn new(clip: &AnimationClip, hierarchy: &SkeletonHierarchy) -> Self {
+        let get_joint_idx = |target_node: usize, target_node_name: &Option<String>| -> Option<usize> {
+            if let Some(name) = target_node_name {
+                // Tam eşleşme
+                if let Some(idx) = hierarchy.joints.iter().position(|j| &j.name == name) {
+                    return Some(idx);
+                }
+                // Gevşek eşleşme (mixamorig: vs mixamorig_ ve /RootNode/ gibi fbx2gltf eklentileri)
+                let clean = |n: &str| {
+                    n.replace("/RootNode/", "")
+                        .replace("mixamorig:", "")
+                        .replace("mixamorig_", "")
+                        .to_lowercase()
+                };
+                let clean_name = clean(name);
+                if let Some(idx) = hierarchy.joints.iter().position(|j| clean(&j.name) == clean_name) {
+                    return Some(idx);
                 }
             }
-        } else {
-            missed_targets += 1;
+            // Fallback: `target_node` is the GLTF *global node index* (channel.target().
+            // node().index()), NOT a bone index. Map it to the bone that was built from that
+            // node — joints record their source `node_index` exactly for this. The old code
+            // used `target_node` directly as a bone index (and only if it happened to be <
+            // joint count), which silently mis-targeted or dropped the track whenever the
+            // armature wasn't the first nodes in the document (common in Blender exports).
+            // This also now recovers a track whose name was present but didn't match a joint.
+            hierarchy.joints.iter().position(|j| j.node_index == target_node)
+        };
+        let translations: Vec<Option<usize>> =
+            clip.translations.iter().map(|t| get_joint_idx(t.target_node, &t.target_node_name)).collect();
+        let rotations: Vec<Option<usize>> =
+            clip.rotations.iter().map(|t| get_joint_idx(t.target_node, &t.target_node_name)).collect();
+        let scales: Vec<Option<usize>> = clip.scales.iter().map(|t| get_joint_idx(t.target_node, &t.target_node_name)).collect();
+        // Sadece Hips (kök) kemiğinin hareketine izin ver, diğerlerini yoksay. Mixamo animasyonlarında root motion buradadır.
+        // Kök tespiti yalnızca isim tabanlıdır: hard-coded bir düğüm indeksi (eskiden 66),
+        // Hips'i farklı indekste olan iskeletlerde root motion'ı sessizce bozuyordu.
+        let hips = clip
+            .translations
+            .iter()
+            .map(|t| t.target_node_name.as_deref().is_some_and(|n| n.contains("Hips")))
+            .collect();
+        let missed = [&translations, &rotations, &scales].iter().map(|v| v.iter().filter(|j| j.is_none()).count()).sum();
+        Self { translations, rotations, scales, hips, missed }
+    }
+
+    /// Whether this binding was made for a clip with these many tracks — what [`evaluate_bound`]
+    /// checks before trusting it.
+    #[must_use]
+    pub fn fits(&self, clip: &AnimationClip) -> bool {
+        self.translations.len() == clip.translations.len()
+            && self.rotations.len() == clip.rotations.len()
+            && self.scales.len() == clip.scales.len()
+    }
+}
+
+/// [`evaluate_clip`] with the tracks already matched to their joints ([`ClipBinding`]).
+///
+/// A binding made for another clip (one that does not [`fit`](ClipBinding::fits)) is not trusted:
+/// the clip is matched again for this call.
+pub fn evaluate_bound(
+    clip: &AnimationClip,
+    binding: &ClipBinding,
+    time: f32,
+    hierarchy: &SkeletonHierarchy,
+) -> Vec<(Vec3, Quat, Vec3)> {
+    if !binding.fits(clip) {
+        return evaluate_bound(clip, &ClipBinding::new(clip, hierarchy), time, hierarchy);
+    }
+    let mut changes = vec![(None, None, None); hierarchy.joints.len()];
+    for ((track, joint), hips) in clip.translations.iter().zip(&binding.translations).zip(&binding.hips) {
+        if let (Some(joint_idx), true) = (joint.filter(|j| *j < changes.len()), *hips) {
+            if let Some(v) = sample_vec3(track, time) {
+                changes[joint_idx].0 = Some(v);
+            }
         }
     }
-    for track in &clip.rotations {
-        if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
+    for (track, joint) in clip.rotations.iter().zip(&binding.rotations) {
+        if let Some(joint_idx) = joint.filter(|j| *j < changes.len()) {
             if let Some(v) = sample_quat(track, time) {
                 changes[joint_idx].1 = Some(v.normalize());
             }
-        } else {
-            missed_targets += 1;
         }
     }
-    for track in &clip.scales {
-        if let Some(joint_idx) = get_joint_idx(track.target_node, &track.target_node_name) {
+    for (track, joint) in clip.scales.iter().zip(&binding.scales) {
+        if let Some(joint_idx) = joint.filter(|j| *j < changes.len()) {
             if let Some(v) = sample_vec3(track, time) {
                 // Scale izleri artık uygulanıyor (eskiden tamamen atılıyordu). Squash/stretch,
                 // nefes-alma ve büyüme animasyonları için gerekli; render iskelete ulaşır.
                 changes[joint_idx].2 = Some(v);
             }
-        } else {
-            missed_targets += 1;
         }
     }
 
@@ -139,9 +178,9 @@ pub fn evaluate_clip(
     // silently dropped. Reported at debug! (not warn!) because this runs per skinned
     // entity per frame — a persistent mismatch at warn! would flood the log — but the
     // aggregate count still points straight at a broken retarget/skeleton pairing.
-    if missed_targets > 0 {
+    if binding.missed > 0 {
         tracing::debug!(
-            missed_targets,
+            missed_targets = binding.missed,
             joints = hierarchy.joints.len(),
             translations = clip.translations.len(),
             rotations = clip.rotations.len(),
@@ -150,23 +189,14 @@ pub fn evaluate_clip(
             "[Animation] retarget: tracks matched no joint (name or node index) and were dropped"
         );
     }
-    tracing::trace!(
-        joints = hierarchy.joints.len(),
-        t = time,
-        missed_targets,
-        "[Animation] evaluate_clip sampled pose"
-    );
 
-    let mut result_trs = Vec::with_capacity(hierarchy.joints.len());
-    for (joint_idx, (t_opt, r_opt, s_opt)) in changes.into_iter().enumerate() {
-        let joint = &hierarchy.joints[joint_idx];
-        let pos = t_opt.unwrap_or(joint.bind_translation);
-        let rot = r_opt.unwrap_or(joint.bind_rotation);
-        let scale = s_opt.unwrap_or(joint.bind_scale);
-
-        result_trs.push((pos, rot, scale));
-    }
-    result_trs
+    changes
+        .into_iter()
+        .zip(&hierarchy.joints)
+        .map(|((t_opt, r_opt, s_opt), joint)| {
+            (t_opt.unwrap_or(joint.bind_translation), r_opt.unwrap_or(joint.bind_rotation), s_opt.unwrap_or(joint.bind_scale))
+        })
+        .collect()
 }
 
 /// Linearly blend two pose arrays. Uses lerp for T/S, slerp for R.
@@ -442,6 +472,33 @@ mod tests {
             interpolation: InterpolationMode::Linear,
             keyframes: vec![Keyframe::new(0.0, value)],
         }
+    }
+
+    /// **A binding kept is the matching done once**: sampling with a [`ClipBinding`] gives the pose
+    /// `evaluate_clip` gives, for a clip whose tracks match by exact name, loosely and by node index;
+    /// and a binding made for another clip is not trusted — the clip is matched afresh.
+    #[test]
+    fn a_kept_binding_samples_what_matching_every_time_does() {
+        let hierarchy = SkeletonHierarchy {
+            joints: vec![make_joint("Hips", 3), make_joint("Spine", 5), make_joint("Head", 9)],
+            root_transform: Mat4::IDENTITY,
+        };
+        let clip = AnimationClip {
+            name: "walk".into(),
+            duration: 1.0,
+            translations: vec![translation_track(3, Some("Hips"), Vec3::new(0.0, 0.2, 0.0))],
+            rotations: vec![
+                rotation_track(5, Some("mixamorig:Spine"), Quat::from_rotation_y(0.4)),
+                rotation_track(9, None, Quat::from_rotation_x(0.3)),
+            ],
+            scales: vec![scale_track(9, Some("Head"), Vec3::splat(1.1))],
+        };
+        let binding = ClipBinding::new(&clip, &hierarchy);
+        assert_eq!(evaluate_bound(&clip, &binding, 0.0, &hierarchy), evaluate_clip(&clip, 0.0, &hierarchy));
+        let other = AnimationClip { name: "idle".into(), duration: 1.0, translations: vec![], rotations: vec![], scales: vec![] };
+        let wrong = ClipBinding::new(&other, &hierarchy);
+        assert!(!wrong.fits(&clip));
+        assert_eq!(evaluate_bound(&clip, &wrong, 0.0, &hierarchy), evaluate_clip(&clip, 0.0, &hierarchy), "an unfitting binding is matched afresh");
     }
 
     #[test]

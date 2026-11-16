@@ -613,7 +613,7 @@ pub fn sync_transforms(world: &mut crate::core::World) {
 /// Runs `f`, adding its time to the world's [`FrameProfiler`](crate::core::profiler::FrameProfiler)
 /// as `name` when the world has one; costs one clock read otherwise.
 fn timed(world: &mut crate::core::World, name: &'static str, f: impl FnOnce(&mut crate::core::World)) {
-    let start = std::time::Instant::now();
+    let start = gizmo_core::time::Instant::now();
     f(world);
     if let Some(mut profiler) = world.get_resource_mut::<crate::core::profiler::FrameProfiler>() {
         profiler.record_scope(name, start.elapsed());

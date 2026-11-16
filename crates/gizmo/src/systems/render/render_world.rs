@@ -348,6 +348,7 @@ mod render_world_tests {
     /// of them in another form — each with that form.
     const PREPARED: &[(&str, &str)] = &[
         ("Gizmos", "taken into the `GizmoFrame` resource by `end_debug_line_frame`"),
+        ("FrameProfiler", "written by the preparation's laps, on the game world; the draw writes its laps to `Renderer::draw_laps` and the next preparation moves them in"),
         ("ParticleEmitter", "stepped by `step_particle_emitters`; the draw reads `ParticleSpawns`"),
         ("PhysicsWorld", "its fluid zones handed over as `WaterVolumes`"),
         ("LocalizedText", "resolved into `LocalizedLabel` by `resolve_localized_texts`"),

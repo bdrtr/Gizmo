@@ -90,6 +90,54 @@ pub struct TextRenderer {
     /// The uploaded overlay, per layer, low to high: `(layer, rect range, glyph range)` in buffer
     /// instance indices.
     overlay_runs: Vec<(i32, std::ops::Range<u32>, std::ops::Range<u32>)>,
+    /// Laid-out text kept from frame to frame ([`LayoutCache`]).
+    layouts: LayoutCache,
+}
+
+/// Text laid out before, kept: a HUD's lines are the same frame after frame, and shaping them again
+/// every frame — and once more for every view drawn — was most of what the text pass cost (`dunya`,
+/// 2026-11-16). Keyed by everything a layout depends on — the mode (horizontal, vertical, upright),
+/// the face, the size, the wrap width, the style runs and the string — through a hash, with the
+/// string and the rest checked on a hit, so a collision lays out afresh rather than draws another
+/// line. Bounded: past [`LayoutCache::CAPACITY`] entries it starts again empty, which a game whose
+/// text changes every frame (a timer) reaches only slowly and pays for once.
+#[derive(Default)]
+struct LayoutCache {
+    entries: std::collections::HashMap<u64, (LayoutKey, crate::text::TextLayout)>,
+}
+
+#[derive(Clone, PartialEq)]
+struct LayoutKey {
+    mode: u8,
+    font: crate::text::FontId,
+    px: u32,
+    wrap: Option<u32>,
+    runs: Vec<(u32, crate::text::FontId, u32)>,
+    content: String,
+}
+
+impl LayoutCache {
+    const CAPACITY: usize = 1024;
+
+    fn hash(mode: u8, text: &Text, wrap: Option<f32>, runs: &[crate::text::StyleRun]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (mode, text.font, text.size_px.to_bits(), wrap.map(f32::to_bits), text.content.as_str()).hash(&mut h);
+        for r in runs {
+            (r.start, r.font, r.px.to_bits()).hash(&mut h);
+        }
+        h.finish()
+    }
+
+    fn matches(key: &LayoutKey, mode: u8, text: &Text, wrap: Option<f32>, runs: &[crate::text::StyleRun]) -> bool {
+        key.mode == mode
+            && key.font == text.font
+            && key.px == text.size_px.to_bits()
+            && key.wrap == wrap.map(f32::to_bits)
+            && key.content == text.content
+            && key.runs.len() == runs.len()
+            && key.runs.iter().zip(runs).all(|(k, r)| *k == (r.start, r.font, r.px.to_bits()))
+    }
 }
 
 /// Where each layer's entries sit in `layers` once it is sorted (stably) low to high:
@@ -171,6 +219,7 @@ impl TextRenderer {
             screen_layers: Vec::new(),
             layer: 0,
             overlay_runs: Vec::new(),
+            layouts: LayoutCache::default(),
             uploaded_world: 0,
             uploaded_rects: 0,
             uploaded_screen: 0,
@@ -293,6 +342,9 @@ impl TextRenderer {
     ///
     /// See [`FontLibrary::load`].
     pub fn load_font(&mut self, bytes: Vec<u8>) -> Result<FontId, FontError> {
+        // Any change to the faces may change how kept text lays out (a fallback that now covers a
+        // glyph): the kept layouts go.
+        self.layouts.entries.clear();
         self.library.load(bytes)
     }
 
@@ -302,6 +354,7 @@ impl TextRenderer {
     ///
     /// See [`FontLibrary::load_file`].
     pub fn load_font_file(&mut self, path: impl AsRef<std::path::Path>) -> Result<FontId, FontError> {
+        self.layouts.entries.clear();
         self.library.load_file(path)
     }
 
@@ -316,11 +369,13 @@ impl TextRenderer {
     ///
     /// See [`FontLibrary::load`].
     pub fn load_font_named(&mut self, name: &str, bytes: Vec<u8>) -> Result<FontId, FontError> {
+        self.layouts.entries.clear();
         self.library.load_named(name, bytes)
     }
 
     /// Adds a face to the fallback chain — see [`FontLibrary::add_fallback`].
     pub fn add_font_fallback(&mut self, font: FontId) {
+        self.layouts.entries.clear();
         self.library.add_fallback(font);
     }
 
@@ -459,12 +514,40 @@ impl TextRenderer {
     ) {
         let wrap = wrap_width(text, screen_anchor, screen_size);
         let runs = text.style_runs();
-        let laid_out = if text.vertical && text.upright {
-            self.library.layout_vertical_upright(text.font, text.size_px, &text.content, wrap, &runs)
-        } else if text.vertical {
-            self.library.layout_vertical(text.font, text.size_px, &text.content, wrap, &runs)
-        } else {
-            self.library.layout_styled(text.font, text.size_px, &text.content, wrap, &runs)
+        let mode = u8::from(text.vertical) + u8::from(text.vertical && text.upright);
+        let hash = LayoutCache::hash(mode, text, wrap, &runs);
+        let cached = self
+            .layouts
+            .entries
+            .get(&hash)
+            .filter(|(key, _)| LayoutCache::matches(key, mode, text, wrap, &runs))
+            .map(|(_, layout)| layout.clone());
+        let laid_out = match cached {
+            Some(layout) => Some(layout),
+            None => {
+                let laid_out = if text.vertical && text.upright {
+                    self.library.layout_vertical_upright(text.font, text.size_px, &text.content, wrap, &runs)
+                } else if text.vertical {
+                    self.library.layout_vertical(text.font, text.size_px, &text.content, wrap, &runs)
+                } else {
+                    self.library.layout_styled(text.font, text.size_px, &text.content, wrap, &runs)
+                };
+                if let Some(layout) = &laid_out {
+                    if self.layouts.entries.len() >= LayoutCache::CAPACITY {
+                        self.layouts.entries.clear();
+                    }
+                    let key = LayoutKey {
+                        mode,
+                        font: text.font,
+                        px: text.size_px.to_bits(),
+                        wrap: wrap.map(f32::to_bits),
+                        runs: runs.iter().map(|r| (r.start, r.font, r.px.to_bits())).collect(),
+                        content: text.content.clone(),
+                    };
+                    self.layouts.entries.insert(hash, (key, layout.clone()));
+                }
+                laid_out
+            }
         };
         let Some(mut layout) = laid_out else {
             return;
@@ -785,6 +868,30 @@ fn place_clipped(
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod layout_cache_tests {
+    use super::*;
+
+    /// A kept layout answers only for the text it was made of: the same string, face, size, wrap
+    /// and runs match; a change to any of them does not, and is laid out afresh (a hash is all the
+    /// map is keyed by, so this check is what stops a collision drawing another line).
+    #[test]
+    fn a_kept_layout_matches_only_its_own_text() {
+        let font = crate::text::FontId(0);
+        let text = Text::screen("Kristal 3/15", font, 22.0, Vec2::ZERO);
+        let key = LayoutKey { mode: 0, font, px: 22.0f32.to_bits(), wrap: None, runs: Vec::new(), content: text.content.clone() };
+        assert!(LayoutCache::matches(&key, 0, &text, None, &[]));
+        assert!(!LayoutCache::matches(&key, 0, &Text::screen("Kristal 4/15", font, 22.0, Vec2::ZERO), None, &[]), "another string");
+        assert!(!LayoutCache::matches(&key, 0, &Text::screen("Kristal 3/15", font, 24.0, Vec2::ZERO), None, &[]), "another size");
+        assert!(!LayoutCache::matches(&key, 0, &text, Some(100.0), &[]), "another wrap");
+        assert!(!LayoutCache::matches(&key, 1, &text, None, &[]), "vertical");
+        assert_ne!(
+            LayoutCache::hash(0, &text, None, &[]),
+            LayoutCache::hash(0, &Text::screen("Kristal 4/15", font, 22.0, Vec2::ZERO), None, &[])
+        );
     }
 }
 

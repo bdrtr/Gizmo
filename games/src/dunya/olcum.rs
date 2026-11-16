@@ -10,7 +10,8 @@
 //! - **`GIZMO_PROFILE=1`** ile beş saniyede bir aynı döküm standart hataya — oyun oynanırken arkada.
 //!
 //! Okuma: kare süresi `update + render`'dan çok büyükse kare GPU'yu (ya da dikey eşitlemeyi) bekliyor;
-//! `update` büyükse oyunun bir adımı, hangisi olduğunu adımlar söylüyor.
+//! `update` büyükse oyunun bir adımı, hangisi olduğunu adımlar söylüyor; `render` büyükse motorun
+//! karesinin hangi kısmı olduğunu `motor` satırı. Pencere olmadan, GPU dahil: `dunya --bench`.
 
 use super::*;
 use gizmo::core::profiler::FrameProfiler;
@@ -44,7 +45,7 @@ pub(super) fn install(world: &mut World, font: FontId) -> Meter {
 
 /// `f`'i ölçer ve profilciye `name` adıyla yazar.
 pub(super) fn timed<R>(world: &mut World, name: &'static str, f: impl FnOnce(&mut World) -> R) -> R {
-    let start = std::time::Instant::now();
+    let start = gizmo::core::time::Instant::now();
     let r = f(world);
     if let Some(mut p) = world.get_resource_mut::<FrameProfiler>() {
         p.record_scope(name, start.elapsed());
@@ -66,8 +67,15 @@ pub(super) fn report(world: &World) -> Option<String> {
     steps.sort_by(|a, b| b.1.total_cmp(&a.1));
     let steps = steps.iter().take(5).map(|(s, ms)| format!("{s} {ms:.1}")).collect::<Vec<_>>().join(" · ");
     // Fiziğin kısımları kare başına: bir karede birkaç adım olabiliyor.
-    let per_frame = |name: &str| p.history().iter().rev().take(n).flat_map(|f| f.scopes.iter()).filter(|s| s.name == name).map(|s| s.duration_ms()).sum::<f64>() / n as f64;
+    let per_frame = |name: &str| p.history().iter().rev().take(n).flat_map(|f| f.scopes.iter()).filter(|s| s.name == name).map(|s| s.duration_ms()).sum::<f64>().max(0.0) / n as f64;
     let physics = PHYSICS.iter().map(|(k, label)| format!("{label} {:.1}", per_frame(k))).collect::<Vec<_>>().join(" · ");
+    // Motorun karesinin CPU'su: eşitleme, iskelet animasyonu, kamera görünümleri (harita dahil),
+    // görünümlerin arayüzü ve metni.
+    let engine = [("render.sync", "eşitleme"), ("render.animation", "animasyon"), ("view.batch", "gruplama"), ("view.ui", "arayüz")]
+        .iter()
+        .map(|(k, label)| format!("{label} {:.1}", per_frame(k)))
+        .collect::<Vec<_>>()
+        .join(" · ");
     let stats = world
         .get_resource::<RenderStats>()
         .map(|s| {
@@ -82,7 +90,7 @@ pub(super) fn report(world: &World) -> Option<String> {
         })
         .unwrap_or_default();
     Some(format!(
-        "FPS {:.0} · kare {frame:.1} ms (en kötü {worst:.1}) · güncelleme {:.1} · render {:.1} · çizim {:.1} ms\noyun: {steps}\nfizik: {physics}{stats}",
+        "FPS {:.0} · kare {frame:.1} ms (en kötü {worst:.1}) · güncelleme {:.1} · render {:.1} · çizim {:.1} ms\noyun: {steps}\nfizik: {physics}\nmotor: {engine}{stats}",
         1000.0 / frame.max(0.001),
         part("update"),
         part("render"),

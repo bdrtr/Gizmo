@@ -199,6 +199,7 @@ impl<'a> Commands<'a> {
                 viewport: None,
                 order: 0,
                 clear_color: None,
+                detail: Default::default(),
             },
         );
         EntityBuilder {
@@ -237,6 +238,7 @@ impl<'a> Commands<'a> {
                 viewport: None,
                 order: 0,
                 clear_color: None,
+                detail: Default::default(),
             },
         );
         EntityBuilder {

@@ -298,16 +298,21 @@ pub fn draw_frame(
     view: &wgpu::TextureView,
     renderer: &mut Renderer,
 ) {
+    let mut laps = Laps::start();
     if any_camera_has_a_viewport(world) {
         draw_viewports(world, encoder, view, renderer);
+        laps.draw_lap(renderer, "render.viewports");
         return;
     }
     let camera = crate::renderer::components::active_camera(world);
     draw_ahead_of_views(world, renderer, SimulationDetail::NearestOf(&[camera_world_position(world, camera)]));
+    laps.draw_lap(renderer, "render.ahead");
     // The texture cameras were drawn first, each with its mirrors; the frame's own mirrors last, so
     // they are what the frame's view samples.
     capture_planar_reflections(world, renderer, camera, renderer_aspect(renderer));
+    laps.draw_lap(renderer, "render.mirrors");
     draw_camera_view(world, encoder, view, renderer, camera, true, None, true, None);
+    laps.draw_lap(renderer, "render.camera");
 }
 
 /// How much of each GPU simulation a frame runs: the particles' and the fluid's share of what they
@@ -536,7 +541,13 @@ pub fn draw_viewports(
         let region = viewport.to_pixels(size.width, size.height);
         // Its mirrors, captured for it at its rectangle's shape, just before it: the capture is
         // submitted now and the view after it.
-        capture_planar_reflections(world, renderer, Some(camera), region[2] / region[3].max(1.0));
+        let simple = world
+            .query::<&Camera>()
+            .get(camera)
+            .is_some_and(|c| c.detail == crate::renderer::components::CameraDetail::Simple);
+        if !simple {
+            capture_planar_reflections(world, renderer, Some(camera), region[2] / region[3].max(1.0));
+        }
         // The first view is the frame's own and draws with the renderer's temporal state; every
         // other one with its camera's.
         renderer.with_view_history((index > 0).then_some(camera), |renderer| {
@@ -1018,6 +1029,14 @@ pub fn advance_frame_clocks(world: &mut World) {
 ///
 /// After it, [`draw_frame`] needs the world only to read — so it can be given a copy of this one.
 pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
+    // The last draw's parts, into the profile (a frame late: the draw finished after its preparation).
+    if let Some(mut profiler) = world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+        for (name, time) in renderer.draw_laps.drain(..) {
+            profiler.record_scope(name, time);
+        }
+    }
+    renderer.draw_laps.clear();
+    let mut laps = Laps::start();
     // A `DespawnAfter` with no `LifetimePlugin` used to pile entities up in silence; say so, once.
     crate::systems::lifetime::warn_if_inert(world);
     // One step of object-motion history per frame, however many views then draw it.
@@ -1083,6 +1102,7 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     crate::renderer::components::sync_lod_groups(world, renderer);
     // And every camera drawing into a texture its size (`sync_camera_targets`).
     crate::renderer::components::sync_camera_targets(world, renderer);
+    laps.lap(world, "render.sync");
 
     // **Advance skeletal animation.** `collect_draw_items` below reads `Skeleton` for its skinning
     // matrices, and until this call nothing in the engine ever advanced the pose it reads: the two
@@ -1109,6 +1129,7 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     crate::renderer::gltf_model::resolve_gltf_models(world, renderer);
     // A model whose clips the editor has changed keeps those clips for the save to write.
     crate::renderer::gltf_model::sync_clip_edits(world);
+    laps.lap(world, "render.models");
     let animation_dt = world
         .get_resource::<gizmo_core::time::Time>()
         .map(|t| t.dt())
@@ -1128,6 +1149,7 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // what the two drivers above made of it this frame and before anything follows a bone — a
     // sword in a reaching hand goes where the hand went (`ik`).
     apply_ik_chains_system(world, &renderer.queue);
+    laps.lap(world, "render.animation");
 
     // **Bones carry what is attached to them.** `BoneAttachmentSystem` places every entity
     // parented to a joint — a sword in a hand, a hat on a head — onto the pose the animation
@@ -1171,6 +1193,37 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
 
     // **The debug-line frame ends here**, before the draw — see `end_debug_line_frame`.
     end_debug_line_frame(world);
+    laps.lap(world, "render.effects");
+}
+
+/// Times the parts of a frame into the world's `FrameProfiler`, when it has one: each
+/// [`lap`](Self::lap) records the time since the last as its own scope. What lets a game see which
+/// part of the engine's frame its time went to (`dunya --bench`, its F3 meter).
+struct Laps {
+    last: gizmo_core::time::Instant,
+}
+
+impl Laps {
+    fn start() -> Self {
+        Self { last: gizmo_core::time::Instant::now() }
+    }
+
+    /// The preparation's half: straight into the world's profiler (the game world, at the sync point).
+    fn lap(&mut self, world: &World, name: &'static str) {
+        let now = gizmo_core::time::Instant::now();
+        if let Some(mut profiler) = world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
+            profiler.record_scope(name, now - self.last);
+        }
+        self.last = now;
+    }
+
+    /// The draw's half: into [`Renderer::draw_laps`](crate::renderer::Renderer::draw_laps), which the
+    /// next preparation moves into the profiler — the draw's world is a copy with none.
+    fn draw_lap(&mut self, renderer: &mut Renderer, name: &'static str) {
+        let now = gizmo_core::time::Instant::now();
+        renderer.draw_laps.push((name, now - self.last));
+        self.last = now;
+    }
 }
 
 /// Ends the frame's debug lines: what the game drew into [`Gizmos`](crate::renderer::Gizmos) this
@@ -1353,7 +1406,40 @@ fn draw_camera_view(
     overlay: bool,
     capture: Option<FixedView>,
 ) {
-    renderer.skip_mirrors = capture.is_some();
+    // A camera drawn with `CameraDetail::Simple`: the effects it goes without are set aside for its
+    // view and put back after — the same way a probe's capture sets the temporal ones aside — and
+    // its view plans no shadow pass (`collect_scene_setup` then also tells the lighting there are no
+    // shadows to read, rather than leave it the last view's maps).
+    let simple = camera
+        .and_then(|c| world.query::<&Camera>().get(c).map(|cam| cam.detail == crate::renderer::components::CameraDetail::Simple))
+        .unwrap_or(false);
+    if !simple {
+        return draw_camera_view_with(world, encoder, view, renderer, camera, simulations, region, overlay, capture, false);
+    }
+    let ssao = renderer.ssao.take();
+    let volumetric = renderer.volumetric.take();
+    let bloom = std::mem::replace(&mut renderer.bloom_intensity, 0.0);
+    draw_camera_view_with(world, encoder, view, renderer, camera, simulations, region, overlay, capture, true);
+    renderer.ssao = ssao;
+    renderer.volumetric = volumetric;
+    renderer.bloom_intensity = bloom;
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_camera_view_with(
+    world: &World,
+    encoder: &mut wgpu::CommandEncoder,
+    view: &wgpu::TextureView,
+    renderer: &mut Renderer,
+    camera: Option<Entity>,
+    simulations: bool,
+    region: Option<[f32; 4]>,
+    overlay: bool,
+    capture: Option<FixedView>,
+    simple: bool,
+) {
+    let mut laps = Laps::start();
+    renderer.skip_mirrors = capture.is_some() || simple;
     renderer.skip_sky = capture.as_ref().is_some_and(|fixed| fixed.bounce);
     // Post-process params are written AFTER the active camera is resolved (below), so the
     // single exposure knob can be the camera's exposure — see the update_post_process call
@@ -1590,8 +1676,8 @@ fn draw_camera_view(
             },
             // The forward-only path draws the sun's cascade and the local lights' layers unless a game
             // says not to (`ShadowSettings::forward_only`).
-            sun_shadow_maps: !cfg!(gizmo_forward_only) || renderer.shadow_settings.forward_only,
-            local_shadow_maps: !cfg!(gizmo_forward_only) || renderer.shadow_settings.forward_only,
+            sun_shadow_maps: !simple && (!cfg!(gizmo_forward_only) || renderer.shadow_settings.forward_only),
+            local_shadow_maps: !simple && (!cfg!(gizmo_forward_only) || renderer.shadow_settings.forward_only),
             elapsed_time,
             light_cookies: renderer.light_cookies.table(),
             shadow_settings: renderer.shadow_settings,
@@ -1680,9 +1766,11 @@ fn draw_camera_view(
     // instanced batches and upload the instance buffer. Lives in `batching.rs`.
     // An object off screen still casts into any shadow map the frame draws: the sun's cascades, and
     // every local light's layers.
+    laps.draw_lap(renderer, "view.setup");
     let (draw_items, uploaded_instances) =
         batching::collect_draw_items(world, renderer, unjittered_view_proj, &setup.shadow_view_projs(), cam_pos);
     record_render_stats(renderer, &draw_items, elapsed_time);
+    laps.draw_lap(renderer, "view.batch");
 
     // The GPU-physics cull reads the view's camera, so it is per view; its simulation is not.
     if let Some(physics) = &renderer.gpu_physics {
@@ -1746,6 +1834,7 @@ fn draw_camera_view(
             stats.shadow_instances = shadow_instances;
         }
     }
+    laps.draw_lap(renderer, "view.shadows");
     passes::record_deferred_geometry(
         encoder,
         renderer,
@@ -1755,6 +1844,7 @@ fn draw_camera_view(
         cam_pos,
     );
     passes::record_ssao(encoder, renderer);
+    laps.draw_lap(renderer, "view.geometry");
     // CPU-computed inverse of the (unjittered) view-projection for the volumetric smoke raymarch
     // (the WGSL inverse_mat4 returns a wrong inverse for the perspective matrix).
     let inv_view_proj = unjittered_view_proj.inverse().to_cols_array_2d();
@@ -1778,11 +1868,13 @@ fn draw_camera_view(
         ssgi.advance_frame();
     }
     passes::record_taa_and_overlays(encoder, renderer, world, capture.is_none());
+    laps.draw_lap(renderer, "view.forward");
     // After the overlays and before post-processing: sprites and text are overlays too, and the
     // ones whose smear a temporal resolve makes most obvious. Sprites first, so a HUD label lands
     // on its HUD image; with the UNJITTERED matrix, so a sprite drawn past TAA does not shimmer.
     record_sprites(encoder, renderer, world, unjittered_view_proj);
     record_text(encoder, renderer, world);
+    laps.draw_lap(renderer, "view.ui");
 
     // A probe face stops at the HDR target: what it captures is radiance, not a graded picture.
     if capture.is_some() {
@@ -1795,6 +1887,7 @@ fn draw_camera_view(
         .unwrap_or(1.0 / 60.0);
     renderer.update_auto_exposure(exposure_dt);
     renderer.run_post_processing_in(encoder, view, region, overlay);
+    laps.draw_lap(renderer, "view.post");
 }
 
 // ============================================================
@@ -10041,6 +10134,86 @@ mod golden_render_tests {
             // instance flag (transparent 0), and the batcher never writing it (both 0).
             assert!(found[0] > 80, "the deferred path honours it: {} shadow pixels", found[0]);
             assert!(found[1] > 80, "the forward path honours it: {} shadow pixels", found[1]);
+        });
+    }
+
+    /// **A camera drawn `CameraDetail::Simple` casts no shadow and reads none.** The cube-over-floor
+    /// scene of the test above: through a full camera the floor shows the cube's shadow (pixels 20
+    /// darker than with the floor refusing shadows); through a simple one it shows none — and none
+    /// either when the simple view is drawn right after a full one in the same frame, whose cascades
+    /// the shadow maps still hold: the simple view tells the lighting it has no shadow range rather
+    /// than leave it the full view's maps. Added with the minimap of `dunya`, which drawn in full
+    /// cost a seventh of the frame (2026-11-16).
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_simple_camera_casts_no_shadow_and_reads_none() {
+        use crate::renderer::components::{Camera, CameraDetail, Viewport};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // `views`: the cameras, as (detail, viewport, order); the frame shows the last one drawn.
+        async fn frame(receives: bool, views: &[(CameraDetail, Option<Viewport>, i32)]) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(floor, MeshRenderer::new().with_receives_shadows(receives));
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 1.0, 0.0)).with_scale(Vec3::splat(0.6)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            world.add_component(cube, Material::new(tex).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.9, 0.0));
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle {
+                rotation: gizmo_math::Quat::from_rotation_z(-0.3) * gizmo_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                intensity: 3.0,
+                ..Default::default()
+            });
+            for (i, &(detail, viewport, order)) in views.iter().enumerate() {
+                let cam = world.spawn_bundle(CameraBundle {
+                    position: Vec3::new(0.0, 6.0, 6.0),
+                    yaw: -std::f32::consts::FRAC_PI_2,
+                    pitch: -0.8,
+                    primary: i == 0,
+                    ..Default::default()
+                });
+                if let Some(mut c) = world.query_mut::<&mut Camera>().get_mut(cam) {
+                    c.detail = detail;
+                    c.viewport = viewport;
+                    c.order = order;
+                }
+            }
+            render_world(&mut renderer, &mut world).await
+        }
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        let shadow = |receiving: &[u8], refusing: &[u8]| (0..128 * 128).filter(|&i| luma(receiving, i) + 20 < luma(refusing, i)).count();
+        let full_screen = Some(Viewport::new(0.0, 0.0, 1.0, 1.0));
+        pollster::block_on(async {
+            let full = [(CameraDetail::Full, None, 0)];
+            let simple = [(CameraDetail::Simple, None, 0)];
+            // The full view first, then a simple one over the whole frame: what the frame shows is the
+            // simple view, drawn after the full one filled the shadow maps.
+            let after_full = [(CameraDetail::Full, None, 0), (CameraDetail::Simple, full_screen, 1)];
+            let cast = shadow(&frame(true, &full).await, &frame(false, &full).await);
+            let none = shadow(&frame(true, &simple).await, &frame(false, &simple).await);
+            let stale = shadow(&frame(true, &after_full).await, &frame(false, &after_full).await);
+            assert!(cast > 80, "a full camera shows the shadow: {cast} pixels");
+            assert!(none < 10, "a simple camera shows none: {none} pixels");
+            assert!(stale < 10, "a simple view after a full one reads none of its maps: {stale} pixels");
         });
     }
 

@@ -108,6 +108,25 @@ pub struct Camera {
     /// over it. `#[serde(default)]`.
     #[serde(default)]
     pub clear_color: Option<gizmo_math::Vec3>,
+    /// How much of the pipeline draws this camera's view. [`CameraDetail::Full`] (the default) is
+    /// everything the renderer has; [`CameraDetail::Simple`] is the view lit without shadows, ambient
+    /// occlusion, volumetric light, bloom or mirrors — for a secondary view that costs as much as the
+    /// frame's own otherwise: a minimap, a rear-view mirror, a security monitor. `#[serde(default)]`.
+    #[serde(default)]
+    pub detail: CameraDetail,
+}
+
+/// How much of the pipeline draws a camera's view — see [`Camera::detail`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum CameraDetail {
+    /// Everything the renderer has.
+    #[default]
+    Full,
+    /// Lit, without the sun's and the lights' shadow passes, ambient occlusion, volumetric light,
+    /// bloom or mirrors. In `dunya` a minimap drawn so cost a seventh of what a full one did (measured
+    /// 2026-11-16).
+    Simple,
 }
 
 /// A rectangle of the render target, as **fractions** of its size with the origin at the
@@ -216,6 +235,7 @@ impl Camera {
             viewport: None,
             order: 0,
             clear_color: None,
+            detail: CameraDetail::Full,
         }
     }
 

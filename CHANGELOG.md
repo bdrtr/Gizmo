@@ -50,6 +50,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`Camera::detail`: `CameraDetail::Simple` for secondary views.** A minimap, a rear-view mirror or a monitor drawn
+  without the sun's and the lights' shadow passes, ambient occlusion, volumetric light, bloom or mirrors. `dunya`'s
+  minimap drawn in full cost about 7 ms of GPU and 7 of CPU a frame on its laptop's integrated GPU; simple, about 3 of
+  GPU.
+- **The engine's frame times its parts.** With a `FrameProfiler` in the world, `prepare_frame` records `render.sync`,
+  `render.models`, `render.animation`, `render.effects`, the draw `render.viewports` / `render.ahead` /
+  `render.mirrors` / `render.camera`, and each view `view.setup`, `view.batch`, `view.shadows`, `view.geometry`,
+  `view.forward`, `view.ui`, `view.post`.
+- **`dunya --bench [frames]`**: the game played by its autopilot and drawn off-screen on the GPU, with the frame
+  split into game, loading, preparation and encoding, and GPU time, the engine's parts and the draw counts — where a
+  frame goes, without a window. `DUNYA_BENCH_NOMAP=1` and `DUNYA_BENCH_OFF=ssao,taa,…` measure what a part costs.
 - **`FixedPhysics` times its parts.** With a `FrameProfiler` in the world, each step records `physics.vehicles`,
   `physics.characters`, `physics.step` and `physics.history` — what a game needs to see which part of its physics a
   frame went to.
@@ -968,6 +979,19 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The text pass built its queries a dozen times a label.** Every `Text` asked whether it was hidden, clipped, on
+  which layer, a field, a dropdown, a translation, a typewriter, faded — each through a query of its own, and building
+  a query walks every archetype; the UI boxes did the same per node. The lookups are built once a pass
+  (`TextLookups`) now: `dunya`'s UI and text went from 6.8 ms a frame to 0.5. Laid-out text is also kept between
+  frames, keyed by everything a layout depends on and checked on a hit.
+- **A skeleton matched its clips to its joints every frame.** `evaluate_clip` searched joint names for every track
+  (loosely, with an allocation per joint, when the exact name was missing) each frame for each character. The match
+  is a `ClipBinding` now, made once per clip and skeleton and kept on the `Skeleton`; `evaluate_clip` is unchanged and
+  `evaluate_bound` samples with a kept one. `dunya`'s 117 characters went from 5.1 ms to 3.0. Skin matrices upload
+  the skeleton's own joints, not all 128 slots.
+- **A view that draws no shadow maps no longer reads the last view's.** A view whose path draws no cascades still
+  told the lighting its shadow range, so it sampled whatever the maps held — another camera's cascades, or nothing.
+  It reports no range now, which the lighting reads as lit.
 - **Character controllers no longer scale with the size of the world.** Two passes cast every grounded character's
   floor ray at every collider in the world, unbounded: `platform_carry` with no box test at all — each terrain tile
   walked cell by cell to its far side, for each of `dunya`'s hundred animals — and the step's own prefilter computing

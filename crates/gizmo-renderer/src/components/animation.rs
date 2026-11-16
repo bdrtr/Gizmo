@@ -30,6 +30,47 @@ pub struct Skeleton {
     pub local_poses: Vec<gizmo_math::Mat4>,
     /// The same pose composed down the hierarchy, in model space. This is what reaches the GPU.
     pub global_poses: Vec<gizmo_math::Mat4>,
+    /// Each clip's tracks matched to this skeleton's joints, kept: matching is a search by name
+    /// that the animation systems used to repeat for every clip every frame.
+    pub(crate) bindings: ClipBindings,
+}
+
+/// The [`ClipBinding`](gizmo_animation::skeletal::ClipBinding)s a skeleton has made, by joint
+/// hierarchy, clip table and index. Each entry holds the hierarchy and the table it was made for,
+/// so neither address it is keyed by can be reused by another while the entry lives — and a
+/// skeleton given another hierarchy matches its clips again.
+#[derive(Clone, Default)]
+pub(crate) struct ClipBindings {
+    entries: Vec<BindingEntry>,
+}
+
+type BindingEntry = (
+    Arc<gizmo_animation::skeletal::SkeletonHierarchy>,
+    Arc<[gizmo_animation::skeletal::AnimationClip]>,
+    usize,
+    Arc<gizmo_animation::skeletal::ClipBinding>,
+);
+
+impl ClipBindings {
+    /// The binding of clip `index` of `clips` to `hierarchy`, made the first time it is asked for.
+    pub(crate) fn get(
+        &mut self,
+        clips: &Arc<[gizmo_animation::skeletal::AnimationClip]>,
+        index: usize,
+        hierarchy: &Arc<gizmo_animation::skeletal::SkeletonHierarchy>,
+    ) -> Option<Arc<gizmo_animation::skeletal::ClipBinding>> {
+        let clip = clips.get(index)?;
+        if let Some((.., b)) =
+            self.entries.iter().find(|(h, t, i, _)| Arc::ptr_eq(h, hierarchy) && Arc::ptr_eq(t, clips) && *i == index)
+        {
+            return Some(b.clone());
+        }
+        // What no one uses any more is let go: a table no player holds, a hierarchy replaced.
+        self.entries.retain(|(h, t, ..)| Arc::strong_count(t) > 1 && Arc::ptr_eq(h, hierarchy));
+        let binding = Arc::new(gizmo_animation::skeletal::ClipBinding::new(clip, hierarchy));
+        self.entries.push((hierarchy.clone(), clips.clone(), index, binding.clone()));
+        Some(binding)
+    }
 }
 
 impl Skeleton {
@@ -58,6 +99,47 @@ impl Skeleton {
             hierarchy,
             local_poses,
             global_poses,
+            bindings: ClipBindings::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod binding_tests {
+    use super::*;
+    use gizmo_animation::skeletal::{AnimationClip, SkeletonHierarchy, SkeletonJoint};
+
+    fn hierarchy() -> Arc<SkeletonHierarchy> {
+        Arc::new(SkeletonHierarchy {
+            joints: vec![SkeletonJoint {
+                name: "Hips".into(),
+                node_index: 0,
+                inverse_bind_matrix: gizmo_math::Mat4::IDENTITY,
+                parent_index: None,
+                local_bind_transform: gizmo_math::Mat4::IDENTITY,
+                bind_translation: gizmo_math::Vec3::ZERO,
+                bind_rotation: gizmo_math::Quat::IDENTITY,
+                bind_scale: gizmo_math::Vec3::ONE,
+            }],
+            root_transform: gizmo_math::Mat4::IDENTITY,
+        })
+    }
+
+    /// A skeleton keeps each clip's binding and hands the same one back; another clip, another
+    /// table or another hierarchy gets its own — a skeleton given a new hierarchy does not reuse the
+    /// old one's matching.
+    #[test]
+    fn bindings_are_kept_per_clip_table_and_hierarchy() {
+        let clip = || AnimationClip { name: "a".into(), duration: 1.0, translations: vec![], rotations: vec![], scales: vec![] };
+        let clips: Arc<[AnimationClip]> = Arc::from(vec![clip(), clip()].into_boxed_slice());
+        let (h, other_h) = (hierarchy(), hierarchy());
+        let mut cache = ClipBindings::default();
+        let first = cache.get(&clips, 0, &h).expect("clip 0");
+        assert!(Arc::ptr_eq(&first, &cache.get(&clips, 0, &h).unwrap()), "kept, not matched again");
+        assert!(!Arc::ptr_eq(&first, &cache.get(&clips, 1, &h).unwrap()), "another clip, another binding");
+        let again: Arc<[AnimationClip]> = Arc::from(vec![clip(), clip()].into_boxed_slice());
+        assert!(!Arc::ptr_eq(&first, &cache.get(&again, 0, &h).unwrap()), "another table, another binding");
+        assert!(!Arc::ptr_eq(&first, &cache.get(&clips, 0, &other_h).unwrap()), "another hierarchy, matched again");
+        assert!(cache.get(&clips, 7, &h).is_none(), "no such clip");
     }
 }

@@ -23,6 +23,6 @@ gizmo = { package = "gizmo-engine", path = "../crates/gizmo", default-features =
     "audio",
 ] }
 
-[dev-dependencies]
-# The GPU tests' one async call (a headless renderer).
+# `dunya --bench`'s one async call (a headless renderer); the desktop's only.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 pollster = "1.0"

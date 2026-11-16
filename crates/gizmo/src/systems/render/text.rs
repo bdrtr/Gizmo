@@ -49,6 +49,8 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
     let bars = world.query::<&crate::ui::ProgressBar>();
     let toggles = world.query::<&crate::ui::Toggle>();
     let scrolls = world.query::<&crate::ui::Scroll>();
+    // Built once for the whole tree: per node it was ten queries, each a walk of every archetype.
+    let lookups = TextLookups::new(world);
     let mut out = Vec::new();
     for id in tree_order(world) {
         let Some(node) = nodes.get(id) else { continue };
@@ -91,7 +93,7 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
             out.push((id, at - Vec2::splat(side * 0.5), Vec2::splat(side), Some(s.knob)));
         }
         // A fading box fades all of its parts.
-        let alpha = ui_opacity(world, id);
+        let alpha = lookups.opacity(id);
         if alpha < 1.0 {
             for b in &mut out[start..] {
                 if let Some(c) = b.3.as_mut() {
@@ -103,32 +105,7 @@ fn ui_boxes(world: &World) -> Vec<UiBox> {
     out
 }
 
-/// The opacity `entity` is drawn at: the product of every [`UiTransform`](crate::ui::UiTransform)
-/// `opacity` from it up through its parents — a card fades with its face and its label.
-#[cfg(feature = "ui")]
-fn ui_opacity(world: &World, entity: Entity) -> f32 {
-    let transforms = world.query::<&crate::ui::UiTransform>();
-    if transforms.is_empty() {
-        return 1.0;
-    }
-    let parents = world.query::<&crate::core::component::Parent>();
-    let mut alpha = 1.0;
-    let mut at = Some(entity);
-    // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
-    for _ in 0..256 {
-        let Some(id) = at else { break };
-        if let Some(t) = transforms.get(id) {
-            alpha *= t.opacity.clamp(0.0, 1.0);
-        }
-        at = parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0);
-    }
-    alpha
-}
 
-#[cfg(not(feature = "ui"))]
-fn ui_opacity(_world: &World, _entity: Entity) -> f32 {
-    1.0
-}
 
 /// Every UI node in painting order: a parent before its children, earlier siblings (in
 /// `Children` order) before later ones and everything under them — depth first, as a page is
@@ -182,16 +159,7 @@ fn ui_text_scale(_world: &World) -> Option<f32> {
     None
 }
 
-/// Whether `entity` is a UI node in a hidden part of the tree (`Node::visible`).
-#[cfg(feature = "ui")]
-fn ui_hidden(world: &World, entity: Entity) -> bool {
-    world.query::<&crate::ui::Node>().get(entity).is_some_and(|n| !n.visible)
-}
 
-#[cfg(not(feature = "ui"))]
-fn ui_hidden(_world: &World, _entity: Entity) -> bool {
-    false
-}
 
 /// Frame pixels per logical pixel (`DisplayScale`, 1 without one).
 fn display_density(world: &World) -> f32 {
@@ -224,53 +192,9 @@ fn ui_boxes(_world: &World) -> Vec<UiBox> {
     Vec::new()
 }
 
-/// Where `entity`'s drawing is cut: the intersection of the boxes of every
-/// [`ClipContent`](crate::ui::ClipContent) or [`Scroll`](crate::ui::Scroll) node from it up
-/// through its ancestors (`[min, max]`,
-/// window pixels), or `None` when none of them clips. An empty intersection is a zero-size rect,
-/// which clips everything.
-#[cfg(feature = "ui")]
-pub(crate) fn ui_clip(world: &World, entity: Entity) -> Option<[Vec2; 2]> {
-    let clips = world.query::<&crate::ui::ClipContent>();
-    let scrolls = world.query::<&crate::ui::Scroll>();
-    let nodes = world.query::<&crate::ui::Node>();
-    let parents = world.query::<&crate::core::component::Parent>();
-    let mut out: Option<[Vec2; 2]> = None;
-    let mut at = Some(entity);
-    // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
-    for _ in 0..256 {
-        let Some(id) = at else { break };
-        if clips.get(id).is_some() || scrolls.get(id).is_some() {
-            if let Some(n) = nodes.get(id) {
-                let r = [n.position, n.position + n.size];
-                out = Some(match out {
-                    Some([lo, hi]) => [lo.max(r[0]), hi.min(r[1])],
-                    None => r,
-                });
-            }
-        }
-        at = parents.get(id).filter(|p| world.is_alive(p.0)).map(|p| p.0);
-    }
-    out
-}
 
-#[cfg(not(feature = "ui"))]
-pub(crate) fn ui_clip(_world: &World, _entity: Entity) -> Option<[Vec2; 2]> {
-    None
-}
 
-/// What a [`TextInput`](crate::ui::TextInput) on `entity` shows instead of its `Text`'s content —
-/// the value (with a caret while focused) — or `None` to draw the `Text` as authored (its
-/// placeholder).
-#[cfg(feature = "ui")]
-fn text_input_display(world: &World, entity: Entity) -> Option<String> {
-    world.query::<&crate::ui::TextInput>().get(entity).and_then(|f| f.display())
-}
 
-#[cfg(not(feature = "ui"))]
-fn text_input_display(_world: &World, _entity: Entity) -> Option<String> {
-    None
-}
 
 /// A `Text` shown a character at a time — dialogue, a tutorial line, a typed-out intro. Put it
 /// beside a `Text`: the label draws the first [`visible`](Self::visible) characters of what it
@@ -362,12 +286,11 @@ gizmo_core::impl_component!(Typewriter);
 pub fn typewriter_system(world: &mut World, dt: f32) {
     let lines: Vec<(Entity, String)> = {
         let texts = world.query::<&Text>();
+        let lookups = TextLookups::new(world);
         world.query::<(Entity, &Typewriter)>().iter()
             .filter_map(|(entity, _)| {
                 let t = texts.get(entity)?;
-                let s = text_input_display(world, entity)
-                    .or_else(|| dropdown_display(world, entity))
-                    .or_else(|| localized_display(world, entity))
+                let s = lookups.shown(entity)
                     .unwrap_or_else(|| t.content.clone());
                 Some((entity, s))
             })
@@ -385,11 +308,6 @@ pub fn typewriter_system(world: &mut World, dt: f32) {
     }
 }
 
-/// `full` cut to what a [`Typewriter`] on `entity` has typed so far, or `None` without one.
-fn typed_display(world: &World, entity: Entity, full: &str) -> Option<String> {
-    let t = *world.query::<&Typewriter>().get(entity)?;
-    Some(full.chars().take(t.visible()).collect())
-}
 
 /// The string a [`LocalizedText`](crate::app::locale::LocalizedText) shows this frame, in the
 /// game's [`Locale`](crate::app::locale::Locale) — written by [`resolve_localized_texts`] in the
@@ -446,25 +364,8 @@ pub fn resolve_localized_texts(world: &mut World) {
     }
 }
 
-/// What a [`LocalizedText`](crate::app::locale::LocalizedText) on `entity` shows — its
-/// [`LocalizedLabel`] — or `None` (no label, or no locale) to draw the `Text` as authored. The
-/// preparation resolves it each frame, so a language switch relabels every one on the next frame.
-fn localized_display(world: &World, entity: Entity) -> Option<String> {
-    world.query::<&LocalizedLabel>().get(entity).map(|l| l.0.clone())
-}
 
-/// What a [`Dropdown`](crate::ui::Dropdown) on `entity` shows on its button: the selected option
-/// and a down-arrow — or `None` without one.
-#[cfg(feature = "ui")]
-fn dropdown_display(world: &World, entity: Entity) -> Option<String> {
-    let d = world.query::<&crate::ui::Dropdown>().get(entity).cloned()?;
-    Some(format!("{}  ▾", d.selected_option().unwrap_or("")))
-}
 
-#[cfg(not(feature = "ui"))]
-fn dropdown_display(_world: &World, _entity: Entity) -> Option<String> {
-    None
-}
 
 /// Every open dropdown's rows: `(entity, [(top-left, size, colour, label)])`.
 #[cfg(feature = "ui")]
@@ -528,15 +429,156 @@ fn dropdown_lists(_world: &World) -> Vec<(Entity, Vec<(Vec2, Vec2, Vec4, String)
     Vec::new()
 }
 
-/// The overlay layer `entity` is drawn on — its `ZIndex`, inherited through its parents.
-#[cfg(feature = "ui")]
-fn ui_layer(world: &World, entity: Entity) -> i32 {
-    crate::ui::ui_layer(world, entity)
+
+
+/// Every lookup the text pass makes for each label, its queries built once for the pass.
+///
+/// The pass asked a dozen questions of every `Text` — hidden? clipped? on which layer? a field, a
+/// dropdown, a translation, a typewriter? faded? — and each helper built its own query to ask,
+/// and building a query walks every archetype of the world. In `dunya` (58 labels, 130 archetypes)
+/// that was 3.4 ms a view, twice a frame with its minimap (measured 2026-11-16). The answers are
+/// the same; the queries are built once.
+struct TextLookups<'w> {
+    #[cfg(feature = "ui")]
+    world: &'w World,
+    #[cfg(feature = "ui")]
+    parents: gizmo_core::query::Query<'w, &'w crate::core::component::Parent>,
+    labels: gizmo_core::query::Query<'w, &'w LocalizedLabel>,
+    typewriters: gizmo_core::query::Query<'w, &'w Typewriter>,
+    #[cfg(feature = "ui")]
+    ui: UiLookups<'w>,
 }
 
-#[cfg(not(feature = "ui"))]
-fn ui_layer(_world: &World, _entity: Entity) -> i32 {
-    0
+#[cfg(feature = "ui")]
+struct UiLookups<'w> {
+    nodes: gizmo_core::query::Query<'w, &'w crate::ui::Node>,
+    clips: gizmo_core::query::Query<'w, &'w crate::ui::ClipContent>,
+    scrolls: gizmo_core::query::Query<'w, &'w crate::ui::Scroll>,
+    transforms: gizmo_core::query::Query<'w, &'w crate::ui::UiTransform>,
+    inputs: gizmo_core::query::Query<'w, &'w crate::ui::TextInput>,
+    dropdowns: gizmo_core::query::Query<'w, &'w crate::ui::Dropdown>,
+    layers: gizmo_core::query::Query<'w, &'w crate::ui::ZIndex>,
+}
+
+impl<'w> TextLookups<'w> {
+    fn new(world: &'w World) -> Self {
+        Self {
+            #[cfg(feature = "ui")]
+            world,
+            #[cfg(feature = "ui")]
+            parents: world.query::<&crate::core::component::Parent>(),
+            labels: world.query::<&LocalizedLabel>(),
+            typewriters: world.query::<&Typewriter>(),
+            #[cfg(feature = "ui")]
+            ui: UiLookups {
+                nodes: world.query::<&crate::ui::Node>(),
+                clips: world.query::<&crate::ui::ClipContent>(),
+                scrolls: world.query::<&crate::ui::Scroll>(),
+                transforms: world.query::<&crate::ui::UiTransform>(),
+                inputs: world.query::<&crate::ui::TextInput>(),
+                dropdowns: world.query::<&crate::ui::Dropdown>(),
+                layers: world.query::<&crate::ui::ZIndex>(),
+            },
+        }
+    }
+
+    #[cfg(feature = "ui")]
+    fn parent(&self, id: Entity) -> Option<Entity> {
+        self.parents.get(id).filter(|p| self.world.is_alive(p.0)).map(|p| p.0)
+    }
+
+        fn hidden(&self, id: Entity) -> bool {
+        #[cfg(feature = "ui")]
+        return self.ui.nodes.get(id).is_some_and(|n| !n.visible);
+        #[cfg(not(feature = "ui"))]
+        {
+            let _ = id;
+            false
+        }
+    }
+
+        fn clip(&self, entity: Entity) -> Option<[Vec2; 2]> {
+        #[cfg(feature = "ui")]
+        {
+            let ui = &self.ui;
+            let mut out: Option<[Vec2; 2]> = None;
+            let mut at = Some(entity);
+            // Bounded: a hierarchy cycle (which the core prevents) must not hang a frame.
+            for _ in 0..256 {
+                let Some(id) = at else { break };
+                if ui.clips.get(id).is_some() || ui.scrolls.get(id).is_some() {
+                    if let Some(n) = ui.nodes.get(id) {
+                        let r = [n.position, n.position + n.size];
+                        out = Some(match out {
+                            Some([lo, hi]) => [lo.max(r[0]), hi.min(r[1])],
+                            None => r,
+                        });
+                    }
+                }
+                at = self.parent(id);
+            }
+            out
+        }
+        #[cfg(not(feature = "ui"))]
+        {
+            let _ = entity;
+            None
+        }
+    }
+
+        fn opacity(&self, entity: Entity) -> f32 {
+        #[cfg(feature = "ui")]
+        {
+            if self.ui.transforms.is_empty() {
+                return 1.0;
+            }
+            let mut alpha = 1.0;
+            let mut at = Some(entity);
+            for _ in 0..256 {
+                let Some(id) = at else { break };
+                if let Some(t) = self.ui.transforms.get(id) {
+                    alpha *= t.opacity.clamp(0.0, 1.0);
+                }
+                at = self.parent(id);
+            }
+            alpha
+        }
+        #[cfg(not(feature = "ui"))]
+        {
+            let _ = entity;
+            1.0
+        }
+    }
+
+        fn layer(&self, entity: Entity) -> i32 {
+        #[cfg(feature = "ui")]
+        return crate::ui::layer_with(entity, |id| self.ui.layers.get(id).map(|z| z.0), |id| self.parent(id));
+        #[cfg(not(feature = "ui"))]
+        {
+            let _ = entity;
+            0
+        }
+    }
+
+    /// What a field (its value, with a caret while focused), a dropdown (the selected option and a
+    /// down-arrow) or a translation (its [`LocalizedLabel`]) shows on `id` instead of its `Text`.
+    fn shown(&self, id: Entity) -> Option<String> {
+        #[cfg(feature = "ui")]
+        {
+            if let Some(s) = self.ui.inputs.get(id).and_then(|f| f.display()) {
+                return Some(s);
+            }
+            if let Some(d) = self.ui.dropdowns.get(id) {
+                return Some(format!("{}  ▾", d.selected_option().unwrap_or("")));
+            }
+        }
+        self.labels.get(id).map(|l| l.0.clone())
+    }
+
+        fn typed(&self, id: Entity, full: &str) -> Option<String> {
+        let t = *self.typewriters.get(id)?;
+        Some(full.chars().take(t.visible()).collect())
+    }
 }
 
 /// Lays this frame's [`Text`] out, rasterises any glyph the atlas has not seen, and draws it —
@@ -598,19 +640,20 @@ pub fn record_text(
     };
 
     text.begin_frame();
+    let lookups = TextLookups::new(world);
     // Backgrounds first in the source too, though the renderer keeps them under the glyphs
     // whatever order they arrive in — `TextRenderer::queue_rect` says so.
     for (id, position, size, background) in &boxes {
         if let Some(color) = background {
-            text.set_layer(ui_layer(world, *id));
-            text.queue_rect_clipped(*position, *size, *color, screen, ui_clip(world, *id));
+            text.set_layer(lookups.layer(*id));
+            text.queue_rect_clipped(*position, *size, *color, screen, lookups.clip(*id));
         }
     }
 
     for (id, item) in world.query::<(Entity, &Text)>().iter() {
         // A label in a hidden panel (`Node::visible`) is not drawn — at its authored position it
         // would sit at the window's corner, which is where it was.
-        if ui_hidden(world, id) {
+        if lookups.hidden(id) {
             continue;
         }
         // `TextSpace::needs_world_position` rather than a `match` here: the enum is
@@ -636,16 +679,14 @@ pub fn record_text(
             (Vec3::ZERO, anchor)
         };
         // A clipping UI box above it (or on it) cuts screen text to the box.
-        let clip = if item.space.needs_world_position() { None } else { ui_clip(world, id) };
-        text.set_layer(ui_layer(world, id));
+        let clip = if item.space.needs_world_position() { None } else { lookups.clip(id) };
+        text.set_layer(lookups.layer(id));
         // A text field draws its value where its `Text` holds the placeholder; otherwise a
         // `LocalizedText` draws the current language's string (the placeholder too).
         // A `Typewriter` then shows only as much of that as it has typed.
         let field;
-        let shown = text_input_display(world, id)
-            .or_else(|| dropdown_display(world, id))
-            .or_else(|| localized_display(world, id));
-        let shown = typed_display(world, id, shown.as_deref().unwrap_or(&item.content)).or(shown);
+        let shown = lookups.shown(id);
+        let shown = lookups.typed(id, shown.as_deref().unwrap_or(&item.content)).or(shown);
         let item = match shown {
             Some(shown) => {
                 field = {
@@ -660,7 +701,7 @@ pub fn record_text(
         // A label on a UI box grows with the layout's `UiScale`, as the box did, and fades with
         // its `UiTransform`s.
         let scaled;
-        let alpha = ui_opacity(world, id);
+        let alpha = lookups.opacity(id);
         let k = text_scale(world, anchor.is_some(), item.space.needs_world_position());
         let item = match (k, alpha < 1.0) {
             (None, false) => item,
@@ -771,10 +812,10 @@ mod clip_tests {
         world.add_child(plain, label);
         let loose = world.spawn_bundle((node(0.0, 0.0, 10.0, 10.0),));
 
-        assert_eq!(ui_clip(&world, panel), Some([Vec2::ZERO, Vec2::splat(100.0)]));
-        assert_eq!(ui_clip(&world, label), Some([Vec2::splat(50.0), Vec2::splat(100.0)]), "the intersection");
-        assert_eq!(ui_clip(&world, plain), Some([Vec2::splat(50.0), Vec2::splat(100.0)]));
-        assert_eq!(ui_clip(&world, loose), None);
+        assert_eq!(TextLookups::new(&world).clip(panel), Some([Vec2::ZERO, Vec2::splat(100.0)]));
+        assert_eq!(TextLookups::new(&world).clip(label), Some([Vec2::splat(50.0), Vec2::splat(100.0)]), "the intersection");
+        assert_eq!(TextLookups::new(&world).clip(plain), Some([Vec2::splat(50.0), Vec2::splat(100.0)]));
+        assert_eq!(TextLookups::new(&world).clip(loose), None);
     }
 
     /// A slider is its box, then its fill: `value` of the width from the left, in its fill colour,
@@ -829,7 +870,7 @@ mod clip_tests {
             crate::ui::UiTransform { translation: Vec2::ZERO, opacity: 0.5 },
         ));
         world.add_child(card, face);
-        assert_eq!(ui_opacity(&world, face), 0.25);
+        assert_eq!(TextLookups::new(&world).opacity(face), 0.25);
         let alphas: Vec<f32> = ui_boxes(&world).iter().map(|b| b.3.unwrap().w).collect();
         assert_eq!(alphas, vec![0.5, 0.2, 0.25]);
     }
@@ -894,18 +935,18 @@ mod clip_tests {
         let mut world = World::new();
         let label = world.spawn_bundle((LocalizedText::new("menu.score").with_arg("n", 3),));
         resolve_localized_texts(&mut world);
-        assert_eq!(localized_display(&world, label), None, "no locale: the Text as authored");
+        assert_eq!(TextLookups::new(&world).shown(label), None, "no locale: the Text as authored");
         let mut locale = Locale::new("tr");
         locale.insert("tr", "menu.score", "Skor: {n}");
         locale.insert("en", "menu.score", "Score: {n}");
         world.insert_resource(locale);
         resolve_localized_texts(&mut world);
-        assert_eq!(localized_display(&world, label).as_deref(), Some("Skor: 3"));
+        assert_eq!(TextLookups::new(&world).shown(label).as_deref(), Some("Skor: 3"));
         world.get_resource_mut::<Locale>().unwrap().set_language("en");
         resolve_localized_texts(&mut world);
-        assert_eq!(localized_display(&world, label).as_deref(), Some("Score: 3"));
+        assert_eq!(TextLookups::new(&world).shown(label).as_deref(), Some("Score: 3"));
         let plain = world.spawn();
-        assert_eq!(localized_display(&world, plain), None);
+        assert_eq!(TextLookups::new(&world).shown(plain), None);
 
         // A label written only when its string changes: a frame with nothing new leaves it alone.
         world.begin_change_frame(world.tick);
@@ -923,10 +964,10 @@ mod clip_tests {
         assert!(world.get_resource::<Locale>().unwrap().missing().iter().any(|k| k == "menu.lost"));
         world.remove_component::<LocalizedText>(lost);
         resolve_localized_texts(&mut world);
-        assert_eq!(localized_display(&world, lost), None);
+        assert_eq!(TextLookups::new(&world).shown(lost), None);
         world.remove_resource::<Locale>();
         resolve_localized_texts(&mut world);
-        assert_eq!(localized_display(&world, label), None, "the locale went: the Text as authored");
+        assert_eq!(TextLookups::new(&world).shown(label), None, "the locale went: the Text as authored");
 
         let code: String = include_str!("text.rs")
             .split(concat!("mod ", "clip_tests"))
@@ -936,9 +977,10 @@ mod clip_tests {
             .filter(|c| !c.is_whitespace())
             .collect();
         assert!(
-            // `let shown =` is record_text's own line — the typewriter has the same chain, so a
-            // looser match would find that one and pass with the draw loop's removed.
-            code.contains(concat!("letshown=text_input_display(world,id)", ".or_else(||dropdown_display(world,id))", ".or_else(||localized_display(world,id));")),
+            // `let shown =` is record_text's own line — the typewriter asks `shown(entity)`, so a
+            // looser match would find that one and pass with the draw loop's removed. And `shown`
+            // still answers from the label: the draw's lookup is the one this test measures above.
+            code.contains(concat!("letshown=lookups", ".shown(id);")) && code.contains(concat!("self.labels", ".get(id).map(|l|l.0.clone())")),
             "record_text no longer draws localized labels"
         );
     }
@@ -985,7 +1027,7 @@ mod clip_tests {
         let tw = |w: &World| *w.query::<&Typewriter>().get(e).unwrap();
         typewriter_system(&mut world, 0.35);
         assert_eq!(tw(&world).visible(), 3);
-        assert_eq!(typed_display(&world, e, "Merhaba").as_deref(), Some("Mer"));
+        assert_eq!(TextLookups::new(&world).typed(e, "Merhaba").as_deref(), Some("Mer"));
         typewriter_system(&mut world, 1.0);
         assert!(tw(&world).is_finished() && tw(&world).just_finished());
         typewriter_system(&mut world, 0.1);
@@ -1004,7 +1046,7 @@ mod clip_tests {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
-        assert!(code.contains(concat!("typed_display(world,id,", "shown.as_deref()")), "record_text no longer cuts typed labels");
+        assert!(code.contains(concat!("lookups.typed(id,", "shown.as_deref()")), "record_text no longer cuts typed labels");
     }
 
     /// A scrolling list clips like a `ClipContent` panel: its rows scroll out of sight.
@@ -1014,6 +1056,6 @@ mod clip_tests {
         let list = world.spawn_bundle((node(10.0, 10.0, 100.0, 50.0), crate::ui::Scroll::default()));
         let row = world.spawn_bundle((node(10.0, -20.0, 100.0, 40.0),));
         world.add_child(list, row);
-        assert_eq!(ui_clip(&world, row), Some([Vec2::splat(10.0), Vec2::new(110.0, 60.0)]));
+        assert_eq!(TextLookups::new(&world).clip(row), Some([Vec2::splat(10.0), Vec2::new(110.0, 60.0)]));
     }
 }
