@@ -186,6 +186,20 @@ pub struct NavAgent {
     /// one another.
     #[serde(default = "NavAgent::default_separation_weight")]
     pub separation_weight: f32,
+    /// Whether the agent picks its velocity so as not to run into other agents over the next
+    /// [`time_horizon`](Self::time_horizon) seconds — reciprocal collision avoidance
+    /// ([`crate::avoidance`]), after following its route. On by default. Off, an agent still
+    /// separates (above) but walks into one coming the other way, and the agents around it treat it
+    /// as one that will not step aside.
+    #[serde(default = "NavAgent::default_avoidance")]
+    pub avoidance: bool,
+    /// The agent's body radius for avoidance, metres. Default 0.4 — a person.
+    #[serde(default = "NavAgent::default_radius")]
+    pub radius: f32,
+    /// How far ahead avoidance looks, seconds. Default 1.5: longer starts swerving earlier and
+    /// is more cautious in a crowd; shorter leaves it late.
+    #[serde(default = "NavAgent::default_time_horizon")]
+    pub time_horizon: f32,
     /// Seconds accumulated since the agent last made meaningful progress.
     ///
     /// It grows while the agent stays within 5 cm of `last_agent_pos` and is reset to
@@ -246,6 +260,9 @@ impl NavAgent {
             arrival_radius,
             separation_radius: Self::default_separation_radius(),
             separation_weight: Self::default_separation_weight(),
+            avoidance: Self::default_avoidance(),
+            radius: Self::default_radius(),
+            time_horizon: Self::default_time_horizon(),
             stuck_timer: 0.0,
             last_agent_pos: None,
         }
@@ -263,6 +280,35 @@ impl NavAgent {
 
     fn default_separation_radius() -> f32 {
         1.5
+    }
+
+    fn default_avoidance() -> bool {
+        true
+    }
+
+    fn default_radius() -> f32 {
+        0.4
+    }
+
+    fn default_time_horizon() -> f32 {
+        1.5
+    }
+
+    /// The same agent avoiding others with a body of `radius` metres, looking `time_horizon`
+    /// seconds ahead — see [`avoidance`](Self::avoidance).
+    #[must_use]
+    pub fn with_avoidance(mut self, radius: f32, time_horizon: f32) -> Self {
+        self.avoidance = true;
+        self.radius = radius.max(0.0);
+        self.time_horizon = time_horizon.max(0.05);
+        self
+    }
+
+    /// The same agent not avoiding others — see [`avoidance`](Self::avoidance).
+    #[must_use]
+    pub fn without_avoidance(mut self) -> Self {
+        self.avoidance = false;
+        self
     }
 
     fn default_separation_weight() -> f32 {

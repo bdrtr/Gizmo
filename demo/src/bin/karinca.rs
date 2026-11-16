@@ -95,7 +95,9 @@ fn spawn_colony(world: &mut World, visual: bool) -> Colony {
         let r = 1.5 + (rng(&mut s) % 1000) as f32 / 1000.0;
         let at = NEST + Vec3::new(a.cos() * r, 0.0, a.sin() * r);
         let pile = i % colony.piles.len();
-        let mut agent = NavAgent::new(4.0, 20.0, 0.5).with_separation(0.35, 0.6);
+        // An ant's body, and a second's look ahead: the default is a person's (0.4 m, 1.5 s), and a
+        // column of ants each avoiding a person-sized neighbour jams.
+        let mut agent = NavAgent::new(4.0, 20.0, 0.5).with_separation(0.35, 0.6).with_avoidance(0.15, 1.0);
         agent.set_target(colony.piles[pile].at);
         let e = world.spawn();
         world.add_component(e, Transform::new(at).with_scale(Vec3::splat(0.18)));

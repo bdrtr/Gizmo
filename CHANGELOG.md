@@ -59,6 +59,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Reciprocal collision avoidance for navigation agents: `gizmo_ai::avoidance` (ORCA).** A `NavAgent` now picks,
+  after following its route, the velocity nearest the one it wants that runs into none of its ten nearest neighbours
+  over the next `time_horizon` seconds, each pair sharing the change — RVO2's algorithm, as Godot's and Unity's agent
+  avoidance are. Two agents meeting head-on step aside and pass where they used to walk into each other; a crossing
+  crowd does not touch. `NavAgent::avoidance` (on by default), `radius` (0.4 m), `time_horizon` (1.5 s),
+  `with_avoidance` / `without_avoidance`; an agent with it off, or idle, is avoided without being expected to step
+  aside. Deterministic: two agents in a perfect mirror both keep to the right rather than stop face to face. The
+  neighbour search starts at a few body widths and widens only when it has not found ten (`karinca`, 600 ants: the
+  worst AI frame 12 ms → 4.6). `karinca`'s ants avoid at their own scale (0.15 m).
 - **Normal-mapped sprites: `Renderer::set_sprite_normal_map`.** A sprite image can carry a tangent-space normal map
   (linear, red right, green up, blue out of the picture) that its lit sprites are shaded with, so bricks catch a torch
   on their edges; the map's frame follows `flip_x`/`flip_y`. The map's path rides in `ImageName::normal_map`, so a

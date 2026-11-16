@@ -30,6 +30,8 @@
 //! API lightweight. The [`prelude`] module re-exports the most commonly used
 //! items for convenient glob imports.
 
+// Reciprocal collision avoidance (ORCA): see its module docs.
+pub mod avoidance;
 pub mod behavior_tree;
 pub mod components;
 pub mod goap;

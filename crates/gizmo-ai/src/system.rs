@@ -129,6 +129,14 @@ fn replan_phase(id: u32) -> f32 {
     0.1 + 0.9 * frac
 }
 
+/// How far avoidance looks first around an agent of body `radius` for its nearest neighbours, metres:
+/// six of its widths, between half a metre and two — where, in a crowd, its ten nearest are.
+fn near_search(radius: f32) -> f32 {
+    (6.0 * radius).clamp(0.5, 2.0)
+}
+/// How many of the nearest neighbours avoidance weighs (RVO2's `maxNeighbors`).
+const MAX_AVOIDED: usize = 10;
+
 /// Advances every [`NavAgent`] one frame: replans its path when needed, steers it toward the
 /// next waypoint and writes the result into `Velocity::linear`. `dt` is the frame time in
 /// seconds.
@@ -190,9 +198,17 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     let grid_changed = grid.take_change();
     let grid = &*grid;
 
+    // Each agent's reach: how far it looks for neighbours, to separate from or to avoid (what it
+    // could cover in its avoidance horizon, and two bodies' width).
+    let reach = |a: &NavAgent| {
+        let avoid = if a.avoidance { a.max_speed * a.time_horizon + 2.0 * a.radius } else { 0.0 };
+        a.separation_radius.max(avoid)
+    };
+    // Buckets as wide as the widest separation, and no wider than the first avoidance search: a
+    // bucket the size of a whole reach puts a crowd in nine of them.
     let (agent_entities, cell): (Vec<Entity>, f32) = {
         let agents = world.query::<(Entity, &NavAgent)>();
-        let widest = agents.iter().map(|(_, a)| a.separation_radius).fold(0.0f32, f32::max);
+        let widest = agents.iter().map(|(_, a)| a.separation_radius.max(reach(a).min(near_search(a.radius)))).fold(0.0f32, f32::max);
         (agents.iter().map(|(entity, _)| entity).collect(), widest.max(0.01))
     };
     let agent_count = agent_entities.len();
@@ -218,6 +234,17 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
     // as wide as the largest separation radius, so an agent's neighbours lie in the cells its
     // own radius overlaps. Measured, 1000 / 2000 agents: 13.1 / 53.2 ms a frame with the scan.
     let positions: Vec<Option<Vec3>> = agent_entities.iter().map(|&id| transforms.get(id).map(|t| t.position)).collect();
+    // What avoidance reads of the others, as the frame began: how they move, how wide they are,
+    // whether they will step aside (they avoid, and have somewhere to go).
+    let others: Vec<(Vec3, f32, bool)> = agent_entities
+        .iter()
+        .map(|&id| {
+            let velocity = velocities.get_mut(id).map_or(Vec3::ZERO, |v| v.linear);
+            let agent = agents.get_mut(id);
+            let (radius, steps_aside) = agent.map_or((0.0, false), |a| (a.radius, a.avoidance && a.target.is_some()));
+            (velocity, radius, steps_aside)
+        })
+        .collect();
     let key = |p: Vec3| ((p.x / cell).floor() as i32, (p.z / cell).floor() as i32);
     let mut buckets: std::collections::HashMap<(i32, i32), Vec<usize>> = std::collections::HashMap::new();
     for (k, p) in positions.iter().enumerate() {
@@ -365,12 +392,24 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
             }
         }
 
-        // Neighbours for separation: the buckets the agent's radius overlaps, visited in agent
-        // order (sorted), so the forces sum in the same order a full scan sums them.
+        // Neighbours, for separation and for avoidance: the buckets a radius around the agent
+        // overlaps, visited in agent order (sorted), so the forces sum in the same order a full scan
+        // sums them. Avoidance wants the ten nearest within the agent's reach; in a crowd they are a
+        // few of its own widths away, so the search starts there (`near_search`) and widens to the
+        // whole reach only when it has not found ten — measured, 600 ants searching their whole 4 m
+        // reach every frame: 12 ms.
         let radius = agent.separation_radius;
+        let look = reach(&agent);
         let mut neighbor_positions = Vec::new();
-        if radius > 0.0 {
-            let (lo, hi) = (key(t.position - Vec3::splat(radius)), key(t.position + Vec3::splat(radius)));
+        let mut avoid_neighbours: Vec<(f32, crate::avoidance::Neighbour)> = Vec::new();
+        let first = if agent.avoidance { look.min(near_search(agent.radius)).max(radius) } else { radius };
+        for (pass, within) in [first, look].into_iter().enumerate() {
+            if within <= 0.0 || (pass == 1 && (!agent.avoidance || within <= first || avoid_neighbours.len() >= MAX_AVOIDED)) {
+                continue;
+            }
+            neighbor_positions.clear();
+            avoid_neighbours.clear();
+            let (lo, hi) = (key(t.position - Vec3::splat(within)), key(t.position + Vec3::splat(within)));
             nearby.clear();
             for x in lo.0..=hi.0 {
                 for z in lo.1..=hi.1 {
@@ -385,8 +424,21 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
                     continue;
                 }
                 if let Some(p) = positions[k] {
-                    if (p - t.position).length_squared() < radius * radius {
+                    let dist_sq = (p - t.position).length_squared();
+                    if dist_sq < radius * radius {
                         neighbor_positions.push(p);
+                    }
+                    if agent.avoidance && dist_sq < within * within {
+                        let (velocity, r, steps_aside) = others[k];
+                        avoid_neighbours.push((
+                            dist_sq,
+                            crate::avoidance::Neighbour {
+                                position: gizmo_math::Vec2::new(p.x, p.z),
+                                velocity: gizmo_math::Vec2::new(velocity.x, velocity.z),
+                                radius: r,
+                                reciprocal: steps_aside,
+                            },
+                        ));
                     }
                 }
             }
@@ -498,6 +550,31 @@ pub fn ai_navigation_system(world: &World, dt: f32) {
         let speed = v.linear.length();
         if speed > agent.max_speed {
             v.linear = (v.linear / speed) * agent.max_speed;
+        }
+
+        // Avoidance: the velocity nearest this one that runs into no neighbour within the horizon —
+        // the ten nearest, as RVO2 takes them.
+        if agent.avoidance && !avoid_neighbours.is_empty() {
+            if avoid_neighbours.len() > MAX_AVOIDED {
+                avoid_neighbours.select_nth_unstable_by(MAX_AVOIDED - 1, |a, b| a.0.total_cmp(&b.0));
+                avoid_neighbours.truncate(MAX_AVOIDED);
+            }
+            // Nearest first, and so the same order whatever the buckets gave.
+            avoid_neighbours.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let neighbours: Vec<crate::avoidance::Neighbour> = avoid_neighbours.iter().map(|(_, n)| *n).collect();
+            let own = others[index].0;
+            let chosen = crate::avoidance::avoid(
+                gizmo_math::Vec2::new(t.position.x, t.position.z),
+                gizmo_math::Vec2::new(own.x, own.z),
+                agent.radius,
+                gizmo_math::Vec2::new(v.linear.x, v.linear.z),
+                agent.max_speed,
+                &neighbours,
+                agent.time_horizon,
+                dt,
+            );
+            v.linear.x = chosen.x;
+            v.linear.z = chosen.y;
         }
 
         // Ajanın uzaya uçuşunu engellemek için Y eksenindeki suni birikimleri sıfırla
@@ -636,6 +713,59 @@ mod frame_tests {
         let advanced = world.query::<&NavAgent>().get(e).unwrap().path_index();
         ai_navigation_system(&world, step);
         assert_eq!(world.query::<&NavAgent>().get(e).unwrap().path_index(), advanced, "replanned with nothing changed");
+    }
+
+    /// **Two agents walking at each other step aside and pass.** Head-on along a corridor-free grid,
+    /// each to the other's start: with avoidance (the default) they never come closer than their two
+    /// bodies' width and both arrive; with it off they walk into each other (separation alone pushes
+    /// only once they are close), coming far nearer.
+    #[test]
+    fn two_agents_head_on_step_aside_and_pass() {
+        let closest = |agent: NavAgent| {
+            let mut world = World::new();
+            world.insert_resource({
+                let mut g = NavGrid::centred_on(1.0, 40, 20, Vec3::ZERO);
+                g.needs_rebuild = false;
+                g
+            });
+            let ends = [(-8.0f32, 8.0f32), (8.0, -8.0)];
+            let ids: Vec<Entity> = ends
+                .iter()
+                .map(|&(from, to)| {
+                    let e = world.spawn();
+                    world.add_component(e, Transform::new(Vec3::new(from, 0.0, 0.0)));
+                    world.add_component(e, Velocity::default());
+                    let mut a = agent.clone();
+                    a.max_speed = 2.0;
+                    a.target = Some(Vec3::new(to, 0.0, 0.0));
+                    world.add_component(e, a);
+                    e
+                })
+                .collect();
+            let dt = 1.0 / 60.0;
+            let mut nearest = f32::INFINITY;
+            for _ in 0..(14.0 / dt) as usize {
+                ai_navigation_system(&world, dt);
+                let moves: Vec<(Entity, Vec3)> = {
+                    let v = world.query::<&Velocity>();
+                    ids.iter().map(|&id| (id, v.get(id).unwrap().linear)).collect()
+                };
+                let mut t = world.query_mut::<&mut Transform>();
+                for (id, vel) in moves {
+                    t.get_mut(id).unwrap().position += vel * dt;
+                }
+                drop(t);
+                let t = world.query::<&Transform>();
+                nearest = nearest.min((t.get(ids[0]).unwrap().position - t.get(ids[1]).unwrap().position).length());
+            }
+            let arrived = ids.iter().all(|&id| world.query::<&NavAgent>().get(id).is_some_and(|a| a.target.is_none()));
+            (nearest, arrived)
+        };
+        let (avoiding, arrived) = closest(NavAgent::default());
+        assert!(avoiding >= 0.8 - 0.05, "they came {avoiding} m apart, under their bodies' 0.8 m");
+        assert!(arrived, "both arrived");
+        let (blind, _) = closest(NavAgent::default().without_avoidance());
+        assert!(blind < avoiding - 0.2, "without avoidance they walk into each other: {blind} m, against {avoiding} m");
     }
 
     /// Separation is the agent's own: two agents walking side by side 1 m apart are pushed apart
@@ -889,4 +1019,3 @@ mod frame_tests {
         }
     }
 }
-
