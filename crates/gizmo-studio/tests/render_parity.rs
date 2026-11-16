@@ -825,10 +825,12 @@ fn with_its_preparation(editor: String, workspace: &std::path::Path) -> String {
         let end = game[start..].find("\n}\n").map(|e| start + e + 3).expect("its body ends");
         game[start..end].to_string()
     };
+    // `apply_root_motion` too: `prepare_frame` calls it, and it is where `RootMotion` is read.
     format!(
-        "{editor}\n{}\n{}",
+        "{editor}\n{}\n{}\n{}",
         body("pub fn prepare_frame("),
-        body("pub fn advance_frame_clocks(")
+        body("pub fn advance_frame_clocks("),
+        body("pub fn apply_root_motion(")
     )
 }
 
@@ -914,6 +916,7 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         "animation_update_system_seen(",
         "animation_state_machine_update_system_seen(",
         "sprite_animation_system(",
+        "apply_root_motion(",
         "apply_ik_chains_system(",
         "fluid_scene_system(",
         "BoneAttachmentSystem",
@@ -1027,6 +1030,10 @@ fn every_capability_neither_path_names_is_accounted_for() {
         ("BlendSpace", "clips a state blends by a parameter, read by the state-machine driver; same guard."),
         ("BlendPoint", "one clip of a `BlendSpace`; same guard."),
         ("AnimationUpdate", "how often the drivers pose a skeleton (`gizmo_renderer::animation_lod`); same guard."),
+        ("AnimationLayers", "laid over the pose inside the animation drivers; same guard."),
+        ("AnimationLayer", "one of `AnimationLayers`; same guard."),
+        ("BoneMask", "the joints an `AnimationLayer` acts on; same guard."),
+        ("LayerBlend", "how an `AnimationLayer` is laid over; same guard."),
         ("SkeletonHierarchy", "the joint tree behind `Skeleton`, which both paths do name."),
         ("DofBlur", "a field of `PostProcess` and of `Renderer`, not a component: both paths read it by name, `dof_blur.uniform()`, into `PostProcessUniforms::dof_shape`."),
         // ── Read by the lightmap bake, not by a frame ────────────────────────────────────────

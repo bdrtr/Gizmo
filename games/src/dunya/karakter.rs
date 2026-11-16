@@ -12,12 +12,16 @@
 //! makinesine çevriliyor ([`AnimationStateMachine`]); `move` durumu yürüyüşle koşuyu gövdenin
 //! hızına göre karıştırıyor (`BlendSpace`), ikisi aynı adım fazında. Her klip ayrıca kendi adında
 //! bir durum (boşta, havada, iş klipleri); geçişler tetikleyiciyle, çeyrek saniyelik karışımla.
+//! Yürürken yapılan bir iş üst gövde katmanında (`AnimationLayers`, `spine`'dan yukarısı) oynuyor;
+//! dururken bütün beden.
 //!
 //! Penceresiz sınamada model kurulmuyor (renderer yok); bileşenler ve klip seçimi yine yerinde.
 
 use super::*;
 use gizmo::core::component::Parent;
-use gizmo::renderer::components::{AnimationPlayer, AnimationState, AnimationStateMachine, AnimationTransition};
+use gizmo::renderer::components::{
+    AnimationLayer, AnimationLayers, AnimationPlayer, AnimationState, AnimationStateMachine, AnimationTransition, BoneMask,
+};
 use gizmo::renderer::BlendSpace;
 use gizmo::renderer::gltf_model::GltfModel;
 
@@ -55,6 +59,8 @@ impl Gait {
 
 /// Yürüyüşle koşuyu karıştıran durumun adı.
 const MOVE: &str = "move";
+/// Üst gövde katmanı: yürürken yapılan iş (toplamak, kullanmak) belden yukarıda, bacaklar yürüyor.
+const UPPER: &str = "upper";
 
 /// İnsanlar: KayKit'in maceracıları.
 pub(super) const PERSON: Gait =
@@ -96,6 +102,7 @@ pub(super) fn dress(world: &mut World, body: Entity, model: (&str, f32), feet: f
         GlobalTransform::default(),
         GltfModel::new(path),
         AnimationPlayer::default(),
+        AnimationLayers::new(vec![AnimationLayer::new(UPPER, BoneMask::below(&["spine"]))]),
         Figure { action: None, gait, rests: (body.id() as usize) % gait.idle.len(), resting: false },
     ));
     world.add_child(body, figure);
@@ -194,16 +201,28 @@ pub(super) fn animate(world: &mut World, dt: f32) {
             f.rests += 1;
         }
         f.resting = resting;
-        let state = match f.action {
+        // Yürürken iş üst gövdede, dururken bütün bedende.
+        let walking = grounded && speed >= STILL;
+        let (state, upper) = match f.action {
             Some((clip, left)) if left > 0.0 => {
                 f.action = Some((clip, left - dt));
-                clip
+                if walking { (pick(f.gait, speed, grounded, f.rests).0, Some(clip)) } else { (clip, None) }
             }
             _ => {
                 f.action = None;
-                pick(f.gait, speed, grounded, f.rests).0
+                (pick(f.gait, speed, grounded, f.rests).0, None)
             }
         };
+        if let Some(mut layers) = world.query_mut::<&mut AnimationLayers>().get_mut(figure) {
+            match upper {
+                Some(clip) => {
+                    layers.play(UPPER, clip, 0.2, false);
+                }
+                None => {
+                    layers.stop(UPPER, 0.2);
+                }
+            }
+        }
         let gait = f.gait;
         if let Some(mut slot) = world.query_mut::<&mut Figure>().get_mut(figure) {
             *slot = f;

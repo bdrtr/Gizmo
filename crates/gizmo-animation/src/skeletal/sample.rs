@@ -44,10 +44,12 @@ fn sample_quat(track: &Track<Quat>, time: f32) -> Option<Quat> {
 /// and reported once at `debug!`, deliberately not `warn!`, because this runs per skinned
 /// entity per frame and a persistent retarget mismatch would flood the log.
 ///
-/// **Translation is applied only when the track's own target node name contains `Hips`.**
-/// Every other translation track is sampled and discarded, so a clip cannot slide limbs off
-/// the skeleton; root motion has to come through the hips. Rotation and scale are applied to
-/// every joint.
+/// Every track is applied — translation, rotation and scale, on every joint it targets — as glTF
+/// means it. Until 2026-11-16 a translation was applied only to a joint whose name contained
+/// `Hips` (a rule from an early Mixamo integration): KayKit's `hips`, lower-case, lost its bob and
+/// its crouch on landing, and Quaternius' animals their body's sway. A clip that moves the whole
+/// character is not this function's to undo: an entity with `RootMotion` takes that motion out of
+/// the pose and onto itself (`gizmo_renderer`'s animation systems).
 #[tracing::instrument(skip_all, name = "evaluate_clip", level = "trace")]
 pub fn evaluate_clip(
     clip: &AnimationClip,
@@ -70,8 +72,6 @@ pub struct ClipBinding {
     translations: Vec<Option<usize>>,
     rotations: Vec<Option<usize>>,
     scales: Vec<Option<usize>>,
-    /// Per translation track: whether it moves the hips — the one translation applied.
-    hips: Vec<bool>,
     /// Tracks that matched no joint, for the report.
     missed: usize,
 }
@@ -114,16 +114,8 @@ impl ClipBinding {
         let rotations: Vec<Option<usize>> =
             clip.rotations.iter().map(|t| get_joint_idx(t.target_node, &t.target_node_name)).collect();
         let scales: Vec<Option<usize>> = clip.scales.iter().map(|t| get_joint_idx(t.target_node, &t.target_node_name)).collect();
-        // Sadece Hips (kök) kemiğinin hareketine izin ver, diğerlerini yoksay. Mixamo animasyonlarında root motion buradadır.
-        // Kök tespiti yalnızca isim tabanlıdır: hard-coded bir düğüm indeksi (eskiden 66),
-        // Hips'i farklı indekste olan iskeletlerde root motion'ı sessizce bozuyordu.
-        let hips = clip
-            .translations
-            .iter()
-            .map(|t| t.target_node_name.as_deref().is_some_and(|n| n.contains("Hips")))
-            .collect();
         let missed = [&translations, &rotations, &scales].iter().map(|v| v.iter().filter(|j| j.is_none()).count()).sum();
-        Self { translations, rotations, scales, hips, missed }
+        Self { translations, rotations, scales, missed }
     }
 
     /// Whether this binding was made for a clip with these many tracks — what [`evaluate_bound`]
@@ -150,8 +142,8 @@ pub fn evaluate_bound(
         return evaluate_bound(clip, &ClipBinding::new(clip, hierarchy), time, hierarchy);
     }
     let mut changes = vec![(None, None, None); hierarchy.joints.len()];
-    for ((track, joint), hips) in clip.translations.iter().zip(&binding.translations).zip(&binding.hips) {
-        if let (Some(joint_idx), true) = (joint.filter(|j| *j < changes.len()), *hips) {
+    for (track, joint) in clip.translations.iter().zip(&binding.translations) {
+        if let Some(joint_idx) = joint.filter(|j| *j < changes.len()) {
             if let Some(v) = sample_vec3(track, time) {
                 changes[joint_idx].0 = Some(v);
             }
@@ -297,7 +289,7 @@ mod tests {
     }
 
     #[test]
-    fn root_motion_applies_to_hips_regardless_of_node_index() {
+    fn a_hips_translation_applies_regardless_of_node_index() {
         // Hips is NOT at the old hard-coded index 66; root motion must still apply.
         let hierarchy = SkeletonHierarchy {
             joints: vec![make_joint("mixamorig:Hips", 15)],
@@ -319,10 +311,10 @@ mod tests {
         );
     }
 
+    /// Every translation track applies, whatever its joint is called — KayKit's lower-case `hips`
+    /// and a foot alike. It used to be dropped unless the name held `Hips`.
     #[test]
-    fn root_motion_ignored_for_non_hips_bones() {
-        // A non-Hips translation track must be ignored (bind translation kept),
-        // and it must NOT be resurrected just because target_node == 66.
+    fn a_translation_track_moves_any_joint() {
         let bind = Vec3::new(1.0, 2.0, 3.0);
         let mut joint = make_joint("LeftFoot", 66);
         joint.bind_translation = bind;
@@ -338,11 +330,7 @@ mod tests {
             scales: vec![],
         };
         let poses = evaluate_clip(&clip, 0.0, &hierarchy);
-        assert!(
-            (poses[0].0 - bind).length() < 0.001,
-            "Non-Hips translation must be ignored even at node index 66, got {:?}",
-            poses[0].0
-        );
+        assert!((poses[0].0 - Vec3::new(9.0, 9.0, 9.0)).length() < 0.001, "the foot's translation: {:?}", poses[0].0);
     }
 
     // Regression: a nameless animation channel carries the GLTF *global node index*,

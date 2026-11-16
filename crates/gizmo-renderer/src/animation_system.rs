@@ -1,7 +1,7 @@
 use gizmo_core::Entity;
 use crate::components::Skeleton;
 use gizmo_animation::skeletal::{
-    blend_poses, evaluate_bound, ActiveBlend, AnimationPlayer, AnimationStateMachine,
+    blend_poses, evaluate_bound, ActiveBlend, AnimationLayers, AnimationPlayer, AnimationStateMachine, LayerBlend, RootMotion,
 };
 use gizmo_core::World;
 use gizmo_math::Mat4;
@@ -27,6 +27,10 @@ pub fn animation_update_system_seen(world: &mut World, dt: f32, queue: &wgpu::Qu
     let mut players = unsafe { world.query_unchecked::<&mut AnimationPlayer>() };
     // SAFETY: as above — Skeleton is a distinct component type from AnimationPlayer.
     let mut skeletons = unsafe { world.query_unchecked::<&mut Skeleton>() };
+    // SAFETY: as above — AnimationLayers is a third distinct component type.
+    let mut layer_sets = unsafe { world.query_unchecked::<&mut AnimationLayers>() };
+    // SAFETY: as above — RootMotion is a fourth.
+    let mut root_motions = unsafe { world.query_unchecked::<&mut RootMotion>() };
     {
         for entity in entities {
             let mut player = match players.get_mut(entity) {
@@ -57,8 +61,12 @@ pub fn animation_update_system_seen(world: &mut World, dt: f32, queue: &wgpu::Qu
             };
 
             // Moved by something other than this driver's clock since it last left it: posed this frame.
-            let key = player_key(&player);
+            let mut layers = layer_sets.get_mut(entity);
+            let key = player_key(&player) ^ layers.as_ref().map_or(0, |l| l.key());
             let moved = skeleton.driven != Some((key, player.current_time));
+
+            let mut root_motion = root_motions.get_mut(entity);
+            let before = player.current_time;
 
             // Advance FIRST, then normalize. Clamping to `.max(0.0)` *before* adding
             // `dt*speed` pinned reverse playback (speed < 0) at frame 0 forever. rem_euclid
@@ -76,7 +84,14 @@ pub fn animation_update_system_seen(world: &mut World, dt: f32, queue: &wgpu::Qu
             }
 
             skeleton.driven = Some((key, player.current_time));
-            if !seen.poses(&skeleton, entity.id(), player.update, moved) {
+            if let Some(layers) = layers.as_mut() {
+                layers.advance(dt, &animations);
+            }
+            // Went round this frame: root motion runs on through the clip's end and its start.
+            let wrapped = player.loop_anim
+                && ((player.speed > 0.0 && player.current_time < before) || (player.speed < 0.0 && player.current_time > before));
+            // An entity with root motion is posed every frame: its motion is the game's.
+            if !seen.poses(&skeleton, entity.id(), player.update, moved || root_motion.is_some()) {
                 // Not posed this frame: the fade's clocks run all the same, so it ends when it would.
                 if let Some(prev_idx) = player.prev_animation {
                     if player.blend_time < player.blend_duration {
@@ -125,6 +140,21 @@ pub fn animation_update_system_seen(world: &mut World, dt: f32, queue: &wgpu::Qu
                 poses_trs
             };
 
+            let mut final_trs = final_trs;
+            if let Some(rm) = root_motion.as_mut() {
+                let ends = |skeleton: &mut Skeleton| {
+                    let at = |skeleton: &mut Skeleton, time: f32| {
+                        sample_clip(skeleton, &animations, player.active_animation, time)
+                    };
+                    let (end, start) = (at(skeleton, anim.duration), at(skeleton, 0.0));
+                    // Played backwards, it goes round from its start to its end.
+                    if player.speed < 0.0 { (start, end) } else { (end, start) }
+                };
+                take_root_motion(rm, &mut skeleton, &mut final_trs, wrapped.then_some(ends));
+            }
+            if let Some(layers) = layers.as_ref() {
+                lay_layers(&mut skeleton, &animations, layers, &mut final_trs);
+            }
             let poses = final_trs
                 .into_iter()
                 .map(|(t, r, s)| Mat4::from_scale_rotation_translation(s, r, t))
@@ -185,6 +215,10 @@ pub fn animation_state_machine_update_system_seen(world: &mut World, dt: f32, qu
     let mut machines = unsafe { world.query_unchecked::<&mut AnimationStateMachine>() };
     // SAFETY: as above — Skeleton is a distinct component type from AnimationStateMachine.
     let mut skeletons = unsafe { world.query_unchecked::<&mut Skeleton>() };
+    // SAFETY: as above — AnimationLayers is a third distinct component type.
+    let mut layer_sets = unsafe { world.query_unchecked::<&mut AnimationLayers>() };
+    // SAFETY: as above — RootMotion is a fourth.
+    let mut root_motions = unsafe { world.query_unchecked::<&mut RootMotion>() };
     for entity in entities {
         let mut machine_mut = match machines.get_mut(entity) {
             Some(m) => m,
@@ -203,7 +237,13 @@ pub fn animation_state_machine_update_system_seen(world: &mut World, dt: f32, qu
         }
 
         // Moved by something other than this driver since it last left it: posed this frame.
-        let moved = skeleton.driven != Some((machine_key(machine), machine.current_time));
+        let mut layers = layer_sets.get_mut(entity);
+        let layers_key = layers.as_ref().map_or(0, |l| l.key());
+        let moved = skeleton.driven != Some((machine_key(machine) ^ layers_key, machine.current_time));
+
+        let mut root_motion = root_motions.get_mut(entity);
+        let before = machine.current_time;
+        let fading = machine.active_blend.is_some();
 
         // --- Advance times ---
         // A clip's seconds, or a blended state's phase at the pace of its blended cycle.
@@ -217,6 +257,8 @@ pub fn animation_state_machine_update_system_seen(world: &mut World, dt: f32, qu
         let clip_finished = machine.current_time >= clip_duration;
 
         machine.current_time = normalize_anim_time(machine.current_time, clip_duration, looped);
+        // Went round this frame, outside a fade: root motion runs on through the state's end and start.
+        let wrapped = !fading && looped && ((rate > 0.0 && machine.current_time < before) || (rate < 0.0 && machine.current_time > before));
 
         if let Some((to_rate, to_duration)) = machine.active_blend.as_ref().map(|blend| {
             match machine.find_state(&blend.to_state) {
@@ -285,8 +327,12 @@ pub fn animation_state_machine_update_system_seen(world: &mut World, dt: f32, qu
             machine.current_time = blend.to_time;
         }
 
-        skeleton.driven = Some((machine_key(machine), machine.current_time));
-        if !seen.poses(skeleton, entity.id(), machine.update, moved) {
+        skeleton.driven = Some((machine_key(machine) ^ layers_key, machine.current_time));
+        if let Some(layers) = layers.as_mut() {
+            layers.advance(dt, &machine.clips);
+        }
+        // An entity with root motion is posed every frame: its motion is the game's.
+        if !seen.poses(skeleton, entity.id(), machine.update, moved || root_motion.is_some()) {
             continue;
         }
 
@@ -311,9 +357,23 @@ pub fn animation_state_machine_update_system_seen(world: &mut World, dt: f32, qu
             None => state_clips(&machine.current_state, machine.current_time, 1.0).collect(),
         };
         let clips = machine.clips.clone();
-        let Some(poses_trs) = sample_weighted(skeleton, &clips, &weighted) else {
+        let Some(mut poses_trs) = sample_weighted(skeleton, &clips, &weighted) else {
             continue;
         };
+        if let Some(rm) = root_motion.as_mut() {
+            let ends = |skeleton: &mut Skeleton| {
+                let at = |skeleton: &mut Skeleton, time: f32| {
+                    let weighted = machine.find_state(&machine.current_state).map(|s| machine.state_clips(s, time)).unwrap_or_default();
+                    sample_weighted(skeleton, &clips, &weighted).unwrap_or_default()
+                };
+                let (end, start) = (at(skeleton, clip_duration), at(skeleton, 0.0));
+                if rate < 0.0 { (start, end) } else { (end, start) }
+            };
+            take_root_motion(rm, skeleton, &mut poses_trs, wrapped.then_some(ends));
+        }
+        if let Some(layers) = layers.as_ref() {
+            lay_layers(skeleton, &clips, layers, &mut poses_trs);
+        }
 
         // Convert TRS to Mat4
         let poses = poses_trs
@@ -327,6 +387,50 @@ pub fn animation_state_machine_update_system_seen(world: &mut World, dt: f32, qu
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// Takes the frame's root motion out of `pose` ([`RootMotion::take`]); `ends`, when the playhead went
+/// round, samples the pose where the clip ends and where it begins (the order it went round in).
+fn take_root_motion(
+    rm: &mut RootMotion,
+    skeleton: &mut Skeleton,
+    pose: &mut [(gizmo_math::Vec3, gizmo_math::Quat, gizmo_math::Vec3)],
+    ends: Option<impl FnOnce(&mut Skeleton) -> (Vec<(gizmo_math::Vec3, gizmo_math::Quat, gizmo_math::Vec3)>, Vec<(gizmo_math::Vec3, gizmo_math::Quat, gizmo_math::Vec3)>)>,
+) {
+    let joint = rm.joint(&skeleton.hierarchy);
+    let wrap = ends.and_then(|ends| {
+        let (end, start) = ends(skeleton);
+        let j = joint?;
+        Some((end.get(j)?.0, start.get(j)?.0))
+    });
+    let hierarchy = skeleton.hierarchy.clone();
+    rm.take(&hierarchy, pose, wrap);
+}
+
+/// Lays an entity's [`AnimationLayers`] over its base `pose`, bottom first: each layer playing a clip
+/// of `clips` at some weight is sampled at its playhead (and, additive, at its first frame) and laid
+/// over its mask's joints ([`gizmo_animation::skeletal::lay_over`]).
+fn lay_layers(
+    skeleton: &mut Skeleton,
+    clips: &Arc<[gizmo_animation::skeletal::AnimationClip]>,
+    layers: &AnimationLayers,
+    pose: &mut [(gizmo_math::Vec3, gizmo_math::Quat, gizmo_math::Vec3)],
+) {
+    for layer in &layers.layers {
+        if layer.weight <= 0.0 {
+            continue;
+        }
+        let Some(index) = layer.clip.as_deref().and_then(|name| clips.iter().position(|c| c.name == name)) else {
+            continue;
+        };
+        let now = sample_clip(skeleton, clips, index, layer.time);
+        let reference = match layer.blend {
+            LayerBlend::Additive => sample_clip(skeleton, clips, index, 0.0),
+            _ => Vec::new(),
+        };
+        let mask = layer.mask.weights(&skeleton.hierarchy);
+        gizmo_animation::skeletal::lay_over(pose, &now, &reference, &mask, layer.blend, layer.weight);
+    }
+}
 
 /// What a player is playing, for `Skeleton::driven`: its clip table (a timeline edit swaps it), its
 /// clip and the one fading out.

@@ -5,7 +5,8 @@ use std::sync::Arc;
 // `gizmo_renderer::components::{AnimationPlayer, ...}` keep resolving unchanged.
 pub use gizmo_animation::skeletal::{
     ActiveBlend, AnimationClip, AnimationPlayer, AnimationState, AnimationStateMachine,
-    AnimationTransition, AnimationUpdate, BlendPoint, BlendSpace, BoneAttachment, SkeletonHierarchy,
+    AnimationLayer, AnimationLayers, AnimationTransition, AnimationUpdate, BlendPoint, BlendSpace, BoneAttachment, BoneMask,
+    LayerBlend, RootMotion, SkeletonHierarchy,
 };
 
 /// A skinned mesh's skeleton: the joint hierarchy, the current pose, and the GPU buffer the

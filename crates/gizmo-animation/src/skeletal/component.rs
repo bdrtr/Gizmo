@@ -289,7 +289,7 @@ impl Default for BoneAttachment {
     }
 }
 
-gizmo_core::impl_component!(AnimationPlayer, AnimationStateMachine, BoneAttachment);
+gizmo_core::impl_component!(AnimationPlayer, AnimationStateMachine, BoneAttachment, super::layers::AnimationLayers, super::root_motion::RootMotion);
 
 #[cfg(test)]
 mod tests {

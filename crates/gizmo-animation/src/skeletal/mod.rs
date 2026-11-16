@@ -41,16 +41,21 @@ pub mod keyframe;
 /// and [`sample::decompose_mat4`].
 ///
 /// This is where clip tracks are matched against skeleton joints, including the loose
-/// `mixamorig:` / `/RootNode/` name cleanup used for retargeting, and where the
-/// Hips-only root-motion rule is enforced.
+/// `mixamorig:` / `/RootNode/` name cleanup used for retargeting.
 pub mod sample;
 
+// Clips laid over the base pose on a part of the skeleton: see its module docs.
+pub mod layers;
+// A clip's travel across the ground taken out of the pose and onto the entity.
+pub mod root_motion;
 pub mod skeleton;
 pub mod state_machine;
 
 pub use clip::AnimationClip;
 pub use component::{AnimationPlayer, AnimationUpdate, BoneAttachment};
 pub use keyframe::{InterpolationMode, Keyframe, Track};
+pub use layers::{lay_over, AnimationLayer, AnimationLayers, BoneMask, JointPose, LayerBlend};
+pub use root_motion::RootMotion;
 pub use sample::{blend_poses, decompose_mat4, evaluate_bound, evaluate_clip, ClipBinding};
 pub use skeleton::{SkeletonHierarchy, SkeletonJoint};
 pub use state_machine::{

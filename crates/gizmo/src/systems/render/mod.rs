@@ -1169,6 +1169,7 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // Each skeleton as often as the last frames drew it big (`gizmo_renderer::animation_lod`).
     crate::renderer::animation_update_system_seen(world, animation_dt, &renderer.queue, &renderer.skeletons_seen);
     crate::renderer::animation_state_machine_update_system_seen(world, animation_dt, &renderer.queue, &renderer.skeletons_seen);
+    apply_root_motion(world);
     if animation_dt > 0.0 {
         // Sprite-sheet animation rides the same clock: `set_time_scale` and pause apply to it.
         crate::renderer::components::sprite_animation_system(world, animation_dt);
@@ -1383,6 +1384,21 @@ fn step_gpu_simulations(
             (particles.max_particles as f32 * particle_share) as u32
         };
         particles.compute_pass(encoder, particles.active_particles);
+    }
+}
+
+/// Moves each entity whose [`RootMotion`](crate::renderer::components::RootMotion) says `apply` by
+/// the travel the animation drivers just took out of its pose — turned and scaled by its own
+/// transform, since the travel is in the model's space. A game that moves the entity some other way
+/// (a character controller) leaves `apply` off and reads the delta.
+pub fn apply_root_motion(world: &mut World) {
+    use crate::renderer::components::RootMotion;
+    for (_, mut transform, motion) in world.query_mut::<(Entity, &mut gizmo_physics_core::components::Transform, &RootMotion)>().iter_mut() {
+        if motion.apply && motion.delta != Vec3::ZERO {
+            let step = transform.rotation * (motion.delta * transform.scale);
+            transform.position += step;
+            transform.update_local_matrix();
+        }
     }
 }
 
@@ -2313,6 +2329,167 @@ mod golden_render_tests {
             }
             let at = scale_at(&mut world, &mut renderer, 1.0);
             assert!(close(at, 1.5), "a quarter of the way from the plain state into the blended one: {at:?}");
+        });
+    }
+
+    /// **A layer acts on its mask's joints alone, fading in and out, overriding or adding.** A root
+    /// and an arm under it, both held at scale 1 by the base clip. A layer over the arm plays a clip
+    /// holding everything at 3, fading in over 0.1 s: half-way the arm is at 2, faded in at 3, and
+    /// the root stays at 1 throughout. Then an additive layer over everything plays a clip that
+    /// grows from 1 to 2 over 0.1 s, with the arm layer stopped: half-way through it the root and
+    /// the arm are each at 1.5 — the clip's motion from its own first frame added to the pose
+    /// beneath.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_layer_acts_on_its_masks_joints_alone() {
+        use crate::renderer::components::{AnimationLayer, AnimationLayers, AnimationPlayer, AnimationUpdate, BoneMask};
+        use crate::renderer::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
+        use std::sync::Arc;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut world = World::new();
+            let mut time = crate::core::time::Time::new();
+            // The clock's step is capped at 0.05 s (`Time::max_dt`): the fade and the clip below are
+            // timed in it.
+            time.update(0.05);
+            world.insert_resource(time);
+            let joint = |name: &str, parent: Option<usize>, node_index: usize| SkeletonJoint {
+                name: name.into(),
+                node_index,
+                inverse_bind_matrix: crate::math::Mat4::IDENTITY,
+                parent_index: parent,
+                local_bind_transform: crate::math::Mat4::IDENTITY,
+                bind_translation: Vec3::ZERO,
+                bind_rotation: crate::math::Quat::IDENTITY,
+                bind_scale: Vec3::ONE,
+            };
+            let hierarchy = Arc::new(SkeletonHierarchy {
+                joints: vec![joint("root", None, 0), joint("arm", Some(0), 1)],
+                root_transform: crate::math::Mat4::IDENTITY,
+            });
+            let scales = |name: &str, keys: &[(f32, f32)]| AnimationClip {
+                name: name.into(),
+                duration: keys.last().map_or(1.0, |k| k.0),
+                translations: Vec::new(),
+                rotations: Vec::new(),
+                scales: ["root", "arm"]
+                    .iter()
+                    .enumerate()
+                    .map(|(node, joint)| Track {
+                        target_node: node,
+                        target_node_name: Some((*joint).into()),
+                        interpolation: crate::renderer::InterpolationMode::Linear,
+                        keyframes: keys.iter().map(|&(time, s)| Keyframe { time, value: Vec3::splat(s), in_tangent: None, out_tangent: None }).collect(),
+                    })
+                    .collect(),
+            };
+            let clips: Arc<[AnimationClip]> =
+                Arc::from(vec![scales("base", &[(0.0, 1.0), (1.0, 1.0)]), scales("big", &[(0.0, 3.0), (1.0, 3.0)]), scales("grow", &[(0.0, 1.0), (0.1, 2.0)])]);
+            let rig = world.spawn();
+            world.add_component(rig, Transform::new(Vec3::ZERO));
+            world.add_component(rig, renderer.create_skeleton(hierarchy));
+            world.add_component(rig, AnimationPlayer { animations: clips, update: AnimationUpdate::Always, ..Default::default() });
+            let mut layers = AnimationLayers::new(vec![
+                AnimationLayer::new("arms", BoneMask::below(&["arm"])),
+                AnimationLayer::new("breath", BoneMask::default()).additive(),
+            ]);
+            layers.play("arms", "big", 0.1, true);
+            world.add_component(rig, layers);
+            // The root's own scale, and the arm's (its global over the root's).
+            let scales_now = |world: &mut World, renderer: &mut Renderer| {
+                super::prepare_frame(world, renderer);
+                let s = world.get::<crate::renderer::components::Skeleton>(rig).expect("skeleton");
+                let root = s.global_poses[0].x_axis.x;
+                (root, s.global_poses[1].x_axis.x / root)
+            };
+            let close = |got: (f32, f32), want: (f32, f32)| (got.0 - want.0).abs() < 1.0e-3 && (got.1 - want.1).abs() < 1.0e-3;
+            let at = scales_now(&mut world, &mut renderer);
+            assert!(close(at, (1.0, 2.0)), "half faded in, the arm half-way to 3 and the root untouched: {at:?}");
+            let at = scales_now(&mut world, &mut renderer);
+            assert!(close(at, (1.0, 3.0)), "faded in: {at:?}");
+
+            if let Some(mut l) = world.query_mut::<&mut AnimationLayers>().get_mut(rig) {
+                l.stop("arms", 0.0);
+                l.play("breath", "grow", 0.0, true);
+            }
+            let at = scales_now(&mut world, &mut renderer);
+            // Over every joint: the arm's own grows by the same, and the stopped arm layer is gone.
+            assert!(close(at, (1.5, 1.5)), "half-way through the grow, added over the base: {at:?}");
+        });
+    }
+
+    /// **Root motion moves the entity, not the body.** A root joint carried from 0 to 1 m along z
+    /// by a looping 0.1 s clip; the entity turned a quarter about y, with `RootMotion::applied()`.
+    /// Five frames of 0.05 s go round the loop twice: the entity travels 2 m — along x, turned with
+    /// it, and with no jump back at either wrap — while the joint is drawn over its bind position
+    /// throughout. The first frame has nothing to compare with and travels nothing.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn root_motion_moves_the_entity_and_not_the_body() {
+        use crate::renderer::components::{AnimationPlayer, RootMotion};
+        use crate::renderer::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
+        use std::sync::Arc;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut world = World::new();
+            let mut time = crate::core::time::Time::new();
+            time.update(0.05);
+            world.insert_resource(time);
+            let hierarchy = Arc::new(SkeletonHierarchy {
+                joints: vec![SkeletonJoint {
+                    name: "root".into(),
+                    node_index: 0,
+                    inverse_bind_matrix: crate::math::Mat4::IDENTITY,
+                    parent_index: None,
+                    local_bind_transform: crate::math::Mat4::IDENTITY,
+                    bind_translation: Vec3::ZERO,
+                    bind_rotation: crate::math::Quat::IDENTITY,
+                    bind_scale: Vec3::ONE,
+                }],
+                root_transform: crate::math::Mat4::IDENTITY,
+            });
+            let key = |time: f32, z: f32| Keyframe { time, value: Vec3::new(0.0, 0.0, z), in_tangent: None, out_tangent: None };
+            let clip = AnimationClip {
+                name: "stride".into(),
+                duration: 0.1,
+                translations: vec![Track {
+                    target_node: 0,
+                    target_node_name: Some("root".into()),
+                    interpolation: crate::renderer::InterpolationMode::Linear,
+                    keyframes: vec![key(0.0, 0.0), key(0.1, 1.0)],
+                }],
+                rotations: Vec::new(),
+                scales: Vec::new(),
+            };
+            let rig = world.spawn();
+            world.add_component(
+                rig,
+                Transform::new(Vec3::ZERO).with_rotation(crate::math::Quat::from_rotation_y(std::f32::consts::FRAC_PI_2)),
+            );
+            world.add_component(rig, renderer.create_skeleton(hierarchy));
+            world.add_component(rig, AnimationPlayer { animations: Arc::from(vec![clip]), ..Default::default() });
+            world.add_component(rig, RootMotion::applied());
+            for _ in 0..5 {
+                super::prepare_frame(&mut world, &mut renderer);
+                let joint = world.get::<crate::renderer::components::Skeleton>(rig).map(|s| s.global_poses[0].w_axis.truncate());
+                assert!(joint.is_some_and(|j| j.length() < 1.0e-4), "the joint is drawn over its bind position: {joint:?}");
+            }
+            let at = world.get::<Transform>(rig).map(|t| t.position).expect("transform");
+            assert!((at - Vec3::new(2.0, 0.0, 0.0)).length() < 1.0e-3, "two metres along x, turned with the entity: {at:?}");
         });
     }
 

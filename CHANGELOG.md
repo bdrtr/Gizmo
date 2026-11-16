@@ -59,6 +59,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Animation layers: `AnimationLayers`.** Clips laid over the pose an entity's player or state machine makes, on the
+  joints a `BoneMask` names and everything below them, each with its own playhead and a weight that fades
+  (`play(layer, clip, fade, looped)` / `stop(layer, fade)`): `LayerBlend::Override` replaces the masked joints' pose
+  by the weight, `LayerBlend::Additive` adds the clip's motion from its own first frame. Saved with a scene. `dunya`'s
+  people do a job while walking on an upper-body layer (`spine` up), their legs still walking.
+- **Root motion: `RootMotion`.** One joint's travel across the ground (named, or the skeleton's root) is taken out of
+  the pose each frame — the joint drawn over its bind position, its height kept — into `RootMotion::delta`, running on
+  through a loop's wrap; `RootMotion::applied()` has the engine add it to the entity's `Transform`
+  (`apply_root_motion`), `read()` leaves it for a character controller. Such an entity is posed every frame.
+
 - **Blend spaces: `BlendSpace` in an `AnimationState`.** A state of `AnimationStateMachine` blends several clips by a
   parameter (`set_parameter` / `set_parameter_2d`) — a walk and a run by speed, the directions of a strafe — with
   gradient-band weights (no triangulation; 1D and 2D alike). The clips keep step: a blended state's playhead is a phase
@@ -1013,6 +1023,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `local_shadow_pass_bind_groups`, with `ensure_local_shadow_layers`.
 
 ### Fixed
+
+- **Every translation track of a clip is applied.** A translation reached a joint only if its name contained `Hips`
+  (a rule left from an early Mixamo integration): KayKit's lower-case `hips` lost its bob and its crouch on landing,
+  and Quaternius' deer and sheep their body's sway. A clip that carries the character is `RootMotion`'s to take out.
 
 - **The text pass built its queries a dozen times a label.** Every `Text` asked whether it was hidden, clipped, on
   which layer, a field, a dropdown, a translation, a typewriter, faded — each through a query of its own, and building

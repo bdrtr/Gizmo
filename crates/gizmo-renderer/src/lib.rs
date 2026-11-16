@@ -241,7 +241,8 @@ pub use web_profile::{PostProcessLevel, ShadowQuality, WebProfile};
 
 pub use gizmo_animation::skeletal::{
     ActiveBlend, AnimationClip, AnimationPlayer, AnimationState, AnimationStateMachine,
-    AnimationTransition, AnimationUpdate, BlendPoint, BlendSpace, BoneAttachment, InterpolationMode, Keyframe,
+    AnimationLayer, AnimationLayers, AnimationTransition, AnimationUpdate, BlendPoint, BlendSpace, BoneAttachment, BoneMask,
+    InterpolationMode, Keyframe, LayerBlend, RootMotion,
     SkeletonHierarchy, SkeletonJoint, Track,
 };
 /// The ECS systems that advance animation players and write their poses into skeletons.

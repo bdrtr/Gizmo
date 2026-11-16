@@ -108,6 +108,10 @@ pub fn full_scene_registry() -> SceneRegistry {
         // playhead and blend — its clips are the model's, given back by `resolve_gltf_models`.
         reg_or_warn!(gizmo_renderer::tween::Tween, "Tween");
         reg_or_warn!(gizmo_renderer::components::AnimationStateMachine, "AnimationStateMachine");
+        // The layers over either: their clips, masks, playheads and fades.
+        reg_or_warn!(gizmo_renderer::components::AnimationLayers, "AnimationLayers");
+        // Which joint's travel moves the entity, and whether the engine moves it (the delta is a frame's).
+        reg_or_warn!(gizmo_renderer::components::RootMotion, "RootMotion");
         // The limbs the engine bends: each chain's tip bone by name, its target and pole as world
         // points, its weight (`gizmo_renderer::ik`).
         reg_or_warn!(gizmo_renderer::ik::IkChains, "IkChains");
