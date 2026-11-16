@@ -99,6 +99,22 @@ fn material_sampler_key(material: &gltf::Material) -> SamplerKey {
     }
 }
 
+/// A glTF material's clear coat and anisotropy, from the two extensions the `gltf` crate does not type:
+/// `KHR_materials_clearcoat` as `(coat, coat roughness)`, glTF's defaults (0, 0) for a field it leaves
+/// out, and `KHR_materials_anisotropy`'s strength (default 0). `None` for an extension the material
+/// does not have. Their textures and the anisotropy's rotation are not read: the engine has the
+/// factors only (a material's anisotropy runs along the mesh's tangent).
+fn gltf_coat_and_anisotropy(material: &gltf::Material<'_>) -> (Option<(f32, f32)>, Option<f32>) {
+    let number = |extension: &gltf::json::Value, field: &str, default: f32| {
+        extension.get(field).and_then(gltf::json::Value::as_f64).map_or(default, |v| v as f32)
+    };
+    let coat = material
+        .extension_value("KHR_materials_clearcoat")
+        .map(|c| (number(c, "clearcoatFactor", 0.0), number(c, "clearcoatRoughnessFactor", 0.0)));
+    let anisotropy = material.extension_value("KHR_materials_anisotropy").map(|a| number(a, "anisotropyStrength", 0.0));
+    (coat, anisotropy)
+}
+
 /// Apply `KHR_materials_emissive_strength` to the emissive factor.
 ///
 /// The extension multiplies the emissive colour by a scalar (default 1.0) to
@@ -363,6 +379,15 @@ pub(super) fn build_gltf_materials(
                 || alpha < 0.99
                 || is_glass;
             mat.is_double_sided = material.double_sided();
+            // `KHR_materials_clearcoat` and `KHR_materials_anisotropy`, without their textures. Until
+            // 2026-11-17 neither was read: a car's lacquer and a brushed metal came in bare.
+            let (coat, anisotropy) = gltf_coat_and_anisotropy(&material);
+            if let Some((coat, roughness)) = coat {
+                mat = mat.with_clear_coat(coat).with_clear_coat_roughness(roughness);
+            }
+            if let Some(strength) = anisotropy {
+                mat = mat.with_anisotropy(strength);
+            }
             // `KHR_materials_transmission` and `KHR_materials_volume`, without their textures.
             if let Some(t) = material.transmission() {
                 mat = mat.with_transmission(t.transmission_factor());
@@ -419,6 +444,29 @@ mod tests {
         assert!(close(got[1], 1.0 / 9.0), "ior 2: {}", got[1]);
         assert!(close(got[2], 0.02), "half the specular: {}", got[2]);
         assert!(close(got[3], 1.0 / 9.0), "a green tint leaves the number to the index: {}", got[3]);
+    }
+
+    /// `KHR_materials_clearcoat` and `KHR_materials_anisotropy` are read from the extension JSON: the
+    /// coat and its roughness, glTF's zero for a field left out, and the anisotropy's strength; a
+    /// material without either has neither.
+    #[test]
+    fn clearcoat_and_anisotropy_extensions_are_read() {
+        let json = r#"{
+          "asset": { "version": "2.0" },
+          "extensionsUsed": ["KHR_materials_clearcoat", "KHR_materials_anisotropy"],
+          "materials": [
+            {},
+            { "extensions": { "KHR_materials_clearcoat": { "clearcoatFactor": 1.0, "clearcoatRoughnessFactor": 0.3 } } },
+            { "extensions": { "KHR_materials_clearcoat": { "clearcoatFactor": 0.5 } } },
+            { "extensions": { "KHR_materials_anisotropy": { "anisotropyStrength": 0.7, "anisotropyRotation": 1.0 } } }
+          ]
+        }"#;
+        let doc = gltf::Gltf::from_slice(json.as_bytes()).expect("parse");
+        let got: Vec<_> = doc.materials().map(|m| gltf_coat_and_anisotropy(&m)).collect();
+        assert_eq!(got[0], (None, None));
+        assert_eq!(got[1], (Some((1.0, 0.3)), None));
+        assert_eq!(got[2], (Some((0.5, 0.0)), None), "a roughness left out is glTF's 0");
+        assert_eq!(got[3], (None, Some(0.7)));
     }
 
     #[test]

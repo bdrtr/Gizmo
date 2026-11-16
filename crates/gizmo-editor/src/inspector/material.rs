@@ -125,7 +125,7 @@ pub fn draw_material_section(
 
                         // --- The rest of the surface model ---
                         let min_coat = gizmo_renderer::components::MIN_COAT_ROUGHNESS;
-                        slider(ui, key, "anisotropy", "Anisotropy:", &mut mat.anisotropy, -1.0..=1.0, "Fırçalanmış metal, saç, plak: parlamanın bir yönde uzaması. 0 = yönsüz.");
+                        slider(ui, key, "anisotropy", "Anisotropy:", &mut mat.anisotropy, 0.0..=1.0, "Fırçalanmış metal, saç, plak: parlamanın bir yönde uzaması. 0 = yönsüz.");
                         slider(ui, key, "clear_coat", "Clear coat:", &mut mat.clear_coat, 0.0..=1.0, "Yüzeyin üstünde ikinci, daha pürüzsüz bir parlak katman — araba boyası, cila. 0 = yok.");
                         slider(ui, key, "clear_coat_roughness", "Coat roughness:", &mut mat.clear_coat_roughness, min_coat..=1.0, "O katmanın pürüzü: sert cilâdan aşınmış boyaya.");
                         slider(ui, key, "subsurface", "Subsurface:", &mut mat.subsurface, 0.0..=1.0, "Işığın yüzeyin içinden saçılması — deri, mum, yaprak. 0 = opak.");

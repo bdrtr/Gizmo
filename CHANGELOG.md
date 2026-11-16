@@ -59,6 +59,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **glTF clear coat and anisotropy are imported.** `KHR_materials_clearcoat` (`clearcoatFactor`,
+  `clearcoatRoughnessFactor`) and `KHR_materials_anisotropy` (`anisotropyStrength`) were not read at all, so a model's
+  car paint or brushed metal loaded bare although the engine draws both. Their factors are read now; their textures
+  and the anisotropy's rotation are not (the engine has the factors, and runs anisotropy along the mesh's tangent). The
+  inspector's anisotropy slider is 0–1, the range `Material::with_anisotropy` keeps (it offered −1).
 - **SSAO without halos.** Three faults, each measured: the 5×5 blur and the half-resolution upsample averaged
   whatever was next to a pixel on screen, so a near object's edge took the darkness of a corner behind it (a pole 3 m
   in front of a room corner: 78 of its 256 pixels darkened; now 0) — they now keep to one surface, by the G-buffer's
