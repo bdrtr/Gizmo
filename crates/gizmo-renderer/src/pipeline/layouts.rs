@@ -84,9 +84,32 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 },
                 count: None,
             },
-            // Reflection probes on the forward-only path (`reflection_probes.wgsl`): the prefiltered
-            // cube array, its sampler and the uniform that places them. The desktop reads its probes
-            // through the irradiance group and binds placeholders here.
+            // The depth of the frame under the glass (`crate::transmission`): how far behind a
+            // surface the opaque world is, which a surface over a volume (water) reads for its depth.
+            // One sampled texture more: the desktop's deferred lighting layout held 16 with it before the
+            // forward-only path's probes and cascades (6–10) left group 0 on the desktop, 14 since; the
+            // forward-only lit layout 12 — of WebGPU's 16 a stage.
+            wgpu::BindGroupLayoutEntry {
+                binding: 14,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Depth,
+                },
+                count: None,
+            },
+    ];
+    // Reflection probes (6–8) and the sun's cascades (9–10), for the forward-only path's lit shaders,
+    // which have no irradiance group and no shadow group to read them from. **Not on the desktop**,
+    // which reads both from those groups: it used to bind placeholders and the same cascades here, and
+    // a layout counts every texture it offers whether a shader reads it or not — two sampled textures
+    // in every pipeline over group 0 that no desktop shader touched, which held the forward lit layout
+    // at 15 of WebGPU's 16 a stage and the deferred lighting one at 16 (measured 2026-11-17, adding a
+    // material map failed validation at 17).
+    #[cfg(gizmo_forward_only)]
+    global_entries.extend([
+        // The prefiltered cube array, its sampler and the uniform that places them (`reflection_probes.wgsl`).
             wgpu::BindGroupLayoutEntry {
                 binding: 6,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -113,9 +136,7 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 },
                 count: None,
             },
-            // The sun's cascades and their comparison sampler, for the forward-only path's lit shaders
-            // (`SUN_SHADOWS`), which have no shadow group. The desktop reads them through its shadow
-            // group and binds the same ones here.
+        // The sun's cascades and their comparison sampler (`SUN_SHADOWS`).
             wgpu::BindGroupLayoutEntry {
                 binding: 9,
                 visibility: wgpu::ShaderStages::FRAGMENT,
@@ -132,26 +153,12 @@ pub(crate) fn build_layouts(device: &wgpu::Device) -> Layouts {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Comparison),
                 count: None,
             },
-            // The depth of the frame under the glass (`crate::transmission`): how far behind a
-            // surface the opaque world is, which a surface over a volume (water) reads for its depth.
-            // One sampled texture more: the desktop's deferred lighting layout holds 16 with it, the
-            // forward-only lit layout 12 — of WebGPU's 16 a stage.
-            wgpu::BindGroupLayoutEntry {
-                binding: 14,
-                visibility: wgpu::ShaderStages::FRAGMENT,
-                ty: wgpu::BindingType::Texture {
-                    multisampled: false,
-                    view_dimension: wgpu::TextureViewDimension::D2,
-                    sample_type: wgpu::TextureSampleType::Depth,
-                },
-                count: None,
-            },
-    ];
+    ]);
     // The local lights' shadow layers and cookies, with the cookies' sampler, for the forward-only path's lit
     // shaders (`LOCAL_LIGHT_MAPS`), which have no shadow group: there the lit pipeline layout holds 11
     // sampled textures and 5 samplers with them, of WebGPU's 16 and 16 a stage. Not on the desktop, which
     // reads them from its shadow group (bindings 2–4): its deferred lighting layout, over group 0 and the
-    // G-buffer, would hold 17.
+    // G-buffer, would hold two more.
     #[cfg(gizmo_forward_only)]
     global_entries.extend([
             wgpu::BindGroupLayoutEntry {

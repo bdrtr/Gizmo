@@ -59,6 +59,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Two texture slots freed on the desktop's forward and G-buffer passes.** WebGPU allows 16 sampled textures a stage
+  and a pipeline layout counts all its groups offer. Group 0 carried the reflection-probe array and the sun's cascades
+  for the forward-only path's lit shaders, which have no group of their own for them; the desktop, which reads both
+  from its own groups, bound placeholders and the same cascades there anyway. Those bindings are the forward-only
+  path's only now: the desktop's forward lit layout holds 13 sampled textures instead of 15, its deferred lighting
+  layout 14 instead of 16. A test asks wgpu how much room the forward lit layout has (3; it was 1, which is why a
+  clear-coat map failed validation).
 - **glTF clear coat and anisotropy are imported.** `KHR_materials_clearcoat` (`clearcoatFactor`,
   `clearcoatRoughnessFactor`) and `KHR_materials_anisotropy` (`anisotropyStrength`) were not read at all, so a model's
   car paint or brushed metal loaded bare although the engine draws both. Their factors are read now; their textures

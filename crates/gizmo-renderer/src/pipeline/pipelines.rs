@@ -908,4 +908,65 @@ mod tests {
         assert!(o.depth_write, "opaque baked-lit must keep writing depth");
         assert_eq!(o.cull, Some(wgpu::Face::Back), "opaque baked-lit must stay backface-culled");
     }
+
+    /// **Room for another material map, measured by wgpu.** WebGPU allows 16 sampled textures a
+    /// stage, and a pipeline layout counts every one its groups offer whether a shader reads it or
+    /// not. On the desktop the forward lit layout held 15 — two of them on group 0 for the
+    /// forward-only path alone — so a clear-coat map failed validation at 17 (2026-11-17). Asked here
+    /// of wgpu itself (a hand count was off by two): the skeleton group, which has no texture, is
+    /// swapped for one of `n` fragment textures, and the largest `n` the layout validates with is the
+    /// room left. The noop backend validates limits as a real device does, so this needs no GPU.
+    #[cfg(not(gizmo_forward_only))]
+    #[test]
+    fn the_forward_lit_layout_has_room_for_material_maps() {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::NOOP,
+            backend_options: wgpu::BackendOptions {
+                noop: wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        // WebGPU's 16 a stage, and enough groups for the native forward pass's six.
+        let limits = wgpu::Limits { max_bind_groups: 6, max_sampled_textures_per_shader_stage: 16, ..wgpu::Limits::default() };
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() }))
+            .expect("a noop device");
+        let layouts = crate::pipeline::layouts::build_layouts(&device);
+        let indirect = crate::irradiance::IrradianceState::layout(&device);
+        let room = (0..=16u32)
+            .take_while(|&n| {
+                let entries: Vec<wgpu::BindGroupLayoutEntry> = (0..n)
+                    .map(|binding| wgpu::BindGroupLayoutEntry {
+                        binding,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    })
+                    .collect();
+                let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+                let probe = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("room"), entries: &entries });
+                let _layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                    label: Some("lit, skeleton swapped"),
+                    bind_group_layouts: &[
+                        Some(&layouts.global),
+                        Some(&layouts.texture),
+                        Some(&layouts.shadow),
+                        Some(&probe),
+                        Some(&layouts.instance),
+                        Some(&indirect),
+                    ],
+                    immediate_size: 0,
+                });
+                pollster::block_on(scope.pop()).is_none()
+            })
+            .last()
+            .unwrap_or(0);
+        assert!(room >= 3, "the forward lit layout has room for {room} more sampled textures of 16");
+        eprintln!("the forward lit layout has room for {room} more sampled textures");
+    }
 }

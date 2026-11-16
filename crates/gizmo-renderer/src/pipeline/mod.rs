@@ -626,8 +626,10 @@ impl SceneState {
 /// placeholder while there is none), a sampler and the uniform that places them. See
 /// [`SceneState::set_forward_reflections`].
 pub(crate) struct ForwardProbes {
+    #[cfg_attr(not(gizmo_forward_only), allow(dead_code))] // Bound on group 0 by the forward-only path alone.
     placeholder: wgpu::TextureView,
     view: Option<wgpu::TextureView>,
+    #[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
     sampler: wgpu::Sampler,
     uniform: wgpu::Buffer,
     /// What the lit pipelines are built to read.
@@ -742,6 +744,7 @@ impl ForwardProbes {
         Self { placeholder, view: None, sampler, uniform, shape: ProbeShape::default() }
     }
 
+    #[cfg_attr(not(gizmo_forward_only), allow(dead_code))]
     fn view(&self) -> &wgpu::TextureView {
         self.view.as_ref().unwrap_or(&self.placeholder)
     }
@@ -758,8 +761,11 @@ fn global_group(
     (behind, behind_depth): (&wgpu::TextureView, &wgpu::TextureView),
     sampler: &wgpu::Sampler,
     environment: &wgpu::TextureView,
-    probes: &ForwardProbes,
-    (sun_shadow, sun_shadow_sampler): (&wgpu::TextureView, &wgpu::Sampler),
+    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] probes: &ForwardProbes,
+    #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] (sun_shadow, sun_shadow_sampler): (
+        &wgpu::TextureView,
+        &wgpu::Sampler,
+    ),
     #[cfg_attr(not(gizmo_forward_only), allow(unused_variables))] (local_shadow, cookies): (
         &wgpu::TextureView,
         &crate::cookies::CookieTextures,
@@ -773,16 +779,17 @@ fn global_group(
             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(behind) },
             wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::Sampler(sampler) },
             wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(environment) },
-            wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(probes.view()) },
-            wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&probes.sampler) },
-            wgpu::BindGroupEntry { binding: 8, resource: probes.uniform.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(sun_shadow) },
-            wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(sun_shadow_sampler) },
             wgpu::BindGroupEntry { binding: 14, resource: wgpu::BindingResource::TextureView(behind_depth) },
     ];
-    // The local lights' layers and cookies: the forward-only path's only (see `build_layouts`).
+    // The reflection probes, the sun's cascades, the local lights' layers and cookies: the forward-only
+    // path's only (see `build_layouts`).
     #[cfg(gizmo_forward_only)]
     entries.extend([
+        wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(probes.view()) },
+        wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(&probes.sampler) },
+        wgpu::BindGroupEntry { binding: 8, resource: probes.uniform.as_entire_binding() },
+        wgpu::BindGroupEntry { binding: 9, resource: wgpu::BindingResource::TextureView(sun_shadow) },
+        wgpu::BindGroupEntry { binding: 10, resource: wgpu::BindingResource::Sampler(sun_shadow_sampler) },
         wgpu::BindGroupEntry { binding: 11, resource: wgpu::BindingResource::TextureView(local_shadow) },
         wgpu::BindGroupEntry { binding: 12, resource: wgpu::BindingResource::TextureView(&cookies.view) },
         wgpu::BindGroupEntry { binding: 13, resource: wgpu::BindingResource::Sampler(&cookies.sampler) },
