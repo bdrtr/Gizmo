@@ -127,6 +127,15 @@ pub struct TextSpan {
     pub font_name: Option<String>,
 }
 
+impl TextSpan {
+    /// A part starting at byte `start` in the text's own look: white (so the text's colour), its
+    /// face and its size.
+    #[must_use]
+    pub fn new(start: u32) -> Self {
+        Self { start, color: Vec4::ONE, font: None, size_px: None, font_name: None }
+    }
+}
+
 impl Text {
     /// White text at `size_px`, anchored at its top-left, in screen space at `position`.
     #[must_use]

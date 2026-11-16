@@ -65,7 +65,9 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   layer, lighting and space; a text's content, face (a `.ttf`/`.otf` dropped), size, colour, anchor, alignment, wrap
   width, vertical layout and space — with a ◆ on each animatable one. A new sprite is a square of the engine's own white
   (`AssetManager::WHITE_TEXTURE`, now a sprite image name `Renderer::sprite_image_by_name` makes, as a material's white
-  is made), a new text is in the default face: names a scene keeps.
+  is made), a new text is in the default face: names a scene keeps. A rich text is edited as its parts (words, colour,
+  size, face; added, removed, or the text turned plain), its spans' byte offsets made again from the parts on every
+  edit so a look stays on its words. `TextSpan::new` makes a part in the text's own look.
 - **Fixed: a mesh spawned with `MeshBundle` was invisible in the studio.** `MeshBundle` puts `Handle<Mesh>` and
   `Handle<Material>` on the entity; the game's draw looked them up in `Assets`, the studio's viewport asked for `Mesh`
   and `Material` components only — so the mesh was in the game and not in the editor (a whole cube missing,

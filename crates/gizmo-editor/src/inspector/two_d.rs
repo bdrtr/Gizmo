@@ -3,7 +3,7 @@ use super::material::asset_slot;
 use crate::editor_state::EditorState;
 use gizmo_core::World;
 use gizmo_math::{Vec2, Vec4};
-use gizmo_renderer::components::{Sprite, SpriteSpace, Text, TextAlign, TextAnchor, TextSpace};
+use gizmo_renderer::components::{Sprite, SpriteSpace, Text, TextAlign, TextAnchor, TextSpace, TextSpan};
 use gizmo_renderer::sprite::{ImageName, SpriteFilter};
 
 /// The images a sprite slot takes from the asset browser.
@@ -123,11 +123,112 @@ pub fn draw_sprite_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_co
     ui.separator();
 }
 
+/// A rich text's parts, in order: each one's text and its look — `None` for text before the first
+/// span, which is in the text's own. Offsets a file put inside a character or out of order are taken
+/// as the layout takes them: down to the character, in order.
+fn parts_of(text: &Text) -> Vec<(String, Option<TextSpan>)> {
+    let content = &text.content;
+    let on_char = |b: usize| (0..=b.min(content.len())).rev().find(|&b| content.is_char_boundary(b)).unwrap_or(0);
+    let mut spans: Vec<(usize, &TextSpan)> = text.spans.iter().map(|s| (on_char(s.start as usize), s)).collect();
+    spans.sort_by_key(|(b, _)| *b);
+    let mut out = Vec::new();
+    let first = spans.first().map_or(content.len(), |(b, _)| *b);
+    if first > 0 {
+        out.push((content[..first].to_string(), None));
+    }
+    for (i, (b, span)) in spans.iter().enumerate() {
+        let end = spans.get(i + 1).map_or(content.len(), |(next, _)| *next);
+        out.push((content[*b..end].to_string(), Some((*span).clone())));
+    }
+    out
+}
+
+/// `text`'s content and spans made from `parts` again — every offset where its part now starts. What
+/// keeps a look on the words it was given when a part before them grows or shrinks.
+fn set_parts(text: &mut Text, parts: &[(String, Option<TextSpan>)]) {
+    let mut content = String::new();
+    let mut spans = Vec::new();
+    for (part, look) in parts {
+        if let Some(look) = look {
+            let mut span = look.clone();
+            span.start = content.len() as u32;
+            spans.push(span);
+        }
+        content.push_str(part);
+    }
+    text.content = content;
+    text.spans = spans;
+}
+
+/// The rich text's parts, each its words and its look: colour, a size and a face of its own or the
+/// text's. Edited as parts, never as one string with offsets into it — a letter typed into a string
+/// moved every look after it onto the wrong letters.
+fn rich_rows(ui: &mut egui::Ui, text: &mut Text, state: &std::cell::RefCell<&mut EditorState>) {
+    let mut parts = parts_of(text);
+    let mut changed = false;
+    let mut remove = None;
+    let base_px = text.size_px;
+    for (i, (words, look)) in parts.iter_mut().enumerate() {
+        ui.group(|ui| {
+            ui.horizontal(|ui| {
+                let width = (ui.available_width() - 28.0).max(60.0);
+                changed |= ui.add(egui::TextEdit::multiline(words).desired_rows(1).desired_width(width)).changed();
+                if look.is_some() && ui.small_button("✕").on_hover_text("Bu parçayı sil").clicked() {
+                    remove = Some(i);
+                }
+            });
+            let Some(look) = look else {
+                ui.label(egui::RichText::new("metnin kendi görünümünde").weak().small());
+                return;
+            };
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Color:");
+                let before = look.color;
+                rgba(ui, &mut look.color);
+                changed |= look.color != before;
+                let mut sized = look.size_px.is_some();
+                if ui.checkbox(&mut sized, "Size").changed() {
+                    look.size_px = sized.then_some(base_px);
+                    changed = true;
+                }
+                if let Some(px) = look.size_px.as_mut() {
+                    changed |= ui.add(egui::DragValue::new(px).speed(0.5).range(4.0..=256.0).suffix(" px")).changed();
+                }
+            });
+            if let Some(path) = asset_slot(ui, &mut state.borrow_mut(), "Part font", look.font_name.as_deref(), FONTS) {
+                // No name is the text's own face; the id goes with it, or `text_sync` would name the
+                // old face again.
+                if path.is_none() {
+                    look.font = None;
+                }
+                look.font_name = path;
+                changed = true;
+            }
+        });
+    }
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("+ Parça").on_hover_text("Sona kendi görünümü olan bir parça ekle").clicked() {
+            parts.push((String::new(), Some(TextSpan::new(0))));
+            changed = true;
+        }
+        if ui.button("Düz metne çevir").on_hover_text("Parçaların görünümlerini bırak; kelimeler kalır").clicked() {
+            text.spans.clear();
+        }
+    });
+    if let Some(i) = remove {
+        parts.remove(i);
+        changed = true;
+    }
+    if changed && !text.spans.is_empty() {
+        set_parts(text, &parts);
+    }
+}
+
 /// The text rows: what it says, its face (dropped from the asset browser; ✕ goes back to the
 /// engine's default), size, colour, anchor, alignment, wrap width, the vertical layout, and where it
-/// lives — the window, a point of the window, or the world. Each animatable field has its ◆. Rich
-/// text (the `spans`) is counted, not edited here. (A text had no section in the studio until
-/// 2026-11-16.)
+/// lives — the window, a point of the window, or the world. Each animatable field has its ◆. A rich
+/// text (with `spans`) is edited as its parts, each with its look. (A text had no section in the studio
+/// until 2026-11-16.)
 pub fn draw_text_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core::entity::Entity, state: &mut EditorState) {
     // SAFETY: editor UI runs single-threaded in the egui draw; no concurrent World access.
     let mut texts = unsafe { world.query_unchecked::<&mut Text>() };
@@ -137,12 +238,16 @@ pub fn draw_text_section(ui: &mut egui::Ui, world: &World, entity_id: gizmo_core
     let state = std::cell::RefCell::new(state);
     let key = RowKey { world, state: &state, entity: entity_id, component: "Text" };
     egui::CollapsingHeader::new(crate::theme::section_title("Text")).default_open(true).show(ui, |ui| {
-        let mut content = text.content.clone();
-        if ui.add(egui::TextEdit::multiline(&mut content).desired_rows(2).desired_width(f32::INFINITY)).changed() {
-            text.content = content;
-        }
-        if !text.spans.is_empty() {
-            ui.label(egui::RichText::new(format!("+ {} span (zengin metin, kodda düzenlenir)", text.spans.len())).weak().small());
+        if text.spans.is_empty() {
+            let mut content = text.content.clone();
+            if ui.add(egui::TextEdit::multiline(&mut content).desired_rows(2).desired_width(f32::INFINITY)).changed() {
+                text.content = content;
+            }
+            if ui.button("Zengin metne çevir").on_hover_text("Metni, her biri kendi rengi, boyutu ve yazı yüzü olan parçalarla düzenle").clicked() {
+                text.spans.push(TextSpan::new(0));
+            }
+        } else {
+            rich_rows(ui, &mut text, &state);
         }
         // The face is its name: `text_sync` finds the face a changed name names on the next frame.
         let shown = text.font_name.as_deref().filter(|n| *n != gizmo_renderer::Renderer::DEFAULT_FONT);
@@ -324,6 +429,71 @@ mod tests {
         drop_on(&ctx, &world, &mut state, "Image:", "demo/assets/sprites/hero.png");
         let name = world.get::<Sprite>(e).unwrap().image_name.clone().unwrap();
         assert_eq!((name.path.as_str(), name.filter), ("demo/assets/sprites/hero.png", SpriteFilter::Nearest));
+    }
+
+    /// **A look stays on its words when a part before it changes.** "Can: " white then "5" red; the
+    /// first part becomes "Sağlık: " — longer, and with two-byte letters — and the red span starts
+    /// exactly where "5" now does. Edited as one string with offsets, the red moved onto the "k".
+    #[test]
+    fn a_look_stays_on_its_words_when_a_part_before_it_changes() {
+        let red = Vec4::new(1.0, 0.0, 0.0, 1.0);
+        let mut text = Text::world("", gizmo_renderer::text::FontId::UNRESOLVED, 32.0, 64.0).rich([("Can: ", Vec4::ONE), ("5", red)]);
+        let mut parts = parts_of(&text);
+        assert_eq!(parts.iter().map(|(w, _)| w.as_str()).collect::<Vec<_>>(), ["Can: ", "5"]);
+        parts[0].0 = "Sağlık: ".into();
+        set_parts(&mut text, &parts);
+        assert_eq!(text.content, "Sağlık: 5");
+        let start = text.spans[1].start as usize;
+        assert_eq!(&text.content[start..], "5", "the red look moved off its digit");
+        assert_eq!(text.spans[1].color, red);
+    }
+
+    /// Text before the first span keeps the text's own look and stays first; an offset a file put
+    /// inside a character is taken down to it, as the layout takes it.
+    #[test]
+    fn plain_text_before_the_first_part_and_a_bad_offset_survive() {
+        let mut text = Text::world("ağaç!", gizmo_renderer::text::FontId::UNRESOLVED, 32.0, 64.0);
+        // Byte 2 is inside "ğ" (bytes 1..3).
+        text.spans.push(TextSpan::new(2));
+        let parts = parts_of(&text);
+        assert_eq!(parts.iter().map(|(w, l)| (w.as_str(), l.is_some())).collect::<Vec<_>>(), [("a", false), ("ğaç!", true)]);
+        set_parts(&mut text, &parts);
+        assert_eq!(text.content, "ağaç!");
+        assert_eq!(text.spans[0].start, 1, "the span now starts on the character");
+    }
+
+    /// **A rich text is shown as its parts**, each in a field of its own, and a plain one converts to
+    /// one part with a click.
+    #[test]
+    fn a_rich_text_is_shown_as_its_parts() {
+        let mut world = World::new();
+        let e = world.spawn();
+        let text = Text::world("", gizmo_renderer::text::FontId::UNRESOLVED, 32.0, 64.0)
+            .rich([("Can: ", Vec4::ONE), ("5", Vec4::new(1.0, 0.0, 0.0, 1.0))]);
+        world.add_component(e, text);
+        let mut state = selected(e);
+        let ctx = egui::Context::default();
+        frame(&ctx, &world, &mut state, None, false);
+        let painted = frame(&ctx, &world, &mut state, None, false);
+        for words in ["Can: ", "5", "+ Parça"] {
+            assert!(painted.iter().any(|(t, _)| t == words), "{words:?} not painted: {painted:?}");
+        }
+
+        let plain = world.spawn();
+        world.add_component(plain, Text::world("hi", gizmo_renderer::text::FontId::UNRESOLVED, 32.0, 64.0));
+        let mut state = selected(plain);
+        frame(&ctx, &world, &mut state, None, false);
+        let painted = frame(&ctx, &world, &mut state, None, false);
+        let at = painted.iter().find(|(t, _)| t == "Zengin metne çevir").map(|(_, r)| r.center()).expect("the convert button");
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let run = |events: Vec<egui::Event>, state: &mut EditorState| {
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(420.0, 4000.0))), events, ..Default::default() };
+            ctx.run_ui(input, |ui| crate::inspector::ui_inspector(ui, &world, state)).drop_without_applying_deltas();
+        };
+        run(vec![egui::Event::PointerMoved(at), press(true)], &mut state);
+        run(vec![press(false)], &mut state);
+        let text = world.get::<Text>(plain).unwrap();
+        assert_eq!((text.content.as_str(), text.spans.len(), text.spans[0].start), ("hi", 1, 0));
     }
 
     /// **A text takes its face from the asset browser**: a `.ttf` dropped on the Font slot is the

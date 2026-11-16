@@ -420,6 +420,10 @@ fn every_component_the_inspector_edits_survives_a_save() {
         ("draw_behavior_tree_section", "BehaviorTree"),
         // Saved with their image and face by name (`sprite_sync`, `text_sync`).
         ("draw_sprite_section", "Sprite"),
+        // The skinned player. This entry used to sit in the other table saying no description of
+        // it existed; one had for some time (`full_scene_registry` registers it, its clips given
+        // back by the model it plays), and that table cannot tell a stale reason from a live one.
+        ("draw_animation_player_section", "AnimationPlayer"),
         ("draw_text_section", "Text"),
     ];
 
@@ -435,13 +439,6 @@ fn every_component_the_inspector_edits_survives_a_save() {
             "draw_material_section",
             "`Material` owns a live wgpu bind group. `MaterialDesc` is what travels, under its \
              own name, with `gizmo_renderer::material_sync` converting at each end.",
-        ),
-        (
-            "draw_animation_player_section",
-            "`AnimationPlayer` holds an `Arc<AnimationClip>` — a loaded asset, like `Mesh` — and \
-             a `HashMap<String, Entity>` cache of resolved targets, whose ids do not survive a \
-             reload. What could travel is a description (clip name, speed, looping), which does \
-             not exist yet; the `Material`/`MaterialDesc` pair is the shape it would take.",
         ),
         (
             "draw_joint_section",
