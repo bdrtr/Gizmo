@@ -203,13 +203,15 @@ impl SsaoState {
             &noise_sampler,
             &kernel_buffer,
         );
-        let blur_bind_group = mk_blur_bg(device, &blur_bgl, &ao_view, &gbuf_sampler);
+        let blur_bind_group = mk_blur_bg(device, &blur_bgl, &ao_view, &gbuf_sampler, &deferred.world_position_view, &deferred.normal_roughness_view);
         let apply_bind_group = mk_apply_bg(
             device,
             &apply_bgl,
             &ao_blurred_view,
             &gbuf_sampler,
             &params_buffer,
+            &deferred.world_position_view,
+            &deferred.normal_roughness_view,
         );
 
         // ── Pipelines ───────────────────────────────────────────────────────
@@ -266,13 +268,15 @@ impl SsaoState {
             &self.noise_sampler,
             &self.kernel_buffer,
         );
-        self.blur_bind_group = mk_blur_bg(device, &self.blur_bgl, &ao_view, &self.gbuf_sampler);
+        self.blur_bind_group = mk_blur_bg(device, &self.blur_bgl, &ao_view, &self.gbuf_sampler, &deferred.world_position_view, &deferred.normal_roughness_view);
         self.apply_bind_group = mk_apply_bg(
             device,
             &self.apply_bgl,
             &ao_blurred_view,
             &self.gbuf_sampler,
             &self.params_buffer,
+            &deferred.world_position_view,
+            &deferred.normal_roughness_view,
         );
 
         self.ao_texture = ao_texture;
@@ -320,29 +324,33 @@ impl SsaoState {
 // ── Kernel & noise generation ─────────────────────────────────────────────────
 
 fn build_kernel(count: usize) -> SsaoKernel {
-    let mut state: u32 = 0xDEAD_BEEF;
-    let mut rng = move || -> f32 {
-        state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-        (state >> 9) as f32 / (u32::MAX >> 9) as f32
-    };
-
     let mut kernel = SsaoKernel {
         samples: [[0.0; 4]; KERNEL_SIZE],
         shape: [SSAO_DEFAULT_RADIUS, SSAO_DEFAULT_BIAS, count as f32, 0.0],
     };
+    // **A stratified set, not a random one.** The samples were directions from a seeded LCG — points
+    // in a cube pushed onto the sphere, which crowds them toward its corners — and each level drew a
+    // set of its own, so 32 samples were not a better estimate than 16, only another one (measured
+    // away from 64: 16 at 2630, 32 at 2567, and the order flipped with any change to the pass). Here
+    // each level covers the same distribution evenly: the height on the hemisphere from the van der
+    // Corput sequence (every `count` here is a power of two, so it is exactly the `count` strata),
+    // uniform over the hemisphere as the pass always meant (cosine-weighted would be Lambert's, and
+    // would take most of the darkness out of a crease, whose occluder is seen edge-on); the turn by
+    // the golden angle; the length stratified on its own index, still
+    // crowded toward the surface (`0.1 + 0.9 t²`) for close-range occlusion. Height and length come
+    // from different sequences, so a near sample is not always one along the normal.
+    const GOLDEN_ANGLE: f32 = 2.399_963_2;
+    let radical_inverse = |mut i: u32| -> f32 {
+        i = i.reverse_bits();
+        i as f32 / 4_294_967_296.0
+    };
     for (i, sample) in kernel.samples.iter_mut().enumerate().take(count) {
-        // Uniform hemisphere sample (z > 0)
-        let xi1 = rng() * 2.0 - 1.0;
-        let xi2 = rng() * 2.0 - 1.0;
-        let xi3 = rng();
-        let len = (xi1 * xi1 + xi2 * xi2 + xi3 * xi3).sqrt().max(1e-6);
-        let (x, y, z) = (xi1 / len, xi2 / len, xi3 / len);
-
-        // Concentrate samples closer to origin (better close-range occlusion)
-        let t = i as f32 / count as f32;
+        let u = radical_inverse(i as u32) + 0.5 / count as f32;
+        let (sin_theta, cos_theta) = ((1.0 - u * u).max(0.0).sqrt(), u);
+        let phi = i as f32 * GOLDEN_ANGLE;
+        let t = (i as f32 + 0.5) / count as f32;
         let scale = 0.1 + t * t * 0.9;
-
-        *sample = [x * scale, y * scale, z.abs() * scale, 0.0];
+        *sample = [sin_theta * phi.cos() * scale, sin_theta * phi.sin() * scale, cos_theta * scale, 0.0];
     }
     kernel
 }
@@ -493,6 +501,28 @@ fn mk_blur_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            // The G-buffer's position: which neighbours are on the same surface.
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                },
+                count: None,
+            },
+            // The G-buffer's normal: the plane a neighbour has to lie on.
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                },
+                count: None,
+            },
         ],
     })
 }
@@ -526,6 +556,28 @@ fn mk_apply_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
                     min_binding_size: wgpu::BufferSize::new(
                         std::mem::size_of::<SsaoParams>() as u64
                     ),
+                },
+                count: None,
+            },
+            // The G-buffer's position: which neighbours are on the same surface.
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                },
+                count: None,
+            },
+            // The G-buffer's normal: the plane a neighbour has to lie on.
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    multisampled: false,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
                 },
                 count: None,
             },
@@ -583,6 +635,8 @@ fn mk_blur_bg(
     layout: &wgpu::BindGroupLayout,
     ao_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    position_view: &wgpu::TextureView,
+    normal_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("ssao_blur_bg"),
@@ -596,6 +650,14 @@ fn mk_blur_bg(
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(sampler),
             },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(position_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(normal_view),
+            },
         ],
     })
 }
@@ -606,6 +668,8 @@ fn mk_apply_bg(
     ao_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
     params_buf: &wgpu::Buffer,
+    position_view: &wgpu::TextureView,
+    normal_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("ssao_apply_bg"),
@@ -622,6 +686,14 @@ fn mk_apply_bg(
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: params_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(position_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(normal_view),
             },
         ],
     })

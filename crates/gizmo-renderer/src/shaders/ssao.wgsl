@@ -86,8 +86,11 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
         let occ_dist = length(occ_samp.xyz);
         let s_dist   = length(w_samp       - scene.camera_pos.xyz);
 
-        // Range falloff: ignore occluders farther than sampling radius
-        let range = smoothstep(0.0, 1.0, radius / max(length(world_pos - occ_pos), 0.001));
+        // Range falloff: an occluder within the radius counts whole, one past twice the radius not at
+        // all. It was `smoothstep(0, 1, radius / distance)`, whose tail never ends — an occluder 2 m
+        // away still counted 16 % at the default 0.5 m — so every near object laid a faint halo on
+        // whatever was far behind it, and the blur spread that halo onto the object's own edge.
+        let range = 1.0 - smoothstep(radius, 2.0 * radius, length(world_pos - occ_pos));
         // In front of the sample, and above this surface's plane. Without the second a flat floor
         // occludes itself: the position read back is the nearest pixel's, not the exact point, and
         // near the horizon that is enough to put the floor in front of a sample lying on it.

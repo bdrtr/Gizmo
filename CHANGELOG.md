@@ -59,6 +59,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **SSAO without halos.** Three faults, each measured: the 5×5 blur and the half-resolution upsample averaged
+  whatever was next to a pixel on screen, so a near object's edge took the darkness of a corner behind it (a pole 3 m
+  in front of a room corner: 78 of its 256 pixels darkened; now 0) — they now keep to one surface, by the G-buffer's
+  position and normal; the range falloff `smoothstep(0, 1, radius / distance)` never ended, so every near object laid a
+  faint shadow on what stood a metre or two behind it (492 wall pixels darkened; now 0) — it now counts an occluder
+  whole within the radius and not at all past twice it; and the sample kernel was random per quality level, so 32
+  samples were not a better estimate than 16 — it is stratified now, and the error against 64 samples falls with
+  every level (8: 2418, 16: 2169, 32: 2024). AO looks a little different everywhere: what was halo is gone.
 - **Exclusive systems: `fn(world: &mut World)` in a schedule.** No scheduled system could hold `&mut World` —
   `.exclusive()` only isolated a `&World` system — so despawning what a query found or reorganising the world had to
   live in the app's `set_update` hook. A function of `&mut World` (optionally `, dt: f32`) is now a system that runs

@@ -12269,6 +12269,143 @@ mod golden_render_tests {
         });
     }
 
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSAO.
+    /// **SSAO does not bleed across a silhouette.** A room's inner corner — dark under SSAO — and,
+    /// 3 m in front of it and just beside it on screen, a green pole that touches nothing: its own
+    /// occlusion is none, so no pixel of it may darken. The blur and the upsample mixed whatever was
+    /// next to a pixel on screen, so the corner's darkness spread onto the pole's edge in front of it
+    /// (78 of its 256 pixels) and was taken from the corner (359 pixels darker by more than two levels
+    /// where there are 668).
+    /// The pole's one-pixel rim is left out: an edge pixel is part wall after anti-aliasing.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn ssao_does_not_bleed_across_a_silhouette() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(ssao: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            if !ssao {
+                renderer.ssao = None;
+            }
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut boxed = |at: Vec3, half: Vec3, colour: Vec4| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(colour, 0.9, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            };
+            let grey = Vec4::new(0.8, 0.8, 0.8, 1.0);
+            // The back wall and a short return out of it: a vertical inner corner at x = -1, z = -3. The
+            // return stops 1.5 m short of the pole, so nothing the camera sees beside the pole is near it.
+            boxed(Vec3::new(0.0, 0.0, -3.05), Vec3::new(12.0, 20.0, 0.05), grey);
+            boxed(Vec3::new(-1.05, 0.0, -2.25), Vec3::new(0.05, 20.0, 0.75), grey);
+            // The pole, 3 m in front, its right edge just left of the corner line on screen.
+            boxed(Vec3::new(-0.70, 0.0, 0.0), Vec3::new(0.08, 20.0, 0.08), Vec4::new(0.05, 0.9, 0.05, 1.0));
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 4.0), yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let off = frame(false).await;
+            let on = frame(true).await;
+            let px = |f: &[u8], i: usize| [f[i * 4] as i32, f[i * 4 + 1] as i32, f[i * 4 + 2] as i32];
+            // The pole's lit front face. Its shaded side is a pixel wide, thinner than an AO texel, and
+            // falls in the rim.
+            let is_pole = |i: usize| { let [r, g, _] = px(&off, i); g > r + 60 && g > 180 };
+            let pole: Vec<usize> = (0..128 * 128)
+                .filter(|&i| {
+                    let (x, y) = ((i % 128) as i32, (i / 128) as i32);
+                    (-1..=1).all(|dy| (-1..=1).all(|dx| is_pole(((y + dy).clamp(0, 127) * 128 + (x + dx).clamp(0, 127)) as usize)))
+                })
+                .collect();
+            assert!(pole.len() > 200, "the pole is not in the frame: {} pixels", pole.len());
+            let right = pole.iter().map(|&i| (i % 128) as i32).max().unwrap() + 1;
+            // Right of the pole: the corner.
+            let column = |i: usize| (i % 128) as i32;
+            let corner = (0..128 * 128).filter(|&i| column(i) > right && px(&off, i)[0] - px(&on, i)[0] > 2).count();
+            assert!(corner > 40, "the corner is not dark under SSAO ({corner} pixels): the fixture shows nothing");
+            // More than a level in any channel: the pole's own occlusion is none, and a level either way
+            // is the anti-aliasing's (a channel even comes out a level brighter, which a multiply cannot).
+            let bled = pole.iter().filter(|&&i| (0..3).any(|c| px(&off, i)[c] - px(&on, i)[c] > 1)).count();
+            eprintln!("corner pixels darkened {corner}, pole pixels darkened {bled} of {}", pole.len());
+            assert_eq!(bled, 0, "{bled} pixels of the pole darkened under SSAO: the corner's occlusion bled across its silhouette");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSAO.
+    /// **A far occluder lays no halo on what is behind it.** A long wall seen edge-on and, 3 m in front
+    /// of where it meets the back wall, a pole: the wall just left of the pole on screen is 0.5 to 2 m
+    /// from it, mostly past twice the default 0.5 m radius. The range falloff was
+    /// `smoothstep(0, 1, radius / distance)`, whose tail never ends — 50 % at twice the radius, 16 % at
+    /// four times — and it darkened 492 of those wall pixels by more than four levels: a dark shadow
+    /// beside every near object on whatever lay a metre or two behind it. Whole within the radius,
+    /// nothing past twice it, none does.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn ssao_lays_no_halo_from_a_far_occluder() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(ssao: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.volumetric = None;
+            if !ssao {
+                renderer.ssao = None;
+            }
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut boxed = |at: Vec3, half: Vec3, colour: Vec4| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(colour, 0.9, 0.0));
+                world.add_component(e, MeshRenderer::new());
+            };
+            let grey = Vec4::new(0.8, 0.8, 0.8, 1.0);
+            boxed(Vec3::new(4.0, 0.0, -3.05), Vec3::new(5.0, 20.0, 0.05), grey);
+            boxed(Vec3::new(-1.05, 0.0, 2.0), Vec3::new(0.05, 20.0, 5.0), grey);
+            boxed(Vec3::new(-0.571, 0.0, 0.0), Vec3::new(0.1, 20.0, 0.1), Vec4::new(0.05, 0.9, 0.05, 1.0));
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 4.0), yaw: -std::f32::consts::FRAC_PI_2, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            let off = frame(false).await;
+            let on = frame(true).await;
+            let px = |f: &[u8], i: usize| [f[i * 4] as i32, f[i * 4 + 1] as i32, f[i * 4 + 2] as i32];
+            let pole_columns: Vec<i32> = (0..128 * 128).filter(|&i| { let [r, g, _] = px(&off, i); g > r + 60 }).map(|i| (i % 128) as i32).collect();
+            assert!(pole_columns.len() > 300, "the pole is not in the frame");
+            let left = *pole_columns.iter().min().unwrap();
+            // The edge-on wall, the eight columns left of the pole (its own edge column left out).
+            let band: Vec<usize> = (0..128 * 128).filter(|&i| ((left - 9)..(left - 1)).contains(&((i % 128) as i32))).collect();
+            let halo = band.iter().filter(|&&i| px(&off, i)[0] - px(&on, i)[0] > 4).count();
+            eprintln!("wall pixels left of the pole darkened more than four levels: {halo} of {}", band.len());
+            assert_eq!(halo, 0, "{halo} pixels of the wall beside the pole darkened under SSAO: a far occluder laid a halo");
+        });
+    }
+
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no TAA.
     /// **TAA does not trail a moving object.** A white cube crossing a dark floor, a little each frame:
     /// the last frame under TAA against the same frame without it. The history is found through the
@@ -15346,6 +15483,10 @@ fn material_surface(input: SurfaceInput) -> Surface {
         pollster::block_on(async {
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            // SSGI gathers over frames, so a frame after the empty one drawn below is not the frame
+            // after the star: 184 pixels differed by up to 5 levels, and any change to another pass
+            // could push one past the tolerance. What is compared here is the geometry.
+            renderer.ssgi = None;
             let mut world = World::new();
             let star: Vec<gizmo_math::Vec2> = (0..10)
                 .map(|i| {
@@ -15386,6 +15527,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
             crate::scene::SceneData::save(&world, &scene_path, &registry).expect("saves");
             let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
             renderer.taa = None;
+            renderer.ssgi = None;
             let mut world = World::new();
             crate::scene::SceneData::load_into(&scene_path, &mut world, &registry).expect("loads");
             load(&mut world, &renderer);
