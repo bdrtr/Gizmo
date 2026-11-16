@@ -59,6 +59,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Keyed transform animation, driven by the engine and keyed in the editor: `TransformAnimationPlayer`.** A door, a
+  platform, a camera move: a clip of position/rotation/scale tracks on an entity (an empty target name) or on named
+  entities below it. The engine's frame now drives it (`transform_animation_system`, in `advance_frame_clocks` beside
+  the tweens — windowed and headless alike), and a paused player follows its playhead; until now nothing drove it
+  unless a game scheduled `animation_system` by hand (removed, with `player::Animated`; `gizmo_animation::register`
+  only registers types). Saved with a scene (`serde` on the clip types). The ANIMATION tab keys it as Godot does:
+  ＋ Dönüşüm animasyonu adds the player, ◆ Key records the selected entity's transform at the playhead, keys drag and
+  delete, ▶ plays, one undo entry per edit (`EditorAction::TransformClipChanged`). `Track::set_key` / `remove_key` /
+  `retime_key` keep the keys sorted. Reached as `gizmo_renderer::transform_animation`.
 - **Reciprocal collision avoidance for navigation agents: `gizmo_ai::avoidance` (ORCA).** A `NavAgent` now picks,
   after following its route, the velocity nearest the one it wants that runs into none of its ten nearest neighbours
   over the next `time_horizon` seconds, each pair sharing the change — RVO2's algorithm, as Godot's and Unity's agent

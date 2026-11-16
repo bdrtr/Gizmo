@@ -252,6 +252,17 @@ pub use animation_system::{
     animation_update_system_seen, upload_skin_poses,
 };
 pub use gizmo_animation::skeletal::decompose_mat4;
+
+/// Transform-track animation — a door, a platform, a cutscene camera, keyed by position, rotation
+/// and scale: [`TransformAnimationPlayer`](transform_animation::TransformAnimationPlayer) plays an
+/// [`AnimationClip`](transform_animation::AnimationClip) of [`Track`](transform_animation::Track)s,
+/// and the engine's frame drives it ([`transform_animation_system`](transform_animation::transform_animation_system)).
+/// Named apart from the skeletal [`AnimationPlayer`] and [`AnimationClip`], which play a skin.
+pub mod transform_animation {
+    pub use gizmo_animation::clip::{AnimationClip, CubicTangents, InterpolatedValue, Interpolation, Keyframes, Track, TrackError};
+    pub use gizmo_animation::player::AnimationPlayer as TransformAnimationPlayer;
+    pub use gizmo_animation::system::{apply_interpolated, transform_animation_system};
+}
 /// Tweens — re-exported because the draw path drives them (`tween::tween_system`), the same way
 /// it drives skeletal animation.
 pub use gizmo_animation::tween;

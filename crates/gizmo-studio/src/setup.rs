@@ -340,6 +340,8 @@ world.insert_resource(editor_state);
     // The limbs the engine bends: added from ➕ and edited in the inspector's generic rows — a
     // chain's tip bone by name, its target and pole as world points, its weight.
     let _ = component_registry.register::<gizmo::renderer::ik::IkChains>("IkChains");
+    // Keyed transforms — a door, a platform, a camera move — which the ANIMATION tab keys.
+    let _ = component_registry.register::<gizmo::renderer::transform_animation::TransformAnimationPlayer>("TransformAnimationPlayer");
     world.insert_resource(component_registry);
 
     // --- SCRIPT ENGINE & ASSET WATCHER BİRLEŞİMİ ---

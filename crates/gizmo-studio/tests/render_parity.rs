@@ -933,6 +933,7 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
         "resolve_material_descriptions(",
         "sync_material_descriptions(",
         "tween_system(",
+        "transform_animation_system(",
         "color_tween_system(",
         "advance_camera_shakes(",
         "screen_fade_system(",

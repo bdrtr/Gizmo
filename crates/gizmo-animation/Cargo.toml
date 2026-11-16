@@ -13,7 +13,7 @@ readme.workspace = true
 [features]
 # OFF by default so the crate's default public API is dependency-light (Stage A:
 # only gizmo-core/math/physics-core). The dependency-light
-# `register(world, schedule)` entry point is always available.
+# `register(world)` entry point is always available.
 #
 # NOTE: the former `app` feature (which pulled in `gizmo-app` for the
 # `AnimationPlugin` convenience wrapper) has been removed: `gizmo-renderer` now
@@ -26,5 +26,5 @@ default = []
 gizmo-core = { version = "0.11.0", path = "../gizmo-core" }
 gizmo-math = { version = "0.11.0", path = "../gizmo-math" }
 gizmo-physics-core = { version = "0.11.0", path = "../gizmo-physics-core" }
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 tracing = "0.1.44"

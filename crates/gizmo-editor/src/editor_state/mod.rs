@@ -96,6 +96,9 @@ pub struct EditorState {
     /// becomes ONE undo entry instead of one per frame — the same shape the transform gizmo uses
     /// with `gizmo_original_transforms`.
     pub anim_drag_original: Option<std::sync::Arc<[gizmo_renderer::AnimationClip]>>,
+    /// The transform clip as a keyframe drag on the transform timeline found it — one undo entry
+    /// per drag, as `anim_drag_original` is for a skin's (`crate::transform_timeline`).
+    pub transform_drag_original: Option<Option<std::sync::Arc<gizmo_renderer::transform_animation::AnimationClip>>>,
     /// Export/build state: the target, the progress and the last result.
     pub build: BuildState,
     /// The asset browser's own state: where it is looking and what is filtered.
@@ -320,6 +323,7 @@ impl EditorState {
             camera: CameraState::default(),
             anim_edit: AnimationEditState::default(),
             anim_drag_original: None,
+            transform_drag_original: None,
             build: BuildState::default(),
             assets: AssetBrowserState::default(),
             scene: SceneState::default(),

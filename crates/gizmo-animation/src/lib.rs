@@ -16,15 +16,15 @@
 //! collide (see [`skeletal`]) — but they share one keyframe-sampling core so
 //! their interpolation can never silently diverge:
 //!
-//! 1. **Transform-track animation** ([`clip`] / [`player`] / [`system`]) — a
-//!    small ECS system that animates named entity `Transform`s:
+//! 1. **Transform-track animation** ([`clip`] / [`player`] / [`system`]) — keyed
+//!    `Transform`s, an entity's own or named ones below it:
 //!    - [`clip`]: the data model. An [`clip::AnimationClip`] is a collection of
-//!      [`clip::Track`]s, each targeting an entity by name and holding keyframe
-//!      timestamps plus per-channel [`clip::Keyframes`] (translation/rotation/scale).
-//!    - [`player`]: the [`player::AnimationPlayer`] component tracking playback
-//!      state, and the [`player::Animated`] marker component.
-//!    - [`system`]: the [`system::animation_system`] that advances players,
-//!      resolves each track's target name to an entity in the player's
+//!      [`clip::Track`]s, each targeting an entity by name (empty: the player's own)
+//!      and holding keyframe timestamps plus per-channel [`clip::Keyframes`]
+//!      (translation/rotation/scale).
+//!    - [`player`]: the [`player::AnimationPlayer`] component tracking playback state.
+//!    - [`system`]: [`system::transform_animation_system`], which the engine's frame
+//!      runs: it advances players, resolves each track's target in the player's
 //!      hierarchy, and writes sampled values to the targeted transforms.
 //!
 //! 2. **Skeletal (GPU-skinning) animation** ([`skeletal`]) — the pure-data bone
@@ -35,8 +35,8 @@
 //! FABRIK inverse kinematics, and [`ik::IkChains`] — two-bone chains on a skeleton that `gizmo`'s
 //! frame preparation applies every frame.
 //!
-//! Register the transform-track components + system with [`register`] (the
-//! dependency-light entry point) on a [`World`]/[`Schedule`] directly.
+//! Register the component types with [`register`] (the dependency-light entry point) on a
+//! [`World`] directly; the engine's frame runs the transform player.
 
 /// Transform-track data model: [`clip::AnimationClip`], the [`clip::Track`]s it is
 /// made of, and the per-channel [`clip::Keyframes`] / [`clip::InterpolatedValue`]
@@ -63,8 +63,7 @@ pub mod clip;
 mod hermite;
 pub mod ik;
 /// Playback state for transform-track animation: the [`player::AnimationPlayer`]
-/// component and the [`player::Animated`] marker that [`system::animation_system`]
-/// stamps onto every transform it has claimed.
+/// component, which [`system::transform_animation_system`] advances and applies.
 ///
 /// The player owns the playhead, the loop/speed flags and a name→entity resolution
 /// cache; it samples nothing itself. [`player::AnimationPlayer::play`] clears that
@@ -74,12 +73,10 @@ pub mod player;
 pub mod skeletal;
 /// The ECS half of transform-track animation.
 ///
-/// [`system::animation_system`] advances every *playing* player, then — once per
-/// clip, cached — walks that entity's subtree (the player's own entity included) to
-/// map each track's `target_name` onto a named entity, and writes the sampled TRS
-/// values to those entities' `Transform`s. It is scheduled
-/// `before("transform_propagate")` by [`register`] so the animated locals reach global
-/// space in the same frame.
+/// [`system::transform_animation_system`] advances every *playing* player, then — once
+/// per clip, cached — walks that entity's subtree to map each track's `target_name` onto
+/// a named entity (an empty name is the player's own), and writes the sampled TRS values
+/// to those entities' `Transform`s, playing or paused. The engine's frame runs it.
 ///
 /// Failure is quiet by design: a track naming nothing in the hierarchy resolves to
 /// no entity and animates nothing, rather than erroring.
@@ -87,25 +84,17 @@ pub mod system;
 /// Tweens: a `Transform` eased to a target over a duration — [`tween::Tween`], [`tween::Ease`].
 pub mod tween;
 
-use gizmo_core::system::{IntoSystemConfig, Schedule};
 use gizmo_core::world::World;
 
-/// Registers the animation components ([`player::AnimationPlayer`],
-/// [`player::Animated`], [`ik::IkChains`]) and schedules
-/// [`system::animation_system`] to run before transform propagation, on a
-/// [`World`]/[`Schedule`] directly.
+/// Registers the animation component types ([`player::AnimationPlayer`], [`ik::IkChains`]) on a
+/// [`World`] directly — the **dependency-light** entry point, needing only `gizmo-core`.
 ///
-/// This is the **dependency-light** entry point — it needs only `gizmo-core`, so
-/// it works without `gizmo-app`.
-pub fn register(world: &mut World, schedule: &mut Schedule) {
+/// It schedules nothing: the engine's frame drives the transform player
+/// ([`system::transform_animation_system`], from `gizmo::systems::render::prepare_frame`) with the
+/// skeletal players and the tweens, in the game's and the editor's draw paths alike. It used to add
+/// a scheduled `animation_system` too — a second driver nothing called, which a game calling it as
+/// well as the frame would have advanced twice.
+pub fn register(world: &mut World) {
     world.register_component_type::<player::AnimationPlayer>();
-    world.register_component_type::<player::Animated>();
     world.register_component_type::<ik::IkChains>();
-    schedule.add_di_system(
-        system::animation_system
-            .into_config()
-            .label("animation_update")
-            // Animated local transforms must be updated before they are propagated to global space.
-            .before("transform_propagate"),
-    );
 }

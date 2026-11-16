@@ -31,19 +31,12 @@
 //! başına bir varyant olduğu için iki kanal iki [`Track`] demek, ikisi de aynı `target_name`'i
 //! taşıyor. Demo dört izin dördünü de kuruyor.
 //!
-//! ## Ölçülen: basit sahnede dünya matrisi bir kare geride
+//! ## Kim sürüyor
 //!
-//! `gizmo_animation::register()` animasyon sistemini `.before("transform_propagate")` diye
-//! sıralıyor. Ama **basit sahnede o etiket yok**: `with_simple_scene` yayılımı çizelgeye değil
-//! `set_update` kapanışının içine koyuyor, ve orada koşan bir şeye kısıt bağlanamaz. Kısıt
-//! yazılırsa hata değil **uyarı** basılıp düşürülüyor (motorun sıralama sözleşmesi bu; bkz.
-//! `transform`).
-//!
-//! Sonucu HUD ölçüyor: gezegenin yerel konumu ile yayılmış dünya matrisinin ötelemesi aynı karede
-//! **0,0086 birim** ayrı çıkıyor. Gezegen kenar başına 2 birim/saniye gittiğine ve kare ~5 ms
-//! sürdüğüne göre bu tam olarak **bir karelik gecikme** — yayılım animasyondan önce koşuyor.
-//! Gözle görülmez ama ışın atma ya da çarpışma gibi dünya matrisini okuyan bir iş bir kare eski
-//! veri görür.
+//! Motorun karesi: `advance_frame_clocks` (tween'lerle aynı saatle, hem çizilen hem penceresiz
+//! karede) her `TransformAnimationPlayer`'ı ilerletip izlerini dönüşümlere yazıyor. Demo hiçbir
+//! sistem eklemiyor. HUD, gezegenin yerel konumu ile dünya matrisinin aynı karede ne kadar ayrı
+//! olduğunu ölçmeyi sürdürüyor.
 //!
 //! ## Kontroller
 //!   * **Boşluk** — duraklat/sürdür · **1/2/3** — hız ×0,25 / ×1 / ×3
@@ -92,13 +85,7 @@ fn main() {
             );
             let device = &scene.renderer.device;
 
-            // Animasyon bileşenleri elle kaydediliyor: `register()` bir `&mut Schedule` ister,
-            // `with_simple_scene` ise onu vermiyor — sistem aşağıda `add_update_system` ile
-            // ekleniyor.
-            scene.world.register_component_type::<AnimationPlayer>();
-            scene
-                .world
-                .register_component_type::<gizmo::animation::player::Animated>();
+            gizmo::animation::register(scene.world);
 
             // Hiyerarşi: gezegen → yörünge denetleyicisi → uydu.
             let planet = scene.world.spawn_bundle((
@@ -159,20 +146,8 @@ fn main() {
             });
             scene.spawn_camera(state, Vec3::new(-2.0, 2.5, 5.0), Vec3::ZERO);
         })
-        // Animasyon sistemi elle. `register()` buna `.before("transform_propagate")` de ekliyor
-        // ama **basit sahnede o etiket yok**: `with_simple_scene` yayılımı çizelgeye değil
-        // `set_update` kapanışının içine koyuyor, ve orada koşan bir şeyin etiketi olmaz. Kısıt
-        // yazılsaydı hata değil UYARI basılıp düşürülürdü; ölçülen gecikme aşağıda.
-        .add_update_system(
-            gizmo::animation::system::animation_system
-                .in_phase(Phase::Update)
-                .label("animation_update"),
-        )
-        .add_update_system(
-            controls
-                .in_phase(Phase::Update)
-                .after("animation_update"),
-        )
+        // Animasyonu motorun karesi sürüyor; burası yalnız duraklatma ve hız.
+        .add_update_system(controls.in_phase(Phase::Update))
         .set_ui(|world, _state, ctx| {
             let Some(playback) = world.get_resource::<Playback>().map(|p| p.clone()) else {
                 return;

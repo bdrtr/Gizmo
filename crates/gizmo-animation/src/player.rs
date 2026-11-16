@@ -3,25 +3,18 @@ use crate::clip::AnimationClip;
 use std::collections::HashMap;
 use gizmo_core::entity::Entity;
 
-/// Marker component inserted onto entities that are currently targeted by an
-/// [`AnimationPlayer`], so the animation system can query only animated transforms.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Animated;
-
-impl gizmo_core::component::Component for Animated {
-    fn storage_type() -> gizmo_core::component::StorageType {
-        gizmo_core::component::StorageType::Table
-    }
-}
-
-
-/// Component that drives an [`AnimationClip`] over time.
+/// Component that drives an [`AnimationClip`] of transform tracks over time — Godot's
+/// `AnimationPlayer` for a node's position, rotation and scale: a door that swings, a platform
+/// that rides, a camera that sweeps through a cutscene.
 ///
-/// Attach this to the root entity of a hierarchy; the animation system advances
-/// [`Self::elapsed_time`], resolves each track's `target_name` to a child entity
-/// (caching the result in [`Self::target_entities`]), and writes the sampled
-/// transform values to those entities.
-#[derive(Clone, Debug)]
+/// Attach this to the root entity of a hierarchy; the engine's frame
+/// ([`transform_animation_system`](crate::system::transform_animation_system)) advances
+/// [`Self::elapsed_time`] while it plays, resolves each track's `target_name` to the root (an empty
+/// name) or a named entity below it (caching the result in [`Self::target_entities`]), and writes the
+/// sampled values to their transforms. Saved with a scene, the clip with it; the editor's timeline
+/// keys it.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 #[non_exhaustive]
 pub struct AnimationPlayer {
     /// The clip currently being played, if any.
@@ -34,7 +27,8 @@ pub struct AnimationPlayer {
     pub playing: bool,
     /// Whether the clip restarts from the beginning when it ends.
     pub looping: bool,
-    /// Cache mapping each track's `target_name` to the resolved entity.
+    /// Cache mapping each track's `target_name` to the resolved entity. Not saved: ids are a run's.
+    #[serde(skip)]
     pub target_entities: HashMap<String, Entity>,
 }
 

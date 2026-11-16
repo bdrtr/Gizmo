@@ -1,9 +1,6 @@
-use gizmo_core::query::Query;
-use gizmo_core::system::Res;
-use gizmo_core::Time;
 use gizmo_core::component::{Children, EntityName};
 use gizmo_core::entity::Entity;
-use gizmo_core::world::Entities;
+use gizmo_core::World;
 use gizmo_physics_core::Transform;
 use crate::player::AnimationPlayer;
 use crate::clip::InterpolatedValue;
@@ -20,168 +17,86 @@ pub fn apply_interpolated(transform: &mut Transform, value: InterpolatedValue) {
     }
 }
 
-/// ECS system that advances every [`AnimationPlayer`], resolves track targets by
-/// name within each player's hierarchy, and applies sampled values to the
-/// targeted [`Transform`]s.
-#[tracing::instrument(skip_all, name = "animation_system")]
-pub fn animation_system(
-    time: Res<Time>,
-    entities: Res<Entities>,
-    mut commands: gizmo_core::Commands,
-    mut players: Query<(Entity, &mut AnimationPlayer)>,
-    names: Query<&EntityName>,
-    children: Query<&Children>,
-    mut transforms: Query<&mut Transform, gizmo_core::query::With<crate::player::Animated>>,
-) {
-    let dt = time.dt();
-
-    for (root_id, mut player) in players.iter_mut() {
-        if !player.playing {
+/// The transform-track animation driver: every [`AnimationPlayer`] advanced by `dt` while it plays,
+/// and its clip's tracks sampled at its playhead onto the `Transform`s they target — **playing or
+/// not**, so an editor scrubbing a paused player's `elapsed_time` moves what it animates.
+///
+/// A track targets the player's own entity when its `target_name` is empty, and otherwise the
+/// first entity of that [`EntityName`] in the player's hierarchy (the player's entity and its
+/// `Children`, walked once per clip and cached in `target_entities`, again whenever a cached target
+/// has gone). The walk is guarded against a `Children` cycle — a scene file writes parent edges
+/// verbatim — which until 2026-08-30 froze the frame.
+///
+/// The engine's frame runs it (`gizmo::systems::render::prepare_frame`, beside the tweens and the
+/// skeletal drivers), on the game clock, in both the game's and the editor's draw paths.
+pub fn transform_animation_system(world: &mut World, dt: f32) {
+    let players: Vec<Entity> = world.query::<(Entity, &AnimationPlayer)>().iter().map(|(e, _)| e).collect();
+    for root in players {
+        let Some((clip, time, mut targets)) = ({
+            let mut q = world.query_mut::<&mut AnimationPlayer>();
+            q.get_mut(root).and_then(|mut player| {
+                let clip = player.clip.clone()?;
+                if player.playing {
+                    player.advance(dt, clip.duration());
+                }
+                Some((clip, player.elapsed_time, std::mem::take(&mut player.target_entities)))
+            })
+        }) else {
             continue;
-        }
-
-        let clip = match &player.clip {
-            Some(c) => c.clone(),
-            None => continue,
         };
 
-        // Advance time. `advance` guards against a non-finite speed (NaN/Inf)
-        // poisoning elapsed_time, wraps when looping, and stops exactly at the
-        // clip end (`>=`) when not. Unit-tested in `player.rs`.
-        player.advance(dt, clip.duration());
-
-        // Resolve targets if necessary
-        // A simple heuristic: if cached map is empty but there are tracks, we need to resolve.
-        // Or if we haven't found all of them, but we only do this once to avoid performance hit.
-        if player.target_entities.is_empty() && !clip.tracks.is_empty() {
-            // `visited` is the cycle guard. This resolution re-runs on EVERY FRAME for as long
-            // as `target_entities` stays empty — and a clip whose track names match nothing
-            // keeps it empty forever — so a `Children` loop under an animated root was not a
-            // one-shot risk: the first frame in which that player is playing never completes.
-            //
-            // WHAT AN UNGUARDED CYCLE COSTS DEPENDS ON WHAT IS INSIDE IT, and the first
-            // version of this comment got that wrong. The *stack* is flat: this walk pops
-            // before it pushes, so on the simple cycle A→B→C→A it holds one id for the whole
-            // infinite run, and it grows only where an entity in the cycle has more than one
-            // child. But the loop body is not free. If any entity in the cycle carries an
-            // `EntityName` matching a track, the `commands.entity(entity).insert(Animated)`
-            // below fires on every revisit, and `EntityCommands::insert` pushes a BOXED
-            // closure onto a `CommandQueue` that nothing drains until the schedule flushes —
-            // which a walk that never returns never reaches. So a named entity in the cycle
-            // turns the frozen frame into unbounded heap growth. Corrected 2026-08-31, after
-            // the audit; unguarded until 2026-08-30.
-            let mut visited = std::collections::HashSet::new();
-            visited.insert(root_id);
-            let mut stack = vec![root_id];
-            
-            while let Some(current) = stack.pop() {
-                // If it has a name, check if it matches any track
-                if let Some(name) = names.get(current) {
-                    for track in &clip.tracks {
-                        if track.target_name == name.0 {
-                            // Recover from a poisoned mutex instead of panicking: a
-                            // poisoned lock here would otherwise abort the whole frame.
-                            let gen = {
-                                let state = entities.state.lock().unwrap_or_else(|e| {
-                                    // Surface the silently-recovered lock poisoning: it
-                                    // means another thread panicked while holding it.
-                                    tracing::warn!(
-                                        "[Animation] entities state lock was poisoned; recovering in place"
-                                    );
-                                    e.into_inner()
-                                });
-                                // Bounds-check the id: a stale/out-of-range id must skip
-                                // gracefully rather than panic on an out-of-bounds index.
-                                match state.generations.get(current.id() as usize).copied() {
-                                    Some(gen) => gen,
-                                    None => {
-                                        tracing::trace!(
-                                            id = %current,
-                                            target = %track.target_name,
-                                            "[Animation] target resolution: entity id out of range, skipping track"
-                                        );
-                                        continue;
-                                    }
-                                }
-                            };
-                            let entity = Entity::new(current.id(), gen);
-                            player.target_entities.insert(name.0.clone(), entity);
-
-                            // Insert the Animated marker component onto the target entity.
-                            commands.entity(entity).insert(crate::player::Animated);
-                        }
-                    }
-                }
-                
-                // Add children to stack — only the ones this walk has not already queued.
-                if let Some(child_comp) = children.get(current) {
-                    for &child in &child_comp.0 {
-                        if children.entity(child.id()) == Some(child) && visited.insert(child) {
-                            stack.push(child);
-                        }
-                    }
-                }
-            }
-
-            // One-time-per-clip resolution result. A successful resolve is a useful
-            // debug! landmark; a resolve that found nothing re-runs every frame (the
-            // cache stays empty), so it is kept at trace! to avoid per-frame spam.
-            let resolved = player.target_entities.len();
-            if resolved > 0 {
-                tracing::debug!(
-                    resolved,
-                    tracks = clip.tracks.len(),
-                    clip = %clip.name,
-                    "[Animation] resolved track targets in hierarchy"
-                );
-            } else {
-                tracing::trace!(
-                    tracks = clip.tracks.len(),
-                    clip = %clip.name,
-                    "[Animation] no track targets resolved this frame"
-                );
-            }
+        let stale = clip.tracks.iter().any(|t| {
+            !t.target_name.is_empty() && targets.get(&t.target_name).is_none_or(|e| !world.is_alive(*e))
+        });
+        if stale {
+            targets = resolve_targets(world, root, &clip);
         }
 
-        // Apply animations. Aggregate per-track outcomes and emit a single
-        // per-player trace! rather than logging inside the hot per-track loop.
-        let mut applied = 0usize;
-        let mut skipped_dead = 0usize;
-        let mut missing_transform = 0usize;
+        let mut transforms = world.query_mut::<&mut Transform>();
         for track in &clip.tracks {
-            if let Some(&target_entity) = player.target_entities.get(&track.target_name) {
-                // Check if the target entity is still alive and matches the generation in the world
-                if !entities.is_alive(target_entity) {
-                    skipped_dead += 1;
-                    continue;
-                }
-                let target_id = target_entity;
-                let interpolated = track.sample(player.elapsed_time);
+            let target = if track.target_name.is_empty() { Some(root) } else { targets.get(&track.target_name).copied() };
+            if let Some(mut transform) = target.and_then(|e| transforms.get_mut(e)) {
+                apply_interpolated(&mut transform, track.sample(time));
+            }
+        }
+        drop(transforms);
+        if let Some(mut player) = world.query_mut::<&mut AnimationPlayer>().get_mut(root) {
+            player.target_entities = targets;
+        }
+    }
+}
 
-                if let Some(mut transform) = transforms.get_mut(target_id) {
-                    apply_interpolated(&mut transform, interpolated);
-                    applied += 1;
-                } else {
-                    missing_transform += 1;
+/// Each named track's target in `root`'s hierarchy: a walk of `Children` from `root`, every entity
+/// visited once (a cycle cannot hold it), the first of each name winning.
+fn resolve_targets(world: &World, root: Entity, clip: &crate::clip::AnimationClip) -> std::collections::HashMap<String, Entity> {
+    let names = world.query::<&EntityName>();
+    let children = world.query::<&Children>();
+    let mut found = std::collections::HashMap::new();
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(root);
+    let mut stack = vec![root];
+    while let Some(current) = stack.pop() {
+        if let Some(name) = names.get(current) {
+            if clip.tracks.iter().any(|t| t.target_name == name.0) {
+                found.entry(name.0.clone()).or_insert(current);
+            }
+        }
+        if let Some(c) = children.get(current) {
+            for &child in &c.0 {
+                if world.is_alive(child) && visited.insert(child) {
+                    stack.push(child);
                 }
             }
         }
-        tracing::trace!(
-            applied,
-            skipped_dead,
-            missing_transform,
-            elapsed = player.elapsed_time,
-            "[Animation] applied sampled tracks"
-        );
     }
+    tracing::debug!(resolved = found.len(), tracks = clip.tracks.len(), clip = %clip.name, "[Animation] resolved track targets");
+    found
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::clip::{AnimationClip, Interpolation, Keyframes, Track};
-    use gizmo_core::component::Children;
-    use gizmo_core::system::Schedule;
     use gizmo_math::Vec3;
     use std::sync::mpsc::RecvTimeoutError;
 
@@ -223,32 +138,12 @@ mod tests {
     /// `SceneData::instantiate_entities` writes a file's parent edges verbatim, and an animated
     /// rig is exactly the kind of thing that arrives out of a file.
     ///
-    /// **THE NAMED BONE IS DELIBERATELY OUTSIDE THE CYCLE**, and the first version of this test
-    /// had it inside. That matters because it decides how the test fails when the guard is
-    /// removed. A name-matched entity reached inside the loop runs
-    /// `commands.entity(entity).insert(Animated)` on every revisit, and each of those pushes a
-    /// boxed closure onto a `CommandQueue` nothing drains until the schedule flushes — which a
-    /// walk that never returns never reaches. `within` bounds the WAIT, not the work, so the
-    /// worker stays detached and allocating after the deadline fires: on the ~13 GB machine
-    /// `CLAUDE.md` describes, a clear red would turn into an allocation abort taking the rest
-    /// of this binary's tests with it under `--no-fail-fast`. With the cycle built out of
-    /// nameless entities the pre-fix failure is a spin at flat memory, which is the same choice
-    /// `compound_children_cycle.rs` makes and documents for the physics walk.
+    /// The named bone sits outside the cycle and the walk enters the cycle first, so it reaches
+    /// `bone` only if it gets out again — the evidence the guard works, not just that it ends.
     #[test]
     fn a_children_cycle_under_an_animated_root_does_not_hang_the_frame() {
         let resolved = within(10, || {
             let mut world = gizmo_core::world::World::new();
-            let mut schedule = Schedule::new();
-            crate::register(&mut world, &mut schedule);
-            world.register_component_type::<Children>();
-            world.register_component_type::<EntityName>();
-            world.register_component_type::<Transform>();
-            // The schedule's `dt` argument and the `Time` resource are separate: the system
-            // reads the resource, so a default `Time` would hand it dt = 0 and the player
-            // would not advance at all.
-            let mut time = Time::new();
-            time.update(0.016);
-            world.insert_resource(time);
 
             let root = world.spawn();
             let bone = world.spawn();
@@ -283,7 +178,7 @@ mod tests {
             world.add_component(loop_a, Children(vec![loop_b]));
             world.add_component(loop_b, Children(vec![loop_a]));
 
-            schedule.run(&mut world, 0.016);
+            transform_animation_system(&mut world, 0.016);
 
             let players = world.query::<&AnimationPlayer>();
             let player = players.get(root).expect("the player is still there");

@@ -1041,6 +1041,8 @@ pub fn advance_frame_clocks(world: &mut World) {
     let tween_dt = world.get_resource::<gizmo_core::time::Time>().map(|t| t.dt()).unwrap_or(0.0);
     crate::renderer::tween::tween_system(world, tween_dt);
     crate::renderer::components::color_tween_system(world, tween_dt);
+    // Keyed transforms — a door, a platform, a cutscene camera — on the same clock as the tweens.
+    crate::renderer::transform_animation::transform_animation_system(world, tween_dt);
     typewriter_system(world, tween_dt);
     // The trauma wearing off is game state (`CameraShake::trauma`); the shaken view is the draw's.
     advance_camera_shakes(world, tween_dt);
@@ -2026,6 +2028,80 @@ pub use shared::{
 
 #[cfg(test)]
 mod frame_split_tests;
+
+#[cfg(test)]
+mod transform_animation_tests {
+    //! The transform-track player, driven by the engine's frame (`advance_frame_clocks`).
+
+    use super::advance_frame_clocks;
+    use crate::core::World;
+    use crate::math::Vec3;
+    use crate::physics::components::Transform;
+    use crate::renderer::transform_animation::{AnimationClip, Keyframes, TransformAnimationPlayer, Track};
+
+    /// A door sliding 10 m along x over a second, on its own entity (an empty target name).
+    fn door() -> (World, gizmo_core::Entity) {
+        let mut world = World::new();
+        let mut time = gizmo_core::time::Time::new();
+        time.update(0.05);
+        world.insert_resource(time);
+        let track = Track::new("", vec![0.0, 1.0], Keyframes::Translation(vec![Vec3::ZERO, Vec3::new(10.0, 0.0, 0.0)])).expect("valid");
+        let mut clip = AnimationClip::default();
+        clip.name = "open".into();
+        clip.tracks.push(track);
+        let mut player = TransformAnimationPlayer::new().looping(false);
+        player.play(std::sync::Arc::new(clip));
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::ZERO));
+        world.add_component(e, player);
+        (world, e)
+    }
+
+    fn x(world: &World, e: gizmo_core::Entity) -> f32 {
+        world.get::<Transform>(e).map_or(f32::NAN, |t| t.position.x)
+    }
+
+    /// **The frame plays it, and a paused one follows its playhead.** Four frames of 0.05 s slide the
+    /// door 2 m; paused and set to 0.75 s, the next frame puts it at 7.5 m and the playhead stays.
+    /// Nothing drove this player before 2026-11-16 unless a game scheduled it by hand.
+    #[test]
+    fn the_frame_plays_a_transform_clip_and_a_paused_one_follows_its_playhead() {
+        let (mut world, door) = door();
+        for _ in 0..4 {
+            advance_frame_clocks(&mut world);
+        }
+        assert!((x(&world, door) - 2.0).abs() < 1.0e-4, "four frames of 0.05 s: {}", x(&world, door));
+        if let Some(mut p) = world.query_mut::<&mut TransformAnimationPlayer>().get_mut(door) {
+            p.pause();
+            p.elapsed_time = 0.75;
+        }
+        advance_frame_clocks(&mut world);
+        assert!((x(&world, door) - 7.5).abs() < 1.0e-4, "scrubbed to 0.75 s: {}", x(&world, door));
+        assert_eq!(world.get::<TransformAnimationPlayer>(door).map(|p| p.elapsed_time), Some(0.75), "paused, it stays");
+    }
+
+    /// **A scene keeps the clip and the playhead.** Saved and reopened, the door plays on from where
+    /// it was.
+    #[cfg(feature = "scene")]
+    #[test]
+    fn a_scene_keeps_a_transform_clip() {
+        let (mut world, door) = door();
+        for _ in 0..4 {
+            advance_frame_clocks(&mut world);
+        }
+        let registry = crate::full_scene_registry();
+        let text = crate::scene::SceneData::of_entities(&world, vec![door], &registry).to_ron_string().expect("saves");
+        let mut reopened = World::new();
+        let mut time = gizmo_core::time::Time::new();
+        time.update(0.05);
+        reopened.insert_resource(time);
+        let ids = crate::scene::SceneData::from_ron_str(&text).expect("reads").instantiate(&mut reopened, &registry);
+        let copy = *ids.get(&door.id()).expect("the door came back");
+        assert_eq!(reopened.get::<TransformAnimationPlayer>(copy).map(|p| (p.elapsed_time * 100.0).round()), Some(20.0));
+        advance_frame_clocks(&mut reopened);
+        assert!((x(&reopened, copy) - 2.5).abs() < 1.0e-4, "it plays on from 0.2 s: {}", x(&reopened, copy));
+    }
+}
 
 #[cfg(test)]
 mod taa_jitter_tests {

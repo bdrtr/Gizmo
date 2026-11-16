@@ -34,7 +34,6 @@ const NOT_SAVED: &[(&str, &str)] = &[
     ("LodGroup", "GPU meshes; saved as its `LodGroupDesc`, each level's mesh by its key (`sync_lod_groups`)"),
     ("CameraTarget", "a GPU texture; saved as its `CameraTargetDesc` (its size), the texture made again (`sync_camera_targets`)"),
     ("GltfModelResolved", "the mark that a model has its skeletons and clips; left off a file so a reopened one is resolved"),
-    ("Animated", "the transform animator's mark of what it is driving, set by the system each frame"),
     ("LodLevel", "one level inside a `LodGroup`, saved with it"),
     ("VisibilityIndex", "the renderer's culling cache"),
     ("FluidHandle", "the GPU fluid simulation's handle, made when the simulation is"),

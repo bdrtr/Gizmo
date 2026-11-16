@@ -57,7 +57,7 @@ impl std::error::Error for TrackError {}
 /// Each vector is parallel to [`Track::keyframe_timestamps`]. Scale is a
 /// first-class channel: it is sampled and applied to the target's `Transform`
 /// just like translation and rotation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub enum Keyframes {
     /// Position keyframes (linearly interpolated).
@@ -69,6 +69,62 @@ pub enum Keyframes {
 }
 
 impl Keyframes {
+    /// The value at `index`, as a sample of this channel would give it.
+    #[must_use]
+    pub fn value(&self, index: usize) -> InterpolatedValue {
+        match self {
+            Keyframes::Translation(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Translation(*x)),
+            Keyframes::Rotation(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Rotation(*x)),
+            Keyframes::Scale(v) => v.get(index).map_or(InterpolatedValue::None, |x| InterpolatedValue::Scale(*x)),
+        }
+    }
+
+    /// Inserts `value` at `index` when it is of this channel; whether it was.
+    fn insert(&mut self, index: usize, value: InterpolatedValue) -> bool {
+        match (self, value) {
+            (Keyframes::Translation(v), InterpolatedValue::Translation(x)) | (Keyframes::Scale(v), InterpolatedValue::Scale(x)) => {
+                v.insert(index, x);
+                true
+            }
+            (Keyframes::Rotation(v), InterpolatedValue::Rotation(x)) => {
+                v.insert(index, x);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Replaces the value at `index` when it is of this channel; whether it was.
+    fn replace(&mut self, index: usize, value: InterpolatedValue) -> bool {
+        match (self, value) {
+            (Keyframes::Translation(v), InterpolatedValue::Translation(x)) | (Keyframes::Scale(v), InterpolatedValue::Scale(x)) => {
+                v.get_mut(index).map(|slot| *slot = x).is_some()
+            }
+            (Keyframes::Rotation(v), InterpolatedValue::Rotation(x)) => v.get_mut(index).map(|slot| *slot = x).is_some(),
+            _ => false,
+        }
+    }
+
+    fn remove(&mut self, index: usize) {
+        match self {
+            Keyframes::Translation(v) | Keyframes::Scale(v) => {
+                v.remove(index);
+            }
+            Keyframes::Rotation(v) => {
+                v.remove(index);
+            }
+        }
+    }
+
+    /// A zero value of this channel — what a new key's cubic tangents start as.
+    fn zero(&self) -> InterpolatedValue {
+        match self {
+            Keyframes::Translation(_) => InterpolatedValue::Translation(Vec3::ZERO),
+            Keyframes::Rotation(_) => InterpolatedValue::Rotation(Quat::from_xyzw(0.0, 0.0, 0.0, 0.0)),
+            Keyframes::Scale(_) => InterpolatedValue::Scale(Vec3::ZERO),
+        }
+    }
+
     /// Returns the number of keyframe values held by this channel.
     pub fn len(&self) -> usize {
         match self {
@@ -87,7 +143,7 @@ impl Keyframes {
 /// How values between two keyframes are blended.
 ///
 /// Mirrors the glTF animation sampler interpolation modes.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Interpolation {
     /// Linear (lerp for vectors, slerp for rotations).
     #[default]
@@ -105,7 +161,7 @@ pub enum Interpolation {
 /// `[in_tangent, value, out_tangent]` triples per keyframe; when loading, split
 /// them into the track's `keyframes` (the values) and this struct. Both tangent
 /// arrays must use the same [`Keyframes`] variant and length as the values.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CubicTangents {
     /// In-tangent per keyframe (aligned with `keyframe_timestamps`).
     pub in_tangents: Keyframes,
@@ -114,7 +170,7 @@ pub struct CubicTangents {
 }
 
 /// A single animated channel targeting one named entity.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct Track {
     /// Name of the entity this track animates (resolved at runtime).
@@ -131,6 +187,62 @@ pub struct Track {
 }
 
 impl Track {
+    /// Keys `value` at `time`: replacing the key already within a millisecond of it, else inserted
+    /// where the timestamps stay sorted (sampling binary-searches them). Returns the key's index, or
+    /// `None` when `value` is not of this track's channel or `time` is not finite. A cubic track's
+    /// new key gets zero tangents.
+    pub fn set_key(&mut self, time: f32, value: InterpolatedValue) -> Option<usize> {
+        if !time.is_finite() {
+            return None;
+        }
+        if let Some(i) = self.keyframe_timestamps.iter().position(|t| (t - time).abs() < 1.0e-3) {
+            return self.keyframes.replace(i, value).then_some(i);
+        }
+        let i = self.keyframe_timestamps.partition_point(|t| *t < time);
+        if !self.keyframes.insert(i, value) {
+            return None;
+        }
+        self.keyframe_timestamps.insert(i, time);
+        if let Some(t) = self.tangents.as_mut() {
+            let zero = t.in_tangents.zero();
+            t.in_tangents.insert(i, zero);
+            t.out_tangents.insert(i, zero);
+        }
+        Some(i)
+    }
+
+    /// Removes key `index`; whether there was one.
+    pub fn remove_key(&mut self, index: usize) -> bool {
+        if index >= self.keyframe_timestamps.len() {
+            return false;
+        }
+        self.keyframe_timestamps.remove(index);
+        self.keyframes.remove(index);
+        if let Some(t) = self.tangents.as_mut() {
+            t.in_tangents.remove(index);
+            t.out_tangents.remove(index);
+        }
+        true
+    }
+
+    /// Moves key `index` to `time` (clamped at zero), the list kept sorted; returns where it landed.
+    pub fn retime_key(&mut self, index: usize, time: f32) -> Option<usize> {
+        if index >= self.keyframe_timestamps.len() || !time.is_finite() {
+            return None;
+        }
+        let value = self.keyframes.value(index);
+        let tangents = self.tangents.as_ref().map(|t| (t.in_tangents.value(index), t.out_tangents.value(index)));
+        self.remove_key(index);
+        let time = time.max(0.0);
+        // Onto another key's time: that key is replaced, as `set_key` does.
+        let landed = self.set_key(time, value)?;
+        if let (Some((i, o)), Some(t)) = (tangents, self.tangents.as_mut()) {
+            t.in_tangents.replace(landed, i);
+            t.out_tangents.replace(landed, o);
+        }
+        Some(landed)
+    }
+
     /// Creates a new linearly-interpolated track targeting `target_name` with the
     /// given keyframe timestamps and values.
     ///
@@ -358,7 +470,7 @@ pub enum InterpolatedValue {
 }
 
 /// Represents an animation sequence: a named collection of [`Track`]s.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 #[non_exhaustive]
 pub struct AnimationClip {
     /// Human-readable clip name.
@@ -388,6 +500,26 @@ mod tests {
         )
         .expect("valid track")
         .with_interpolation(interp)
+    }
+
+    /// Keys stay sorted however they are set, moved or removed, and a key set onto an existing time
+    /// replaces it; a value of another channel is refused.
+    #[test]
+    fn keys_are_set_moved_and_removed_in_order() {
+        let mut t = Track::new("", vec![0.0, 1.0], Keyframes::Translation(vec![Vec3::ZERO, Vec3::X])).expect("valid");
+        assert_eq!(t.set_key(0.5, InterpolatedValue::Translation(Vec3::Y)), Some(1));
+        assert_eq!(t.keyframe_timestamps, vec![0.0, 0.5, 1.0]);
+        assert_eq!(t.set_key(1.0, InterpolatedValue::Translation(Vec3::Z)), Some(2), "onto 1.0: replaced");
+        assert_eq!(t.keyframes.len(), 3);
+        assert_eq!(t.keyframes.value(2), InterpolatedValue::Translation(Vec3::Z));
+        assert_eq!(t.set_key(0.2, InterpolatedValue::Scale(Vec3::ONE)), None, "another channel");
+        assert_eq!(t.retime_key(0, 2.0), Some(2), "the first key moved past the others");
+        assert_eq!(t.keyframe_timestamps, vec![0.5, 1.0, 2.0]);
+        assert_eq!(t.keyframes.value(2), InterpolatedValue::Translation(Vec3::ZERO));
+        assert!(t.remove_key(1));
+        assert_eq!(t.keyframe_timestamps, vec![0.5, 2.0]);
+        assert!(!t.remove_key(5));
+        assert_eq!(t.sample(1.25), InterpolatedValue::Translation(Vec3::Y * 0.5));
     }
 
     #[test]

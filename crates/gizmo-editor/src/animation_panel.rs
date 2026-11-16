@@ -66,14 +66,14 @@ use crate::theme::palette::*;
 use gizmo_core::World;
 
 /// Height of one track row.
-const ROW: f32 = 18.0;
+pub(crate) const ROW: f32 = 18.0;
 /// Width of the track-name column, matching the prototype's `Tracks` gutter.
-const GUTTER: f32 = 150.0;
+pub(crate) const GUTTER: f32 = 150.0;
 /// Radius of a keyframe marker, and therefore the lane's inset at each end.
-const MARK: f32 = 3.5;
+pub(crate) const MARK: f32 = 3.5;
 /// Width of a keyframe's interactive rect. Wider than the mark on purpose: a 7 px target is a
 /// dexterity test, and a keyframe you cannot reliably grab reads as a broken timeline.
-const HIT: f32 = 11.0;
+pub(crate) const HIT: f32 = 11.0;
 
 /// Draws the animation timeline for the selected entity's player.
 pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
@@ -86,7 +86,14 @@ pub fn ui_animation(ui: &mut egui::Ui, world: &World, state: &mut EditorState) {
     let mut players =
         unsafe { world.query_unchecked::<&mut gizmo_renderer::components::AnimationPlayer>() };
     let Some(mut player) = players.get_mut(entity) else {
-        empty(ui, "Seçili varlıkta AnimationPlayer yok.");
+        // No skin to play: its keyed transforms, if it has a player for them.
+        if crate::transform_timeline::ui_transform_animation(ui, world, state, entity) {
+            return;
+        }
+        empty(ui, "Seçili varlıkta animasyon oynatıcısı yok.");
+        if ui.button("＋ Dönüşüm animasyonu").on_hover_text("Bu varlığın konumunu, dönüşünü ve ölçeğini anahtarla").clicked() {
+            state.add_component_request = Some((entity, "TransformAnimationPlayer".into()));
+        }
         return;
     };
     let Some(clip) = player.current_clip().cloned() else {
@@ -492,7 +499,7 @@ fn track_name(name: Option<&str>) -> &str {
 
 /// A keyframe marker: the prototype draws these as diamonds, and a diamond reads as a point in
 /// time in a way a square does not.
-fn diamond(painter: &egui::Painter, c: egui::Pos2, r: f32, color: egui::Color32) {
+pub(crate) fn diamond(painter: &egui::Painter, c: egui::Pos2, r: f32, color: egui::Color32) {
     painter.add(egui::Shape::convex_polygon(
         vec![
             egui::pos2(c.x, c.y - r),
@@ -507,7 +514,7 @@ fn diamond(painter: &egui::Painter, c: egui::Pos2, r: f32, color: egui::Color32)
 
 /// The panel's empty states, which are most of what it shows in a scene with no animation — so
 /// they say which of the three things is missing rather than going blank.
-fn empty(ui: &mut egui::Ui, why: &str) {
+pub(crate) fn empty(ui: &mut egui::Ui, why: &str) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("A N I M A T I O N").size(10.0).color(TEXT_MUTED));
         ui.label(egui::RichText::new(why).size(10.0).color(TEXT_DIM));
