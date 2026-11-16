@@ -11,8 +11,9 @@ pub trait IntoSystem<Params> {
     /// Boxes `self` into a runnable system.
     ///
     /// Implemented for `FnMut()` and for functions or closures of 1 to 12 parameters, every
-    /// one of which must be a [`SystemParam`], plus an identity impl for an already-boxed
-    /// `Box<dyn System>`. `Params` is inferred from the signature and only serves to keep
+    /// one of which must be a [`SystemParam`]; for an exclusive system, `FnMut(&mut World)` or
+    /// `FnMut(&mut World, f32)` (see [`System::takes_world_mut`]); plus an identity impl for an
+    /// already-boxed `Box<dyn System>`. `Params` is inferred from the signature and only serves to keep
     /// those impls apart.
     ///
     /// Conversion is where the parameter list becomes an [`AccessInfo`]; nothing is fetched
@@ -103,6 +104,73 @@ impl System for Box<dyn System> {
     fn access_info(&self) -> AccessInfo {
         (**self).access_info()
     }
+    fn takes_world_mut(&self) -> bool {
+        (**self).takes_world_mut()
+    }
+    fn run_mut(&mut self, world: &mut World, dt: f32) {
+        (**self).run_mut(world, dt);
+    }
+}
+
+/// The marker [`IntoSystem`] is implemented under for an exclusive system: a function taking the
+/// whole world, `&mut World`, and optionally the step's `f32`.
+pub struct ExclusiveMarker;
+
+/// A function of the whole world, run as an exclusive system — see [`System::takes_world_mut`].
+struct ExclusiveFunctionSystem<F, Out> {
+    func: F,
+    _out: std::marker::PhantomData<fn() -> Out>,
+}
+
+impl<F, Out> System for ExclusiveFunctionSystem<F, Out>
+where
+    F: FnMut(&mut World, f32) -> Out + Send + Sync + 'static,
+    Out: SystemOutput + 'static,
+{
+    fn run(&mut self, _world: &World, _dt: f32) {
+        // The scheduler asks `takes_world_mut` and calls `run_mut`; a caller that only has a shared
+        // world has no way to run this one, and running it on one would be unsound.
+        panic!("an exclusive system ({}) needs `&mut World`: run it through a schedule or `World::run_system`", std::any::type_name::<F>());
+    }
+    fn access_info(&self) -> AccessInfo {
+        let mut info = AccessInfo::new();
+        info.is_exclusive = true;
+        info
+    }
+    fn takes_world_mut(&self) -> bool {
+        true
+    }
+    fn run_mut(&mut self, world: &mut World, dt: f32) {
+        fn body<F: FnMut(&mut World, f32) -> Out, Out>(func: &mut F, world: &mut World, dt: f32) -> Out {
+            func(world, dt)
+        }
+        let out = crate::hotpatch::hot_call!(body::<F, Out>, &mut self.func, world, dt);
+        out.handle(world, std::any::type_name::<F>());
+    }
+}
+
+/// `fn(world: &mut World)` — an exclusive system: the whole world, alone in its batch, the commands
+/// before it applied. What a game reaches for to despawn what a query found, run a stored closure or
+/// reorganise the world, which no shared-world system can do.
+impl<F, Out> IntoSystem<(ExclusiveMarker,)> for F
+where
+    F: FnMut(&mut World) -> Out + Send + Sync + 'static,
+    Out: SystemOutput + 'static,
+{
+    fn into_system(mut self) -> Box<dyn System> {
+        Box::new(ExclusiveFunctionSystem { func: move |world: &mut World, _dt: f32| self(world), _out: std::marker::PhantomData })
+    }
+}
+
+/// `fn(world: &mut World, dt: f32)` — the same, with the step's `dt`.
+impl<F, Out> IntoSystem<(ExclusiveMarker, f32)> for F
+where
+    F: FnMut(&mut World, f32) -> Out + Send + Sync + 'static,
+    Out: SystemOutput + 'static,
+{
+    fn into_system(self) -> Box<dyn System> {
+        Box::new(ExclusiveFunctionSystem { func: self, _out: std::marker::PhantomData })
+    }
 }
 
 /// Two systems fused into one scheduling unit, produced by [`SystemExt::then`].
@@ -129,6 +197,15 @@ impl System for ThenSystem {
         let mut info = self.a.access_info();
         info.merge(self.b.access_info());
         info
+    }
+
+    fn takes_world_mut(&self) -> bool {
+        self.a.takes_world_mut() || self.b.takes_world_mut()
+    }
+
+    fn run_mut(&mut self, world: &mut World, dt: f32) {
+        self.a.run_mut(world, dt);
+        self.b.run_mut(world, dt);
     }
 }
 

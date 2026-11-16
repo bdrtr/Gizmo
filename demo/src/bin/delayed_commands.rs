@@ -17,8 +17,9 @@
 //! ## Karşılığı: bir kuyruk bileşeni
 //!
 //! Demo genel hâli kuruyor: her biri kendi geri sayımını taşıyan **bekleyen komutlar**, ve süresi
-//! dolanı uygulayan tek bir sistem. Motorun `DespawnAfter`'ının yaptığı işin genelleştirilmişi —
-//! ve zaten `LifetimeSystem` de tam olarak böyle yazılmış.
+//! dolanı uygulayan tek bir sistem. Motorun `DespawnAfter`'ının yaptığı işin genelleştirilmişi:
+//! `LifetimeSystem` de bir geri sayım ve süresi dolanı silen bir sistem (2026-11-16'dan beri
+//! `&mut World` alan dışlayıcı bir sistem).
 //!
 //! Farkı görmek için demo iki yolu **yan yana** koşturuyor: sol sütun motorun `DespawnAfter`'ıyla,
 //! sağ sütun elle kuyrukla. İkisinin ömrü aynı olmalı.
@@ -212,8 +213,7 @@ fn tick(world: &mut World, dt: f32, input: &Input) {
         spawn_wave(world, elapsed);
     }
 
-    // Elle kurulan kuyruk: süresi dolan komutları uygula. Motorun `LifetimeSystem`'i de aynı
-    // biçimde yazılmış — sorgu ham id veriyor, `world.entity(id)` ile `Entity`'ye çevriliyor.
+    // Elle kurulan kuyruk: süresi dolan komutları uygula.
     let mut due_ids: Vec<(u32, Action)> = Vec::new();
     {
         let mut q = world.query_mut::<(Entity, &mut Delayed)>();

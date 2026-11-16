@@ -57,16 +57,14 @@
 //! **sıfır** nesne var, ilk nesne ancak ilk geçişte doğuyor. Bu, "geçiş oldu mu" sinyaline
 //! güvenen her kurulumun düşeceği tuzak.
 //!
-//! ## İkinci bulgu: kapsam yönetimi çizelgeye sığmıyor
+//! ## İkinci bulgu: kapsam yönetimi çizelgeye sığmıyordu — **kapandı (2026-11-16)**
 //!
-//! Sorgu ham `u32` id üretiyor. Onu `Entity`'ye çevirmenin güvenli yolu `World::entity(id)` — ve
-//! o `&World` istiyor. Çizelgeye kayıtlı bir sistem `&World` alamıyor, ve `.exclusive()` bunu
-//! **değiştirmiyor**: belgesinin kendi ifadesiyle o "bir *eşzamanlılık* bariyeri, yetki
-//! yükseltmesi değil". Yani bu demonun temizlik işi `set_update` kancasında — motorun kendi
-//! `LifetimeSystem`'i de aynı sebeple `query_unchecked` + `world.entity(id)` kullanıyor.
-//!
-//! (`Entity::new(id, 0)` uydurmak derleniyor ve yanlış: id geri dönüştürülmüşse nesil tutmaz.
-//! `World::entity`'nin belgesi bunu "birkaç denetim hatasının kökü" diye anıyor.)
+//! Silmek `&mut World` istiyor, ve çizelgeye kayıtlı hiçbir sistem onu alamıyordu: `.exclusive()`
+//! belgesinin kendi ifadesiyle "bir *eşzamanlılık* bariyeri, yetki yükseltmesi değil". Bu yüzden
+//! demonun temizlik işi uygulamanın `set_update` kancasındaydı — motorun kendi `LifetimeSystem`'i
+//! de `unsafe` `query_unchecked` ve komutlarla dolanıyordu. Artık `fn(world: &mut World)` bir
+//! **dışlayıcı sistem**: batch'inde yalnız, önceki batch'lerin komutları uygulanmış, bütün dünyayla
+//! (`System::takes_world_mut`). Temizlik `Update` fazında, `drive_states`'ten sonra koşuyor.
 //!
 //! ## Kontroller
 //!   * Demo durumları kendi çeviriyor (2 saniyede bir A → B → C → A)
@@ -189,14 +187,9 @@ fn main() {
         })
         // Durum makinesini süren şey: motorda böyle bir faz YOK, uygulama kendi çağırıyor.
         .add_update_system(drive_states.in_phase(Phase::PreUpdate).label("states"))
-        // Kapsam yönetimi ÇİZELGEDE DEĞİL, `set_update`'te: sorgunun verdiği ham id'yi güvenle
-        // `Entity`'ye çevirmek `&mut World` istiyor, ve çizelgeye kayıtlı hiçbir sistem onu
-        // alamıyor (aşağıdaki başlık notuna bakın).
-        .replace_update(|world, state, dt, input| {
-            // Bkz. `demo::simple_scene_update` — `set_update` basit sahnenin kancasını eziyor.
-            demo::simple_scene_update(world, state, dt, input);
-            scoped_lifecycle(world);
-        })
+        // Kapsam yönetimi çizelgede: `&mut World` alan dışlayıcı bir sistem, durum makinesi
+        // `PreUpdate`'te döndükten sonra `Update`'te.
+        .add_update_system(scoped_lifecycle.after("states"))
         .set_ui(|world, _state, ctx| {
             let Some(r) = world.get_resource::<ScopeReport>().map(|r| r.clone()) else {
                 return;
@@ -268,15 +261,9 @@ fn drive_states(
 
 /// Durum temizliği, elle: durum değişince eskiye ait olanı sil, yeniye ait olanı doğur.
 ///
-/// **Neden dışlayıcı (`set_update`) ve neden çizelgede değil:** sorgu ham `u32` id üretiyor, ve
-/// onu `Entity`'ye çevirmenin güvenli tek yolu `World::entity(id)` — o da `&World` istiyor.
-/// Çizelgeye kayıtlı bir sistem `&World`'ü parametre olarak alamıyor (`Query`/`Res` alıyor), ve
-/// `.exclusive()` bunu değiştirmiyor: o bir **eşzamanlılık bariyeri**, yetki yükseltmesi değil —
-/// `System::run` yine `&World` görüyor ama sisteme geçirilmiyor. Motorun kendi
-/// `LifetimeSystem`'i de aynı yerden geçiyor: `query_unchecked` + `world.entity(id)`.
-///
-/// `Entity::new(id, 0)` uydurmak çalışıyor gibi görünür ve yanlıştır — id geri dönüştürülmüşse
-/// nesil tutmaz. `World::entity`'nin belgesi bunu "birkaç denetim hatasının kökü" diye anıyor.
+/// **Dışlayıcı sistem** (`fn(world: &mut World)`): silip doğurmak bütün dünyayı istiyor, ve
+/// çizelge onu böyle bir sisteme batch'inde yalnızken veriyor. 2026-11-16'ya kadar bu iş
+/// çizelgeye sığmıyordu ve uygulamanın `set_update` kancasındaydı.
 fn scoped_lifecycle(world: &mut World) {
     let Some(current) = world.get_resource::<ScopeReport>().map(|r| r.state) else {
         return;

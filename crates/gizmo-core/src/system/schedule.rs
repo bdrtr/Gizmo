@@ -780,6 +780,15 @@ impl Schedule {
         use crate::parallel_compat::*;
 
         for batch in batches.iter_mut() {
+            // An exclusive system is alone in its batch (it declares `is_exclusive`): it gets the world.
+            if let [system] = batch.systems.as_mut_slice() {
+                if system.takes_world_mut() {
+                    system.run_mut(world, dt);
+                    world.advance_change_tick();
+                    Self::flush_commands(world);
+                    continue;
+                }
+            }
             match executor {
                 ExecutorKind::Parallel => batch.systems.par_iter_mut().for_each(|system| {
                     system.run(world, dt);
@@ -825,7 +834,12 @@ impl Schedule {
         let mut left = index;
         for batch in batches {
             if left < batch.systems.len() {
-                batch.systems[left].run(world, dt);
+                let system = &mut batch.systems[left];
+                if system.takes_world_mut() {
+                    system.run_mut(world, dt);
+                } else {
+                    system.run(world, dt);
+                }
                 break;
             }
             left -= batch.systems.len();
@@ -1585,5 +1599,110 @@ mod stepping_and_order {
         add_startup_system(&mut w, a);
         run_startup_systems(&mut w);
         assert_eq!(log(&w), ["a"]);
+    }
+}
+
+/// Exclusive systems: `fn(world: &mut World)`, alone in their batch, with the whole world.
+#[cfg(test)]
+mod exclusive_systems {
+    use super::*;
+    use crate::system::{IntoSystemChain, ResMut, SystemExt};
+    use crate::Commands;
+
+    #[derive(Clone)]
+    struct Doomed;
+    crate::impl_component!(Doomed);
+    #[derive(Default)]
+    struct Log(Vec<&'static str>);
+    struct Reaped(usize);
+
+    fn world() -> World {
+        let mut world = World::new();
+        world.register_component_type::<Doomed>();
+        world.insert_resource(Log::default());
+        world
+    }
+
+    /// **The whole world, in a schedule.** A system spawns three doomed entities by command; the
+    /// exclusive system after it sees them (the commands were applied first), despawns them with
+    /// `&mut World` and inserts a resource saying how many; the system after that sees it. In one
+    /// run, in chain order. No shared-world system could despawn there and then.
+    #[test]
+    fn an_exclusive_system_has_the_whole_world_between_two_others() {
+        fn spawn(mut commands: Commands, mut log: ResMut<Log>) {
+            for _ in 0..3 {
+                commands.spawn_bundle((Doomed,));
+            }
+            log.0.push("spawn");
+        }
+        fn reap(world: &mut World) {
+            let doomed: Vec<_> = world.query::<(crate::Entity, &Doomed)>().iter().map(|(e, _)| e).collect();
+            for e in &doomed {
+                world.despawn(*e);
+            }
+            world.insert_resource(Reaped(doomed.len()));
+            world.get_resource_mut::<Log>().unwrap().0.push("reap");
+        }
+        fn after(reaped: crate::system::Res<Reaped>, mut log: ResMut<Log>) {
+            assert_eq!(reaped.0, 3);
+            log.0.push("after");
+        }
+        let mut world = world();
+        let mut schedule = Schedule::new();
+        schedule.add_systems((spawn, reap, after).chain());
+        schedule.run(&mut world, 0.0);
+        assert_eq!(world.query::<&Doomed>().iter().count(), 0, "the exclusive system did not despawn");
+        assert_eq!(world.get_resource::<Log>().unwrap().0, ["spawn", "reap", "after"]);
+    }
+
+    /// It is alone in its batch, whatever else the schedule holds.
+    #[test]
+    fn an_exclusive_system_runs_alone() {
+        fn plain(_log: crate::system::Res<Log>) {}
+        fn whole(_world: &mut World) {}
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(plain);
+        schedule.add_di_system(whole);
+        schedule.add_di_system(plain);
+        schedule.build();
+        assert_eq!(schedule.total_batch_count(), 2, "the two readers share a batch, the exclusive one has its own");
+    }
+
+    /// Through a run condition and `then`, with the step's `dt`, and from `World::run_system`.
+    #[test]
+    fn an_exclusive_system_keeps_its_world_through_wrappers() {
+        fn note(world: &mut World, dt: f32) {
+            assert_eq!(dt, 0.5);
+            world.get_resource_mut::<Log>().unwrap().0.push("dt");
+        }
+        fn spawn_one(world: &mut World) {
+            world.spawn_bundle((Doomed,));
+        }
+        let mut world = world();
+        let mut schedule = Schedule::new();
+        schedule.add_di_system(note.run_if(|w: &World| w.get_resource::<Log>().is_some()));
+        schedule.add_di_system(spawn_one.then(spawn_one));
+        schedule.run(&mut world, 0.5);
+        assert_eq!(world.get_resource::<Log>().unwrap().0, ["dt"]);
+        assert_eq!(world.query::<&Doomed>().iter().count(), 2);
+
+        world.run_system(spawn_one);
+        assert_eq!(world.query::<&Doomed>().iter().count(), 3);
+    }
+
+    /// A `Result` it returns goes to the error handler, as any system's does.
+    #[test]
+    fn an_exclusive_systems_error_is_handled() {
+        fn fails(_world: &mut World) -> Result<(), String> {
+            Err("no".into())
+        }
+        static SEEN: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        fn count(_system: &str, _error: &dyn std::fmt::Display) {
+            SEEN.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let mut world = world();
+        world.insert_resource(crate::system::SystemErrorHandler(count));
+        world.run_system(fails);
+        assert_eq!(SEEN.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 }

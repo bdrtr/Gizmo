@@ -261,8 +261,10 @@ impl SystemConfig {
     /// This is a *concurrency* barrier, not a mutability upgrade — [`System::run`] still
     /// receives `&World`, and deferred structural changes still go through the
     /// [`CommandQueue`](crate::commands::CommandQueue), which the schedule flushes after each
-    /// batch. It costs a full serialisation point inside the phase, so prefer declaring
-    /// precise access where the access is knowable.
+    /// batch. A system that needs the world itself is written as one: `fn(world: &mut World)`
+    /// (see [`System::takes_world_mut`]), which is exclusive by being so. Either costs a full
+    /// serialisation point inside the phase, so prefer declaring precise access where the access
+    /// is knowable.
     pub fn exclusive(mut self) -> Self {
         self.added_info.is_exclusive = true;
         self
@@ -426,7 +428,7 @@ pub trait IntoSystemConfig<Params> {
         self.into_config().writes_res::<C>()
     }
     /// Starts a config that makes this system run alone in its batch. Still `&World`, not
-    /// `&mut World` — see [`SystemConfig::exclusive`].
+    /// `&mut World` — for that, write `fn(world: &mut World)`; see [`SystemConfig::exclusive`].
     fn exclusive(self) -> SystemConfig
     where
         Self: Sized,

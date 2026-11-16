@@ -59,6 +59,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Exclusive systems: `fn(world: &mut World)` in a schedule.** No scheduled system could hold `&mut World` —
+  `.exclusive()` only isolated a `&World` system — so despawning what a query found or reorganising the world had to
+  live in the app's `set_update` hook. A function of `&mut World` (optionally `, dt: f32`) is now a system that runs
+  alone in its batch with the whole world, after every earlier batch's commands were applied; run conditions, `then`
+  and `World::run_system` carry it, and a `Result` it returns goes to the error handler. `System` gains the provided
+  `takes_world_mut` / `run_mut`. `LifetimeSystem` is one: its two `unsafe` views and its command queue are gone, and it
+  despawns in a world without a `CommandQueue` (it did nothing there). **Breaking:** `LifetimeSystem::run(&World)`
+  panics — call `run_mut`, or schedule it.
 - **Sprites and texts in the studio's inspector and ➕ menu.** Both were loaded from a scene and drawn, and neither
   could be added or changed in the editor. Their sections (`gizmo_editor::inspector::two_d`) edit every field — a
   sprite's image and normal map dropped from the asset browser, its filter, size, colour, anchor, UV rect, flips,

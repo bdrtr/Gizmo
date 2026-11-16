@@ -308,6 +308,14 @@ impl System for ConditionalSystem {
             self.inner.run(world, dt);
         }
     }
+    fn takes_world_mut(&self) -> bool {
+        self.inner.takes_world_mut()
+    }
+    fn run_mut(&mut self, world: &mut World, dt: f32) {
+        if (self.condition)(world) {
+            self.inner.run_mut(world, dt);
+        }
+    }
     fn access_info(&self) -> AccessInfo {
         // Union the inner system's access with the CONDITION's access, so the batcher
         // never co-schedules a condition that reads state with a system that writes it.
@@ -359,6 +367,14 @@ macro_rules! impl_distributive_run_if {
                     fn run(&mut self, world: &World, dt: f32) {
                         for s in &mut self.systems {
                             s.run(world, dt);
+                        }
+                    }
+                    fn takes_world_mut(&self) -> bool {
+                        self.systems.iter().any(|s| s.takes_world_mut())
+                    }
+                    fn run_mut(&mut self, world: &mut World, dt: f32) {
+                        for s in &mut self.systems {
+                            s.run_mut(world, dt);
                         }
                     }
                     fn access_info(&self) -> AccessInfo {

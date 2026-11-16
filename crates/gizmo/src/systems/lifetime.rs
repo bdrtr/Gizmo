@@ -85,76 +85,57 @@ impl DespawnBelowY {
 gizmo_core::impl_component!(DespawnBelowY);
 
 /// Despawns entities whose time has run out ([`DespawnAfter`]) or that have crossed the
-/// kill-plane ([`DespawnBelowY`]). [`LifetimePlugin`] adds this to the schedule;
-/// `LifetimeSystem.run` can also be called by hand. Deletion is DEFERRED via `Commands`
-/// (the schedule flushes between batches).
+/// kill-plane ([`DespawnBelowY`]). [`LifetimePlugin`] adds this to the schedule.
+///
+/// An **exclusive system** ([`System::takes_world_mut`](gizmo_core::system::System::takes_world_mut)):
+/// it runs alone with the whole world and despawns there and then. Until 2026-11-16 no scheduled
+/// system could hold `&mut World`, so this one reached its components through two `unsafe`
+/// `query_unchecked` views and queued its despawns as commands — and did nothing at all in a world
+/// without a `CommandQueue`. By hand: [`run_mut`](gizmo_core::system::System::run_mut).
 pub struct LifetimeSystem;
 
 impl gizmo_core::system::System for LifetimeSystem {
     fn access_info(&self) -> gizmo_core::system::AccessInfo {
         let mut info = gizmo_core::system::AccessInfo::new();
-        // DespawnAfter'a mutable erişir + Commands ile (ertelenmiş) despawn eder.
         info.is_exclusive = true;
         info
     }
 
+    fn run(&mut self, _world: &World, _dt: f32) {
+        panic!("LifetimeSystem despawns with `&mut World`: run it through a schedule, or call `run_mut`");
+    }
+
+    fn takes_world_mut(&self) -> bool {
+        true
+    }
+
     #[tracing::instrument(skip_all, level = "trace", name = "lifetime")]
-    fn run(&mut self, world: &World, dt: f32) {
-        use gizmo_core::commands::Commands;
-        use gizmo_core::system::SystemParam;
-
-        let mut commands = match Commands::fetch_stateless(world, dt) {
-            Ok(c) => c,
-            // Sessiz `Err(_) => return` yutması yerine: CommandQueue yoksa hiçbir varlık
-            // despawn edilemez (yaşam-döngüsü komponentleri atıl kalır). Kalıcı, per-frame
-            // bir koşul olduğu için trace! (gürültü yapmaz; kurulum hatasında görünür).
-            Err(_) => {
-                tracing::trace!(
-                    "LifetimeSystem: Commands (CommandQueue) yok — despawn atlanıyor, ömür komponentleri atıl"
-                );
-                return;
-            }
-        };
-
-        // Silinenleri say → çıkışta tek AGGREGATE debug! (per-entity despawn logu YOK).
-        let mut despawned_after = 0usize;
-        let mut despawned_below_y = 0usize;
-
-        // ── DespawnAfter: sayacı azalt, süresi dolanları sil. ──
-        // SAFETY: exclusive sistem; scheduler bu çalışırken disjoint mutable erişim garanti eder.
-        // (Bound out of the `if let` so the comment sits directly above the `unsafe`, which is
-        // where `clippy::undocumented_unsafe_blocks` looks — the lint is a ratchet in this crate.)
-        let despawn_after =
-            unsafe { world.query_unchecked::<(Entity, &mut DespawnAfter)>() };
-        {
-            let mut q = despawn_after;
-            for (entity, mut d) in q.iter_mut() {
-                d.remaining -= dt;
-                if d.remaining <= 0.0 {
-                    commands.entity(entity).despawn();
-                    despawned_after += 1;
-                }
+    fn run_mut(&mut self, world: &mut World, dt: f32) {
+        // ── DespawnAfter: the clock runs down; what reaches zero goes. ──
+        let mut doomed: Vec<Entity> = Vec::new();
+        for (entity, mut d) in world.query_mut::<(Entity, &mut DespawnAfter)>().iter_mut() {
+            d.remaining -= dt;
+            if d.remaining <= 0.0 {
+                doomed.push(entity);
             }
         }
+        let despawned_after = doomed.len();
 
-        {
-            // ── DespawnBelowY: konumu eşiğin altındaki varlıkları sil. ──
-            // SAFETY: exclusive system; this view is read-only and aliases nothing mutably.
-            let q = unsafe { world.query_unchecked::<(Entity, &DespawnBelowY, &Transform)>() };
-            for (entity, below, t) in q.iter() {
-                if t.position.y < below.y {
-                    commands.entity(entity).despawn();
-                    despawned_below_y += 1;
-                }
-            }
+        // ── DespawnBelowY: below the kill-plane goes. ──
+        doomed.extend(
+            world
+                .query::<(Entity, &DespawnBelowY, &Transform)>()
+                .iter()
+                .filter(|(_, below, t)| t.position.y < below.y)
+                .map(|(e, _, _)| e),
+        );
+        let despawned_below_y = doomed.len() - despawned_after;
+
+        for entity in doomed {
+            world.despawn(entity);
         }
-
         if despawned_after > 0 || despawned_below_y > 0 {
-            tracing::debug!(
-                despawned_after,
-                despawned_below_y,
-                "LifetimeSystem: geçici varlıklar despawn için kuyruğa alındı"
-            );
+            tracing::debug!(despawned_after, despawned_below_y, "LifetimeSystem: despawned what ran out of time or fell");
         }
     }
 }
@@ -210,14 +191,12 @@ pub fn warn_if_inert(world: &mut World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gizmo_core::commands::CommandQueue;
     use gizmo_core::system::System;
     use gizmo_math::Vec3;
 
+    /// No `CommandQueue`: the system despawns with the world it is handed, and needs none.
     fn world_with_commands() -> World {
-        let mut world = World::new();
-        world.insert_resource(CommandQueue::default());
-        world
+        World::new()
     }
 
     /// A lifetime component with nothing to read it is reported; with the plugin's marker, or with
@@ -245,6 +224,32 @@ mod tests {
         assert!(app.world.get_resource::<LifetimeActive>().is_some());
     }
 
+    /// **Through the plugin, in a schedule**: the app loop runs it as the exclusive system it is, and
+    /// an entity whose time is up is gone the frame after.
+    #[test]
+    fn the_plugin_despawns_through_the_schedule() {
+        let gone = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let seen = gone.clone();
+        let frames = std::sync::atomic::AtomicU32::new(0);
+        let result = crate::app::headless::App::<gizmo_core::Entity>::new("lifetime", 1, 1)
+            .add_plugin(LifetimePlugin)
+            .set_setup(|world| {
+                let e = world.spawn();
+                world.add_component(e, DespawnAfter::secs(0.0));
+                e
+            })
+            .set_update(move |world, &mut e, _| {
+                let n = frames.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if !world.is_alive(e) || n > 1000 {
+                    seen.store(!world.is_alive(e), std::sync::atomic::Ordering::SeqCst);
+                    world.insert_resource(gizmo_core::window::AppExit);
+                }
+            })
+            .run();
+        assert!(result.is_ok());
+        assert!(gone.load(std::sync::atomic::Ordering::SeqCst), "the plugin's system never despawned it");
+    }
+
     #[test]
     fn despawn_after_removes_entity_when_timer_elapses() {
         let mut world = world_with_commands();
@@ -255,13 +260,11 @@ mod tests {
         let mut sys = LifetimeSystem;
 
         // 0.05 s: henüz canlı.
-        sys.run(&world, 0.05);
-        world.apply_commands();
+        sys.run_mut(&mut world, 0.05);
         assert!(world.is_alive(e), "0.05s'de hâlâ canlı olmalı");
 
         // +0.1 s → toplam 0.15 > 0.1: silinmeli.
-        sys.run(&world, 0.1);
-        world.apply_commands();
+        sys.run_mut(&mut world, 0.1);
         assert!(!world.is_alive(e), "süre dolunca despawn edilmeli");
     }
 
@@ -278,8 +281,7 @@ mod tests {
         world.add_component(fallen, DespawnBelowY::new(-60.0));
 
         let mut sys = LifetimeSystem;
-        sys.run(&world, 0.016);
-        world.apply_commands();
+        sys.run_mut(&mut world, 0.016);
 
         assert!(world.is_alive(above), "eşiğin üstündeki korunmalı");
         assert!(!world.is_alive(fallen), "eşiğin altındaki silinmeli");

@@ -438,19 +438,19 @@ fn lifetimes_still_end() {
     let e = ball(&mut world, "faller", Vec3::ZERO);
     world.add_component(e, DespawnBelowY::new(-3.0));
     for _ in 0..36 {
-        LifetimeSystem.run(&world, DT);
+        LifetimeSystem.run_mut(&mut world, DT);
         step(&mut world, 1);
     }
     assert!(find(&world, "spark").is_some() && find(&world, "faller").is_some(), "both alive at the save");
 
     let mut world = reopen(&world, physics);
     for _ in 0..20 {
-        LifetimeSystem.run(&world, DT);
+        LifetimeSystem.run_mut(&mut world, DT);
         step(&mut world, 1);
     }
     assert!(find(&world, "spark").is_some(), "0.93 s of 1 s: the spark is not due yet");
     for _ in 0..30 {
-        LifetimeSystem.run(&world, DT);
+        LifetimeSystem.run_mut(&mut world, DT);
         step(&mut world, 1);
     }
     assert!(find(&world, "spark").is_none(), "1.43 s of a 1 s lifetime and the spark is still here");

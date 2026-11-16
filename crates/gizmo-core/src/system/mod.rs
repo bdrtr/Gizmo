@@ -278,6 +278,27 @@ pub trait System: Send + Sync {
     /// cannot be introspected must return `is_exclusive = true` — the conservative answer
     /// that is always sound.
     fn access_info(&self) -> AccessInfo;
+
+    /// Whether this system runs with the whole world, `&mut World` — an **exclusive system**, as
+    /// `fn(world: &mut World)` is ([`IntoSystem`] makes one of it). The scheduler then calls
+    /// [`run_mut`](Self::run_mut) instead of [`run`](Self::run), alone in its batch, after the
+    /// commands of every batch before it have been applied — so it can spawn and despawn, add and
+    /// remove components, insert resources and run other systems, there and then.
+    ///
+    /// A system saying `true` must also say [`AccessInfo::is_exclusive`], which is what puts it in a
+    /// batch of its own; [`run_mut`](Self::run_mut) is never called with another system running.
+    /// `false` by default.
+    fn takes_world_mut(&self) -> bool {
+        false
+    }
+
+    /// Runs the system once with the whole world. Called instead of [`run`](Self::run) when
+    /// [`takes_world_mut`](Self::takes_world_mut) says so; by default it is `run`. A wrapper (a run
+    /// condition, `then`, a boxed system) forwards both, so an exclusive system keeps its world
+    /// through them.
+    fn run_mut(&mut self, world: &mut World, dt: f32) {
+        self.run(world, dt);
+    }
 }
 
 
