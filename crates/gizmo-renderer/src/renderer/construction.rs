@@ -725,6 +725,7 @@ impl Renderer {
             shadow_settings: crate::csm::ShadowSettings::for_device(device_type),
             view_targets: Vec::new(),
             view_targets_frame: 0,
+            skeletons_seen: Default::default(),
             scene_extent: Default::default(),
             fog: None,
             sky: None,

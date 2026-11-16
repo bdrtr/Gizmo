@@ -337,6 +337,9 @@ fn draw_studio_frame(
                 let mut skel_bg = renderer.scene.dummy_skeleton_bind_group.clone();
                 if let Some(s) = skeletons.get(e) {
                     skel_bg = s.bind_group.clone();
+                    // Drawn here: posed every frame (`gizmo_renderer::animation_lod`). The editor's
+                    // view is looked at closely, and a skeleton it draws must not wait on the game's.
+                    renderer.skeletons_seen.record(s, f32::INFINITY);
                 }
 
                 let vbuf_ptr = std::sync::Arc::as_ptr(&active_mesh.vbuf);

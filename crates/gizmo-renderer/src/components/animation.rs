@@ -5,7 +5,7 @@ use std::sync::Arc;
 // `gizmo_renderer::components::{AnimationPlayer, ...}` keep resolving unchanged.
 pub use gizmo_animation::skeletal::{
     ActiveBlend, AnimationClip, AnimationPlayer, AnimationState, AnimationStateMachine,
-    AnimationTransition, BoneAttachment, SkeletonHierarchy,
+    AnimationTransition, AnimationUpdate, BlendPoint, BlendSpace, BoneAttachment, SkeletonHierarchy,
 };
 
 /// A skinned mesh's skeleton: the joint hierarchy, the current pose, and the GPU buffer the
@@ -33,6 +33,11 @@ pub struct Skeleton {
     /// Each clip's tracks matched to this skeleton's joints, kept: matching is a search by name
     /// that the animation systems used to repeat for every clip every frame.
     pub(crate) bindings: ClipBindings,
+    /// Where an animation driver last left this skeleton's player or machine: a key for its clip or
+    /// state, and its playhead. A frame that finds them otherwise — the game switched the clip, the
+    /// editor scrubbed a paused playhead, a scene was reopened — poses it whatever its size on screen
+    /// says (`crate::animation_lod`); `None` until a driver has posed it.
+    pub(crate) driven: Option<(u64, f32)>,
 }
 
 /// The [`ClipBinding`](gizmo_animation::skeletal::ClipBinding)s a skeleton has made, by joint
@@ -100,6 +105,7 @@ impl Skeleton {
             local_poses,
             global_poses,
             bindings: ClipBindings::default(),
+            driven: None,
         }
     }
 }

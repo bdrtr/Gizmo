@@ -25,9 +25,11 @@
 //! the exact fallback it takes.
 
 use super::clip::AnimationClip;
+use gizmo_math::Vec2;
 use std::sync::Arc;
 
-/// A single state in the animation state machine — names one clip.
+/// A single state in the animation state machine — names one clip, or blends several by a
+/// parameter ([`blend`](Self::blend)).
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AnimationState {
     /// The key this state is addressed by: [`AnimationTransition::from`],
@@ -64,6 +66,127 @@ pub struct AnimationState {
     /// looped state wraps around to the clip's end instead of sampling at a negative time.
     /// `0.0` freezes the playhead where it is.
     pub speed: f32,
+
+    /// Several clips blended by one of the machine's parameters
+    /// ([`AnimationStateMachine::set_parameter`]) in place of [`clip_index`](Self::clip_index): a
+    /// walk and a run by how fast the character goes, eight directions of a strafe by where it
+    /// heads. See [`BlendSpace`]. `None`: the state plays its one clip.
+    #[serde(default)]
+    pub blend: Option<BlendSpace>,
+}
+
+impl AnimationState {
+    /// A state that plays clip `clip_index`, looping, at its authored rate.
+    #[must_use]
+    pub fn clip(name: &str, clip_index: usize) -> Self {
+        Self { name: name.into(), clip_index, looped: true, speed: 1.0, blend: None }
+    }
+
+    /// A state that blends clips by a parameter ([`BlendSpace`]), looping, at their authored rate.
+    #[must_use]
+    pub fn blended(name: &str, blend: BlendSpace) -> Self {
+        Self { name: name.into(), clip_index: 0, looped: true, speed: 1.0, blend: Some(blend) }
+    }
+
+    /// The same state, holding its last frame instead of looping.
+    #[must_use]
+    pub fn once(mut self) -> Self {
+        self.looped = false;
+        self
+    }
+
+    /// The same state at `speed` times its authored rate.
+    #[must_use]
+    pub fn at_speed(mut self, speed: f32) -> Self {
+        self.speed = speed;
+        self
+    }
+}
+
+/// **Clips placed at points of a parameter's space, blended by where the parameter is** — Godot's
+/// `BlendSpace1D`/`BlendSpace2D`, Unity's blend trees.
+///
+/// Each [`BlendPoint`] puts a clip at a value of the parameter: a walk at 1.5 m/s and a run at
+/// 4.6 m/s on a speed, or a forward, a back and two sideways steps on a direction. At any value the
+/// clips nearest it are weighted by how close it is — between two points along a line, linearly;
+/// past the last, all the last — with **gradient band** interpolation, which needs no triangulation
+/// and takes points anywhere (one dimension is a space whose points all have `y = 0`).
+///
+/// **The clips keep step.** A blended state's playhead is a phase, 0 to 1 through the cycle, and
+/// every clip is sampled at the same phase of its own length: a 1 s walk and a 0.7 s run at a half
+/// blend put both feet down together, where sampling both at the same second would have one foot of
+/// each down at once. The phase advances at the weighted average of the clips' lengths, so a
+/// half-and-half cycle lasts halfway between the two.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BlendSpace {
+    /// The machine parameter that places the blend ([`AnimationStateMachine::set_parameter`]).
+    pub parameter: String,
+    /// The clips and where each sits.
+    pub points: Vec<BlendPoint>,
+}
+
+/// A clip at a point of a [`BlendSpace`].
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct BlendPoint {
+    /// Index into [`AnimationStateMachine::clips`].
+    pub clip_index: usize,
+    /// Where it sits: `[x, 0]` in one dimension.
+    pub at: [f32; 2],
+}
+
+impl BlendSpace {
+    /// A one-dimensional space: each clip at a value of `parameter`.
+    #[must_use]
+    pub fn one_d(parameter: &str, points: &[(usize, f32)]) -> Self {
+        Self {
+            parameter: parameter.into(),
+            points: points.iter().map(|&(clip_index, x)| BlendPoint { clip_index, at: [x, 0.0] }).collect(),
+        }
+    }
+
+    /// A two-dimensional space: each clip at a point of `parameter`.
+    #[must_use]
+    pub fn two_d(parameter: &str, points: &[(usize, [f32; 2])]) -> Self {
+        Self { parameter: parameter.into(), points: points.iter().map(|&(clip_index, at)| BlendPoint { clip_index, at }).collect() }
+    }
+
+    /// Each point's weight at `at`, in the order of [`points`](Self::points), summing to 1 (empty
+    /// for a space with no point). Gradient band: a point's weight is the least, over every other
+    /// point, of how far `at` still is from crossing over to it — at a point, that point alone;
+    /// along the line between two, linear; beyond the outermost, the outermost.
+    #[must_use]
+    pub fn weights(&self, at: [f32; 2]) -> Vec<f32> {
+        let n = self.points.len();
+        if n <= 1 {
+            return vec![1.0; n];
+        }
+        let p = Vec2::from(at);
+        let mut weights: Vec<f32> = (0..n)
+            .map(|i| {
+                let pi = Vec2::from(self.points[i].at);
+                let mut least = f32::INFINITY;
+                for (j, other) in self.points.iter().enumerate() {
+                    let d = Vec2::from(other.at) - pi;
+                    let length_squared = d.length_squared();
+                    if j == i || length_squared <= 1.0e-12 {
+                        continue;
+                    }
+                    least = least.min(1.0 - (p - pi).dot(d) / length_squared);
+                }
+                if least.is_finite() { least.max(0.0) } else { 1.0 }
+            })
+            .collect();
+        let total: f32 = weights.iter().sum();
+        if total > 1.0e-6 {
+            for w in &mut weights {
+                *w /= total;
+            }
+        } else {
+            // Every point at the same place: the first speaks for them.
+            weights.iter_mut().enumerate().for_each(|(i, w)| *w = if i == 0 { 1.0 } else { 0.0 });
+        }
+        weights
+    }
 }
 
 /// A directed transition between two named states.
@@ -87,26 +210,18 @@ pub struct AnimationTransition {
 /// Per-entity state tracked while a cross-fade blend is in progress.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct ActiveBlend {
-    /// Index into [`AnimationStateMachine::clips`] of the outgoing clip, captured from
-    /// [`AnimationStateMachine::current_clip_index`] when the blend started (falling back to
-    /// `0` if the state was unknown). Sampled at the frozen [`from_time`](Self::from_time).
-    pub from_clip: usize,
+    /// The outgoing state, sampled at the frozen [`from_time`](Self::from_time) — a clip or a
+    /// blend space alike ([`AnimationStateMachine::state_clips`]). An unknown state contributes
+    /// nothing, and the incoming one is drawn alone.
+    pub from_state: String,
 
-    /// Index into [`AnimationStateMachine::clips`] of the incoming clip, copied from the
-    /// destination state's [`AnimationState::clip_index`].
-    ///
-    /// If either this or [`from_clip`](Self::from_clip) is out of range the driver skips the
-    /// entity for the rest of the frame, so a mis-configured transition freezes the character
-    /// mid-blend rather than panicking.
-    pub to_clip: usize,
-
-    /// Time into the source clip at the moment the blend started.
+    /// Time into the source state at the moment the blend started (its phase, for a blended one).
     ///
     /// **Never advanced** while the blend runs: the outgoing clip is a still frame that the
     /// incoming one fades over. That is why there is no `from_speed` counterpart to
     /// [`to_speed`](Self::to_speed).
     pub from_time: f32,
-    /// Time into the destination clip (advances each frame).
+    /// Time into the destination state (advances each frame; its phase, for a blended one).
     pub to_time: f32,
     /// Seconds elapsed since blend began.
     pub elapsed: f32,
@@ -179,9 +294,9 @@ impl ActiveBlend {
 ///     "idle",
 ///     clips,
 ///     vec![
-///         AnimationState { name: "idle".into(), clip_index: 0, looped: true, speed: 1.0 },
-///         AnimationState { name: "run".into(),  clip_index: 1, looped: true, speed: 1.2 },
-///         AnimationState { name: "jump".into(), clip_index: 2, looped: false, speed: 1.0 },
+///         AnimationState::clip("idle", 0),
+///         AnimationState::clip("run", 1).at_speed(1.2),
+///         AnimationState::clip("jump", 2).once(),
 ///     ],
 ///     vec![
 ///         AnimationTransition { from: "idle".into(), to: "run".into(),  blend_duration: 0.2, trigger: Some("run".into()),  has_exit_time: false },
@@ -270,6 +385,14 @@ pub struct AnimationStateMachine {
     /// whole batch once per update.
     #[serde(default)]
     pending_triggers: Vec<String>,
+    /// The values the blend spaces read, by name ([`set_parameter`](Self::set_parameter)); one not
+    /// set reads `[0, 0]`.
+    #[serde(default)]
+    parameters: Vec<(String, [f32; 2])>,
+    /// How often its skeleton is posed: by how big it is drawn, by default
+    /// ([`AnimationUpdate`](super::AnimationUpdate)). Transitions and the playhead advance whatever it says.
+    #[serde(default)]
+    pub update: super::AnimationUpdate,
 }
 
 impl AnimationStateMachine {
@@ -305,6 +428,8 @@ impl AnimationStateMachine {
             current_time: 0.0,
             active_blend: None,
             pending_triggers: Vec::new(),
+            parameters: Vec::new(),
+            update: super::AnimationUpdate::default(),
         }
     }
 
@@ -343,6 +468,74 @@ impl AnimationStateMachine {
         std::mem::take(&mut self.pending_triggers)
     }
 
+    /// Sets a one-dimensional parameter the blend spaces read — a speed, a lean.
+    pub fn set_parameter(&mut self, name: &str, value: f32) {
+        self.set_parameter_2d(name, [value, 0.0]);
+    }
+
+    /// Sets a two-dimensional parameter the blend spaces read — a direction of travel.
+    pub fn set_parameter_2d(&mut self, name: &str, value: [f32; 2]) {
+        match self.parameters.iter_mut().find(|(n, _)| n == name) {
+            Some((_, v)) => *v = value,
+            None => self.parameters.push((name.to_string(), value)),
+        }
+    }
+
+    /// A parameter's value; `[0, 0]` for one never set.
+    #[must_use]
+    pub fn parameter(&self, name: &str) -> [f32; 2] {
+        self.parameters.iter().find(|(n, _)| n == name).map_or([0.0; 2], |(_, v)| *v)
+    }
+
+    /// The clips `state` plays at `time` — `(clip index, time into that clip, weight)`, the weights
+    /// summing to 1: its one clip at `time`, or each clip of its blend space at the phase `time`
+    /// of its own length, weighted by where the space's parameter is now. Points whose clip is
+    /// missing, and weights of nothing, are left out.
+    #[must_use]
+    pub fn state_clips(&self, state: &AnimationState, time: f32) -> Vec<(usize, f32, f32)> {
+        match &state.blend {
+            None => match self.clips.get(state.clip_index) {
+                Some(_) => vec![(state.clip_index, time, 1.0)],
+                None => Vec::new(),
+            },
+            Some(space) => space
+                .points
+                .iter()
+                .zip(space.weights(self.parameter(&space.parameter)))
+                .filter(|(_, w)| *w > 1.0e-4)
+                .filter_map(|(point, w)| self.clips.get(point.clip_index).map(|clip| (point.clip_index, time * clip.duration, w)))
+                .collect(),
+        }
+    }
+
+    /// How long `state`'s playhead runs before it wraps or stops: its clip's length (1.0 s when the
+    /// clip is missing), or 1 — a whole cycle of phase — for a blended state.
+    #[must_use]
+    pub fn state_duration(&self, state: &AnimationState) -> f32 {
+        match &state.blend {
+            Some(_) => 1.0,
+            None => self.clips.get(state.clip_index).map_or(1.0, |c| c.duration),
+        }
+    }
+
+    /// How fast `state`'s playhead moves per second of `dt` at playback rate `speed`: `speed` for a
+    /// clip; for a blended state, `speed` over the weighted average of its clips' lengths, so the
+    /// phase goes round once in the time the blended cycle takes.
+    #[must_use]
+    pub fn state_rate(&self, state: &AnimationState, speed: f32) -> f32 {
+        match &state.blend {
+            None => speed,
+            Some(_) => {
+                let cycle: f32 = self
+                    .state_clips(state, 0.0)
+                    .iter()
+                    .map(|&(clip, _, w)| self.clips.get(clip).map_or(0.0, |c| c.duration) * w)
+                    .sum();
+                if cycle > 1.0e-6 { speed / cycle } else { 0.0 }
+            }
+        }
+    }
+
     // ── helpers ──────────────────────────────────────────────────────────────
 
     /// Looks a state up by exact name — linear scan over [`states`](Self::states), first match
@@ -361,10 +554,20 @@ impl AnimationStateMachine {
     /// [`current_state`](Self::current_state) names no known state — in which case the driver
     /// skips posing the entity and the skeleton holds its last pose.
     ///
-    /// Reports the *outgoing* clip for the whole of a cross-fade; the incoming one is
-    /// [`ActiveBlend::to_clip`].
+    /// Reports the *outgoing* clip for the whole of a cross-fade; the incoming state is
+    /// [`ActiveBlend::to_state`]. For a blended state, the clip that weighs most where its
+    /// parameter is now.
     pub fn current_clip_index(&self) -> Option<usize> {
-        self.find_state(&self.current_state).map(|s| s.clip_index)
+        let state = self.find_state(&self.current_state)?;
+        match &state.blend {
+            None => Some(state.clip_index),
+            // The clip weighing most where the parameter is now.
+            Some(_) => self
+                .state_clips(state, self.current_time)
+                .into_iter()
+                .max_by(|a, b| a.2.total_cmp(&b.2))
+                .map(|(clip, _, _)| clip),
+        }
     }
 
     /// Length of the current state's clip, in seconds.
@@ -375,12 +578,10 @@ impl AnimationStateMachine {
     /// `0.0` here would report the clip finished on every single frame.
     ///
     /// This is the clip's authored length and is unaffected by [`AnimationState::speed`] — at
-    /// speed `2.0` a clip reporting 2.0 s here is done after 1 s of wall clock.
+    /// speed `2.0` a clip reporting 2.0 s here is done after 1 s of wall clock. For a blended state
+    /// it is 1: its playhead is a phase ([`BlendSpace`]).
     pub fn current_clip_duration(&self) -> f32 {
-        self.current_clip_index()
-            .and_then(|i| self.clips.get(i))
-            .map(|c| c.duration)
-            .unwrap_or(1.0)
+        self.find_state(&self.current_state).map_or(1.0, |s| self.state_duration(s))
     }
 
     /// Playback rate of the current state: a dimensionless multiplier on the frame `dt`, not a
@@ -544,8 +745,7 @@ mod tests {
 
     fn active_blend(elapsed: f32, duration: f32) -> ActiveBlend {
         ActiveBlend {
-            from_clip: 0,
-            to_clip: 1,
+            from_state: "idle".into(),
             from_time: 0.0,
             to_time: 0.0,
             elapsed,
@@ -594,17 +794,84 @@ mod tests {
             rotations: vec![],
             scales: vec![],
         }]);
-        let states = vec![AnimationState {
-            name: "run".into(),
-            clip_index: 0,
-            looped: false,
-            speed: 1.5,
-        }];
+        let states = vec![AnimationState::clip("run", 0).once().at_speed(1.5)];
         let m = AnimationStateMachine::new("run", clips, states, vec![]);
         assert_eq!(m.current_clip_index(), Some(0));
         assert!((m.current_clip_duration() - 2.5).abs() < 1e-6);
         assert!((m.current_speed() - 1.5).abs() < 1e-6);
         assert!(!m.is_current_looped());
+    }
+
+    fn clip(name: &str, duration: f32) -> AnimationClip {
+        AnimationClip { name: name.into(), duration, translations: vec![], rotations: vec![], scales: vec![] }
+    }
+
+    /// Along a line: a point's clip alone at the point, linear between two, the outermost beyond
+    /// the ends; the weights always sum to one.
+    #[test]
+    fn a_one_dimensional_space_blends_linearly_and_holds_past_its_ends() {
+        let space = BlendSpace::one_d("speed", &[(0, 1.5), (1, 4.6)]);
+        let w = |x: f32| space.weights([x, 0.0]);
+        assert_eq!(w(1.5), vec![1.0, 0.0]);
+        assert_eq!(w(4.6), vec![0.0, 1.0]);
+        let half = w(3.05);
+        assert!((half[0] - 0.5).abs() < 1e-5 && (half[1] - 0.5).abs() < 1e-5, "{half:?}");
+        assert_eq!(w(0.0), vec![1.0, 0.0], "below the first point, the first");
+        assert_eq!(w(9.0), vec![0.0, 1.0], "past the last, the last");
+        // Three along the line: the middle one only between its neighbours.
+        let three = BlendSpace::one_d("speed", &[(0, 0.0), (1, 1.0), (2, 2.0)]);
+        let at = three.weights([0.5, 0.0]);
+        assert!((at[0] - 0.5).abs() < 1e-5 && (at[1] - 0.5).abs() < 1e-5 && at[2].abs() < 1e-6, "{at:?}");
+    }
+
+    /// In a plane: a point alone at itself, the weights summing to one anywhere, and the centre of
+    /// four points around it shared between them evenly.
+    #[test]
+    fn a_two_dimensional_space_weighs_the_points_around_the_parameter() {
+        let space = BlendSpace::two_d("heading", &[(0, [0.0, 1.0]), (1, [1.0, 0.0]), (2, [0.0, -1.0]), (3, [-1.0, 0.0])]);
+        assert_eq!(space.weights([1.0, 0.0]), vec![0.0, 1.0, 0.0, 0.0]);
+        for at in [[0.3, 0.4], [-0.9, 0.2], [2.0, 2.0], [0.0, 0.0]] {
+            let sum: f32 = space.weights(at).iter().sum();
+            assert!((sum - 1.0).abs() < 1e-5, "weights at {at:?} sum to {sum}");
+        }
+        let centre = space.weights([0.0, 0.0]);
+        assert!(centre.iter().all(|w| (w - 0.25).abs() < 1e-5), "{centre:?}");
+        // Between forward and right, those two.
+        let between = space.weights([0.5, 0.5]);
+        assert!(between[0] > 0.3 && between[1] > 0.3 && between[2] < 1e-5 && between[3] < 1e-5, "{between:?}");
+    }
+
+    /// **The clips keep step.** A 1 s walk and a 0.5 s run half and half: both are sampled at the
+    /// same phase of their own length, and the phase goes round in the 0.75 s the blended cycle
+    /// takes — so after 0.375 s both are half-way through.
+    #[test]
+    fn a_blended_state_samples_every_clip_at_one_phase() {
+        let clips: Arc<[AnimationClip]> = Arc::from(vec![clip("walk", 1.0), clip("run", 0.5)]);
+        let state = AnimationState::blended("move", BlendSpace::one_d("speed", &[(0, 1.0), (1, 3.0)]));
+        let mut m = AnimationStateMachine::new("move", clips, vec![state.clone()], vec![]);
+        m.set_parameter("speed", 2.0);
+        let rate = m.state_rate(&state, 1.0);
+        assert!((rate - 1.0 / 0.75).abs() < 1e-5, "the phase goes round in 0.75 s: {rate}");
+        let at = m.state_clips(&state, 0.375 * rate);
+        assert_eq!(at.len(), 2);
+        assert!((at[0].1 - 0.5).abs() < 1e-5, "the walk half-way: {:?}", at[0]);
+        assert!((at[1].1 - 0.25).abs() < 1e-5, "the run half-way: {:?}", at[1]);
+        assert!((at[0].2 - 0.5).abs() < 1e-5 && (at[1].2 - 0.5).abs() < 1e-5);
+        assert_eq!(m.current_clip_duration(), 1.0, "a blended state's playhead is a phase");
+        // At the run's end of the space the run alone, and the walk weighs nothing.
+        m.set_parameter("speed", 3.0);
+        assert_eq!(m.state_clips(&state, 0.0).iter().map(|c| c.0).collect::<Vec<_>>(), vec![1]);
+        assert_eq!(m.current_clip_index(), Some(1));
+    }
+
+    #[test]
+    fn a_parameter_never_set_reads_zero() {
+        let mut m = machine(vec![]);
+        assert_eq!(m.parameter("speed"), [0.0, 0.0]);
+        m.set_parameter("speed", 2.0);
+        m.set_parameter_2d("heading", [0.5, -1.0]);
+        m.set_parameter("speed", 3.0);
+        assert_eq!((m.parameter("speed"), m.parameter("heading")), ([3.0, 0.0], [0.5, -1.0]));
     }
 
     #[test]

@@ -172,6 +172,7 @@ pub mod gpu_particles;
 pub mod gpu_context;
 pub mod gpu_smoke;
 // How long the parts of a frame take on the GPU: timestamps read back a few frames later.
+pub mod animation_lod;
 pub mod gpu_timer;
 pub mod view_targets;
 /// The renderer's own GPU rigid-body solver, separate from `gizmo-physics-rigid`.
@@ -240,12 +241,15 @@ pub use web_profile::{PostProcessLevel, ShadowQuality, WebProfile};
 
 pub use gizmo_animation::skeletal::{
     ActiveBlend, AnimationClip, AnimationPlayer, AnimationState, AnimationStateMachine,
-    AnimationTransition, BoneAttachment, InterpolationMode, Keyframe, SkeletonHierarchy,
-    SkeletonJoint, Track,
+    AnimationTransition, AnimationUpdate, BlendPoint, BlendSpace, BoneAttachment, InterpolationMode, Keyframe,
+    SkeletonHierarchy, SkeletonJoint, Track,
 };
 /// The ECS systems that advance animation players and write their poses into skeletons.
 pub mod animation_system;
-pub use animation_system::{animation_state_machine_update_system, animation_update_system, upload_skin_poses};
+pub use animation_system::{
+    animation_state_machine_update_system, animation_state_machine_update_system_seen, animation_update_system,
+    animation_update_system_seen, upload_skin_poses,
+};
 pub use gizmo_animation::skeletal::decompose_mat4;
 /// Tweens — re-exported because the draw path drives them (`tween::tween_system`), the same way
 /// it drives skeletal animation.

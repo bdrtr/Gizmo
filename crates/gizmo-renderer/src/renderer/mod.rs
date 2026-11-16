@@ -198,6 +198,9 @@ pub struct Renderer {
     pub(crate) view_targets: Vec<crate::view_targets::ViewTargets>,
     /// The frame [`retain_view_targets`](Self::retain_view_targets) counts.
     view_targets_frame: u64,
+    /// The skeletons the last frames drew and how big, which sets how often each is posed — see
+    /// [`crate::animation_lod`]. The game path's draw records it.
+    pub skeletons_seen: crate::animation_lod::SkeletonsSeen,
 
     // === SSGI — Screen-Space Global Illumination ===
     /// Screen-space global illumination. Requires [`deferred`](Renderer::deferred).

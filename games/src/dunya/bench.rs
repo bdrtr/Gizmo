@@ -243,7 +243,7 @@ pub fn bench(frames: usize) -> bool {
             println!("dunya --bench: motorun karesi (CPU, ms): {parts}");
             // Görünüm başına (ana görünüm ve harita birlikte, kare başına toplam).
             let per_frame = |name: &str| p.history().iter().rev().take(n).flat_map(|f| f.scopes.iter()).filter(|s| s.name == name).map(|s| s.duration_ms()).sum::<f64>().max(0.0) / n as f64;
-            let views = ["view.setup", "view.batch", "view.shadows", "view.geometry", "view.forward", "view.ui", "view.post"]
+            let views = ["view.setup", "view.batch", "view.shadows", "view.geometry", "view.forward", "view.ui", "view.post", "view.submit"]
                 .iter()
                 .map(|k| format!("{} {:.2}", k.trim_start_matches("view."), per_frame(k)))
                 .collect::<Vec<_>>()

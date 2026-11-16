@@ -526,6 +526,9 @@ pub(super) fn collect_draw_items(
     let skip_sky = renderer.skip_sky;
 
     let frustum = crate::math::Frustum::from_matrix(&unjittered_view_proj);
+    // The projection's vertical scale (its row 1: the view's up axis times it, perspective or
+    // orthographic alike), for how tall a skeleton is drawn.
+    let vertical_scale = unjittered_view_proj.row(1).truncate().length();
     // Every shadow map's LIGHT frustum — shadow casters are culled against these, NOT the camera
     // frustum, so objects outside the view that cast shadows INTO it aren't dropped.
     let shadow_frusta: Vec<crate::math::Frustum> =
@@ -686,6 +689,16 @@ pub(super) fn collect_draw_items(
                 } else {
                     camera_visible
                 };
+
+                // How tall a skeleton was drawn, for how often it is posed (`gizmo_renderer::animation_lod`):
+                // its box's radius over the clip-space `w` (the depth, or 1 for an orthographic view)
+                // times the projection's vertical scale and the view's height in pixels. `|w|`: a
+                // shadow caster behind the camera has a negative one, and is as far as it is.
+                if let Some(skeleton) = $skeleton {
+                    let w = (unjittered_view_proj * world_c.extend(1.0)).w.abs().max(1.0e-3);
+                    let pixels = world_r * vertical_scale * renderer.size.height as f32 / w;
+                    renderer.skeletons_seen.record(skeleton, pixels);
+                }
 
                 // Auto-LOD (Level of Detail) Seçimi. The per-object bias means the same thing
                 // here as in the editor even though the mechanism differs (flattened `lod_vbufs`

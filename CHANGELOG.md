@@ -59,6 +59,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Blend spaces: `BlendSpace` in an `AnimationState`.** A state of `AnimationStateMachine` blends several clips by a
+  parameter (`set_parameter` / `set_parameter_2d`) — a walk and a run by speed, the directions of a strafe — with
+  gradient-band weights (no triangulation; 1D and 2D alike). The clips keep step: a blended state's playhead is a phase
+  and each clip is sampled at that phase of its own length, the phase going round at the weighted cycle length. Fades
+  run between any two states, blended or not (`ActiveBlend::from_state` replaces `from_clip`/`to_clip`).
+  `AnimationState::clip` / `blended` / `once` / `at_speed` build states. `dunya`'s people and animals walk and run
+  through one: no more snap between walk and run at a threshold.
+- **Skeletons are posed as often as they are drawn big: `gizmo_renderer::animation_lod`.** The draw records how
+  tall each skeleton was drawn (camera or shadow map, the largest of the frame's views); the animation systems pose
+  it every frame from 120 px, every 2nd/4th/8th as it shrinks (staggered by entity), and not while nothing draws it —
+  its playhead and fades still advance. Only frames where the driver's own clock is all that moved are thinned: a
+  skeleton never posed, a clip or state switched, a playhead set by hand (the editor scrubbing a paused game, a
+  reopened scene), a clip table edited — each is posed that frame, whatever its size. `AnimationPlayer::update` /
+  `AnimationStateMachine::update` (`AnimationUpdate::Always`) opts out for a pose read off screen. Where nothing records
+  (headless steps) every skeleton is posed every frame, as before; the studio's own view records what it draws at
+  full rate. `dunya`'s 127 characters: 3.7 ms of preparation → 0.6.
 - **A view is drawn at its own size: `Renderer::with_view_targets`.** A camera with a viewport (a minimap, a player of a
   split screen) or a texture of its own was drawn at the window's size and its picture squeezed into its rectangle,
   paying for every pixel of the window. Now its screen targets — depth, G-buffer, HDR, SSAO/SSR/volumetric, the edge

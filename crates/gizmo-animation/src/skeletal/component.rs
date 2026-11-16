@@ -30,6 +30,8 @@ use std::sync::Arc;
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct AnimationPlayer {
+    /// How often its skeleton is posed: by how big it is drawn, by default ([`AnimationUpdate`]).
+    pub update: AnimationUpdate,
     /// Playhead into the active clip, in **seconds**.
     ///
     /// The renderer normalizes it *after* advancing: a looping clip wraps with `rem_euclid`
@@ -125,9 +127,23 @@ pub struct AnimationPlayer {
     pub prev_time: f32,
 }
 
+/// How often a skeleton is posed — see `gizmo_renderer::animation_lod`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[non_exhaustive]
+pub enum AnimationUpdate {
+    /// By how big the last frames drew it: every frame up close, every 2nd to 8th as it shrinks
+    /// on screen, not at all while no view draws it (its playhead still advances).
+    #[default]
+    BySize,
+    /// Every frame, seen or not: for a pose something reads off screen — a hitbox on a bone, a
+    /// camera on a head.
+    Always,
+}
+
 impl Default for AnimationPlayer {
     fn default() -> Self {
         Self {
+            update: AnimationUpdate::default(),
             current_time: 0.0,
             active_animation: 0,
             loop_anim: true,

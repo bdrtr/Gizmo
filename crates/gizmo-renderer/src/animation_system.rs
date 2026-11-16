@@ -13,6 +13,13 @@ use std::sync::Arc;
 /// Advances every [`AnimationPlayer`], composes the resulting local poses down each skeleton, and
 /// uploads the joint matrices.
 pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
+    animation_update_system_seen(world, dt, queue, &crate::animation_lod::SkeletonsSeen::everything());
+}
+
+/// [`animation_update_system`], posing each skeleton as often as `seen` says for how big the last
+/// frames drew it ([`crate::animation_lod`]): the game path passes the renderer's record. A skeleton
+/// not posed this frame still has its playhead and its fade advanced.
+pub fn animation_update_system_seen(world: &mut World, dt: f32, queue: &wgpu::Queue, seen: &crate::animation_lod::SkeletonsSeen) {
     let entities: Vec<Entity> = world.query::<(Entity, &AnimationPlayer)>().iter().map(|(entity, _)| entity).collect();
     tracing::trace!(players = entities.len(), dt, "[Animation] updating skeletal players");
     // SAFETY: exclusive `&mut World`; AnimationPlayer and Skeleton are distinct component
@@ -49,6 +56,10 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                 }
             };
 
+            // Moved by something other than this driver's clock since it last left it: posed this frame.
+            let key = player_key(&player);
+            let moved = skeleton.driven != Some((key, player.current_time));
+
             // Advance FIRST, then normalize. Clamping to `.max(0.0)` *before* adding
             // `dt*speed` pinned reverse playback (speed < 0) at frame 0 forever. rem_euclid
             // wraps negative times back into [0, duration) so a looping clip plays backward;
@@ -64,6 +75,22 @@ pub fn animation_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) 
                 player.current_time = player.current_time.max(0.0);
             }
 
+            skeleton.driven = Some((key, player.current_time));
+            if !seen.poses(&skeleton, entity.id(), player.update, moved) {
+                // Not posed this frame: the fade's clocks run all the same, so it ends when it would.
+                if let Some(prev_idx) = player.prev_animation {
+                    if player.blend_time < player.blend_duration {
+                        player.blend_time += dt;
+                        if let Some(prev_anim) = animations.get(prev_idx) {
+                            let (speed, looped) = (player.speed, player.loop_anim);
+                            advance_and_sample_prev(&mut player.prev_time, dt, speed, prev_anim.duration, looped);
+                        }
+                    } else {
+                        player.prev_animation = None;
+                    }
+                }
+                continue;
+            }
             let poses_trs = sample_clip(&mut skeleton, &animations, player.active_animation, player.current_time);
 
             let final_trs = if let Some(prev_idx) = player.prev_animation {
@@ -146,6 +173,12 @@ fn advance_and_sample_prev(
 /// The same, for entities driven by an [`AnimationStateMachine`]: it evaluates transitions first,
 /// then blends the active states before composing the pose.
 pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: &wgpu::Queue) {
+    animation_state_machine_update_system_seen(world, dt, queue, &crate::animation_lod::SkeletonsSeen::everything());
+}
+
+/// [`animation_state_machine_update_system`], posing as often as `seen` says
+/// ([`crate::animation_lod`]). Times, triggers and transitions run every frame regardless.
+pub fn animation_state_machine_update_system_seen(world: &mut World, dt: f32, queue: &wgpu::Queue, seen: &crate::animation_lod::SkeletonsSeen) {
     let entities: Vec<Entity> = world.query::<(Entity, &AnimationStateMachine)>().iter().map(|(entity, _)| entity).collect();
     // SAFETY: exclusive `&mut World`; AnimationStateMachine and Skeleton are distinct
     // component types, so these two mutable queries never alias the same storage.
@@ -169,9 +202,13 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
             continue;
         }
 
+        // Moved by something other than this driver since it last left it: posed this frame.
+        let moved = skeleton.driven != Some((machine_key(machine), machine.current_time));
+
         // --- Advance times ---
-        let speed = machine.current_speed();
-        machine.current_time += dt * speed;
+        // A clip's seconds, or a blended state's phase at the pace of its blended cycle.
+        let rate = machine.find_state(&machine.current_state).map_or(machine.current_speed(), |s| machine.state_rate(s, s.speed));
+        machine.current_time += dt * rate;
 
         let clip_duration = machine.current_clip_duration();
         let looped = machine.is_current_looped();
@@ -181,18 +218,18 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 
         machine.current_time = normalize_anim_time(machine.current_time, clip_duration, looped);
 
-        if let Some(ref mut blend) = machine.active_blend {
-            let to_speed = blend.to_speed;
-            blend.elapsed += dt;
-            blend.to_time += dt * to_speed;
-
-            let to_clip_duration = machine
-                .clips
-                .get(blend.to_clip)
-                .map(|c| c.duration)
-                .unwrap_or(1.0);
-            let to_looped = blend.to_looped;
-            blend.to_time = normalize_anim_time(blend.to_time, to_clip_duration, to_looped);
+        if let Some((to_rate, to_duration)) = machine.active_blend.as_ref().map(|blend| {
+            match machine.find_state(&blend.to_state) {
+                Some(to) => (machine.state_rate(to, blend.to_speed), machine.state_duration(to)),
+                None => (blend.to_speed, 1.0),
+            }
+        }) {
+            if let Some(ref mut blend) = machine.active_blend {
+                blend.elapsed += dt;
+                blend.to_time += dt * to_rate;
+                let to_looped = blend.to_looped;
+                blend.to_time = normalize_anim_time(blend.to_time, to_duration, to_looped);
+            }
         }
 
         // --- Evaluate pending triggers and exit-time transitions ---
@@ -222,10 +259,8 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 
             if let Some((to_state_name, blend_dur)) = chosen_transition {
                 if let Some(to_state) = machine.find_state(&to_state_name).cloned() {
-                    let from_clip = machine.current_clip_index().unwrap_or(0);
                     machine.active_blend = Some(ActiveBlend {
-                        from_clip,
-                        to_clip: to_state.clip_index,
+                        from_state: current_name.clone(),
                         from_time: machine.current_time,
                         to_time: 0.0,
                         elapsed: 0.0,
@@ -250,25 +285,34 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
             machine.current_time = blend.to_time;
         }
 
+        skeleton.driven = Some((machine_key(machine), machine.current_time));
+        if !seen.poses(skeleton, entity.id(), machine.update, moved) {
+            continue;
+        }
+
         // --- Compute blended poses ---
-        let poses_trs = if let Some(ref blend) = machine.active_blend {
-            if machine.clips.get(blend.from_clip).is_none() || machine.clips.get(blend.to_clip).is_none() {
-                continue;
+        // Every clip that weighs anything: the state's own (one, or its blend space's), or during a
+        // cross-fade the outgoing state's at its frozen time and the incoming one's, by the fade.
+        let state_clips = |name: &str, time: f32, weight: f32| {
+            machine
+                .find_state(name)
+                .map(|s| machine.state_clips(s, time))
+                .unwrap_or_default()
+                .into_iter()
+                .map(move |(clip, t, w)| (clip, t, w * weight))
+        };
+        let weighted: Vec<(usize, f32, f32)> = match &machine.active_blend {
+            Some(blend) => {
+                let alpha = blend.alpha();
+                state_clips(&blend.from_state, blend.from_time, 1.0 - alpha)
+                    .chain(state_clips(&blend.to_state, blend.to_time, alpha))
+                    .collect()
             }
-            let clips = machine.clips.clone();
-            let poses_a = sample_clip(skeleton, &clips, blend.from_clip, blend.from_time);
-            let poses_b = sample_clip(skeleton, &clips, blend.to_clip, blend.to_time);
-            blend_poses(&poses_a, &poses_b, blend.alpha())
-        } else {
-            let clip_idx = match machine.current_clip_index() {
-                Some(i) => i,
-                None => continue,
-            };
-            if machine.clips.get(clip_idx).is_none() {
-                continue;
-            }
-            let clips = machine.clips.clone();
-            sample_clip(skeleton, &clips, clip_idx, machine.current_time)
+            None => state_clips(&machine.current_state, machine.current_time, 1.0).collect(),
+        };
+        let clips = machine.clips.clone();
+        let Some(poses_trs) = sample_weighted(skeleton, &clips, &weighted) else {
+            continue;
         };
 
         // Convert TRS to Mat4
@@ -283,6 +327,52 @@ pub fn animation_state_machine_update_system(world: &mut World, dt: f32, queue: 
 }
 
 // ── Shared helpers ────────────────────────────────────────────────────────────
+
+/// What a player is playing, for `Skeleton::driven`: its clip table (a timeline edit swaps it), its
+/// clip and the one fading out.
+fn player_key(player: &AnimationPlayer) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::ptr::hash(Arc::as_ptr(&player.animations), &mut h);
+    (player.active_animation, player.prev_animation).hash(&mut h);
+    h.finish()
+}
+
+/// What a state machine is playing, for `Skeleton::driven`: its clip table, its state and the state
+/// it is fading to.
+fn machine_key(machine: &AnimationStateMachine) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    std::ptr::hash(Arc::as_ptr(&machine.clips), &mut h);
+    machine.current_state.hash(&mut h);
+    machine.active_blend.as_ref().map(|b| &b.to_state).hash(&mut h);
+    h.finish()
+}
+
+/// The pose of several clips at once — `(clip, time, weight)` each — blended by weight, the weights
+/// taken relative to one another; `None` when no clip weighs anything. Folded two at a time: each
+/// clip joins the running blend at its share of the weight so far, which for the translation and
+/// scale lerps is exactly the weighted average and for the rotations' slerps is close to it.
+fn sample_weighted(
+    skeleton: &mut Skeleton,
+    clips: &Arc<[gizmo_animation::skeletal::AnimationClip]>,
+    weighted: &[(usize, f32, f32)],
+) -> Option<Vec<(gizmo_math::Vec3, gizmo_math::Quat, gizmo_math::Vec3)>> {
+    let mut pose: Option<Vec<_>> = None;
+    let mut total = 0.0;
+    for &(clip, time, weight) in weighted {
+        if weight <= 1.0e-4 || clip >= clips.len() {
+            continue;
+        }
+        let this = sample_clip(skeleton, clips, clip, time);
+        total += weight;
+        pose = Some(match pose {
+            None => this,
+            Some(so_far) => blend_poses(&so_far, &this, weight / total),
+        });
+    }
+    pose
+}
 
 /// Clip `index` of `clips` at `time`, on `skeleton`, with the skeleton's kept binding of that clip
 /// (`Skeleton::bindings`) — matched to the joints once, not every frame. The caller has checked the

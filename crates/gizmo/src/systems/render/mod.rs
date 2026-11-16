@@ -375,6 +375,7 @@ pub fn draw_ahead_of_views(world: &World, renderer: &mut Renderer, detail: Simul
     renderer.planar.begin_frame();
     renderer.retain_view_histories(|camera| world.get::<Camera>(camera).is_some());
     renderer.retain_view_targets();
+    renderer.skeletons_seen.begin_frame();
     let mut cameras = Vec::new();
     let detail = match detail {
         SimulationDetail::NearestOf(views) => {
@@ -578,8 +579,10 @@ pub fn draw_viewports(
                 draw_camera_view(world, &mut frame, view, renderer, Some(camera), true, Some(region), false, None);
             });
         });
+        let mut laps = Laps::start();
         let done = std::mem::replace(&mut frame, new_encoder(renderer));
         renderer.queue.submit(std::iter::once(done.finish()));
+        laps.draw_lap(renderer, "view.submit");
     }
     tracing::trace!(views = views.len(), "[Render] split screen");
     renderer.record_overlay(encoder, view);
@@ -1163,8 +1166,9 @@ pub fn prepare_frame(world: &mut World, renderer: &mut Renderer) {
     // pose is read from, and the editor's timeline moves it while ⏸ holds dt at 0. Until 2026-11-13
     // these ran only on a clock that ran, and scrubbing a paused game changed nothing on screen. At
     // dt 0 a player's time does not move; only its pose is evaluated.
-    crate::renderer::animation_update_system(world, animation_dt, &renderer.queue);
-    crate::renderer::animation_state_machine_update_system(world, animation_dt, &renderer.queue);
+    // Each skeleton as often as the last frames drew it big (`gizmo_renderer::animation_lod`).
+    crate::renderer::animation_update_system_seen(world, animation_dt, &renderer.queue, &renderer.skeletons_seen);
+    crate::renderer::animation_state_machine_update_system_seen(world, animation_dt, &renderer.queue, &renderer.skeletons_seen);
     if animation_dt > 0.0 {
         // Sprite-sheet animation rides the same clock: `set_time_scale` and pause apply to it.
         crate::renderer::components::sprite_animation_system(world, animation_dt);
@@ -2099,6 +2103,219 @@ mod golden_render_tests {
     use crate::renderer::components::{PointLight, SpotLight};
     use crate::renderer::Renderer;
 
+    /// **A skeleton is posed as often as it is drawn big.** Three rigs whose one joint grows to twice
+    /// its size over a second, each with a cube to draw it by: one 2.5 m in front of the camera, one 300 m
+    /// away (a few pixels), one behind the camera. Over 24 frames the near one is posed every frame,
+    /// the far one every 8th, the one behind once — its first frame, never posed before — and not
+    /// again, while its playhead runs on with the others'. Then `AnimationUpdate::Always` poses the
+    /// one behind every frame. See `gizmo_renderer::animation_lod`: in `dunya` the 127 characters
+    /// were posed every frame, 3.5–4 ms of preparation, most of them small or out of sight.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_skeleton_is_posed_as_often_as_it_is_drawn_big() {
+        use crate::renderer::{AnimationClip, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
+        use crate::renderer::components::{AnimationPlayer, AnimationUpdate};
+        use std::sync::Arc;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            let mut world = World::new();
+            let mut time = crate::core::time::Time::new();
+            time.update(1.0 / 60.0);
+            world.insert_resource(time);
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let hierarchy = Arc::new(SkeletonHierarchy {
+                joints: vec![SkeletonJoint {
+                    name: "root".into(),
+                    node_index: 0,
+                    inverse_bind_matrix: crate::math::Mat4::IDENTITY,
+                    parent_index: None,
+                    local_bind_transform: crate::math::Mat4::IDENTITY,
+                    bind_translation: Vec3::ZERO,
+                    bind_rotation: crate::math::Quat::IDENTITY,
+                    bind_scale: Vec3::ONE,
+                }],
+                root_transform: crate::math::Mat4::IDENTITY,
+            });
+            // A scale track: the engine applies a translation track to the hips alone.
+            let key = |time: f32, s: f32| Keyframe { time, value: Vec3::splat(s), in_tangent: None, out_tangent: None };
+            let clip = AnimationClip {
+                name: "grow".into(),
+                duration: 1.0,
+                translations: Vec::new(),
+                rotations: Vec::new(),
+                scales: vec![Track {
+                    target_node: 0,
+                    target_node_name: Some("root".into()),
+                    interpolation: crate::renderer::InterpolationMode::Linear,
+                    keyframes: vec![key(0.0, 1.0), key(1.0, 2.0)],
+                }],
+            };
+            let clips: Arc<[AnimationClip]> = Arc::from(vec![clip]);
+            let mut rig = |at: Vec3, shadows: crate::renderer::components::ShadowCasting| {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, Material::new(tex.clone()).with_pbr(Vec4::ONE, 0.5, 0.0));
+                world.add_component(e, MeshRenderer::new().with_shadows(shadows));
+                world.add_component(e, renderer.create_skeleton(hierarchy.clone()));
+                world.add_component(e, AnimationPlayer { animations: clips.clone(), ..Default::default() });
+                e
+            };
+            // The camera at the origin looks down −z. The rig behind it casts no shadow, so nothing
+            // draws it at all: one that casts is drawn into the shadow maps, and posed for them.
+            use crate::renderer::components::ShadowCasting;
+            let near = rig(Vec3::new(0.0, 0.0, -2.5), ShadowCasting::On);
+            let far = rig(Vec3::new(0.0, 0.0, -300.0), ShadowCasting::On);
+            let behind = rig(Vec3::new(0.0, 0.0, 6.0), ShadowCasting::Off);
+            world.spawn_bundle(DirectionalLightBundle::default());
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::ZERO,
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                far: 1000.0,
+                ..Default::default()
+            });
+            let pose = |world: &World, e: Entity| {
+                world.get::<crate::renderer::components::Skeleton>(e).and_then(|s| s.global_poses.first().map(|m| m.x_axis.x))
+            };
+            let posed = |world: &mut World, renderer: &mut Renderer, frames: usize| {
+                let mut counts = [0usize; 3];
+                let mut last = [near, far, behind].map(|e| pose(world, e));
+                for _ in 0..frames {
+                    pollster::block_on(render_world(renderer, world));
+                    for (i, e) in [near, far, behind].into_iter().enumerate() {
+                        let now = pose(world, e);
+                        if now != last[i] {
+                            counts[i] += 1;
+                        }
+                        last[i] = now;
+                    }
+                }
+                counts
+            };
+            let [n, f, b] = posed(&mut world, &mut renderer, 24);
+            assert!(n >= 22, "the near rig was posed {n} times in 24 frames");
+            assert!((2..=5).contains(&f), "the far rig was posed {f} times in 24 frames — every 8th is 3");
+            assert_eq!(b, 1, "the rig behind the camera was posed {b} times: its first frame, and no more");
+            let playhead = |e: Entity| world.get::<AnimationPlayer>(e).map(|p| p.current_time);
+            assert_eq!(playhead(behind), playhead(near), "an unposed rig's playhead runs on");
+
+            if let Some(mut p) = world.query_mut::<&mut AnimationPlayer>().get_mut(behind) {
+                p.update = AnimationUpdate::Always;
+            }
+            let [_, _, b] = posed(&mut world, &mut renderer, 8);
+            assert!(b >= 7, "`Always` posed the rig behind the camera {b} times in 8 frames");
+        });
+    }
+
+    /// **A blend space poses between its clips, through the engine's driver.** Two clips holding a
+    /// joint at scale 1 and at scale 3, placed at 0 and 1 of a `speed` parameter: at 0.25 the joint
+    /// is drawn at 1.5, at 1 at 3, and past the end still at 3. Then a cross-fade from a plain
+    /// state holding scale 1 into the blended one at 1, a quarter of the way: 1.5 again.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_blend_space_poses_between_its_clips() {
+        use crate::renderer::components::{ActiveBlend, AnimationState, AnimationStateMachine};
+        use crate::renderer::{AnimationClip, BlendSpace, Keyframe, SkeletonHierarchy, SkeletonJoint, Track};
+        use std::sync::Arc;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut world = World::new();
+            let mut time = crate::core::time::Time::new();
+            time.update(1.0 / 60.0);
+            world.insert_resource(time);
+            let hierarchy = Arc::new(SkeletonHierarchy {
+                joints: vec![SkeletonJoint {
+                    name: "root".into(),
+                    node_index: 0,
+                    inverse_bind_matrix: crate::math::Mat4::IDENTITY,
+                    parent_index: None,
+                    local_bind_transform: crate::math::Mat4::IDENTITY,
+                    bind_translation: Vec3::ZERO,
+                    bind_rotation: crate::math::Quat::IDENTITY,
+                    bind_scale: Vec3::ONE,
+                }],
+                root_transform: crate::math::Mat4::IDENTITY,
+            });
+            let held = |name: &str, scale: f32, duration: f32| AnimationClip {
+                name: name.into(),
+                duration,
+                translations: Vec::new(),
+                rotations: Vec::new(),
+                scales: vec![Track {
+                    target_node: 0,
+                    target_node_name: Some("root".into()),
+                    interpolation: crate::renderer::InterpolationMode::Linear,
+                    keyframes: [0.0, duration]
+                        .map(|time| Keyframe { time, value: Vec3::splat(scale), in_tangent: None, out_tangent: None })
+                        .to_vec(),
+                }],
+            };
+            let clips: Arc<[AnimationClip]> = Arc::from(vec![held("small", 1.0, 1.0), held("big", 3.0, 0.6)]);
+            let rig = world.spawn();
+            world.add_component(rig, Transform::new(Vec3::ZERO));
+            world.add_component(rig, renderer.create_skeleton(hierarchy));
+            let mut machine = AnimationStateMachine::new(
+                "move",
+                clips,
+                vec![
+                    AnimationState::clip("still", 0),
+                    AnimationState::blended("move", BlendSpace::one_d("speed", &[(0, 0.0), (1, 1.0)])),
+                ],
+                vec![],
+            );
+            machine.update = crate::renderer::components::AnimationUpdate::Always;
+            world.add_component(rig, machine);
+            let scale_at = |world: &mut World, renderer: &mut Renderer, speed: f32| {
+                if let Some(mut m) = world.query_mut::<&mut AnimationStateMachine>().get_mut(rig) {
+                    m.set_parameter("speed", speed);
+                }
+                super::prepare_frame(world, renderer);
+                world.get::<crate::renderer::components::Skeleton>(rig).and_then(|s| s.global_poses.first().map(|m| m.x_axis.x))
+            };
+            let close = |got: Option<f32>, want: f32| got.is_some_and(|g| (g - want).abs() < 1.0e-3);
+            let at = scale_at(&mut world, &mut renderer, 0.25);
+            assert!(close(at, 1.5), "a quarter of the way from scale 1 to scale 3: {at:?}");
+            let at = scale_at(&mut world, &mut renderer, 1.0);
+            assert!(close(at, 3.0), "at the big clip's point: {at:?}");
+            let at = scale_at(&mut world, &mut renderer, 4.0);
+            assert!(close(at, 3.0), "past it: {at:?}");
+
+            // A quarter of a fade from the plain state into the blended one, at its big end.
+            if let Some(mut m) = world.query_mut::<&mut AnimationStateMachine>().get_mut(rig) {
+                m.current_state = "still".into();
+                m.active_blend = Some(ActiveBlend {
+                    from_state: "still".into(),
+                    from_time: 0.0,
+                    to_time: 0.0,
+                    elapsed: 0.25 - 1.0 / 60.0,
+                    duration: 1.0,
+                    to_state: "move".into(),
+                    to_looped: true,
+                    to_speed: 1.0,
+                });
+            }
+            let at = scale_at(&mut world, &mut renderer, 1.0);
+            assert!(close(at, 1.5), "a quarter of the way from the plain state into the blended one: {at:?}");
+        });
+    }
+
     /// The same scene renders the same whether it sits at the world origin or two kilometres away.
     ///
     /// It did not. The G-buffer's world-position target is `Rgba16Float`, and it held **absolute**
@@ -2546,6 +2763,7 @@ mod golden_render_tests {
                     blend_duration: 0.0,
                     prev_animation: None,
                     prev_time: 0.0,
+                    update: Default::default(),
                 },
             );
 
@@ -14369,7 +14587,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
                 (root, player.animations.clone())
             };
             world.remove_component::<AnimationPlayer>(root);
-            let state = |name: &str| AnimationState { name: name.into(), clip_index: 0, looped: false, speed: 0.0 };
+            let state = |name: &str| AnimationState::clip(name, 0).once().at_speed(0.0);
             let mut machine = AnimationStateMachine::new(
                 "rest",
                 clips,
@@ -14382,9 +14600,11 @@ fn material_surface(input: SurfaceInput) -> Surface {
                     has_exit_time: false,
                 }],
             );
+            // Posed every frame: what is asserted is the blend, not how often a small rig is posed
+            // (`gizmo_renderer::animation_lod`).
+            machine.update = crate::renderer::components::AnimationUpdate::Always;
             machine.active_blend = Some(ActiveBlend {
-                from_clip: 0,
-                to_clip: 0,
+                from_state: "rest".into(),
                 from_time: 0.0,
                 to_time: 1.0,
                 elapsed: 0.25,
@@ -14407,8 +14627,7 @@ fn material_surface(input: SurfaceInput) -> Surface {
                 let mut machines = world.query_mut::<&mut AnimationStateMachine>();
                 let mut m = machines.get_mut(root).unwrap();
                 m.active_blend = Some(ActiveBlend {
-                    from_clip: 0,
-                    to_clip: 0,
+                    from_state: "rest".into(),
                     from_time: 0.0,
                     to_time: 1.0,
                     elapsed: 0.25,

@@ -909,8 +909,10 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
     // and not the other is the editor's oldest failure mode, and the list is short enough to state.
     let preparation = [
         "ensure_global_transforms(",
-        "animation_update_system(",
-        "animation_state_machine_update_system(",
+        // The `_seen` forms: posed as often as the last frames drew each skeleton big
+        // (`gizmo_renderer::animation_lod`).
+        "animation_update_system_seen(",
+        "animation_state_machine_update_system_seen(",
         "sprite_animation_system(",
         "apply_ik_chains_system(",
         "fluid_scene_system(",
@@ -939,7 +941,7 @@ fn both_draw_paths_run_the_same_per_frame_drivers() {
             "the game path does not run {driver} — whatever it drives is frozen in the game"
         );
     }
-    for driver in ["animation_update_system(", "animation_state_machine_update_system(", "sprite_animation_system("] {
+    for driver in ["animation_update_system_seen(", "animation_state_machine_update_system_seen(", "sprite_animation_system("] {
         assert!(
             game.contains(&format!("{driver}world,animation_dt,")) || game.contains(&format!("{driver}world,animation_dt)")),
             "the game path must advance animation by `animation_dt`, the clock's delta — a raw \
@@ -1022,6 +1024,9 @@ fn every_capability_neither_path_names_is_accounted_for() {
         ("AnimationClip", "the clip data those drivers sample; same guard."),
         ("AnimationState", "a state machine's state; same guard."),
         ("AnimationTransition", "an edge between two of them; same guard."),
+        ("BlendSpace", "clips a state blends by a parameter, read by the state-machine driver; same guard."),
+        ("BlendPoint", "one clip of a `BlendSpace`; same guard."),
+        ("AnimationUpdate", "how often the drivers pose a skeleton (`gizmo_renderer::animation_lod`); same guard."),
         ("SkeletonHierarchy", "the joint tree behind `Skeleton`, which both paths do name."),
         ("DofBlur", "a field of `PostProcess` and of `Renderer`, not a component: both paths read it by name, `dof_blur.uniform()`, into `PostProcessUniforms::dof_shape`."),
         // ── Read by the lightmap bake, not by a frame ────────────────────────────────────────
