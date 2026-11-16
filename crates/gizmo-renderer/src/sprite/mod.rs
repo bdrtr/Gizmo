@@ -204,6 +204,49 @@ pub struct ImageName {
     pub filter: SpriteFilter,
 }
 
+/// Occluder edges a lit sprite's shader reads, at most this many a frame.
+pub const MAX_OCCLUDER_EDGES: usize = 256;
+/// Occluders whose own inside is told apart (a pixel inside one is not in its shadow), at most this
+/// many a frame.
+pub const MAX_OCCLUDERS: usize = 32;
+
+/// This frame's [`LightOccluder2D`](crate::components::LightOccluder2D)s as the sprite shader reads
+/// them: each edge in the world's XY plane, and which occluder it belongs to (its index; the top
+/// bit set when the occluder is closed, so a pixel can be inside it). Built with [`add`](Self::add).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OccluderEdges {
+    edges: Vec<[f32; 4]>,
+    ids: Vec<u32>,
+    occluders: usize,
+}
+
+impl OccluderEdges {
+    /// Adds one occluder's edges (`LightOccluder2D::world_edges`). Whether it fitted: past
+    /// [`MAX_OCCLUDERS`] or [`MAX_OCCLUDER_EDGES`] it casts nothing.
+    pub fn add(&mut self, edges: &[[f32; 4]], closed: bool) -> bool {
+        if self.occluders >= MAX_OCCLUDERS || self.edges.len() + edges.len() > MAX_OCCLUDER_EDGES {
+            return false;
+        }
+        let id = self.occluders as u32 | if closed { 1 << 31 } else { 0 };
+        self.edges.extend_from_slice(edges);
+        self.ids.extend(std::iter::repeat_n(id, edges.len()));
+        self.occluders += 1;
+        true
+    }
+
+    /// The edges so far.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.edges.len()
+    }
+
+    /// Whether there are none.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.edges.is_empty()
+    }
+}
+
 /// The light every **lit** sprite ([`Sprite::lit`]) gets before any light reaches it — Godot's
 /// `CanvasModulate`. A world resource; white when there is none, so a lit sprite with no light near
 /// it looks as an unlit one does and lights only add. A night scene sets it dark.
@@ -215,8 +258,12 @@ pub struct SpriteRenderer {
     layout: wgpu::BindGroupLayout,
     /// Group 1 of the world pipeline: the view's scene uniforms and the ambient (`fs_lit`).
     lights_layout: wgpu::BindGroupLayout,
-    /// [`SpriteAmbient`], as the shader reads it.
+    /// [`SpriteAmbient`], as the shader reads it; `w` = how many occluder edges this frame has.
     ambient: wgpu::Buffer,
+    /// This frame's occluder edges in the XY plane, `[a.x, a.y, b.x, b.y]` each, and each one's
+    /// occluder — see [`OccluderEdges`].
+    occluder_edges: wgpu::Buffer,
+    occluder_ids: wgpu::Buffer,
     /// Group 1 over the scene uniforms it was made for (by identity), and a fallback over a
     /// zeroed one — no lights, no sun — until [`set_lighting`](Self::set_lighting) is called.
     lights: (wgpu::Buffer, wgpu::BindGroup),
@@ -301,20 +348,33 @@ impl SpriteRenderer {
         };
         let lights_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Sprite Lights Layout"),
-            entries: &[uniform(0), uniform(1)],
+            entries: &[uniform(0), uniform(1), uniform(2), uniform(3)],
         });
         let ambient = wgpu::util::DeviceExt::create_buffer_init(device, &wgpu::util::BufferInitDescriptor {
             label: Some("Sprite Ambient"),
-            contents: bytemuck::cast_slice(&[1.0f32, 1.0, 1.0, 1.0]),
+            contents: bytemuck::cast_slice(&[1.0f32, 1.0, 1.0, 0.0]),
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
+        let zeroed = |label: &str, size: usize| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: size as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            })
+        };
+        let occluder_edges = zeroed("Sprite Occluder Edges", MAX_OCCLUDER_EDGES * 16);
+        let occluder_ids = zeroed("Sprite Occluder Ids", MAX_OCCLUDER_EDGES * 4);
         let no_lights = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Sprite Scene (none)"),
             size: std::mem::size_of::<crate::gpu_types::SceneUniforms>() as u64,
             usage: wgpu::BufferUsages::UNIFORM,
             mapped_at_creation: false,
         });
-        let lights = (no_lights.clone(), Self::lights_group(device, &lights_layout, &no_lights, &ambient));
+        let lights = (
+            no_lights.clone(),
+            Self::lights_group(device, &lights_layout, [&no_lights, &ambient, &occluder_edges, &occluder_ids]),
+        );
         let (pipeline_world, overlay) =
             Self::build_pipelines(device, &layout, &lights_layout, color_format, depth_format);
         let buffer = Self::instance_buffer(device, INITIAL_CAPACITY);
@@ -322,6 +382,8 @@ impl SpriteRenderer {
             layout,
             lights_layout,
             ambient,
+            occluder_edges,
+            occluder_ids,
             lights,
             linear,
             nearest,
@@ -716,23 +778,39 @@ impl SpriteRenderer {
     }
 
     /// What lit sprites are lit by this view: `scene` — the view's scene uniforms, the buffer its 3D
-    /// passes read the lights, the sun and the camera from — and the ambient ([`SpriteAmbient`]).
-    pub fn set_lighting(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, scene: &wgpu::Buffer, ambient: Vec3) {
-        queue.write_buffer(&self.ambient, 0, bytemuck::cast_slice(&[ambient.x, ambient.y, ambient.z, 1.0]));
+    /// passes read the lights, the sun and the camera from — the ambient ([`SpriteAmbient`]) and the
+    /// occluders that shade them ([`OccluderEdges`]).
+    pub fn set_lighting(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        scene: &wgpu::Buffer,
+        ambient: Vec3,
+        occluders: &OccluderEdges,
+    ) {
+        let count = occluders.edges.len().min(MAX_OCCLUDER_EDGES);
+        queue.write_buffer(&self.ambient, 0, bytemuck::cast_slice(&[ambient.x, ambient.y, ambient.z, count as f32]));
+        if count > 0 {
+            queue.write_buffer(&self.occluder_edges, 0, bytemuck::cast_slice(&occluders.edges[..count]));
+            let mut ids = occluders.ids[..count].to_vec();
+            ids.resize(count.next_multiple_of(4), 0);
+            queue.write_buffer(&self.occluder_ids, 0, bytemuck::cast_slice(&ids));
+        }
         if self.lights.0 != *scene {
-            self.lights = (scene.clone(), Self::lights_group(device, &self.lights_layout, scene, &self.ambient));
+            self.lights = (
+                scene.clone(),
+                Self::lights_group(device, &self.lights_layout, [scene, &self.ambient, &self.occluder_edges, &self.occluder_ids]),
+            );
         }
     }
 
-    fn lights_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, scene: &wgpu::Buffer, ambient: &wgpu::Buffer) -> wgpu::BindGroup {
-        device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Sprite Lights"),
-            layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: scene.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: ambient.as_entire_binding() },
-            ],
-        })
+    fn lights_group(device: &wgpu::Device, layout: &wgpu::BindGroupLayout, buffers: [&wgpu::Buffer; 4]) -> wgpu::BindGroup {
+        let entries: Vec<wgpu::BindGroupEntry<'_>> = buffers
+            .iter()
+            .enumerate()
+            .map(|(i, b)| wgpu::BindGroupEntry { binding: i as u32, resource: b.as_entire_binding() })
+            .collect();
+        device.create_bind_group(&wgpu::BindGroupDescriptor { label: Some("Sprite Lights"), layout, entries: &entries })
     }
 
     fn draw_runs(&self, pass: &mut wgpu::RenderPass<'_>, list: &[Run]) {

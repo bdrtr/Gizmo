@@ -59,6 +59,10 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **2D shadows: `LightOccluder2D`.** A polygon or a line in an entity's plane (`polygon`, `line`, `rectangle`) stops
+  point and spot lights from reaching the lit sprites behind it, in the world's XY plane — Godot's
+  `LightOccluder2D`. A pixel inside a closed occluder is not in that occluder's own shadow, so a wall's sprite stays
+  lit on the side facing the light. Up to 256 edges and 32 occluders a frame; saved with a scene.
 - **Lit sprites: `Sprite::lit()`, `Tilemap::lit()`, `SpriteAmbient`.** A lit world sprite is lit by the scene's own
   point, spot and directional lights and its sun — read from the view's scene uniforms, the same ranked array and the
   same falloff and cone (`gizmo::common`) as a 3D surface's, Lambert over the sprite's plane facing the camera — over

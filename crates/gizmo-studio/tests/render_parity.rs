@@ -826,12 +826,20 @@ fn with_its_preparation(editor: String, workspace: &std::path::Path) -> String {
         game[start..end].to_string()
     };
     // `apply_root_motion` too: `prepare_frame` calls it, and it is where `RootMotion` is read.
-    format!(
+    let mut sources = format!(
         "{editor}\n{}\n{}\n{}",
         body("pub fn prepare_frame("),
         body("pub fn advance_frame_clocks("),
         body("pub fn apply_root_motion(")
-    )
+    );
+    // The game path's shared passes the editor calls for itself: their files are code it runs.
+    for (call, file) in [("record_sprites(", "crates/gizmo/src/systems/render/sprite.rs")] {
+        if code_only(&sources).contains(call) {
+            sources.push('\n');
+            sources.push_str(&std::fs::read_to_string(workspace.join(file)).expect("the shared pass's source"));
+        }
+    }
+    sources
 }
 
 fn draw_path_sources() -> (String, String) {

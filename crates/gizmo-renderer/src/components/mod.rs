@@ -42,6 +42,8 @@ pub mod sprite;
 pub mod text;
 /// The [`Tilemap`] component — a grid of tiles from one tileset image.
 pub mod tilemap;
+/// The [`LightOccluder2D`] component — a shape that casts 2D shadows onto lit sprites.
+pub mod occluder2d;
 
 pub use animation::*;
 pub use camera::*;
@@ -62,6 +64,7 @@ pub use reflection_probe::*;
 pub use sprite::*;
 pub use text::*;
 pub use tilemap::*;
+pub use occluder2d::LightOccluder2D;
 
 gizmo_core::impl_component!(
     Mesh,
@@ -91,4 +94,4 @@ gizmo_core::impl_component!(
     Text,
     Tilemap
 );
-gizmo_core::impl_component!(FluidParticle, FluidHandle, FluidPhase, FluidInteractor);
+gizmo_core::impl_component!(FluidParticle, FluidHandle, FluidPhase, FluidInteractor, LightOccluder2D);

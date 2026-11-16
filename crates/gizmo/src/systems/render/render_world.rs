@@ -299,6 +299,7 @@ pub fn render_extractor() -> Extractor {
         // 2D and text.
         .component::<Sprite>()
         .component::<Tilemap>()
+        .component::<crate::renderer::components::LightOccluder2D>()
         .component::<Text>()
         .component::<super::Typewriter>()
         .component::<super::LocalizedLabel>()

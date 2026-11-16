@@ -9,7 +9,8 @@
 // edges from it — and `fs_lit`, the world pipeline's entry, lights it with the scene's own lights:
 // the view's `SceneUniforms` (the same ranked array, sun and camera the 3D passes read), the same
 // falloff and cone (`gizmo::common`), the Lambert 1/PI a matte surface gets, over an ambient that is
-// white unless the game darkens it (`SpriteAmbient`). An unlit sprite, and every screen sprite, is
+// white unless the game darkens it (`SpriteAmbient`), shaded by the `LightOccluder2D`s between it and
+// each point or spot light in the world's XY plane. An unlit sprite, and every screen sprite, is
 // drawn in its own colours, by either entry. Group 1 is read by `fs_lit` alone, so the overlay's
 // pipelines, which draw screen sprites with `fs_main`, do not carry it.
 
@@ -17,8 +18,70 @@
 
 @group(1) @binding(0)
 var<uniform> scene: SceneUniforms;
+// rgb = `SpriteAmbient`, w = how many occluder edges this frame has.
 @group(1) @binding(1)
 var<uniform> sprite_ambient: vec4<f32>;
+// `LightOccluder2D` edges in the world's XY plane, (a.x, a.y, b.x, b.y); each one's occluder index,
+// its top bit set when that occluder is closed. Four ids to a vec4.
+@group(1) @binding(2)
+var<uniform> occluder_edges: array<vec4<f32>, 256>;
+@group(1) @binding(3)
+var<uniform> occluder_ids: array<vec4<u32>, 64>;
+
+fn occluder_id(i: u32) -> u32 {
+    return occluder_ids[i / 4u][i % 4u];
+}
+
+// Whether the segment p→q crosses the segment a→b, its end q excluded and its start barely past p
+// (a pixel on an outline is not shadowed by that outline).
+fn segments_cross(p: vec2<f32>, q: vec2<f32>, a: vec2<f32>, b: vec2<f32>) -> bool {
+    let d1 = q - p;
+    let d2 = b - a;
+    let den = d1.x * d2.y - d1.y * d2.x;
+    if (abs(den) < 1.0e-8) {
+        return false;
+    }
+    let ap = a - p;
+    let t = (ap.x * d2.y - ap.y * d2.x) / den;
+    let u = (ap.x * d1.y - ap.y * d1.x) / den;
+    return t > 1.0e-4 && t < 1.0 && u >= 0.0 && u <= 1.0;
+}
+
+// Which closed occluders `p` is inside, one bit each: the even-odd count of their edges a ray to +x
+// crosses. A pixel inside an occluder is not in that occluder's own shadow.
+fn inside_occluders(p: vec2<f32>, count: u32) -> u32 {
+    var mask = 0u;
+    for (var i = 0u; i < count; i++) {
+        let id = occluder_id(i);
+        if ((id & 0x80000000u) == 0u) {
+            continue;
+        }
+        let e = occluder_edges[i];
+        if ((e.y > p.y) != (e.w > p.y)) {
+            let x = e.x + (p.y - e.y) / (e.w - e.y) * (e.z - e.x);
+            if (x > p.x) {
+                mask = mask ^ (1u << (id & 31u));
+            }
+        }
+    }
+    return mask;
+}
+
+// Whether an occluder stands between `p` and a light at `light`, both in the XY plane — those `p`
+// is inside left out.
+fn occluded(p: vec2<f32>, light: vec2<f32>, count: u32, inside: u32) -> bool {
+    for (var i = 0u; i < count; i++) {
+        let id = occluder_id(i);
+        if ((inside & (1u << (id & 31u))) != 0u && (id & 0x80000000u) != 0u) {
+            continue;
+        }
+        let e = occluder_edges[i];
+        if (segments_cross(p, light, e.xy, e.zw)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 @group(0) @binding(0)
 var image: texture_2d<f32>;
@@ -87,6 +150,8 @@ fn fs_lit(in: VertexOutput) -> @location(0) vec4<f32> {
         let l = normalize(-scene.sun_direction.xyz);
         light += scene.sun_color.rgb * scene.sun_color.w * max(dot(n, l), 0.0) / PI;
     }
+    let edges = min(u32(sprite_ambient.w), 256u);
+    let inside = inside_occluders(in.world.xy, edges);
     let count = min(scene.num_lights, 256u);
     for (var i = 0u; i < count; i++) {
         let ld = scene.lights[i];
@@ -102,6 +167,10 @@ fn fs_lit(in: VertexOutput) -> @location(0) vec4<f32> {
             atten = light_falloff(d, ld.color.a).x;
             if (kind == 1u) {
                 atten *= spot_cone(ld, -l);
+            }
+            // 2D shadow: an occluder between this pixel and the light, in the XY plane.
+            if (atten > 0.0 && edges > 0u && occluded(in.world.xy, ld.position.xy, edges, inside)) {
+                continue;
             }
         } else {
             // A rectangle light's area integral is not here yet; it lights 3D surfaces only.

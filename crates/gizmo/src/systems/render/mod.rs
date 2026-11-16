@@ -17066,6 +17066,67 @@ fn material_surface(input: SurfaceInput) -> Surface {
         });
     }
 
+    /// **An occluder casts a 2D shadow on lit sprites.** A wide lit sprite under a dark ambient, a
+    /// point light at its left end, and a thin wall (`LightOccluder2D::rectangle`) standing across its
+    /// middle: past the wall the sprite is dark where, with no wall, it is lit — and inside the wall's
+    /// outline, on the side facing the light, it stays lit (a pixel inside an occluder is not in that
+    /// occluder's shadow).
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn an_occluder_casts_a_2d_shadow_on_lit_sprites() {
+        use gizmo_renderer::components::{LightOccluder2D, PointLight, Sprite};
+        use gizmo_renderer::sprite::{SpriteAmbient, SpriteFilter};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(wall: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            world.insert_resource(SpriteAmbient(Vec3::splat(0.03)));
+            let white = renderer.load_sprite_rgba(&[255; 4], 1, 1, SpriteFilter::Nearest).expect("a 1×1 image");
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::ZERO));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, Sprite::world(white, gizmo_math::Vec2::new(5.0, 1.5)).lit());
+            let light = world.spawn();
+            world.add_component(light, Transform::new(Vec3::new(-2.0, 0.0, 0.3)));
+            world.add_component(light, GlobalTransform::default());
+            world.add_component(light, PointLight::new(Vec3::ONE, 12.0, 8.0));
+            if wall {
+                let w = world.spawn();
+                world.add_component(w, Transform::new(Vec3::ZERO));
+                world.add_component(w, GlobalTransform::default());
+                world.add_component(w, LightOccluder2D::rectangle(gizmo_math::Vec2::new(0.4, 3.0)));
+            }
+            render_world(&mut renderer, &mut world).await
+        }
+        let luma = |f: &[u8], x: usize, y: usize| {
+            let p = &f[(y * 128 + x) * 4..][..3];
+            (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3
+        };
+        // About 18.5 px a metre about the centre: x = 1 m is px 82, x = −0.1 m (inside the wall, on
+        // the light's side) px 62.
+        pollster::block_on(async {
+            let shadowed = frame(true).await;
+            let open = frame(false).await;
+            let (behind, unblocked) = (luma(&shadowed, 82, 64), luma(&open, 82, 64));
+            assert!(unblocked > behind + 30, "past the wall the sprite is in shadow: {behind}, against {unblocked} with no wall");
+            let (inside, inside_open) = (luma(&shadowed, 62, 64), luma(&open, 62, 64));
+            assert!(inside + 10 >= inside_open, "inside the wall, facing the light, it stays lit: {inside}, against {inside_open}");
+        });
+    }
+
     /// **The back of a double-sided surface is lit like the front.** A pale panel with the sun behind the
     /// camera, seen from each side. Both faces carried the front's normal until 2026-11-07, so the back read
     /// as turned away from the light that was shining straight on it.
