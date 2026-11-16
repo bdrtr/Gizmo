@@ -2936,6 +2936,9 @@ fn a_game_plays_in_a_world_of_its_own() {
                 world.insert_resource(Frames(0));
                 let e = world.spawn();
                 world.add_component(e, EntityName("Made by the game".into()));
+                // The game's own camera, which the Game view should show.
+                let camera = world.spawn_bundle(gizmo::prelude::CameraBundle { primary: true, ..Default::default() });
+                world.add_component(camera, EntityName("The game's camera".into()));
             },
             |world, _dt, _input| {
                 if let Some(mut f) = world.get_resource_mut::<Frames>() {
@@ -2978,10 +2981,16 @@ fn a_game_plays_in_a_world_of_its_own() {
         assert_eq!(world.get_resource::<Frames>().map(|f| f.0), Some(3), "three frames of the game");
         assert!(named(&world, "Made by the game").is_some(), "the game's own entity");
         assert!(named(&world, "Default Cube").is_none(), "the game deleted the cube in its world");
+        assert_eq!(Some(state.game_camera), named(&world, "The game's camera"), "the Game view shows the game's camera");
 
         world.get_resource_mut::<EditorState>().expect("editor").toggle_play();
         frame(&mut world, &mut state, &mut renderer); // ⏹
         assert_eq!(named(&world, "Default Cube"), Some(cube), "the cube is back, under its own id");
+        assert_eq!(
+            world.get::<EntityName>(state.game_camera).map(|n| n.0.clone()).as_deref(),
+            Some("Game Camera"),
+            "and the Game view the studio's own camera"
+        );
         assert!(world.get_resource::<Frames>().is_none(), "the game's state went with its world");
         assert!(named(&world, "Made by the game").is_none());
     });

@@ -112,6 +112,19 @@ pub fn stop_play(world: &mut World, state: &mut StudioState) {
     // `session.edited` is the play world now, and goes with the session.
 }
 
+/// The camera a hooked game draws its picture with, in the play world: its primary one — not the
+/// editor's camera, which is primary too and was copied over, and not one with a viewport (a
+/// minimap) or a texture of its own. `None` until the game has made one.
+pub fn game_camera(world: &World, editor_camera: Entity) -> Option<Entity> {
+    use gizmo::renderer::components::{Camera, CameraTarget};
+    let cameras = world.query::<(Entity, &Camera)>();
+    let targets = world.query::<&CameraTarget>();
+    cameras
+        .iter()
+        .find(|(e, c)| *e != editor_camera && c.primary && c.viewport.is_none() && targets.get(*e).is_none())
+        .map(|(e, _)| e)
+}
+
 /// The first entity called `name`.
 fn find_named(world: &World, name: &str) -> Option<Entity> {
     let names = world.query::<&EntityName>();

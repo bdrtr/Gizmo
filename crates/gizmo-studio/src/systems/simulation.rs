@@ -85,6 +85,10 @@ pub fn handle_simulation(
         if let Some(game) = state.game.clone() {
             if world.get_resource::<crate::pie::GameSetupPending>().is_none() {
                 (game.update)(world, dt, input);
+                // The Game view shows the game's own camera, whichever it is this frame.
+                if let Some(camera) = crate::pie::game_camera(world, state.editor_camera) {
+                    state.game_camera = camera;
+                }
             }
             return;
         }
