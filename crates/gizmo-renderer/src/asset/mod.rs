@@ -244,7 +244,10 @@ pub struct AssetManager {
     texture_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
     /// Texture views by cache key and whether they were read as sRGB: what a material's maps are.
     view_cache: std::collections::HashMap<(String, bool), Arc<wgpu::TextureView>>,
-    /// Material bind groups by the sources they were built from ([`load_material`](Self::load_material)).
+    /// Material bind groups by the sources and strengths they were built from
+    /// ([`load_material`](Self::load_material)). An entry nothing else holds is dropped when the next
+    /// one is made, so a material whose strengths are animated costs the values it is drawn with,
+    /// not every value it ever took.
     material_cache: std::collections::HashMap<String, Arc<wgpu::BindGroup>>,
     /// Imported glTF scenes by the path asked for ([`gltf_scene`](Self::gltf_scene)).
     gltf_scenes: std::collections::HashMap<String, Arc<loaders::GltfSceneAsset>>,

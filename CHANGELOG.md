@@ -59,6 +59,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Material maps' strengths and UV transform are animatable: a scrolling surface is a keyed `Material.maps.uv_offset.x`.**
+  `normal_scale`, `emissive_factor`, `occlusion_strength`, `lightmap_intensity`, `uv_scale`, `uv_rotation` and
+  `uv_offset` (the vectors lane by lane) join the engine's animatable fields. They were left out because the material
+  bind-group cache (`AssetManager::load_material`, keyed by the maps' values) never evicted, so each value an animation
+  took kept a uniform buffer and a bind group for the renderer's lifetime. **Fixed:** an entry nothing outside the
+  cache holds is dropped when the next one is made — 600 frames of a scrolled offset leave 5 entries, not 602. This
+  holds for any material whose maps change, keyed or not.
 - **A headless build plays tweens and keyed clips.** `gizmo_app`'s headless loop — a server, a build without
   `render` — now advances the animation clock after each frame's commands: `Tween`s and `KeyedAnimationPlayer`s move,
   on the simulated delta. Until now only the draw path ran them, so on a server a tween never moved and a keyed door

@@ -2168,6 +2168,26 @@ mod keyed_animation_tests {
         assert_eq!(m.albedo.x, 1.0, "the alpha lane alone");
     }
 
+    /// **A scrolling surface is a keyed UV offset.** `Material.maps.uv_offset.x` moves on the frame
+    /// clock and leaves `y` as it was; the changed maps are what `rebind_changed_materials` builds
+    /// the bind group again from. Not animatable before 2026-11-16: every value took a cache entry
+    /// for good (`AssetManager::load_material`).
+    #[test]
+    fn advance_frame_clocks_scrolls_a_material_uv_offset() {
+        use crate::renderer::components::Material;
+        let (mut world, e) = playing(vec![scalar("Material.maps.uv_offset.x", 0.0, 1.0)]);
+        let mut material = noop_material();
+        material.maps.uv_offset = [0.0, 0.25];
+        world.add_component(e, material);
+        for _ in 0..4 {
+            advance_frame_clocks(&mut world);
+        }
+        let offset = world.get::<Material>(e).unwrap().maps.uv_offset;
+        assert!((offset[0] - 0.2).abs() < 1.0e-4, "{offset:?}");
+        assert_eq!(offset[1], 0.25, "the x lane alone");
+        assert!(!world.get::<Material>(e).unwrap().maps_are_bound(), "the bind group is built again from the new offset");
+    }
+
     /// **A keyed track wins over a `ColorTween` on the same field** — the driver runs after the
     /// colour tweens, deliberately: what an animator keyed is what is drawn.
     #[test]

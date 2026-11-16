@@ -280,8 +280,22 @@ impl super::AssetManager {
             builder = builder.lightmap(v);
         }
         let bind_group = builder.build(self, device, queue, layout);
+        // **Entries no material holds any more go before a new one comes in.** The key holds the
+        // strengths (`params`), so every value an animated `emissive_factor` or UV offset takes is a
+        // key of its own: kept for good, that was a uniform buffer and a bind group per frame the
+        // value moved, for as long as the renderer lived. A material — the game's, the render
+        // world's copy of it — holds its bind group's `Arc`; one held by the cache alone is drawn by
+        // nothing, and a material that comes back to those sources builds it again (the textures
+        // themselves stay, in `view_cache`). Swept on a miss only: the cache grows on nothing else.
+        self.material_cache.retain(|_, held| Arc::strong_count(held) > 1);
         self.material_cache.insert(key, bind_group.clone());
         bind_group
+    }
+
+    /// How many material bind groups [`load_material`](Self::load_material) is keeping.
+    #[cfg(test)]
+    pub(crate) fn material_cache_len(&self) -> usize {
+        self.material_cache.len()
     }
 
     // ── Public load API ───────────────────────────────────────────────────
@@ -493,5 +507,57 @@ impl super::AssetManager {
         }
 
         decode_rgba_image_file(resolved_path)
+    }
+}
+
+/// The material bind-group cache keeps what is drawn, not every value a material ever took.
+#[cfg(test)]
+mod material_cache_tests {
+    use crate::asset::AssetManager;
+    use crate::components::MaterialMaps;
+    use std::sync::Arc;
+
+    fn gpu() -> (wgpu::Device, wgpu::Queue, wgpu::BindGroupLayout) {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::NOOP,
+            backend_options: wgpu::BackendOptions {
+                noop: wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a noop device");
+        let layout = crate::pipeline::layouts::build_layouts(&device).texture;
+        (device, queue, layout)
+    }
+
+    /// A UV offset of `x`: strengths that are not neutral, so the material gets a bind group of its own.
+    fn scrolled(x: f32) -> MaterialMaps {
+        MaterialMaps::default().with_uv_transform([1.0, 1.0], 0.0, [x, 0.0])
+    }
+
+    /// **A UV offset scrolled for 600 frames keeps one bind group, not 600.** Each frame's value is a
+    /// key of its own; until 2026-11-16 every one stayed in the cache with its uniform buffer for
+    /// the renderer's lifetime, which is why `MaterialMaps` could not be keyed. The bind groups a
+    /// material still holds stay, and the same sources asked for again get the same one.
+    #[test]
+    fn an_animated_strength_does_not_pile_up_bind_groups() {
+        let (device, queue, layout) = gpu();
+        let mut assets = AssetManager::new();
+        let held: Vec<_> = (0..3).map(|i| assets.load_material(&device, &queue, &layout, None, &scrolled(10.0 + i as f32))).collect();
+        let mut drawn = assets.load_material(&device, &queue, &layout, None, &scrolled(0.0));
+        for frame in 1..600 {
+            // What `rebind_changed_materials` does: the material's bind group replaced by the new value's.
+            drawn = assets.load_material(&device, &queue, &layout, None, &scrolled(frame as f32 / 600.0));
+        }
+        // The three held, the one being drawn, and the one before it — which the material still held
+        // while its replacement was made, as `rebind_changed_materials` holds it.
+        assert_eq!(assets.material_cache_len(), 5, "the cache kept values nothing draws any more");
+        for (i, bind_group) in held.iter().enumerate() {
+            let again = assets.load_material(&device, &queue, &layout, None, &scrolled(10.0 + i as f32));
+            assert!(Arc::ptr_eq(bind_group, &again), "a held material's bind group was dropped and built again");
+        }
+        drop(drawn);
     }
 }

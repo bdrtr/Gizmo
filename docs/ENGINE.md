@@ -61,9 +61,9 @@ by name**: `Track::property("lamp", "PointLight.intensity", …)`. The contract:
 - **The engine registers only what both draw paths re-read every frame**: a material's
   per-instance factors (what `InstanceRaw::new` + `with_alpha_cutoff` / `with_reflectance` /
   `with_lit_extras_of` upload, in both batchers), light colours/intensities/shapes, the camera's
-  projection and exposure, sprite and text colour and size, every `PostProcess` float. Not
-  `MaterialMaps` (its GPU parameters are cached per distinct maps value and never evicted — an
-  animated value would leak a buffer per value), not `MaterialDesc` (the saved description,
+  projection and exposure, sprite and text colour and size, every `PostProcess` float — and the
+  `MaterialMaps` strengths and UV transform (`Material.maps.uv_offset.x` scrolls a surface), which
+  the material's bind group is built again from (see below). Not `MaterialDesc` (the saved description,
   which `sync_material_descriptions` derives from the live `Material` every frame — so a save
   stores the value at the playhead), not an `Option` or an enum variant's field.
   `property_animation::tests::every_numeric_field_is_registered_or_excluded` fails on a new numeric
@@ -98,9 +98,21 @@ completeness check, run as a test over the serialised form instead of as the wri
   fields are renderer components and do not exist without one. `Tween` and `KeyedAnimationPlayer`
   are saved by `full_scene_registry` outside its `render` block for the same reason.
 
-Separate work, named: writing the `MaterialMaps` parameter buffer in place so its floats can be
-keyed; `Handle<Material>` assets (the studio draws only the `Material` component); a per-field ◆
-in the inspector.
+- **A keyed `MaterialMaps` value builds a bind group, and the cache keeps only the held ones**
+  (2026-11-16). The maps' strengths and UV transform live in the material's own uniform buffer,
+  inside the bind group `AssetManager::load_material` caches under `{base}|{maps:?}` — so every
+  value is a key. That cache never evicted, which is why these fields were first left out: an
+  animated offset would have kept a buffer and a bind group per frame for the renderer's life. Now
+  an entry no `Arc` outside the cache holds (no game material, no render-world copy) is dropped
+  whenever a new one is made; measured, 600 frames of a scrolled offset leave 5 entries where they
+  left 602 (`material_cache_tests`). What a moving value costs is one small buffer and bind group
+  per frame, textures shared. Writing the buffer in place instead was considered and not taken:
+  a bind group is shared by every material with the same sources and strengths (glTF clones,
+  `Material` copies), so an in-place write would move all of them, and telling a sole owner apart
+  rests on `Arc` counts the render thread's copy makes unreliable.
+
+Separate work, named: `Handle<Material>` assets (the studio draws only the `Material` component);
+a per-field ◆ in the inspector.
 
 ---
 

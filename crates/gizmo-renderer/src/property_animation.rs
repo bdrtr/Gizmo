@@ -10,10 +10,6 @@
 //!
 //! Deliberately **not** registered — each is a cache or a description that a write to the live
 //! value would not reach, or would make leak:
-//! - the `MaterialMaps` floats (`normal_scale`, `emissive_factor`, the UV transform…): the
-//!   material's GPU parameters are built once per distinct maps value and kept in a cache that
-//!   never evicts (`asset::AssetManager::load_material`, keyed by `{maps:?}`), so an animated
-//!   value would leak one buffer per frame it took. Writing that buffer in place is separate work.
 //! - `MaterialDesc`: it is the saved description; `material_sync` writes it from the live
 //!   `Material` every frame, so a track on it would fight that sync and lose.
 //! - `SpotLight::cookie`, `Camera::clear_color`, `Camera::viewport`, `Text::max_width`: not
@@ -22,8 +18,10 @@
 //!   an enum (`SpriteSpace::Screen`, `TextSpace::Screen`, `DofBlur::Bokeh`), which a name cannot
 //!   address without saying what happens when the variant is another.
 //!
-//! Two that are registered and cost something: `Text.size_px` lays the text out again at each new
-//! size (the layout cache is bounded) and rasterises its glyphs once per whole pixel size into the
+//! Registered, at a cost: the `MaterialMaps` strengths and UV transform (`Material.maps.uv_offset`,
+//! …) build the material's bind group again at each new value — a small uniform buffer and a bind
+//! group, the textures shared; the cache keeps only those a material still holds. And
+//! `Text.size_px` lays the text out again at each new size (the layout cache is bounded) and rasterises its glyphs once per whole pixel size into the
 //! glyph atlas, which never evicts — a size swept from 16 to 64 px stores 49 copies of each glyph.
 
 use gizmo_animation::property::{PropertyError, PropertyRegistry};
@@ -58,6 +56,18 @@ pub fn engine_properties(reg: &mut PropertyRegistry) -> Vec<PropertyError> {
     taken.extend(reg.register::<Material, Vec3>("Material.attenuation_color", |m| m.attenuation_color, |m, v| m.attenuation_color = v).err());
     taken.extend(reg.register::<Material, f32>("Material.attenuation_distance", |m| m.attenuation_distance, |m, v| m.attenuation_distance = v).err());
     taken.extend(reg.register::<Material, Vec3>("Material.specular_tint", |m| m.specular_tint, |m, v| m.specular_tint = v).err());
+    // ── Material maps: the strengths and UV transform in the material's own uniform buffer. A change
+    // builds the bind group again (`material_sync::rebind_changed_materials`) — a uniform buffer and
+    // a bind group per frame the value moves, the textures shared — and the cache keeps only what
+    // a material still holds (`asset::AssetManager::load_material`). A scrolling conveyor or water
+    // surface is `Material.maps.uv_offset.x`.
+    taken.extend(reg.register::<Material, f32>("Material.maps.normal_scale", |m| m.maps.normal_scale, |m, v| m.maps.normal_scale = v).err());
+    taken.extend(reg.register::<Material, Vec3>("Material.maps.emissive_factor", |m| m.maps.emissive_factor, |m, v| m.maps.emissive_factor = v).err());
+    taken.extend(reg.register::<Material, f32>("Material.maps.occlusion_strength", |m| m.maps.occlusion_strength, |m, v| m.maps.occlusion_strength = v).err());
+    taken.extend(reg.register::<Material, f32>("Material.maps.lightmap_intensity", |m| m.maps.lightmap_intensity, |m, v| m.maps.lightmap_intensity = v).err());
+    taken.extend(reg.register_lanes::<Material, Vec2>("Material.maps.uv_scale", |m| Vec2::from(m.maps.uv_scale), |m, v| m.maps.uv_scale = v.to_array()).err());
+    taken.extend(reg.register::<Material, f32>("Material.maps.uv_rotation", |m| m.maps.uv_rotation, |m, v| m.maps.uv_rotation = v).err());
+    taken.extend(reg.register_lanes::<Material, Vec2>("Material.maps.uv_offset", |m| Vec2::from(m.maps.uv_offset), |m, v| m.maps.uv_offset = v.to_array()).err());
 
     // ── Lights: gathered from the world every frame.
     taken.extend(reg.register::<PointLight, Vec3>("PointLight.color", |l| l.color, |l, v| l.color = v).err());
@@ -276,7 +286,6 @@ mod tests {
     /// on one of these components fails `every_numeric_field_is_registered_or_excluded` until
     /// someone decides which list it belongs on.
     const EXCLUDED: &[(&str, &str)] = &[
-        ("Material.maps", "MaterialMaps: the GPU parameters are cached per distinct maps value and never evicted"),
         ("Camera.clear_color", "an Option: a key cannot say 'none'"),
         ("Camera.viewport", "an Option of a rectangle: a key cannot say 'none'"),
         ("Text.max_width", "an Option: a key cannot say 'none'"),
