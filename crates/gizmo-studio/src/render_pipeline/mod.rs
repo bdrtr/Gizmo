@@ -212,8 +212,23 @@ fn draw_studio_frame(
         let editor_only = world.query::<&gizmo::core::component::EditorOnly>();
 
         {
-            let mut q = world.query::<(Entity, &Mesh, &gizmo::physics::components::GlobalTransform, &Material)>();
-            for (e, mesh, global_trans, mat) in q.iter_mut() {
+            // What draws: a `Mesh` and a `Material` on the entity, or handles to them in `Assets` —
+            // `MeshBundle`'s way, which the game's draw has always looked up. This loop asked for
+            // the components alone until 2026-11-16, so a bundle's mesh was in the game and not in
+            // the viewport at all (`an_entity_made_from_asset_handles_is_drawn_in_the_editor_viewport`).
+            let mesh_assets = world.try_get_resource::<gizmo::core::asset::Assets<Mesh>>().ok();
+            let material_assets = world.try_get_resource::<gizmo::core::asset::Assets<Material>>().ok();
+            let handled = world.query::<(
+                Entity,
+                &gizmo::core::asset::Handle<Mesh>,
+                &gizmo::physics::components::GlobalTransform,
+                &gizmo::core::asset::Handle<Material>,
+            )>();
+            let by_handle = handled.iter().filter_map(|(e, mesh, transform, material)| {
+                Some((e, mesh_assets.as_ref()?.get(mesh)?, transform, material_assets.as_ref()?.get(material)?))
+            });
+            let q = world.query::<(Entity, &Mesh, &gizmo::physics::components::GlobalTransform, &Material)>();
+            for (e, mesh, global_trans, mat) in q.iter().chain(by_handle) {
                 // Sadece MeshRenderer tagli olanları çiz
                 if renderers.get(e).is_none() {
                     continue;

@@ -123,8 +123,20 @@ completeness check, run as a test over the serialised form instead of as the wri
   camera none for its exposure and the look none for its sensor height — all added. `Sprite` and
   `Text` have no inspector section in the studio, so no ◆: that is the open part.
 
-Separate work, named: `Handle<Material>` assets (the studio draws only the `Material` component);
-inspector sections for `Sprite` and `Text` (an image and a font to pick, not only numbers).
+- **A mesh held by handle is drawn, clicked and boxed in the studio** (2026-11-16). `MeshBundle`
+  — the documented way to spawn a mesh — puts `Handle<Mesh>` and `Handle<Material>` on the entity;
+  the game's draw has always looked them up in `Assets`, the studio's viewport loop asked for the
+  `Mesh` and `Material` components only. Such an entity was in the game and not in the editor at
+  all (4092 of 4092 pixels of a cube missing, `an_entity_made_from_asset_handles_is_drawn_in_the_editor_viewport`),
+  a click went through it and its selection box was missing. The viewport now walks both, and
+  picking and the selection box ask `gizmo_studio::drawn_mesh::DrawnMeshes`, which answers from
+  the component or the handle.
+
+Separate work, named: inspector sections for `Sprite` and `Text` (an image and a font to pick, not
+only numbers). And a decision rather than a defect: a property track on a `Handle<Material>`
+entity — the asset is shared by every entity that holds the handle, so a per-entity track on it
+would move them all; whether a track may name an asset, and how, is a design question the clip
+format does not answer yet.
 
 ---
 

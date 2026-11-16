@@ -77,7 +77,8 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
     if let Some(mut gizmos) = world.get_resource_mut::<gizmo::renderer::Gizmos>() {
         gizmos.depth_test = false;
 
-        let meshes = world.query::<&gizmo::renderer::components::Mesh>();
+        // A bundle's mesh is in `Assets`, not on the entity: its box comes from there.
+        let meshes = crate::drawn_mesh::DrawnMeshes::new(world);
         let global_transforms = world.query::<&gizmo::physics::components::GlobalTransform>();
         let Some(editor_state) = world.get_resource::<gizmo::editor::EditorState>() else { return; };
 

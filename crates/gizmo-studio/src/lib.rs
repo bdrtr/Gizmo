@@ -35,6 +35,8 @@ pub mod setup;
 /// The studio's runtime state — cameras, timers, frame counters — and the table every spawned
 /// primitive's size is read from.
 pub mod state;
+/// The mesh an entity draws, from its component or from its handle into `Assets`.
+pub mod drawn_mesh;
 /// Viewport picking: the mouse ray, OBB selection and the rubber band.
 pub mod studio_input;
 /// The per-frame systems the studio's update hook runs, one module each.

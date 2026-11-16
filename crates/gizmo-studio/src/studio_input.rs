@@ -127,7 +127,7 @@ fn find_closest_hit(world: &World, ray: &Ray, player_id: Entity) -> Option<Entit
 
     let global_transforms = world.query::<&gizmo::physics::components::GlobalTransform>();
     let colliders = world.query::<&Collider>();
-    let meshes = world.query::<&gizmo::renderer::components::Mesh>();
+    let meshes = crate::drawn_mesh::DrawnMeshes::new(world);
     let is_hidden = world.query::<&gizmo::core::component::IsHidden>();
 
     for (entity, t) in world.query::<(Entity, &Transform)>().iter() {
@@ -164,7 +164,7 @@ struct ObbInfo {
 fn compute_entity_obb(
     id: Entity,
     local_transform: &Transform,
-    meshes: &gizmo::core::Query<'_, &gizmo::renderer::components::Mesh>,
+    meshes: &crate::drawn_mesh::DrawnMeshes<'_>,
     colliders: &gizmo::core::Query<'_, &Collider>,
     global_transforms: &gizmo::core::Query<'_, &gizmo::physics::components::GlobalTransform>,
 ) -> Option<ObbInfo> {
@@ -250,7 +250,7 @@ fn perform_rubber_band_selection(
     let global_transforms = world.query::<&gizmo::physics::components::GlobalTransform>();
     let is_hidden = world.query::<&gizmo::core::component::IsHidden>();
     let colliders = world.query::<&Collider>();
-    let meshes = world.query::<&gizmo::renderer::components::Mesh>();
+    let meshes = crate::drawn_mesh::DrawnMeshes::new(world);
 
     for (id, t) in world.query::<(Entity, &Transform)>().iter() {
         if id == player_id || is_hidden.get(id).is_some() || is_editor_entity(world, id) {
@@ -487,7 +487,7 @@ mod tests {
 
     fn obb_of(world: &World, id: Entity) -> Option<super::ObbInfo> {
         let transforms = world.query::<&Transform>();
-        let meshes = world.query::<&gizmo::renderer::components::Mesh>();
+        let meshes = crate::drawn_mesh::DrawnMeshes::new(world);
         let colliders = world.query::<&Collider>();
         let gts = world.query::<&GlobalTransform>();
         let t = transforms.get(id).unwrap();
@@ -525,6 +525,36 @@ mod tests {
         assert!((obb.half_extents - Vec3::new(1.0, 1.5, 2.0)).length() < 1e-4);
         // Center unaffected by scale because the collider offset is zero.
         assert!((obb.center - Vec3::new(5.0, 0.0, 0.0)).length() < 1e-4);
+    }
+
+    /// **A mesh held by handle is clicked through its mesh.** `MeshBundle` puts a `Handle<Mesh>` on
+    /// the entity and the mesh in `Assets`; the picking OBB is the mesh's bounds — a ±1 cube, so a
+    /// half-extent of 1 — as for a mesh held as a component. Until 2026-11-16 such an entity had no
+    /// OBB at all: it was not drawn in the viewport and a click went through it.
+    #[test]
+    fn compute_obb_from_a_mesh_held_by_handle() {
+        let instance = gizmo::wgpu::Instance::new(gizmo::wgpu::InstanceDescriptor {
+            backends: gizmo::wgpu::Backends::NOOP,
+            backend_options: gizmo::wgpu::BackendOptions {
+                noop: gizmo::wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..gizmo::wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&gizmo::wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let (device, _queue) = pollster::block_on(adapter.request_device(&gizmo::wgpu::DeviceDescriptor::default())).expect("a noop device");
+
+        let mut world = World::new();
+        let mut meshes = gizmo::core::asset::Assets::<gizmo::renderer::components::Mesh>::new();
+        let handle = meshes.add(gizmo::renderer::asset::AssetManager::create_cube(&device));
+        world.insert_resource(meshes);
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::new(3.0, 0.0, 0.0)));
+        world.add_component(e, handle);
+
+        let obb = obb_of(&world, e).expect("a mesh held by handle yields an OBB");
+        assert!((obb.center - Vec3::new(3.0, 0.0, 0.0)).length() < 1e-4, "{:?}", obb.center);
+        assert!((obb.half_extents - Vec3::ONE).length() < 1e-4, "{:?}", obb.half_extents);
     }
 
     #[test]

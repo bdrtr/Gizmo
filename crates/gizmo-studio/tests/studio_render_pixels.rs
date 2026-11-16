@@ -1898,6 +1898,48 @@ fn a_cut_out_material_cuts_in_the_editor_viewport() {
     );
 }
 
+/// **An entity made from asset handles is drawn in the editor viewport.** `MeshBundle` — the engine's
+/// documented way to spawn a mesh — puts a `Handle<Mesh>` and a `Handle<Material>` on the entity,
+/// with the mesh and the material in `Assets`; the game's draw has always looked them up there. The
+/// viewport's own loop asked for `Mesh` and `Material` components only, so a bundle's cube was in the
+/// game and not in the editor at all. The same cube made from components is the reference: the two
+/// frames must be the same picture.
+#[test]
+fn an_entity_made_from_asset_handles_is_drawn_in_the_editor_viewport() {
+    use gizmo::core::asset::Assets;
+    let _gpu = gpu_lock();
+    let red = |tex: &std::sync::Arc<wgpu::BindGroup>| Material::new(tex.clone()).with_pbr(Vec4::new(0.9, 0.1, 0.1, 1.0), 0.5, 0.0);
+    let (Some(empty), Some(components), Some(handles)) = (
+        render_one_light_frame(|_, _, _| {}),
+        render_one_light_frame(|world, renderer, tex| {
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::ZERO));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, AssetManager::create_cube(&renderer.device));
+            world.add_component(e, red(tex));
+            world.add_component(e, MeshRenderer::new());
+        }),
+        render_one_light_frame(|world, renderer, tex| {
+            let mut meshes = Assets::<Mesh>::new();
+            let mut materials = Assets::<Material>::new();
+            let bundle = gizmo::prelude::MeshBundle::new(meshes.add(AssetManager::create_cube(&renderer.device)), materials.add(red(tex)));
+            world.insert_resource(meshes);
+            world.insert_resource(materials);
+            world.spawn_bundle(bundle);
+        }),
+    ) else {
+        return;
+    };
+    let drawn = differing_pixels(&empty, &components);
+    assert!(drawn >= 500, "the reference cube changed only {drawn} pixels — the fixture draws nothing");
+    let missing = differing_pixels(&components, &handles);
+    assert_eq!(
+        missing, 0,
+        "the cube made from asset handles differs from the same cube made from components in {missing} \
+         of {drawn} pixels — the viewport is not drawing `Handle<Mesh>` + `Handle<Material>` entities"
+    );
+}
+
 /// **Glass in the editor is glass.** The viewport has its own draw loop, and a loop that did not know
 /// about the copy of the frame would draw a clear pane as a white wall or as nothing.
 #[test]
@@ -2132,23 +2174,7 @@ fn render_pane_frame_with(
 ///
 /// `None` spawns no quad at all — the reference the other two are measured against.
 fn render_cutout_frame(cutoff: Option<f32>) -> Option<Vec<u8>> {
-    if !pollster::block_on(Renderer::headless_adapter_available())
-        || pollster::block_on(Renderer::headless_adapter_is_software())
-    {
-        eprintln!("skipping: no usable GPU adapter");
-        return None;
-    }
-
-    pollster::block_on(async {
-        let mut renderer = shared_device_renderer(W, H).await;
-        let mut asset_manager = AssetManager::new();
-        let mut world = World::new();
-        let tex = asset_manager.create_white_texture(
-            &renderer.device,
-            &renderer.queue,
-            &renderer.scene.texture_bind_group_layout,
-        );
-
+    render_one_light_frame(|world, renderer, tex| {
         if let Some(cutoff) = cutoff {
             let e = world.spawn();
             world.add_component(
@@ -2166,6 +2192,30 @@ fn render_cutout_frame(cutoff: Option<f32>) -> Option<Vec<u8>> {
             );
             world.add_component(e, MeshRenderer::new());
         }
+    })
+}
+
+/// The editor's pipeline over what `spawn` puts in front of a camera at z = 6 looking down −z, lit by
+/// one sun, in a white texture's bind group handed to it.
+fn render_one_light_frame(spawn: impl FnOnce(&mut World, &Renderer, &std::sync::Arc<wgpu::BindGroup>)) -> Option<Vec<u8>> {
+    if !pollster::block_on(Renderer::headless_adapter_available())
+        || pollster::block_on(Renderer::headless_adapter_is_software())
+    {
+        eprintln!("skipping: no usable GPU adapter");
+        return None;
+    }
+
+    pollster::block_on(async {
+        let mut renderer = shared_device_renderer(W, H).await;
+        let mut asset_manager = AssetManager::new();
+        let mut world = World::new();
+        let tex = asset_manager.create_white_texture(
+            &renderer.device,
+            &renderer.queue,
+            &renderer.scene.texture_bind_group_layout,
+        );
+
+        spawn(&mut world, &renderer, &tex);
 
         let cam = world.spawn();
         world.add_component(cam, Transform::new(Vec3::new(0.0, 0.0, 6.0)));

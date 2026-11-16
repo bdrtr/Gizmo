@@ -59,6 +59,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Fixed: a mesh spawned with `MeshBundle` was invisible in the studio.** `MeshBundle` puts `Handle<Mesh>` and
+  `Handle<Material>` on the entity; the game's draw looked them up in `Assets`, the studio's viewport asked for `Mesh`
+  and `Material` components only — so the mesh was in the game and not in the editor (a whole cube missing,
+  `an_entity_made_from_asset_handles_is_drawn_in_the_editor_viewport`), a click went through it and its selection
+  box was missing. The viewport walks both now; picking and the selection box go through
+  `gizmo_studio::drawn_mesh::DrawnMeshes`, which answers from either.
 - **The inspector keys a field where it shows it: a ◆ beside every animatable field.** On an entity with a
   `KeyedAnimationPlayer`, a click keys the field at its value now at the playhead — its track made by the first click —
   as Godot's property key icon does; one undo entry per key. The engine's rows and a game component's registered

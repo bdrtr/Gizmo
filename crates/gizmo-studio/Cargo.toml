@@ -40,3 +40,6 @@ pollster = "1.0"
 # is written against. Test-only, like the two above.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# Tests that build a `Mesh` (wgpu buffers) with no GPU, on the noop backend — they run in CI. The
+# engine's `wgpu` with one more backend turned on; the shipped binary's graph is unchanged.
+wgpu = { version = "30", default-features = false, features = ["noop", "wgsl"] }
