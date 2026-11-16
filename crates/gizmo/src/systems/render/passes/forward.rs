@@ -229,8 +229,14 @@ fn record_veil_depth(
             continue;
         }
         let pipeline = match item.surface {
-            Some(id) => match renderer.custom_materials.surface(id).and_then(|s| s.prepass_pipeline(true)) {
-                Some(pipeline) => pipeline,
+            Some(id) => match renderer.custom_materials.surface(id) {
+                Some(s) if s.is_solid() => {
+                    if item.discards { &def.z_prepass_discard_pipelines[1] } else { &def.z_prepass_double_sided_pipeline }
+                }
+                Some(s) => match s.prepass_pipeline(true) {
+                    Some(pipeline) => pipeline,
+                    None => continue,
+                },
                 None => continue,
             },
             None if item.discards => &def.z_prepass_discard_pipelines[1],

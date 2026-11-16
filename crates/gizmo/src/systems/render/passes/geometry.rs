@@ -49,8 +49,17 @@ pub fn record_deferred_geometry(
                 let pipeline = match item.surface {
                     // A game's surface cuts where its own code says, so its prepass always has the
                     // fragment stage; an id with nothing behind it draws nothing, here as everywhere.
-                    Some(id) => match renderer.custom_materials.surface(id).and_then(|s| s.prepass_pipeline(item.is_double_sided)) {
-                        Some(pipeline) => pipeline,
+                    Some(id) => match renderer.custom_materials.surface(id) {
+                        // A surface that never cuts leaves the depth a plain solid does.
+                        Some(s) if s.is_solid() => match (item.discards, item.is_double_sided) {
+                            (true, two_sided) => &def.z_prepass_discard_pipelines[usize::from(two_sided)],
+                            (false, true) => &def.z_prepass_double_sided_pipeline,
+                            (false, false) => &def.z_prepass_pipeline,
+                        },
+                        Some(s) => match s.prepass_pipeline(item.is_double_sided) {
+                            Some(pipeline) => pipeline,
+                            None => continue,
+                        },
                         None => continue,
                     },
                     None => match (item.discards, item.is_double_sided) {

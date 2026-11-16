@@ -76,6 +76,12 @@ pub(super) fn report(world: &World) -> Option<String> {
         .map(|(k, label)| format!("{label} {:.1}", per_frame(k)))
         .collect::<Vec<_>>()
         .join(" · ");
+    // GPU'da (motorun zaman damgaları, birkaç kare geriden; desteklemeyen aygıtta boş).
+    let gpu = [("gpu.shadows", "gölge"), ("gpu.geometry", "geometri"), ("gpu.ssao", "ssao"), ("gpu.forward", "ileri"), ("gpu.ui", "arayüz"), ("gpu.post", "son işleme")]
+        .iter()
+        .map(|(k, label)| format!("{label} {:.1}", per_frame(k)))
+        .collect::<Vec<_>>()
+        .join(" · ");
     let stats = world
         .get_resource::<RenderStats>()
         .map(|s| {
@@ -90,7 +96,7 @@ pub(super) fn report(world: &World) -> Option<String> {
         })
         .unwrap_or_default();
     Some(format!(
-        "FPS {:.0} · kare {frame:.1} ms (en kötü {worst:.1}) · güncelleme {:.1} · render {:.1} · çizim {:.1} ms\noyun: {steps}\nfizik: {physics}\nmotor: {engine}{stats}",
+        "FPS {:.0} · kare {frame:.1} ms (en kötü {worst:.1}) · güncelleme {:.1} · render {:.1} · çizim {:.1} ms\noyun: {steps}\nfizik: {physics}\nmotor: {engine}\nGPU: {gpu}{stats}",
         1000.0 / frame.max(0.001),
         part("update"),
         part("render"),

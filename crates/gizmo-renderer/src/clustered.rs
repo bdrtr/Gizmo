@@ -624,6 +624,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 cascade_splits: [0.0; 4],
                 local: crate::local_shadows::LocalShadows::default(),
                 bias_scale: [1.0, 1.0],
+                resolution: crate::csm::SHADOW_MAP_RES,
             },
             environment: EnvironmentFrame::default(),
             elapsed_time: 0.0,

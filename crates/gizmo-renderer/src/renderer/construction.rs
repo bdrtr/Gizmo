@@ -176,7 +176,7 @@ impl Renderer {
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
-                    required_features: wgpu::Features::POLYGON_MODE_LINE,
+                    required_features: native_device_features(&adapter),
                     required_limits: native_device_limits(&adapter),
                     label: None,
                     experimental_features: wgpu::ExperimentalFeatures::default(),
@@ -395,7 +395,7 @@ impl Renderer {
 
         adapter
             .request_device(&wgpu::DeviceDescriptor {
-                required_features: wgpu::Features::POLYGON_MODE_LINE,
+                required_features: native_device_features(&adapter),
                 required_limits: native_device_limits(&adapter),
                 label: None,
                 experimental_features: wgpu::ExperimentalFeatures::default(),
@@ -685,6 +685,8 @@ impl Renderer {
         // Not built until asked for (`Renderer::set_smaa`): its shader is long, and a phone that never turns it
         // on should not compile it three times at every start.
         let smaa = None;
+        let gpu_timer = crate::gpu_timer::GpuTimer::new(&device, &queue);
+        let device_type = device.adapter_info().device_type;
 
         let mut renderer = Self {
             instance: None,
@@ -720,7 +722,7 @@ impl Renderer {
             reflection_probe: None,
             motion_history: Default::default(),
             light_cookies: Default::default(),
-            shadow_settings: Default::default(),
+            shadow_settings: crate::csm::ShadowSettings::for_device(device_type),
             scene_extent: Default::default(),
             fog: None,
             sky: None,
@@ -755,6 +757,7 @@ impl Renderer {
             skip_mirrors: false,
             skip_sky: false,
             draw_laps: Vec::new(),
+            gpu_timer,
             exposure: 1.15,
             // Depth of field is an opt-in artistic effect, not a default: with it
             // ON, any scene whose subject isn't near `dof_focus_dist` (4.5 m) is
@@ -786,6 +789,12 @@ impl Renderer {
         renderer.enable_volumetric();
         renderer
     }
+}
+
+/// The features every native renderer device is asked for: line polygons (the debug wireframe), and
+/// the GPU timer's timestamps (`crate::gpu_timer`) where the adapter has them.
+pub(crate) fn native_device_features(adapter: &wgpu::Adapter) -> wgpu::Features {
+    wgpu::Features::POLYGON_MODE_LINE | (adapter.features() & crate::gpu_timer::GpuTimer::FEATURES)
 }
 
 /// The limits every native renderer device is asked for.

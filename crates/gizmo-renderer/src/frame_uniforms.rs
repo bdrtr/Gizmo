@@ -160,6 +160,8 @@ pub struct ShadowFrame {
     pub local: crate::local_shadows::LocalShadows,
     /// `ShadowSettings::depth_bias` and `normal_offset`, the multipliers on every lookup's bias.
     pub bias_scale: [f32; 2],
+    /// `ShadowSettings::resolution`: the cascades' texels a side, which the soft-shadow filter steps by.
+    pub resolution: u32,
 }
 
 impl Default for ShadowFrame {
@@ -171,6 +173,7 @@ impl Default for ShadowFrame {
             cascade_splits: [1.0, 10.0, 50.0, 500.0],
             local: crate::local_shadows::LocalShadows::default(),
             bias_scale: [1.0, 1.0],
+            resolution: SHADOW_MAP_RES,
         }
     }
 }
@@ -424,7 +427,7 @@ impl SceneUniforms {
             // w = tan(sun angular radius): the soft-shadow size `sun_shadow_visibility` reads; 0 = a
             // sun with no size, filtered 3×3. The slot was unused padding.
             camera_forward: camera.forward.extend(sun.angular_radius.max(0.0).tan()).to_array(),
-            cascade_params: [camera.near, 1.0 / SHADOW_MAP_RES as f32, *elapsed_time, 0.0],
+            cascade_params: [camera.near, 1.0 / shadows.resolution.max(1) as f32, *elapsed_time, 0.0],
             num_lights: *num_lights,
             // Derived here rather than plumbed: the grid is the one `ClusterGrid::default()` both
             // sides use, and the depth mapping comes from the camera's own near/far, which this

@@ -87,7 +87,7 @@ pub fn bench(frames: usize) -> bool {
             }
         }
         let mut world = World::new();
-        let ground = renderer.add_surface_material("dunya_arazi", modeller::GROUND_WGSL).unwrap_or_else(|e| panic!("{e}"));
+        let ground = renderer.add_solid_surface_material("dunya_arazi", modeller::GROUND_WGSL).unwrap_or_else(|e| panic!("{e}"));
         world.insert_resource(modeller::ground_look(ground));
         let water = renderer.add_surface_material("dunya_su", modeller::WATER_WGSL).unwrap_or_else(|e| panic!("{e}"));
         world.insert_resource(modeller::water_look(water));
@@ -139,6 +139,10 @@ pub fn bench(frames: usize) -> bool {
             renderer.ssgi.is_some(),
         );
         let font = renderer.default_font();
+        // `DUNYA_BENCH_OFF=ground`: arazi düz renkli PBR — dokulu yüzeyinin payını görmek için.
+        if off("ground") {
+            world.insert_resource(modeller::GroundLook(MaterialDesc::new().with_pbr(Vec4::new(0.3, 0.5, 0.2, 1.0), 0.9, 0.0)));
+        }
         let mut game = setup(&mut world, font, true);
         // `DUNYA_BENCH_NOMAP=1`: küçük harita kapalı — ikinci kameranın payını görmek için.
         if std::env::var("DUNYA_BENCH_NOMAP").is_ok_and(|v| !v.is_empty() && v != "0") {
@@ -245,6 +249,12 @@ pub fn bench(frames: usize) -> bool {
                 .collect::<Vec<_>>()
                 .join(" · ");
             println!("dunya --bench: görünümlerin kodlaması (CPU, kare başına ms): {views}");
+            let gpu = ["gpu.shadows", "gpu.geometry", "gpu.ssao", "gpu.forward", "gpu.ui", "gpu.post", "gpu.between"]
+                .iter()
+                .map(|k| format!("{} {:.2}", k.trim_start_matches("gpu."), per_frame(k)))
+                .collect::<Vec<_>>()
+                .join(" · ");
+            println!("dunya --bench: GPU'da görünümler (kare başına ms): {gpu}");
         }
         if let Some(r) = olcum::report(&world) {
             println!("dunya --bench: oyunun adımları: {}", r.lines().skip(1).collect::<Vec<_>>().join(" | "));

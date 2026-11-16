@@ -156,10 +156,11 @@ mod tests {
                 return;
             }
             let mut renderer = Renderer::new_headless(64, 64, None).await;
-            for (label, wgsl) in [("dunya_arazi", GROUND_WGSL), ("dunya_su", WATER_WGSL)] {
-                if let Err(e) = renderer.add_surface_material(label, wgsl) {
-                    panic!("{label}: {e}");
-                }
+            if let Err(e) = renderer.add_solid_surface_material("dunya_arazi", GROUND_WGSL) {
+                panic!("dunya_arazi: {e}");
+            }
+            if let Err(e) = renderer.add_surface_material("dunya_su", WATER_WGSL) {
+                panic!("dunya_su: {e}");
             }
         });
     }

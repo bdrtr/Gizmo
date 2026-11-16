@@ -299,9 +299,17 @@ pub fn draw_frame(
     renderer: &mut Renderer,
 ) {
     let mut laps = Laps::start();
+    // The GPU's times of frames it has finished, into the draw's laps (`gizmo_renderer::gpu_timer`).
+    {
+        let Renderer { gpu_timer, device, draw_laps, .. } = &mut *renderer;
+        if let Some(timer) = gpu_timer.as_mut() {
+            timer.collect(device, draw_laps);
+        }
+    }
     if any_camera_has_a_viewport(world) {
         draw_viewports(world, encoder, view, renderer);
         laps.draw_lap(renderer, "render.viewports");
+        end_gpu_frame(renderer, encoder);
         return;
     }
     let camera = crate::renderer::components::active_camera(world);
@@ -313,6 +321,14 @@ pub fn draw_frame(
     laps.draw_lap(renderer, "render.mirrors");
     draw_camera_view(world, encoder, view, renderer, camera, true, None, true, None);
     laps.draw_lap(renderer, "render.camera");
+    end_gpu_frame(renderer, encoder);
+}
+
+/// Resolves the frame's GPU timestamps in `encoder`, the frame's last — submitted after every view's.
+fn end_gpu_frame(renderer: &mut Renderer, encoder: &mut wgpu::CommandEncoder) {
+    if let Some(timer) = renderer.gpu_timer.as_mut() {
+        timer.end_frame(encoder);
+    }
 }
 
 /// How much of each GPU simulation a frame runs: the particles' and the fluid's share of what they
@@ -1439,6 +1455,8 @@ fn draw_camera_view_with(
     simple: bool,
 ) {
     let mut laps = Laps::start();
+    // The view's first GPU mark: what it times is the gap since the last view, not a part of this one.
+    renderer.gpu_mark(encoder, "gpu.between");
     renderer.skip_mirrors = capture.is_some() || simple;
     renderer.skip_sky = capture.as_ref().is_some_and(|fixed| fixed.bounce);
     // Post-process params are written AFTER the active camera is resolved (below), so the
@@ -1690,7 +1708,7 @@ fn draw_camera_view_with(
     // The local lights' shadow layers: the array grown to hold them, each layer's matrix where its
     // pass reads it.
     let local_shadow_layers = setup.local_shadows.layers();
-    renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades());
+    renderer.scene.ensure_sun_shadow_maps(&renderer.device, setup.draws_cascades(), renderer.shadow_settings.resolution);
     renderer.scene.ensure_local_shadow_layers(&renderer.device, local_shadow_layers.len());
     // The forward-only path's lit pipelines read the sun's shadow only while there is one to read, and
     // the local lights' layers and cookies only while a frame draws a layer or lights a spot through a
@@ -1835,6 +1853,7 @@ fn draw_camera_view_with(
         }
     }
     laps.draw_lap(renderer, "view.shadows");
+    renderer.gpu_mark(encoder, "gpu.shadows");
     passes::record_deferred_geometry(
         encoder,
         renderer,
@@ -1843,8 +1862,10 @@ fn draw_camera_view_with(
         uploaded_instances,
         cam_pos,
     );
+    renderer.gpu_mark(encoder, "gpu.geometry");
     passes::record_ssao(encoder, renderer);
     laps.draw_lap(renderer, "view.geometry");
+    renderer.gpu_mark(encoder, "gpu.ssao");
     // CPU-computed inverse of the (unjittered) view-projection for the volumetric smoke raymarch
     // (the WGSL inverse_mat4 returns a wrong inverse for the perspective matrix).
     let inv_view_proj = unjittered_view_proj.inverse().to_cols_array_2d();
@@ -1869,12 +1890,14 @@ fn draw_camera_view_with(
     }
     passes::record_taa_and_overlays(encoder, renderer, world, capture.is_none());
     laps.draw_lap(renderer, "view.forward");
+    renderer.gpu_mark(encoder, "gpu.forward");
     // After the overlays and before post-processing: sprites and text are overlays too, and the
     // ones whose smear a temporal resolve makes most obvious. Sprites first, so a HUD label lands
     // on its HUD image; with the UNJITTERED matrix, so a sprite drawn past TAA does not shimmer.
     record_sprites(encoder, renderer, world, unjittered_view_proj);
     record_text(encoder, renderer, world);
     laps.draw_lap(renderer, "view.ui");
+    renderer.gpu_mark(encoder, "gpu.ui");
 
     // A probe face stops at the HDR target: what it captures is radiance, not a graded picture.
     if capture.is_some() {
@@ -1888,6 +1911,7 @@ fn draw_camera_view_with(
     renderer.update_auto_exposure(exposure_dt);
     renderer.run_post_processing_in(encoder, view, region, overlay);
     laps.draw_lap(renderer, "view.post");
+    renderer.gpu_mark(encoder, "gpu.post");
 }
 
 // ============================================================
@@ -5585,7 +5609,9 @@ mod golden_render_tests {
             // there; the desktop draws them whatever it says.
             renderer.shadow_settings = renderer.shadow_settings.with_forward_only(false);
             let _ = render_world(&mut renderer, &mut world).await;
-            let full = gizmo_renderer::SHADOW_MAP_RES;
+            // The renderer's starting resolution: `SHADOW_MAP_RES`, or less on an integrated GPU.
+            let full = renderer.shadow_settings.resolution;
+            assert_eq!(full, gizmo_renderer::csm::ShadowSettings::for_device(renderer.device.adapter_info().device_type).resolution);
             let turned_off = if cfg!(gizmo_forward_only) { (1, 1) } else { (full, full) };
             assert_eq!(edge(&renderer.scene.shadow_depth_texture), turned_off, "a sun's cascades, unless turned off there");
             // On, as by default: at their path's size, 2048 and one layer there, 3072 and four here.
@@ -5597,6 +5623,13 @@ mod golden_render_tests {
                 gizmo_renderer::csm::CASCADES_DRAWN as u32,
                 "a layer a cascade drawn",
             );
+            // Another resolution is made the next frame, and the lookups step by its texel.
+            renderer.shadow_settings.resolution = 1024;
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_eq!(edge(&renderer.scene.shadow_depth_texture), (1024, 1024), "the cascades at the new size");
+            renderer.shadow_settings.resolution = full;
+            let _ = render_world(&mut renderer, &mut world).await;
+            assert_eq!(edge(&renderer.scene.shadow_depth_texture), (full, full), "and back");
 
             // A local light's layers once one casts — 512² on the forward-only path, 1024² here — and the
             // cookies once a game registers one.
@@ -10134,6 +10167,114 @@ mod golden_render_tests {
             // instance flag (transparent 0), and the batcher never writing it (both 0).
             assert!(found[0] > 80, "the deferred path honours it: {} shadow pixels", found[0]);
             assert!(found[1] > 80, "the forward path honours it: {} shadow pixels", found[1]);
+        });
+    }
+
+    /// **A solid surface casts by its shape; one that may cut, by its function.** A cube whose
+    /// surface cuts every pixel (alpha 0 under a cutoff of 0.5) over a floor under a high sun:
+    /// registered as an ordinary surface it casts nothing — the shadow pass runs its function — and
+    /// registered solid (`add_solid_surface_material`) it casts its whole shadow, because the depth
+    /// passes draw it with the engine's own depth-only pipelines and never run the function. Which is
+    /// the point: a terrain's five texture layers ran in every shadow cascade (`dunya`, 2026-11-16).
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_solid_surface_casts_by_its_shape_without_running_its_function() {
+        use crate::renderer::components::MaterialType;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        const CUTS_ALL: &str = "#import gizmo::surface::{Surface, SurfaceInput}\n#import gizmo::material::{standard_surface}\nfn material_surface(input: SurfaceInput) -> Surface { var s = standard_surface(input); s.alpha = 0.0; s.alpha_cutoff = 0.5; return s; }";
+        // `caster`: None — the cube is plain; Some(solid) — the cutting surface, solid or not.
+        async fn frame(caster: Option<bool>, floor_receives: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssr = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            let surface = match caster {
+                Some(true) => Some(renderer.add_solid_surface_material("cuts", CUTS_ALL).expect("composes")),
+                Some(false) => Some(renderer.add_surface_material("cuts", CUTS_ALL).expect("composes")),
+                None => None,
+            };
+            let mut world = World::new();
+            let mut assets = AssetManager::new();
+            let tex = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let floor = world.spawn();
+            world.add_component(floor, Transform::new(Vec3::new(0.0, -0.2, 0.0)).with_scale(Vec3::new(20.0, 0.2, 20.0)));
+            world.add_component(floor, GlobalTransform::default());
+            world.add_component(floor, AssetManager::create_cube(&renderer.device));
+            world.add_component(floor, Material::new(tex.clone()).with_pbr(Vec4::new(0.8, 0.8, 0.8, 1.0), 0.9, 0.0));
+            world.add_component(floor, MeshRenderer::new().with_receives_shadows(floor_receives));
+            // Out of the camera's view, so only its shadow is seen: high above the floor, to one side.
+            let cube = world.spawn();
+            world.add_component(cube, Transform::new(Vec3::new(0.0, 1.0, 0.0)).with_scale(Vec3::splat(0.6)));
+            world.add_component(cube, GlobalTransform::default());
+            world.add_component(cube, AssetManager::create_cube(&renderer.device));
+            let mut mat = Material::new(tex).with_pbr(Vec4::new(0.8, 0.3, 0.3, 1.0), 0.9, 0.0);
+            if let Some(id) = surface {
+                mat.material_type = MaterialType::CustomSurface(id);
+            }
+            world.add_component(cube, mat);
+            world.add_component(cube, MeshRenderer::new());
+            world.spawn_bundle(crate::bundles::DirectionalLightBundle {
+                rotation: gizmo_math::Quat::from_rotation_z(-0.3) * gizmo_math::Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2),
+                intensity: 3.0,
+                ..Default::default()
+            });
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 6.0, 6.0), yaw: -std::f32::consts::FRAC_PI_2, pitch: -0.8, primary: true, ..Default::default() });
+            render_world(&mut renderer, &mut world).await
+        }
+        let luma = |f: &[u8], i: usize| (f[i * 4] as i32 + f[i * 4 + 1] as i32 + f[i * 4 + 2] as i32) / 3;
+        let shadow = |receiving: &[u8], refusing: &[u8]| (0..128 * 128).filter(|&i| luma(receiving, i) + 20 < luma(refusing, i)).count();
+        pollster::block_on(async {
+            let plain = shadow(&frame(None, true).await, &frame(None, false).await);
+            let cutting = shadow(&frame(Some(false), true).await, &frame(Some(false), false).await);
+            let solid = shadow(&frame(Some(true), true).await, &frame(Some(true), false).await);
+            assert!(plain > 80, "a plain cube casts: {plain} pixels");
+            assert!(cutting < 10, "a surface that cuts everywhere casts nothing: {cutting} pixels");
+            assert!(solid * 10 > plain * 8, "a solid one casts its whole shape: {solid} pixels, a plain cube {plain}");
+        });
+    }
+
+    /// **The GPU timer reads back what each part of a frame took on the GPU.** After a few frames —
+    /// the timestamps are read back without waiting, so they arrive late — the draw's laps hold the
+    /// view's parts (`gpu.shadows`, `gpu.geometry`, `gpu.post`), and the whole is not nothing. Skipped
+    /// where the device has no timestamp queries.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn the_gpu_timer_reads_back_the_parts_of_a_frame() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            if renderer.gpu_timer.is_none() {
+                eprintln!("skipping: the device has no timestamp queries");
+                return;
+            }
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 0.0, 4.0), yaw: -std::f32::consts::FRAC_PI_2, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            let mut seen: Vec<(&'static str, std::time::Duration)> = Vec::new();
+            for _ in 0..8 {
+                render_world(&mut renderer, &mut world).await;
+                seen.extend(renderer.draw_laps.drain(..).filter(|(name, _)| name.starts_with("gpu.")));
+            }
+            let names: std::collections::BTreeSet<&str> = seen.iter().map(|(n, _)| *n).collect();
+            for part in ["gpu.shadows", "gpu.geometry", "gpu.post"] {
+                assert!(names.contains(part), "{part} was not read back: {names:?}");
+            }
+            let total: std::time::Duration = seen.iter().map(|(_, d)| *d).sum();
+            assert!(total > std::time::Duration::ZERO, "the GPU took no time at all: {seen:?}");
         });
     }
 

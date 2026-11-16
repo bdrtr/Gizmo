@@ -6,7 +6,15 @@ use super::super::*;
 /// where there is no shadow pass.
 fn caster_pipeline<'a>(renderer: &'a Renderer, item: &DrawItem, front_faces: bool) -> Option<&'a wgpu::RenderPipeline> {
     match item.surface {
-        Some(id) => renderer.custom_materials.surface(id)?.shadow_pipeline(front_faces),
+        // A surface that never cuts casts as a plain solid does: no fragment stage to run.
+        Some(id) => {
+            let surface = renderer.custom_materials.surface(id)?;
+            if surface.is_solid() {
+                Some(renderer.scene.shadow_pipeline_for(front_faces, item.discards))
+            } else {
+                surface.shadow_pipeline(front_faces)
+            }
+        }
         None => Some(renderer.scene.shadow_pipeline_for(front_faces, item.discards)),
     }
 }

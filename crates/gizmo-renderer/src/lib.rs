@@ -171,6 +171,8 @@ pub mod gpu_fluid;
 pub mod gpu_particles;
 pub mod gpu_context;
 pub mod gpu_smoke;
+// How long the parts of a frame take on the GPU: timestamps read back a few frames later.
+pub mod gpu_timer;
 /// The renderer's own GPU rigid-body solver, separate from `gizmo-physics-rigid`.
 pub mod gpu_physics;
 /// The structs that mirror the shaders' own byte layouts.

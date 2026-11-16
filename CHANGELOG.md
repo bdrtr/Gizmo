@@ -50,6 +50,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **GPU timing: `gizmo_renderer::gpu_timer`.** Where the device has timestamp queries (a desktop's and most phones'
+  Vulkan), the draw writes a timestamp between each part of each view — `gpu.shadows`, `gpu.geometry`, `gpu.ssao`,
+  `gpu.forward`, `gpu.ui`, `gpu.post` — and reads them back from a ring of three a few frames later, never waiting,
+  into `Renderer::draw_laps` and from there the `FrameProfiler`. What a GPU-bound frame waits for, by pass.
+- **Solid surfaces: `SurfaceMaterial::solid` / `Renderer::add_solid_surface_material`.** A game's surface that never
+  cuts is drawn into the shadow maps and the depth prepass by the engine's depth-only pipelines, without running its
+  function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
+  registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
+  (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **`ShadowSettings::resolution`, and integrated GPUs start at 2048.** The sun's cascades' size is a setting, made
+  again the next frame it changes (`ShadowSettings::for_device` is what `Renderer` starts with): an integrated GPU's
+  four cascades are 2048² rather than 3072², which took `dunya`'s shadow pass on a Radeon 780M from 5.1 ms to 2.8.
 - **`Camera::detail`: `CameraDetail::Simple` for secondary views.** A minimap, a rear-view mirror or a monitor drawn
   without the sun's and the lights' shadow passes, ambient occlusion, volumetric light, bloom or mirrors. `dunya`'s
   minimap drawn in full cost about 7 ms of GPU and 7 of CPU a frame on its laptop's integrated GPU; simple, about 3 of

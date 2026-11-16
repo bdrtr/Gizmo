@@ -367,6 +367,8 @@ pub struct SurfaceMaterial {
     label: String,
     wgsl: String,
     pipelines: SurfacePipelines,
+    /// It never cuts: see [`solid`](Self::solid).
+    solid: bool,
 }
 
 /// The pipelines a surface is drawn with, as the engine's own material has them.
@@ -405,7 +407,26 @@ impl SurfaceMaterial {
     /// [`SurfaceError::Compose`] when the WGSL does not compose or validate inside any of them.
     pub fn from_wgsl(renderer: &crate::Renderer, label: &str, wgsl: &str) -> Result<Self, SurfaceError> {
         let pipelines = SurfacePipelines::build(&renderer.device, &renderer.scene, renderer.deferred.as_ref(), label, wgsl)?;
-        Ok(Self { label: label.to_string(), wgsl: wgsl.to_string(), pipelines })
+        Ok(Self { label: label.to_string(), wgsl: wgsl.to_string(), pipelines, solid: false })
+    }
+
+    /// This surface never cuts — its `material_surface` never sets `alpha` under `alpha_cutoff` — so
+    /// the depth passes draw it with the engine's own depth-only pipelines: its shadow and its depth
+    /// prepass run no fragment stage, where a surface that may cut runs its whole function for every
+    /// pixel of every shadow cascade to learn where it is cut. A textured terrain is the case: in
+    /// `dunya` its five layers ran in each of the sun's four cascades (measured 2026-11-16). Its
+    /// colour is still its own in the G-buffer and every lit draw. A surface marked solid that does
+    /// cut casts and occludes as if it did not.
+    #[must_use]
+    pub fn solid(mut self) -> Self {
+        self.solid = true;
+        self
+    }
+
+    /// Whether this surface never cuts ([`solid`](Self::solid)).
+    #[must_use]
+    pub fn is_solid(&self) -> bool {
+        self.solid
     }
 
     /// [`from_wgsl`](Self::from_wgsl) with the WGSL a [`ShaderGraph`](crate::shader_graph::ShaderGraph)

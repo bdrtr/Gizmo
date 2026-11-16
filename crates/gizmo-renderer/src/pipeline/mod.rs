@@ -905,12 +905,13 @@ impl SceneState {
         }
     }
 
-    /// Gives the sun's cascades their `SHADOW_MAP_RES` the first frame that `draws` them, rebuilding the
-    /// shadow group over them, and returns whether it did. Until then they are a texel a layer
-    /// (`build_shadow_resources`), so a scene with no sun, and a path that draws no shadow maps, holds
-    /// none of their 144 MiB. They are kept from then on, as the local layers are.
-    pub fn ensure_sun_shadow_maps(&mut self, device: &wgpu::Device, draws: bool) -> bool {
-        let res = crate::csm::SHADOW_MAP_RES;
+    /// Gives the sun's cascades `res` texels a side (`ShadowSettings::resolution`) the first frame that
+    /// `draws` them, or the first after the resolution changed, rebuilding the shadow group over them,
+    /// and returns whether it did. Until then they are a texel a layer (`build_shadow_resources`), so a
+    /// scene with no sun, and a path that draws no shadow maps, holds none of their memory (144 MiB at
+    /// 3072). They are kept from then on, as the local layers are.
+    pub fn ensure_sun_shadow_maps(&mut self, device: &wgpu::Device, draws: bool, res: u32) -> bool {
+        let res = res.max(1);
         if !draws || self.shadow_depth_texture.size().width == res {
             return false;
         }

@@ -22,6 +22,9 @@ pub const CASCADES_DRAWN: usize = if cfg!(gizmo_forward_only) { 1 } else { CASCA
 /// only once a frame draws them (`SceneState::ensure_sun_shadow_maps`).
 pub const SHADOW_MAP_RES: u32 = if cfg!(gizmo_forward_only) { 2048 } else { 3072 };
 
+/// The sun's cascades' resolution on an integrated GPU (`ShadowSettings::for_device`).
+pub const INTEGRATED_SHADOW_MAP_RES: u32 = 2048;
+
 /// Maximum world distance the cascades cover, independent of the camera's far plane.
 ///
 /// The camera far plane is often huge (e.g. 1500) so the sky/horizon isn't clipped,
@@ -179,6 +182,12 @@ pub struct ShadowSettings {
     /// put fine texels near the camera; and the volumetric light reads them in the air past the last
     /// surface, which a fit to the surfaces would leave unshadowed.
     pub fit_to_scene: bool,
+    /// Texels on a side of each of the sun's cascades. [`SHADOW_MAP_RES`] by default (3072 on the
+    /// desktop path, 2048 on the forward-only one); the renderer starts an integrated GPU at 2048
+    /// (`Renderer::new`): four 3072² cascades were the larger part of a frame on a Radeon 780M in
+    /// `dunya` (5.1 ms of GPU, 3.1 at 2048 — measured 2026-11-16), for shadows a little coarser.
+    /// The maps are made again at a new size the next frame that draws them.
+    pub resolution: u32,
 }
 
 impl Default for ShadowSettings {
@@ -190,11 +199,25 @@ impl Default for ShadowSettings {
             normal_offset: 1.0,
             forward_only: true,
             fit_to_scene: CASCADES_DRAWN == 1,
+            resolution: SHADOW_MAP_RES,
         }
     }
 }
 
 impl ShadowSettings {
+    /// The defaults for a GPU of this kind: an integrated one's cascades at 2048 texels a side, where
+    /// four of 3072 cost a Radeon 780M 5.1 ms of a `dunya` frame against 3.1 (measured 2026-11-16) —
+    /// it shares the system's memory bandwidth, which the shadow pass is bound by. Anything else gets
+    /// [`SHADOW_MAP_RES`]. What `Renderer` starts with.
+    #[must_use]
+    pub fn for_device(device_type: wgpu::DeviceType) -> Self {
+        let resolution = match device_type {
+            wgpu::DeviceType::IntegratedGpu => SHADOW_MAP_RES.min(INTEGRATED_SHADOW_MAP_RES),
+            _ => SHADOW_MAP_RES,
+        };
+        Self { resolution, ..Self::default() }
+    }
+
     /// The cascades fitted to how deep the camera sees into the scene, or not (see
     /// [`fit_to_scene`](Self::fit_to_scene)).
     pub fn with_fit_to_scene(mut self, on: bool) -> Self {
@@ -262,7 +285,7 @@ pub fn compute_directional_cascades_with(
         cam_near,
         &splits,
         light_dir,
-        SHADOW_MAP_RES,
+        settings.resolution.max(1),
     );
     if CASCADES_DRAWN == 1 {
         view_projs = [view_projs[0]; CASCADE_COUNT];
@@ -537,6 +560,19 @@ pub fn directional_cascade_view_projs(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// An integrated GPU starts with cascades it can afford; a discrete one with the full ones, and the
+    /// rest of the settings are the defaults either way.
+    #[test]
+    fn an_integrated_gpu_starts_with_smaller_cascades() {
+        let integrated = ShadowSettings::for_device(wgpu::DeviceType::IntegratedGpu);
+        let discrete = ShadowSettings::for_device(wgpu::DeviceType::DiscreteGpu);
+        assert_eq!(integrated.resolution, SHADOW_MAP_RES.min(INTEGRATED_SHADOW_MAP_RES));
+        assert_eq!(discrete.resolution, SHADOW_MAP_RES);
+        assert_eq!(ShadowSettings { resolution: SHADOW_MAP_RES, ..integrated }, ShadowSettings::default());
+    }
+
     /// Source with its comments removed.
     ///
     /// A positive `contains` over raw source is satisfied by a **comment**, and every assertion that
@@ -564,8 +600,6 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n")
     }
-
-    use super::*;
 
     /// A tall caster still casts, at any sun angle.
     ///

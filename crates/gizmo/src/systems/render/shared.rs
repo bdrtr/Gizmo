@@ -557,6 +557,7 @@ pub fn collect_scene_setup(world: &World, inputs: &SceneSetupInputs) -> SceneSet
                 cascade_splits: if inputs.sun_shadow_maps { cascades.splits } else { [0.0; 4] },
                 local: local_shadows,
                 bias_scale: [inputs.shadow_settings.depth_bias, inputs.shadow_settings.normal_offset],
+                resolution: inputs.shadow_settings.resolution,
             },
             environment: inputs.environment,
             elapsed_time: inputs.elapsed_time,

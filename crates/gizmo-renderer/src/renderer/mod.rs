@@ -345,6 +345,9 @@ pub struct Renderer {
     /// its own), which has no profiler, so it writes here and the next frame's preparation, which
     /// holds both the world and the renderer, moves it into the world's `FrameProfiler`.
     pub draw_laps: Vec<(&'static str, std::time::Duration)>,
+    /// The GPU's half: timestamps between the draw's parts (`gpu.*`), read back a few frames late
+    /// into [`draw_laps`](Self::draw_laps). `None` where the device has no timestamp queries.
+    pub gpu_timer: Option<crate::gpu_timer::GpuTimer>,
     /// Linear exposure multiplier applied before tone mapping.
     pub exposure: f32,
     /// Whether depth of field runs.
@@ -886,6 +889,22 @@ impl Renderer {
         Ok(self.custom_materials.register_surface(surface))
     }
 
+    /// [`add_surface_material`](Self::add_surface_material) for a surface that never cuts — see
+    /// [`SurfaceMaterial::solid`](crate::custom_material::SurfaceMaterial::solid): its shadow and
+    /// depth prepass do not run its function.
+    ///
+    /// # Errors
+    ///
+    /// As [`add_surface_material`](Self::add_surface_material).
+    pub fn add_solid_surface_material(
+        &mut self,
+        label: &str,
+        wgsl: &str,
+    ) -> Result<crate::custom_material::SurfaceId, crate::custom_material::SurfaceError> {
+        let surface = crate::custom_material::SurfaceMaterial::from_wgsl(self, label, wgsl)?.solid();
+        Ok(self.custom_materials.register_surface(surface))
+    }
+
     /// [`add_surface_material`](Self::add_surface_material) for a surface built from nodes: the
     /// graph's WGSL ([`ShaderGraph::to_wgsl`](crate::shader_graph::ShaderGraph::to_wgsl)), built and
     /// registered.
@@ -1333,6 +1352,14 @@ impl Renderer {
     pub fn update_auto_exposure(&mut self, dt: f32) {
         if let Some(ae) = self.auto_exposure.as_mut() {
             ae.update(&self.queue, dt);
+        }
+    }
+
+    /// A GPU timestamp: the end of the part called `label` (see [`crate::gpu_timer`]). Nothing
+    /// without a timer.
+    pub fn gpu_mark(&mut self, encoder: &mut wgpu::CommandEncoder, label: &'static str) {
+        if let Some(timer) = self.gpu_timer.as_mut() {
+            timer.mark(encoder, label);
         }
     }
 
