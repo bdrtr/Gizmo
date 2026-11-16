@@ -549,7 +549,7 @@ impl Renderer {
         path: impl AsRef<std::path::Path>,
         filter: crate::sprite::SpriteFilter,
     ) -> Result<crate::sprite::SpriteImageId, crate::sprite::SpriteError> {
-        let name = crate::sprite::ImageName { path: path.as_ref().to_string_lossy().into_owned(), filter };
+        let name = crate::sprite::ImageName { path: path.as_ref().to_string_lossy().into_owned(), filter, normal_map: None };
         if let Some(id) = self.sprites.as_ref().and_then(|s| s.by_name(&name)) {
             return Ok(id);
         }
@@ -574,7 +574,7 @@ impl Renderer {
         let Some(sprites) = self.sprites.as_mut() else {
             return Err(crate::sprite::SpriteError::Invalid);
         };
-        let name = crate::sprite::ImageName { path: name.to_string(), filter };
+        let name = crate::sprite::ImageName { path: name.to_string(), filter, normal_map: None };
         sprites.load_named(&self.device, &self.queue, &name, bytes)
     }
 
@@ -596,7 +596,7 @@ impl Renderer {
         names: &[&str],
         filter: crate::sprite::SpriteFilter,
     ) -> Result<Vec<crate::sprite::SpriteRegion>, crate::sprite::SpriteError> {
-        let name = crate::sprite::ImageName { path: format!("{}{}", Self::ATLAS_PREFIX, names.join("|")), filter };
+        let name = crate::sprite::ImageName { path: format!("{}{}", Self::ATLAS_PREFIX, names.join("|")), filter, normal_map: None };
         if let Some(regions) = self.named_atlases.get(&name) {
             return Ok(regions.clone());
         }
@@ -651,6 +651,21 @@ impl Renderer {
         if let Some(id) = self.sprites.as_ref().and_then(|s| s.by_name(name)) {
             return Ok(id);
         }
+        // With a normal map: a copy of its own, so the sprites drawing the image without one keep
+        // being flat.
+        if let Some(normal) = name.normal_map.clone() {
+            let bytes = self.sprite_asset_bytes(&name.path)?;
+            let Some(sprites) = self.sprites.as_mut() else {
+                return Err(crate::sprite::SpriteError::Invalid);
+            };
+            let id = sprites.load_encoded(&self.device, &self.queue, &bytes, name.filter)?;
+            sprites.name_image(id, name.clone());
+            let normal_bytes = self.sprite_asset_bytes(&normal)?;
+            if let Some(sprites) = self.sprites.as_mut() {
+                sprites.set_normal_map_encoded(&self.device, &self.queue, id, &normal_bytes)?;
+            }
+            return Ok(id);
+        }
         if let Some(members) = name.path.strip_prefix(Self::ATLAS_PREFIX) {
             let members: Vec<&str> = members.split('|').collect();
             let regions = self.load_sprite_atlas_named(&members, name.filter)?;
@@ -667,6 +682,61 @@ impl Renderer {
             Some(bytes) => self.load_sprite_image_named(&name.path, &bytes, name.filter),
             None => self.load_sprite_image_file(&name.path, name.filter),
         }
+    }
+
+    /// The bytes at `path`: embedded under it (`AssetManager::embed_asset`), else the file.
+    fn sprite_asset_bytes(&self, path: &str) -> Result<Vec<u8>, crate::sprite::SpriteError> {
+        let embedded = self
+            .asset_manager
+            .read()
+            .unwrap_or_else(|p| p.into_inner())
+            .embedded_assets
+            .get(path)
+            .map(|b| b.to_vec());
+        match embedded {
+            Some(bytes) => Ok(bytes),
+            None => std::fs::read(path).map_err(crate::sprite::SpriteError::Io),
+        }
+    }
+
+    /// Gives `image` the normal map at `path` (embedded under it, else the file): tangent-space,
+    /// linear, laid out as the image is. Its lit sprites ([`Sprite::lit`](crate::components::Sprite::lit))
+    /// are shaded with it — and every sprite drawing `image`. A named image keeps the map in its name,
+    /// so a scene saves it and a reopen loads it again.
+    ///
+    /// # Errors
+    ///
+    /// [`SpriteError::Io`](crate::sprite::SpriteError::Io) when it cannot be read,
+    /// [`SpriteError::Invalid`](crate::sprite::SpriteError::Invalid) when it does not decode.
+    pub fn set_sprite_normal_map(&mut self, image: crate::sprite::SpriteImageId, path: &str) -> Result<(), crate::sprite::SpriteError> {
+        let bytes = self.sprite_asset_bytes(path)?;
+        let Some(sprites) = self.sprites.as_mut() else {
+            return Err(crate::sprite::SpriteError::Invalid);
+        };
+        sprites.set_normal_map_encoded(&self.device, &self.queue, image, &bytes)?;
+        if let Some(name) = sprites.name_of(image).cloned() {
+            sprites.name_image(image, crate::sprite::ImageName { normal_map: Some(path.to_string()), ..name });
+        }
+        Ok(())
+    }
+
+    /// [`set_sprite_normal_map`](Self::set_sprite_normal_map) from raw pixels (RGBA8, linear) — a
+    /// normal map made at runtime; a scene does not save it.
+    ///
+    /// # Errors
+    ///
+    /// As [`SpriteRenderer::set_normal_map_rgba`](crate::sprite::SpriteRenderer::set_normal_map_rgba).
+    pub fn set_sprite_normal_map_rgba(
+        &mut self,
+        image: crate::sprite::SpriteImageId,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), crate::sprite::SpriteError> {
+        let Some(sprites) = self.sprites.as_mut() else {
+            return Err(crate::sprite::SpriteError::Invalid);
+        };
+        sprites.set_normal_map_rgba(&self.device, &self.queue, image, rgba, width, height)
     }
 
     /// Uploads raw `width × height` RGBA8 pixels (sRGB, straight alpha, top row first) — for

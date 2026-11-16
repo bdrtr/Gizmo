@@ -87,6 +87,10 @@ fn occluded(p: vec2<f32>, light: vec2<f32>, count: u32, inside: u32) -> bool {
 var image: texture_2d<f32>;
 @group(0) @binding(1)
 var image_sampler: sampler;
+// The image's normal map (`set_sprite_normal_map`): tangent-space, linear — red right, green up,
+// blue out of the picture. A flat 1×1 for an image without one.
+@group(0) @binding(2)
+var normal_map: texture_2d<f32>;
 
 struct SpriteInstance {
     @location(0) top_left: vec4<f32>,
@@ -110,6 +114,9 @@ struct VertexOutput {
     @location(2) world: vec3<f32>,
     @location(3) normal: vec3<f32>,
     @location(4) lit: f32,
+    // The picture's right and up in the world, a flip already folded in: the normal map's frame.
+    @location(5) tangent: vec3<f32>,
+    @location(6) bitangent: vec3<f32>,
 };
 
 @vertex
@@ -128,6 +135,11 @@ fn vs_main(@builtin(vertex_index) vi: u32, inst: SpriteInstance) -> VertexOutput
     out.world = inst.world_origin.xyz + inst.world_u.xyz * c.x + inst.world_v.xyz * c.y;
     out.normal = cross(inst.world_u.xyz, inst.world_v.xyz);
     out.lit = inst.world_origin.w;
+    // `world_u` runs right along the image and `world_v` down it; a flipped sprite has its uv
+    // reversed, and its normal map's right or up with it.
+    let flip = vec2<f32>(select(1.0, -1.0, inst.uv.z < inst.uv.x), select(1.0, -1.0, inst.uv.w < inst.uv.y));
+    out.tangent = inst.world_u.xyz * flip.x;
+    out.bitangent = -inst.world_v.xyz * flip.y;
     return out;
 }
 
@@ -137,14 +149,19 @@ const PI: f32 = 3.14159265;
 @fragment
 fn fs_lit(in: VertexOutput) -> @location(0) vec4<f32> {
     let base = textureSample(image, image_sampler, in.uv) * in.color;
+    // Sampled before any branch on the pixel: implicit-derivative sampling must be in uniform control
+    // flow (WGSL's rule, which a browser enforces).
+    let mapped = textureSample(normal_map, image_sampler, in.uv).xyz * 2.0 - 1.0;
     if (in.lit < 0.5) {
         return base;
     }
-    // The face toward the camera: a sprite is seen from either side.
-    var n = normalize(in.normal);
-    if (dot(n, scene.camera_pos.xyz - in.world) < 0.0) {
-        n = -n;
+    // The face toward the camera: a sprite is seen from either side. Then the normal map, in the
+    // frame of the picture's right, up and that face.
+    var face = normalize(in.normal);
+    if (dot(face, scene.camera_pos.xyz - in.world) < 0.0) {
+        face = -face;
     }
+    let n = normalize(normalize(in.tangent) * mapped.x + normalize(in.bitangent) * mapped.y + face * mapped.z);
     var light = sprite_ambient.rgb;
     if (scene.sun_direction.w > 0.5) {
         let l = normalize(-scene.sun_direction.xyz);

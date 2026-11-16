@@ -188,6 +188,9 @@ struct Run {
 
 struct Image {
     bind_group: wgpu::BindGroup,
+    /// Its colours, and how they are sampled — kept to bind again with a normal map.
+    view: wgpu::TextureView,
+    filter: SpriteFilter,
     size: [u32; 2],
     /// The name a scene saves it by, `None` for pixels loaded without one.
     name: Option<ImageName>,
@@ -202,6 +205,18 @@ pub struct ImageName {
     pub path: String,
     /// How it is sampled.
     pub filter: SpriteFilter,
+    /// The normal map its lit sprites are shaded with, by path — the same size and layout as the
+    /// image, tangent-space (red right, green up, blue out of the picture). `None`: flat.
+    #[serde(default)]
+    pub normal_map: Option<String>,
+}
+
+impl ImageName {
+    /// The image at `path`, sampled by `filter`, with no normal map.
+    #[must_use]
+    pub fn new(path: &str, filter: SpriteFilter) -> Self {
+        Self { path: path.to_string(), filter, normal_map: None }
+    }
 }
 
 /// Occluder edges a lit sprite's shader reads, at most this many a frame.
@@ -270,6 +285,8 @@ pub struct SpriteRenderer {
     linear: wgpu::Sampler,
     nearest: wgpu::Sampler,
     images: Vec<Image>,
+    /// A 1×1 flat normal, bound for every image without a normal map; made with the first image.
+    flat_normal: Option<wgpu::TextureView>,
     /// Depth-tested against the scene, writing none.
     pipeline_world: wgpu::RenderPipeline,
     /// Screen sprites, drawn onto the FINAL image after tone mapping — see [`crate::overlay`].
@@ -320,6 +337,17 @@ impl SpriteRenderer {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // The normal map lit sprites are shaded with (`fs_lit`); flat for an image without one.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
                     count: None,
                 },
             ],
@@ -388,6 +416,7 @@ impl SpriteRenderer {
             linear,
             nearest,
             images: Vec::new(),
+            flat_normal: None,
             pipeline_world,
             overlay,
             buffer,
@@ -540,6 +569,24 @@ impl SpriteRenderer {
             max,
         })?;
 
+        let view = Self::upload_texture(device, queue, rgba, width, height, wgpu::TextureFormat::Rgba8UnormSrgb, filter);
+        let normal = self.flat_normal(device, queue);
+        let bind_group = self.bind(device, &view, &normal, filter);
+        self.images.push(Image { bind_group, view, filter, size: [width, height], name: None });
+        Ok(SpriteImageId(id))
+    }
+
+    /// Uploads `width × height` RGBA8 pixels as a texture of `format`, its mips made where `filter`
+    /// samples between them.
+    fn upload_texture(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+        format: wgpu::TextureFormat,
+        filter: SpriteFilter,
+    ) -> wgpu::TextureView {
         let levels = match filter {
             SpriteFilter::Linear => mip_chain(rgba, width, height),
             SpriteFilter::Nearest => Vec::new(),
@@ -551,57 +598,98 @@ impl SpriteRenderer {
             mip_level_count: 1 + levels.len() as u32,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba,
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(width * 4),
-                rows_per_image: Some(height),
-            },
-            extent,
-        );
-        for (i, level) in levels.iter().enumerate() {
+        let write = |level: u32, data: &[u8], w: u32, h: u32| {
             queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: i as u32 + 1,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &level.rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(level.width * 4),
-                    rows_per_image: Some(level.height),
-                },
-                wgpu::Extent3d { width: level.width, height: level.height, depth_or_array_layers: 1 },
+                wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: level, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                data,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(w * 4), rows_per_image: Some(h) },
+                wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
             );
+        };
+        write(0, rgba, width, height);
+        for (i, level) in levels.iter().enumerate() {
+            write(i as u32 + 1, &level.rgba, level.width, level.height);
         }
-        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        texture.create_view(&wgpu::TextureViewDescriptor::default())
+    }
+
+    /// The flat normal every image without a normal map is bound with, made the first time it is asked for.
+    fn flat_normal(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+        self.flat_normal
+            .get_or_insert_with(|| Self::upload_texture(device, queue, &[128, 128, 255, 255], 1, 1, wgpu::TextureFormat::Rgba8Unorm, SpriteFilter::Nearest))
+            .clone()
+    }
+
+    /// An image's bind group: its colours, its sampler, its normal map.
+    fn bind(&self, device: &wgpu::Device, view: &wgpu::TextureView, normal: &wgpu::TextureView, filter: SpriteFilter) -> wgpu::BindGroup {
         let sampler = match filter {
             SpriteFilter::Linear => &self.linear,
             SpriteFilter::Nearest => &self.nearest,
         };
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Sprite Image Bind Group"),
             layout: &self.layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(view) },
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(sampler) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(normal) },
             ],
-        });
-        self.images.push(Image { bind_group, size: [width, height], name: None });
-        Ok(SpriteImageId(id))
+        })
+    }
+
+    /// Gives `image` a normal map — `width × height` RGBA8 pixels, **linear**, tangent-space (red
+    /// right, green up, blue out of the picture), laid out as the image is — which its lit sprites
+    /// ([`Sprite::lit`]) are shaded with, so a brick wall's bricks catch the torch on their edges.
+    ///
+    /// # Errors
+    ///
+    /// As [`load_rgba`](Self::load_rgba) for the pixels; [`SpriteError::Empty`] for an id this
+    /// renderer did not hand out.
+    pub fn set_normal_map_rgba(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        image: SpriteImageId,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), SpriteError> {
+        if width == 0 || height == 0 {
+            return Err(SpriteError::Empty);
+        }
+        let expected = width as usize * height as usize * 4;
+        if rgba.len() != expected {
+            return Err(SpriteError::WrongLength { expected, actual: rgba.len() });
+        }
+        let Some(filter) = self.images.get(image.0 as usize).map(|i| i.filter) else {
+            return Err(SpriteError::Empty);
+        };
+        let normal = Self::upload_texture(device, queue, rgba, width, height, wgpu::TextureFormat::Rgba8Unorm, filter);
+        let view = self.images[image.0 as usize].view.clone();
+        let bind_group = self.bind(device, &view, &normal, filter);
+        self.images[image.0 as usize].bind_group = bind_group;
+        Ok(())
+    }
+
+    /// [`set_normal_map_rgba`](Self::set_normal_map_rgba) from an encoded image (PNG, …).
+    ///
+    /// # Errors
+    ///
+    /// [`SpriteError::Invalid`] if the bytes do not decode; otherwise as `set_normal_map_rgba`.
+    pub fn set_normal_map_encoded(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        image: SpriteImageId,
+        bytes: &[u8],
+    ) -> Result<(), SpriteError> {
+        let img = image::load_from_memory(bytes).map_err(|_| SpriteError::Invalid)?.to_rgba8();
+        let (w, h) = img.dimensions();
+        self.set_normal_map_rgba(device, queue, image, img.as_raw(), w, h)
     }
 
     /// Names an image already loaded — what an atlas packed from named images is called once it is
@@ -1329,6 +1417,17 @@ mod tests {
             ]
         );
         assert!(runs(&[], 0).is_empty());
+    }
+
+    /// A scene saved before images had normal maps reads as flat; one with a map keeps it.
+    #[test]
+    fn an_image_name_carries_its_normal_map_and_an_old_one_reads_flat() {
+        let old: ImageName = ron::from_str(r#"(path: "wall.png", filter: Linear)"#).expect("an old name reads");
+        assert_eq!(old, ImageName::new("wall.png", SpriteFilter::Linear));
+        let mapped = ImageName { normal_map: Some("wall_n.png".into()), ..old.clone() };
+        let back: ImageName = ron::from_str(&ron::to_string(&mapped).unwrap()).unwrap();
+        assert_eq!(back.normal_map.as_deref(), Some("wall_n.png"));
+        assert_ne!(back, old, "with a normal map, another image");
     }
 
     #[test]

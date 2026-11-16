@@ -17127,6 +17127,66 @@ fn material_surface(input: SurfaceInput) -> Surface {
         });
     }
 
+    /// **A normal map turns a lit sprite's pixels toward or away from a light, flips and all.** A wide
+    /// lit sprite under a dark ambient and a point light to its left. With a normal map tilting every
+    /// pixel to the right — away from the light — its left part is darker than the same sprite flat;
+    /// mirrored (`flip_x`), the same map tilts them left, toward the light, and that part is brighter
+    /// than unmirrored: the map's frame follows the flip.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn a_normal_map_turns_a_lit_sprite_toward_its_light() {
+        use gizmo_renderer::components::{PointLight, Sprite};
+        use gizmo_renderer::sprite::{SpriteAmbient, SpriteFilter};
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        // `None`: flat; `Some(flip)`: the right-tilting map, mirrored or not.
+        async fn frame(map: Option<bool>) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            let mut world = World::new();
+            world.spawn_bundle(CameraBundle {
+                position: Vec3::new(0.0, 0.0, 6.0),
+                yaw: -std::f32::consts::FRAC_PI_2,
+                primary: true,
+                ..Default::default()
+            });
+            world.insert_resource(SpriteAmbient(Vec3::splat(0.03)));
+            let white = renderer.load_sprite_rgba(&[255; 4], 1, 1, SpriteFilter::Nearest).expect("a 1×1 image");
+            if map.is_some() {
+                // Tilted 45° to the right: (0.7, 0, 0.7) → (217, 128, 217).
+                renderer.set_sprite_normal_map_rgba(white, &[217, 128, 217, 255], 1, 1).expect("a 1×1 normal map");
+            }
+            let mut sprite = Sprite::world(white, gizmo_math::Vec2::new(4.0, 1.5)).lit();
+            sprite.flip_x = map == Some(true);
+            let e = world.spawn();
+            world.add_component(e, Transform::new(Vec3::ZERO));
+            world.add_component(e, GlobalTransform::default());
+            world.add_component(e, sprite);
+            let light = world.spawn();
+            world.add_component(light, Transform::new(Vec3::new(-3.0, 0.0, 0.5)));
+            world.add_component(light, GlobalTransform::default());
+            world.add_component(light, PointLight::new(Vec3::ONE, 20.0, 8.0));
+            render_world(&mut renderer, &mut world).await
+        }
+        let luma = |f: &[u8], x: usize, y: usize| {
+            let p = &f[(y * 128 + x) * 4..][..3];
+            (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3
+        };
+        pollster::block_on(async {
+            // x = −1 m: px 45.
+            let flat = luma(&frame(None).await, 45, 64);
+            let away = luma(&frame(Some(false)).await, 45, 64);
+            let toward = luma(&frame(Some(true)).await, 45, 64);
+            assert!(flat > away + 20, "tilted away from the light it is darker: {away}, flat {flat}");
+            assert!(toward > away + 20, "mirrored, the same map tilts it toward the light: {toward}, unmirrored {away}");
+        });
+    }
+
     /// **The back of a double-sided surface is lit like the front.** A pale panel with the sun behind the
     /// camera, seen from each side. Both faces carried the front's normal until 2026-11-07, so the back read
     /// as turned away from the light that was shining straight on it.

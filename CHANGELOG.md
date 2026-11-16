@@ -59,6 +59,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Normal-mapped sprites: `Renderer::set_sprite_normal_map`.** A sprite image can carry a tangent-space normal map
+  (linear, red right, green up, blue out of the picture) that its lit sprites are shaded with, so bricks catch a torch
+  on their edges; the map's frame follows `flip_x`/`flip_y`. The map's path rides in `ImageName::normal_map`, so a
+  scene saves it and a reopen loads it — as a copy of its own, so sprites drawing the image without the map stay flat.
+  `set_sprite_normal_map_rgba` for a map made at runtime.
 - **2D shadows: `LightOccluder2D`.** A polygon or a line in an entity's plane (`polygon`, `line`, `rectangle`) stops
   point and spot lights from reaching the lit sprites behind it, in the world's XY plane — Godot's
   `LightOccluder2D`. A pixel inside a closed occluder is not in that occluder's own shadow, so a wall's sprite stays
