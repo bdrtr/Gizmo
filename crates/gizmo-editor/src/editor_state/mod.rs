@@ -200,10 +200,6 @@ pub struct EditorState {
     pub pending_dialog_rx:
         Option<std::sync::Mutex<std::sync::mpsc::Receiver<(bool, Option<String>)>>>,
 
-    /// The in-memory scene backup behind play/stop.
-    /// `Some(snapshot)` once play is pressed, `None` on stop.
-    pub play_snapshot: Option<gizmo_scene::SceneSnapshot>,
-
     /// Component edits the inspector made as JSON, each with the function that applies it.
     ///
     /// The inspector edits a component it does not know the type of by round-tripping it through
@@ -231,7 +227,57 @@ pub struct EditorState {
     pub rss_bytes: Option<u64>,
 }
 
+/// What the editor holds about the **edited** world while a play session runs in another one: the
+/// undo history, the selection, the clipboard — all of them entity ids of the edited world, which
+/// mean other entities, or none, in the play world. [`EditorState::enter_play`] takes them out,
+/// [`EditorState::leave_play`] puts them back, so ⏹ returns to the selection and the history it
+/// left, and nothing done under ▶ can be undone into the edited scene.
+pub struct EditedWorldState {
+    history: crate::history::History,
+    selection: SelectionState,
+    clipboard: Vec<gizmo_core::entity::Entity>,
+}
+
 impl EditorState {
+    /// Sets aside what refers to the edited world's entities (see [`EditedWorldState`]) and leaves
+    /// an empty history, selection and clipboard, and no entity request pending, for the play world.
+    pub fn enter_play(&mut self) -> EditedWorldState {
+        let max_history = self.history.max_history;
+        let kept = EditedWorldState {
+            history: std::mem::replace(&mut self.history, crate::history::History::new(max_history)),
+            selection: std::mem::take(&mut self.selection),
+            clipboard: std::mem::take(&mut self.clipboard_entities),
+        };
+        self.clear_entity_requests();
+        kept
+    }
+
+    /// Puts back what [`enter_play`](Self::enter_play) set aside, dropping whatever the play world's
+    /// session gathered — its history, its selection, its pending entity requests.
+    pub fn leave_play(&mut self, kept: EditedWorldState) {
+        self.history = kept.history;
+        self.selection = kept.selection;
+        self.clipboard_entities = kept.clipboard;
+        self.clear_entity_requests();
+    }
+
+    /// Drops every request that names an entity: on a change of world, the entity it names is not
+    /// the one it meant.
+    fn clear_entity_requests(&mut self) {
+        self.reparent_request = None;
+        self.unparent_request = None;
+        self.add_component_request = None;
+        self.remove_component_request = None;
+        self.despawn_requests.clear();
+        self.generate_terrain_requests.clear();
+        self.duplicate_requests.clear();
+        self.toggle_visibility_requests.clear();
+        self.prefab_save_request = None;
+        self.pending_child_parent = None;
+        self.pending_group_members.clear();
+        self.inspector_drag_original_transforms.clear();
+    }
+
     /// The editor's starting state, with preferences and the dock layout read from disk.
     ///
     /// Both reads touch the filesystem — `editor_prefs.toml` from the config directory and
@@ -322,7 +368,6 @@ impl EditorState {
 
             pending_dialog_rx: None,
 
-            play_snapshot: None,
 
             pending_json_updates: Vec::new(),
 
@@ -747,7 +792,6 @@ mod tests {
         assert!(state.despawn_requests.is_empty());
         assert!(state.duplicate_requests.is_empty());
         assert!(state.pending_async_gltfs.is_empty());
-        assert!(state.play_snapshot.is_none());
         assert_eq!(state.status_message, "Hazır");
     }
 

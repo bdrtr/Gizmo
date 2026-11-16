@@ -210,6 +210,8 @@ fn render_scene(albedo: Vec4) -> Option<Frame> {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
 
         let format = renderer.config.format;
@@ -444,6 +446,8 @@ fn the_editor_casts_a_shadow_onto_the_ground() {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
 
         let format = renderer.config.format;
@@ -644,6 +648,8 @@ fn render_with_editor(
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
 
         // A throwaway swapchain-ish view: with an EditorRenderTarget present the pipeline clears
@@ -878,6 +884,8 @@ fn render_grid_scene(show_grid: bool) -> Option<Vec<u8>> {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
 
         let format = renderer.config.format;
@@ -1151,6 +1159,8 @@ fn viewport_frame(world: &mut World, renderer: &mut Renderer, cam: Entity, size:
         autosave_timer: 0.0,
         visible_entity_count: 0,
         draw_call_count: 0,
+        session: None,
+        game: None,
     };
 
     let format = renderer.config.format;
@@ -1573,6 +1583,8 @@ fn render_decal_frame(with_decal: bool) -> Option<Vec<u8>> {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
 
         let format = renderer.config.format;
@@ -1779,6 +1791,8 @@ fn render_water_frame(water: bool, elapsed: f32) -> Option<Vec<u8>> {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
 
         let format = renderer.config.format;
@@ -2053,6 +2067,8 @@ fn render_pane_frame_with(
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
         let format = renderer.config.format;
         let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
@@ -2176,6 +2192,8 @@ fn render_cutout_frame(cutoff: Option<f32>) -> Option<Vec<u8>> {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
 
         let format = renderer.config.format;
@@ -2328,6 +2346,8 @@ fn the_editor_viewport_reflects_a_probe_captured_without_furniture() {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
         let format = renderer.config.format;
         let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
@@ -2477,6 +2497,8 @@ fn blend_scene(mode: Option<gizmo::renderer::components::BlendMode>) -> Option<V
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
         let format = renderer.config.format;
         let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
@@ -2572,6 +2594,8 @@ fn render_gpu_body_frame(with_body: bool) -> Option<Vec<u8>> {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
 
         let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
@@ -2747,6 +2771,8 @@ fn render_cube_frame(
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         };
         let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("studio-game-material-target"),
@@ -2878,3 +2904,85 @@ fn a_games_own_materials_are_drawn_in_the_viewport_as_the_game_draws_them() {
     }
 }
 
+
+/// **A game hooked into the studio plays in a world of its own** (`gizmo_studio::pie`). The real
+/// studio scene, and a game whose setup puts a frame counter and an entity of its own into the
+/// world and whose frame counts and deletes the scene's cube: after ▶ and the render hook (where the
+/// setup runs, since it needs the renderer) three frames count three, the game's entity is there and
+/// the cube is gone; after ⏹ the cube is back under the same id, and the counter and the game's
+/// entity went with the play world. Before, ▶ ran in the edited world and ⏹ wrote a lossy snapshot
+/// over it, and a game written in Rust had no way to run its frame in the editor at all.
+#[test]
+fn a_game_plays_in_a_world_of_its_own() {
+    use gizmo::core::component::EntityName;
+    use gizmo::editor::EditorState;
+    let _gpu = gpu_lock();
+    if !pollster::block_on(Renderer::headless_adapter_available()) || pollster::block_on(Renderer::headless_adapter_is_software()) {
+        eprintln!("skipping: no usable GPU adapter");
+        return;
+    }
+    struct Frames(u32);
+    let named = |world: &World, name: &str| {
+        let names = world.query::<&EntityName>();
+        world.iter_alive_entities().into_iter().find(|e| names.get(*e).is_some_and(|n| n.0 == name))
+    };
+    pollster::block_on(async {
+        let mut renderer = shared_device_renderer(W, H).await;
+        let mut world = World::new();
+        let mut state = gizmo_studio::setup::setup_studio_scene(&mut world, &mut renderer);
+        let game = gizmo_studio::StudioGame::new(
+            "test",
+            |world, _renderer| {
+                world.insert_resource(Frames(0));
+                let e = world.spawn();
+                world.add_component(e, EntityName("Made by the game".into()));
+            },
+            |world, _dt, _input| {
+                if let Some(mut f) = world.get_resource_mut::<Frames>() {
+                    f.0 += 1;
+                }
+                let names = world.query::<&EntityName>();
+                let cube = world.iter_alive_entities().into_iter().find(|e| names.get(*e).is_some_and(|n| n.0 == "Default Cube"));
+                drop(names);
+                if let Some(cube) = cube {
+                    world.despawn(cube);
+                }
+            },
+        );
+        state.game = Some(std::sync::Arc::new(game));
+        let cube = named(&world, "Default Cube").expect("the studio's starting scene has its cube");
+        let input = gizmo::core::input::Input::new();
+        let target = renderer.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pie-target"),
+            size: wgpu::Extent3d { width: W, height: H, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: renderer.config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let view = target.create_view(&wgpu::TextureViewDescriptor::default());
+        let frame = |world: &mut World, state: &mut StudioState, renderer: &mut Renderer| {
+            gizmo_studio::update::update_studio(world, state, 1.0 / 60.0, &input);
+            let mut encoder = renderer.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+            gizmo_studio::render::render_studio(world, state, &mut encoder, &view, renderer, 0.0);
+            renderer.queue.submit(std::iter::once(encoder.finish()));
+        };
+
+        world.get_resource_mut::<EditorState>().expect("editor").toggle_play();
+        frame(&mut world, &mut state, &mut renderer); // ▶: the play world, and the game's setup
+        for _ in 0..3 {
+            frame(&mut world, &mut state, &mut renderer);
+        }
+        assert_eq!(world.get_resource::<Frames>().map(|f| f.0), Some(3), "three frames of the game");
+        assert!(named(&world, "Made by the game").is_some(), "the game's own entity");
+        assert!(named(&world, "Default Cube").is_none(), "the game deleted the cube in its world");
+
+        world.get_resource_mut::<EditorState>().expect("editor").toggle_play();
+        frame(&mut world, &mut state, &mut renderer); // ⏹
+        assert_eq!(named(&world, "Default Cube"), Some(cube), "the cube is back, under its own id");
+        assert!(world.get_resource::<Frames>().is_none(), "the game's state went with its world");
+        assert!(named(&world, "Made by the game").is_none());
+    });
+}

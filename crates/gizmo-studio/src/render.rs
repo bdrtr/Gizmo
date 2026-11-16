@@ -6,7 +6,7 @@ use std::collections::HashSet;
 
 /// Identifies the editor's own objects (camera, grid, light, highlight box) and returns the set
 /// of protected ids. Used to keep them from being deleted while a scene is cleared or loaded.
-fn collect_protected_ids(world: &World, editor_camera: Entity) -> std::collections::HashSet<Entity> {
+pub(crate) fn collect_protected_ids(world: &World, editor_camera: Entity) -> std::collections::HashSet<Entity> {
     let mut protected = HashSet::new();
     protected.insert(editor_camera);
 
@@ -81,8 +81,9 @@ pub fn render_studio(
     let mut prefab_load_req = None;
     let mut gltf_req = None;
     let mut duplicate_reqs = Vec::new();
-    let mut play_start = false;
-    let mut play_stop = false;
+    // ▶ and ⏹ are the update hook's (`systems::simulation`, `crate::pie`): it swaps the worlds, and
+    // the render hook draws whichever is current. What is left here is the game's setup, which needs
+    // the renderer.
 
     if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
         save_req = ed.scene.save_request.take();
@@ -93,14 +94,16 @@ pub fn render_studio(
         prefab_load_req = ed.prefab_load_request.take();
         gltf_req = ed.gltf_load_request.take();
         duplicate_reqs = std::mem::take(&mut ed.duplicate_requests);
+    }
 
-        if ed.play_start_request {
-            ed.play_start_request = false;
-            play_start = true;
+    // The game's setup on a play world ▶ has just built (`crate::pie::GameSetupPending`), and from
+    // then on what it sets on the renderer each frame.
+    if let Some(game) = state.game.as_ref().filter(|_| state.session.is_some()) {
+        if world.remove_resource::<crate::pie::GameSetupPending>().is_some() {
+            (game.setup)(world, renderer);
         }
-        if ed.play_stop_request {
-            ed.play_stop_request = false;
-            play_stop = true;
+        if let Some(settings) = game.render_settings.as_ref() {
+            settings(world, renderer);
         }
     }
 
@@ -179,66 +182,8 @@ pub fn render_studio(
     // of the saved file, the play snapshot (so Stop did not restore it) and a duplicate.
     let scene_registry = gizmo::scene_registry_for(world);
 
-    if play_start {
-        // 1. In-memory snapshot al (hızlı yol — fizik state dahil, GPU state korunur)
-        let protected_ids = collect_protected_ids(world, state.editor_camera);
-        let snapshot = gizmo::scene::SceneSnapshot::capture(
-            world,
-            &scene_registry,
-            &protected_ids,
-        );
-
-        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-            let entity_count = snapshot.entity_count();
-            ed.play_snapshot = Some(snapshot);
-            ed.log_info(&format!(
-                "▶ Play: {} entity in-memory snapshot alındı, simülasyon başladı.",
-                entity_count
-            ));
-        }
-    }
-
-    if play_stop {
-        // A snapshot cannot restore a sound: the sinks live on the device behind the
-        // `AudioManager` resource, which is not part of any scene. Without this, ⏹ left the
-        // level's looping ambience playing over the editor for the rest of the session.
-        if let Some(mut audio) = world.get_resource_mut::<gizmo::audio::AudioManager>() {
-            let stopped = audio.stop_all();
-            if stopped > 0 {
-                tracing::info!(stopped, "[Studio] ⏹ — çalan sesler durduruldu");
-            }
-        }
-
-        let snapshot_opt = {
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.play_snapshot.take()
-            } else {
-                None
-            }
-        };
-
-        if let Some(snapshot) = snapshot_opt {
-            let protected_ids = collect_protected_ids(world, state.editor_camera);
-            let result = snapshot.restore(
-                world,
-                &scene_registry,
-                &protected_ids,
-            );
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.log_info(&format!(
-                    "⏹ Stop: Sahne geri yüklendi (Silinen: {}, Geri Gelen: {}, Süre: {:?})",
-                    result.despawned, result.restored, result.duration
-                ));
-            }
-        } else {
-            if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
-                ed.log_warning("Geri yüklenecek snapshot bulunamadı!");
-            }
-        }
-    }
-
-    if save_req.is_some() || play_start {
-        warn_undescribed_meshes(world, if play_start { "▶ Play" } else { "Kaydetme" });
+    if save_req.is_some() {
+        warn_undescribed_meshes(world, "Kaydetme");
     }
 
     if let Some(path) = save_req {

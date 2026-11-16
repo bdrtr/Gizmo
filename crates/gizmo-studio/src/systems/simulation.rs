@@ -32,8 +32,8 @@ fn log_play_report(editor_state: &mut EditorState, report: PlayReport<'_>) {
     }
 }
 
-/// Advances play mode: steps the game loop while playing, and takes or restores the scene
-/// snapshot on the play/stop transitions.
+/// Advances play mode: steps the game while playing — a hooked game's own frame, else the engine's
+/// `PlayLoop`. ▶ and ⏹ themselves are `crate::pie`'s, run first in the update hook.
 pub fn handle_simulation(
     world: &mut World,
     editor_state: &mut EditorState,
@@ -79,6 +79,16 @@ pub fn handle_simulation(
     }
 
     // --- OYUN / SİMÜLASYON DÖNGÜSÜ ---
+    // A game hooked into the studio runs its own frame — the one its binary runs — once its setup
+    // has run on the play world (`crate::pie::GameSetupPending`, the render hook's).
+    if editor_state.is_playing() {
+        if let Some(game) = state.game.clone() {
+            if world.get_resource::<crate::pie::GameSetupPending>().is_none() {
+                (game.update)(world, dt, input);
+            }
+            return;
+        }
+    }
     if editor_state.is_playing() {
         // The frame of a running game is the ENGINE's, not the editor's: `PlayLoop::step` is the
         // same call an exported game makes (`demo/src/bin/gizmo_runtime.rs`). That is what lets
@@ -461,6 +471,8 @@ mod tests {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
+            session: None,
+            game: None,
         }
     }
 

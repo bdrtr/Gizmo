@@ -1,11 +1,13 @@
-//! In-memory scene backup for the editor's Play/Stop mode.
+//! In-memory scene backup: [`SceneSnapshot::capture`] takes the editable part of a world,
+//! [`SceneSnapshot::restore`] writes it back. Nothing goes through the filesystem and no RON *file*
+//! is produced, so a capture costs microseconds.
 //!
-//! Pressing **Play** captures the editable part of the world
-//! ([`SceneSnapshot::capture`]); pressing **Stop** writes it back
-//! ([`SceneSnapshot::restore`]). Nothing goes through the filesystem and no RON *file* is
-//! produced, so a capture costs microseconds and can be taken every single time the user
-//! starts the simulation. The in-tree caller is `gizmo-studio`'s `render_studio`, which
-//! parks the snapshot in `EditorState::play_snapshot` for the duration of Play.
+//! **The editor no longer plays this way.** It was `gizmo-studio`'s Play/Stop until 2026-11-16, and
+//! its restore is lossy by design (see [`SceneSnapshot::restore`]): an entity deleted under Play came
+//! back without its mesh, its material or its parent, the physics world was not restored, and a
+//! game's own state was left pointing at ids that had moved. The studio now plays in a world of its
+//! own and drops it on Stop (`gizmo_studio::pie`), which leaves nothing to restore. What remains here
+//! is the capture and the restore for a caller that wants exactly this trade.
 //!
 //! Why this exists next to [`SceneData`](crate::scene::SceneData), which can already
 //! round-trip a world through disk:

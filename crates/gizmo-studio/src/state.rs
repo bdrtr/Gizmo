@@ -25,6 +25,73 @@ pub struct StudioState {
     pub visible_entity_count: u32,
     /// The draw-call count of the last frame
     pub draw_call_count: u32,
+    /// The edited world, set aside while ▶ runs the game in a world of its own; `None` while
+    /// editing. See [`crate::pie`].
+    pub session: Option<crate::pie::PlaySession>,
+    /// The game hooked into the studio, whose setup and frame ▶ runs; `None`: a scene played by the
+    /// engine's own loop ([`gizmo::systems::PlayLoop`]: scripts, physics, AI).
+    pub game: Option<std::sync::Arc<StudioGame>>,
+}
+
+/// A game written in Rust, hooked into the studio: ▶ runs **its** setup and **its** frame on the play
+/// world ([`crate::pie`]) — the frame its own binary runs — and the editor sees and saves its
+/// components. Built with [`StudioGame::new`]; given to [`crate::run`].
+pub struct StudioGame {
+    /// What the studio calls it (the window title).
+    pub name: String,
+    /// Registers the game's components with the editor (`gizmo::register_editor_component`), on the
+    /// edited world when the studio opens.
+    pub(crate) register: Box<dyn Fn(&mut gizmo::core::World) + Send + Sync>,
+    /// Builds the game on the play world — its resources, the entities it makes in code — once, on ▶,
+    /// after the edited scene has been spawned there.
+    pub(crate) setup: Box<dyn Fn(&mut gizmo::core::World, &mut gizmo::renderer::Renderer) + Send + Sync>,
+    /// The game's frame, every frame of ▶ (not under ⏸).
+    pub(crate) update: Box<dyn Fn(&mut gizmo::core::World, f32, &gizmo::core::input::Input) + Send + Sync>,
+    /// What the game sets on the renderer from its world each frame of ▶ — a sky by the time of day,
+    /// a fog by the weather: the work a game's `RenderWorld::with_settings` does in its own binary.
+    pub(crate) render_settings: Option<Box<dyn Fn(&gizmo::core::World, &mut gizmo::renderer::Renderer) + Send + Sync>>,
+    /// What the game's own app adds to the studio's — its plugins, its embedded files. Taken by
+    /// [`crate::run`] before the app starts.
+    pub(crate) app: Option<Box<dyn FnOnce(gizmo::prelude::App<StudioState>) -> gizmo::prelude::App<StudioState> + Send + Sync>>,
+}
+
+impl StudioGame {
+    /// A game called `name`, with its setup and its frame.
+    pub fn new(
+        name: &str,
+        setup: impl Fn(&mut gizmo::core::World, &mut gizmo::renderer::Renderer) + Send + Sync + 'static,
+        update: impl Fn(&mut gizmo::core::World, f32, &gizmo::core::input::Input) + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            register: Box::new(|_| {}),
+            setup: Box::new(setup),
+            update: Box::new(update),
+            render_settings: None,
+            app: None,
+        }
+    }
+
+    /// The same game, setting the renderer from its world each frame of ▶ (see the field).
+    #[must_use]
+    pub fn with_render_settings(mut self, settings: impl Fn(&gizmo::core::World, &mut gizmo::renderer::Renderer) + Send + Sync + 'static) -> Self {
+        self.render_settings = Some(Box::new(settings));
+        self
+    }
+
+    /// The same game, adding to the studio's app what its own adds — `UiPlugin`, embedded models.
+    #[must_use]
+    pub fn with_app(mut self, app: impl FnOnce(gizmo::prelude::App<StudioState>) -> gizmo::prelude::App<StudioState> + Send + Sync + 'static) -> Self {
+        self.app = Some(Box::new(app));
+        self
+    }
+
+    /// The same game, registering its components with the editor when the studio opens.
+    #[must_use]
+    pub fn with_components(mut self, register: impl Fn(&mut gizmo::core::World) + Send + Sync + 'static) -> Self {
+        self.register = Box::new(register);
+        self
+    }
 }
 
 /// GPU resources used to render editor debug gizmos (primitive meshes and a

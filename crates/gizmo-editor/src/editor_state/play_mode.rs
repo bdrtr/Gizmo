@@ -3,8 +3,10 @@ use super::*;
 
 impl EditorState {
     /// Toggles between play and stop.
-    /// Edit → Play: sets `play_start_request`, so a scene snapshot gets taken.
-    /// Play or Paused → Edit: sets `play_stop_request`, so the scene gets restored.
+    /// Edit → Play: sets `play_start_request`, which the host answers by playing in a world of its
+    /// own (`gizmo_studio::pie`).
+    /// Play or Paused → Edit: sets `play_stop_request`, which drops that world and returns to the
+    /// edited one.
     pub fn toggle_play(&mut self) {
         self.mode = match self.mode {
             EditorMode::Edit => {

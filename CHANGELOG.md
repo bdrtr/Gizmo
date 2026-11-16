@@ -59,6 +59,15 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Gizmo Studio on a game, and ▶ in a world of its own.** `gizmo_studio::run(Some(StudioGame::new(name, setup,
+  update)))` opens the studio on a game written in Rust (`with_components`, `with_render_settings`, `with_app` for its
+  plugins and embedded files); `demo/src/bin/dunya_studio.rs` opens it on `dunya`. ▶ builds a fresh world from the
+  edited scene, moves the editor's resources there (`World::move_resources_to`), starts the physics and Lua afresh,
+  sets the editor's selection and undo history aside (`EditorState::enter_play`), runs the game's setup in the render
+  hook and its frame every frame — the frame its own binary runs — instead of `PlayLoop`'s; ⏹ moves the resources back
+  and drops that world (`gizmo_studio::pie`). This replaces the lossy snapshot restore: an entity deleted under ▶ came
+  back without its mesh or parent and often with another id, the physics world was not restored, and a game's state
+  pointed at moved ids. The studio binary is `gizmo_studio::run(None)`.
 - **Animation layers: `AnimationLayers`.** Clips laid over the pose an entity's player or state machine makes, on the
   joints a `BoneMask` names and everything below them, each with its own playhead and a weight that fades
   (`play(layer, clip, fade, looped)` / `stop(layer, fade)`): `LayerBlend::Override` replaces the masked joints' pose

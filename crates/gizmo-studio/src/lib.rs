@@ -22,8 +22,8 @@
 //! A `lib.rs` is the cheapest thing that changes that, and `tests/` next to it is where the parity
 //! checks live.
 //!
-//! The binary (`main.rs`) is now only the entry point: it boots a [`gizmo::App`](gizmo::prelude::App) window and wires
-//! the setup/update/UI/render hooks to the modules below.
+//! The binary (`main.rs`) is only the entry point: [`run`] boots a [`gizmo::App`](gizmo::prelude::App) window and wires
+//! the setup/update/UI/render hooks to the modules below — on a game, too ([`StudioGame`]).
 
 /// The studio's render hook: editor objects, the scene/game viewports and their render targets.
 pub mod render;
@@ -41,6 +41,12 @@ pub mod studio_input;
 pub mod systems;
 /// The studio's update hook — the per-frame entry point the engine calls.
 pub mod update;
+// ▶ in a world of its own: see its module docs.
+pub mod pie;
+// The studio as a library call, on a game or on its own: see its module docs.
+pub mod app;
 
-pub use state::{DebugAssets, StudioState};
+pub use app::run;
+
+pub use state::{DebugAssets, StudioGame, StudioState};
 pub use studio_input::*;

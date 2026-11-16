@@ -669,7 +669,9 @@ mod tests {
             autosave_timer: 0.0,
             visible_entity_count: 0,
             draw_call_count: 0,
-            }
+            session: None,
+            game: None,
+        }
     }
 
 

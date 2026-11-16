@@ -9,6 +9,28 @@ pub fn update_studio(world: &mut World, state: &mut StudioState, dt: f32, input:
     state.current_fps = 1.0 / dt;
     state.actual_dt = dt;
 
+    // ▶ / ⏹ first, before anything borrows the editor's state out of the world: they swap the
+    // world itself (`crate::pie`).
+    let (start, stop) = world.get_resource_mut::<EditorState>().map_or((false, false), |mut ed| {
+        (std::mem::take(&mut ed.play_start_request), std::mem::take(&mut ed.play_stop_request))
+    });
+    if stop {
+        crate::pie::stop_play(world, state);
+        if let Some(mut audio) = world.get_resource_mut::<gizmo::audio::AudioManager>() {
+            audio.stop_all();
+        }
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+            ed.log_info("⏹ Stop: düzenlenen sahneye dönüldü (oyun dünyası atıldı).");
+        }
+    }
+    if start && state.session.is_none() {
+        crate::pie::start_play(world, state);
+        let count = world.iter_alive_entities().len();
+        if let Some(mut ed) = world.get_resource_mut::<EditorState>() {
+            ed.log_info(&format!("▶ Play: oyun kendi dünyasında başladı ({count} varlık)."));
+        }
+    }
+
     let mut look_delta = None;
     let mut pan_delta = None;
     let mut orbit_delta = None;

@@ -162,6 +162,32 @@ impl World {
         );
     }
 
+    /// Moves every resource of this world whose type `take` accepts into `other`, replacing any
+    /// `other` holds of the same type, and returns the types moved. Each arrives stamped as written
+    /// at `other`'s current tick, so `Changed`-style checks in `other` see it as new there rather than
+    /// reading a tick from this world's clock.
+    ///
+    /// What lets a host run a second world beside the first — an editor's play session, built fresh
+    /// and handed the host's own resources (its input, its clock, its asset caches) for as long as it
+    /// runs — without naming each of them: the resources are type-erased here, and moving the same
+    /// list of types back puts the host's world as it was.
+    ///
+    /// The world's own two — its entity allocator and its command queue, which `World::new` puts
+    /// in every world and which say which ids are alive *here* — never move, whatever `take` says:
+    /// moved, the other world's ids would be read against this one's allocator.
+    pub fn move_resources_to(&mut self, other: &mut World, take: impl Fn(TypeId) -> bool) -> Vec<TypeId> {
+        let own = [TypeId::of::<crate::entity::allocator::Entities>(), TypeId::of::<crate::commands::CommandQueue>()];
+        let types: Vec<TypeId> = self.resources.keys().copied().filter(|t| !own.contains(t) && take(*t)).collect();
+        for type_id in &types {
+            if let Some(cell) = self.resources.remove(type_id) {
+                cell.changed.store(other.tick, Ordering::Relaxed);
+                other.resources.insert(*type_id, cell);
+            }
+        }
+        tracing::debug!(moved = types.len(), "move_resources_to");
+        types
+    }
+
     /// Called in order to read a global Resource (Immutable Borrow)
     pub fn get_resource<T: 'static>(&self) -> Option<ResourceReadGuard<'_, T>> {
         self.try_get_resource::<T>().ok()
@@ -365,6 +391,31 @@ impl World {
 // Sıfır allocation ile yaşayan entity'ler üzerinde iterasyon yapan iterator.
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// The resources a filter accepts go to the other world, replacing its own of the same type, and
+    /// come back the same way; the rest stay.
+    #[test]
+    fn resources_move_between_worlds_by_type() {
+        let mut host = World::new();
+        let mut play = World::new();
+        host.insert_resource(1u32);
+        host.insert_resource(String::from("host"));
+        play.insert_resource(String::from("play"));
+        let moved = host.move_resources_to(&mut play, |t| t == TypeId::of::<String>());
+        assert_eq!(moved, vec![TypeId::of::<String>()]);
+        assert_eq!(play.get_resource::<String>().map(|s| s.clone()).as_deref(), Some("host"), "replaced the play world's own");
+        assert!(host.get_resource::<String>().is_none());
+        assert_eq!(host.get_resource::<u32>().map(|v| *v), Some(1), "the rest stay");
+        play.move_resources_to(&mut host, |t| moved.contains(&t));
+        assert_eq!(host.get_resource::<String>().map(|s| s.clone()).as_deref(), Some("host"), "and come back");
+        // The world's own never move, even when asked for everything.
+        let everything = host.move_resources_to(&mut play, |_| true);
+        assert!(!everything.contains(&TypeId::of::<crate::entity::allocator::Entities>()));
+        let e = host.spawn();
+        assert!(host.is_alive(e), "the host still has its allocator");
+    }
+
     use crate::impl_component;
     use crate::Entity;
     use crate::World;

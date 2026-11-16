@@ -1266,6 +1266,41 @@ pub fn app() -> App<SimpleSceneState> {
         .set_render_stage(RenderWorld::new().with_settings(frame_settings))
 }
 
+/// **Stüdyoda oynamak için** (`demo/src/bin/dunya_studio.rs`, `gizmo_studio::StudioGame`): oyunun
+/// kurulumu, karesi, render ayarı ve gömülü modelleri — kendi ikilisinin `app()`'te yaptıklarının
+/// aynısı, stüdyonun ▶'da kurduğu oyun dünyasında. `games` stüdyoya bağlı değil; bağlayan ikili.
+pub mod studio {
+    use super::*;
+
+    /// ▶'da, düzenlenen sahnenin kurulduğu oyun dünyasında: arazinin ve suyun gölgelendiricileri,
+    /// oyunun kaynağı, uçan kameranın durumu.
+    pub fn setup(world: &mut World, renderer: &mut gizmo::renderer::Renderer) {
+        let font = renderer.default_font();
+        let surface = renderer.add_solid_surface_material("dunya_arazi", modeller::GROUND_WGSL).unwrap_or_else(|e| panic!("{e}"));
+        world.insert_resource(modeller::ground_look(surface));
+        let water = renderer.add_surface_material("dunya_su", modeller::WATER_WGSL).unwrap_or_else(|e| panic!("{e}"));
+        world.insert_resource(modeller::water_look(water));
+        let game = super::setup(world, font, true);
+        world.insert_resource(game);
+        world.insert_resource(SimpleSceneState::default());
+    }
+
+    /// ▶'ın her karesi: oyunun kendi karesi.
+    pub fn update(world: &mut World, dt: f32, input: &Input) {
+        world.resource_scope(|world, state: &mut SimpleSceneState| super::update(world, state, dt, input));
+    }
+
+    /// Gök, sis, yağmur: oyunun kaynağından, her kare.
+    pub fn render_settings(world: &World, renderer: &mut gizmo::renderer::Renderer) {
+        super::frame_settings(world, renderer);
+    }
+
+    /// Oyunun ikilisine gömülü modeller ve dokular: `(yol, bayt)`.
+    pub fn embedded() -> &'static [(&'static str, &'static [u8])] {
+        &modeller::EMBEDDED
+    }
+}
+
 /// Gök, sis, yağmur: günün saatine ve havaya göre, oyunun kaynağından — her senkron noktasında
 /// (pencereli oyun) ya da ölçüm kipinin her karesinde.
 fn frame_settings(game: &World, renderer: &mut gizmo::renderer::Renderer) {

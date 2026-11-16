@@ -9,6 +9,8 @@ default-run = "3d_scene"
 [dependencies]
 gizmo = { package = "gizmo-engine", path = "../crates/gizmo", features = ["audio", "scripting", "scene", "editor", "render", "window", "ui", "analysis", "network-client-server"] }
 games = { path = "../games" }
+# `dunya_studio`: a game opened in the editor on itself (`gizmo_studio::run`).
+gizmo-studio = { path = "../crates/gizmo-studio" }
 mimalloc = { workspace = true }
 pollster = "1.0"
 rand = "0.10.1"

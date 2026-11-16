@@ -15,7 +15,7 @@
 //!
 //! - [`scene`]: on-disk scene/prefab serialization to RON files
 //!   ([`SceneData`], [`MaterialData`], [`EntityData`]).
-//! - [`snapshot`]: fast in-memory snapshots for the editor's Play/Stop flow
+//! - [`snapshot`]: fast in-memory snapshots of a world, written back over it
 //!   ([`SceneSnapshot`]), with no disk I/O.
 //! - [`registry`]: the [`SceneRegistry`] describing which components can be
 //!   (de)serialized, plus [`default_scene_registry`](registry::default_scene_registry).
@@ -87,7 +87,7 @@ pub use registry::SceneRegistry;
 /// metallic, unlit, optional texture path) copied out of a row's `MaterialSource` — none of
 /// which the in-memory [`SceneSnapshot`] carries.
 pub use scene::{AssetIdentity, EntityData, MaterialData, NoAssetIdentity, SceneData};
-/// Re-export of [`snapshot::SceneSnapshot`] — the editor's in-memory Play/Stop backup. Same
+/// Re-export of [`snapshot::SceneSnapshot`] — an in-memory scene backup (the editor's Play/Stop until 2026-11-16). Same
 /// component registry as the file format, but no disk I/O, no RON file, and no mesh or
 /// material data.
 pub use snapshot::SceneSnapshot;
