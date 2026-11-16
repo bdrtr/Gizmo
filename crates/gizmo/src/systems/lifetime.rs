@@ -20,15 +20,14 @@
 //! world.add_component(ball, Transform::new(Vec3::new(0.0, -100.0, 0.0)));
 //! world.add_component(ball, DespawnBelowY::new(-60.0));
 //!
-//! // In an application `app.add_plugin(LifetimePlugin)` runs this every frame.
+//! // In an application `app.add_plugin(LifetimePlugin)` runs this every frame. It is an exclusive
+//! // system — the whole world, alone — so by hand it is `run_mut`, and it despawns there and then.
 //! let mut sys = LifetimeSystem;
-//! sys.run(&world, 1.0);
-//! world.apply_commands();
+//! sys.run_mut(&mut world, 1.0);
 //! assert!(world.is_alive(spark), "after 1 s the spark is still alive");
 //! assert!(!world.is_alive(ball), "the ball below the threshold must be despawned at once");
 //!
-//! sys.run(&world, 1.5); // toplam 2.5 sn > 2.0
-//! world.apply_commands();
+//! sys.run_mut(&mut world, 1.5); // 2.5 s in all, past 2.0
 //! assert!(!world.is_alive(spark), "the expired spark must be despawned");
 //! ```
 
