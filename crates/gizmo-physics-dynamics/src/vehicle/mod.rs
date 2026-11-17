@@ -501,8 +501,14 @@ pub struct AeroPackage {
     /// is why a stationary car feels no drag at all. Never scaled by ground effect.
     pub drag_coefficient: f32,     // Cd
     /// Dimensionless lift coefficient Cl, applied along the chassis' **local up** axis. A
-    /// negative value is therefore downforce, and the default is negative. Because the axis is
-    /// local rather than world, an inverted car gets its downforce pointing at the sky.
+    /// negative value is therefore downforce. Because the axis is local rather than world, an
+    /// inverted car gets its downforce pointing at the sky.
+    ///
+    /// **Default `0.0`: neither lift nor downforce**, so a car gets the aero it is given and none it
+    /// was not. It was −0.8 until 2026-11-17 — a racing car's wing on every car whose game never
+    /// set aero, which was all of them: grip rose with the square of speed and nothing said so
+    /// (`nfsu2-gizmo` MOTOR-NOTLARI #21). A road car is about `+0.3` (it lifts); a car with wings
+    /// −1 to −3.
     ///
     /// Unlike drag, this term is multiplied by the ground-effect factor.
     pub lift_coefficient: f32,     // Cl (negatif = downforce)
@@ -553,7 +559,7 @@ impl Default for AeroPackage {
     fn default() -> Self {
         Self {
             drag_coefficient: 0.32,
-            lift_coefficient: -0.8, // downforce
+            lift_coefficient: 0.0, // nothing the car was not given
             frontal_area: 2.2,      // m²
             center_of_pressure: Vec3::new(0.0, 0.3, 0.2),
             ground_effect_height: 0.15,

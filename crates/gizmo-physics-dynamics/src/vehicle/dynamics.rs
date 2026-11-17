@@ -658,9 +658,6 @@ pub fn update_vehicle_with_query(
 
                 // 6.3 Tekerlek angular_velocity entegrasyonu (Semi-implicit Euler)
                 // Reaksiyon torku lastikten gelen geri tepme
-                let reaction_torque = final_long * wheel.radius;
-
-                // Fren torku: tekerlek dönüşünün tersine
                 let brake_dir = if wheel.angular_velocity.abs() > 0.01 {
                     -wheel.angular_velocity.signum()
                 } else {
@@ -668,37 +665,32 @@ pub fn update_vehicle_with_query(
                 };
                 let effective_brake = wheel.brake_torque * brake_dir;
 
-                // Rolling resistance: `Crr·Fz·r` against the spin (see `Wheel::rolling_resistance`).
-                let rolling_torque = if wheel.angular_velocity.abs() > 1e-6 {
-                    -wheel.angular_velocity.signum() * wheel.rolling_resistance * normal_load * wheel.radius
-                } else {
-                    0.0
+                let external = wheel.drive_torque + effective_brake;
+
+                // **The wheel and the chassis take the same force.** The spin update is implicit
+                // in the tyre's stiffness at zero slip, `k = B·C·D·Fz / ref` per m/s of slip
+                // velocity — the steepest the curve gets, so it is stable wherever the slip is —
+                // which to first order is the wheel balancing against
+                //   F = (F₀ + k·dt·r·T/I) / (1 + k·dt·r²/I),
+                // and that `F` is what the chassis is pushed with too. The chassis used to be pushed
+                // with the curve's force at the slip the update left instead: equal to `F` only on the
+                // curve's straight part, and at a crawl, where the slip is tiny and the stiffness
+                // ~10⁵ N per m/s, the two parted by enough to pump — a parked car fell into a slow
+                // spin on the spot, left and right wheels rolling opposite ways for good, and a heavy
+                // car could not pull away gently (`a_parked_car_comes_to_rest_and_stays`,
+                // `a_heavy_car_driven_by_one_axle_pulls_away`).
+                let r_contact = hit.point - com;
+                let inv_inertia = vehicle_rb.inv_world_inertia_tensor(vehicle_transform.rotation);
+                let inv_mass_along = |dir: Vec3| {
+                    let rn = r_contact.cross(dir);
+                    vehicle_rb.inv_mass() + rn.dot(inv_inertia * rn)
                 };
-                let spin_before = wheel.angular_velocity;
-
-                // Net tork
-                let net_torque = wheel.drive_torque + effective_brake + rolling_torque - reaction_torque;
-
-                // DOĞRUSAL-İMPLİSİT spin güncellemesi. Lastik tepki-torku ω'ya STIFF bağlı:
-                // reaction = final_long·r, final_long ≈ K·slip, slip = (ω·r − v_long)/ref_vel →
-                // ∂reaction/∂ω = K·r²/ref_vel (K = b·c·d·Fz, Pacejka sıfır-slip sertliği). Açık
-                // Euler bunu ω'da açık işlerken düşük-ataletli serbest-yuvarlanan tekerlekte
-                // λ·dt ≫ 2 olup KAOTİK salınıyordu (ön-tekerlek jitter + dönüşte scrub-sürükleme).
-                // Sertliği paydaya ekleyip implisit yapmak koşulsuz kararlı kılar; sürüş/fren
-                // dengesini değiştirmez (yalnız kararlılık).
-                let slip_stiffness =
-                    wheel.pacejka_long.b * wheel.pacejka_long.c * wheel.pacejka_long.d * normal_load;
-                let implicit_inertia =
-                    effective_inertia + slip_stiffness * wheel.radius * wheel.radius * dt / ref_vel;
-                wheel.angular_velocity += (net_torque / implicit_inertia) * dt;
-                // Resistance stops a wheel; it never turns it back. Only when nothing else drives
-                // the wheel round: a tyre dragging it the other way does so next step, from zero.
-                if rolling_torque != 0.0
-                    && wheel.angular_velocity * spin_before < 0.0
-                    && wheel.drive_torque.abs() < 1.0
-                {
-                    wheel.angular_velocity = 0.0;
-                }
+                let k = wheel.pacejka_long.b * wheel.pacejka_long.c * wheel.pacejka_long.d * normal_load / ref_vel;
+                let radius = wheel.radius;
+                let solved_force = (final_long + k * dt * radius * external / effective_inertia)
+                    / (1.0 + k * dt * radius * radius / effective_inertia);
+                wheel.angular_velocity += (external - solved_force * radius) / effective_inertia * dt;
+                let solved_spin = wheel.angular_velocity;
 
                 // --- TRAKSİYON KONTROL (patinaj sınırı) ---
                 // Sürülen tekerleğin drive_torque'u lastik tutuşunun ürettiği reaksiyon
@@ -738,18 +730,13 @@ pub fn update_vehicle_with_query(
                     wheel.angular_velocity = 0.0;
                 }
 
-                // The force on the chassis is the tyre's at the slip the wheel has **after** this
-                // step's spin update — the same force the implicit update above balances the
-                // wheel against (in the linear range `I·Δω/dt = T − F·r` exactly), so wheel and
-                // chassis agree on it. It was the force at the slip *before* the update: the
-                // chassis gained `a·dt` of speed each step that the wheel only caught a step
-                // later, and that one-step lag, through the implicit stiffness, acted as an extra
-                // inertia of `K·r²·dt/ref_vel` — measured on `dunya`'s car at 120 Hz, ~30 kg·m²
-                // per free-rolling wheel at launch (a real one is ~1), so the front wheels dragged
-                // ~1 kN each and the car crept off the line (0.4 → 2.7 m/s in the first 1.4 s).
-                // The lateral slip angle is the chassis's and does not change with the spin.
+                // The slip the wheel has now, after its update and the traction control's and the
+                // brake's say: the lateral force is taken at it, and it caps the solved force —
+                // a first-order step that ran past the curve's peak (a big torque on a light wheel),
+                // or a spin the clamps changed after the solve, leaves the tyre with what the curve
+                // gives there and no more.
                 let slip_ratio = (wheel.angular_velocity * wheel.radius - v_long) / ref_vel;
-                let (final_long, final_lat) = pacejka_combined_weighted(
+                let (at_slip, final_lat) = pacejka_combined_weighted(
                     &wheel.pacejka_long,
                     &wheel.pacejka_lat,
                     slip_ratio,
@@ -758,34 +745,43 @@ pub fn update_vehicle_with_query(
                     wheel.sliding_grip_floor,
                     fx_weight,
                 );
-                // **The tyre never pushes the contact past standing still in one step.** At a
-                // crawl `ref_vel` is held at 0.5 m/s, so a few mm/s of sideways drift reads as a
-                // large slip angle and the linear tyre is a damper of ~10⁵ N per m/s on a corner
-                // carrying ~300 kg: λ·dt ≈ 4 at 60 Hz, past explicit Euler's 2. It overshot — a
-                // parked car rocked in yaw at ±0.2 rad/s, rounding noise grew into a left/right
-                // asymmetry within ten steps of landing, and the step-end rule that zeroed slow
-                // wheels (MOTOR-NOTLARI #17) had been hiding the longitudinal half of it. The spin
-                // update is implicit for the same stiffness (above); this is the chassis side: a
-                // force component that opposes the contact's velocity is limited to what stops it
-                // exactly, through the contact's effective mass, shared among the grounded wheels
-                // (each reads the same start-of-step velocity). At speed the limit is far above
-                // any tyre force and nothing changes.
+                let at_slip = at_slip * grip;
+                // A spin the traction control or the brake's lock set after the solve is held there,
+                // not free to take the slip up as the solve assumed (`r²/I`): the tyre then gives what
+                // the curve gives at it — a locked wheel slides at its full sliding grip.
+                let held = wheel.angular_velocity != solved_spin;
+                let long_force = if held || solved_force * at_slip < 0.0 || solved_force.abs() > at_slip.abs() {
+                    at_slip
+                } else {
+                    solved_force
+                };
+                // **The tyre never pushes the contact past standing still sideways in one step**:
+                // the lateral half of the same stiffness, limited to what stops the contact's
+                // sideways velocity through its effective mass, shared among the grounded wheels.
+                // At speed the limit is far above any tyre force and nothing changes.
                 let tire_force = {
-                    let r = hit.point - com;
-                    let inv_inertia = vehicle_rb.inv_world_inertia_tensor(vehicle_transform.rotation);
                     let at_most = |dir: Vec3, force: f32, v: f32| -> f32 {
                         if force * v >= 0.0 {
                             return force;
                         }
-                        let rn = r.cross(dir);
-                        let inv_mass = vehicle_rb.inv_mass() + rn.dot(inv_inertia * rn);
+                        let inv_mass = inv_mass_along(dir);
                         if inv_mass <= 0.0 {
                             return force;
                         }
                         let stop = v.abs() / (inv_mass * dt * grounded_share);
                         force.clamp(-stop, stop)
                     };
-                    wheel_forward * (final_long * grip) + wheel_right * at_most(wheel_right, final_lat * grip, v_lat)
+                    // Rolling resistance (`Wheel::rolling_resistance`): what a free-rolling tyre's
+                    // `Crr·Fz·r` comes to at the contact — a force against the contact's motion of
+                    // at most `Crr·Fz`, and at most what stops it. As a torque on the wheel it was a
+                    // light wheel crossing zero and being caught there every other step, and the car
+                    // crept on at a fraction of a millimetre a second.
+                    let rolling = if v_long == 0.0 {
+                        0.0
+                    } else {
+                        at_most(wheel_forward, -v_long.signum() * wheel.rolling_resistance * normal_load, v_long)
+                    };
+                    wheel_forward * (long_force + rolling) + wheel_right * at_most(wheel_right, final_lat * grip, v_lat)
                 };
                 apply_force_at_point(
                     vehicle_rb,
@@ -1030,17 +1026,25 @@ mod tests {
     }
 
     /// **A parked car stays parked.** Dropped onto flat ground with no input, it settles and stops:
-    /// no creep (it rolled on at 1.4 cm/s for good with nothing resisting rolling) and no rocking
-    /// in yaw (±0.2 rad/s, the low-speed tyre overshooting the contact velocity each step).
+    /// no creep (it rolled on at 1.4 cm/s for good with nothing resisting rolling, then at 0.6 mm/s
+    /// with the resistance as a wheel torque), no rocking in yaw (±0.2 rad/s, the low-speed tyre
+    /// overshooting the contact velocity each step) and no slow spin on the spot (left and right
+    /// wheels rolling opposite ways, the longitudinal half of the same overshoot).
     #[test]
     fn a_parked_car_comes_to_rest_and_stays() {
-        let settled = sim_vehicle(0.0, 0.0, 120, None);
-        let (_, before, _, _) = settled.clone();
-        let (_, after, vel, vc) = sim_vehicle(0.0, 0.0, 180, Some(settled));
-        let crept = (after.position - before.position).length();
-        assert!(crept < 5e-3, "a parked car crept {crept} m in 3 s");
-        assert!(vel.linear.length() < 1e-3 && vel.angular.length() < 1e-3, "still moving: {vel:?}");
-        assert!(vc.wheels.iter().all(|w| w.angular_velocity.abs() < 1e-3), "wheels turning while parked");
+        // With and without downforce: the drop lands a little differently, and the yaw mode came
+        // out of one landing and not the other.
+        for lift in [0.0, -0.8] {
+            let (rb, t, v, mut vc) = sim_vehicle(0.0, 0.0, 1, None);
+            vc.tuning.aero.lift_coefficient = lift;
+            let settled = sim_vehicle(0.0, 0.0, 120, Some((rb, t, v, vc)));
+            let (_, before, _, _) = settled.clone();
+            let (_, after, vel, vc) = sim_vehicle(0.0, 0.0, 180, Some(settled));
+            let crept = (after.position - before.position).length();
+            assert!(crept < 5e-3, "lift {lift}: a parked car crept {crept} m in 3 s");
+            assert!(vel.linear.length() < 1e-3 && vel.angular.length() < 1e-3, "lift {lift}: still moving: {vel:?}");
+            assert!(vc.wheels.iter().all(|w| w.angular_velocity.abs() < 1e-3), "lift {lift}: wheels turning while parked");
+        }
     }
 
     /// **Left and right turns are mirror images.** A symmetric car at speed, steered half left and
@@ -1999,6 +2003,9 @@ mod tests {
         //    daha cok sikistirir, ge_factor rampalanir, normal yuk artar.
         let mut fast_vel = vel;
         fast_vel.linear.z = -40.0;
+        // A car with downforce: the default has none.
+        let mut vc = vc;
+        vc.tuning.aero.lift_coefficient = -0.8;
         let (_rb2, _t2, _vel2, vc_fast) = sim_vehicle(0.0, 0.0, 20, Some((rb, t, fast_vel, vc)));
         let fast_load = sum_load(&vc_fast);
         assert!(

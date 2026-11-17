@@ -59,6 +59,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **`AeroPackage::default()` has no lift** (`lift_coefficient` −0.8 → 0.0). Every car whose game never set aero —
+  all of them — carried a racing car's wing: grip rising with the square of speed, unasked. Set it for a car that
+  has one (`pist`'s three laps went 121 → 97 s with the fixes below; their times are the test's own reference).
+- **Vehicle: the wheel and the chassis take the same tyre force.** The chassis was pushed with the curve's force at
+  the slip the wheel's implicit update left, the wheel balanced against the linearised one; at a crawl the two
+  parted by enough to pump — a parked car fell into a slow spin on the spot (found by the lift change, which landed
+  the test car a little differently). Rolling resistance is now a force at the contact (at most `Crr·Fz`, at most
+  what stops it): as a wheel torque a light wheel crossed zero every other step and the car crept on. A spin the
+  traction control or the brake lock sets after the update gives the curve's force at it (a locked wheel slides at
+  full grip).
 - **New: `RigidBody::contact_mass`** — a kinematic body that counts as that many kilograms in contacts (`nfsu2-gizmo`
   MOTOR-NOTLARI #20: a car running into a rail car at 15 m/s was thrown back at −90 m/s). Impulses are sized as
   between two bodies of those masses and the kinematic body's velocity takes its share for the rest of the step,
