@@ -518,3 +518,58 @@ fn box_box_overlap_answers_the_obvious_cases() {
         "and a hair inside certainly does"
     );
 }
+
+// ── Terrain contacts: the ground is solid below its surface ──────────────────────────────
+
+/// A flat field of `n`×`n` samples, 1 m cells, centred on its origin, at height 0.
+fn flat_field(n: u32) -> ColliderShape {
+    crate::components::Collider::heightfield(vec![0.0; (n * n) as usize], n, n, Vec3::ONE).shape
+}
+
+/// **A box sunk tilted into terrain is pushed up out of it, not on through.** Each triangle on
+/// its own is a plate EPA may leave on either side: a box tilted 20° and sunk 0.42 m got a
+/// normal along its own axis that pushed it *down*, and an edge normal sideways.
+#[test]
+fn a_tilted_box_sunk_into_terrain_is_pushed_up_not_through() {
+    let field = flat_field(11);
+    let bx = ColliderShape::Box(BoxShape { half_extents: Vec3::new(1.0, 0.25, 2.0) });
+    let contacts = NarrowPhase::test_collision_manifold(&bx, Vec3::new(0.3, 0.5, 0.0), Quat::from_rotation_x(0.35), &field, Vec3::ZERO, Quat::IDENTITY);
+    assert!(!contacts.is_empty(), "the box is in the ground");
+    for c in &contacts {
+        assert!(c.normal.dot(-Vec3::Y) > 0.999, "box → ground must point down (box pushed up): {c:?}");
+    }
+    let deepest = contacts.iter().map(|c| c.penetration).fold(0.0, f32::max);
+    assert!((deepest - 0.4195).abs() < 0.01, "as deep as its lowest corner is below the ground: {deepest}");
+}
+
+/// **Where two fields meet, both push up.** A world is tiled out of fields; a body across the
+/// seam overlaps the border triangles of each, and EPA pushed it off their borders sideways.
+#[test]
+fn a_body_across_the_seam_of_two_fields_is_pushed_up_by_both() {
+    let field = flat_field(11); // x, z in [-5, 5]
+    let bx = ColliderShape::Box(BoxShape { half_extents: Vec3::new(1.0, 0.25, 2.0) });
+    // Tilted 30° about x, nose down across the seam at z = 0 between fields at z = -5 and z = +5.
+    let (at, rot) = (Vec3::new(0.0, 0.6, 0.1), Quat::from_rotation_x(0.5));
+    for field_at in [Vec3::new(0.0, 0.0, -5.0), Vec3::new(0.0, 0.0, 5.0)] {
+        for c in NarrowPhase::test_collision_manifold(&bx, at, rot, &field, field_at, Quat::IDENTITY) {
+            assert!(c.normal.dot(-Vec3::Y) > 0.999, "field at {field_at}: {c:?}");
+        }
+    }
+}
+
+/// **A ridge is still a ridge.** An edge the field folds down from on both sides stands out of
+/// the surface, and a ball on it rests on the edge, along the edge's own normal — the face rule
+/// is for edges the surface goes on past, not for this one.
+#[test]
+fn a_ball_on_a_ridge_rests_on_its_edge() {
+    // 3 columns along x: heights 0, 1, 0 — a tent with 45° sides and its crest along z at x = 0.
+    let heights: Vec<f32> = (0..5).flat_map(|_| [0.0, 1.0, 0.0]).collect();
+    let field = crate::components::Collider::heightfield(heights, 5, 3, Vec3::ONE).shape;
+    let ball = ColliderShape::Sphere(crate::components::SphereShape { radius: 0.3 });
+    let contacts = NarrowPhase::test_collision_manifold(&ball, Vec3::new(0.0, 1.28, 0.25), Quat::IDENTITY, &field, Vec3::ZERO, Quat::IDENTITY);
+    assert!(!contacts.is_empty(), "the ball sits 2 cm into the crest");
+    for c in &contacts {
+        assert!(c.normal.dot(-Vec3::Y) > 0.99, "pushed straight up off the crest, not along a slope: {c:?}");
+        assert!((c.penetration - 0.02).abs() < 2e-3, "{c:?}");
+    }
+}

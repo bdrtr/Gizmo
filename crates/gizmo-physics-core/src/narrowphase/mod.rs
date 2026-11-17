@@ -604,7 +604,7 @@ impl NarrowPhase {
 
         for row in row0..row1 {
             for col in col0..col1 {
-                for tri in hf.cell_triangles(row, col) {
+                for (k, tri) in hf.cell_triangles(row, col).into_iter().enumerate() {
                     let ColliderShape::ConvexHull(hull) = &mut face else {
                         unreachable!("`face` is constructed as a ConvexHull above")
                     };
@@ -612,15 +612,138 @@ impl NarrowPhase {
                     verts.clear();
                     verts.extend_from_slice(&tri);
                     if let Some(c) = Gjk::get_contact(shape, pos, rot, &face, hf_pos, hf_rot) {
-                        out.push(c);
+                        let ridge = |edge: usize| Self::heightfield_edge_is_ridge(hf, row, col, k, edge);
+                        let world = tri.map(|v| hf_pos + hf_rot * v);
+                        if let Some(c) = Self::terrain_contact(c, shape, pos, rot, world, ridge) {
+                            out.push(c);
+                        }
                     }
                 }
             }
         }
 
+        // A point a face contact found from two triangles — the shape's deepest point over an edge
+        // they share — is one contact, not two the solver would push on twice.
         out.sort_by(|a, b| b.penetration.total_cmp(&a.penetration));
-        out.truncate(4);
-        out
+        let mut kept: Vec<ContactPoint> = Vec::with_capacity(4);
+        for c in out {
+            if !kept.iter().any(|k| k.point.distance_squared(c.point) < 1e-8 && k.normal.dot(c.normal) > 0.9999) {
+                kept.push(c);
+            }
+            if kept.len() == 4 {
+                break;
+            }
+        }
+        kept
+    }
+
+    /// The contact a shape makes with one triangle of a **surface that goes on past it** — a
+    /// terrain's — given what GJK/EPA found for the triangle on its own.
+    ///
+    /// EPA treats the triangle as the whole of the other body: a plate with no thickness and
+    /// open edges. Two of its answers are wrong for terrain, and both were measured:
+    ///
+    /// - **Through the surface.** A plate can be left on either side, so a shape sunk deeper than
+    ///   halfway is pushed out *below* it. A box tilted 20° and sunk 0.4 m into a flat field got
+    ///   a normal pushing it down, along its own axis.
+    /// - **Off an edge.** A shape that overlaps a triangle only a little is pushed off sideways,
+    ///   over an edge that the next triangle continues — the "ghost" collision. In `dunya` a
+    ///   parked car resting across the seam of two terrain cells took 0.7 m pushes along its
+    ///   own tilted axis, with impulses of 8 000–21 000 N·s, and in half the runs fell through
+    ///   the ground.
+    ///
+    /// The ground is solid below its surface, so a shape is moved out **upward, along the
+    /// triangle's face normal**, by how far its deepest point lies below the triangle's plane —
+    /// where that point is over this triangle; one over another triangle is that triangle's
+    /// contact. EPA's answer stands where it is right: when its normal is the face normal
+    /// already, and over a **ridge** — an edge `ridge` reports convex — when it points out of
+    /// the front of the surface, which is what an edge's own normal does there.
+    fn terrain_contact(
+        c: ContactPoint,
+        shape: &ColliderShape,
+        pos: Vec3,
+        rot: Quat,
+        tri: [Vec3; 3],
+        ridge: impl Fn(usize) -> bool,
+    ) -> Option<ContactPoint> {
+        let Some(face) = (tri[1] - tri[0]).cross(tri[2] - tri[0]).try_normalize() else {
+            return Some(c);
+        };
+        // The shape is moved along `-c.normal`.
+        let out_along = (-c.normal).dot(face);
+        if out_along > 0.9995 {
+            return Some(c);
+        }
+        // Which feature of the triangle EPA's contact is on: its witness on the triangle, in the
+        // triangle's barycentric weights. A weight near zero puts it on the edge opposite.
+        let on_tri = c.point - c.normal * (c.penetration * 0.5);
+        let weights = Self::barycentric(on_tri, tri);
+        let on_ridge = weights.is_some_and(|w| (0..3).any(|i| w[i] < 1e-3 && ridge(i)));
+        if on_ridge && out_along > 0.0 {
+            return Some(c);
+        }
+        let deepest = Gjk::support_point(shape, pos, rot, -face);
+        let depth = (tri[0] - deepest).dot(face);
+        if depth <= 0.0 {
+            return None;
+        }
+        let on_plane = deepest + face * depth;
+        if !Self::barycentric(on_plane, tri).is_some_and(|w| w.iter().all(|&x| x > -1e-3)) {
+            return None;
+        }
+        let point = deepest + face * (depth * 0.5);
+        Some(ContactPoint { point, normal: -face, penetration: depth, ..c })
+    }
+
+    /// `p`'s barycentric weights in triangle `t` (for `t[0]`, `t[1]`, `t[2]`), measured in the
+    /// triangle's plane; `None` for a degenerate triangle.
+    pub(crate) fn barycentric(p: Vec3, t: [Vec3; 3]) -> Option<[f32; 3]> {
+        let (ab, ac, ap) = (t[1] - t[0], t[2] - t[0], p - t[0]);
+        let (d00, d01, d11) = (ab.dot(ab), ab.dot(ac), ac.dot(ac));
+        let (d20, d21) = (ap.dot(ab), ap.dot(ac));
+        let denom = d00 * d11 - d01 * d01;
+        if denom.abs() < 1e-12 {
+            return None;
+        }
+        let v = (d11 * d20 - d01 * d21) / denom;
+        let w = (d00 * d21 - d01 * d20) / denom;
+        Some([1.0 - v - w, v, w])
+    }
+
+    /// Whether the edge of heightfield triangle `tri` (0 or 1, as [`HeightfieldShape::cell_triangles`]
+    /// returns them) in cell `(row, col)` opposite its vertex `edge` is a **ridge**: the triangle
+    /// across it bends down by more than 5°, so the edge stands out of the surface and a shape
+    /// can rest on it. A flat or hollow edge is not, and nor is one on the field's border, past
+    /// which terrain is taken to go on (a world is tiled out of fields).
+    ///
+    /// [`HeightfieldShape::cell_triangles`]: crate::components::HeightfieldShape::cell_triangles
+    fn heightfield_edge_is_ridge(hf: &crate::components::HeightfieldShape, row: u32, col: u32, tri: usize, edge: usize) -> bool {
+        // The two samples of the edge and the sample opposite it in the triangle across: for
+        // `[p00, p10, p11]` and `[p00, p11, p01]`, edge `i` runs between the other two corners.
+        let (r, c) = (row as i64, col as i64);
+        let (a, b, across): ((i64, i64), (i64, i64), (i64, i64)) = match (tri, edge) {
+            (0, 0) => ((r + 1, c), (r + 1, c + 1), (r + 2, c + 1)),
+            (0, 1) => ((r + 1, c + 1), (r, c), (r, c + 1)),
+            (0, _) => ((r, c), (r + 1, c), (r, c - 1)),
+            (_, 0) => ((r + 1, c + 1), (r, c + 1), (r + 1, c + 2)),
+            (_, 1) => ((r, c + 1), (r, c), (r - 1, c)),
+            (_, _) => ((r, c), (r + 1, c + 1), (r + 1, c)),
+        };
+        let valid = |(r, c): (i64, i64)| r >= 0 && c >= 0 && r < hf.rows as i64 && c < hf.cols as i64;
+        if !valid(across) {
+            return false;
+        }
+        let at = |(r, c): (i64, i64)| hf.sample_position(r as u32, c as u32);
+        let own = hf.cell_triangles(row, col)[tri];
+        let (Some(n), Some(other)) = (
+            (own[1] - own[0]).cross(own[2] - own[0]).try_normalize(),
+            (at(b) - at(a)).cross(at(across) - at(a)).try_normalize(),
+        ) else {
+            return false;
+        };
+        // Both normals up: the triangle across is wound the other way round its shared edge.
+        let other = if other.y < 0.0 { -other } else { other };
+        n.dot(at(across) - at(a)) < 0.0 && n.dot(other) < 5f32.to_radians().cos()
     }
 
     /// Return the contact points between two shapes, empty when they do not

@@ -745,6 +745,46 @@ impl Gjk {
                     return None;
                 }
                 let (col0, col1, row0, row1) = hf.cell_range(lo, hi);
+                // **Terrain answers for what is over it, along its own normal** — the touching
+                // path's rule (`NarrowPhase::terrain_contact`). Tested whole, a triangle offered its
+                // nearest feature: a field's border edge to a body over the next field, sideways —
+                // a CCD ball rolling across the seam of two fields was thrown 0.6 m up there. So
+                // each triangle measures the gap from the shape's deepest point to its plane,
+                // where that point is over it.
+                let (pos_a, inv_a, pos_b, inv_b) =
+                    if surface_is_a { (s_pos, s_inv, c_pos, c_inv) } else { (c_pos, c_inv, s_pos, s_inv) };
+                let rel_vel = if surface_is_a { s_vel - c_vel } else { c_vel - s_vel };
+                let mut owned = false;
+                let mut on_face: Option<ContactPoint> = None;
+                for row in row0..row1 {
+                    for col in col0..col1 {
+                        for tri in hf.cell_triangles(row, col) {
+                            let w = tri.map(|v| s_pos + s_rot * v);
+                            let Some(up) = (w[1] - w[0]).cross(w[2] - w[0]).try_normalize() else { continue };
+                            let deepest = Self::support_point(c_shape, c_pos, c_rot, -up);
+                            let gap = (deepest - w[0]).dot(up);
+                            let over = crate::narrowphase::NarrowPhase::barycentric(deepest - up * gap, w)
+                                .is_some_and(|b| b.iter().all(|&x| x > -1e-3));
+                            if !over {
+                                continue;
+                            }
+                            owned = true;
+                            let normal = if surface_is_a { up } else { -up };
+                            if let Some(c) = Self::speculative_emit(gap.max(0.0), normal, rel_vel, dt, pos_a, inv_a, pos_b, inv_b) {
+                                if on_face.is_none_or(|f| c.penetration > f.penetration) {
+                                    on_face = Some(c);
+                                }
+                            }
+                        }
+                    }
+                }
+                // Over no triangle along its face: on a ridge, which the face rule leaves to the
+                // nearest feature — but only for a body over this field at all.
+                let lowest = s_rot.inverse() * (Self::support_point(c_shape, c_pos, c_rot, -(s_rot * Vec3::Y)) - s_pos);
+                let (half_x, half_z) = (cells_x as f32 * 0.5 * hf.scale.x, cells_z as f32 * 0.5 * hf.scale.z);
+                if owned || lowest.x.abs() > half_x || lowest.z.abs() > half_z {
+                    return on_face;
+                }
                 for row in row0..row1 {
                     for col in col0..col1 {
                         for tri in hf.cell_triangles(row, col) {

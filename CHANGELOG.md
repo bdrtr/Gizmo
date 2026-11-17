@@ -113,6 +113,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before, with and without frames advancing; so do the `chaos` storms. Debug builds check both premises on every
   step: a body left out holds in the physics world exactly what the sync would have written (rows, collider,
   generation, broadphase box), and a body not written back was not changed by the step.
+- **Terrain is solid below its surface: a heightfield pushes a body up out of it, never through it or off an
+  edge.** Each terrain triangle was handed to GJK/EPA as the whole other body — a plate with no thickness and open
+  edges — and two of its answers were wrong for ground: a body sunk past halfway was pushed out *below* the plate (a
+  box tilted 20° and sunk 0.42 m got a normal pushing it down, and fell through to y = −30), and a body overlapping
+  a triangle a little was pushed sideways over an edge the next triangle continues — the "ghost" collision. Where two
+  fields of a tiled world meet it was a wall: a box sliding across stopped with its nose on the seam, and in `dunya`
+  a parked car left across one took impulses of 8 000–21 000 N·s when its cell reloaded and, in half the runs, fell
+  through the ground (CI's determinism job failed on it). Now a terrain contact (`NarrowPhase`, per triangle) pushes
+  along the triangle's face normal, by how far the body's deepest point lies below its plane, where that point is
+  over the triangle; EPA's answer stands where it is the face normal already, and over a **ridge** — an edge the
+  field folds down from by more than 5° — where it points out of the surface. The speculative path (CCD bodies near
+  the ground) follows the same rule, so a field no longer offers its border edge to a body over the next one: a CCD
+  ball rolling across a seam was thrown 0.6 m up. `dunya` passes in every run (8 of 8), the parked car's largest
+  vertical speed 29.7 → 4.1 m/s (the 1.4 m drop it is spawned with), and its runs are bit-identical again. Tests:
+  `narrowphase::tests` (sunk tilted box, seam, ridge) and `tests/heightfield_collider.rs` (a box across a seam, a
+  CCD ball across a seam, a tilted box sunk into the ground). Triangle meshes take the same per-triangle EPA and are
+  not changed yet: a mesh has no solid side and no adjacency to tell a ridge from a seam, so it needs both first.
 - **A body with CCD rests on the ground as any body does: touching it, with friction and rolling resistance.** A
   0.2 m ball rolled at 1 m/s with rolling friction 0.08 stops in a quarter of a second; with CCD it rolled on for eight,
   three to four metres, until damping stopped it — on a box floor, on terrain and on a mesh alike. Two causes:

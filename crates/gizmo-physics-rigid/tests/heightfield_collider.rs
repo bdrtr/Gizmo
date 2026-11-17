@@ -190,3 +190,104 @@ fn a_ccd_ball_falling_onto_terrain_lands_on_it() {
     let y = y_of(&w, e);
     assert!((y - 0.3).abs() < 0.03, "the ball is not resting on the ground: centre at {y:.3}");
 }
+
+/// Friction 0.1 on both sides of a pair.
+fn slippery() -> PhysicsMaterial {
+    PhysicsMaterial { static_friction: 0.1, dynamic_friction: 0.1, friction_combine: CombineMode::Min, ..grippy() }
+}
+
+/// A flat, slippery static field of 11×11 samples, 1 m cells, at `at` (it spans ±5 m around it).
+fn flat_field_at(world: &mut World, at: Vec3) {
+    let e = world.spawn();
+    let mut collider = Collider::heightfield(vec![0.0; 121], 11, 11, Vec3::ONE);
+    collider.material = slippery();
+    world.add_component(e, Transform::new(at));
+    world.add_component(e, RigidBody::new_static());
+    world.add_component(e, Velocity::default());
+    world.add_component(e, collider);
+}
+
+/// **A body crossing from one terrain field to the next is neither stopped nor thrown.** A world
+/// is tiled out of fields, and the border triangles of each pushed a body at the seam sideways
+/// and along its own axis: a box sliding across stopped with its nose exactly on the seam, as at
+/// a wall, and in `dunya` a parked car resting across one took impulses of 8 000–21 000 N·s and,
+/// in half the runs, fell through the ground.
+#[test]
+fn a_box_sliding_across_the_seam_of_two_fields_is_neither_stopped_nor_thrown() {
+    let mut world = scene();
+    flat_field_at(&mut world, Vec3::new(0.0, 0.0, -5.0));
+    flat_field_at(&mut world, Vec3::new(0.0, 0.0, 5.0));
+    // A car-sized box, settled on the near field, then sent sliding across the seam at z = 0 on
+    // slippery ground (it would slide 8 m), so that only the seam could stop it.
+    let b = drop_box(&mut world, Vec3::new(0.9, 0.3, 2.0), Vec3::new(0.0, 0.31, -3.0));
+    world.query_mut::<&mut Collider>().get_mut(b).unwrap().material = slippery();
+    step(&world, 240);
+    {
+        let mut q = world.query_mut::<(&mut RigidBody, &mut Velocity)>();
+        let (mut rb, mut v) = q.get_mut(b).unwrap();
+        rb.wake_up();
+        v.linear = Vec3::new(0.0, 0.0, 4.0);
+    }
+    let (mut fastest_up, mut lowest, mut farthest) = (0.0f32, f32::MAX, f32::MIN);
+    for _ in 0..480 {
+        step(&world, 1);
+        let v = world.query::<&Velocity>().get(b).unwrap().linear;
+        fastest_up = fastest_up.max(v.y.abs());
+        lowest = lowest.min(y_of(&world, b));
+        farthest = farthest.max(world.query::<&Transform>().get(b).unwrap().position.z);
+    }
+    assert!(farthest > 2.5, "stopped at the seam: its centre got to z = {farthest}, its nose to {}", farthest + 2.0);
+    assert!(fastest_up < 1.0, "thrown at the seam: |vy| reached {fastest_up} m/s");
+    assert!(lowest > 0.1, "sank into the ground: its centre went down to {lowest} m");
+}
+
+/// **A body sunk into the ground comes up out of it.** A tilted box placed 0.3 m into a flat
+/// field — a spawn a little too low, a body let go where its ground has just loaded — is pushed
+/// up, along the ground's normal, not through to the other side.
+#[test]
+fn a_tilted_box_sunk_into_the_ground_comes_up_out_of_it() {
+    let mut world = scene();
+    flat_field_at(&mut world, Vec3::ZERO);
+    let b = drop_box(&mut world, Vec3::new(0.9, 0.3, 2.0), Vec3::new(0.0, 0.5, 0.0));
+    world.query_mut::<&mut Transform>().get_mut(b).unwrap().rotation = Quat::from_rotation_x(0.35);
+    step(&world, 480);
+    let y = y_of(&world, b);
+    assert!(y > 0.25 && y < 1.0, "it should rest on the ground, centre ~0.3 m up: {y}");
+}
+
+/// **A fast body crossing the seam of two fields is not stopped by the one it is not over.** A CCD
+/// body near the ground is held by speculative contacts, and the field beside it offered one
+/// against its border edge — sideways, a wall at the seam.
+#[test]
+fn a_ccd_ball_rolling_across_the_seam_of_two_fields_is_not_stopped() {
+    let mut world = scene();
+    flat_field_at(&mut world, Vec3::new(0.0, 0.0, -5.0));
+    flat_field_at(&mut world, Vec3::new(0.0, 0.0, 5.0));
+    let e = world.spawn();
+    let mut collider = Collider::sphere(0.3);
+    collider.material = slippery();
+    let mut rb = RigidBody::new(1.0, true);
+    rb.calculate_sphere_inertia(0.3);
+    rb.ccd_enabled = true;
+    world.add_component(e, Transform::new(Vec3::new(0.0, 0.31, -3.0)));
+    world.add_component(e, rb);
+    world.add_component(e, Velocity::default());
+    world.add_component(e, collider);
+    step(&world, 240);
+    {
+        let mut q = world.query_mut::<(&mut RigidBody, &mut Velocity)>();
+        let (mut rb, mut v) = q.get_mut(e).unwrap();
+        rb.wake_up();
+        v.linear = Vec3::new(0.0, 0.0, 8.0);
+    }
+    let mut farthest = f32::MIN;
+    let mut highest = f32::MIN;
+    for _ in 0..240 {
+        step(&world, 1);
+        let p = world.query::<&Transform>().get(e).unwrap().position;
+        farthest = farthest.max(p.z);
+        highest = highest.max(p.y);
+    }
+    assert!(farthest > 3.0, "stopped at the seam: got to z = {farthest}");
+    assert!(highest < 0.5, "thrown up at the seam: centre rose to {highest}");
+}
