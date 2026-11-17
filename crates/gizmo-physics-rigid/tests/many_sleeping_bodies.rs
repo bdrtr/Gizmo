@@ -75,6 +75,9 @@ fn scene_with(boxes: usize, asleep: bool) -> World {
 fn run(world: &mut World, steps: usize, measured: usize) -> (f64, usize) {
     let mut times = Vec::new();
     for s in 0..steps {
+        // A frame, as a schedule opens one: what the step reads as changed is measured against it.
+        let next = world.tick;
+        world.begin_change_frame(next);
         let t = std::time::Instant::now();
         gizmo_physics_rigid::system::physics_step_system(world, DT);
         world.apply_commands();

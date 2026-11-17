@@ -96,6 +96,23 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   at. 14 600 static bodies (`static_bodies_cost_a_step`, interleaved runs): 13.6 → 10.9 ms a step; 513 sleeping
   boxes 0.26 → 0.22 ms. Bit-identical (the stress test's hash is unchanged), and checked in every debug run: a
   skipped body's box must be one the tree already holds (`DynamicAabbTree::holds` / `SpatialHash::holds`, new).
+- **The ECS bridge reads only the bodies that changed.** `physics_step_system` gathered every body every step — its
+  collider cloned twice, its rows copied into the physics world, its broadphase box recomputed and looked up — and wrote
+  every one back. Now a body is brought over when something may have moved it on the ECS side: a write to its
+  `RigidBody`, `Transform`, `Velocity`, `Collider`, `PhysicsMaterial` or `Children` since the last step
+  (`World::query_since`), a material or children taken off, its arrival in the body set — and always when it is awake,
+  kinematic, has children or a force component. A static body, or a sleeping one nobody touched, is left as the physics
+  world already holds it; written back are the bodies brought over, those a contact woke, and those the step moved
+  while they stayed asleep (a sleeping member of a solved island takes its share of the position correction —
+  `PhysicsWorld::moved_asleep`). Everything is read again when the record cannot vouch for the world: another ECS
+  world, a tick that went back, or a body set changed outside the bridge (`add_body`, `remove_body_at`, `clear_bodies`,
+  `sync_bodies`, `restore_snapshot`, a rewind). 14 600 static bodies 10.9 → 3.1 ms a step; 513 sleeping boxes
+  0.22 → 0.11 ms. Bit-identical: an ECS-path scene with every kind of body and game-side write (compound, kinematic
+  target and moved by hand, forces, a CCD bullet, teleports, velocity written to a sleeper, despawn/spawn, collider
+  removed and put back, material and mass changes) gives the same ECS and physics hashes at every 100 frames as
+  before, with and without frames advancing; so do the `chaos` storms. Debug builds check both premises on every
+  step: a body left out holds in the physics world exactly what the sync would have written (rows, collider,
+  generation, broadphase box), and a body not written back was not changed by the step.
 - **A big static scene's frame costs half the CPU** (`nfsu2-gizmo` MOTOR-NOTLARI #29; measured by
   `a_static_city_frame_cpu_cost`, 14 620 static entities of 68 textures each with its own mesh, median of a release
   run): collecting draw items 11.7 → 2.8 ms, material sync 1.7 → 0.03 ms.

@@ -47,6 +47,10 @@ impl PhysicsWorld {
             //    restore requires to be unchanged anyway.
             spatial_hash: _,
             settled_bounds: _,
+            body_revision: _,
+            moved_asleep: _,
+            #[cfg(feature = "ecs")]
+            ecs_sync: _,
             entity_index_map: _,
             ecs_generations: _,
             departed_contacts: _,
@@ -106,6 +110,8 @@ impl PhysicsWorld {
             weather,
         } = snap;
 
+        // The rows change under the ECS bridge: it reads everything again next step.
+        self.body_revision += 1;
         self.transforms.clone_from(transforms);
         self.velocities.clone_from(velocities);
         self.rigid_bodies.clone_from(rigid_bodies);

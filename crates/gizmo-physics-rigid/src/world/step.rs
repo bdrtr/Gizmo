@@ -19,10 +19,13 @@ impl PhysicsWorld {
 
         dt: f32,
     ) -> Result<(), gizmo_physics_core::GizmoError> {
+        self.moved_asleep.clear();
         if self.rewind_requested {
             self.rewind_requested = false;
             if let Some(snapshot) = self.history.pop_back() {
                 if snapshot.transforms.len() == self.transforms.len() {
+                    // Rows changed outside a step's own work: see `body_revision`.
+                    self.body_revision += 1;
                     self.transforms = snapshot.transforms;
                     self.velocities = snapshot.velocities;
                     tracing::info!(body_count = self.transforms.len(), "Physics rewound by 1 frame");

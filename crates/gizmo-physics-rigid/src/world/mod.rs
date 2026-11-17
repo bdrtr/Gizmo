@@ -12,6 +12,8 @@ use rustc_hash::FxHashMap;
 use std::path::PathBuf;
 
 mod construction;
+#[cfg(feature = "ecs")]
+pub(crate) use construction::synced_bounds;
 mod entity_index_map;
 mod fluid;
 mod query;
@@ -418,6 +420,22 @@ pub struct PhysicsWorld {
     /// bodies, three of the four substeps of a 60 Hz frame paid that for nothing.
     #[serde(skip)]
     pub(crate) settled_bounds: Vec<Option<(u32, gizmo_math::Vec3, gizmo_math::Quat)>>,
+    /// Bumped by everything that changes the body set or its rows from outside a step's own
+    /// work: `add_body`, `remove_body_at`, `clear_bodies`, `sync_bodies`, `restore_snapshot`.
+    /// The ECS bridge reads only what changed since its last step, and a revision it did not
+    /// leave behind tells it the world was changed under it: it reads everything again.
+    #[serde(skip)]
+    pub(crate) body_revision: u64,
+    /// Ids of bodies the last `step` moved while they stayed asleep: a sleeping member of a
+    /// solved island that nothing woke still takes its share of the split-impulse position
+    /// correction. Everything else the step changes belongs to a body awake by its end. Emptied
+    /// at the start of every `step`; may repeat an id.
+    #[serde(skip)]
+    pub(crate) moved_asleep: Vec<u32>,
+    /// What the ECS bridge brought over last time — see `system::EcsSync`.
+    #[cfg(feature = "ecs")]
+    #[serde(skip)]
+    pub(crate) ecs_sync: crate::system::EcsSync,
     /// Non-trigger contacts observed during the last `step`: `Started` on the first
     /// substep a pair touches, `Persisting` afterwards, `Ended` on the substep the
     /// pair separates. Cleared and refilled by `step`, so entries accumulate across

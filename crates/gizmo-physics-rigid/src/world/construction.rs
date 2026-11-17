@@ -27,6 +27,10 @@ impl PhysicsWorld {
             solver: ConstraintSolver::default(),
             spatial_hash: SpatialHash::new(10.0),
             settled_bounds: Vec::new(),
+            body_revision: 0,
+            moved_asleep: Vec::new(),
+            #[cfg(feature = "ecs")]
+            ecs_sync: crate::system::EcsSync::default(),
             collision_events: Vec::new(),
             trigger_events: Vec::new(),
             fracture_events: Vec::new(),
@@ -117,19 +121,9 @@ impl PhysicsWorld {
         c: Collider,
     ) {
         let idx = self.entities.len();
+        self.body_revision += 1;
 
-        let mut aabb = c.compute_aabb(t.position, t.rotation);
-        if rb.ccd_enabled {
-            let movement = v.linear * (1.0 / 60.0); // Fatten by max expected delta movement
-            let min_mov = aabb
-                .min
-                .min((gizmo_math::Vec3::from(aabb.min) + movement).into());
-            let max_mov = aabb
-                .max
-                .max((gizmo_math::Vec3::from(aabb.max) + movement).into());
-            aabb = gizmo_math::Aabb::new(min_mov, max_mov);
-        }
-        self.spatial_hash.insert(entity, aabb);
+        self.spatial_hash.insert(entity, synced_bounds(&rb, &t, &v, &c));
 
         self.entities.push(entity);
         self.rigid_bodies.push(rb);
@@ -147,6 +141,7 @@ impl PhysicsWorld {
     /// the gravity/fluid zones all survive untouched, so a world reused after this call
     /// still holds entries naming handles that no longer exist.
     pub fn clear_bodies(&mut self) {
+        self.body_revision += 1;
         self.entities.clear();
         self.rigid_bodies.clear();
         self.transforms.clear();
@@ -175,11 +170,24 @@ impl PhysicsWorld {
         &mut self,
         incoming_bodies: impl Iterator<Item = &'a (BodyHandle, RigidBody, Transform, Velocity, Collider)>,
     ) {
-        let mut active_ids = std::collections::HashSet::new();
+        // Whatever the rows say, they came from outside the step: the ECS bridge's record of
+        // what it last brought over no longer describes this world.
+        self.body_revision += 1;
+        let mut active_ids = rustc_hash::FxHashSet::default();
+        self.update_bodies(incoming_bodies.inspect(|(entity, ..)| {
+            active_ids.insert(entity.id());
+        }));
+        self.retain_bodies(|id| active_ids.contains(&id));
+    }
 
+    /// The update half of [`Self::sync_bodies`]: the bodies given are updated in place or added;
+    /// nothing is removed.
+    pub(crate) fn update_bodies<'a>(
+        &mut self,
+        incoming_bodies: impl Iterator<Item = &'a (BodyHandle, RigidBody, Transform, Velocity, Collider)>,
+    ) {
         for (entity, rb, trans, vel, col) in incoming_bodies {
             let e_id = entity.id();
-            active_ids.insert(e_id);
 
             if let Some(&idx) = self.entity_index_map.get(&e_id) {
                 // Update existing body without dropping/allocating mappings
@@ -216,28 +224,20 @@ impl PhysicsWorld {
                 self.colliders[idx] = col.clone();
 
                 // Update spatial hash (Fatten for CCD if enabled)
-                let mut aabb = col.compute_aabb(trans.position, trans.rotation);
-                if rb.ccd_enabled {
-                    let movement = vel.linear * (1.0 / 60.0);
-                    let min_mov = aabb
-                        .min
-                        .min((gizmo_math::Vec3::from(aabb.min) + movement).into());
-                    let max_mov = aabb
-                        .max
-                        .max((gizmo_math::Vec3::from(aabb.max) + movement).into());
-                    aabb = gizmo_math::Aabb::new(min_mov, max_mov);
-                }
-                self.spatial_hash.update(*entity, aabb);
+                self.spatial_hash.update(*entity, synced_bounds(rb, trans, vel, col));
             } else {
                 // Add new body
                 self.add_body(*entity, *rb, *trans, *vel, col.clone());
             }
         }
+    }
 
-        // Cleanup removed entities
+    /// The removal half of [`Self::sync_bodies`]: every body whose id `keep` rejects is removed,
+    /// walking the rows in order (through [`Self::remove_body_at`], so survivors can change index).
+    pub(crate) fn retain_bodies(&mut self, keep: impl Fn(u32) -> bool) {
         let mut i = 0;
         while i < self.entities.len() {
-            if !active_ids.contains(&self.entities[i].id()) {
+            if !keep(self.entities[i].id()) {
                 self.remove_body_at(i);
             } else {
                 i += 1;
@@ -245,14 +245,10 @@ impl PhysicsWorld {
         }
     }
 
-    /// Records that body `id` is, on the ECS side, the entity of `generation`. If the id was
-    /// last synced under a different generation it now names a different entity: the old body
-    /// is removed — its joints with it — and the sync that follows adds the new one fresh.
-    /// Only the ECS sync (`system.rs`, `ecs` feature) calls it.
-    #[cfg(feature = "ecs")]
     /// Where the last step left the body whose ECS entity is `id` of `generation` — `None` when the
     /// world has no such body, or the id last synced belonged to another generation (a recycled id is
     /// a new body). What a kinematic body moved outside the step is carried from.
+    #[cfg(feature = "ecs")]
     #[must_use]
     pub fn last_pose(&self, id: u32, generation: u32) -> Option<Transform> {
         if self.ecs_generations.get(&id) != Some(&generation) {
@@ -261,6 +257,11 @@ impl PhysicsWorld {
         self.entity_index_map.get(&id).map(|&row| self.transforms[row])
     }
 
+    /// Records that body `id` is, on the ECS side, the entity of `generation`. If the id was
+    /// last synced under a different generation it now names a different entity: the old body
+    /// is removed — its joints with it — and the sync that follows adds the new one fresh.
+    /// Only the ECS sync (`system.rs`, `ecs` feature) calls it.
+    #[cfg(feature = "ecs")]
     pub(crate) fn note_ecs_generation(&mut self, id: u32, generation: u32) {
         match self.ecs_generations.get(&id) {
             Some(&g) if g == generation => {}
@@ -296,6 +297,7 @@ impl PhysicsWorld {
     ///
     /// If `idx` is not a valid body index, including any call on a world with no bodies.
     pub fn remove_body_at(&mut self, idx: usize) {
+        self.body_revision += 1;
         let last_idx = self.entities.len() - 1;
         let entity = self.entities[idx];
 
@@ -333,4 +335,18 @@ impl PhysicsWorld {
     }
 
     // ──────────────────────────────────────────────────────────────────────────
+}
+
+/// The broadphase bounds a body is given when it is added or synced: its collider's box at `t`,
+/// and for a CCD-enabled body that box stretched by one 60 Hz frame of `v.linear` — a fixed
+/// assumption about how far it can travel, unrelated to the actual substep length.
+pub(crate) fn synced_bounds(rb: &RigidBody, t: &Transform, v: &Velocity, c: &Collider) -> gizmo_math::Aabb {
+    let aabb = c.compute_aabb(t.position, t.rotation);
+    if !rb.ccd_enabled {
+        return aabb;
+    }
+    let movement = v.linear * (1.0 / 60.0);
+    let min_mov = aabb.min.min((gizmo_math::Vec3::from(aabb.min) + movement).into());
+    let max_mov = aabb.max.max((gizmo_math::Vec3::from(aabb.max) + movement).into());
+    gizmo_math::Aabb::new(min_mov, max_mov)
 }

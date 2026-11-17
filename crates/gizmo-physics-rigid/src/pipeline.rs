@@ -1107,6 +1107,13 @@ current_cache.insert(pair, (false, Some(cached)));
                         // Axis locks hold here too: this moves the transform without a
                         // velocity, so the velocity-level `enforce_locks` cannot see it.
                         let (dlin, dang) = self.rigid_bodies[idx].mask_locked(dlin, dang);
+                        // A sleeping member of an island with no real mover is not woken, and
+                        // takes its share of the correction all the same: the step moves a body
+                        // that stays asleep. Noted for whoever mirrors the world (`moved_asleep`).
+                        let rb = &self.rigid_bodies[idx];
+                        if rb.is_dynamic() && rb.is_sleeping && (dlin != gizmo_math::Vec3::ZERO || dang != gizmo_math::Vec3::ZERO) {
+                            self.moved_asleep.push(entity.id());
+                        }
                         let t = &mut self.transforms[idx];
                         t.position += dlin;
                         if dang.length_squared() > 1e-12 {

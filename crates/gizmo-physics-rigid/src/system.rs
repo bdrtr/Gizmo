@@ -39,6 +39,272 @@ fn write_back<T: PartialEq>(slot: &mut gizmo_core::query::Mut<'_, T>, value: T) 
     }
 }
 
+/// The collider a body is simulated with: its own, with the entity's `PhysicsMaterial` over its
+/// material, and — when it has children with colliders — their shapes too, as a compound.
+#[allow(clippy::too_many_arguments)]
+fn body_collider(
+    world: &World,
+    id: Entity,
+    col: &Collider,
+    transform: &Transform,
+    material: Option<&gizmo_physics_core::components::PhysicsMaterial>,
+    children: Option<&gizmo_core::component::Children>,
+    children_query: &gizmo_core::query::Query<'_, &gizmo_core::component::Children>,
+    trans_query: &gizmo_core::query::Query<'_, &Transform>,
+    col_query: &gizmo_core::query::Query<'_, &Collider>,
+) -> Collider {
+    // **A body with no children is its own collider**, and costs one clone: the walk below
+    // allocated a shape list, a boxed copy of the shape, a visited set and a stack to arrive at
+    // exactly `col.clone()`.
+    if children.is_none_or(|c| c.0.is_empty()) {
+        let mut own = col.clone();
+        own.material = col.material_with(material);
+        return own;
+    }
+    let mut compound_shapes = Vec::new();
+    compound_shapes.push((
+        gizmo_physics_core::Transform::default(),
+        Box::new(col.shape.clone()),
+    ));
+
+    // Check children recursively.
+    //
+    // `visited` is the cycle guard, and this walk is inside the per-frame step: a
+    // `Children` loop — which `add_component` can write directly and scene loading
+    // writes verbatim out of a file — meant this step never returned, on the FIRST
+    // tick after such a scene loaded. Unguarded until 2026-08-30.
+    //
+    // `stack` is not what grew: this walk pops before it pushes, so a simple cycle
+    // holds one id in it forever. `compound_shapes` is the one that climbs, because
+    // the loop body appends a sub-shape per child it visits — so the body being
+    // assembled swells for as long as the step spins.
+    //
+    // The same `visited.insert` also keeps a DIAMOND from adding the same child
+    // collider to the compound body twice, which is the quieter half: it terminates
+    // on its own and just builds a body nobody authored.
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(id);
+    let mut stack = vec![id];
+    while let Some(curr_id) = stack.pop() {
+        {
+            if let Some(children) = children_query.get(curr_id) {
+                for &child in &children.0 {
+                    let child_id = child;
+                    if !world.is_alive(child) || !visited.insert(child) {
+                        continue;
+                    }
+                    stack.push(child);
+                    {
+                        let (tq, cq) = (&trans_query, &col_query);
+                        if let (Some(child_trans), Some(child_col)) = (tq.get(child_id), cq.get(child_id)) {
+                            let inv_rot = transform.rotation.inverse();
+                            let local_pos =
+                                inv_rot.mul_vec3(child_trans.position - transform.position);
+                            let local_rot = inv_rot * child_trans.rotation;
+
+                            let local_t = gizmo_physics_core::Transform::new(local_pos)
+                                .with_rotation(local_rot);
+                            compound_shapes
+                                .push((local_t, Box::new(child_col.shape.clone())));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // One collider for this rigid body, rebuilt every frame from the entity's own
+    // shape plus its children's — and it carries the AUTHORED collider forward, not
+    // just its geometry.
+    //
+    // **This is the third field to go missing here, and the first two are why it is
+    // written this way.** The line used to be `Collider::from_shape(shape)`, and
+    // `from_shape` fills everything but the shape from `Default`. So a custom
+    // `material` was silently discarded on every ECS entity — an elastic ball
+    // (restitution 1) behaved as the default 0.3 — and that was fixed by appending
+    // `.with_material(col.material)`, one field at a time. The two fields nobody
+    // appended were `is_trigger` and `collision_layer`:
+    //
+    // - a collider with the inspector's "Trigger (Tetikleyici)" box ticked was rebuilt
+    //   as a solid one, every frame. The badge under the checkbox promises "no
+    //   physical response, only enter/exit events"; the player walked into the door
+    //   sensor instead of through it, and because `pipeline.rs` decides between a
+    //   contact manifold and a `TriggerEvent` on this same flag, **no ECS body could
+    //   ever emit a trigger event at all** — which also left Lua's `physics.triggers`
+    //   list structurally empty rather than merely wrong.
+    // - `Collider::with_layer` was equally inert from the ECS: layer filtering is
+    //   opt-in, and opting in did nothing.
+    //
+    // Cloning the authored collider and replacing only the shape ends the class:
+    // a field added tomorrow travels without anyone remembering this line.
+    let mut final_collider = if compound_shapes.is_empty() {
+        Collider::default() // Should technically not be simulated
+    } else if compound_shapes.len() == 1 {
+        // Single collider, avoid nesting in Compound
+        let (_t, s) = compound_shapes.remove(0);
+        let mut rebuilt = col.clone();
+        rebuilt.shape = *s;
+        rebuilt
+    } else {
+        let mut rebuilt = col.clone();
+        rebuilt.shape = gizmo_physics_core::ColliderShape::Compound(compound_shapes);
+        rebuilt
+    };
+
+    final_collider.material = col.material_with(material);
+    final_collider
+}
+
+/// What the ECS bridge knows about what it brought over last time, so that the next step reads
+/// only what changed since (see `physics_step_system`). Kept in the `PhysicsWorld`, which is the
+/// resource that lives as long as the bodies it describes.
+#[derive(Debug, Default)]
+pub(crate) struct EcsSync {
+    /// The ECS world the rest describes (`World::id`), or `None` when nothing is vouched for:
+    /// never synced, or a step that did not write back.
+    world: Option<u64>,
+    /// The tick read up to: `World::tick − 1` at the last step, so what is written later in that
+    /// same tick is news next time (the bridge's own write-back is then seen once more, and
+    /// costs a comparison).
+    tick: u32,
+    /// `PhysicsWorld::body_revision` as the last step left it.
+    revision: u64,
+    /// This step's number, from 1; `present` holds it for the ids in the body set this step.
+    epoch: u32,
+    /// Per ECS id: the last step (`epoch`) the id was in the body set — what tells the ids that
+    /// came in (or back: a pooled entity reactivated writes nothing) from those that stayed, and
+    /// the ones that left.
+    present: Vec<u32>,
+    /// Per ECS id: `WRITTEN` / `SYNCED` / `MOVED` for this step, and what the id had at its last
+    /// sync that no tick reports the loss of (`MATERIAL`, `CHILDREN`).
+    flags: Vec<u8>,
+}
+
+impl EcsSync {
+    const WRITTEN: u8 = 1;
+    const SYNCED: u8 = 2;
+    const MATERIAL: u8 = 4;
+    const CHILDREN: u8 = 8;
+    const MOVED: u8 = 16;
+    const KEPT: u8 = Self::MATERIAL | Self::CHILDREN;
+
+    /// Whether the record describes `world` as the physics world now holds it: the same ECS world,
+    /// a tick that has not gone back, and no body set or row changed outside the bridge.
+    fn vouches_for(&self, world: &World, revision: u64) -> bool {
+        self.world == Some(world.id()) && self.revision == revision && world.tick > self.tick
+    }
+
+    /// Opens a step; `full` forgets what was known, so every body is read.
+    fn begin(&mut self, full: bool) {
+        self.epoch = self.epoch.wrapping_add(1);
+        if full || self.epoch == 1 || self.epoch == 0 {
+            self.present.iter_mut().for_each(|p| *p = 0);
+            self.flags.iter_mut().for_each(|f| *f = 0);
+            self.epoch = self.epoch.max(1);
+        } else {
+            self.flags.iter_mut().for_each(|f| *f &= Self::KEPT);
+        }
+        if full {
+            self.world = None;
+        }
+    }
+
+    /// The tick a `query_since` reads from.
+    fn since(&self) -> u32 {
+        self.tick
+    }
+
+    fn slot(&mut self, id: u32) -> usize {
+        let i = id as usize;
+        if i >= self.flags.len() {
+            self.flags.resize(i + 1, 0);
+            self.present.resize(i + 1, 0);
+        }
+        i
+    }
+
+    fn mark_written(&mut self, id: u32) {
+        let i = self.slot(id);
+        self.flags[i] |= Self::WRITTEN;
+    }
+
+    /// Enters `id` in this step's body set and says whether it must be brought over: when the
+    /// record does not vouch for it (`full` was asked, it is new to the set, it was written, it
+    /// lost a material or its children) or `always`. A body with children always is: what moves
+    /// its children's colliders is written on them, not on it.
+    fn needs(&mut self, id: u32, material: bool, children: Option<&gizmo_core::component::Children>, always: bool) -> bool {
+        let i = self.slot(id);
+        let kept = if material { Self::MATERIAL } else { 0 }
+            | if children.is_some_and(|c| !c.0.is_empty()) { Self::CHILDREN } else { 0 };
+        let stayed = self.present[i] == self.epoch.wrapping_sub(1) && self.epoch > 1;
+        self.present[i] = self.epoch;
+        let flags = self.flags[i];
+        let needed = always
+            || !stayed
+            || flags & Self::WRITTEN != 0
+            || flags & Self::KEPT != kept
+            || kept & Self::CHILDREN != 0;
+        self.flags[i] = (flags & !Self::KEPT) | kept | if needed { Self::SYNCED } else { 0 };
+        needed
+    }
+
+    /// Whether `id` is in this step's body set.
+    fn present(&self, id: u32) -> bool {
+        self.present.get(id as usize) == Some(&self.epoch)
+    }
+
+    /// Marks `id` as moved by the step while it stayed asleep (`PhysicsWorld::moved_asleep`).
+    fn mark_moved(&mut self, id: u32) {
+        let i = self.slot(id);
+        self.flags[i] |= Self::MOVED;
+    }
+
+    fn moved(&self, id: u32) -> bool {
+        self.flags.get(id as usize).is_some_and(|f| f & Self::MOVED != 0)
+    }
+
+    /// Whether `id` was brought over this step.
+    fn synced(&self, id: u32) -> bool {
+        self.flags.get(id as usize).is_some_and(|f| f & Self::SYNCED != 0)
+    }
+
+    /// Closes a step that wrote the ECS back.
+    fn finish(&mut self, world: &World, revision: u64) {
+        self.world = Some(world.id());
+        self.tick = world.tick.wrapping_sub(1);
+        self.revision = revision;
+    }
+
+    /// A step that did not write back: nothing is vouched for.
+    fn invalidate(&mut self) {
+        self.world = None;
+    }
+}
+
+/// What leaving a body out of the sync relies on, checked wherever tests run (debug builds call
+/// it): the physics world already holds exactly what the sync would have put there — its rows,
+/// its collider, its generation, and a broadphase box the refresh would not have changed.
+fn assert_clean(physics_world: &PhysicsWorld, id: Entity, rb: &RigidBody, transform: &Transform, vel: &Velocity, collider: &Collider) {
+    let Some(&i) = physics_world.entity_index_map.get(&id.id()) else {
+        panic!("body {id:?} left out of the sync is not in the physics world");
+    };
+    assert!(
+        physics_world.rigid_bodies[i] == *rb && physics_world.transforms[i] == *transform,
+        "body {id:?} left out of the sync differs from the physics world's copy"
+    );
+    let sleeping_dynamic = rb.is_sleeping && rb.is_dynamic();
+    assert!(
+        sleeping_dynamic || physics_world.velocities[i] == *vel,
+        "body {id:?} left out of the sync has another velocity in the physics world"
+    );
+    assert!(physics_world.colliders[i] == *collider, "body {id:?} left out of the sync has another collider in the physics world");
+    assert_eq!(physics_world.ecs_generations.get(&id.id()), Some(&id.generation()), "body {id:?}: another generation");
+    assert!(
+        physics_world.spatial_hash.holds(BodyHandle::from_id(id.id()), &crate::world::synced_bounds(rb, transform, vel, collider)),
+        "body {id:?} left out of the sync is not inside its broadphase box"
+    );
+}
+
 /// Exclusive system that updates the entire physics simulation.
 /// It reads all rigid and soft bodies from the ECS, steps the physics world,
 /// and writes the transformed positions and velocities back to the ECS.
@@ -80,219 +346,151 @@ pub fn physics_step_system(world: &World, dt: f32) {
     }
     physics_world.bodies_without_collider = orphans;
 
-    // 2. Gather Compound Shapes (Read Locks Only)
-    // FxHash: an insert and a remove per body per step, keyed by entities the engine made.
-    let mut compound_shapes_map: rustc_hash::FxHashMap<Entity, Collider> = rustc_hash::FxHashMap::default();
-    {
-        {
-            let query = world.query_filtered::<(Entity, &Collider, &Transform, &RigidBody), (gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>();
-            let mut children_query = world.query::<&gizmo_core::component::Children>();
-            let trans_query = world.query::<&Transform>();
-            let col_query = world.query::<&Collider>();
-            // An entity's `PhysicsMaterial` component overrides its collider's own material —
-            // see `Collider::material_with`, which `gizmo-physics-dynamics` applies too.
-            let material_query = world.query::<&gizmo_physics_core::components::PhysicsMaterial>();
-
-            for (id, col, transform, _rb) in query.iter() {
-                // **A body with no children is its own collider**, and costs one clone: the walk
-                // below allocated a shape list, a boxed copy of the shape, a visited set and a
-                // stack for every body every step to arrive at exactly `col.clone()`. With a few
-                // hundred resting props that was a measurable share of a step that otherwise did
-                // nothing (`many_sleeping_bodies`, `nfsu2-gizmo` MOTOR-NOTLARI #26).
-                if children_query.get(id).is_none_or(|c| c.0.is_empty()) {
-                    let mut own = col.clone();
-                    own.material = col.material_with(material_query.get(id));
-                    compound_shapes_map.insert(id, own);
-                    continue;
-                }
-                let mut compound_shapes = Vec::new();
-                compound_shapes.push((
-                    gizmo_physics_core::Transform::default(),
-                    Box::new(col.shape.clone()),
-                ));
-
-                // Check children recursively.
-                //
-                // `visited` is the cycle guard, and this walk is inside the per-frame step: a
-                // `Children` loop — which `add_component` can write directly and scene loading
-                // writes verbatim out of a file — meant this step never returned, on the FIRST
-                // tick after such a scene loaded. Unguarded until 2026-08-30.
-                //
-                // `stack` is not what grew: this walk pops before it pushes, so a simple cycle
-                // holds one id in it forever. `compound_shapes` is the one that climbs, because
-                // the loop body appends a sub-shape per child it visits — so the body being
-                // assembled swells for as long as the step spins.
-                //
-                // The same `visited.insert` also keeps a DIAMOND from adding the same child
-                // collider to the compound body twice, which is the quieter half: it terminates
-                // on its own and just builds a body nobody authored.
-                let mut visited = std::collections::HashSet::new();
-                visited.insert(id);
-                let mut stack = vec![id];
-                while let Some(curr_id) = stack.pop() {
-                    {
-                        let children_query_ref = &mut children_query;
-                        if let Some(children) = children_query_ref.get(curr_id) {
-                            for &child in &children.0 {
-                                let child_id = child;
-                                if !world.is_alive(child) || !visited.insert(child) {
-                                    continue;
-                                }
-                                stack.push(child);
-                                {
-                                    let (tq, cq) = (&trans_query, &col_query);
-                                    if let (Some(child_trans), Some(child_col)) = (tq.get(child_id), cq.get(child_id)) {
-                                        let inv_rot = transform.rotation.inverse();
-                                        let local_pos =
-                                            inv_rot.mul_vec3(child_trans.position - transform.position);
-                                        let local_rot = inv_rot * child_trans.rotation;
-
-                                        let local_t = gizmo_physics_core::Transform::new(local_pos)
-                                            .with_rotation(local_rot);
-                                        compound_shapes
-                                            .push((local_t, Box::new(child_col.shape.clone())));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // One collider for this rigid body, rebuilt every frame from the entity's own
-                // shape plus its children's — and it carries the AUTHORED collider forward, not
-                // just its geometry.
-                //
-                // **This is the third field to go missing here, and the first two are why it is
-                // written this way.** The line used to be `Collider::from_shape(shape)`, and
-                // `from_shape` fills everything but the shape from `Default`. So a custom
-                // `material` was silently discarded on every ECS entity — an elastic ball
-                // (restitution 1) behaved as the default 0.3 — and that was fixed by appending
-                // `.with_material(col.material)`, one field at a time. The two fields nobody
-                // appended were `is_trigger` and `collision_layer`:
-                //
-                // - a collider with the inspector's "Trigger (Tetikleyici)" box ticked was rebuilt
-                //   as a solid one, every frame. The badge under the checkbox promises "no
-                //   physical response, only enter/exit events"; the player walked into the door
-                //   sensor instead of through it, and because `pipeline.rs` decides between a
-                //   contact manifold and a `TriggerEvent` on this same flag, **no ECS body could
-                //   ever emit a trigger event at all** — which also left Lua's `physics.triggers`
-                //   list structurally empty rather than merely wrong.
-                // - `Collider::with_layer` was equally inert from the ECS: layer filtering is
-                //   opt-in, and opting in did nothing.
-                //
-                // Cloning the authored collider and replacing only the shape ends the class:
-                // a field added tomorrow travels without anyone remembering this line.
-                let mut final_collider = if compound_shapes.is_empty() {
-                    Collider::default() // Should technically not be simulated
-                } else if compound_shapes.len() == 1 {
-                    // Single collider, avoid nesting in Compound
-                    let (_t, s) = compound_shapes.remove(0);
-                    let mut rebuilt = col.clone();
-                    rebuilt.shape = *s;
-                    rebuilt
-                } else {
-                    let mut rebuilt = col.clone();
-                    rebuilt.shape = gizmo_physics_core::ColliderShape::Compound(compound_shapes);
-                    rebuilt
-                };
-
-                final_collider.material =
-                    col.material_with(material_query.get(id));
-                compound_shapes_map.insert(id, final_collider);
-            }
+    // 2. What to bring over.
+    //
+    // **Only what changed since the last step is read.** Every body used to be gathered, its
+    // collider cloned (twice), its rows copied into the physics world and its broadphase box
+    // recomputed and looked up, every step — for a static city of 14 600 bodies that was most of
+    // a 12 ms step that simulated nothing. Now a body is brought over when something may have
+    // moved it on the ECS side: a write to its `RigidBody`, `Transform`, `Velocity`, `Collider`,
+    // `PhysicsMaterial` or `Children` since the last step (`World::query_since`), a material or
+    // children taken off (which no tick reports), its arrival in the body set — and always when
+    // it is awake or kinematic, has children (whose own moves no tick on it reports) or a force
+    // component (pushed every step). What is left is a static body or a sleeping one nobody
+    // touched, which the physics world already holds exactly. Everything is read again when the
+    // record cannot vouch for that: another ECS world, a tick that went backwards, or a body set
+    // changed outside this bridge (`PhysicsWorld::body_revision`). See `EcsSync`.
+    let mut sync = std::mem::take(&mut physics_world.ecs_sync);
+    let full = !sync.vouches_for(world, physics_world.body_revision);
+    sync.begin(full);
+    if !full {
+        use gizmo_core::query::{Changed, Or};
+        let written = world.query_since::<
+            Entity,
+            Or<
+                Changed<RigidBody>,
+                Or<
+                    Changed<Transform>,
+                    Or<
+                        Changed<Velocity>,
+                        Or<
+                            Changed<Collider>,
+                            Or<Changed<gizmo_physics_core::components::PhysicsMaterial>, Changed<gizmo_core::component::Children>>,
+                        >,
+                    >,
+                >,
+            >,
+        >(sync.since());
+        for e in written.iter() {
+            sync.mark_written(e.id());
         }
     }
 
-    // 3. Query Rigid Bodies (Write Locks)
-    let mut rigid_bodies = Vec::with_capacity(compound_shapes_map.len());
+    let children_query = world.query::<&gizmo_core::component::Children>();
+    let trans_query = world.query::<&Transform>();
+    let col_query = world.query::<&Collider>();
+
+    // 3. Bring the bodies over that need it.
+    let mut rigid_bodies = Vec::new();
     // The handle of each entry above, for the write-back: a `BodyHandle` is the physics side's raw id.
-    let mut body_entities: Vec<Entity> = Vec::with_capacity(compound_shapes_map.len());
+    let mut body_entities: Vec<Entity> = Vec::new();
     // Kinematic bodies driven to a pose: their index in `rigid_bodies`, and the pose to put them
     // on after the step.
     let mut targets: Vec<(usize, crate::components::KinematicTarget)> = Vec::new();
     let target_query = world.query::<&crate::components::KinematicTarget>();
-    // Forces that push on every step, not once a frame — see `ExternalForce`.
-    let force_query = world.query::<&crate::components::ExternalForce>();
-    // And the engine's own, from the body's surroundings — see `EnvironmentForce`.
-    let environment_query = world.query::<&crate::components::EnvironmentForce>();
     {
-        // SAFETY: physics_step_system runs as a scheduled system; the scheduler guarantees
-        // no other system mutably aliases these components while it runs (see `query_unchecked`).
-        let mut query = unsafe {
-        world.query_filtered_unchecked::<(Entity, &mut RigidBody, &mut Transform, &mut Velocity), (gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>()
-    };
-        for (id, rb, transform, vel) in query.iter_mut() {
-            if let Some(final_collider) = compound_shapes_map.remove(&id) {
-                // A moving body whose inertia was never set gets its collider's.
-                //
-                // `RigidBody::new` cannot know the shape, so it stores a 1×1×1-box placeholder,
-                // and the rule was "call `update_inertia_from_collider` yourself" — which 28 of
-                // the 36 `RigidBody::new` calls in `demo/` did not. Measured in `lobut`: a 20 cm
-                // ball, I = 0.4·m·r² = 0.096, spun as if I were ~1 — ten times too hard to turn,
-                // so it never stopped sliding and lost 80 % of its speed to friction in 1.5 s
-                // instead of settling into a roll at 5/7 of it. The derived value is written back
-                // with the body, so this runs once; an inertia set by hand is anything but the
-                // placeholder and is left alone.
-                let mut rb = *rb;
-                if !rb.is_static() && rb.local_inertia == RigidBody::UNSET_INERTIA {
-                    rb.update_inertia_from_collider(&final_collider);
+        let query = world.query_filtered::<(
+            Entity,
+            &RigidBody,
+            &Transform,
+            &Velocity,
+            &Collider,
+            Option<&gizmo_physics_core::components::PhysicsMaterial>,
+            Option<&gizmo_core::component::Children>,
+            // Forces that push on every step, not once a frame — see `ExternalForce`.
+            Option<&crate::components::ExternalForce>,
+            // And the engine's own, from the body's surroundings — see `EnvironmentForce`.
+            Option<&crate::components::EnvironmentForce>,
+        ), (gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>();
+        for (id, rb, transform, vel, col, material, children, external, environment) in query.iter() {
+            let always = !(rb.is_static() || (rb.is_dynamic() && rb.is_sleeping)) || external.is_some() || environment.is_some();
+            if !sync.needs(id.id(), material.is_some(), children, always) {
+                if cfg!(debug_assertions) {
+                    let collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
+                    assert_clean(&physics_world, id, rb, transform, vel, &collider);
                 }
-                if let Some(push) = force_query.get(id) {
-                    if rb.is_dynamic() {
-                        rb.force_accumulator += push.force;
-                        rb.torque_accumulator += push.torque;
-                    }
+                continue;
+            }
+            let final_collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
+            // A moving body whose inertia was never set gets its collider's.
+            //
+            // `RigidBody::new` cannot know the shape, so it stores a 1×1×1-box placeholder,
+            // and the rule was "call `update_inertia_from_collider` yourself" — which 28 of
+            // the 36 `RigidBody::new` calls in `demo/` did not. Measured in `lobut`: a 20 cm
+            // ball, I = 0.4·m·r² = 0.096, spun as if I were ~1 — ten times too hard to turn,
+            // so it never stopped sliding and lost 80 % of its speed to friction in 1.5 s
+            // instead of settling into a roll at 5/7 of it. The derived value is written back
+            // with the body, so this runs once; an inertia set by hand is anything but the
+            // placeholder and is left alone.
+            let mut rb = *rb;
+            if !rb.is_static() && rb.local_inertia == RigidBody::UNSET_INERTIA {
+                rb.update_inertia_from_collider(&final_collider);
+            }
+            if let Some(push) = external {
+                if rb.is_dynamic() {
+                    rb.force_accumulator += push.force;
+                    rb.torque_accumulator += push.torque;
                 }
-                if let Some(push) = environment_query.get(id) {
-                    if rb.is_dynamic() {
-                        rb.force_accumulator += push.force;
-                        rb.torque_accumulator += push.torque;
-                    }
+            }
+            if let Some(push) = environment {
+                if rb.is_dynamic() {
+                    rb.force_accumulator += push.force;
+                    rb.torque_accumulator += push.torque;
                 }
-                // A kinematic body with a target moves by whatever velocity reaches it this step.
-                let mut vel = *vel;
-                let mut start = *transform;
-                if let Some(target) = rb
-                    .is_kinematic()
-                    .then(|| target_query.get(id).copied())
-                    .flatten()
-                {
-                    let com = transform.rotation * rb.center_of_mass;
-                    let (linear, angular) = target.velocity_from(transform.position, transform.rotation, com, dt);
+            }
+            // A kinematic body with a target moves by whatever velocity reaches it this step.
+            let mut vel = *vel;
+            let mut start = *transform;
+            if let Some(target) = rb
+                .is_kinematic()
+                .then(|| target_query.get(id).copied())
+                .flatten()
+            {
+                let com = transform.rotation * rb.center_of_mass;
+                let (linear, angular) = target.velocity_from(transform.position, transform.rotation, com, dt);
+                vel.linear = linear;
+                vel.angular = angular;
+                targets.push((rigid_bodies.len(), target));
+            } else if rb.is_kinematic() {
+                // **A kinematic body moved outside the step** — its `Transform` written by an
+                // animation, a script, the game — is carried there from where the last step left
+                // it, as if its new pose were a `KinematicTarget`: so it has the velocity of that
+                // move, and what stands on it goes with it (`platform_carry` reads it). It used to
+                // jump there with no velocity at all, and a platform keyed in the timeline slid out
+                // from under the player. Once it has arrived and is not moved again, it stops.
+                let moved = physics_world
+                    .last_pose(id.id(), id.generation())
+                    .filter(|last| last.position != transform.position || last.rotation != transform.rotation);
+                if let Some(last) = moved {
+                    let target = crate::components::KinematicTarget::new(transform.position, transform.rotation);
+                    start.position = last.position;
+                    start.rotation = last.rotation;
+                    let com = start.rotation * rb.center_of_mass;
+                    let (linear, angular) = target.velocity_from(start.position, start.rotation, com, dt);
                     vel.linear = linear;
                     vel.angular = angular;
+                    rb.pose_driven = true;
                     targets.push((rigid_bodies.len(), target));
-                } else if rb.is_kinematic() {
-                    // **A kinematic body moved outside the step** — its `Transform` written by an
-                    // animation, a script, the game — is carried there from where the last step left
-                    // it, as if its new pose were a `KinematicTarget`: so it has the velocity of that
-                    // move, and what stands on it goes with it (`platform_carry` reads it). It used to
-                    // jump there with no velocity at all, and a platform keyed in the timeline slid out
-                    // from under the player. Once it has arrived and is not moved again, it stops.
-                    let moved = physics_world
-                        .last_pose(id.id(), id.generation())
-                        .filter(|last| last.position != transform.position || last.rotation != transform.rotation);
-                    if let Some(last) = moved {
-                        let target = crate::components::KinematicTarget::new(transform.position, transform.rotation);
-                        start.position = last.position;
-                        start.rotation = last.rotation;
-                        let com = start.rotation * rb.center_of_mass;
-                        let (linear, angular) = target.velocity_from(start.position, start.rotation, com, dt);
-                        vel.linear = linear;
-                        vel.angular = angular;
-                        rb.pose_driven = true;
-                        targets.push((rigid_bodies.len(), target));
-                    } else if rb.pose_driven {
-                        vel.linear = gizmo_math::Vec3::ZERO;
-                        vel.angular = gizmo_math::Vec3::ZERO;
-                        rb.pose_driven = false;
-                    }
+                } else if rb.pose_driven {
+                    vel.linear = gizmo_math::Vec3::ZERO;
+                    vel.angular = gizmo_math::Vec3::ZERO;
+                    rb.pose_driven = false;
                 }
-                // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
-                // unused by physics; bodies are keyed by id only).
-                rigid_bodies.push((BodyHandle::from_id(id.id()), rb, start, vel, final_collider));
-                body_entities.push(id);
             }
+            // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
+            // unused by physics; bodies are keyed by id only).
+            rigid_bodies.push((BodyHandle::from_id(id.id()), rb, start, vel, final_collider));
+            body_entities.push(id);
         }
     }
 
@@ -308,10 +506,25 @@ pub fn physics_step_system(world: &World, dt: f32) {
     // Scenes whose bodies all carry a `Velocity` — every one written before this — take neither
     // branch, so their bodies, their order and their hashes are unchanged.
     {
-        let query = world.query_filtered::<(Entity, &RigidBody, &Transform), (gizmo_core::query::Without<Velocity>, gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>();
-        for (id, rb, transform) in query.iter() {
+        let query = world.query_filtered::<(
+            Entity,
+            &RigidBody,
+            &Transform,
+            Option<&Collider>,
+            Option<&gizmo_physics_core::components::PhysicsMaterial>,
+            Option<&gizmo_core::component::Children>,
+        ), (gizmo_core::query::Without<Velocity>, gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>();
+        for (id, rb, transform, col, material, children) in query.iter() {
             if rb.is_static() {
-                if let Some(final_collider) = compound_shapes_map.remove(&id) {
+                if let Some(col) = col {
+                    if !sync.needs(id.id(), material.is_some(), children, false) {
+                        if cfg!(debug_assertions) {
+                            let collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
+                            assert_clean(&physics_world, id, rb, transform, &Velocity::default(), &collider);
+                        }
+                        continue;
+                    }
+                    let final_collider = body_collider(world, id, col, transform, material, children, &children_query, &trans_query, &col_query);
                     rigid_bodies.push((BodyHandle::from_id(id.id()), *rb, *transform, Velocity::default(), final_collider));
                     body_entities.push(id);
                 }
@@ -338,14 +551,22 @@ pub fn physics_step_system(world: &World, dt: f32) {
             physics_world.note_ecs_generation(handle.id(), entity.generation());
         }
     }
-    physics_world.sync_bodies(rigid_bodies.iter());
+    physics_world.update_bodies(rigid_bodies.iter());
+    // A body that left the set — despawned, lost its collider, pooled — leaves the world.
+    physics_world.retain_bodies(|id| sync.present(id));
 
+    // A step that rewrites rows itself (a rewind) leaves bodies changed that this bridge did not
+    // bring over: they are all written back.
+    let revision_before_step = physics_world.body_revision;
     // A numerical error (NaN/Inf/Overflow) in physics may originate from
     // user-controlled body state; panicking would crash the whole engine.
     // Instead, log and skip this frame gracefully (signature unchanged).
     if let Err(e) = physics_world.step(dt) {
         tracing::error!(error = ?e, "Physics step failed (NaN/Inf/Overflow), skipping frame");
         // Make sure the profiler scope opened above is closed before returning.
+        // The ECS was not written back: read everything next step.
+        sync.invalidate();
+        physics_world.ecs_sync = sync;
         drop(physics_world); // release PhysicsWorld lock
         if let Ok(mut profiler) =
             world.try_get_resource_mut::<gizmo_core::profiler::FrameProfiler>()
@@ -355,20 +576,11 @@ pub fn physics_step_system(world: &World, dt: f32) {
         return;
     }
 
-    // Sync back to rigid_bodies so vehicles/ECS writeback works.
-    //
-    // Through an index built once, not a linear `find` per body. The scan was O(N²) — at a few
-    // thousand bodies that is millions of comparisons every frame, spent entirely on the bridge
-    // rather than on simulating anything. Entity ids are unique, so the map finds exactly what
-    // the scan's first match found.
-    let ecs_index: rustc_hash::FxHashMap<u32, usize> = rigid_bodies
-        .iter()
-        .enumerate()
-        .map(|(idx, (handle, ..))| (handle.id(), idx))
-        .collect();
-    for i in 0..physics_world.entities.len() {
-        if let Some(&idx) = ecs_index.get(&physics_world.entities[i].id()) {
-            let (_, rb, trans, vel, _) = &mut rigid_bodies[idx];
+    let write_all = physics_world.body_revision != revision_before_step;
+
+    // Sync back to the bodies brought over, for the write-back below.
+    for (handle, rb, trans, vel, _) in &mut rigid_bodies {
+        if let Some(&i) = physics_world.entity_index_map.get(&handle.id()) {
             *rb = physics_world.rigid_bodies[i];
             *trans = physics_world.transforms[i];
             *vel = physics_world.velocities[i];
@@ -389,30 +601,56 @@ pub fn physics_step_system(world: &World, dt: f32) {
     }
 
     // 5. Write back to ECS (Rigid Bodies)
-    if !rigid_bodies.is_empty() {
-        {
-            // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
-            let mut query = unsafe {
+    {
+        // SAFETY: scheduled system; scheduler guarantees disjoint mutable access.
+        let mut query = unsafe {
             world.query_filtered_unchecked::<(&mut RigidBody, &mut Transform, &mut Velocity), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
         };
-            for ((_, rb, transform, vel, _collider), entity) in rigid_bodies.into_iter().zip(body_entities) {
-                // Marked changed only where the step changed something. Every body was written
-                // back through `DerefMut` every step, a resting or static one included, which
-                // stamped each `Transform`, `Velocity` and `RigidBody` as changed every frame: a
-                // `Changed<Transform>` filter on a static city of 14 600 cells matched all of
-                // them, always, and a pass that reads only what changed could skip nothing a
-                // physics body touched — the render world's extractor above all, which copies a
-                // `Transform` when it is `Changed` and so cloned every body's, every frame.
-                if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get_mut(entity) {
-                    write_back(&mut ecs_rb, rb);
-                    write_back(&mut ecs_trans, transform);
-                    write_back(&mut ecs_vel, vel);
-                }
+        for ((_, rb, transform, vel, _collider), entity) in rigid_bodies.into_iter().zip(body_entities) {
+            // Marked changed only where the step changed something. Every body was written
+            // back through `DerefMut` every step, a resting or static one included, which
+            // stamped each `Transform`, `Velocity` and `RigidBody` as changed every frame: a
+            // `Changed<Transform>` filter on a static city of 14 600 cells matched all of
+            // them, always, and a pass that reads only what changed could skip nothing a
+            // physics body touched — the render world's extractor above all, which copies a
+            // `Transform` when it is `Changed` and so cloned every body's, every frame.
+            if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get_mut(entity) {
+                write_back(&mut ecs_rb, rb);
+                write_back(&mut ecs_trans, transform);
+                write_back(&mut ecs_vel, vel);
             }
         }
+        // And the bodies the step changed without their having been brought over: a sleeping
+        // body woken by a contact, one moved while it stayed asleep (`moved_asleep`), or all of
+        // them after a rewind. A static body, and one asleep before and after and not moved, is
+        // what the step leaves alone.
+        for &id in &physics_world.moved_asleep {
+            sync.mark_moved(id);
+        }
+        for i in 0..physics_world.entities.len() {
+            let id = physics_world.entities[i].id();
+            let rb = physics_world.rigid_bodies[i];
+            let untouched = !write_all && !sync.moved(id) && (sync.synced(id) || rb.is_static() || rb.is_sleeping);
+            if untouched && (sync.synced(id) || !cfg!(debug_assertions)) {
+                continue;
+            }
+            let Some(entity) = world.entity(id) else { continue };
+            let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get_mut(entity) else { continue };
+            if untouched {
+                // Debug builds only: what leaving it out relies on.
+                assert!(
+                    *ecs_rb == rb && *ecs_trans == physics_world.transforms[i] && *ecs_vel == physics_world.velocities[i],
+                    "body {entity:?} was neither brought over nor written back, and the step changed it"
+                );
+                continue;
+            }
+            write_back(&mut ecs_rb, rb);
+            write_back(&mut ecs_trans, physics_world.transforms[i]);
+            write_back(&mut ecs_vel, physics_world.velocities[i]);
+        }
     }
-
-    
+    sync.finish(world, physics_world.body_revision);
+    physics_world.ecs_sync = sync;
 
     // 7. Dispatch Events
     if let Ok(mut trigger_queue) =
