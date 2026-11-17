@@ -2200,6 +2200,28 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16ak. The forty-first game: platforms keyed in the timeline (2026-11-17, `tirman`)
+
+A side-on course whose ferry over a pit and lift to a ledge are not movement code but the engine's
+**keyed animation** — a `KeyedAnimationPlayer` and a translation track each, what the editor's
+ANIMATION tab keys with ◆ — and whose lamp pulses on a property track (`PointLight.intensity`). The
+first game to use keyed animation at all. Its `--test` waits for the ferry, stands on it without
+walking, rides the lift and reaches the flag.
+
+- ~~**An animated platform left its passenger behind.**~~ **Closed 2026-11-17.** The animation
+  writes the platform's `Transform`; the physics took a kinematic body to move by its `Velocity`
+  alone, and `platform_carry` reads the floor's velocity — so a platform keyed in the timeline
+  jumped to each frame's pose with none, and the player stood still and fell into the pit (0.06 m
+  carried, 9 falls in a minute). A kinematic body moved outside the step — by an animation, a
+  script, the game — is now carried there by the step from where it left it, as if to a
+  `KinematicTarget` (`RigidBody::pose_driven`), and stops once it arrives; `FixedPhysics` cuts the
+  move across a frame's steps as it does a target. 3.80 m carried, no fall, the flag in 16.8 s.
+  Tested in `gizmo-physics-rigid`'s `kinematic_target` too (on the pose exactly, the move's velocity,
+  then still; a board tilted by its `Transform` rolls a ball downhill), each failing with it taken out.
+
+Everything else worked the first time: the clips loop with a dwell at each end (a repeated key), the
+lift carries the player up, and the property track pulses the lamp through `HeadlessFrames`.
+
 ### C16aj. A game as an Android app (2026-11-05, `demo-android`)
 
 The browser ran the games on a phone; a game a player installs is an APK. `scripts/android-apk.sh`

@@ -249,6 +249,17 @@ impl PhysicsWorld {
     /// is removed — its joints with it — and the sync that follows adds the new one fresh.
     /// Only the ECS sync (`system.rs`, `ecs` feature) calls it.
     #[cfg(feature = "ecs")]
+    /// Where the last step left the body whose ECS entity is `id` of `generation` — `None` when the
+    /// world has no such body, or the id last synced belonged to another generation (a recycled id is
+    /// a new body). What a kinematic body moved outside the step is carried from.
+    #[must_use]
+    pub fn last_pose(&self, id: u32, generation: u32) -> Option<Transform> {
+        if self.ecs_generations.get(&id) != Some(&generation) {
+            return None;
+        }
+        self.entity_index_map.get(&id).map(|&row| self.transforms[row])
+    }
+
     pub(crate) fn note_ecs_generation(&mut self, id: u32, generation: u32) {
         match self.ecs_generations.get(&id) {
             Some(&g) if g == generation => {}

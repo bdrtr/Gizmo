@@ -705,6 +705,11 @@ impl FixedPhysics {
     /// frame moves at the speed it asked for. It used to make the whole move in the first step and
     /// stand still for the rest — at 240 Hz and 60 fps, four times too fast in jerks, which threw
     /// a ball off a board just starting to tilt (`labirent`). The target itself is left as it was.
+    ///
+    /// A kinematic body **moved outside the step** — its `Transform` written by an animation or the
+    /// game — is carried there by the step as if to a target (`RigidBody::pose_driven`), and is cut
+    /// across the call's steps the same way: its `Transform` is put on the step's share of the way
+    /// before each step, from where the last step left it.
     pub fn advance(&mut self, world: &mut crate::core::World, dt: f32) -> u32 {
         use crate::physics::components::KinematicTarget;
         let steps = self.plan(dt);
@@ -715,6 +720,24 @@ impl FixedPhysics {
         } else {
             Vec::new()
         };
+        // Each kinematic body moved outside the step since the last one: where that step left it, and
+        // where it was moved to.
+        let moved: Vec<(Entity, Transform, Transform)> = if steps > 1 {
+            world.get_resource::<crate::physics::world::PhysicsWorld>().map_or_else(Vec::new, |physics| {
+                let targeted = world.query::<&KinematicTarget>();
+                world
+                    .query::<(Entity, &crate::physics::RigidBody, &Transform)>()
+                    .iter()
+                    .filter(|(entity, body, _)| body.is_kinematic() && targeted.get(*entity).is_none())
+                    .filter_map(|(entity, _, now)| {
+                        let last = physics.last_pose(entity.id(), entity.generation())?;
+                        (last.position != now.position || last.rotation != now.rotation).then_some((entity, last, *now))
+                    })
+                    .collect()
+            })
+        } else {
+            Vec::new()
+        };
         // Bodies drawn between the steps (`systems::interpolation`): the poses either side of each.
         if world.get_resource::<crate::systems::interpolation::InterpolationHistory>().is_none() {
             world.insert_resource(crate::systems::interpolation::InterpolationHistory::default());
@@ -722,6 +745,21 @@ impl FixedPhysics {
         for step in 0..steps {
             if let Some(mut history) = world.get_resource_mut::<crate::systems::interpolation::InterpolationHistory>() {
                 history.begin_step(world);
+            }
+            if !moved.is_empty() {
+                let f = (step + 1) as f32 / steps as f32;
+                let mut transforms = world.query_mut::<&mut Transform>();
+                for (id, from, goal) in &moved {
+                    if let Some(mut t) = transforms.get_mut(*id) {
+                        if step + 1 == steps {
+                            t.position = goal.position;
+                            t.rotation = goal.rotation;
+                        } else {
+                            t.position = from.position.lerp(goal.position, f);
+                            t.rotation = from.rotation.slerp(goal.rotation, f);
+                        }
+                    }
+                }
             }
             if !driven.is_empty() {
                 let f = (step + 1) as f32 / steps as f32;

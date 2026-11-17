@@ -59,6 +59,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **A kinematic body moved by its `Transform` carries what stands on it.** An animation, a script or the game writing a
+  kinematic body's `Transform` left it with no velocity, so `platform_carry` had nothing to give a character on it: a
+  platform keyed in the animation timeline slid out from under the player. The physics step now carries such a body
+  from where it left it to the new pose, as if to a `KinematicTarget`, and stops it once it arrives
+  (`RigidBody::pose_driven`, new); `FixedPhysics` cuts the move across a frame's steps. `PhysicsWorld::last_pose`
+  says where the last step left a body. A body driven by its `Velocity` is unaffected. Found by `tirman`, the
+  forty-first game and the first to use keyed animation: its ferry carried the player 0.06 m before, 3.80 m now.
 - **Two texture slots freed on the desktop's forward and G-buffer passes.** WebGPU allows 16 sampled textures a stage
   and a pipeline layout counts all its groups offer. Group 0 carried the reflection-probe array and the sun's cascades
   for the forward-only path's lit shaders, which have no group of their own for them; the desktop, which reads both

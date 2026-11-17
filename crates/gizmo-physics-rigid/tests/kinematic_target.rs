@@ -169,3 +169,67 @@ fn a_ball_rolls_across_tile_seams_as_on_one_slab() {
     assert!((slab - analytic).abs() < 0.1 * analytic, "slab {slab} vs analytic {analytic}");
     assert!((tiles - slab).abs() < 0.03 * slab, "tiles {tiles} vs slab {slab}");
 }
+
+/// **A kinematic body moved by its `Transform` alone** — an animation's write, a script's — is
+/// carried there by the next step as if to a target: on the new pose exactly, with that move's
+/// velocity, which is what makes what stands on it go along. It had no velocity at all, so a
+/// platform keyed in the animation timeline slid out from under the player. Not moved again, it
+/// stops; a body driven by its `Velocity`, as kinematic bodies always were, is left alone.
+#[test]
+fn a_kinematic_body_moved_by_its_transform_is_carried_there_and_stops() {
+    let mut world = World::new();
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    let b = board(&mut world);
+    step(&mut world);
+    let goal = Vec3::new(0.3, 0.0, 0.0);
+    world.query_mut::<&mut Transform>().get_mut(b).unwrap().position = goal;
+    step(&mut world);
+    let t = *world.query::<&Transform>().get(b).unwrap();
+    assert_eq!(t.position, goal, "not exactly where it was moved");
+    let v = *world.query::<&Velocity>().get(b).unwrap();
+    assert!((v.linear.x - 0.3 / DT).abs() < 1e-2, "the step's velocity is the move: {v:?}");
+    step(&mut world);
+    let t = *world.query::<&Transform>().get(b).unwrap();
+    assert_eq!(t.position, goal, "it drifted on past where it was moved");
+    assert_eq!(world.query::<&Velocity>().get(b).unwrap().linear, Vec3::ZERO, "it did not stop");
+
+    // A kinematic body driven by its velocity keeps it.
+    let rolling = board(&mut world);
+    world.query_mut::<&mut Transform>().get_mut(rolling).unwrap().position = Vec3::new(0.0, 5.0, 0.0);
+    world.query_mut::<&mut Velocity>().get_mut(rolling).unwrap().linear = Vec3::new(1.0, 0.0, 0.0);
+    for _ in 0..12 {
+        step(&mut world);
+    }
+    let x = world.query::<&Transform>().get(rolling).unwrap().position.x;
+    assert!((x - 12.0 * DT).abs() < 1e-4, "a velocity-driven kinematic body moved {x}, not {}", 12.0 * DT);
+}
+
+/// The marble maze again, tilted by writing the board's `Transform` a little each step as an
+/// animation would — no `KinematicTarget` — and the ball rolls downhill on it as it does when the
+/// board is driven to a target.
+#[test]
+fn a_board_tilted_by_its_transform_rolls_the_ball_on_it_downhill() {
+    let mut world = World::new();
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    let b = board(&mut world);
+    let ball = world.spawn();
+    world.add_component(ball, Transform::new(Vec3::new(0.0, 0.31, 0.0)));
+    world.add_component(ball, RigidBody::new(0.5, true));
+    world.add_component(ball, Velocity::default());
+    world.add_component(ball, Collider::sphere(0.2));
+    for _ in 0..60 {
+        step(&mut world);
+    }
+    for i in 1..=120 {
+        let angle = -(8f32.to_radians()) * (i as f32 / 120.0);
+        world.query_mut::<&mut Transform>().get_mut(b).unwrap().rotation = Quat::from_rotation_z(angle);
+        step(&mut world);
+    }
+    for _ in 0..60 {
+        step(&mut world);
+    }
+    let p = world.query::<&Transform>().get(ball).unwrap().position;
+    assert!(p.x > 0.5, "the ball did not roll downhill: {p:?}");
+    let surface = -p.x * 8f32.to_radians().tan() + 0.1 + 0.2;
+    assert!((p.y - surface).abs() < 0.08, "the ball left the board: {p:?} (surface {surface})");
+}

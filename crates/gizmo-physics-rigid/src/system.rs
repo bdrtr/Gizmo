@@ -225,6 +225,7 @@ pub fn physics_step_system(world: &World, dt: f32) {
                 }
                 // A kinematic body with a target moves by whatever velocity reaches it this step.
                 let mut vel = *vel;
+                let mut start = *transform;
                 if let Some(target) = rb
                     .is_kinematic()
                     .then(|| target_query.get(id).copied())
@@ -235,10 +236,35 @@ pub fn physics_step_system(world: &World, dt: f32) {
                     vel.linear = linear;
                     vel.angular = angular;
                     targets.push((rigid_bodies.len(), target));
+                } else if rb.is_kinematic() {
+                    // **A kinematic body moved outside the step** — its `Transform` written by an
+                    // animation, a script, the game — is carried there from where the last step left
+                    // it, as if its new pose were a `KinematicTarget`: so it has the velocity of that
+                    // move, and what stands on it goes with it (`platform_carry` reads it). It used to
+                    // jump there with no velocity at all, and a platform keyed in the timeline slid out
+                    // from under the player. Once it has arrived and is not moved again, it stops.
+                    let moved = physics_world
+                        .last_pose(id.id(), id.generation())
+                        .filter(|last| last.position != transform.position || last.rotation != transform.rotation);
+                    if let Some(last) = moved {
+                        let target = crate::components::KinematicTarget::new(transform.position, transform.rotation);
+                        start.position = last.position;
+                        start.rotation = last.rotation;
+                        let com = start.rotation * rb.center_of_mass;
+                        let (linear, angular) = target.velocity_from(start.position, start.rotation, com, dt);
+                        vel.linear = linear;
+                        vel.angular = angular;
+                        rb.pose_driven = true;
+                        targets.push((rigid_bodies.len(), target));
+                    } else if rb.pose_driven {
+                        vel.linear = gizmo_math::Vec3::ZERO;
+                        vel.angular = gizmo_math::Vec3::ZERO;
+                        rb.pose_driven = false;
+                    }
                 }
                 // Bridge: ECS entity id -> opaque physics BodyHandle (generation is
                 // unused by physics; bodies are keyed by id only).
-                rigid_bodies.push((BodyHandle::from_id(id.id()), rb, *transform, vel, final_collider));
+                rigid_bodies.push((BodyHandle::from_id(id.id()), rb, start, vel, final_collider));
                 body_entities.push(id);
             }
         }
@@ -324,10 +350,16 @@ pub fn physics_step_system(world: &World, dt: f32) {
     }
     // Driven bodies land on their targets exactly: the integrator's average of two velocities
     // would otherwise leave them a little off, and a little off every step is drift.
+    // On both sides: the world's own copy too, or the next step would read the integrator's
+    // near-miss as the body having been moved again.
     for (idx, target) in targets {
-        let (_, _, trans, _, _) = &mut rigid_bodies[idx];
+        let (handle, _, trans, _, _) = &mut rigid_bodies[idx];
         trans.position = target.position;
         trans.rotation = target.rotation;
+        if let Some(&row) = physics_world.entity_index_map.get(&handle.id()) {
+            physics_world.transforms[row].position = target.position;
+            physics_world.transforms[row].rotation = target.rotation;
+        }
     }
 
     // 5. Write back to ECS (Rigid Bodies)

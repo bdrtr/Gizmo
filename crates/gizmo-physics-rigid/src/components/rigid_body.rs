@@ -235,6 +235,16 @@ pub struct RigidBody {
     /// [`force_accumulator`](Self::force_accumulator); both are dropped together by
     /// [`clear_forces`](Self::clear_forces).
     pub torque_accumulator: Vec3,
+    /// Whether the last step carried this **kinematic** body to a pose it was given outside the
+    /// physics step — its `Transform` written by an animation, a script or the game — as if that
+    /// pose were a [`KinematicTarget`](crate::components::KinematicTarget). Written by the step,
+    /// read by the next one: a body that was carried and has not been moved again has arrived, and
+    /// its velocity is put back to zero. Without this a kinematic body moved by its `Transform`
+    /// alone had no velocity at all, so what stood on it was left behind (a platform keyed in the
+    /// animation timeline slid out from under the player). Kept on the body rather than beside it so
+    /// a rollback restores it with the velocity it explains. `#[serde(skip)]`: a step's bookkeeping.
+    #[serde(skip)]
+    pub pose_driven: bool,
 }
 
 impl Default for RigidBody {
@@ -260,6 +270,7 @@ impl Default for RigidBody {
             center_of_mass: Vec3::ZERO,
             fracture_threshold: None,
             force_accumulator: Vec3::ZERO,
+            pose_driven: false,
             torque_accumulator: Vec3::ZERO,
         }
     }
