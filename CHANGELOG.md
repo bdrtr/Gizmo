@@ -113,6 +113,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before, with and without frames advancing; so do the `chaos` storms. Debug builds check both premises on every
   step: a body left out holds in the physics world exactly what the sync would have written (rows, collider,
   generation, broadphase box), and a body not written back was not changed by the step.
+- **Static bodies have a broadphase tree of their own, and a step's pairs come in id order.** The broadphase walked one
+  tree against itself every substep, pairing static bodies with each other only for the narrowphase to skip them: with
+  14 600 static bodies and nothing moving, a quarter of the step. `SpatialHash` now keeps the moving bodies and the
+  static ones (new `insert_static`) in two trees and pairs the moving tree with itself and with the static one (new
+  `DynamicAabbTree::query_pairs_with`); two static bodies are never a pair. 14 600 static bodies: 3.1 → 1.8 ms a step.
+  The split changed the order the pairs came in, and that order was the collision events' order — `vinc`'s wrecking
+  ball broke 25 blocks instead of 27, because the fracture system spawns debris in event order. The island solve never
+  cared; the events did, and a rollback (which restores bodies, not a tree's history) could have replayed a step's
+  events in another order. The narrowphase now takes its pairs in id order, so a step's outcome is a function of the
+  bodies alone (`tests/broadphase_order.rs`: a pile whose broadphase is rebuilt backwards gives the same events every
+  step and the same final state).
 - **Terrain is solid below its surface: a heightfield pushes a body up out of it, never through it or off an
   edge.** Each terrain triangle was handed to GJK/EPA as the whole other body — a plate with no thickness and open
   edges — and two of its answers were wrong for ground: a body sunk past halfway was pushed out *below* the plate (a

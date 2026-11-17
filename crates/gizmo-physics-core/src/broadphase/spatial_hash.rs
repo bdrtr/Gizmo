@@ -16,8 +16,19 @@ use super::*;
 /// enlarged boxes. Results are therefore a conservative superset: pairs and hits are
 /// reported for bodies whose true bounds may not overlap at all, and the narrowphase
 /// or an exact [`Raycast`](crate::Raycast) test is expected to reject them.
+///
+/// **Two trees.** Bodies that never move — static ones, put in with
+/// [`insert_static`](Self::insert_static) — live in a tree of their own, which is never walked
+/// against itself: two of them can never start touching, and the narrowphase skipped every such
+/// pair anyway. [`query_pairs`](Self::query_pairs) is the moving tree against itself and against
+/// the static one. With 14 600 static bodies and nothing moving, walking them against each other
+/// four times a step was a quarter of the step. A body is in one tree at a time: putting it in
+/// one takes it out of the other.
 pub struct SpatialHash {
+    /// Bodies that may move: dynamic (awake or asleep) and kinematic.
     tree: DynamicAabbTree,
+    /// Static bodies.
+    fixed: DynamicAabbTree,
 }
 
 impl Default for SpatialHash {
@@ -37,12 +48,14 @@ impl SpatialHash {
     pub fn new(_cell_size: f32) -> Self {
         Self {
             tree: DynamicAabbTree::new(),
+            fixed: DynamicAabbTree::new(),
         }
     }
 
     /// FIX-4: &mut self instead of &self
     pub fn clear(&mut self) {
         self.tree.clear();
+        self.fixed.clear();
     }
 
     /// Adds `entity` with its tight world-space `aabb`, or refreshes it if the id is
@@ -51,48 +64,68 @@ impl SpatialHash {
     /// Forwards to [`DynamicAabbTree::insert`], including its early-out for a body
     /// that has not left the box already stored for it.
     pub fn insert(&mut self, entity: BodyHandle, aabb: Aabb) {
+        if self.tree.holds(entity, &aabb) {
+            return;
+        }
+        self.fixed.remove(entity);
         self.tree.insert(entity, aabb);
+    }
+
+    /// [`insert`](Self::insert) for a body that never moves: it goes in the static tree, which
+    /// is only ever walked against the moving one (see the type's documentation). Taken out of
+    /// the moving tree if it was there — a body made static.
+    pub fn insert_static(&mut self, entity: BodyHandle, aabb: Aabb) {
+        if self.fixed.holds(entity, &aabb) {
+            return;
+        }
+        self.tree.remove(entity);
+        self.fixed.insert(entity, aabb);
     }
 
     /// Whether the broadphase already stores a box for `entity` that contains `aabb`, so that
     /// [`insert`](Self::insert) would change nothing. Forwards to [`DynamicAabbTree::holds`].
     pub fn holds(&self, entity: BodyHandle, aabb: &Aabb) -> bool {
-        self.tree.holds(entity, aabb)
+        self.tree.holds(entity, aabb) || self.fixed.holds(entity, aabb)
     }
 
     /// Refreshes an entity's bounds. Identical to [`insert`](Self::insert) — it is
     /// the same call underneath, and it inserts entities that are not present yet.
     pub fn update(&mut self, entity: BodyHandle, aabb: Aabb) {
-        self.tree.insert(entity, aabb);
+        self.insert(entity, aabb);
     }
 
     /// Drops the entity from the broadphase. A no-op for an id that is not present.
     pub fn remove(&mut self, entity: BodyHandle) {
         self.tree.remove(entity);
+        self.fixed.remove(entity);
     }
 
     /// Drops every entity whose id `keep` rejects, and reports how many went. Forwards to
     /// [`DynamicAabbTree::retain`] — see it for why a caller wants this.
     pub fn retain(&mut self, keep: impl Fn(u32) -> bool) -> usize {
-        self.tree.retain(keep)
+        self.tree.retain(&keep) + self.fixed.retain(&keep)
     }
 
     /// Number of entities currently in the broadphase.
     pub fn entity_count(&self) -> usize {
-        self.tree.entity_count()
+        self.tree.entity_count() + self.fixed.entity_count()
     }
 
     /// Candidate collision pairs, ordered by id (`.0.id() < .1.id()`) so a tuple
     /// works as a symmetric cache key. See [`DynamicAabbTree::query_pairs`] for the
-    /// guarantees in full.
+    /// guarantees in full. Two static bodies are never a pair.
     pub fn query_pairs(&self) -> Vec<(BodyHandle, BodyHandle)> {
-        self.tree.query_pairs()
+        let mut pairs = self.tree.query_pairs();
+        self.tree.query_pairs_with(&self.fixed, &mut pairs);
+        pairs
     }
 
     /// Entities overlapping `aabb`, touching included. See
     /// [`DynamicAabbTree::query_aabb`].
     pub fn query_aabb(&self, aabb: Aabb) -> Vec<BodyHandle> {
-        self.tree.query_aabb(&aabb)
+        let mut found = self.tree.query_aabb(&aabb);
+        found.extend(self.fixed.query_aabb(&aabb));
+        found
     }
 
     /// Entities near `point`, within an axis-aligned **cube** of half-extent
@@ -106,7 +139,7 @@ impl SpatialHash {
             min: Vec3::new(point.x - radius, point.y - radius, point.z - radius).into(),
             max: Vec3::new(point.x + radius, point.y + radius, point.z + radius).into(),
         };
-        self.tree.query_aabb(&aabb)
+        self.query_aabb(aabb)
     }
 
     /// Ray candidates, nearest first, each with the parameter at which the ray
@@ -116,7 +149,10 @@ impl SpatialHash {
     /// See [`DynamicAabbTree::query_ray`] for what the `t` values mean, how they are
     /// scaled, and the degenerate-direction caveats.
     pub fn query_ray(&self, origin: Vec3, dir: Vec3, max_t: f32) -> Vec<(BodyHandle, f32)> {
-        self.tree.query_ray(origin, dir, max_t)
+        let mut hits = self.tree.query_ray(origin, dir, max_t);
+        hits.extend(self.fixed.query_ray(origin, dir, max_t));
+        hits.sort_unstable_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+        hits
     }
 }
 

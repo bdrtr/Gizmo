@@ -358,6 +358,57 @@ mod tests {
         assert_eq!(sh.query_pairs().len(), 0);
     }
 
+    /// **Static bodies are never walked against each other, and pair with everything else as
+    /// before.** A grid of overlapping static boxes with a few movers among them: the pairs are
+    /// exactly one tree's pairs less the static–static ones, whatever order they come in.
+    #[test]
+    fn static_bodies_pair_with_movers_only() {
+        let mut one = DynamicAabbTree::new();
+        let mut two = SpatialHash::new(10.0);
+        let mut statics = std::collections::HashSet::new();
+        for i in 0..400u32 {
+            let aabb = make_aabb((i % 20) as f32 * 1.5, 0.0, (i / 20) as f32 * 1.5, 1.0);
+            one.insert(make_entity(i), aabb);
+            if i % 7 == 0 {
+                two.insert(make_entity(i), aabb);
+            } else {
+                two.insert_static(make_entity(i), aabb);
+                statics.insert(i);
+            }
+        }
+        let sorted = |mut v: Vec<(BodyHandle, BodyHandle)>| {
+            v.sort_by_key(|(a, b)| (a.id(), b.id()));
+            v
+        };
+        let expected = sorted(
+            one.query_pairs().into_iter().filter(|(a, b)| !(statics.contains(&a.id()) && statics.contains(&b.id()))).collect(),
+        );
+        assert!(!expected.is_empty(), "premise: the movers overlap statics");
+        assert_eq!(sorted(two.query_pairs()), expected);
+        assert_eq!(two.entity_count(), 400);
+        assert_eq!(two.query_aabb(make_aabb(0.0, 0.0, 0.0, 0.5)).len(), one.query_aabb(&make_aabb(0.0, 0.0, 0.0, 0.5)).len());
+    }
+
+    /// **A body is in one tree at a time.** Made static, it leaves the moving tree; made to move
+    /// again, it leaves the static one — and pairs accordingly.
+    #[test]
+    fn a_body_changing_type_changes_tree() {
+        let mut sh = SpatialHash::new(10.0);
+        let (wall, block) = (make_entity(1), make_entity(2));
+        sh.insert_static(wall, make_aabb(0.0, 0.0, 0.0, 1.0));
+        sh.insert(block, make_aabb(1.0, 0.0, 0.0, 1.0));
+        assert_eq!(sh.query_pairs().len(), 1, "a mover and a static body pair");
+        sh.insert_static(block, make_aabb(1.0, 0.0, 0.0, 1.0));
+        assert_eq!(sh.entity_count(), 2, "moved, not copied");
+        assert!(sh.query_pairs().is_empty(), "two static bodies do not");
+        sh.insert(wall, make_aabb(0.0, 0.0, 0.0, 1.0));
+        assert_eq!(sh.entity_count(), 2);
+        assert_eq!(sh.query_pairs().len(), 1);
+        sh.remove(wall);
+        sh.remove(block);
+        assert_eq!(sh.entity_count(), 0);
+    }
+
     #[test]
     fn test_many_entities_no_crash() {
         let mut tree = DynamicAabbTree::new();

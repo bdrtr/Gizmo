@@ -123,7 +123,12 @@ impl PhysicsWorld {
         let idx = self.entities.len();
         self.body_revision += 1;
 
-        self.spatial_hash.insert(entity, synced_bounds(&rb, &t, &v, &c));
+        let bounds = synced_bounds(&rb, &t, &v, &c);
+        if rb.is_static() {
+            self.spatial_hash.insert_static(entity, bounds);
+        } else {
+            self.spatial_hash.insert(entity, bounds);
+        }
 
         self.entities.push(entity);
         self.rigid_bodies.push(rb);
@@ -223,8 +228,14 @@ impl PhysicsWorld {
                 // Shapes use Arc internally, so clone is cheap
                 self.colliders[idx] = col.clone();
 
-                // Update spatial hash (Fatten for CCD if enabled)
-                self.spatial_hash.update(*entity, synced_bounds(rb, trans, vel, col));
+                // Update spatial hash (Fatten for CCD if enabled); a static body in the static
+                // tree (see `SpatialHash`), which also moves one whose type changed.
+                let bounds = synced_bounds(rb, trans, vel, col);
+                if rb.is_static() {
+                    self.spatial_hash.insert_static(*entity, bounds);
+                } else {
+                    self.spatial_hash.update(*entity, bounds);
+                }
             } else {
                 // Add new body
                 self.add_body(*entity, *rb, *trans, *vel, col.clone());

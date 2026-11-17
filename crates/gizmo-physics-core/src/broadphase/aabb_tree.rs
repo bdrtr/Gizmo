@@ -509,6 +509,53 @@ impl DynamicAabbTree {
         pairs
     }
 
+    /// Appends to `pairs` every pair of an entity of this tree and an entity of `other` whose
+    /// fattened boxes overlap, each once and ordered by id like [`query_pairs`](Self::query_pairs).
+    /// The trees are meant to hold different entities; one held by both would pair with itself.
+    ///
+    /// A simultaneous descent of the two trees, splitting the larger box at each step: what lets
+    /// a broadphase keep the bodies that never move in a tree of their own, never walked against
+    /// itself, and pay only for what the moving ones reach.
+    pub fn query_pairs_with(&self, other: &DynamicAabbTree, pairs: &mut Vec<(BodyHandle, BodyHandle)>) {
+        if self.root == NULL || other.root == NULL {
+            return;
+        }
+        let mut stack = vec![(self.root, other.root)];
+        while let Some((a, b)) = stack.pop() {
+            if a == NULL || b == NULL {
+                continue;
+            }
+            let (na, nb) = (&self.nodes[a], &other.nodes[b]);
+            if !aabb_overlaps(&na.aabb, &nb.aabb) {
+                continue;
+            }
+            match (na.is_leaf(), nb.is_leaf()) {
+                (true, true) => {
+                    if let (Some(ea), Some(eb)) = (na.entity, nb.entity) {
+                        pairs.push(if ea.id() < eb.id() { (ea, eb) } else { (eb, ea) });
+                    }
+                }
+                (true, false) => {
+                    stack.push((a, nb.left));
+                    stack.push((a, nb.right));
+                }
+                (false, true) => {
+                    stack.push((na.left, b));
+                    stack.push((na.right, b));
+                }
+                (false, false) => {
+                    if surface_area(&na.aabb) >= surface_area(&nb.aabb) {
+                        stack.push((na.left, b));
+                        stack.push((na.right, b));
+                    } else {
+                        stack.push((a, nb.left));
+                        stack.push((a, nb.right));
+                    }
+                }
+            }
+        }
+    }
+
     /// Test every internal node's left and right children against each other
     /// (for the pairs within the same subtree)
     fn collect_internal_pairs(&self, pairs: &mut Vec<(BodyHandle, BodyHandle)>) {

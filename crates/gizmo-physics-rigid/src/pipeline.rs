@@ -273,7 +273,11 @@ impl PhysicsWorld {
                 base_aabb
             };
 
-            self.spatial_hash.insert(entity, aabb);
+            if rb.is_static() {
+                self.spatial_hash.insert_static(entity, aabb);
+            } else {
+                self.spatial_hash.insert(entity, aabb);
+            }
         }
 
         // Evict bodies the world no longer has. Skipped on the common path, where the counts
@@ -328,7 +332,7 @@ impl PhysicsWorld {
             }
         };
         let mut dormant_pairs: Vec<(BodyHandle, BodyHandle)> = Vec::new();
-        let active_pairs: Vec<(BodyHandle, BodyHandle)> = potential_pairs
+        let mut active_pairs: Vec<(BodyHandle, BodyHandle)> = potential_pairs
             .into_iter()
             .filter(|&(a, b)| {
                 if !is_active_body(a) && !is_active_body(b) {
@@ -339,6 +343,15 @@ impl PhysicsWorld {
                 }
             })
             .collect();
+        // **In id order, not the tree's.** The broadphase hands its pairs over in whatever order
+        // its trees' shapes walk them, and that order became the collision events' order — which
+        // what reacts to them (the fracture system spawning debris, a game's own handler) turns
+        // into entity ids and onward into a different simulation. The island solve does not care
+        // (`support_ordering`), the events did: splitting the broadphase into a static and a
+        // moving tree changed which blocks `vinc`'s wrecking ball broke, and a rollback, which
+        // restores bodies but not the tree's history, could replay a step's events in another
+        // order. Sorted, they are a function of the bodies alone.
+        active_pairs.sort_unstable_by_key(|&(a, b)| (a.id(), b.id()));
 
         // ── Parallel narrowphase ──────────────────────────────────────────
         // Each entry: (entity_a, entity_b, contacts, is_trigger_a, is_trigger_b,
