@@ -42,6 +42,10 @@ hotpatching = ["dep:subsecond"]
 # longer depends on `bevy_math`, the `reflect` feature enables it explicitly.
 bevy_reflect = { version = "0.19", features = ["functions", "glam"], optional = true }
 crossbeam-queue = "0.3.12"
+# FxHash for the maps keyed by `ComponentKey`, which every `Query::get` consults: the keys are
+# `TypeId`s the program made, nothing an attacker chooses, so SipHash's flooding resistance buys
+# nothing. Private — no type of it appears in a signature.
+rustc-hash = "2"
 ron = "0.12.1"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"

@@ -89,6 +89,23 @@ impl World {
         crate::query::Query::new(self)
     }
 
+    /// A read-only query whose `Changed` and `Added` filters mean **"since tick `since`"** — what a
+    /// system's own query does with the tick it last ran at, for a pass that runs outside any
+    /// schedule (a render pass, a sync step) and keeps its own.
+    ///
+    /// The pattern a schedule uses, and the one to copy: query with the tick kept last time (`0`
+    /// the first time: everything), then keep `self.tick.wrapping_sub(1)` — one short of where
+    /// the tick stands, so that what is written later in this same tick is news next time. The
+    /// pass's own writes are then seen once more, which costs a comparison. Default query filters
+    /// are not applied, as by the render side's extraction, which reads this way too.
+    pub fn query_since<'w, D, F>(&'w self, since: u32) -> crate::query::Query<'w, D, F>
+    where
+        D: crate::query::QueryData + crate::query::ReadOnlyQuery,
+        F: crate::query::QueryFilter,
+    {
+        crate::query::Query::new_since(self, since)
+    }
+
     /// Creates a mutable [`Query`](crate::query::Query). Because it takes `&mut self` the
     /// returned query borrows the World EXCLUSIVELY → a second (mutable OR read) query cannot
     /// compile at the same time. This is the safe way that makes two live `Mut` queries

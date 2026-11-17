@@ -59,6 +59,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **A big static scene's frame costs half the CPU** (`nfsu2-gizmo` MOTOR-NOTLARI #29; measured by
+  `a_static_city_frame_cpu_cost`, 14 620 static entities of 68 textures each with its own mesh, median of a release
+  run): collecting draw items 11.7 → 6.4 ms, material sync 1.7 → 0.03 ms.
+  - The draw list is handed over instead of cloned (every item's `Arc`s and shadow chunks were copied a second time
+    each frame, and the previous copy dropped); a batch's spatial reorder is skipped when it is the identity (six new
+    vectors a batch a frame, for one-object batches); `MeshRenderer` is read once per object; `InstanceRaw`'s
+    builders are `#[inline]` (each was a 144-byte copy across the crate boundary).
+  - The ECS's archetype column map is FxHash: every `Query::get` hashed its `ComponentKey` with SipHash.
+  - `sync_material_descriptions` reads only materials and descriptions written since it last ran: new
+    `World::query_since` (a read-only query whose `Changed`/`Added` mean "since this tick", for a pass outside any
+    schedule) and `World::id` (a world's identity, so a tick moved into another world — the editor's ▶ moves
+    resources — is not taken as a reference there).
 - **Vehicle powertrain knobs**, each off by default (`nfsu2-gizmo` MOTOR-NOTLARI #21, #23, #24): `VehicleTuning::
   {shift_time, shift_torque_share, fuel_cut_rpm, engine_brake_curve}`, `AeroPackage::drag_coefficient_off_throttle`,
   `VehicleController::{extra_crank_torque, shift_remaining, shift_to, engine_brake_torque}` (engine braking reaches the

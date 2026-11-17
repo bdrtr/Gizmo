@@ -94,6 +94,8 @@ pub struct World {
     /// Read it with [`World::reset_epoch`], store it beside whatever holds handles, and discard
     /// that when the two differ. `PoolManager` is the worked example.
     reset_epoch: u64,
+    /// This world's identity — see [`World::id`].
+    id: u64,
     /// The resource types that are event queues ([`Events<T>`](crate::event::Events)), each with
     /// the function that empties it and the one that rotates it — recorded by
     /// [`World::init_events`], which `App::add_event` calls. The resource map is type-erased and
@@ -150,7 +152,9 @@ impl World {
     /// so until the first [`World::begin_change_frame`] every component matches both
     /// `Added<T>` and `Changed<T>`.
     pub fn new() -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut world = Self {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             resources: HashMap::new(),
             entity_locations: Vec::new(),
             archetype_index: ArchetypeIndex::new(),
@@ -246,6 +250,15 @@ impl World {
         }
         tracing::trace!(tick = self.tick, ref_tick, "begin_change_frame");
         self.tick
+    }
+
+    /// This world's identity: a number no other world of this process has had. What a record
+    /// that outlives one world — a tick kept in a resource, which the editor's ▶ moves into a
+    /// fresh world with every other resource — checks to know it is still in the world it was
+    /// made in: ticks of two worlds say nothing about each other.
+    #[inline]
+    pub fn id(&self) -> u64 {
+        self.id
     }
 
     /// How many times [`World::clear_entities`] has run — see the field for what it is for.

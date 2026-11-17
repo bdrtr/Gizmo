@@ -73,6 +73,16 @@ fn decide(material: &MaterialDesc, desc: Option<&MaterialDesc>, synced: Option<&
     }
 }
 
+/// Where [`sync_material_descriptions`] left off: the world it ran in and the tick it reads
+/// changes since next time.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MaterialSyncTick {
+    /// [`World::id`] of the world the tick belongs to.
+    pub world: u64,
+    /// Changes stamped after this are news.
+    pub tick: u32,
+}
+
 /// Keep every entity's [`Material`] and [`MaterialDesc`] saying the same thing, **in whichever
 /// direction the game changed them**.
 ///
@@ -90,13 +100,27 @@ fn decide(material: &MaterialDesc, desc: Option<&MaterialDesc>, synced: Option<&
 ///   material is removed and [`resolve_material_descriptions`] builds it again next frame.
 ///
 /// Which side was edited is told by a hidden copy of the description as this pass last left it.
-/// The cost is that copy per material and a comparison or two per frame.
+///
+/// **Only what changed is looked at.** A material or a description written since the pass last
+/// ran (`World::query_since`, with the tick kept in [`MaterialSyncTick`]) is compared; one nobody
+/// touched is not even read. Until 2026-11-17 every material was rebuilt into a description and
+/// compared every frame — 1.7 ms of a 14 620-material static city, for nothing (`nfsu2-gizmo`
+/// MOTOR-NOTLARI #29).
 pub fn sync_material_descriptions(world: &mut World) {
+    use gizmo_core::query::{Changed, Or};
+    // A tick kept in another world (the editor's ▶ moves resources into a fresh one) is no
+    // reference here: read everything.
+    let since = world
+        .get_resource::<MaterialSyncTick>()
+        .filter(|t| t.world == world.id())
+        .map_or(0, |t| t.tick);
+    let now = world.tick.wrapping_sub(1);
     let mut decided: Vec<(Entity, Sync)> = Vec::new();
     {
         let descs = world.query::<&MaterialDesc>();
         let synced = world.query::<&SyncedDesc>();
-        for (entity, material) in world.query::<(Entity, &Material)>().iter() {
+        let changed = world.query_since::<(Entity, &Material), Or<Changed<Material>, Changed<MaterialDesc>>>(since);
+        for (entity, material) in changed.iter() {
             let live = MaterialDesc::from(material);
             match decide(&live, descs.get(entity), synced.get(entity).map(|s| &s.0)) {
                 Sync::Nothing => {}
@@ -104,6 +128,7 @@ pub fn sync_material_descriptions(world: &mut World) {
             }
         }
     }
+    world.insert_resource(MaterialSyncTick { world: world.id(), tick: now });
     if decided.is_empty() {
         return;
     }

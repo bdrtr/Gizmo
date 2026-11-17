@@ -2223,6 +2223,56 @@ mod keyed_animation_tests {
         assert!((desc - 0.2).abs() < 1.0e-4, "{desc}");
     }
 
+    /// **The sync reads only what changed, and misses nothing** (`nfsu2-gizmo` MOTOR-NOTLARI #29):
+    /// with frames ticking, an edit to a material is followed by its description and an edit to a
+    /// description by its material, a frame or several later; an edit made after the pass in the
+    /// same tick is seen on the next; and a tick record moved in from another world (the editor's
+    /// ▶ moves every resource into a fresh world) makes the pass read everything rather than skip
+    /// what that world never stamped.
+    #[test]
+    fn material_sync_follows_every_edit_reading_only_changes() {
+        use crate::renderer::components::{Material, MaterialDesc};
+        use crate::renderer::material_sync::sync_material_descriptions;
+        let mut world = World::new();
+        let a = world.spawn();
+        world.add_component(a, noop_material());
+        let b = world.spawn();
+        world.add_component(b, noop_material());
+        let frame = |world: &mut World| {
+            let reference = world.tick.wrapping_sub(1);
+            world.begin_change_frame(reference);
+            sync_material_descriptions(world);
+        };
+        frame(&mut world);
+        frame(&mut world);
+        assert!(world.get::<MaterialDesc>(a).is_some() && world.get::<MaterialDesc>(b).is_some());
+
+        world.query_mut::<&mut Material>().get_mut(a).unwrap().roughness = 0.11;
+        frame(&mut world);
+        assert_eq!(world.get::<MaterialDesc>(a).unwrap().roughness, 0.11, "the material's edit");
+        frame(&mut world);
+        world.query_mut::<&mut MaterialDesc>().get_mut(b).unwrap().roughness = 0.22;
+        frame(&mut world);
+        assert_eq!(world.get::<Material>(b).unwrap().roughness, 0.22, "the description's edit");
+
+        // After the pass, in the same tick: seen next frame.
+        world.query_mut::<&mut Material>().get_mut(a).unwrap().roughness = 0.33;
+        frame(&mut world);
+        assert_eq!(world.get::<MaterialDesc>(a).unwrap().roughness, 0.33, "an edit after the pass");
+
+        let record = world.remove_resource::<crate::renderer::material_sync::MaterialSyncTick>().unwrap();
+        // The fresh world's ticks are behind the record's: everything in it is "older" than a
+        // tick from the other world, and only the world's identity tells the two apart.
+        let mut fresh = World::new();
+        assert!(fresh.tick < record.tick);
+        let c = fresh.spawn();
+        fresh.add_component(c, noop_material());
+        fresh.insert_resource(record);
+        fresh.begin_change_frame(fresh.tick);
+        sync_material_descriptions(&mut fresh);
+        assert!(fresh.get::<MaterialDesc>(c).is_some(), "a tick from another world skipped this one's material");
+    }
+
     /// **A scene keeps a clip that mixes a transform track and a property track**, and the reopened
     /// one plays on bit for bit: the same frame after it, the same position and intensity.
     #[cfg(feature = "scene")]
@@ -3639,6 +3689,89 @@ mod golden_render_tests {
     ///
     /// Asserted on the count that reaches the GPU rather than on pixels: the failure is geometry
     /// that never got uploaded, and 9 000 overlapping cubes look much the same either way.
+    /// **What a big static scene costs the CPU each frame** — a measurement, not a gate (run it in
+    /// release: `cargo test --release -p gizmo-engine --lib a_static_city_frame -- --ignored
+    /// --nocapture`; run the test binary itself, twice, when comparing — the cargo wrapper's own
+    /// work shows up in the numbers). The shape of `nfsu2-gizmo`'s city (MOTOR-NOTLARI #29): 215 cells × 68
+    /// textures, every entity its own mesh and material, nothing moving. Times the three per-entity
+    /// passes of the frame on their own, after a warm-up, as the median of 30 frames.
+    #[test]
+    #[ignore = "a measurement; run in release with --nocapture"]
+    fn a_static_city_frame_cpu_cost() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available()) {
+            eprintln!("skipping: no GPU");
+            return;
+        }
+        // A software adapter's timings would say nothing about a GPU's frame.
+        if pollster::block_on(Renderer::headless_adapter_is_software()) {
+            eprintln!("skipping: software adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let mut renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut asset_manager = AssetManager::new();
+            let mut world = World::new();
+            let textures: Vec<_> = (0..68)
+                .map(|_| asset_manager.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout))
+                .collect();
+            let (cells, per_cell) = (215usize, 68usize);
+            for cell in 0..cells {
+                let origin = Vec3::new((cell % 15) as f32 * 256.0 - 1900.0, 0.0, (cell / 15) as f32 * -256.0);
+                for (k, texture) in textures.iter().enumerate().take(per_cell) {
+                    let e = world.spawn();
+                    let at = origin + Vec3::new((k % 9) as f32 * 25.0, 0.0, (k / 9) as f32 * -25.0);
+                    world.add_component(e, Transform::new(at).with_scale(Vec3::splat(4.0)));
+                    world.add_component(e, AssetManager::create_cube(&renderer.device));
+                    world.add_component(e, Material::new(texture.clone()).with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), 0.8, 0.0));
+                    world.add_component(e, MeshRenderer::new());
+                }
+            }
+            let cam = Vec3::new(0.0, 30.0, 60.0);
+            let view_proj = gizmo_math::Mat4::perspective_rh(1.2, 16.0 / 9.0, 0.5, 3000.0)
+                * gizmo_math::Mat4::look_at_rh(cam, cam + Vec3::new(0.0, -0.2, -1.0), Vec3::Y);
+            super::batching::clear_render_cache();
+            let mut times = [Vec::new(), Vec::new(), Vec::new()];
+            let mut drawn = 0;
+            // More frames to sample a profiler against: `GIZMO_CITY_FRAMES=2000`.
+            let frames = std::env::var("GIZMO_CITY_FRAMES").ok().and_then(|f| f.parse().ok()).unwrap_or(40);
+            for frame in 0..frames {
+                // A frame's schedule run opens a change window, as the app's does.
+                let reference = world.tick.wrapping_sub(1);
+                world.begin_change_frame(reference);
+                let t0 = std::time::Instant::now();
+                crate::systems::render::ensure_global_transforms(&mut world);
+                let t1 = std::time::Instant::now();
+                crate::renderer::material_sync::sync_material_descriptions(&mut world);
+                let t2 = std::time::Instant::now();
+                let (items, uploaded) =
+                    super::batching::collect_draw_items(&world, &mut renderer, view_proj, &[view_proj; 4], cam);
+                let t3 = std::time::Instant::now();
+                drawn = uploaded;
+                std::hint::black_box(items);
+                if frame >= 10 {
+                    for (slot, d) in times.iter_mut().zip([t1 - t0, t2 - t1, t3 - t2]) {
+                        slot.push(d.as_secs_f64() * 1000.0);
+                    }
+                }
+            }
+            let median = |v: &mut Vec<f64>| {
+                v.sort_by(f64::total_cmp);
+                v[v.len() / 2]
+            };
+            let [mut a, mut b, mut c] = times;
+            let (ma, mb, mc) = (median(&mut a), median(&mut b), median(&mut c));
+            eprintln!(
+                "static city, {} entities, {drawn} instances (median / fastest): transforms {ma:.2} / {:.2} ms, material sync {mb:.2} / {:.2} ms, collect {mc:.2} / {:.2} ms",
+                cells * per_cell,
+                a[0],
+                b[0],
+                c[0]
+            );
+            super::batching::clear_render_cache();
+        });
+    }
+
     #[test]
     fn a_scene_past_the_instance_capacity_grows_the_buffer_instead_of_dropping_meshes() {
         let _gpu = crate::test_gpu::gpu_lock();

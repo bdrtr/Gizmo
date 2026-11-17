@@ -95,7 +95,9 @@ pub struct Archetype {
     /// This archetype's global index number
     pub id: u32,
     /// Component type → column index (in the columns vector)
-    column_indices: HashMap<ComponentKey, usize>,
+    /// FxHash: consulted on every `Query::get` of this archetype's rows (see `rustc-hash` in the
+    /// manifest). It was SipHash until 2026-11-17, a measurable share of a large scene's frame.
+    column_indices: rustc_hash::FxHashMap<ComponentKey, usize>,
     /// The vector of columns — each one the data of a single component type.
     /// Wrapped in UnsafeCell because the engine's Scheduler (DAG) guarantees parallel access
     /// safety at compile/planning time, not at run time (RwLock).
@@ -199,7 +201,8 @@ pub(crate) struct DetachedRows {
 impl Archetype {
     /// Creates a new empty archetype for the specified component types.
     pub fn new(id: u32, component_infos: &[ComponentInfo]) -> Self {
-        let mut column_indices = HashMap::with_capacity(component_infos.len());
+        let mut column_indices =
+            rustc_hash::FxHashMap::with_capacity_and_hasher(component_infos.len(), Default::default());
         let mut columns = Vec::with_capacity(component_infos.len());
 
         for (idx, info) in component_infos.iter().enumerate() {

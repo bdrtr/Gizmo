@@ -578,6 +578,7 @@ impl InstanceRaw {
     /// `lit + ambient` negative. (`f32::max` also drops NaN, which would otherwise poison the
     /// whole fragment.)
     #[allow(clippy::too_many_arguments)]
+    #[inline]
     pub fn new(
         model: [[f32; 4]; 4],
         albedo_color: [f32; 4],
@@ -610,6 +611,7 @@ impl InstanceRaw {
     /// in was padding, so the stride and every shader that indexes this buffer are untouched.
     /// See [`Material::alpha_cutoff`](crate::components::Material::alpha_cutoff).
     #[must_use]
+    #[inline]
     pub fn with_alpha_cutoff(mut self, cutoff: f32) -> Self {
         self.ambient[3] = cutoff.clamp(0.0, 1.0);
         self
@@ -619,6 +621,7 @@ impl InstanceRaw {
     /// part says which pixels this level keeps and the fraction is the threshold (`instance_keeps` in
     /// `common.wgsl`). `None` leaves the slot as it is, so an instance with no fade is unchanged.
     #[must_use]
+    #[inline]
     pub fn with_lod_fade(mut self, fade: Option<crate::components::LodFade>) -> Self {
         if let Some(fade) = fade {
             let edge = (fade.edge * 256.0).round().clamp(1.0, 255.0);
@@ -636,6 +639,7 @@ impl InstanceRaw {
     /// shader reads it directly. A half float keeps a sign and a magnitude down to well below any
     /// reflectance a material can ask for, so no new render target was needed for either.
     #[must_use]
+    #[inline]
     pub fn with_shadow_receiving(mut self, receives: bool) -> Self {
         let w = self.emissive[3].abs();
         self.emissive[3] = if receives {
@@ -658,6 +662,7 @@ impl InstanceRaw {
     /// [draws as glass]: crate::components::Material::is_transmissive
     /// [`clear_coat_roughness`]: crate::components::Material::clear_coat_roughness
     #[must_use]
+    #[inline]
     pub fn with_lit_extras_of(mut self, material: &crate::components::Material) -> Self {
         if material.is_transmissive() {
             self.ambient[0] = material.transmission;
@@ -684,6 +689,7 @@ impl InstanceRaw {
     /// [`DIELECTRIC_REFLECTANCE`](crate::components::DIELECTRIC_REFLECTANCE) (`dielectric_f0` in
     /// `common.wgsl`), so an instance that says nothing is still all zero bytes there.
     #[must_use]
+    #[inline]
     pub fn with_reflectance(mut self, reflectance: f32) -> Self {
         let r = reflectance.clamp(crate::components::MIN_REFLECTANCE, 1.0);
         self.emissive[3] = if self.emissive[3] < 0.0 { -r } else { r };

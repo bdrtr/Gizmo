@@ -567,9 +567,10 @@ pub(super) fn collect_draw_items(
         
         macro_rules! process_mesh {
             ($e:expr, $mesh:expr, $trans:expr, $mat:expr, $skeleton:expr, $fade:expr) => {
-                if renderers.get($e).is_none() {
+                // Read once: it answers five questions below, and each `get` is a lookup.
+                let Some(mesh_renderer) = renderers.get($e) else {
                     continue;
-                }
+                };
                 
                 // Pooled (havuzda pasif) nesneleri render etme
                 if pooled_storage.get($e).is_some() {
@@ -657,7 +658,7 @@ pub(super) fn collect_draw_items(
                 // built and uploaded for a shadow pass that skips it. Measured with 19 882 such cubes
                 // and the camera turned away: all of them still uploaded.
                 let unseen_and_silent = |camera: bool| {
-                    !camera && renderers.get($e).is_some_and(|r| !r.shadows.casts())
+                    !camera && !mesh_renderer.shadows.casts()
                 };
                 if unseen_and_silent(camera_visible) {
                     continue;
@@ -705,7 +706,7 @@ pub(super) fn collect_draw_items(
                 // rather than a `LodGroup`) — that is what the shared helper is for.
                 let dist_to_cam = crate::renderer::components::effective_lod_distance(
                     (world_c - cam_pos).length(),
-                    renderers.get($e).map(|r| r.lod_bias).unwrap_or(1.0),
+                    mesh_renderer.lod_bias,
                 );
                 let use_lod1 = if !$mesh.lod_vbufs.is_empty() {
                     dist_to_cam > world_r * 15.0 // Nesne boyutuna göre uzaklaştıkça LOD1'e geç (örneğin 2m çapında bir nesne 30m uzaktayken geç)
@@ -762,7 +763,7 @@ pub(super) fn collect_draw_items(
                 .with_lod_fade($fade)
                 .with_reflectance($mat.reflectance)
                 .with_lit_extras_of($mat)
-                .with_shadow_receiving(renderers.get($e).map(|r| r.receives_shadows).unwrap_or(true));
+                .with_shadow_receiving(mesh_renderer.receives_shadows);
                 // Where this entity was drawn last frame — the object half of its velocity.
                 let generation = $e.generation();
                 let previous_model = renderer.motion_history.previous($e.id(), generation, upload_model.to_cols_array_2d());
@@ -807,7 +808,7 @@ pub(super) fn collect_draw_items(
                     && ($mat.anisotropy > 0.0 || $mat.clear_coat > 0.0 || $mat.subsurface > 0.0);
                 // Honoured by BOTH paths from the start, unlike `is_double_sided` above — a flag
                 // the editor obeys and the game ignores makes the viewport lie about the build.
-                let shadows = renderers.get($e).map(|r| r.shadows).unwrap_or_default();
+                let shadows = mesh_renderer.shadows;
                 let casts_shadows = shadows.casts();
                 let visible_in_camera = shadows.visible();
 
@@ -1021,14 +1022,22 @@ pub(super) fn collect_draw_items(
             if !shadows_drawn || !batch.casts_shadows || batch.is_transparent || batch.is_backdrop {
                 continue;
             }
+            // Only an order that is not already the identity is applied — a batch of one or of a
+            // single chunk keeps its own, and is not copied into six new vectors to get it back
+            // (one batch per object in a scene of merged, unique meshes: 14 620 of them a frame).
+            let identity = |order: &[u32]| order.iter().enumerate().all(|(i, &o)| i as u32 == o);
             let order = gizmo_renderer::shadow_culling::spatial_order(&batch.bounds);
-            batch.instances = order.iter().map(|&i| batch.instances[i as usize]).collect();
-            batch.previous = order.iter().map(|&i| batch.previous[i as usize]).collect();
-            batch.bounds = order.iter().map(|&i| batch.bounds[i as usize]).collect();
+            if !identity(&order) {
+                batch.instances = order.iter().map(|&i| batch.instances[i as usize]).collect();
+                batch.previous = order.iter().map(|&i| batch.previous[i as usize]).collect();
+                batch.bounds = order.iter().map(|&i| batch.bounds[i as usize]).collect();
+            }
             let order = gizmo_renderer::shadow_culling::spatial_order(&batch.shadow_bounds);
-            batch.shadow_instances = order.iter().map(|&i| batch.shadow_instances[i as usize]).collect();
-            batch.shadow_previous = order.iter().map(|&i| batch.shadow_previous[i as usize]).collect();
-            batch.shadow_bounds = order.iter().map(|&i| batch.shadow_bounds[i as usize]).collect();
+            if !identity(&order) {
+                batch.shadow_instances = order.iter().map(|&i| batch.shadow_instances[i as usize]).collect();
+                batch.shadow_previous = order.iter().map(|&i| batch.shadow_previous[i as usize]).collect();
+                batch.shadow_bounds = order.iter().map(|&i| batch.shadow_bounds[i as usize]).collect();
+            }
         }
 
         let batches: Vec<&BatchData> = cache
@@ -1159,10 +1168,13 @@ pub(super) fn collect_draw_items(
             def.motion.upload_previous(&renderer.device, &renderer.queue, &local_previous[..n]);
         }
         
-        // Pass draw_items to rendering logic by cloning the small struct (Arc clones are cheap).
-        // Also return how many instances actually made it into the GPU buffer so draw ranges
-        // can be clamped (shadow casters increase the count → guard against capacity truncation).
-        (cache.draw_items.clone(), instances_slice.len() as u32)
+        // The draw list is handed over, not copied: nothing reads the cache's copy after this, and
+        // cloning it cost every item's `Arc`s and shadow chunks a second time each frame — a
+        // tenth of the collection in a scene of 14 620 one-object batches, where the previous
+        // frame's copy was then dropped item by item as well. Also returned: how many instances
+        // actually made it into the GPU buffer, so draw ranges can be clamped.
+        let uploaded = instances_slice.len() as u32;
+        (std::mem::take(&mut cache.draw_items), uploaded)
     })
 }
 
