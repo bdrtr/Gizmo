@@ -6,9 +6,10 @@
 //! can handle errors at the right boundary.
 
 use crate::{
-    components::Velocity,
+    components::{RigidBody, Velocity},
     world::PhysicsWorld,
 };
+use gizmo_physics_core::{Collider, Transform};
 use gizmo_physics_core::{CollisionEvent, CollisionEventType, ContactManifold, ContactPoints, TriggerEvent};
 use gizmo_physics_core::narrowphase::NarrowPhase;
 use gizmo_physics_core::BodyHandle;
@@ -18,6 +19,35 @@ use rayon::prelude::*;
 #[cfg(target_arch = "wasm32")]
 use crate::parallel_compat::*;
 use rustc_hash::{FxHashMap, FxHashSet};
+
+/// Awake dynamic bodies below which a per-body loop runs on the calling thread.
+///
+/// Handing a loop to the thread pool costs a wake-up and a wait on a latch, and splitting it costs
+/// steals and yields across every worker — tens of microseconds, several times a step, whatever the
+/// loop holds. With a few hundred bodies asleep and a handful awake that was nearly all of a step:
+/// 513 resting boxes on terrain took 1.03 ms a step against the terrain's 0.10
+/// (`many_sleeping_bodies`, `nfsu2-gizmo` MOTOR-NOTLARI #26). The result is the same either way:
+/// the bodies are independent and the outputs keep their order.
+const PARALLEL_MIN_AWAKE: usize = 256;
+
+/// Whether a per-body loop over `bodies` is worth the thread pool — see [`PARALLEL_MIN_AWAKE`].
+fn worth_parallel(bodies: &[RigidBody]) -> bool {
+    bodies.iter().filter(|rb| !rb.is_sleeping && rb.is_dynamic()).take(PARALLEL_MIN_AWAKE).count() >= PARALLEL_MIN_AWAKE
+}
+
+/// Whether a loop over `items` independent jobs is worth the thread pool, given how many it takes
+/// to pay for the handoff: a body's integration is a few multiplies (`PARALLEL_MIN_AWAKE`), a pair's
+/// contacts a few microseconds (`PARALLEL_MIN_PAIRS`), and the islands' solve is counted in the
+/// manifolds they hold (`PARALLEL_MIN_MANIFOLDS`), not in islands — one threshold for all three made
+/// settling bodies slower, and an island count let six resting boxes' six islands go to the pool.
+fn worth_parallel_jobs(items: usize, at_least: usize) -> bool {
+    items >= at_least
+}
+
+/// See [`worth_parallel_jobs`].
+const PARALLEL_MIN_PAIRS: usize = 64;
+/// See [`worth_parallel_jobs`].
+const PARALLEL_MIN_MANIFOLDS: usize = 32;
 
 
 /// The fracture events one manifold's strongest contact produces.
@@ -75,16 +105,11 @@ impl PhysicsWorld {
         let fluid_zones = &self.fluid_zones;
         let watchlist = &self.watchlist;
 
-        // Parallel iteration over all entities.
+        // Over every body, in parallel when there is enough awake to be worth it (`worth_parallel`).
         // `try_for_each` short-circuits on the first `Err` and propagates it.
-        self.entities
-            .par_iter()
-            .zip(self.rigid_bodies.par_iter_mut())
-            .zip(self.transforms.par_iter())
-            .zip(self.velocities.par_iter_mut())
-            .zip(self.colliders.par_iter())
-            .try_for_each(
-                |((((&entity, rb), transform), vel), collider)| -> Result<(), gizmo_physics_core::GizmoError> {
+        let parallel = worth_parallel(&self.rigid_bodies);
+        let integrate =
+                |((((&entity, rb), transform), vel), collider): ((((&BodyHandle, &mut RigidBody), &Transform), &mut Velocity), &Collider)| -> Result<(), gizmo_physics_core::GizmoError> {
                     if rb.is_sleeping {
                         return Ok(());
                     }
@@ -145,8 +170,25 @@ impl PhysicsWorld {
                     }
 
                     Ok(())
-                },
-            )
+                };
+        let result = if parallel {
+            self.entities
+                .par_iter()
+                .zip(self.rigid_bodies.par_iter_mut())
+                .zip(self.transforms.par_iter())
+                .zip(self.velocities.par_iter_mut())
+                .zip(self.colliders.par_iter())
+                .try_for_each(integrate)
+        } else {
+            self.entities
+                .iter()
+                .zip(self.rigid_bodies.iter_mut())
+                .zip(self.transforms.iter())
+                .zip(self.velocities.iter_mut())
+                .zip(self.colliders.iter())
+                .try_for_each(&integrate)
+        };
+        result
             .inspect_err(|e| {
                 tracing::error!("Velocity integration failed: {e:?}");
                 if let Err(snap_err) =
@@ -324,9 +366,7 @@ impl PhysicsWorld {
         // motorda kimsenin okumadığı bir sayaç için kalıcı bir vergi, ve buradan okunan sayı
         // (duvar saati) zaten daha kullanışlı — CPU-ms yerine fazın gerçekte ne kadar sürdüğü.
         let _t = crate::profile::Scope::new(&crate::profile::PHASES.dispatch);
-        let narrowphase_results: Vec<NpResult> = active_pairs
-            .par_iter()
-            .filter_map(|&(entity_a, entity_b)| {
+        let pair_contacts = |&(entity_a, entity_b): &(BodyHandle, BodyHandle)| -> Option<NpResult> {
                 let is_a_rigid = entity_map.contains_key(&entity_a.id());
                 let is_b_rigid = entity_map.contains_key(&entity_b.id());
 
@@ -477,8 +517,13 @@ impl PhysicsWorld {
                         None,
                     )),
                 }
-            })
-            .collect();
+        };
+        // On the calling thread when there are few pairs (`worth_parallel_jobs`); order is kept.
+        let narrowphase_results: Vec<NpResult> = if worth_parallel_jobs(active_pairs.len(), PARALLEL_MIN_PAIRS) {
+            active_pairs.par_iter().filter_map(pair_contacts).collect()
+        } else {
+            active_pairs.iter().filter_map(pair_contacts).collect()
+        };
 
         // ── Contacts of bodies removed since the last step: ended ─────────
         // Reported first, before this step's own events: the body that took the id may be in the
@@ -765,9 +810,7 @@ current_cache.insert(pair, (false, Some(cached)));
                 bool,                             // every dynamic member is eligible to sleep
             );
 
-            let results: Vec<IslandResult> = island_groups
-                .into_par_iter()
-                .map(|mut island_manifolds| -> IslandResult {
+            let solve_island = |mut island_manifolds: Vec<ContactManifold>| -> IslandResult {
                     // Adayı bir "mover" içeriyorsa uyanık say: uyanık bir dinamik gövde
                     // VEYA hareket eden bir kinematik gövde. (Eskiden yalnızca dinamik-uyanık
                     // sayılıyordu; hareket eden bir kinematik platformun üstündeki uyuyan
@@ -942,8 +985,15 @@ current_cache.insert(pair, (false, Some(cached)));
                         solve_stats,
                         island_can_sleep,
                     )
-                })
-                .collect();
+            };
+            // On the calling thread when there are few islands (`worth_parallel_jobs`); order is kept.
+            let results: Vec<IslandResult> = if island_groups.len() > 1
+                && worth_parallel_jobs(island_groups.iter().map(Vec::len).sum(), PARALLEL_MIN_MANIFOLDS)
+            {
+                island_groups.into_par_iter().map(solve_island).collect()
+            } else {
+                island_groups.into_iter().map(solve_island).collect()
+            };
 
             // Write-back: velocities, wake-ups, fractures, warm-start data.
             // Build a lookup from entity pair → event index for O(1) updates.
@@ -1235,13 +1285,9 @@ current_cache.insert(pair, (false, Some(cached)));
     ) -> Result<(), gizmo_physics_core::GizmoError> {
         let integrator = &self.integrator;
 
-        self.entities
-            .par_iter()
-            .zip(self.rigid_bodies.par_iter_mut())
-            .zip(self.transforms.par_iter_mut())
-            .zip(self.velocities.par_iter_mut())
-            .try_for_each(
-                |(((&entity, rb), transform), vel)| -> Result<(), gizmo_physics_core::GizmoError> {
+        let parallel = worth_parallel(&self.rigid_bodies);
+        let integrate =
+                |(((&entity, rb), transform), vel): (((&BodyHandle, &mut RigidBody), &mut Transform), &mut Velocity)| -> Result<(), gizmo_physics_core::GizmoError> {
                     if rb.is_sleeping {
                         return Ok(());
                     }
@@ -1252,8 +1298,23 @@ current_cache.insert(pair, (false, Some(cached)));
                     integrator.integrate_positions(entity, rb, transform, vel, dt)?;
 
                     Ok(())
-                },
-            )
+                };
+        let result = if parallel {
+            self.entities
+                .par_iter()
+                .zip(self.rigid_bodies.par_iter_mut())
+                .zip(self.transforms.par_iter_mut())
+                .zip(self.velocities.par_iter_mut())
+                .try_for_each(integrate)
+        } else {
+            self.entities
+                .iter()
+                .zip(self.rigid_bodies.iter_mut())
+                .zip(self.transforms.iter_mut())
+                .zip(self.velocities.iter_mut())
+                .try_for_each(&integrate)
+        };
+        result
             .inspect_err(|e| {
                 tracing::error!("Position integration failed: {e:?}");
                 if let Err(snap_err) =

@@ -59,6 +59,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Resting bodies cost half as much a step** (`nfsu2-gizmo` MOTOR-NOTLARI #26; measured by `many_sleeping_bodies`,
+  513 boxes on 16 terrain cells of 2 048 triangles): at rest 1.03 → 0.5 ms a step, settling 3.9 → 3.1 ms, the
+  terrain alone 0.10 → 0.015 ms. The step's per-body loops (both integrations) and the narrowphase and island solve
+  ran through the thread pool whatever they held; handing a loop to the pool and waiting on it is tens of
+  microseconds, several times a step. Each now runs on the calling thread under a threshold sized to its work
+  (256 awake bodies, 64 pairs, 32 manifolds); results are bit-identical (the stress test's hash is unchanged).
 - **A big static scene's frame costs half the CPU** (`nfsu2-gizmo` MOTOR-NOTLARI #29; measured by
   `a_static_city_frame_cpu_cost`, 14 620 static entities of 68 textures each with its own mesh, median of a release
   run): collecting draw items 11.7 → 2.8 ms, material sync 1.7 → 0.03 ms.
