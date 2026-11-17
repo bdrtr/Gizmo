@@ -26,6 +26,7 @@ impl PhysicsWorld {
             integrator: Integrator::default(),
             solver: ConstraintSolver::default(),
             spatial_hash: SpatialHash::new(10.0),
+            settled_bounds: Vec::new(),
             collision_events: Vec::new(),
             trigger_events: Vec::new(),
             fracture_events: Vec::new(),

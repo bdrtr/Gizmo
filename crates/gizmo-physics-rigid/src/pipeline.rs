@@ -228,12 +228,30 @@ impl PhysicsWorld {
         // a tree built incrementally emits them in a different order than a freshly rebuilt one.
 
         // Rigid bodies — sequential because `spatial_hash` needs `&mut self`.
+        self.settled_bounds.resize(self.entities.len(), None);
         for i in 0..self.entities.len() {
             let entity = self.entities[i];
             let rb = &self.rigid_bodies[i];
             let transform = &self.transforms[i];
             let vel = &self.velocities[i];
             let collider = &self.colliders[i];
+
+            // Static or asleep, and where it was when its bounds were last refreshed this step:
+            // nothing to do (see `settled_bounds`). The id is compared too, so a body added or
+            // removed mid-step — which moves others to new indices — is refreshed, not trusted.
+            let settled = rb.is_static() || rb.is_sleeping;
+            let pose = (entity.id(), transform.position, transform.rotation);
+            if settled && self.settled_bounds[i] == Some(pose) {
+                // What the skip relies on, checked wherever tests run (debug): the refresh it
+                // saves would have found the body inside its box and changed nothing.
+                debug_assert!(
+                    self.spatial_hash.holds(entity, &collider.compute_aabb(transform.position, transform.rotation)),
+                    "body {} skipped by the broadphase is not inside the box the tree holds for it",
+                    entity.id()
+                );
+                continue;
+            }
+            self.settled_bounds[i] = settled.then_some(pose);
 
             let base_aabb = collider.compute_aabb(transform.position, transform.rotation);
 

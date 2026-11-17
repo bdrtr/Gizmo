@@ -393,9 +393,10 @@ pub struct PhysicsWorld {
     /// Broadphase acceleration structure. Despite the name it is backed by a dynamic
     /// AABB tree, and the `cell_size` its constructor takes is ignored.
     ///
-    /// Derived state, not authoritative. Every substep refreshes every body's bounds — swept
-    /// along the velocity for CCD-enabled movers — and then evicts any id the world no longer
-    /// has, so anything you insert or remove by hand is undone by the next `step`.
+    /// Derived state, not authoritative. The first substep of every `step` refreshes every
+    /// body's bounds — swept along the velocity for CCD-enabled movers — and then evicts any id
+    /// the world no longer has, so anything you insert or remove by hand is undone by the next
+    /// `step`. Later substeps refresh only what may have moved (see `settled_bounds`).
     ///
     /// The tree is now KEPT between substeps rather than cleared and refilled (2026-08-06). It
     /// fattens each leaf's box, so refreshing a body that has not left its box costs a lookup
@@ -406,6 +407,17 @@ pub struct PhysicsWorld {
     /// on by default) — and the determinism hash did not move.
     #[serde(skip)]
     pub spatial_hash: SpatialHash,
+    /// For each body, its id and pose when the broadphase last refreshed its bounds, if it was
+    /// static or asleep then — `None` for a body that was moving. Emptied at the start of every
+    /// `step`, so its first substep refreshes every body.
+    ///
+    /// A later substep skips a body still static or asleep at that same pose: its bounds are the
+    /// unswept box of the same collider at the same pose, which the tree already holds, so the
+    /// refresh could only have found it inside its fat box and returned. Skipping it saves the
+    /// box, a hash lookup and a read of a tree node scattered in memory — for 14 600 static
+    /// bodies, three of the four substeps of a 60 Hz frame paid that for nothing.
+    #[serde(skip)]
+    pub(crate) settled_bounds: Vec<Option<(u32, gizmo_math::Vec3, gizmo_math::Quat)>>,
     /// Non-trigger contacts observed during the last `step`: `Started` on the first
     /// substep a pair touches, `Persisting` afterwards, `Ended` on the substep the
     /// pair separates. Cleared and refilled by `step`, so entries accumulate across

@@ -156,14 +156,10 @@ impl DynamicAabbTree {
     /// it was.
     pub fn insert(&mut self, entity: BodyHandle, aabb: Aabb) {
         // FIX-1: tight AABB hâlâ fat AABB içindeyse rebuild'den kaçın
-        // Skalar karşılaştırma — Vec3A cmpge/cmple trait sorununu önler
-        if let Some(&node_idx) = self.entity_map.get(&entity.id()) {
-            let fat = self.nodes[node_idx].aabb;
-            if aabb_contains(&fat, &aabb) {
-                return;
-            }
-            self.remove(entity);
+        if self.holds(entity, &aabb) {
+            return;
         }
+        self.remove(entity);
 
         let fat_aabb = fatten(&aabb, self.fat_margin);
 
@@ -174,6 +170,14 @@ impl DynamicAabbTree {
 
         self.insert_leaf(leaf);
         self.entity_map.insert(entity.id(), leaf);
+    }
+
+    /// Whether the tree already stores a box for `entity` that contains `aabb` — that is,
+    /// whether [`insert`](Self::insert)`(entity, aabb)` would return without changing anything.
+    pub fn holds(&self, entity: BodyHandle, aabb: &Aabb) -> bool {
+        self.entity_map
+            .get(&entity.id())
+            .is_some_and(|&leaf| aabb_contains(&self.nodes[leaf].aabb, aabb))
     }
 
     /// Removes the entity's leaf and returns its node slot to the free list.

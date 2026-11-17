@@ -40,11 +40,13 @@ impl PhysicsWorld {
             watchlist: _,
 
             // ── Derived, and rebuilt before it is read again. The broadphase tree is refreshed
-            //    for every body each substep; a tree still shaped by the rolled-back future is
+            //    for every body at the first substep of each step (`settled_bounds` is emptied
+            //    there, and only skips within a step); a tree still shaped by the rolled-back future is
             //    only a different pair *order*, which the island solve is invariant to
             //    (`support_ordering`). The index map is a function of `entities`, which a
             //    restore requires to be unchanged anyway.
             spatial_hash: _,
+            settled_bounds: _,
             entity_index_map: _,
             ecs_generations: _,
             departed_contacts: _,

@@ -106,6 +106,11 @@ impl PhysicsWorld {
             }
         }
 
+        // The first substep refreshes every body's broadphase bounds: whatever moved a body
+        // between steps — the ECS sync, a restored snapshot, a write to the public arrays — is
+        // caught there. See `settled_bounds`.
+        self.settled_bounds.clear();
+
         let mut steps = 0u32;
         while self.accumulator >= FIXED_DT && steps < MAX_SUBSTEPS {
             self.step_internal(FIXED_DT)?;

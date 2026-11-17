@@ -54,6 +54,12 @@ impl SpatialHash {
         self.tree.insert(entity, aabb);
     }
 
+    /// Whether the broadphase already stores a box for `entity` that contains `aabb`, so that
+    /// [`insert`](Self::insert) would change nothing. Forwards to [`DynamicAabbTree::holds`].
+    pub fn holds(&self, entity: BodyHandle, aabb: &Aabb) -> bool {
+        self.tree.holds(entity, aabb)
+    }
+
     /// Refreshes an entity's bounds. Identical to [`insert`](Self::insert) — it is
     /// the same call underneath, and it inserts entities that are not present yet.
     pub fn update(&mut self, entity: BodyHandle, aabb: Aabb) {

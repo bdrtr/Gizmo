@@ -108,6 +108,49 @@ fn resting_bodies_cost_a_step() {
     );
 }
 
+/// What a world of many static bodies costs a step, and what copying it to a render world costs
+/// after one: 14 600 static boxes (the order of a city's merged meshes, each with a collider), no
+/// moving body at all. `GIZMO_STATIC_STEPS` for more steps to sample a profiler against.
+#[test]
+#[ignore = "a measurement; run in release with --nocapture"]
+fn static_bodies_cost_a_step() {
+    use gizmo_core::extract::Extractor;
+    let mut world = World::new();
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    for k in 0..14_600 {
+        let e = world.spawn();
+        world.add_component(e, Transform::new(Vec3::new((k % 120) as f32 * 10.0, 0.0, (k / 120) as f32 * 10.0)));
+        world.add_component(e, RigidBody::new_static());
+        world.add_component(e, Velocity::default());
+        world.add_component(e, Collider::box_collider(Vec3::splat(4.0)));
+    }
+    let mut copy = World::new();
+    let mut extractor = Extractor::new();
+    extractor.component::<Transform>();
+    let steps: usize = std::env::var("GIZMO_STATIC_STEPS").ok().and_then(|s| s.parse().ok()).unwrap_or(200);
+    let (mut step, mut extract) = (Vec::new(), Vec::new());
+    for s in 0..steps {
+        let next = world.tick;
+        world.begin_change_frame(next);
+        let t = std::time::Instant::now();
+        gizmo_physics_rigid::system::physics_step_system(&world, DT);
+        world.apply_commands();
+        let stepped = std::time::Instant::now();
+        extractor.run(&mut world, &mut copy);
+        if s >= steps / 2 {
+            step.push((stepped - t).as_secs_f64() * 1000.0);
+            extract.push(stepped.elapsed().as_secs_f64() * 1000.0);
+        }
+    }
+    step.sort_by(f64::total_cmp);
+    extract.sort_by(f64::total_cmp);
+    eprintln!(
+        "14 600 static bodies: {:.3} ms a step, {:.3} ms to extract their transforms",
+        step[step.len() / 2],
+        extract[extract.len() / 2]
+    );
+}
+
 /// **A step marks changed only what it moved.** A static cell and a sleeping box are not stamped
 /// `Changed` by a step; a falling box is. Every body used to be written back every step, so a
 /// `Changed<Transform>` filter matched the whole static world every frame.

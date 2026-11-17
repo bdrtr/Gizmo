@@ -89,6 +89,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   change tick is conditional. A body without children no longer goes through the compound-collider walk (a shape
   list, a boxed shape, a visited set and a stack per body per step, to arrive at its own collider): 513 sleeping
   boxes 0.32 → 0.27 ms a step. Regression: `a_step_marks_changed_only_the_bodies_it_moved`.
+- **Later substeps leave static and sleeping bodies' broadphase bounds alone.** Every substep refreshed every body's
+  bounds: a box, a hash lookup and a read of a tree node scattered in memory, to find a body that could not have
+  moved still inside its fat box. The first substep of a `step` still refreshes all of them (so anything that moved a
+  body between steps is caught, as before); a later one skips a body static or asleep at the pose it was refreshed
+  at. 14 600 static bodies (`static_bodies_cost_a_step`, interleaved runs): 13.6 → 10.9 ms a step; 513 sleeping
+  boxes 0.26 → 0.22 ms. Bit-identical (the stress test's hash is unchanged), and checked in every debug run: a
+  skipped body's box must be one the tree already holds (`DynamicAabbTree::holds` / `SpatialHash::holds`, new).
 - **A big static scene's frame costs half the CPU** (`nfsu2-gizmo` MOTOR-NOTLARI #29; measured by
   `a_static_city_frame_cpu_cost`, 14 620 static entities of 68 textures each with its own mesh, median of a release
   run): collecting draw items 11.7 → 2.8 ms, material sync 1.7 → 0.03 ms.
