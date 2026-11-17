@@ -542,11 +542,15 @@ pub fn simple_scene_update(
         }
     }
 
-    let mut physics_dt = dt.min(0.1);
-    while physics_dt > 0.0 {
-        let step = physics_dt.min(0.016);
-        systems::cpu_physics_step_system(world, step);
-        physics_dt -= step;
+    // A `PhysicsPlugin` steps physics on the fixed schedule: stepping it here as well ran it twice a
+    // frame (see `PhysicsSteppedBySchedule`).
+    if world.get_resource::<crate::plugins::PhysicsSteppedBySchedule>().is_none() {
+        let mut physics_dt = dt.min(0.1);
+        while physics_dt > 0.0 {
+            let step = physics_dt.min(0.016);
+            systems::cpu_physics_step_system(world, step);
+            physics_dt -= step;
+        }
     }
 
     sync_transforms(world);
@@ -660,6 +664,8 @@ pub struct FixedPhysics {
     step: f32,
     max_steps: u32,
     accumulator: f32,
+    /// Whether it has said that a `PhysicsPlugin` steps the same world (it says so once).
+    warned_double: bool,
 }
 
 impl FixedPhysics {
@@ -677,7 +683,7 @@ impl FixedPhysics {
     #[must_use]
     pub fn with_step(step: f32) -> Self {
         let step = if step.is_finite() && step > 0.0 { step } else { 1.0 / 60.0 };
-        Self { step, max_steps: Self::DEFAULT_MAX_STEPS, accumulator: 0.0 }
+        Self { step, max_steps: Self::DEFAULT_MAX_STEPS, accumulator: 0.0, warned_double: false }
     }
 
     /// Replaces the per-call step ceiling — see the type's docs. 0 is taken as 1.
@@ -712,6 +718,12 @@ impl FixedPhysics {
     /// before each step, from where the last step left it.
     pub fn advance(&mut self, world: &mut crate::core::World, dt: f32) -> u32 {
         use crate::physics::components::KinematicTarget;
+        if world.get_resource::<crate::plugins::PhysicsSteppedBySchedule>().is_some() && !self.warned_double {
+            self.warned_double = true;
+            tracing::warn!(
+                "[Physics] FixedPhysics::advance on a world a PhysicsPlugin already steps: the rigid step runs twice a frame. Use one of the two."
+            );
+        }
         let steps = self.plan(dt);
         // Each driven body's pose now and where the caller wants it after the last step.
         let driven: Vec<(Entity, Transform, KinematicTarget)> = if steps > 1 {
@@ -1653,6 +1665,42 @@ mod headless_frames_tests {
             run.frame(1.0 / 60.0, |_, _, _, _| {});
         }
         assert!(!run.world.is_alive(spark), "a DespawnAfter outlived its time under the plugin");
+    }
+
+    /// **A `PhysicsPlugin` on a simple scene steps physics once, not twice.** `simple_scene_update`
+    /// — the hook `with_simple_scene` installs — stepped physics by the frame's time itself, so a game
+    /// written with systems that also added `PhysicsPlugin` had its physics stepped by both: things
+    /// fell twice as fast in the window, while its `--test` (which runs the plugin and not the hook)
+    /// saw nothing wrong. A ball dropped for one second falls ½·g·t² ≈ 4.9 m either way: with the
+    /// hook alone, with the plugin alone, and with both.
+    #[test]
+    fn a_physics_plugin_on_a_simple_scene_steps_physics_once() {
+        use crate::physics::{Collider, RigidBody, Velocity};
+        let fallen = |plugin: bool, hook: bool| {
+            let mut world = World::new();
+            let ball = world.spawn_bundle((
+                Transform::new(Vec3::new(0.0, 100.0, 0.0)),
+                RigidBody::new(1.0, true),
+                Velocity::default(),
+                Collider::sphere(0.2),
+            ));
+            let mut run = HeadlessFrames::new(world);
+            if plugin {
+                run = run.add_plugin(crate::plugins::PhysicsPlugin::default());
+            }
+            for _ in 0..60 {
+                if hook {
+                    run.frame(1.0 / 60.0, simple_scene_update);
+                } else {
+                    run.frame(1.0 / 60.0, |_, _, _, _| {});
+                }
+            }
+            100.0 - run.world.get::<Transform>(ball).map_or(100.0, |t| t.position.y)
+        };
+        let (hook, plugin, both) = (fallen(false, true), fallen(true, false), fallen(true, true));
+        for (name, d) in [("the hook alone", hook), ("the plugin alone", plugin), ("both", both)] {
+            assert!((d - 4.9).abs() < 0.4, "{name}: the ball fell {d:.2} m in a second, not 4.9");
+        }
     }
 
     #[test]

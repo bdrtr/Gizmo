@@ -2200,6 +2200,31 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16al. The forty-second game: written as a plugin (2026-11-17, `sapan`)
+
+A launcher knocking crates off pedestals, three waves — and **the first game in Bevy's shape**: no
+`update` hook at all, the whole game one plugin (`Sapan`) with a `Startup` system that builds the
+scene with `Commands`, `Update` systems that aim and fire (`run_if` stops them when it is won), an
+**exclusive system** (`fn(world: &mut World)`) in the chain that counts and despawns knocked crates
+and builds the next wave, `LifetimePlugin` (exclusive too) clearing the balls, `PhysicsPlugin`
+stepping physics. The window and the `--test` run the same plugins; the test adds them to
+`HeadlessFrames` and plays them with an empty hook. 18 crates, 20 shots, at most 5 balls in the air
+and none left at the end.
+
+- ~~**`with_simple_scene` and `PhysicsPlugin` stepped physics twice.**~~ **Closed 2026-11-17.** The
+  simple scene's hook stepped physics by the frame's time itself; the plugin steps it on the fixed
+  schedule. Together a ball fell 19.5 m in a second instead of 4.9 — in the window only, since a
+  `--test` runs the plugin and not the hook. `air_drag` and `bounce` ran this way. `PhysicsPlugin`
+  now leaves `PhysicsSteppedBySchedule` in the world; the hook does not step physics when it is
+  there, and `FixedPhysics::advance` warns once
+  (`a_physics_plugin_on_a_simple_scene_steps_physics_once`: hook alone, plugin alone and both, 4.9 m).
+- ~~**A plugin could not be written from the prelude.**~~ **Closed 2026-11-17.** It exported `Plugin`
+  but not `AppLike`, which `Plugin::build` takes.
+- ~~**A plugin spelled out what an app says in a word.**~~ **Closed 2026-11-17.** Adding a system was
+  `Update.with_schedule(parts.world, parts.schedule, parts.update_schedule, |s| s.add_systems(..))`
+  through `parts_mut`; the trait object now has `add_systems(label, systems)` and
+  `insert_resource`, as `App` has (methods of `dyn AppLike`, so `Plugin` stays object-safe).
+
 ### C16ak. The forty-first game: platforms keyed in the timeline (2026-11-17, `tirman`)
 
 A side-on course whose ferry over a pit and lift to a ledge are not movement code but the engine's

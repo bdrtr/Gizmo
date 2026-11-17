@@ -27,6 +27,34 @@ pub trait AppLike {
     fn parts_mut(&mut self) -> AppParts<'_>;
 }
 
+/// What an app offers a plugin, in the words an app uses: a plugin's `build` gets a `&mut dyn AppLike`
+/// and writes `app.add_systems(Update, (aim, fire).chain())` and `app.insert_resource(Score::default())`,
+/// as a game writes them on its `App`. These are methods of the trait object rather than of the trait,
+/// because a generic method on the trait would take `dyn AppLike` away; and they are all a plugin needed
+/// that it had to spell out through [`parts_mut`](AppLike::parts_mut) and a label's `with_schedule`
+/// (`sapan`, the first game written as a plugin, 2026-11-17).
+impl dyn AppLike + '_ {
+    /// Adds systems to one of the app's schedules: [`Startup`](gizmo_core::system::Startup),
+    /// [`Update`](gizmo_core::system::Update) or [`FixedUpdate`](gizmo_core::system::FixedUpdate) — as
+    /// `App::add_systems` does. `systems` is one, a tuple of them (no order between them), or
+    /// `(a, b).chain()`.
+    pub fn add_systems<L: gizmo_core::system::ScheduleLabel, T, C: gizmo_core::system::IntoSystemConfigs<T>>(
+        &mut self,
+        label: L,
+        systems: C,
+    ) -> &mut Self {
+        let parts = self.parts_mut();
+        label.with_schedule(parts.world, parts.schedule, parts.update_schedule, |schedule| systems.into_configs(schedule));
+        self
+    }
+
+    /// Inserts a resource, replacing any of the same type — as `App::insert_resource` does.
+    pub fn insert_resource<R: Send + Sync + 'static>(&mut self, resource: R) -> &mut Self {
+        self.parts_mut().world.insert_resource(resource);
+        self
+    }
+}
+
 /// The three pieces of an app a plugin may touch, borrowed disjointly — see [`AppLike::parts_mut`].
 pub struct AppParts<'a> {
     /// The ECS world: resources, entities, components.

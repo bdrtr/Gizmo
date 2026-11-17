@@ -429,6 +429,47 @@ mod exit_tests {
         assert!(z > 0.0, "the tweened crate never moved on the headless loop (z = {z})");
     }
 
+    /// **A plugin writes what an app writes**: `app.insert_resource(..)` and `app.add_systems(Startup,
+    /// ..)` / `(Update, ..)` on the `&mut dyn AppLike` its `build` gets. The startup system runs once,
+    /// the update system every frame, in order with what the plugin chained.
+    #[test]
+    fn a_plugin_adds_systems_and_resources_as_an_app_does() {
+        use gizmo_core::prelude::*;
+        use gizmo_core::system::{IntoSystemChain, Startup, Update};
+
+        #[derive(Default)]
+        struct Log(Vec<&'static str>);
+        struct Game;
+        impl crate::Plugin for Game {
+            fn build(&self, app: &mut dyn crate::AppLike) {
+                fn start(mut log: ResMut<Log>) {
+                    log.0.push("start");
+                }
+                fn first(mut log: ResMut<Log>) {
+                    log.0.push("first");
+                }
+                fn second(mut log: ResMut<Log>) {
+                    log.0.push("second");
+                }
+                app.insert_resource(Log::default()).add_systems(Startup, start).add_systems(Update, (first, second).chain());
+            }
+        }
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let out = seen.clone();
+        let result = super::App::<()>::new("plugin", 1, 1)
+            .add_plugin(Game)
+            .set_setup(|_| ())
+            .set_update(move |world, _, _| {
+                out.lock().unwrap().clone_from(&world.get_resource::<Log>().unwrap().0);
+                if out.lock().unwrap().len() >= 5 {
+                    world.insert_resource(gizmo_core::window::AppExit);
+                }
+            })
+            .run();
+        assert!(result.is_ok());
+        assert_eq!(&seen.lock().unwrap()[..5], ["start", "first", "second", "first", "second"]);
+    }
+
     /// A headless app whose game inserts `AppExit` on its third frame returns from `run` — the
     /// loop used to have no way out at all.
     #[test]

@@ -59,6 +59,16 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Fixed: `with_simple_scene` and `PhysicsPlugin` together stepped physics twice a frame.** The simple scene's hook
+  stepped physics by the frame's time and the plugin on the fixed schedule: a ball fell 19.5 m in a second instead of
+  4.9, in the window only (a `--test` runs the plugin, not the hook). `air_drag` and `bounce` ran like this.
+  `PhysicsPlugin` leaves `PhysicsSteppedBySchedule` (new) in the world; the hook leaves physics to the schedule when
+  it is there, and `FixedPhysics::advance` warns once.
+- **A plugin writes what an app writes.** `app.add_systems(Update, (a, b).chain())` and `app.insert_resource(..)` on
+  the `&mut dyn AppLike` a `Plugin::build` gets, as on `App`; `AppLike` is in the prelude beside `Plugin`. Found by
+  `sapan`, the forty-second game and the first written as a plugin: a `Startup` system, `Update` systems with
+  `run_if`, an exclusive system in the chain, `LifetimePlugin` and `PhysicsPlugin` — the same plugins in the window
+  and in its `--test`.
 - **A kinematic body moved by its `Transform` carries what stands on it.** An animation, a script or the game writing a
   kinematic body's `Transform` left it with no velocity, so `platform_carry` had nothing to give a character on it: a
   platform keyed in the animation timeline slid out from under the player. The physics step now carries such a body

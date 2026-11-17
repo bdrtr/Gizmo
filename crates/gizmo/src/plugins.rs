@@ -9,8 +9,22 @@ use crate::math::Vec3;
 #[cfg(feature = "physics")]
 use gizmo_physics_rigid::world::PhysicsWorld;
 
+/// Marks a world whose physics the **fixed schedule** steps — what [`PhysicsPlugin`] leaves behind.
+/// A frame hook that would step physics itself reads it and leaves the stepping to the schedule:
+/// [`simple_scene_update`](crate::simple::simple_scene_update) does, and
+/// [`FixedPhysics::advance`](crate::simple::FixedPhysics::advance) warns. A game with its own loop
+/// that steps physics in a system of its own inserts it too.
+///
+/// Before it, `with_simple_scene` and `PhysicsPlugin` together stepped physics twice a frame — a
+/// ball fell 19.5 m in a second instead of 4.9 — and only in the window: a game's `--test` runs the
+/// plugin and not the hook.
+#[cfg(feature = "physics")]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PhysicsSteppedBySchedule;
+
 /// Gizmo Engine Physics Plugin.
-/// When added, it initializes the physics world (PhysicsWorld).
+/// When added, it initializes the physics world (PhysicsWorld), steps it on the fixed schedule and
+/// marks the world so ([`PhysicsSteppedBySchedule`]).
 #[non_exhaustive]
 #[cfg(feature = "physics")]
 pub struct PhysicsPlugin {
@@ -51,6 +65,7 @@ impl Plugin for PhysicsPlugin {
         );
         app.world
             .insert_resource(PhysicsWorld::new().with_gravity(self.gravity));
+        app.world.insert_resource(PhysicsSteppedBySchedule);
         // Run the physics step automatically at the app's fixed timestep (the
         // `PhysicsTime` accumulator loop that also drives `TransformPlugin`), so
         // callers don't hand-call `cpu_physics_step_system` every frame. Labelled

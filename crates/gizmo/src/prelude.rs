@@ -35,7 +35,8 @@ pub use crate::core::{Commands, EntityCommands};
 pub use crate::math::{EulerRot, Mat4, Quat, Ray, Vec2, Vec3, Vec4};
 
 // === Sadelik API ===
-pub use crate::app::{App, Plugin};
+// A plugin is written against `AppLike` (its `build` takes one), so the two go together.
+pub use crate::app::{App, AppLike, Plugin};
 #[cfg(feature = "render")]
 pub use crate::asset_server::AssetServer;
 pub use crate::color::Color;
