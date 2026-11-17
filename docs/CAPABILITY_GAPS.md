@@ -2245,7 +2245,9 @@ walking, rides the lift and reaches the flag.
   then still; a board tilted by its `Transform` rolls a ball downhill), each failing with it taken out.
 
 Everything else worked the first time: the clips loop with a dwell at each end (a repeated key), the
-lift carries the player up, and the property track pulses the lamp through `HeadlessFrames`.
+lift carries the player up, and the property track pulses the lamp through `HeadlessFrames`. The
+`--test` also saves the course in the scene format and plays it again from the file in a fresh
+world: the same 16.8 s, 3.80 m carried, no fall.
 
 ### C16aj. A game as an Android app (2026-11-05, `demo-android`)
 

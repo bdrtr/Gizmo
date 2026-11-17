@@ -23,6 +23,10 @@
 //!   `RigidBody::pose_driven`), varınca duruyor; `FixedPhysics` bir karedeki birden çok adıma
 //!   bölüyor. Animasyon, script ya da oyun kodu — kim yazarsa yazsın.
 //!
+//! `--test` parkuru iki kez oynar: kurulduğu gibi, ve motorun sahne biçiminde kaydedilip temiz bir
+//! dünyaya açılınca — klipler, kinematik platformlar ve karakter dosyadan gelir. İkisi aynı: 16,8 s,
+//! 3,80 m taşınma, düşüş yok.
+//!
 //! ## Ortam değişkenleri
 //!   * `TIRMAN_OTO=1` — oyunu kendisi oynar (`tirman --test` aynısını pencere açmadan yapar)
 //!   * `GIZMO_FONT=<yol>` — HUD fontu
@@ -79,7 +83,7 @@ enum Plan {
     ToGoal,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
 struct Actor;
 gizmo::core::impl_component!(Actor);
 
@@ -144,9 +148,11 @@ fn setup(world: &mut World, font: FontId) -> Game {
     // Çukurun üstündeki feribot ve asansör: kinematik gövdeler, keyed animasyonla.
     let ferry_y = -0.25;
     let ferry = block(world, Vec3::new(FERRY.0, ferry_y, 0.0), Vec3::new(1.0, 0.25, 1.2), "#D4A017", Some(RigidBody::new_kinematic()));
+    world.add_component(ferry, gizmo::core::EntityName::new("feribot"));
     shuttle(world, ferry, Vec3::new(FERRY.0, ferry_y, 0.0), Vec3::new(FERRY.1, ferry_y, 0.0), FERRY.2, "feribot");
     let lift_at = |top: f32| Vec3::new(LIFT_X, top - 0.25, 0.0);
     let lift = block(world, lift_at(LIFT.0), Vec3::new(0.75, 0.25, 1.2), "#2E86C1", Some(RigidBody::new_kinematic()));
+    world.add_component(lift, gizmo::core::EntityName::new("asansör"));
     shuttle(world, lift, lift_at(LIFT.0), lift_at(LIFT.1), LIFT.2, "asansör");
 
     // Bayrak ve yanıp sönen lamba (property track).
@@ -165,10 +171,11 @@ fn setup(world: &mut World, font: FontId) -> Game {
     player.play(Arc::new(clip));
     world.add_component(lamp, player);
 
-    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)),));
-    let banner = world.spawn_bundle((Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO)
-        .with_anchor(TextAnchor::Center)
-        .with_align(TextAlign::Center),));
+    let hud = world.spawn_bundle((Text::pinned("", font, 22.0, TextAnchor::TopLeft, Vec2::new(16.0, 16.0)), gizmo::core::EntityName::new("hud")));
+    let banner = world.spawn_bundle((
+        Text::pinned_at("", font, 44.0, Vec2::new(0.5, 0.3), Vec2::ZERO).with_anchor(TextAnchor::Center).with_align(TextAlign::Center),
+        gizmo::core::EntityName::new("pankart"),
+    ));
     let mut game = Game {
         physics: FixedPhysics::new(60),
         player: Entity::new(0, 0),
@@ -212,6 +219,49 @@ fn self_test() -> bool {
     let mut game = setup(&mut world, HeadlessFrames::font());
     game.auto = true;
     world.insert_resource(game);
+    let played = play(world, "kurulduğu gibi");
+    // The same course saved in the engine's scene format and opened in a fresh world: the clips,
+    // the kinematic platforms and the character come back from the file, and play the same.
+    let reopened = reopen().is_some_and(|world| play(world, "kaydedilip açılınca"));
+    played && reopened
+}
+
+/// The course as `setup` builds it, saved to a scene file and loaded into a fresh world, with the
+/// game's state found again by the entities' names.
+fn reopen() -> Option<World> {
+    let mut registry = gizmo::full_scene_registry();
+    registry.register_serializable::<Actor>("Actor").expect("'Actor' motorun bir adıyla çakışmamalı");
+    let mut world = World::new();
+    let game = setup(&mut world, HeadlessFrames::font());
+    let path = std::env::temp_dir().join(format!("tirman-{}.scene", std::process::id()));
+    let path = path.to_string_lossy().into_owned();
+    if let Err(e) = gizmo::scene::SceneData::save(&world, &path, &registry) {
+        println!("tirman --test: kaydedilemedi: {e}");
+        return None;
+    }
+    let mut world = World::new();
+    let loaded = gizmo::scene::SceneData::load_into(&path, &mut world, &registry);
+    let _ = std::fs::remove_file(&path);
+    if let Err(e) = loaded {
+        println!("tirman --test: açılamadı: {e}");
+        return None;
+    }
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    let named = |world: &World, name: &str| {
+        world.query::<(Entity, &gizmo::core::EntityName)>().iter().find(|(_, n)| n.0 == name).map(|(e, _)| e)
+    };
+    let found = (named(&world, "oyuncu"), named(&world, "feribot"), named(&world, "asansör"), named(&world, "hud"), named(&world, "pankart"));
+    let (Some(player), Some(ferry), Some(lift), Some(hud), Some(banner)) = found else {
+        println!("tirman --test: açılan sahnede bir varlık eksik: {found:?}");
+        return None;
+    };
+    let camera = world.query::<(Entity, &gizmo::renderer::components::Camera)>().iter().next().map(|(e, _)| e)?;
+    world.insert_resource(Game { player, ferry, lift, camera, hud, banner, auto: true, physics: FixedPhysics::new(60), ..game });
+    Some(world)
+}
+
+/// Plays `world`'s course with the autopilot until the flag or a minute, and says how it went.
+fn play(world: World, how: &str) -> bool {
     let mut run = HeadlessFrames::new(world);
     let dt = 1.0 / 60.0;
     let mut time = 0.0f32;
@@ -227,7 +277,7 @@ fn self_test() -> bool {
     let carried = game.ridden > 2.0;
     let ok = game.won && game.falls == 0 && carried;
     println!(
-        "tirman --test: {time:.1} s; feribotta {:.1} s durup {:.2} m taşındı; düşüş {}; bayrağa vardı mı: {} → {}",
+        "tirman --test ({how}): {time:.1} s; feribotta {:.1} s durup {:.2} m taşındı; düşüş {}; bayrağa vardı mı: {} → {}",
         game.ride_time,
         game.ridden,
         game.falls,
@@ -254,6 +304,7 @@ fn restart(world: &mut World, game: &mut Game) {
         Velocity::default(),
         Collider::capsule(0.3, 0.2),
         Actor,
+        gizmo::core::EntityName::new("oyuncu"),
     ));
     game.won = false;
     game.plan = Plan::ToEdge;
