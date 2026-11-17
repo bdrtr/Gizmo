@@ -107,3 +107,38 @@ fn resting_bodies_cost_a_step() {
         GRID * GRID * 2
     );
 }
+
+/// **A step marks changed only what it moved.** A static cell and a sleeping box are not stamped
+/// `Changed` by a step; a falling box is. Every body used to be written back every step, so a
+/// `Changed<Transform>` filter matched the whole static world every frame.
+#[test]
+fn a_step_marks_changed_only_the_bodies_it_moved() {
+    use gizmo_core::query::Changed;
+    use gizmo_core::Entity;
+    let mut world = scene_with(8, true);
+    let falling = world.spawn();
+    world.add_component(falling, Transform::new(Vec3::new(5.0, 20.0, 5.0)));
+    world.add_component(falling, RigidBody::new(10.0, true));
+    world.add_component(falling, Velocity::default());
+    world.add_component(falling, Collider::box_collider(Vec3::splat(0.5)));
+    for _ in 0..5 {
+        gizmo_physics_rigid::system::physics_step_system(&world, DT);
+        world.apply_commands();
+    }
+    let before = world.tick;
+    let next = world.tick;
+    world.begin_change_frame(next);
+    gizmo_physics_rigid::system::physics_step_system(&world, DT);
+    world.apply_commands();
+    let transforms: Vec<_> = world.query_since::<Entity, Changed<Transform>>(before).iter().collect();
+    assert_eq!(transforms, vec![falling], "Transform changed by one step: {transforms:?}");
+    let velocities: Vec<_> = world.query_since::<Entity, Changed<Velocity>>(before).iter().collect();
+    assert_eq!(velocities, vec![falling], "Velocity changed by one step: {velocities:?}");
+    let bodies: Vec<_> = world.query_since::<Entity, Changed<RigidBody>>(before).iter().collect();
+    assert!(
+        bodies.iter().all(|&e| e == falling),
+        "RigidBody changed by one step on a body that did not move: {bodies:?}"
+    );
+    let asleep = world.query::<&RigidBody>().iter().filter(|rb| rb.is_dynamic() && rb.is_sleeping).count();
+    assert_eq!(asleep, 8, "the placed boxes stay asleep");
+}

@@ -25,6 +25,20 @@ pub fn apply_impulse(world: &mut World, id: Entity, impulse: gizmo_math::Vec3, p
     true
 }
 
+/// Puts the step's `value` in an ECS component, stamping it changed only when it differs.
+///
+/// The value is stored either way, bit for bit: `==` on floats calls `-0.0` and `0.0` equal, and
+/// skipping the store on equality would leave the ECS holding a zero of the other sign than the
+/// step produced — which the next step reads back. Every bit the world held before this was
+/// marked conditionally is still the bit it holds (`headless_stress_test`'s hash is unchanged).
+fn write_back<T: PartialEq>(slot: &mut gizmo_core::query::Mut<'_, T>, value: T) {
+    if **slot != value {
+        **slot = value;
+    } else {
+        *slot.bypass_change_detection() = value;
+    }
+}
+
 /// Exclusive system that updates the entire physics simulation.
 /// It reads all rigid and soft bodies from the ECS, steps the physics world,
 /// and writes the transformed positions and velocities back to the ECS.
@@ -67,7 +81,8 @@ pub fn physics_step_system(world: &World, dt: f32) {
     physics_world.bodies_without_collider = orphans;
 
     // 2. Gather Compound Shapes (Read Locks Only)
-    let mut compound_shapes_map = std::collections::HashMap::new();
+    // FxHash: an insert and a remove per body per step, keyed by entities the engine made.
+    let mut compound_shapes_map: rustc_hash::FxHashMap<Entity, Collider> = rustc_hash::FxHashMap::default();
     {
         {
             let query = world.query_filtered::<(Entity, &Collider, &Transform, &RigidBody), (gizmo_core::query::Without<gizmo_core::pool::Pooled>, gizmo_core::query::Without<gizmo_core::component::IsDeleted>)>();
@@ -79,6 +94,17 @@ pub fn physics_step_system(world: &World, dt: f32) {
             let material_query = world.query::<&gizmo_physics_core::components::PhysicsMaterial>();
 
             for (id, col, transform, _rb) in query.iter() {
+                // **A body with no children is its own collider**, and costs one clone: the walk
+                // below allocated a shape list, a boxed copy of the shape, a visited set and a
+                // stack for every body every step to arrive at exactly `col.clone()`. With a few
+                // hundred resting props that was a measurable share of a step that otherwise did
+                // nothing (`many_sleeping_bodies`, `nfsu2-gizmo` MOTOR-NOTLARI #26).
+                if children_query.get(id).is_none_or(|c| c.0.is_empty()) {
+                    let mut own = col.clone();
+                    own.material = col.material_with(material_query.get(id));
+                    compound_shapes_map.insert(id, own);
+                    continue;
+                }
                 let mut compound_shapes = Vec::new();
                 compound_shapes.push((
                     gizmo_physics_core::Transform::default(),
@@ -178,9 +204,9 @@ pub fn physics_step_system(world: &World, dt: f32) {
     }
 
     // 3. Query Rigid Bodies (Write Locks)
-    let mut rigid_bodies = Vec::new();
+    let mut rigid_bodies = Vec::with_capacity(compound_shapes_map.len());
     // The handle of each entry above, for the write-back: a `BodyHandle` is the physics side's raw id.
-    let mut body_entities: Vec<Entity> = Vec::new();
+    let mut body_entities: Vec<Entity> = Vec::with_capacity(compound_shapes_map.len());
     // Kinematic bodies driven to a pose: their index in `rigid_bodies`, and the pose to put them
     // on after the step.
     let mut targets: Vec<(usize, crate::components::KinematicTarget)> = Vec::new();
@@ -370,10 +396,17 @@ pub fn physics_step_system(world: &World, dt: f32) {
             world.query_filtered_unchecked::<(&mut RigidBody, &mut Transform, &mut Velocity), gizmo_core::query::Without<gizmo_core::pool::Pooled>>()
         };
             for ((_, rb, transform, vel, _collider), entity) in rigid_bodies.into_iter().zip(body_entities) {
+                // Marked changed only where the step changed something. Every body was written
+                // back through `DerefMut` every step, a resting or static one included, which
+                // stamped each `Transform`, `Velocity` and `RigidBody` as changed every frame: a
+                // `Changed<Transform>` filter on a static city of 14 600 cells matched all of
+                // them, always, and a pass that reads only what changed could skip nothing a
+                // physics body touched — the render world's extractor above all, which copies a
+                // `Transform` when it is `Changed` and so cloned every body's, every frame.
                 if let Some((mut ecs_rb, mut ecs_trans, mut ecs_vel)) = query.get_mut(entity) {
-                    *ecs_rb = rb;
-                    *ecs_trans = transform;
-                    *ecs_vel = vel;
+                    write_back(&mut ecs_rb, rb);
+                    write_back(&mut ecs_trans, transform);
+                    write_back(&mut ecs_vel, vel);
                 }
             }
         }

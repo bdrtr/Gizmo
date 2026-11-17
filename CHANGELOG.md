@@ -81,6 +81,14 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ran through the thread pool whatever they held; handing a loop to the pool and waiting on it is tens of
   microseconds, several times a step. Each now runs on the calling thread under a threshold sized to its work
   (256 awake bodies, 64 pairs, 32 manifolds); results are bit-identical (the stress test's hash is unchanged).
+- **A physics step marks changed only the bodies it moved.** Every body was written back to the ECS every step
+  through `DerefMut`, a static or sleeping one included, so `Changed<Transform>`, `Changed<Velocity>` and
+  `Changed<RigidBody>` matched every physics body every frame — and the render world's extractor, which copies a
+  `Transform` when it is `Changed`, cloned all of them: 14 600 static bodies, 3.72 → 0.027 ms a frame. The values
+  are still stored bit for bit (an equal `-0.0` is not left as `0.0`; the stress test's hash is unchanged); only the
+  change tick is conditional. A body without children no longer goes through the compound-collider walk (a shape
+  list, a boxed shape, a visited set and a stack per body per step, to arrive at its own collider): 513 sleeping
+  boxes 0.32 → 0.27 ms a step. Regression: `a_step_marks_changed_only_the_bodies_it_moved`.
 - **A big static scene's frame costs half the CPU** (`nfsu2-gizmo` MOTOR-NOTLARI #29; measured by
   `a_static_city_frame_cpu_cost`, 14 620 static entities of 68 textures each with its own mesh, median of a release
   run): collecting draw items 11.7 → 2.8 ms, material sync 1.7 → 0.03 ms.
