@@ -808,6 +808,7 @@ current_cache.insert(pair, (false, Some(cached)));
                 Vec<(BodyHandle, Vec3, Vec3)>,    // speculative bounces, for after position integration
                 crate::solver::SolveStats,        // adaptive sweep count + support depth
                 bool,                             // every dynamic member is eligible to sleep
+                Vec<(usize, Vec3)>,               // what contacts gave kinematic bodies with a contact mass
             );
 
             let solve_island = |mut island_manifolds: Vec<ContactManifold>| -> IslandResult {
@@ -848,6 +849,7 @@ current_cache.insert(pair, (false, Some(cached)));
                             Vec::new(),
                             crate::solver::SolveStats::default(),
                             false,
+                            Vec::new(),
                         );
                     }
 
@@ -895,6 +897,7 @@ current_cache.insert(pair, (false, Some(cached)));
                     }
 
                     let mut velocity_updates = Vec::with_capacity(island_indices.len());
+                    let mut kinematic_responses: Vec<(usize, Vec3)> = Vec::new();
                     let mut position_updates = Vec::with_capacity(island_indices.len());
                     let mut bounce_updates = Vec::new();
 
@@ -939,6 +942,14 @@ current_cache.insert(pair, (false, Some(cached)));
 
                             // Collect results.
                             for &idx in &island_indices {
+                                // A kinematic body with a contact mass took impulses in the solve;
+                                // its velocity stays the game's, and what it took is reported.
+                                // Its bounce too: the restitution of a speculative contact goes
+                                // to the bounce buffer, not into the solved velocity.
+                                if !rigid_bodies[idx].is_dynamic() && rigid_bodies[idx].responds_to_contacts() {
+                                    let bounce = bounce_buf[idx].0;
+                                    kinematic_responses.push((idx, buf[idx].linear - velocities[idx].linear + bounce));
+                                }
                                 if rigid_bodies[idx].is_dynamic() {
                                     velocity_updates.push((entities_arr[idx], buf[idx]));
                                     let (dlin, dang) = pos_buf[idx];
@@ -984,6 +995,7 @@ current_cache.insert(pair, (false, Some(cached)));
                         bounce_updates,
                         solve_stats,
                         island_can_sleep,
+                        kinematic_responses,
                     )
             };
             // On the calling thread when there are few islands (`worth_parallel_jobs`); order is kept.
@@ -1015,8 +1027,16 @@ current_cache.insert(pair, (false, Some(cached)));
                 island_bounces,
                 stats,
                 island_can_sleep,
+                kinematic_responses,
             ) in results
             {
+                // A kinematic body touching several islands took a share in each. It moves by it
+                // for the rest of the step, as a body of its contact mass would — a later substep
+                // that still saw it standing would push it again — and it is reported.
+                for (idx, dv) in kinematic_responses {
+                    self.rigid_bodies[idx].contact_response += dv;
+                    self.velocities[idx].linear += dv;
+                }
                 bounces.extend(island_bounces);
                 // Captured before `island_vels` is consumed below; empty unless the whole island
                 // qualifies, so this allocates only on the substep a pile actually settles.

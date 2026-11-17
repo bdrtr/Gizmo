@@ -49,6 +49,11 @@ impl PhysicsWorld {
             return Ok(());
         }
 
+        // What contacts give a kinematic body with a contact mass is this call's (`contact_response`).
+        for rb in &mut self.rigid_bodies {
+            rb.contact_response = gizmo_math::Vec3::ZERO;
+        }
+
         // --- STEP ONCE (DEBUG) ---
         let frame_dt = if self.step_once {
             self.step_once = false;

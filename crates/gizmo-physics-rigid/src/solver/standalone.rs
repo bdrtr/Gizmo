@@ -60,7 +60,7 @@ impl ConstraintSolver {
         restitution: f32,
         dt: f32,
     ) {
-        if !rb_a.is_dynamic() && !rb_b.is_dynamic() {
+        if !rb_a.responds_to_contacts() && !rb_b.responds_to_contacts() {
             return;
         }
 
@@ -79,8 +79,8 @@ impl ConstraintSolver {
             return;
         } // Ayrılıyor, işlem yapma
 
-        let inv_m_a = rb_a.inv_mass();
-        let inv_m_b = rb_b.inv_mass();
+        let inv_m_a = rb_a.inv_contact_mass();
+        let inv_m_b = rb_b.inv_contact_mass();
         let inv_i_a = rb_a.inv_contact_inertia_tensor(transform_a.rotation);
         let inv_i_b = rb_b.inv_contact_inertia_tensor(transform_b.rotation);
 
@@ -106,11 +106,11 @@ impl ConstraintSolver {
 
         let impulse = normal * j;
 
-        if rb_a.is_dynamic() {
+        if rb_a.responds_to_contacts() {
             vel_a.linear -= impulse * inv_m_a;
             vel_a.angular -= inv_i_a.mul_vec3(r_a.cross(impulse));
         }
-        if rb_b.is_dynamic() {
+        if rb_b.responds_to_contacts() {
             vel_b.linear += impulse * inv_m_b;
             vel_b.angular += inv_i_b.mul_vec3(r_b.cross(impulse));
         }
@@ -158,8 +158,8 @@ impl ConstraintSolver {
         }
         let tangent = tang_v / tang_mag;
 
-        let inv_m_a = rb_a.inv_mass();
-        let inv_m_b = rb_b.inv_mass();
+        let inv_m_a = rb_a.inv_contact_mass();
+        let inv_m_b = rb_b.inv_contact_mass();
 
         let r_a_x_t = r_a.cross(tangent);
         let r_b_x_t = r_b.cross(tangent);
@@ -184,11 +184,11 @@ impl ConstraintSolver {
         };
 
         let ft = tangent * jt;
-        if rb_a.is_dynamic() {
+        if rb_a.responds_to_contacts() {
             vel_a.linear -= ft * inv_m_a;
             vel_a.angular -= inv_i_a.mul_vec3(r_a.cross(ft));
         }
-        if rb_b.is_dynamic() {
+        if rb_b.responds_to_contacts() {
             vel_b.linear += ft * inv_m_b;
             vel_b.angular += inv_i_b.mul_vec3(r_b.cross(ft));
         }

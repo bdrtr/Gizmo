@@ -259,6 +259,24 @@ pub struct RigidBody {
     /// PhysX calls the same thing a contact's inverse inertia scale.
     #[serde(default = "one")]
     pub contact_spin_share: f32,
+    /// **A kinematic body that counts as this many kilograms in contacts** — a car on a rail, a
+    /// lift with a load limit: its path is the game's, but what runs into it should meet a body of
+    /// finite mass, not a wall. In contacts it is a body of that mass: each impulse is sized as
+    /// between the two, and its velocity takes its share for the rest of the step — a kinematic
+    /// body moved by its `Velocity` goes on with it, one moved by a target or its `Transform`
+    /// follows the game again next step. What contacts gave it is
+    /// [`contact_response`](Self::contact_response), for the game to put into its path (a rail
+    /// car's speed). It does not turn in contacts (its inertia is not asked).
+    /// `None` (the default): the infinite mass of every kinematic body. Ignored on a dynamic or
+    /// static body. (`nfsu2-gizmo` MOTOR-NOTLARI #20: a car running into a rail car at 15 m/s
+    /// was thrown back at −90 m/s.)
+    #[serde(default)]
+    pub contact_mass: Option<f32>,
+    /// Output, for a kinematic body with a [`contact_mass`](Self::contact_mass): the change of
+    /// velocity the last step's contacts gave it, m/s, summed over the step — what a body of that
+    /// mass would have been pushed by. Zero for any other body and after a step without contact.
+    #[serde(skip)]
+    pub contact_response: Vec3,
 }
 
 fn one() -> f32 {
@@ -290,6 +308,8 @@ impl Default for RigidBody {
             force_accumulator: Vec3::ZERO,
             pose_driven: false,
             contact_spin_share: 1.0,
+            contact_mass: None,
+            contact_response: Vec3::ZERO,
             torque_accumulator: Vec3::ZERO,
         }
     }
@@ -626,6 +646,25 @@ impl RigidBody {
             angular.z = 0.0;
         }
         (linear, angular)
+    }
+
+    /// The inverse mass the **contact** solver uses: [`inv_mass`](Self::inv_mass) for a dynamic
+    /// body, `1 / contact_mass` for a kinematic one that has [`contact_mass`](Self::contact_mass),
+    /// 0 otherwise.
+    pub fn inv_contact_mass(&self) -> f32 {
+        if self.is_dynamic() {
+            self.inv_mass()
+        } else if self.is_kinematic() {
+            self.contact_mass.filter(|m| *m > 0.0 && m.is_finite()).map_or(0.0, |m| 1.0 / m)
+        } else {
+            0.0
+        }
+    }
+
+    /// Whether contacts push this body in the solver: a dynamic one, or a kinematic one with a
+    /// [`contact_mass`](Self::contact_mass).
+    pub fn responds_to_contacts(&self) -> bool {
+        self.is_dynamic() || self.inv_contact_mass() > 0.0
     }
 
     /// Inverse mass in kg⁻¹, or `0.0` meaning "infinite mass — cannot be accelerated".

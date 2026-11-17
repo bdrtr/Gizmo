@@ -59,6 +59,12 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **New: `RigidBody::contact_mass`** — a kinematic body that counts as that many kilograms in contacts (`nfsu2-gizmo`
+  MOTOR-NOTLARI #20: a car running into a rail car at 15 m/s was thrown back at −90 m/s). Impulses are sized as
+  between two bodies of those masses and the kinematic body's velocity takes its share for the rest of the step,
+  without turning; what it took is `RigidBody::contact_response`, for a game to put into its path. Against a
+  1 200 kg rail car a 1 200 kg car ends as against a dynamic car of that mass. The contact solvers ask
+  `inv_contact_mass`/`responds_to_contacts` (bit-identical for every other body; the stress test's hash is unchanged).
 - **Resting bodies cost half as much a step** (`nfsu2-gizmo` MOTOR-NOTLARI #26; measured by `many_sleeping_bodies`,
   513 boxes on 16 terrain cells of 2 048 triangles): at rest 1.03 → 0.5 ms a step, settling 3.9 → 3.1 ms, the
   terrain alone 0.10 → 0.015 ms. The step's per-body loops (both integrations) and the narrowphase and island solve
