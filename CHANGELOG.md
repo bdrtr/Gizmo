@@ -59,6 +59,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Vehicle: a crawling car behaves.** Three causes, one symptom family (`nfsu2-gizmo` MOTOR-NOTLARI #17, #19):
+  - The wheel forces of a step are summed and applied once (Jacobi). They went into the body's velocity wheel after
+    wheel, each reading what the one before had changed, so left and right turns of a symmetric car were not mirror
+    images (`left_and_right_turns_are_mirror_images`).
+  - A tyre's lateral force never pushes the contact past standing still in one step. At a crawl (`ref_vel` held at
+    0.5 m/s) the linear tyre was a damper stiff enough for explicit Euler to overshoot: a parked car rocked in yaw at
+    ±0.2 rad/s and rounding noise grew into a left/right asymmetry within ten steps of landing.
+  - **New: `Wheel::rolling_resistance`** (`Crr`, default `DEFAULT_ROLLING_RESISTANCE` = 0.012). There was none; a
+    step-end rule that zeroed every slow unpowered wheel stood in for it, and also locked crawling undriven wheels on
+    the ground, so a heavy car driven by one axle could not pull away gently. That rule now applies in the air only
+    (`a_heavy_car_driven_by_one_axle_pulls_away`, `a_parked_car_comes_to_rest_and_stays`).
+  **Behaviour change:** vehicle trajectories differ at the bit level; a car coasting slows by rolling resistance.
 - **Fixed: events are rotated on every runtime, once.** Rotating event queues was the windowed `App`'s alone, for
   the types its own `add_event` named: under `HeadlessFrames` and the headless `App` no `EventReader` saw anything, a
   plugin's event type was never rotated, and `PlayLoop` rotated `CollisionEvent`/`TriggerEvent`/`HitEvent` itself —

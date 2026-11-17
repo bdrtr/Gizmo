@@ -92,6 +92,9 @@ impl PacejkaParams {
 /// A `PacejkaLat` alias, kept for backwards compatibility.
 pub type PacejkaLat = PacejkaParams;
 
+/// [`Wheel::rolling_resistance`]'s default: a passenger tyre on asphalt.
+pub const DEFAULT_ROLLING_RESISTANCE: f32 = 0.012;
+
 /// The share of an axis' grip a tyre keeps however hard the *other* axis slides — the default
 /// for [`Wheel::sliding_grip_floor`], and the value [`pacejka_combined`] uses.
 pub const DEFAULT_SLIDING_GRIP_FLOOR: f32 = 0.35;
@@ -404,6 +407,17 @@ pub struct Wheel {
     /// 1.40 suggests ~0.8); lower it for one that lets go. The friction circle still caps the
     /// combined force, so this cannot add grip past the peak.
     pub sliding_grip_floor: f32,
+    /// Rolling resistance coefficient `Crr`: the tyre resists rolling with a torque of
+    /// `Crr · Fz · r`, which never turns the wheel the other way. Default
+    /// [`DEFAULT_ROLLING_RESISTANCE`] (0.012, a passenger tyre on asphalt; ~0.005 for a racing
+    /// slick, ~0.03 on gravel). `0` lets a car roll forever at any speed.
+    ///
+    /// There was none until 2026-11-17, and a step-end rule that zeroed every slow, unpowered
+    /// wheel stood in for it: it parked a car, but it also locked a crawling undriven wheel, so a
+    /// heavy car driven by one axle could not pull away against its own standing wheels
+    /// (`nfsu2-gizmo` MOTOR-NOTLARI #17). Without either, a car that landed with a few cm/s rolled
+    /// on for good.
+    pub rolling_resistance: f32,
 }
 
 impl Default for Wheel {
@@ -433,6 +447,7 @@ impl Default for Wheel {
             suspension_force: 0.0,
             surface_friction: PhysicsMaterial::ASPHALT.dynamic_friction,
             sliding_grip_floor: DEFAULT_SLIDING_GRIP_FLOOR,
+            rolling_resistance: DEFAULT_ROLLING_RESISTANCE,
         }
     }
 }

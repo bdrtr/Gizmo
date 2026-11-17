@@ -106,9 +106,10 @@ pub fn weather_grip_factor(weather: Weather, speed_mps: f32) -> f32 {
 ///
 /// # What it writes
 ///
-/// Every force is accumulated straight into `vehicle_vel` as `force · inv_mass · dt` (and the
-/// matching angular term), so this is an explicit force-to-velocity step and the result is
-/// order- and `dt`-dependent. Two jobs are left to the surrounding pipeline, NOT to the
+/// Every force is summed as `force · inv_mass · dt` (and the matching angular term) and added to
+/// `vehicle_vel` once, at the end, so every wheel reads the body's velocity at the start of the
+/// step and the result does not depend on the wheels' order; it is an explicit force-to-velocity
+/// step and `dt`-dependent. Two jobs are left to the surrounding pipeline, NOT to the
 /// immediate caller: integrating `vehicle_transform` from the resulting velocity — this
 /// function takes the transform by shared reference and never moves the car — and applying
 /// **gravity**, which is not applied here. In this engine both happen later in the schedule,
@@ -262,6 +263,14 @@ pub fn update_vehicle_with_query(
         .mul_vec3(Vec3::new(1.0, 0.0, 0.0));
 
     let v_com = vehicle_vel.linear;
+    // **Every force of the step is summed here and applied once, at the end** (Jacobi). They used
+    // to go straight into `vehicle_vel`, wheel after wheel, and the next wheel read its contact
+    // velocity from what the one before had just changed (Gauss-Seidel): the result depended on the
+    // wheels' order, no order of four corners is its own mirror, and a symmetric car turned left
+    // and right differently — 5 % of lateral grip on a front-driven car
+    // (`left_and_right_turns_are_mirror_images`). Every wheel now reads the body's velocity at the
+    // start of the step.
+    let mut kick = Velocity::default();
     let forward_speed = v_com.dot(forward);
     vehicle.current_speed_kmh = forward_speed * 3.6;
 
@@ -352,7 +361,7 @@ pub fn update_vehicle_with_query(
             .mul_vec3(vehicle_rb.center_of_mass);
     apply_force_at_point(
         vehicle_rb,
-        vehicle_vel,
+        &mut kick,
         com,
         vehicle_transform.rotation,
         drag_force + lift_force,
@@ -482,6 +491,9 @@ pub fn update_vehicle_with_query(
     // --------------------------------------------------------
     // 6. TEKERLEK DÖNGÜSÜ — 2. geçiş: Kuvvetler + Tekerlek integrasyon
     // --------------------------------------------------------
+    // How many contacts share stopping the body (the tyre-force limit below); the rays above have
+    // set `is_grounded`.
+    let grounded_share = vehicle.wheels.iter().filter(|w| w.is_grounded).count().max(1) as f32;
 
     // Motor/volan ataleti — sürülen tekerlekte gear² ile yansır (aşağıda). Döngü
     // içinde `vehicle`'a erişilemez (wheels mutable borrow), o yüzden burada yakala.
@@ -587,7 +599,7 @@ pub fn update_vehicle_with_query(
                 let susp_impulse = (-ray_dir) * wheel.suspension_force;
                 apply_force_at_point(
                     vehicle_rb,
-                    vehicle_vel,
+                    &mut kick,
                     com,
                     vehicle_transform.rotation,
                     susp_impulse,
@@ -644,8 +656,16 @@ pub fn update_vehicle_with_query(
                 };
                 let effective_brake = wheel.brake_torque * brake_dir;
 
+                // Rolling resistance: `Crr·Fz·r` against the spin (see `Wheel::rolling_resistance`).
+                let rolling_torque = if wheel.angular_velocity.abs() > 1e-6 {
+                    -wheel.angular_velocity.signum() * wheel.rolling_resistance * normal_load * wheel.radius
+                } else {
+                    0.0
+                };
+                let spin_before = wheel.angular_velocity;
+
                 // Net tork
-                let net_torque = wheel.drive_torque + effective_brake - reaction_torque;
+                let net_torque = wheel.drive_torque + effective_brake + rolling_torque - reaction_torque;
 
                 // DOĞRUSAL-İMPLİSİT spin güncellemesi. Lastik tepki-torku ω'ya STIFF bağlı:
                 // reaction = final_long·r, final_long ≈ K·slip, slip = (ω·r − v_long)/ref_vel →
@@ -659,6 +679,14 @@ pub fn update_vehicle_with_query(
                 let implicit_inertia =
                     effective_inertia + slip_stiffness * wheel.radius * wheel.radius * dt / ref_vel;
                 wheel.angular_velocity += (net_torque / implicit_inertia) * dt;
+                // Resistance stops a wheel; it never turns it back. Only when nothing else drives
+                // the wheel round: a tyre dragging it the other way does so next step, from zero.
+                if rolling_torque != 0.0
+                    && wheel.angular_velocity * spin_before < 0.0
+                    && wheel.drive_torque.abs() < 1.0
+                {
+                    wheel.angular_velocity = 0.0;
+                }
 
                 // --- TRAKSİYON KONTROL (patinaj sınırı) ---
                 // Sürülen tekerleğin drive_torque'u lastik tutuşunun ürettiği reaksiyon
@@ -717,10 +745,38 @@ pub fn update_vehicle_with_query(
                     normal_load,
                     wheel.sliding_grip_floor,
                 );
-                let tire_force = wheel_forward * (final_long * grip) + wheel_right * (final_lat * grip);
+                // **The tyre never pushes the contact past standing still in one step.** At a
+                // crawl `ref_vel` is held at 0.5 m/s, so a few mm/s of sideways drift reads as a
+                // large slip angle and the linear tyre is a damper of ~10⁵ N per m/s on a corner
+                // carrying ~300 kg: λ·dt ≈ 4 at 60 Hz, past explicit Euler's 2. It overshot — a
+                // parked car rocked in yaw at ±0.2 rad/s, rounding noise grew into a left/right
+                // asymmetry within ten steps of landing, and the step-end rule that zeroed slow
+                // wheels (MOTOR-NOTLARI #17) had been hiding the longitudinal half of it. The spin
+                // update is implicit for the same stiffness (above); this is the chassis side: a
+                // force component that opposes the contact's velocity is limited to what stops it
+                // exactly, through the contact's effective mass, shared among the grounded wheels
+                // (each reads the same start-of-step velocity). At speed the limit is far above
+                // any tyre force and nothing changes.
+                let tire_force = {
+                    let r = hit.point - com;
+                    let inv_inertia = vehicle_rb.inv_world_inertia_tensor(vehicle_transform.rotation);
+                    let at_most = |dir: Vec3, force: f32, v: f32| -> f32 {
+                        if force * v >= 0.0 {
+                            return force;
+                        }
+                        let rn = r.cross(dir);
+                        let inv_mass = vehicle_rb.inv_mass() + rn.dot(inv_inertia * rn);
+                        if inv_mass <= 0.0 {
+                            return force;
+                        }
+                        let stop = v.abs() / (inv_mass * dt * grounded_share);
+                        force.clamp(-stop, stop)
+                    };
+                    wheel_forward * (final_long * grip) + wheel_right * at_most(wheel_right, final_lat * grip, v_lat)
+                };
                 apply_force_at_point(
                     vehicle_rb,
-                    vehicle_vel,
+                    &mut kick,
                     com,
                     vehicle_transform.rotation,
                     tire_force,
@@ -759,8 +815,12 @@ pub fn update_vehicle_with_query(
             wheel.angular_velocity *= (1.0 - damping_coeff * dt).max(0.0);
         }
 
-        // Çok yavaşsa ve girdi yoksa dur
-        if wheel.angular_velocity.abs() < 0.05
+        // A slow, unpowered wheel in the AIR stops. Only in the air: on the ground the tyre owns ω
+        // (it settles at ≈ v/r), and zeroing it there turned every crawling undriven wheel into a
+        // locked one — a heavy car driven by one axle could not pull away against its own
+        // standing wheels (`a_heavy_car_driven_by_one_axle_pulls_away`).
+        if !wheel.is_grounded
+            && wheel.angular_velocity.abs() < 0.05
             && wheel.drive_torque.abs() < 1.0
             && wheel.brake_torque < 1.0
         {
@@ -773,6 +833,9 @@ pub fn update_vehicle_with_query(
     }
 
     // Per-step özet (yalnız trace etkinken alanlar hesaplanır — tracing makro seviye-kapılıdır).
+    vehicle_vel.linear += kick.linear;
+    vehicle_vel.angular += kick.angular;
+
     tracing::trace!(
         entity = ?vehicle_entity,
         speed_kmh = vehicle.current_speed_kmh,
@@ -885,6 +948,76 @@ mod tests {
             );
         }
         (rb, t, vel, vc)
+    }
+
+    /// **A parked car stays parked.** Dropped onto flat ground with no input, it settles and stops:
+    /// no creep (it rolled on at 1.4 cm/s for good with nothing resisting rolling) and no rocking
+    /// in yaw (±0.2 rad/s, the low-speed tyre overshooting the contact velocity each step).
+    #[test]
+    fn a_parked_car_comes_to_rest_and_stays() {
+        let settled = sim_vehicle(0.0, 0.0, 120, None);
+        let (_, before, _, _) = settled.clone();
+        let (_, after, vel, vc) = sim_vehicle(0.0, 0.0, 180, Some(settled));
+        let crept = (after.position - before.position).length();
+        assert!(crept < 5e-3, "a parked car crept {crept} m in 3 s");
+        assert!(vel.linear.length() < 1e-3 && vel.angular.length() < 1e-3, "still moving: {vel:?}");
+        assert!(vc.wheels.iter().all(|w| w.angular_velocity.abs() < 1e-3), "wheels turning while parked");
+    }
+
+    /// **Left and right turns are mirror images.** A symmetric car at speed, steered half left and
+    /// half right for two seconds, must end mirrored: the same lateral offset with the opposite
+    /// sign, the same yaw rate negated. With the wheels' forces applied one after another (each
+    /// wheel reading the velocity the one before had changed) they were not — 5 % of lateral grip
+    /// on a front-driven car, and swapping the wheels' order swapped the two numbers exactly
+    /// (`nfsu2-gizmo` MOTOR-NOTLARI #19).
+    #[test]
+    fn left_and_right_turns_are_mirror_images() {
+        let settled = sim_vehicle(0.0, 0.0, 120, None);
+        let rolling = sim_vehicle(1.0, 0.0, 120, Some(settled));
+        let (_, left_t, left_v, _) = sim_vehicle(0.3, 0.5, 120, Some(rolling.clone()));
+        let (_, right_t, right_v, _) = sim_vehicle(0.3, -0.5, 120, Some(rolling));
+        let (lx, rx) = (left_t.position.x, right_t.position.x);
+        let (ly, ry) = (left_v.angular.y, right_v.angular.y);
+        assert!(lx.abs() > 1.0, "the car did not turn: x {lx}");
+        assert!((lx + rx).abs() < 1e-3 * lx.abs(), "offsets {lx} and {rx} are not mirrored");
+        assert!((ly + ry).abs() < 1e-3 * ly.abs(), "yaw rates {ly} and {ry} are not mirrored");
+    }
+
+    /// **A heavy car driven by one axle pulls away, however gently.** The step-end rule that stops a
+    /// slow wheel with no input used to stop *grounded* undriven wheels too: rolling at a crawl, their ω (≈ v/r) fell
+    /// under 0.05 rad/s every step and was zeroed, and a zero-ω wheel on a moving body brakes with
+    /// the tyre's full slip force. A 2.9 t rear-driven car at full throttle sat at 0 km/h for a
+    /// minute with its front wheels at exactly ω = 0 (`nfsu2-gizmo` MOTOR-NOTLARI #17); the same
+    /// torque on all four wheels moved it.
+    #[test]
+    fn a_heavy_car_driven_by_one_axle_pulls_away() {
+        let mut rb = RigidBody::new(2900.0, true);
+        rb.calculate_box_inertia(1.8, 0.9, 4.6);
+        rb.center_of_mass = Vec3::new(0.0, 0.2, 0.0);
+        let (_, _, _, light) = sim_vehicle(0.0, 0.0, 1, None);
+        let mut vc = light.clone();
+        for w in &mut vc.wheels {
+            w.suspension_stiffness = 90000.0;
+            w.suspension_damping = 7000.0;
+        }
+        // 200 N·m at the driven wheels in first gear, flat over the rev range: ≈ 670 N of push
+        // against ≈ 340 N of rolling resistance — a gentle pull-away that spends seconds at a crawl,
+        // where the old rule held the undriven wheels at ω = 0 (0.005 m/s after 10 s, against
+        // 0.43). The report's car stalled harder (≈ 6 kN against ≈ 14 kN); part of that was the
+        // low-speed tyre overshoot `a_parked_car_comes_to_rest_and_stays` pins.
+        let t = &mut vc.tuning;
+        // `gear_ratios[2]` is first gear (0 is reverse, 1 neutral).
+        let at_wheels = 200.0 / (t.gear_ratios[2] * t.final_drive_ratio);
+        t.torque_curve = vec![(0.0, at_wheels), (20000.0, at_wheels)];
+        let seed = (rb, Transform::new(Vec3::new(0.0, 1.0, 0.0)), Velocity::default(), vc);
+        let settled = sim_vehicle(0.0, 0.0, 120, Some(seed));
+        let (_, _, vel, vc) = sim_vehicle(1.0, 0.0, 600, Some(settled));
+        let front_still = vc.wheels.iter().filter(|w| w.axle_type == Axle::Front && w.angular_velocity == 0.0).count();
+        assert!(
+            vel.linear.length() > 0.25,
+            "10 s at full throttle and the car moves at {:.2} m/s; undriven wheels at ω = 0: {front_still}",
+            vel.linear.length()
+        );
     }
 
     /// E2E: the vehicle must SETTLE on the ground (all wheels grounded, sane ride height),
