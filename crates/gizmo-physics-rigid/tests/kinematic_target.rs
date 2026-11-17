@@ -233,3 +233,22 @@ fn a_board_tilted_by_its_transform_rolls_the_ball_on_it_downhill() {
     let surface = -p.x * 8f32.to_radians().tan() + 0.1 + 0.2;
     assert!((p.y - surface).abs() < 0.08, "the ball left the board: {p:?} (surface {surface})");
 }
+
+/// **A teleport is a move with its target set too.** A kinematic body moved by its `Transform` alone
+/// is carried there, at whatever speed that takes; one moved there with a `KinematicTarget` at the same
+/// pose is not carried — the target says where it is, the step finds it already there — so it arrives
+/// with no velocity, and what rests on it is not thrown. How a game restarts a platform.
+#[test]
+fn a_kinematic_body_moved_with_its_target_set_too_teleports() {
+    let mut world = World::new();
+    world.insert_resource(PhysicsWorld::new().with_gravity(Vec3::new(0.0, -9.81, 0.0)));
+    let b = board(&mut world);
+    step(&mut world);
+    let away = Vec3::new(30.0, 0.0, 0.0);
+    world.query_mut::<&mut Transform>().get_mut(b).unwrap().position = away;
+    world.add_component(b, KinematicTarget::new(away, Quat::IDENTITY));
+    step(&mut world);
+    assert_eq!(world.query::<&Transform>().get(b).unwrap().position, away);
+    let v = world.query::<&Velocity>().get(b).unwrap().linear;
+    assert_eq!(v, Vec3::ZERO, "a teleport carried the body at {v:?}");
+}

@@ -243,6 +243,12 @@ pub struct RigidBody {
     /// alone had no velocity at all, so what stood on it was left behind (a platform keyed in the
     /// animation timeline slid out from under the player). Kept on the body rather than beside it so
     /// a rollback restores it with the velocity it explains. `#[serde(skip)]`: a step's bookkeeping.
+    ///
+    /// **To teleport** a kinematic body — a platform put back at its start — set its
+    /// `KinematicTarget` to the new pose as well as its `Transform`: the target wins, the step finds the
+    /// body already there, and it arrives with no velocity, so nothing on it is thrown. A target stays
+    /// until it is removed, and holds the body there: remove it after that step for a body an animation
+    /// moves on from there.
     #[serde(skip)]
     pub pose_driven: bool,
 }
