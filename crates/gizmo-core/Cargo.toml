@@ -56,7 +56,7 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"], optional =
 uuid = { version = "1.23.0", features = ["v4", "serde"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-chrono = "0.4.44"
+jiff = "1.0.0"
 # rayon needs OS threads → native only; wasm uses `parallel_compat` (sequential).
 rayon = "1.11.0"
 
@@ -101,3 +101,4 @@ web-time = "1"
 # uuid v4 needs a randomness source on wasm; the `js` feature routes it through
 # the browser crypto API. Unions with the base ["v4", "serde"] features.
 uuid = { version = "1.23.0", features = ["js"] }
+js-sys = "0.3"

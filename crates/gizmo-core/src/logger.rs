@@ -126,6 +126,23 @@ fn lock_min_level() -> std::sync::MutexGuard<'static, LogLevel> {
     }
 }
 
+/// The local wall-clock time of day, `HH:MM:SS`, that a log record carries.
+///
+/// Native: `jiff` with the system's time zone (it took `chrono`, which RUSTSEC-2026-0543 declared
+/// unmaintained with no safe upgrade). The browser: its own `Date`, which knows the visitor's
+/// offset — until 2026-11-17 the web build printed the UTC time of day here, labelled as the time.
+fn local_time_of_day() -> String {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        jiff::ZonedDateTime::now().strftime("%H:%M:%S").to_string()
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let now = js_sys::Date::new_0();
+        format!("{:02}:{:02}:{:02}", now.get_hours(), now.get_minutes(), now.get_seconds())
+    }
+}
+
 /// Adds a log record. **Do not call directly** — use the `gizmo_log!` macro.
 #[doc(hidden)]
 pub fn log_message(level: LogLevel, msg: String, file: &'static str, line: u32) {
@@ -142,18 +159,7 @@ pub fn log_message(level: LogLevel, msg: String, file: &'static str, line: u32) 
         logs.remove(0);
     }
 
-    #[cfg(target_arch = "wasm32")]
-    let timestamp = {
-        let now = web_time::SystemTime::now();
-        let duration = now.duration_since(web_time::SystemTime::UNIX_EPOCH).unwrap_or_default();
-        let secs = duration.as_secs();
-        let mins = (secs / 60) % 60;
-        let hours = (secs / 3600) % 24;
-        let secs_of_min = secs % 60;
-        format!("{:02}:{:02}:{:02}", hours, mins, secs_of_min)
-    };
-    #[cfg(not(target_arch = "wasm32"))]
-    let timestamp = chrono::Local::now().format("%H:%M:%S").to_string();
+    let timestamp = local_time_of_day();
 
     logs.push(LogEntry {
         message: msg.clone(),
@@ -480,6 +486,19 @@ mod tests {
         clear_logs();
         set_min_log_level(LogLevel::Info);
         guard
+    }
+
+    #[test]
+    fn a_record_carries_the_local_time_of_day() {
+        let before = jiff::ZonedDateTime::now().strftime("%H:%M").to_string();
+        let t = local_time_of_day();
+        let after = jiff::ZonedDateTime::now().strftime("%H:%M").to_string();
+        let b = t.as_bytes();
+        assert!(
+            t.len() == 8 && b[2] == b':' && b[5] == b':' && b.iter().enumerate().all(|(i, c)| i == 2 || i == 5 || c.is_ascii_digit()),
+            "HH:MM:SS, got {t:?}"
+        );
+        assert!(t[..5] == before || t[..5] == after, "{t} is the local time between {before} and {after}");
     }
 
     #[test]

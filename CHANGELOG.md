@@ -113,6 +113,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before, with and without frames advancing; so do the `chaos` storms. Debug builds check both premises on every
   step: a body left out holds in the physics world exactly what the sync would have written (rows, collider,
   generation, broadphase box), and a body not written back was not changed by the step.
+- **`chrono` is gone; a log record's time comes from `jiff` (native) and the browser's `Date` (web).** RUSTSEC-2026-0543
+  declared `chrono` unmaintained with no safe upgrade, and `cargo deny` — a CI gate — failed on every push since. It
+  was used once, for the `HH:MM:SS` a `gizmo_log!` record carries: `jiff::ZonedDateTime::now()` gives the same local
+  time with the system's zone. The web build printed the UTC time of day there, labelled as the time; it now asks
+  `js_sys::Date`, which knows the visitor's offset (`js-sys` was already in the wasm graph through `web-time`).
 - **A big static scene's frame costs half the CPU** (`nfsu2-gizmo` MOTOR-NOTLARI #29; measured by
   `a_static_city_frame_cpu_cost`, 14 620 static entities of 68 textures each with its own mesh, median of a release
   run): collecting draw items 11.7 → 2.8 ms, material sync 1.7 → 0.03 ms.
