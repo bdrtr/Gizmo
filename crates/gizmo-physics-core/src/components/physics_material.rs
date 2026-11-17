@@ -163,8 +163,11 @@ pub struct PhysicsMaterial {
     /// Rule for merging [`restitution`](Self::restitution) with a partner material's,
     /// resolved independently of [`friction_combine`](Self::friction_combine) — a contact can
     /// take its friction from one material's preference and its bounce from the other's.
-    /// Defaults to [`Max`](CombineMode::Max), which is why a bouncy material stays bouncy
-    /// against a dull one.
+    /// Defaults to [`Average`](CombineMode::Average), the lowest priority, so a material that
+    /// says nothing yields to one that asks: a bouncy material asking `Max` stays bouncy against
+    /// it, and a dull one asking `Min` stays dull. The default was `Max` until 2026-11-17, which
+    /// outranks everything — a body with no material bounced at 0.3 off a road that had asked for
+    /// `Min` and 0.05 (`nfsu2-gizmo` MOTOR-NOTLARI #22).
     pub restitution_combine: CombineMode,
 }
 
@@ -179,18 +182,19 @@ impl Default for PhysicsMaterial {
             rolling_friction: 0.0,
             density: 1.0,
             friction_combine: CombineMode::GeometricMean,
-            restitution_combine: CombineMode::Max,
+            restitution_combine: CombineMode::Average,
         }
     }
 }
 
 impl PhysicsMaterial {
-    /// Shortcut for a material given only bounciness (restitution). Since `restitution_combine`
-    /// defaults to `Max`, this material bounces even when the opposing surface is non-bouncy.
+    /// Shortcut for a material given only bounciness (restitution), asking for `Max` so that it
+    /// bounces even when the opposing surface is non-bouncy.
     /// E.g.: `Collider::sphere(r).with_material(PhysicsMaterial::bouncy(0.9))`.
     pub fn bouncy(restitution: f32) -> Self {
         Self {
             restitution: restitution.clamp(0.0, 1.0),
+            restitution_combine: CombineMode::Max,
             ..Default::default()
         }
     }
@@ -442,9 +446,21 @@ gizmo_core::impl_component!(PhysicsMaterial);
 mod tests {
     use super::*;
 
+    /// **A material that says nothing yields to one that asks** (MOTOR-NOTLARI #22a): the
+    /// default bounces 0.3 against itself as it always did, but against a road asking `Min` and
+    /// 0.05 it takes the road's 0.05 — it used to impose its own `Max`, 0.3.
+    #[test]
+    fn the_default_material_yields_to_a_surface_that_asks() {
+        let default = PhysicsMaterial::default();
+        let road = PhysicsMaterial { restitution: 0.05, restitution_combine: CombineMode::Min, ..Default::default() };
+        assert_eq!(PhysicsMaterial::combine(&default, &default).restitution, 0.3);
+        assert_eq!(PhysicsMaterial::combine(&default, &road).restitution, 0.05);
+        assert_eq!(PhysicsMaterial::combine(&PhysicsMaterial::bouncy(0.9), &road).restitution, 0.9, "Max still outranks Min");
+    }
+
     #[test]
     fn ergonomic_material_builders() {
-        // `bouncy(e)`: restitution ayarlı, combine=Max (varsayılan) → karşı yüzey mat
+        // `bouncy(e)`: restitution ayarlı, combine=Max (açıkça) → karşı yüzey mat
         // olsa bile zıplar.
         let m = PhysicsMaterial::bouncy(0.9);
         assert_eq!(m.restitution, 0.9);

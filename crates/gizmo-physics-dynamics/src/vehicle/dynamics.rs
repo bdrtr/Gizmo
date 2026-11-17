@@ -304,7 +304,11 @@ pub fn update_vehicle_with_query(
     vehicle.engine_rpm =
         (wheel_rpm * total_ratio.abs()).clamp(vehicle.tuning.idle_rpm, vehicle.tuning.max_rpm);
 
+    vehicle.shift_remaining = (vehicle.shift_remaining - dt).max(0.0);
     let engine_torque = vehicle.engine_torque();
+    // Engine braking at the driven wheels, against their spin like a brake (it never drives a
+    // stopped car backwards): the crank's drag through the gearbox, shared out like the torque.
+    let engine_brake_at_wheels = vehicle.engine_brake_torque() * total_ratio.abs();
     // Geri viteste tork yönü ters
     let torque_sign = if total_ratio < 0.0 { -1.0 } else { 1.0 };
     let drive_torque_total = engine_torque * total_ratio.abs() * torque_sign;
@@ -348,7 +352,11 @@ pub fn update_vehicle_with_query(
     };
 
     let drag_dir = if spd > 0.1 { -v_com / spd } else { Vec3::ZERO };
-    let drag_force = drag_dir * (a.drag_coefficient * a.frontal_area * q);
+    let drag_coefficient = match a.drag_coefficient_off_throttle {
+        Some(closed) => closed + (a.drag_coefficient - closed) * vehicle.throttle_input.abs().min(1.0),
+        None => a.drag_coefficient,
+    };
+    let drag_force = drag_dir * (drag_coefficient * a.frontal_area * q);
     let q_lift = lift_pressure(a.downforce_speed_exponent, spd, q);
     let lift_force = up * (a.lift_coefficient * a.frontal_area * q_lift * ge_factor);
 
@@ -469,7 +477,8 @@ pub fn update_vehicle_with_query(
         } else {
             vehicle.tuning.brake_bias_rear
         };
-        wheel.brake_torque = vehicle.brake_input * vehicle.tuning.max_brake_torque * bias;
+        wheel.brake_torque = vehicle.brake_input * vehicle.tuning.max_brake_torque * bias
+            + if drivetrain.drives(&wheel.axle_type) { engine_brake_at_wheels / driven_count_f } else { 0.0 };
     }
 
     // --------------------------------------------------------
@@ -628,13 +637,16 @@ pub fn update_vehicle_with_query(
                 let normal_load = wheel.suspension_force;
 
                 // Kombine Pacejka MF — sürtünme çemberi dahilinde
-                let (final_long, _) = pacejka_combined_with_floor(
+                // The traction weight counts while the wheel is driven forward (`traction_circle_weight`).
+                let fx_weight = if wheel.drive_torque > 1.0 { wheel.traction_circle_weight } else { 1.0 };
+                let (final_long, _) = pacejka_combined_weighted(
                     &wheel.pacejka_long,
                     &wheel.pacejka_lat,
                     slip_ratio,
                     slip_angle,
                     normal_load,
                     wheel.sliding_grip_floor,
+                    fx_weight,
                 );
 
                 // Yüzey materyali (buz/kum/asfalt) + hava durumu (yağmur/kar) grip çarpanı.
@@ -737,13 +749,14 @@ pub fn update_vehicle_with_query(
                 // ~1 kN each and the car crept off the line (0.4 → 2.7 m/s in the first 1.4 s).
                 // The lateral slip angle is the chassis's and does not change with the spin.
                 let slip_ratio = (wheel.angular_velocity * wheel.radius - v_long) / ref_vel;
-                let (final_long, final_lat) = pacejka_combined_with_floor(
+                let (final_long, final_lat) = pacejka_combined_weighted(
                     &wheel.pacejka_long,
                     &wheel.pacejka_lat,
                     slip_ratio,
                     slip_angle,
                     normal_load,
                     wheel.sliding_grip_floor,
+                    fx_weight,
                 );
                 // **The tyre never pushes the contact past standing still in one step.** At a
                 // crawl `ref_vel` is held at 0.5 m/s, so a few mm/s of sideways drift reads as a
@@ -948,6 +961,72 @@ mod tests {
             );
         }
         (rb, t, vel, vc)
+    }
+
+    /// **The traction weight takes cornering grip at the limit, and only there** (#24): with the
+    /// pair inside the circle nothing changes; at the limit, a weight of 1.5 leaves less lateral
+    /// force for the same slips.
+    #[test]
+    fn traction_weight_costs_lateral_grip_only_at_the_limit() {
+        let p = PacejkaParams::default();
+        let fz = 4000.0;
+        let (gentle_x, gentle_y) = pacejka_combined_weighted(&p, &p, 0.01, 0.01, fz, DEFAULT_SLIDING_GRIP_FLOOR, 1.5);
+        assert_eq!((gentle_x, gentle_y), pacejka_combined_with_floor(&p, &p, 0.01, 0.01, fz, DEFAULT_SLIDING_GRIP_FLOOR));
+        let (_, plain) = pacejka_combined_with_floor(&p, &p, 0.1, 0.05, fz, DEFAULT_SLIDING_GRIP_FLOOR);
+        let (_, weighted) = pacejka_combined_weighted(&p, &p, 0.1, 0.05, fz, DEFAULT_SLIDING_GRIP_FLOOR, 1.5);
+        assert!(weighted.abs() < plain.abs() * 0.95, "at the limit: {weighted} against {plain}");
+    }
+
+    /// **The powertrain's knobs, each off by default** (`nfsu2-gizmo` MOTOR-NOTLARI #21, #23): a
+    /// shift that takes time and shares torque, a fuel cut, torque added at the crank.
+    #[test]
+    fn shift_time_fuel_cut_and_extra_torque_shape_the_crank_torque() {
+        let mut vc = VehicleController::new();
+        vc.tuning.torque_curve = vec![(0.0, 300.0), (9000.0, 300.0)];
+        vc.throttle_input = 1.0;
+        vc.engine_rpm = 4000.0;
+        assert_eq!(vc.engine_torque(), 300.0, "defaults: the curve times the throttle");
+        vc.extra_crank_torque = 50.0;
+        assert_eq!(vc.engine_torque(), 350.0, "extra torque is added, not scaled by the throttle");
+        vc.tuning.shift_time = 0.5;
+        vc.tuning.shift_torque_share = 0.7;
+        vc.shift_to(3);
+        assert_eq!((vc.current_gear, vc.shift_remaining), (3, 0.5));
+        assert!((vc.engine_torque() - 245.0).abs() < 1e-3, "70 % during the shift: {}", vc.engine_torque());
+        vc.shift_remaining = 0.0;
+        vc.tuning.fuel_cut_rpm = Some(3975.0);
+        assert_eq!(vc.engine_torque(), 0.0, "fuel cut above 3975 rpm");
+        vc.engine_rpm = 3900.0;
+        assert_eq!(vc.engine_torque(), 350.0);
+        let mut auto = VehicleController::new();
+        auto.tuning.shift_time = 0.4;
+        auto.engine_rpm = auto.tuning.upshift_rpm + 1.0;
+        auto.auto_shift_tick(0.016);
+        assert_eq!((auto.current_gear, auto.shift_remaining), (3, 0.4), "the automatic box arms the shift too");
+    }
+
+    /// **Engine braking slows a coasting car and never drives a stopped one backwards**, and drag
+    /// can be higher off the throttle (#21 c, d).
+    #[test]
+    fn engine_braking_and_off_throttle_drag_slow_a_coasting_car() {
+        let settled = sim_vehicle(0.0, 0.0, 120, None);
+        let rolling = sim_vehicle(1.0, 0.0, 240, Some(settled.clone()));
+        let coast = |tune: &dyn Fn(&mut VehicleController)| {
+            let (rb, t, v, mut vc) = rolling.clone();
+            tune(&mut vc);
+            let (_, _, v2, _) = sim_vehicle(0.0, 0.0, 120, Some((rb, t, v, vc)));
+            v.linear.length() - v2.linear.length()
+        };
+        let plain = coast(&|_| {});
+        let braked = coast(&|vc| vc.tuning.engine_brake_curve = vec![(800.0, 20.0), (7000.0, 80.0)]);
+        let draggy = coast(&|vc| vc.tuning.aero.drag_coefficient_off_throttle = Some(1.5));
+        assert!(braked > plain + 0.5, "engine braking: lost {braked} m/s against {plain}");
+        assert!(draggy > plain + 0.05, "off-throttle drag: lost {draggy} m/s against {plain}");
+
+        let (rb, t, v, mut vc) = settled;
+        vc.tuning.engine_brake_curve = vec![(800.0, 200.0), (7000.0, 200.0)];
+        let (_, parked, still, _) = sim_vehicle(0.0, 0.0, 180, Some((rb, t, v, vc)));
+        assert!(still.linear.length() < 1e-3 && (parked.position - t.position).length() < 5e-3, "engine braking moved a stopped car");
     }
 
     /// **A parked car stays parked.** Dropped onto flat ground with no input, it settles and stops:

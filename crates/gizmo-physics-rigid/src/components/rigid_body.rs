@@ -251,6 +251,18 @@ pub struct RigidBody {
     /// moves on from there.
     #[serde(skip)]
     pub pose_driven: bool,
+    /// How much of a contact impulse's turning effect this body takes: `1` (the default) all of
+    /// it, `0.4` four tenths — as if the body were 2.5× harder to turn, **for contacts only**
+    /// (joints, gravity and applied torques see the real inertia). The solver uses the scaled
+    /// inertia both to size the impulse and to apply it, so contacts stay solved. A car's body
+    /// that should not spin off a wall it brushes is what it is for (NFSU2's bodies keep 0.4).
+    /// PhysX calls the same thing a contact's inverse inertia scale.
+    #[serde(default = "one")]
+    pub contact_spin_share: f32,
+}
+
+fn one() -> f32 {
+    1.0
 }
 
 impl Default for RigidBody {
@@ -277,6 +289,7 @@ impl Default for RigidBody {
             fracture_threshold: None,
             force_accumulator: Vec3::ZERO,
             pose_driven: false,
+            contact_spin_share: 1.0,
             torque_accumulator: Vec3::ZERO,
         }
     }
@@ -693,6 +706,20 @@ impl RigidBody {
         let rot_mat = Mat3::from_quat(rotation);
         let local_inertia_mat = Mat3::from_diagonal(self.local_inertia);
         rot_mat * local_inertia_mat * rot_mat.transpose()
+    }
+
+    /// The world-space inverse inertia the **contact** solver uses: [`inv_world_inertia_tensor`]
+    /// scaled by [`contact_spin_share`](Self::contact_spin_share).
+    ///
+    /// [`inv_world_inertia_tensor`]: Self::inv_world_inertia_tensor
+    pub fn inv_contact_inertia_tensor(&self, rotation: Quat) -> Mat3 {
+        let tensor = self.inv_world_inertia_tensor(rotation);
+        // A branch rather than a multiply: the default leaves the tensor bit for bit as it was.
+        if self.contact_spin_share == 1.0 {
+            tensor
+        } else {
+            tensor * self.contact_spin_share.max(0.0)
+        }
     }
 
     /// Get inverse world-space inertia tensor: `R·diag(inv_local_inertia)·Rᵀ`, with

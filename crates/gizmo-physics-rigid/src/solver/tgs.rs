@@ -248,8 +248,8 @@ impl ConstraintSolver {
             };
             let inv_m_a = rigid_bodies[idx_a].inv_mass();
             let inv_m_b = rigid_bodies[idx_b].inv_mass();
-            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+            let inv_i_a = rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
+            let inv_i_b = rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
             let dyn_a = rigid_bodies[idx_a].is_dynamic();
             let dyn_b = rigid_bodies[idx_b].is_dynamic();
             let com_a = com_of(idx_a);
@@ -321,8 +321,8 @@ impl ConstraintSolver {
             }
             let inv_m_a = rigid_bodies[idx_a].inv_mass();
             let inv_m_b = rigid_bodies[idx_b].inv_mass();
-            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+            let inv_i_a = rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
+            let inv_i_b = rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
             let com_a = com_of(idx_a);
             let com_b = com_of(idx_b);
             let friction = manifolds[mid].friction;

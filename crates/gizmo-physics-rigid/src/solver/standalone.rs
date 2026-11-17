@@ -81,8 +81,8 @@ impl ConstraintSolver {
 
         let inv_m_a = rb_a.inv_mass();
         let inv_m_b = rb_b.inv_mass();
-        let inv_i_a = rb_a.inv_world_inertia_tensor(transform_a.rotation);
-        let inv_i_b = rb_b.inv_world_inertia_tensor(transform_b.rotation);
+        let inv_i_a = rb_a.inv_contact_inertia_tensor(transform_a.rotation);
+        let inv_i_b = rb_b.inv_contact_inertia_tensor(transform_b.rotation);
 
         let r_a_x_n = r_a.cross(normal);
         let r_b_x_n = r_b.cross(normal);

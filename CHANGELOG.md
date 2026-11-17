@@ -59,6 +59,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Vehicle powertrain knobs**, each off by default (`nfsu2-gizmo` MOTOR-NOTLARI #21, #23, #24): `VehicleTuning::
+  {shift_time, shift_torque_share, fuel_cut_rpm, engine_brake_curve}`, `AeroPackage::drag_coefficient_off_throttle`,
+  `VehicleController::{extra_crank_torque, shift_remaining, shift_to, engine_brake_torque}` (engine braking reaches the
+  driven wheels as brake torque, so it never drives a stopped car backwards), and `Wheel::traction_circle_weight`
+  with `pacejka_combined_weighted` (traction counted `w` times into the friction circle: power oversteer without
+  touching the tyre's stiffness).
+- **`RigidBody::contact_spin_share`** (default 1.0, bit-identical): the share of a contact impulse's turning effect a
+  body takes, used both to size and to apply the impulse — PhysX's contact inverse-inertia scale (#22b).
+- **Fixed: the default material imposed its bounce.** `PhysicsMaterial::default()` asked `restitution_combine: Max`,
+  which outranks everything: a body with no material bounced at 0.3 off a surface that asked `Min` and 0.05. The
+  default is `Average` now, the lowest priority; `bouncy(e)` asks `Max` itself. Default against default is unchanged
+  (the stress test's hash is the same) (#22a).
 - **Vehicle: a crawling car behaves.** Three causes, one symptom family (`nfsu2-gizmo` MOTOR-NOTLARI #17, #19):
   - The wheel forces of a step are summed and applied once (Jacobi). They went into the body's velocity wheel after
     wheel, each reading what the one before had changed, so left and right turns of a symmetric car were not mirror

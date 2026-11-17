@@ -110,7 +110,24 @@ pub fn pacejka_combined_with_floor(
     normal_load: f32,
     sliding_grip_floor: f32,
 ) -> (f32, f32) {
-    combined(long, lat, slip_ratio, slip_angle, normal_load, sliding_grip_floor)
+    combined(long, lat, slip_ratio, slip_angle, normal_load, sliding_grip_floor, 1.0)
+}
+
+/// [`pacejka_combined_with_floor`] with the longitudinal force counted `fx_weight` times into the
+/// friction circle: the pair is kept to `(fx_weight·Fx)² + Fy² ≤ (μ·Fz)²`, so a tyre putting
+/// down traction with a weight above 1 gives up more of its cornering grip at the limit — power
+/// oversteer — without its stiffness changing anywhere below it. See
+/// [`Wheel::traction_circle_weight`].
+pub fn pacejka_combined_weighted(
+    long: &PacejkaParams,
+    lat: &PacejkaParams,
+    slip_ratio: f32,
+    slip_angle: f32,
+    normal_load: f32,
+    sliding_grip_floor: f32,
+    fx_weight: f32,
+) -> (f32, f32) {
+    combined(long, lat, slip_ratio, slip_angle, normal_load, sliding_grip_floor, fx_weight)
 }
 
 /// Combined Pacejka: compute the longitudinal and lateral forces together,
@@ -122,7 +139,7 @@ pub fn pacejka_combined(
     slip_angle: f32,
     normal_load: f32,
 ) -> (f32, f32) {
-    combined(long, lat, slip_ratio, slip_angle, normal_load, DEFAULT_SLIDING_GRIP_FLOOR)
+    combined(long, lat, slip_ratio, slip_angle, normal_load, DEFAULT_SLIDING_GRIP_FLOOR, 1.0)
 }
 
 fn combined(
@@ -132,6 +149,7 @@ fn combined(
     slip_angle: f32, // lateral (radyan, σy)
     normal_load: f32,
     floor: f32,
+    fx_weight: f32,
 ) -> (f32, f32) {
     let fx_pure = long.calculate_force(slip_ratio, normal_load);
     let fy_pure = lat.calculate_force(slip_angle, normal_load);
@@ -146,7 +164,7 @@ fn combined(
     // Sürtünme çemberi: μ * Fz sınırı
     let mu_peak = long.d.max(lat.d) * 1.2;
     let limit = normal_load * mu_peak;
-    let mag = (fx * fx + fy * fy).sqrt();
+    let mag = ((fx_weight * fx) * (fx_weight * fx) + fy * fy).sqrt();
     if mag > limit && mag > 0.0 {
         let scale = limit / mag;
         // Sıcak yol: her lastik her frame çağrılır → yalnız GERÇEKTEN doygunken (limit aşıldı)
@@ -418,6 +436,12 @@ pub struct Wheel {
     /// (`nfsu2-gizmo` MOTOR-NOTLARI #17). Without either, a car that landed with a few cm/s rolled
     /// on for good.
     pub rolling_resistance: f32,
+    /// How many times the tyre's traction force counts into its friction circle while the wheel
+    /// is driven: `(w·Fx)² + Fy² ≤ (μ·Fz)²`. Above 1, throttle at the limit costs the driven tyre
+    /// lateral grip — power oversteer — with the tyre's stiffness unchanged below the limit (the
+    /// only knob before it, `pacejka_lat.d`, scaled both). Default `1.0`, the plain circle. NFSU2's
+    /// tyres use 1.5.
+    pub traction_circle_weight: f32,
 }
 
 impl Default for Wheel {
@@ -448,6 +472,7 @@ impl Default for Wheel {
             surface_friction: PhysicsMaterial::ASPHALT.dynamic_friction,
             sliding_grip_floor: DEFAULT_SLIDING_GRIP_FLOOR,
             rolling_resistance: DEFAULT_ROLLING_RESISTANCE,
+            traction_circle_weight: 1.0,
         }
     }
 }
@@ -517,6 +542,11 @@ pub struct AeroPackage {
     /// lift coefficient — tune `lift_coefficient` against the force you want at a reference
     /// speed. Drag is always quadratic.
     pub downforce_speed_exponent: f32,
+    /// The drag coefficient with the throttle closed; the drag goes from this to
+    /// [`drag_coefficient`](Self::drag_coefficient) as the throttle opens. `None` (the default):
+    /// the same at every throttle. A car whose drag stands in for the drivetrain's losses (more of
+    /// them off the throttle) is what it is for.
+    pub drag_coefficient_off_throttle: Option<f32>,
 }
 
 impl Default for AeroPackage {
@@ -529,6 +559,7 @@ impl Default for AeroPackage {
             ground_effect_height: 0.15,
             ground_effect_multiplier: 1.8,
             downforce_speed_exponent: 2.0,
+            drag_coefficient_off_throttle: None,
         }
     }
 }
@@ -646,6 +677,23 @@ pub struct VehicleTuning {
     /// braking the car once past the redline is not real, and the bell curve's `0.05` floor was
     /// there for exactly that.
     pub torque_curve: Vec<(f32, f32)>,
+    /// How long a gear change takes, in seconds: for this long after one, the engine's torque
+    /// reaches the wheels scaled by [`shift_torque_share`](Self::shift_torque_share). `0` (the
+    /// default) shifts instantly, with the clutch always locked. Armed by the automatic box and by
+    /// [`VehicleController::shift_to`].
+    pub shift_time: f32,
+    /// The share of the engine's torque that reaches the wheels during a shift — `0` cuts it
+    /// (the default), `0.7` keeps most of it.
+    pub shift_torque_share: f32,
+    /// Above this many rpm the engine makes no torque — a rev limiter that cuts fuel, rather than
+    /// the rpm clamp at [`max_rpm`](Self::max_rpm) alone. `None` (the default): no cut.
+    pub fuel_cut_rpm: Option<f32>,
+    /// Engine braking: `(rpm, N·m)` points of the torque a closed throttle drags the engine down
+    /// with, interpolated as [`torque_curve`](Self::torque_curve) is. Applied as
+    /// `(1 − throttle) · curve(rpm)` to the driven wheels through the gearbox, against their spin —
+    /// it slows a car, it never pushes one backwards. Empty (the default): none, and the engine
+    /// only ever drives.
+    pub engine_brake_curve: Vec<(f32, f32)>,
 }
 
 impl Default for VehicleTuning {
@@ -669,6 +717,10 @@ impl Default for VehicleTuning {
             aero: AeroPackage::default(),
             // Boş = çan eğrisi. Varsayılanın davranışı değişmiyor.
             torque_curve: Vec::new(),
+            shift_time: 0.0,
+            shift_torque_share: 0.0,
+            fuel_cut_rpm: None,
+            engine_brake_curve: Vec::new(),
         }
     }
 }
@@ -686,11 +738,10 @@ impl Default for VehicleTuning {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct VehicleController {
     /// Every suspension corner. A wheel's *role* comes from its [`Wheel::axle_type`] and
-    /// [`Wheel::is_left`] rather than from its index, but the order is still load-bearing:
-    /// `update_vehicle` accumulates each corner's suspension and tyre force into the chassis
-    /// velocity as it walks the vector, and the next corner reads that already-updated velocity
-    /// back when it computes its own contact-point velocity. Reordering the vector therefore
-    /// changes the result.
+    /// [`Wheel::is_left`] rather than from its index, and the order does not change the result:
+    /// every corner reads the chassis velocity of the start of the step, and their forces are
+    /// summed and applied once. (Until 2026-11-17 each corner's force went into the velocity the
+    /// next one read, and a symmetric car turned left and right differently.)
     ///
     /// An empty list is legal and yields a chassis with aero and no traction whatsoever.
     /// Drive torque is divided evenly among the *driven* wheels, so adding a driven wheel
@@ -785,6 +836,13 @@ pub struct VehicleController {
     pub flywheel_inertia: f32,   // kg·m²
     /// The drivetrain layout (FWD/RWD/AWD) — torque distribution and RPM derivation follow it.
     pub drivetrain: Drivetrain,
+    /// Input: torque added at the crank on top of the curve, in N·m — a nitro shot, a turbo's
+    /// boost, a penalty when negative. Not scaled by the throttle; cut by the fuel cut and shared
+    /// out by a shift like the rest. `0` by default. (Before it, the only way was a throttle above
+    /// 1, which worked because nothing clamps the throttle — by accident, not by contract.)
+    pub extra_crank_torque: f32,
+    /// State: seconds left of the gear change in progress — see [`VehicleTuning::shift_time`].
+    pub shift_remaining: f32,
 }
 
 #[cfg(feature = "ecs")]
@@ -807,6 +865,8 @@ impl Default for VehicleController {
             current_speed_kmh: 0.0,
             flywheel_inertia: 0.25, // kg·m²
             drivetrain: Drivetrain::Rwd,
+            extra_crank_torque: 0.0,
+            shift_remaining: 0.0,
         }
     }
 }
@@ -824,7 +884,7 @@ impl VehicleController {
     /// A four-wheeled car: a wheel at each corner of a `track_width × wheelbase` rectangle
     /// centred on the chassis origin, the front axle toward −Z (the controller's forward), every
     /// wheel `radius` with [`Wheel`]'s default suspension and tyres. Front left, front right, rear
-    /// left, rear right — the order the wheel vector's docs warn is load-bearing.
+    /// left, rear right.
     ///
     /// [`VehicleTuning::wheelbase`] and [`VehicleTuning::track_width`] are set to match: the
     /// anti-roll bar and the Ackermann steering read them, and a hand-built car that leaves them at
@@ -867,8 +927,12 @@ impl VehicleController {
     /// The engine torque curve — from the measured points if there are any, otherwise from the
     /// parametric bell curve.
     ///
-    /// Both paths scale linearly with throttle and neither ever returns a negative value: an
-    /// engine past the redline *braking* the car would not be physics, it would be a bug.
+    /// Both paths scale linearly with throttle and neither curve ever goes negative: an engine
+    /// past the redline *braking* the car would not be physics, it would be a bug. Engine braking
+    /// is separate ([`engine_brake_torque`](Self::engine_brake_torque)), and so is the only sign a
+    /// game can give this: a negative [`extra_crank_torque`](Self::extra_crank_torque). On top of
+    /// the curve: `extra_crank_torque`; zero above [`VehicleTuning::fuel_cut_rpm`]; scaled by
+    /// [`VehicleTuning::shift_torque_share`] during a shift.
     pub fn engine_torque(&self) -> f32 {
         let t = &self.tuning;
         let nm = if t.torque_curve.is_empty() {
@@ -878,7 +942,36 @@ impl VehicleController {
         } else {
             Self::torque_from_curve(&t.torque_curve, self.engine_rpm)
         };
-        nm * self.throttle_input.abs()
+        let t = &self.tuning;
+        if t.fuel_cut_rpm.is_some_and(|cut| self.engine_rpm >= cut) {
+            return 0.0;
+        }
+        let made = nm * self.throttle_input.abs() + self.extra_crank_torque;
+        if self.shift_remaining > 0.0 {
+            made * t.shift_torque_share
+        } else {
+            made
+        }
+    }
+
+    /// Engine braking at the crank, in N·m, ≥ 0: `(1 − throttle) · engine_brake_curve(rpm)` — see
+    /// [`VehicleTuning::engine_brake_curve`]. Zero with no curve.
+    pub fn engine_brake_torque(&self) -> f32 {
+        let curve = &self.tuning.engine_brake_curve;
+        if curve.is_empty() {
+            return 0.0;
+        }
+        (1.0 - self.throttle_input.abs().min(1.0)) * Self::torque_from_curve(curve, self.engine_rpm)
+    }
+
+    /// Changes gear by hand, with the shift taking [`VehicleTuning::shift_time`] — what the
+    /// automatic box does. Setting [`current_gear`](Self::current_gear) directly still works and
+    /// shifts instantly.
+    pub fn shift_to(&mut self, gear: usize) {
+        if gear != self.current_gear {
+            self.current_gear = gear;
+            self.shift_remaining = self.tuning.shift_time;
+        }
     }
 
     /// Reads the torque for an rpm out of the `(rpm, N·m)` points by linear interpolation.
@@ -986,6 +1079,7 @@ impl VehicleController {
         let max_gear = self.tuning.gear_ratios.len().saturating_sub(1);
         if self.engine_rpm > self.tuning.upshift_rpm && self.current_gear < max_gear {
             self.current_gear += 1;
+            self.shift_remaining = self.tuning.shift_time;
             self.shift_cooldown = 0.4; // 400ms bekleme
             tracing::debug!(
                 gear = self.current_gear,
@@ -995,6 +1089,7 @@ impl VehicleController {
             );
         } else if self.engine_rpm < self.tuning.downshift_rpm && self.current_gear > 2 {
             self.current_gear -= 1;
+            self.shift_remaining = self.tuning.shift_time;
             self.shift_cooldown = 0.3;
             tracing::debug!(
                 gear = self.current_gear,

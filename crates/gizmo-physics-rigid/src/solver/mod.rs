@@ -757,8 +757,8 @@ impl ConstraintSolver {
 
             let inv_m_a = rigid_bodies[idx_a].inv_mass();
             let inv_m_b = rigid_bodies[idx_b].inv_mass();
-            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+            let inv_i_a = rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
+            let inv_i_b = rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
             let dyn_a = rigid_bodies[idx_a].is_dynamic();
             let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
@@ -845,9 +845,9 @@ impl ConstraintSolver {
                     let inv_m_a = rigid_bodies[idx_a].inv_mass();
                     let inv_m_b = rigid_bodies[idx_b].inv_mass();
                     let inv_i_a =
-                        rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+                        rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
                     let inv_i_b =
-                        rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+                        rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
                     let dyn_a = rigid_bodies[idx_a].is_dynamic();
                     let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
@@ -1040,8 +1040,8 @@ impl ConstraintSolver {
             }
             let inv_m_a = rigid_bodies[idx_a].inv_mass();
             let inv_m_b = rigid_bodies[idx_b].inv_mass();
-            let inv_i_a = rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
-            let inv_i_b = rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+            let inv_i_a = rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
+            let inv_i_b = rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
             let com_a = transforms[idx_a].position + transforms[idx_a].rotation.mul_vec3(rigid_bodies[idx_a].center_of_mass);
             let com_b = transforms[idx_b].position + transforms[idx_b].rotation.mul_vec3(rigid_bodies[idx_b].center_of_mass);
             for cid in 0..manifolds[mid].contacts.len() {
@@ -1138,9 +1138,9 @@ impl ConstraintSolver {
                     let inv_m_a = rigid_bodies[idx_a].inv_mass();
                     let inv_m_b = rigid_bodies[idx_b].inv_mass();
                     let inv_i_a =
-                        rigid_bodies[idx_a].inv_world_inertia_tensor(transforms[idx_a].rotation);
+                        rigid_bodies[idx_a].inv_contact_inertia_tensor(transforms[idx_a].rotation);
                     let inv_i_b =
-                        rigid_bodies[idx_b].inv_world_inertia_tensor(transforms[idx_b].rotation);
+                        rigid_bodies[idx_b].inv_contact_inertia_tensor(transforms[idx_b].rotation);
                     let dyn_a = rigid_bodies[idx_a].is_dynamic();
                     let dyn_b = rigid_bodies[idx_b].is_dynamic();
 
