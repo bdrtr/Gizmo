@@ -128,8 +128,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   ball rolling across a seam was thrown 0.6 m up. `dunya` passes in every run (8 of 8), the parked car's largest
   vertical speed 29.7 → 4.1 m/s (the 1.4 m drop it is spawned with), and its runs are bit-identical again. Tests:
   `narrowphase::tests` (sunk tilted box, seam, ridge) and `tests/heightfield_collider.rs` (a box across a seam, a
-  CCD ball across a seam, a tilted box sunk into the ground). Triangle meshes take the same per-triangle EPA and are
-  not changed yet: a mesh has no solid side and no adjacency to tell a ridge from a seam, so it needs both first.
+  CCD ball across a seam, a tilted box sunk into the ground). Triangle meshes: see the next entry.
+- **A triangle mesh is ground too.** The same per-triangle EPA gave the same two wrong answers on a mesh — a box sunk
+  tilted into a flat mesh fell through to y = −10.5, a box sliding from one mesh onto the next stopped at the seam,
+  and a CCD ball rolling across hopped 7 mm. A mesh says nothing about which side is solid (a road and a wall are both
+  just triangles, and the winding is whatever the file had), so each triangle is taken from the side the body is on,
+  and then the terrain rule applies. Telling a ridge from a seam needs to know what is across each edge: new
+  `TriMeshShape::ridges` (`edge_kind`, `EDGE_FLAT` / `EDGE_RIDGE_FRONT` / `EDGE_RIDGE_BACK`), measured once when the
+  collider is built — by position, so triangles that share a corner by value rather than index still meet — and
+  rebuilt on load. The speculative path offers the nearest feature only from a triangle with a ridge on the body's
+  side, never from a border edge. Tests: `narrowphase::tests` (a sunk box is pushed up whichever way the mesh is
+  wound; a ball rests on a mesh ridge) and `tests/mesh_ground.rs` (sunk box, a box and a CCD ball across a seam), each
+  failing against the rule it covers.
 - **A body with CCD rests on the ground as any body does: touching it, with friction and rolling resistance.** A
   0.2 m ball rolled at 1 m/s with rolling friction 0.08 stops in a quarter of a second; with CCD it rolled on for eight,
   three to four metres, until damping stopped it — on a box floor, on terrain and on a mesh alike. Two causes:

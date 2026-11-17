@@ -541,12 +541,14 @@ impl Collider {
             crate::bvh::BvhTree::default()
         });
         let local_aabb = local_bounds(&vertices);
+        let ridges = mesh_ridges(&vertices, &indices);
         Self {
             shape: ColliderShape::TriMesh(TriMeshShape {
                 vertices: std::sync::Arc::new(vertices),
                 indices: std::sync::Arc::new(indices),
                 bvh: std::sync::Arc::new(bvh),
                 local_aabb,
+                ridges: std::sync::Arc::new(ridges),
             }),
             ..Default::default()
         }
@@ -1029,6 +1031,72 @@ pub struct TriMeshShape {
     /// is eight corners rotated, whatever the mesh.
     #[serde(skip)]
     pub local_aabb: gizmo_math::Aabb,
+    /// For each triangle (in `indices` order), what each of its edges is: two bits per edge,
+    /// edge `i` being the one opposite the triangle's corner `i` — [`EDGE_FLAT`](Self::EDGE_FLAT),
+    /// or a fold of more than 5° towards the side the triangle's winding faces away from
+    /// ([`EDGE_RIDGE_FRONT`](Self::EDGE_RIDGE_FRONT): an edge that stands out on the front) or
+    /// towards it ([`EDGE_RIDGE_BACK`](Self::EDGE_RIDGE_BACK)). An edge with no triangle across it,
+    /// or with more than one, is flat. Measured once when the collider is built, from positions,
+    /// so triangles that share a corner by value rather than by index still meet; rebuilt on load.
+    ///
+    /// Contact generation needs it to tell a ridge, whose own normal a body may rest along, from
+    /// a seam the surface goes on past, where only the face's normal is right (see the
+    /// narrowphase's terrain contact). Empty means "nothing known": every edge flat.
+    #[serde(skip)]
+    pub ridges: std::sync::Arc<Vec<u8>>,
+}
+
+impl TriMeshShape {
+    /// An edge that is flat, a mesh border or shared by more than two triangles.
+    pub const EDGE_FLAT: u8 = 0;
+    /// An edge folding away from the front (the side the winding's normal points to): convex
+    /// seen from the front.
+    pub const EDGE_RIDGE_FRONT: u8 = 1;
+    /// An edge folding towards the front: convex seen from the back.
+    pub const EDGE_RIDGE_BACK: u8 = 2;
+
+    /// What edge `edge` (opposite corner `edge`) of triangle `tri` is — one of the `EDGE_*`
+    /// values.
+    pub fn edge_kind(&self, tri: usize, edge: usize) -> u8 {
+        self.ridges.get(tri).map_or(Self::EDGE_FLAT, |f| (f >> (2 * edge)) & 3)
+    }
+}
+
+/// [`TriMeshShape::ridges`] for a mesh.
+fn mesh_ridges(vertices: &[Vec3], indices: &[u32]) -> Vec<u8> {
+    let tris = indices.len() / 3;
+    let corner = |t: usize, k: usize| vertices.get(indices[t * 3 + k] as usize).copied();
+    let key = |v: Vec3| [v.x.to_bits(), v.y.to_bits(), v.z.to_bits()];
+    // Each edge, by its two corners' positions in a fixed order, to the triangles that have it.
+    let mut edges: std::collections::HashMap<([u32; 3], [u32; 3]), Vec<(usize, usize)>> = std::collections::HashMap::new();
+    for t in 0..tris {
+        let (Some(a), Some(b), Some(c)) = (corner(t, 0), corner(t, 1), corner(t, 2)) else { continue };
+        for (edge, (p, q)) in [(b, c), (c, a), (a, b)].into_iter().enumerate() {
+            let (kp, kq) = (key(p), key(q));
+            edges.entry(if kp <= kq { (kp, kq) } else { (kq, kp) }).or_default().push((t, edge));
+        }
+    }
+    let cos_fold = 5f32.to_radians().cos();
+    let mut out = vec![0u8; tris];
+    for owners in edges.values() {
+        let &[(t, e), (u, f)] = owners.as_slice() else { continue };
+        for ((me, my_edge), (other, other_edge)) in [((t, e), (u, f)), ((u, f), (t, e))] {
+            let (Some(a), Some(b), Some(c)) = (corner(me, 0), corner(me, 1), corner(me, 2)) else { continue };
+            let Some(n) = (b - a).cross(c - a).try_normalize() else { continue };
+            let Some(across) = corner(other, other_edge) else { continue };
+            let start = [a, b, c][(my_edge + 1) % 3];
+            let end = [a, b, c][(my_edge + 2) % 3];
+            let Some(m) = (end - start).cross(across - start).try_normalize() else { continue };
+            let m = if m.dot(n) < 0.0 { -m } else { m };
+            if n.dot(m) >= cos_fold {
+                continue;
+            }
+            let side = n.dot(across - start);
+            let kind = if side < 0.0 { TriMeshShape::EDGE_RIDGE_FRONT } else { TriMeshShape::EDGE_RIDGE_BACK };
+            out[me] |= kind << (2 * my_edge);
+        }
+    }
+    out
 }
 
 /// A regular grid of height samples — the shape for terrain.
@@ -1240,11 +1308,13 @@ impl From<TriMeshShapeData> for TriMeshShape {
             crate::bvh::BvhTree::default()
         });
         let local_aabb = local_bounds(&data.vertices);
+        let ridges = mesh_ridges(&data.vertices, &data.indices);
         Self {
             vertices: std::sync::Arc::new(data.vertices),
             indices: std::sync::Arc::new(data.indices),
             bvh: std::sync::Arc::new(bvh),
             local_aabb,
+            ridges: std::sync::Arc::new(ridges),
         }
     }
 }

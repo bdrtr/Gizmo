@@ -573,3 +573,63 @@ fn a_ball_on_a_ridge_rests_on_its_edge() {
         assert!((c.penetration - 0.02).abs() < 2e-3, "{c:?}");
     }
 }
+
+/// A flat mesh of `n`×`n` 1 m quads centred on its origin, wound facing up — or down.
+fn flat_mesh(n: i32, facing_down: bool) -> ColliderShape {
+    let mut v = Vec::new();
+    let mut idx = Vec::new();
+    for j in 0..=n {
+        for i in 0..=n {
+            v.push(Vec3::new(i as f32 - n as f32 / 2.0, 0.0, j as f32 - n as f32 / 2.0));
+        }
+    }
+    let row = (n + 1) as u32;
+    for j in 0..n as u32 {
+        for i in 0..n as u32 {
+            let a = j * row + i;
+            if facing_down {
+                idx.extend_from_slice(&[a, a + row + 1, a + row, a, a + 1, a + row + 1]);
+            } else {
+                idx.extend_from_slice(&[a, a + row, a + row + 1, a, a + row + 1, a + 1]);
+            }
+        }
+    }
+    crate::components::Collider::trimesh(v, idx).shape
+}
+
+/// **A mesh pushes a body sunk into it out on the side the body is on**, whichever way it is
+/// wound: up, along the face, by how deep its lowest corner is — not down along the box's own
+/// axis, which is what a plate on its own answered.
+#[test]
+fn a_tilted_box_sunk_into_a_mesh_is_pushed_up_whatever_its_winding() {
+    let bx = ColliderShape::Box(BoxShape { half_extents: Vec3::new(1.0, 0.25, 2.0) });
+    for facing_down in [false, true] {
+        let mesh = flat_mesh(10, facing_down);
+        let contacts = NarrowPhase::test_collision_manifold(&bx, Vec3::new(0.3, 0.5, 0.0), Quat::from_rotation_x(0.35), &mesh, Vec3::ZERO, Quat::IDENTITY);
+        assert!(!contacts.is_empty(), "the box is in the mesh");
+        for c in &contacts {
+            assert!(c.normal.dot(-Vec3::Y) > 0.999, "facing down {facing_down}: box → mesh must point down: {c:?}");
+        }
+        let deepest = contacts.iter().map(|c| c.penetration).fold(0.0, f32::max);
+        assert!((deepest - 0.4195).abs() < 0.01, "facing down {facing_down}: {deepest}");
+    }
+}
+
+/// **A mesh's ridge is still a ridge**: an edge its two triangles fold down from by 45° each way,
+/// and a ball on it rests along the edge's own normal.
+#[test]
+fn a_ball_on_a_mesh_ridge_rests_on_its_edge() {
+    // A tent: crest along z at x = 0, height 1, sides down to x = ±1.
+    let v = vec![
+        Vec3::new(-1.0, 0.0, -2.0), Vec3::new(0.0, 1.0, -2.0), Vec3::new(1.0, 0.0, -2.0),
+        Vec3::new(-1.0, 0.0, 2.0), Vec3::new(0.0, 1.0, 2.0), Vec3::new(1.0, 0.0, 2.0),
+    ];
+    let idx = vec![0, 3, 4, 0, 4, 1, 1, 4, 5, 1, 5, 2];
+    let tent = crate::components::Collider::trimesh(v, idx).shape;
+    let ball = ColliderShape::Sphere(crate::components::SphereShape { radius: 0.3 });
+    let contacts = NarrowPhase::test_collision_manifold(&ball, Vec3::new(0.0, 1.28, 0.25), Quat::IDENTITY, &tent, Vec3::ZERO, Quat::IDENTITY);
+    assert!(!contacts.is_empty(), "the ball sits 2 cm into the crest");
+    for c in &contacts {
+        assert!(c.normal.dot(-Vec3::Y) > 0.99, "pushed straight up off the crest, not along a slope: {c:?}");
+    }
+}

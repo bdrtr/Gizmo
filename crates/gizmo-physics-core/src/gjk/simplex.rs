@@ -796,13 +796,52 @@ impl Gjk {
             ColliderShape::TriMesh(mesh) => {
                 let mut tris = Vec::new();
                 mesh.bvh.query_aabb(gizmo_math::Aabb::new(lo, hi), &mut tris);
+                // The heightfield's rule (above), on the side of each triangle the body is on — a
+                // mesh says nothing about which side is solid. A mesh has no footprint to ask
+                // "over it at all?" of, so the nearest feature is offered only by a triangle with
+                // a ridge on that side: never a border edge, which is where two meshes meet.
+                let (pos_a, inv_a, pos_b, inv_b) =
+                    if surface_is_a { (s_pos, s_inv, c_pos, c_inv) } else { (c_pos, c_inv, s_pos, s_inv) };
+                let rel_vel = if surface_is_a { s_vel - c_vel } else { c_vel - s_vel };
+                let (mut owned, mut on_face) = (false, None::<ContactPoint>);
+                let mut on_ridge: Vec<[Vec3; 3]> = Vec::new();
                 for t in tris {
                     let base = t as usize * 3;
                     let corner = |k: usize| mesh.indices.get(base + k).and_then(|i| mesh.vertices.get(*i as usize)).copied();
                     // A corrupt index is skipped, as the touching path skips it.
-                    if let (Some(a), Some(b), Some(c)) = (corner(0), corner(1), corner(2)) {
-                        test([a, b, c], &mut face);
+                    let (Some(a), Some(b), Some(c)) = (corner(0), corner(1), corner(2)) else { continue };
+                    let w = [a, b, c].map(|v| s_pos + s_rot * v);
+                    let Some(n) = (w[1] - w[0]).cross(w[2] - w[0]).try_normalize() else { continue };
+                    let front = n.dot(c_pos - w[0]) >= 0.0;
+                    let up = if front { n } else { -n };
+                    let ridge_kind = if front {
+                        crate::components::TriMeshShape::EDGE_RIDGE_FRONT
+                    } else {
+                        crate::components::TriMeshShape::EDGE_RIDGE_BACK
+                    };
+                    if (0..3).any(|e| mesh.edge_kind(t as usize, e) == ridge_kind) {
+                        on_ridge.push([a, b, c]);
                     }
+                    let deepest = Self::support_point(c_shape, c_pos, c_rot, -up);
+                    let gap = (deepest - w[0]).dot(up);
+                    let over = crate::narrowphase::NarrowPhase::barycentric(deepest - up * gap, w)
+                        .is_some_and(|b| b.iter().all(|&x| x > -1e-3));
+                    if !over {
+                        continue;
+                    }
+                    owned = true;
+                    let normal = if surface_is_a { up } else { -up };
+                    if let Some(c) = Self::speculative_emit(gap.max(0.0), normal, rel_vel, dt, pos_a, inv_a, pos_b, inv_b) {
+                        if on_face.is_none_or(|f| c.penetration > f.penetration) {
+                            on_face = Some(c);
+                        }
+                    }
+                }
+                if owned {
+                    return on_face;
+                }
+                for tri in on_ridge {
+                    test(tri, &mut face);
                 }
             }
             _ => unreachable!("only heightfields and triangle meshes are passed here"),

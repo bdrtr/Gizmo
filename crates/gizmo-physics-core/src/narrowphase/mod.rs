@@ -525,14 +525,45 @@ impl NarrowPhase {
             if !ok {
                 continue;
             }
+            let local = [verts[0], verts[1], verts[2]];
             if let Some(c) = Gjk::get_contact(shape, pos, rot, &face, mesh_pos, mesh_rot) {
-                out.push(c);
+                // The surface's rule, as for terrain (`terrain_contact`), on the side of the
+                // triangle the shape is on: a mesh says nothing about which side is solid — a road
+                // and a wall are both just triangles — and its winding is whatever the file had.
+                let world = local.map(|v| mesh_pos + mesh_rot * v);
+                let front = (world[1] - world[0]).cross(world[2] - world[0]).dot(pos - world[0]) >= 0.0;
+                let t = tri as usize;
+                let (tri_w, ridge_kind) = if front {
+                    (world, crate::components::TriMeshShape::EDGE_RIDGE_FRONT)
+                } else {
+                    ([world[0], world[2], world[1]], crate::components::TriMeshShape::EDGE_RIDGE_BACK)
+                };
+                // Turned over, corners 1 and 2 swap, and with them the edges opposite them.
+                let ridge = |edge: usize| mesh.edge_kind(t, if front { edge } else { [0, 2, 1][edge] }) == ridge_kind;
+                if let Some(c) = Self::terrain_contact(c, shape, pos, rot, tri_w, ridge) {
+                    out.push(c);
+                }
             }
         }
 
+        Self::four_deepest(out)
+    }
+
+    /// The four deepest of a surface's per-triangle contacts — what the solver keeps — with a
+    /// point two triangles found (the shape's deepest point over an edge they share) taken once,
+    /// not pushed on twice.
+    fn four_deepest(mut out: Vec<ContactPoint>) -> Vec<ContactPoint> {
         out.sort_by(|a, b| b.penetration.total_cmp(&a.penetration));
-        out.truncate(4);
-        out
+        let mut kept: Vec<ContactPoint> = Vec::with_capacity(4);
+        for c in out {
+            if !kept.iter().any(|k| k.point.distance_squared(c.point) < 1e-8 && k.normal.dot(c.normal) > 0.9999) {
+                kept.push(c);
+            }
+            if kept.len() == 4 {
+                break;
+            }
+        }
+        kept
     }
 
     /// Contacts between a shape and a terrain heightfield, generated per **cell**.
@@ -622,19 +653,7 @@ impl NarrowPhase {
             }
         }
 
-        // A point a face contact found from two triangles — the shape's deepest point over an edge
-        // they share — is one contact, not two the solver would push on twice.
-        out.sort_by(|a, b| b.penetration.total_cmp(&a.penetration));
-        let mut kept: Vec<ContactPoint> = Vec::with_capacity(4);
-        for c in out {
-            if !kept.iter().any(|k| k.point.distance_squared(c.point) < 1e-8 && k.normal.dot(c.normal) > 0.9999) {
-                kept.push(c);
-            }
-            if kept.len() == 4 {
-                break;
-            }
-        }
-        kept
+        Self::four_deepest(out)
     }
 
     /// The contact a shape makes with one triangle of a **surface that goes on past it** — a
@@ -966,6 +985,7 @@ mod trimesh_tests {
             indices: Arc::new(indices),
             bvh: Arc::new(bvh),
                 local_aabb: Default::default(),
+                ridges: Default::default(),
         })
     }
 
@@ -1105,6 +1125,7 @@ mod trimesh_tests {
             indices: Arc::new(Vec::new()),
             bvh: Arc::new(crate::bvh::BvhTree::default()),
                 local_aabb: Default::default(),
+                ridges: Default::default(),
         });
         assert!(NarrowPhase::test_collision_manifold(
             &b, Vec3::ZERO, Quat::IDENTITY, &empty, Vec3::ZERO, Quat::IDENTITY).is_empty());
@@ -1117,6 +1138,7 @@ mod trimesh_tests {
             indices: Arc::new(vec![0, 1, 2]), // one triangle where the BVH indexes two
             bvh: Arc::new(bvh),
                 local_aabb: Default::default(),
+                ridges: Default::default(),
         });
         let _ = NarrowPhase::test_collision_manifold(
             &b, Vec3::new(0.0, 0.4, 0.0), Quat::IDENTITY, &broken, Vec3::ZERO, Quat::IDENTITY);
