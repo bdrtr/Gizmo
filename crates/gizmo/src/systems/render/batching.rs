@@ -19,7 +19,32 @@ pub struct RenderCache {
     /// FxHash, not SipHash: this map is hashed once per drawn object, and its keys are pointers
     /// and flags the engine made — nothing an attacker chooses, so SipHash's resistance to flooding
     /// buys nothing and costs a long hash of a fifteen-field key, every object, every frame.
-    pub(crate) batches: rustc_hash::FxHashMap<BatchKey, BatchData>,
+    ///
+    /// The batches themselves live in a vector, in the order they were first seen, and the map only
+    /// says which slot holds a key; `hints` remembers, per entity id, the slot it went to last
+    /// collection, tried before the map and checked against the key. A static scene walks its
+    /// entities in the same order every frame, so the slots it touches are touched in order.
+    slots: rustc_hash::FxHashMap<BatchKey, u32>,
+    /// Every batch, by slot.
+    pub(crate) batches: Vec<BatchData>,
+    /// Per entity id, the slot it was batched into last time (`u32::MAX`: none yet).
+    hints: Vec<u32>,
+    /// This collection's objects, in walk order — written one after another, then dealt out into
+    /// the flat per-batch runs below. Until 2026-11-17 each object was pushed straight into its
+    /// batch's own six vectors: in a scene where every object is its own batch (merged, unique
+    /// meshes), that was a handful of scattered heap buffers touched per object, every frame.
+    records: Vec<Record>,
+    /// The camera-visible instances of every batch, batch after batch (`BatchData::camera` is a
+    /// batch's run), with last frame's model and the world box of each, index for index.
+    camera_instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
+    camera_previous: Vec<[[f32; 4]; 4]>,
+    camera_bounds: Vec<crate::math::Aabb>,
+    /// The same for the off-screen shadow casters (`BatchData::shadow`).
+    shadow_instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
+    shadow_previous: Vec<[[f32; 4]; 4]>,
+    shadow_bounds: Vec<crate::math::Aabb>,
+    /// Scratch: per slot, the two counts, then the two write cursors.
+    cursors: Vec<[u32; 2]>,
     /// Per-instance data for every batch, in the order the draw items index it.
     pub instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
     /// One entry per batch: the geometry to bind and how many instances of it to draw.
@@ -38,10 +63,29 @@ thread_local! {
 pub fn clear_render_cache() {
     RENDER_CACHE.with(|rc| {
         let mut cache = rc.borrow_mut();
-        cache.batches.clear();
-        cache.instances.clear();
-        cache.draw_items.clear();
+        *cache = RenderCache::default();
     });
+}
+
+/// One object of a collection, before it is dealt into its batch's run.
+struct Record {
+    slot: u32,
+    camera: bool,
+    instance: crate::renderer::gpu_types::InstanceRaw,
+    previous: [[f32; 4]; 4],
+    bounds: crate::math::Aabb,
+}
+
+/// `range` of a flat per-batch array: a batch's `(start, len)` run.
+fn run((start, len): (u32, u32)) -> std::ops::Range<usize> {
+    start as usize..(start + len) as usize
+}
+
+/// Reorders `data[range]` by `order` (indices into the range), through `scratch`.
+fn permute<T: Copy>(data: &mut [T], range: std::ops::Range<usize>, order: &[u32], scratch: &mut Vec<T>) {
+    scratch.clear();
+    scratch.extend(order.iter().map(|&i| data[range.start + i as usize]));
+    data[range].copy_from_slice(scratch);
 }
 
 /// Compresses anisotropy/clear_coat/subsurface into a single f32 with decimal-digit packing
@@ -385,21 +429,14 @@ pub(crate) struct BatchData {
     is_transparent: bool,
     is_transmissive: bool,
     blend_mode: crate::renderer::components::BlendMode,
-    instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
-    /// Casters outside the camera frustum but inside a shadow cascade's light frustum —
-    /// must be drawn into the shadow maps so off-screen objects still cast visible shadows.
-    shadow_instances: Vec<crate::renderer::gpu_types::InstanceRaw>,
-    /// The model each of `instances` was drawn with last frame (`renderer.motion_history`),
-    /// index for index — the G-buffer's object velocity.
-    previous: Vec<[[f32; 4]; 4]>,
-    /// The same for `shadow_instances`; never read by the G-buffer, kept so indices line up.
-    shadow_previous: Vec<[[f32; 4]; 4]>,
-    /// Each of `instances`' world box as it is drawn, index for index: what the shadow passes cull
-    /// it by. (A transparent batch's paint-order sort leaves these behind; it casts nothing, so
-    /// nothing reads them.)
-    bounds: Vec<crate::math::Aabb>,
-    /// The same for `shadow_instances`.
-    shadow_bounds: Vec<crate::math::Aabb>,
+    /// The key this batch was made for — what a slot hint is checked against.
+    key: BatchKey,
+    /// This collection's camera-visible instances: a `(start, len)` run of the cache's
+    /// `camera_*` arrays.
+    camera: (u32, u32),
+    /// Casters outside the camera frustum but inside a shadow map's light frustum — drawn into the
+    /// shadow maps so off-screen objects still cast visible shadows: a run of `shadow_*`.
+    shadow: (u32, u32),
     /// How many collections in a row gave this batch nothing to draw — see `IDLE_COLLECTIONS`.
     idle: u32,
 }
@@ -547,19 +584,27 @@ pub(super) fn collect_draw_items(
         // dropped first depended on nondeterministic HashMap batch order.
         // Batches the last collection gave nothing count another idle collection, and go once
         // they have had `IDLE_COLLECTIONS` of them; the rest are emptied for this one.
-        cache.batches.retain(|_, batch| {
-            let drew = !(batch.instances.is_empty() && batch.shadow_instances.is_empty());
+        let cache = &mut *cache;
+        let mut i = 0;
+        while i < cache.batches.len() {
+            let batch = &mut cache.batches[i];
+            let drew = batch.camera.1 + batch.shadow.1 > 0;
             batch.idle = if drew { 0 } else { batch.idle + 1 };
-            batch.idle <= IDLE_COLLECTIONS
-        });
-        for batch in cache.batches.values_mut() {
-            batch.instances.clear();
-            batch.shadow_instances.clear();
-            batch.previous.clear();
-            batch.shadow_previous.clear();
-            batch.bounds.clear();
-            batch.shadow_bounds.clear();
+            if batch.idle > IDLE_COLLECTIONS {
+                // The last batch takes this slot: its key now points here (hints to either fail
+                // their key check and fall back to the map).
+                let gone = cache.batches.swap_remove(i);
+                cache.slots.remove(&gone.key);
+                if let Some(moved) = cache.batches.get(i) {
+                    cache.slots.insert(moved.key.clone(), i as u32);
+                }
+                continue;
+            }
+            batch.camera = (0, 0);
+            batch.shadow = (0, 0);
+            i += 1;
         }
+        cache.records.clear();
         cache.instances.clear();
         cache.draw_items.clear();
 
@@ -855,7 +900,22 @@ pub(super) fn collect_draw_items(
                     is_grid,
                 };
 
-                let batch = cache.batches.entry(key).or_insert_with(|| BatchData {
+                // The slot this object goes to: last time's, if it still holds this key; else
+                // the map's; else a new batch.
+                let id = $e.id() as usize;
+                let hinted = cache
+                    .hints
+                    .get(id)
+                    .copied()
+                    .filter(|&slot| cache.batches.get(slot as usize).is_some_and(|b| b.key == key));
+                let slot = match hinted {
+                    Some(slot) => slot,
+                    None => {
+                        let slot = match cache.slots.get(&key) {
+                            Some(&slot) => slot,
+                            None => {
+                                let slot = cache.batches.len() as u32;
+                                cache.batches.push(BatchData {
                     vbuf: active_vbuf.clone(),
                     ibuf: active_ibuf.cloned(),
                     index_count: active_index_count,
@@ -883,24 +943,29 @@ pub(super) fn collect_draw_items(
                     is_transparent,
                     is_transmissive,
                     blend_mode,
-                    instances: Vec::new(),
-                    shadow_instances: Vec::new(),
-                    previous: Vec::new(),
-                    shadow_previous: Vec::new(),
-                    bounds: Vec::new(),
-                    shadow_bounds: Vec::new(),
-                    idle: 0,
+                                    key: key.clone(),
+                                    camera: (0, 0),
+                                    shadow: (0, 0),
+                                    idle: 0,
+                                });
+                                cache.slots.insert(key, slot);
+                                slot
+                            }
+                        };
+                        if cache.hints.len() <= id {
+                            cache.hints.resize(id + 1, u32::MAX);
+                        }
+                        cache.hints[id] = slot;
+                        slot
+                    }
+                };
+                cache.records.push(Record {
+                    slot,
+                    camera: camera_visible,
+                    instance: instance_data,
+                    previous: previous_model,
+                    bounds: drawn_world_aabb,
                 });
-                if camera_visible {
-                    batch.instances.push(instance_data);
-                    batch.previous.push(previous_model);
-                    batch.bounds.push(drawn_world_aabb);
-                } else {
-                    // Off-screen caster kept above for shadow maps only.
-                    batch.shadow_instances.push(instance_data);
-                    batch.shadow_previous.push(previous_model);
-                    batch.shadow_bounds.push(drawn_world_aabb);
-                }
             };
         }
 
@@ -983,6 +1048,49 @@ pub(super) fn collect_draw_items(
         }
         
         renderer.occluded_objects = occluded_objects.get();
+
+        // Deal the records out into each batch's runs: count, place the runs batch after batch,
+        // then copy every record to its batch's next index — walk order kept within a batch.
+        {
+            let n = cache.batches.len();
+            cache.cursors.clear();
+            cache.cursors.resize(n, [0, 0]);
+            for record in &cache.records {
+                cache.cursors[record.slot as usize][usize::from(!record.camera)] += 1;
+            }
+            let (mut camera_at, mut shadow_at) = (0u32, 0u32);
+            for (batch, cursor) in cache.batches.iter_mut().zip(cache.cursors.iter_mut()) {
+                batch.camera = (camera_at, cursor[0]);
+                batch.shadow = (shadow_at, cursor[1]);
+                *cursor = [camera_at, shadow_at];
+                camera_at += batch.camera.1;
+                shadow_at += batch.shadow.1;
+            }
+            let zero = <crate::renderer::gpu_types::InstanceRaw as bytemuck::Zeroable>::zeroed();
+            let (camera_n, shadow_n) = (camera_at as usize, shadow_at as usize);
+            cache.camera_instances.resize(camera_n, zero);
+            cache.camera_previous.resize(camera_n, [[0.0; 4]; 4]);
+            cache.camera_bounds.resize(camera_n, crate::math::Aabb::empty());
+            cache.shadow_instances.resize(shadow_n, zero);
+            cache.shadow_previous.resize(shadow_n, [[0.0; 4]; 4]);
+            cache.shadow_bounds.resize(shadow_n, crate::math::Aabb::empty());
+            for record in &cache.records {
+                let cursor = &mut cache.cursors[record.slot as usize];
+                if record.camera {
+                    let at = cursor[0] as usize;
+                    cursor[0] += 1;
+                    cache.camera_instances[at] = record.instance;
+                    cache.camera_previous[at] = record.previous;
+                    cache.camera_bounds[at] = record.bounds;
+                } else {
+                    let at = cursor[1] as usize;
+                    cursor[1] += 1;
+                    cache.shadow_instances[at] = record.instance;
+                    cache.shadow_previous[at] = record.previous;
+                    cache.shadow_bounds[at] = record.bounds;
+                }
+            }
+        }
         renderer.scene_extent.absorb(drawn_extent.get());
 
         let mut local_instances: Vec<crate::renderer::gpu_types::InstanceRaw> = std::mem::take(&mut cache.instances);
@@ -1003,13 +1111,16 @@ pub(super) fn collect_draw_items(
         // batch's instances have to be far-to-near too, not just the batches relative to each
         // other. Only the editor did this; the engine appended them in collection order, so two
         // overlapping panes of the SAME material composited by ECS iteration order.
-        for batch in cache.batches.values_mut() {
+        for batch in &cache.batches {
             if batch.is_transparent || batch.is_backdrop {
-                crate::renderer::sort_back_to_front(&mut batch.instances, cam_pos);
-                // The sort reorders `instances` but not `previous`. Neither layer is drawn into
-                // the G-buffer, so their velocity is never read — give them none rather than
-                // another instance's history.
-                batch.previous = batch.instances.iter().map(|i| i.model).collect();
+                let range = run(batch.camera);
+                crate::renderer::sort_back_to_front(&mut cache.camera_instances[range.clone()], cam_pos);
+                // The sort reorders the instances but not their previous models. Neither layer is
+                // drawn into the G-buffer, so their velocity is never read — give them none rather
+                // than another instance's history.
+                for i in range {
+                    cache.camera_previous[i] = cache.camera_instances[i].model;
+                }
             }
         }
 
@@ -1018,52 +1129,54 @@ pub(super) fn collect_draw_items(
         // (`gizmo_renderer::shadow_culling`). Opaque only: a transparent or backdrop batch casts
         // nothing, and its order is its paint order.
         let shadows_drawn = !shadow_vp.is_empty();
-        for batch in cache.batches.values_mut() {
-            if !shadows_drawn || !batch.casts_shadows || batch.is_transparent || batch.is_backdrop {
-                continue;
-            }
+        {
+            let mut scratch_instances = Vec::new();
+            let mut scratch_models = Vec::new();
+            let mut scratch_bounds = Vec::new();
             // Only an order that is not already the identity is applied — a batch of one or of a
-            // single chunk keeps its own, and is not copied into six new vectors to get it back
-            // (one batch per object in a scene of merged, unique meshes: 14 620 of them a frame).
+            // single chunk keeps its own (one batch per object in a scene of merged, unique meshes).
             let identity = |order: &[u32]| order.iter().enumerate().all(|(i, &o)| i as u32 == o);
-            let order = gizmo_renderer::shadow_culling::spatial_order(&batch.bounds);
-            if !identity(&order) {
-                batch.instances = order.iter().map(|&i| batch.instances[i as usize]).collect();
-                batch.previous = order.iter().map(|&i| batch.previous[i as usize]).collect();
-                batch.bounds = order.iter().map(|&i| batch.bounds[i as usize]).collect();
-            }
-            let order = gizmo_renderer::shadow_culling::spatial_order(&batch.shadow_bounds);
-            if !identity(&order) {
-                batch.shadow_instances = order.iter().map(|&i| batch.shadow_instances[i as usize]).collect();
-                batch.shadow_previous = order.iter().map(|&i| batch.shadow_previous[i as usize]).collect();
-                batch.shadow_bounds = order.iter().map(|&i| batch.shadow_bounds[i as usize]).collect();
+            for batch in &cache.batches {
+                if !shadows_drawn || !batch.casts_shadows || batch.is_transparent || batch.is_backdrop {
+                    continue;
+                }
+                for (which, (instances, previous, bounds)) in [
+                    (batch.camera, (&mut cache.camera_instances, &mut cache.camera_previous, &mut cache.camera_bounds)),
+                    (batch.shadow, (&mut cache.shadow_instances, &mut cache.shadow_previous, &mut cache.shadow_bounds)),
+                ] {
+                    let range = run(which);
+                    let order = gizmo_renderer::shadow_culling::spatial_order(&bounds[range.clone()]);
+                    if identity(&order) {
+                        continue;
+                    }
+                    permute(instances, range.clone(), &order, &mut scratch_instances);
+                    permute(previous, range.clone(), &order, &mut scratch_models);
+                    permute(bounds, range, &order, &mut scratch_bounds);
+                }
             }
         }
 
-        let batches: Vec<&BatchData> = cache
-            .batches
-            .values()
-            .filter(|b| !(b.instances.is_empty() && b.shadow_instances.is_empty()))
-            .collect();
+        let batches: Vec<&BatchData> = cache.batches.iter().filter(|b| b.camera.1 + b.shadow.1 > 0).collect();
 
         // Region A — all camera-visible instances. One DrawItem per batch (shadow fields
         // filled in the region-B pass below; the batch list order is stable between passes).
         for batch in &batches {
             let first_instance = local_instances.len() as u32;
-            let camera_count = batch.instances.len() as u32;
+            let camera_count = batch.camera.1;
+            let camera_instances = &cache.camera_instances[run(batch.camera)];
             // Depth key matters for the two layers the depth buffer cannot sort: transparent
             // (no depth write) and backdrop (no depth write AND every vertex pinned to the
             // same depth). A backdrop's instances are camera-RELATIVE offsets, so their
             // distance is measured from the origin — see `DrawItem::sort_depth`.
             let sort_depth = if batch.is_backdrop {
-                crate::renderer::batch_depth(&batch.instances, Vec3::ZERO)
+                crate::renderer::batch_depth(camera_instances, Vec3::ZERO)
             } else if batch.is_transparent {
-                crate::renderer::batch_depth(&batch.instances, cam_pos)
+                crate::renderer::batch_depth(camera_instances, cam_pos)
             } else {
                 0.0
             };
-            local_instances.extend(&batch.instances);
-            local_previous.extend(&batch.previous);
+            local_instances.extend_from_slice(camera_instances);
+            local_previous.extend_from_slice(&cache.camera_previous[run(batch.camera)]);
             local_draw_items.push(DrawItem {
                 vbuf: batch.vbuf.clone(),
                 vertex_count: batch.vertex_count,
@@ -1098,7 +1211,7 @@ pub(super) fn collect_draw_items(
                 shadow_chunks: {
                     let mut chunks = Vec::new();
                     if shadows_drawn && batch.casts_shadows {
-                        gizmo_renderer::shadow_culling::chunk(&batch.bounds, first_instance, &mut chunks);
+                        gizmo_renderer::shadow_culling::chunk(&cache.camera_bounds[run(batch.camera)], first_instance, &mut chunks);
                     }
                     chunks
                 },
@@ -1111,11 +1224,11 @@ pub(super) fn collect_draw_items(
         let draw_item_base = local_draw_items.len() - batches.len();
         for (i, batch) in batches.iter().enumerate() {
             let shadow_first_instance = local_instances.len() as u32;
-            local_instances.extend(&batch.shadow_instances);
-            local_previous.extend(&batch.shadow_previous);
+            local_instances.extend_from_slice(&cache.shadow_instances[run(batch.shadow)]);
+            local_previous.extend_from_slice(&cache.shadow_previous[run(batch.shadow)]);
             let item = &mut local_draw_items[draw_item_base + i];
             if shadows_drawn && batch.casts_shadows {
-                gizmo_renderer::shadow_culling::chunk(&batch.shadow_bounds, shadow_first_instance, &mut item.shadow_chunks);
+                gizmo_renderer::shadow_culling::chunk(&cache.shadow_bounds[run(batch.shadow)], shadow_first_instance, &mut item.shadow_chunks);
             }
         }
 
