@@ -15,6 +15,49 @@ mod block;
 mod standalone;
 mod tgs;
 
+/// One pass of the rolling-resistance row for a contact (see `tgs::apply_rolling` for why it
+/// exists): oppose the pair's relative spin with a torque impulse, bounded like friction by the
+/// contact's normal impulse `acc_n` times `rolling`. `acc_r` is the row's impulse accumulated so
+/// far this sweep; the new total is returned. Both contact solvers run it — the TGS path and the
+/// split-impulse path an island with a CCD body takes.
+pub(super) fn rolling_row(
+    velocities: &mut [Velocity],
+    (idx_a, idx_b): (usize, usize),
+    (dyn_a, dyn_b): (bool, bool),
+    (inv_i_a, inv_i_b): (gizmo_math::Mat3, gizmo_math::Mat3),
+    rolling: f32,
+    acc_n: f32,
+    acc_r: Vec3,
+) -> Vec3 {
+    if rolling <= 0.0 || acc_n <= 0.0 {
+        return acc_r;
+    }
+    let w_rel = velocities[idx_b].angular - velocities[idx_a].angular;
+    let len = w_rel.length();
+    if len < 1e-8 {
+        return acc_r;
+    }
+    let axis = w_rel / len;
+    // Effective angular mass along the spin axis, the rotational twin of `k_n`.
+    let k = axis.dot(inv_i_a.mul_vec3(axis)) + axis.dot(inv_i_b.mul_vec3(axis));
+    if k < 1e-12 {
+        return acc_r;
+    }
+    let mut acc = acc_r - axis * (len / k);
+    let max = rolling * acc_n;
+    if acc.length() > max {
+        acc = acc.normalize_or_zero() * max;
+    }
+    let applied = acc - acc_r;
+    if dyn_a {
+        velocities[idx_a].angular -= inv_i_a.mul_vec3(applied);
+    }
+    if dyn_b {
+        velocities[idx_b].angular += inv_i_b.mul_vec3(applied);
+    }
+    acc
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Support-order (topological) contact ordering.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -795,6 +838,17 @@ impl ConstraintSolver {
         let inv_dt = if dt > 0.0 { 1.0 / dt } else { 0.0 };
 
         let n_manifolds = manifolds.len();
+        // Each contact's rolling-resistance impulse over the sweep (`rolling_row`), at
+        // `roll_at[mid] + cid`. This path had no rolling row at all, and every island with a CCD
+        // body comes here: a CCD ball on any ground rolled on until damping stopped it — eight
+        // seconds from 1 m/s where the same ball without CCD stops in a quarter of one.
+        let mut roll_at = Vec::with_capacity(n_manifolds);
+        let mut n_points = 0;
+        for m in manifolds.iter() {
+            roll_at.push(n_points);
+            n_points += m.contacts.len();
+        }
+        let mut acc_roll = vec![Vec3::ZERO; n_points];
         for iter in 0..self.iterations {
             // Symmetric Gauss-Seidel: alternate the sweep direction every
             // iteration. Plain forward-only PGS applies the manifold's contact
@@ -1003,6 +1057,17 @@ impl ConstraintSolver {
                         velocities[idx_b].linear += imp_t * inv_m_b;
                         velocities[idx_b].angular += inv_i_b.mul_vec3(r_b.cross(imp_t));
                     }
+
+                    let at = roll_at[mid] + cid;
+                    acc_roll[at] = rolling_row(
+                        velocities,
+                        (idx_a, idx_b),
+                        (dyn_a, dyn_b),
+                        (inv_i_a, inv_i_b),
+                        manifolds[mid].rolling_friction,
+                        new_acc_n,
+                        acc_roll[at],
+                    );
                 }
             }
         }

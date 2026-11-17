@@ -458,9 +458,13 @@ impl Gjk {
     /// far short (the old `penetration = 0` behaviour, which stopped the body at
     /// its start-of-frame position).
     ///
-    /// The body is intentionally halted a hair (`SKIN`) short of contact so the
-    /// *next* frame still measures a clean, GJK-reliable gap and converges to a
-    /// full stop without ever overlapping.
+    /// A body arriving from farther than a hair (`SKIN`) is halted that hair short of contact, so
+    /// the *next* step still measures a clean, GJK-reliable gap. A body already within it closes
+    /// the rest and touches: from there the touching path's real contacts hold it, and they carry
+    /// friction and rolling resistance, which a speculative contact does not. Halted short every
+    /// step, a CCD body resting on terrain never touched it — a ball rolled on frictionless at a
+    /// millimetre's height, for eight seconds from 1 m/s, where the same ball without CCD stops
+    /// in a quarter of one.
     ///
     /// The normal is oriented A→B. The contact is anchored at the **inverse-mass-
     /// weighted centre** of the two bodies — which collapses onto the *dynamic*
@@ -648,8 +652,9 @@ impl Gjk {
             return None;
         }
 
-        // How far the solver may let the body close this step (stop SKIN short).
-        let allowed_close = (gap - SKIN).max(0.0);
+        // How far the solver may let the body close this step: to SKIN short of the surface on
+        // arrival, and the rest of the way from within it (see `speculative_contact`).
+        let allowed_close = if gap <= SKIN { gap } else { gap - SKIN };
 
         // Anchor at the inverse-mass-weighted centre: collapses onto the dynamic
         // body when the other is static ⇒ that body's lever arm vanishes ⇒ the

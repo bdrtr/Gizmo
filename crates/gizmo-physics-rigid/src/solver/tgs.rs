@@ -60,33 +60,15 @@ struct Prepared {
 /// normal: a ball rolling on a plane spins about a *tangential* axis, so a normal-only row
 /// would leave exactly the case this exists for untouched.
 fn apply_rolling(p: &mut Prepared, velocities: &mut [Velocity]) {
-    if p.rolling <= 0.0 || p.acc_n <= 0.0 {
-        return;
-    }
-    let w_rel = velocities[p.idx_b].angular - velocities[p.idx_a].angular;
-    let len = w_rel.length();
-    if len < 1e-8 {
-        return;
-    }
-    let axis = w_rel / len;
-    // Effective angular mass along the spin axis, the rotational twin of `k_n`.
-    let k = axis.dot(p.inv_i_a.mul_vec3(axis)) + axis.dot(p.inv_i_b.mul_vec3(axis));
-    if k < 1e-12 {
-        return;
-    }
-    let mut acc = p.acc_r - axis * (len / k);
-    let max = p.rolling * p.acc_n;
-    if acc.length() > max {
-        acc = acc.normalize_or_zero() * max;
-    }
-    let applied = acc - p.acc_r;
-    p.acc_r = acc;
-    if p.dyn_a {
-        velocities[p.idx_a].angular -= p.inv_i_a.mul_vec3(applied);
-    }
-    if p.dyn_b {
-        velocities[p.idx_b].angular += p.inv_i_b.mul_vec3(applied);
-    }
+    p.acc_r = super::rolling_row(
+        velocities,
+        (p.idx_a, p.idx_b),
+        (p.dyn_a, p.dyn_b),
+        (p.inv_i_a, p.inv_i_b),
+        p.rolling,
+        p.acc_n,
+        p.acc_r,
+    );
 }
 
 /// One contact manifold's contiguous run in `prepared`, plus its precomputed N×N normal

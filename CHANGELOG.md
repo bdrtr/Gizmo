@@ -113,6 +113,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   before, with and without frames advancing; so do the `chaos` storms. Debug builds check both premises on every
   step: a body left out holds in the physics world exactly what the sync would have written (rows, collider,
   generation, broadphase box), and a body not written back was not changed by the step.
+- **A body with CCD rests on the ground as any body does: touching it, with friction and rolling resistance.** A
+  0.2 m ball rolled at 1 m/s with rolling friction 0.08 stops in a quarter of a second; with CCD it rolled on for eight,
+  three to four metres, until damping stopped it — on a box floor, on terrain and on a mesh alike. Two causes:
+  - **It never touched.** A speculative contact halts a body a skin (1 cm) short of the surface, and it did so every
+    step, so a CCD body at rest hovered; on terrain it had no real contact at all, and a speculative contact carries no
+    friction. A body already within the skin now closes the rest and touches (`Gjk::speculative_contact`); one
+    arriving from farther is still halted the skin short, as the tunnelling guarantees need.
+  - **The solver it went to had no rolling row.** An island with a CCD body is solved by the split-impulse path, and
+    rolling resistance existed only in the TGS path. Both now run one `rolling_row` (the TGS path bit for bit as
+    before). `golf`'s ball, which carries rolling friction 0.08 that never acted, now stops where its course puts it;
+    `pinbol` and `lobut` pass unchanged. Test: `tests/ccd_resting.rs`, each cause caught alone.
 - **`chrono` is gone; a log record's time comes from `jiff` (native) and the browser's `Date` (web).** RUSTSEC-2026-0543
   declared `chrono` unmaintained with no safe upgrade, and `cargo deny` — a CI gate — failed on every push since. It
   was used once, for the `HH:MM:SS` a `gizmo_log!` record carries: `jiff::ZonedDateTime::now()` gives the same local
