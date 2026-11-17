@@ -92,6 +92,13 @@ impl<State: 'static> App<State> {
         self
     }
 
+    /// Makes `T` an event type of the app — as the windowed `App::add_event`: the queue is in the
+    /// world and every frame rotates it once ([`World::update_events`]).
+    pub fn add_event<T: 'static + Send + Sync>(mut self) -> Self {
+        self.world.init_events::<T>();
+        self
+    }
+
     /// Makes `S` a state machine the app drives, starting in `initial` — see
     /// [`gizmo_core::state::add_state`]. Once a frame, before any schedule, a queued
     /// `State::set` is applied and the [`on_exit`](Self::on_exit) / [`on_enter`](Self::on_enter)

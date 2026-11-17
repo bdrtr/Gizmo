@@ -11,9 +11,11 @@
 //! system which does not run on a given frame misses that frame's events permanently instead
 //! of catching up later.
 //!
-//! Nothing in this module rotates the buffers by itself. A queue whose owner never calls
-//! [`Events::update`] never becomes readable at all, while its write buffer grows without
-//! bound.
+//! **Who rotates them:** a queue registered with [`World::init_events`] (which `add_event` on an
+//! app or a plugin calls) is rotated by [`World::update_events`], and every frame driver calls that
+//! once a frame, first thing — `gizmo_app::frame::run_fixed_and_update`, which the windowed app,
+//! the headless app and `HeadlessFrames` all go through. A queue merely inserted as a resource is
+//! rotated by nobody: it never becomes readable, while its write buffer grows without bound.
 
 use crate::system::{AccessInfo, Res, ResMut, SystemParam, SystemParamFetchError};
 use crate::world::World;
@@ -31,8 +33,8 @@ use crate::world::World;
 /// use gizmo_core::prelude::*;
 /// struct CollisionEvent(u32);
 ///
-/// // Registration: at App level `app.add_event::<CollisionEvent>()` both does this and calls
-/// // `update()` every frame. On a world alone (the queue is then yours to rotate):
+/// // Registration: `app.add_event::<CollisionEvent>()` on an app or a plugin does this, and the
+/// // app's frame rotates it. On a world alone, the frame is yours:
 /// let mut world = World::new();
 /// world.init_events::<CollisionEvent>();
 ///
@@ -42,8 +44,8 @@ use crate::world::World;
 /// // Not readable yet in the frame it was sent:
 /// assert_eq!(world.get_resource::<Events<CollisionEvent>>().unwrap().len(), 0);
 ///
-/// // Frame sonu rotasyonu:
-/// world.get_resource_mut::<Events<CollisionEvent>>().unwrap().update();
+/// // The frame's rotation — every queue the world knows, once:
+/// world.update_events();
 ///
 /// // Reading events (any system, non-destructive — every reader sees the same batch):
 /// let events = world.get_resource::<Events<CollisionEvent>>().unwrap();
@@ -86,8 +88,9 @@ impl<T> Events<T> {
     /// End of frame: clears the previous frame's events, moves the current frame into the
     /// previous position.
     ///
-    /// This method must be called **once** at the end of every frame — `App::add_event()` does
-    /// this automatically.
+    /// This method must be called **once** a frame — [`World::update_events`] does it for every
+    /// registered queue, and the app's frame calls that. Calling it a second time in one frame
+    /// throws away the batch no reader has seen yet.
     pub fn update(&mut self) {
         self.previous.clear();
         std::mem::swap(&mut self.current, &mut self.previous);
@@ -139,10 +142,21 @@ impl<T> Default for Events<T> {
     }
 }
 
+/// What the world keeps for one registered event queue: its type, and the two things done to every
+/// queue without knowing its `T` — emptying it ([`World::clear_entities`]) and rotating it
+/// ([`World::update_events`]).
+#[derive(Clone, Copy)]
+pub(crate) struct EventQueueFns {
+    pub(crate) id: std::any::TypeId,
+    pub(crate) clear: fn(&World),
+    pub(crate) update: fn(&World),
+}
+
 impl World {
     /// Makes `T` an event queue of this world: inserts an empty [`Events<T>`] unless one is there,
-    /// and records the type, so that [`World::clear_entities`] empties the queue. Returns `true`
-    /// when `T` was not an event queue of this world before.
+    /// and records the type, so that [`World::update_events`] rotates the queue and
+    /// [`World::clear_entities`] empties it. Returns `true` when `T` was not an event queue of this
+    /// world before.
     ///
     /// **Why the record matters:** an event that names an entity — `CollisionEvent`,
     /// `TriggerEvent`, `HitEvent` — outlives it in the queue, and `clear_entities` hands every
@@ -151,23 +165,52 @@ impl World {
     /// which of its entries are queues; this is how the world knows. A queue inserted with
     /// `insert_resource` instead is not recorded, and is not emptied.
     ///
-    /// Rotating the queue each frame ([`Events::update`]) is not done here — that is the app's,
-    /// and `App::add_event` does both. Calling this again for the same `T` keeps the queue and the
-    /// events in it.
+    /// Calling this again for the same `T` — two plugins that both need one event type — keeps the
+    /// queue and the events in it, and it is still rotated once a frame.
     pub fn init_events<T: Send + Sync + 'static>(&mut self) -> bool {
         if self.get_resource::<Events<T>>().is_none() {
             self.insert_resource(Events::<T>::new());
         }
         let id = std::any::TypeId::of::<Events<T>>();
-        if self.event_queues.iter().any(|(queue, _)| *queue == id) {
+        if self.event_queues.iter().any(|queue| queue.id == id) {
             return false;
         }
-        self.event_queues.push((id, |world| {
-            if let Some(mut queue) = world.get_resource_mut::<Events<T>>() {
-                queue.clear();
-            }
-        }));
+        self.event_queues.push(EventQueueFns {
+            id,
+            clear: |world| {
+                if let Some(mut queue) = world.get_resource_mut::<Events<T>>() {
+                    queue.clear();
+                }
+            },
+            update: |world| {
+                if let Some(mut queue) = world.get_resource_mut::<Events<T>>() {
+                    queue.update();
+                }
+            },
+        });
         true
+    }
+
+    /// How many event queues are registered ([`init_events`](Self::init_events)).
+    pub fn event_queue_count(&self) -> usize {
+        self.event_queues.len()
+    }
+
+    /// The frame's rotation of every event queue registered with [`init_events`](Self::init_events):
+    /// what was sent last frame becomes readable, what was readable goes. **Once a frame, by the
+    /// frame's driver** — `gizmo_app::frame::run_fixed_and_update` calls it first thing, so a game
+    /// on any runtime gets it and none gets it twice.
+    ///
+    /// It used to be the windowed app's alone (`App::add_event` kept the rotations), so an event
+    /// type a plugin registered was never rotated, and nothing rotated anything under the headless
+    /// app or `HeadlessFrames` — a game's `--test` read no events at all — while the editor's play
+    /// loop rotated the physics queues itself, a second time for a game that had also asked for
+    /// them (`kurye`, 2026-11-17).
+    pub fn update_events(&mut self) {
+        for index in 0..self.event_queues.len() {
+            let update = self.event_queues[index].update;
+            update(self);
+        }
     }
 }
 
@@ -540,5 +583,25 @@ mod tests {
         world.get_resource_mut::<Events<Hit>>().unwrap().update();
         assert_eq!(world.get_resource::<Events<Hit>>().unwrap().len(), 1, "the second registration replaced the queue");
         assert_eq!(world.event_queues.len(), 1);
+    }
+
+    /// **`update_events` rotates every registered queue once**, a type registered twice included:
+    /// an event sent this frame is readable after one rotation and gone after the next.
+    #[test]
+    fn update_events_rotates_each_registered_queue_once() {
+        struct Other(u8);
+        let mut world = World::new();
+        world.init_events::<Hit>();
+        world.init_events::<Other>();
+        world.init_events::<Hit>();
+        let e = world.spawn();
+        world.get_resource_mut::<Events<Hit>>().unwrap().send(Hit(e));
+        world.get_resource_mut::<Events<Other>>().unwrap().send(Other(3));
+        world.update_events();
+        assert_eq!(world.get_resource::<Events<Hit>>().unwrap().len(), 1, "a twice-registered queue rotated twice");
+        assert_eq!(world.get_resource::<Events<Other>>().unwrap().iter().next().map(|o| o.0), Some(3));
+        world.update_events();
+        assert!(world.get_resource::<Events<Hit>>().unwrap().is_empty());
+        assert!(world.get_resource::<Events<Other>>().unwrap().is_empty());
     }
 }

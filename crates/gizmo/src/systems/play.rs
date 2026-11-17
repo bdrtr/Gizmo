@@ -487,6 +487,11 @@ impl PlayLoop {
     /// exported game — or in the editor the moment ▶ was pressed — stopped being steered by
     /// anything. Same shape as the fight clock and the animation drivers: one contract, and it
     /// had been implemented in one of the two hosts.
+    ///
+    /// **Event queues are the frame's, not this step's:** the app's frame rotates them before its
+    /// hook runs this ([`World::update_events`](crate::core::world::World::update_events)). A caller
+    /// that drives this on a world of its own — a `--test`, a unit test — is the frame, and calls
+    /// `world.update_events()` once before each step.
     pub fn step(
         &mut self,
         world: &mut World,
@@ -634,50 +639,31 @@ impl PlayLoop {
             crate::physics::system::physics_step_system(world, FIXED_DT);
         }
         self.accumulator = remaining;
-        pump_event_queues(world);
+        register_event_queues(world);
         steps
     }
 }
 
-/// End of frame for the event queues this loop's own systems fill.
+/// The event queue this loop's own systems fill and nothing else creates: `HitEvent`.
 ///
-/// `Events<T>` is double-buffered: `send` writes the current frame and `iter` reads the previous
-/// one, and **something must call `update()` once a frame** or nothing ever becomes readable.
-/// Nothing did on this path — `App::add_event` is the windowed runtime's pump and neither the
-/// editor's ▶ nor an exported game goes through it. So `physics_step_system` had been sending
-/// collision and trigger events into queues that never rotated, and the fight events would have
-/// joined them.
+/// It is **registered**, not rotated: the frame rotates every registered queue once
+/// ([`World::update_events`](crate::core::world::World::update_events), first thing in
+/// [`run_fixed_and_update`](gizmo_app::frame::run_fixed_and_update)), on every runtime. This used to
+/// rotate `HitEvent`, `CollisionEvent` and `TriggerEvent` itself, because nothing else did on this
+/// path — and so a game that had also asked for `CollisionEvent` (`add_event`, as `lobut` does) had it
+/// rotated twice a frame, and lost every batch before a reader saw it.
 ///
-/// The `HitEvent` queue is **created** if it is missing, the way
-/// [`run_fixed_and_update`](gizmo_app::frame::run_fixed_and_update) creates a `PhysicsTime`: it is
-/// the only one of the three with no other way in, and a fight whose hits are unreadable is not a
-/// fight. The other two are only rotated **if the game asked for them**, and that asymmetry is
-/// measured rather than tidy: `physics_step_system` clones every collision event it produced into
-/// that queue, which in a scene like the 200-box tower is thousands of contact lists a frame, and
-/// nobody should pay that for a resource they never asked for.
-fn pump_event_queues(world: &mut World) {
+/// The collision and trigger queues are not created here: `physics_step_system` clones every
+/// collision event it produced into that queue, which in a scene like the 200-box tower is thousands
+/// of contact lists a frame, and nobody should pay that for a resource they never asked for. A game
+/// that wants them registers them.
+fn register_event_queues(world: &mut World) {
     #[cfg(feature = "physics-dynamics")]
     {
-        use gizmo_physics_core::components::HitEvent;
-        // Registered with the world, not merely inserted: `clear_entities` (a level reloaded in
-        // place) empties a queue the world knows about, where this one would otherwise carry hits
-        // naming entities whose handles then belong to others.
-        world.init_events::<HitEvent>();
-        if let Ok(mut hits) = world.try_get_resource_mut::<crate::core::event::Events<HitEvent>>() {
-            hits.update();
-        }
+        world.init_events::<gizmo_physics_core::components::HitEvent>();
     }
-
-    if let Ok(mut collisions) = world
-        .try_get_resource_mut::<crate::core::event::Events<gizmo_physics_core::CollisionEvent>>()
-    {
-        collisions.update();
-    }
-    if let Ok(mut triggers) = world
-        .try_get_resource_mut::<crate::core::event::Events<gizmo_physics_core::TriggerEvent>>()
-    {
-        triggers.update();
-    }
+    #[cfg(not(feature = "physics-dynamics"))]
+    let _ = world;
 }
 
 /// How many fixed steps this frame runs, and the debt left over.

@@ -1673,6 +1673,41 @@ mod headless_frames_tests {
     /// fell twice as fast in the window, while its `--test` (which runs the plugin and not the hook)
     /// saw nothing wrong. A ball dropped for one second falls ½·g·t² ≈ 4.9 m either way: with the
     /// hook alone, with the plugin alone, and with both.
+    /// **An event a plugin registers reaches its readers, once each.** A writer sends one a frame,
+    /// a reader counts what it reads: after N frames it has read N − 1 (the last is still in flight)
+    /// — never 0, which is what it read until 2026-11-17, when only the windowed app rotated event
+    /// queues and only the ones its own `add_event` named; and never 2N, which a second rotation
+    /// would not give either but would lose half.
+    #[test]
+    fn an_event_a_plugin_registers_reaches_its_readers_in_headless_frames() {
+        use crate::core::event::{EventReader, EventWriter};
+        use crate::core::system::{IntoSystemChain, Local, ResMut};
+        struct Ping(u32);
+        #[derive(Default)]
+        struct Read(Vec<u32>);
+        struct Game;
+        impl crate::app::Plugin for Game {
+            fn build(&self, app: &mut dyn crate::app::AppLike) {
+                fn send(mut out: EventWriter<Ping>, mut n: Local<u32>) {
+                    *n += 1;
+                    out.send(Ping(*n));
+                }
+                fn read(pings: EventReader<Ping>, mut read: ResMut<Read>) {
+                    read.0.extend(pings.iter().map(|p| p.0));
+                }
+                app.add_event::<Ping>().add_event::<Ping>().insert_resource(Read::default()).add_systems(
+                    crate::core::system::Update,
+                    (send, read).chain(),
+                );
+            }
+        }
+        let mut run = HeadlessFrames::new(World::new()).add_plugin(Game);
+        for _ in 0..5 {
+            run.frame(1.0 / 60.0, |_, _, _, _| {});
+        }
+        assert_eq!(run.world.get_resource::<Read>().unwrap().0, [1, 2, 3, 4]);
+    }
+
     #[test]
     fn a_physics_plugin_on_a_simple_scene_steps_physics_once() {
         use crate::physics::{Collider, RigidBody, Velocity};

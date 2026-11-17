@@ -1442,6 +1442,59 @@ mod stepping_and_order {
         assert_eq!(log(&w), ["a", "b", "c", "a", "b", "c"], "removing it lets go");
     }
 
+    fn d(mut log: ResMut<Log>) {
+        log.0.push("d");
+    }
+
+    /// **A chain's element can be a chain or an unordered group**, as deep as written: `a`, then `b`
+    /// and `c` in either order, then `d` — every run, with the batcher free to do anything it likes
+    /// inside the pair. Until 2026-11-17 an element had to be one system.
+    #[test]
+    fn a_chain_of_groups_runs_each_group_after_the_one_before() {
+        let mut w = world();
+        let mut s = Schedule::new();
+        s.add_systems((a, (b, c), d).chain());
+        let mut nested = Schedule::new();
+        nested.add_systems(((a, b).chain(), (c, d).chain()).chain());
+        for _ in 0..50 {
+            w.get_resource_mut::<Log>().unwrap().0.clear();
+            s.run(&mut w, 0.0);
+            let got = log(&w);
+            assert_eq!((got[0], got[3]), ("a", "d"), "{got:?}");
+            assert!(got[1..3].contains(&"b") && got[1..3].contains(&"c"), "{got:?}");
+            w.get_resource_mut::<Log>().unwrap().0.clear();
+            nested.run(&mut w, 0.0);
+            assert_eq!(log(&w), ["a", "b", "c", "d"]);
+        }
+    }
+
+    /// **A group's condition is asked once a run**, and its answer holds for the whole group: the
+    /// first system switches the condition off, and the one after it still runs this time — and
+    /// neither runs the next. Asked by each system, `b` would have been skipped.
+    #[test]
+    fn a_groups_condition_is_asked_once_per_run() {
+        #[derive(Default)]
+        struct Open(bool);
+        fn close(mut log: ResMut<Log>, mut open: ResMut<Open>) {
+            log.0.push("close");
+            open.0 = false;
+        }
+        let mut w = world();
+        w.insert_resource(Open(true));
+        let mut s = Schedule::new();
+        s.add_systems((close, b).chain().run_if(|w: &World| w.get_resource::<Open>().is_some_and(|o| o.0)));
+        let mut loose = Schedule::new();
+        loose.add_systems((a, c).run_if(|w: &World| w.get_resource::<Open>().is_some_and(|o| o.0)));
+        s.run(&mut w, 0.0);
+        assert_eq!(log(&w), ["close", "b"]);
+        s.run(&mut w, 0.0);
+        loose.run(&mut w, 0.0);
+        assert_eq!(log(&w), ["close", "b"], "the group ran with its condition false");
+        w.get_resource_mut::<Open>().unwrap().0 = true;
+        loose.run(&mut w, 0.0);
+        assert_eq!(log(&w).len(), 4, "the unordered pair under one condition: {:?}", log(&w));
+    }
+
     #[test]
     fn a_step_goes_one_system_at_a_time_and_starts_over() {
         let mut w = world();

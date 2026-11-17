@@ -123,7 +123,11 @@ pub fn run_fixed_and_update<F>(
 where
     F: FnMut(&mut World),
 {
-    // State machines first (`gizmo_core::state::add_state`): a switch requested last frame is
+    // The event queues first: what last frame sent becomes readable, for this whole frame — every
+    // registered queue, once (`World::update_events`). Here, because every runtime's frame comes
+    // through this function and nothing else rotates them.
+    world.update_events();
+    // State machines next (`gizmo_core::state::add_state`): a switch requested last frame is
     // applied, its `on_exit` / `on_enter` hooks run, and then every schedule of this frame — fixed
     // steps and update alike — sees the one state. Nothing happens in a world without one.
     gizmo_core::state::run_state_drivers(world);

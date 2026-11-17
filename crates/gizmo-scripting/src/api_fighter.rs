@@ -761,7 +761,7 @@ mod tests {
             move_name: "Jab".to_string(),
         });
         // `iter` reads the rotated buffer, so a frame has to have ended for the hit to be visible
-        // — the same rotation `PlayLoop` performs at the end of its own frame.
+        // — the rotation every frame starts with (`World::update_events`).
         queue.update();
         world.insert_resource(queue);
 

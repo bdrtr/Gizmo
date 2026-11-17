@@ -26,8 +26,6 @@ impl<State: 'static> App<State> {
             input: gizmo_core::input::Input::new(),
             #[cfg(feature = "gamepad")]
             gamepad_backend: None,
-            event_updaters: Vec::new(),
-            event_types: std::collections::HashSet::new(),
             initial_scene: None,
             window_icon: None,
             record_mode: false,
@@ -115,25 +113,16 @@ impl<State: 'static> App<State> {
     }
 
     /// Makes `T` an event type of the app: its queue ([`Events<T>`](gizmo_core::event::Events))
-    /// is in the world, rotated once at the end of every frame (`update`), and emptied by
-    /// [`World::clear_entities`] ([`World::init_events`] is the registration both rest on).
+    /// is in the world, rotated once at the start of every frame ([`World::update_events`]), and
+    /// emptied by [`World::clear_entities`] — [`World::init_events`] is the registration both rest
+    /// on, and a plugin calling it (or `add_event` on its `AppLike`) has the same queue.
     ///
     /// **Once per type, however many times it is called.** Two plugins that both need, say,
     /// `CollisionEvent` can both ask for it: the queue and its events are kept, and it is rotated
-    /// once. It used to be replaced on the second call and rotated twice per frame, and a queue
-    /// rotated twice throws its events away before any reader sees them.
+    /// once.
     pub fn add_event<T: 'static + Send + Sync>(mut self) -> Self {
         tracing::debug!(event = %std::any::type_name::<T>(), "[App] event type registered");
         self.world.init_events::<T>();
-        // Whether the APP rotates it yet — its own record, not the world's: a plugin may have
-        // registered the queue with the world already, and that arranges no rotation.
-        if self.event_types.insert(std::any::TypeId::of::<T>()) {
-            self.event_updaters.push(Box::new(|world| {
-                if let Some(mut events) = world.get_resource_mut::<gizmo_core::event::Events<T>>() {
-                    events.update();
-                }
-            }));
-        }
         self
     }
 
@@ -551,47 +540,28 @@ mod update_hook_tests {
         App::<()>::new("test", 64, 64)
     }
 
-    /// **An event type asked for twice is rotated once.** Two plugins can both need one event
-    /// type; the second request used to replace the queue and add a second rotation, and a queue
-    /// rotated twice a frame throws its events away before any reader sees them.
+    /// **An event type asked for twice is one queue, rotated once.** Two plugins can both need one
+    /// event type — one through the world, one through `add_event`; the second request used to
+    /// replace the queue, or add a second rotation, or (the plugin's) arrange none.
     #[test]
-    fn an_event_type_added_twice_keeps_its_queue_and_is_rotated_once() {
+    fn an_event_type_asked_for_twice_is_one_queue_rotated_once() {
         struct Ping;
-        let app = app().add_event::<Ping>();
-        app.world.get_resource_mut::<gizmo_core::event::Events<Ping>>().unwrap().send(Ping);
-        let mut app = app.add_event::<Ping>();
-        assert_eq!(app.event_updaters.len(), 1, "two rotations for one event type");
-        for update in &mut app.event_updaters {
-            update(&mut app.world);
-        }
-        assert_eq!(
-            app.world.get_resource::<gizmo_core::event::Events<Ping>>().unwrap().len(),
-            1,
-            "the event sent before the second registration did not reach a reader"
-        );
-    }
-
-    /// **An event type a plugin registered with the world is still rotated by `add_event`.** The
-    /// world's registry says what `clear_entities` empties, not what the app rotates: a plugin can
-    /// only reach the world, and the game's `add_event` after it arranged no rotation when the
-    /// app asked the world whether the type was new — the queue was never readable.
-    #[test]
-    fn an_event_type_a_plugin_registered_is_rotated_by_add_event() {
-        struct Scored;
         struct Registers;
         impl crate::plugin::Plugin for Registers {
             fn build(&self, app: &mut dyn crate::plugin::AppLike) {
-                app.parts_mut().world.init_events::<Scored>();
+                app.parts_mut().world.init_events::<Ping>();
             }
         }
-        let app = app().add_plugin(Registers).add_event::<Scored>();
-        assert_eq!(app.event_updaters.len(), 1, "the app does not rotate the plugin's queue");
-        app.world.get_resource_mut::<gizmo_core::event::Events<Scored>>().unwrap().send(Scored);
-        let mut app = app;
-        for update in &mut app.event_updaters {
-            update(&mut app.world);
-        }
-        assert_eq!(app.world.get_resource::<gizmo_core::event::Events<Scored>>().unwrap().len(), 1);
+        let app = app().add_plugin(Registers);
+        app.world.get_resource_mut::<gizmo_core::event::Events<Ping>>().unwrap().send(Ping);
+        let mut app = app.add_event::<Ping>().add_event::<Ping>();
+        assert_eq!(app.world.event_queue_count(), 1);
+        app.world.update_events();
+        assert_eq!(
+            app.world.get_resource::<gizmo_core::event::Events<Ping>>().unwrap().len(),
+            1,
+            "the event sent before the later registrations did not reach a reader"
+        );
     }
 
     /// **The loop's asset loader has a manager to load with in every app.** It runs only when the

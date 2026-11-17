@@ -48,6 +48,42 @@ impl dyn AppLike + '_ {
         self
     }
 
+    /// Makes `T` an event type — as `App::add_event` does: one queue however many plugins ask, and
+    /// every frame of every runtime rotates it once ([`World::update_events`]).
+    pub fn add_event<T: Send + Sync + 'static>(&mut self) -> &mut Self {
+        self.parts_mut().world.init_events::<T>();
+        self
+    }
+
+    /// Makes `S` a state machine the app drives, starting in `initial` — as `App::add_state` does
+    /// ([`gizmo_core::state::add_state`]): every frame of every runtime applies a queued `State::set`
+    /// and runs the hooks below.
+    pub fn add_state<S: Clone + PartialEq + Eq + Send + Sync + 'static>(&mut self, initial: S) -> &mut Self {
+        gizmo_core::state::add_state(self.parts_mut().world, initial);
+        self
+    }
+
+    /// Runs `hook` with the world every time `state` is entered, the initial state included — as
+    /// `App::on_enter` does.
+    pub fn on_enter<S, F>(&mut self, state: S, hook: F) -> &mut Self
+    where
+        S: Clone + PartialEq + Eq + Send + Sync + 'static,
+        F: FnMut(&mut World) + Send + Sync + 'static,
+    {
+        gizmo_core::state::on_enter(self.parts_mut().world, state, hook);
+        self
+    }
+
+    /// Runs `hook` with the world every time `state` is left — as `App::on_exit` does.
+    pub fn on_exit<S, F>(&mut self, state: S, hook: F) -> &mut Self
+    where
+        S: Clone + PartialEq + Eq + Send + Sync + 'static,
+        F: FnMut(&mut World) + Send + Sync + 'static,
+    {
+        gizmo_core::state::on_exit(self.parts_mut().world, state, hook);
+        self
+    }
+
     /// Inserts a resource, replacing any of the same type — as `App::insert_resource` does.
     pub fn insert_resource<R: Send + Sync + 'static>(&mut self, resource: R) -> &mut Self {
         self.parts_mut().world.insert_resource(resource);

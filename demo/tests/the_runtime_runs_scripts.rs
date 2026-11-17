@@ -496,8 +496,8 @@ fn a_script_can_read_the_move_it_started() {
 ///
 /// The end of the chain, and every link is a thing that did not exist at the start of the day: the
 /// fight clock advances the move, the active window drives the fist's hitbox, `hit_detection_system`
-/// resolves the overlap and reports a `HitEvent`, `PlayLoop` rotates the queue so the event is
-/// readable at all, the Lua mirror hands it to the script, and the script takes the health off
+/// resolves the overlap and reports a `HitEvent` into the queue `PlayLoop` registers, the frame
+/// rotates it so the event is readable at all (here the test is the frame), the Lua mirror hands it to the script, and the script takes the health off
 /// with `fighter.set_health`. Nothing in the engine subtracts it — that is the design.
 ///
 /// The numbers are the contract: **92**, not 100 (the hit landed and was spent) and not 84 (one
@@ -534,6 +534,8 @@ fn a_script_spends_the_hits_the_engine_reports() {
     let input = Input::default();
     let mut play = PlayLoop::new();
     for _ in 0..10 {
+        // What an app's frame does first (`run_fixed_and_update`); this test is the frame.
+        world.update_events();
         play.step(&mut world, 1.0 / 60.0, &input, &mut |_| {});
     }
 

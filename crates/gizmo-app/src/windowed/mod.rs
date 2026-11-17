@@ -117,13 +117,6 @@ pub struct App<State: 'static = ()> {
     /// checks a builder method — should not touch `/dev/input` to do it.
     #[cfg(feature = "gamepad")]
     gamepad_backend: Option<crate::gamepad::GamepadBackend>,
-    #[allow(clippy::type_complexity)]
-    event_updaters: Vec<Box<dyn FnMut(&mut World)>>,
-    /// The event types `event_updaters` rotates — one rotation each, however often `add_event`
-    /// names one. The app's own record, not the world's: the world's (`World::init_events`) says
-    /// which queues `clear_entities` empties, and a type can be in it without the app rotating it
-    /// (a plugin registers through the world; it cannot reach `add_event`).
-    event_types: std::collections::HashSet<std::any::TypeId>,
     initial_scene: Option<String>,
     window_icon: Option<&'static [u8]>,
     /// When `true`, per-frame input is recorded and saved on exit.
@@ -191,7 +184,7 @@ impl<State: 'static> std::fmt::Debug for App<State> {
             .field("input_fn", &self.input_fn.as_ref().map(|_| "<closure>"));
         #[cfg(feature = "egui")]
         ds.field("ui_fn", &self.ui_fn.as_ref().map(|_| "<closure>"));
-        ds.field("event_updaters", &self.event_updaters.len())
+        ds.field("event_queues", &self.world.event_queue_count())
             .field("initial_scene", &self.initial_scene)
             .field("window_icon", &self.window_icon.map(|b| b.len()))
             .field("record_mode", &self.record_mode)

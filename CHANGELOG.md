@@ -59,6 +59,18 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   function — which a surface that may cut runs for every pixel of every cascade. `dunya`'s textured terrain is
   registered so, and its shader reads only the layers a pixel shows: the frame's GPU time went from 24.2 ms to 18.6
   (Radeon 780M, 1280×800), the textured terrain costing what a flat one does.
+- **Fixed: events are rotated on every runtime, once.** Rotating event queues was the windowed `App`'s alone, for
+  the types its own `add_event` named: under `HeadlessFrames` and the headless `App` no `EventReader` saw anything, a
+  plugin's event type was never rotated, and `PlayLoop` rotated `CollisionEvent`/`TriggerEvent`/`HitEvent` itself —
+  twice a frame for a game that had also `add_event`ed one. The world now rotates every queue registered with
+  `init_events` (`World::update_events`, new), and the frame (`run_fixed_and_update`) calls it once, first thing.
+  **Behaviour change:** `PlayLoop::step` no longer rotates; code that drives it on a bare world calls
+  `world.update_events()` once a frame, and `HitEvent`s are readable the frame after they happen, as every event is.
+- **Nested system groups.** A chain's element, or `add_systems`'s, can be a chain or a tuple:
+  `(a, (b, c), d).chain()` runs `b` and `c` (unordered) between `a` and `d`. A tuple or a chain takes `run_if`, asked
+  once per schedule run for the whole group (`SystemGroup`, new).
+- **Plugins:** `add_event`, `add_state`, `on_enter`, `on_exit` on `AppLike`; `add_event` on the headless `App`;
+  `Local` in the prelude. Found by `kurye`, the forty-third game (states and events in one plugin).
 - **Fixed: `with_simple_scene` and `PhysicsPlugin` together stepped physics twice a frame.** The simple scene's hook
   stepped physics by the frame's time and the plugin on the fixed schedule: a ball fell 19.5 m in a second instead of
   4.9, in the window only (a `--test` runs the plugin, not the hook). `air_drag` and `bounce` ran like this.

@@ -2200,6 +2200,33 @@ it was already there (`move_axis`, `right_stick`, `cursor_on_plane`, `Timer`, `o
   still loads), and for a name without an extension the error lists the primitive keys. GPU-tested:
   two requests share one buffer, collection forgets it; not inserting into the cache fails it.
 
+### C16am. The forty-third game: states and events (2026-11-17, `kurye`)
+
+A courier taking packages across a square before their time runs out — eight a round, three
+strikes and it is over, SPACE starts again. One plugin, like `sapan`, built on what no game had
+used yet: **states** (`Baslik → Yolda → Bitti → Yolda`, each entered by a hook that builds its own
+entities and marks them `DespawnOnExit`) and **events** (`Teslim` and `Gecikti`, written by the
+system that sees the package reached or late, read by three others: the score, the next package,
+the flash). Its `--test` plays two rounds: 8 delivered, no strike, the package order and the score
+agreeing in both, and the second round starting with exactly the entities of the first.
+
+- ~~**Events were read only in a window.**~~ **Closed 2026-11-17.** Only the windowed `App`'s
+  `add_event` rotated queues, and only the ones it named: under `HeadlessFrames` and the headless
+  `App` no reader saw anything (this game's `--test` could not have counted a delivery), a plugin
+  could not register an event type that anything rotated, and `PlayLoop` rotated the physics queues
+  itself — twice a frame for a game that had also asked for `CollisionEvent`, losing every batch.
+  The world rotates its registered queues (`World::update_events`), and every runtime's frame calls
+  that once, first (`an_event_a_plugin_registers_reaches_its_readers_in_headless_frames`).
+- ~~**A plugin could not make a state or an event type.**~~ **Closed 2026-11-17.** `add_state`,
+  `on_enter`, `on_exit` and `add_event` were `App`'s only; the plugin's `AppLike` has them now.
+- ~~**A chain's elements had to be single systems, and a group took no condition.**~~ **Closed
+  2026-11-17.** `(steer, (clock, reach).chain(), (count, next, flash), finish).chain().run_if(..)`
+  did not compile: a chain of a chain, a chain of an unordered group, and a condition on a group
+  were all missing. Any element of a chain or `add_systems` is now a group — a system, a chain, a
+  tuple — and a group's `run_if` is asked once per run, its answer holding for the whole group
+  (`a_chain_of_groups_runs_each_group_after_the_one_before`, `a_groups_condition_is_asked_once_per_run`).
+- ~~**`Local` was not in the prelude.**~~ **Closed 2026-11-17.**
+
 ### C16al. The forty-second game: written as a plugin (2026-11-17, `sapan`)
 
 A launcher knocking crates off pedestals, three waves — and **the first game in Bevy's shape**: no

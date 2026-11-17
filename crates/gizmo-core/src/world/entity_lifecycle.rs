@@ -576,7 +576,7 @@ impl World {
         // it sits here with the command queue, above the two clears that can. By index rather than
         // by iterator: each function takes the world it is a field of.
         for index in 0..self.event_queues.len() {
-            let clear = self.event_queues[index].1;
+            let clear = self.event_queues[index].clear;
             clear(self);
         }
 

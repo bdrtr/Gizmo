@@ -619,11 +619,6 @@ impl<State: 'static> App<State> {
                                 profiler.end_scope("update");
                             }
 
-                            // Olayları Güncelle (Çift-buffer temizliği)
-                            for updater in &mut self.event_updaters {
-                                updater(&mut self.world);
-                            }
-
                             if let Some(mut profiler) = self.world.get_resource_mut::<gizmo_core::profiler::FrameProfiler>() {
                                 profiler.begin_scope("render");
                             }

@@ -763,7 +763,17 @@ state instead.
     added a rotation every time it was called, so an event type two plugins both asked for was
     rotated twice a frame — and a queue rotated twice throws its events away before any reader sees
     them. It registers once per type now (`init_events` says whether the type was new), keeping the
-    queue and its events (`an_event_type_added_twice_keeps_its_queue_and_is_rotated_once`).
+    queue and its events (`an_event_type_asked_for_twice_is_one_queue_rotated_once`).
+
+    **The rotation moved to the world too (2026-11-17, `kurye`).** The registry recorded what to
+    empty but not what to rotate, so rotating stayed with the windowed `App` (`event_updaters`, filled
+    by its own `add_event` only): a plugin's queue was never rotated, nothing rotated anything under
+    the headless `App` or `HeadlessFrames` (a game's `--test` read no events at all), and `PlayLoop`
+    rotated the three physics queues itself — a second time for a game that had also `add_event`ed
+    `CollisionEvent`, which lost every batch. Each recorded queue now carries its rotation as well,
+    `World::update_events` runs them, and `run_fixed_and_update` — the frame of every runtime —
+    calls it once, first thing. `PlayLoop` only registers `HitEvent`; a caller driving `PlayLoop`
+    on a bare world is the frame and calls `update_events` itself.
   - **`PoolManager` and stale handles — two of the three closed 2026-08-31, the third is the
     hard one.** Looking at the `clear_entities` case turned up two defects that need no clear at
     all, both reachable from ordinary use:

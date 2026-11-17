@@ -95,11 +95,12 @@ pub struct World {
     /// that when the two differ. `PoolManager` is the worked example.
     reset_epoch: u64,
     /// The resource types that are event queues ([`Events<T>`](crate::event::Events)), each with
-    /// the function that empties it — recorded by [`World::init_events`], which `App::add_event`
-    /// calls. The resource map is type-erased and holds `Time`, `Input` and the world's own
-    /// machinery beside the queues, so nothing generic can tell which of its entries to drain;
-    /// this list is how [`World::clear_entities`] does.
-    pub(crate) event_queues: Vec<(TypeId, fn(&World))>,
+    /// the function that empties it and the one that rotates it — recorded by
+    /// [`World::init_events`], which `App::add_event` calls. The resource map is type-erased and
+    /// holds `Time`, `Input` and the world's own machinery beside the queues, so nothing generic can
+    /// tell which of its entries to drain or rotate; this list is how [`World::clear_entities`] and
+    /// [`World::update_events`] do.
+    pub(crate) event_queues: Vec<crate::event::EventQueueFns>,
     /// Frame counter stamped into a component's `ComponentTicks` every time it is written;
     /// with `change_ref_tick` it is the whole of change detection.
     ///

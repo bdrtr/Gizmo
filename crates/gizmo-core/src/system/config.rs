@@ -471,8 +471,9 @@ impl IntoSystemConfig<()> for SystemConfig {
 /// Registers one system, or a tuple of 2–8 systems, on a [`Schedule`] in a single call —
 /// the trait behind [`Schedule::add_systems`].
 ///
-/// Each element is a plain system function, a `Box<dyn System>` or a configured system (`a.after(..)`,
-/// `a.run_if(..)`), and a [`SystemChain`] counts as one group.
+/// Anything that is a [group](IntoSystemGroup) is one: a plain system function, a `Box<dyn System>`,
+/// a configured system (`a.after(..)`, `a.run_if(..)`), a [`SystemChain`], a [`SystemGroup`], and a
+/// tuple of any of these — nested as deep as it is written.
 pub trait IntoSystemConfigs<T> {
     /// Pushes every system in `self` onto `schedule`, left to right, each with its own configuration:
     /// for a bare function, [`Phase::Update`], no labels, no constraints.
@@ -484,49 +485,160 @@ pub trait IntoSystemConfigs<T> {
     fn into_configs(self, schedule: &mut Schedule);
 }
 
-impl<P1, S1> IntoSystemConfigs<(P1,)> for S1
-where
-    S1: IntoSystemConfig<P1>,
-{
+impl<M, G: IntoSystemGroup<M>> IntoSystemConfigs<M> for G {
     fn into_configs(self, schedule: &mut Schedule) {
-        schedule.add_di_system(self);
+        schedule.add_chain(SystemChain(self.into_group().0));
     }
 }
 
-/// A chain is a group of systems too, so `add_systems(Update, (a, b).chain())` reads as it does in Bevy.
-impl IntoSystemConfigs<SystemChain> for SystemChain {
-    fn into_configs(self, schedule: &mut Schedule) {
-        schedule.add_chain(self);
+/// Systems taken as one unit — what an element of a [`chain`](IntoSystemChain::chain), an
+/// `add_systems` call or a group's [`run_if`](SystemGroup::run_if) can be: one system (a bare
+/// function, a `Box<dyn System>` or a configured one), a [`SystemChain`], a [`SystemGroup`], or a
+/// tuple of 2–8 of any of these, so `(a, (b, c).chain(), (d, e)).chain().run_if(playing)` reads as
+/// it does in Bevy.
+///
+/// Before 2026-11-17 an element had to be a single system: a chain could not hold a chain or an
+/// unordered pair, and a condition could only be put on each system by hand (`kurye`).
+pub trait IntoSystemGroup<Marker>: Sized {
+    /// The systems, with whatever ordering they carry among themselves.
+    fn into_group(self) -> SystemGroup;
+}
+
+/// `group` gated by one `condition`, evaluated once per schedule run — see
+/// [`SystemGroup::run_if`].
+fn gate(group: SystemGroup, condition: Box<dyn FnMut(&World) -> bool + Send + Sync>) -> SystemGroup {
+    let shared = std::sync::Arc::new(SharedCondition {
+        condition: std::sync::Mutex::new(condition),
+        memo: std::sync::Mutex::new(None),
+    });
+    SystemGroup(
+        group
+            .0
+            .into_iter()
+            .map(|config| {
+                let shared = shared.clone();
+                config.run_if(move |world: &World| shared.check(world))
+            })
+            .collect(),
+    )
+}
+
+/// One condition shared by every system of a group, with the answer of the current schedule run.
+struct SharedCondition {
+    condition: std::sync::Mutex<Box<dyn FnMut(&World) -> bool + Send + Sync>>,
+    /// `(the run's change_ref_tick, answer)`. The reference tick is set once at the start of every
+    /// schedule run (`begin_change_frame`) and differs between runs of one schedule.
+    memo: std::sync::Mutex<Option<(u32, bool)>>,
+}
+
+impl SharedCondition {
+    fn check(&self, world: &World) -> bool {
+        let run = world.change_ref_tick;
+        let mut memo = self.memo.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((at, answer)) = *memo {
+            if at == run {
+                return answer;
+            }
+        }
+        let answer = (self.condition.lock().unwrap_or_else(|e| e.into_inner()))(world);
+        *memo = Some((run, answer));
+        answer
     }
 }
 
-macro_rules! impl_into_system_configs {
-    ($($P:ident $S:ident),+) => {
-        impl<$($P, $S),+> IntoSystemConfigs<($($P,)+)> for ($($S,)+)
+/// Systems with no order among them — what a tuple becomes when it is given a
+/// [`run_if`](SystemGroup::run_if) or a phase. Added and chained like any [group](IntoSystemGroup).
+pub struct SystemGroup(pub(crate) Vec<SystemConfig>);
+
+impl SystemGroup {
+    /// Runs the whole group only while `condition` holds. **Evaluated once per schedule run** for
+    /// the group, by whichever of its systems runs first, and that answer holds for the rest of the
+    /// run — so a system of the group that changes what the condition reads does not switch off the
+    /// ones after it in the same run. Each system is gated as by [`SystemConfig::run_if`] (and is
+    /// exclusive for the same reason). A tuple and a [`SystemChain`] have the same method.
+    pub fn run_if<F>(self, condition: F) -> SystemGroup
+    where
+        F: FnMut(&World) -> bool + Send + Sync + 'static,
+    {
+        gate(self, Box::new(condition))
+    }
+
+    /// Puts every system of the group in `phase`.
+    pub fn in_phase(mut self, phase: Phase) -> SystemGroup {
+        for config in &mut self.0 {
+            config.phase = phase;
+        }
+        self
+    }
+
+    /// How many systems the group holds.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Whether the group holds no systems.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+#[doc(hidden)]
+pub struct SingleSystem;
+#[doc(hidden)]
+pub struct ChainOfSystems;
+#[doc(hidden)]
+pub struct GroupOfSystems;
+#[doc(hidden)]
+pub struct TupleOfGroups;
+
+impl<P, S: IntoSystemConfig<P>> IntoSystemGroup<(SingleSystem, P)> for S {
+    fn into_group(self) -> SystemGroup {
+        SystemGroup(vec![self.into_config()])
+    }
+}
+
+impl IntoSystemGroup<ChainOfSystems> for SystemChain {
+    fn into_group(self) -> SystemGroup {
+        SystemGroup(self.0)
+    }
+}
+
+impl IntoSystemGroup<GroupOfSystems> for SystemGroup {
+    fn into_group(self) -> SystemGroup {
+        self
+    }
+}
+
+macro_rules! impl_into_system_group {
+    ($($M:ident $G:ident),+) => {
+        impl<$($M, $G),+> IntoSystemGroup<(TupleOfGroups, $($M,)+)> for ($($G,)+)
         where
-            $($S: IntoSystemConfig<$P>,)+
+            $($G: IntoSystemGroup<$M>,)+
         {
-            fn into_configs(self, schedule: &mut Schedule) {
+            fn into_group(self) -> SystemGroup {
                 #[allow(non_snake_case)]
-                let ($($S,)+) = self;
-                $(schedule.add_di_system($S);)+
+                let ($($G,)+) = self;
+                let mut all = Vec::new();
+                $(all.extend($G.into_group().0);)+
+                SystemGroup(all)
             }
         }
     };
 }
 
-impl_into_system_configs!(P1 S1, P2 S2);
-impl_into_system_configs!(P1 S1, P2 S2, P3 S3);
-impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4);
-impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5);
-impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6);
-impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6, P7 S7);
-impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6, P7 S7, P8 S8);
+impl_into_system_group!(M1 G1, M2 G2);
+impl_into_system_group!(M1 G1, M2 G2, M3 G3);
+impl_into_system_group!(M1 G1, M2 G2, M3 G3, M4 G4);
+impl_into_system_group!(M1 G1, M2 G2, M3 G3, M4 G4, M5 G5);
+impl_into_system_group!(M1 G1, M2 G2, M3 G3, M4 G4, M5 G5, M6 G6);
+impl_into_system_group!(M1 G1, M2 G2, M3 G3, M4 G4, M5 G5, M6 G6, M7 G7);
+impl_into_system_group!(M1 G1, M2 G2, M3 G3, M4 G4, M5 G5, M6 G6, M7 G7, M8 G8);
 
 /// Systems that run one after another, in the order they were listed — built by
 /// [`IntoSystemChain::chain`], added with [`Schedule::add_chain`].
 ///
-/// Each system gets a generated label and an `after` constraint on the one before it, which is
+/// Each element (a system, or a [group](IntoSystemGroup) of them) gets a generated label and an
+/// `after` constraint on the one before it, which is
 /// exactly what writing `label` / `after` by hand on every edge does — and the generated labels
 /// cannot be misspelt, which the hand-written ones can: an `after` naming a label nobody has is
 /// dropped with a warning, not an error. Systems keep whatever else their configs carry (their
@@ -535,6 +647,15 @@ impl_into_system_configs!(P1 S1, P2 S2, P3 S3, P4 S4, P5 S5, P6 S6, P7 S7, P8 S8
 pub struct SystemChain(pub(crate) Vec<SystemConfig>);
 
 impl SystemChain {
+    /// Runs the whole chain only while `condition` holds, evaluated once per schedule run — see
+    /// [`SystemGroup::run_if`].
+    pub fn run_if<F>(self, condition: F) -> SystemChain
+    where
+        F: FnMut(&World) -> bool + Send + Sync + 'static,
+    {
+        SystemChain(gate(SystemGroup(self.0), Box::new(condition)).0)
+    }
+
     /// Puts every system of the chain in `phase`.
     pub fn in_phase(mut self, phase: Phase) -> Self {
         for config in &mut self.0 {
@@ -554,11 +675,19 @@ impl SystemChain {
     }
 }
 
-/// A tuple of 2–8 systems (bare functions or configured [`SystemConfig`]s) that can be chained:
-/// `(spawn, move_things, despawn).chain()` runs them in that order every time.
+/// A tuple of 2–8 [groups](IntoSystemGroup) — systems, chains, tuples — that can be chained:
+/// `(spawn, move_things, despawn).chain()` runs them in that order every time, and
+/// `(read, (score, flash), finish).chain()` runs `score` and `flash` (in either order) between the
+/// other two.
 pub trait IntoSystemChain<Marker> {
     /// Orders the systems as listed — see [`SystemChain`].
     fn chain(self) -> SystemChain;
+
+    /// The tuple as an unordered [`SystemGroup`] that runs only while `condition` holds — see
+    /// [`SystemGroup::run_if`].
+    fn run_if<F>(self, condition: F) -> SystemGroup
+    where
+        F: FnMut(&World) -> bool + Send + Sync + 'static;
 }
 
 /// A fresh label for the `index`th system of a new chain. Leaked: labels are `&'static str`
@@ -567,24 +696,24 @@ fn chain_label(chain: u64, index: usize) -> &'static str {
     Box::leak(format!("chain#{chain}/{index}").into_boxed_str())
 }
 
-fn link(configs: Vec<SystemConfig>) -> SystemChain {
+/// Orders `groups` as listed: every system of a group runs after every system of the group
+/// before it. A group's systems share one generated label, and a nested chain keeps its own order.
+fn link(groups: Vec<SystemGroup>) -> SystemChain {
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let chain = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let mut previous: Option<&'static str> = None;
-    let linked = configs
-        .into_iter()
-        .enumerate()
-        .map(|(i, config)| {
-            let label = chain_label(chain, i);
+    let mut linked = Vec::new();
+    for (i, group) in groups.into_iter().enumerate() {
+        let label = chain_label(chain, i);
+        for config in group.0 {
             let config = config.label(label);
-            let config = match previous {
+            linked.push(match previous {
                 Some(p) => config.after(p),
                 None => config,
-            };
-            previous = Some(label);
-            config
-        })
-        .collect();
+            });
+        }
+        previous = Some(label);
+    }
     SystemChain(linked)
 }
 
@@ -592,12 +721,23 @@ macro_rules! impl_into_system_chain {
     ($($P:ident $S:ident),+) => {
         impl<$($P, $S),+> IntoSystemChain<($($P,)+)> for ($($S,)+)
         where
-            $($S: IntoSystemConfig<$P>,)+
+            $($S: IntoSystemGroup<$P>,)+
         {
             fn chain(self) -> SystemChain {
                 #[allow(non_snake_case)]
                 let ($($S,)+) = self;
-                link(vec![$($S.into_config()),+])
+                link(vec![$($S.into_group()),+])
+            }
+
+            fn run_if<F>(self, condition: F) -> SystemGroup
+            where
+                F: FnMut(&World) -> bool + Send + Sync + 'static,
+            {
+                #[allow(non_snake_case)]
+                let ($($S,)+) = self;
+                let mut all = Vec::new();
+                $(all.extend($S.into_group().0);)+
+                gate(SystemGroup(all), Box::new(condition))
             }
         }
     };
