@@ -5,7 +5,6 @@ use super::layouts::LayoutRefs;
 use super::shaders::load_shader_composed;
 #[cfg(gizmo_forward_only)]
 use super::shaders::load_shader_composed_web;
-use crate::gpu_types::Vertex;
 
 /// The fixed-function state of one baked-lit pipeline variant.
 ///
@@ -102,7 +101,7 @@ pub(crate) fn forward_pipeline(
             module,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
-            buffers: &[Some(Vertex::desc())],
+            buffers: &[Some(crate::gpu_types::GpuVertex::desc())],
         },
         fragment: Some(wgpu::FragmentState {
             module,
@@ -826,7 +825,7 @@ pub(crate) fn shadow_pipeline(
             module: shader,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
-            buffers: &[Some(Vertex::desc())],
+            buffers: &[Some(crate::gpu_types::GpuVertex::desc())],
         },
         // No colour targets either way, and no fragment stage at all unless the draw cuts, which
         // is what keeps the pass cheap.

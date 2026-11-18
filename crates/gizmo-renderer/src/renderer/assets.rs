@@ -93,13 +93,14 @@ impl Renderer {
         )
     }
 
-    /// Uploads a vertex slice and returns the buffer. The caller wraps it in a
-    /// [`Mesh`](crate::components::Mesh), which is where the bounds and the CPU copy are computed.
+    /// Uploads a vertex slice, packed for the GPU ([`pack_vertices`](crate::gpu_types::pack_vertices)),
+    /// and returns the buffer. The caller wraps it in a [`Mesh`](crate::components::Mesh), which is
+    /// where the bounds and the CPU copy are computed.
     pub fn create_mesh(&self, vertices: &[Vertex]) -> wgpu::Buffer {
         self.device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Mesh Vertex Buffer"),
-                contents: bytemuck::cast_slice(vertices),
+                contents: bytemuck::cast_slice(&crate::gpu_types::pack_vertices(vertices)),
                 usage: wgpu::BufferUsages::VERTEX,
             })
     }

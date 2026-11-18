@@ -405,7 +405,7 @@ fn setup(world: &mut World, renderer: &mut Renderer) -> BeamNGState {
         .device
         .create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Ground VBuf"),
-            contents: bytemuck::cast_slice(&ground_vertices),
+            contents: bytemuck::cast_slice(&gizmo::renderer::gpu_types::pack_vertices(&ground_vertices)),
             usage: wgpu::BufferUsages::VERTEX,
         });
 

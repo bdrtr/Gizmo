@@ -22,7 +22,7 @@ use gizmo_math::Vec3;
 use std::ops::Range;
 use std::sync::{Arc, Mutex, Weak};
 
-/// Vertices a vertex slab holds: 512 Ki of [`Vertex`]'s 104 bytes, 52 MiB.
+/// Vertices a vertex slab holds: 512 Ki of [`GpuVertex`](crate::gpu_types::GpuVertex)'s 60 bytes, 30 MiB.
 const VERTEX_SLAB: u32 = 1 << 19;
 /// Indices an index slab holds: 8 Mi `u32`s, 32 MiB.
 const INDEX_SLAB: u32 = 1 << 23;
@@ -49,6 +49,9 @@ pub struct ArenaStats {
     pub index_slabs: usize,
     /// Indices placed and not yet given back.
     pub indices: u64,
+    /// What the placed vertices take on the GPU: `vertices` packed
+    /// ([`GpuVertex`](crate::gpu_types::GpuVertex)), not the CPU's `Vertex`.
+    pub vertex_bytes: u64,
 }
 
 struct Pools {
@@ -162,7 +165,7 @@ impl MeshArena {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
         let pools = Pools {
             vertices: Pool {
-                stride: std::mem::size_of::<Vertex>() as u64,
+                stride: std::mem::size_of::<crate::gpu_types::GpuVertex>() as u64,
                 slab_elements: VERTEX_SLAB,
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
                 label: "MeshArena vertices",
@@ -195,7 +198,7 @@ impl MeshArena {
     }
 
     pub(crate) fn place_vertices(&self, vertices: &[Vertex]) -> Placed {
-        self.place(false, bytemuck::cast_slice(vertices), vertices.len() as u32)
+        self.place(false, bytemuck::cast_slice(&crate::gpu_types::pack_vertices(vertices)), vertices.len() as u32)
     }
 
     // Indexed meshes are deduplicated by meshopt, which the browser build does not have.
@@ -226,6 +229,7 @@ impl MeshArena {
         ArenaStats {
             vertex_slabs: pools.vertices.slabs.len(),
             vertices: pools.vertices.slabs.iter().map(Slab::used).sum(),
+            vertex_bytes: pools.vertices.slabs.iter().map(Slab::used).sum::<u64>() * pools.vertices.stride,
             index_slabs: pools.indices.slabs.len(),
             indices: pools.indices.slabs.iter().map(Slab::used).sum(),
         }

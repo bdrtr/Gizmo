@@ -1,14 +1,13 @@
 use bytemuck::{Pod, Zeroable};
 
-/// The engine's one vertex layout — every mesh, every pipeline, one stride.
+/// A vertex as the engine builds, imports and keeps one on the CPU: every attribute at full
+/// precision, 104 bytes. What the GPU is handed is [`GpuVertex`], the same vertex packed to 60
+/// bytes ([`pack_vertices`]) — every mesh's buffer holds those.
 ///
 /// There is deliberately no second, leaner layout for meshes that carry no skin or no tangents:
-/// a mesh with two possible strides is a mesh that can be bound to the wrong pipeline, and the
-/// bytes saved are dwarfed by the buffers themselves. Absent source attributes are normalised at
-/// import instead (see [`Default`]), so a shader may always read all seven.
-///
-/// [`Vertex::desc`] describes it to wgpu, and the field offsets there come from `offset_of!`
-/// rather than a running sum — see the note on that function.
+/// a mesh with two possible strides is a mesh that can be bound to the wrong pipeline. Absent
+/// source attributes are normalised at import instead (see [`Default`]), so a shader may always
+/// read all seven.
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct Vertex {
@@ -67,70 +66,113 @@ impl Default for Vertex {
     }
 }
 
-impl Vertex {
-    /// This layout as wgpu describes it: the stride, and one attribute per field at
-    /// locations 0..=7.
-    ///
-    /// Offsets are taken from `offset_of!` rather than written out, because a hand-maintained
-    /// running sum is one arithmetic slip away from a pipeline that reads normals out of the
-    /// tex-coords — see the comment inside.
-    pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
-        wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                // Vertex colour is RGBA (Float32x4). A shader that only wants the RGB may
-                // still declare `vec3<f32>` here — wgpu/WebGPU allow a shader input with
-                // FEWER components than the attribute format supplies, so widening this
-                // attribute did not require touching the eight shaders that ignore alpha.
-                // Offsets come from `offset_of!` rather than a running sum of the preceding
-                // field sizes: widening `color` from RGB to RGBA moved five of them by four
-                // bytes, and a hand-maintained sum is one arithmetic slip away from a
-                // pipeline that reads normals out of the tex-coords.
-                wgpu::VertexAttribute {
-                    offset: std::mem::offset_of!(Vertex, color) as wgpu::BufferAddress,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::offset_of!(Vertex, normal) as wgpu::BufferAddress,
-                    shader_location: 2,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::offset_of!(Vertex, tex_coords) as wgpu::BufferAddress,
-                    shader_location: 3,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::offset_of!(Vertex, joint_indices) as wgpu::BufferAddress,
-                    shader_location: 4,
-                    format: wgpu::VertexFormat::Uint32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::offset_of!(Vertex, joint_weights) as wgpu::BufferAddress,
-                    shader_location: 5,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::offset_of!(Vertex, tangent) as wgpu::BufferAddress,
-                    shader_location: 6,
-                    format: wgpu::VertexFormat::Float32x4,
-                },
-                wgpu::VertexAttribute {
-                    offset: std::mem::offset_of!(Vertex, lightmap_uv) as wgpu::BufferAddress,
-                    shader_location: 7,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-            ],
+/// The engine's one GPU vertex layout — every mesh buffer, every pipeline, one stride: a [`Vertex`]
+/// packed to 60 bytes from 104 ([`GpuVertex::from`], [`pack_vertices`]).
+///
+/// Each attribute in the narrowest format that still holds what it carries, and every one arrives
+/// in the shader as the `f32`/`u32` vector it always was — wgpu converts on fetch — so no shader
+/// changed for it:
+///
+/// | attribute | format | why that one |
+/// |---|---|---|
+/// | position | `Float32x3` | the one that places triangles; nothing coarser |
+/// | colour | `Float16x4` | half floats keep a value above 1 and the dark end's precision (a linear colour decoded from sRGB is mostly small numbers) |
+/// | normal | `Snorm16x4` | a unit vector: 1/32767 a step |
+/// | first UV | `Float32x2` | tiles and mirrors far outside 0–1 |
+/// | joints | `Uint8x4` | a skin has at most 128 (`SkeletonData::joints`) |
+/// | weights | `Unorm8x4` | rounded to sum to exactly 255, so a skinned vertex's weights still sum to 1 |
+/// | tangent | `Snorm16x4` | a unit vector and a ±1 |
+/// | lightmap UV | `Float32x2` | as the first set |
+///
+/// Measured before it existed, the city of `nfsu2-gizmo` drawn from its first 48 bytes instead of
+/// 104: the forward pass 6.2 → 5.1 ms on a Radeon 780M and 3.1 → 2.7 ms on an RTX 3050 — a mesh's
+/// vertices are read once per vertex the GPU shades, and on an integrated GPU through the memory
+/// the CPU is using.
+#[repr(C)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Pod, Zeroable)]
+pub struct GpuVertex {
+    /// [`Vertex::position`].
+    pub position: [f32; 3],
+    /// [`Vertex::color`], as half floats (the bits).
+    pub color: [u16; 4],
+    /// [`Vertex::normal`], snorm16; the fourth is zero.
+    pub normal: [i16; 4],
+    /// [`Vertex::tex_coords`].
+    pub tex_coords: [f32; 2],
+    /// [`Vertex::joint_indices`], each below 256.
+    pub joint_indices: [u8; 4],
+    /// [`Vertex::joint_weights`], unorm8, summing to 255 where they summed to 1.
+    pub joint_weights: [u8; 4],
+    /// [`Vertex::tangent`], snorm16.
+    pub tangent: [i16; 4],
+    /// [`Vertex::lightmap_uv`].
+    pub lightmap_uv: [f32; 2],
+}
+
+/// A value in −1…1 as a snorm16: what `Snorm16x4` turns back into `max(v / 32767, −1)`.
+fn snorm16(v: f32) -> i16 {
+    (v.clamp(-1.0, 1.0) * 32767.0).round() as i16
+}
+
+/// Skin weights as unorm8 that sum to exactly what the floats did: each rounded, and the rounding's
+/// remainder given to the largest, so a skinned vertex's weights sum to 255 — 1.0 in the shader —
+/// rather than to 254 or 256, which would shrink or swell it. Weights that summed to zero stay zero.
+fn unorm8_weights(w: [f32; 4]) -> [u8; 4] {
+    let target = (w.iter().map(|x| x.clamp(0.0, 1.0)).sum::<f32>() * 255.0).round().clamp(0.0, 255.0) as i32;
+    let mut q = w.map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as i32);
+    let largest = (0..4).max_by(|&a, &b| w[a].total_cmp(&w[b])).unwrap_or(0);
+    q[largest] = (q[largest] + target - q.iter().sum::<i32>()).clamp(0, 255);
+    q.map(|x| x as u8)
+}
+
+impl From<&Vertex> for GpuVertex {
+    fn from(v: &Vertex) -> Self {
+        let half = |x: f32| half::f16::from_f32(x).to_bits();
+        debug_assert!(v.joint_indices.iter().all(|&j| j < 256), "a joint index past 255: {:?}", v.joint_indices);
+        Self {
+            position: v.position,
+            color: v.color.map(half),
+            normal: [snorm16(v.normal[0]), snorm16(v.normal[1]), snorm16(v.normal[2]), 0],
+            tex_coords: v.tex_coords,
+            joint_indices: v.joint_indices.map(|j| j.min(255) as u8),
+            joint_weights: unorm8_weights(v.joint_weights),
+            tangent: v.tangent.map(snorm16),
+            lightmap_uv: v.lightmap_uv,
         }
     }
 }
+
+/// Every vertex packed for the GPU ([`GpuVertex`]): what a mesh's vertex buffer holds.
+#[must_use]
+pub fn pack_vertices(vertices: &[Vertex]) -> Vec<GpuVertex> {
+    vertices.iter().map(GpuVertex::from).collect()
+}
+
+impl GpuVertex {
+    /// This layout as wgpu describes it: the stride, and one attribute per field at locations
+    /// 0..=7 — the locations every engine shader and a custom material's declare.
+    ///
+    /// Offsets are taken from `offset_of!` rather than written out: a hand-maintained running sum
+    /// is one slip away from a pipeline that reads normals out of the tex-coords.
+    pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRIBUTES: [wgpu::VertexAttribute; 8] = [
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(GpuVertex, position) as u64, shader_location: 0, format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(GpuVertex, color) as u64, shader_location: 1, format: wgpu::VertexFormat::Float16x4 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(GpuVertex, normal) as u64, shader_location: 2, format: wgpu::VertexFormat::Snorm16x4 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(GpuVertex, tex_coords) as u64, shader_location: 3, format: wgpu::VertexFormat::Float32x2 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(GpuVertex, joint_indices) as u64, shader_location: 4, format: wgpu::VertexFormat::Uint8x4 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(GpuVertex, joint_weights) as u64, shader_location: 5, format: wgpu::VertexFormat::Unorm8x4 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(GpuVertex, tangent) as u64, shader_location: 6, format: wgpu::VertexFormat::Snorm16x4 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(GpuVertex, lightmap_uv) as u64, shader_location: 7, format: wgpu::VertexFormat::Float32x2 },
+        ];
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<GpuVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &ATTRIBUTES,
+        }
+    }
+}
+
 
 /// One punctual light as the shaders read it: point, spot and directional in a single 64-byte
 /// record, discriminated by `params.y`.
@@ -919,24 +961,62 @@ mod tests {
 
     #[test]
     fn vertex_desc_offsets_are_packed_and_in_bounds() {
-        let d = Vertex::desc();
-        assert_eq!(d.array_stride as usize, std::mem::size_of::<Vertex>());
+        let d = GpuVertex::desc();
+        assert_eq!(d.array_stride as usize, std::mem::size_of::<GpuVertex>());
+        assert_eq!(std::mem::size_of::<GpuVertex>(), 60, "the packed vertex is 60 bytes");
 
         // Offsets strictly increase, shader locations run 0..=7, everything fits.
         let mut prev: Option<u64> = None;
         for (i, a) in d.attributes.iter().enumerate() {
             assert_eq!(a.shader_location, i as u32, "attribute {i} shader_location");
-            assert!(a.offset < d.array_stride, "attribute {i} offset past stride");
+            assert!(a.offset + a.format.size() <= d.array_stride, "attribute {i} runs past the stride");
             if let Some(p) = prev {
                 assert!(a.offset > p, "attribute {i} offset must increase");
             }
             prev = Some(a.offset);
         }
-        // Last attribute is the Float32x2 lightmap UV (8 bytes) and must end exactly
-        // at the stride — no hidden gap that would corrupt the next vertex.
-        let last = d.attributes.last().unwrap();
-        assert_eq!(last.format, wgpu::VertexFormat::Float32x2);
-        assert_eq!(last.offset + 8, d.array_stride);
+        // The attributes tile the stride exactly: no gap that a field could fall into unseen,
+        // no overlap that would read one field as another.
+        let covered: u64 = d.attributes.iter().map(|a| a.format.size()).sum();
+        assert_eq!(covered, d.array_stride, "the attributes cover the vertex, byte for byte");
+    }
+
+    /// A vertex comes back from its packing as itself, to the precision each format keeps: the
+    /// position and both UV sets exactly, the colour to a half float (above 1 too), the normal and
+    /// the tangent to 1/32767, the joints exactly, and the weights to 1/255 — summing to exactly
+    /// 255, so a skinned vertex is neither shrunk nor swollen.
+    #[test]
+    fn a_vertex_survives_its_packing() {
+        let v = Vertex {
+            position: [1.25, -3.5, 1.0e4],
+            color: [0.0021, 0.5, 3.75, 0.25],
+            normal: [0.267_261_24, -0.534_522_5, 0.801_783_7],
+            tex_coords: [-17.375, 2048.5],
+            joint_indices: [0, 7, 127, 3],
+            joint_weights: [0.333, 0.333, 0.334, 0.0],
+            tangent: [0.0, 1.0, 0.0, -1.0],
+            lightmap_uv: [0.125, 0.9375],
+        };
+        let g = GpuVertex::from(&v);
+        assert_eq!(g.position, v.position);
+        assert_eq!(g.tex_coords, v.tex_coords);
+        assert_eq!(g.lightmap_uv, v.lightmap_uv);
+        for (half, f) in g.color.iter().zip(v.color) {
+            let back = half::f16::from_bits(*half).to_f32();
+            assert!((back - f).abs() <= f.abs() * 1.0e-3, "colour {f} came back as {back}");
+        }
+        let snorm = |x: i16| (f32::from(x) / 32767.0).max(-1.0);
+        for i in 0..3 {
+            assert!((snorm(g.normal[i]) - v.normal[i]).abs() < 1.0e-4, "normal {i}");
+        }
+        assert_eq!(g.tangent.map(snorm), [0.0, 1.0, 0.0, -1.0], "the handedness stays exactly ±1");
+        assert_eq!(g.joint_indices, [0, 7, 127, 3]);
+        assert_eq!(g.joint_weights.iter().map(|&w| u32::from(w)).sum::<u32>(), 255, "{:?}", g.joint_weights);
+        for i in 0..4 {
+            assert!((f32::from(g.joint_weights[i]) / 255.0 - v.joint_weights[i]).abs() <= 1.5 / 255.0, "weight {i}");
+        }
+        // An unskinned vertex keeps zero weights — the identity in the shader.
+        assert_eq!(GpuVertex::from(&Vertex::default()).joint_weights, [0; 4]);
     }
 
     // The Material lighting knobs are useless if they land in the wrong slot, and the wrong
@@ -1073,16 +1153,16 @@ mod tests {
         // Vertex alpha reaches the GPU or it does not exist. A Float32x3 here is exactly the
         // bug that made decal/skid-mark layers draw as opaque geometry: the alpha was in the
         // Rust struct's neighbourhood but never described to the pipeline.
-        let d = Vertex::desc();
+        let d = GpuVertex::desc();
         let colour = d.attributes.iter().find(|a| a.shader_location == 1).expect("colour attribute");
         assert_eq!(
             colour.format,
-            wgpu::VertexFormat::Float32x4,
-            "vertex colour must be RGBA — a Float32x3 silently drops the alpha channel"
+            wgpu::VertexFormat::Float16x4,
+            "vertex colour must be RGBA — a three-component format silently drops the alpha channel"
         );
         // The attribute must cover the whole `color` field and nothing else.
-        assert_eq!(colour.offset as usize, std::mem::offset_of!(Vertex, color));
-        assert_eq!(colour.offset as usize + 16, std::mem::offset_of!(Vertex, normal));
+        assert_eq!(colour.offset as usize, std::mem::offset_of!(GpuVertex, color));
+        assert_eq!(colour.offset as usize + 8, std::mem::offset_of!(GpuVertex, normal));
     }
 
     #[test]

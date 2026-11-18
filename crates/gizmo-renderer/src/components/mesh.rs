@@ -197,7 +197,7 @@ fn build_lod1(
     let lod_flat = lod1_vertices(unique_vertices, indices)?;
     let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some(&format!("LOD1 VBuf: {source}")),
-        contents: bytemuck::cast_slice(&lod_flat),
+        contents: bytemuck::cast_slice(&crate::gpu_types::pack_vertices(&lod_flat)),
         usage: wgpu::BufferUsages::VERTEX,
     });
     Some((Arc::new(buf), lod_flat.len() as u32))
@@ -210,6 +210,10 @@ impl Mesh {
     // WASM: meshopt LOD üretimi native-only cfg'li — `device` ve `mut`'lar orada
     // kullanılmadığından hedefli allow (native lint gücü korunur).
     #[cfg_attr(target_arch = "wasm32", allow(unused_variables, unused_mut))]
+    ///
+    /// `vbuf` holds `vertices` packed for the GPU ([`pack_vertices`](crate::gpu_types::pack_vertices)),
+    /// as every mesh buffer does: the pipelines read [`GpuVertex`](crate::gpu_types::GpuVertex)s.
+    /// [`Mesh::from_vertices`] makes the buffer itself.
     pub fn new(
         device: &wgpu::Device,
         vbuf: Arc<wgpu::Buffer>,
@@ -236,9 +240,12 @@ impl Mesh {
             "Kullanım hatası: Normal kullanımlarda vertices boş olamaz. Boş (fallback) mesh için Mesh::empty() kullanın."
         );
         let vertex_count = vertices.len() as u32;
+        // The buffer holds the vertices packed (`GpuVertex`): one built from `cast_slice(vertices)` —
+        // what every caller wrote until 2026-11-18 — is 104 bytes a vertex and is read as garbage.
         debug_assert_eq!(
-            vertex_count as usize * std::mem::size_of::<crate::gpu_types::Vertex>(),
-            vbuf.size() as usize
+            vertex_count as usize * std::mem::size_of::<crate::gpu_types::GpuVertex>(),
+            vbuf.size() as usize,
+            "`{source}`: its vertex buffer is not `gpu_types::pack_vertices(vertices)`"
         );
         let bounds = gizmo_math::Aabb::from_points(vertices.iter().map(|v| v.position));
         let cpu_vertices: Arc<Vec<Vec3>> = Arc::new(vertices.iter().map(|v| Vec3::from(v.position)).collect());
@@ -312,7 +319,7 @@ impl Mesh {
             use wgpu::util::DeviceExt;
             let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("VBuf (flat, no meshopt): {source}")),
-                contents: bytemuck::cast_slice(vertices),
+                contents: bytemuck::cast_slice(&crate::gpu_types::pack_vertices(vertices)),
                 usage: wgpu::BufferUsages::VERTEX,
             });
             // Tail expression, not a `return`: on wasm the block below is stripped, so this
@@ -332,7 +339,7 @@ impl Mesh {
 
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("VBuf (indexed): {source}")),
-            contents: bytemuck::cast_slice(&unique_vertices),
+            contents: bytemuck::cast_slice(&crate::gpu_types::pack_vertices(&unique_vertices)),
             usage: wgpu::BufferUsages::VERTEX,
         });
         // 16-bit indeksler, sığdığı sürece: indeks tamponunun bandını ve belleğini yarıya
@@ -455,7 +462,7 @@ impl Mesh {
         use wgpu::util::DeviceExt;
         let vbuf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("ProcMesh VBuf"),
-            contents: bytemuck::cast_slice(vertices),
+            contents: bytemuck::cast_slice(&crate::gpu_types::pack_vertices(vertices)),
             // COPY_DST → içerik her frame güncellenebilir (bkz `update_vertices`).
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         });
@@ -469,10 +476,11 @@ impl Mesh {
     /// `bounds`/`vertex_count` are not updated (the position range is expected to stay the same)
     /// and above 20000 vertices the LOD buffers are not updated.
     pub fn update_vertices(&self, queue: &wgpu::Queue, vertices: &[crate::gpu_types::Vertex]) {
-        let bytes: &[u8] = bytemuck::cast_slice(vertices);
+        let packed = crate::gpu_types::pack_vertices(vertices);
+        let bytes: &[u8] = bytemuck::cast_slice(&packed);
         // Within this mesh's own vertices: in a shared buffer, past them is another mesh.
         debug_assert!(vertices.len() <= self.vertex_count as usize);
-        let offset = u64::from(self.first_vertex) * std::mem::size_of::<crate::gpu_types::Vertex>() as u64;
+        let offset = u64::from(self.first_vertex) * std::mem::size_of::<crate::gpu_types::GpuVertex>() as u64;
         debug_assert!(offset + bytes.len() as u64 <= self.vbuf.size());
         queue.write_buffer(&self.vbuf, offset, bytes);
     }

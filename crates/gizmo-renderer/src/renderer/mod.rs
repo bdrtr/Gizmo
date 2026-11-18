@@ -1754,18 +1754,20 @@ mod tests {
         assert_eq!(std::mem::offset_of!(crate::gpu_types::MaterialParams, uv_scale), 32, "uv_scale must be at offset 32");
 
         // Vertex attribute offsetleri shader VertexInput @location'larıyla (ve
-        // Vertex::desc() ile) BİREBİR uyuşmalı. Bir alan kayarsa skinning/tangent
+        // GpuVertex::desc() ile) BİREBİR uyuşmalı. Bir alan kayarsa skinning/tangent
         // bozulur ama toplam boyut değişmeyebilir — bu yüzden offset'leri de kilitle.
-        use crate::gpu_types::Vertex;
-        assert_eq!(std::mem::offset_of!(Vertex, position), 0);
-        // color is RGBA (16 bytes), so everything after it sits 4 bytes later than it used to.
-        assert_eq!(std::mem::offset_of!(Vertex, color), 12);
-        assert_eq!(std::mem::offset_of!(Vertex, normal), 28);
-        assert_eq!(std::mem::offset_of!(Vertex, tex_coords), 40);
-        assert_eq!(std::mem::offset_of!(Vertex, joint_indices), 48);
-        assert_eq!(std::mem::offset_of!(Vertex, joint_weights), 64);
-        assert_eq!(std::mem::offset_of!(Vertex, tangent), 80);
-        assert_eq!(std::mem::size_of::<Vertex>(), 104, "Vertex size/layout shifted!");
+        // The GPU's vertex is the packed one (60 bytes since 2026-11-18); `Vertex` is the CPU's.
+        use crate::gpu_types::GpuVertex;
+        assert_eq!(std::mem::offset_of!(GpuVertex, position), 0);
+        assert_eq!(std::mem::offset_of!(GpuVertex, color), 12);
+        assert_eq!(std::mem::offset_of!(GpuVertex, normal), 20);
+        assert_eq!(std::mem::offset_of!(GpuVertex, tex_coords), 28);
+        assert_eq!(std::mem::offset_of!(GpuVertex, joint_indices), 36);
+        assert_eq!(std::mem::offset_of!(GpuVertex, joint_weights), 40);
+        assert_eq!(std::mem::offset_of!(GpuVertex, tangent), 44);
+        assert_eq!(std::mem::offset_of!(GpuVertex, lightmap_uv), 52);
+        assert_eq!(std::mem::size_of::<GpuVertex>(), 60, "GpuVertex size/layout shifted!");
+        assert_eq!(std::mem::size_of::<crate::gpu_types::Vertex>(), 104, "Vertex size/layout shifted!");
     }
 
     /// Regression for M7.0a: the SSGI-apply pass runs at full-res but samples a

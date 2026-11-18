@@ -163,7 +163,7 @@ pub fn asset_server_update_system(
             .device()
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some(&format!("Obj VBuf: {}", obj.path)),
-                contents: bytemuck::cast_slice(&obj.vertices),
+                contents: bytemuck::cast_slice(&crate::renderer::gpu_types::pack_vertices(&obj.vertices)),
                 usage: wgpu::BufferUsages::VERTEX,
             });
         let mesh = Mesh::new(

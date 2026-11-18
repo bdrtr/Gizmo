@@ -272,7 +272,7 @@ impl CustomMaterial {
                 module: &module,
                 entry_point: Some(options.vertex_entry),
                 compilation_options: Default::default(),
-                buffers: &[Some(crate::gpu_types::Vertex::desc())],
+                buffers: &[Some(crate::gpu_types::GpuVertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: &module,

@@ -50,6 +50,17 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Every mesh's vertices go to the GPU packed: 60 bytes a vertex from 104.** `Vertex` stays what the engine builds,
+  imports and keeps on the CPU; its buffers hold `GpuVertex`, each attribute in the narrowest format that still
+  holds it — position and both UV sets as `f32`, the colour as half floats (a value above 1 kept, and the precision a
+  colour decoded to linear needs at the dark end), normal and tangent as snorm16, joints as `u8` (a skin has 128 at
+  most), weights as unorm8 rounded to sum to exactly 1. wgpu converts on fetch, so every shader, a custom
+  material's included, reads the same `vec3<f32>`/`vec4<f32>` it did. A mesh's vertices are read once per vertex the
+  GPU shades, and an integrated GPU reads them through the memory the CPU is using: in `nfsu2-gizmo`'s city
+  (4.3 M vertices) the forward pass 7.0 → 4.5 ms on the Radeon 780M and 3.2 → 2.8 ms on the RTX 3050, paired runs,
+  and the city's vertex buffers 446 → 257 MB. `ArenaStats::vertex_bytes` says what the arena's take. Test
+  `a_vertex_survives_its_packing`; the GPU golden suite is unchanged by it, 220/220.
+
 - **`TexturePool`: many textures of one size in a few shared arrays, materials from one array in one batch.** A
   batch is the buffers and the material's bind group, so objects with different textures never shared a draw: in
   `nfsu2-gizmo`'s city, 3 872 draws at the measured spot, and a third of the main thread was wgpu tracking every
@@ -70,6 +81,11 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   WebGPU's 16, which nothing did.
 
 ### Changed
+
+- **`Vertex::desc` is `GpuVertex::desc`, and a buffer handed to `Mesh::new` holds `gpu_types::pack_vertices(vertices)`.**
+  A pipeline of a game's own describes its vertex buffer with `GpuVertex::desc()`; a buffer built from
+  `cast_slice(vertices)` is caught by the size check `Mesh::new` already had, which names `pack_vertices`.
+  `Renderer::create_mesh`, `Mesh::from_vertices` and every constructor that makes the buffer pack it themselves.
 
 - **A custom shader that declares the instance struct declares `texture: vec4<f32>` after `optics`**, and one that
   builds a `SurfaceInput` sets `base_layer`; `CustomMaterial::from_wgsl` names both sizes when the struct is

@@ -1,5 +1,4 @@
 use super::types::GpuBox;
-use crate::gpu_types::Vertex;
 
 /// Every pipeline the GPU rigid-body solver runs: one compute pass per stage of a step, plus the
 /// draw and the frustum-culling pass that feeds it.
@@ -281,7 +280,7 @@ pub fn create_physics_pipelines(
             module: &render_shader,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
-            buffers: &[Some(Vertex::desc()), Some(GpuBox::desc())],
+            buffers: &[Some(crate::gpu_types::GpuVertex::desc()), Some(GpuBox::desc())],
         },
         fragment: Some(wgpu::FragmentState {
             module: &render_shader,

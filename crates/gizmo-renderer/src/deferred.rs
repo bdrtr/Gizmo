@@ -1,4 +1,3 @@
-use crate::gpu_types::Vertex;
 use crate::pipeline::SceneState;
 
 // Single source of truth for the deferred G-buffer render-target formats.
@@ -791,7 +790,7 @@ impl DeferredState {
                 module: shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[Some(Vertex::desc())],
+                buffers: &[Some(crate::gpu_types::GpuVertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader,
@@ -886,7 +885,7 @@ impl DeferredState {
                 module: shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[Some(Vertex::desc())],
+                buffers: &[Some(crate::gpu_types::GpuVertex::desc())],
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader,
@@ -949,7 +948,7 @@ impl DeferredState {
                 module: shader,
                 entry_point: Some("vs_main"),
                 compilation_options: Default::default(),
-                buffers: &[Some(Vertex::desc())],
+                buffers: &[Some(crate::gpu_types::GpuVertex::desc())],
             },
             // No colour targets either way. No fragment stage at all unless the draw discards, which is
             // what makes this pass cheap.

@@ -252,7 +252,7 @@ impl GpuPhysicsSystem {
 
         let box_vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Box Vertex Buffer"),
-            contents: bytemuck::cast_slice(&vertices),
+            contents: bytemuck::cast_slice(&crate::gpu_types::pack_vertices(&vertices)),
             usage: wgpu::BufferUsages::VERTEX,
         });
 
