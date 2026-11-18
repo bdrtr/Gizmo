@@ -50,6 +50,22 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Screen-space reflections are glossy: a rough surface spreads what it reflects over its lobe, streaked
+  towards the viewer.** The march found one mirror-direction hit per pixel, and roughness only faded it
+  (`fade_start`/`fade_end`): a glossy floor showed a sharp, fainter copy of the scene — on wet asphalt, glass. A
+  glossy resolve now runs between the march and the apply pass (`ssr_blur.wgsl`, two half-resolution passes,
+  `SsrState::record_blur`): the march leaves in alpha how wide the surface's lobe spreads what it found — α = r²
+  as an angle, at the ray's length, seen from the reflected image's distance; on a miss, the ray's length on
+  screen — and each pixel gathers its reflection over that width along the axis the surface's normal takes on
+  screen, and over the width times N·V across it (a half vector tipped by δ turns the reflection by 2δ in the plane
+  of incidence and by 2δ·N·V across it). So a lamp over a glossy road at a grazing angle is a long streak down the
+  road and a thin one across, as on wet asphalt, and a mirror is left as it is. Only pixels of the same surface are
+  gathered — on its plane, facing its way — and nothing is noise: drawing each pixel's ray from the lobe did the
+  same with grain only TAA could take out, and a game may run without TAA. Test
+  `a_glossy_floor_spreads_what_it_reflects_and_streaks_it`: a small red block over a metal floor, TAA off, spreads
+  4.04 px down the screen over a polished floor and 6.64 over a rough one, 2.81 across; without the resolve the
+  two agree, and with the two axes equal the streak is 5.78 down and 4.81 across.
+
 - **Screen-space reflections march across the screen, and reach what stands far down a street.** The march
   walked equal **world** steps, `step_size × max_steps` = 20 m by default, so a reflection of anything further was
   never found — on a wet street, which shows the lights, signs and buildings a hundred metres down it, that was all

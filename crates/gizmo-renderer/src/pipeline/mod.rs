@@ -1657,6 +1657,7 @@ mod tests {
                 ("ssao_apply.wgsl", include_str!("../shaders/ssao_apply.wgsl")),
                 ("ssr.wgsl", include_str!("../shaders/ssr.wgsl")),
                 ("ssr_apply.wgsl", include_str!("../shaders/ssr_apply.wgsl")),
+                ("ssr_blur.wgsl", include_str!("../shaders/ssr_blur.wgsl")),
                 ("ssgi.wgsl", include_str!("../shaders/ssgi.wgsl")),
                 ("ssgi_blur.wgsl", include_str!("../shaders/ssgi_blur.wgsl")),
                 ("ssgi_apply.wgsl", include_str!("../shaders/ssgi_apply.wgsl")),

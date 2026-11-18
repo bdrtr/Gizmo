@@ -88,6 +88,16 @@ pub struct SsrState {
 
     nearest_sampler: wgpu::Sampler,
 
+    // The glossy resolve (`ssr_blur.wgsl`): along the axis the surface's normal takes on screen,
+    // from `ssr_texture` into this one, then across it, back into `ssr_texture`.
+    blur_texture: wgpu::Texture,
+    blur_view: wgpu::TextureView,
+    blur_bgl: wgpu::BindGroupLayout,
+    blur_along_bind_group: wgpu::BindGroup,
+    blur_across_bind_group: wgpu::BindGroup,
+    blur_along_pipeline: wgpu::RenderPipeline,
+    blur_across_pipeline: wgpu::RenderPipeline,
+
     /// The reflection target's width, in pixels.
     pub width: u32,
     /// Its height.
@@ -182,6 +192,13 @@ impl SsrState {
         let ssr_pipeline = Self::mk_ssr_pipeline(device, scene, &ssr_bgl, &deferred.irradiance.bind_group_layout);
         let apply_pipeline = Self::mk_apply_pipeline(device, &apply_bgl);
 
+        let (blur_texture, blur_view) = Self::mk_ssr_tex(device, half_w, half_h);
+        let blur_bgl = Self::mk_blur_bgl(device);
+        let blur_along_bind_group = Self::mk_blur_bg(device, &blur_bgl, &ssr_view, deferred);
+        let blur_across_bind_group = Self::mk_blur_bg(device, &blur_bgl, &blur_view, deferred);
+        let blur_along_pipeline = Self::mk_blur_pipeline(device, scene, &blur_bgl, "fs_along");
+        let blur_across_pipeline = Self::mk_blur_pipeline(device, scene, &blur_bgl, "fs_across");
+
         Self {
             enabled: true,
             params,
@@ -195,8 +212,45 @@ impl SsrState {
             apply_bgl,
             apply_bind_group,
             nearest_sampler: linear_sampler,
+            blur_texture,
+            blur_view,
+            blur_bgl,
+            blur_along_bind_group,
+            blur_across_bind_group,
+            blur_along_pipeline,
+            blur_across_pipeline,
             width,
             height,
+        }
+    }
+
+    /// Records the glossy resolve: the march's result in [`ssr_view`](Self::ssr_view) spread over each
+    /// surface's lobe, in two passes, and left there for the apply pass.
+    pub fn record_blur(&self, encoder: &mut wgpu::CommandEncoder, scene_bind_group: &wgpu::BindGroup) {
+        for (label, target, pipeline, bind_group) in [
+            ("SSR Blur Along", &self.blur_view, &self.blur_along_pipeline, &self.blur_along_bind_group),
+            ("SSR Blur Across", &self.ssr_view, &self.blur_across_pipeline, &self.blur_across_bind_group),
+        ] {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, scene_bind_group, &[]);
+            pass.set_bind_group(1, bind_group, &[]);
+            pass.draw(0..3, 0..1);
         }
     }
 
@@ -227,6 +281,11 @@ impl SsrState {
         );
         self.apply_bind_group =
             Self::mk_apply_bg(device, &self.apply_bgl, &ssr_view, &self.nearest_sampler, &deferred.seen_view);
+        let (blur_texture, blur_view) = Self::mk_ssr_tex(device, half_w, half_h);
+        self.blur_along_bind_group = Self::mk_blur_bg(device, &self.blur_bgl, &ssr_view, deferred);
+        self.blur_across_bind_group = Self::mk_blur_bg(device, &self.blur_bgl, &blur_view, deferred);
+        self.blur_texture = blur_texture;
+        self.blur_view = blur_view;
 
         self.ssr_texture = ssr_texture;
         self.ssr_view = ssr_view;
@@ -342,6 +401,96 @@ impl SsrState {
                     count: None,
                 },
             ],
+        })
+    }
+
+    fn mk_blur_bgl(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+        let texture = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                multisampled: false,
+                view_dimension: wgpu::TextureViewDimension::D2,
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+            },
+            count: None,
+        };
+        device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("ssr_blur_bgl"),
+            // The pass's source, and the G-buffer's normals and positions.
+            entries: &[texture(0), texture(1), texture(2)],
+        })
+    }
+
+    fn mk_blur_bg(
+        device: &wgpu::Device,
+        layout: &wgpu::BindGroupLayout,
+        source: &wgpu::TextureView,
+        deferred: &DeferredState,
+    ) -> wgpu::BindGroup {
+        device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ssr_blur_bg"),
+            layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(source) },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&deferred.normal_roughness_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&deferred.world_position_view),
+                },
+            ],
+        })
+    }
+
+    fn mk_blur_pipeline(
+        device: &wgpu::Device,
+        scene: &SceneState,
+        bgl: &wgpu::BindGroupLayout,
+        entry: &str,
+    ) -> wgpu::RenderPipeline {
+        let shader = crate::pipeline::shaders::load_shader_composed_with(
+            device,
+            "demo/assets/shaders/ssr_blur.wgsl",
+            include_str!("shaders/ssr_blur.wgsl"),
+            "SSR Blur Shader",
+            &[],
+        );
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ssr_blur_layout"),
+            bind_group_layouts: &[Some(&scene.global_bind_group_layout), Some(bgl)],
+            immediate_size: 0,
+        });
+        device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("ssr_blur_pipeline"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some(entry),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba16Float,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview_mask: None,
+            cache: None,
         })
     }
 

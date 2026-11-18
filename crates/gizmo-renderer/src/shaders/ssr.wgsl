@@ -96,17 +96,26 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     // world steps reached `step × steps` metres and no further, which on a street is the next car:
     // what a wet road shows — the lights, the signs, the buildings down the street — is a hundred
     // metres off and more, and a few pixels away on screen.
-    let origin = world_pos + R * params.start_offset;
+    //
+    // The ray is the mirror direction. A glossy surface spreads what it reflects over its lobe, and
+    // `ssr_blur.wgsl` spreads it so, by the radius this pass leaves in alpha (`blur_radius`): a
+    // direction drawn from the lobe each frame did the same with noise only TAA could take out, and
+    // a game may run without TAA.
+    let ray = R;
+    let origin = world_pos + ray * params.start_offset;
     let clip_origin = scene.view_proj * vec4(origin, 1.0);
-    let clip_dir = scene.view_proj * vec4(R, 0.0);
+    let clip_dir = scene.view_proj * vec4(ray, 0.0);
     // `w` is the view depth: kept past the near plane, so a ray towards the camera ends before it.
     let near = max(scene.cascade_params.x, 1e-3);
     var reach = params.max_distance;
     if (clip_dir.w < 0.0) {
         reach = min(reach, (clip_origin.w - near) / -clip_dir.w);
     }
+    // The lobe's width, for `ssr_blur.wgsl`: pixels per metre at a metre's depth, vertically.
+    let focal_px = 0.5 * tex_dim.y * length(vec3<f32>(scene.view_proj[0][1], scene.view_proj[1][1], scene.view_proj[2][1]));
+    let view_distance = length(pos_sample.xyz);
     if (clip_origin.w <= near || reach <= 0.0) {
-        return vec4(unfound, 1.0);
+        return vec4(unfound, blur_radius(normal_roughness.w, 0.0, view_distance, focal_px));
     }
     let clip_end = clip_origin + clip_dir * reach;
     let uv_origin = ndc_to_uv(clip_origin.xy / clip_origin.w);
@@ -139,7 +148,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
     var previous_depth = length(origin - scene.camera_pos.xyz);
     for (var i = 0; i < steps; i++) {
         let f = stride * (f32(i) + jitter);
-        let ray_depth = march_depth(f, inv_w0, inv_w1, reach, origin, R);
+        let ray_depth = march_depth(f, inv_w0, inv_w1, reach, origin, ray);
         let scene_rel = textureLoad(t_position_rel_camera, uv_to_texel(mix(uv_origin, uv_end, f), tex_dim), 0);
         // `>= 0.5`, not `> 0.5`: a written pixel of an ordinary material carries exactly 0.5 (see
         // `gbuffer.wgsl`), and the strict form once made every hit a miss. An unwritten one is sky,
@@ -156,7 +165,7 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 for (var k = 0; k < 5; k++) {
                     let mid = 0.5 * (lo + hi);
                     let mid_rel = textureLoad(t_position_rel_camera, uv_to_texel(mix(uv_origin, uv_end, mid), tex_dim), 0);
-                    if (mid_rel.w >= 0.5 && march_depth(mid, inv_w0, inv_w1, reach, origin, R) >= length(mid_rel.xyz)) {
+                    if (mid_rel.w >= 0.5 && march_depth(mid, inv_w0, inv_w1, reach, origin, ray) >= length(mid_rel.xyz)) {
                         hi = mid;
                     } else {
                         lo = mid;
@@ -172,14 +181,29 @@ fn fs_main(@builtin(position) frag_coord: vec4<f32>) -> @location(0) vec4<f32> {
                 // What it found replaces the environment, so this can be negative, and the additive
                 // pass that applies it takes light away: a dark thing reflected in a metal floor is
                 // dark. Added on top, a metal would have shown both pictures at once.
-                return vec4((hit_color - environment) * weight * fade_roughness * edge_fade + unfound, 1.0);
+                let travelled = params.start_offset + march_t(hi, inv_w0, inv_w1, reach);
+                return vec4(
+                    (hit_color - environment) * weight * fade_roughness * edge_fade + unfound,
+                    blur_radius(normal_roughness.w, travelled, view_distance, focal_px),
+                );
             }
         }
         previous_f = f;
         previous_depth = ray_depth;
     }
 
-    return vec4(unfound, 1.0);
+    // Nothing found: the lobe is as wide as the ray went before it left the screen.
+    let travelled = params.start_offset + march_t(on_screen, inv_w0, inv_w1, reach);
+    return vec4(unfound, blur_radius(normal_roughness.w, travelled, view_distance, focal_px));
+}
+
+// How wide, in full-resolution pixels, a surface of this roughness spreads what it reflects from
+// `travelled` metres away: the lobe's width there (α = r², GGX's, as an angle), seen from the camera at
+// the distance of the reflected image — the surface's, and the ray's beyond it. At least a hair over
+// zero, which tells `ssr_blur.wgsl` the pixel reflects.
+fn blur_radius(roughness: f32, travelled: f32, view_distance: f32, focal_px: f32) -> f32 {
+    let alpha = roughness * roughness;
+    return max(alpha * travelled / max(view_distance + travelled, 1e-3) * focal_px, 1e-3);
 }
 
 fn ndc_to_uv(ndc: vec2<f32>) -> vec2<f32> {
@@ -190,8 +214,12 @@ fn uv_to_texel(uv: vec2<f32>, dim: vec2<f32>) -> vec2<i32> {
     return clamp(vec2<i32>(uv * dim), vec2<i32>(0), vec2<i32>(dim) - vec2<i32>(1));
 }
 
-// The distance from the camera of the march's point a fraction `f` of the way across the screen.
+// How far along the ray, in metres, the march's point a fraction `f` of the way across the screen is.
+fn march_t(f: f32, inv_w0: f32, inv_w1: f32, reach: f32) -> f32 {
+    return f * reach * inv_w1 / mix(inv_w0, inv_w1, f);
+}
+
+// That point's distance from the camera.
 fn march_depth(f: f32, inv_w0: f32, inv_w1: f32, reach: f32, origin: vec3<f32>, R: vec3<f32>) -> f32 {
-    let t = f * reach * inv_w1 / mix(inv_w0, inv_w1, f);
-    return length(origin + R * t - scene.camera_pos.xyz);
+    return length(origin + R * march_t(f, inv_w0, inv_w1, reach) - scene.camera_pos.xyz);
 }

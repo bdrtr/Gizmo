@@ -47,7 +47,10 @@ pub fn record_surface_effects(encoder: &mut wgpu::CommandEncoder, renderer: &Ren
             pass.draw(0..3, 0..1);
         }
 
-        // Pass 2: SSR Apply (Additive blend into HDR texture)
+        // Pass 2: the glossy resolve, spreading each reflection over its surface's lobe.
+        ssr.record_blur(encoder, renderer.scene.view_bind_group());
+
+        // Pass 3: SSR Apply (Additive blend into HDR texture)
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("SSR Apply Pass"),

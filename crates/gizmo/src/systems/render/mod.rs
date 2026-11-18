@@ -6179,6 +6179,90 @@ mod golden_render_tests {
     }
 
     #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR.
+    /// **A glossy floor spreads what it reflects, and streaks it towards the viewer.** The glossy
+    /// resolve (`ssr_blur.wgsl`) gathers each pixel's reflection over its surface's lobe — wider the
+    /// rougher the surface and the further the ray went — and the lobe, seen at a grazing angle, is
+    /// long down the floor and thin across it (N·V): a small red block floating over a rough metal floor
+    /// shows as a tall smear, over a polished one as a sharp spot, as a lamp does on a wet road. Without
+    /// the resolve, roughness made the reflection fainter (`fade_start`/`fade_end`, off here) and never
+    /// wider. No TAA, so nothing here leans on frames gathered over time.
+    #[test]
+    #[ignore = "requires a GPU adapter"]
+    fn a_glossy_floor_spreads_what_it_reflects_and_streaks_it() {
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        async fn frame(roughness: f32, reflections: bool) -> Vec<u8> {
+            let mut renderer = crate::test_gpu::headless_renderer(128, 128).await;
+            renderer.taa = None;
+            renderer.ssgi = None;
+            renderer.ssao = None;
+            renderer.volumetric = None;
+            if reflections {
+                let p = &mut renderer.ssr.as_mut().expect("the deferred path has screen-space reflections").params;
+                // No fading with roughness: the comparison is of where the reflection lands.
+                p.roughness_cutoff = 1.0;
+                p.fade_start = 1.0;
+                p.fade_end = 1.01;
+            } else {
+                renderer.ssr = None;
+            }
+            let mut assets = AssetManager::new();
+            let white = assets.create_white_texture(&renderer.device, &renderer.queue, &renderer.scene.texture_bind_group_layout);
+            let mut world = World::new();
+            // `create_cube` is ±1: a scale is a half extent.
+            for (at, half, material) in [
+                (Vec3::new(10.0, -0.1, 0.0), Vec3::new(20.0, 0.1, 20.0), Material::new(white.clone()).with_pbr(Vec4::new(0.7, 0.7, 0.7, 1.0), roughness, 1.0)),
+                (Vec3::new(8.0, 1.5, 0.0), Vec3::new(0.2, 0.2, 0.2), Material::new(white.clone()).with_pbr(Vec4::new(1.0, 0.05, 0.02, 1.0), 1.0, 0.0).with_emissive(Vec3::new(4.0, 0.2, 0.1))),
+            ] {
+                let e = world.spawn();
+                world.add_component(e, Transform::new(at).with_scale(half));
+                world.add_component(e, GlobalTransform::default());
+                world.add_component(e, AssetManager::create_cube(&renderer.device));
+                world.add_component(e, material);
+                world.add_component(e, MeshRenderer::new());
+            }
+            world.spawn_bundle(CameraBundle { position: Vec3::new(0.0, 1.2, 0.0), yaw: 0.0, pitch: -0.15, primary: true, ..Default::default() });
+            world.spawn_bundle(DirectionalLightBundle::default());
+            render_world(&mut renderer, &mut world).await
+        }
+        pollster::block_on(async {
+            // Where the floor's reddening (red minus green, against the frame without reflections,
+            // below the horizon) lies about its strongest pixel: its mean distance across and down the
+            // screen, weighted by how much.
+            let spread = |with: &[u8], without: &[u8]| {
+                let mut redness = vec![0i64; 128 * 128];
+                for (i, r) in redness.iter_mut().enumerate().skip(66 * 128) {
+                    let rg = |f: &[u8]| i64::from(f[i * 4]) - i64::from(f[i * 4 + 1]);
+                    *r = (rg(with) - rg(without)).max(0);
+                }
+                let peak = (0..redness.len()).max_by_key(|&i| redness[i]).unwrap_or(0);
+                let (px, py) = ((peak % 128) as i64, (peak / 128) as i64);
+                let (mut across, mut down, mut total) = (0i64, 0i64, 0i64);
+                for (i, &r) in redness.iter().enumerate() {
+                    if r > 6 {
+                        across += r * ((i % 128) as i64 - px).abs();
+                        down += r * ((i / 128) as i64 - py).abs();
+                        total += r;
+                    }
+                }
+                let t = total.max(1) as f64;
+                (across as f64 / t, down as f64 / t, total)
+            };
+            let (_, p_down, p_total) = spread(&frame(0.02, true).await, &frame(0.02, false).await);
+            let (r_across, r_down, r_total) = spread(&frame(0.3, true).await, &frame(0.3, false).await);
+            // When written: polished 2.13 across and 4.04 down, rough 2.81 and 6.64.
+            assert!(p_total > 5_000 && r_total > 5_000, "both floors show the block: {p_total}, {r_total}");
+            assert!(r_down > 1.4 * p_down, "the rough floor spreads the block {r_down:.2} px down the screen, the polished one {p_down:.2}");
+            assert!(r_down > 2.0 * r_across, "and streaks it: {r_down:.2} px down, {r_across:.2} across");
+        });
+    }
+
+    #[cfg(not(gizmo_forward_only))] // The forward-only path has no SSR.
     /// **A polished metal floor shows the scene.** A red cube on a mirror-like floor under a blue sky:
     /// below the cube the floor reads red where the sky's blue would be, because what the reflection found
     /// replaces the environment rather than adding to it. Both sides of that are asserted: red goes up and
