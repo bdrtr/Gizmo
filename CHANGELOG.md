@@ -1324,6 +1324,13 @@ to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **The draw's per-frame material and mesh passes read only what changed.** `rebind_changed_materials` cloned and
+  compared every material's sources, and `describe_meshes` compared every mesh's source string, every frame — in
+  `nfsu2-gizmo`'s 14 600-object city together 37 % of the draw's CPU time (MOTOR-NOTLARI #29). Both now read the
+  components written since they last ran (`World::query_since`, a tick kept per world in `MaterialRebindTick` /
+  `MeshDescribeTick`, as `sync_material_descriptions` has done since 2026-11-17) and the ones they have not seen.
+  New tests `mesh_descriptions_follow_only_what_changed` (no GPU) and `material_rebinding_reads_only_what_changed`;
+  both fail when the kept tick misses what is written after the pass in the tick it ran in.
 - **The opaque world is drawn grouped by material.** The depth buffer decides what an opaque draw shows, so its
   order was left as the batches were built — ECS order, in a merged city a different texture every draw — and wgpu
   validates and tracks every bind group set on a pass. Opaque items now come ordered by what the passes bind for

@@ -200,6 +200,16 @@ pub fn resolve_material_descriptions(world: &mut World, renderer: &crate::Render
     tracing::debug!(count, "[Material] descriptions resolved into materials");
 }
 
+/// Where [`rebind_changed_materials`] left off: the world it ran in and the tick it reads changes
+/// since next time.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MaterialRebindTick {
+    /// [`World::id`] of the world the tick belongs to.
+    pub world: u64,
+    /// Changes stamped after this are news.
+    pub tick: u32,
+}
+
 /// What a material's bind group was built from, as [`rebind_changed_materials`] last saw it.
 #[derive(Clone, PartialEq)]
 struct BoundSources {
@@ -219,12 +229,24 @@ impl gizmo_core::component::Component for BoundSources {}
 /// [`maps`](Material::maps) are not the ones its bind group was built from
 /// ([`Material::maps_are_bound`]) — made in code with a map set before its first frame: that is
 /// built again from what it names.
+///
+/// **Only what changed is looked at**, as in [`sync_material_descriptions`]: a material written since
+/// the pass last ran (tick kept in [`MaterialRebindTick`]), or one it has not seen yet. Until
+/// 2026-11-18 every material's sources were cloned and compared every frame — a fifth of the draw's
+/// CPU time in `nfsu2-gizmo`'s 14 600-material city (MOTOR-NOTLARI #29).
 pub fn rebind_changed_materials(world: &mut World, renderer: &crate::Renderer) {
+    use gizmo_core::query::{Changed, Or, Without};
+    let since = world
+        .get_resource::<MaterialRebindTick>()
+        .filter(|t| t.world == world.id())
+        .map_or(0, |t| t.tick);
+    let now = world.tick.wrapping_sub(1);
     let (adopt, changed): (Vec<(Entity, BoundSources)>, Vec<(Entity, BoundSources)>) = {
         let bound = world.query::<&BoundSources>();
         let mut adopt = Vec::new();
         let mut changed = Vec::new();
-        for (entity, material) in world.query::<(Entity, &Material)>().iter() {
+        let candidates = world.query_since::<(Entity, &Material), Or<Changed<Material>, Without<BoundSources>>>(since);
+        for (entity, material) in candidates.iter() {
             let now = BoundSources { texture_source: material.texture_source.clone(), maps: material.maps.clone() };
             match bound.get(entity) {
                 // Seen for the first time with maps its bind group was not built from: built again.
@@ -236,6 +258,7 @@ pub fn rebind_changed_materials(world: &mut World, renderer: &crate::Renderer) {
         }
         (adopt, changed)
     };
+    world.insert_resource(MaterialRebindTick { world: world.id(), tick: now });
     // A material seen for the first time that names no texture may still be drawn over one this
     // renderer loaded or generated — built as `Material::new(renderer.load_texture(path)?)`. Its
     // bind group says which; naming it here is what a save writes, so the material comes back

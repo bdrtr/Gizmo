@@ -17,6 +17,16 @@ use gizmo_core::{Entity, World};
 use crate::asset::AssetManager;
 use crate::components::Mesh;
 
+/// Where [`describe_meshes`] left off: the world it ran in and the tick it reads changes since next
+/// time.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MeshDescribeTick {
+    /// `World::id` of the world the tick belongs to.
+    pub world: u64,
+    /// Changes stamped after this are news.
+    pub tick: u32,
+}
+
 /// The [`Mesh::source`] an entity's description was last brought in line with.
 #[derive(Clone)]
 struct DescribedMesh(String);
@@ -52,12 +62,23 @@ fn decide(source: &str, has_source: bool, described: Option<&str>) -> Describe {
 /// `MeshSource` naming it, and keeps it naming the mesh when the mesh is swapped — see the
 /// [module docs](self). An entity that already had a `MeshSource` when first seen keeps it until its
 /// mesh changes. Needs no GPU.
+///
+/// **Only what changed is looked at**: a mesh written since the pass last ran (tick kept in
+/// [`MeshDescribeTick`]), or one it has not described yet. Until 2026-11-18 every mesh's source was
+/// compared every frame — a fifth of the draw's CPU time in `nfsu2-gizmo`'s 14 600-mesh city
+/// (MOTOR-NOTLARI #29).
 pub fn describe_meshes(world: &mut World) {
+    use gizmo_core::query::{Changed, Or, Without};
+    let since = world
+        .get_resource::<MeshDescribeTick>()
+        .filter(|t| t.world == world.id())
+        .map_or(0, |t| t.tick);
+    let now = world.tick.wrapping_sub(1);
     let work: Vec<(Entity, String, Describe)> = {
         let sources = world.query::<&MeshSource>();
         let described = world.query::<&DescribedMesh>();
         world
-            .query::<(Entity, &Mesh)>()
+            .query_since::<(Entity, &Mesh), Or<Changed<Mesh>, Without<DescribedMesh>>>(since)
             .iter()
             .filter_map(|(e, mesh)| {
                 let d = decide(&mesh.source, sources.get(e).is_some(), described.get(e).map(|d| d.0.as_str()));
@@ -65,6 +86,7 @@ pub fn describe_meshes(world: &mut World) {
             })
             .collect()
     };
+    world.insert_resource(MeshDescribeTick { world: world.id(), tick: now });
     for (entity, source, describe) in work {
         match describe {
             Describe::Write => world.add_component(entity, MeshSource(source.clone())),

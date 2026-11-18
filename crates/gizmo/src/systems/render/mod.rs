@@ -2117,6 +2117,119 @@ mod keyed_animation_tests {
 
     // ── Property tracks: a keyed field of a component, through the engine's registry. ──
 
+    /// **A mesh's description follows only what changed.** `describe_meshes` used to compare every
+    /// mesh's source with its description every frame — a fifth of the draw's CPU time in a 14 600-mesh
+    /// city. It now reads the meshes written since it last ran, and those it has not described yet.
+    /// Every edit below is made after the pass, in the tick it ran in: the next frame must see it.
+    #[test]
+    fn mesh_descriptions_follow_only_what_changed() {
+        use crate::renderer::components::Mesh;
+        use crate::renderer::mesh_sync::{describe_meshes, MeshDescribeTick};
+        use gizmo_core::component::MeshSource;
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends: wgpu::Backends::NOOP,
+            backend_options: wgpu::BackendOptions {
+                noop: wgpu::NoopBackendOptions { enable: true, ..Default::default() },
+                ..Default::default()
+            },
+            ..wgpu::InstanceDescriptor::new_without_display_handle()
+        });
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).expect("the noop adapter");
+        let (device, _queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).expect("a noop device");
+        let mesh = |key: &str| Mesh::from_vertices(&device, &[crate::renderer::gpu_types::Vertex::default(); 3], key.to_string());
+        let source = |world: &World, e| world.get::<MeshSource>(e).map(|s| s.0.clone());
+        let frame = |world: &mut World| {
+            let reference = world.tick.wrapping_sub(1);
+            world.begin_change_frame(reference);
+            describe_meshes(world);
+        };
+        let mut world = World::new();
+        let a = world.spawn();
+        world.add_component(a, mesh("sphere_0.5_20_20"));
+        frame(&mut world);
+        assert_eq!(source(&world, a).as_deref(), Some("sphere_0.5_20_20"));
+        frame(&mut world);
+        world.add_component(a, mesh("plane_10"));
+        frame(&mut world);
+        assert_eq!(source(&world, a).as_deref(), Some("plane_10"), "a mesh swapped after the pass");
+        let b = world.spawn();
+        world.add_component(b, mesh("cone_1_2_12"));
+        frame(&mut world);
+        assert_eq!(source(&world, b).as_deref(), Some("cone_1_2_12"), "a mesh spawned after the pass");
+        assert_eq!(source(&world, a).as_deref(), Some("plane_10"), "an untouched mesh keeps its description");
+        // A tick from another world is no reference: its world's meshes are all read.
+        let record = world.remove_resource::<MeshDescribeTick>().expect("the pass keeps its tick");
+        let mut fresh = World::new();
+        let c = fresh.spawn();
+        fresh.add_component(c, mesh("plane_4_8"));
+        fresh.insert_resource(record);
+        fresh.begin_change_frame(fresh.tick);
+        describe_meshes(&mut fresh);
+        assert_eq!(source(&fresh, c).as_deref(), Some("plane_4_8"), "a tick from another world skipped this one's mesh");
+    }
+
+    /// **A material's bind group is rebuilt only for what changed.** `rebind_changed_materials` used to
+    /// clone and compare every material's sources every frame — a fifth of the draw's CPU time in a
+    /// 14 600-material city. It now reads the materials written since it last ran and those it has
+    /// not seen. A source changed after the pass, in the tick it ran in, is rebuilt next frame; one
+    /// nobody touched keeps its bind group.
+    #[test]
+    #[ignore = "needs a GPU adapter"]
+    fn material_rebinding_reads_only_what_changed() {
+        use crate::renderer::asset::AssetManager;
+        use crate::renderer::components::Material;
+        use crate::renderer::material_sync::{rebind_changed_materials, MaterialRebindTick};
+        use crate::renderer::Renderer;
+        let _gpu = crate::test_gpu::gpu_lock();
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
+            return;
+        }
+        pollster::block_on(async {
+            let renderer = crate::test_gpu::headless_renderer(64, 64).await;
+            let mut assets = AssetManager::new();
+            let layout = renderer.scene.texture_bind_group_layout.clone();
+            let own = |assets: &mut AssetManager, k: u8| {
+                let rgba: Vec<u8> = (0..16).flat_map(|_| [k, k, k, 255]).collect();
+                assets
+                    .install_decoded_material_texture(&renderer.device, &renderer.queue, &layout, &format!("rebind_{k}"), &rgba, 4, 4)
+                    .expect("a 4×4 texture installs")
+            };
+            let frame = |world: &mut World| {
+                let reference = world.tick.wrapping_sub(1);
+                world.begin_change_frame(reference);
+                rebind_changed_materials(world, &renderer);
+            };
+            let group = |world: &World, e| world.get::<Material>(e).expect("a material").bind_group.clone();
+            let mut world = World::new();
+            let (first, second) = (own(&mut assets, 40), own(&mut assets, 90));
+            let a = world.spawn();
+            world.add_component(a, Material::new(first.clone()));
+            let b = world.spawn();
+            world.add_component(b, Material::new(second.clone()));
+            frame(&mut world);
+            frame(&mut world);
+            assert!(std::sync::Arc::ptr_eq(&group(&world, a), &first), "a material seen first is taken as it is");
+            world.query_mut::<&mut Material>().get_mut(a).expect("a").texture_source = Some("no/such/texture.png".into());
+            frame(&mut world);
+            assert!(!std::sync::Arc::ptr_eq(&group(&world, a), &first), "a source changed after the pass is rebuilt");
+            assert!(std::sync::Arc::ptr_eq(&group(&world, b), &second), "an untouched material keeps its bind group");
+            // A tick from another world is no reference.
+            let record = world.remove_resource::<MaterialRebindTick>().expect("the pass keeps its tick");
+            let mut fresh = World::new();
+            let c = fresh.spawn();
+            let mut named = Material::new(first.clone());
+            named.texture_source = Some("no/such/texture.png".into());
+            fresh.add_component(c, named);
+            fresh.insert_resource(record);
+            fresh.begin_change_frame(fresh.tick);
+            rebind_changed_materials(&mut fresh, &renderer);
+            assert!(fresh.get::<Material>(c).is_some(), "the fresh world's material is read");
+        });
+    }
+
     /// A material over an empty bind group on wgpu's noop backend: no GPU, runs in CI.
     pub(crate) fn noop_material() -> crate::renderer::components::Material {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
@@ -3934,8 +4047,10 @@ mod golden_render_tests {
     #[test]
     fn opaque_draws_come_grouped_by_material() {
         let _gpu = crate::test_gpu::gpu_lock();
-        if !pollster::block_on(Renderer::headless_adapter_available()) {
-            eprintln!("skipping: no GPU");
+        if !pollster::block_on(Renderer::headless_adapter_available())
+            || pollster::block_on(Renderer::headless_adapter_is_software())
+        {
+            eprintln!("skipping: no usable GPU adapter");
             return;
         }
         pollster::block_on(async {
